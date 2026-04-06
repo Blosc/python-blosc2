@@ -43,20 +43,18 @@ SMALL_STRUCT = np.array(SMALL_DATA, dtype=dtype_struct)
 # -------------------------------------------------------------------
 def assert_table_equals_data(table: CTable, expected_data: list):
     assert len(table) == len(expected_data), f"Expected length {len(expected_data)}, got {len(table)}"
+    if not expected_data:
+        return
     col_names = table.col_names
-    for i, expected_row in enumerate(expected_data):
-        row_extracted = table.row[i]
-        for col_idx, expected_val in enumerate(expected_row):
-            col_name = col_names[col_idx]
-            extracted_val = getattr(row_extracted, col_name)[0]
-            if isinstance(expected_val, (float, complex)):
-                np.testing.assert_allclose(
-                    extracted_val, expected_val, err_msg=f"Discrepancy at row {i}, col {col_name}"
-                )
-            else:
-                assert extracted_val == expected_val, (
-                    f"Row {i}, col {col_name}: expected {expected_val}, got {extracted_val}"
-                )
+    # Transpose: expected_data is list-of-rows → list-of-columns
+    expected_cols = list(zip(*expected_data, strict=False))
+    for col_idx, col_name in enumerate(col_names):
+        actual = table[col_name].to_numpy()
+        expected = expected_cols[col_idx]
+        if isinstance(expected[0], (float, complex)):
+            np.testing.assert_allclose(actual, expected, err_msg=f"col {col_name}")
+        else:
+            np.testing.assert_array_equal(actual, expected, err_msg=f"col {col_name}")
 
 
 # -------------------------------------------------------------------
@@ -95,24 +93,20 @@ def test_empty_data_lifecycle():
     assert_table_equals_data(table, SMALL_DATA)
 
 
-def test_construction_sources():
-    """List of tuples and structured array both produce identical tables."""
+def test_construction_variants():
+    """Sources (list, structured array), expected_size, and compact flag."""
+    # list of tuples and structured array produce identical tables
     assert_table_equals_data(CTable(Row, new_data=SMALL_DATA), SMALL_DATA)
     assert_table_equals_data(CTable(Row, new_data=SMALL_STRUCT), SMALL_DATA)
 
-
-def test_expected_size_variants():
-    """expected_size smaller, exact, and larger than the inserted data."""
+    # expected_size smaller than data → resize; larger → preallocated
     for es in [1, 5]:
         assert_table_equals_data(CTable(Row, new_data=SMALL_DATA, expected_size=es), SMALL_DATA)
-
     table_large = CTable(Row, new_data=SMALL_DATA, expected_size=1000)
     assert_table_equals_data(table_large, SMALL_DATA)
     assert all(len(col) == 1000 for col in table_large._cols.values())
 
-
-def test_compact_flag():
-    """compact=False and compact=True both preserve data correctly."""
+    # compact flag is stored and data is intact
     table_false = CTable(Row, new_data=SMALL_DATA, compact=False)
     assert table_false.auto_compact is False
     assert_table_equals_data(table_false, SMALL_DATA)
@@ -152,25 +146,15 @@ def test_invalid_append():
 
 
 def test_extreme_values():
-    """Extreme complex, float boundary, and large integer values."""
-    extreme_complex = [
-        (1, complex(1e308, -1e308), 50.0, True),
-        (2, complex(0, 0), 0.0, False),
-        (3, complex(-1e308, 1e308), 100.0, True),
-    ]
-    extreme_float = [
-        (1, 0j, 0.0, True),
-        (2, 0j, 100.0, False),
-        (3, 0j, 0.0001, True),
+    """Extreme complex, float boundary, and large integer values in one table."""
+    # Combine all extremes into one table to avoid repeated CTable construction
+    extreme_data = [
+        (1, complex(1e308, -1e308), 0.0, True),
+        (2**32, 0j, 100.0, False),
+        (2**60, complex(-1e308, 1e308), 0.0001, True),
         (4, 0j, 99.9999, False),
     ]
-    extreme_int = [
-        (1, 0j, 50.0, True),
-        (2**32, 0j, 50.0, False),
-        (2**60, 0j, 50.0, True),
-    ]
-    for data in [extreme_complex, extreme_float, extreme_int]:
-        assert_table_equals_data(CTable(Row, new_data=data), data)
+    assert_table_equals_data(CTable(Row, new_data=extreme_data), extreme_data)
 
 
 def test_extend_append_and_resize():

@@ -41,7 +41,8 @@ def build_validator_model(schema: CompiledSchema) -> type[BaseModel]:
         else:
             field_definitions[col.name] = (col.py_type, Field(default=col.default, **pydantic_kwargs))
 
-    model_cls = create_model(f"_Validator_{schema.row_cls.__name__}", **field_definitions)
+    cls_name = schema.row_cls.__name__ if schema.row_cls is not None else "Unknown"
+    model_cls = create_model(f"_Validator_{cls_name}", **field_definitions)
     schema.validator_model = model_cls
     return model_cls
 

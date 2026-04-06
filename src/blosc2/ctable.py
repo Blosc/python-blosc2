@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import dataclasses
+import os
+import shutil
 from collections.abc import Iterable
 from dataclasses import MISSING
 from typing import Any, Generic, TypeVar
@@ -39,7 +41,9 @@ from blosc2.schema_compiler import (
     ColumnConfig,
     CompiledColumn,
     CompiledSchema,
+    _validate_column_name,
     compile_schema,
+    compute_display_width,
 )
 
 # RowT is intentionally left unbound so CTable works with both dataclasses
@@ -276,6 +280,18 @@ class Column:
                 mask[phys_indices[:]] = True
             return Column(self._table, self._col_name, mask=mask)
 
+        elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
+            # Boolean mask in logical space — same convention as numpy/pandas.
+            # key[i] == True means "include logical row i".
+            n_live = len(self)
+            if len(key) != n_live:
+                raise IndexError(
+                    f"Boolean mask length {len(key)} does not match number of live rows {n_live}."
+                )
+            all_pos = np.where(self._valid_rows[:])[0]
+            phys_indices = all_pos[key]
+            return self._raw_col[phys_indices]
+
         elif isinstance(key, (list, tuple, np.ndarray)):
             real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
             phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
@@ -284,6 +300,8 @@ class Column:
         raise TypeError(f"Invalid index type: {type(key)}")
 
     def __setitem__(self, key: int | slice | list | np.ndarray, value):
+        if self._table._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
         if isinstance(key, int):
             n_rows = len(self)
             if key < 0:
@@ -292,6 +310,19 @@ class Column:
                 raise IndexError(f"index {key} is out of bounds for column with size {n_rows}")
             pos_true = _find_physical_index(self._valid_rows, key)
             self._raw_col[int(pos_true)] = value
+
+        elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
+            # Boolean mask in logical space.
+            n_live = len(self)
+            if len(key) != n_live:
+                raise IndexError(
+                    f"Boolean mask length {len(key)} does not match number of live rows {n_live}."
+                )
+            all_pos = np.where(self._valid_rows[:])[0]
+            phys_indices = all_pos[key]
+            if isinstance(value, (list, tuple)):
+                value = np.array(value, dtype=self._raw_col.dtype)
+            self._raw_col[phys_indices] = value
 
         elif isinstance(key, (slice, list, tuple, np.ndarray)):
             real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
@@ -355,14 +386,310 @@ class Column:
     def dtype(self):
         return self._raw_col.dtype
 
-    def to_numpy(self):
-        real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
-        return self._raw_col[real_pos[:]]
+    def iter_chunks(self, size: int = 65536):
+        """Iterate over live column values in chunks of *size* rows.
+
+        Yields numpy arrays of at most *size* elements each, skipping deleted
+        rows.  The last chunk may be smaller than *size*.
+
+        Parameters
+        ----------
+        size:
+            Number of live rows per yielded chunk.  Defaults to 65 536.
+
+        Yields
+        ------
+        numpy.ndarray
+            A 1-D array of up to *size* live values with this column's dtype.
+
+        Examples
+        --------
+        >>> for chunk in t["score"].iter_chunks(size=100_000):
+        ...     process(chunk)
+        """
+        valid = self._valid_rows
+        raw = self._raw_col
+        arr_len = len(valid)
+        phys_chunk = valid.chunks[0]
+
+        pending: list[np.ndarray] = []
+        pending_count = 0
+
+        for info in valid.iterchunks_info():
+            actual = min(phys_chunk, arr_len - info.nchunk * phys_chunk)
+            start = info.nchunk * phys_chunk
+
+            if info.special == blosc2.SpecialValue.ZERO:
+                continue
+
+            if info.special == blosc2.SpecialValue.VALUE:
+                val = np.frombuffer(info.repeated_value, dtype=valid.dtype)[0]
+                if not val:
+                    continue
+                segment = raw[start : start + actual]
+            else:
+                mask = valid[start : start + actual]
+                segment = raw[start : start + actual][mask]
+
+            if len(segment) == 0:
+                continue
+
+            pending.append(segment)
+            pending_count += len(segment)
+
+            while pending_count >= size:
+                combined = np.concatenate(pending)
+                yield combined[:size]
+                rest = combined[size:]
+                pending = [rest] if len(rest) > 0 else []
+                pending_count = len(rest)
+
+        if pending:
+            yield np.concatenate(pending)
+
+    def to_numpy(self) -> np.ndarray:
+        """Return all live values as a NumPy array."""
+        parts = list(self.iter_chunks(size=max(1, len(self))))
+        if not parts:
+            return np.array([], dtype=self.dtype)
+        return np.concatenate(parts) if len(parts) > 1 else parts[0]
+
+    def assign(self, data) -> None:
+        """Replace all live values in this column with *data*.
+
+        Works on both full tables and views — on a view, only the rows
+        visible through the view's mask are overwritten.
+
+        Parameters
+        ----------
+        data:
+            List, numpy array, or any iterable.  Must have exactly as many
+            elements as there are live rows in this column.  Values are
+            coerced to the column's dtype if possible.
+
+        Raises
+        ------
+        ValueError
+            If ``len(data)`` does not match the number of live rows, or the
+            table is opened read-only.
+        TypeError
+            If values cannot be coerced to the column's dtype.
+        """
+        if self._table._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
+        n_live = len(self)
+        arr = np.asarray(data)
+        if len(arr) != n_live:
+            raise ValueError(f"assign() requires {n_live} values (live rows), got {len(arr)}.")
+        try:
+            arr = arr.astype(self.dtype)
+        except (ValueError, OverflowError) as exc:
+            raise TypeError(f"Cannot coerce data to column dtype {self.dtype!r}: {exc}") from exc
+        live_pos = np.where(self._valid_rows[:])[0]
+        self._raw_col[live_pos] = arr
+
+    def unique(self) -> np.ndarray:
+        """Return sorted array of unique live values.
+
+        Processes data in chunks — never loads the full column at once.
+        """
+        seen: set = set()
+        for chunk in self.iter_chunks():
+            seen.update(chunk.tolist())
+        return np.array(sorted(seen), dtype=self.dtype)
+
+    def value_counts(self) -> dict:
+        """Return a ``{value: count}`` dict sorted by count descending.
+
+        Processes data in chunks — never loads the full column at once.
+
+        Example
+        -------
+        >>> t["active"].value_counts()
+        {True: 8432, False: 1568}
+        """
+        counts: dict = {}
+        for chunk in self.iter_chunks():
+            for val in chunk.tolist():
+                counts[val] = counts.get(val, 0) + 1
+        return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
+
+    # ------------------------------------------------------------------
+    # Aggregate helpers
+    # ------------------------------------------------------------------
+
+    def _require_nonempty(self, op: str) -> None:
+        if len(self) == 0:
+            raise ValueError(f"Column.{op}() called on an empty column.")
+
+    def _require_kind(self, kinds: str, op: str) -> None:
+        """Raise TypeError if this column's dtype is not in *kinds*."""
+        if self.dtype.kind not in kinds:
+            _kind_names = {
+                "b": "bool",
+                "i": "signed int",
+                "u": "unsigned int",
+                "f": "float",
+                "c": "complex",
+                "U": "string",
+                "S": "bytes",
+            }
+            raise TypeError(
+                f"Column.{op}() is not supported for dtype {self.dtype!r} "
+                f"({_kind_names.get(self.dtype.kind, self.dtype.kind)})."
+            )
+
+    # ------------------------------------------------------------------
+    # Aggregates
+    # ------------------------------------------------------------------
+
+    def sum(self):
+        """Sum of all live values.
+
+        Supported dtypes: bool, int, uint, float, complex.
+        Bool values are counted as 0 / 1.
+        """
+        self._require_kind("biufc", "sum")
+        self._require_nonempty("sum")
+        # Use a wide accumulator to reduce overflow risk
+        acc_dtype = (
+            np.float64
+            if self.dtype.kind == "f"
+            else (
+                np.complex128 if self.dtype.kind == "c" else np.int64 if self.dtype.kind in "biu" else None
+            )
+        )
+        result = acc_dtype(0)
+        for chunk in self.iter_chunks():
+            result += chunk.sum(dtype=acc_dtype)
+        # Return in the column's natural dtype when it fits, else keep wide
+        if self.dtype.kind in "biu":
+            return int(result)
+        return result
+
+    def min(self):
+        """Minimum live value.
+
+        Supported dtypes: bool, int, uint, float, string, bytes.
+        Strings are compared lexicographically.
+        """
+        self._require_kind("biufUS", "min")
+        self._require_nonempty("min")
+        result = None
+        is_str = self.dtype.kind in "US"
+        for chunk in self.iter_chunks():
+            # numpy .min()/.max() don't support string dtypes in recent NumPy;
+            # fall back to Python's built-in min/max which work on any comparable type.
+            chunk_min = min(chunk) if is_str else chunk.min()
+            if result is None or chunk_min < result:
+                result = chunk_min
+        return result
+
+    def max(self):
+        """Maximum live value.
+
+        Supported dtypes: bool, int, uint, float, string, bytes.
+        Strings are compared lexicographically.
+        """
+        self._require_kind("biufUS", "max")
+        self._require_nonempty("max")
+        result = None
+        is_str = self.dtype.kind in "US"
+        for chunk in self.iter_chunks():
+            chunk_max = max(chunk) if is_str else chunk.max()
+            if result is None or chunk_max > result:
+                result = chunk_max
+        return result
+
+    def mean(self) -> float:
+        """Arithmetic mean of all live values.
+
+        Supported dtypes: bool, int, uint, float.
+        Always returns a Python float.
+        """
+        self._require_kind("biuf", "mean")
+        self._require_nonempty("mean")
+        total = np.float64(0)
+        count = 0
+        for chunk in self.iter_chunks():
+            total += chunk.sum(dtype=np.float64)
+            count += len(chunk)
+        return float(total / count)
+
+    def std(self, ddof: int = 0) -> float:
+        """Standard deviation of all live values (single-pass, Welford's algorithm).
+
+        Parameters
+        ----------
+        ddof:
+            Delta degrees of freedom.  ``0`` (default) gives the population
+            std; ``1`` gives the sample std (divides by N-1).
+
+        Supported dtypes: bool, int, uint, float.
+        Always returns a Python float.
+        """
+        self._require_kind("biuf", "std")
+        self._require_nonempty("std")
+
+        # Chan's parallel update — combines per-chunk (n, mean, M2) tuples.
+        # This is numerically stable and requires only a single pass.
+        n_total = np.int64(0)
+        mean_total = np.float64(0)
+        M2_total = np.float64(0)
+
+        for chunk in self.iter_chunks():
+            chunk = chunk.astype(np.float64)
+            n_b = np.int64(len(chunk))
+            mean_b = chunk.mean()
+            M2_b = np.float64(((chunk - mean_b) ** 2).sum())
+
+            if n_total == 0:
+                n_total, mean_total, M2_total = n_b, mean_b, M2_b
+            else:
+                delta = mean_b - mean_total
+                n_new = n_total + n_b
+                mean_total = (n_total * mean_total + n_b * mean_b) / n_new
+                M2_total += M2_b + delta**2 * n_total * n_b / n_new
+                n_total = n_new
+
+        divisor = n_total - ddof
+        if divisor <= 0:
+            return float("nan")
+        return float(np.sqrt(M2_total / divisor))
+
+    def any(self) -> bool:
+        """Return True if at least one live value is True.
+
+        Supported dtypes: bool.
+        Short-circuits on the first True found.
+        """
+        self._require_kind("b", "any")
+        return any(chunk.any() for chunk in self.iter_chunks())
+
+    def all(self) -> bool:
+        """Return True if every live value is True.
+
+        Supported dtypes: bool.
+        Short-circuits on the first False found.
+        """
+        self._require_kind("b", "all")
+        return all(chunk.all() for chunk in self.iter_chunks())
 
 
 # ---------------------------------------------------------------------------
 # CTable
 # ---------------------------------------------------------------------------
+
+
+def _fmt_bytes(n: int) -> str:
+    """Human-readable byte count (e.g. '1.23 MB')."""
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024**2:
+        return f"{n / 1024:.2f} KB"
+    if n < 1024**3:
+        return f"{n / 1024**2:.2f} MB"
+    return f"{n / 1024**3:.2f} GB"
 
 
 class CTable(Generic[RowT]):
@@ -565,29 +892,71 @@ class CTable(Generic[RowT]):
     # Display
     # ------------------------------------------------------------------
 
-    def __str__(self):
-        retval = []
-        cont = 0
+    def __str__(self) -> str:
+        _HEAD_TAIL = 10  # rows shown at each end
 
-        for name in self._cols:
-            retval.append(f"{name:^{self._col_widths[name]}} |")
-            cont += self._col_widths[name] + 2
-        retval.append("\n")
-        for _i in range(cont):
-            retval.append("-")
-        retval.append("\n")
+        nrows = self._n_rows
+        ncols = len(self.col_names)
+        hidden = max(0, nrows - _HEAD_TAIL * 2)
 
-        real_poss = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
+        # -- physical positions for head and tail rows --
+        valid_np = self._valid_rows[:]
+        all_pos = np.where(valid_np)[0]
 
-        for j in real_poss:
-            for name in self._cols:
-                retval.append(f"{self._cols[name][j]:^{self._col_widths[name]}}")
-                retval.append(" |")
-            retval.append("\n")
-            for _ in range(cont):
-                retval.append("-")
-            retval.append("\n")
-        return "".join(retval)
+        if nrows <= _HEAD_TAIL * 2:
+            head_pos = all_pos
+            tail_pos = np.array([], dtype=all_pos.dtype)
+            hidden = 0
+        else:
+            head_pos = all_pos[:_HEAD_TAIL]
+            tail_pos = all_pos[-_HEAD_TAIL:]
+
+        # -- per-column display widths --
+        widths: dict[str, int] = {}
+        for name in self.col_names:
+            widths[name] = max(
+                self._col_widths[name],
+                len(str(self._cols[name].dtype)),
+            )
+
+        sep = "  ".join("─" * (w + 2) for w in widths.values())
+
+        def fmt_row(values: dict) -> str:
+            return "  ".join(f" {values[n]!s:<{widths[n]}} " for n in self.col_names)
+
+        # -- batch-fetch values (one read per column, not one per cell) --
+        def rows_to_dicts(positions) -> list[dict]:
+            if len(positions) == 0:
+                return []
+            col_data = {n: self._cols[n][positions] for n in self.col_names}
+            return [{n: col_data[n][i].item() for n in self.col_names} for i in range(len(positions))]
+
+        lines = [
+            fmt_row({n: n for n in self.col_names}),
+            fmt_row({n: str(self._cols[n].dtype) for n in self.col_names}),
+            sep,
+        ]
+
+        for row in rows_to_dicts(head_pos):
+            lines.append(fmt_row(row))
+
+        if hidden > 0:
+            lines.append(fmt_row(dict.fromkeys(self.col_names, "...")))
+
+        for row in rows_to_dicts(tail_pos):
+            lines.append(fmt_row(row))
+
+        lines.append(sep)
+        footer = f"{nrows:,} rows × {ncols} columns"
+        if hidden > 0:
+            footer += f"  ({hidden:,} rows hidden)"
+        lines.append(footer)
+
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        cols = ", ".join(self.col_names)
+        return f"CTable<{cols}>({self._n_rows:,} rows, {_fmt_bytes(self.cbytes)} compressed)"
 
     def __len__(self):
         return self._n_rows
@@ -654,6 +1023,152 @@ class CTable(Generic[RowT]):
         return obj
 
     # ------------------------------------------------------------------
+    # Save / Load (in-memory ↔ disk)
+    # ------------------------------------------------------------------
+
+    def save(self, urlpath: str, *, overwrite: bool = False) -> None:
+        """Copy this (in-memory) table to disk at *urlpath*.
+
+        Only live rows are written — the on-disk table is always compacted.
+
+        Parameters
+        ----------
+        urlpath:
+            Destination directory path.
+        overwrite:
+            If ``False`` (default), raise :exc:`ValueError` when *urlpath*
+            already exists.  Set to ``True`` to replace an existing table.
+
+        Raises
+        ------
+        ValueError
+            If *urlpath* already exists and ``overwrite=False``, or if called
+            on a view.
+        """
+        if self.base is not None:
+            raise ValueError("Cannot save a view — save the parent table instead.")
+        if os.path.exists(urlpath):
+            if not overwrite:
+                raise ValueError(f"Path {urlpath!r} already exists. Use overwrite=True to replace.")
+            shutil.rmtree(urlpath)
+
+        # Collect live physical positions
+        valid_np = self._valid_rows[:]
+        live_pos = np.where(valid_np)[0]
+        n_live = len(live_pos)
+        capacity = max(n_live, 1)
+
+        file_storage = FileTableStorage(urlpath, "w")
+        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+
+        # --- valid_rows (all True, compacted) ---
+        disk_valid = file_storage.create_valid_rows(
+            shape=(capacity,),
+            chunks=default_chunks,
+            blocks=default_blocks,
+        )
+        if n_live > 0:
+            disk_valid[:n_live] = True
+
+        # --- columns ---
+        for col in self._schema.columns:
+            name = col.name
+            col_storage = self._resolve_column_storage(col, default_chunks, default_blocks)
+            disk_col = file_storage.create_column(
+                name,
+                dtype=col.dtype,
+                shape=(capacity,),
+                chunks=col_storage["chunks"],
+                blocks=col_storage["blocks"],
+                cparams=col_storage.get("cparams"),
+                dparams=col_storage.get("dparams"),
+            )
+            if n_live > 0:
+                disk_col[:n_live] = self._cols[name][live_pos]
+
+        file_storage.save_schema(schema_to_dict(self._schema))
+
+    @classmethod
+    def load(cls, urlpath: str) -> CTable:
+        """Load a persistent table from *urlpath* into RAM.
+
+        The schema is read from the table's metadata — the original Python
+        dataclass is not required.  The returned table is fully in-memory and
+        read/write.
+
+        Parameters
+        ----------
+        urlpath:
+            Path to the table root directory.
+
+        Raises
+        ------
+        FileNotFoundError
+            If *urlpath* does not contain a CTable.
+        ValueError
+            If the metadata at *urlpath* does not identify a CTable.
+        """
+        file_storage = FileTableStorage(urlpath, "r")
+        if not file_storage.table_exists():
+            raise FileNotFoundError(f"No CTable found at {urlpath!r}")
+        file_storage.check_kind()
+        schema_dict = file_storage.load_schema()
+        schema = schema_from_dict(schema_dict)
+        col_names = [c["name"] for c in schema_dict["columns"]]
+
+        disk_valid = file_storage.open_valid_rows()
+        disk_cols = {name: file_storage.open_column(name) for name in col_names}
+        phys_size = len(disk_valid)
+        n_live = int(blosc2.count_nonzero(disk_valid))
+        capacity = max(phys_size, 1)
+
+        mem_storage = InMemoryTableStorage()
+        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+
+        mem_valid = mem_storage.create_valid_rows(
+            shape=(capacity,),
+            chunks=default_chunks,
+            blocks=default_blocks,
+        )
+        if phys_size > 0:
+            mem_valid[:phys_size] = disk_valid[:]
+
+        mem_cols: dict[str, blosc2.NDArray] = {}
+        for col in schema.columns:
+            name = col.name
+            mem_col = mem_storage.create_column(
+                name,
+                dtype=col.dtype,
+                shape=(capacity,),
+                chunks=default_chunks,
+                blocks=default_blocks,
+                cparams=None,
+                dparams=None,
+            )
+            if phys_size > 0:
+                mem_col[:phys_size] = disk_cols[name][:]
+            mem_cols[name] = mem_col
+
+        obj = cls.__new__(cls)
+        obj._row_type = None
+        obj._validate = True
+        obj._table_cparams = None
+        obj._table_dparams = None
+        obj._storage = mem_storage
+        obj._read_only = False
+        obj._schema = schema
+        obj._cols = mem_cols
+        obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
+        obj.col_names = col_names
+        obj.row = _RowIndexer(obj)
+        obj.auto_compact = False
+        obj.base = None
+        obj._valid_rows = mem_valid
+        obj._n_rows = n_live
+        obj._last_pos = None  # resolve lazily on first write
+        return obj
+
+    # ------------------------------------------------------------------
     # View / filtering
     # ------------------------------------------------------------------
 
@@ -666,9 +1181,9 @@ class CTable(Generic[RowT]):
         obj._table_cparams = parent._table_cparams
         obj._table_dparams = parent._table_dparams
         obj._storage = None
-        obj._read_only = True
+        obj._read_only = parent._read_only  # inherit: only True for mode="r" disk tables
         obj._schema = parent._schema
-        obj._cols = parent._cols  # shared — views never mutate
+        obj._cols = parent._cols  # shared — views cannot change row structure
         obj._col_widths = parent._col_widths
         obj.col_names = parent.col_names
         obj.row = _RowIndexer(obj)
@@ -738,6 +1253,213 @@ class CTable(Generic[RowT]):
         mask_arr = (mask_arr & self._valid_rows).compute()
         return self.view(mask_arr)
 
+    def sample(self, n: int, *, seed: int | None = None) -> CTable:
+        """Return a read-only view of *n* randomly chosen live rows.
+
+        Parameters
+        ----------
+        n:
+            Number of rows to sample.  If *n* >= number of live rows,
+            returns a view of the whole table.
+        seed:
+            Optional random seed for reproducibility.
+
+        Returns
+        -------
+        CTable
+            A read-only view sharing columns with this table.
+        """
+        if n <= 0:
+            return self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
+        if n >= self._n_rows:
+            return self.view(self._valid_rows)
+
+        rng = np.random.default_rng(seed)
+        all_pos = np.where(self._valid_rows[:])[0]
+        chosen = rng.choice(all_pos, size=n, replace=False)
+
+        mask = np.zeros(len(self._valid_rows), dtype=np.bool_)
+        mask[chosen] = True
+        return self.view(blosc2.asarray(mask))
+
+    # ------------------------------------------------------------------
+    # Schema mutations: add / drop / rename columns
+    # ------------------------------------------------------------------
+
+    def add_column(
+        self,
+        name: str,
+        spec: SchemaSpec,
+        default,
+        *,
+        cparams: dict | None = None,
+    ) -> None:
+        """Add a new column filled with *default* for every existing live row.
+
+        Parameters
+        ----------
+        name:
+            Column name.  Must follow the same naming rules as schema fields.
+        spec:
+            A schema descriptor such as ``b2.int64(ge=0)`` or ``b2.string()``.
+        default:
+            Value written to every existing live row.  Must be coercible to
+            *spec*'s dtype.
+        cparams:
+            Optional compression parameters for this column's NDArray.
+
+        Raises
+        ------
+        ValueError
+            If the table is read-only, is a view, or the column already exists.
+        TypeError
+            If *default* cannot be coerced to *spec*'s dtype.
+        """
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
+        if self.base is not None:
+            raise ValueError("Cannot add a column to a view.")
+        _validate_column_name(name)
+        if name in self._cols:
+            raise ValueError(f"Column {name!r} already exists.")
+
+        try:
+            default_val = spec.dtype.type(default)
+        except (ValueError, OverflowError) as exc:
+            raise TypeError(f"Cannot coerce default {default!r} to dtype {spec.dtype!r}: {exc}") from exc
+
+        capacity = len(self._valid_rows)
+        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        new_col = self._storage.create_column(
+            name,
+            dtype=spec.dtype,
+            shape=(capacity,),
+            chunks=default_chunks,
+            blocks=default_blocks,
+            cparams=cparams,
+            dparams=None,
+        )
+
+        live_pos = np.where(self._valid_rows[:])[0]
+        if len(live_pos) > 0:
+            new_col[live_pos] = default_val
+
+        compiled_col = CompiledColumn(
+            name=name,
+            py_type=spec.python_type,
+            spec=spec,
+            dtype=spec.dtype,
+            default=default,
+            config=ColumnConfig(cparams=cparams, dparams=None, chunks=None, blocks=None),
+            display_width=compute_display_width(spec),
+        )
+        self._cols[name] = new_col
+        self.col_names.append(name)
+        self._col_widths[name] = max(len(name), compiled_col.display_width)
+
+        new_columns = self._schema.columns + [compiled_col]
+        self._schema = CompiledSchema(
+            row_cls=self._schema.row_cls,
+            columns=new_columns,
+            columns_by_name={**self._schema.columns_by_name, name: compiled_col},
+        )
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(schema_to_dict(self._schema))
+
+    def drop_column(self, name: str) -> None:
+        """Remove a column from the table.
+
+        On disk tables the corresponding ``.b2nd`` file is deleted.
+
+        Raises
+        ------
+        ValueError
+            If the table is read-only, is a view, or *name* is the last column.
+        KeyError
+            If *name* does not exist.
+        """
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
+        if self.base is not None:
+            raise ValueError("Cannot drop a column from a view.")
+        if name not in self._cols:
+            raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
+        if len(self.col_names) == 1:
+            raise ValueError("Cannot drop the last column.")
+
+        if isinstance(self._storage, FileTableStorage):
+            col_path = self._storage._col_path(name)
+            if os.path.exists(col_path):
+                os.remove(col_path)
+
+        del self._cols[name]
+        del self._col_widths[name]
+        self.col_names.remove(name)
+
+        new_columns = [c for c in self._schema.columns if c.name != name]
+        self._schema = CompiledSchema(
+            row_cls=self._schema.row_cls,
+            columns=new_columns,
+            columns_by_name={c.name: c for c in new_columns},
+        )
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(schema_to_dict(self._schema))
+
+    def rename_column(self, old: str, new: str) -> None:
+        """Rename a column.
+
+        On disk tables the corresponding ``.b2nd`` file is renamed.
+
+        Raises
+        ------
+        ValueError
+            If the table is read-only, is a view, or *new* already exists.
+        KeyError
+            If *old* does not exist.
+        """
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
+        if self.base is not None:
+            raise ValueError("Cannot rename a column in a view.")
+        if old not in self._cols:
+            raise KeyError(f"No column named {old!r}. Available: {self.col_names}")
+        if new in self._cols:
+            raise ValueError(f"Column {new!r} already exists.")
+        _validate_column_name(new)
+
+        if isinstance(self._storage, FileTableStorage):
+            old_path = self._storage._col_path(old)
+            new_path = self._storage._col_path(new)
+            os.rename(old_path, new_path)
+            b2_mode = "r" if self._read_only else "a"
+            self._cols[new] = blosc2.open(new_path, mode=b2_mode)
+        else:
+            self._cols[new] = self._cols[old]
+        del self._cols[old]
+
+        idx = self.col_names.index(old)
+        self.col_names[idx] = new
+        self._col_widths[new] = max(len(new), self._col_widths.pop(old))
+
+        old_compiled = self._schema.columns_by_name[old]
+        renamed = CompiledColumn(
+            name=new,
+            py_type=old_compiled.py_type,
+            spec=old_compiled.spec,
+            dtype=old_compiled.dtype,
+            default=old_compiled.default,
+            config=old_compiled.config,
+            display_width=old_compiled.display_width,
+        )
+        new_columns = [renamed if c.name == old else c for c in self._schema.columns]
+        self._schema = CompiledSchema(
+            row_cls=self._schema.row_cls,
+            columns=new_columns,
+            columns_by_name={c.name: c for c in new_columns},
+        )
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(schema_to_dict(self._schema))
+
     # ------------------------------------------------------------------
     # Column access
     # ------------------------------------------------------------------
@@ -759,6 +1481,8 @@ class CTable(Generic[RowT]):
     def compact(self):
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
+        if self.base is not None:
+            raise ValueError("Cannot compact a view.")
         real_poss = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
         start = 0
         block_size = self._valid_rows.blocks[0]
@@ -786,6 +1510,16 @@ class CTable(Generic[RowT]):
         return len(self._cols)
 
     @property
+    def cbytes(self) -> int:
+        """Total compressed size in bytes (all columns + valid_rows mask)."""
+        return sum(col.cbytes for col in self._cols.values()) + self._valid_rows.cbytes
+
+    @property
+    def nbytes(self) -> int:
+        """Total uncompressed size in bytes (all columns + valid_rows mask)."""
+        return sum(col.nbytes for col in self._cols.values()) + self._valid_rows.nbytes
+
+    @property
     def schema(self) -> CompiledSchema:
         """The compiled schema that drives this table's columns and validation."""
         return self._schema
@@ -809,28 +1543,12 @@ class CTable(Generic[RowT]):
 
     def info(self) -> None:
         """Print a concise summary of the CTable."""
-        n_cols = len(self._cols)
-        n_rows = len(self)
-
-        cbytes = sum(col.cbytes for col in self._cols.values()) + self._valid_rows.cbytes
-        nbytes = sum(col.nbytes for col in self._cols.values()) + self._valid_rows.nbytes
-
-        def format_bytes(bytes_size: float) -> str:
-            if bytes_size < 1024:
-                return f"{bytes_size} B"
-            elif bytes_size < 1024**2:
-                return f"{bytes_size / 1024:.2f} KB"
-            elif bytes_size < 1024**3:
-                return f"{bytes_size / (1024**2):.2f} MB"
-            else:
-                return f"{bytes_size / (1024**3):.2f} GB"
-
-        ratio = (nbytes / cbytes) if cbytes > 0 else 0.0
+        ratio = (self.nbytes / self.cbytes) if self.cbytes > 0 else 0.0
 
         lines = []
         lines.append("<class 'CTable'>")
-        lines.append(f"nºColumns: {n_cols}")
-        lines.append(f"nºRows: {n_rows}")
+        lines.append(f"nºColumns: {self.ncols}")
+        lines.append(f"nºRows: {self.nrows}")
         lines.append("")
 
         header = f" {'#':>3}   {'Column':<15} {'Itemsize':<12} {'Dtype':<15}"
@@ -844,8 +1562,8 @@ class CTable(Generic[RowT]):
             lines.append(f" {i:>3}   {name:<15} {itemsize:<12} {dtype_str:<15}")
 
         lines.append("")
-        lines.append(f"memory usage: {format_bytes(cbytes)}")
-        lines.append(f"uncompressed size: {format_bytes(nbytes)}")
+        lines.append(f"memory usage: {_fmt_bytes(self.cbytes)}")
+        lines.append(f"uncompressed size: {_fmt_bytes(self.nbytes)}")
         lines.append(f"compression ratio: {ratio:.2f}x")
         lines.append("")
 
@@ -902,6 +1620,8 @@ class CTable(Generic[RowT]):
     def delete(self, ind: int | slice | str | Iterable) -> None:
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
+        if self.base is not None:
+            raise ValueError("Cannot delete rows from a view.")
         valid_rows_np = self._valid_rows[:]
         true_pos = np.where(valid_rows_np)[0]
 

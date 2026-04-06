@@ -21,6 +21,11 @@ class Row:
     active: bool = blosc2.field(blosc2.bool(), default=True)
 
 
+@dataclass
+class StrRow:
+    label: str = blosc2.field(blosc2.string(max_length=16))
+
+
 DATA20 = [(i, float(i * 10), True) for i in range(20)]
 
 
@@ -231,26 +236,20 @@ def test_column_slice_returns_view():
     assert view._col_name == "id"
 
 
-def test_to_array_no_holes():
-    """to_array() on a slice view returns correct data on a full table."""
+def test_to_array_slices():
+    """to_array() on slice views: full table and with holes."""
+    # No holes
     tabla = CTable(Row, new_data=DATA20)
     col = tabla.id
-
     np.testing.assert_array_equal(col[0:5].to_numpy(), np.array([0, 1, 2, 3, 4], dtype=np.int64))
     np.testing.assert_array_equal(col[5:10].to_numpy(), np.array([5, 6, 7, 8, 9], dtype=np.int64))
     np.testing.assert_array_equal(col[15:20].to_numpy(), np.array([15, 16, 17, 18, 19], dtype=np.int64))
     np.testing.assert_array_equal(col[0:20].to_numpy(), np.arange(20, dtype=np.int64))
 
-
-def test_to_array_with_holes():
-    """to_array() on a slice view skips deleted rows correctly."""
-    tabla = CTable(Row, new_data=DATA20)
-    tabla.delete([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])  # keep evens: 0,2,4,...,18
+    # With holes: delete odd indices → keep evens 0,2,4,...,18
+    tabla.delete([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])
     col = tabla.id
-
-    # logical [0:5] → physical rows 0,2,4,6,8
     np.testing.assert_array_equal(col[0:5].to_numpy(), np.array([0, 2, 4, 6, 8], dtype=np.int64))
-    # logical [5:10] → physical rows 10,12,14,16,18
     np.testing.assert_array_equal(col[5:10].to_numpy(), np.array([10, 12, 14, 16, 18], dtype=np.int64))
 
 
@@ -284,6 +283,396 @@ def test_column_view_mask_is_independent():
     view_a = col[0:5]
 
     np.testing.assert_array_equal(view_a.to_numpy(), np.arange(0, 5, dtype=np.int64))
+
+
+# -------------------------------------------------------------------
+# iter_chunks
+# -------------------------------------------------------------------
+
+
+def test_iter_chunks_full_table():
+    """iter_chunks reassembles to the same values as to_numpy()."""
+    tabla = CTable(Row, new_data=DATA20)
+    expected = tabla["id"].to_numpy()
+    got = np.concatenate(list(tabla["id"].iter_chunks(size=7)))
+    np.testing.assert_array_equal(got, expected)
+
+
+def test_iter_chunks_chunk_sizes():
+    """Each yielded chunk has at most *size* elements; last may be smaller."""
+    tabla = CTable(Row, new_data=DATA20)
+    chunks = list(tabla["score"].iter_chunks(size=6))
+    for c in chunks[:-1]:
+        assert len(c) == 6
+    assert len(chunks[-1]) <= 6
+    assert sum(len(c) for c in chunks) == 20
+
+
+def test_iter_chunks_skips_deleted_rows():
+    """Deleted rows are not included in any chunk."""
+    tabla = CTable(Row, new_data=DATA20)
+    tabla.delete([0, 1, 2])  # delete id 0, 1, 2
+    chunks = list(tabla["id"].iter_chunks(size=5))
+    all_vals = np.concatenate(chunks)
+    assert 0 not in all_vals
+    assert 1 not in all_vals
+    assert 2 not in all_vals
+    assert len(all_vals) == 17
+
+
+def test_iter_chunks_size_larger_than_table():
+    """A size larger than the table yields a single chunk with all rows."""
+    tabla = CTable(Row, new_data=DATA20)
+    chunks = list(tabla["id"].iter_chunks(size=1000))
+    assert len(chunks) == 1
+    np.testing.assert_array_equal(chunks[0], np.arange(20, dtype=np.int64))
+
+
+def test_iter_chunks_empty_table():
+    """iter_chunks on an empty table yields nothing."""
+    tabla = CTable(Row)
+    chunks = list(tabla["id"].iter_chunks())
+    assert chunks == []
+
+
+# -------------------------------------------------------------------
+# Aggregates: sum
+# -------------------------------------------------------------------
+
+
+def test_sum_int():
+    t = CTable(Row, new_data=DATA20)
+    assert t["id"].sum() == sum(range(20))
+
+
+def test_sum_float():
+    t = CTable(Row, new_data=DATA20)
+    assert t["score"].sum() == pytest.approx(sum(i * 10.0 for i in range(20)))
+
+
+def test_sum_bool_counts_trues():
+    t = CTable(Row, new_data=DATA20)  # all active=True
+    assert t["active"].sum() == 20
+
+
+def test_sum_skips_deleted_rows():
+    t = CTable(Row, new_data=DATA20)
+    t.delete([0])  # remove id=0
+    assert t["id"].sum() == sum(range(1, 20))
+
+
+def test_sum_empty_raises():
+    t = CTable(Row)
+    with pytest.raises(ValueError, match="empty"):
+        t["id"].sum()
+
+
+def test_sum_wrong_type_raises():
+    t = CTable(StrRow, new_data=[("hello",)])
+    with pytest.raises(TypeError):
+        t["label"].sum()
+
+
+# -------------------------------------------------------------------
+# Aggregates: min / max
+# -------------------------------------------------------------------
+
+
+def test_min_int():
+    t = CTable(Row, new_data=DATA20)
+    assert t["id"].min() == 0
+
+
+def test_max_int():
+    t = CTable(Row, new_data=DATA20)
+    assert t["id"].max() == 19
+
+
+def test_min_float():
+    t = CTable(Row, new_data=DATA20)
+    assert t["score"].min() == pytest.approx(0.0)
+
+
+def test_max_float():
+    t = CTable(Row, new_data=DATA20)
+    assert t["score"].max() == pytest.approx(190.0)
+
+
+def test_min_max_string():
+    t = CTable(StrRow, new_data=[("banana",), ("apple",), ("cherry",)])
+    assert t["label"].min() == "apple"
+    assert t["label"].max() == "cherry"
+
+
+def test_min_skips_deleted():
+    t = CTable(Row, new_data=DATA20)
+    t.delete([0])  # remove id=0, next min is 1
+    assert t["id"].min() == 1
+
+
+def test_min_empty_raises():
+    t = CTable(Row)
+    with pytest.raises(ValueError, match="empty"):
+        t["id"].min()
+
+
+def test_max_complex_raises():
+    @dataclass
+    class CRow:
+        val: complex = blosc2.field(blosc2.complex128())
+
+    t = CTable(CRow, new_data=[(1 + 2j,)])
+    with pytest.raises(TypeError):
+        t["val"].max()
+
+
+# -------------------------------------------------------------------
+# Aggregates: mean
+# -------------------------------------------------------------------
+
+
+def test_mean_int():
+    t = CTable(Row, new_data=DATA20)
+    assert t["id"].mean() == pytest.approx(9.5)
+
+
+def test_mean_float():
+    t = CTable(Row, new_data=DATA20)
+    assert t["score"].mean() == pytest.approx(95.0)
+
+
+def test_mean_skips_deleted():
+    t = CTable(Row, new_data=[(0, 0.0, True), (10, 100.0, True)])
+    t.delete([0])  # remove id=0; only id=10 remains
+    assert t["id"].mean() == pytest.approx(10.0)
+
+
+def test_mean_empty_raises():
+    t = CTable(Row)
+    with pytest.raises(ValueError, match="empty"):
+        t["id"].mean()
+
+
+# -------------------------------------------------------------------
+# Aggregates: std
+# -------------------------------------------------------------------
+
+
+def test_std_population():
+    t = CTable(Row, new_data=DATA20)
+    ids = np.arange(20, dtype=np.float64)
+    assert t["id"].std() == pytest.approx(float(ids.std(ddof=0)))
+
+
+def test_std_sample():
+    t = CTable(Row, new_data=DATA20)
+    ids = np.arange(20, dtype=np.float64)
+    assert t["id"].std(ddof=1) == pytest.approx(float(ids.std(ddof=1)))
+
+
+def test_std_single_element():
+    t = CTable(Row, new_data=[(5, 50.0, True)])
+    assert t["id"].std() == pytest.approx(0.0)
+
+
+def test_std_single_element_ddof1_is_nan():
+    t = CTable(Row, new_data=[(5, 50.0, True)])
+    assert np.isnan(t["id"].std(ddof=1))
+
+
+def test_std_empty_raises():
+    t = CTable(Row)
+    with pytest.raises(ValueError, match="empty"):
+        t["id"].std()
+
+
+# -------------------------------------------------------------------
+# Aggregates: any / all
+# -------------------------------------------------------------------
+
+
+def test_any_all_true():
+    t = CTable(Row, new_data=DATA20)  # all active=True
+    assert t["active"].any() is True
+    assert t["active"].all() is True
+
+
+def test_any_some_false():
+    data = [(i, float(i), i % 2 == 0) for i in range(10)]
+    t = CTable(Row, new_data=data)
+    assert t["active"].any() is True
+    assert t["active"].all() is False
+
+
+def test_all_false():
+    data = [(i, float(i), False) for i in range(5)]
+    t = CTable(Row, new_data=data)
+    assert t["active"].any() is False
+    assert t["active"].all() is False
+
+
+def test_any_empty_is_false():
+    t = CTable(Row)
+    assert t["active"].any() is False
+
+
+def test_all_empty_is_true():
+    # vacuous truth: all() over nothing is True (same as Python's built-in)
+    t = CTable(Row)
+    assert t["active"].all() is True
+
+
+def test_any_wrong_type_raises():
+    t = CTable(Row, new_data=DATA20)
+    with pytest.raises(TypeError):
+        t["id"].any()
+
+
+# -------------------------------------------------------------------
+# unique
+# -------------------------------------------------------------------
+
+
+def test_unique_int():
+    t = CTable(Row, new_data=[(i % 5, float(i), True) for i in range(20)])
+    result = t["id"].unique()
+    np.testing.assert_array_equal(result, np.array([0, 1, 2, 3, 4], dtype=np.int64))
+
+
+def test_unique_bool():
+    data = [(i, float(i), i % 3 != 0) for i in range(10)]
+    t = CTable(Row, new_data=data)
+    result = t["active"].unique()
+    assert set(result.tolist()) == {True, False}
+
+
+def test_unique_skips_deleted():
+    t = CTable(Row, new_data=[(i % 3, float(i), True) for i in range(9)])
+    # ids are [0,1,2,0,1,2,0,1,2]; logical rows with id==0 are at positions 0,3,6
+    t.delete([0, 3, 6])
+    result = t["id"].unique()
+    assert 0 not in result.tolist()
+    assert set(result.tolist()) == {1, 2}
+
+
+def test_unique_empty():
+    t = CTable(Row)
+    result = t["id"].unique()
+    assert len(result) == 0
+
+
+# -------------------------------------------------------------------
+# value_counts
+# -------------------------------------------------------------------
+
+
+def test_value_counts_basic():
+    data = [(i % 3, float(i), True) for i in range(9)]  # ids: 0,1,2,0,1,2,0,1,2
+    t = CTable(Row, new_data=data)
+    vc = t["id"].value_counts()
+    assert vc[0] == 3
+    assert vc[1] == 3
+    assert vc[2] == 3
+
+
+def test_value_counts_sorted_by_count():
+    data = [(0, 0.0, True)] * 5 + [(1, 1.0, True)] * 2 + [(2, 2.0, True)] * 8
+    t = CTable(Row, new_data=data)
+    vc = t["id"].value_counts()
+    counts = list(vc.values())
+    assert counts == sorted(counts, reverse=True)
+
+
+def test_value_counts_bool():
+    data = [(i, float(i), i % 4 != 0) for i in range(20)]  # 5 False, 15 True
+    t = CTable(Row, new_data=data)
+    vc = t["active"].value_counts()
+    assert vc[True] == 15
+    assert vc[False] == 5
+    assert list(vc.keys())[0] is True  # True comes first (higher count)
+
+
+def test_value_counts_empty():
+    t = CTable(Row)
+    assert t["id"].value_counts() == {}
+
+
+# -------------------------------------------------------------------
+# sample (on CTable)
+# -------------------------------------------------------------------
+
+
+def test_sample_returns_correct_count():
+    t = CTable(Row, new_data=DATA20)
+    s = t.sample(5, seed=0)
+    assert len(s) == 5
+
+
+def test_sample_rows_are_subset():
+    t = CTable(Row, new_data=DATA20)
+    s = t.sample(7, seed=42)
+    all_ids = set(t["id"].to_numpy().tolist())
+    sample_ids = set(s["id"].to_numpy().tolist())
+    assert sample_ids.issubset(all_ids)
+
+
+def test_sample_is_read_only():
+    t = CTable(Row, new_data=DATA20)
+    s = t.sample(5, seed=0)
+    with pytest.raises((ValueError, TypeError)):
+        s.append((99, 9.0, True))
+
+
+def test_sample_seed_reproducible():
+    t = CTable(Row, new_data=DATA20)
+    s1 = t.sample(5, seed=7)
+    s2 = t.sample(5, seed=7)
+    np.testing.assert_array_equal(s1["id"].to_numpy(), s2["id"].to_numpy())
+
+
+def test_sample_n_larger_than_table():
+    t = CTable(Row, new_data=DATA20)
+    s = t.sample(1000, seed=0)
+    assert len(s) == 20
+
+
+def test_sample_zero():
+    t = CTable(Row, new_data=DATA20)
+    assert len(t.sample(0)) == 0
+
+
+# -------------------------------------------------------------------
+# cbytes / nbytes / __repr__
+# -------------------------------------------------------------------
+
+
+def test_cbytes_nbytes_positive():
+    t = CTable(Row, new_data=DATA20)
+    assert t.cbytes > 0
+    assert t.nbytes > 0
+    assert t.nbytes >= t.cbytes  # compressed is never larger than raw
+
+
+def test_cbytes_nbytes_consistent_with_info():
+    t = CTable(Row, new_data=DATA20)
+    expected_cb = sum(col.cbytes for col in t._cols.values()) + t._valid_rows.cbytes
+    expected_nb = sum(col.nbytes for col in t._cols.values()) + t._valid_rows.nbytes
+    assert t.cbytes == expected_cb
+    assert t.nbytes == expected_nb
+
+
+def test_repr_contains_col_names_and_row_count():
+    t = CTable(Row, new_data=DATA20)
+    r = repr(t)
+    assert "id" in r
+    assert "score" in r
+    assert "active" in r
+    assert "20" in r
+
+
+def test_repr_is_single_line():
+    t = CTable(Row, new_data=DATA20)
+    assert "\n" not in repr(t)
 
 
 if __name__ == "__main__":
