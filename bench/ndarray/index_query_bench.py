@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import re
 import statistics
@@ -23,10 +24,43 @@ from blosc2 import indexing as blosc2_indexing
 SIZES = (1_000_000, 2_000_000, 5_000_000, 10_000_000)
 DEFAULT_REPEATS = 3
 KINDS = ("ultralight", "light", "medium", "full")
-DISTS = ("sorted", "block-shuffled", "random")
+DISTS = ("sorted", "block-shuffled", "permuted")
 RNG_SEED = 0
 DEFAULT_OPLEVEL = 5
 FULL_QUERY_MODES = ("auto", "selective-ooc", "whole-load")
+
+COLD_COLUMNS = [
+    ("rows", lambda result: f"{result['size']:,}"),
+    ("dist", lambda result: result["dist"]),
+    ("builder", lambda result: "mem" if result["in_mem"] else "ooc"),
+    ("kind", lambda result: result["kind"]),
+    ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
+    ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
+    ("cold_ms", lambda result: f"{result['cold_ms']:.3f}"),
+    ("speedup", lambda result: f"{result['cold_speedup']:.2f}x"),
+    ("logical_bytes", lambda result: f"{result['logical_index_bytes']:,}"),
+    ("disk_bytes", lambda result: f"{result['disk_index_bytes']:,}"),
+    ("index_pct", lambda result: f"{result['index_pct']:.4f}%"),
+    ("index_pct_disk", lambda result: f"{result['index_pct_disk']:.4f}%"),
+]
+
+WARM_COLUMNS = [
+    ("rows", lambda result: f"{result['size']:,}"),
+    ("dist", lambda result: result["dist"]),
+    ("builder", lambda result: "mem" if result["in_mem"] else "ooc"),
+    ("kind", lambda result: result["kind"]),
+    ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
+    ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
+    ("warm_ms", lambda result: f"{result['warm_ms']:.3f}" if result["warm_ms"] is not None else "-"),
+    (
+        "speedup",
+        lambda result: f"{result['warm_speedup']:.2f}x" if result["warm_speedup"] is not None else "-",
+    ),
+    ("logical_bytes", lambda result: f"{result['logical_index_bytes']:,}"),
+    ("disk_bytes", lambda result: f"{result['disk_index_bytes']:,}"),
+    ("index_pct", lambda result: f"{result['index_pct']:.4f}%"),
+    ("index_pct_disk", lambda result: f"{result['index_pct_disk']:.4f}%"),
+]
 
 
 def dtype_token(dtype: np.dtype) -> str:
@@ -57,6 +91,65 @@ def make_ordered_ids(size: int, dtype: np.dtype) -> np.ndarray:
     if dtype.kind == "f":
         span = max(1, size)
         return np.linspace(-span / 2, span / 2, num=size, endpoint=False, dtype=dtype)
+
+    raise ValueError(f"unsupported dtype for benchmark: {dtype}")
+
+
+def ordered_id_slice(size: int, start: int, stop: int, dtype: np.dtype) -> np.ndarray:
+    dtype = np.dtype(dtype)
+    if stop <= start:
+        return np.empty(0, dtype=dtype)
+
+    if dtype == np.dtype(np.bool_):
+        values = np.zeros(stop - start, dtype=dtype)
+        true_start = max(start, size // 2)
+        if true_start < stop:
+            values[true_start - start :] = True
+        return values
+
+    positions = np.arange(start, stop, dtype=np.int64)
+    if dtype.kind in {"i", "u"}:
+        info = np.iinfo(dtype)
+        unique_count = min(size, int(info.max) - int(info.min) + 1)
+        base = int(info.min) if unique_count < size and dtype.kind == "i" else 0
+        if dtype.kind == "i" and unique_count < size:
+            base = max(int(info.min), -(unique_count // 2))
+        values = base + (positions * unique_count) // size
+        return values.astype(dtype, copy=False)
+
+    if dtype.kind == "f":
+        span = max(1, size)
+        values = positions.astype(np.float64, copy=False) - (span / 2)
+        return values.astype(dtype, copy=False)
+
+    raise ValueError(f"unsupported dtype for benchmark: {dtype}")
+
+
+def ordered_id_at(size: int, index: int, dtype: np.dtype) -> object:
+    return ordered_id_slice(size, index, index + 1, dtype)[0].item()
+
+
+def ordered_ids_from_positions(positions: np.ndarray, size: int, dtype: np.dtype) -> np.ndarray:
+    dtype = np.dtype(dtype)
+    if positions.size == 0:
+        return np.empty(0, dtype=dtype)
+
+    if dtype == np.dtype(np.bool_):
+        return (positions >= (size // 2)).astype(dtype, copy=False)
+
+    if dtype.kind in {"i", "u"}:
+        info = np.iinfo(dtype)
+        unique_count = min(size, int(info.max) - int(info.min) + 1)
+        base = int(info.min) if unique_count < size and dtype.kind == "i" else 0
+        if dtype.kind == "i" and unique_count < size:
+            base = max(int(info.min), -(unique_count // 2))
+        values = base + (positions * unique_count) // size
+        return values.astype(dtype, copy=False)
+
+    if dtype.kind == "f":
+        span = max(1, size)
+        values = positions.astype(np.float64, copy=False) - (span / 2)
+        return values.astype(dtype, copy=False)
 
     raise ValueError(f"unsupported dtype for benchmark: {dtype}")
 
@@ -106,30 +199,73 @@ def resolve_geometry(shape: tuple[int, ...], dtype: np.dtype, chunks: int | None
     return int(resolved_chunks[0]), int(resolved_blocks[0])
 
 
-def make_source_data(size: int, dist: str, id_dtype: np.dtype, chunks: int | None, blocks: int | None) -> np.ndarray:
+def _block_order(size: int, block_len: int) -> np.ndarray:
+    nblocks = (size + block_len - 1) // block_len
+    return np.random.default_rng(RNG_SEED).permutation(nblocks)
+
+
+def _fill_block_shuffled_ids(
+    ids: np.ndarray, size: int, start: int, stop: int, block_len: int, order: np.ndarray
+) -> None:
+    cursor = start
+    out_cursor = 0
+    while cursor < stop:
+        dest_block = cursor // block_len
+        block_offset = cursor % block_len
+        src_block = int(order[dest_block])
+        src_start = src_block * block_len + block_offset
+        take = min(stop - cursor, block_len - block_offset, size - src_start)
+        ids[out_cursor : out_cursor + take] = ordered_id_slice(size, src_start, src_start + take, ids.dtype)
+        cursor += take
+        out_cursor += take
+
+
+def _permuted_position_params(size: int) -> tuple[int, int]:
+    if size <= 1:
+        return 1, 0
+    rng = np.random.default_rng(RNG_SEED)
+    step = int(rng.integers(1, size))
+    while math.gcd(step, size) != 1:
+        step += 1
+        if step >= size:
+            step = 1
+    offset = int(rng.integers(0, size))
+    return step, offset
+
+
+def _fill_permuted_ids(ids: np.ndarray, size: int, start: int, stop: int, step: int, offset: int) -> None:
+    positions = np.arange(start, stop, dtype=np.int64)
+    shuffled_positions = (positions * step + offset) % size
+    ids[:] = ordered_ids_from_positions(shuffled_positions, size, ids.dtype)
+
+
+def build_persistent_array(
+    size: int, dist: str, id_dtype: np.dtype, path: Path, chunks: int | None, blocks: int | None
+) -> blosc2.NDArray:
     dtype = source_dtype(id_dtype)
-    data = np.zeros(size, dtype=dtype)
-    _, block_len = resolve_geometry((size,), dtype, chunks, blocks)
-    fill_ids(data["id"], make_ordered_ids(size, id_dtype), dist, np.random.default_rng(RNG_SEED), block_len)
-    return data
-
-
-def build_array(data: np.ndarray, chunks: int | None, blocks: int | None) -> blosc2.NDArray:
-    kwargs = {}
-    if chunks is not None:
-        kwargs["chunks"] = (chunks,)
-    if blocks is not None:
-        kwargs["blocks"] = (blocks,)
-    return blosc2.asarray(data, **kwargs)
-
-
-def build_persistent_array(data: np.ndarray, path: Path, chunks: int | None, blocks: int | None) -> blosc2.NDArray:
     kwargs = {"urlpath": path, "mode": "w"}
     if chunks is not None:
         kwargs["chunks"] = (chunks,)
     if blocks is not None:
         kwargs["blocks"] = (blocks,)
-    return blosc2.asarray(data, **kwargs)
+    arr = blosc2.zeros((size,), dtype=dtype, **kwargs)
+    chunk_len = int(arr.chunks[0])
+    block_len = int(arr.blocks[0])
+    block_order = _block_order(size, block_len) if dist == "block-shuffled" else None
+    permuted_step, permuted_offset = _permuted_position_params(size) if dist == "permuted" else (1, 0)
+    for start in range(0, size, chunk_len):
+        stop = min(start + chunk_len, size)
+        chunk = np.zeros(stop - start, dtype=dtype)
+        if dist == "sorted":
+            chunk["id"] = ordered_id_slice(size, start, stop, id_dtype)
+        elif dist == "block-shuffled":
+            _fill_block_shuffled_ids(chunk["id"], size, start, stop, block_len, block_order)
+        elif dist == "permuted":
+            _fill_permuted_ids(chunk["id"], size, start, stop, permuted_step, permuted_offset)
+        else:
+            raise ValueError(f"unsupported distribution {dist!r}")
+        arr[start:stop] = chunk
+    return arr
 
 
 def base_array_path(size_dir: Path, size: int, dist: str, id_dtype: np.dtype, chunks: int | None, blocks: int | None) -> Path:
@@ -219,37 +355,13 @@ def index_sizes(descriptor: dict) -> tuple[int, int]:
     return logical, disk
 
 
-def _source_data_factory(size: int, dist: str, id_dtype: np.dtype, chunks: int | None, blocks: int | None):
-    data = None
-
-    def get_data() -> np.ndarray:
-        nonlocal data
-        if data is None:
-            data = make_source_data(size, dist, id_dtype, chunks, blocks)
-        return data
-
-    return get_data
-
-
-def _ordered_ids_factory(size: int, id_dtype: np.dtype):
-    ordered_ids = None
-
-    def get_ordered_ids() -> np.ndarray:
-        nonlocal ordered_ids
-        if ordered_ids is None:
-            ordered_ids = make_ordered_ids(size, id_dtype)
-        return ordered_ids
-
-    return get_ordered_ids
-
-
-def _query_bounds(ordered_ids: np.ndarray, query_width: int) -> tuple[object, object]:
-    if ordered_ids.size == 0:
+def _query_bounds(size: int, query_width: int, dtype: np.dtype) -> tuple[object, object]:
+    if size <= 0:
         raise ValueError("benchmark arrays must not be empty")
 
-    lo_idx = ordered_ids.size // 2
-    hi_idx = min(ordered_ids.size - 1, lo_idx + max(query_width - 1, 0))
-    return ordered_ids[lo_idx].item(), ordered_ids[hi_idx].item()
+    lo_idx = size // 2
+    hi_idx = min(size - 1, lo_idx + max(query_width - 1, 0))
+    return ordered_id_at(size, lo_idx, dtype), ordered_id_at(size, hi_idx, dtype)
 
 
 def _literal(value: object, dtype: np.dtype) -> str:
@@ -285,15 +397,25 @@ def _valid_index_descriptor(arr: blosc2.NDArray, kind: str, optlevel: int, in_me
     return None
 
 
-def _open_or_build_persistent_array(path: Path, get_data, chunks: int | None, blocks: int | None) -> blosc2.NDArray:
+def _open_or_build_persistent_array(
+    path: Path, size: int, dist: str, id_dtype: np.dtype, chunks: int | None, blocks: int | None
+) -> blosc2.NDArray:
     if path.exists():
         return blosc2.open(path, mode="a")
     blosc2.remove_urlpath(path)
-    return build_persistent_array(get_data(), path, chunks, blocks)
+    return build_persistent_array(size, dist, id_dtype, path, chunks, blocks)
 
 
 def _open_or_build_indexed_array(
-    path: Path, get_data, kind: str, optlevel: int, in_mem: bool, chunks: int | None, blocks: int | None
+    path: Path,
+    size: int,
+    dist: str,
+    id_dtype: np.dtype,
+    kind: str,
+    optlevel: int,
+    in_mem: bool,
+    chunks: int | None,
+    blocks: int | None,
 ) -> tuple[blosc2.NDArray, float]:
     if path.exists():
         arr = blosc2.open(path, mode="a")
@@ -303,7 +425,7 @@ def _open_or_build_indexed_array(
             arr.drop_index(field="id")
         blosc2.remove_urlpath(path)
 
-    arr = build_persistent_array(get_data(), path, chunks, blocks)
+    arr = build_persistent_array(size, dist, id_dtype, path, chunks, blocks)
     build_start = time.perf_counter()
     arr.create_index(field="id", kind=kind, optlevel=optlevel, in_mem=in_mem)
     return arr, time.perf_counter() - build_start
@@ -320,11 +442,12 @@ def benchmark_size(
     full_query_mode: str,
     chunks: int | None,
     blocks: int | None,
+    cold_row_callback=None,
 ) -> list[dict]:
-    get_data = _source_data_factory(size, dist, id_dtype, chunks, blocks)
-    get_ordered_ids = _ordered_ids_factory(size, id_dtype)
-    arr = _open_or_build_persistent_array(base_array_path(size_dir, size, dist, id_dtype, chunks, blocks), get_data, chunks, blocks)
-    lo, hi = _query_bounds(get_ordered_ids(), query_width)
+    arr = _open_or_build_persistent_array(
+        base_array_path(size_dir, size, dist, id_dtype, chunks, blocks), size, dist, id_dtype, chunks, blocks
+    )
+    lo, hi = _query_bounds(size, query_width, id_dtype)
     condition_str = _condition_expr(lo, hi, id_dtype)
     condition = blosc2.lazyexpr(condition_str, arr.fields)
     expr = condition.where(arr)
@@ -337,7 +460,9 @@ def benchmark_size(
     for kind in KINDS:
         idx_arr, build_time = _open_or_build_indexed_array(
             indexed_array_path(size_dir, size, dist, kind, optlevel, id_dtype, in_mem, chunks, blocks),
-            get_data,
+            size,
+            dist,
+            id_dtype,
             kind,
             optlevel,
             in_mem,
@@ -352,33 +477,34 @@ def benchmark_size(
         descriptor = idx_arr.indexes[0]
         logical_index_bytes, disk_index_bytes = index_sizes(descriptor)
 
-        rows.append(
-            {
-                "size": size,
-                "dist": dist,
-                "kind": kind,
-                "optlevel": optlevel,
-                "in_mem": in_mem,
-                "query_rows": index_len,
-                "build_s": build_time,
-                "create_idx_ms": build_time * 1_000,
-                "scan_ms": scan_ms,
-                "cold_ms": cold_time * 1_000,
-                "cold_speedup": scan_ms / (cold_time * 1_000),
-                "warm_ms": None,
-                "warm_speedup": None,
-                "candidate_units": explanation["candidate_units"],
-                "total_units": explanation["total_units"],
-                "lookup_path": explanation.get("lookup_path"),
-                "full_query_mode": full_query_mode,
-                "logical_index_bytes": logical_index_bytes,
-                "disk_index_bytes": disk_index_bytes,
-                "index_pct": logical_index_bytes / base_bytes * 100,
-                "index_pct_disk": disk_index_bytes / compressed_base_bytes * 100,
-                "_arr": idx_arr,
-                "_cond": idx_cond,
-            }
-        )
+        row = {
+            "size": size,
+            "dist": dist,
+            "kind": kind,
+            "optlevel": optlevel,
+            "in_mem": in_mem,
+            "query_rows": index_len,
+            "build_s": build_time,
+            "create_idx_ms": build_time * 1_000,
+            "scan_ms": scan_ms,
+            "cold_ms": cold_time * 1_000,
+            "cold_speedup": scan_ms / (cold_time * 1_000),
+            "warm_ms": None,
+            "warm_speedup": None,
+            "candidate_units": explanation["candidate_units"],
+            "total_units": explanation["total_units"],
+            "lookup_path": explanation.get("lookup_path"),
+            "full_query_mode": full_query_mode,
+            "logical_index_bytes": logical_index_bytes,
+            "disk_index_bytes": disk_index_bytes,
+            "index_pct": logical_index_bytes / base_bytes * 100,
+            "index_pct_disk": disk_index_bytes / compressed_base_bytes * 100,
+            "_arr": idx_arr,
+            "_cond": idx_cond,
+        }
+        rows.append(row)
+        if cold_row_callback is not None:
+            cold_row_callback(row)
     return rows
 
 
@@ -559,6 +685,11 @@ def run_benchmarks(
     blocks: int | None,
 ) -> None:
     all_results = []
+    cold_widths = progress_widths(COLD_COLUMNS, sizes, dists, id_dtype)
+
+    def stream_cold_row(result: dict) -> None:
+        print_table_row(result, COLD_COLUMNS, cold_widths)
+
     array_dtype = source_dtype(id_dtype)
     resolved_geometries = {resolve_geometry((size,), array_dtype, chunks, blocks) for size in sizes}
     if len(resolved_geometries) == 1:
@@ -572,58 +703,30 @@ def run_benchmarks(
         f"query_width={query_width:,}, optlevel={optlevel}, dtype={id_dtype.name}, in_mem={in_mem}, "
         f"full_query_mode={full_query_mode}"
     )
+    print()
+    print("Cold Query Table")
+    print_table_header(COLD_COLUMNS, cold_widths)
     for dist in dists:
         for size in sizes:
             size_results = benchmark_size(
-                size, size_dir, dist, query_width, optlevel, id_dtype, in_mem, full_query_mode, chunks, blocks
+                size,
+                size_dir,
+                dist,
+                query_width,
+                optlevel,
+                id_dtype,
+                in_mem,
+                full_query_mode,
+                chunks,
+                blocks,
+                stream_cold_row,
             )
             all_results.extend(size_results)
-
-    print()
-    print("Cold Query Table")
-    print_table(
-        all_results,
-        [
-            ("rows", lambda result: f"{result['size']:,}"),
-            ("dist", lambda result: result["dist"]),
-            ("builder", lambda result: "mem" if result["in_mem"] else "ooc"),
-            ("kind", lambda result: result["kind"]),
-            ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
-            ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
-            ("cold_ms", lambda result: f"{result['cold_ms']:.3f}"),
-            ("speedup", lambda result: f"{result['cold_speedup']:.2f}x"),
-            ("logical_bytes", lambda result: f"{result['logical_index_bytes']:,}"),
-            ("disk_bytes", lambda result: f"{result['disk_index_bytes']:,}"),
-            ("index_pct", lambda result: f"{result['index_pct']:.4f}%"),
-            ("index_pct_disk", lambda result: f"{result['index_pct_disk']:.4f}%"),
-        ],
-    )
     if repeats > 0:
         measure_warm_queries(all_results, repeats)
         print()
         print("Warm Query Table")
-        print_table(
-            all_results,
-            [
-                ("rows", lambda result: f"{result['size']:,}"),
-                ("dist", lambda result: result["dist"]),
-                ("builder", lambda result: "mem" if result["in_mem"] else "ooc"),
-                ("kind", lambda result: result["kind"]),
-                ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
-                ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
-                ("warm_ms", lambda result: f"{result['warm_ms']:.3f}" if result["warm_ms"] is not None else "-"),
-                (
-                    "speedup",
-                    lambda result: f"{result['warm_speedup']:.2f}x"
-                    if result["warm_speedup"] is not None
-                    else "-",
-                ),
-                ("logical_bytes", lambda result: f"{result['logical_index_bytes']:,}"),
-                ("disk_bytes", lambda result: f"{result['disk_index_bytes']:,}"),
-                ("index_pct", lambda result: f"{result['index_pct']:.4f}%"),
-                ("index_pct_disk", lambda result: f"{result['index_pct_disk']:.4f}%"),
-            ],
-        )
+        print_table(all_results, WARM_COLUMNS)
 
 
 def _format_row(cells: list[str], widths: list[int]) -> str:
@@ -645,6 +748,47 @@ def print_table(results: list[dict], columns: list[tuple[str, callable]]) -> Non
     print(_format_row(["-" * width for width in widths], widths))
     for row in rows:
         print(_format_row(row, widths))
+
+
+def print_table_header(columns: list[tuple[str, callable]], widths: list[int] | None = None) -> None:
+    headers = [header for header, _ in columns]
+    if widths is None:
+        widths = [len(header) for header in headers]
+    print(_format_row(headers, widths))
+    print(_format_row(["-" * width for width in widths], widths))
+
+
+def print_table_row(result: dict, columns: list[tuple[str, callable]], widths: list[int] | None = None) -> None:
+    cells = [formatter(result) for _, formatter in columns]
+    if widths is None:
+        widths = [max(len(header), len(cell)) for (header, _), cell in zip(columns, cells, strict=True)]
+    print(_format_row(cells, widths))
+
+
+def progress_widths(
+    columns: list[tuple[str, callable]], sizes: tuple[int, ...], dists: tuple[str, ...], id_dtype: np.dtype
+) -> list[int]:
+    max_size = max(sizes)
+    max_index_bytes = max_size * max(np.dtype(id_dtype).itemsize + 8, 16)
+    max_cells = {
+        "rows": f"{max_size:,}",
+        "dist": max(dists, key=len),
+        "builder": "ooc",
+        "kind": max(KINDS, key=len),
+        "create_idx_ms": "999999.999",
+        "scan_ms": "9999.999",
+        "cold_ms": "9999.999",
+        "warm_ms": "9999.999",
+        "speedup": "9999.99x",
+        "logical_bytes": f"{max_index_bytes:,}",
+        "disk_bytes": f"{max_index_bytes:,}",
+        "index_pct": "100.0000%",
+        "index_pct_disk": "100.0000%",
+    }
+    widths = []
+    for header, _ in columns:
+        widths.append(max(len(header), len(max_cells.get(header, ""))))
+    return widths
 
 
 if __name__ == "__main__":
