@@ -697,10 +697,6 @@ def run_benchmarks(
     blocks: int | None,
 ) -> None:
     all_results = []
-    cold_widths = progress_widths(COLD_COLUMNS, sizes, dists, kinds, id_dtype)
-
-    def stream_cold_row(result: dict) -> None:
-        print_table_row(result, COLD_COLUMNS, cold_widths)
 
     array_dtype = source_dtype(id_dtype)
     resolved_geometries = {resolve_geometry((size,), array_dtype, chunks, blocks) for size in sizes}
@@ -715,9 +711,6 @@ def run_benchmarks(
         f"query_width={query_width:,}, optlevel={optlevel}, dtype={id_dtype.name}, in_mem={in_mem}, "
         f"full_query_mode={full_query_mode}"
     )
-    print()
-    print("Cold Query Table")
-    print_table_header(COLD_COLUMNS, cold_widths)
     for dist in dists:
         for size in sizes:
             size_results = benchmark_size(
@@ -732,14 +725,24 @@ def run_benchmarks(
                 chunks,
                 blocks,
                 kinds,
-                stream_cold_row,
             )
             all_results.extend(size_results)
+    cold_widths = table_widths(all_results, COLD_COLUMNS)
+    print()
+    print("Cold Query Table")
+    print_table(all_results, COLD_COLUMNS, cold_widths)
     if repeats > 0:
         measure_warm_queries(all_results, repeats)
+        warm_widths = table_widths(all_results, WARM_COLUMNS)
+        shared_width_by_header = {}
+        for (header, _), width in zip(COLD_COLUMNS, cold_widths, strict=True):
+            shared_width_by_header[header] = width
+        for (header, _), width in zip(WARM_COLUMNS, warm_widths, strict=True):
+            shared_width_by_header[header] = max(shared_width_by_header.get(header, 0), width)
+        warm_widths = [shared_width_by_header[header] for header, _ in WARM_COLUMNS]
         print()
         print("Warm Query Table")
-        print_table(all_results, WARM_COLUMNS)
+        print_table(all_results, WARM_COLUMNS, warm_widths)
 
 
 def _format_row(cells: list[str], widths: list[int]) -> str:
@@ -755,8 +758,9 @@ def _table_rows(results: list[dict], columns: list[tuple[str, callable]]) -> tup
     return headers, rows, widths
 
 
-def print_table(results: list[dict], columns: list[tuple[str, callable]]) -> None:
-    headers, rows, widths = _table_rows(results, columns)
+def print_table(results: list[dict], columns: list[tuple[str, callable]], widths: list[int] | None = None) -> None:
+    headers, rows, computed_widths = _table_rows(results, columns)
+    widths = computed_widths if widths is None else widths
     print(_format_row(headers, widths))
     print(_format_row(["-" * width for width in widths], widths))
     for row in rows:
@@ -805,6 +809,11 @@ def progress_widths(
     widths = []
     for header, _ in columns:
         widths.append(max(len(header), len(max_cells.get(header, ""))))
+    return widths
+
+
+def table_widths(results: list[dict], columns: list[tuple[str, callable]]) -> list[int]:
+    _, _, widths = _table_rows(results, columns)
     return widths
 
 
