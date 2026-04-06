@@ -4760,6 +4760,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         The current indexing model supports one active index target per field.
         Append operations keep compatible indexes current, while general
         mutation and resize operations mark indexes as stale until rebuild.
+
+        Chunk-local index creation uses parallel intra-chunk sorting by default.
+        Set the ``BLOSC2_INDEX_BUILD_THREADS`` environment variable to control
+        the number of build threads. Setting
+        ``BLOSC2_INDEX_BUILD_THREADS=1`` disables parallel sorting.
         """
         from . import indexing
 
@@ -4824,6 +4829,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Expression indexes are matched by normalized expression identity. The
         current implementation supports one active index target per normalized
         expression key.
+
+        Chunk-local index creation uses parallel intra-chunk sorting by default.
+        Set the ``BLOSC2_INDEX_BUILD_THREADS`` environment variable to control
+        the number of build threads. Setting
+        ``BLOSC2_INDEX_BUILD_THREADS=1`` disables parallel sorting.
         """
         from . import indexing
 

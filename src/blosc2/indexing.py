@@ -826,6 +826,27 @@ def _segment_row_count(chunk_len: int, nav_segment_len: int) -> int:
     return max(1, math.ceil(chunk_len / nav_segment_len))
 
 
+def _chunk_offsets(size: int, chunk_len: int) -> np.ndarray:
+    nchunks = math.ceil(size / chunk_len)
+    offsets = np.empty(nchunks + 1, dtype=np.int64)
+    offsets[0] = 0
+    if nchunks == 0:
+        return offsets
+    offsets[1:] = np.minimum(np.arange(1, nchunks + 1, dtype=np.int64) * chunk_len, size)
+    return offsets
+
+
+def _index_build_threads() -> int:
+    forced = os.getenv("BLOSC2_INDEX_BUILD_THREADS")
+    if forced is not None:
+        try:
+            forced_threads = int(forced)
+        except ValueError:
+            forced_threads = 1
+        return max(1, forced_threads)
+    return max(1, int(getattr(blosc2, "nthreads", 1) or 1))
+
+
 def _sidecar_block_len(sidecar: dict, fallback_block_len: int) -> int:
     path = sidecar.get("path")
     if path is None:
@@ -947,6 +968,140 @@ def _build_chunk_sorted_payload_direct(
         cursor = next_cursor
 
     return payload, aux, offsets, l1, l2
+
+
+def _intra_chunk_run_ranges(chunk_size: int, thread_count: int) -> list[tuple[int, int]]:
+    if chunk_size <= 0:
+        return []
+    run_count = max(1, min(thread_count, chunk_size))
+    boundaries = np.linspace(0, chunk_size, run_count + 1, dtype=np.int64)
+    return [(int(boundaries[idx]), int(boundaries[idx + 1])) for idx in range(run_count)]
+
+
+def _sort_chunk_run(
+    chunk: np.ndarray, run_start: int, run_stop: int, position_dtype: np.dtype
+) -> tuple[np.ndarray, np.ndarray]:
+    run = chunk[run_start:run_stop]
+    try:
+        return indexing_ext.intra_chunk_sort_run(run, run_start, position_dtype)
+    except TypeError:
+        order = np.argsort(run, kind="stable")
+        return run[order], (order + run_start).astype(position_dtype, copy=False)
+
+
+def _merge_sorted_run_pair(
+    left_values: np.ndarray,
+    left_positions: np.ndarray,
+    right_values: np.ndarray,
+    right_positions: np.ndarray,
+    dtype: np.dtype,
+    position_dtype: np.dtype,
+) -> tuple[np.ndarray, np.ndarray]:
+    try:
+        merged_values, merged_positions = indexing_ext.intra_chunk_merge_sorted_slices(
+            left_values, left_positions, right_values, right_positions, position_dtype
+        )
+    except TypeError:
+        merged_values, merged_positions = _merge_sorted_slices(
+            left_values, left_positions, right_values, right_positions, dtype
+        )
+    return merged_values, merged_positions.astype(position_dtype, copy=False)
+
+
+def _sort_chunk_intra_chunk(
+    chunk: np.ndarray,
+    position_dtype: np.dtype,
+    *,
+    thread_count: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    chunk_size = chunk.shape[0]
+    if chunk_size == 0:
+        return np.empty(0, dtype=chunk.dtype), np.empty(0, dtype=position_dtype)
+    if thread_count is None:
+        thread_count = _index_build_threads()
+    thread_count = max(1, min(int(thread_count), chunk_size))
+    if thread_count <= 1:
+        order = np.argsort(chunk, kind="stable")
+        return chunk[order], order.astype(position_dtype, copy=False)
+
+    def sort_run(run_range: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+        return _sort_chunk_run(chunk, run_range[0], run_range[1], position_dtype)
+
+    run_ranges = _intra_chunk_run_ranges(chunk_size, thread_count)
+    with ThreadPoolExecutor(max_workers=thread_count) as executor:
+        runs = list(executor.map(sort_run, run_ranges))
+
+    while len(runs) > 1:
+        pair_specs = [(runs[idx], runs[idx + 1]) for idx in range(0, len(runs) - 1, 2)]
+
+        def merge_pair(
+            pair_spec: tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]],
+        ) -> tuple[np.ndarray, np.ndarray]:
+            (left_values, left_positions), (right_values, right_positions) = pair_spec
+            return _merge_sorted_run_pair(
+                left_values, left_positions, right_values, right_positions, chunk.dtype, position_dtype
+            )
+
+        if pair_specs:
+            merge_workers = min(thread_count, len(pair_specs))
+            if merge_workers <= 1:
+                merged_runs = [merge_pair(pair_spec) for pair_spec in pair_specs]
+            else:
+                with ThreadPoolExecutor(max_workers=merge_workers) as executor:
+                    merged_runs = list(executor.map(merge_pair, pair_specs))
+        else:
+            merged_runs = []
+        if len(runs) % 2 == 1:
+            merged_runs.append(runs[-1])
+        runs = merged_runs
+
+    return runs[0]
+
+
+def _build_reduced_chunk_payloads_intra_chunk(
+    array: blosc2.NDArray,
+    target: dict,
+    dtype: np.dtype,
+    chunk_len: int,
+    nav_segment_len: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    size = int(array.shape[0])
+    nchunks = math.ceil(size / chunk_len)
+    position_dtype = _position_dtype(chunk_len - 1)
+    sorted_values = np.empty(size, dtype=dtype)
+    positions = np.empty(size, dtype=position_dtype)
+    offsets = np.empty(nchunks + 1, dtype=np.int64)
+    offsets[0] = 0
+    l1 = np.empty(nchunks, dtype=_boundary_dtype(dtype))
+    nsegments_per_chunk = _segment_row_count(chunk_len, nav_segment_len)
+    l2 = np.empty(nchunks * nsegments_per_chunk, dtype=_boundary_dtype(dtype))
+    cursor = 0
+    thread_count = _index_build_threads()
+
+    for chunk_id in range(nchunks):
+        start = chunk_id * chunk_len
+        stop = min(start + chunk_len, size)
+        chunk_sorted, local_positions = _sort_chunk_intra_chunk(
+            _slice_values_for_target(array, target, start, stop), position_dtype, thread_count=thread_count
+        )
+        chunk_size = stop - start
+        next_cursor = cursor + chunk_size
+        sorted_values[cursor:next_cursor] = chunk_sorted
+        positions[cursor:next_cursor] = local_positions
+        offsets[chunk_id + 1] = next_cursor
+        if chunk_size > 0:
+            l1[chunk_id] = (chunk_sorted[0], chunk_sorted[-1])
+            row_start = chunk_id * nsegments_per_chunk
+            segment_count = _segment_row_count(chunk_size, nav_segment_len)
+            for segment_id in range(segment_count):
+                seg_start = segment_id * nav_segment_len
+                seg_stop = min(seg_start + nav_segment_len, chunk_size)
+                l2[row_start + segment_id] = (chunk_sorted[seg_start], chunk_sorted[seg_stop - 1])
+            for segment_id in range(segment_count, nsegments_per_chunk):
+                l2[row_start + segment_id] = l2[row_start + segment_count - 1]
+        cursor = next_cursor
+
+    return sorted_values, positions, offsets, l1, l2
 
 
 def _chunk_index_payload_storage(
@@ -1137,12 +1292,11 @@ def _build_reduced_descriptor_ooc(
             for chunk_id in range(nchunks):
                 start = chunk_id * chunk_len
                 stop = min(start + chunk_len, size)
-                chunk = _slice_values_for_target(array, target, start, stop)
-                order = np.argsort(chunk, kind="stable")
                 chunk_size = stop - start
                 next_cursor = cursor + chunk_size
-                chunk_sorted = chunk[order]
-                local_positions = order.astype(position_dtype, copy=False)
+                chunk_sorted, local_positions = _sort_chunk_intra_chunk(
+                    _slice_values_for_target(array, target, start, stop), position_dtype
+                )
                 if values_handle is not None:
                     values_handle[cursor:next_cursor] = chunk_sorted
                 if positions_handle is not None:
@@ -1186,7 +1340,7 @@ def _build_reduced_descriptor_ooc(
 
     chunk_len = int(array.chunks[0])
     nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(int(array.blocks[0]), chunk_len, optlevel)
-    sorted_values, positions, offsets, l1, l2 = _build_chunk_sorted_payload_direct(
+    sorted_values, positions, offsets, l1, l2 = _build_reduced_chunk_payloads_intra_chunk(
         array, target, dtype, chunk_len, nav_segment_len
     )
     reduced = _chunk_index_payload_storage(
@@ -1381,6 +1535,60 @@ def _build_light_chunk_payloads(
     return sorted_values, bucket_positions, offsets, l1, l2
 
 
+def _build_light_chunk_payloads_intra_chunk(
+    array: blosc2.NDArray,
+    target: dict,
+    dtype: np.dtype,
+    chunk_len: int,
+    nav_segment_len: int,
+    value_lossy_bits: int,
+    bucket_len: int,
+    bucket_dtype: np.dtype,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    size = int(array.shape[0])
+    nchunks = math.ceil(size / chunk_len)
+    offsets = np.empty(nchunks + 1, dtype=np.int64)
+    offsets[0] = 0
+    sorted_values = np.empty(size, dtype=dtype)
+    bucket_positions = np.empty(size, dtype=bucket_dtype)
+    l1 = np.empty(nchunks, dtype=_boundary_dtype(dtype))
+    nsegments_per_chunk = _segment_row_count(chunk_len, nav_segment_len)
+    l2 = np.empty(nchunks * nsegments_per_chunk, dtype=_boundary_dtype(dtype))
+    position_dtype = _position_dtype(chunk_len - 1)
+    cursor = 0
+    thread_count = _index_build_threads()
+
+    for chunk_id in range(nchunks):
+        start = chunk_id * chunk_len
+        stop = min(start + chunk_len, size)
+        chunk_sorted, local_positions = _sort_chunk_intra_chunk(
+            _slice_values_for_target(array, target, start, stop), position_dtype, thread_count=thread_count
+        )
+        chunk_size = stop - start
+        next_cursor = cursor + chunk_size
+        stored_chunk_sorted = chunk_sorted
+        if value_lossy_bits > 0:
+            stored_chunk_sorted = _quantize_light_values_array(chunk_sorted, value_lossy_bits)
+        sorted_values[cursor:next_cursor] = stored_chunk_sorted
+        bucket_positions[cursor:next_cursor] = (local_positions // bucket_len).astype(
+            bucket_dtype, copy=False
+        )
+        offsets[chunk_id + 1] = next_cursor
+        if chunk_size > 0:
+            l1[chunk_id] = (stored_chunk_sorted[0], stored_chunk_sorted[-1])
+            row_start = chunk_id * nsegments_per_chunk
+            segment_count = _segment_row_count(chunk_size, nav_segment_len)
+            for segment_id in range(segment_count):
+                seg_start = segment_id * nav_segment_len
+                seg_stop = min(seg_start + nav_segment_len, chunk_size)
+                l2[row_start + segment_id] = (chunk_sorted[seg_start], chunk_sorted[seg_stop - 1])
+            for segment_id in range(segment_count, nsegments_per_chunk):
+                l2[row_start + segment_id] = l2[row_start + segment_count - 1]
+        cursor = next_cursor
+
+    return sorted_values, bucket_positions, offsets, l1, l2
+
+
 def _build_light_descriptor(
     array: blosc2.NDArray,
     token: str,
@@ -1440,7 +1648,7 @@ def _build_light_descriptor_ooc(
     bucket_count = math.ceil(chunk_len / bucket_len)
     value_lossy_bits = _light_value_lossy_bits(dtype, optlevel)
     bucket_dtype = _position_dtype(bucket_count - 1)
-    sorted_values, bucket_positions, offsets, l1, l2 = _build_light_chunk_payloads(
+    sorted_values, bucket_positions, offsets, l1, l2 = _build_light_chunk_payloads_intra_chunk(
         array, target, dtype, chunk_len, nav_segment_len, value_lossy_bits, bucket_len, bucket_dtype
     )
     if persistent:

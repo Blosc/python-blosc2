@@ -392,6 +392,65 @@ def test_in_mem_override_disables_ooc_builder(kind):
     assert descriptor["ooc"] is False
 
 
+@pytest.mark.parametrize("kind", ["light", "medium"])
+def test_chunk_local_ooc_intra_chunk_build_uses_thread_pool_when_strategy_forced(monkeypatch, kind):
+    data = np.arange(48_000, dtype=np.int64)
+    arr = blosc2.asarray(data, chunks=(48_000,), blocks=(1_500,))
+    indexing = __import__("blosc2.indexing", fromlist=["ThreadPoolExecutor"])
+    observed_workers = []
+
+    class FakeExecutor:
+        def __init__(self, *, max_workers):
+            observed_workers.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def map(self, fn, iterable):
+            return [fn(item) for item in iterable]
+
+    monkeypatch.setenv("BLOSC2_INDEX_BUILD_THREADS", "2")
+    monkeypatch.setattr(indexing, "ThreadPoolExecutor", FakeExecutor)
+
+    descriptor = arr.create_index(kind=kind)
+
+    assert descriptor["ooc"] is True
+    assert observed_workers
+    assert observed_workers[0] == 2
+
+
+def test_intra_chunk_sort_run_matches_numpy_stable_order():
+    indexing_ext = __import__("blosc2.indexing_ext", fromlist=["intra_chunk_sort_run"])
+    values = np.array([4.0, np.nan, 2.0, 2.0, np.nan, 1.0, 4.0], dtype=np.float64)
+
+    sorted_values, positions = indexing_ext.intra_chunk_sort_run(values, 0, np.dtype(np.uint16))
+
+    order = np.argsort(values, kind="stable")
+    np.testing.assert_array_equal(sorted_values, values[order])
+    np.testing.assert_array_equal(positions, order.astype(np.uint16, copy=False))
+
+
+def test_intra_chunk_merge_sorted_slices_matches_lexsort_merge():
+    indexing_ext = __import__("blosc2.indexing_ext", fromlist=["intra_chunk_merge_sorted_slices"])
+    left_values = np.array([1.0, 2.0, 2.0, np.nan], dtype=np.float64)
+    left_positions = np.array([0, 2, 3, 6], dtype=np.uint16)
+    right_values = np.array([1.0, 2.0, 3.0, np.nan], dtype=np.float64)
+    right_positions = np.array([1, 4, 5, 7], dtype=np.uint16)
+
+    merged_values, merged_positions = indexing_ext.intra_chunk_merge_sorted_slices(
+        left_values, left_positions, right_values, right_positions, np.dtype(np.uint16)
+    )
+
+    all_values = np.concatenate((left_values, right_values))
+    all_positions = np.concatenate((left_positions, right_positions))
+    order = np.lexsort((all_positions, all_values))
+    np.testing.assert_array_equal(merged_values, all_values[order])
+    np.testing.assert_array_equal(merged_positions, all_positions[order])
+
+
 def test_mutation_marks_index_stale_and_rebuild_restores_it():
     data = np.arange(50_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(5_000,), blocks=(1_000,))

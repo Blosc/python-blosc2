@@ -11,6 +11,700 @@ cimport numpy as np
 from libc.stdint cimport int8_t, int16_t, int32_t, int64_t, uint8_t, uint16_t, uint32_t, uint64_t
 
 
+ctypedef fused sort_float_t:
+    np.float32_t
+    np.float64_t
+
+
+ctypedef fused sort_ordered_t:
+    np.int8_t
+    np.int16_t
+    np.int32_t
+    np.int64_t
+    np.uint8_t
+    np.uint16_t
+    np.uint32_t
+    np.uint64_t
+
+
+cdef inline bint _le_float_pair(
+    sort_float_t left_value,
+    uint64_t left_position,
+    sort_float_t right_value,
+    uint64_t right_position,
+) noexcept nogil:
+    cdef bint left_nan = left_value != left_value
+    cdef bint right_nan = right_value != right_value
+    if left_nan:
+        if right_nan:
+            return left_position <= right_position
+        return False
+    if right_nan:
+        return True
+    if left_value < right_value:
+        return True
+    if left_value > right_value:
+        return False
+    return left_position <= right_position
+
+
+cdef inline bint _le_ordered_pair(
+    sort_ordered_t left_value,
+    uint64_t left_position,
+    sort_ordered_t right_value,
+    uint64_t right_position,
+) noexcept nogil:
+    if left_value < right_value:
+        return True
+    if left_value > right_value:
+        return False
+    return left_position <= right_position
+
+
+cdef void _stable_mergesort_float(
+    sort_float_t[:] values,
+    uint64_t[:] positions,
+    sort_float_t[:] tmp_values,
+    uint64_t[:] tmp_positions,
+) noexcept nogil:
+    cdef Py_ssize_t n = values.shape[0]
+    cdef Py_ssize_t width = 1
+    cdef Py_ssize_t start
+    cdef Py_ssize_t mid
+    cdef Py_ssize_t stop
+    cdef Py_ssize_t left
+    cdef Py_ssize_t right
+    cdef Py_ssize_t out
+    cdef sort_float_t[:] src_values = values
+    cdef uint64_t[:] src_positions = positions
+    cdef sort_float_t[:] dst_values = tmp_values
+    cdef uint64_t[:] dst_positions = tmp_positions
+    cdef sort_float_t[:] swap_values
+    cdef uint64_t[:] swap_positions
+    cdef bint in_original = True
+    while width < n:
+        start = 0
+        while start < n:
+            mid = start + width
+            if mid > n:
+                mid = n
+            stop = start + 2 * width
+            if stop > n:
+                stop = n
+            left = start
+            right = mid
+            out = start
+            while left < mid and right < stop:
+                if _le_float_pair(
+                    src_values[left], src_positions[left], src_values[right], src_positions[right]
+                ):
+                    dst_values[out] = src_values[left]
+                    dst_positions[out] = src_positions[left]
+                    left += 1
+                else:
+                    dst_values[out] = src_values[right]
+                    dst_positions[out] = src_positions[right]
+                    right += 1
+                out += 1
+            while left < mid:
+                dst_values[out] = src_values[left]
+                dst_positions[out] = src_positions[left]
+                left += 1
+                out += 1
+            while right < stop:
+                dst_values[out] = src_values[right]
+                dst_positions[out] = src_positions[right]
+                right += 1
+                out += 1
+            start = stop
+        swap_values = src_values
+        src_values = dst_values
+        dst_values = swap_values
+        swap_positions = src_positions
+        src_positions = dst_positions
+        dst_positions = swap_positions
+        in_original = not in_original
+        width <<= 1
+    if not in_original:
+        for start in range(n):
+            values[start] = src_values[start]
+            positions[start] = src_positions[start]
+
+
+cdef void _stable_mergesort_ordered(
+    sort_ordered_t[:] values,
+    uint64_t[:] positions,
+    sort_ordered_t[:] tmp_values,
+    uint64_t[:] tmp_positions,
+) noexcept nogil:
+    cdef Py_ssize_t n = values.shape[0]
+    cdef Py_ssize_t width = 1
+    cdef Py_ssize_t start
+    cdef Py_ssize_t mid
+    cdef Py_ssize_t stop
+    cdef Py_ssize_t left
+    cdef Py_ssize_t right
+    cdef Py_ssize_t out
+    cdef sort_ordered_t[:] src_values = values
+    cdef uint64_t[:] src_positions = positions
+    cdef sort_ordered_t[:] dst_values = tmp_values
+    cdef uint64_t[:] dst_positions = tmp_positions
+    cdef sort_ordered_t[:] swap_values
+    cdef uint64_t[:] swap_positions
+    cdef bint in_original = True
+    while width < n:
+        start = 0
+        while start < n:
+            mid = start + width
+            if mid > n:
+                mid = n
+            stop = start + 2 * width
+            if stop > n:
+                stop = n
+            left = start
+            right = mid
+            out = start
+            while left < mid and right < stop:
+                if _le_ordered_pair(
+                    src_values[left], src_positions[left], src_values[right], src_positions[right]
+                ):
+                    dst_values[out] = src_values[left]
+                    dst_positions[out] = src_positions[left]
+                    left += 1
+                else:
+                    dst_values[out] = src_values[right]
+                    dst_positions[out] = src_positions[right]
+                    right += 1
+                out += 1
+            while left < mid:
+                dst_values[out] = src_values[left]
+                dst_positions[out] = src_positions[left]
+                left += 1
+                out += 1
+            while right < stop:
+                dst_values[out] = src_values[right]
+                dst_positions[out] = src_positions[right]
+                right += 1
+                out += 1
+            start = stop
+        swap_values = src_values
+        src_values = dst_values
+        dst_values = swap_values
+        swap_positions = src_positions
+        src_positions = dst_positions
+        dst_positions = swap_positions
+        in_original = not in_original
+        width <<= 1
+    if not in_original:
+        for start in range(n):
+            values[start] = src_values[start]
+            positions[start] = src_positions[start]
+
+
+cdef tuple _intra_chunk_sort_run_float32(np.ndarray values, Py_ssize_t run_start, np.dtype position_dtype):
+    cdef np.ndarray[np.float32_t, ndim=1] sorted_values = np.array(values, copy=True, order="C")
+    cdef np.ndarray[np.uint64_t, ndim=1] positions = np.empty(sorted_values.shape[0], dtype=np.uint64)
+    cdef np.ndarray[np.float32_t, ndim=1] tmp_values = np.empty_like(sorted_values)
+    cdef np.ndarray[np.uint64_t, ndim=1] tmp_positions = np.empty_like(positions)
+    cdef np.float32_t[:] sorted_values_mv = sorted_values
+    cdef np.uint64_t[:] positions_mv = positions
+    cdef np.float32_t[:] tmp_values_mv = tmp_values
+    cdef np.uint64_t[:] tmp_positions_mv = tmp_positions
+    cdef Py_ssize_t idx
+    with nogil:
+        for idx in range(sorted_values.shape[0]):
+            positions[idx] = <uint64_t>(run_start + idx)
+        _stable_mergesort_float(sorted_values_mv, positions_mv, tmp_values_mv, tmp_positions_mv)
+    return sorted_values, positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_sort_run_float64(np.ndarray values, Py_ssize_t run_start, np.dtype position_dtype):
+    cdef np.ndarray[np.float64_t, ndim=1] sorted_values = np.array(values, copy=True, order="C")
+    cdef np.ndarray[np.uint64_t, ndim=1] positions = np.empty(sorted_values.shape[0], dtype=np.uint64)
+    cdef np.ndarray[np.float64_t, ndim=1] tmp_values = np.empty_like(sorted_values)
+    cdef np.ndarray[np.uint64_t, ndim=1] tmp_positions = np.empty_like(positions)
+    cdef np.float64_t[:] sorted_values_mv = sorted_values
+    cdef np.uint64_t[:] positions_mv = positions
+    cdef np.float64_t[:] tmp_values_mv = tmp_values
+    cdef np.uint64_t[:] tmp_positions_mv = tmp_positions
+    cdef Py_ssize_t idx
+    with nogil:
+        for idx in range(sorted_values.shape[0]):
+            positions[idx] = <uint64_t>(run_start + idx)
+        _stable_mergesort_float(sorted_values_mv, positions_mv, tmp_values_mv, tmp_positions_mv)
+    return sorted_values, positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_sort_run_int8(np.ndarray values, Py_ssize_t run_start, np.dtype position_dtype):
+    cdef np.ndarray[np.int8_t, ndim=1] sorted_values = np.array(values, copy=True, order="C")
+    cdef np.ndarray[np.uint64_t, ndim=1] positions = np.empty(sorted_values.shape[0], dtype=np.uint64)
+    cdef np.ndarray[np.int8_t, ndim=1] tmp_values = np.empty_like(sorted_values)
+    cdef np.ndarray[np.uint64_t, ndim=1] tmp_positions = np.empty_like(positions)
+    cdef np.int8_t[:] sorted_values_mv = sorted_values
+    cdef np.uint64_t[:] positions_mv = positions
+    cdef np.int8_t[:] tmp_values_mv = tmp_values
+    cdef np.uint64_t[:] tmp_positions_mv = tmp_positions
+    cdef Py_ssize_t idx
+    with nogil:
+        for idx in range(sorted_values.shape[0]):
+            positions[idx] = <uint64_t>(run_start + idx)
+        _stable_mergesort_ordered(sorted_values_mv, positions_mv, tmp_values_mv, tmp_positions_mv)
+    return sorted_values, positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_sort_run_int16(np.ndarray values, Py_ssize_t run_start, np.dtype position_dtype):
+    cdef np.ndarray[np.int16_t, ndim=1] sorted_values = np.array(values, copy=True, order="C")
+    cdef np.ndarray[np.uint64_t, ndim=1] positions = np.empty(sorted_values.shape[0], dtype=np.uint64)
+    cdef np.ndarray[np.int16_t, ndim=1] tmp_values = np.empty_like(sorted_values)
+    cdef np.ndarray[np.uint64_t, ndim=1] tmp_positions = np.empty_like(positions)
+    cdef np.int16_t[:] sorted_values_mv = sorted_values
+    cdef np.uint64_t[:] positions_mv = positions
+    cdef np.int16_t[:] tmp_values_mv = tmp_values
+    cdef np.uint64_t[:] tmp_positions_mv = tmp_positions
+    cdef Py_ssize_t idx
+    with nogil:
+        for idx in range(sorted_values.shape[0]):
+            positions[idx] = <uint64_t>(run_start + idx)
+        _stable_mergesort_ordered(sorted_values_mv, positions_mv, tmp_values_mv, tmp_positions_mv)
+    return sorted_values, positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_sort_run_int32(np.ndarray values, Py_ssize_t run_start, np.dtype position_dtype):
+    cdef np.ndarray[np.int32_t, ndim=1] sorted_values = np.array(values, copy=True, order="C")
+    cdef np.ndarray[np.uint64_t, ndim=1] positions = np.empty(sorted_values.shape[0], dtype=np.uint64)
+    cdef np.ndarray[np.int32_t, ndim=1] tmp_values = np.empty_like(sorted_values)
+    cdef np.ndarray[np.uint64_t, ndim=1] tmp_positions = np.empty_like(positions)
+    cdef np.int32_t[:] sorted_values_mv = sorted_values
+    cdef np.uint64_t[:] positions_mv = positions
+    cdef np.int32_t[:] tmp_values_mv = tmp_values
+    cdef np.uint64_t[:] tmp_positions_mv = tmp_positions
+    cdef Py_ssize_t idx
+    with nogil:
+        for idx in range(sorted_values.shape[0]):
+            positions[idx] = <uint64_t>(run_start + idx)
+        _stable_mergesort_ordered(sorted_values_mv, positions_mv, tmp_values_mv, tmp_positions_mv)
+    return sorted_values, positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_sort_run_int64(np.ndarray values, Py_ssize_t run_start, np.dtype position_dtype):
+    cdef np.ndarray[np.int64_t, ndim=1] sorted_values = np.array(values, copy=True, order="C")
+    cdef np.ndarray[np.uint64_t, ndim=1] positions = np.empty(sorted_values.shape[0], dtype=np.uint64)
+    cdef np.ndarray[np.int64_t, ndim=1] tmp_values = np.empty_like(sorted_values)
+    cdef np.ndarray[np.uint64_t, ndim=1] tmp_positions = np.empty_like(positions)
+    cdef np.int64_t[:] sorted_values_mv = sorted_values
+    cdef np.uint64_t[:] positions_mv = positions
+    cdef np.int64_t[:] tmp_values_mv = tmp_values
+    cdef np.uint64_t[:] tmp_positions_mv = tmp_positions
+    cdef Py_ssize_t idx
+    with nogil:
+        for idx in range(sorted_values.shape[0]):
+            positions[idx] = <uint64_t>(run_start + idx)
+        _stable_mergesort_ordered(sorted_values_mv, positions_mv, tmp_values_mv, tmp_positions_mv)
+    return sorted_values, positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_sort_run_uint8(np.ndarray values, Py_ssize_t run_start, np.dtype position_dtype):
+    cdef np.ndarray[np.uint8_t, ndim=1] sorted_values = np.array(values, copy=True, order="C")
+    cdef np.ndarray[np.uint64_t, ndim=1] positions = np.empty(sorted_values.shape[0], dtype=np.uint64)
+    cdef np.ndarray[np.uint8_t, ndim=1] tmp_values = np.empty_like(sorted_values)
+    cdef np.ndarray[np.uint64_t, ndim=1] tmp_positions = np.empty_like(positions)
+    cdef np.uint8_t[:] sorted_values_mv = sorted_values
+    cdef np.uint64_t[:] positions_mv = positions
+    cdef np.uint8_t[:] tmp_values_mv = tmp_values
+    cdef np.uint64_t[:] tmp_positions_mv = tmp_positions
+    cdef Py_ssize_t idx
+    with nogil:
+        for idx in range(sorted_values.shape[0]):
+            positions[idx] = <uint64_t>(run_start + idx)
+        _stable_mergesort_ordered(sorted_values_mv, positions_mv, tmp_values_mv, tmp_positions_mv)
+    return sorted_values, positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_sort_run_uint16(np.ndarray values, Py_ssize_t run_start, np.dtype position_dtype):
+    cdef np.ndarray[np.uint16_t, ndim=1] sorted_values = np.array(values, copy=True, order="C")
+    cdef np.ndarray[np.uint64_t, ndim=1] positions = np.empty(sorted_values.shape[0], dtype=np.uint64)
+    cdef np.ndarray[np.uint16_t, ndim=1] tmp_values = np.empty_like(sorted_values)
+    cdef np.ndarray[np.uint64_t, ndim=1] tmp_positions = np.empty_like(positions)
+    cdef np.uint16_t[:] sorted_values_mv = sorted_values
+    cdef np.uint64_t[:] positions_mv = positions
+    cdef np.uint16_t[:] tmp_values_mv = tmp_values
+    cdef np.uint64_t[:] tmp_positions_mv = tmp_positions
+    cdef Py_ssize_t idx
+    with nogil:
+        for idx in range(sorted_values.shape[0]):
+            positions[idx] = <uint64_t>(run_start + idx)
+        _stable_mergesort_ordered(sorted_values_mv, positions_mv, tmp_values_mv, tmp_positions_mv)
+    return sorted_values, positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_sort_run_uint32(np.ndarray values, Py_ssize_t run_start, np.dtype position_dtype):
+    cdef np.ndarray[np.uint32_t, ndim=1] sorted_values = np.array(values, copy=True, order="C")
+    cdef np.ndarray[np.uint64_t, ndim=1] positions = np.empty(sorted_values.shape[0], dtype=np.uint64)
+    cdef np.ndarray[np.uint32_t, ndim=1] tmp_values = np.empty_like(sorted_values)
+    cdef np.ndarray[np.uint64_t, ndim=1] tmp_positions = np.empty_like(positions)
+    cdef np.uint32_t[:] sorted_values_mv = sorted_values
+    cdef np.uint64_t[:] positions_mv = positions
+    cdef np.uint32_t[:] tmp_values_mv = tmp_values
+    cdef np.uint64_t[:] tmp_positions_mv = tmp_positions
+    cdef Py_ssize_t idx
+    with nogil:
+        for idx in range(sorted_values.shape[0]):
+            positions[idx] = <uint64_t>(run_start + idx)
+        _stable_mergesort_ordered(sorted_values_mv, positions_mv, tmp_values_mv, tmp_positions_mv)
+    return sorted_values, positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_sort_run_uint64(np.ndarray values, Py_ssize_t run_start, np.dtype position_dtype):
+    cdef np.ndarray[np.uint64_t, ndim=1] sorted_values = np.array(values, copy=True, order="C")
+    cdef np.ndarray[np.uint64_t, ndim=1] positions = np.empty(sorted_values.shape[0], dtype=np.uint64)
+    cdef np.ndarray[np.uint64_t, ndim=1] tmp_values = np.empty_like(sorted_values)
+    cdef np.ndarray[np.uint64_t, ndim=1] tmp_positions = np.empty_like(positions)
+    cdef np.uint64_t[:] sorted_values_mv = sorted_values
+    cdef np.uint64_t[:] positions_mv = positions
+    cdef np.uint64_t[:] tmp_values_mv = tmp_values
+    cdef np.uint64_t[:] tmp_positions_mv = tmp_positions
+    cdef Py_ssize_t idx
+    with nogil:
+        for idx in range(sorted_values.shape[0]):
+            positions[idx] = <uint64_t>(run_start + idx)
+        _stable_mergesort_ordered(sorted_values_mv, positions_mv, tmp_values_mv, tmp_positions_mv)
+    return sorted_values, positions.astype(position_dtype, copy=False)
+
+
+def intra_chunk_sort_run(np.ndarray values, Py_ssize_t run_start, object position_dtype):
+    cdef np.dtype dtype = values.dtype
+    cdef np.dtype pos_dtype = np.dtype(position_dtype)
+    if dtype == np.dtype(np.float32):
+        return _intra_chunk_sort_run_float32(values, run_start, pos_dtype)
+    if dtype == np.dtype(np.float64):
+        return _intra_chunk_sort_run_float64(values, run_start, pos_dtype)
+    if dtype == np.dtype(np.int8):
+        return _intra_chunk_sort_run_int8(values, run_start, pos_dtype)
+    if dtype == np.dtype(np.int16):
+        return _intra_chunk_sort_run_int16(values, run_start, pos_dtype)
+    if dtype == np.dtype(np.int32):
+        return _intra_chunk_sort_run_int32(values, run_start, pos_dtype)
+    if dtype == np.dtype(np.int64):
+        return _intra_chunk_sort_run_int64(values, run_start, pos_dtype)
+    if dtype == np.dtype(np.uint8) or dtype == np.dtype(np.bool_):
+        sorted_values, positions = _intra_chunk_sort_run_uint8(values.view(np.uint8), run_start, pos_dtype)
+        if dtype == np.dtype(np.bool_):
+            return sorted_values.view(np.bool_), positions
+        return sorted_values, positions
+    if dtype == np.dtype(np.uint16):
+        return _intra_chunk_sort_run_uint16(values, run_start, pos_dtype)
+    if dtype == np.dtype(np.uint32):
+        return _intra_chunk_sort_run_uint32(values, run_start, pos_dtype)
+    if dtype == np.dtype(np.uint64):
+        return _intra_chunk_sort_run_uint64(values, run_start, pos_dtype)
+    if dtype.kind in {"m", "M"}:
+        sorted_values, positions = _intra_chunk_sort_run_int64(values.view(np.int64), run_start, pos_dtype)
+        return sorted_values.view(dtype), positions
+    raise TypeError("unsupported dtype for intra_chunk_sort_run")
+
+
+cdef void _linear_merge_float(
+    sort_float_t[:] left_values,
+    uint64_t[:] left_positions,
+    sort_float_t[:] right_values,
+    uint64_t[:] right_positions,
+    sort_float_t[:] out_values,
+    uint64_t[:] out_positions,
+) noexcept nogil:
+    cdef Py_ssize_t left = 0
+    cdef Py_ssize_t right = 0
+    cdef Py_ssize_t out = 0
+    cdef Py_ssize_t left_n = left_values.shape[0]
+    cdef Py_ssize_t right_n = right_values.shape[0]
+    while left < left_n and right < right_n:
+        if _le_float_pair(left_values[left], left_positions[left], right_values[right], right_positions[right]):
+            out_values[out] = left_values[left]
+            out_positions[out] = left_positions[left]
+            left += 1
+        else:
+            out_values[out] = right_values[right]
+            out_positions[out] = right_positions[right]
+            right += 1
+        out += 1
+    while left < left_n:
+        out_values[out] = left_values[left]
+        out_positions[out] = left_positions[left]
+        left += 1
+        out += 1
+    while right < right_n:
+        out_values[out] = right_values[right]
+        out_positions[out] = right_positions[right]
+        right += 1
+        out += 1
+
+
+cdef void _linear_merge_ordered(
+    sort_ordered_t[:] left_values,
+    uint64_t[:] left_positions,
+    sort_ordered_t[:] right_values,
+    uint64_t[:] right_positions,
+    sort_ordered_t[:] out_values,
+    uint64_t[:] out_positions,
+) noexcept nogil:
+    cdef Py_ssize_t left = 0
+    cdef Py_ssize_t right = 0
+    cdef Py_ssize_t out = 0
+    cdef Py_ssize_t left_n = left_values.shape[0]
+    cdef Py_ssize_t right_n = right_values.shape[0]
+    while left < left_n and right < right_n:
+        if _le_ordered_pair(
+            left_values[left], left_positions[left], right_values[right], right_positions[right]
+        ):
+            out_values[out] = left_values[left]
+            out_positions[out] = left_positions[left]
+            left += 1
+        else:
+            out_values[out] = right_values[right]
+            out_positions[out] = right_positions[right]
+            right += 1
+        out += 1
+    while left < left_n:
+        out_values[out] = left_values[left]
+        out_positions[out] = left_positions[left]
+        left += 1
+        out += 1
+    while right < right_n:
+        out_values[out] = right_values[right]
+        out_positions[out] = right_positions[right]
+        right += 1
+        out += 1
+
+
+cdef tuple _intra_chunk_merge_float32(
+    np.ndarray left_values, np.ndarray left_positions, np.ndarray right_values, np.ndarray right_positions, np.dtype position_dtype
+):
+    cdef Py_ssize_t total = left_values.shape[0] + right_values.shape[0]
+    cdef np.ndarray[np.float32_t, ndim=1] merged_values = np.empty(total, dtype=np.float32)
+    cdef np.ndarray[np.uint64_t, ndim=1] merged_positions = np.empty(total, dtype=np.uint64)
+    cdef np.float32_t[:] left_values_mv = left_values
+    cdef np.uint64_t[:] left_positions_mv = np.asarray(left_positions, dtype=np.uint64)
+    cdef np.float32_t[:] right_values_mv = right_values
+    cdef np.uint64_t[:] right_positions_mv = np.asarray(right_positions, dtype=np.uint64)
+    cdef np.float32_t[:] merged_values_mv = merged_values
+    cdef np.uint64_t[:] merged_positions_mv = merged_positions
+    with nogil:
+        _linear_merge_float(
+            left_values_mv, left_positions_mv, right_values_mv, right_positions_mv, merged_values_mv, merged_positions_mv
+        )
+    return merged_values, merged_positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_merge_float64(
+    np.ndarray left_values, np.ndarray left_positions, np.ndarray right_values, np.ndarray right_positions, np.dtype position_dtype
+):
+    cdef Py_ssize_t total = left_values.shape[0] + right_values.shape[0]
+    cdef np.ndarray[np.float64_t, ndim=1] merged_values = np.empty(total, dtype=np.float64)
+    cdef np.ndarray[np.uint64_t, ndim=1] merged_positions = np.empty(total, dtype=np.uint64)
+    cdef np.float64_t[:] left_values_mv = left_values
+    cdef np.uint64_t[:] left_positions_mv = np.asarray(left_positions, dtype=np.uint64)
+    cdef np.float64_t[:] right_values_mv = right_values
+    cdef np.uint64_t[:] right_positions_mv = np.asarray(right_positions, dtype=np.uint64)
+    cdef np.float64_t[:] merged_values_mv = merged_values
+    cdef np.uint64_t[:] merged_positions_mv = merged_positions
+    with nogil:
+        _linear_merge_float(
+            left_values_mv, left_positions_mv, right_values_mv, right_positions_mv, merged_values_mv, merged_positions_mv
+        )
+    return merged_values, merged_positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_merge_int8(
+    np.ndarray left_values, np.ndarray left_positions, np.ndarray right_values, np.ndarray right_positions, np.dtype position_dtype
+):
+    cdef Py_ssize_t total = left_values.shape[0] + right_values.shape[0]
+    cdef np.ndarray[np.int8_t, ndim=1] merged_values = np.empty(total, dtype=np.int8)
+    cdef np.ndarray[np.uint64_t, ndim=1] merged_positions = np.empty(total, dtype=np.uint64)
+    cdef np.int8_t[:] left_values_mv = left_values
+    cdef np.uint64_t[:] left_positions_mv = np.asarray(left_positions, dtype=np.uint64)
+    cdef np.int8_t[:] right_values_mv = right_values
+    cdef np.uint64_t[:] right_positions_mv = np.asarray(right_positions, dtype=np.uint64)
+    cdef np.int8_t[:] merged_values_mv = merged_values
+    cdef np.uint64_t[:] merged_positions_mv = merged_positions
+    with nogil:
+        _linear_merge_ordered(
+            left_values_mv, left_positions_mv, right_values_mv, right_positions_mv, merged_values_mv, merged_positions_mv
+        )
+    return merged_values, merged_positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_merge_int16(
+    np.ndarray left_values, np.ndarray left_positions, np.ndarray right_values, np.ndarray right_positions, np.dtype position_dtype
+):
+    cdef Py_ssize_t total = left_values.shape[0] + right_values.shape[0]
+    cdef np.ndarray[np.int16_t, ndim=1] merged_values = np.empty(total, dtype=np.int16)
+    cdef np.ndarray[np.uint64_t, ndim=1] merged_positions = np.empty(total, dtype=np.uint64)
+    cdef np.int16_t[:] left_values_mv = left_values
+    cdef np.uint64_t[:] left_positions_mv = np.asarray(left_positions, dtype=np.uint64)
+    cdef np.int16_t[:] right_values_mv = right_values
+    cdef np.uint64_t[:] right_positions_mv = np.asarray(right_positions, dtype=np.uint64)
+    cdef np.int16_t[:] merged_values_mv = merged_values
+    cdef np.uint64_t[:] merged_positions_mv = merged_positions
+    with nogil:
+        _linear_merge_ordered(
+            left_values_mv, left_positions_mv, right_values_mv, right_positions_mv, merged_values_mv, merged_positions_mv
+        )
+    return merged_values, merged_positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_merge_int32(
+    np.ndarray left_values, np.ndarray left_positions, np.ndarray right_values, np.ndarray right_positions, np.dtype position_dtype
+):
+    cdef Py_ssize_t total = left_values.shape[0] + right_values.shape[0]
+    cdef np.ndarray[np.int32_t, ndim=1] merged_values = np.empty(total, dtype=np.int32)
+    cdef np.ndarray[np.uint64_t, ndim=1] merged_positions = np.empty(total, dtype=np.uint64)
+    cdef np.int32_t[:] left_values_mv = left_values
+    cdef np.uint64_t[:] left_positions_mv = np.asarray(left_positions, dtype=np.uint64)
+    cdef np.int32_t[:] right_values_mv = right_values
+    cdef np.uint64_t[:] right_positions_mv = np.asarray(right_positions, dtype=np.uint64)
+    cdef np.int32_t[:] merged_values_mv = merged_values
+    cdef np.uint64_t[:] merged_positions_mv = merged_positions
+    with nogil:
+        _linear_merge_ordered(
+            left_values_mv, left_positions_mv, right_values_mv, right_positions_mv, merged_values_mv, merged_positions_mv
+        )
+    return merged_values, merged_positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_merge_int64(
+    np.ndarray left_values, np.ndarray left_positions, np.ndarray right_values, np.ndarray right_positions, np.dtype position_dtype
+):
+    cdef Py_ssize_t total = left_values.shape[0] + right_values.shape[0]
+    cdef np.ndarray[np.int64_t, ndim=1] merged_values = np.empty(total, dtype=np.int64)
+    cdef np.ndarray[np.uint64_t, ndim=1] merged_positions = np.empty(total, dtype=np.uint64)
+    cdef np.int64_t[:] left_values_mv = left_values
+    cdef np.uint64_t[:] left_positions_mv = np.asarray(left_positions, dtype=np.uint64)
+    cdef np.int64_t[:] right_values_mv = right_values
+    cdef np.uint64_t[:] right_positions_mv = np.asarray(right_positions, dtype=np.uint64)
+    cdef np.int64_t[:] merged_values_mv = merged_values
+    cdef np.uint64_t[:] merged_positions_mv = merged_positions
+    with nogil:
+        _linear_merge_ordered(
+            left_values_mv, left_positions_mv, right_values_mv, right_positions_mv, merged_values_mv, merged_positions_mv
+        )
+    return merged_values, merged_positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_merge_uint8(
+    np.ndarray left_values, np.ndarray left_positions, np.ndarray right_values, np.ndarray right_positions, np.dtype position_dtype
+):
+    cdef Py_ssize_t total = left_values.shape[0] + right_values.shape[0]
+    cdef np.ndarray[np.uint8_t, ndim=1] merged_values = np.empty(total, dtype=np.uint8)
+    cdef np.ndarray[np.uint64_t, ndim=1] merged_positions = np.empty(total, dtype=np.uint64)
+    cdef np.uint8_t[:] left_values_mv = left_values
+    cdef np.uint64_t[:] left_positions_mv = np.asarray(left_positions, dtype=np.uint64)
+    cdef np.uint8_t[:] right_values_mv = right_values
+    cdef np.uint64_t[:] right_positions_mv = np.asarray(right_positions, dtype=np.uint64)
+    cdef np.uint8_t[:] merged_values_mv = merged_values
+    cdef np.uint64_t[:] merged_positions_mv = merged_positions
+    with nogil:
+        _linear_merge_ordered(
+            left_values_mv, left_positions_mv, right_values_mv, right_positions_mv, merged_values_mv, merged_positions_mv
+        )
+    return merged_values, merged_positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_merge_uint16(
+    np.ndarray left_values, np.ndarray left_positions, np.ndarray right_values, np.ndarray right_positions, np.dtype position_dtype
+):
+    cdef Py_ssize_t total = left_values.shape[0] + right_values.shape[0]
+    cdef np.ndarray[np.uint16_t, ndim=1] merged_values = np.empty(total, dtype=np.uint16)
+    cdef np.ndarray[np.uint64_t, ndim=1] merged_positions = np.empty(total, dtype=np.uint64)
+    cdef np.uint16_t[:] left_values_mv = left_values
+    cdef np.uint64_t[:] left_positions_mv = np.asarray(left_positions, dtype=np.uint64)
+    cdef np.uint16_t[:] right_values_mv = right_values
+    cdef np.uint64_t[:] right_positions_mv = np.asarray(right_positions, dtype=np.uint64)
+    cdef np.uint16_t[:] merged_values_mv = merged_values
+    cdef np.uint64_t[:] merged_positions_mv = merged_positions
+    with nogil:
+        _linear_merge_ordered(
+            left_values_mv, left_positions_mv, right_values_mv, right_positions_mv, merged_values_mv, merged_positions_mv
+        )
+    return merged_values, merged_positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_merge_uint32(
+    np.ndarray left_values, np.ndarray left_positions, np.ndarray right_values, np.ndarray right_positions, np.dtype position_dtype
+):
+    cdef Py_ssize_t total = left_values.shape[0] + right_values.shape[0]
+    cdef np.ndarray[np.uint32_t, ndim=1] merged_values = np.empty(total, dtype=np.uint32)
+    cdef np.ndarray[np.uint64_t, ndim=1] merged_positions = np.empty(total, dtype=np.uint64)
+    cdef np.uint32_t[:] left_values_mv = left_values
+    cdef np.uint64_t[:] left_positions_mv = np.asarray(left_positions, dtype=np.uint64)
+    cdef np.uint32_t[:] right_values_mv = right_values
+    cdef np.uint64_t[:] right_positions_mv = np.asarray(right_positions, dtype=np.uint64)
+    cdef np.uint32_t[:] merged_values_mv = merged_values
+    cdef np.uint64_t[:] merged_positions_mv = merged_positions
+    with nogil:
+        _linear_merge_ordered(
+            left_values_mv, left_positions_mv, right_values_mv, right_positions_mv, merged_values_mv, merged_positions_mv
+        )
+    return merged_values, merged_positions.astype(position_dtype, copy=False)
+
+
+cdef tuple _intra_chunk_merge_uint64(
+    np.ndarray left_values, np.ndarray left_positions, np.ndarray right_values, np.ndarray right_positions, np.dtype position_dtype
+):
+    cdef Py_ssize_t total = left_values.shape[0] + right_values.shape[0]
+    cdef np.ndarray[np.uint64_t, ndim=1] merged_values = np.empty(total, dtype=np.uint64)
+    cdef np.ndarray[np.uint64_t, ndim=1] merged_positions = np.empty(total, dtype=np.uint64)
+    cdef np.uint64_t[:] left_values_mv = left_values
+    cdef np.uint64_t[:] left_positions_mv = np.asarray(left_positions, dtype=np.uint64)
+    cdef np.uint64_t[:] right_values_mv = right_values
+    cdef np.uint64_t[:] right_positions_mv = np.asarray(right_positions, dtype=np.uint64)
+    cdef np.uint64_t[:] merged_values_mv = merged_values
+    cdef np.uint64_t[:] merged_positions_mv = merged_positions
+    with nogil:
+        _linear_merge_ordered(
+            left_values_mv, left_positions_mv, right_values_mv, right_positions_mv, merged_values_mv, merged_positions_mv
+        )
+    return merged_values, merged_positions.astype(position_dtype, copy=False)
+
+
+def intra_chunk_merge_sorted_slices(
+    np.ndarray left_values, np.ndarray left_positions, np.ndarray right_values, np.ndarray right_positions, object position_dtype
+):
+    cdef np.dtype dtype = left_values.dtype
+    cdef np.dtype pos_dtype = np.dtype(position_dtype)
+    if dtype != right_values.dtype:
+        raise TypeError("left_values and right_values must have the same dtype")
+    if dtype == np.dtype(np.float32):
+        return _intra_chunk_merge_float32(left_values, left_positions, right_values, right_positions, pos_dtype)
+    if dtype == np.dtype(np.float64):
+        return _intra_chunk_merge_float64(left_values, left_positions, right_values, right_positions, pos_dtype)
+    if dtype == np.dtype(np.int8):
+        return _intra_chunk_merge_int8(left_values, left_positions, right_values, right_positions, pos_dtype)
+    if dtype == np.dtype(np.int16):
+        return _intra_chunk_merge_int16(left_values, left_positions, right_values, right_positions, pos_dtype)
+    if dtype == np.dtype(np.int32):
+        return _intra_chunk_merge_int32(left_values, left_positions, right_values, right_positions, pos_dtype)
+    if dtype == np.dtype(np.int64):
+        return _intra_chunk_merge_int64(left_values, left_positions, right_values, right_positions, pos_dtype)
+    if dtype == np.dtype(np.uint8):
+        return _intra_chunk_merge_uint8(left_values, left_positions, right_values, right_positions, pos_dtype)
+    if dtype == np.dtype(np.uint16):
+        return _intra_chunk_merge_uint16(left_values, left_positions, right_values, right_positions, pos_dtype)
+    if dtype == np.dtype(np.uint32):
+        return _intra_chunk_merge_uint32(left_values, left_positions, right_values, right_positions, pos_dtype)
+    if dtype == np.dtype(np.uint64):
+        return _intra_chunk_merge_uint64(left_values, left_positions, right_values, right_positions, pos_dtype)
+    if dtype == np.dtype(np.bool_):
+        merged_values, merged_positions = _intra_chunk_merge_uint8(
+            left_values.view(np.uint8), left_positions, right_values.view(np.uint8), right_positions, pos_dtype
+        )
+        return merged_values.view(np.bool_), merged_positions
+    if dtype.kind in {"m", "M"}:
+        merged_values, merged_positions = _intra_chunk_merge_int64(
+            left_values.view(np.int64), left_positions, right_values.view(np.int64), right_positions, pos_dtype
+        )
+        return merged_values.view(dtype), merged_positions
+    raise TypeError("unsupported dtype for intra_chunk_merge_sorted_slices")
+
+
 cdef inline Py_ssize_t _search_left_float32(np.float32_t[:] values, np.float32_t target) noexcept nogil:
     cdef Py_ssize_t lo = 0
     cdef Py_ssize_t hi = values.shape[0]

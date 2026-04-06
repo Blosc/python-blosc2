@@ -40,6 +40,10 @@ In addition, all the functions from the :ref:`Lazy Functions <lazy_functions>` s
     mutations, and ``compact_index`` to consolidate append-heavy ``full``
     indexes explicitly.
 
+    Chunk-local index creation uses parallel intra-chunk sorting by default.
+    Set ``BLOSC2_INDEX_BUILD_THREADS`` to control the number of build threads.
+    Set ``BLOSC2_INDEX_BUILD_THREADS=1`` to disable parallel sorting.
+
     .. automethod:: create_index
     .. automethod:: create_csindex
     .. automethod:: create_expr_index
