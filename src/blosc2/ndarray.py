@@ -4722,7 +4722,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
         field: str | None = None,
         kind: str = "light",
         optlevel: int = 5,
-        granularity: str = "chunk",
         persistent: bool | None = None,
         in_mem: bool = False,
         name: str | None = None,
@@ -4733,7 +4732,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Parameters
         ----------
         field : str or None, optional
-            Field to index for structured dtypes. Use ``None`` to index the array values.
+            Field to index for structured dtypes. Use ``None`` to index the
+            array values for plain 1-D arrays. Structured arrays require an
+            explicit field name.
         kind : {"ultralight", "light", "medium", "full"}, optional
             Index tier to build. Use ``light`` or ``medium`` for faster/lighter
             filter-oriented indexes, and ``full`` when exact ordered access via
@@ -4741,8 +4742,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
             should reuse the index directly.
         optlevel : int, optional
             Optimization level for index payload construction.
-        granularity : str, optional
-            Current implementation only supports ``"chunk"``.
         persistent : bool or None, optional
             Whether index sidecars should be persisted. If ``None``, this follows whether the base array is persistent.
         in_mem : bool, optional
@@ -4782,7 +4781,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
             field=field,
             kind=kind,
             optlevel=optlevel,
-            granularity=granularity,
             persistent=persistent,
             in_mem=in_mem,
             name=name,
@@ -4807,7 +4805,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
         operands: dict | None = None,
         kind: str = "light",
         optlevel: int = 3,
-        granularity: str = "chunk",
         persistent: bool | None = None,
         in_mem: bool = False,
         name: str | None = None,
@@ -4826,7 +4823,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             Operand mapping used for normalization and evaluation. When omitted,
             structured arrays default to ``self.fields`` and plain arrays use
             ``{"value": self}``.
-        kind, optlevel, granularity, persistent, in_mem, name
+        kind, optlevel, persistent, in_mem, name
             Same meaning as in :meth:`create_index`. Setting ``in_mem=True``
             materializes the derived expression stream in RAM and can allocate
             additional temporary arrays for sorting and block payloads, so the
@@ -4861,7 +4858,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
             operands=operands,
             kind=kind,
             optlevel=optlevel,
-            granularity=granularity,
             persistent=persistent,
             in_mem=in_mem,
             name=name,

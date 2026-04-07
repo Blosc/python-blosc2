@@ -2240,7 +2240,6 @@ def _build_descriptor(
     token: str,
     kind: str,
     optlevel: int,
-    granularity: str,
     persistent: bool,
     ooc: bool,
     name: str | None,
@@ -2260,7 +2259,6 @@ def _build_descriptor(
         "kind": kind,
         "version": INDEX_FORMAT_VERSION,
         "optlevel": optlevel,
-        "granularity": granularity,
         "persistent": persistent,
         "ooc": ooc,
         "stale": False,
@@ -2281,7 +2279,6 @@ def create_index(
     field: str | None = None,
     kind: str = "light",
     optlevel: int = 5,
-    granularity: str = "chunk",
     persistent: bool | None = None,
     in_mem: bool = False,
     name: str | None = None,
@@ -2294,8 +2291,6 @@ def create_index(
     token = _target_token(target)
     if kind not in SEGMENT_LEVELS_BY_KIND:
         raise NotImplementedError(f"unsupported index kind {kind!r}")
-    if granularity != "chunk":
-        raise NotImplementedError("only chunk-based array indexes are implemented for now")
     if persistent is None:
         persistent = _is_persistent_array(array)
     use_ooc = _resolve_ooc_mode(kind, in_mem)
@@ -2324,7 +2319,6 @@ def create_index(
             token,
             kind,
             optlevel,
-            granularity,
             persistent,
             True,
             name,
@@ -2359,7 +2353,6 @@ def create_index(
             token,
             kind,
             optlevel,
-            granularity,
             persistent,
             False,
             name,
@@ -2384,7 +2377,6 @@ def create_expr_index(
     operands: dict | None = None,
     kind: str = "light",
     optlevel: int = 5,
-    granularity: str = "chunk",
     persistent: bool | None = None,
     in_mem: bool = False,
     name: str | None = None,
@@ -2401,8 +2393,6 @@ def create_expr_index(
         )
     if kind not in SEGMENT_LEVELS_BY_KIND:
         raise NotImplementedError(f"unsupported index kind {kind!r}")
-    if granularity != "chunk":
-        raise NotImplementedError("only chunk-based array indexes are implemented for now")
     if persistent is None:
         persistent = _is_persistent_array(array)
     use_ooc = _resolve_ooc_mode(kind, in_mem)
@@ -2432,7 +2422,6 @@ def create_expr_index(
             token,
             kind,
             optlevel,
-            granularity,
             persistent,
             True,
             name,
@@ -2467,7 +2456,6 @@ def create_expr_index(
             token,
             kind,
             optlevel,
-            granularity,
             persistent,
             False,
             name,
@@ -2831,7 +2819,6 @@ def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | N
             operands=operands,
             kind=descriptor["kind"],
             optlevel=descriptor["optlevel"],
-            granularity=descriptor["granularity"],
             persistent=descriptor["persistent"],
             in_mem=not descriptor.get("ooc", False),
             name=descriptor["name"],
@@ -2841,7 +2828,6 @@ def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | N
         field=descriptor["field"],
         kind=descriptor["kind"],
         optlevel=descriptor["optlevel"],
-        granularity=descriptor["granularity"],
         persistent=descriptor["persistent"],
         in_mem=not descriptor.get("ooc", False),
         name=descriptor["name"],
