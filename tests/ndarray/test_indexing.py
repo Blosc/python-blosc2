@@ -393,7 +393,7 @@ def test_in_mem_override_disables_ooc_builder(kind):
 
 
 @pytest.mark.parametrize("kind", ["light", "medium"])
-def test_chunk_local_ooc_intra_chunk_build_uses_thread_pool_when_strategy_forced(monkeypatch, kind):
+def test_chunk_local_ooc_intra_chunk_build_uses_thread_pool_when_threads_forced(monkeypatch, kind):
     data = np.arange(48_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(48_000,), blocks=(1_500,))
     indexing = __import__("blosc2.indexing", fromlist=["ThreadPoolExecutor"])
@@ -420,6 +420,54 @@ def test_chunk_local_ooc_intra_chunk_build_uses_thread_pool_when_strategy_forced
     assert descriptor["ooc"] is True
     assert observed_workers
     assert observed_workers[0] == 2
+
+
+@pytest.mark.parametrize("kind", ["light", "medium"])
+def test_in_memory_chunk_local_build_uses_cparams_nthreads(monkeypatch, kind):
+    data = np.arange(48_000, dtype=np.int64)
+    arr = blosc2.asarray(data, chunks=(48_000,), blocks=(1_500,))
+    indexing = __import__("blosc2.indexing", fromlist=["ThreadPoolExecutor"])
+    observed_workers = []
+
+    class FakeExecutor:
+        def __init__(self, *, max_workers):
+            observed_workers.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def map(self, fn, iterable):
+            return [fn(item) for item in iterable]
+
+    monkeypatch.setattr(indexing, "ThreadPoolExecutor", FakeExecutor)
+
+    descriptor = arr.create_index(kind=kind, in_mem=True, cparams=blosc2.CParams(nthreads=2))
+
+    assert descriptor["ooc"] is False
+    assert observed_workers
+    assert observed_workers[0] == 2
+
+
+@pytest.mark.parametrize("kind", ["light", "medium"])
+def test_persistent_chunk_local_sidecars_use_cparams(tmp_path, kind):
+    path = tmp_path / f"persistent_cparams_{kind}.b2nd"
+    data = np.arange(48_000, dtype=np.int64)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(12_000,), blocks=(2_000,))
+    cparams = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=2, nthreads=3)
+
+    descriptor = arr.create_index(kind=kind, cparams=cparams)
+    meta = descriptor["light"] if kind == "light" else descriptor["reduced"]
+    aux_key = "bucket_positions_path" if kind == "light" else "positions_path"
+
+    values_sidecar = blosc2.open(meta["values_path"])
+    aux_sidecar = blosc2.open(meta[aux_key])
+
+    for sidecar in (values_sidecar, aux_sidecar):
+        assert sidecar.cparams.codec == blosc2.Codec.LZ4
+        assert sidecar.cparams.clevel == 2
 
 
 def test_intra_chunk_sort_run_matches_numpy_stable_order():

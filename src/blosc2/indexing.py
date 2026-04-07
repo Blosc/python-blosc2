@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import ast
+import enum
 import hashlib
 import math
 import os
@@ -15,7 +16,7 @@ import re
 import tempfile
 import weakref
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -175,6 +176,8 @@ def _copy_nested_dict(value: dict | None) -> dict | None:
 
 def _copy_descriptor(descriptor: dict) -> dict:
     copied = descriptor.copy()
+    if descriptor.get("cparams") is not None:
+        copied["cparams"] = descriptor["cparams"].copy()
     copied["levels"] = _copy_nested_dict(descriptor.get("levels"))
     if descriptor.get("target") is not None:
         copied["target"] = descriptor["target"].copy()
@@ -495,6 +498,7 @@ def _store_array_sidecar(
     *,
     chunks: tuple[int, ...] | None = None,
     blocks: tuple[int, ...] | None = None,
+    cparams: dict | None = None,
 ) -> dict:
     cache_key = _data_cache_key(array, token, category, name)
     if persistent:
@@ -505,6 +509,8 @@ def _store_array_sidecar(
             kwargs["chunks"] = chunks
         if blocks is not None:
             kwargs["blocks"] = blocks
+        if cparams is not None:
+            kwargs["cparams"] = cparams
         blosc2.asarray(data, **kwargs)
         if isinstance(data, np.memmap):
             _DATA_CACHE.pop(cache_key, None)
@@ -527,6 +533,7 @@ def _create_persistent_sidecar_handle(
     *,
     chunks: tuple[int, ...] | None = None,
     blocks: tuple[int, ...] | None = None,
+    cparams: dict | None = None,
 ) -> tuple[blosc2.NDArray | None, dict]:
     path = _sidecar_path(array, token, kind, f"{category}.{name}")
     blosc2.remove_urlpath(path)
@@ -535,11 +542,41 @@ def _create_persistent_sidecar_handle(
         kwargs["chunks"] = chunks
     if blocks is not None:
         kwargs["blocks"] = blocks
+    if cparams is not None:
+        kwargs["cparams"] = cparams
     if length == 0:
         blosc2.asarray(np.empty(0, dtype=dtype), **kwargs)
         return None, {"path": path, "dtype": dtype.descr if dtype.fields else dtype.str}
     handle = blosc2.empty((length,), dtype=dtype, **kwargs)
     return handle, {"path": path, "dtype": dtype.descr if dtype.fields else dtype.str}
+
+
+def _normalize_index_cparams(cparams) -> blosc2.CParams | None:
+    if cparams is None:
+        return None
+    if isinstance(cparams, blosc2.CParams):
+        return cparams
+    return blosc2.CParams(**cparams)
+
+
+def _plain_index_cparams(cparams: dict | blosc2.CParams | None) -> dict | None:
+    if cparams is None:
+        return None
+
+    def _plain_value(value):
+        if isinstance(value, enum.Enum):
+            return value.value
+        if isinstance(value, dict):
+            return {key: _plain_value(item) for key, item in value.items()}
+        if isinstance(value, list | tuple):
+            return type(value)(_plain_value(item) for item in value)
+        return value
+
+    if isinstance(cparams, blosc2.CParams):
+        cparams = asdict(cparams)
+    else:
+        cparams = cparams.copy()
+    return {key: _plain_value(value) for key, value in cparams.items()}
 
 
 def _load_array_sidecar(
@@ -564,12 +601,15 @@ def _build_levels_descriptor(
     dtype: np.dtype,
     values: np.ndarray,
     persistent: bool,
+    cparams: dict | None = None,
 ) -> dict:
     levels = {}
     for level in SEGMENT_LEVELS_BY_KIND[kind]:
         segment_len = _segment_len(array, level)
         summaries = _compute_segment_summaries(values, dtype, segment_len)
-        sidecar = _store_array_sidecar(array, token, kind, "summary", level, summaries, persistent)
+        sidecar = _store_array_sidecar(
+            array, token, kind, "summary", level, summaries, persistent, cparams=cparams
+        )
         levels[level] = {
             "segment_len": segment_len,
             "nsegments": len(summaries),
@@ -586,6 +626,7 @@ def _build_levels_descriptor_ooc(
     kind: str,
     dtype: np.dtype,
     persistent: bool,
+    cparams: dict | None = None,
 ) -> dict:
     levels = {}
     size = int(array.shape[0])
@@ -598,7 +639,9 @@ def _build_levels_descriptor_ooc(
             start = idx * segment_len
             stop = min(start + segment_len, size)
             summaries[idx] = _segment_summary(_slice_values_for_target(array, target, start, stop), dtype)
-        sidecar = _store_array_sidecar(array, token, kind, "summary", level, summaries, persistent)
+        sidecar = _store_array_sidecar(
+            array, token, kind, "summary", level, summaries, persistent, cparams=cparams
+        )
         levels[level] = {
             "segment_len": segment_len,
             "nsegments": len(summaries),
@@ -624,14 +667,15 @@ def _rebuild_full_navigation_sidecars(
     full: dict,
     sorted_values: np.ndarray,
     persistent: bool,
+    cparams: dict | None = None,
 ) -> None:
     chunk_len, block_len = _sidecar_storage_geometry(
         full.get("values_path"), int(array.chunks[0]), int(array.blocks[0])
     )
     l1 = _compute_sorted_boundaries(sorted_values, np.dtype(sorted_values.dtype), chunk_len)
     l2 = _compute_sorted_boundaries(sorted_values, np.dtype(sorted_values.dtype), block_len)
-    l1_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l1", l1, persistent)
-    l2_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l2", l2, persistent)
+    l1_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l1", l1, persistent, cparams=cparams)
+    l2_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l2", l2, persistent, cparams=cparams)
     full["l1_path"] = l1_sidecar["path"]
     full["l2_path"] = l2_sidecar["path"]
     full["sidecar_chunk_len"] = int(chunk_len)
@@ -647,12 +691,13 @@ def _rebuild_full_navigation_sidecars_from_path(
     dtype: np.dtype,
     length: int,
     persistent: bool,
+    cparams: dict | None = None,
 ) -> None:
     chunk_len, block_len = _sidecar_storage_geometry(values_path, int(array.chunks[0]), int(array.blocks[0]))
     l1 = _compute_sorted_boundaries_from_sidecar(values_path, dtype, length, chunk_len)
     l2 = _compute_sorted_boundaries_from_sidecar(values_path, dtype, length, block_len)
-    l1_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l1", l1, persistent)
-    l2_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l2", l2, persistent)
+    l1_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l1", l1, persistent, cparams=cparams)
+    l2_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l2", l2, persistent, cparams=cparams)
     full["l1_path"] = l1_sidecar["path"]
     full["l2_path"] = l2_sidecar["path"]
     full["sidecar_chunk_len"] = int(chunk_len)
@@ -668,12 +713,14 @@ def _stream_copy_sidecar_array(
     dtype: np.dtype,
     chunks: tuple[int, ...],
     blocks: tuple[int, ...],
+    cparams: dict | None = None,
 ) -> None:
     source = blosc2.open(str(source_path), mmap_mode="r")
     blosc2.remove_urlpath(str(dest_path))
-    dest = blosc2.empty(
-        (length,), dtype=dtype, chunks=chunks, blocks=blocks, urlpath=str(dest_path), mode="w"
-    )
+    kwargs = {"chunks": chunks, "blocks": blocks, "urlpath": str(dest_path), "mode": "w"}
+    if cparams is not None:
+        kwargs["cparams"] = cparams
+    dest = blosc2.empty((length,), dtype=dtype, **kwargs)
     chunk_len = int(dest.chunks[0])
     for start in range(0, length, chunk_len):
         stop = min(start + chunk_len, length)
@@ -692,6 +739,7 @@ def _stream_copy_temp_run_to_full_sidecars(
     dtype: np.dtype,
     persistent: bool,
     tracker: TempRunTracker | None = None,
+    cparams: dict | None = None,
 ) -> None:
     if not persistent:
         raise ValueError("temp-run streaming only supports persistent runs")
@@ -701,7 +749,13 @@ def _stream_copy_temp_run_to_full_sidecars(
     _remove_sidecar_path(values_path)
     _remove_sidecar_path(positions_path)
     _stream_copy_sidecar_array(
-        run.values_path, values_path, run.length, dtype, (int(array.chunks[0]),), (int(array.blocks[0]),)
+        run.values_path,
+        values_path,
+        run.length,
+        dtype,
+        (int(array.chunks[0]),),
+        (int(array.blocks[0]),),
+        cparams,
     )
     _stream_copy_sidecar_array(
         run.positions_path,
@@ -710,6 +764,7 @@ def _stream_copy_temp_run_to_full_sidecars(
         np.dtype(np.int64),
         (int(array.chunks[0]),),
         (int(array.blocks[0]),),
+        cparams,
     )
     _tracker_register_delete(tracker, run.values_path, run.positions_path)
     run.values_path.unlink(missing_ok=True)
@@ -719,7 +774,7 @@ def _stream_copy_temp_run_to_full_sidecars(
     full["runs"] = []
     full["next_run_id"] = 0
     _rebuild_full_navigation_sidecars_from_path(
-        array, token, kind, full, values_path, dtype, run.length, persistent
+        array, token, kind, full, values_path, dtype, run.length, persistent, cparams
     )
 
 
@@ -729,19 +784,24 @@ def _build_full_descriptor(
     kind: str,
     values: np.ndarray,
     persistent: bool,
+    cparams: dict | None = None,
 ) -> dict:
     order = np.argsort(values, kind="stable")
     positions = order.astype(np.int64, copy=False)
     sorted_values = values[order]
-    values_sidecar = _store_array_sidecar(array, token, kind, "full", "values", sorted_values, persistent)
-    positions_sidecar = _store_array_sidecar(array, token, kind, "full", "positions", positions, persistent)
+    values_sidecar = _store_array_sidecar(
+        array, token, kind, "full", "values", sorted_values, persistent, cparams=cparams
+    )
+    positions_sidecar = _store_array_sidecar(
+        array, token, kind, "full", "positions", positions, persistent, cparams=cparams
+    )
     full = {
         "values_path": values_sidecar["path"],
         "positions_path": positions_sidecar["path"],
         "runs": [],
         "next_run_id": 0,
     }
-    _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent)
+    _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent, cparams)
     return full
 
 
@@ -794,11 +854,12 @@ def _build_reduced_descriptor(
     values: np.ndarray,
     optlevel: int,
     persistent: bool,
+    cparams: dict | None = None,
 ) -> dict:
     chunk_len = int(array.chunks[0])
     nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(int(array.blocks[0]), chunk_len, optlevel)
     sorted_values, positions, offsets, l2, _ = _build_chunk_sorted_payload(
-        values, chunk_len, nav_segment_len
+        values, chunk_len, nav_segment_len, cparams
     )
     l1 = _compute_sorted_boundaries(sorted_values, np.dtype(values.dtype), chunk_len)
     reduced = _chunk_index_payload_storage(
@@ -816,6 +877,7 @@ def _build_reduced_descriptor(
         persistent,
         chunk_len,
         nav_segment_len,
+        cparams,
     )
     reduced["position_dtype"] = positions.dtype.str
     reduced["nav_segment_divisor"] = nav_segment_divisor
@@ -836,7 +898,7 @@ def _chunk_offsets(size: int, chunk_len: int) -> np.ndarray:
     return offsets
 
 
-def _index_build_threads() -> int:
+def _index_build_threads(cparams: dict | blosc2.CParams | None = None) -> int:
     forced = os.getenv("BLOSC2_INDEX_BUILD_THREADS")
     if forced is not None:
         try:
@@ -844,6 +906,16 @@ def _index_build_threads() -> int:
         except ValueError:
             forced_threads = 1
         return max(1, forced_threads)
+    if cparams is not None:
+        nthreads = cparams.nthreads if isinstance(cparams, blosc2.CParams) else cparams.get("nthreads")
+    else:
+        nthreads = None
+    if nthreads is not None:
+        try:
+            cparams_threads = int(nthreads)
+        except (TypeError, ValueError):
+            cparams_threads = 1
+        return max(1, cparams_threads)
     return max(1, int(getattr(blosc2, "nthreads", 1) or 1))
 
 
@@ -875,6 +947,7 @@ def _build_chunk_sorted_payload(
     values: np.ndarray,
     chunk_len: int,
     nav_segment_len: int,
+    cparams: dict | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.dtype]:
     size = values.shape[0]
     nchunks = math.ceil(size / chunk_len)
@@ -888,16 +961,18 @@ def _build_chunk_sorted_payload(
     l2 = np.empty(nchunks * nsegments_per_chunk, dtype=_boundary_dtype(values.dtype))
 
     cursor = 0
+    thread_count = _index_build_threads(cparams)
     for chunk_id in range(nchunks):
         start = chunk_id * chunk_len
         stop = min(start + chunk_len, size)
         chunk = values[start:stop]
-        order = np.argsort(chunk, kind="stable")
         chunk_size = stop - start
         next_cursor = cursor + chunk_size
-        chunk_sorted = chunk[order]
+        chunk_sorted, chunk_positions = _sort_chunk_intra_chunk(
+            chunk, position_dtype, thread_count=thread_count
+        )
         sorted_values[cursor:next_cursor] = chunk_sorted
-        positions[cursor:next_cursor] = order.astype(position_dtype, copy=False)
+        positions[cursor:next_cursor] = chunk_positions
         offsets[chunk_id + 1] = next_cursor
         l1[chunk_id] = (chunk_sorted[0], chunk_sorted[-1])
 
@@ -1064,6 +1139,7 @@ def _build_reduced_chunk_payloads_intra_chunk(
     dtype: np.dtype,
     chunk_len: int,
     nav_segment_len: int,
+    cparams: dict | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     size = int(array.shape[0])
     nchunks = math.ceil(size / chunk_len)
@@ -1076,7 +1152,7 @@ def _build_reduced_chunk_payloads_intra_chunk(
     nsegments_per_chunk = _segment_row_count(chunk_len, nav_segment_len)
     l2 = np.empty(nchunks * nsegments_per_chunk, dtype=_boundary_dtype(dtype))
     cursor = 0
-    thread_count = _index_build_threads()
+    thread_count = _index_build_threads(cparams)
 
     for chunk_id in range(nchunks):
         start = chunk_id * chunk_len
@@ -1119,6 +1195,7 @@ def _chunk_index_payload_storage(
     persistent: bool,
     chunk_len: int,
     nav_segment_len: int,
+    cparams: dict | None = None,
 ) -> dict:
     nsegments_per_chunk = _segment_row_count(chunk_len, nav_segment_len)
     payload_sidecar = _store_array_sidecar(
@@ -1131,6 +1208,7 @@ def _chunk_index_payload_storage(
         persistent,
         chunks=(chunk_len,),
         blocks=(nav_segment_len,),
+        cparams=cparams,
     )
     aux_sidecar = _store_array_sidecar(
         array,
@@ -1142,9 +1220,14 @@ def _chunk_index_payload_storage(
         persistent,
         chunks=(chunk_len,),
         blocks=(nav_segment_len,),
+        cparams=cparams,
     )
-    offsets_sidecar = _store_array_sidecar(array, token, kind, category, "offsets", offsets, persistent)
-    l1_sidecar = _store_array_sidecar(array, token, kind, f"{category}_nav", "l1", l1, persistent)
+    offsets_sidecar = _store_array_sidecar(
+        array, token, kind, category, "offsets", offsets, persistent, cparams=cparams
+    )
+    l1_sidecar = _store_array_sidecar(
+        array, token, kind, f"{category}_nav", "l1", l1, persistent, cparams=cparams
+    )
     l2_sidecar = _store_array_sidecar(
         array,
         token,
@@ -1155,6 +1238,7 @@ def _chunk_index_payload_storage(
         persistent,
         chunks=(nsegments_per_chunk,),
         blocks=(min(nsegments_per_chunk, max(1, nsegments_per_chunk)),),
+        cparams=cparams,
     )
     return {
         "layout": "chunk-local-v1",
@@ -1181,6 +1265,7 @@ def _prepare_chunk_index_payload_sidecars(
     size: int,
     chunk_len: int,
     nav_segment_len: int,
+    cparams: dict | None = None,
 ) -> tuple[blosc2.NDArray | None, dict, blosc2.NDArray | None, dict]:
     payload_handle, payload_sidecar = _create_persistent_sidecar_handle(
         array,
@@ -1192,6 +1277,7 @@ def _prepare_chunk_index_payload_sidecars(
         payload_dtype,
         chunks=(chunk_len,),
         blocks=(nav_segment_len,),
+        cparams=cparams,
     )
     aux_handle, aux_sidecar = _create_persistent_sidecar_handle(
         array,
@@ -1203,6 +1289,7 @@ def _prepare_chunk_index_payload_sidecars(
         aux_dtype,
         chunks=(chunk_len,),
         blocks=(nav_segment_len,),
+        cparams=cparams,
     )
     return payload_handle, payload_sidecar, aux_handle, aux_sidecar
 
@@ -1220,10 +1307,13 @@ def _finalize_chunk_index_payload_storage(
     aux_sidecar: dict,
     chunk_len: int,
     nav_segment_len: int,
+    cparams: dict | None = None,
 ) -> dict:
     nsegments_per_chunk = _segment_row_count(chunk_len, nav_segment_len)
-    offsets_sidecar = _store_array_sidecar(array, token, kind, category, "offsets", offsets, True)
-    l1_sidecar = _store_array_sidecar(array, token, kind, f"{category}_nav", "l1", l1, True)
+    offsets_sidecar = _store_array_sidecar(
+        array, token, kind, category, "offsets", offsets, True, cparams=cparams
+    )
+    l1_sidecar = _store_array_sidecar(array, token, kind, f"{category}_nav", "l1", l1, True, cparams=cparams)
     l2_sidecar = _store_array_sidecar(
         array,
         token,
@@ -1234,6 +1324,7 @@ def _finalize_chunk_index_payload_storage(
         True,
         chunks=(nsegments_per_chunk,),
         blocks=(min(nsegments_per_chunk, max(1, nsegments_per_chunk)),),
+        cparams=cparams,
     )
     return {
         "layout": "chunk-local-v1",
@@ -1256,6 +1347,7 @@ def _build_reduced_descriptor_ooc(
     dtype: np.dtype,
     optlevel: int,
     persistent: bool,
+    cparams: dict | None = None,
 ) -> dict:
     if persistent:
         size = int(array.shape[0])
@@ -1286,6 +1378,7 @@ def _build_reduced_descriptor_ooc(
                     size,
                     chunk_len,
                     nav_segment_len,
+                    cparams,
                 )
             )
             cursor = 0
@@ -1327,6 +1420,7 @@ def _build_reduced_descriptor_ooc(
                 positions_sidecar,
                 chunk_len,
                 nav_segment_len,
+                cparams,
             )
         except Exception:
             if values_sidecar is not None:
@@ -1341,7 +1435,7 @@ def _build_reduced_descriptor_ooc(
     chunk_len = int(array.chunks[0])
     nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(int(array.blocks[0]), chunk_len, optlevel)
     sorted_values, positions, offsets, l1, l2 = _build_reduced_chunk_payloads_intra_chunk(
-        array, target, dtype, chunk_len, nav_segment_len
+        array, target, dtype, chunk_len, nav_segment_len, cparams
     )
     reduced = _chunk_index_payload_storage(
         array,
@@ -1358,6 +1452,7 @@ def _build_reduced_descriptor_ooc(
         persistent,
         chunk_len,
         nav_segment_len,
+        cparams,
     )
     reduced["position_dtype"] = positions.dtype.str
     reduced["nav_segment_divisor"] = nav_segment_divisor
@@ -1544,6 +1639,7 @@ def _build_light_chunk_payloads_intra_chunk(
     value_lossy_bits: int,
     bucket_len: int,
     bucket_dtype: np.dtype,
+    cparams: dict | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     size = int(array.shape[0])
     nchunks = math.ceil(size / chunk_len)
@@ -1556,7 +1652,7 @@ def _build_light_chunk_payloads_intra_chunk(
     l2 = np.empty(nchunks * nsegments_per_chunk, dtype=_boundary_dtype(dtype))
     position_dtype = _position_dtype(chunk_len - 1)
     cursor = 0
-    thread_count = _index_build_threads()
+    thread_count = _index_build_threads(cparams)
 
     for chunk_id in range(nchunks):
         start = chunk_id * chunk_len
@@ -1596,6 +1692,7 @@ def _build_light_descriptor(
     values: np.ndarray,
     optlevel: int,
     persistent: bool,
+    cparams: dict | None = None,
 ) -> dict:
     chunk_len = int(array.chunks[0])
     nav_segment_len = int(array.blocks[0])
@@ -1603,7 +1700,7 @@ def _build_light_descriptor(
     bucket_count = math.ceil(chunk_len / bucket_len)
     value_lossy_bits = _light_value_lossy_bits(values.dtype, optlevel)
     sorted_values, positions, offsets, l2, _ = _build_chunk_sorted_payload(
-        values, chunk_len, nav_segment_len
+        values, chunk_len, nav_segment_len, cparams
     )
     if value_lossy_bits > 0:
         sorted_values = _quantize_light_values_array(sorted_values, value_lossy_bits)
@@ -1625,6 +1722,7 @@ def _build_light_descriptor(
         persistent,
         chunk_len,
         nav_segment_len,
+        cparams,
     )
     light["bucket_count"] = bucket_count
     light["bucket_len"] = bucket_len
@@ -1641,6 +1739,7 @@ def _build_light_descriptor_ooc(
     dtype: np.dtype,
     optlevel: int,
     persistent: bool,
+    cparams: dict | None = None,
 ) -> dict:
     chunk_len = int(array.chunks[0])
     nav_segment_len = int(array.blocks[0])
@@ -1649,7 +1748,15 @@ def _build_light_descriptor_ooc(
     value_lossy_bits = _light_value_lossy_bits(dtype, optlevel)
     bucket_dtype = _position_dtype(bucket_count - 1)
     sorted_values, bucket_positions, offsets, l1, l2 = _build_light_chunk_payloads_intra_chunk(
-        array, target, dtype, chunk_len, nav_segment_len, value_lossy_bits, bucket_len, bucket_dtype
+        array,
+        target,
+        dtype,
+        chunk_len,
+        nav_segment_len,
+        value_lossy_bits,
+        bucket_len,
+        bucket_dtype,
+        cparams,
     )
     if persistent:
         values_handle = bucket_handle = None
@@ -1668,6 +1775,7 @@ def _build_light_descriptor_ooc(
                     len(sorted_values),
                     chunk_len,
                     nav_segment_len,
+                    cparams,
                 )
             )
             if values_handle is not None:
@@ -1688,6 +1796,7 @@ def _build_light_descriptor_ooc(
                 bucket_sidecar,
                 chunk_len,
                 nav_segment_len,
+                cparams,
             )
         except Exception:
             if values_sidecar is not None:
@@ -1716,6 +1825,7 @@ def _build_light_descriptor_ooc(
         persistent,
         chunk_len,
         nav_segment_len,
+        cparams,
     )
     light["bucket_count"] = bucket_count
     light["bucket_len"] = bucket_len
@@ -1819,9 +1929,12 @@ def _tracker_register_delete(tracker: TempRunTracker | None, *paths: Path) -> No
     tracker.current_disk_bytes = max(0, tracker.current_disk_bytes - delta)
 
 
-def _create_blosc2_temp_array(path: Path, length: int, dtype: np.dtype, buffer_items: int):
+def _create_blosc2_temp_array(
+    path: Path, length: int, dtype: np.dtype, buffer_items: int, cparams: dict | None = None
+):
     chunks, blocks = _temp_run_storage_geometry(length, dtype, buffer_items)
-    cparams = blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=1)
+    if cparams is None:
+        cparams = blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=1)
     return blosc2.empty(
         (length,),
         dtype=dtype,
@@ -1858,12 +1971,15 @@ def _materialize_sorted_run(
     workdir: Path,
     prefix: str,
     tracker: TempRunTracker | None = None,
+    cparams: dict | None = None,
 ) -> SortedRun:
     values_path = workdir / f"{prefix}.values.b2nd"
     positions_path = workdir / f"{prefix}.positions.b2nd"
-    run_values = _create_blosc2_temp_array(values_path, length, value_dtype, FULL_OOC_MERGE_BUFFER_ITEMS)
+    run_values = _create_blosc2_temp_array(
+        values_path, length, value_dtype, FULL_OOC_MERGE_BUFFER_ITEMS, cparams
+    )
     run_positions = _create_blosc2_temp_array(
-        positions_path, length, np.dtype(np.int64), FULL_OOC_MERGE_BUFFER_ITEMS
+        positions_path, length, np.dtype(np.int64), FULL_OOC_MERGE_BUFFER_ITEMS, cparams
     )
     run_values[:] = values
     run_positions[:] = positions
@@ -1879,10 +1995,11 @@ def _copy_sidecar_to_temp_run(
     workdir: Path,
     prefix: str,
     tracker: TempRunTracker | None = None,
+    cparams: dict | None = None,
 ) -> Path:
     out_path = workdir / f"{prefix}.b2nd"
     sidecar = blosc2.open(path, mmap_mode="r")
-    output = _create_blosc2_temp_array(out_path, length, dtype, FULL_OOC_MERGE_BUFFER_ITEMS)
+    output = _create_blosc2_temp_array(out_path, length, dtype, FULL_OOC_MERGE_BUFFER_ITEMS, cparams)
     chunk_len = int(sidecar.chunks[0])
     for chunk_id, start in enumerate(range(0, length, chunk_len)):
         stop = min(start + chunk_len, length)
@@ -1919,6 +2036,7 @@ def _merge_run_pair(
     merge_id: int,
     buffer_items: int,
     tracker: TempRunTracker | None = None,
+    cparams: dict | None = None,
 ) -> SortedRun:
     left_values_mm = blosc2.open(str(left.values_path), mmap_mode="r")
     left_positions_mm = blosc2.open(str(left.positions_path), mmap_mode="r")
@@ -1927,9 +2045,11 @@ def _merge_run_pair(
 
     out_values_path = workdir / f"full_merge_values_{merge_id}.b2nd"
     out_positions_path = workdir / f"full_merge_positions_{merge_id}.b2nd"
-    out_values = _create_blosc2_temp_array(out_values_path, left.length + right.length, dtype, buffer_items)
+    out_values = _create_blosc2_temp_array(
+        out_values_path, left.length + right.length, dtype, buffer_items, cparams
+    )
     out_positions = _create_blosc2_temp_array(
-        out_positions_path, left.length + right.length, np.dtype(np.int64), buffer_items
+        out_positions_path, left.length + right.length, np.dtype(np.int64), buffer_items, cparams
     )
 
     left_cursor = 0
@@ -2016,6 +2136,7 @@ def _build_full_descriptor_ooc(
     dtype: np.dtype,
     persistent: bool,
     workdir: Path,
+    cparams: dict | None = None,
 ) -> dict:
     size = int(array.shape[0])
     tracker = TempRunTracker()
@@ -2023,10 +2144,10 @@ def _build_full_descriptor_ooc(
         sorted_values = np.empty(0, dtype=dtype)
         positions = np.empty(0, dtype=np.int64)
         values_sidecar = _store_array_sidecar(
-            array, token, kind, "full", "values", sorted_values, persistent
+            array, token, kind, "full", "values", sorted_values, persistent, cparams=cparams
         )
         positions_sidecar = _store_array_sidecar(
-            array, token, kind, "full", "positions", positions, persistent
+            array, token, kind, "full", "positions", positions, persistent, cparams=cparams
         )
         full = {
             "values_path": values_sidecar["path"],
@@ -2034,7 +2155,7 @@ def _build_full_descriptor_ooc(
             "runs": [],
             "next_run_id": 0,
         }
-        _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent)
+        _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent, cparams)
         return full
     run_items = max(int(array.chunks[0]), min(size, FULL_OOC_RUN_ITEMS))
     runs = []
@@ -2054,6 +2175,7 @@ def _build_full_descriptor_ooc(
                 workdir,
                 f"full_run_{run_id}",
                 tracker,
+                cparams,
             )
         )
 
@@ -2073,6 +2195,7 @@ def _build_full_descriptor_ooc(
                     merge_id,
                     FULL_OOC_MERGE_BUFFER_ITEMS,
                     tracker,
+                    cparams,
                 )
             )
             merge_id += 1
@@ -2090,20 +2213,20 @@ def _build_full_descriptor_ooc(
     }
     if persistent:
         _stream_copy_temp_run_to_full_sidecars(
-            array, token, kind, full, final_run, dtype, persistent, tracker
+            array, token, kind, full, final_run, dtype, persistent, tracker, cparams
         )
     else:
         sorted_values = blosc2.open(str(final_run.values_path), mmap_mode="r")[:]
         positions = blosc2.open(str(final_run.positions_path), mmap_mode="r")[:]
         values_sidecar = _store_array_sidecar(
-            array, token, kind, "full", "values", sorted_values, persistent
+            array, token, kind, "full", "values", sorted_values, persistent, cparams=cparams
         )
         positions_sidecar = _store_array_sidecar(
-            array, token, kind, "full", "positions", positions, persistent
+            array, token, kind, "full", "positions", positions, persistent, cparams=cparams
         )
         full["values_path"] = values_sidecar["path"]
         full["positions_path"] = positions_sidecar["path"]
-        _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent)
+        _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent, cparams)
         del sorted_values, positions
         _tracker_register_delete(tracker, final_run.values_path, final_run.positions_path)
         final_run.values_path.unlink(missing_ok=True)
@@ -2126,6 +2249,7 @@ def _build_descriptor(
     light: dict | None,
     reduced: dict | None,
     full: dict | None,
+    cparams: dict | None = None,
 ) -> dict:
     return {
         "name": name
@@ -2148,6 +2272,7 @@ def _build_descriptor(
         "light": light,
         "reduced": reduced,
         "full": full,
+        "cparams": _plain_index_cparams(cparams),
     }
 
 
@@ -2162,6 +2287,7 @@ def create_index(
     name: str | None = None,
     **kwargs,
 ) -> dict:
+    cparams = _normalize_index_cparams(kwargs.pop("cparams", None))
     del kwargs
     dtype = _validate_index_target(array, field)
     target = _field_target_descriptor(field)
@@ -2175,14 +2301,14 @@ def create_index(
     use_ooc = _resolve_ooc_mode(kind, in_mem)
 
     if use_ooc and kind in {"light", "medium", "full"}:
-        levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent)
+        levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent, cparams)
         light = (
-            _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent)
+            _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
             if kind == "light"
             else None
         )
         reduced = (
-            _build_reduced_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent)
+            _build_reduced_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
             if kind == "medium"
             else None
         )
@@ -2190,7 +2316,7 @@ def create_index(
         if kind == "full":
             with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
                 full = _build_full_descriptor_ooc(
-                    array, target, token, kind, dtype, persistent, Path(tmpdir)
+                    array, target, token, kind, dtype, persistent, Path(tmpdir), cparams
                 )
         descriptor = _build_descriptor(
             array,
@@ -2207,21 +2333,26 @@ def create_index(
             light,
             reduced,
             full,
+            cparams,
         )
     else:
         values = _values_for_target(array, target)
-        levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent)
+        levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent, cparams)
         light = (
-            _build_light_descriptor(array, token, kind, values, optlevel, persistent)
+            _build_light_descriptor(array, token, kind, values, optlevel, persistent, cparams)
             if kind == "light"
             else None
         )
         reduced = (
-            _build_reduced_descriptor(array, token, kind, values, optlevel, persistent)
+            _build_reduced_descriptor(array, token, kind, values, optlevel, persistent, cparams)
             if kind == "medium"
             else None
         )
-        full = _build_full_descriptor(array, token, kind, values, persistent) if kind == "full" else None
+        full = (
+            _build_full_descriptor(array, token, kind, values, persistent, cparams)
+            if kind == "full"
+            else None
+        )
         descriptor = _build_descriptor(
             array,
             target,
@@ -2237,6 +2368,7 @@ def create_index(
             light,
             reduced,
             full,
+            cparams,
         )
 
     store = _load_store(array)
@@ -2258,6 +2390,7 @@ def create_expr_index(
     name: str | None = None,
     **kwargs,
 ) -> dict:
+    cparams = _normalize_index_cparams(kwargs.pop("cparams", None))
     del kwargs
     if operands is None:
         operands = array.fields if array.dtype.fields is not None else {"value": array}
@@ -2276,14 +2409,14 @@ def create_expr_index(
     token = _target_token(target)
 
     if use_ooc and kind in {"light", "medium", "full"}:
-        levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent)
+        levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent, cparams)
         light = (
-            _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent)
+            _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
             if kind == "light"
             else None
         )
         reduced = (
-            _build_reduced_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent)
+            _build_reduced_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
             if kind == "medium"
             else None
         )
@@ -2291,7 +2424,7 @@ def create_expr_index(
         if kind == "full":
             with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
                 full = _build_full_descriptor_ooc(
-                    array, target, token, kind, dtype, persistent, Path(tmpdir)
+                    array, target, token, kind, dtype, persistent, Path(tmpdir), cparams
                 )
         descriptor = _build_descriptor(
             array,
@@ -2308,21 +2441,26 @@ def create_expr_index(
             light,
             reduced,
             full,
+            cparams,
         )
     else:
         values = _values_for_target(array, target)
-        levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent)
+        levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent, cparams)
         light = (
-            _build_light_descriptor(array, token, kind, values, optlevel, persistent)
+            _build_light_descriptor(array, token, kind, values, optlevel, persistent, cparams)
             if kind == "light"
             else None
         )
         reduced = (
-            _build_reduced_descriptor(array, token, kind, values, optlevel, persistent)
+            _build_reduced_descriptor(array, token, kind, values, optlevel, persistent, cparams)
             if kind == "medium"
             else None
         )
-        full = _build_full_descriptor(array, token, kind, values, persistent) if kind == "full" else None
+        full = (
+            _build_full_descriptor(array, token, kind, values, persistent, cparams)
+            if kind == "full"
+            else None
+        )
         descriptor = _build_descriptor(
             array,
             target,
@@ -2338,6 +2476,7 @@ def create_expr_index(
             light,
             reduced,
             full,
+            cparams,
         )
 
     store = _load_store(array)
@@ -2400,13 +2539,16 @@ def _replace_levels_descriptor(array: blosc2.NDArray, descriptor: dict, kind: st
     size = int(array.shape[0])
     target = descriptor["target"]
     token = descriptor["token"]
+    cparams = _normalize_index_cparams(descriptor.get("cparams"))
     for level, level_info in descriptor["levels"].items():
         segment_len = int(level_info["segment_len"])
         start = 0
         summaries = _compute_segment_summaries(
             _slice_values_for_target(array, target, start, size), np.dtype(descriptor["dtype"]), segment_len
         )
-        sidecar = _store_array_sidecar(array, token, kind, "summary", level, summaries, persistent)
+        sidecar = _store_array_sidecar(
+            array, token, kind, "summary", level, summaries, persistent, cparams=cparams
+        )
         level_info["path"] = sidecar["path"]
         level_info["dtype"] = sidecar["dtype"]
         level_info["nsegments"] = len(summaries)
@@ -2419,6 +2561,7 @@ def _replace_levels_descriptor_tail(
     token = descriptor["token"]
     dtype = np.dtype(descriptor["dtype"])
     new_size = int(array.shape[0])
+    cparams = _normalize_index_cparams(descriptor.get("cparams"))
     for level, level_info in descriptor["levels"].items():
         segment_len = int(level_info["segment_len"])
         start_segment = old_size // segment_len
@@ -2427,7 +2570,9 @@ def _replace_levels_descriptor_tail(
         tail_values = _slice_values_for_target(array, target, tail_start, new_size)
         tail_summaries = _compute_segment_summaries(tail_values, dtype, segment_len)
         summaries = np.concatenate((prefix, tail_summaries)) if len(prefix) else tail_summaries
-        sidecar = _store_array_sidecar(array, token, kind, "summary", level, summaries, persistent)
+        sidecar = _store_array_sidecar(
+            array, token, kind, "summary", level, summaries, persistent, cparams=cparams
+        )
         level_info["path"] = sidecar["path"]
         level_info["dtype"] = sidecar["dtype"]
         level_info["nsegments"] = len(summaries)
@@ -2439,6 +2584,7 @@ def _replace_reduced_descriptor_tail(
     del old_size
     target = descriptor["target"]
     reduced = descriptor["reduced"]
+    cparams = _normalize_index_cparams(descriptor.get("cparams"))
     for key in ("values_path", "positions_path", "offsets_path", "l1_path", "l2_path"):
         _remove_sidecar_path(reduced.get(key))
     if descriptor.get("ooc", False):
@@ -2450,6 +2596,7 @@ def _replace_reduced_descriptor_tail(
             np.dtype(descriptor["dtype"]),
             descriptor["optlevel"],
             persistent,
+            cparams,
         )
     else:
         rebuilt = _build_reduced_descriptor(
@@ -2459,6 +2606,7 @@ def _replace_reduced_descriptor_tail(
             _values_for_target(array, target),
             descriptor["optlevel"],
             persistent,
+            cparams,
         )
     descriptor["reduced"] = rebuilt
 
@@ -2469,6 +2617,7 @@ def _replace_light_descriptor_tail(
     del old_size
     target = descriptor["target"]
     light = descriptor["light"]
+    cparams = _normalize_index_cparams(descriptor.get("cparams"))
     for key in ("values_path", "bucket_positions_path", "offsets_path", "l1_path", "l2_path"):
         _remove_sidecar_path(light.get(key))
     if descriptor.get("ooc", False):
@@ -2480,6 +2629,7 @@ def _replace_light_descriptor_tail(
             np.dtype(descriptor["dtype"]),
             descriptor["optlevel"],
             persistent,
+            cparams,
         )
     else:
         rebuilt = _build_light_descriptor(
@@ -2489,6 +2639,7 @@ def _replace_light_descriptor_tail(
             _values_for_target(array, target),
             descriptor["optlevel"],
             persistent,
+            cparams,
         )
     descriptor["light"] = rebuilt
 
@@ -2503,19 +2654,24 @@ def _replace_full_descriptor(
     kind = descriptor["kind"]
     token = descriptor["token"]
     full = descriptor["full"]
+    cparams = _normalize_index_cparams(descriptor.get("cparams"))
     for run in full.get("runs", ()):
         _remove_sidecar_path(run.get("values_path"))
         _remove_sidecar_path(run.get("positions_path"))
     _remove_sidecar_path(full.get("l1_path"))
     _remove_sidecar_path(full.get("l2_path"))
     _clear_cached_data(array, token)
-    values_sidecar = _store_array_sidecar(array, token, kind, "full", "values", sorted_values, persistent)
-    positions_sidecar = _store_array_sidecar(array, token, kind, "full", "positions", positions, persistent)
+    values_sidecar = _store_array_sidecar(
+        array, token, kind, "full", "values", sorted_values, persistent, cparams=cparams
+    )
+    positions_sidecar = _store_array_sidecar(
+        array, token, kind, "full", "positions", positions, persistent, cparams=cparams
+    )
     full["values_path"] = values_sidecar["path"]
     full["positions_path"] = positions_sidecar["path"]
     full["runs"] = []
     full["next_run_id"] = 0
-    _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent)
+    _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent, cparams)
 
 
 def _replace_full_descriptor_from_paths(
@@ -2529,6 +2685,7 @@ def _replace_full_descriptor_from_paths(
     token = descriptor["token"]
     full = descriptor["full"]
     persistent = descriptor["persistent"]
+    cparams = _normalize_index_cparams(descriptor.get("cparams"))
     if not persistent:
         raise ValueError("path-based full replacement requires persistent indexes")
     for run in full.get("runs", ()):
@@ -2548,6 +2705,7 @@ def _replace_full_descriptor_from_paths(
         np.dtype(descriptor["dtype"]),
         (int(array.chunks[0]),),
         (int(array.blocks[0]),),
+        cparams,
     )
     _stream_copy_sidecar_array(
         positions_path,
@@ -2556,6 +2714,7 @@ def _replace_full_descriptor_from_paths(
         np.dtype(np.int64),
         (int(array.chunks[0]),),
         (int(array.blocks[0]),),
+        cparams,
     )
     values_path.unlink(missing_ok=True)
     positions_path.unlink(missing_ok=True)
@@ -2564,7 +2723,15 @@ def _replace_full_descriptor_from_paths(
     full["runs"] = []
     full["next_run_id"] = 0
     _rebuild_full_navigation_sidecars_from_path(
-        array, token, kind, full, final_values_path, np.dtype(descriptor["dtype"]), length, persistent
+        array,
+        token,
+        kind,
+        full,
+        final_values_path,
+        np.dtype(descriptor["dtype"]),
+        length,
+        persistent,
+        cparams,
     )
 
 
@@ -2578,11 +2745,12 @@ def _store_full_run_descriptor(
     kind = descriptor["kind"]
     token = descriptor["token"]
     persistent = descriptor["persistent"]
+    cparams = _normalize_index_cparams(descriptor.get("cparams"))
     values_sidecar = _store_array_sidecar(
-        array, token, kind, "full_run", f"{run_id}.values", sorted_values, persistent
+        array, token, kind, "full_run", f"{run_id}.values", sorted_values, persistent, cparams=cparams
     )
     positions_sidecar = _store_array_sidecar(
-        array, token, kind, "full_run", f"{run_id}.positions", positions, persistent
+        array, token, kind, "full_run", f"{run_id}.positions", positions, persistent, cparams=cparams
     )
     return {
         "id": run_id,

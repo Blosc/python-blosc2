@@ -4762,9 +4762,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
         mutation and resize operations mark indexes as stale until rebuild.
 
         Chunk-local index creation uses parallel intra-chunk sorting by default.
-        Set the ``BLOSC2_INDEX_BUILD_THREADS`` environment variable to control
-        the number of build threads. Setting
-        ``BLOSC2_INDEX_BUILD_THREADS=1`` disables parallel sorting.
+        Pass ``cparams`` in ``kwargs`` to control the compression settings used
+        for the index sidecars. When provided, ``cparams["nthreads"]`` is used
+        as the default build-thread count. Set the
+        ``BLOSC2_INDEX_BUILD_THREADS`` environment variable to override that
+        selection explicitly. Setting ``BLOSC2_INDEX_BUILD_THREADS=1``
+        disables parallel sorting.
         """
         from . import indexing
 
@@ -4831,9 +4834,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
         expression key.
 
         Chunk-local index creation uses parallel intra-chunk sorting by default.
-        Set the ``BLOSC2_INDEX_BUILD_THREADS`` environment variable to control
-        the number of build threads. Setting
-        ``BLOSC2_INDEX_BUILD_THREADS=1`` disables parallel sorting.
+        Pass ``cparams`` in ``kwargs`` to control the compression settings used
+        for the index sidecars. When provided, ``cparams["nthreads"]`` is used
+        as the default build-thread count. Set the
+        ``BLOSC2_INDEX_BUILD_THREADS`` environment variable to override that
+        selection explicitly. Setting ``BLOSC2_INDEX_BUILD_THREADS=1``
+        disables parallel sorting.
         """
         from . import indexing
 

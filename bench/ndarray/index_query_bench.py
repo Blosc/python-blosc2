@@ -283,9 +283,15 @@ def indexed_array_path(
     in_mem: bool,
     chunks: int | None,
     blocks: int | None,
+    nthreads: int | None,
 ) -> Path:
     mode = "mem" if in_mem else "ooc"
-    return size_dir / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{geometry_token(chunks, blocks)}.{kind}.opt{optlevel}.{mode}.b2nd"
+    thread_token = "threads-auto" if nthreads is None else f"threads-{nthreads}"
+    return (
+        size_dir
+        / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{geometry_token(chunks, blocks)}.{thread_token}"
+        f".{kind}.opt{optlevel}.{mode}.b2nd"
+    )
 
 
 def benchmark_scan_once(expr) -> tuple[float, int]:
@@ -417,6 +423,7 @@ def _open_or_build_indexed_array(
     in_mem: bool,
     chunks: int | None,
     blocks: int | None,
+    nthreads: int | None,
 ) -> tuple[blosc2.NDArray, float]:
     if path.exists():
         arr = blosc2.open(path, mode="a")
@@ -428,7 +435,10 @@ def _open_or_build_indexed_array(
 
     arr = build_persistent_array(size, dist, id_dtype, path, chunks, blocks)
     build_start = time.perf_counter()
-    arr.create_index(field="id", kind=kind, optlevel=optlevel, in_mem=in_mem)
+    kwargs = {"field": "id", "kind": kind, "optlevel": optlevel, "in_mem": in_mem}
+    if nthreads is not None:
+        kwargs["cparams"] = {"nthreads": nthreads}
+    arr.create_index(**kwargs)
     return arr, time.perf_counter() - build_start
 
 
@@ -443,6 +453,7 @@ def benchmark_size(
     full_query_mode: str,
     chunks: int | None,
     blocks: int | None,
+    nthreads: int | None,
     kinds: tuple[str, ...],
     cold_row_callback=None,
 ) -> list[dict]:
@@ -461,7 +472,7 @@ def benchmark_size(
     rows = []
     for kind in kinds:
         idx_arr, build_time = _open_or_build_indexed_array(
-            indexed_array_path(size_dir, size, dist, kind, optlevel, id_dtype, in_mem, chunks, blocks),
+            indexed_array_path(size_dir, size, dist, kind, optlevel, id_dtype, in_mem, chunks, blocks, nthreads),
             size,
             dist,
             id_dtype,
@@ -470,6 +481,7 @@ def benchmark_size(
             in_mem,
             chunks,
             blocks,
+            nthreads,
         )
         idx_cond = blosc2.lazyexpr(condition_str, idx_arr.fields)
         idx_expr = idx_cond.where(idx_arr)
@@ -628,6 +640,12 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="How full exact queries should run during the benchmark: auto, selective-ooc, or whole-load.",
     )
+    parser.add_argument(
+        "--nthreads",
+        type=int,
+        default=None,
+        help="Number of threads to use for index creation. Default: use blosc2.nthreads.",
+    )
     return parser.parse_args()
 
 
@@ -641,6 +659,8 @@ def main() -> None:
         raise SystemExit(f"unsupported dtype {args.dtype!r}") from exc
     if id_dtype.kind not in {"b", "i", "u", "f"}:
         raise SystemExit(f"--dtype only supports bool, integer, and floating-point dtypes; got {id_dtype}")
+    if args.nthreads is not None and args.nthreads <= 0:
+        raise SystemExit("--nthreads must be a positive integer")
     sizes = (args.size,) if args.size is not None else SIZES
     dists = DISTS if args.dist == "all" else (args.dist,)
     kinds = KINDS if args.kind == "all" else (args.kind,)
@@ -661,6 +681,7 @@ def main() -> None:
                 args.full_query_mode,
                 args.chunks,
                 args.blocks,
+                args.nthreads,
             )
     else:
         args.outdir.mkdir(parents=True, exist_ok=True)
@@ -678,6 +699,7 @@ def main() -> None:
             args.full_query_mode,
             args.chunks,
             args.blocks,
+            args.nthreads,
         )
 
 
@@ -695,6 +717,7 @@ def run_benchmarks(
     full_query_mode: str,
     chunks: int | None,
     blocks: int | None,
+    nthreads: int | None,
 ) -> None:
     all_results = []
 
@@ -709,7 +732,7 @@ def run_benchmarks(
     print(
         f"{geometry_label}, repeats={repeats}, dist={dist_label}, "
         f"query_width={query_width:,}, optlevel={optlevel}, dtype={id_dtype.name}, in_mem={in_mem}, "
-        f"full_query_mode={full_query_mode}"
+        f"full_query_mode={full_query_mode}, index_nthreads={'auto' if nthreads is None else nthreads}"
     )
     for dist in dists:
         for size in sizes:
@@ -724,6 +747,7 @@ def run_benchmarks(
                 full_query_mode,
                 chunks,
                 blocks,
+                nthreads,
                 kinds,
             )
             all_results.extend(size_results)
