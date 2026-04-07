@@ -598,8 +598,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--query-width",
         type=parse_human_size,
-        default=1_000,
-        help="Width of the range predicate. Supports suffixes like 1k, 1K, 1M, 1G. Default: 1000.",
+        default=1,
+        help="Width of the range predicate. Supports suffixes like 1k, 1K, 1M, 1G. Default: 1.",
     )
     parser.add_argument(
         "--chunks",
@@ -638,7 +638,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dist",
         choices=(*DISTS, "all"),
-        default="sorted",
+        default="permuted",
         help="Distribution for the indexed field. Use 'all' to benchmark every distribution.",
     )
     parser.add_argument(
