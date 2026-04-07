@@ -33,10 +33,12 @@ See the `LazyExpr`_ and `LazyUDF`_ sections for more information.
     .. autosummary::
 
         __getitem__
+        will_use_index
 
     Methods
     ---------------
     .. automethod:: __getitem__
+    .. automethod:: will_use_index
 
     Attributes
     ----------

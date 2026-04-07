@@ -3723,6 +3723,7 @@ class LazyExpr(LazyArray):
         return lazy_expr
 
     def will_use_index(self) -> bool:
+        """Return whether the current lazy query can use an index."""
         from . import indexing
 
         return indexing.will_use_index(self)

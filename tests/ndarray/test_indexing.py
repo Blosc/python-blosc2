@@ -54,6 +54,25 @@ def test_structured_field_index_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data["id"] >= 48_000) & (data["id"] < 51_000)])
 
 
+def test_module_level_will_use_index_matches_lazyexpr_method():
+    import blosc2.indexing as indexing
+
+    indexed = blosc2.asarray(np.arange(100_000, dtype=np.int64), chunks=(10_000,), blocks=(2_000,))
+    indexed.create_index(kind="medium")
+    indexed_expr = ((indexed >= 48_000) & (indexed < 51_000)).where(indexed)
+
+    plain = blosc2.asarray(np.arange(100_000, dtype=np.int64), chunks=(10_000,), blocks=(2_000,))
+    plain_expr = ((plain >= 48_000) & (plain < 51_000)).where(plain)
+
+    assert indexing.will_use_index(indexed_expr) is True
+    assert indexed_expr.will_use_index() is True
+    assert indexing.will_use_index(indexed_expr) == indexed_expr.will_use_index()
+
+    assert indexing.will_use_index(plain_expr) is False
+    assert plain_expr.will_use_index() is False
+    assert indexing.will_use_index(plain_expr) == plain_expr.will_use_index()
+
+
 @pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_random_field_index_matches_scan(kind):
     rng = np.random.default_rng(0)
