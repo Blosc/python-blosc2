@@ -252,9 +252,10 @@ def test_sort_ascending_length_mismatch_raises():
 
 def test_sort_readonly_inplace_raises():
     import os
+    import pathlib
     import shutil
 
-    path = "saved_ctable/_sort_ro_test"
+    path = str(pathlib.Path(__file__).parent / "saved_ctable" / "_sort_ro_test")
     os.makedirs(path, exist_ok=True)
     try:
         t = CTable(Row, urlpath=path, mode="w", new_data=DATA)

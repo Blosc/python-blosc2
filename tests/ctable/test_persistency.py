@@ -9,6 +9,7 @@
 
 import json
 import os
+import pathlib
 import shutil
 from dataclasses import dataclass
 
@@ -29,7 +30,7 @@ class Row:
     active: bool = blosc2.field(blosc2.bool(), default=True)
 
 
-TABLE_ROOT = "saved_ctable/test_tables"
+TABLE_ROOT = str(pathlib.Path(__file__).parent / "saved_ctable" / "test_tables")
 
 
 @pytest.fixture(autouse=True)

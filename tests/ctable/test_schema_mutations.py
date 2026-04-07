@@ -9,6 +9,7 @@
 and the corrected view mutability model."""
 
 import os
+import pathlib
 import shutil
 from dataclasses import dataclass
 
@@ -18,7 +19,7 @@ import pytest
 import blosc2
 from blosc2 import CTable
 
-TABLE_ROOT = "saved_ctable/test_schema_mutations"
+TABLE_ROOT = str(pathlib.Path(__file__).parent / "saved_ctable" / "test_schema_mutations")
 
 
 @dataclass
