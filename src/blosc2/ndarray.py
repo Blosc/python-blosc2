@@ -4754,6 +4754,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
             Optional logical label stored in the descriptor. Index identity is
             still driven by the target field, so creating another index on the
             same field replaces the previous one.
+        kwargs : dict, optional
+            Keyword arguments forwarded to the index builder. At the moment the
+            supported option is ``cparams``. Pass ``cparams`` to control the
+            compression settings used for index sidecars, including
+            ``codec``, ``clevel``, and ``nthreads``. If provided,
+            ``cparams["nthreads"]`` becomes the default build-thread count for
+            intra-chunk sorting unless ``BLOSC2_INDEX_BUILD_THREADS`` overrides
+            it.
 
         Notes
         -----
@@ -4762,12 +4770,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
         mutation and resize operations mark indexes as stale until rebuild.
 
         Chunk-local index creation uses parallel intra-chunk sorting by default.
-        Pass ``cparams`` in ``kwargs`` to control the compression settings used
-        for the index sidecars. When provided, ``cparams["nthreads"]`` is used
-        as the default build-thread count. Set the
-        ``BLOSC2_INDEX_BUILD_THREADS`` environment variable to override that
-        selection explicitly. Setting ``BLOSC2_INDEX_BUILD_THREADS=1``
-        disables parallel sorting.
+        Set ``BLOSC2_INDEX_BUILD_THREADS=1`` to disable parallel sorting. If
+        ``cparams`` is provided in ``kwargs``, its ``nthreads`` value becomes
+        the default build-thread count unless
+        ``BLOSC2_INDEX_BUILD_THREADS`` overrides it.
         """
         from . import indexing
 
@@ -4826,6 +4832,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
             additional temporary arrays for sorting and block payloads, so the
             default remains ``False`` and uses the out-of-core builders for
             ``light``, ``medium``, and ``full``.
+        kwargs : dict, optional
+            Keyword arguments forwarded to the index builder. At the moment the
+            supported option is ``cparams``. Pass ``cparams`` to control the
+            compression settings used for index sidecars, including
+            ``codec``, ``clevel``, and ``nthreads``. If provided,
+            ``cparams["nthreads"]`` becomes the default build-thread count for
+            intra-chunk sorting unless ``BLOSC2_INDEX_BUILD_THREADS`` overrides
+            it.
 
         Notes
         -----
@@ -4834,12 +4848,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
         expression key.
 
         Chunk-local index creation uses parallel intra-chunk sorting by default.
-        Pass ``cparams`` in ``kwargs`` to control the compression settings used
-        for the index sidecars. When provided, ``cparams["nthreads"]`` is used
-        as the default build-thread count. Set the
-        ``BLOSC2_INDEX_BUILD_THREADS`` environment variable to override that
-        selection explicitly. Setting ``BLOSC2_INDEX_BUILD_THREADS=1``
-        disables parallel sorting.
+        Set ``BLOSC2_INDEX_BUILD_THREADS=1`` to disable parallel sorting. If
+        ``cparams`` is provided in ``kwargs``, its ``nthreads`` value becomes
+        the default build-thread count unless
+        ``BLOSC2_INDEX_BUILD_THREADS`` overrides it.
         """
         from . import indexing
 

@@ -283,13 +283,17 @@ def indexed_array_path(
     in_mem: bool,
     chunks: int | None,
     blocks: int | None,
+    codec: blosc2.Codec | None,
+    clevel: int | None,
     nthreads: int | None,
 ) -> Path:
     mode = "mem" if in_mem else "ooc"
+    codec_token = "codec-auto" if codec is None else f"codec-{codec.name}"
+    clevel_token = "clevel-auto" if clevel is None else f"clevel-{clevel}"
     thread_token = "threads-auto" if nthreads is None else f"threads-{nthreads}"
     return (
         size_dir
-        / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{geometry_token(chunks, blocks)}.{thread_token}"
+        / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{geometry_token(chunks, blocks)}.{codec_token}.{clevel_token}.{thread_token}"
         f".{kind}.opt{optlevel}.{mode}.b2nd"
     )
 
@@ -423,6 +427,8 @@ def _open_or_build_indexed_array(
     in_mem: bool,
     chunks: int | None,
     blocks: int | None,
+    codec: blosc2.Codec | None,
+    clevel: int | None,
     nthreads: int | None,
 ) -> tuple[blosc2.NDArray, float]:
     if path.exists():
@@ -436,8 +442,15 @@ def _open_or_build_indexed_array(
     arr = build_persistent_array(size, dist, id_dtype, path, chunks, blocks)
     build_start = time.perf_counter()
     kwargs = {"field": "id", "kind": kind, "optlevel": optlevel, "in_mem": in_mem}
+    cparams = {}
+    if codec is not None:
+        cparams["codec"] = codec
+    if clevel is not None:
+        cparams["clevel"] = clevel
     if nthreads is not None:
-        kwargs["cparams"] = {"nthreads": nthreads}
+        cparams["nthreads"] = nthreads
+    if cparams:
+        kwargs["cparams"] = cparams
     arr.create_index(**kwargs)
     return arr, time.perf_counter() - build_start
 
@@ -453,6 +466,8 @@ def benchmark_size(
     full_query_mode: str,
     chunks: int | None,
     blocks: int | None,
+    codec: blosc2.Codec | None,
+    clevel: int | None,
     nthreads: int | None,
     kinds: tuple[str, ...],
     cold_row_callback=None,
@@ -472,7 +487,9 @@ def benchmark_size(
     rows = []
     for kind in kinds:
         idx_arr, build_time = _open_or_build_indexed_array(
-            indexed_array_path(size_dir, size, dist, kind, optlevel, id_dtype, in_mem, chunks, blocks, nthreads),
+            indexed_array_path(
+                size_dir, size, dist, kind, optlevel, id_dtype, in_mem, chunks, blocks, codec, clevel, nthreads
+            ),
             size,
             dist,
             id_dtype,
@@ -481,6 +498,8 @@ def benchmark_size(
             in_mem,
             chunks,
             blocks,
+            codec,
+            clevel,
             nthreads,
         )
         idx_cond = blosc2.lazyexpr(condition_str, idx_arr.fields)
@@ -641,6 +660,19 @@ def parse_args() -> argparse.Namespace:
         help="How full exact queries should run during the benchmark: auto, selective-ooc, or whole-load.",
     )
     parser.add_argument(
+        "--codec",
+        type=str,
+        default=None,
+        choices=[codec.name for codec in blosc2.Codec],
+        help="Codec to use for index sidecars. Default: library default.",
+    )
+    parser.add_argument(
+        "--clevel",
+        type=int,
+        default=None,
+        help="Compression level to use for index sidecars. Default: library default.",
+    )
+    parser.add_argument(
         "--nthreads",
         type=int,
         default=None,
@@ -659,6 +691,9 @@ def main() -> None:
         raise SystemExit(f"unsupported dtype {args.dtype!r}") from exc
     if id_dtype.kind not in {"b", "i", "u", "f"}:
         raise SystemExit(f"--dtype only supports bool, integer, and floating-point dtypes; got {id_dtype}")
+    codec = None if args.codec is None else blosc2.Codec[args.codec]
+    if args.clevel is not None and args.clevel < 0:
+        raise SystemExit("--clevel must be >= 0")
     if args.nthreads is not None and args.nthreads <= 0:
         raise SystemExit("--nthreads must be a positive integer")
     sizes = (args.size,) if args.size is not None else SIZES
@@ -681,6 +716,8 @@ def main() -> None:
                 args.full_query_mode,
                 args.chunks,
                 args.blocks,
+                codec,
+                args.clevel,
                 args.nthreads,
             )
     else:
@@ -699,6 +736,8 @@ def main() -> None:
             args.full_query_mode,
             args.chunks,
             args.blocks,
+            codec,
+            args.clevel,
             args.nthreads,
         )
 
@@ -717,6 +756,8 @@ def run_benchmarks(
     full_query_mode: str,
     chunks: int | None,
     blocks: int | None,
+    codec: blosc2.Codec | None,
+    clevel: int | None,
     nthreads: int | None,
 ) -> None:
     all_results = []
@@ -732,7 +773,9 @@ def run_benchmarks(
     print(
         f"{geometry_label}, repeats={repeats}, dist={dist_label}, "
         f"query_width={query_width:,}, optlevel={optlevel}, dtype={id_dtype.name}, in_mem={in_mem}, "
-        f"full_query_mode={full_query_mode}, index_nthreads={'auto' if nthreads is None else nthreads}"
+        f"full_query_mode={full_query_mode}, index_codec={'auto' if codec is None else codec.name}, "
+        f"index_clevel={'auto' if clevel is None else clevel}, "
+        f"index_nthreads={'auto' if nthreads is None else nthreads}"
     )
     for dist in dists:
         for size in sizes:
@@ -747,6 +790,8 @@ def run_benchmarks(
                 full_query_mode,
                 chunks,
                 blocks,
+                codec,
+                clevel,
                 nthreads,
                 kinds,
             )
