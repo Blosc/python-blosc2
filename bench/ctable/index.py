@@ -8,8 +8,8 @@
 # Benchmark for measuring Column[int] access (single row by logical index),
 # which exercises _find_physical_index() traversal over chunk metadata.
 
-from time import time
 from dataclasses import dataclass
+from time import time
 
 import numpy as np
 

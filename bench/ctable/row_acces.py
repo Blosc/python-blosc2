@@ -8,8 +8,8 @@
 # Benchmark for measuring row[int] access (full row via _RowIndexer),
 # testing access at different positions across the array.
 
-from time import time
 from dataclasses import dataclass
+from time import time
 
 import numpy as np
 

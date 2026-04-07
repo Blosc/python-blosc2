@@ -8,8 +8,8 @@
 # Benchmark for measuring delete() performance with different index types:
 # int, slice, and list — with varying sizes.
 
-from time import time
 from dataclasses import dataclass
+from time import time
 
 import numpy as np
 

@@ -6,12 +6,10 @@
 #######################################################################
 
 from dataclasses import dataclass
-
-import numpy as np
 from time import time
 
-from blosc2 import CTable
 import blosc2
+from blosc2 import CTable
 
 
 @dataclass
@@ -32,7 +30,7 @@ print(f"Table created with {len(tabla)} rows\n")
 # Test 1: iterate without accessing any column (minimum cost)
 # -------------------------------------------------------------------
 t0 = time()
-for row in tabla:
+for _row in tabla:
     pass
 t1 = time()
 print(f"[Test 1] Iter without accessing columns:    {(t1 - t0)*1000:.3f} ms")

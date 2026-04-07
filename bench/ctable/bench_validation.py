@@ -33,7 +33,7 @@ def make_data(n: int):
     ids    = np.arange(n, dtype=np.int64)
     scores = rng.uniform(0, 100, n)
     flags  = rng.integers(0, 2, n, dtype=np.bool_)
-    return list(zip(ids.tolist(), scores.tolist(), flags.tolist()))
+    return list(zip(ids.tolist(), scores.tolist(), flags.tolist(), strict=False))
 
 
 SIZES = [100, 1_000, 10_000, 100_000, 1_000_000]

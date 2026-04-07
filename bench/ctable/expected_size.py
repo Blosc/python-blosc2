@@ -8,8 +8,8 @@
 # Benchmark for measuring the overhead of resize() when expected_size
 # is too small (M rows) vs correctly sized (N rows) during extend().
 
-from time import time
 from dataclasses import dataclass
+from time import time
 
 import numpy as np
 

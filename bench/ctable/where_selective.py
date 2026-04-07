@@ -8,8 +8,8 @@
 # Benchmark for measuring where() performance with varying selectivity.
 # Filter: id < threshold, with thresholds covering 1%, 10%, 50%, 90%, 100%
 
-from time import time
 from dataclasses import dataclass
+from time import time
 
 import numpy as np
 

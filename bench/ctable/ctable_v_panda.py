@@ -11,10 +11,11 @@
 #   3. Filtering (where/query)
 #   4. Row iteration
 
-from time import time
 from dataclasses import dataclass
+from time import time
 
 import numpy as np
+import pandas as pd
 
 import blosc2
 
@@ -96,12 +97,12 @@ print(f"{'Filter (id 250k-750k)':<30} {t_ct_filter:>12.4f} {t_pd_filter:>12.4f} 
 
 # 4. Row iteration
 t0 = time()
-for val in ct["score"]:
+for _val in ct["score"]:
     pass
 t_ct_iter = time() - t0
 
 t0 = time()
-for val in df["score"]:
+for _val in df["score"]:
     pass
 t_pd_iter = time() - t0
 

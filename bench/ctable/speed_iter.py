@@ -6,13 +6,10 @@
 #######################################################################
 
 from dataclasses import dataclass
-
-import numpy as np
 from time import time
 
-
-from blosc2 import CTable
 import blosc2
+from blosc2 import CTable
 
 
 @dataclass

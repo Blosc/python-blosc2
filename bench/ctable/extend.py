@@ -10,8 +10,8 @@
 #   2. NumPy structured array (1M rows) — list of named tuples
 #   3. An existing CTable (previously created from Python lists, 1M rows)
 
-from time import time
 from dataclasses import dataclass
+from time import time
 
 import numpy as np
 

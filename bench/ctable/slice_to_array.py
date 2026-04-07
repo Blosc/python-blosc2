@@ -8,8 +8,8 @@
 # Benchmark for measuring Column[slice] + to_array() with slices of
 # different sizes and positions: small, large, and middle of the array.
 
-from time import time
 from dataclasses import dataclass
+from time import time
 
 import numpy as np
 

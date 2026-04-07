@@ -7,8 +7,8 @@
 
 # Benchmark for measuring Column[::step].to_array() with varying step sizes.
 
-from time import time
 from dataclasses import dataclass
+from time import time
 
 import numpy as np
 

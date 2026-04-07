@@ -10,8 +10,8 @@
 #   2. np.array(list(ct["score"]))  — materialize via list then convert
 #   3. ct["score"][0:N].to_array()  — slice view + to_array()
 
-from time import time
 from dataclasses import dataclass
+from time import time
 
 import numpy as np
 
@@ -55,7 +55,7 @@ col = ct["score"]
 
 # 1. Python iterator
 t0 = time()
-for val in col:
+for _val in col:
     pass
 t_iter = time() - t0
 print(f"for val in col:              {t_iter:.4f} s")
@@ -69,7 +69,7 @@ print(f"np.array(list(col)):         {t_list:.4f} s")
 # 3. slice view + to_array()
 t0 = time()
 arr = col[0:N].to_numpy()
-for val in arr:
+for _val in arr:
     pass
 t_toarray = time() - t0
 print(f"col[0:N].to_array():         {t_toarray:.4f} s")

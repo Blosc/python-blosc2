@@ -8,10 +8,8 @@
 # Benchmark for comparing append() (row by row) vs extend() (bulk),
 # to find the crossover point where extend() becomes worth it.
 
-from time import time
 from dataclasses import dataclass
-
-import numpy as np
+from time import time
 
 import blosc2
 
@@ -26,7 +24,7 @@ class Row:
 
 # Parameter — change N to test different crossover points
 N = 2
-print(f"append() vs extend() benchmark")
+print("append() vs extend() benchmark")
 for i in range(6):
     print("\n")
     print("%" * 100)

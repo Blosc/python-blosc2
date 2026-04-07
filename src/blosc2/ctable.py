@@ -1282,6 +1282,498 @@ class CTable(Generic[RowT]):
         mask[chosen] = True
         return self.view(blosc2.asarray(mask))
 
+    def select(self, cols: list[str]) -> CTable:
+        """Return a column-projection view exposing only *cols*.
+
+        The returned object shares the underlying NDArrays with this table
+        (no data is copied).  Row filtering and value writes work as usual;
+        structural mutations (add/drop/rename column, append, …) are blocked.
+
+        Parameters
+        ----------
+        cols:
+            Ordered list of column names to keep.
+
+        Raises
+        ------
+        KeyError
+            If any name in *cols* is not a column of this table.
+        ValueError
+            If *cols* is empty.
+        """
+        if not cols:
+            raise ValueError("select() requires at least one column name.")
+        for name in cols:
+            if name not in self._cols:
+                raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
+
+        obj = CTable.__new__(CTable)
+        obj._row_type = self._row_type
+        obj._validate = self._validate
+        obj._table_cparams = self._table_cparams
+        obj._table_dparams = self._table_dparams
+        obj._storage = None
+        obj._read_only = self._read_only
+        obj._valid_rows = self._valid_rows
+        obj._n_rows = self._n_rows
+        obj._last_pos = self._last_pos
+        obj.auto_compact = self.auto_compact
+        obj.base = self
+
+        # Subset of columns — same NDArray objects, no copy
+        obj._cols = {name: self._cols[name] for name in cols}
+        obj.col_names = list(cols)
+
+        # Rebuild schema for the selected columns only
+        sel_set = set(cols)
+        sel_compiled = [c for c in self._schema.columns if c.name in sel_set]
+        # Preserve caller-specified order
+        order = {name: i for i, name in enumerate(cols)}
+        sel_compiled.sort(key=lambda c: order[c.name])
+        obj._schema = CompiledSchema(
+            columns=sel_compiled,
+            columns_by_name={c.name: c for c in sel_compiled},
+            row_cls=self._schema.row_cls,
+        )
+        obj._col_widths = {name: self._col_widths[name] for name in cols if name in self._col_widths}
+        obj.row = _RowIndexer(obj)
+        return obj
+
+    def describe(self) -> None:
+        """Print a per-column statistical summary.
+
+        Numeric columns (int, float): count, mean, std, min, max.
+        Bool columns: count, true-count, true-%.
+        String columns: count, min (lex), max (lex), n-unique.
+        """
+        n = self._n_rows
+        lines = []
+        lines.append(f"CTable  {n:,} rows × {self.ncols} cols")
+        lines.append("")
+
+        for name in self.col_names:
+            col = self[name]
+            dtype = col.dtype
+            lines.append(f"  {name}  [{dtype}]")
+
+            if n == 0:
+                lines.append("    (empty)")
+                lines.append("")
+                continue
+
+            if dtype.kind in "biufc" and dtype.kind != "c":
+                # numeric + bool
+                if dtype.kind == "b":
+                    arr = col.to_numpy()
+                    true_n = int(arr.sum())
+                    lines.append(f"    count : {n:,}")
+                    lines.append(f"    true  : {true_n:,}  ({true_n / n * 100:.1f} %)")
+                    lines.append(f"    false : {n - true_n:,}  ({(n - true_n) / n * 100:.1f} %)")
+                else:
+                    mn = col.min()
+                    mx = col.max()
+                    avg = col.mean()
+                    sd = col.std()
+                    fmt = ".4g"
+                    lines.append(f"    count : {n:,}")
+                    lines.append(f"    mean  : {avg:{fmt}}")
+                    lines.append(f"    std   : {sd:{fmt}}")
+                    lines.append(f"    min   : {mn:{fmt}}")
+                    lines.append(f"    max   : {mx:{fmt}}")
+            elif dtype.kind in "US":
+                mn = col.min()
+                mx = col.max()
+                nu = len(col.unique())
+                lines.append(f"    count   : {n:,}")
+                lines.append(f"    unique  : {nu:,}")
+                lines.append(f"    min     : {mn!r}")
+                lines.append(f"    max     : {mx!r}")
+            else:
+                lines.append(f"    count : {n:,}")
+                lines.append(f"    (stats not available for dtype {dtype})")
+
+            lines.append("")
+
+        print("\n".join(lines))
+
+    def cov(self) -> np.ndarray:
+        """Return the covariance matrix as a numpy array.
+
+        Only int, float, and bool columns are supported.  Bool columns are
+        cast to int (0/1) before computation.  Complex columns raise
+        :exc:`TypeError`.
+
+        Returns
+        -------
+        numpy.ndarray
+            Shape ``(ncols, ncols)``.  Column order matches
+            :attr:`col_names`.
+
+        Raises
+        ------
+        TypeError
+            If any column has an unsupported dtype (complex, string, …).
+        ValueError
+            If the table has fewer than 2 live rows (covariance undefined).
+        """
+        for name in self.col_names:
+            dtype = self._cols[name].dtype
+            if not (
+                np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.floating) or dtype == np.bool_
+            ):
+                raise TypeError(
+                    f"Column {name!r} has dtype {dtype} which is not supported by cov(). "
+                    "Only int, float, and bool columns are allowed."
+                )
+
+        if self._n_rows < 2:
+            raise ValueError(f"cov() requires at least 2 live rows, got {self._n_rows}.")
+
+        # Build (n_cols, n_rows) matrix — one row per column
+        arrays = []
+        for name in self.col_names:
+            arr = self[name].to_numpy()
+            if arr.dtype == np.bool_:
+                arr = arr.astype(np.int8)
+            arrays.append(arr.astype(np.float64))
+
+        data = np.stack(arrays, axis=0)  # shape (ncols, n_live)
+        return np.atleast_2d(np.cov(data))
+
+    # ------------------------------------------------------------------
+    # Arrow interop
+    # ------------------------------------------------------------------
+
+    def to_arrow(self):
+        """Convert all live rows to a :class:`pyarrow.Table`.
+
+        Each column is materialized via :meth:`Column.to_numpy` and wrapped
+        in a ``pyarrow.array``.  String columns are emitted as ``pa.string()``
+        (variable-length UTF-8); bytes columns as ``pa.large_binary()``.
+
+        Raises
+        ------
+        ImportError
+            If ``pyarrow`` is not installed.
+        """
+        try:
+            import pyarrow as pa
+        except ImportError:
+            raise ImportError(
+                "pyarrow is required for to_arrow(). Install it with: pip install pyarrow"
+            ) from None
+
+        arrays = {}
+        for name in self.col_names:
+            col = self[name]
+            arr = col.to_numpy()
+            kind = arr.dtype.kind
+            if kind == "U":
+                pa_arr = pa.array(arr.tolist(), type=pa.string())
+            elif kind == "S":
+                pa_arr = pa.array(arr.tolist(), type=pa.large_binary())
+            else:
+                pa_arr = pa.array(arr)
+            arrays[name] = pa_arr
+
+        return pa.table(arrays)
+
+    @classmethod
+    def from_arrow(cls, arrow_table) -> CTable:
+        """Build a :class:`CTable` from a :class:`pyarrow.Table`.
+
+        Schema is inferred from the Arrow field types.  String columns
+        (``pa.string()``, ``pa.large_string()``) are stored with
+        ``max_length`` set to the longest value found in the data.
+
+        Parameters
+        ----------
+        arrow_table:
+            A ``pyarrow.Table`` instance.
+
+        Returns
+        -------
+        CTable
+            A new in-memory CTable containing all rows from *arrow_table*.
+
+        Raises
+        ------
+        ImportError
+            If ``pyarrow`` is not installed.
+        TypeError
+            If an Arrow field type has no corresponding blosc2 spec.
+        """
+        try:
+            import pyarrow as pa
+        except ImportError:
+            raise ImportError(
+                "pyarrow is required for from_arrow(). Install it with: pip install pyarrow"
+            ) from None
+
+        import blosc2.schema as b2s
+
+        def _arrow_type_to_spec(pa_type, arrow_col):
+            """Map a pyarrow DataType to a blosc2 SchemaSpec."""
+            mapping = [
+                (pa.int8(), b2s.int8),
+                (pa.int16(), b2s.int16),
+                (pa.int32(), b2s.int32),
+                (pa.int64(), b2s.int64),
+                (pa.uint8(), b2s.uint8),
+                (pa.uint16(), b2s.uint16),
+                (pa.uint32(), b2s.uint32),
+                (pa.uint64(), b2s.uint64),
+                (pa.float32(), b2s.float32),
+                (pa.float64(), b2s.float64),
+                (pa.bool_(), b2s.bool),
+            ]
+            for arrow_t, spec_cls in mapping:
+                if pa_type == arrow_t:
+                    return spec_cls()
+
+            # String types: determine max_length from the data
+            if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+                values = [v for v in arrow_col.to_pylist() if v is not None]
+                max_len = max((len(v) for v in values), default=1)
+                return b2s.string(max_length=max(max_len, 1))
+
+            raise TypeError(
+                f"No blosc2 spec for Arrow type {pa_type!r}. "
+                "Supported: int8/16/32/64, uint8/16/32/64, float32/64, bool, string."
+            )
+
+        # Build CompiledSchema from Arrow schema
+        columns: list[CompiledColumn] = []
+        for field in arrow_table.schema:
+            name = field.name
+            _validate_column_name(name)
+            spec = _arrow_type_to_spec(field.type, arrow_table.column(name))
+            col_config = ColumnConfig(cparams=None, dparams=None, chunks=None, blocks=None)
+            columns.append(
+                CompiledColumn(
+                    name=name,
+                    py_type=spec.python_type,
+                    spec=spec,
+                    dtype=spec.dtype,
+                    default=MISSING,
+                    config=col_config,
+                    display_width=compute_display_width(spec),
+                )
+            )
+
+        schema = CompiledSchema(
+            row_cls=None,
+            columns=columns,
+            columns_by_name={col.name: col for col in columns},
+        )
+
+        n = len(arrow_table)
+        capacity = max(n, 1)
+        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        mem_storage = InMemoryTableStorage()
+
+        new_valid = mem_storage.create_valid_rows(
+            shape=(capacity,),
+            chunks=default_chunks,
+            blocks=default_blocks,
+        )
+        new_cols: dict[str, blosc2.NDArray] = {}
+        for col in columns:
+            new_cols[col.name] = mem_storage.create_column(
+                col.name,
+                dtype=col.dtype,
+                shape=(capacity,),
+                chunks=default_chunks,
+                blocks=default_blocks,
+                cparams=None,
+                dparams=None,
+            )
+
+        obj = cls.__new__(cls)
+        obj._row_type = None
+        obj._validate = False
+        obj._table_cparams = None
+        obj._table_dparams = None
+        obj._storage = mem_storage
+        obj._read_only = False
+        obj._schema = schema
+        obj._cols = new_cols
+        obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in columns}
+        obj.col_names = [col.name for col in columns]
+        obj.row = _RowIndexer(obj)
+        obj.auto_compact = False
+        obj.base = None
+        obj._valid_rows = new_valid
+        obj._n_rows = 0
+        obj._last_pos = 0
+
+        if n > 0:
+            # Write each column directly — one bulk slice assignment per column.
+            # String columns (dtype.kind == 'U') can't go through Arrow's zero-copy
+            # to_numpy(), so we convert via to_pylist() and let NumPy handle the
+            # fixed-width unicode coercion.  All other types use zero-copy numpy.
+            for col in columns:
+                arrow_col = arrow_table.column(col.name)
+                if col.dtype.kind in "US":
+                    arr = np.array(arrow_col.to_pylist(), dtype=col.dtype)
+                else:
+                    arr = arrow_col.to_numpy(zero_copy_only=False).astype(col.dtype)
+                new_cols[col.name][:n] = arr
+
+            new_valid[:n] = True
+            obj._n_rows = n
+            obj._last_pos = n
+
+        return obj
+
+    # ------------------------------------------------------------------
+    # CSV interop
+    # ------------------------------------------------------------------
+
+    def to_csv(self, path: str, *, header: bool = True, sep: str = ",") -> None:
+        """Write all live rows to a CSV file.
+
+        Uses Python's stdlib ``csv`` module — no extra dependency required.
+        Each column is materialised once via :meth:`Column.to_numpy`; rows
+        are then written one at a time.
+
+        Parameters
+        ----------
+        path:
+            Destination file path.  Created or overwritten.
+        header:
+            If ``True`` (default), write column names as the first row.
+        sep:
+            Field delimiter.  Defaults to ``","``; use ``"\\t"`` for TSV.
+        """
+        import csv
+
+        arrays = [self[name].to_numpy() for name in self.col_names]
+
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f, delimiter=sep)
+            if header:
+                writer.writerow(self.col_names)
+            for row in zip(*arrays, strict=True):
+                writer.writerow(row)
+
+    @classmethod
+    def from_csv(
+        cls,
+        path: str,
+        row_cls,
+        *,
+        header: bool = True,
+        sep: str = ",",
+    ) -> CTable:
+        """Build a :class:`CTable` from a CSV file.
+
+        Schema comes from *row_cls* (a dataclass) — CTable is always typed.
+        All rows are read in a single pass into per-column Python lists, then
+        each column is bulk-written into a pre-allocated NDArray (one slice
+        assignment per column, no ``extend()``).
+
+        Parameters
+        ----------
+        path:
+            Source CSV file path.
+        row_cls:
+            A dataclass whose fields define the column names and types.
+        header:
+            If ``True`` (default), the first row is treated as a header and
+            skipped.  Column order in the file must match *row_cls* field
+            order regardless.
+        sep:
+            Field delimiter.  Defaults to ``","``; use ``"\\t"`` for TSV.
+
+        Returns
+        -------
+        CTable
+            A new in-memory CTable containing all rows from the CSV file.
+
+        Raises
+        ------
+        TypeError
+            If *row_cls* is not a dataclass.
+        ValueError
+            If a row has a different number of fields than the schema.
+        """
+        import csv
+
+        schema = compile_schema(row_cls)
+        ncols = len(schema.columns)
+
+        # Accumulate values per column as Python lists (one pass through file)
+        col_data: list[list] = [[] for _ in range(ncols)]
+
+        with open(path, newline="") as f:
+            reader = csv.reader(f, delimiter=sep)
+            if header:
+                next(reader)
+            for lineno, row in enumerate(reader, start=2 if header else 1):
+                if len(row) != ncols:
+                    raise ValueError(f"Line {lineno}: expected {ncols} fields, got {len(row)}.")
+                for i, val in enumerate(row):
+                    col_data[i].append(val)
+
+        n = len(col_data[0]) if ncols > 0 else 0
+        capacity = max(n, 1)
+        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        mem_storage = InMemoryTableStorage()
+
+        new_valid = mem_storage.create_valid_rows(
+            shape=(capacity,),
+            chunks=default_chunks,
+            blocks=default_blocks,
+        )
+        new_cols: dict[str, blosc2.NDArray] = {}
+        for col in schema.columns:
+            new_cols[col.name] = mem_storage.create_column(
+                col.name,
+                dtype=col.dtype,
+                shape=(capacity,),
+                chunks=default_chunks,
+                blocks=default_blocks,
+                cparams=None,
+                dparams=None,
+            )
+
+        obj = cls.__new__(cls)
+        obj._row_type = row_cls
+        obj._validate = True
+        obj._table_cparams = None
+        obj._table_dparams = None
+        obj._storage = mem_storage
+        obj._read_only = False
+        obj._schema = schema
+        obj._cols = new_cols
+        obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
+        obj.col_names = [col.name for col in schema.columns]
+        obj.row = _RowIndexer(obj)
+        obj.auto_compact = False
+        obj.base = None
+        obj._valid_rows = new_valid
+        obj._n_rows = 0
+        obj._last_pos = 0
+
+        if n > 0:
+            for i, col in enumerate(schema.columns):
+                if col.dtype == np.bool_:
+                    # np.array(["False"], dtype=bool) treats any non-empty
+                    # string as True.  Parse "True"/"False"/"1"/"0" explicitly.
+                    arr = np.array(
+                        [v.strip() in ("True", "true", "1") for v in col_data[i]],
+                        dtype=np.bool_,
+                    )
+                else:
+                    arr = np.array(col_data[i], dtype=col.dtype)
+                new_cols[col.name][:n] = arr
+            new_valid[:n] = True
+            obj._n_rows = n
+            obj._last_pos = n
+
+        return obj
+
     # ------------------------------------------------------------------
     # Schema mutations: add / drop / rename columns
     # ------------------------------------------------------------------
@@ -1496,6 +1988,173 @@ class CTable(Generic[RowT]):
         self._valid_rows[: self._n_rows] = True
         self._valid_rows[self._n_rows :] = False
         self._last_pos = self._n_rows  # next write goes right after live rows
+
+    def _normalise_sort_keys(
+        self,
+        cols: str | list[str],
+        ascending: bool | list[bool],
+    ) -> tuple[list[str], list[bool]]:
+        """Validate and normalise sort key arguments; return (cols, ascending)."""
+        if isinstance(cols, str):
+            cols = [cols]
+        if isinstance(ascending, bool):
+            ascending = [ascending] * len(cols)
+        if len(cols) != len(ascending):
+            raise ValueError(
+                f"'ascending' must have the same length as 'cols' ({len(cols)}), got {len(ascending)}."
+            )
+        for name in cols:
+            if name not in self._cols:
+                raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
+            dtype = self._cols[name].dtype
+            if np.issubdtype(dtype, np.complexfloating):
+                raise TypeError(
+                    f"Column {name!r} has complex dtype {dtype} which does not support ordering."
+                )
+        return cols, ascending
+
+    def _build_lex_keys(
+        self,
+        cols: list[str],
+        ascending: list[bool],
+        live_pos: np.ndarray,
+        n: int,
+    ) -> list[np.ndarray]:
+        """Build the key list for np.lexsort (innermost = last = primary key)."""
+        lex_keys = []
+        for name, asc in zip(reversed(cols), reversed(ascending), strict=True):
+            raw = self._cols[name][live_pos]
+            if not asc:
+                if raw.dtype.kind in "US":
+                    # strings can't be negated — invert via rank
+                    rank = np.argsort(np.argsort(raw, stable=True), stable=True)
+                    lex_keys.append((n - 1 - rank).astype(np.intp))
+                elif np.issubdtype(raw.dtype, np.unsignedinteger):
+                    lex_keys.append(-raw.astype(np.int64))
+                else:
+                    lex_keys.append(-raw)
+            else:
+                lex_keys.append(raw)
+        return lex_keys
+
+    def sort_by(
+        self,
+        cols: str | list[str],
+        ascending: bool | list[bool] = True,
+        *,
+        inplace: bool = False,
+    ) -> CTable:
+        """Return a copy of the table sorted by one or more columns.
+
+        Parameters
+        ----------
+        cols:
+            Column name or list of column names to sort by.  When multiple
+            columns are given, the first is the primary key, the second is
+            the tiebreaker, and so on.
+        ascending:
+            Sort direction.  A single bool applies to all keys; a list must
+            have the same length as *cols*.
+        inplace:
+            If ``True``, rewrite the physical data in place and return
+            ``self`` (like :meth:`compact` but sorted).  If ``False``
+            (default), return a new in-memory CTable leaving this one
+            untouched.
+
+        Raises
+        ------
+        ValueError
+            If called on a view or a read-only table when ``inplace=True``.
+        KeyError
+            If any column name is not found.
+        TypeError
+            If a column used as a sort key does not support ordering
+            (e.g. complex numbers).
+        """
+        if self.base is not None:
+            raise ValueError("Cannot sort a view. Materialise it first with .to_table() or sort the parent.")
+        if inplace and self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
+
+        cols, ascending = self._normalise_sort_keys(cols, ascending)
+
+        # Live physical positions
+        valid_np = self._valid_rows[:]
+        live_pos = np.where(valid_np)[0]
+        n = len(live_pos)
+
+        if n == 0:
+            if inplace:
+                return self
+            return self._empty_copy()
+
+        order = np.lexsort(self._build_lex_keys(cols, ascending, live_pos, n))
+
+        sorted_pos = live_pos[order]
+
+        if inplace:
+            for _col_name, arr in self._cols.items():
+                arr[:n] = arr[sorted_pos]
+            self._valid_rows[:n] = True
+            self._valid_rows[n:] = False
+            self._n_rows = n
+            self._last_pos = n
+            return self
+        else:
+            # Build a new in-memory table with the sorted rows
+            result = self._empty_copy()
+            for col_name, arr in self._cols.items():
+                result._cols[col_name][:n] = arr[sorted_pos]
+            result._valid_rows[:n] = True
+            result._valid_rows[n:] = False
+            result._n_rows = n
+            result._last_pos = n
+            return result
+
+    def _empty_copy(self) -> CTable:
+        """Return a new empty in-memory CTable with the same schema and capacity."""
+        from blosc2 import compute_chunks_blocks
+
+        capacity = max(self._n_rows, 1)
+        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        mem_storage = InMemoryTableStorage()
+
+        new_valid = mem_storage.create_valid_rows(
+            shape=(capacity,),
+            chunks=default_chunks,
+            blocks=default_blocks,
+        )
+        new_cols = {}
+        for col in self._schema.columns:
+            col_storage = self._resolve_column_storage(col, default_chunks, default_blocks)
+            new_cols[col.name] = mem_storage.create_column(
+                col.name,
+                dtype=col.dtype,
+                shape=(capacity,),
+                chunks=col_storage["chunks"],
+                blocks=col_storage["blocks"],
+                cparams=col_storage.get("cparams"),
+                dparams=col_storage.get("dparams"),
+            )
+
+        obj = CTable.__new__(CTable)
+        obj._schema = self._schema
+        obj._row_type = self._row_type
+        obj._table_cparams = self._table_cparams
+        obj._table_dparams = self._table_dparams
+        obj._storage = mem_storage
+        obj._valid_rows = new_valid
+        obj._cols = new_cols
+        obj._col_widths = self._col_widths
+        obj.col_names = [col.name for col in self._schema.columns]
+        obj.row = _RowIndexer(obj)
+        obj._n_rows = 0
+        obj._last_pos = None
+        obj._read_only = False
+        obj.base = None
+        obj.auto_compact = self.auto_compact
+        obj._validate = self._validate
+        return obj
 
     # ------------------------------------------------------------------
     # Properties / info
