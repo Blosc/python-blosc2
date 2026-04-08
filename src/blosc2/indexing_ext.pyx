@@ -4,9 +4,11 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
+# cython: wraparound=False
 
 import numpy as np
 cimport numpy as np
+import cython
 
 from libc.stdint cimport int8_t, int16_t, int32_t, int64_t, uint8_t, uint16_t, uint32_t, uint64_t
 
@@ -61,6 +63,8 @@ cdef inline bint _le_ordered_pair(
     return left_position <= right_position
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
 cdef void _stable_mergesort_float(
     sort_float_t[:] values,
     uint64_t[:] positions,
@@ -131,6 +135,8 @@ cdef void _stable_mergesort_float(
             positions[start] = src_positions[start]
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
 cdef void _stable_mergesort_ordered(
     sort_ordered_t[:] values,
     uint64_t[:] positions,
@@ -1475,7 +1481,7 @@ cdef inline tuple _search_boundary_bounds_uint32_impl(
 
 
 cdef inline tuple _search_bounds_uint64_impl(
-    np.ndarray[np.uint64_t, ndim=1] values,
+    np.uint64_t[:] values,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1505,8 +1511,8 @@ cdef inline tuple _search_bounds_uint64_impl(
 
 
 cdef inline tuple _search_boundary_bounds_uint64_impl(
-    np.ndarray[np.uint64_t, ndim=1] starts,
-    np.ndarray[np.uint64_t, ndim=1] ends,
+    np.uint64_t[:] starts,
+    np.uint64_t[:] ends,
     object lower,
     bint lower_inclusive,
     object upper,
