@@ -13,6 +13,7 @@ import hashlib
 import math
 import os
 import re
+import sys
 import tempfile
 import weakref
 from concurrent.futures import ThreadPoolExecutor
@@ -3985,7 +3986,10 @@ def _light_batch_result_dtype(where_x) -> np.dtype:
 
 def _light_worker_source(where_x):
     if _supports_block_reads(where_x) and getattr(where_x, "urlpath", None) is not None:
-        return blosc2.open(str(where_x.urlpath), mmap_mode="r")
+        # On Windows, mmap holds a file lock that prevents later vlmeta updates
+        # (e.g. during rebuild_index / drop_index), so use regular file I/O.
+        mmap = None if sys.platform == "win32" else "r"
+        return blosc2.open(str(where_x.urlpath), mmap_mode=mmap)
     return where_x
 
 
