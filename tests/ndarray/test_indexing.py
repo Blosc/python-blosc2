@@ -417,6 +417,8 @@ def test_in_mem_override_disables_ooc_builder(kind):
 
 @pytest.mark.parametrize("kind", ["light", "medium"])
 def test_chunk_local_ooc_intra_chunk_build_uses_thread_pool_when_threads_forced(monkeypatch, kind):
+    if blosc2.IS_WASM:
+        pytest.skip("wasm32 does not use Python thread pools for index building")
     data = np.arange(48_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(48_000,), blocks=(1_500,))
     indexing = __import__("blosc2.indexing", fromlist=["ThreadPoolExecutor"])
@@ -447,6 +449,8 @@ def test_chunk_local_ooc_intra_chunk_build_uses_thread_pool_when_threads_forced(
 
 @pytest.mark.parametrize("kind", ["light", "medium"])
 def test_in_memory_chunk_local_build_uses_cparams_nthreads(monkeypatch, kind):
+    if blosc2.IS_WASM:
+        pytest.skip("wasm32 does not use Python thread pools for index building")
     data = np.arange(48_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(48_000,), blocks=(1_500,))
     indexing = __import__("blosc2.indexing", fromlist=["ThreadPoolExecutor"])

@@ -1042,7 +1042,9 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.clevel = kwargs.get('clevel', blosc2.cparams_dflts['clevel'])
     cparams.use_dict = kwargs.get('use_dict', blosc2.cparams_dflts['use_dict'])
     cparams.typesize = typesize = kwargs.get('typesize', blosc2.cparams_dflts['typesize'])
-    cparams.nthreads = kwargs.get('nthreads', blosc2.nthreads)
+    cparams.nthreads = kwargs.get('nthreads', 1 if blosc2.IS_WASM else blosc2.nthreads)
+    if blosc2.IS_WASM:
+        cparams.nthreads = 1
     cparams.blocksize = kwargs.get('blocksize', blosc2.cparams_dflts['blocksize'])
     splitmode = kwargs.get('splitmode', blosc2.cparams_dflts['splitmode'])
     cparams.splitmode = splitmode.value
@@ -1123,7 +1125,9 @@ def compress2(src, **kwargs):
 
 cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs, blosc2_cparams* cparams=NULL):
     memcpy(dparams, &BLOSC2_DPARAMS_DEFAULTS, sizeof(BLOSC2_DPARAMS_DEFAULTS))
-    dparams.nthreads = kwargs.get('nthreads', blosc2.nthreads)
+    dparams.nthreads = kwargs.get('nthreads', 1 if blosc2.IS_WASM else blosc2.nthreads)
+    if blosc2.IS_WASM:
+        dparams.nthreads = 1
     dparams.schunk = NULL
     dparams.postfilter = NULL
     dparams.postparams = NULL
@@ -2832,7 +2836,9 @@ def open(urlpath, mode, offset, **kwargs):
         if cparams is not None:
             res.schunk.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
         else:
-            res.schunk.cparams = dataclasses.replace(res.schunk.cparams, nthreads=blosc2.nthreads)
+            res.schunk.cparams = dataclasses.replace(
+                res.schunk.cparams, nthreads=(1 if blosc2.IS_WASM else blosc2.nthreads)
+            )
         if dparams is not None:
             res.schunk.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
         res.schunk.mode = mode
@@ -2842,7 +2848,7 @@ def open(urlpath, mode, offset, **kwargs):
         if cparams is not None:
             res.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
         else:
-            res.cparams = dataclasses.replace(res.cparams, nthreads=blosc2.nthreads)
+            res.cparams = dataclasses.replace(res.cparams, nthreads=(1 if blosc2.IS_WASM else blosc2.nthreads))
         if dparams is not None:
             res.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
 
