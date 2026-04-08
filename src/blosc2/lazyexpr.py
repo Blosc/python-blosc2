@@ -2759,7 +2759,7 @@ def chunked_eval(  # noqa: C901
                 unit_steps = np.all([s.step == 1 for s in item.raw if isinstance(s, slice)])
                 # shape of slice, if non-unit steps have to decompress full array into memory
                 shape_operands = item.newshape(shape) if unit_steps else shape
-                _dtype = kwargs.get("dtype", np.float64)
+                _dtype = np.dtype(kwargs.get("dtype", np.float64))
                 size_operands = math.prod(shape_operands) * len(operands) * _dtype.itemsize
                 # Only take the fast path if the size of operands is relatively small
                 if size_operands < blosc2.MAX_FAST_PATH_SIZE:

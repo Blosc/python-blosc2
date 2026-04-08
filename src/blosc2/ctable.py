@@ -2027,7 +2027,7 @@ class CTable(Generic[RowT]):
             if not asc:
                 if raw.dtype.kind in "US":
                     # strings can't be negated — invert via rank
-                    rank = np.argsort(np.argsort(raw, stable=True), stable=True)
+                    rank = np.argsort(np.argsort(raw, kind="stable"), kind="stable")
                     lex_keys.append((n - 1 - rank).astype(np.intp))
                 elif np.issubdtype(raw.dtype, np.unsignedinteger):
                     lex_keys.append(-raw.astype(np.int64))
