@@ -26,7 +26,6 @@ env:
 jobs:
 
   build_wheels:
-    if: ${{ github.ref_name != 'ctable3' && github.head_ref != 'ctable3' }}
     name: Build wheels on ${{ matrix.os }} for ${{ matrix.arch }}
     runs-on: ${{ matrix.runs-on || matrix.os }}
     permissions:
@@ -129,9 +128,10 @@ jobs:
 
 
   upload_pypi:
-    if: ${{ (github.ref_name != 'ctable3' && github.head_ref != 'ctable3') && startsWith(github.event.ref, 'refs/tags') }}
     needs: [ build_wheels]
     runs-on: ubuntu-latest
+    # Only upload wheels when tagging (typically a release)
+    if: startsWith(github.event.ref, 'refs/tags')
     steps:
       - uses: actions/download-artifact@v8
         with:
