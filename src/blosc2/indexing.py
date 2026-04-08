@@ -53,6 +53,13 @@ FULL_RUN_BOUNDED_FALLBACK_ITEMS = 1_000_000
 INDEX_QUERY_MIN_CHUNKS_PER_THREAD = 8
 
 
+def _python_executor_threads(requested_threads: int) -> int:
+    # wasm32 builds do not support spawning Python worker threads reliably.
+    if blosc2.IS_WASM:
+        return 1
+    return max(1, int(requested_threads))
+
+
 def _sanitize_token(token: str) -> str:
     return re.sub(r"[^0-9A-Za-z_.-]+", "_", token)
 
@@ -899,13 +906,15 @@ def _chunk_offsets(size: int, chunk_len: int) -> np.ndarray:
 
 
 def _index_build_threads(cparams: dict | blosc2.CParams | None = None) -> int:
+    if blosc2.IS_WASM:
+        return 1
     forced = os.getenv("BLOSC2_INDEX_BUILD_THREADS")
     if forced is not None:
         try:
             forced_threads = int(forced)
         except ValueError:
             forced_threads = 1
-        return max(1, forced_threads)
+        return _python_executor_threads(forced_threads)
     if cparams is not None:
         nthreads = cparams.nthreads if isinstance(cparams, blosc2.CParams) else cparams.get("nthreads")
     else:
@@ -915,8 +924,8 @@ def _index_build_threads(cparams: dict | blosc2.CParams | None = None) -> int:
             cparams_threads = int(nthreads)
         except (TypeError, ValueError):
             cparams_threads = 1
-        return max(1, cparams_threads)
-    return max(1, int(getattr(blosc2, "nthreads", 1) or 1))
+        return _python_executor_threads(cparams_threads)
+    return _python_executor_threads(int(getattr(blosc2, "nthreads", 1) or 1))
 
 
 def _sidecar_block_len(sidecar: dict, fallback_block_len: int) -> int:
@@ -3929,10 +3938,12 @@ def _chunk_nav_candidate_runs(
 
 
 def _index_query_thread_count(task_count: int) -> int:
+    if blosc2.IS_WASM:
+        return 1
     if task_count < INDEX_QUERY_MIN_CHUNKS_PER_THREAD:
         return 1
     configured_threads = int(getattr(blosc2, "nthreads", 1) or 1)
-    return max(1, min(configured_threads, task_count // INDEX_QUERY_MIN_CHUNKS_PER_THREAD))
+    return _python_executor_threads(min(configured_threads, task_count // INDEX_QUERY_MIN_CHUNKS_PER_THREAD))
 
 
 def _chunk_batches(chunk_ids: np.ndarray, thread_count: int) -> list[np.ndarray]:
