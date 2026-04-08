@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
-# cython: wraparound=False
+# cython: boundscheck=False, wraparound=False, initializedcheck=False
 
 import numpy as np
 cimport numpy as np
@@ -972,7 +972,7 @@ cdef inline Py_ssize_t _search_right_uint64(np.uint64_t[:] values, np.uint64_t t
 
 
 cdef inline tuple _search_bounds_float32_impl(
-    np.ndarray[np.float32_t, ndim=1] values,
+    np.float32_t[:] values,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -992,8 +992,8 @@ cdef inline tuple _search_bounds_float32_impl(
 
 
 cdef inline tuple _search_boundary_bounds_float32_impl(
-    np.ndarray[np.float32_t, ndim=1] starts,
-    np.ndarray[np.float32_t, ndim=1] ends,
+    np.float32_t[:] starts,
+    np.float32_t[:] ends,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1013,7 +1013,7 @@ cdef inline tuple _search_boundary_bounds_float32_impl(
 
 
 cdef inline tuple _search_bounds_float64_impl(
-    np.ndarray[np.float64_t, ndim=1] values,
+    np.float64_t[:] values,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1033,8 +1033,8 @@ cdef inline tuple _search_bounds_float64_impl(
 
 
 cdef inline tuple _search_boundary_bounds_float64_impl(
-    np.ndarray[np.float64_t, ndim=1] starts,
-    np.ndarray[np.float64_t, ndim=1] ends,
+    np.float64_t[:] starts,
+    np.float64_t[:] ends,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1054,7 +1054,7 @@ cdef inline tuple _search_boundary_bounds_float64_impl(
 
 
 cdef inline tuple _search_bounds_int8_impl(
-    np.ndarray[np.int8_t, ndim=1] values,
+    np.int8_t[:] values,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1084,8 +1084,8 @@ cdef inline tuple _search_bounds_int8_impl(
 
 
 cdef inline tuple _search_boundary_bounds_int8_impl(
-    np.ndarray[np.int8_t, ndim=1] starts,
-    np.ndarray[np.int8_t, ndim=1] ends,
+    np.int8_t[:] starts,
+    np.int8_t[:] ends,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1115,7 +1115,7 @@ cdef inline tuple _search_boundary_bounds_int8_impl(
 
 
 cdef inline tuple _search_bounds_int16_impl(
-    np.ndarray[np.int16_t, ndim=1] values,
+    np.int16_t[:] values,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1145,8 +1145,8 @@ cdef inline tuple _search_bounds_int16_impl(
 
 
 cdef inline tuple _search_boundary_bounds_int16_impl(
-    np.ndarray[np.int16_t, ndim=1] starts,
-    np.ndarray[np.int16_t, ndim=1] ends,
+    np.int16_t[:] starts,
+    np.int16_t[:] ends,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1176,7 +1176,7 @@ cdef inline tuple _search_boundary_bounds_int16_impl(
 
 
 cdef inline tuple _search_bounds_int32_impl(
-    np.ndarray[np.int32_t, ndim=1] values,
+    np.int32_t[:] values,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1206,8 +1206,8 @@ cdef inline tuple _search_bounds_int32_impl(
 
 
 cdef inline tuple _search_boundary_bounds_int32_impl(
-    np.ndarray[np.int32_t, ndim=1] starts,
-    np.ndarray[np.int32_t, ndim=1] ends,
+    np.int32_t[:] starts,
+    np.int32_t[:] ends,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1237,7 +1237,7 @@ cdef inline tuple _search_boundary_bounds_int32_impl(
 
 
 cdef inline tuple _search_bounds_int64_impl(
-    np.ndarray[np.int64_t, ndim=1] values,
+    np.int64_t[:] values,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1267,8 +1267,8 @@ cdef inline tuple _search_bounds_int64_impl(
 
 
 cdef inline tuple _search_boundary_bounds_int64_impl(
-    np.ndarray[np.int64_t, ndim=1] starts,
-    np.ndarray[np.int64_t, ndim=1] ends,
+    np.int64_t[:] starts,
+    np.int64_t[:] ends,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1298,7 +1298,7 @@ cdef inline tuple _search_boundary_bounds_int64_impl(
 
 
 cdef inline tuple _search_bounds_uint8_impl(
-    np.ndarray[np.uint8_t, ndim=1] values,
+    np.uint8_t[:] values,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1328,8 +1328,8 @@ cdef inline tuple _search_bounds_uint8_impl(
 
 
 cdef inline tuple _search_boundary_bounds_uint8_impl(
-    np.ndarray[np.uint8_t, ndim=1] starts,
-    np.ndarray[np.uint8_t, ndim=1] ends,
+    np.uint8_t[:] starts,
+    np.uint8_t[:] ends,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1359,7 +1359,7 @@ cdef inline tuple _search_boundary_bounds_uint8_impl(
 
 
 cdef inline tuple _search_bounds_uint16_impl(
-    np.ndarray[np.uint16_t, ndim=1] values,
+    np.uint16_t[:] values,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1389,8 +1389,8 @@ cdef inline tuple _search_bounds_uint16_impl(
 
 
 cdef inline tuple _search_boundary_bounds_uint16_impl(
-    np.ndarray[np.uint16_t, ndim=1] starts,
-    np.ndarray[np.uint16_t, ndim=1] ends,
+    np.uint16_t[:] starts,
+    np.uint16_t[:] ends,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1420,7 +1420,7 @@ cdef inline tuple _search_boundary_bounds_uint16_impl(
 
 
 cdef inline tuple _search_bounds_uint32_impl(
-    np.ndarray[np.uint32_t, ndim=1] values,
+    np.uint32_t[:] values,
     object lower,
     bint lower_inclusive,
     object upper,
@@ -1450,8 +1450,8 @@ cdef inline tuple _search_bounds_uint32_impl(
 
 
 cdef inline tuple _search_boundary_bounds_uint32_impl(
-    np.ndarray[np.uint32_t, ndim=1] starts,
-    np.ndarray[np.uint32_t, ndim=1] ends,
+    np.uint32_t[:] starts,
+    np.uint32_t[:] ends,
     object lower,
     bint lower_inclusive,
     object upper,
