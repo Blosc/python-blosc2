@@ -30,6 +30,11 @@ INDEXES_VLMETA_KEY = "blosc2_indexes"
 INDEX_FORMAT_VERSION = 1
 SELF_TARGET_NAME = "__self__"
 
+# On Windows, mmap holds file locks that prevent later writes (vlmeta updates,
+# sidecar recreation during rebuild_index, etc.).  Disable mmap for all index
+# I/O on that platform.
+_INDEX_MMAP_MODE = None if sys.platform == "win32" else "r"
+
 FLAG_ALL_NAN = np.uint8(1 << 0)
 FLAG_HAS_NAN = np.uint8(1 << 1)
 
@@ -483,7 +488,7 @@ def _compute_sorted_boundaries_from_sidecar(
 ) -> np.ndarray:
     nsegments = math.ceil(length / segment_len)
     boundaries = np.empty(nsegments, dtype=_boundary_dtype(dtype))
-    sidecar = blosc2.open(path, mmap_mode="r")
+    sidecar = blosc2.open(path, mmap_mode=_INDEX_MMAP_MODE)
     start_value = np.empty(1, dtype=dtype)
     end_value = np.empty(1, dtype=dtype)
     for idx in range(nsegments):
@@ -664,7 +669,7 @@ def _sidecar_storage_geometry(
 ) -> tuple[int, int]:
     if path is None:
         return fallback_chunk_len, fallback_block_len
-    sidecar = blosc2.open(path, mmap_mode="r")
+    sidecar = blosc2.open(path, mmap_mode=_INDEX_MMAP_MODE)
     return int(sidecar.chunks[0]), int(sidecar.blocks[0])
 
 
@@ -723,7 +728,7 @@ def _stream_copy_sidecar_array(
     blocks: tuple[int, ...],
     cparams: dict | None = None,
 ) -> None:
-    source = blosc2.open(str(source_path), mmap_mode="r")
+    source = blosc2.open(str(source_path), mmap_mode=_INDEX_MMAP_MODE)
     blosc2.remove_urlpath(str(dest_path))
     kwargs = {"chunks": chunks, "blocks": blocks, "urlpath": str(dest_path), "mode": "w"}
     if cparams is not None:
@@ -2008,7 +2013,7 @@ def _copy_sidecar_to_temp_run(
     cparams: dict | None = None,
 ) -> Path:
     out_path = workdir / f"{prefix}.b2nd"
-    sidecar = blosc2.open(path, mmap_mode="r")
+    sidecar = blosc2.open(path, mmap_mode=_INDEX_MMAP_MODE)
     output = _create_blosc2_temp_array(out_path, length, dtype, FULL_OOC_MERGE_BUFFER_ITEMS, cparams)
     chunk_len = int(sidecar.chunks[0])
     for chunk_id, start in enumerate(range(0, length, chunk_len)):
@@ -2048,10 +2053,10 @@ def _merge_run_pair(
     tracker: TempRunTracker | None = None,
     cparams: dict | None = None,
 ) -> SortedRun:
-    left_values_mm = blosc2.open(str(left.values_path), mmap_mode="r")
-    left_positions_mm = blosc2.open(str(left.positions_path), mmap_mode="r")
-    right_values_mm = blosc2.open(str(right.values_path), mmap_mode="r")
-    right_positions_mm = blosc2.open(str(right.positions_path), mmap_mode="r")
+    left_values_mm = blosc2.open(str(left.values_path), mmap_mode=_INDEX_MMAP_MODE)
+    left_positions_mm = blosc2.open(str(left.positions_path), mmap_mode=_INDEX_MMAP_MODE)
+    right_values_mm = blosc2.open(str(right.values_path), mmap_mode=_INDEX_MMAP_MODE)
+    right_positions_mm = blosc2.open(str(right.positions_path), mmap_mode=_INDEX_MMAP_MODE)
 
     out_values_path = workdir / f"full_merge_values_{merge_id}.b2nd"
     out_positions_path = workdir / f"full_merge_positions_{merge_id}.b2nd"
@@ -2226,8 +2231,8 @@ def _build_full_descriptor_ooc(
             array, token, kind, full, final_run, dtype, persistent, tracker, cparams
         )
     else:
-        sorted_values = blosc2.open(str(final_run.values_path), mmap_mode="r")[:]
-        positions = blosc2.open(str(final_run.positions_path), mmap_mode="r")[:]
+        sorted_values = blosc2.open(str(final_run.values_path), mmap_mode=_INDEX_MMAP_MODE)[:]
+        positions = blosc2.open(str(final_run.positions_path), mmap_mode=_INDEX_MMAP_MODE)[:]
         values_sidecar = _store_array_sidecar(
             array, token, kind, "full", "values", sorted_values, persistent, cparams=cparams
         )
@@ -2925,8 +2930,8 @@ def compact_index(array: blosc2.NDArray, field: str | None = None, name: str | N
                 array, descriptor, final_run.values_path, final_run.positions_path, final_run.length
             )
         else:
-            sorted_values = blosc2.open(str(final_run.values_path), mmap_mode="r")[:]
-            positions = blosc2.open(str(final_run.positions_path), mmap_mode="r")[:]
+            sorted_values = blosc2.open(str(final_run.values_path), mmap_mode=_INDEX_MMAP_MODE)[:]
+            positions = blosc2.open(str(final_run.positions_path), mmap_mode=_INDEX_MMAP_MODE)[:]
             _replace_full_descriptor(array, descriptor, sorted_values, positions, descriptor["persistent"])
             del sorted_values, positions
             final_run.values_path.unlink(missing_ok=True)
@@ -3986,10 +3991,7 @@ def _light_batch_result_dtype(where_x) -> np.dtype:
 
 def _light_worker_source(where_x):
     if _supports_block_reads(where_x) and getattr(where_x, "urlpath", None) is not None:
-        # On Windows, mmap holds a file lock that prevents later vlmeta updates
-        # (e.g. during rebuild_index / drop_index), so use regular file I/O.
-        mmap = None if sys.platform == "win32" else "r"
-        return blosc2.open(str(where_x.urlpath), mmap_mode=mmap)
+        return blosc2.open(str(where_x.urlpath), mmap_mode=_INDEX_MMAP_MODE)
     return where_x
 
 
@@ -4136,9 +4138,9 @@ def _bucket_masks_from_light_chunk_nav_ooc(
     def process_batch(chunk_ids: np.ndarray) -> tuple[list[tuple[int, np.ndarray]], int]:
         if len(chunk_ids) == 0:
             return [], 0
-        batch_values = blosc2.open(light["values_path"], mmap_mode="r")
-        batch_buckets = blosc2.open(light["bucket_positions_path"], mmap_mode="r")
-        batch_l2 = blosc2.open(light["l2_path"], mmap_mode="r")
+        batch_values = blosc2.open(light["values_path"], mmap_mode=_INDEX_MMAP_MODE)
+        batch_buckets = blosc2.open(light["bucket_positions_path"], mmap_mode=_INDEX_MMAP_MODE)
+        batch_l2 = blosc2.open(light["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
         batch_results = []
         batch_candidate_segments = 0
         l2_row = np.empty(nsegments_per_chunk, dtype=_boundary_dtype(dtype))
@@ -4206,9 +4208,9 @@ def _exact_positions_from_reduced_chunk_nav_ooc(
     def process_cython_batch(chunk_ids: np.ndarray) -> tuple[np.ndarray, int]:
         if len(chunk_ids) == 0:
             return np.empty(0, dtype=np.int64), 0
-        batch_values = blosc2.open(reduced["values_path"], mmap_mode="r")
-        batch_positions = blosc2.open(reduced["positions_path"], mmap_mode="r")
-        batch_l2 = blosc2.open(reduced["l2_path"], mmap_mode="r")
+        batch_values = blosc2.open(reduced["values_path"], mmap_mode=_INDEX_MMAP_MODE)
+        batch_positions = blosc2.open(reduced["positions_path"], mmap_mode=_INDEX_MMAP_MODE)
+        batch_l2 = blosc2.open(reduced["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
         batch_l2_row = np.empty(nsegments_per_chunk, dtype=l2_boundary_dtype)
         batch_span_values = np.empty(chunk_len, dtype=dtype)
         batch_local_positions = np.empty(chunk_len, dtype=local_position_dtype)
@@ -4244,9 +4246,9 @@ def _exact_positions_from_reduced_chunk_nav_ooc(
     def process_batch(chunk_ids: np.ndarray) -> tuple[list[np.ndarray], int]:
         if len(chunk_ids) == 0:
             return [], 0
-        batch_values = blosc2.open(reduced["values_path"], mmap_mode="r")
-        batch_positions = blosc2.open(reduced["positions_path"], mmap_mode="r")
-        batch_l2 = blosc2.open(reduced["l2_path"], mmap_mode="r")
+        batch_values = blosc2.open(reduced["values_path"], mmap_mode=_INDEX_MMAP_MODE)
+        batch_positions = blosc2.open(reduced["positions_path"], mmap_mode=_INDEX_MMAP_MODE)
+        batch_l2 = blosc2.open(reduced["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
         batch_parts = []
         batch_candidate_segments = 0
         l2_row = np.empty(nsegments_per_chunk, dtype=l2_boundary_dtype)
