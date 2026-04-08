@@ -283,6 +283,7 @@ def test_persistent_index_survives_reopen(tmp_path, kind):
     else:
         assert descriptor["full"]["values_path"] is not None
 
+    del arr
     reopened = blosc2.open(path, mode="a")
     assert len(reopened.indexes) == 1
     if kind == "light":
@@ -311,6 +312,7 @@ def test_default_ooc_persistent_index_matches_scan_and_rebuilds(tmp_path, kind):
 
     assert descriptor["ooc"] is True
 
+    del arr
     reopened = blosc2.open(path, mode="a")
     assert reopened.indexes[0]["ooc"] is True
 
@@ -340,6 +342,7 @@ def test_persistent_chunk_local_ooc_builds_do_not_use_temp_memmap(tmp_path, kind
     meta = descriptor["light"] if kind == "light" else descriptor["reduced"]
     assert meta["values_path"] is not None
 
+    del arr
     reopened = blosc2.open(path, mode="a")
     expr = ((reopened >= 55_000) & (reopened < 55_010)).where(reopened)
     np.testing.assert_array_equal(expr.compute()[:], data[(data >= 55_000) & (data < 55_010)])
@@ -382,6 +385,7 @@ def test_chunk_local_index_descriptor_and_lookup_path(tmp_path, kind):
     if kind == "medium":
         assert meta["nav_segment_divisor"] == 4
 
+    del arr
     reopened = blosc2.open(path, mode="a")
     expr = (reopened == 123_456).where(reopened)
     explanation = expr.explain()
@@ -694,6 +698,7 @@ def test_persistent_full_index_runs_survive_reopen(tmp_path):
     arr.append(batch1)
     arr.append(batch2)
 
+    del arr
     reopened = blosc2.open(path, mode="a")
     assert len(reopened.indexes[0]["full"]["runs"]) == 2
 
@@ -711,6 +716,7 @@ def test_persistent_compact_full_exact_query_avoids_whole_sidecar_load(monkeypat
     arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(12_000,), blocks=(2_000,))
     arr.create_csindex()
 
+    del arr
     reopened = blosc2.open(path, mode="a")
     indexing = __import__("blosc2.indexing", fromlist=["_load_array_sidecar"])
     original_load = indexing._load_array_sidecar
@@ -796,6 +802,7 @@ def test_persistent_expression_index_survives_reopen(tmp_path):
     arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(8_000,), blocks=(2_000,))
     descriptor = arr.create_expr_index("abs(x)", kind="medium")
 
+    del arr
     reopened = blosc2.open(path, mode="a")
     assert reopened.indexes[0]["target"]["source"] == "expression"
     assert reopened.indexes[0]["target"]["expression_key"] == "abs(x)"
@@ -879,6 +886,7 @@ def test_compact_full_index_clears_runs_and_preserves_results(tmp_path):
     assert compacted["full"]["l1_path"] is not None
     assert compacted["full"]["l2_path"] is not None
 
+    del arr
     reopened = blosc2.open(path, mode="a")
     assert reopened.indexes[0]["full"]["runs"] == []
     for values_path, positions_path in run_paths:
@@ -929,6 +937,7 @@ def test_persistent_large_run_full_query_uses_bounded_fallback(monkeypatch, tmp_
         batch = np.array([(100 + run, 10 + run)], dtype=dtype)
         arr.append(batch)
 
+    del arr
     reopened = blosc2.open(path, mode="a")
     indexing = __import__("blosc2.indexing", fromlist=["_load_full_arrays"])
 
