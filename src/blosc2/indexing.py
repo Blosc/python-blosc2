@@ -2800,9 +2800,10 @@ def append_to_indexes(array: blosc2.NDArray, old_size: int, appended_values: np.
 def drop_index(array: blosc2.NDArray, field: str | None = None, name: str | None = None) -> None:
     store = _load_store(array)
     token = _resolve_index_token(store, field, name)
+    descriptor = store["indexes"][token]
+    _clear_cached_data(array, descriptor["token"])
     descriptor = store["indexes"].pop(token)
     _save_store(array, store)
-    _clear_cached_data(array, descriptor["token"])
     _drop_descriptor_sidecars(descriptor)
 
 
