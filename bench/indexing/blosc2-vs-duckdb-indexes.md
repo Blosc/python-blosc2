@@ -10,6 +10,9 @@ The goal is not to claim a universal winner, but to document the current observe
 - total storage footprint
 - sensitivity to query shape
 
+The latest width-1 single-value figures below come from a fresh run on a Mac mini with an M4 Pro CPU
+and 24 GB of RAM.
+
 
 ## Benchmark Setup
 
@@ -56,7 +59,7 @@ There are two different DuckDB query shapes that matter a lot:
 - single-value form:
   - `id = value`
 
-For Blosc2, switching between a collapsed width-1 range and `==` makes almost no practical difference.
+For Blosc2, switching between a collapsed width-1 range and `==` makes only a small difference in practice.
 
 For DuckDB, this difference is very important:
 
@@ -167,22 +170,24 @@ python index_query_bench.py \
 Observed results:
 
 - `light`
-  - cold lookup: `1.463 ms`
-  - warm lookup: `1.286 ms`
+  - cold lookup: `0.841 ms`
+  - warm lookup: `0.184 ms`
 - `medium`
-  - cold lookup: `1.089 ms`
-  - warm lookup: `0.986 ms`
+  - cold lookup: `0.564 ms`
+  - warm lookup: `0.168 ms`
 - `full`
-  - cold lookup: `0.618 ms`
-  - warm lookup: `0.544 ms`
+  - cold lookup: `0.554 ms`
+  - warm lookup: `0.167 ms`
 
 ### Interpretation
 
-With the generic range form, Blosc2 is much faster than DuckDB:
+With the generic width-1 range form, Blosc2 is much faster than DuckDB:
 
-- Blosc2 `light` is already about `9x` faster than DuckDB `zonemap`
-- Blosc2 exact indexes (`medium`, `full`) are much faster still
+- Blosc2 `light` is already much faster than DuckDB `zonemap`, and comfortably faster than the
+  generic-range DuckDB `art-index` behavior
+- Blosc2 `medium` and `full` are in a different regime on warm hits, at about `0.17 ms`
 - DuckDB `art-index` does not show its real point-lookup behavior in this predicate form
+- Blosc2 warm reuse changes the picture substantially for repeated lookups
 
 
 ## Width-1 Comparison: Single-Value Predicate
@@ -205,13 +210,15 @@ python duckdb_query_bench.py \
 Observed results:
 
 - `zonemap`
-  - build: `1193.665 ms`
-  - filtered lookup: `8.646 ms`
+  - build: `509.338 ms`
+  - cold lookup: `4.595 ms`
+  - warm lookup: `2.857 ms`
   - DB size: `56,111,104` bytes
 - `art-index`
-  - build: `2849.869 ms`
-  - filtered lookup: `0.755 ms`
-  - DB size: `478,687,232` bytes
+  - build: `2000.316 ms`
+  - cold lookup: `0.613 ms`
+  - warm lookup: `0.246 ms`
+  - DB size: `478,425,088` bytes
 
 ### Blosc2
 
@@ -230,19 +237,19 @@ python index_query_bench.py \
 Observed results:
 
 - `light`
-  - build: `1225.637 ms`
-  - cold lookup: `1.290 ms`
-  - warm lookup: `2.351 ms`
+  - build: `960.048 ms`
+  - cold lookup: `2.489 ms`
+  - warm lookup: `0.172 ms`
   - index sidecars: `27,497,393` bytes
 - `medium`
-  - build: `5511.863 ms`
-  - cold lookup: `1.081 ms`
-  - warm lookup: `0.964 ms`
+  - build: `4745.880 ms`
+  - cold lookup: `2.202 ms`
+  - warm lookup: `0.147 ms`
   - index sidecars: `37,645,201` bytes
 - `full`
-  - build: `10954.844 ms`
-  - cold lookup: `0.603 ms`
-  - warm lookup: `0.525 ms`
+  - build: `9539.843 ms`
+  - cold lookup: `1.753 ms`
+  - warm lookup: `0.144 ms`
   - index sidecars: `29,888,673` bytes
 
 ### Interpretation
@@ -250,22 +257,22 @@ Observed results:
 Once DuckDB is allowed to use the more planner-friendly single-value predicate:
 
 - `art-index` becomes very fast
-- `art-index` is now faster than Blosc2 `light`
-- Blosc2 `full` still remains slightly faster than DuckDB `art-index` on this measured point-lookup case
+- `art-index` is clearly faster than Blosc2 on cold point lookups in this run
+- Blosc2 is clearly faster on warm repeated point lookups across `light`, `medium`, and `full`
 
 However, the storage costs are very different:
 
-- DuckDB `art-index` database size: about `478.7 MB`
+- DuckDB `art-index` database size: about `478.4 MB`
 - DuckDB zonemap baseline size: about `56.1 MB`
-- estimated ART overhead over baseline: about `422.6 MB`
+- estimated ART overhead over baseline: about `422.3 MB`
 - Blosc2 `full` base + index footprint: about `31 MB + 29.9 MB = 60.9 MB`
 
 So for true point lookups:
 
-- DuckDB `art-index` is competitive on latency
-- Blosc2 `full` is still faster in the measured run
-- Blosc2 `full` is much smaller overall
-- DuckDB `art-index` is much faster to build than Blosc2 `full`
+- DuckDB `art-index` wins on cold point-lookup latency in this measurement
+- Blosc2 `full` remains much smaller overall
+- Blosc2 `light`, `medium`, and `full` all become faster than DuckDB `art-index` on warm repeated hits
+- DuckDB `art-index` still has a very large storage premium over both Blosc2 `light` and `full`
 
 
 ## Blosc2 Light vs DuckDB Zonemap
@@ -280,7 +287,8 @@ Main observations:
   - Blosc2 base + `light`: about `58 MB`
 - Blosc2 `light` lookup speed is much better
   - width `50`: about `6.25 ms` vs `13.33 ms`
-  - width `1`: about `1.3-1.5 ms` vs `8.6-12.6 ms`
+  - width `1` range: about `0.18 ms` warm vs `12.61 ms` generic-range DuckDB
+  - width `1` equality: about `0.17 ms` warm vs `2.94 ms` DuckDB zonemap warm
 
 Conclusion:
 
@@ -295,20 +303,21 @@ This is the most relevant exact-index comparison.
 Main observations:
 
 - point-lookup latency
-  - DuckDB `art-index`: `0.755 ms`
-  - Blosc2 `full`: `0.603 ms` cold, `0.525 ms` warm
+  - DuckDB `art-index`: `0.613 ms` cold, `0.245 ms` warm
+  - Blosc2 `full`: `1.753 ms` cold, `0.144 ms` warm
 - build time
-  - DuckDB `art-index`: `2849.869 ms`
-  - Blosc2 `full`: `10954.844 ms`
+  - DuckDB `art-index`: `2000.316 ms`
+  - Blosc2 `full`: `9539.843 ms`
 - footprint
-  - DuckDB `art-index` DB: about `478.7 MB`
+  - DuckDB `art-index` DB: about `478.4 MB`
   - Blosc2 `full` base + index: about `60.9 MB`
 
 Conclusion:
 
-- DuckDB ART wins on build time
 - Blosc2 `full` wins on storage efficiency
-- Blosc2 `full` was slightly faster on the measured point lookup
+- DuckDB `art-index` wins on cold point-lookup latency
+- Warm repeated point lookups favor Blosc2 `full` more clearly
+- DuckDB `art-index` is much faster to build than Blosc2 `full`
 - DuckDB ART is much more sensitive to predicate shape
 
 
@@ -317,7 +326,7 @@ Conclusion:
 Observed behavior:
 
 - Blosc2:
-  - width-1 range form and `==` are nearly equivalent in performance
+  - width-1 range form and `==` are close, with `==` giving a small but measurable improvement
 - DuckDB:
   - width-1 range form was much slower than `id = value`
 
@@ -343,10 +352,9 @@ Practical implication:
 1. Blosc2 `light` is very competitive against DuckDB zonemap-like pruning.
 2. Blosc2 `light` offers much faster selective lookups than DuckDB zonemap at a similar total storage cost.
 3. DuckDB `art-index` becomes strong only when queries are written as true equality predicates.
-4. Blosc2 `full` compares very well against DuckDB `art-index` on point lookups:
-   - slightly faster in the measured run
-   - much smaller on disk
-   - slower to build
-5. Query-shape sensitivity is a major difference:
+4. On true point lookups, DuckDB `art-index` wins on cold latency in the current M4 Pro run, but
+   Blosc2 exact indexes are markedly better on warm repeated lookups.
+5. Blosc2 exact indexes remain dramatically smaller on disk than DuckDB `art-index`.
+6. Query-shape sensitivity is a major difference:
    - small for Blosc2
    - large for DuckDB ART
