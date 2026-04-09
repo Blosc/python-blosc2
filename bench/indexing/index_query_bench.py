@@ -405,8 +405,12 @@ def _literal(value: object, dtype: np.dtype) -> str:
     raise ValueError(f"unsupported dtype for literal formatting: {dtype}")
 
 
-def _condition_expr(lo: object, hi: object, dtype: np.dtype) -> str:
+def _condition_expr(lo: object, hi: object, dtype: np.dtype, *, query_single_value: bool = False) -> str:
     lo_literal = _literal(lo, dtype)
+    if query_single_value:
+        if lo != hi:
+            raise ValueError(f"single-value queries require a single lookup value, got lo={lo!r}, hi={hi!r}")
+        return f"id == {lo_literal}"
     hi_literal = _literal(hi, dtype)
     return f"(id >= {lo_literal}) & (id <= {hi_literal})"
 
@@ -479,6 +483,7 @@ def benchmark_size(
     size_dir: Path,
     dist: str,
     query_width: int,
+    query_single_value: bool,
     optlevel: int,
     id_dtype: np.dtype,
     in_mem: bool,
@@ -495,7 +500,7 @@ def benchmark_size(
         base_array_path(size_dir, size, dist, id_dtype, chunks, blocks), size, dist, id_dtype, chunks, blocks
     )
     lo, hi = _query_bounds(size, query_width, id_dtype)
-    condition_str = _condition_expr(lo, hi, id_dtype)
+    condition_str = _condition_expr(lo, hi, id_dtype, query_single_value=query_single_value)
     condition = blosc2.lazyexpr(condition_str, arr.fields)
     expr = condition.where(arr)
     base_bytes = size * arr.dtype.itemsize
@@ -621,6 +626,12 @@ def parse_args() -> argparse.Namespace:
         help="Width of the range predicate. Supports suffixes like 1k, 1K, 1M, 1G. Default: 1.",
     )
     parser.add_argument(
+        "--query-single-value",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use `id == value` instead of a range predicate. Requires query-width=1.",
+    )
+    parser.add_argument(
         "--chunks",
         type=parse_human_size_or_auto,
         default=None,
@@ -704,6 +715,8 @@ def main() -> None:
     args = parse_args()
     if args.repeats < 0:
         raise SystemExit("--repeats must be >= 0")
+    if args.query_single_value and args.query_width != 1:
+        raise SystemExit("--query-single-value requires --query-width 1")
     try:
         id_dtype = np.dtype(args.dtype)
     except TypeError as exc:
@@ -728,6 +741,7 @@ def main() -> None:
                 Path(tmpdir),
                 args.dist,
                 args.query_width,
+                args.query_single_value,
                 args.repeats,
                 args.optlevel,
                 id_dtype,
@@ -748,6 +762,7 @@ def main() -> None:
             args.outdir,
             args.dist,
             args.query_width,
+            args.query_single_value,
             args.repeats,
             args.optlevel,
             id_dtype,
@@ -768,6 +783,7 @@ def run_benchmarks(
     size_dir: Path,
     dist_label: str,
     query_width: int,
+    query_single_value: bool,
     repeats: int,
     optlevel: int,
     id_dtype: np.dtype,
@@ -792,6 +808,7 @@ def run_benchmarks(
     print(
         f"{geometry_label}, repeats={repeats}, dist={dist_label}, "
         f"query_width={query_width:,}, optlevel={optlevel}, dtype={id_dtype.name}, in_mem={in_mem}, "
+        f"query_single_value={query_single_value}, "
         f"full_query_mode={full_query_mode}, index_codec={'auto' if codec is None else codec.name}, "
         f"index_clevel={'auto' if clevel is None else clevel}, "
         f"index_nthreads={'auto' if nthreads is None else nthreads}"
@@ -803,6 +820,7 @@ def run_benchmarks(
                 size_dir,
                 dist,
                 query_width,
+                query_single_value,
                 optlevel,
                 id_dtype,
                 in_mem,
