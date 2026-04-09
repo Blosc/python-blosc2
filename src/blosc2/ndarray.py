@@ -6327,6 +6327,32 @@ def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     array.save(urlpath, contiguous, **kwargs)
 
 
+def _ndarray_asarray_requires_copy(
+    array: NDArray, dtype: np.dtype, chunks, blocks, user_kwargs: dict[str, Any]
+) -> bool:
+    if np.dtype(dtype) != np.dtype(array.dtype):
+        return True
+    if "chunks" in user_kwargs and tuple(chunks) != tuple(array.chunks):
+        return True
+    if "blocks" in user_kwargs and tuple(blocks) != tuple(array.blocks):
+        return True
+
+    copy_keys = {
+        "cparams",
+        "dparams",
+        "meta",
+        "urlpath",
+        "contiguous",
+        "mode",
+        "mmap_mode",
+        "initial_mapping_size",
+        "storage",
+        "out",
+        "_chunksize_reduc_factor",
+    }
+    return builtins.any(key in user_kwargs for key in copy_keys)
+
+
 def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: Any) -> NDArray:
     """Convert the `array` to an `NDArray`.
 
@@ -6338,7 +6364,8 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     copy: bool | None, optional
         Whether to copy the input. If True, the function copies.
         If False, raise a ValueError if copy is necessary. If None and
-        input is NDArray, avoid copy by returning lazyexpr.
+        input is NDArray, return the original array when no dtype,
+        partition, or storage-related changes are requested.
         Default: None.
 
     kwargs: dict, optional
@@ -6346,8 +6373,9 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
 
     Returns
     -------
-    out: :ref:`NDArray` or :ref:`LazyExpr`
-        An new NDArray or LazyExpr made of :paramref:`array`.
+    out: :ref:`NDArray`
+        A new :ref:`NDArray` made of :paramref:`array`, or the original
+        array when a copy is not required.
 
     Notes
     -----
@@ -6365,7 +6393,11 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     >>> a = np.arange(0, np.prod(shape), dtype=np.int64).reshape(shape)
     >>> # Create a NDArray from a NumPy array
     >>> nda = blosc2.asarray(a)
+    >>> # NDArray inputs are returned as-is unless a copy is requested
+    >>> blosc2.asarray(nda) is nda
+    True
     """
+    user_kwargs = kwargs.copy()
     # Convert scalars to numpy array
     casting = kwargs.pop("casting", "unsafe")
     if casting != "unsafe":
@@ -6373,7 +6405,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     if not hasattr(array, "shape"):
         array = np.asarray(array)  # defaults if dtype=None
     dtype_ = blosc2.proxy.convert_dtype(array.dtype)
-    dtype = kwargs.pop("dtype", dtype_)  # check if dtype provided
+    dtype = blosc2.proxy.convert_dtype(kwargs.pop("dtype", dtype_))  # check if dtype provided
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
@@ -6385,9 +6417,17 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     if blocks is None and hasattr(array, "blocks") and isinstance(array.blocks, tuple | list):
         blocks = array.blocks
 
-    copy = True if copy is None and not isinstance(array, NDArray) else copy
+    requires_copy = isinstance(array, NDArray) and _ndarray_asarray_requires_copy(
+        array, dtype, chunks, blocks, user_kwargs
+    )
+    if copy is None:
+        copy = not isinstance(array, NDArray) or requires_copy
+    elif copy is False and requires_copy:
+        raise ValueError(
+            "Cannot satisfy dtype, partition, or storage changes with copy=False for NDArray input."
+        )
     if copy:
-        chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, dtype_, **kwargs)
+        chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, dtype, **kwargs)
         # Fast path for small arrays. This is not too expensive in terms of memory consumption.
         shape = array.shape
         small_size = 2**24  # 16 MB
@@ -6402,7 +6442,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
             return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
         # Create the empty array
-        ndarr = empty(shape, dtype_, chunks=chunks, blocks=blocks, **kwargs)
+        ndarr = empty(shape, dtype, chunks=chunks, blocks=blocks, **kwargs)
         behaved = are_partitions_behaved(shape, chunks, blocks)
 
         # Get the coordinates of the chunks

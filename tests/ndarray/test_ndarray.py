@@ -103,6 +103,31 @@ def test_asarray(a):
         np.testing.assert_allclose(a, b[:])
 
 
+def test_asarray_ndarray_persists_copy_when_urlpath_requested(tmp_path):
+    array = blosc2.asarray(np.arange(10, dtype=np.int64), chunks=(5,), blocks=(2,))
+    path = tmp_path / "persisted_copy.b2nd"
+
+    persisted = blosc2.asarray(array, urlpath=path, mode="w")
+
+    assert persisted is not array
+    assert persisted.urlpath == str(path)
+    assert path.exists()
+    np.testing.assert_array_equal(persisted[:], array[:])
+
+
+def test_asarray_ndarray_copies_for_dtype_changes_and_rejects_copy_false(tmp_path):
+    array = blosc2.asarray(np.arange(10, dtype=np.int64), chunks=(5,), blocks=(2,))
+
+    cast = blosc2.asarray(array, dtype=np.float32)
+
+    assert cast is not array
+    assert cast.dtype == np.float32
+    np.testing.assert_allclose(cast[:], array[:].astype(np.float32))
+
+    with pytest.raises(ValueError, match="copy=False"):
+        blosc2.asarray(array, urlpath=tmp_path / "persisted_copy_false.b2nd", mode="w", copy=False)
+
+
 def test_ndarray_info_has_human_sizes():
     array = blosc2.asarray(np.arange(16, dtype=np.int32))
 
