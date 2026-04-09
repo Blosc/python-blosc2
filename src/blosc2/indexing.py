@@ -16,6 +16,7 @@ import re
 import sys
 import tempfile
 import weakref
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -153,6 +154,14 @@ class OrderedIndexPlan:
     secondary_refinement: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class IndexComponent:
+    label: str
+    category: str
+    name: str
+    path: str | None
+
+
 def _default_index_store() -> dict:
     return {"version": INDEX_FORMAT_VERSION, "indexes": {}}
 
@@ -203,6 +212,17 @@ def _copy_descriptor(descriptor: dict) -> dict:
         if "runs" in copied["full"]:
             copied["full"]["runs"] = [run.copy() for run in copied["full"]["runs"]]
     return copied
+
+
+def _descriptor_for_token(array: blosc2.NDArray, token: str) -> dict:
+    descriptor = _load_store(array)["indexes"].get(token)
+    if descriptor is None:
+        raise KeyError("index not found")
+    return descriptor
+
+
+def _copy_descriptor_for_token(array: blosc2.NDArray, token: str) -> dict:
+    return _copy_descriptor(_descriptor_for_token(array, token))
 
 
 def _is_persistent_array(array: blosc2.NDArray) -> bool:
@@ -2508,6 +2528,160 @@ def _resolve_index_token(store: dict, field: str | None, name: str | None) -> st
     return token
 
 
+def iter_index_components(array: blosc2.NDArray, descriptor: dict):
+    for level in descriptor["levels"]:
+        level_info = descriptor["levels"][level]
+        yield IndexComponent(f"summary.{level}", "summary", level, level_info.get("path"))
+
+    light = descriptor.get("light")
+    if light is not None:
+        yield IndexComponent("light.values", "light", "values", light.get("values_path"))
+        yield IndexComponent(
+            "light.bucket_positions", "light", "bucket_positions", light.get("bucket_positions_path")
+        )
+        yield IndexComponent("light.offsets", "light", "offsets", light.get("offsets_path"))
+        yield IndexComponent("light_nav.l1", "light_nav", "l1", light.get("l1_path"))
+        yield IndexComponent("light_nav.l2", "light_nav", "l2", light.get("l2_path"))
+
+    reduced = descriptor.get("reduced")
+    if reduced is not None:
+        yield IndexComponent("reduced.values", "reduced", "values", reduced.get("values_path"))
+        yield IndexComponent("reduced.positions", "reduced", "positions", reduced.get("positions_path"))
+        yield IndexComponent("reduced.offsets", "reduced", "offsets", reduced.get("offsets_path"))
+        yield IndexComponent("reduced_nav.l1", "reduced_nav", "l1", reduced.get("l1_path"))
+        yield IndexComponent("reduced_nav.l2", "reduced_nav", "l2", reduced.get("l2_path"))
+
+    full = descriptor.get("full")
+    if full is not None:
+        yield IndexComponent("full.values", "full", "values", full.get("values_path"))
+        yield IndexComponent("full.positions", "full", "positions", full.get("positions_path"))
+        yield IndexComponent("full_nav.l1", "full_nav", "l1", full.get("l1_path"))
+        yield IndexComponent("full_nav.l2", "full_nav", "l2", full.get("l2_path"))
+        for run in full.get("runs", ()):
+            run_id = int(run["id"])
+            yield IndexComponent(
+                f"full_run.{run_id}.values",
+                "full_run",
+                f"{run_id}.values",
+                run.get("values_path"),
+            )
+            yield IndexComponent(
+                f"full_run.{run_id}.positions",
+                "full_run",
+                f"{run_id}.positions",
+                run.get("positions_path"),
+            )
+
+
+def _component_nbytes(array: blosc2.NDArray, descriptor: dict, component: IndexComponent) -> int:
+    if component.path is not None:
+        return int(blosc2.open(component.path, mmap_mode=_INDEX_MMAP_MODE).nbytes)
+    token = descriptor["token"]
+    return int(_load_array_sidecar(array, token, component.category, component.name, component.path).nbytes)
+
+
+def _component_cbytes(array: blosc2.NDArray, descriptor: dict, component: IndexComponent) -> int:
+    if component.path is not None:
+        return int(blosc2.open(component.path, mmap_mode=_INDEX_MMAP_MODE).cbytes)
+    token = descriptor["token"]
+    sidecar = _load_array_sidecar(array, token, component.category, component.name, component.path)
+    kwargs = {}
+    cparams = descriptor.get("cparams")
+    if cparams is not None:
+        kwargs["cparams"] = cparams
+    return int(blosc2.asarray(sidecar, **kwargs).cbytes)
+
+
+class Index(Mapping):
+    def __init__(self, array: blosc2.NDArray, token: str):
+        self._array = array
+        self._token = token
+
+    def _descriptor(self) -> dict:
+        return _descriptor_for_token(self._array, self._token)
+
+    @property
+    def descriptor(self) -> dict:
+        return _copy_descriptor_for_token(self._array, self._token)
+
+    @property
+    def kind(self) -> str:
+        return self._descriptor()["kind"]
+
+    @property
+    def field(self) -> str | None:
+        return self._descriptor()["field"]
+
+    @property
+    def name(self) -> str | None:
+        return self._descriptor()["name"]
+
+    @property
+    def target(self) -> dict:
+        return self.descriptor["target"]
+
+    @property
+    def persistent(self) -> bool:
+        return bool(self._descriptor()["persistent"])
+
+    @property
+    def stale(self) -> bool:
+        return bool(self._descriptor()["stale"])
+
+    @property
+    def nbytes(self) -> int:
+        descriptor = self._descriptor()
+        return sum(
+            _component_nbytes(self._array, descriptor, component)
+            for component in iter_index_components(self._array, descriptor)
+        )
+
+    @property
+    def cbytes(self) -> int:
+        descriptor = self._descriptor()
+        return sum(
+            _component_cbytes(self._array, descriptor, component)
+            for component in iter_index_components(self._array, descriptor)
+        )
+
+    @property
+    def cratio(self) -> float:
+        cbytes = self.cbytes
+        if cbytes == 0:
+            return math.inf
+        return self.nbytes / cbytes
+
+    def drop(self) -> None:
+        drop_index(self._array, field=self.field, name=self.name)
+
+    def rebuild(self) -> Index:
+        rebuild_index(self._array, field=self.field, name=self.name)
+        return self
+
+    def compact(self) -> Index:
+        compact_index(self._array, field=self.field, name=self.name)
+        return self
+
+    def __getitem__(self, key):
+        return self.descriptor[key]
+
+    def __iter__(self):
+        return iter(self.descriptor)
+
+    def __len__(self) -> int:
+        return len(self.descriptor)
+
+    def __repr__(self) -> str:
+        try:
+            descriptor = self._descriptor()
+        except KeyError:
+            return "Index(<dropped>)"
+        return (
+            f"Index(kind={descriptor['kind']!r}, field={descriptor['field']!r}, "
+            f"name={descriptor['name']!r}, stale={descriptor['stale']!r})"
+        )
+
+
 def _remove_sidecar_path(path: str | None) -> None:
     if path:
         blosc2.remove_urlpath(path)
@@ -2942,9 +3116,15 @@ def compact_index(array: blosc2.NDArray, field: str | None = None, name: str | N
     return _copy_descriptor(descriptor)
 
 
-def get_indexes(array: blosc2.NDArray) -> list[dict]:
+def get_indexes(array: blosc2.NDArray) -> list[Index]:
     store = _load_store(array)
-    return [_copy_descriptor(store["indexes"][key]) for key in sorted(store["indexes"])]
+    return [Index(array, key) for key in sorted(store["indexes"])]
+
+
+def get_index(array: blosc2.NDArray, field: str | None = None, name: str | None = None) -> Index:
+    store = _load_store(array)
+    token = _resolve_index_token(store, field, name)
+    return Index(array, token)
 
 
 def mark_indexes_stale(array: blosc2.NDArray) -> None:

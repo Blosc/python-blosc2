@@ -73,6 +73,63 @@ def test_module_level_will_use_index_matches_lazyexpr_method():
     assert indexing.will_use_index(plain_expr) == plain_expr.will_use_index()
 
 
+def test_index_accessor_exposes_live_view_and_sizes():
+    import blosc2.indexing as indexing
+
+    arr = blosc2.asarray(np.arange(1_000, dtype=np.int64), chunks=(250,), blocks=(50,))
+    arr.create_index(kind="medium")
+
+    idx = arr.index()
+    assert isinstance(idx, indexing.Index)
+    assert idx.kind == "medium"
+    assert idx.field is None
+    assert idx.name == "__self__"
+    assert idx.target == {"source": "field", "field": None}
+    assert idx.persistent is False
+    assert idx.stale is False
+    assert idx["kind"] == "medium"
+    assert idx["target"]["field"] is None
+    assert idx.nbytes > 0
+    assert idx.cbytes > 0
+    assert idx.cratio == pytest.approx(idx.nbytes / idx.cbytes)
+
+    arr[:3] = -1
+    assert idx.stale is True
+
+    rebuilt = idx.rebuild()
+    assert rebuilt is idx
+    assert idx.stale is False
+
+    idx.drop()
+    assert arr.indexes == []
+    with pytest.raises(KeyError):
+        _ = idx.kind
+
+
+def test_index_accessor_compact_updates_live_view(tmp_path):
+    path = tmp_path / "index_accessor_compact.b2nd"
+    dtype = np.dtype([("a", np.int64), ("b", np.int64)])
+    data = np.array([(3, 9), (1, 8), (2, 7), (1, 6)], dtype=dtype)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(2,), blocks=(2,))
+    arr.create_csindex("a")
+
+    idx = arr.index("a")
+    assert idx.kind == "full"
+    assert idx.persistent is True
+    assert idx.nbytes > 0
+    assert idx.cbytes > 0
+
+    arr.append(np.array([(0, 100), (3, 101)], dtype=dtype))
+    assert len(idx["full"]["runs"]) == 1
+
+    compacted = idx.compact()
+    assert compacted is idx
+    assert idx["full"]["runs"] == []
+
+    reopened = blosc2.open(path, mode="a")
+    assert reopened.index("a")["full"]["runs"] == []
+
+
 @pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_random_field_index_matches_scan(kind):
     rng = np.random.default_rng(0)

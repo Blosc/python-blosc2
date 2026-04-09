@@ -4926,8 +4926,24 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return indexing.compact_index(self, field=field, name=name)
 
+    def index(self, field: str | None = None, name: str | None = None) -> blosc2.indexing.Index:
+        """Return a live view over one index.
+
+        Parameters
+        ----------
+        field : str or None, optional
+            Structured field identifying the target index. Use ``None`` for the
+            value index on a plain 1-D array.
+        name : str or None, optional
+            Optional logical index label. When omitted and the array has a
+            single index, that index is selected automatically.
+        """
+        from . import indexing
+
+        return indexing.get_index(self, field=field, name=name)
+
     @property
-    def indexes(self) -> list[dict]:
+    def indexes(self) -> list[blosc2.indexing.Index]:
         from . import indexing
 
         return indexing.get_indexes(self)
