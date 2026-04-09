@@ -130,6 +130,41 @@ def test_index_accessor_compact_updates_live_view(tmp_path):
     assert reopened.index("a")["full"]["runs"] == []
 
 
+def test_gather_positions_by_block_avoids_whole_chunk_fallback_for_multi_block_reads(monkeypatch):
+    import blosc2.indexing as indexing
+
+    class FakeSource:
+        def __init__(self, data, chunk_len):
+            self.data = np.asarray(data)
+            self.dtype = self.data.dtype
+            self.chunk_len = chunk_len
+            self.slice_reads = 0
+            self.span_reads = []
+
+        def __getitem__(self, key):
+            self.slice_reads += 1
+            return self.data[key]
+
+        def get_1d_span_numpy(self, out, nchunk, start, nitems):
+            self.span_reads.append((int(nchunk), int(start), int(nitems)))
+            base = int(nchunk) * self.chunk_len + int(start)
+            out[:] = self.data[base : base + int(nitems)]
+
+    chunk_len = 10
+    block_len = 4
+    data = np.arange(40, dtype=np.int64)
+    positions = np.array([1, 5, 7, 12, 19], dtype=np.int64)
+    source = FakeSource(data, chunk_len)
+
+    monkeypatch.setattr(indexing, "_supports_block_reads", lambda _: True)
+
+    gathered = indexing._gather_positions_by_block(source, positions, chunk_len, block_len, len(data))
+
+    np.testing.assert_array_equal(gathered, data[positions])
+    assert source.slice_reads == 0
+    assert source.span_reads == [(0, 1, 1), (0, 5, 3), (1, 2, 1), (1, 9, 1)]
+
+
 @pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_random_field_index_matches_scan(kind):
     rng = np.random.default_rng(0)

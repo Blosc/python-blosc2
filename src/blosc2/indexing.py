@@ -51,7 +51,6 @@ _IN_MEMORY_INDEX_FINALIZERS: dict[int, weakref.finalize] = {}
 _PERSISTENT_INDEXES: dict[tuple[str, str | int], dict] = {}
 _DATA_CACHE: dict[tuple[int, str | None, str, str], np.ndarray] = {}
 _SIDECAR_HANDLE_CACHE: dict[tuple[int, str | None, str, str], object] = {}
-BLOCK_GATHER_POSITIONS_THRESHOLD = 32
 FULL_OOC_RUN_ITEMS = 2_000_000
 FULL_OOC_MERGE_BUFFER_ITEMS = 500_000
 FULL_SELECTIVE_OOC_MAX_SPANS = 128
@@ -4934,21 +4933,37 @@ def _gather_positions_by_block(
         chunk_id = int(chunk_ids[chunk_start_idx])
         chunk_origin = chunk_id * chunk_len
         local_positions = chunk_positions - chunk_origin
-        block_ids = local_positions // block_len
-        unique_blocks = np.unique(block_ids)
-        if len(unique_blocks) != 1 or np.any(np.diff(local_positions) < 0):
-            chunk_stop = min(chunk_origin + chunk_len, total_len)
-            chunk_values = where_x[chunk_origin:chunk_stop]
-            output[chunk_start_idx:chunk_stop_idx] = chunk_values[local_positions]
-            chunk_start_idx = chunk_stop_idx
-            continue
+        if np.any(np.diff(local_positions) < 0):
+            order = np.argsort(local_positions, kind="stable")
+            sorted_local_positions = local_positions[order]
+        else:
+            order = None
+            sorted_local_positions = local_positions
 
-        span_start = int(local_positions[0])
-        span_stop = int(local_positions[-1]) + 1
-        span_items = span_stop - span_start
-        span_values = np.empty(span_items, dtype=_where_output_dtype(where_x))
-        where_x.get_1d_span_numpy(span_values, chunk_id, span_start, span_items)
-        output[chunk_start_idx:chunk_stop_idx] = span_values[local_positions - span_start]
+        sorted_output = (
+            output[chunk_start_idx:chunk_stop_idx]
+            if order is None
+            else np.empty(len(chunk_positions), dtype=output.dtype)
+        )
+        block_ids = sorted_local_positions // block_len
+        block_breaks = np.nonzero(np.diff(block_ids) != 0)[0] + 1
+        block_start_idx = 0
+        for block_stop_idx in (*block_breaks, len(sorted_local_positions)):
+            block_positions = sorted_local_positions[block_start_idx:block_stop_idx]
+            span_start = int(block_positions[0])
+            span_stop = int(block_positions[-1]) + 1
+            span_items = span_stop - span_start
+            span_values = np.empty(span_items, dtype=output.dtype)
+            where_x.get_1d_span_numpy(span_values, chunk_id, span_start, span_items)
+            sorted_output[block_start_idx:block_stop_idx] = span_values[block_positions - span_start]
+            block_start_idx = block_stop_idx
+
+        if order is None:
+            output[chunk_start_idx:chunk_stop_idx] = sorted_output
+        else:
+            inverse = np.empty(len(order), dtype=np.intp)
+            inverse[order] = np.arange(len(order), dtype=np.intp)
+            output[chunk_start_idx:chunk_stop_idx] = sorted_output[inverse]
         chunk_start_idx = chunk_stop_idx
     return output
 
@@ -4957,7 +4972,8 @@ def evaluate_full_query(where: dict, plan: IndexPlan) -> np.ndarray:
     if plan.exact_positions is None:
         raise ValueError("full evaluation requires exact positions")
     if plan.base is not None:
-        if len(plan.exact_positions) <= BLOCK_GATHER_POSITIONS_THRESHOLD:
+        block_gather_threshold = int(plan.base.blocks[0])
+        if len(plan.exact_positions) <= block_gather_threshold:
             return _gather_positions_by_block(
                 where["_where_x"],
                 plan.exact_positions,

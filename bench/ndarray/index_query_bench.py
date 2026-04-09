@@ -25,10 +25,11 @@ SIZES = (1_000_000, 2_000_000, 5_000_000, 10_000_000)
 DEFAULT_REPEATS = 3
 KINDS = ("ultralight", "light", "medium", "full")
 DEFAULT_KIND = "light"
-DISTS = ("sorted", "block-shuffled", "permuted")
+DISTS = ("sorted", "block-shuffled", "permuted", "random")
 RNG_SEED = 0
 DEFAULT_OPLEVEL = 5
 FULL_QUERY_MODES = ("auto", "selective-ooc", "whole-load")
+DATASET_LAYOUT_VERSION = "payload-ramp-v1"
 
 COLD_COLUMNS = [
     ("rows", lambda result: f"{result['size']:,}"),
@@ -70,6 +71,11 @@ def dtype_token(dtype: np.dtype) -> str:
 
 def source_dtype(id_dtype: np.dtype) -> np.dtype:
     return np.dtype([("id", np.dtype(id_dtype)), ("payload", np.float32)])
+
+
+def payload_slice(start: int, stop: int) -> np.ndarray:
+    """Deterministic nontrivial payload values for structured benchmark rows."""
+    return np.arange(start, stop, dtype=np.float32)
 
 
 def make_ordered_ids(size: int, dtype: np.dtype) -> np.ndarray:
@@ -240,6 +246,12 @@ def _fill_permuted_ids(ids: np.ndarray, size: int, start: int, stop: int, step: 
     ids[:] = ordered_ids_from_positions(shuffled_positions, size, ids.dtype)
 
 
+def _randomized_ids(size: int, dtype: np.dtype) -> np.ndarray:
+    ids = make_ordered_ids(size, dtype)
+    np.random.default_rng(RNG_SEED).shuffle(ids)
+    return ids
+
+
 def build_persistent_array(
     size: int, dist: str, id_dtype: np.dtype, path: Path, chunks: int | None, blocks: int | None
 ) -> blosc2.NDArray:
@@ -254,6 +266,7 @@ def build_persistent_array(
     block_len = int(arr.blocks[0])
     block_order = _block_order(size, block_len) if dist == "block-shuffled" else None
     permuted_step, permuted_offset = _permuted_position_params(size) if dist == "permuted" else (1, 0)
+    random_ids = _randomized_ids(size, id_dtype) if dist == "random" else None
     for start in range(0, size, chunk_len):
         stop = min(start + chunk_len, size)
         chunk = np.zeros(stop - start, dtype=dtype)
@@ -263,14 +276,20 @@ def build_persistent_array(
             _fill_block_shuffled_ids(chunk["id"], size, start, stop, block_len, block_order)
         elif dist == "permuted":
             _fill_permuted_ids(chunk["id"], size, start, stop, permuted_step, permuted_offset)
+        elif dist == "random":
+            chunk["id"] = random_ids[start:stop]
         else:
             raise ValueError(f"unsupported distribution {dist!r}")
+        chunk["payload"] = payload_slice(start, stop)
         arr[start:stop] = chunk
     return arr
 
 
 def base_array_path(size_dir: Path, size: int, dist: str, id_dtype: np.dtype, chunks: int | None, blocks: int | None) -> Path:
-    return size_dir / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{geometry_token(chunks, blocks)}.b2nd"
+    return (
+        size_dir
+        / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{DATASET_LAYOUT_VERSION}.{geometry_token(chunks, blocks)}.b2nd"
+    )
 
 
 def indexed_array_path(
@@ -293,7 +312,7 @@ def indexed_array_path(
     thread_token = "threads-auto" if nthreads is None else f"threads-{nthreads}"
     return (
         size_dir
-        / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{geometry_token(chunks, blocks)}.{codec_token}.{clevel_token}.{thread_token}"
+        / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{DATASET_LAYOUT_VERSION}.{geometry_token(chunks, blocks)}.{codec_token}.{clevel_token}.{thread_token}"
         f".{kind}.opt{optlevel}.{mode}.b2nd"
     )
 
