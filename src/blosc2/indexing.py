@@ -512,6 +512,82 @@ def _persistent_cache_lookup(array: blosc2.NDArray, digest: str) -> np.ndarray |
     return coords
 
 
+def _query_cache_entry_cbytes(payload_mapping: dict) -> int:
+    """Return the compressed coordinate payload size used for budget accounting."""
+    coord_dtype = np.dtype(payload_mapping["dtype"])
+    compressed_coords = blosc2.compress2(
+        payload_mapping["data"], cparams=blosc2.CParams(typesize=coord_dtype.itemsize)
+    )
+    return len(compressed_coords)
+
+
+def _query_cache_entries_fifo(catalog: dict) -> list[tuple[str, dict]]:
+    """Return catalog entries ordered from oldest to newest insertion."""
+    entries = catalog.get("entries", {})
+    return sorted(entries.items(), key=lambda item: int(item[1]["slot"]))
+
+
+def _query_cache_rebuild_store(
+    array: blosc2.NDArray,
+    catalog: dict,
+    retained_entries: list[tuple[str, dict]],
+    appended: tuple[str, dict, dict, int] | None = None,
+) -> bool:
+    """Rewrite the persistent store with retained FIFO entries and an optional appended entry."""
+    payload_path = _query_cache_payload_path(array)
+    temp_path = f"{payload_path}.tmp"
+    _close_query_cache_store(payload_path)
+    _close_query_cache_store(temp_path)
+    blosc2.remove_urlpath(temp_path)
+
+    old_store = _open_query_cache_store(array)
+    temp_store = blosc2.VLArray(storage=blosc2.Storage(urlpath=temp_path, mode="w"))
+    new_entries = {}
+    persistent_cbytes = 0
+    slot = 0
+
+    try:
+        for digest, entry in retained_entries:
+            if old_store is None or int(entry["slot"]) >= len(old_store):
+                continue
+            payload = old_store[int(entry["slot"])]
+            if not isinstance(payload, dict) or payload.get("version") != QUERY_CACHE_FORMAT_VERSION:
+                continue
+            temp_store.append(payload)
+            updated = entry.copy()
+            updated["slot"] = slot
+            new_entries[digest] = updated
+            persistent_cbytes += int(updated["cbytes"])
+            slot += 1
+
+        if appended is not None:
+            digest, payload_mapping, query_descriptor, cbytes = appended
+            temp_store.append(payload_mapping)
+            new_entries[digest] = {
+                "slot": slot,
+                "cbytes": cbytes,
+                "nrows": payload_mapping["nrows"],
+                "dtype": payload_mapping["dtype"],
+                "query": query_descriptor,
+            }
+            persistent_cbytes += cbytes
+            slot += 1
+    finally:
+        del temp_store
+        del old_store
+        _close_query_cache_store(payload_path)
+        _close_query_cache_store(temp_path)
+
+    blosc2.remove_urlpath(payload_path)
+    os.replace(temp_path, payload_path)
+
+    catalog["entries"] = new_entries
+    catalog["persistent_cbytes"] = persistent_cbytes
+    catalog["next_slot"] = slot
+    _save_query_cache_catalog(array, catalog)
+    return True
+
+
 def _persistent_cache_insert(
     array: blosc2.NDArray,
     digest: str,
@@ -527,15 +603,11 @@ def _persistent_cache_insert(
     payload_path = _query_cache_payload_path(array)
     if catalog is None:
         catalog = _default_query_cache_catalog(payload_path)
+    elif digest in catalog.get("entries", {}):
+        return True
 
     payload_mapping = _encode_coords_payload(coords)
-    raw_data = payload_mapping["data"]
-
-    # Measure the compressed size of the coordinate bytes directly so the
-    # per-entry limit is independent of VLArray/msgpack encoding overhead.
-    coord_dtype = np.dtype(payload_mapping["dtype"])
-    compressed_coords = blosc2.compress2(raw_data, cparams=blosc2.CParams(typesize=coord_dtype.itemsize))
-    cbytes = len(compressed_coords)
+    cbytes = _query_cache_entry_cbytes(payload_mapping)
 
     max_entry = catalog.get("max_entry_cbytes", QUERY_CACHE_MAX_ENTRY_CBYTES)
     if cbytes > max_entry:
@@ -544,7 +616,19 @@ def _persistent_cache_insert(
     max_persistent = catalog.get("max_persistent_cbytes", QUERY_CACHE_MAX_PERSISTENT_CBYTES)
     current_persistent = int(catalog.get("persistent_cbytes", 0))
     if current_persistent + cbytes > max_persistent:
-        return False
+        retained_entries = _query_cache_entries_fifo(catalog)
+        retained_cbytes = current_persistent
+        while retained_entries and retained_cbytes + cbytes > max_persistent:
+            _, oldest = retained_entries.pop(0)
+            retained_cbytes -= int(oldest["cbytes"])
+        if retained_cbytes + cbytes > max_persistent:
+            return False
+        return _query_cache_rebuild_store(
+            array,
+            catalog,
+            retained_entries,
+            appended=(digest, payload_mapping, query_descriptor, cbytes),
+        )
 
     store = _open_query_cache_store(array, create=True)
     if store is None:

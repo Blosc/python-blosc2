@@ -1319,6 +1319,51 @@ def test_persistent_entry_size_limit_rejected(tmp_path):
     assert result is False, "oversized entry must be rejected"
 
 
+def test_persistent_cache_prunes_oldest_entries_and_rebuilds_slots(tmp_path, monkeypatch):
+    arr, urlpath = _make_persistent_array(tmp_path, n=8_000)
+    _clear_caches()
+
+    rng = np.random.default_rng(123)
+    payloads = []
+    for i in range(3):
+        coords = np.sort(rng.choice(8_000, size=256, replace=False)).astype(np.int64)
+        descriptor = indexing._normalize_query_descriptor(
+            f"(id >= {i}) & (id < {i + 1})", ["__self__"], None
+        )
+        digest = indexing._query_cache_digest(descriptor)
+        payload_mapping = indexing._encode_coords_payload(coords)
+        cbytes = indexing._query_cache_entry_cbytes(payload_mapping)
+        payloads.append((digest, descriptor, coords, cbytes))
+
+    budget = max(payloads[0][3] + payloads[1][3], payloads[1][3] + payloads[2][3])
+    monkeypatch.setattr(indexing, "QUERY_CACHE_MAX_PERSISTENT_CBYTES", budget)
+
+    for digest, descriptor, coords, _ in payloads:
+        assert indexing._persistent_cache_insert(arr, digest, coords, descriptor) is True
+
+    catalog = indexing._load_query_cache_catalog(arr)
+    assert catalog is not None
+    assert catalog["max_persistent_cbytes"] == budget
+    assert set(catalog["entries"]) == {payloads[1][0], payloads[2][0]}
+    assert catalog["entries"][payloads[1][0]]["slot"] == 0
+    assert catalog["entries"][payloads[2][0]]["slot"] == 1
+    assert catalog["next_slot"] == 2
+    assert catalog["persistent_cbytes"] == payloads[1][3] + payloads[2][3]
+
+    assert indexing._persistent_cache_lookup(arr, payloads[0][0]) is None
+    np.testing.assert_array_equal(indexing._persistent_cache_lookup(arr, payloads[1][0]), payloads[1][2])
+    np.testing.assert_array_equal(indexing._persistent_cache_lookup(arr, payloads[2][0]), payloads[2][2])
+
+    _clear_caches()
+    reopened = blosc2.open(urlpath, mode="r")
+    np.testing.assert_array_equal(
+        indexing._persistent_cache_lookup(reopened, payloads[1][0]), payloads[1][2]
+    )
+    np.testing.assert_array_equal(
+        indexing._persistent_cache_lookup(reopened, payloads[2][0]), payloads[2][2]
+    )
+
+
 # ---------------------------------------------------------------------------
 # Stage 5 – Invalidation
 # ---------------------------------------------------------------------------
