@@ -1870,12 +1870,10 @@ def slices_eval(  # noqa: C901
                 return cached_coords
 
         # --- Value-returning path (arr[cond][:]) — cache check before plan_query ---
-        # Only cache for persistent arrays: in-memory arrays use id() which can be
-        # reused after GC, making stale hot-cache hits possible.
         _cache_urlpath = getattr(_cache_array, "urlpath", None) or getattr(
             getattr(_cache_array, "ndarr", None), "urlpath", None
         )
-        if not _indices and _order is None and _cache_urlpath is not None:
+        if not _indices and _order is None:
             cached_coords = indexing.get_cached_coords(_cache_array, expression, _cache_tokens, None)
             if cached_coords is not None:
                 cached_plan = indexing.IndexPlan(
@@ -1885,20 +1883,40 @@ def slices_eval(  # noqa: C901
 
         index_plan = indexing.plan_query(expression, operands, where, use_index=use_index)
 
-        if _indices and _order is None and index_plan.usable and index_plan.exact_positions is not None:
-            coords = np.asarray(index_plan.exact_positions, dtype=np.int64)
-            indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
-            return coords
+        if _indices and _order is None and index_plan.usable:
+            if index_plan.exact_positions is not None:
+                coords = np.asarray(index_plan.exact_positions, dtype=np.int64)
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return coords
+            if index_plan.bucket_masks is not None:
+                _, coords = indexing.evaluate_light_query(
+                    expression, operands, ne_args, where, index_plan, return_positions=True
+                )
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return coords
+            if index_plan.candidate_units is not None and index_plan.segment_len is not None:
+                _, coords = indexing.evaluate_segment_query(
+                    expression, operands, ne_args, where, index_plan, return_positions=True
+                )
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return coords
         if index_plan.usable and not (_indices or _order):
             if index_plan.exact_positions is not None:
-                if _cache_urlpath is not None:
-                    coords = np.asarray(index_plan.exact_positions, dtype=np.int64)
-                    indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                coords = np.asarray(index_plan.exact_positions, dtype=np.int64)
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
                 return indexing.evaluate_full_query(where, index_plan)
             if index_plan.bucket_masks is not None:
-                return indexing.evaluate_light_query(expression, operands, ne_args, where, index_plan)
-            if index_plan.level not in (None, "chunk"):
-                return indexing.evaluate_segment_query(expression, operands, ne_args, where, index_plan)
+                result, coords = indexing.evaluate_light_query(
+                    expression, operands, ne_args, where, index_plan, return_positions=True
+                )
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return result
+            if index_plan.candidate_units is not None and index_plan.segment_len is not None:
+                result, coords = indexing.evaluate_segment_query(
+                    expression, operands, ne_args, where, index_plan, return_positions=True
+                )
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return result
 
     for chunk_slice in intersecting_chunks:
         # Check whether current cslice intersects with _slice

@@ -1132,6 +1132,12 @@ def test_canonical_digest_differs_on_order_change():
     assert indexing._query_cache_digest(d1) != indexing._query_cache_digest(d2)
 
 
+def test_canonical_digest_preserves_order_field_sequence():
+    d1 = indexing._normalize_query_descriptor("(id >= 3) & (id < 6)", ["__self__"], ["a", "b"])
+    d2 = indexing._normalize_query_descriptor("(id >= 3) & (id < 6)", ["__self__"], ["b", "a"])
+    assert indexing._query_cache_digest(d1) != indexing._query_cache_digest(d2)
+
+
 def test_ast_normalization_ignores_whitespace():
     """ast.unparse normalizes whitespace so queries match regardless of spacing."""
     d1 = indexing._normalize_query_descriptor("(id>=3)&(id<6)", ["__self__"], None)
@@ -1160,6 +1166,14 @@ def test_encode_decode_roundtrip_u8():
     np.testing.assert_array_equal(recovered, coords.astype(np.uint64))
 
 
+def test_encode_decode_roundtrip_empty():
+    coords = np.array([], dtype=np.int64)
+    payload = indexing._encode_coords_payload(coords)
+    assert payload["dtype"] == "<u4"
+    recovered = indexing._decode_coords_payload(payload)
+    np.testing.assert_array_equal(recovered, coords.astype(np.uint32))
+
+
 # ---------------------------------------------------------------------------
 # Stage 1/3 – Hot-cache put / get / eviction
 # ---------------------------------------------------------------------------
@@ -1177,6 +1191,16 @@ def test_hot_cache_put_then_get():
     result = indexing._hot_cache_get("abc")
     assert result is not None
     np.testing.assert_array_equal(result, coords)
+
+
+def test_hot_cache_scope_isolation():
+    _clear_caches()
+    indexing._hot_cache_put("abc", np.array([1, 2, 3], dtype=np.int64), scope=("memory", 1))
+    indexing._hot_cache_put("abc", np.array([4, 5], dtype=np.int64), scope=("memory", 2))
+
+    np.testing.assert_array_equal(indexing._hot_cache_get("abc", scope=("memory", 1)), np.array([1, 2, 3]))
+    np.testing.assert_array_equal(indexing._hot_cache_get("abc", scope=("memory", 2)), np.array([4, 5]))
+    assert indexing._hot_cache_get("abc", scope=("memory", 3)) is None
 
 
 def test_hot_cache_byte_limit_evicts_lru():
@@ -1406,6 +1430,23 @@ def test_ordered_query_indices_cached(tmp_path):
     np.testing.assert_array_equal(result1, result2)
 
 
+def test_ordered_query_cache_distinguishes_order_sequences(tmp_path):
+    path = tmp_path / "ordered_sequences.b2nd"
+    dtype = np.dtype([("a", np.int64), ("b", np.int64)])
+    data = np.array([(1, 2), (1, 1), (2, 1), (2, 2)], dtype=dtype)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(4,), blocks=(2,))
+    arr.create_index(field="a", kind="full")
+    arr.create_index(field="b", kind="full")
+    _clear_caches()
+
+    expr = blosc2.lazyexpr("(a >= 1)", arr.fields).where(arr)
+    ordered_ab = expr.indices(order=["a", "b"]).compute()[:]
+    ordered_ba = expr.indices(order=["b", "a"]).compute()[:]
+
+    np.testing.assert_array_equal(ordered_ab, np.argsort(data, order=["a", "b"]))
+    np.testing.assert_array_equal(ordered_ba, np.argsort(data, order=["b", "a"]))
+
+
 # ---------------------------------------------------------------------------
 # Stage 4 – Multiple distinct queries stored in same array cache
 # ---------------------------------------------------------------------------
@@ -1537,7 +1578,7 @@ def _scalar_value_query(arr, lo=5_000, hi=7_000):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("kind", ["full", "medium", "light"])
+@pytest.mark.parametrize("kind", ["ultralight", "full", "medium", "light"])
 def test_inmem_value_path_correct(kind):
     """In-memory value-path queries return correct results for all index kinds."""
     arr = _make_structured_array(kind=kind)
@@ -1549,7 +1590,7 @@ def test_inmem_value_path_correct(kind):
     np.testing.assert_array_equal(result, expected)
 
 
-@pytest.mark.parametrize("kind", ["full", "medium", "light"])
+@pytest.mark.parametrize("kind", ["ultralight", "full", "medium", "light"])
 def test_inmem_value_path_repeated_calls_stable(kind):
     """Repeated in-memory value-path calls on the same object are stable."""
     arr = _make_structured_array(kind=kind)
@@ -1557,6 +1598,21 @@ def test_inmem_value_path_repeated_calls_stable(kind):
 
     r1 = _value_query(arr)
     r2 = _value_query(arr)
+    np.testing.assert_array_equal(r1, r2)
+
+
+@pytest.mark.parametrize("kind", ["ultralight", "full", "medium", "light"])
+def test_inmem_value_path_hot_cache_hit(kind):
+    """Second in-memory arr[cond][:] call should reuse the scoped hot cache."""
+    arr = _make_structured_array(kind=kind)
+    _clear_caches()
+
+    r1 = _value_query(arr)
+    hot_before = indexing._HOT_CACHE_BYTES
+    assert hot_before > 0
+
+    r2 = _value_query(arr)
+    assert hot_before == indexing._HOT_CACHE_BYTES
     np.testing.assert_array_equal(r1, r2)
 
 
@@ -1592,7 +1648,7 @@ def test_inmem_value_path_no_cross_array_contamination():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("kind", ["full", "medium", "light"])
+@pytest.mark.parametrize("kind", ["ultralight", "full", "medium", "light"])
 def test_ondisk_value_path_correct(tmp_path, kind):
     """On-disk value-path queries return correct results for all index kinds."""
     arr = _make_structured_array(tmp_path, kind=kind)
@@ -1623,9 +1679,28 @@ def test_ondisk_value_path_full_warm_hits_cache(tmp_path):
     np.testing.assert_array_equal(r1, r2)
 
 
+@pytest.mark.parametrize("kind", ["ultralight", "light"])
+def test_ondisk_value_path_non_exact_warm_hits_cache(tmp_path, kind):
+    """Ultralight/light on-disk value queries should populate the coordinate cache."""
+    arr = _make_structured_array(tmp_path, kind=kind)
+    urlpath = arr.urlpath
+    _clear_caches()
+
+    r1 = _value_query(arr)
+    catalog = indexing._load_query_cache_catalog(arr)
+    assert catalog is not None
+    assert len(catalog["entries"]) == 1
+
+    _clear_caches()
+    arr2 = blosc2.open(urlpath, mode="r")
+    r2 = _value_query(arr2)
+
+    np.testing.assert_array_equal(r1, r2)
+
+
 @pytest.mark.parametrize("kind", ["medium", "light"])
 def test_ondisk_value_path_non_full_correct(tmp_path, kind):
-    """Light/medium on-disk value queries are correct (no coord caching, but correct)."""
+    """Light/medium on-disk value queries are correct."""
     arr = _make_structured_array(tmp_path, kind=kind)
     _clear_caches()
 
@@ -1685,3 +1760,64 @@ def test_inmem_indices_path_hot_cache_hit():
     data = arr[:]
     expected = np.where((data["id"] >= 5_000) & (data["id"] < 7_000))[0]
     np.testing.assert_array_equal(r1, expected)
+
+
+def test_inmem_indices_cache_entries_are_dropped_on_gc():
+    arr = _make_structured_array(kind="full")
+    _clear_caches()
+
+    expr = blosc2.lazyexpr("(id >= 5_000) & (id < 7_000)", arr.fields).where(arr)
+    result = expr.indices().compute()
+    assert result.shape[0] == 2_000
+    assert indexing._HOT_CACHE_BYTES > 0
+
+    del expr, result, arr
+    gc.collect()
+
+    assert indexing._HOT_CACHE_BYTES == 0
+    assert indexing._HOT_CACHE == {}
+
+
+def test_ondisk_indices_path_no_cross_array_hot_cache_contamination(tmp_path):
+    dtype = np.dtype([("id", np.int64), ("val", np.float32)])
+    data1 = np.empty(1_000, dtype=dtype)
+    data2 = np.empty(1_000, dtype=dtype)
+    data1["id"] = np.arange(1_000, dtype=np.int64)
+    data2["id"] = np.arange(1_000, dtype=np.int64) + 1_000
+    data1["val"] = 0
+    data2["val"] = 0
+
+    arr1 = blosc2.asarray(data1, urlpath=tmp_path / "arr1.b2nd", mode="w", chunks=(200,), blocks=(50,))
+    arr2 = blosc2.asarray(data2, urlpath=tmp_path / "arr2.b2nd", mode="w", chunks=(200,), blocks=(50,))
+    arr1.create_index(field="id", kind="full")
+    arr2.create_index(field="id", kind="full")
+    _clear_caches()
+
+    expr1 = blosc2.lazyexpr("(id >= 10) & (id < 20)", arr1.fields).where(arr1)
+    expr2 = blosc2.lazyexpr("(id >= 10) & (id < 20)", arr2.fields).where(arr2)
+
+    r1 = expr1.indices().compute()[:]
+    r2 = expr2.indices().compute()[:]
+
+    np.testing.assert_array_equal(r1, np.arange(10, 20, dtype=np.int64))
+    assert r2.size == 0
+
+
+def test_ondisk_empty_indices_result_cached(tmp_path):
+    arr, urlpath = _make_persistent_array(tmp_path)
+    _clear_caches()
+
+    expr = blosc2.lazyexpr("(id >= 60_000) & (id < 61_000)", arr.fields).where(arr)
+    result1 = expr.indices().compute()[:]
+    assert result1.size == 0
+
+    catalog = indexing._load_query_cache_catalog(arr)
+    assert catalog is not None
+    assert len(catalog["entries"]) == 1
+
+    _clear_caches()
+    arr2 = blosc2.open(urlpath, mode="r")
+    result2 = (
+        blosc2.lazyexpr("(id >= 60_000) & (id < 61_000)", arr2.fields).where(arr2).indices().compute()[:]
+    )
+    assert result2.size == 0

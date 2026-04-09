@@ -62,14 +62,15 @@ QUERY_CACHE_MAX_ENTRY_CBYTES = 4096  # 4 KB per persistent entry
 QUERY_CACHE_MAX_MEM_CBYTES = 131_072  # 128 KB for the in-process hot cache
 QUERY_CACHE_MAX_PERSISTENT_CBYTES = 2_147_483_648  # 2 GB for the payload store
 
-# In-process hot cache: digest -> decoded np.ndarray of coordinates.
-_HOT_CACHE: dict[str, np.ndarray] = {}
+# In-process hot cache: (array-scope, digest) -> decoded np.ndarray of coordinates.
+_HOT_CACHE: dict[tuple[tuple[str, str | int], str], np.ndarray] = {}
 # Insertion-order list for LRU eviction.
-_HOT_CACHE_ORDER: list[str] = []
+_HOT_CACHE_ORDER: list[tuple[tuple[str, str | int], str]] = []
 # Total bytes of arrays currently in the hot cache.
 _HOT_CACHE_BYTES: int = 0
 # Persistent VLArray handles: resolved urlpath -> open VLArray object.
 _QUERY_CACHE_STORE_HANDLES: dict[str, object] = {}
+_HOT_CACHE_GLOBAL_SCOPE = ("global", 0)
 
 FULL_OOC_RUN_ITEMS = 2_000_000
 FULL_OOC_MERGE_BUFFER_ITEMS = 500_000
@@ -93,6 +94,7 @@ def _sanitize_token(token: str) -> str:
 def _cleanup_in_memory_store(key: int) -> None:
     _IN_MEMORY_INDEXES.pop(key, None)
     _IN_MEMORY_INDEX_FINALIZERS.pop(key, None)
+    _hot_cache_clear(scope=("memory", key))
 
 
 @dataclass(slots=True)
@@ -298,6 +300,24 @@ def _query_cache_payload_path(array: blosc2.NDArray) -> str:
     return str(path.with_name(f"{root}.__query_cache__.b2frame"))
 
 
+def _query_cache_owner(array: blosc2.NDArray) -> blosc2.NDArray:
+    owner = getattr(array, "ndarr", None)
+    return owner if owner is not None else array
+
+
+def _ensure_in_memory_array_finalizer(array: blosc2.NDArray) -> None:
+    if _is_persistent_array(array):
+        return
+    key = id(array)
+    _IN_MEMORY_INDEX_FINALIZERS.setdefault(key, weakref.finalize(array, _cleanup_in_memory_store, key))
+
+
+def _query_cache_scope(array: blosc2.NDArray) -> tuple[str, str | int]:
+    owner = _query_cache_owner(array)
+    _ensure_in_memory_array_finalizer(owner)
+    return _array_key(owner)
+
+
 def _default_query_cache_catalog(payload_path: str) -> dict:
     return {
         "version": QUERY_CACHE_FORMAT_VERSION,
@@ -377,7 +397,7 @@ def _normalize_query_descriptor(
         "kind": "indices",
         "tokens": sorted(tokens),
         "expr": normalized_expr,
-        "order": sorted(order) if order is not None else None,
+        "order": list(order) if order is not None else None,
     }
 
 
@@ -396,7 +416,10 @@ def _query_cache_digest(descriptor: dict) -> str:
 
 def _encode_coords_payload(coords: np.ndarray) -> dict:
     """Encode a coordinate array as a compact msgpack-safe mapping."""
-    dtype = np.dtype("<u4") if coords.max() <= np.iinfo(np.uint32).max else np.dtype("<u8")
+    if coords.size == 0:
+        dtype = np.dtype("<u4")
+    else:
+        dtype = np.dtype("<u4") if coords.max() <= np.iinfo(np.uint32).max else np.dtype("<u8")
     return {
         "version": QUERY_CACHE_FORMAT_VERSION,
         "dtype": dtype.str,
@@ -410,44 +433,58 @@ def _decode_coords_payload(payload: dict) -> np.ndarray:
     return np.frombuffer(payload["data"], dtype=np.dtype(payload["dtype"])).copy()
 
 
-def _hot_cache_get(digest: str) -> np.ndarray | None:
+def _hot_cache_key(
+    digest: str, scope: tuple[str, str | int] | None = None
+) -> tuple[tuple[str, str | int], str]:
+    return (_HOT_CACHE_GLOBAL_SCOPE if scope is None else scope, digest)
+
+
+def _hot_cache_get(digest: str, scope: tuple[str, str | int] | None = None) -> np.ndarray | None:
     """Return the cached coordinate array for *digest*, or ``None``."""
-    arr = _HOT_CACHE.get(digest)
+    key = _hot_cache_key(digest, scope)
+    arr = _HOT_CACHE.get(key)
     if arr is None:
         return None
     # Move to most-recently-used position.
     with contextlib.suppress(ValueError):
-        _HOT_CACHE_ORDER.remove(digest)
-    _HOT_CACHE_ORDER.append(digest)
+        _HOT_CACHE_ORDER.remove(key)
+    _HOT_CACHE_ORDER.append(key)
     return arr
 
 
-def _hot_cache_put(digest: str, coords: np.ndarray) -> None:
+def _hot_cache_put(digest: str, coords: np.ndarray, scope: tuple[str, str | int] | None = None) -> None:
     """Insert *coords* into the hot cache, evicting LRU entries if needed."""
     global _HOT_CACHE_BYTES
+    key = _hot_cache_key(digest, scope)
     entry_bytes = coords.nbytes
     if entry_bytes > QUERY_CACHE_MAX_MEM_CBYTES:
         # Single entry too large; skip.
         return
     # If already present, remove old accounting first.
-    if digest in _HOT_CACHE:
-        _HOT_CACHE_BYTES -= _HOT_CACHE[digest].nbytes
+    if key in _HOT_CACHE:
+        _HOT_CACHE_BYTES -= _HOT_CACHE[key].nbytes
         with contextlib.suppress(ValueError):
-            _HOT_CACHE_ORDER.remove(digest)
+            _HOT_CACHE_ORDER.remove(key)
     # Evict LRU entries until there is room.
     while _HOT_CACHE_ORDER and _HOT_CACHE_BYTES + entry_bytes > QUERY_CACHE_MAX_MEM_CBYTES:
         oldest = _HOT_CACHE_ORDER.pop(0)
         evicted = _HOT_CACHE.pop(oldest, None)
         if evicted is not None:
             _HOT_CACHE_BYTES -= evicted.nbytes
-    _HOT_CACHE[digest] = coords
-    _HOT_CACHE_ORDER.append(digest)
+    _HOT_CACHE[key] = coords
+    _HOT_CACHE_ORDER.append(key)
     _HOT_CACHE_BYTES += entry_bytes
 
 
-def _hot_cache_clear() -> None:
-    """Clear all in-process hot cache entries."""
+def _hot_cache_clear(scope: tuple[str, str | int] | None = None) -> None:
+    """Clear all in-process hot cache entries for *scope* (or all scopes)."""
     global _HOT_CACHE_BYTES
+    if scope is not None:
+        keys = [key for key in _HOT_CACHE if key[0] == scope]
+        for key in keys:
+            _HOT_CACHE_BYTES -= _HOT_CACHE.pop(key).nbytes
+        _HOT_CACHE_ORDER[:] = [key for key in _HOT_CACHE_ORDER if key[0] != scope]
+        return
     _HOT_CACHE.clear()
     _HOT_CACHE_ORDER.clear()
     _HOT_CACHE_BYTES = 0
@@ -536,8 +573,9 @@ def _persistent_cache_insert(
 
 def _invalidate_query_cache(array: blosc2.NDArray) -> None:
     """Drop the entire query cache for *array* (persistent file + hot cache)."""
+    scope = _query_cache_scope(array)
     if not _is_persistent_array(array):
-        _hot_cache_clear()
+        _hot_cache_clear(scope=scope)
         return
     payload_path = _query_cache_payload_path(array)
     _close_query_cache_store(payload_path)
@@ -545,7 +583,7 @@ def _invalidate_query_cache(array: blosc2.NDArray) -> None:
     # Clear the catalog in vlmeta.
     with contextlib.suppress(KeyError, Exception):
         del array.schunk.vlmeta[QUERY_CACHE_VLMETA_KEY]
-    _hot_cache_clear()
+    _hot_cache_clear(scope=scope)
 
 
 # ---------------------------------------------------------------------------
@@ -560,17 +598,19 @@ def get_cached_coords(
     order: list[str] | None,
 ) -> np.ndarray | None:
     """Return cached coordinates for *expression*/*tokens*/*order*, or ``None``."""
+    owner = _query_cache_owner(array)
+    scope = _query_cache_scope(owner)
     descriptor = _normalize_query_descriptor(expression, tokens, order)
     digest = _query_cache_digest(descriptor)
     # 1. In-process hot cache.
-    coords = _hot_cache_get(digest)
+    coords = _hot_cache_get(digest, scope=scope)
     if coords is not None:
         return coords
     # 2. Persistent cache (persistent arrays only).
-    if _is_persistent_array(array):
-        coords = _persistent_cache_lookup(array, digest)
+    if _is_persistent_array(owner):
+        coords = _persistent_cache_lookup(owner, digest)
         if coords is not None:
-            _hot_cache_put(digest, coords)
+            _hot_cache_put(digest, coords, scope=scope)
             return coords
     return None
 
@@ -583,11 +623,13 @@ def store_cached_coords(
     coords: np.ndarray,
 ) -> None:
     """Store *coords* in both the hot cache and (if persistent) the payload store."""
+    owner = _query_cache_owner(array)
+    scope = _query_cache_scope(owner)
     descriptor = _normalize_query_descriptor(expression, tokens, order)
     digest = _query_cache_digest(descriptor)
-    _hot_cache_put(digest, coords)
-    if _is_persistent_array(array):
-        _persistent_cache_insert(array, digest, coords, descriptor)
+    _hot_cache_put(digest, coords, scope=scope)
+    if _is_persistent_array(owner):
+        _persistent_cache_insert(owner, digest, coords, descriptor)
 
 
 def _supported_index_dtype(dtype: np.dtype) -> bool:
@@ -4516,9 +4558,15 @@ def _light_match_from_span(span: np.ndarray, plan: IndexPlan) -> np.ndarray:
 
 
 def _process_light_chunk_batch(
-    chunk_ids: np.ndarray, where_x, plan: IndexPlan, total_len: int, chunk_len: int
-) -> np.ndarray:
-    parts = []
+    chunk_ids: np.ndarray,
+    where_x,
+    plan: IndexPlan,
+    total_len: int,
+    chunk_len: int,
+    return_positions: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    value_parts = []
+    position_parts = []
     local_where_x = _light_worker_source(where_x)
     for chunk_id in chunk_ids:
         bucket_mask = plan.bucket_masks[int(chunk_id)]
@@ -4538,10 +4586,14 @@ def _process_light_chunk_batch(
                 span = local_where_x[start:stop]
             match = _light_match_from_span(span, plan)
             if np.any(match):
-                parts.append(np.require(span[match], requirements="C"))
-    if not parts:
+                value_parts.append(np.require(span[match], requirements="C"))
+                if return_positions:
+                    position_parts.append(np.flatnonzero(match).astype(np.int64, copy=False) + start)
+    if return_positions:
+        return _merge_value_position_batches(value_parts, position_parts, _light_batch_result_dtype(where_x))
+    if not value_parts:
         return np.empty(0, dtype=_light_batch_result_dtype(where_x))
-    return np.concatenate(parts) if len(parts) > 1 else parts[0]
+    return np.concatenate(value_parts) if len(value_parts) > 1 else value_parts[0]
 
 
 def _merge_result_batches(parts: list[np.ndarray], dtype: np.dtype) -> np.ndarray:
@@ -4549,6 +4601,70 @@ def _merge_result_batches(parts: list[np.ndarray], dtype: np.dtype) -> np.ndarra
     if not parts:
         return np.empty(0, dtype=dtype)
     return np.concatenate(parts) if len(parts) > 1 else parts[0]
+
+
+def _merge_value_position_batches(
+    value_batches: list[np.ndarray], position_batches: list[np.ndarray], dtype: np.dtype
+) -> tuple[np.ndarray, np.ndarray]:
+    return _merge_result_batches(value_batches, dtype), _merge_position_batches(position_batches)
+
+
+def _merge_segment_query_batches(
+    parts: list[np.ndarray] | list[tuple[np.ndarray, np.ndarray]],
+    dtype: np.dtype,
+    *,
+    return_positions: bool,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    if return_positions:
+        value_batches = []
+        position_batches = []
+        for values, positions in parts:
+            if len(values) > 0:
+                value_batches.append(values)
+            if len(positions) > 0:
+                position_batches.append(positions)
+        return _merge_value_position_batches(value_batches, position_batches, dtype)
+
+    value_batches = [part for part in parts if len(part) > 0]
+    if value_batches:
+        return np.concatenate(value_batches) if len(value_batches) > 1 else value_batches[0]
+    return np.empty(0, dtype=dtype)
+
+
+def _process_segment_query_batch(
+    units: np.ndarray,
+    expression: str,
+    operands: dict,
+    ne_args: dict,
+    where: dict,
+    plan: IndexPlan,
+    result_dtype: np.dtype,
+    return_positions: bool,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    from .lazyexpr import _get_result, ne_evaluate
+    from .utils import get_chunk_operands
+
+    chunk_operands = {}
+    value_parts = []
+    position_parts = []
+    for unit in units:
+        start = int(unit) * plan.segment_len
+        stop = min(start + plan.segment_len, plan.base.shape[0])
+        cslice = (slice(start, stop, 1),)
+        get_chunk_operands(operands, cslice, chunk_operands, plan.base.shape)
+        if return_positions:
+            match = ne_evaluate(expression, chunk_operands, **ne_args)
+            if np.any(match):
+                value_parts.append(np.require(chunk_operands["_where_x"][match], requirements="C"))
+                absolute = np.arange(start, stop, dtype=np.int64)
+                position_parts.append(absolute[match])
+        else:
+            result, _ = _get_result(expression, chunk_operands, ne_args, where)
+            if len(result) > 0:
+                value_parts.append(np.require(result, requirements="C"))
+    if return_positions:
+        return _merge_value_position_batches(value_parts, position_parts, result_dtype)
+    return _merge_result_batches(value_parts, result_dtype)
 
 
 def _reduced_positions_from_cython_batches(
@@ -5131,48 +5247,63 @@ def _where_output_dtype(where_x) -> np.dtype:
 
 
 def evaluate_segment_query(
-    expression: str, operands: dict, ne_args: dict, where: dict, plan: IndexPlan
-) -> np.ndarray:
-    from .lazyexpr import _get_result
-    from .utils import get_chunk_operands
-
+    expression: str,
+    operands: dict,
+    ne_args: dict,
+    where: dict,
+    plan: IndexPlan,
+    *,
+    return_positions: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     if plan.base is None or plan.candidate_units is None or plan.segment_len is None:
         raise ValueError("segment evaluation requires a segment-based plan")
 
     candidate_units = np.flatnonzero(plan.candidate_units).astype(np.intp, copy=False)
-
-    def process_batch(units: np.ndarray) -> np.ndarray:
-        chunk_operands = {}
-        parts = []
-        for unit in units:
-            start = int(unit) * plan.segment_len
-            stop = min(start + plan.segment_len, plan.base.shape[0])
-            cslice = (slice(start, stop, 1),)
-            get_chunk_operands(operands, cslice, chunk_operands, plan.base.shape)
-            result, _ = _get_result(expression, chunk_operands, ne_args, where)
-            if len(result) > 0:
-                parts.append(np.require(result, requirements="C"))
-        if not parts:
-            return np.empty(0, dtype=_where_output_dtype(where["_where_x"]))
-        return np.concatenate(parts) if len(parts) > 1 else parts[0]
+    result_dtype = _where_output_dtype(where["_where_x"])
 
     thread_count = _downstream_query_thread_count(len(candidate_units), plan)
     if thread_count <= 1:
-        parts = [process_batch(candidate_units)]
+        parts = [
+            _process_segment_query_batch(
+                candidate_units,
+                expression,
+                operands,
+                ne_args,
+                where,
+                plan,
+                result_dtype,
+                return_positions=return_positions,
+            )
+        ]
     else:
         batches = _chunk_batches(candidate_units, thread_count)
         with ThreadPoolExecutor(max_workers=thread_count) as executor:
-            parts = list(executor.map(process_batch, batches))
+            parts = list(
+                executor.map(
+                    _process_segment_query_batch,
+                    batches,
+                    [expression] * len(batches),
+                    [operands] * len(batches),
+                    [ne_args] * len(batches),
+                    [where] * len(batches),
+                    [plan] * len(batches),
+                    [result_dtype] * len(batches),
+                    [return_positions] * len(batches),
+                )
+            )
 
-    parts = [part for part in parts if len(part) > 0]
-    if parts:
-        return np.concatenate(parts) if len(parts) > 1 else parts[0]
-    return np.empty(0, dtype=_where_output_dtype(where["_where_x"]))
+    return _merge_segment_query_batches(parts, result_dtype, return_positions=return_positions)
 
 
 def evaluate_light_query(
-    expression: str, operands: dict, ne_args: dict, where: dict, plan: IndexPlan
-) -> np.ndarray:
+    expression: str,
+    operands: dict,
+    ne_args: dict,
+    where: dict,
+    plan: IndexPlan,
+    *,
+    return_positions: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     del expression, operands, ne_args
 
     if plan.base is None or plan.bucket_masks is None or plan.chunk_len is None or plan.bucket_len is None:
@@ -5182,10 +5313,15 @@ def evaluate_light_query(
     chunk_len = int(plan.base.chunks[0])
     where_x = where["_where_x"]
     candidate_chunk_ids = np.flatnonzero(np.any(plan.bucket_masks, axis=1)).astype(np.intp, copy=False)
+    result_dtype = _where_output_dtype(where["_where_x"])
 
     thread_count = _downstream_query_thread_count(len(candidate_chunk_ids), plan)
     if thread_count <= 1:
-        parts = [_process_light_chunk_batch(candidate_chunk_ids, where_x, plan, total_len, chunk_len)]
+        parts = [
+            _process_light_chunk_batch(
+                candidate_chunk_ids, where_x, plan, total_len, chunk_len, return_positions
+            )
+        ]
     else:
         batches = _chunk_batches(candidate_chunk_ids, thread_count)
         with ThreadPoolExecutor(max_workers=thread_count) as executor:
@@ -5197,10 +5333,21 @@ def evaluate_light_query(
                     [plan] * len(batches),
                     [total_len] * len(batches),
                     [chunk_len] * len(batches),
+                    [return_positions] * len(batches),
                 )
             )
 
-    return _merge_result_batches(parts, _where_output_dtype(where["_where_x"]))
+    if return_positions:
+        value_batches = []
+        position_batches = []
+        for values, positions in parts:
+            if len(values) > 0:
+                value_batches.append(values)
+            if len(positions) > 0:
+                position_batches.append(positions)
+        return _merge_value_position_batches(value_batches, position_batches, result_dtype)
+
+    return _merge_result_batches(parts, result_dtype)
 
 
 def _gather_positions(where_x, positions: np.ndarray) -> np.ndarray:
