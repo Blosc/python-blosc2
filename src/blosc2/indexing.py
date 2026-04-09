@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import enum
 import hashlib
 import math
@@ -51,6 +52,25 @@ _IN_MEMORY_INDEX_FINALIZERS: dict[int, weakref.finalize] = {}
 _PERSISTENT_INDEXES: dict[tuple[str, str | int], dict] = {}
 _DATA_CACHE: dict[tuple[int, str | None, str, str], np.ndarray] = {}
 _SIDECAR_HANDLE_CACHE: dict[tuple[int, str | None, str, str], object] = {}
+
+# ---------------------------------------------------------------------------
+# Query-result cache constants and global state
+# ---------------------------------------------------------------------------
+QUERY_CACHE_VLMETA_KEY = "_blosc2_query_cache"
+QUERY_CACHE_FORMAT_VERSION = 1
+QUERY_CACHE_MAX_ENTRY_CBYTES = 4096  # 4 KB per persistent entry
+QUERY_CACHE_MAX_MEM_CBYTES = 131_072  # 128 KB for the in-process hot cache
+QUERY_CACHE_MAX_PERSISTENT_CBYTES = 2_147_483_648  # 2 GB for the payload store
+
+# In-process hot cache: digest -> decoded np.ndarray of coordinates.
+_HOT_CACHE: dict[str, np.ndarray] = {}
+# Insertion-order list for LRU eviction.
+_HOT_CACHE_ORDER: list[str] = []
+# Total bytes of arrays currently in the hot cache.
+_HOT_CACHE_BYTES: int = 0
+# Persistent VLArray handles: resolved urlpath -> open VLArray object.
+_QUERY_CACHE_STORE_HANDLES: dict[str, object] = {}
+
 FULL_OOC_RUN_ITEMS = 2_000_000
 FULL_OOC_MERGE_BUFFER_ITEMS = 500_000
 FULL_SELECTIVE_OOC_MAX_SPANS = 128
@@ -265,6 +285,309 @@ def _save_store(array: blosc2.NDArray, store: dict) -> None:
         key = id(array)
         _IN_MEMORY_INDEXES[key] = store
         _IN_MEMORY_INDEX_FINALIZERS.setdefault(key, weakref.finalize(array, _cleanup_in_memory_store, key))
+
+
+# ---------------------------------------------------------------------------
+# Stage 1 – Query cache: metadata helpers and container plumbing
+# ---------------------------------------------------------------------------
+
+
+def _query_cache_payload_path(array: blosc2.NDArray) -> str:
+    """Return the path for the persistent query-cache VLArray payload store."""
+    path, root = _sanitize_sidecar_root(array.urlpath)
+    return str(path.with_name(f"{root}.__query_cache__.b2frame"))
+
+
+def _default_query_cache_catalog(payload_path: str) -> dict:
+    return {
+        "version": QUERY_CACHE_FORMAT_VERSION,
+        "payload_ref": {"kind": "urlpath", "version": 1, "urlpath": payload_path},
+        "max_entry_cbytes": QUERY_CACHE_MAX_ENTRY_CBYTES,
+        "max_mem_cbytes": QUERY_CACHE_MAX_MEM_CBYTES,
+        "max_persistent_cbytes": QUERY_CACHE_MAX_PERSISTENT_CBYTES,
+        "persistent_cbytes": 0,
+        "next_slot": 0,
+        "entries": {},
+    }
+
+
+def _load_query_cache_catalog(array: blosc2.NDArray) -> dict | None:
+    """Read the query-cache catalog from *array* vlmeta, or return None."""
+    if not _is_persistent_array(array):
+        return None
+    try:
+        cat = array.schunk.vlmeta[QUERY_CACHE_VLMETA_KEY]
+    except KeyError:
+        return None
+    if not isinstance(cat, dict) or cat.get("version") != QUERY_CACHE_FORMAT_VERSION:
+        return None
+    return cat
+
+
+def _save_query_cache_catalog(array: blosc2.NDArray, catalog: dict) -> None:
+    """Write *catalog* back to *array* vlmeta."""
+    array.schunk.vlmeta[QUERY_CACHE_VLMETA_KEY] = catalog
+
+
+def _open_query_cache_store(array: blosc2.NDArray, *, create: bool = False):
+    """Return an open (writable) VLArray for the persistent payload store.
+
+    Returns ``None`` if the array is not persistent.  When *create* is True the
+    store is created if it does not yet exist.
+    """
+    if not _is_persistent_array(array):
+        return None
+    path = _query_cache_payload_path(array)
+    cached = _QUERY_CACHE_STORE_HANDLES.get(path)
+    if cached is not None:
+        return cached
+    if Path(path).exists():
+        vla = blosc2.VLArray(storage=blosc2.Storage(urlpath=path, mode="a"))
+        _QUERY_CACHE_STORE_HANDLES[path] = vla
+        return vla
+    if not create:
+        return None
+    vla = blosc2.VLArray(storage=blosc2.Storage(urlpath=path, mode="w"))
+    _QUERY_CACHE_STORE_HANDLES[path] = vla
+    return vla
+
+
+def _close_query_cache_store(path: str) -> None:
+    """Drop a cached VLArray handle for *path*."""
+    _QUERY_CACHE_STORE_HANDLES.pop(path, None)
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 – Cache key normalization
+# ---------------------------------------------------------------------------
+
+
+def _normalize_query_descriptor(
+    expression: str,
+    tokens: list[str],
+    order: list[str] | None,
+) -> dict:
+    """Build a canonical, order-stable query descriptor for cache keying."""
+    try:
+        normalized_expr = ast.unparse(ast.parse(expression, mode="eval"))
+    except Exception:
+        normalized_expr = expression
+    return {
+        "version": QUERY_CACHE_FORMAT_VERSION,
+        "kind": "indices",
+        "tokens": sorted(tokens),
+        "expr": normalized_expr,
+        "order": sorted(order) if order is not None else None,
+    }
+
+
+def _query_cache_digest(descriptor: dict) -> str:
+    """Return a 32-character hex digest for *descriptor*."""
+    import json
+
+    canonical = json.dumps(descriptor, sort_keys=True, separators=(",", ":"))
+    return hashlib.blake2b(canonical.encode(), digest_size=16).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 – Payload encode/decode and hot/persistent cache helpers
+# ---------------------------------------------------------------------------
+
+
+def _encode_coords_payload(coords: np.ndarray) -> dict:
+    """Encode a coordinate array as a compact msgpack-safe mapping."""
+    dtype = np.dtype("<u4") if coords.max() <= np.iinfo(np.uint32).max else np.dtype("<u8")
+    return {
+        "version": QUERY_CACHE_FORMAT_VERSION,
+        "dtype": dtype.str,
+        "nrows": len(coords),
+        "data": coords.astype(dtype).tobytes(),
+    }
+
+
+def _decode_coords_payload(payload: dict) -> np.ndarray:
+    """Reconstruct a coordinate array from a cached payload mapping."""
+    return np.frombuffer(payload["data"], dtype=np.dtype(payload["dtype"])).copy()
+
+
+def _hot_cache_get(digest: str) -> np.ndarray | None:
+    """Return the cached coordinate array for *digest*, or ``None``."""
+    arr = _HOT_CACHE.get(digest)
+    if arr is None:
+        return None
+    # Move to most-recently-used position.
+    with contextlib.suppress(ValueError):
+        _HOT_CACHE_ORDER.remove(digest)
+    _HOT_CACHE_ORDER.append(digest)
+    return arr
+
+
+def _hot_cache_put(digest: str, coords: np.ndarray) -> None:
+    """Insert *coords* into the hot cache, evicting LRU entries if needed."""
+    global _HOT_CACHE_BYTES
+    entry_bytes = coords.nbytes
+    if entry_bytes > QUERY_CACHE_MAX_MEM_CBYTES:
+        # Single entry too large; skip.
+        return
+    # If already present, remove old accounting first.
+    if digest in _HOT_CACHE:
+        _HOT_CACHE_BYTES -= _HOT_CACHE[digest].nbytes
+        with contextlib.suppress(ValueError):
+            _HOT_CACHE_ORDER.remove(digest)
+    # Evict LRU entries until there is room.
+    while _HOT_CACHE_ORDER and _HOT_CACHE_BYTES + entry_bytes > QUERY_CACHE_MAX_MEM_CBYTES:
+        oldest = _HOT_CACHE_ORDER.pop(0)
+        evicted = _HOT_CACHE.pop(oldest, None)
+        if evicted is not None:
+            _HOT_CACHE_BYTES -= evicted.nbytes
+    _HOT_CACHE[digest] = coords
+    _HOT_CACHE_ORDER.append(digest)
+    _HOT_CACHE_BYTES += entry_bytes
+
+
+def _hot_cache_clear() -> None:
+    """Clear all in-process hot cache entries."""
+    global _HOT_CACHE_BYTES
+    _HOT_CACHE.clear()
+    _HOT_CACHE_ORDER.clear()
+    _HOT_CACHE_BYTES = 0
+
+
+def _persistent_cache_lookup(array: blosc2.NDArray, digest: str) -> np.ndarray | None:
+    """Return coordinates from the persistent cache for *digest*, or ``None``."""
+    catalog = _load_query_cache_catalog(array)
+    if catalog is None:
+        return None
+    entry = catalog.get("entries", {}).get(digest)
+    if entry is None:
+        return None
+    slot = entry["slot"]
+    store = _open_query_cache_store(array)
+    if store is None or slot >= len(store):
+        return None
+    payload = store[slot]
+    if not isinstance(payload, dict) or payload.get("version") != QUERY_CACHE_FORMAT_VERSION:
+        return None
+    try:
+        coords = _decode_coords_payload(payload)
+    except Exception:
+        return None
+    return coords
+
+
+def _persistent_cache_insert(
+    array: blosc2.NDArray,
+    digest: str,
+    coords: np.ndarray,
+    query_descriptor: dict,
+) -> bool:
+    """Append *coords* to the persistent cache and update the catalog.
+
+    Returns ``True`` on success, ``False`` if the entry is too large or the
+    persistent budget is exceeded.
+    """
+    catalog = _load_query_cache_catalog(array)
+    payload_path = _query_cache_payload_path(array)
+    if catalog is None:
+        catalog = _default_query_cache_catalog(payload_path)
+
+    payload_mapping = _encode_coords_payload(coords)
+    raw_data = payload_mapping["data"]
+
+    # Measure the compressed size of the coordinate bytes directly so the
+    # per-entry limit is independent of VLArray/msgpack encoding overhead.
+    coord_dtype = np.dtype(payload_mapping["dtype"])
+    compressed_coords = blosc2.compress2(raw_data, cparams=blosc2.CParams(typesize=coord_dtype.itemsize))
+    cbytes = len(compressed_coords)
+
+    max_entry = catalog.get("max_entry_cbytes", QUERY_CACHE_MAX_ENTRY_CBYTES)
+    if cbytes > max_entry:
+        return False
+
+    max_persistent = catalog.get("max_persistent_cbytes", QUERY_CACHE_MAX_PERSISTENT_CBYTES)
+    current_persistent = int(catalog.get("persistent_cbytes", 0))
+    if current_persistent + cbytes > max_persistent:
+        return False
+
+    store = _open_query_cache_store(array, create=True)
+    if store is None:
+        return False
+
+    slot = len(store)
+    store.append(payload_mapping)
+
+    catalog["entries"][digest] = {
+        "slot": slot,
+        "cbytes": cbytes,
+        "nrows": len(coords),
+        "dtype": payload_mapping["dtype"],
+        "query": query_descriptor,
+    }
+    catalog["persistent_cbytes"] = current_persistent + cbytes
+    catalog["next_slot"] = slot + 1
+    _save_query_cache_catalog(array, catalog)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Stage 5 – Query cache invalidation
+# ---------------------------------------------------------------------------
+
+
+def _invalidate_query_cache(array: blosc2.NDArray) -> None:
+    """Drop the entire query cache for *array* (persistent file + hot cache)."""
+    if not _is_persistent_array(array):
+        _hot_cache_clear()
+        return
+    payload_path = _query_cache_payload_path(array)
+    _close_query_cache_store(payload_path)
+    blosc2.remove_urlpath(payload_path)
+    # Clear the catalog in vlmeta.
+    with contextlib.suppress(KeyError, Exception):
+        del array.schunk.vlmeta[QUERY_CACHE_VLMETA_KEY]
+    _hot_cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# Public helper: cached coordinate lookup (used by lazyexpr.py integration)
+# ---------------------------------------------------------------------------
+
+
+def get_cached_coords(
+    array: blosc2.NDArray,
+    expression: str,
+    tokens: list[str],
+    order: list[str] | None,
+) -> np.ndarray | None:
+    """Return cached coordinates for *expression*/*tokens*/*order*, or ``None``."""
+    descriptor = _normalize_query_descriptor(expression, tokens, order)
+    digest = _query_cache_digest(descriptor)
+    # 1. In-process hot cache.
+    coords = _hot_cache_get(digest)
+    if coords is not None:
+        return coords
+    # 2. Persistent cache (persistent arrays only).
+    if _is_persistent_array(array):
+        coords = _persistent_cache_lookup(array, digest)
+        if coords is not None:
+            _hot_cache_put(digest, coords)
+            return coords
+    return None
+
+
+def store_cached_coords(
+    array: blosc2.NDArray,
+    expression: str,
+    tokens: list[str],
+    order: list[str] | None,
+    coords: np.ndarray,
+) -> None:
+    """Store *coords* in both the hot cache and (if persistent) the payload store."""
+    descriptor = _normalize_query_descriptor(expression, tokens, order)
+    digest = _query_cache_digest(descriptor)
+    _hot_cache_put(digest, coords)
+    if _is_persistent_array(array):
+        _persistent_cache_insert(array, digest, coords, descriptor)
 
 
 def _supported_index_dtype(dtype: np.dtype) -> bool:
@@ -2983,6 +3306,7 @@ def append_to_indexes(array: blosc2.NDArray, old_size: int, appended_values: np.
         descriptor["blocks"] = tuple(array.blocks)
         descriptor["stale"] = False
     _save_store(array, store)
+    _invalidate_query_cache(array)
 
 
 def drop_index(array: blosc2.NDArray, field: str | None = None, name: str | None = None) -> None:
@@ -2993,6 +3317,7 @@ def drop_index(array: blosc2.NDArray, field: str | None = None, name: str | None
     descriptor = store["indexes"].pop(token)
     _save_store(array, store)
     _drop_descriptor_sidecars(descriptor)
+    _invalidate_query_cache(array)
 
 
 def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | None = None) -> dict:
@@ -3077,6 +3402,7 @@ def compact_index(array: blosc2.NDArray, field: str | None = None, name: str | N
             _replace_full_descriptor(array, descriptor, sorted_values, positions, descriptor["persistent"])
         _clear_full_merge_cache(array, descriptor["token"])
         _save_store(array, store)
+        _invalidate_query_cache(array)
         return _copy_descriptor(descriptor)
 
     dtype = np.dtype(descriptor["dtype"])
@@ -3112,6 +3438,7 @@ def compact_index(array: blosc2.NDArray, field: str | None = None, name: str | N
 
     _clear_full_merge_cache(array, descriptor["token"])
     _save_store(array, store)
+    _invalidate_query_cache(array)
     return _copy_descriptor(descriptor)
 
 
@@ -3137,6 +3464,7 @@ def mark_indexes_stale(array: blosc2.NDArray) -> None:
             changed = True
     if changed:
         _save_store(array, store)
+        _invalidate_query_cache(array)
 
 
 def _descriptor_for(array: blosc2.NDArray, field: str | None) -> dict | None:
