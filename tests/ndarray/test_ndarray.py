@@ -115,6 +115,21 @@ def test_ndarray_info_has_human_sizes():
     assert "cbytes" in text
 
 
+def test_fields_assignment_requires_field_view_slice():
+    dtype = np.dtype([("id", np.float64), ("payload", np.int32)])
+    array = blosc2.zeros(4, dtype=dtype)
+
+    with pytest.raises(
+        TypeError, match=r'assign through the field view, e\.g\. array\.fields\["id"\]\[:\] = values'
+    ):
+        array.fields["id"] = np.arange(4, dtype=np.float64)
+
+    np.testing.assert_array_equal(array[:], np.zeros(4, dtype=dtype))
+
+    array.fields["id"][:] = np.arange(4, dtype=np.float64)
+    np.testing.assert_array_equal(array.fields["id"][:], np.arange(4, dtype=np.float64))
+
+
 @pytest.mark.parametrize(
     ("shape", "newshape", "chunks", "blocks"),
     [

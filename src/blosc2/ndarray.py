@@ -13,6 +13,7 @@ import math
 import tempfile
 from abc import abstractmethod
 from collections import OrderedDict, namedtuple
+from collections.abc import Mapping
 from functools import reduce
 from itertools import product
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
@@ -141,6 +142,41 @@ class Array(Protocol):
     def __getitem__(self, key: Any) -> Any:
         """Get items from the array."""
         ...
+
+
+class FieldsAccessor(Mapping):
+    """Read-only mapping of structured field views."""
+
+    def __init__(self, field_views: dict[str, Any]):
+        self._field_views = field_views
+
+    def __getitem__(self, key: str) -> Any:
+        return self._field_views[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._field_views)
+
+    def __len__(self) -> int:
+        return len(self._field_views)
+
+    def __setitem__(self, key: str, value: object) -> None:
+        raise TypeError(f'assign through the field view, e.g. array.fields["{key}"][:] = values')
+
+    def copy(self) -> dict[str, Any]:
+        return dict(self._field_views)
+
+    def __or__(self, other: object) -> dict[str, Any]:
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        return self.copy() | dict(other)
+
+    def __ror__(self, other: object) -> dict[str, Any]:
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        return dict(other) | self.copy()
+
+    def __repr__(self) -> str:
+        return repr(self._field_views)
 
 
 def is_documented_by(original):
@@ -3695,10 +3731,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         base = kwargs.pop("_base", None)
         super().__init__(kwargs["_array"], base=base)
         # Accessor to fields
-        self._fields = {}
+        field_views = {}
         if self.dtype.fields:
             for field in self.dtype.fields:
-                self._fields[field] = NDField(self, field)
+                field_views[field] = NDField(self, field)
+        self._fields = FieldsAccessor(field_views)
 
     @property
     def cparams(self) -> blosc2.CParams:
@@ -3747,14 +3784,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return self.schunk.vlmeta
 
     @property
-    def fields(self) -> dict:
+    def fields(self) -> Mapping[str, NDField]:
         """
-        Dictionary with the fields of the structured array.
+        Read-only mapping with the fields of the structured array.
 
         Returns
         -------
-        fields: dict
-            A dictionary with the fields of the structured array.
+        fields: Mapping
+            A read-only mapping with the fields of the structured array.
 
         See Also
         --------
@@ -3770,6 +3807,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> sa = blosc2.zeros(shape, dtype=dtype)
         >>> # Check that fields are equal
         >>> assert sa.fields['a'] == sa.fields['b']
+        >>> # Assign through the field view
+        >>> sa.fields['a'][:] = 1
         """
         return self._fields
 
