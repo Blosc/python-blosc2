@@ -70,6 +70,8 @@ _HOT_CACHE_ORDER: list[tuple[tuple[str, str | int], str]] = []
 _HOT_CACHE_BYTES: int = 0
 # Persistent VLArray handles: resolved urlpath -> open VLArray object.
 _QUERY_CACHE_STORE_HANDLES: dict[str, object] = {}
+# Cached mmap handles for data arrays used in full-query gather: urlpath -> NDArray.
+_GATHER_MMAP_HANDLES: dict[str, object] = {}
 _HOT_CACHE_GLOBAL_SCOPE = ("global", 0)
 
 FULL_OOC_RUN_ITEMS = 2_000_000
@@ -668,6 +670,11 @@ def _invalidate_query_cache(array: blosc2.NDArray) -> None:
     with contextlib.suppress(KeyError, Exception):
         del array.schunk.vlmeta[QUERY_CACHE_VLMETA_KEY]
     _hot_cache_clear(scope=scope)
+    # Drop any cached mmap handle for this array's data file so a re-opened or
+    # extended array is not served from a stale mapping.
+    urlpath = getattr(array, "urlpath", None)
+    if urlpath is not None:
+        _GATHER_MMAP_HANDLES.pop(str(urlpath), None)
 
 
 # ---------------------------------------------------------------------------
@@ -4628,6 +4635,25 @@ def _light_worker_source(where_x):
     return where_x
 
 
+def _gather_mmap_source(where_x):
+    """Return a cached mmap handle for *where_x* for use in repeated gather operations.
+
+    On Windows mmap is disabled (see ``_INDEX_MMAP_MODE``), so the original handle
+    is returned unchanged.
+    """
+    if _INDEX_MMAP_MODE is None:
+        return where_x
+    urlpath = getattr(where_x, "urlpath", None)
+    if not _supports_block_reads(where_x) or urlpath is None:
+        return where_x
+    urlpath = str(urlpath)
+    handle = _GATHER_MMAP_HANDLES.get(urlpath)
+    if handle is None:
+        handle = blosc2.open(urlpath, mmap_mode=_INDEX_MMAP_MODE)
+        _GATHER_MMAP_HANDLES[urlpath] = handle
+    return handle
+
+
 def _light_match_from_span(span: np.ndarray, plan: IndexPlan) -> np.ndarray:
     if plan.target is not None and plan.target.get("source") == "expression":
         field_values = _values_from_numpy_target(span, plan.target)
@@ -5531,16 +5557,19 @@ def evaluate_full_query(where: dict, plan: IndexPlan) -> np.ndarray:
     if plan.exact_positions is None:
         raise ValueError("full evaluation requires exact positions")
     if plan.base is not None:
+        # Use a cached mmap handle when available so blosc2_schunk_get_lazychunk can return
+        # a zero-copy pointer into the mapped region instead of malloc+pread per block.
+        gather_source = _gather_mmap_source(where["_where_x"])
         block_gather_threshold = int(plan.base.blocks[0])
         if len(plan.exact_positions) <= block_gather_threshold:
             return _gather_positions_by_block(
-                where["_where_x"],
+                gather_source,
                 plan.exact_positions,
                 int(plan.base.chunks[0]),
                 int(plan.base.blocks[0]),
                 int(plan.base.shape[0]),
             )
-        return _gather_positions_by_chunk(where["_where_x"], plan.exact_positions, int(plan.base.chunks[0]))
+        return _gather_positions_by_chunk(gather_source, plan.exact_positions, int(plan.base.chunks[0]))
     return _gather_positions(where["_where_x"], plan.exact_positions)
 
 
