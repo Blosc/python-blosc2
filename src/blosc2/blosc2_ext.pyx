@@ -377,7 +377,7 @@ cdef extern from "blosc2.h":
     blosc2_schunk *blosc2_schunk_open_offset(const char* urlpath, int64_t offset)
     blosc2_schunk* blosc2_schunk_open_offset_udio(const char* urlpath, int64_t offset, const blosc2_io *udio)
 
-    int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, c_bool* needs_free)
+    int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, c_bool* needs_free) nogil
     void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, c_bool avoid_cframe_free)
     int64_t blosc2_schunk_to_file(blosc2_schunk* schunk, const char* urlpath)
     int64_t blosc2_schunk_free(blosc2_schunk *schunk)
@@ -1476,6 +1476,10 @@ cdef class SChunk:
         cdef int64_t index
         cdef Py_buffer buf
         cdef uint8_t *buf_ptr
+        cdef int comp_size
+        cdef int32_t csize
+        cdef uint8_t* chunk
+        cdef int32_t len_chunk
         if data is not None and len(data) > 0:
             PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
             buf_ptr = <uint8_t *> buf.buf
@@ -1486,8 +1490,27 @@ cdef class SChunk:
                 if i == (nchunks - 1):
                     len_chunk = len_data - i * chunksize
                 index = i * chunksize
-                nchunks_ = blosc2_schunk_append_buffer(self.schunk, buf_ptr + index, len_chunk)
+                csize = <int32_t> (len_chunk + BLOSC2_MAX_OVERHEAD)
+                chunk = <uint8_t*> malloc(csize)
+                self.schunk.current_nchunk = i
+                if RELEASEGIL:
+                    with nogil:
+                        comp_size = blosc2_compress_ctx(self.schunk.cctx, buf_ptr + index, len_chunk, chunk, csize)
+                else:
+                    comp_size = blosc2_compress_ctx(self.schunk.cctx, buf_ptr + index, len_chunk, chunk, csize)
+                if comp_size < 0:
+                    free(chunk)
+                    PyBuffer_Release(&buf)
+                    raise RuntimeError("Could not compress the data")
+                elif comp_size == 0:
+                    free(chunk)
+                    PyBuffer_Release(&buf)
+                    raise RuntimeError("The result could not fit")
+                chunk = <uint8_t*> realloc(chunk, comp_size)
+                _check_comp_length('chunk', comp_size)
+                nchunks_ = blosc2_schunk_append_chunk(self.schunk, chunk, False)
                 if nchunks_ != (i + 1):
+                    free(chunk)
                     PyBuffer_Release(&buf)
                     raise RuntimeError("An error occurred while appending the chunks")
             PyBuffer_Release(&buf)
@@ -1622,10 +1645,28 @@ cdef class SChunk:
     def append_data(self, data):
         cdef Py_buffer buf
         PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
-        rc = blosc2_schunk_append_buffer(self.schunk, buf.buf, <int32_t> buf.len)
+        cdef int size
+        cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
+        cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
+        self.schunk.current_nchunk = self.schunk.nchunks
+        if RELEASEGIL:
+            with nogil:
+                size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
+        else:
+            size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
         PyBuffer_Release(&buf)
+        if size < 0:
+            free(chunk)
+            raise RuntimeError("Could not compress the data")
+        elif size == 0:
+            free(chunk)
+            raise RuntimeError("The result could not fit")
+        chunk = <uint8_t*> realloc(chunk, size)
+        _check_comp_length('chunk', size)
+        rc = blosc2_schunk_append_chunk(self.schunk, chunk, False)
         if rc < 0:
-            raise RuntimeError("Could not append the buffer")
+            free(chunk)
+            raise RuntimeError("Could not append the chunk")
         return rc
 
     def fill_special(self, nitems, special_value, value):
@@ -1899,6 +1940,10 @@ cdef class SChunk:
         cdef int64_t data_start
         cdef uint8_t *data
         cdef uint8_t *chunk
+        cdef int32_t alloc_len
+        cdef int32_t chunk_nbytes
+        cdef int32_t chunksize
+        cdef int comp_rc
         if buf.len < nbytes:
             raise ValueError("Not enough data for writing the slice")
 
@@ -1922,9 +1967,13 @@ cdef class SChunk:
                 data_start = self.schunk.nbytes - (self.schunk.nchunks - 1) * self.schunk.chunksize
                 memcpy(data + data_start, buf_ptr + buf_pos, nbytes_copy)
                 chunk = <uint8_t *> malloc(chunk_nbytes + BLOSC2_MAX_OVERHEAD)
-                rc = blosc2_compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk, chunk_nbytes + BLOSC2_MAX_OVERHEAD)
+                if RELEASEGIL:
+                    with nogil:
+                        comp_rc = blosc2_compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk, chunk_nbytes + BLOSC2_MAX_OVERHEAD)
+                else:
+                    comp_rc = blosc2_compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk, chunk_nbytes + BLOSC2_MAX_OVERHEAD)
                 free(data)
-                if rc < 0:
+                if comp_rc < 0:
                     free(chunk)
                     raise RuntimeError("Error while compressing the data")
                 rc = blosc2_schunk_update_chunk(self.schunk, self.schunk.nchunks - 1, chunk, True)
@@ -1942,8 +1991,21 @@ cdef class SChunk:
                         chunksize = self.schunk.chunksize
                     else:
                         chunksize = (stop * self.schunk.typesize) % self.schunk.chunksize
-                    rc = blosc2_schunk_append_buffer(self.schunk, buf_ptr + buf_pos, chunksize)
+                    alloc_len = <int32_t> (chunksize + BLOSC2_MAX_OVERHEAD)
+                    chunk = <uint8_t*> malloc(alloc_len)
+                    self.schunk.current_nchunk = self.schunk.nchunks
+                    if RELEASEGIL:
+                        with nogil:
+                            comp_rc = blosc2_compress_ctx(self.schunk.cctx, buf_ptr + buf_pos, chunksize, chunk, alloc_len)
+                    else:
+                        comp_rc = blosc2_compress_ctx(self.schunk.cctx, buf_ptr + buf_pos, chunksize, chunk, alloc_len)
+                    if comp_rc < 0:
+                        free(chunk)
+                        raise RuntimeError("Error while compressing the chunk")
+                    chunk = <uint8_t*> realloc(chunk, comp_rc)
+                    rc = blosc2_schunk_append_chunk(self.schunk, chunk, False)
                     if rc < 0:
+                        free(chunk)
                         raise RuntimeError("Error while appending the chunk")
                     buf_pos += chunksize
         else:
@@ -1955,7 +2017,12 @@ cdef class SChunk:
     def to_cframe(self):
         cdef c_bool needs_free
         cdef uint8_t *cframe
-        cframe_len = blosc2_schunk_to_buffer(self.schunk, &cframe, &needs_free)
+        cdef int64_t cframe_len
+        if RELEASEGIL:
+            with nogil:
+                cframe_len = blosc2_schunk_to_buffer(self.schunk, &cframe, &needs_free)
+        else:
+            cframe_len = blosc2_schunk_to_buffer(self.schunk, &cframe, &needs_free)
         if cframe_len < 0:
             raise RuntimeError("Error while getting the cframe")
         out = PyBytes_FromStringAndSize(<char*>cframe, cframe_len)
