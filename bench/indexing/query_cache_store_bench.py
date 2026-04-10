@@ -22,7 +22,7 @@ import numpy as np
 import blosc2
 from blosc2 import indexing
 
-STRATEGIES = ("baseline", "cache_catalog", "skip_cbytes", "defer_vlmeta", "all")
+STRATEGIES = ("baseline", "cache_catalog", "skip_observer", "defer_vlmeta", "all")
 
 
 @dataclass
@@ -89,7 +89,7 @@ def _load_or_create_store(arr: blosc2.NDArray, state: InsertState | None, strate
 
 
 def _entry_nbytes(coords: np.ndarray, payload_mapping: dict, strategy: str) -> int:
-    if strategy in {"skip_cbytes", "all"}:
+    if strategy in {"skip_observer", "all"}:
         return len(payload_mapping["data"])
     return indexing._query_cache_entry_nbytes(coords)
 

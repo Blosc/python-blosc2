@@ -59,8 +59,8 @@ _SIDECAR_HANDLE_CACHE: dict[tuple[int, str | None, str, str], object] = {}
 QUERY_CACHE_VLMETA_KEY = "_blosc2_query_cache"
 QUERY_CACHE_FORMAT_VERSION = 1
 QUERY_CACHE_MAX_ENTRY_NBYTES = 65_536  # 64 KB of logical int64 positions per persistent entry
-QUERY_CACHE_MAX_MEM_CBYTES = 131_072  # 128 KB for the in-process hot cache
-QUERY_CACHE_MAX_PERSISTENT_NBYTES = 2_147_483_648  # 2 GB of logical int64 positions in the payload store
+QUERY_CACHE_MAX_MEM_NBYTES = 131_072  # 128 KB for the in-process hot cache
+QUERY_CACHE_MAX_PERSISTENT_NBYTES = 4 * 1024 * 1024  # 4 MB of logical int64 positions in the payload store
 
 # In-process hot cache: (array-scope, digest) -> decoded np.ndarray of coordinates.
 _HOT_CACHE: dict[tuple[tuple[str, str | int], str], np.ndarray] = {}
@@ -325,7 +325,7 @@ def _default_query_cache_catalog(payload_path: str) -> dict:
         "version": QUERY_CACHE_FORMAT_VERSION,
         "payload_ref": {"kind": "urlpath", "version": 1, "urlpath": payload_path},
         "max_entry_nbytes": QUERY_CACHE_MAX_ENTRY_NBYTES,
-        "max_mem_cbytes": QUERY_CACHE_MAX_MEM_CBYTES,
+        "max_mem_nbytes": QUERY_CACHE_MAX_MEM_NBYTES,
         "max_persistent_nbytes": QUERY_CACHE_MAX_PERSISTENT_NBYTES,
         "persistent_nbytes": 0,
         "next_slot": 0,
@@ -334,41 +334,17 @@ def _default_query_cache_catalog(payload_path: str) -> dict:
 
 
 def _normalize_query_cache_catalog(catalog: dict) -> dict:
-    """Normalize legacy compressed-byte cache catalogs to logical-byte accounting."""
+    """Ensure the prototype query-cache catalog has the current nbytes schema."""
     if not isinstance(catalog, dict):
         return _default_query_cache_catalog("")
     catalog.setdefault("version", QUERY_CACHE_FORMAT_VERSION)
+    catalog.setdefault("payload_ref", {"kind": "urlpath", "version": 1, "urlpath": ""})
+    catalog.setdefault("max_entry_nbytes", QUERY_CACHE_MAX_ENTRY_NBYTES)
+    catalog.setdefault("max_mem_nbytes", QUERY_CACHE_MAX_MEM_NBYTES)
+    catalog.setdefault("max_persistent_nbytes", QUERY_CACHE_MAX_PERSISTENT_NBYTES)
+    catalog.setdefault("persistent_nbytes", 0)
+    catalog.setdefault("next_slot", 0)
     catalog.setdefault("entries", {})
-
-    if "max_entry_nbytes" not in catalog:
-        catalog["max_entry_nbytes"] = int(catalog.pop("max_entry_cbytes", QUERY_CACHE_MAX_ENTRY_NBYTES))
-    else:
-        catalog.pop("max_entry_cbytes", None)
-
-    catalog.setdefault("max_mem_cbytes", QUERY_CACHE_MAX_MEM_CBYTES)
-
-    if "max_persistent_nbytes" not in catalog:
-        catalog["max_persistent_nbytes"] = int(
-            catalog.pop("max_persistent_cbytes", QUERY_CACHE_MAX_PERSISTENT_NBYTES)
-        )
-    else:
-        catalog.pop("max_persistent_cbytes", None)
-
-    if "persistent_nbytes" not in catalog:
-        catalog["persistent_nbytes"] = int(catalog.pop("persistent_cbytes", 0))
-    else:
-        catalog.pop("persistent_cbytes", None)
-
-    total_nbytes = 0
-    for entry in catalog["entries"].values():
-        if "nbytes" not in entry:
-            entry["nbytes"] = int(entry.pop("cbytes", 0))
-        else:
-            entry.pop("cbytes", None)
-        total_nbytes += int(entry.get("nbytes", 0))
-
-    if catalog["entries"]:
-        catalog["persistent_nbytes"] = total_nbytes
     return catalog
 
 
@@ -498,7 +474,7 @@ def _hot_cache_put(digest: str, coords: np.ndarray, scope: tuple[str, str | int]
     global _HOT_CACHE_BYTES
     key = _hot_cache_key(digest, scope)
     entry_bytes = coords.nbytes
-    if entry_bytes > QUERY_CACHE_MAX_MEM_CBYTES:
+    if entry_bytes > QUERY_CACHE_MAX_MEM_NBYTES:
         # Single entry too large; skip.
         return
     # If already present, remove old accounting first.
@@ -507,7 +483,7 @@ def _hot_cache_put(digest: str, coords: np.ndarray, scope: tuple[str, str | int]
         with contextlib.suppress(ValueError):
             _HOT_CACHE_ORDER.remove(key)
     # Evict LRU entries until there is room.
-    while _HOT_CACHE_ORDER and _HOT_CACHE_BYTES + entry_bytes > QUERY_CACHE_MAX_MEM_CBYTES:
+    while _HOT_CACHE_ORDER and _HOT_CACHE_BYTES + entry_bytes > QUERY_CACHE_MAX_MEM_NBYTES:
         oldest = _HOT_CACHE_ORDER.pop(0)
         evicted = _HOT_CACHE.pop(oldest, None)
         if evicted is not None:
@@ -558,71 +534,21 @@ def _query_cache_entry_nbytes(coords: np.ndarray) -> int:
     return int(np.asarray(coords).size) * np.dtype(np.int64).itemsize
 
 
-def _query_cache_entries_fifo(catalog: dict) -> list[tuple[str, dict]]:
-    """Return catalog entries ordered from oldest to newest insertion."""
-    entries = catalog.get("entries", {})
-    return sorted(entries.items(), key=lambda item: int(item[1]["slot"]))
-
-
-def _query_cache_rebuild_store(
-    array: blosc2.NDArray,
-    catalog: dict,
-    retained_entries: list[tuple[str, dict]],
-    appended: tuple[str, dict, dict, int] | None = None,
-) -> bool:
-    """Rewrite the persistent store with retained FIFO entries and an optional appended entry."""
+def _reset_persistent_query_cache_catalog(array: blosc2.NDArray, catalog: dict | None = None) -> dict:
+    """Drop persistent cache storage and return a fresh empty catalog preserving limits."""
     payload_path = _query_cache_payload_path(array)
-    temp_path = f"{payload_path}.tmp"
     _close_query_cache_store(payload_path)
-    _close_query_cache_store(temp_path)
-    blosc2.remove_urlpath(temp_path)
-
-    old_store = _open_query_cache_store(array)
-    temp_store = blosc2.VLArray(storage=blosc2.Storage(urlpath=temp_path, mode="w"))
-    new_entries = {}
-    persistent_nbytes = 0
-    slot = 0
-
-    try:
-        for digest, entry in retained_entries:
-            if old_store is None or int(entry["slot"]) >= len(old_store):
-                continue
-            payload = old_store[int(entry["slot"])]
-            if not isinstance(payload, dict) or payload.get("version") != QUERY_CACHE_FORMAT_VERSION:
-                continue
-            temp_store.append(payload)
-            updated = entry.copy()
-            updated["slot"] = slot
-            new_entries[digest] = updated
-            persistent_nbytes += int(updated["nbytes"])
-            slot += 1
-
-        if appended is not None:
-            digest, payload_mapping, query_descriptor, nbytes = appended
-            temp_store.append(payload_mapping)
-            new_entries[digest] = {
-                "slot": slot,
-                "nbytes": nbytes,
-                "nrows": payload_mapping["nrows"],
-                "dtype": payload_mapping["dtype"],
-                "query": query_descriptor,
-            }
-            persistent_nbytes += nbytes
-            slot += 1
-    finally:
-        del temp_store
-        del old_store
-        _close_query_cache_store(payload_path)
-        _close_query_cache_store(temp_path)
-
     blosc2.remove_urlpath(payload_path)
-    os.replace(temp_path, payload_path)
 
-    catalog["entries"] = new_entries
-    catalog["persistent_nbytes"] = persistent_nbytes
-    catalog["next_slot"] = slot
-    _save_query_cache_catalog(array, catalog)
-    return True
+    fresh = _default_query_cache_catalog(payload_path)
+    if catalog is not None:
+        fresh["max_entry_nbytes"] = int(catalog.get("max_entry_nbytes", QUERY_CACHE_MAX_ENTRY_NBYTES))
+        fresh["max_mem_nbytes"] = int(catalog.get("max_mem_nbytes", QUERY_CACHE_MAX_MEM_NBYTES))
+        fresh["max_persistent_nbytes"] = int(
+            catalog.get("max_persistent_nbytes", QUERY_CACHE_MAX_PERSISTENT_NBYTES)
+        )
+    _save_query_cache_catalog(array, fresh)
+    return fresh
 
 
 def _persistent_cache_insert(
@@ -653,19 +579,10 @@ def _persistent_cache_insert(
     max_persistent = catalog.get("max_persistent_nbytes", QUERY_CACHE_MAX_PERSISTENT_NBYTES)
     current_persistent = int(catalog.get("persistent_nbytes", 0))
     if current_persistent + nbytes > max_persistent:
-        retained_entries = _query_cache_entries_fifo(catalog)
-        retained_nbytes = current_persistent
-        while retained_entries and retained_nbytes + nbytes > max_persistent:
-            _, oldest = retained_entries.pop(0)
-            retained_nbytes -= int(oldest["nbytes"])
-        if retained_nbytes + nbytes > max_persistent:
+        if nbytes > max_persistent:
             return False
-        return _query_cache_rebuild_store(
-            array,
-            catalog,
-            retained_entries,
-            appended=(digest, payload_mapping, query_descriptor, nbytes),
-        )
+        catalog = _reset_persistent_query_cache_catalog(array, catalog)
+        current_persistent = 0
 
     store = _open_query_cache_store(array, create=True)
     if store is None:
@@ -701,7 +618,6 @@ def _invalidate_query_cache(array: blosc2.NDArray) -> None:
     payload_path = _query_cache_payload_path(array)
     _close_query_cache_store(payload_path)
     blosc2.remove_urlpath(payload_path)
-    # Clear the catalog in vlmeta.
     with contextlib.suppress(KeyError, Exception):
         del array.schunk.vlmeta[QUERY_CACHE_VLMETA_KEY]
     _hot_cache_clear(scope=scope)

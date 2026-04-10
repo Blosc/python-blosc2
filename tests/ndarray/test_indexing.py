@@ -1216,7 +1216,7 @@ def test_hot_cache_byte_limit_evicts_lru():
     assert indexing._hot_cache_get("key0") is None
     # Most recent keys should still be present.
     assert indexing._hot_cache_get("key164") is not None
-    assert indexing._HOT_CACHE_BYTES <= indexing.QUERY_CACHE_MAX_MEM_CBYTES
+    assert indexing._HOT_CACHE_BYTES <= indexing.QUERY_CACHE_MAX_MEM_NBYTES
 
 
 def test_hot_cache_clear():
@@ -1289,7 +1289,7 @@ def test_persistent_cache_not_created_for_non_persistent_array():
 
 
 # ---------------------------------------------------------------------------
-# Stage 3 – 4 KB per-entry size limit
+# Stage 3 – Per-entry logical-byte size limit
 # ---------------------------------------------------------------------------
 
 
@@ -1315,7 +1315,7 @@ def test_persistent_entry_size_limit_rejected(tmp_path):
     assert result is False, "oversized entry must be rejected"
 
 
-def test_persistent_cache_prunes_oldest_entries_and_rebuilds_slots(tmp_path, monkeypatch):
+def test_persistent_cache_overflow_nukes_persistent_entries_and_keeps_newest(tmp_path, monkeypatch):
     arr, urlpath = _make_persistent_array(tmp_path, n=8_000)
     _clear_caches()
 
@@ -1339,23 +1339,52 @@ def test_persistent_cache_prunes_oldest_entries_and_rebuilds_slots(tmp_path, mon
     catalog = indexing._load_query_cache_catalog(arr)
     assert catalog is not None
     assert catalog["max_persistent_nbytes"] == budget
-    assert set(catalog["entries"]) == {payloads[1][0], payloads[2][0]}
-    assert catalog["entries"][payloads[1][0]]["slot"] == 0
-    assert catalog["entries"][payloads[2][0]]["slot"] == 1
-    assert catalog["next_slot"] == 2
-    assert catalog["persistent_nbytes"] == payloads[1][3] + payloads[2][3]
+    assert set(catalog["entries"]) == {payloads[2][0]}
+    assert catalog["entries"][payloads[2][0]]["slot"] == 0
+    assert catalog["next_slot"] == 1
+    assert catalog["persistent_nbytes"] == payloads[2][3]
 
     assert indexing._persistent_cache_lookup(arr, payloads[0][0]) is None
-    np.testing.assert_array_equal(indexing._persistent_cache_lookup(arr, payloads[1][0]), payloads[1][2])
+    assert indexing._persistent_cache_lookup(arr, payloads[1][0]) is None
     np.testing.assert_array_equal(indexing._persistent_cache_lookup(arr, payloads[2][0]), payloads[2][2])
 
     _clear_caches()
     reopened = blosc2.open(urlpath, mode="r")
-    np.testing.assert_array_equal(
-        indexing._persistent_cache_lookup(reopened, payloads[1][0]), payloads[1][2]
-    )
+    assert indexing._persistent_cache_lookup(reopened, payloads[1][0]) is None
     np.testing.assert_array_equal(
         indexing._persistent_cache_lookup(reopened, payloads[2][0]), payloads[2][2]
+    )
+
+
+def test_persistent_cache_overflow_preserves_hot_cache(tmp_path, monkeypatch):
+    arr, _ = _make_persistent_array(tmp_path, n=8_000)
+    _clear_caches()
+
+    coords1 = np.arange(0, 256, dtype=np.int64)
+    coords2 = np.arange(256, 512, dtype=np.int64)
+    expr1 = "(id >= 0) & (id < 256)"
+    expr2 = "(id >= 256) & (id < 512)"
+
+    budget = indexing._query_cache_entry_nbytes(coords1)
+    monkeypatch.setattr(indexing, "QUERY_CACHE_MAX_PERSISTENT_NBYTES", budget)
+
+    indexing.store_cached_coords(arr, expr1, [indexing.SELF_TARGET_NAME], None, coords1)
+    indexing.store_cached_coords(arr, expr2, [indexing.SELF_TARGET_NAME], None, coords2)
+
+    assert (
+        indexing._persistent_cache_lookup(
+            arr,
+            indexing._query_cache_digest(
+                indexing._normalize_query_descriptor(expr1, [indexing.SELF_TARGET_NAME], None)
+            ),
+        )
+        is None
+    )
+    np.testing.assert_array_equal(
+        indexing.get_cached_coords(arr, expr1, [indexing.SELF_TARGET_NAME], None), coords1
+    )
+    np.testing.assert_array_equal(
+        indexing.get_cached_coords(arr, expr2, [indexing.SELF_TARGET_NAME], None), coords2
     )
 
 
