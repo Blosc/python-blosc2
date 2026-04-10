@@ -58,9 +58,9 @@ _SIDECAR_HANDLE_CACHE: dict[tuple[int, str | None, str, str], object] = {}
 # ---------------------------------------------------------------------------
 QUERY_CACHE_VLMETA_KEY = "_blosc2_query_cache"
 QUERY_CACHE_FORMAT_VERSION = 1
-QUERY_CACHE_MAX_ENTRY_CBYTES = 4096  # 4 KB per persistent entry
+QUERY_CACHE_MAX_ENTRY_NBYTES = 65_536  # 64 KB of logical int64 positions per persistent entry
 QUERY_CACHE_MAX_MEM_CBYTES = 131_072  # 128 KB for the in-process hot cache
-QUERY_CACHE_MAX_PERSISTENT_CBYTES = 2_147_483_648  # 2 GB for the payload store
+QUERY_CACHE_MAX_PERSISTENT_NBYTES = 2_147_483_648  # 2 GB of logical int64 positions in the payload store
 
 # In-process hot cache: (array-scope, digest) -> decoded np.ndarray of coordinates.
 _HOT_CACHE: dict[tuple[tuple[str, str | int], str], np.ndarray] = {}
@@ -324,13 +324,52 @@ def _default_query_cache_catalog(payload_path: str) -> dict:
     return {
         "version": QUERY_CACHE_FORMAT_VERSION,
         "payload_ref": {"kind": "urlpath", "version": 1, "urlpath": payload_path},
-        "max_entry_cbytes": QUERY_CACHE_MAX_ENTRY_CBYTES,
+        "max_entry_nbytes": QUERY_CACHE_MAX_ENTRY_NBYTES,
         "max_mem_cbytes": QUERY_CACHE_MAX_MEM_CBYTES,
-        "max_persistent_cbytes": QUERY_CACHE_MAX_PERSISTENT_CBYTES,
-        "persistent_cbytes": 0,
+        "max_persistent_nbytes": QUERY_CACHE_MAX_PERSISTENT_NBYTES,
+        "persistent_nbytes": 0,
         "next_slot": 0,
         "entries": {},
     }
+
+
+def _normalize_query_cache_catalog(catalog: dict) -> dict:
+    """Normalize legacy compressed-byte cache catalogs to logical-byte accounting."""
+    if not isinstance(catalog, dict):
+        return _default_query_cache_catalog("")
+    catalog.setdefault("version", QUERY_CACHE_FORMAT_VERSION)
+    catalog.setdefault("entries", {})
+
+    if "max_entry_nbytes" not in catalog:
+        catalog["max_entry_nbytes"] = int(catalog.pop("max_entry_cbytes", QUERY_CACHE_MAX_ENTRY_NBYTES))
+    else:
+        catalog.pop("max_entry_cbytes", None)
+
+    catalog.setdefault("max_mem_cbytes", QUERY_CACHE_MAX_MEM_CBYTES)
+
+    if "max_persistent_nbytes" not in catalog:
+        catalog["max_persistent_nbytes"] = int(
+            catalog.pop("max_persistent_cbytes", QUERY_CACHE_MAX_PERSISTENT_NBYTES)
+        )
+    else:
+        catalog.pop("max_persistent_cbytes", None)
+
+    if "persistent_nbytes" not in catalog:
+        catalog["persistent_nbytes"] = int(catalog.pop("persistent_cbytes", 0))
+    else:
+        catalog.pop("persistent_cbytes", None)
+
+    total_nbytes = 0
+    for entry in catalog["entries"].values():
+        if "nbytes" not in entry:
+            entry["nbytes"] = int(entry.pop("cbytes", 0))
+        else:
+            entry.pop("cbytes", None)
+        total_nbytes += int(entry.get("nbytes", 0))
+
+    if catalog["entries"]:
+        catalog["persistent_nbytes"] = total_nbytes
+    return catalog
 
 
 def _load_query_cache_catalog(array: blosc2.NDArray) -> dict | None:
@@ -343,7 +382,7 @@ def _load_query_cache_catalog(array: blosc2.NDArray) -> dict | None:
         return None
     if not isinstance(cat, dict) or cat.get("version") != QUERY_CACHE_FORMAT_VERSION:
         return None
-    return cat
+    return _normalize_query_cache_catalog(cat)
 
 
 def _save_query_cache_catalog(array: blosc2.NDArray, catalog: dict) -> None:
@@ -514,13 +553,9 @@ def _persistent_cache_lookup(array: blosc2.NDArray, digest: str) -> np.ndarray |
     return coords
 
 
-def _query_cache_entry_cbytes(payload_mapping: dict) -> int:
-    """Return the compressed coordinate payload size used for budget accounting."""
-    coord_dtype = np.dtype(payload_mapping["dtype"])
-    compressed_coords = blosc2.compress2(
-        payload_mapping["data"], cparams=blosc2.CParams(typesize=coord_dtype.itemsize)
-    )
-    return len(compressed_coords)
+def _query_cache_entry_nbytes(coords: np.ndarray) -> int:
+    """Return the logical int64 position bytes used for persistent budget accounting."""
+    return int(np.asarray(coords).size) * np.dtype(np.int64).itemsize
 
 
 def _query_cache_entries_fifo(catalog: dict) -> list[tuple[str, dict]]:
@@ -545,7 +580,7 @@ def _query_cache_rebuild_store(
     old_store = _open_query_cache_store(array)
     temp_store = blosc2.VLArray(storage=blosc2.Storage(urlpath=temp_path, mode="w"))
     new_entries = {}
-    persistent_cbytes = 0
+    persistent_nbytes = 0
     slot = 0
 
     try:
@@ -559,20 +594,20 @@ def _query_cache_rebuild_store(
             updated = entry.copy()
             updated["slot"] = slot
             new_entries[digest] = updated
-            persistent_cbytes += int(updated["cbytes"])
+            persistent_nbytes += int(updated["nbytes"])
             slot += 1
 
         if appended is not None:
-            digest, payload_mapping, query_descriptor, cbytes = appended
+            digest, payload_mapping, query_descriptor, nbytes = appended
             temp_store.append(payload_mapping)
             new_entries[digest] = {
                 "slot": slot,
-                "cbytes": cbytes,
+                "nbytes": nbytes,
                 "nrows": payload_mapping["nrows"],
                 "dtype": payload_mapping["dtype"],
                 "query": query_descriptor,
             }
-            persistent_cbytes += cbytes
+            persistent_nbytes += nbytes
             slot += 1
     finally:
         del temp_store
@@ -584,7 +619,7 @@ def _query_cache_rebuild_store(
     os.replace(temp_path, payload_path)
 
     catalog["entries"] = new_entries
-    catalog["persistent_cbytes"] = persistent_cbytes
+    catalog["persistent_nbytes"] = persistent_nbytes
     catalog["next_slot"] = slot
     _save_query_cache_catalog(array, catalog)
     return True
@@ -609,27 +644,27 @@ def _persistent_cache_insert(
         return True
 
     payload_mapping = _encode_coords_payload(coords)
-    cbytes = _query_cache_entry_cbytes(payload_mapping)
+    nbytes = _query_cache_entry_nbytes(coords)
 
-    max_entry = catalog.get("max_entry_cbytes", QUERY_CACHE_MAX_ENTRY_CBYTES)
-    if cbytes > max_entry:
+    max_entry = catalog.get("max_entry_nbytes", QUERY_CACHE_MAX_ENTRY_NBYTES)
+    if nbytes > max_entry:
         return False
 
-    max_persistent = catalog.get("max_persistent_cbytes", QUERY_CACHE_MAX_PERSISTENT_CBYTES)
-    current_persistent = int(catalog.get("persistent_cbytes", 0))
-    if current_persistent + cbytes > max_persistent:
+    max_persistent = catalog.get("max_persistent_nbytes", QUERY_CACHE_MAX_PERSISTENT_NBYTES)
+    current_persistent = int(catalog.get("persistent_nbytes", 0))
+    if current_persistent + nbytes > max_persistent:
         retained_entries = _query_cache_entries_fifo(catalog)
-        retained_cbytes = current_persistent
-        while retained_entries and retained_cbytes + cbytes > max_persistent:
+        retained_nbytes = current_persistent
+        while retained_entries and retained_nbytes + nbytes > max_persistent:
             _, oldest = retained_entries.pop(0)
-            retained_cbytes -= int(oldest["cbytes"])
-        if retained_cbytes + cbytes > max_persistent:
+            retained_nbytes -= int(oldest["nbytes"])
+        if retained_nbytes + nbytes > max_persistent:
             return False
         return _query_cache_rebuild_store(
             array,
             catalog,
             retained_entries,
-            appended=(digest, payload_mapping, query_descriptor, cbytes),
+            appended=(digest, payload_mapping, query_descriptor, nbytes),
         )
 
     store = _open_query_cache_store(array, create=True)
@@ -641,12 +676,12 @@ def _persistent_cache_insert(
 
     catalog["entries"][digest] = {
         "slot": slot,
-        "cbytes": cbytes,
+        "nbytes": nbytes,
         "nrows": len(coords),
         "dtype": payload_mapping["dtype"],
         "query": query_descriptor,
     }
-    catalog["persistent_cbytes"] = current_persistent + cbytes
+    catalog["persistent_nbytes"] = current_persistent + nbytes
     catalog["next_slot"] = slot + 1
     _save_query_cache_catalog(array, catalog)
     return True

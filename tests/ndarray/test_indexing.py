@@ -1294,22 +1294,18 @@ def test_persistent_cache_not_created_for_non_persistent_array():
 
 
 def test_persistent_entry_size_limit_rejected(tmp_path):
-    """Entries whose compressed size exceeds 4 KB must not be stored."""
+    """Entries whose logical int64 position bytes exceed the entry limit must not be stored."""
     arr, _ = _make_persistent_array(tmp_path, n=50_000)
     _clear_caches()
 
-    # Random (non-sequential) coordinates compress poorly and should exceed 4 KB.
+    # 10k coordinates imply 80 KB of logical int64 positions and should exceed the 64 KB limit.
     rng = np.random.default_rng(42)
-    coords = np.sort(rng.choice(50_000, size=5_000, replace=False)).astype(np.int64)
+    coords = np.sort(rng.choice(50_000, size=10_000, replace=False)).astype(np.int64)
 
-    # Verify this is actually > 4KB compressed with the same method used internally.
-    payload_mapping = indexing._encode_coords_payload(coords)
-    raw_data = payload_mapping["data"]
-    coord_dtype = np.dtype(payload_mapping["dtype"])
-    compressed = blosc2.compress2(raw_data, cparams=blosc2.CParams(typesize=coord_dtype.itemsize))
-    assert len(compressed) > indexing.QUERY_CACHE_MAX_ENTRY_CBYTES, (
-        f"test setup error: compressed size {len(compressed)} must exceed "
-        f"{indexing.QUERY_CACHE_MAX_ENTRY_CBYTES} for this test to be meaningful"
+    entry_nbytes = indexing._query_cache_entry_nbytes(coords)
+    assert entry_nbytes > indexing.QUERY_CACHE_MAX_ENTRY_NBYTES, (
+        f"test setup error: logical size {entry_nbytes} must exceed "
+        f"{indexing.QUERY_CACHE_MAX_ENTRY_NBYTES} for this test to be meaningful"
     )
 
     descriptor = indexing._normalize_query_descriptor("(id >= 0) & (id < 50000)", ["__self__"], None)
@@ -1331,24 +1327,23 @@ def test_persistent_cache_prunes_oldest_entries_and_rebuilds_slots(tmp_path, mon
             f"(id >= {i}) & (id < {i + 1})", ["__self__"], None
         )
         digest = indexing._query_cache_digest(descriptor)
-        payload_mapping = indexing._encode_coords_payload(coords)
-        cbytes = indexing._query_cache_entry_cbytes(payload_mapping)
-        payloads.append((digest, descriptor, coords, cbytes))
+        nbytes = indexing._query_cache_entry_nbytes(coords)
+        payloads.append((digest, descriptor, coords, nbytes))
 
     budget = max(payloads[0][3] + payloads[1][3], payloads[1][3] + payloads[2][3])
-    monkeypatch.setattr(indexing, "QUERY_CACHE_MAX_PERSISTENT_CBYTES", budget)
+    monkeypatch.setattr(indexing, "QUERY_CACHE_MAX_PERSISTENT_NBYTES", budget)
 
     for digest, descriptor, coords, _ in payloads:
         assert indexing._persistent_cache_insert(arr, digest, coords, descriptor) is True
 
     catalog = indexing._load_query_cache_catalog(arr)
     assert catalog is not None
-    assert catalog["max_persistent_cbytes"] == budget
+    assert catalog["max_persistent_nbytes"] == budget
     assert set(catalog["entries"]) == {payloads[1][0], payloads[2][0]}
     assert catalog["entries"][payloads[1][0]]["slot"] == 0
     assert catalog["entries"][payloads[2][0]]["slot"] == 1
     assert catalog["next_slot"] == 2
-    assert catalog["persistent_cbytes"] == payloads[1][3] + payloads[2][3]
+    assert catalog["persistent_nbytes"] == payloads[1][3] + payloads[2][3]
 
     assert indexing._persistent_cache_lookup(arr, payloads[0][0]) is None
     np.testing.assert_array_equal(indexing._persistent_cache_lookup(arr, payloads[1][0]), payloads[1][2])
