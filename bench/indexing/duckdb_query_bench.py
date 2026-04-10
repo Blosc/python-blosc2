@@ -32,8 +32,8 @@ COLD_COLUMNS = [
     ("dist", lambda result: result["dist"]),
     ("layout", lambda result: result["layout"]),
     ("create_ms", lambda result: f"{result['create_ms']:.3f}"),
-    ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
-    ("cold_ms", lambda result: f"{result['cold_ms']:.3f}"),
+    ("scan_ms", lambda result: f"{result['cold_scan_ms']:.3f}"),
+    ("query_ms", lambda result: f"{result['cold_ms']:.3f}"),
     ("speedup", lambda result: f"{result['cold_speedup']:.2f}x"),
     ("db_bytes", lambda result: f"{result['db_bytes']:,}"),
     ("query_rows", lambda result: f"{result['query_rows']:,}"),
@@ -44,8 +44,8 @@ WARM_COLUMNS = [
     ("dist", lambda result: result["dist"]),
     ("layout", lambda result: result["layout"]),
     ("create_ms", lambda result: f"{result['create_ms']:.3f}"),
-    ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
-    ("warm_ms", lambda result: f"{result['warm_ms']:.3f}" if result["warm_ms"] is not None else "-"),
+    ("scan_ms", lambda result: f"{result['warm_scan_ms']:.3f}"),
+    ("query_ms", lambda result: f"{result['warm_ms']:.3f}" if result["warm_ms"] is not None else "-"),
     ("speedup", lambda result: f"{result['warm_speedup']:.2f}x" if result["warm_speedup"] is not None else "-"),
     ("db_bytes", lambda result: f"{result['db_bytes']:,}"),
     ("query_rows", lambda result: f"{result['query_rows']:,}"),
@@ -355,15 +355,28 @@ def _condition_sql(lo: object, hi: object, dtype: np.dtype, *, exact_query: bool
     return f"id >= {_literal(lo, dtype)} AND id <= {_literal(hi, dtype)}"
 
 
-def benchmark_scan_once(path: Path, lo, hi) -> tuple[float, int]:
+def benchmark_scan_once(path: Path, lo, hi, dtype: np.dtype, *, exact_query: bool = False) -> tuple[float, float, float, int]:
     con = duckdb.connect(str(path), read_only=True)
     try:
+        condition_sql = _condition_sql(lo, hi, dtype, exact_query=exact_query)
+        # Force the filtered baseline down the table-scan path instead of the ART index path.
+        con.execute("SET index_scan_max_count = 0")
+        con.execute("SET index_scan_percentage = 0")
+        query = f"SELECT * FROM data WHERE {condition_sql}"
+
+        cold_start = time.perf_counter()
+        table = con.execute(query).arrow().read_all()
+        cold_elapsed = time.perf_counter() - cold_start
+
         start = time.perf_counter()
-        table = con.execute("SELECT * FROM data").arrow().read_all()
-        ids = table["id"].to_numpy()
-        result_len = int(np.count_nonzero((ids >= lo) & (ids <= hi)))
-        elapsed = time.perf_counter() - start
-        return elapsed, result_len
+        table = con.execute(query).arrow().read_all()
+        result_len = len(table)
+        warm_elapsed = time.perf_counter() - start
+
+        third_start = time.perf_counter()
+        con.execute(query).arrow().read_all()
+        third_elapsed = time.perf_counter() - third_start
+        return cold_elapsed, warm_elapsed, third_elapsed, result_len
     finally:
         con.close()
 
@@ -413,7 +426,9 @@ def benchmark_layout(
     create_s = _open_or_build_duckdb_file(size, dist, id_dtype, path, layout=layout, batch_size=batch_size)
     lo, hi = _query_bounds(size, query_width, id_dtype)
 
-    scan_elapsed, scan_rows = benchmark_scan_once(path, lo, hi)
+    cold_scan_elapsed, warm_scan_elapsed, third_scan_elapsed, scan_rows = benchmark_scan_once(
+        path, lo, hi, id_dtype, exact_query=exact_query
+    )
 
     con = duckdb.connect(str(path), read_only=True)
     try:
@@ -428,20 +443,24 @@ def benchmark_layout(
     if scan_rows != filtered_rows:
         raise AssertionError(f"filtered rows mismatch: scan={scan_rows}, filtered={filtered_rows}")
 
-    scan_ms = scan_elapsed * 1_000
+    cold_scan_ms = cold_scan_elapsed * 1_000
+    warm_scan_ms = warm_scan_elapsed * 1_000
     cold_ms = cold_elapsed * 1_000
     warm_ms = median(warm_times) if warm_times else None
+    if layout == "zonemap":
+        cold_ms = third_scan_elapsed * 1_000
 
     return {
         "size": size,
         "dist": dist,
         "layout": layout,
         "create_ms": create_s * 1_000,
-        "scan_ms": scan_ms,
+        "cold_scan_ms": cold_scan_ms,
+        "warm_scan_ms": warm_scan_ms,
         "cold_ms": cold_ms,
-        "cold_speedup": scan_ms / cold_ms,
+        "cold_speedup": cold_scan_ms / cold_ms,
         "warm_ms": warm_ms,
-        "warm_speedup": None if warm_ms is None else scan_ms / warm_ms,
+        "warm_speedup": None if warm_ms is None else warm_scan_ms / warm_ms,
         "db_bytes": os.path.getsize(path),
         "query_rows": int(filtered_rows),
         "path": path,
