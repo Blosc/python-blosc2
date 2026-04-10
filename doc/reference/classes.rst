@@ -8,6 +8,7 @@ Main Classes
 .. autosummary::
 
     NDArray
+    Index
     NDField
     LazyArray
     C2Array
@@ -28,6 +29,7 @@ Main Classes
     :maxdepth: 1
 
     ndarray
+    index
     ndfield
     lazyarray
     c2array

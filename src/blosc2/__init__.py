@@ -557,6 +557,7 @@ from .lazyexpr import (
     can_cast,
 )
 from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit, as_simpleproxy
+from .indexing import Index
 
 from .schunk import SChunk, open
 from . import linalg
@@ -730,6 +731,7 @@ __all__ = [  # noqa : RUF022
     "DictStore",
     "EmbedStore",
     "Filter",
+    "Index",
     "LazyArray",
     "DSLKernel",
     "DSLSyntaxError",

@@ -1758,6 +1758,7 @@ def slices_eval(  # noqa: C901
         ne_args = {}
     chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
+    use_index = kwargs.pop("_use_index", True)
     _indices = kwargs.pop("_indices", False)
     if _indices and (not where or len(where) != 1):
         raise NotImplementedError("Indices can only be used with one where condition")
@@ -1823,7 +1824,10 @@ def slices_eval(  # noqa: C901
         # Get the dtype of the array to sort
         dtype_ = operands["_where_x"].dtype
         # Now, use only the fields that are necessary for the sorting
-        dtype_ = np.dtype([(f, dtype_[f]) for f in _order])
+        if dtype_.fields is not None and all(f in dtype_.fields for f in _order):
+            dtype_ = np.dtype([(f, dtype_[f]) for f in _order])
+        else:
+            dtype_ = np.dtype(np.int64)
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
@@ -1836,6 +1840,83 @@ def slices_eval(  # noqa: C901
         if 0 not in chunks
         else np.asarray(shape)
     )
+    index_plan = None
+    if where is not None and len(where) == 1 and use_index and _slice == ():
+        from . import indexing
+
+        _cache_array = where["_where_x"]
+        _cache_tokens = [indexing.SELF_TARGET_NAME]
+
+        # --- Ordered path ---
+        if _order is not None:
+            ordered_plan = indexing.plan_ordered_query(expression, operands, where, _order)
+            if ordered_plan.usable:
+                cached_coords = indexing.get_cached_coords(_cache_array, expression, _cache_tokens, _order)
+                if cached_coords is not None:
+                    return cached_coords
+                ordered_positions = indexing.ordered_query_indices(expression, operands, where, _order)
+                if ordered_positions is not None:
+                    indexing.store_cached_coords(
+                        _cache_array, expression, _cache_tokens, _order, ordered_positions
+                    )
+                    return ordered_positions
+            elif indexing.is_expression_order(where["_where_x"], _order):
+                raise ValueError("expression order requires a matching full expression index")
+
+        # --- Indices-only path (.indices().compute()) ---
+        if _indices and _order is None:
+            cached_coords = indexing.get_cached_coords(_cache_array, expression, _cache_tokens, None)
+            if cached_coords is not None:
+                return cached_coords
+
+        # --- Value-returning path (arr[cond][:]) — cache check before plan_query ---
+        _cache_urlpath = getattr(_cache_array, "urlpath", None) or getattr(
+            getattr(_cache_array, "ndarr", None), "urlpath", None
+        )
+        if not _indices and _order is None:
+            cached_coords = indexing.get_cached_coords(_cache_array, expression, _cache_tokens, None)
+            if cached_coords is not None:
+                cached_plan = indexing.IndexPlan(
+                    usable=True, reason="cache-hit", base=_cache_array, exact_positions=cached_coords
+                )
+                return indexing.evaluate_full_query(where, cached_plan)
+
+        index_plan = indexing.plan_query(expression, operands, where, use_index=use_index)
+
+        if _indices and _order is None and index_plan.usable:
+            if index_plan.exact_positions is not None:
+                coords = np.asarray(index_plan.exact_positions, dtype=np.int64)
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return coords
+            if index_plan.bucket_masks is not None:
+                _, coords = indexing.evaluate_light_query(
+                    expression, operands, ne_args, where, index_plan, return_positions=True
+                )
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return coords
+            if index_plan.candidate_units is not None and index_plan.segment_len is not None:
+                _, coords = indexing.evaluate_segment_query(
+                    expression, operands, ne_args, where, index_plan, return_positions=True
+                )
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return coords
+        if index_plan.usable and not (_indices or _order):
+            if index_plan.exact_positions is not None:
+                coords = np.asarray(index_plan.exact_positions, dtype=np.int64)
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return indexing.evaluate_full_query(where, index_plan)
+            if index_plan.bucket_masks is not None:
+                result, coords = indexing.evaluate_light_query(
+                    expression, operands, ne_args, where, index_plan, return_positions=True
+                )
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return result
+            if index_plan.candidate_units is not None and index_plan.segment_len is not None:
+                result, coords = indexing.evaluate_segment_query(
+                    expression, operands, ne_args, where, index_plan, return_positions=True
+                )
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return result
 
     for chunk_slice in intersecting_chunks:
         # Check whether current cslice intersects with _slice
@@ -1851,6 +1932,15 @@ def slices_eval(  # noqa: C901
         offset = tuple(s.start for s in cslice)  # offset for the udf
         cslice_shape = tuple(s.stop - s.start for s in cslice)
         len_chunk = math.prod(cslice_shape)
+        if (
+            index_plan is not None
+            and index_plan.usable
+            and index_plan.level == "chunk"
+            and not index_plan.candidate_units[nchunk]
+        ):
+            if _indices or _order:
+                leninputs += len_chunk
+            continue
         # get local index of part of out that is to be updated
         cslice_subidx = (
             ndindex.ndindex(cslice).as_subindex(_slice).raw
@@ -3687,6 +3777,39 @@ class LazyExpr(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
+    def will_use_index(self) -> bool:
+        """Return whether the current lazy query can use an index."""
+        from . import indexing
+
+        return indexing.will_use_index(self)
+
+    def explain(self) -> dict:
+        """Explain how this lazy query will be executed.
+
+        Returns a dictionary describing the planner decision for the current
+        query. Typical fields include whether an index will be used, the chosen
+        index kind and level, candidate counts, and the lookup path selected
+        for ``full`` indexes.
+
+        Returns:
+            dict: Query planning metadata for the current expression.
+
+        Examples:
+            >>> import numpy as np
+            >>> import blosc2
+            >>> arr = blosc2.asarray(np.arange(10))
+            >>> _ = arr.create_index(kind="full")
+            >>> expr = blosc2.lazyexpr("(a >= 3) & (a < 6)", {"a": arr}).where(arr)
+            >>> info = expr.explain()
+            >>> info["will_use_index"]
+            True
+            >>> info["kind"]
+            'full'
+        """
+        from . import indexing
+
+        return indexing.explain_query(self)
+
     def compute(
         self,
         item=(),
@@ -3735,6 +3858,7 @@ class LazyExpr(LazyArray):
                 "_indices",
                 "_order",
                 "_ne_args",
+                "_use_index",
                 "dtype",
                 "shape",
                 "fp_accuracy",

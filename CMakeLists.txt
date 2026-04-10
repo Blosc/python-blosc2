@@ -41,11 +41,20 @@ add_custom_command(
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx"
   VERBATIM)
 
+add_custom_command(
+  OUTPUT indexing_ext.c
+  COMMAND Python::Interpreter -m cython
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/indexing_ext.pyx" --output-file indexing_ext.c
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/indexing_ext.pyx"
+  VERBATIM)
+
 # ...and add it to the target
 Python_add_library(blosc2_ext MODULE blosc2_ext.c WITH_SOABI)
+Python_add_library(indexing_ext MODULE indexing_ext.c WITH_SOABI)
 
 # We need to link against NumPy
 target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
+target_link_libraries(indexing_ext PRIVATE Python::NumPy)
 
 # Fetch and build miniexpr library
 include(FetchContent)
@@ -63,7 +72,7 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG feadbc633a887bafd84b2fbc370ef2962d01b7ee
+    GIT_TAG f2faef741c4c507bf6a03167c72ce7f92c6f0ae8
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
@@ -72,6 +81,7 @@ FetchContent_MakeAvailable(miniexpr)
 target_link_libraries(blosc2_ext PRIVATE miniexpr_static)
 
 target_compile_features(blosc2_ext PRIVATE c_std_11)
+target_compile_features(indexing_ext PRIVATE c_std_11)
 if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     execute_process(
         COMMAND "${CMAKE_C_COMPILER}" -print-resource-dir
@@ -119,7 +129,7 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG b32256fc1287b6e24c22f09ac202265c7054e2bc
+        GIT_TAG 0568990388e6201240b170947d4c2199572f795d
         # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../c-blosc2
     )
     FetchContent_MakeAvailable(blosc2)
@@ -148,7 +158,7 @@ endif()
 
 # Python extension -> site-packages/blosc2
 install(
-  TARGETS blosc2_ext
+  TARGETS blosc2_ext indexing_ext
   LIBRARY DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
 )
 

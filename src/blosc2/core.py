@@ -1439,7 +1439,10 @@ def get_chunksize(blocksize, l3_minimum=4 * 2**20, l3_maximum=2**26, reduc_facto
     if isinstance(l2_cache_size, int) and l2_cache_size > chunksize:
         # Apple Silicon has a large L2 cache, and memory bandwidth is high,
         # so we can use a larger chunksize based on L2 cache size.
-        chunksize = l2_cache_size * 4
+        # chunksize = l2_cache_size * 4
+        # But experiments show that using such a large chunksize
+        # can make indexes too large. Going back to using just L2.
+        chunksize = l2_cache_size
 
     # Ensure a minimum size
     if chunksize < l3_minimum:

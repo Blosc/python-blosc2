@@ -59,6 +59,7 @@ ctypedef fused T:
     int32_t
     int64_t
 
+
 cdef extern from "<stdio.h>":
     int printf(const char *format, ...) nogil
 
@@ -1041,7 +1042,9 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.clevel = kwargs.get('clevel', blosc2.cparams_dflts['clevel'])
     cparams.use_dict = kwargs.get('use_dict', blosc2.cparams_dflts['use_dict'])
     cparams.typesize = typesize = kwargs.get('typesize', blosc2.cparams_dflts['typesize'])
-    cparams.nthreads = kwargs.get('nthreads', blosc2.nthreads)
+    cparams.nthreads = kwargs.get('nthreads', 1 if blosc2.IS_WASM else blosc2.nthreads)
+    if blosc2.IS_WASM:
+        cparams.nthreads = 1
     cparams.blocksize = kwargs.get('blocksize', blosc2.cparams_dflts['blocksize'])
     splitmode = kwargs.get('splitmode', blosc2.cparams_dflts['splitmode'])
     cparams.splitmode = splitmode.value
@@ -1122,7 +1125,9 @@ def compress2(src, **kwargs):
 
 cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs, blosc2_cparams* cparams=NULL):
     memcpy(dparams, &BLOSC2_DPARAMS_DEFAULTS, sizeof(BLOSC2_DPARAMS_DEFAULTS))
-    dparams.nthreads = kwargs.get('nthreads', blosc2.nthreads)
+    dparams.nthreads = kwargs.get('nthreads', 1 if blosc2.IS_WASM else blosc2.nthreads)
+    if blosc2.IS_WASM:
+        dparams.nthreads = 1
     dparams.schunk = NULL
     dparams.postfilter = NULL
     dparams.postparams = NULL
@@ -2913,7 +2918,9 @@ def open(urlpath, mode, offset, **kwargs):
         if cparams is not None:
             res.schunk.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
         else:
-            res.schunk.cparams = dataclasses.replace(res.schunk.cparams, nthreads=blosc2.nthreads)
+            res.schunk.cparams = dataclasses.replace(
+                res.schunk.cparams, nthreads=(1 if blosc2.IS_WASM else blosc2.nthreads)
+            )
         if dparams is not None:
             res.schunk.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
         res.schunk.mode = mode
@@ -2923,7 +2930,7 @@ def open(urlpath, mode, offset, **kwargs):
         if cparams is not None:
             res.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
         else:
-            res.cparams = dataclasses.replace(res.cparams, nthreads=blosc2.nthreads)
+            res.cparams = dataclasses.replace(res.cparams, nthreads=(1 if blosc2.IS_WASM else blosc2.nthreads))
         if dparams is not None:
             res.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
 
@@ -3314,6 +3321,66 @@ cdef class NDArray:
                                          <void *> view.buf, buffershape_, view.len),
                   "Error while getting the buffer")
         PyBuffer_Release(&view)
+
+        return arr
+
+    def get_1d_span_numpy(self, arr, int64_t nchunk, int32_t start, int32_t nitems):
+        if self.ndim != 1:
+            raise ValueError("get_1d_span_numpy is only supported for 1-D arrays")
+        if nchunk < 0 or nchunk >= self.array.sc.nchunks:
+            raise IndexError("chunk index out of range")
+        if start < 0 or nitems < 0:
+            raise ValueError("start and nitems must be >= 0")
+        if start + nitems > self.array.chunknitems:
+            raise ValueError("requested span exceeds chunk size")
+
+        cdef uint8_t *chunk = NULL
+        cdef c_bool needs_free
+        cdef int32_t chunk_nbytes
+        cdef int32_t chunk_cbytes
+        cdef int32_t block_nbytes
+        cdef blosc2_context *dctx = self.array.sc.dctx
+        cdef Py_buffer view
+        cdef int rc
+        cdef c_bool owns_dctx = False
+
+        rc = blosc2_schunk_get_lazychunk(self.array.sc, nchunk, &chunk, &needs_free)
+        if rc < 0:
+            raise RuntimeError("Error while getting the lazy chunk")
+
+        rc = blosc2_cbuffer_sizes(chunk, &chunk_nbytes, &chunk_cbytes, &block_nbytes)
+        if rc < 0:
+            if needs_free:
+                free(chunk)
+            raise RuntimeError("Error while getting compressed buffer sizes")
+        if start + nitems > chunk_nbytes // self.array.sc.typesize:
+            if needs_free:
+                free(chunk)
+            raise ValueError("requested span exceeds decoded chunk size")
+
+        PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
+        if view.len < nitems * self.array.sc.typesize:
+            PyBuffer_Release(&view)
+            if needs_free:
+                free(chunk)
+            raise ValueError("destination buffer is smaller than the requested decoded span")
+
+        if dctx == NULL:
+            dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
+            owns_dctx = True
+        if dctx == NULL:
+            PyBuffer_Release(&view)
+            if needs_free:
+                free(chunk)
+            raise RuntimeError("Could not create decompression context")
+        rc = blosc2_getitem_ctx(dctx, chunk, chunk_cbytes, start, nitems, view.buf, view.len)
+        if owns_dctx:
+            blosc2_free_ctx(dctx)
+        PyBuffer_Release(&view)
+        if needs_free:
+            free(chunk)
+        if rc < 0:
+            raise RuntimeError("Error while decoding the requested span")
 
         return arr
 
