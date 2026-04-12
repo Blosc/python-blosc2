@@ -8,7 +8,7 @@
 import pytest
 
 import blosc2
-from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
+from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
 BATCHES = [
     [b"bytes\x00payload", "plain text", 42],
