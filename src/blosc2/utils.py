@@ -815,7 +815,6 @@ def get_selection(ctuple, ptuple, chunks):
     # ps.stop = pt.start + step * (out_stop - 1) + k,  k in [step, -1] or [1, step]
     # => out_stop = (ps.stop - pt.start - sign) // step + 1
     out_pselection = ()
-    i = 0
     for ps, pt in zip(pselection, ptuple, strict=True):
         sign_ = np.sign(pt.step)
         n = (ps.start - pt.start - sign_) // pt.step
@@ -829,7 +828,6 @@ def get_selection(ctuple, ptuple, chunks):
                 1,
             ),
         )
-        i += 1
 
     loc_selection = tuple(  # is s.stop is None, get whole chunk so s.start - 0
         slice(0, s.stop - s.start, s.step)
