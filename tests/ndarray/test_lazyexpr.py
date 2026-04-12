@@ -1721,6 +1721,76 @@ def test_missing_operator():
     blosc2.remove_urlpath("expr.b2nd")
 
 
+def test_save_dictstore_operands(tmp_path):
+    store_path = tmp_path / "operands.b2z"
+    ext_a = tmp_path / "a.b2nd"
+    ext_b = tmp_path / "b.b2nd"
+    expr_path = tmp_path / "expr.b2nd"
+    expected = np.arange(5, dtype=np.int64) * 3
+
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(ext_a), mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=str(ext_b), mode="w")
+    with blosc2.DictStore(str(store_path), mode="w", threshold=None) as dstore:
+        dstore["/a"] = a
+        dstore["/b"] = b
+
+    with blosc2.DictStore(str(store_path), mode="r") as dstore:
+        a = dstore["/a"]
+        b = dstore["/b"]
+        expr = blosc2.lazyexpr("a + b")
+        expr.save(expr_path)
+
+    carrier = blosc2.open(expr_path, mode="r").array
+    assert carrier.schunk.vlmeta["b2o"]["operands"] == {
+        "a": {"kind": "dictstore_key", "version": 1, "urlpath": str(store_path), "key": "/a"},
+        "b": {"kind": "dictstore_key", "version": 1, "urlpath": str(store_path), "key": "/b"},
+    }
+
+    restored = blosc2.open(expr_path)
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
+
+
+def test_save_proxy_operands_reopen_default_mode(tmp_path):
+    src_path = tmp_path / "src.b2nd"
+    proxy_path = tmp_path / "proxy.b2nd"
+    expr_path = tmp_path / "expr.b2nd"
+
+    src = blosc2.asarray(np.arange(10, dtype=np.int64), urlpath=str(src_path), mode="w")
+    proxy = blosc2.Proxy(src, urlpath=str(proxy_path), mode="w")
+    expr = proxy + proxy
+    expr.save(str(expr_path))
+
+    restored = blosc2.open(str(expr_path))
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], np.arange(10, dtype=np.int64) * 2)
+
+
+def test_lazyexpr_vlmeta_in_memory_and_persisted(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(tmp_path / "a.b2nd"), mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(tmp_path / "b.b2nd"), mode="w")
+    expr = a + b
+
+    expr.vlmeta["name"] = "sum"
+    expr.vlmeta["config"] = {"scale": 1}
+    assert expr.vlmeta["name"] == "sum"
+    assert expr.vlmeta["config"] == {"scale": 1}
+
+    expr_path = tmp_path / "expr_vlmeta.b2nd"
+    expr.save(str(expr_path))
+    restored = blosc2.open(str(expr_path))
+
+    assert restored.vlmeta["name"] == "sum"
+    assert restored.vlmeta["config"] == {"scale": 1}
+
+    restored.vlmeta["note"] = "persisted"
+    reopened = blosc2.open(str(expr_path))
+    assert reopened.vlmeta["note"] == "persisted"
+    np.testing.assert_array_equal(reopened[:], np.arange(5, dtype=np.int64) * 2)
+
+
 # Test the chaining of multiple lazy expressions
 def test_chain_expressions():
     N = 1_000
@@ -1843,12 +1913,8 @@ def test_to_cframe():
     dtype = "float64"
     a = blosc2.linspace(0, 1, N * N, dtype=dtype, shape=(N, N))
     expr = a**3 + blosc2.sin(a**2)
-    cframe = expr.to_cframe()
-    assert len(cframe) > 0
-    arr = blosc2.ndarray_from_cframe(cframe)
-    assert arr.shape == expr.shape
-    assert arr.dtype == expr.dtype
-    assert np.allclose(arr[:], expr[:])
+    with pytest.raises(ValueError, match="stored on disk/network"):
+        expr.to_cframe()
 
 
 # Test for the bug where multiplying two complex lazy expressions would fail with:

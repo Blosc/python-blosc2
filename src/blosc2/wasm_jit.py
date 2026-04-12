@@ -602,8 +602,8 @@ def init_wasm_jit_helpers() -> bool:
 
     from . import blosc2_ext
 
-    if not hasattr(blosc2_ext, "_register_wasm_jit_helpers"):
-        _trace("extension does not expose _register_wasm_jit_helpers")
+    if not hasattr(blosc2_ext, "register_wasm_jit_helpers"):
+        _trace("extension does not expose register_wasm_jit_helpers")
         return False
 
     _inject_pyodide_runtime_handles(js)
@@ -618,7 +618,7 @@ def init_wasm_jit_helpers() -> bool:
 
     instantiate_ptr, free_ptr = helper_ptrs
     try:
-        blosc2_ext._register_wasm_jit_helpers(instantiate_ptr, free_ptr)
+        blosc2_ext.register_wasm_jit_helpers(instantiate_ptr, free_ptr)
     except Exception as exc:  # pragma: no cover - pyodide-specific error path
         _trace(f"C helper registration failed: {exc}")
         return False

@@ -5,10 +5,23 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import numpy as np
 import pytest
 
 import blosc2
-from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
+import blosc2.c2array as blosc2_c2array
+from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
+
+
+@blosc2.dsl_kernel
+def _kernel_add_twice(x, y):
+    return x + y * 2
+
+
+def _python_udf_add(inputs_tuple, output, offset):
+    x, y = inputs_tuple
+    output[:] = x + y
+
 
 BATCHES = [
     [b"bytes\x00payload", "plain text", 42],
@@ -25,6 +38,65 @@ def _make_payload(seed, size):
 
 def _storage(contiguous, urlpath, mode="w"):
     return blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode=mode)
+
+
+def _make_nested_blosc2_objects():
+    ndarray = blosc2.arange(6, dtype=np.int32)
+
+    schunk = blosc2.SChunk(chunksize=16)
+    schunk.append_data(np.arange(4, dtype=np.int32))
+
+    nested_vlarray = blosc2.VLArray()
+    nested_vlarray.extend(["alpha", {"beta": 2}])
+
+    nested_batchstore = blosc2.BatchStore(items_per_block=2)
+    nested_batchstore.extend([[1, 2], ["x", {"y": 3}]])
+
+    estore = blosc2.EmbedStore()
+    estore["/node"] = blosc2.arange(3, dtype=np.int32)
+
+    return ndarray, schunk, nested_vlarray, nested_batchstore, estore
+
+
+def _make_c2array(monkeypatch, path="@public/examples/ds-1d.b2nd", urlbase="https://cat2.cloud/demo/"):
+    def fake_info(path_, urlbase_, params=None, headers=None, model=None, auth_token=None):
+        return {"schunk": {"cparams": dict(blosc2.cparams_dflts)}}
+
+    monkeypatch.setattr(blosc2_c2array, "info", fake_info)
+    return blosc2.C2Array(path, urlbase=urlbase)
+
+
+def _make_persistent_lazyexpr(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=tmp_path / "a.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=tmp_path / "b.b2nd", mode="w")
+    expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+    expected = np.arange(5, dtype=np.int64) * 3
+    return expr, expected
+
+
+def _make_in_memory_lazyexpr():
+    a = blosc2.asarray(np.arange(5, dtype=np.int64))
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2)
+    return blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+
+
+def _make_persistent_lazyudf(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.float32), urlpath=tmp_path / "a_udf.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.float32) * 2, urlpath=tmp_path / "b_udf.b2nd", mode="w")
+    udf = blosc2.lazyudf(_kernel_add_twice, (a, b), dtype=a.dtype, shape=a.shape)
+    expected = a[:] + b[:] * 2
+    return udf, expected
+
+
+def _make_persistent_python_lazyudf(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.float32), urlpath=tmp_path / "a_pyudf.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.float32) * 2, urlpath=tmp_path / "b_pyudf.b2nd", mode="w")
+    return blosc2.lazyudf(_python_udf_add, (a, b), dtype=a.dtype, shape=a.shape)
+
+
+def _make_persistent_ref(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=tmp_path / "a_ref.b2nd", mode="w")
+    return blosc2.Ref.from_object(a), a[:]
 
 
 @pytest.mark.parametrize(
@@ -46,8 +118,8 @@ def test_batchstore_roundtrip(contiguous, urlpath):
         assert barray.append(batch) == i
 
     assert len(barray) == len(BATCHES)
-    assert barray.max_blocksize is not None
-    assert 1 <= barray.max_blocksize <= len(BATCHES[0])
+    assert barray.items_per_block is not None
+    assert 1 <= barray.items_per_block <= len(BATCHES[0])
     assert [batch[:] for batch in barray] == BATCHES
     assert barray.append([1, 2]) == len(BATCHES) + 1
     assert [batch[:] for batch in barray][-1] == [1, 2]
@@ -83,7 +155,7 @@ def test_batchstore_roundtrip(contiguous, urlpath):
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
         assert isinstance(reopened, blosc2.BatchStore)
-        assert reopened.max_blocksize == barray.max_blocksize
+        assert reopened.items_per_block == barray.items_per_block
         assert [batch[:] for batch in reopened] == expected
         with pytest.raises(ValueError):
             reopened.append(["nope"])
@@ -181,6 +253,234 @@ def test_batchstore_from_cframe():
     assert [batch[:] for batch in restored2] == expected
 
 
+def test_batchstore_msgpack_supports_blosc2_objects():
+    ndarray, schunk, nested_vlarray, nested_batchstore, estore = _make_nested_blosc2_objects()
+
+    barray = blosc2.BatchStore(items_per_block=2)
+    barray.append([ndarray, schunk, nested_vlarray, nested_batchstore, estore])
+
+    restored = barray[0][:]
+
+    assert isinstance(restored[0], blosc2.NDArray)
+    assert np.array_equal(restored[0][:], ndarray[:])
+
+    assert isinstance(restored[1], blosc2.SChunk)
+    assert restored[1].decompress_chunk(0) == schunk.decompress_chunk(0)
+
+    assert isinstance(restored[2], blosc2.VLArray)
+    assert list(restored[2]) == list(nested_vlarray)
+
+    assert isinstance(restored[3], blosc2.BatchStore)
+    assert [batch[:] for batch in restored[3]] == [batch[:] for batch in nested_batchstore]
+
+    assert isinstance(restored[4], blosc2.EmbedStore)
+    assert list(restored[4].keys()) == ["/node"]
+    assert np.array_equal(restored[4]["/node"][:], estore["/node"][:])
+
+
+def test_msgpack_supports_c2array(monkeypatch):
+    c2array = _make_c2array(monkeypatch)
+
+    payload = msgpack_packb({"remote": c2array})
+    restored = msgpack_unpackb(payload)
+
+    assert isinstance(restored["remote"], blosc2.C2Array)
+    assert restored["remote"].path == c2array.path
+    assert restored["remote"].urlbase == c2array.urlbase
+    assert restored["remote"].auth_token is None
+
+
+def test_msgpack_supports_ref(tmp_path):
+    ref, expected = _make_persistent_ref(tmp_path)
+
+    restored = msgpack_unpackb(msgpack_packb({"ref": ref}))["ref"]
+
+    assert isinstance(restored, blosc2.Ref)
+    assert restored == ref
+    np.testing.assert_array_equal(restored.open()[:], expected)
+
+
+def test_batchstore_msgpack_supports_c2array(monkeypatch):
+    c2array = _make_c2array(monkeypatch)
+
+    barray = blosc2.BatchStore(items_per_block=2)
+    barray.append([c2array])
+
+    restored = barray[0][0]
+
+    assert isinstance(restored, blosc2.C2Array)
+    assert restored.path == c2array.path
+    assert restored.urlbase == c2array.urlbase
+    assert restored.auth_token is None
+
+
+def test_msgpack_supports_lazyexpr(tmp_path):
+    expr, expected = _make_persistent_lazyexpr(tmp_path)
+
+    payload = msgpack_packb({"expr": expr})
+    restored = msgpack_unpackb(payload)["expr"]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
+
+
+def test_batchstore_msgpack_supports_lazyexpr(tmp_path):
+    expr, expected = _make_persistent_lazyexpr(tmp_path)
+
+    barray = blosc2.BatchStore(items_per_block=2)
+    barray.append([expr])
+
+    restored = barray[0][0]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
+
+
+def test_msgpack_supports_lazyudf_dslkernel(tmp_path):
+    udf, expected = _make_persistent_lazyudf(tmp_path)
+
+    restored = msgpack_unpackb(msgpack_packb({"udf": udf}))["udf"]
+
+    assert isinstance(restored, blosc2.LazyUDF)
+    np.testing.assert_allclose(restored[:], expected)
+
+
+def test_batchstore_msgpack_supports_lazyudf_dslkernel(tmp_path):
+    udf, expected = _make_persistent_lazyudf(tmp_path)
+
+    barray = blosc2.BatchStore(items_per_block=2)
+    barray.append([udf])
+    restored = barray[0][0]
+
+    assert isinstance(restored, blosc2.LazyUDF)
+    np.testing.assert_allclose(restored[:], expected)
+
+
+def test_msgpack_rejects_plain_python_lazyudf(tmp_path):
+    udf = _make_persistent_python_lazyudf(tmp_path)
+
+    with pytest.raises(TypeError, match="DSLKernel"):
+        msgpack_packb({"udf": udf})
+
+
+def test_msgpack_rejects_lazyexpr_with_in_memory_operands():
+    expr = _make_in_memory_lazyexpr()
+
+    with pytest.raises(ValueError, match="stored on disk/network"):
+        msgpack_packb({"expr": expr})
+
+
+def test_batchstore_msgpack_rejects_lazyexpr_with_in_memory_operands():
+    expr = _make_in_memory_lazyexpr()
+
+    barray = blosc2.BatchStore(items_per_block=2)
+    with pytest.raises(ValueError, match="stored on disk/network"):
+        barray.append([expr])
+
+
+@pytest.mark.network
+def test_msgpack_supports_lazyexpr_with_c2array_operand(cat2_context, tmp_path):
+    path = "@public/expr/ds-1-2-linspace-float64-b2-(5,)d.b2nd"
+    a = blosc2.C2Array(path)
+    a_values = np.asarray(a[:])
+    b = blosc2.asarray(a_values * 2, urlpath=tmp_path / "b.b2nd", mode="w")
+    expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+
+    restored = msgpack_unpackb(msgpack_packb({"expr": expr}))["expr"]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_allclose(restored[:], a_values + b[:])
+
+
+@pytest.mark.network
+def test_batchstore_msgpack_supports_lazyexpr_with_c2array_operand(cat2_context, tmp_path):
+    path = "@public/expr/ds-1-2-linspace-float64-b2-(5,)d.b2nd"
+    a = blosc2.C2Array(path)
+    a_values = np.asarray(a[:])
+    b = blosc2.asarray(a_values * 2, urlpath=tmp_path / "b.b2nd", mode="w")
+    expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+
+    barray = blosc2.BatchStore(items_per_block=2)
+    barray.append([expr])
+    restored = barray[0][0]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_allclose(restored[:], a_values + b[:])
+
+
+@pytest.mark.parametrize("suffix", [".b2d", ".b2z"])
+def test_msgpack_lazyexpr_with_dictstore_operands(tmp_path, suffix):
+    store_path = tmp_path / f"operands{suffix}"
+    ext_a = tmp_path / "a.b2nd"
+    ext_b = tmp_path / "b.b2nd"
+    expected = np.arange(5, dtype=np.int64) * 3
+
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(ext_a), mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=str(ext_b), mode="w")
+    with blosc2.DictStore(str(store_path), mode="w", threshold=None) as dstore:
+        dstore["/a"] = a
+        dstore["/b"] = b
+
+    with blosc2.DictStore(str(store_path), mode="r") as dstore:
+        expr = blosc2.lazyexpr("a + b", operands={"a": dstore["/a"], "b": dstore["/b"]})
+        restored = msgpack_unpackb(msgpack_packb({"expr": expr}))["expr"]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
+
+
+def test_batchstore_msgpack_lazyexpr_with_dictstore_operands(tmp_path):
+    store_path = tmp_path / "operands.b2z"
+    ext_a = tmp_path / "a.b2nd"
+    ext_b = tmp_path / "b.b2nd"
+    expected = np.arange(5, dtype=np.int64) * 3
+
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(ext_a), mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=str(ext_b), mode="w")
+    with blosc2.DictStore(str(store_path), mode="w", threshold=None) as dstore:
+        dstore["/a"] = a
+        dstore["/b"] = b
+
+    with blosc2.DictStore(str(store_path), mode="r") as dstore:
+        expr = blosc2.lazyexpr("a + b", operands={"a": dstore["/a"], "b": dstore["/b"]})
+        barray = blosc2.BatchStore(items_per_block=2)
+        barray.append([expr])
+        restored = barray[0][0]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
+
+
+@pytest.mark.network
+def test_msgpack_roundtrip_c2array_network(cat2_context):
+    path = "@public/expr/ds-1-2-linspace-float64-b2-(5,)d.b2nd"
+    original = blosc2.C2Array(path)
+
+    payload = msgpack_packb({"remote": original})
+    restored = msgpack_unpackb(payload)["remote"]
+
+    assert isinstance(restored, blosc2.C2Array)
+    assert restored.path == original.path
+    assert restored.urlbase == original.urlbase
+    np.testing.assert_allclose(restored[:], original[:])
+
+
+@pytest.mark.network
+def test_batchstore_msgpack_roundtrip_c2array_network(cat2_context):
+    path = "@public/expr/ds-1-2-linspace-float64-b2-(5,)d.b2nd"
+    original = blosc2.C2Array(path)
+
+    barray = blosc2.BatchStore(items_per_block=2)
+    barray.append([original])
+
+    restored = barray[0][0]
+
+    assert isinstance(restored, blosc2.C2Array)
+    assert restored.path == original.path
+    assert restored.urlbase == original.urlbase
+    np.testing.assert_allclose(restored[:], original[:])
+
+
 def test_batchstore_info():
     barray = blosc2.BatchStore()
     barray.extend(BATCHES)
@@ -233,7 +533,7 @@ def test_batchstore_info_uses_persisted_batch_lengths():
 
 
 def test_batchstore_info_reports_exact_block_stats_from_lazy_chunks():
-    barray = blosc2.BatchStore(max_blocksize=2)
+    barray = blosc2.BatchStore(items_per_block=2)
     barray.extend([[1, 2, 3, 4, 5], [6, 7], [8]])
 
     items = dict(barray.info_items)
@@ -241,7 +541,7 @@ def test_batchstore_info_reports_exact_block_stats_from_lazy_chunks():
 
 
 def test_batchstore_pop_keeps_batch_lengths_metadata_in_sync():
-    barray = blosc2.BatchStore(max_blocksize=2)
+    barray = blosc2.BatchStore(items_per_block=2)
     barray.extend([[1, 2, 3], [4, 5], [6]])
 
     removed = barray.pop(1)
@@ -291,9 +591,9 @@ def test_batchstore_zstd_does_not_use_dict_by_default():
     assert barray.cparams.use_dict is False
 
 
-def test_batchstore_explicit_max_blocksize():
-    barray = blosc2.BatchStore(max_blocksize=2)
-    assert barray.max_blocksize == 2
+def test_batchstore_explicit_items_per_block():
+    barray = blosc2.BatchStore(items_per_block=2)
+    assert barray.items_per_block == 2
     barray.append([1, 2, 3])
     barray.append([4])
     assert [batch[:] for batch in barray] == [[1, 2, 3], [4]]
@@ -304,10 +604,10 @@ def test_batchstore_get_vlblock_and_scalar_access():
     blosc2.remove_urlpath(urlpath)
 
     batch = [0, 1, 2, 3, 4]
-    barray = blosc2.BatchStore(storage=_storage(True, urlpath), max_blocksize=2)
+    barray = blosc2.BatchStore(storage=_storage(True, urlpath), items_per_block=2)
     barray.append(batch)
 
-    assert barray.max_blocksize == 2
+    assert barray.items_per_block == 2
     assert msgpack_unpackb(barray.schunk.get_vlblock(0, 0)) == batch[:2]
     assert msgpack_unpackb(barray.schunk.get_vlblock(0, 1)) == batch[2:4]
     assert msgpack_unpackb(barray.schunk.get_vlblock(0, 2)) == batch[4:]
@@ -318,7 +618,7 @@ def test_batchstore_get_vlblock_and_scalar_access():
 
     reopened = blosc2.open(urlpath, mode="r")
     assert isinstance(reopened, blosc2.BatchStore)
-    assert reopened.max_blocksize == 2
+    assert reopened.items_per_block == 2
     assert reopened[0][0] == 0
     assert reopened[0][2] == 2
     assert reopened[0][4] == 4
@@ -328,7 +628,7 @@ def test_batchstore_get_vlblock_and_scalar_access():
 
 
 def test_batchstore_scalar_reads_cache_vlblocks():
-    barray = blosc2.BatchStore(max_blocksize=2)
+    barray = blosc2.BatchStore(items_per_block=2)
     barray.append([0, 1, 2, 3, 4])
 
     batch = barray[0]
@@ -352,7 +652,7 @@ def test_batchstore_scalar_reads_cache_vlblocks():
 
 
 def test_batchstore_iter_items():
-    barray = blosc2.BatchStore(max_blocksize=2)
+    barray = blosc2.BatchStore(items_per_block=2)
     batches = [[1, 2, 3], [4], [5, 6]]
     barray.extend(batches)
 
@@ -380,21 +680,21 @@ def test_batchstore_respects_explicit_use_dict_and_non_zstd():
     assert barray.cparams.use_dict is False
 
 
-def test_batchstore_guess_max_blocksize_uses_l2_for_clevel_5(monkeypatch):
+def test_batchstore_guess_items_per_block_uses_l2_for_clevel_5(monkeypatch):
     monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
     monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 1000)
     barray = blosc2.BatchStore(cparams={"clevel": 5})
     assert barray._guess_blocksize([30, 30, 30, 30]) == 4
 
 
-def test_batchstore_guess_max_blocksize_uses_l2_for_mid_clevel(monkeypatch):
+def test_batchstore_guess_items_per_block_uses_l2_for_mid_clevel(monkeypatch):
     monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
     monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 150)
     barray = blosc2.BatchStore(cparams={"clevel": 6})
     assert barray._guess_blocksize([60, 60, 60, 60]) == 2
 
 
-def test_batchstore_guess_max_blocksize_uses_full_batch_for_clevel_9(monkeypatch):
+def test_batchstore_guess_items_per_block_uses_full_batch_for_clevel_9(monkeypatch):
     monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 1)
     monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 1)
     barray = blosc2.BatchStore(cparams={"clevel": 9})
@@ -552,7 +852,7 @@ def test_batchstore_items_accessor(contiguous, urlpath):
 
     batches = [["a", "b"], [10, 11, 12], [{"x": 1}], [None, True]]
     flat = [item for batch in batches for item in batch]
-    barray = blosc2.BatchStore(storage=_storage(contiguous, urlpath), max_blocksize=2)
+    barray = blosc2.BatchStore(storage=_storage(contiguous, urlpath), items_per_block=2)
     barray.extend(batches)
 
     assert len(barray.items) == len(flat)

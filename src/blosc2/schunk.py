@@ -19,14 +19,28 @@ import numpy as np
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
-from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
+from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     """
     Class providing access to user metadata on an :ref:`SChunk`.
     It is available via the `.vlmeta` property of an :ref:`SChunk`.
+
+    Values are serialized using the general Blosc2 msgpack extensions; see
+    :ref:`Msgpack Serialization <MsgpackSerialization>`. Besides ordinary
+    msgpack-safe Python values, this includes:
+
+    - CFrame-backed Blosc2 objects such as :class:`blosc2.NDArray`,
+      :class:`blosc2.SChunk`, :class:`blosc2.VLArray`,
+      :class:`blosc2.BatchStore`, and :class:`blosc2.EmbedStore`
+    - structured references and lazy objects such as :class:`blosc2.Ref`,
+      :class:`blosc2.C2Array`, :class:`blosc2.LazyExpr`, and
+      :class:`blosc2.LazyUDF` backed by :func:`blosc2.dsl_kernel`
+
+    Lazy expressions and supported lazy UDFs still require durable operand
+    references only; purely in-memory operands are intentionally rejected.
     """
 
     def __init__(self, schunk, urlpath, mode, mmap_mode, initial_mapping_size):
@@ -72,7 +86,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
         Return all the variable length metalayers as a dictionary
 
         """
-        return super().to_dict()
+        return {name: self[name] for name in self}
 
     def __repr__(self):
         return repr(self.getall())
@@ -1607,7 +1621,7 @@ def _set_default_dparams(kwargs):
             kwargs["dparams"] = dparams
 
 
-def _process_opened_object(res):
+def process_opened_object(res):
     meta = getattr(res, "schunk", res).meta
     if "proxy-source" in meta:
         proxy_src = meta["proxy-source"]
@@ -1620,6 +1634,9 @@ def _process_opened_object(res):
         elif not proxy_src["caterva2_env"]:
             raise RuntimeError("Could not find the source when opening a Proxy")
 
+    if "b2o" in meta:
+        return blosc2.open_b2object(res)
+
     if "vlarray" in meta:
         from blosc2.vlarray import VLArray
 
@@ -1631,7 +1648,7 @@ def _process_opened_object(res):
         return BatchStore(_from_schunk=getattr(res, "schunk", res))
 
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
-        return blosc2._open_lazyarray(res)
+        return blosc2.open_lazyarray(res)
     else:
         return res
 
@@ -1764,4 +1781,4 @@ def open(
     _set_default_dparams(kwargs)
     res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
 
-    return _process_opened_object(res)
+    return process_opened_object(res)

@@ -8,6 +8,7 @@ Main Classes
 .. autosummary::
 
     NDArray
+    Index
     NDField
     LazyArray
     C2Array
@@ -18,6 +19,7 @@ Main Classes
     EmbedStore
     BatchStore
     VLArray
+    Ref
     Proxy
     ProxySource
     ProxyNDSource
@@ -27,6 +29,7 @@ Main Classes
     :maxdepth: 1
 
     ndarray
+    index
     ndfield
     lazyarray
     c2array
@@ -37,6 +40,7 @@ Main Classes
     embed_store
     batch_store
     vlarray
+    ref
     proxy
     proxysource
     proxyndsource
@@ -58,4 +62,5 @@ Other Classes
     Storage
     Tuner
     URLPath
+    Ref
     FPAccuracy

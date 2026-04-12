@@ -401,7 +401,7 @@ def test_metadata_discovery_reopens_renamed_external_vlarray(storage_type, tmp_p
         assert value.vlmeta["description"] == "Renamed VLArray"
 
 
-def test_metadata_discovery_warns_and_skips_unsupported_blosc2_leaf(tmp_path):
+def test_metadata_discovery_reopens_lazyexpr_leaf(tmp_path):
     path = tmp_path / "test_unsupported_lazyexpr.b2d"
 
     with DictStore(str(path), mode="w") as dstore:
@@ -413,13 +413,13 @@ def test_metadata_discovery_warns_and_skips_unsupported_blosc2_leaf(tmp_path):
     expr_path = path / "unsupported_lazyexpr.b2nd"
     expr.save(str(expr_path))
 
-    with pytest.warns(
-        UserWarning, match=r"Ignoring unsupported Blosc2 object.*unsupported_lazyexpr\.b2nd.*LazyExpr"
-    ):
-        dstore_read = DictStore(str(path), mode="r")
+    dstore_read = DictStore(str(path), mode="r")
     with dstore_read:
-        assert "/unsupported_lazyexpr" not in dstore_read
+        assert "/unsupported_lazyexpr" in dstore_read
         assert "/embedded" in dstore_read
+        value = dstore_read["/unsupported_lazyexpr"]
+        assert isinstance(value, blosc2.LazyExpr)
+        np.testing.assert_array_equal(value[:], np.arange(5) * 2)
 
 
 def _digest_value(value):

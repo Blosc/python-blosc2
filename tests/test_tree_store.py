@@ -675,7 +675,7 @@ def test_external_batchstore_support(tmp_path):
     store_path = tmp_path / "test_batchstore_external.b2d"
 
     with TreeStore(str(store_path), mode="w", threshold=0) as tstore:
-        bstore = blosc2.BatchStore(max_blocksize=2)
+        bstore = blosc2.BatchStore(items_per_block=2)
         bstore.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
         tstore["/data/batchstore"] = bstore
 
@@ -693,7 +693,7 @@ def test_metadata_discovery_reopens_renamed_batchstore_leaf(storage_type, tmp_pa
     store_path = tmp_path / f"test_batchstore_renamed.{storage_type}"
 
     with TreeStore(str(store_path), mode="w", threshold=0) as tstore:
-        bstore = blosc2.BatchStore(max_blocksize=2)
+        bstore = blosc2.BatchStore(items_per_block=2)
         bstore.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
         tstore["/data/batchstore"] = bstore
 
