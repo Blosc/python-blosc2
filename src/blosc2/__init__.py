@@ -559,7 +559,7 @@ from .ndarray import (
 from .embed_store import EmbedStore, estore_from_cframe
 from .dict_store import DictStore
 from .tree_store import TreeStore
-from .batch_store import Batch, BatchStore
+from .batch_array import Batch, BatchArray
 from .vlarray import VLArray, vlarray_from_cframe
 from .ref import Ref
 from .b2objects import open_b2object
@@ -748,7 +748,7 @@ __all__ = [  # noqa : RUF022
     "C2Array",
     "CParams",
     "Batch",
-    "BatchStore",
+    "BatchArray",
     # Enums
     "Codec",
     "DParams",

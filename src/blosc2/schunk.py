@@ -34,7 +34,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
 
     - CFrame-backed Blosc2 objects such as :class:`blosc2.NDArray`,
       :class:`blosc2.SChunk`, :class:`blosc2.VLArray`,
-      :class:`blosc2.BatchStore`, and :class:`blosc2.EmbedStore`
+      :class:`blosc2.BatchArray`, and :class:`blosc2.EmbedStore`
     - structured references and lazy objects such as :class:`blosc2.Ref`,
       :class:`blosc2.C2Array`, :class:`blosc2.LazyExpr`, and
       :class:`blosc2.LazyUDF` backed by :func:`blosc2.dsl_kernel`
@@ -1642,10 +1642,10 @@ def process_opened_object(res):
 
         return VLArray(_from_schunk=getattr(res, "schunk", res))
 
-    if "batchstore" in meta:
-        from blosc2.batch_store import BatchStore
+    if "batcharray" in meta:
+        from blosc2.batch_array import BatchArray
 
-        return BatchStore(_from_schunk=getattr(res, "schunk", res))
+        return BatchArray(_from_schunk=getattr(res, "schunk", res))
 
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
         return blosc2.open_lazyarray(res)
@@ -1658,7 +1658,7 @@ def open(
 ) -> (
     blosc2.SChunk
     | blosc2.NDArray
-    | blosc2.BatchStore
+    | blosc2.BatchArray
     | blosc2.VLArray
     | blosc2.C2Array
     | blosc2.LazyArray

@@ -13,7 +13,7 @@ The tutorial will cover these main containers, in this order:
 1. `SChunk`
 2. `NDArray`
 3. `VLArray`
-4. `BatchStore`
+4. `BatchArray`
 5. `EmbedStore`
 6. `DictStore`
 7. `TreeStore`
@@ -22,8 +22,8 @@ The tutorial will cover these main containers, in this order:
 Notes:
 
 - `SChunk` comes first because it is the basis for the higher-level local containers.
-- `Batch` is not part of the main list because it is a view returned by `BatchStore`, not a top-level container.
-- `Batch` can still be mentioned briefly inside the `BatchStore` section.
+- `Batch` is not part of the main list because it is a view returned by `BatchArray`, not a top-level container.
+- `Batch` can still be mentioned briefly inside the `BatchArray` section.
 
 ## Proposed Table of Contents
 
@@ -45,7 +45,7 @@ Notes:
    Explain that it stores one serialized variable-length item per entry.
    Position it as the ragged/object-like container.
 
-6. `BatchStore`: Batched Variable-Length Data
+6. `BatchArray`: Batched Variable-Length Data
    Explain that it stores batches in compressed chunks, with optional block-local reads inside each batch.
    Position it for batch-oriented ingestion and access.
 
@@ -131,7 +131,7 @@ The figures do not need to use only these colors, but these three should define 
 Recommended first-pass figure list:
 
 1. Overview map
-   Show the relationships among `SChunk`, `NDArray`, `VLArray`, `BatchStore`, `EmbedStore`, `DictStore`, `TreeStore`, and `C2Array`.
+   Show the relationships among `SChunk`, `NDArray`, `VLArray`, `BatchArray`, `EmbedStore`, `DictStore`, `TreeStore`, and `C2Array`.
 
 2. `SChunk`
    Show a sequence of compressed chunks plus metadata.
@@ -139,10 +139,10 @@ Recommended first-pass figure list:
 3. `NDArray`
    Show array semantics on top of chunked compressed storage.
 
-4. `VLArray` vs `BatchStore`
+4. `VLArray` vs `BatchArray`
    Side-by-side comparison:
    `VLArray` as one variable-sized item per entry;
-   `BatchStore` as one chunk per batch with internal subdivision.
+   `BatchArray` as one chunk per batch with internal subdivision.
 
 5. `EmbedStore` / `DictStore` / `TreeStore`
    Show the progression from embedded bundle to key-value store to hierarchical tree.
@@ -165,7 +165,7 @@ Suggested asset location:
 - `doc/getting_started/tutorials/images/containers/overview.svg`
 - `doc/getting_started/tutorials/images/containers/schunk.svg`
 - `doc/getting_started/tutorials/images/containers/ndarray.svg`
-- `doc/getting_started/tutorials/images/containers/vlarray-batchstore.svg`
+- `doc/getting_started/tutorials/images/containers/vlarray-batcharray.svg`
 - `doc/getting_started/tutorials/images/containers/stores.svg`
 
 ## Collaboration Workflow For Images
@@ -212,7 +212,7 @@ Examples should demonstrate:
 - `SChunk`: append/get/decompress or basic chunk operations
 - `NDArray`: create, persist, slice
 - `VLArray`: append and retrieve variable-length items
-- `BatchStore`: append a batch, iterate batches or items
+- `BatchArray`: append a batch, iterate batches or items
 - `EmbedStore`: put/get a couple of nodes
 - `DictStore`: assign named entries
 - `TreeStore`: assign hierarchical paths and traverse
@@ -243,17 +243,17 @@ Purpose:
 Core message:
 
 - `SChunk` is the storage foundation.
-- `NDArray`, `VLArray`, and `BatchStore` build on top of it.
+- `NDArray`, `VLArray`, and `BatchArray` build on top of it.
 - `EmbedStore`, `DictStore`, and `TreeStore` organize multiple containers.
 - `C2Array` is the remote-facing member of the family.
 
 Suggested layout:
 
 - One central `SChunk` box.
-- Three boxes above or to the right: `NDArray`, `VLArray`, `BatchStore`.
+- Three boxes above or to the right: `NDArray`, `VLArray`, `BatchArray`.
 - Three store boxes further out: `EmbedStore`, `DictStore`, `TreeStore`.
 - One separate remote box: `C2Array`.
-- Solid arrows from `SChunk` to `NDArray`, `VLArray`, `BatchStore`.
+- Solid arrows from `SChunk` to `NDArray`, `VLArray`, `BatchArray`.
 - Solid arrow from `DictStore` to `TreeStore`.
 - Dashed arrow between stores and `C2Array` to indicate references/remote links.
 
@@ -262,7 +262,7 @@ Suggested labels inside boxes:
 - `SChunk`: “compressed chunks + metadata”
 - `NDArray`: “N-D array semantics”
 - `VLArray`: “one variable-length item per entry”
-- `BatchStore`: “one batch per chunk”
+- `BatchArray`: “one batch per chunk”
 - `EmbedStore`: “embedded nodes”
 - `DictStore`: “named collection”
 - `TreeStore`: “hierarchical collection”
@@ -357,16 +357,16 @@ Visual note:
 
 - Different block widths are important here to visually reinforce variable-length storage.
 
-### 5. `vlarray-batchstore.svg`
+### 5. `vlarray-batcharray.svg`
 
 Purpose:
 
-- Compare `VLArray` and `BatchStore` directly.
+- Compare `VLArray` and `BatchArray` directly.
 
 Core message:
 
 - `VLArray`: one item per chunk.
-- `BatchStore`: one batch per chunk, possibly subdivided internally.
+- `BatchArray`: one batch per chunk, possibly subdivided internally.
 
 Suggested layout:
 
@@ -379,7 +379,7 @@ Left panel:
 
 Right panel:
 
-- `BatchStore`
+- `BatchArray`
 - Three logical batches, each mapping to one larger orange block.
 - Inside each batch block, draw smaller subdivisions to suggest internal blocks/items.
 
@@ -408,7 +408,7 @@ Suggested layout:
 - Inside it:
   one small `NDArray` node,
   one `SChunk` node,
-  one `VLArray` or `BatchStore` node,
+  one `VLArray` or `BatchArray` node,
   one dashed-link node for `C2Array` reference.
 - A green map/index strip on one side labeled `key -> offset/length`.
 

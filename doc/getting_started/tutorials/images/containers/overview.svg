@@ -35,7 +35,7 @@
   <title
      id="title">python-blosc2 container family overview</title>
   <desc
-     id="desc">A layered overview showing stores at the top, NDArray, VLArray, and BatchStore in the middle, SChunk as the storage foundation at the bottom, and C2Array attached to NDArray for remote access.</desc>
+     id="desc">A layered overview showing stores at the top, NDArray, VLArray, and BatchArray in the middle, SChunk as the storage foundation at the bottom, and C2Array attached to NDArray for remote access.</desc>
   <defs
      id="defs2">
     <marker
@@ -223,7 +223,7 @@
        x="90"
        y="100"
        class="tiny"
-       id="text19">BS</text>
+       id="text19">BA</text>
   </g>
   <g
      transform="translate(415 170)"
@@ -312,7 +312,7 @@
        x="90"
        y="100"
        class="tiny"
-       id="text27">BS</text>
+       id="text27">BA</text>
   </g>
   <g
      transform="translate(735 170)"
@@ -436,7 +436,7 @@
        x="90"
        y="100"
        class="tiny"
-       id="text38">BS</text>
+       id="text38">BA</text>
   </g>
   <g
      transform="translate(95 390)"
@@ -618,7 +618,7 @@
        x="132"
        y="40"
        class="label"
-       id="text53">BatchStore</text>
+       id="text53">BatchArray</text>
     <text
        x="132"
        y="64"
