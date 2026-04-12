@@ -897,6 +897,36 @@ def _compute_segment_summaries(values: np.ndarray, dtype: np.dtype, segment_len:
     return summaries
 
 
+def _fill_summaries_from_2d(
+    data_2d: np.ndarray,
+    summaries_arr: np.ndarray,
+    offset: int,
+    dtype: np.dtype,
+) -> None:
+    """Fill summaries_arr[offset:offset+n] from data_2d (shape n×segment_len) with vectorized ops."""
+    n = data_2d.shape[0]
+    if n == 0:
+        return
+    if dtype.kind == "f":
+        with np.errstate(all="ignore"):
+            has_nan = np.any(np.isnan(data_2d), axis=1)
+            all_nan = np.all(np.isnan(data_2d), axis=1)
+            mins = np.nanmin(data_2d, axis=1)
+            maxs = np.nanmax(data_2d, axis=1)
+        flags = np.where(has_nan, FLAG_HAS_NAN, np.uint8(0)).astype(np.uint8)
+        flags = np.where(all_nan, np.uint8(FLAG_ALL_NAN | FLAG_HAS_NAN), flags)
+        zero = dtype.type(0)
+        mins = np.where(all_nan, zero, mins).astype(dtype)
+        maxs = np.where(all_nan, zero, maxs).astype(dtype)
+    else:
+        mins = data_2d.min(axis=1)
+        maxs = data_2d.max(axis=1)
+        flags = np.zeros(n, dtype=np.uint8)
+    summaries_arr["min"][offset : offset + n] = mins
+    summaries_arr["max"][offset : offset + n] = maxs
+    summaries_arr["flags"][offset : offset + n] = flags
+
+
 def _compute_sorted_boundaries(values: np.ndarray, dtype: np.dtype, segment_len: int) -> np.ndarray:
     nsegments = math.ceil(values.shape[0] / segment_len)
     boundaries = np.empty(nsegments, dtype=_boundary_dtype(dtype))
@@ -1067,23 +1097,61 @@ def _build_levels_descriptor_ooc(
     persistent: bool,
     cparams: dict | None = None,
 ) -> dict:
-    levels = {}
     size = int(array.shape[0])
     summary_dtype = _summary_dtype(dtype)
-    for level in SEGMENT_LEVELS_BY_KIND[kind]:
-        segment_len = _segment_len(array, level)
-        nsegments = math.ceil(size / segment_len)
-        summaries = np.empty(nsegments, dtype=summary_dtype)
-        for idx in range(nsegments):
-            start = idx * segment_len
-            stop = min(start + segment_len, size)
-            summaries[idx] = _segment_summary(_slice_values_for_target(array, target, start, stop), dtype)
+    chunk_len = int(array.chunks[0])
+    levels_to_build = SEGMENT_LEVELS_BY_KIND[kind]
+    segment_lens = {level: _segment_len(array, level) for level in levels_to_build}
+    nsegments_total = {level: math.ceil(size / slen) for level, slen in segment_lens.items()}
+    all_summaries = {level: np.empty(n, dtype=summary_dtype) for level, n in nsegments_total.items()}
+
+    # Fast path: all segment sizes are ≤ chunk_len and divide it evenly, so no segment
+    # spans a chunk boundary.  A single decompression pass over the data suffices.
+    can_fast = all(slen <= chunk_len and chunk_len % slen == 0 for slen in segment_lens.values())
+
+    if can_fast:
+        seg_offsets = dict.fromkeys(levels_to_build, 0)
+        nchunks = math.ceil(size / chunk_len)
+        for chunk_id in range(nchunks):
+            chunk_start = chunk_id * chunk_len
+            chunk_stop = min(chunk_start + chunk_len, size)
+            chunk_values = _slice_values_for_target(array, target, chunk_start, chunk_stop)
+            chunk_size = chunk_stop - chunk_start
+            for level in levels_to_build:
+                slen = segment_lens[level]
+                summaries_arr = all_summaries[level]
+                offset = seg_offsets[level]
+                n_complete = chunk_size // slen
+                remainder = chunk_size % slen
+                if n_complete > 0:
+                    data_2d = chunk_values[: n_complete * slen].reshape(n_complete, slen)
+                    _fill_summaries_from_2d(data_2d, summaries_arr, offset, dtype)
+                if remainder > 0:
+                    summaries_arr[offset + n_complete] = _segment_summary(
+                        chunk_values[n_complete * slen :], dtype
+                    )
+                    seg_offsets[level] = offset + n_complete + 1
+                else:
+                    seg_offsets[level] = offset + n_complete
+    else:
+        # Fallback: original segment-by-segment approach
+        for level in levels_to_build:
+            slen = segment_lens[level]
+            for idx in range(nsegments_total[level]):
+                start = idx * slen
+                stop = min(start + slen, size)
+                all_summaries[level][idx] = _segment_summary(
+                    _slice_values_for_target(array, target, start, stop), dtype
+                )
+
+    levels = {}
+    for level in levels_to_build:
         sidecar = _store_array_sidecar(
-            array, token, kind, "summary", level, summaries, persistent, cparams=cparams
+            array, token, kind, "summary", level, all_summaries[level], persistent, cparams=cparams
         )
         levels[level] = {
-            "segment_len": segment_len,
-            "nsegments": len(summaries),
+            "segment_len": segment_lens[level],
+            "nsegments": nsegments_total[level],
             "path": sidecar["path"],
             "dtype": sidecar["dtype"],
         }
@@ -2540,12 +2608,12 @@ def _merge_run_pair(
             )
             right_cut = right_values.size
 
-        merged_values, merged_positions = _merge_sorted_slices(
+        merged_values, merged_positions = indexing_ext.intra_chunk_merge_sorted_slices(
             left_values[:left_cut],
             left_positions[:left_cut],
             right_values[:right_cut],
             right_positions[:right_cut],
-            dtype,
+            np.int64,
         )
         take = merged_values.size
         out_values[out_cursor : out_cursor + take] = merged_values
@@ -2603,10 +2671,7 @@ def _build_full_descriptor_ooc(
     for run_id, start in enumerate(range(0, size, run_items)):
         stop = min(start + run_items, size)
         values = _slice_values_for_target(array, target, start, stop)
-        positions = np.arange(start, stop, dtype=np.int64)
-        order = np.lexsort((positions, values))
-        sorted_values = values[order]
-        sorted_positions = positions[order]
+        sorted_values, sorted_positions = indexing_ext.intra_chunk_sort_run(values, start, np.int64)
         runs.append(
             _materialize_sorted_run(
                 sorted_values,
