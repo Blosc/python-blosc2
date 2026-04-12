@@ -10,12 +10,11 @@ from __future__ import annotations
 import builtins
 import inspect
 import math
-import tempfile
 from abc import abstractmethod
 from collections import OrderedDict, namedtuple
 from collections.abc import Mapping
 from functools import reduce
-from itertools import product
+from itertools import islice, product
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
 
 from numpy.exceptions import ComplexWarning
@@ -6029,20 +6028,37 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
 def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
     """Create a new array from an iterable object.
 
+    The iterable is consumed exactly once and in a defined order.  Values are
+    never re-read, so plain generators and other one-pass sources are
+    fully supported.
+
     Parameters
     ----------
     iterable: iterable
-        An iterable object providing data for the array.
+        An iterable object providing data for the array.  It must yield at
+        least ``math.prod(shape)`` values; any surplus values are ignored.
+        If the iterable is exhausted before the array is full, a
+        ``ValueError`` is raised.
+
+        As a special fast path, if *iterable* is a :class:`numpy.ndarray` the
+        element-by-element Python iteration is skipped entirely: the array is
+        cast to *dtype* and written directly to the destination.
     shape: int, tuple or list
         The shape of the final array.
     dtype: np.dtype or list str
         The data type of the array elements in NumPy format.
     c_order: bool
-        Whether to store the array in C order (row-major) or insertion order.
-        Insertion order means that iterable values will be stored in the array
-        following the order of chunks in the array; this is more memory
-        efficient, as it does not require an intermediate copy of the array.
-        Default is C order.
+        Controls the order in which values are consumed from *iterable*.
+
+        * ``True`` (default) – values are consumed in standard C / row-major
+          order, matching ``numpy.fromiter(iterable, dtype).reshape(shape)``.
+          A temporary in-memory buffer equal to the full array size is used.
+        * ``False`` – values are consumed in *chunk-insertion order*: the
+          first ``chunk_size`` values fill the first chunk, the next
+          ``chunk_size`` values fill the second chunk, and so on.  A page
+          buffer (default 1 M elements) amortises the Python iterator
+          call overhead across chunks, so the number of :func:`numpy.fromiter`
+          calls is O(total / page) rather than O(n_chunks).
 
     Other Parameters
     ----------------
@@ -6063,32 +6079,76 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
     >>> print(array[:])
     [0 1 2 3 4 5 6 7 8 9]
     """
-
-    def iter_fill(inputs, output, offset):
-        nout = math.prod(output.shape)
-        (iterable,) = inputs
-        output[:] = np.fromiter(iterable, dtype=output.dtype, count=nout).reshape(output.shape)
-
+    # --- Optimisation C: numpy fast path ---
+    # If the caller already holds the data in a numpy array we can bypass all
+    # Python-level element iteration and write straight to the destination.
     dtype = _check_dtype(dtype)
+    shape = tuple(shape) if not isinstance(shape, tuple) else shape
+
+    if isinstance(iterable, np.ndarray):
+        dst = empty(shape, dtype=dtype, **kwargs)
+        if math.prod(shape) > 0:
+            dst[:] = np.asarray(iterable, dtype=dtype).reshape(shape)
+        return dst
 
     if is_inside_new_expr():
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype)
 
-    lshape = (math.prod(shape),)
-    inputs = (iterable,)
-    lazyarr = blosc2.lazyudf(iter_fill, inputs, dtype=dtype, shape=lshape)
+    # Ensure we hold a true one-shot iterator so that re-iterable objects
+    # (e.g. range, list) are consumed sequentially across all chunks.
+    iterable = iter(iterable)
 
-    if len(shape) == 1:
-        # C order is guaranteed, and no reshape is needed
-        return lazyarr.compute(**kwargs)
+    total_size = math.prod(shape)
+    dst = empty(shape, dtype=dtype, **kwargs)
 
-    # TODO: in principle, the next should work, but tests still fail:
-    # return reshape(lazyarr, shape, c_order=c_order, **kwargs)
-    # Creating a temporary file is a workaround for the issue
-    with tempfile.NamedTemporaryFile(suffix=".b2nd", delete=True) as tmp_file:
-        larr = lazyarr.compute(urlpath=tmp_file.name, mode="w")  # intermediate array
-        return reshape(larr, shape, c_order=c_order, **kwargs)
+    if total_size == 0:
+        return dst
+
+    if c_order or len(shape) == 1:
+        # Read the entire iterator into a numpy array, then write to the destination.
+        # This is O(total_size) in memory but requires only one pass over the
+        # iterable and avoids any temporary on-disk file.
+        buf = np.fromiter(iterable, dtype=dtype, count=total_size)
+        dst[:] = buf.reshape(shape)
+    else:
+        # --- Optimisation A: page-buffered chunk-insertion order ---
+        # Instead of calling np.fromiter once per chunk (O(n_chunks) calls),
+        # we pre-read a page of _PAGE_NELEMS elements at a time.  This reduces
+        # call overhead from O(n_chunks) to O(total / _PAGE_NELEMS), which is
+        # decisive when chunks are small (e.g. (10, 10) → 10 000 chunks vs
+        # ~1 page for a 1 000 × 1 000 array).
+        _PAGE_NELEMS = 1 << 20  # 1 M elements (~8 MB for float64)
+
+        page = np.empty(0, dtype=dtype)
+        page_start = 0  # index of the first unread element in `page`
+
+        for chunk_info in dst.iterchunks_info():
+            dst_slice = tuple(
+                slice(c * s, builtins.min((c + 1) * s, sh))
+                for c, s, sh in zip(chunk_info.coords, dst.chunks, dst.shape, strict=False)
+            )
+            chunk_shape = tuple(s.stop - s.start for s in dst_slice)
+            count = math.prod(chunk_shape)
+
+            available = len(page) - page_start
+            if available < count:
+                # Compact the leftover tail, then read a new page.
+                leftover = page[page_start:] if available > 0 else None
+                to_read = builtins.max(_PAGE_NELEMS, count)
+                new_data = np.fromiter(islice(iterable, to_read), dtype=dtype)
+                if available + len(new_data) < count:
+                    raise ValueError(
+                        f"iterator exhausted: chunk at coords {chunk_info.coords} "
+                        f"requires {count} elements but only {available + len(new_data)} remain"
+                    )
+                page = np.concatenate([leftover, new_data]) if leftover is not None else new_data
+                page_start = 0
+
+            dst[dst_slice] = page[page_start : page_start + count].reshape(chunk_shape)
+            page_start += count
+
+    return dst
 
 
 def frombuffer(

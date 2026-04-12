@@ -293,6 +293,156 @@ def test_fromiter(it, shape, dtype, chunks, blocks, c_order):
         pass
 
 
+class CountingIterator:
+    """Iterator that tracks how many values were successfully yielded."""
+
+    def __init__(self, data):
+        self._data = iter(data)
+        self.call_count = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        # Increment only on successful yield; StopIteration exits before the count
+        # so that the count reflects elements consumed, not attempts made.
+        val = next(self._data)
+        self.call_count += 1
+        return val
+
+
+def test_fromiter_single_pass():
+    """Verify the iterable is consumed exactly once (no replay / no random access)."""
+    total = 60
+    it = CountingIterator(range(total))
+    a = blosc2.fromiter(it, dtype=np.int32, shape=(3, 4, 5), chunks=(2, 2, 3), blocks=(1, 1, 2))
+    assert it.call_count == total, f"Expected {total} __next__ calls, got {it.call_count}"
+    b = np.arange(total, dtype=np.int32).reshape(3, 4, 5)
+    np.testing.assert_array_equal(a[:], b)
+
+
+def test_fromiter_single_pass_corder_false():
+    """Verify single-pass consumption with c_order=False."""
+    total = 60
+    it = CountingIterator(range(total))
+    a = blosc2.fromiter(
+        it, dtype=np.int32, shape=(3, 4, 5), chunks=(2, 2, 3), blocks=(1, 1, 2), c_order=False
+    )
+    assert it.call_count == total, f"Expected {total} __next__ calls, got {it.call_count}"
+
+
+def test_fromiter_generator_no_rewind():
+    """Plain generator (not rewindable) must work correctly."""
+
+    def gen(n):
+        yield from range(n)
+
+    shape = (4, 6)
+    a = blosc2.fromiter(gen(24), dtype=np.float64, shape=shape, chunks=(2, 3), blocks=(1, 2))
+    b = np.arange(24, dtype=np.float64).reshape(shape)
+    np.testing.assert_array_equal(a[:], b)
+
+
+def test_fromiter_corder_false_chunk_values():
+    """With c_order=False, each chunk should contain consecutive values from the iterator."""
+    shape = (4, 6)
+    chunks = (2, 3)
+    dtype = np.int32
+    total = math.prod(shape)
+
+    a = blosc2.fromiter(range(total), dtype=dtype, shape=shape, chunks=chunks, blocks=(1, 2), c_order=False)
+
+    # Build a reference array showing what chunk-insertion order looks like:
+    # chunk coords iterate as (0,0), (0,1), (1,0), (1,1) for this shape/chunk combo
+    ref = np.empty(shape, dtype=dtype)
+    dst_tmp = blosc2.empty(shape, dtype=dtype, chunks=chunks, blocks=(1, 2))
+    flat_iter = iter(range(total))
+    for chunk_info in dst_tmp.iterchunks_info():
+        dst_slice = tuple(
+            slice(c * s, min((c + 1) * s, sh))
+            for c, s, sh in zip(chunk_info.coords, dst_tmp.chunks, dst_tmp.shape, strict=False)
+        )
+        chunk_shape = tuple(s.stop - s.start for s in dst_slice)
+        count = math.prod(chunk_shape)
+        buf = np.fromiter(flat_iter, dtype=dtype, count=count)
+        ref[dst_slice] = buf.reshape(chunk_shape)
+
+    np.testing.assert_array_equal(a[:], ref)
+
+
+@pytest.mark.parametrize(
+    ("shape", "dtype", "chunks", "blocks"),
+    [
+        ((10,), np.int32, (5,), (2,)),
+        ((4, 6), np.float32, (2, 3), (1, 2)),
+        ((2, 3, 4), np.int8, (2, 2, 2), (1, 1, 2)),
+        ((2, 3, 4, 2), np.uint8, (2, 2, 2, 2), (1, 1, 2, 1)),
+    ],
+)
+def test_fromiter_exhausted_iterator_raises(shape, dtype, chunks, blocks):
+    """fromiter() must raise when the iterator runs out before the array is full."""
+    total = math.prod(shape)
+    short_iter = range(total - 1)  # one element too few
+    with pytest.raises((ValueError, StopIteration)):
+        blosc2.fromiter(short_iter, dtype=dtype, shape=shape, chunks=chunks, blocks=blocks)
+
+
+def test_fromiter_empty_shape():
+    """fromiter() with a zero-size shape should return an empty array without consuming anything."""
+    it = CountingIterator(range(100))
+    a = blosc2.fromiter(it, dtype=np.int32, shape=(0,))
+    assert a.shape == (0,)
+    assert it.call_count == 0
+
+
+def test_fromiter_structured_dtype_2d():
+    """fromiter() should handle structured dtypes for multidimensional arrays."""
+    dtype = np.dtype([("x", np.int32), ("y", np.float32)])
+    data = [(i, float(i) * 0.5) for i in range(12)]
+    a = blosc2.fromiter(iter(data), dtype=dtype, shape=(3, 4), chunks=(2, 2), blocks=(1, 1))
+    b = np.array(data, dtype=dtype).reshape(3, 4)
+    np.testing.assert_array_equal(a[:], b)
+
+
+@pytest.mark.parametrize("c_order", [True, False])
+def test_fromiter_higher_dims(c_order):
+    """fromiter() for 3-D and 4-D with various chunk/block configs."""
+    shape3 = (3, 5, 7)
+    data3 = range(math.prod(shape3))
+    a3 = blosc2.fromiter(
+        data3, dtype=np.int16, shape=shape3, chunks=(2, 3, 4), blocks=(1, 2, 2), c_order=c_order
+    )
+    if c_order:
+        b3 = np.arange(math.prod(shape3), dtype=np.int16).reshape(shape3)
+        np.testing.assert_array_equal(a3[:], b3)
+
+    shape4 = (2, 3, 4, 5)
+    data4 = range(math.prod(shape4))
+    a4 = blosc2.fromiter(
+        data4, dtype=np.float32, shape=shape4, chunks=(2, 2, 2, 3), blocks=(1, 1, 2, 2), c_order=c_order
+    )
+    if c_order:
+        b4 = np.arange(math.prod(shape4), dtype=np.float32).reshape(shape4)
+        np.testing.assert_array_equal(a4[:], b4)
+
+
+@pytest.mark.parametrize("c_order", [True, False])
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks"),
+    [
+        ((10,), (5,), (2,)),
+        ((4, 6), (2, 3), (1, 2)),
+        ((3, 4, 5), (2, 2, 3), (1, 1, 2)),
+    ],
+)
+def test_fromiter_numpy_fast_path(shape, chunks, blocks, c_order):
+    """fromiter() with a numpy ndarray input should bypass generator overhead."""
+    dtype = np.float32
+    src = np.arange(math.prod(shape), dtype=dtype).reshape(shape)
+    a = blosc2.fromiter(src, dtype=dtype, shape=shape, chunks=chunks, blocks=blocks, c_order=c_order)
+    np.testing.assert_array_equal(a[:], src)
+
+
 @pytest.mark.parametrize("order", ["f0", "f1", "f2", None])
 def test_sort(order):
     it = ((x + 1, x - 2, -x) for x in range(10))
