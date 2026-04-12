@@ -208,6 +208,25 @@ def test_arange(sss, shape, dtype, chunks, blocks, c_order):
 
 
 @pytest.mark.parametrize(
+    ("start", "stop", "step"),
+    [
+        (10, 2, 1),  # stop < start, positive step
+        (2, 10, -1),  # start < stop, negative step
+        (5, 5, 1),  # start == stop
+        (0, 0, 1),  # both zero
+    ],
+)
+def test_arange_empty(start, stop, step):
+    """blosc2.arange() should return an empty array when the range is empty, like numpy."""
+    a = blosc2.arange(start, stop, step)
+    b = np.arange(start, stop, step)
+    assert a.shape == b.shape
+    assert a.shape == (0,)
+    assert isinstance(a, blosc2.NDArray)
+    np.testing.assert_array_equal(a[:], b)
+
+
+@pytest.mark.parametrize(
     ("ss", "shape", "dtype", "chunks", "blocks"),
     [
         ((0, 7), (10,), np.float32, (10,), (2,)),

@@ -5847,7 +5847,7 @@ def arange(
         )
     dtype = _check_dtype(dtype)
 
-    if is_inside_new_expr() or NUM < 0:
+    if is_inside_new_expr() or NUM == 0:
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
