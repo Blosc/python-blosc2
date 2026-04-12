@@ -6106,11 +6106,22 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
         return dst
 
     if c_order or len(shape) == 1:
-        # Read the entire iterator into a numpy array, then write to the destination.
-        # This is O(total_size) in memory but requires only one pass over the
-        # iterable and avoids any temporary on-disk file.
-        buf = np.fromiter(iterable, dtype=dtype, count=total_size)
-        dst[:] = buf.reshape(shape)
+        # --- Phase 3B: chunk-row buffering ---
+        # Process one "chunk row" at a time (all chunks sharing the same
+        # first-dimension chunk coordinate).  This bounds peak memory to
+        # O(chunks[0] * prod(shape[1:])) instead of O(total_size), while
+        # still using only one np.fromiter call per chunk row.
+        #
+        # For a (5 000, 5 000) array with chunks=(500, 500) this is
+        # 10 × 20 MB reads instead of one 200 MB allocation.
+        row_h = dst.chunks[0]  # elements in dim-0 per chunk row
+        tail_nelems = math.prod(shape[1:])  # elements per row in the remaining dims
+
+        for row_start in range(0, shape[0], row_h):
+            row_end = builtins.min(row_start + row_h, shape[0])
+            n = (row_end - row_start) * tail_nelems
+            buf = np.fromiter(islice(iterable, n), dtype=dtype, count=n)
+            dst[row_start:row_end] = buf.reshape((row_end - row_start,) + shape[1:])
     else:
         # --- Optimisation A: page-buffered chunk-insertion order ---
         # Instead of calling np.fromiter once per chunk (O(n_chunks) calls),
@@ -6118,7 +6129,8 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
         # call overhead from O(n_chunks) to O(total / _PAGE_NELEMS), which is
         # decisive when chunks are small (e.g. (10, 10) → 10 000 chunks vs
         # ~1 page for a 1 000 × 1 000 array).
-        _PAGE_NELEMS = 1 << 20  # 1 M elements (~8 MB for float64)
+        _PAGE_BYTES = 8 << 20  # 8 MB target page size
+        _PAGE_NELEMS = builtins.max(1, _PAGE_BYTES // dtype.itemsize)
 
         page = np.empty(0, dtype=dtype)
         page_start = 0  # index of the first unread element in `page`
