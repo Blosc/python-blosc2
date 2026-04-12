@@ -50,6 +50,11 @@ add_custom_command(
 
 # ...and add it to the target
 Python_add_library(blosc2_ext MODULE blosc2_ext.c WITH_SOABI)
+target_sources(blosc2_ext PRIVATE src/blosc2/matmul_kernels.c)
+target_include_directories(blosc2_ext PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2)
+if(UNIX)
+  target_link_libraries(blosc2_ext PRIVATE ${CMAKE_DL_LIBS})
+endif()
 Python_add_library(indexing_ext MODULE indexing_ext.c WITH_SOABI)
 
 # We need to link against NumPy
@@ -79,6 +84,9 @@ FetchContent_MakeAvailable(miniexpr)
 
 # Link against miniexpr static library
 target_link_libraries(blosc2_ext PRIVATE miniexpr_static)
+if(APPLE)
+  target_link_libraries(blosc2_ext PRIVATE "-framework Accelerate")
+endif()
 
 target_compile_features(blosc2_ext PRIVATE c_std_11)
 target_compile_features(indexing_ext PRIVATE c_std_11)

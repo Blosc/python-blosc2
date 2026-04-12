@@ -93,6 +93,36 @@ If you want to run the network tests, you can use the following command:
   pytest -m "network"
 ```
 
+## Matmul backend discovery
+
+The fast `blosc2.matmul` path uses platform-specific block kernels:
+
+- macOS: `Accelerate`
+- Linux/Windows: runtime-discovered `cblas`
+- fallback: portable `naive` kernel
+
+For the runtime `cblas` backend, `python-blosc2` probes the active Python/NumPy
+environment rather than linking to one BLAS vendor at build time.  Discovery
+starts from NumPy's reported BLAS library directory when available, and then
+searches common library names in the active environment's `lib` directories.
+
+On Linux the current candidates include `libcblas`, `libopenblas`,
+`libflexiblas`, `libblis`, `libmkl_rt`, and generic `libblas`.  A candidate is
+accepted only if it loads successfully and exports both `cblas_sgemm` and
+`cblas_dgemm`.  If no suitable provider is found, the fast path falls back to
+the `naive` kernel.
+
+Useful runtime helpers:
+
+- `blosc2.get_matmul_library()` reports the selected runtime library when available
+- `BLOSC_TRACE=1` logs candidate probing, rejection, selection, and backend fallback
+
+Example:
+
+```bash
+BLOSC_TRACE=1 python -c "import blosc2; print(blosc2.get_matmul_library())"
+```
+
 ## wasm32 / Pyodide developer workflow
 
 For the local wasm32 workflow (uv + pyodide-build + cibuildwheel + test loop),
