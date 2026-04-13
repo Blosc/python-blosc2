@@ -12,6 +12,7 @@ import math
 import os
 import re
 import statistics
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -161,7 +162,9 @@ def ordered_ids_from_positions(positions: np.ndarray, size: int, dtype: np.dtype
     raise ValueError(f"unsupported dtype for benchmark: {dtype}")
 
 
-def fill_ids(ids: np.ndarray, ordered_ids: np.ndarray, dist: str, rng: np.random.Generator, block_len: int) -> None:
+def fill_ids(
+    ids: np.ndarray, ordered_ids: np.ndarray, dist: str, rng: np.random.Generator, block_len: int
+) -> None:
     size = ids.shape[0]
     if dist == "sorted":
         ids[:] = ordered_ids
@@ -199,10 +202,14 @@ def format_geometry_value(value: int | None) -> str:
     return "auto" if value is None else f"{value:,}"
 
 
-def resolve_geometry(shape: tuple[int, ...], dtype: np.dtype, chunks: int | None, blocks: int | None) -> tuple[int, int]:
+def resolve_geometry(
+    shape: tuple[int, ...], dtype: np.dtype, chunks: int | None, blocks: int | None
+) -> tuple[int, int]:
     chunk_spec = None if chunks is None else (chunks,)
     block_spec = None if blocks is None else (blocks,)
-    resolved_chunks, resolved_blocks = blosc2.compute_chunks_blocks(shape, chunk_spec, block_spec, dtype=dtype)
+    resolved_chunks, resolved_blocks = blosc2.compute_chunks_blocks(
+        shape, chunk_spec, block_spec, dtype=dtype
+    )
     return int(resolved_chunks[0]), int(resolved_blocks[0])
 
 
@@ -285,7 +292,9 @@ def build_persistent_array(
     return arr
 
 
-def base_array_path(size_dir: Path, size: int, dist: str, id_dtype: np.dtype, chunks: int | None, blocks: int | None) -> Path:
+def base_array_path(
+    size_dir: Path, size: int, dist: str, id_dtype: np.dtype, chunks: int | None, blocks: int | None
+) -> Path:
     return (
         size_dir
         / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{DATASET_LAYOUT_VERSION}.{geometry_token(chunks, blocks)}.b2nd"
@@ -512,7 +521,18 @@ def benchmark_size(
     for kind in kinds:
         idx_arr, build_time = _open_or_build_indexed_array(
             indexed_array_path(
-                size_dir, size, dist, kind, optlevel, id_dtype, in_mem, chunks, blocks, codec, clevel, nthreads
+                size_dir,
+                size,
+                dist,
+                kind,
+                optlevel,
+                id_dtype,
+                in_mem,
+                chunks,
+                blocks,
+                codec,
+                clevel,
+                nthreads,
             ),
             size,
             dist,
@@ -813,6 +833,15 @@ def run_benchmarks(
         f"index_clevel={'auto' if clevel is None else clevel}, "
         f"index_nthreads={'auto' if nthreads is None else nthreads}"
     )
+    cold_widths = progress_widths(COLD_COLUMNS, sizes, dists, kinds, id_dtype)
+    print()
+    print("Cold Query Table")
+    print_table_header(COLD_COLUMNS, cold_widths)
+
+    def cold_progress_callback(row: dict) -> None:
+        print_table_row(row, COLD_COLUMNS, cold_widths)
+        sys.stdout.flush()
+
     for dist in dists:
         for size in sizes:
             size_results = benchmark_size(
@@ -831,12 +860,9 @@ def run_benchmarks(
                 clevel,
                 nthreads,
                 kinds,
+                cold_row_callback=cold_progress_callback,
             )
             all_results.extend(size_results)
-    cold_widths = table_widths(all_results, COLD_COLUMNS)
-    print()
-    print("Cold Query Table")
-    print_table(all_results, COLD_COLUMNS, cold_widths)
     if repeats > 0:
         measure_warm_queries(all_results, repeats)
         warm_widths = table_widths(all_results, WARM_COLUMNS)
@@ -855,7 +881,9 @@ def _format_row(cells: list[str], widths: list[int]) -> str:
     return "  ".join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True))
 
 
-def _table_rows(results: list[dict], columns: list[tuple[str, callable]]) -> tuple[list[str], list[list[str]], list[int]]:
+def _table_rows(
+    results: list[dict], columns: list[tuple[str, callable]]
+) -> tuple[list[str], list[list[str]], list[int]]:
     headers = [header for header, _ in columns]
     widths = [len(header) for header in headers]
     rows = [[formatter(result) for _, formatter in columns] for result in results]
@@ -864,7 +892,9 @@ def _table_rows(results: list[dict], columns: list[tuple[str, callable]]) -> tup
     return headers, rows, widths
 
 
-def print_table(results: list[dict], columns: list[tuple[str, callable]], widths: list[int] | None = None) -> None:
+def print_table(
+    results: list[dict], columns: list[tuple[str, callable]], widths: list[int] | None = None
+) -> None:
     headers, rows, computed_widths = _table_rows(results, columns)
     widths = computed_widths if widths is None else widths
     print(_format_row(headers, widths))
@@ -881,7 +911,9 @@ def print_table_header(columns: list[tuple[str, callable]], widths: list[int] | 
     print(_format_row(["-" * width for width in widths], widths))
 
 
-def print_table_row(result: dict, columns: list[tuple[str, callable]], widths: list[int] | None = None) -> None:
+def print_table_row(
+    result: dict, columns: list[tuple[str, callable]], widths: list[int] | None = None
+) -> None:
     cells = [formatter(result) for _, formatter in columns]
     if widths is None:
         widths = [max(len(header), len(cell)) for (header, _), cell in zip(columns, cells, strict=True)]
