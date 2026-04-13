@@ -1103,6 +1103,26 @@ def test_compact_full_expression_index_preserves_results():
     np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
 
 
+def test_forced_ooc_full_index_merge_preserves_sorted_sidecars(monkeypatch, tmp_path):
+    path = tmp_path / "forced_ooc_full_merge.b2nd"
+    rng = np.random.default_rng(14)
+    data = np.arange(4096, dtype=np.int64)
+    rng.shuffle(data)
+
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(256,), blocks=(64,))
+    indexing = __import__("blosc2.indexing", fromlist=["FULL_OOC_RUN_ITEMS", "FULL_OOC_MERGE_BUFFER_ITEMS"])
+    monkeypatch.setattr(indexing, "FULL_OOC_RUN_ITEMS", 512)
+    monkeypatch.setattr(indexing, "FULL_OOC_MERGE_BUFFER_ITEMS", 128)
+
+    descriptor = arr.create_index(kind="full")
+    meta = descriptor["full"]
+    values_sidecar = blosc2.open(meta["values_path"])
+    positions_sidecar = blosc2.open(meta["positions_path"])
+
+    np.testing.assert_array_equal(values_sidecar[:], np.sort(data, kind="stable"))
+    np.testing.assert_array_equal(values_sidecar[:], data[positions_sidecar[:]])
+
+
 @pytest.mark.parametrize("persistent", [False, True])
 def test_compact_full_index_rebuilds_navigation_without_whole_loading(monkeypatch, tmp_path, persistent):
     dtype = np.dtype([("a", np.int64), ("b", np.int64)])

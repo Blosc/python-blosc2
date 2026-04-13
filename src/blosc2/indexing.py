@@ -2582,6 +2582,38 @@ def _read_ndarray_linear_span(array: blosc2.NDArray | np.ndarray, start: int, ou
         out_cursor += take
 
 
+def _write_ndarray_linear_span(array: blosc2.NDArray | np.ndarray, start: int, values: np.ndarray) -> None:
+    if len(values) == 0:
+        return
+    stop = int(start) + len(values)
+    if stop > int(array.shape[0]):
+        raise RuntimeError(
+            f"attempted to write past the end of temporary array: stop={stop}, length={int(array.shape[0])}"
+        )
+    if isinstance(array, np.ndarray):
+        array[start:stop] = values
+        return
+    chunk_len = int(array.chunks[0])
+    cursor = int(start)
+    in_cursor = 0
+    while in_cursor < len(values):
+        chunk_id = cursor // chunk_len
+        local_start = cursor % chunk_len
+        take = min(len(values) - in_cursor, chunk_len - local_start)
+        try:
+            array[cursor : cursor + take] = values[in_cursor : in_cursor + take]
+        except Exception as exc:
+            raise RuntimeError(
+                "failed temporary sidecar span write: "
+                f"array_len={int(array.shape[0])}, chunk_len={chunk_len}, "
+                f"write_start={cursor}, write_stop={cursor + take}, "
+                f"write_items={take}, local_start={local_start}, chunk_id={chunk_id}, "
+                f"input_offset={in_cursor}, input_len={len(values)}, dtype={np.dtype(array.dtype)}"
+            ) from exc
+        cursor += take
+        in_cursor += take
+
+
 def _read_sidecar_span(handle, start: int, stop: int) -> np.ndarray:
     if stop <= start:
         return np.empty(0, dtype=np.dtype(handle.dtype))
@@ -2608,8 +2640,8 @@ def _materialize_sorted_run(
     run_positions = _create_blosc2_temp_array(
         positions_path, length, np.dtype(np.int64), FULL_OOC_MERGE_BUFFER_ITEMS, cparams
     )
-    run_values[:] = values
-    run_positions[:] = positions
+    _write_ndarray_linear_span(run_values, 0, values)
+    _write_ndarray_linear_span(run_positions, 0, positions)
     del run_values, run_positions
     _tracker_register_create(tracker, values_path, positions_path)
     return SortedRun(values_path, positions_path, length)
@@ -2698,6 +2730,7 @@ def _merge_run_pair(
     out_positions = _create_blosc2_temp_array(
         out_positions_path, left.length + right.length, np.dtype(np.int64), buffer_items, cparams
     )
+    out_total = left.length + right.length
 
     left_cursor = 0
     right_cursor = 0
@@ -2720,16 +2753,32 @@ def _merge_run_pair(
             break
         if left_values.size == 0:
             take = right_values.size
-            out_values[out_cursor : out_cursor + take] = right_values
-            out_positions[out_cursor : out_cursor + take] = right_positions
+            try:
+                _write_ndarray_linear_span(out_values, out_cursor, right_values)
+                _write_ndarray_linear_span(out_positions, out_cursor, right_positions)
+            except Exception as exc:
+                raise RuntimeError(
+                    "full index OOC merge write failed while flushing right run remainder: "
+                    f"merge_id={merge_id}, left_len={left.length}, right_len={right.length}, "
+                    f"out_total={out_total}, out_cursor={out_cursor}, take={take}, "
+                    f"left_cursor={left_cursor}, right_cursor={right_cursor}, buffer_items={buffer_items}"
+                ) from exc
             out_cursor += take
             right_values = np.empty(0, dtype=dtype)
             right_positions = np.empty(0, dtype=np.int64)
             continue
         if right_values.size == 0:
             take = left_values.size
-            out_values[out_cursor : out_cursor + take] = left_values
-            out_positions[out_cursor : out_cursor + take] = left_positions
+            try:
+                _write_ndarray_linear_span(out_values, out_cursor, left_values)
+                _write_ndarray_linear_span(out_positions, out_cursor, left_positions)
+            except Exception as exc:
+                raise RuntimeError(
+                    "full index OOC merge write failed while flushing left run remainder: "
+                    f"merge_id={merge_id}, left_len={left.length}, right_len={right.length}, "
+                    f"out_total={out_total}, out_cursor={out_cursor}, take={take}, "
+                    f"left_cursor={left_cursor}, right_cursor={right_cursor}, buffer_items={buffer_items}"
+                ) from exc
             out_cursor += take
             left_values = np.empty(0, dtype=dtype)
             left_positions = np.empty(0, dtype=np.int64)
@@ -2754,13 +2803,30 @@ def _merge_run_pair(
             np.int64,
         )
         take = merged_values.size
-        out_values[out_cursor : out_cursor + take] = merged_values
-        out_positions[out_cursor : out_cursor + take] = merged_positions
+        try:
+            _write_ndarray_linear_span(out_values, out_cursor, merged_values)
+            _write_ndarray_linear_span(out_positions, out_cursor, merged_positions)
+        except Exception as exc:
+            raise RuntimeError(
+                "full index OOC merge write failed for merged batch: "
+                f"merge_id={merge_id}, left_len={left.length}, right_len={right.length}, "
+                f"out_total={out_total}, out_cursor={out_cursor}, take={take}, "
+                f"left_cursor={left_cursor}, right_cursor={right_cursor}, "
+                f"left_buffer={left_values.size}, right_buffer={right_values.size}, "
+                f"left_cut={left_cut}, right_cut={right_cut}, buffer_items={buffer_items}"
+            ) from exc
         out_cursor += take
         left_values = left_values[left_cut:]
         left_positions = left_positions[left_cut:]
         right_values = right_values[right_cut:]
         right_positions = right_positions[right_cut:]
+
+    if out_cursor != out_total:
+        raise RuntimeError(
+            "full index OOC merge produced an unexpected output length: "
+            f"merge_id={merge_id}, left_len={left.length}, right_len={right.length}, "
+            f"expected={out_total}, written={out_cursor}"
+        )
 
     del out_values, out_positions
     _tracker_register_create(tracker, out_values_path, out_positions_path)
