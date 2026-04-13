@@ -675,9 +675,9 @@ def test_external_batcharray_support(tmp_path):
     store_path = tmp_path / "test_batcharray_external.b2d"
 
     with TreeStore(str(store_path), mode="w", threshold=0) as tstore:
-        bstore = blosc2.BatchArray(items_per_block=2)
-        bstore.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
-        tstore["/data/batcharray"] = bstore
+        barr = blosc2.BatchArray(items_per_block=2)
+        barr.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
+        tstore["/data/batcharray"] = barr
 
         batcharray_path = store_path / "data" / "batcharray.b2b"
         assert batcharray_path.exists()
@@ -693,9 +693,9 @@ def test_metadata_discovery_reopens_renamed_batcharray_leaf(storage_type, tmp_pa
     store_path = tmp_path / f"test_batcharray_renamed.{storage_type}"
 
     with TreeStore(str(store_path), mode="w", threshold=0) as tstore:
-        bstore = blosc2.BatchArray(items_per_block=2)
-        bstore.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
-        tstore["/data/batcharray"] = bstore
+        barr = blosc2.BatchArray(items_per_block=2)
+        barr.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
+        tstore["/data/batcharray"] = barr
 
     old_name = "data/batcharray.b2b"
     new_name = "data/batcharray.odd"
