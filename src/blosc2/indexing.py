@@ -96,6 +96,13 @@ def _sanitize_token(token: str) -> str:
 def _cleanup_in_memory_store(key: int) -> None:
     _IN_MEMORY_INDEXES.pop(key, None)
     _IN_MEMORY_INDEX_FINALIZERS.pop(key, None)
+    scope = ("memory", key)
+    stale_data = [cache_key for cache_key in _DATA_CACHE if cache_key[0] == scope]
+    for cache_key in stale_data:
+        _DATA_CACHE.pop(cache_key, None)
+    stale_handles = [cache_key for cache_key in _SIDECAR_HANDLE_CACHE if cache_key[0] == scope]
+    for cache_key in stale_handles:
+        _SIDECAR_HANDLE_CACHE.pop(cache_key, None)
     _hot_cache_clear(scope=("memory", key))
 
 
@@ -818,14 +825,27 @@ def _sidecar_handle_cache_key(array: blosc2.NDArray, token: str, category: str, 
     return (_array_key(array), token, category, name)
 
 
+def _sidecar_storage_category(category: str) -> str:
+    return category.removesuffix("_handle")
+
+
 def _open_sidecar_handle(array: blosc2.NDArray, token: str, category: str, name: str, path: str | None):
     cache_key = _sidecar_handle_cache_key(array, token, category, name)
     cached = _SIDECAR_HANDLE_CACHE.get(cache_key)
     if cached is not None:
         return cached
     if path is None:
-        raise RuntimeError("sidecar handle path is not available")
-    handle = blosc2.open(path)
+        storage_category = _sidecar_storage_category(category)
+        legacy = _SIDECAR_HANDLE_CACHE.get(_sidecar_handle_cache_key(array, token, storage_category, name))
+        if legacy is not None:
+            _SIDECAR_HANDLE_CACHE[cache_key] = legacy
+            return legacy
+        legacy = _DATA_CACHE.get(_data_cache_key(array, token, storage_category, name))
+        if legacy is None:
+            raise RuntimeError("sidecar handle path is not available")
+        handle = legacy if isinstance(legacy, blosc2.NDArray) else blosc2.asarray(np.asarray(legacy))
+    else:
+        handle = blosc2.open(path)
     _SIDECAR_HANDLE_CACHE[cache_key] = handle
     return handle
 
@@ -970,6 +990,7 @@ def _store_array_sidecar(
     cparams: dict | None = None,
 ) -> dict:
     cache_key = _data_cache_key(array, token, category, name)
+    handle_cache_key = _sidecar_handle_cache_key(array, token, category, name)
     if persistent:
         path = _sidecar_path(array, token, kind, f"{category}.{name}")
         blosc2.remove_urlpath(path)
@@ -980,14 +1001,22 @@ def _store_array_sidecar(
             kwargs["blocks"] = blocks
         if cparams is not None:
             kwargs["cparams"] = cparams
-        blosc2.asarray(data, **kwargs)
-        if isinstance(data, np.memmap):
-            _DATA_CACHE.pop(cache_key, None)
-        else:
-            _DATA_CACHE[cache_key] = data
+        handle = blosc2.asarray(data, **kwargs)
+        _SIDECAR_HANDLE_CACHE[handle_cache_key] = handle
+        _DATA_CACHE.pop(cache_key, None)
     else:
         path = None
-        _DATA_CACHE[cache_key] = np.array(data, copy=True) if isinstance(data, np.memmap) else data
+        kwargs = {}
+        if chunks is not None:
+            kwargs["chunks"] = chunks
+        if blocks is not None:
+            kwargs["blocks"] = blocks
+        if cparams is not None:
+            kwargs["cparams"] = cparams
+        handle_data = np.array(data, copy=True) if isinstance(data, np.memmap) else data
+        handle = blosc2.asarray(handle_data, **kwargs)
+        _SIDECAR_HANDLE_CACHE[handle_cache_key] = handle
+        _DATA_CACHE.pop(cache_key, None)
     return {"path": path, "dtype": data.dtype.descr if data.dtype.fields else data.dtype.str}
 
 
@@ -1014,9 +1043,11 @@ def _create_persistent_sidecar_handle(
     if cparams is not None:
         kwargs["cparams"] = cparams
     if length == 0:
-        blosc2.asarray(np.empty(0, dtype=dtype), **kwargs)
+        handle = blosc2.asarray(np.empty(0, dtype=dtype), **kwargs)
+        _SIDECAR_HANDLE_CACHE[_sidecar_handle_cache_key(array, token, category, name)] = handle
         return None, {"path": path, "dtype": dtype.descr if dtype.fields else dtype.str}
     handle = blosc2.empty((length,), dtype=dtype, **kwargs)
+    _SIDECAR_HANDLE_CACHE[_sidecar_handle_cache_key(array, token, category, name)] = handle
     return handle, {"path": path, "dtype": dtype.descr if dtype.fields else dtype.str}
 
 
@@ -1056,8 +1087,12 @@ def _load_array_sidecar(
     if cached is not None:
         return cached
     if path is None:
-        raise RuntimeError("in-memory index metadata is missing from the current process")
-    data = blosc2.open(path)[:]
+        handle = _SIDECAR_HANDLE_CACHE.get(_sidecar_handle_cache_key(array, token, category, name))
+        if handle is None:
+            raise RuntimeError("in-memory index metadata is missing from the current process")
+        data = _read_sidecar_span(handle, 0, int(handle.shape[0]))
+    else:
+        data = blosc2.open(path)[:]
     _DATA_CACHE[cache_key] = data
     return data
 
@@ -2256,18 +2291,21 @@ def _build_light_descriptor_ooc(
     bucket_count = math.ceil(chunk_len / bucket_len)
     value_lossy_bits = _light_value_lossy_bits(dtype, optlevel)
     bucket_dtype = _position_dtype(bucket_count - 1)
-    sorted_values, bucket_positions, offsets, l1, l2 = _build_light_chunk_payloads_intra_chunk(
-        array,
-        target,
-        dtype,
-        chunk_len,
-        nav_segment_len,
-        value_lossy_bits,
-        bucket_len,
-        bucket_dtype,
-        cparams,
-    )
+
     if persistent:
+        # Streaming path: write directly into sidecars chunk by chunk so that
+        # we never allocate full-row-count payload arrays in RAM.
+        size = int(array.shape[0])
+        nchunks = math.ceil(size / chunk_len)
+        nsegments_per_chunk = _segment_row_count(chunk_len, nav_segment_len)
+        position_dtype = _position_dtype(chunk_len - 1)
+        thread_count = _index_build_threads(cparams)
+
+        offsets = np.empty(nchunks + 1, dtype=np.int64)
+        offsets[0] = 0
+        l1 = np.empty(nchunks, dtype=_boundary_dtype(dtype))
+        l2 = np.empty(nchunks * nsegments_per_chunk, dtype=_boundary_dtype(dtype))
+
         values_handle = bucket_handle = None
         values_sidecar = bucket_sidecar = None
         try:
@@ -2281,16 +2319,44 @@ def _build_light_descriptor_ooc(
                     dtype,
                     "bucket_positions",
                     bucket_dtype,
-                    len(sorted_values),
+                    size,
                     chunk_len,
                     nav_segment_len,
                     cparams,
                 )
             )
-            if values_handle is not None:
-                values_handle[:] = sorted_values
-            if bucket_handle is not None:
-                bucket_handle[:] = bucket_positions
+            cursor = 0
+            for chunk_id in range(nchunks):
+                start = chunk_id * chunk_len
+                stop = min(start + chunk_len, size)
+                chunk_size = stop - start
+                next_cursor = cursor + chunk_size
+                chunk_sorted, local_positions = _sort_chunk_intra_chunk(
+                    _slice_values_for_target(array, target, start, stop),
+                    position_dtype,
+                    thread_count=thread_count,
+                )
+                stored_chunk_sorted = chunk_sorted
+                if value_lossy_bits > 0:
+                    stored_chunk_sorted = _quantize_light_values_array(chunk_sorted, value_lossy_bits)
+                if values_handle is not None:
+                    values_handle[cursor:next_cursor] = stored_chunk_sorted
+                if bucket_handle is not None:
+                    bucket_handle[cursor:next_cursor] = (local_positions // bucket_len).astype(
+                        bucket_dtype, copy=False
+                    )
+                offsets[chunk_id + 1] = next_cursor
+                if chunk_size > 0:
+                    l1[chunk_id] = (stored_chunk_sorted[0], stored_chunk_sorted[-1])
+                    row_start = chunk_id * nsegments_per_chunk
+                    segment_count = _segment_row_count(chunk_size, nav_segment_len)
+                    for segment_id in range(segment_count):
+                        seg_start = segment_id * nav_segment_len
+                        seg_stop = min(seg_start + nav_segment_len, chunk_size)
+                        l2[row_start + segment_id] = (chunk_sorted[seg_start], chunk_sorted[seg_stop - 1])
+                    for segment_id in range(segment_count, nsegments_per_chunk):
+                        l2[row_start + segment_id] = l2[row_start + segment_count - 1]
+                cursor = next_cursor
             del values_handle, bucket_handle
             light = _finalize_chunk_index_payload_storage(
                 array,
@@ -2319,6 +2385,18 @@ def _build_light_descriptor_ooc(
         light["bucket_dtype"] = bucket_dtype.str
         return light
 
+    # Non-persistent path: full staging in RAM is acceptable.
+    sorted_values, bucket_positions, offsets, l1, l2 = _build_light_chunk_payloads_intra_chunk(
+        array,
+        target,
+        dtype,
+        chunk_len,
+        nav_segment_len,
+        value_lossy_bits,
+        bucket_len,
+        bucket_dtype,
+        cparams,
+    )
     light = _chunk_index_payload_storage(
         array,
         token,
@@ -2455,8 +2533,11 @@ def _create_blosc2_temp_array(
     )
 
 
-def _read_ndarray_linear_span(array: blosc2.NDArray, start: int, out: np.ndarray) -> None:
+def _read_ndarray_linear_span(array: blosc2.NDArray | np.ndarray, start: int, out: np.ndarray) -> None:
     if len(out) == 0:
+        return
+    if isinstance(array, np.ndarray):
+        out[...] = array[start : start + len(out)]
         return
     chunk_len = int(array.chunks[0])
     cursor = int(start)
@@ -2470,6 +2551,14 @@ def _read_ndarray_linear_span(array: blosc2.NDArray, start: int, out: np.ndarray
         )
         cursor += take
         out_cursor += take
+
+
+def _read_sidecar_span(handle, start: int, stop: int) -> np.ndarray:
+    if stop <= start:
+        return np.empty(0, dtype=np.dtype(handle.dtype))
+    out = np.empty(stop - start, dtype=np.dtype(handle.dtype))
+    _read_ndarray_linear_span(handle, start, out)
+    return out
 
 
 def _materialize_sorted_run(
@@ -3646,6 +3735,58 @@ def _load_level_summaries(array: blosc2.NDArray, descriptor: dict, level: str) -
     return _load_array_sidecar(array, descriptor["token"], "summary", level, level_info["path"])
 
 
+def _open_level_summary_handle(array: blosc2.NDArray, descriptor: dict, level: str):
+    level_info = descriptor["levels"][level]
+    return _open_sidecar_handle(array, descriptor["token"], "summary_handle", level, level_info["path"])
+
+
+def _candidate_units_from_summary_handle(summary_handle, op: str, value, dtype: np.dtype) -> np.ndarray:
+    length = int(summary_handle.shape[0])
+    if length == 0:
+        return np.zeros(0, dtype=bool)
+    chunk_len = int(summary_handle.chunks[0]) if hasattr(summary_handle, "chunks") else length
+    candidate = np.empty(length, dtype=bool)
+    for start in range(0, length, chunk_len):
+        stop = min(start + chunk_len, length)
+        candidate[start:stop] = _candidate_units_from_summary(
+            _read_sidecar_span(summary_handle, start, stop), op, value, dtype
+        )
+    return candidate
+
+
+def _candidate_units_from_exact_plan_handle(
+    summary_handle, dtype: np.dtype, plan: ExactPredicatePlan
+) -> np.ndarray:
+    length = int(summary_handle.shape[0])
+    candidate_units = np.ones(length, dtype=bool)
+    if plan.lower is not None:
+        lower_op = ">=" if plan.lower_inclusive else ">"
+        candidate_units &= _candidate_units_from_summary_handle(summary_handle, lower_op, plan.lower, dtype)
+    if plan.upper is not None:
+        upper_op = "<=" if plan.upper_inclusive else "<"
+        candidate_units &= _candidate_units_from_summary_handle(summary_handle, upper_op, plan.upper, dtype)
+    return candidate_units
+
+
+def _candidate_units_from_boundaries_handle(boundaries_handle, plan: ExactPredicatePlan) -> np.ndarray:
+    length = int(boundaries_handle.shape[0])
+    if length == 0:
+        return np.zeros(0, dtype=bool)
+    chunk_len = int(boundaries_handle.chunks[0]) if hasattr(boundaries_handle, "chunks") else length
+    candidate = np.empty(length, dtype=bool)
+    for start in range(0, length, chunk_len):
+        stop = min(start + chunk_len, length)
+        candidate[start:stop] = _candidate_units_from_boundaries(
+            _read_sidecar_span(boundaries_handle, start, stop), plan
+        )
+    return candidate
+
+
+def _read_offset_pair(offsets_handle, index: int) -> tuple[int, int]:
+    pair = _read_sidecar_span(offsets_handle, index, index + 2)
+    return int(pair[0]), int(pair[1])
+
+
 def _full_merge_cache_key(array: blosc2.NDArray, token: str, name: str):
     return _data_cache_key(array, token, "full_merged", name)
 
@@ -3676,6 +3817,16 @@ def _load_full_navigation_arrays(array: blosc2.NDArray, descriptor: dict) -> tup
     token = descriptor["token"]
     l1 = _load_array_sidecar(array, token, "full_nav", "l1", l1_path)
     l2 = _load_array_sidecar(array, token, "full_nav", "l2", l2_path)
+    return l1, l2
+
+
+def _load_full_navigation_handles(array: blosc2.NDArray, descriptor: dict):
+    full = descriptor.get("full")
+    if full is None:
+        raise RuntimeError("full index metadata is not available")
+    token = descriptor["token"]
+    l1 = _open_sidecar_handle(array, token, "full_nav_handle", "l1", full.get("l1_path"))
+    l2 = _open_sidecar_handle(array, token, "full_nav_handle", "l2", full.get("l2_path"))
     return l1, l2
 
 
@@ -3766,6 +3917,14 @@ def _load_reduced_l1_array(array: blosc2.NDArray, descriptor: dict) -> np.ndarra
     return _load_array_sidecar(array, token, "reduced_nav", "l1", reduced["l1_path"])
 
 
+def _load_reduced_l1_handle(array: blosc2.NDArray, descriptor: dict):
+    reduced = descriptor.get("reduced")
+    if reduced is None:
+        raise RuntimeError("reduced index metadata is not available")
+    token = descriptor["token"]
+    return _open_sidecar_handle(array, token, "reduced_nav_handle", "l1", reduced["l1_path"])
+
+
 def _load_reduced_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
     reduced = descriptor.get("reduced")
     if reduced is None:
@@ -3777,6 +3936,14 @@ def _load_reduced_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
     )
     l2_sidecar = _open_sidecar_handle(array, token, "reduced_nav_handle", "l2", reduced["l2_path"])
     return values_sidecar, positions_sidecar, l2_sidecar
+
+
+def _load_reduced_offsets_handle(array: blosc2.NDArray, descriptor: dict):
+    reduced = descriptor.get("reduced")
+    if reduced is None:
+        raise RuntimeError("reduced index metadata is not available")
+    token = descriptor["token"]
+    return _open_sidecar_handle(array, token, "reduced_handle", "offsets", reduced["offsets_path"])
 
 
 def _load_light_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -3809,6 +3976,14 @@ def _load_light_l1_array(array: blosc2.NDArray, descriptor: dict) -> np.ndarray:
     return _load_array_sidecar(array, token, "light_nav", "l1", light["l1_path"])
 
 
+def _load_light_l1_handle(array: blosc2.NDArray, descriptor: dict):
+    light = descriptor.get("light")
+    if light is None:
+        raise RuntimeError("light index metadata is not available")
+    token = descriptor["token"]
+    return _open_sidecar_handle(array, token, "light_nav_handle", "l1", light["l1_path"])
+
+
 def _load_light_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
     light = descriptor.get("light")
     if light is None:
@@ -3820,6 +3995,14 @@ def _load_light_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
     )
     l2_sidecar = _open_sidecar_handle(array, token, "light_nav_handle", "l2", light["l2_path"])
     return values_sidecar, bucket_sidecar, l2_sidecar
+
+
+def _load_light_offsets_handle(array: blosc2.NDArray, descriptor: dict):
+    light = descriptor.get("light")
+    if light is None:
+        raise RuntimeError("light index metadata is not available")
+    token = descriptor["token"]
+    return _open_sidecar_handle(array, token, "light_handle", "offsets", light["offsets_path"])
 
 
 def _normalize_scalar(value, dtype: np.dtype):
@@ -3971,8 +4154,8 @@ def _plan_segment_compare(node: ast.Compare, operands: dict) -> SegmentPredicate
     level_info = descriptor["levels"][level]
     dtype = np.dtype(descriptor["dtype"])
     try:
-        summaries = _load_level_summaries(base, descriptor, level)
-        candidate_units = _candidate_units_from_summary(summaries, op, value, dtype)
+        summaries = _open_level_summary_handle(base, descriptor, level)
+        candidate_units = _candidate_units_from_summary_handle(summaries, op, value, dtype)
     except (RuntimeError, ValueError, TypeError):
         return None
     return SegmentPredicatePlan(
@@ -4363,20 +4546,18 @@ def _full_supports_selective_ooc_lookup(array: blosc2.NDArray, descriptor: dict)
     full = descriptor.get("full")
     if full is None or full.get("runs"):
         return False
-    if not descriptor.get("persistent", False):
-        return False
-    if full.get("values_path") is None or full.get("positions_path") is None:
-        return False
-    if full.get("l1_path") is None or full.get("l2_path") is None:
-        return False
     try:
         values_sidecar, positions_sidecar = _load_full_sidecar_handles(array, descriptor)
+        l1_sidecar, l2_sidecar = _load_full_navigation_handles(array, descriptor)
     except Exception:
         return False
+    if int(values_sidecar.chunks[0]) != int(full.get("sidecar_chunk_len", values_sidecar.chunks[0])):
+        return False
     return (
-        _supports_block_reads(array)
-        and _supports_block_reads(values_sidecar)
+        _supports_block_reads(values_sidecar)
         and _supports_block_reads(positions_sidecar)
+        and _supports_block_reads(l1_sidecar)
+        and _supports_block_reads(l2_sidecar)
     )
 
 
@@ -4416,12 +4597,12 @@ def _exact_positions_from_compact_full_base(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> np.ndarray:
     full = descriptor["full"]
-    l1, l2 = _load_full_navigation_arrays(array, descriptor)
-    candidate_chunks = _candidate_units_from_boundaries(l1, plan)
+    l1_sidecar, l2_sidecar = _load_full_navigation_handles(array, descriptor)
+    candidate_chunks = _candidate_units_from_boundaries_handle(l1_sidecar, plan)
     if not np.any(candidate_chunks):
         return np.empty(0, dtype=np.int64)
 
-    candidate_blocks = _candidate_units_from_boundaries(l2, plan)
+    candidate_blocks = _candidate_units_from_boundaries_handle(l2_sidecar, plan)
     if not np.any(candidate_blocks):
         return np.empty(0, dtype=np.int64)
 
@@ -4482,43 +4663,44 @@ def _exact_positions_from_full_runs_bounded(
         if len(base_positions):
             parts.append(base_positions)
     else:
-        base_values = _load_array_sidecar(array, descriptor["token"], "full", "values", full["values_path"])
-        base_positions = _load_array_sidecar(
-            array, descriptor["token"], "full", "positions", full["positions_path"]
+        base_values_sidecar, base_positions_sidecar = _load_full_sidecar_handles(array, base_descriptor)
+        base_chunk_boundaries = _sorted_chunk_boundaries_from_handle(
+            array,
+            descriptor["token"],
+            "full_bounds",
+            "chunks",
+            base_values_sidecar,
+            dtype,
         )
-        lo, hi = _search_bounds(base_values, plan)
-        if lo < hi:
-            parts.append(base_positions[lo:hi].astype(np.int64, copy=False))
+        base_positions = _exact_positions_from_sorted_chunks(
+            base_values_sidecar,
+            base_positions_sidecar,
+            base_chunk_boundaries,
+            plan,
+            int(base_values_sidecar.chunks[0]),
+            dtype,
+        )
+        if len(base_positions):
+            parts.append(np.sort(base_positions.astype(np.int64, copy=False), kind="stable"))
 
     for run in full.get("runs", ()):
-        if run.get("values_path") is None or run.get("positions_path") is None:
-            run_values, raw_run_positions = _load_full_run_arrays(array, descriptor, run)
-            lo, hi = _search_bounds(run_values, plan)
-            run_positions = (
-                np.empty(0, dtype=np.int64)
-                if lo >= hi
-                else raw_run_positions[lo:hi].astype(np.int64, copy=False)
-            )
-        else:
-            run_values_sidecar, run_positions_sidecar = _load_full_run_sidecar_handles(
-                array, descriptor, run
-            )
-            chunk_boundaries = _sorted_chunk_boundaries_from_handle(
-                array,
-                descriptor["token"],
-                "full_run_bounds",
-                f"{int(run['id'])}.chunks",
-                run_values_sidecar,
-                dtype,
-            )
-            run_positions = _exact_positions_from_sorted_chunks(
-                run_values_sidecar,
-                run_positions_sidecar,
-                chunk_boundaries,
-                plan,
-                int(run_values_sidecar.chunks[0]),
-                dtype,
-            )
+        run_values_sidecar, run_positions_sidecar = _load_full_run_sidecar_handles(array, descriptor, run)
+        chunk_boundaries = _sorted_chunk_boundaries_from_handle(
+            array,
+            descriptor["token"],
+            "full_run_bounds",
+            f"{int(run['id'])}.chunks",
+            run_values_sidecar,
+            dtype,
+        )
+        run_positions = _exact_positions_from_sorted_chunks(
+            run_values_sidecar,
+            run_positions_sidecar,
+            chunk_boundaries,
+            plan,
+            int(run_values_sidecar.chunks[0]),
+            dtype,
+        )
         if len(run_positions):
             parts.append(run_positions)
 
@@ -4539,19 +4721,34 @@ def _exact_positions_from_full(
 ) -> np.ndarray:
     if _range_is_empty(plan):
         return np.empty(0, dtype=np.int64)
-    mode = _full_query_mode_override()
-    if mode != "whole-load" and _full_runs_need_bounded_fallback(descriptor):
+    if _full_run_count(descriptor):
         return _exact_positions_from_full_runs_bounded(array, descriptor, plan)
-    if mode != "whole-load" and _full_supports_selective_ooc_lookup(array, descriptor):
+    if _full_supports_selective_ooc_lookup(array, descriptor):
         try:
             return _exact_positions_from_full_selective_ooc(array, descriptor, plan)
         except RuntimeError:
             pass
-    sorted_values, positions = _load_full_arrays(array, descriptor)
-    lo, hi = _search_bounds(sorted_values, plan)
-    if lo >= hi:
+    dtype = np.dtype(descriptor["dtype"])
+    values_sidecar, positions_sidecar = _load_full_sidecar_handles(array, descriptor)
+    chunk_boundaries = _sorted_chunk_boundaries_from_handle(
+        array,
+        descriptor["token"],
+        "full_bounds",
+        "chunks",
+        values_sidecar,
+        dtype,
+    )
+    positions = _exact_positions_from_sorted_chunks(
+        values_sidecar,
+        positions_sidecar,
+        chunk_boundaries,
+        plan,
+        int(values_sidecar.chunks[0]),
+        dtype,
+    )
+    if len(positions) == 0:
         return np.empty(0, dtype=np.int64)
-    return np.sort(positions[lo:hi], kind="stable")
+    return np.sort(positions.astype(np.int64, copy=False), kind="stable")
 
 
 def _chunk_nav_supports_selective_ooc_lookup(array: blosc2.NDArray, descriptor: dict, kind: str) -> bool:
@@ -4866,37 +5063,50 @@ def _bucket_masks_from_light_chunk_nav_ooc(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> tuple[np.ndarray, int, int]:
     light = descriptor["light"]
-    offsets = _load_array_sidecar(array, descriptor["token"], "light", "offsets", light["offsets_path"])
-    l1 = _load_light_l1_array(array, descriptor)
-    candidate_chunks = _candidate_units_from_boundaries(l1, plan)
-    bucket_masks = np.zeros((len(l1), int(light["bucket_count"])), dtype=bool)
+    dtype = np.dtype(descriptor["dtype"])
+    value_lossy_bits = int(light.get("value_lossy_bits", 0))
+    search_plan = _light_search_plan(plan, dtype, value_lossy_bits)
+    offsets_handle = _load_light_offsets_handle(array, descriptor)
+    l1_handle = _load_light_l1_handle(array, descriptor)
+    candidate_chunks = _candidate_units_from_boundaries_handle(l1_handle, search_plan)
+    bucket_masks = np.zeros((int(l1_handle.shape[0]), int(light["bucket_count"])), dtype=bool)
     if not np.any(candidate_chunks):
         return bucket_masks, 0, 0
 
     values_sidecar, bucket_sidecar, l2_sidecar = _load_light_sidecar_handles(array, descriptor)
-    dtype = np.dtype(descriptor["dtype"])
     chunk_len = int(light["chunk_len"])
     nav_segment_len = int(light["nav_segment_len"])
     nsegments_per_chunk = int(light["nsegments_per_chunk"])
     bucket_dtype = np.dtype(light.get("bucket_dtype", np.uint16))
-    value_lossy_bits = int(light.get("value_lossy_bits", 0))
-    search_plan = _light_search_plan(plan, dtype, value_lossy_bits)
     total_candidate_segments = 0
     candidate_chunk_ids = np.flatnonzero(candidate_chunks).astype(np.intp, copy=False)
 
     def process_batch(chunk_ids: np.ndarray) -> tuple[list[tuple[int, np.ndarray]], int]:
         if len(chunk_ids) == 0:
             return [], 0
-        batch_values = blosc2.open(light["values_path"], mmap_mode=_INDEX_MMAP_MODE)
-        batch_buckets = blosc2.open(light["bucket_positions_path"], mmap_mode=_INDEX_MMAP_MODE)
-        batch_l2 = blosc2.open(light["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
+        batch_values = (
+            values_sidecar
+            if light.get("values_path") is None
+            else blosc2.open(light["values_path"], mmap_mode=_INDEX_MMAP_MODE)
+        )
+        batch_buckets = (
+            bucket_sidecar
+            if light.get("bucket_positions_path") is None
+            else blosc2.open(light["bucket_positions_path"], mmap_mode=_INDEX_MMAP_MODE)
+        )
+        batch_l2 = (
+            l2_sidecar
+            if light.get("l2_path") is None
+            else blosc2.open(light["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
+        )
         batch_results = []
         batch_candidate_segments = 0
         l2_row = np.empty(nsegments_per_chunk, dtype=_boundary_dtype(dtype))
         span_values = np.empty(chunk_len, dtype=dtype)
         bucket_ids = np.empty(chunk_len, dtype=bucket_dtype)
         for chunk_id in chunk_ids:
-            chunk_items = int(offsets[chunk_id + 1] - offsets[chunk_id])
+            offset_start, offset_stop = _read_offset_pair(offsets_handle, int(chunk_id))
+            chunk_items = offset_stop - offset_start
             segment_count = _segment_row_count(chunk_items, nav_segment_len)
             batch_l2.get_1d_span_numpy(l2_row, int(chunk_id), 0, nsegments_per_chunk)
             segment_runs, candidate_segments = _chunk_nav_candidate_runs(l2_row, segment_count, plan)
@@ -4940,9 +5150,9 @@ def _exact_positions_from_reduced_chunk_nav_ooc(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> tuple[np.ndarray, int, int]:
     reduced = descriptor["reduced"]
-    offsets = _load_array_sidecar(array, descriptor["token"], "reduced", "offsets", reduced["offsets_path"])
-    l1 = _load_reduced_l1_array(array, descriptor)
-    candidate_chunks = _candidate_units_from_boundaries(l1, plan)
+    offsets_handle = _load_reduced_offsets_handle(array, descriptor)
+    l1_handle = _load_reduced_l1_handle(array, descriptor)
+    candidate_chunks = _candidate_units_from_boundaries_handle(l1_handle, plan)
     if not np.any(candidate_chunks):
         return np.empty(0, dtype=np.int64), 0, 0
 
@@ -4953,6 +5163,73 @@ def _exact_positions_from_reduced_chunk_nav_ooc(
     local_position_dtype = np.dtype(reduced.get("position_dtype", np.uint32))
     candidate_chunk_ids = np.flatnonzero(candidate_chunks).astype(np.intp, copy=False)
     l2_boundary_dtype = _boundary_dtype(dtype)
+    values_sidecar, positions_sidecar, l2_sidecar = _load_reduced_sidecar_handles(array, descriptor)
+    thread_count = _index_query_thread_count(len(candidate_chunk_ids))
+
+    try:
+        positions, total_candidate_segments = _reduced_chunk_nav_positions_cython(
+            reduced,
+            offsets_handle,
+            candidate_chunk_ids,
+            thread_count,
+            dtype,
+            chunk_len,
+            nav_segment_len,
+            nsegments_per_chunk,
+            local_position_dtype,
+            l2_boundary_dtype,
+            plan,
+        )
+        if len(positions) == 0:
+            return np.empty(0, dtype=np.int64), int(candidate_chunk_ids.size), total_candidate_segments
+        return np.sort(positions, kind="stable"), int(candidate_chunk_ids.size), total_candidate_segments
+    except TypeError:
+        pass
+
+    parts, total_candidate_segments = _reduced_chunk_nav_positions_python(
+        reduced,
+        offsets_handle,
+        candidate_chunk_ids,
+        thread_count,
+        dtype,
+        chunk_len,
+        nav_segment_len,
+        nsegments_per_chunk,
+        local_position_dtype,
+        l2_boundary_dtype,
+        values_sidecar,
+        positions_sidecar,
+        l2_sidecar,
+        plan,
+    )
+
+    if not parts:
+        return np.empty(0, dtype=np.int64), int(candidate_chunk_ids.size), total_candidate_segments
+    positions = np.concatenate(parts) if len(parts) > 1 else parts[0]
+    return (
+        np.sort(positions, kind="stable"),
+        int(candidate_chunk_ids.size),
+        total_candidate_segments,
+    )
+
+
+def _reduced_chunk_nav_positions_cython(
+    reduced: dict,
+    offsets_handle,
+    candidate_chunk_ids: np.ndarray,
+    thread_count: int,
+    dtype: np.dtype,
+    chunk_len: int,
+    nav_segment_len: int,
+    nsegments_per_chunk: int,
+    local_position_dtype: np.dtype,
+    l2_boundary_dtype: np.dtype,
+    plan: ExactPredicatePlan,
+) -> tuple[np.ndarray, int]:
+    if reduced.get("values_path") is None:
+        raise TypeError("cython chunk-nav path requires reopenable sidecars")
+
+    offsets = _read_sidecar_span(offsets_handle, 0, int(offsets_handle.shape[0]))
 
     def process_cython_batch(chunk_ids: np.ndarray) -> tuple[np.ndarray, int]:
         if len(chunk_ids) == 0:
@@ -4981,30 +5258,51 @@ def _exact_positions_from_reduced_chunk_nav_ooc(
             plan.upper_inclusive,
         )
 
-    try:
-        thread_count = _index_query_thread_count(len(candidate_chunk_ids))
-        positions, total_candidate_segments = _reduced_positions_from_cython_batches(
-            candidate_chunk_ids, thread_count, process_cython_batch
-        )
-        if len(positions) == 0:
-            return np.empty(0, dtype=np.int64), int(candidate_chunk_ids.size), total_candidate_segments
-        return np.sort(positions, kind="stable"), int(candidate_chunk_ids.size), total_candidate_segments
-    except TypeError:
-        pass
+    return _reduced_positions_from_cython_batches(candidate_chunk_ids, thread_count, process_cython_batch)
 
+
+def _reduced_chunk_nav_positions_python(
+    reduced: dict,
+    offsets_handle,
+    candidate_chunk_ids: np.ndarray,
+    thread_count: int,
+    dtype: np.dtype,
+    chunk_len: int,
+    nav_segment_len: int,
+    nsegments_per_chunk: int,
+    local_position_dtype: np.dtype,
+    l2_boundary_dtype: np.dtype,
+    values_sidecar,
+    positions_sidecar,
+    l2_sidecar,
+    plan: ExactPredicatePlan,
+) -> tuple[list[np.ndarray], int]:
     def process_batch(chunk_ids: np.ndarray) -> tuple[list[np.ndarray], int]:
         if len(chunk_ids) == 0:
             return [], 0
-        batch_values = blosc2.open(reduced["values_path"], mmap_mode=_INDEX_MMAP_MODE)
-        batch_positions = blosc2.open(reduced["positions_path"], mmap_mode=_INDEX_MMAP_MODE)
-        batch_l2 = blosc2.open(reduced["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
+        batch_values = (
+            values_sidecar
+            if reduced.get("values_path") is None
+            else blosc2.open(reduced["values_path"], mmap_mode=_INDEX_MMAP_MODE)
+        )
+        batch_positions = (
+            positions_sidecar
+            if reduced.get("positions_path") is None
+            else blosc2.open(reduced["positions_path"], mmap_mode=_INDEX_MMAP_MODE)
+        )
+        batch_l2 = (
+            l2_sidecar
+            if reduced.get("l2_path") is None
+            else blosc2.open(reduced["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
+        )
         batch_parts = []
         batch_candidate_segments = 0
         l2_row = np.empty(nsegments_per_chunk, dtype=l2_boundary_dtype)
         span_values = np.empty(chunk_len, dtype=dtype)
         local_positions = np.empty(chunk_len, dtype=local_position_dtype)
         for chunk_id in chunk_ids:
-            chunk_items = int(offsets[chunk_id + 1] - offsets[chunk_id])
+            offset_start, offset_stop = _read_offset_pair(offsets_handle, int(chunk_id))
+            chunk_items = offset_stop - offset_start
             segment_count = _segment_row_count(chunk_items, nav_segment_len)
             batch_l2.get_1d_span_numpy(l2_row, int(chunk_id), 0, nsegments_per_chunk)
             segment_runs, candidate_segments = _chunk_nav_candidate_runs(l2_row, segment_count, plan)
@@ -5025,19 +5323,7 @@ def _exact_positions_from_reduced_chunk_nav_ooc(
                 batch_parts.append(chunk_id * chunk_len + positions_view.astype(np.int64, copy=False))
         return batch_parts, batch_candidate_segments
 
-    thread_count = _index_query_thread_count(len(candidate_chunk_ids))
-    parts, total_candidate_segments = _reduced_positions_from_python_batches(
-        candidate_chunk_ids, thread_count, process_batch
-    )
-
-    if not parts:
-        return np.empty(0, dtype=np.int64), int(candidate_chunk_ids.size), total_candidate_segments
-    positions = np.concatenate(parts) if len(parts) > 1 else parts[0]
-    return (
-        np.sort(positions, kind="stable"),
-        int(candidate_chunk_ids.size),
-        total_candidate_segments,
-    )
+    return _reduced_positions_from_python_batches(candidate_chunk_ids, thread_count, process_batch)
 
 
 def _bit_count_sum(masks: np.ndarray) -> int:
@@ -5051,75 +5337,7 @@ def _bucket_masks_from_light(
 ) -> tuple[np.ndarray, int, int]:
     if _range_is_empty(plan):
         return np.empty((0, 0), dtype=bool), 0, 0
-
-    if _chunk_nav_supports_selective_ooc_lookup(array, descriptor, "light"):
-        return _bucket_masks_from_light_chunk_nav_ooc(array, descriptor, plan)
-
-    summaries = _load_level_summaries(array, descriptor, "chunk")
-    dtype = np.dtype(descriptor["dtype"])
-    candidate_chunks = _candidate_units_from_exact_plan(summaries, dtype, plan)
-    light = descriptor["light"]
-    chunk_len = int(light["chunk_len"])
-    bucket_count = int(light["bucket_count"])
-    bucket_masks = np.zeros((len(summaries), bucket_count), dtype=bool)
-    if not np.any(candidate_chunks):
-        return bucket_masks, 0, 0
-
-    sorted_values, bucket_positions, offsets = _load_light_arrays(array, descriptor)
-    value_lossy_bits = int(light.get("value_lossy_bits", 0))
-    nav_segment_len = int(light["nav_segment_len"])
-    nsegments_per_chunk = int(light["nsegments_per_chunk"])
-    l2 = _load_light_navigation_arrays(array, descriptor)[1]
-    total_candidate_segments = 0
-
-    for chunk_id in np.flatnonzero(candidate_chunks):
-        start = int(offsets[chunk_id])
-        stop = int(offsets[chunk_id + 1])
-        chunk_values = sorted_values[start:stop]
-        row_start = int(chunk_id) * nsegments_per_chunk
-        row_stop = row_start + _segment_row_count(min(chunk_len, stop - start), nav_segment_len)
-        segment_mask = _candidate_units_from_boundaries(l2[row_start:row_stop], plan)
-        total_candidate_segments += int(np.count_nonzero(segment_mask))
-        if not np.any(segment_mask):
-            continue
-
-        if value_lossy_bits > 0:
-            if plan.lower is not None:
-                if dtype.kind in {"i", "u"}:
-                    if plan.lower_inclusive:
-                        next_lower = plan.lower
-                    else:
-                        max_value = np.iinfo(dtype).max
-                        next_lower = min(int(plan.lower) + 1, max_value)
-                else:
-                    if plan.lower_inclusive:
-                        next_lower = plan.lower
-                    else:
-                        next_lower = np.nextafter(np.asarray(plan.lower, dtype=dtype)[()], np.inf)
-                lower = _quantize_light_value_scalar(next_lower, dtype, value_lossy_bits)
-                lower_inclusive = True
-            else:
-                lower = None
-                lower_inclusive = True
-            search_plan = ExactPredicatePlan(
-                base=plan.base,
-                descriptor=plan.descriptor,
-                target=plan.target,
-                field=plan.field,
-                lower=lower,
-                lower_inclusive=lower_inclusive,
-                upper=plan.upper,
-                upper_inclusive=plan.upper_inclusive,
-            )
-            lo, hi = _search_bounds(chunk_values, search_plan)
-        else:
-            lo, hi = _search_bounds(chunk_values, plan)
-        if lo >= hi:
-            continue
-        bucket_masks[
-            int(chunk_id), np.unique(bucket_positions[start + lo : start + hi].astype(np.int64))
-        ] = True
-    return bucket_masks, int(np.count_nonzero(candidate_chunks)), total_candidate_segments
+    return _bucket_masks_from_light_chunk_nav_ooc(array, descriptor, plan)
 
 
 def _exact_positions_from_reduced(
@@ -5127,42 +5345,7 @@ def _exact_positions_from_reduced(
 ) -> tuple[np.ndarray, int, int]:
     if _range_is_empty(plan):
         return np.empty(0, dtype=np.int64), 0, 0
-
-    if _chunk_nav_supports_selective_ooc_lookup(array, descriptor, "medium"):
-        return _exact_positions_from_reduced_chunk_nav_ooc(array, descriptor, plan)
-
-    summaries = _load_level_summaries(array, descriptor, "chunk")
-    candidate_chunks = _candidate_units_from_exact_plan(summaries, dtype, plan)
-    if not np.any(candidate_chunks):
-        return np.empty(0, dtype=np.int64), 0, 0
-
-    sorted_values, local_positions, offsets = _load_reduced_arrays(array, descriptor)
-    chunk_len = int(descriptor["reduced"]["chunk_len"])
-    nav_segment_len = int(descriptor["reduced"]["nav_segment_len"])
-    nsegments_per_chunk = int(descriptor["reduced"]["nsegments_per_chunk"])
-    l2 = _load_reduced_navigation_arrays(array, descriptor)[1]
-    parts = []
-    total_candidate_segments = 0
-    for chunk_id in np.flatnonzero(candidate_chunks):
-        start = int(offsets[chunk_id])
-        stop = int(offsets[chunk_id + 1])
-        chunk_values = sorted_values[start:stop]
-        row_start = int(chunk_id) * nsegments_per_chunk
-        row_stop = row_start + _segment_row_count(min(chunk_len, stop - start), nav_segment_len)
-        segment_mask = _candidate_units_from_boundaries(l2[row_start:row_stop], plan)
-        total_candidate_segments += int(np.count_nonzero(segment_mask))
-        if not np.any(segment_mask):
-            continue
-        lo, hi = _search_bounds(chunk_values, plan)
-        if lo >= hi:
-            continue
-        local = local_positions[start + lo : start + hi].astype(np.int64, copy=False)
-        parts.append(chunk_id * chunk_len + local)
-
-    if not parts:
-        return np.empty(0, dtype=np.int64), int(np.count_nonzero(candidate_chunks)), total_candidate_segments
-    merged = np.concatenate(parts) if len(parts) > 1 else parts[0]
-    return np.sort(merged, kind="stable"), int(np.count_nonzero(candidate_chunks)), total_candidate_segments
+    return _exact_positions_from_reduced_chunk_nav_ooc(array, descriptor, plan)
 
 
 def _exact_positions_from_plan(plan: ExactPredicatePlan) -> np.ndarray | None:
@@ -5611,21 +5794,16 @@ def _full_lookup_path(descriptor: dict | None, *, ordered: bool) -> str | None:
     if descriptor is None or descriptor.get("kind") != "full":
         return None
     if _full_run_count(descriptor):
-        if not ordered and _full_runs_need_bounded_fallback(descriptor):
-            return "run-bounded-ooc"
-        return "in-memory-merge"
+        return "ordered-stream-merge" if ordered else "run-bounded-ooc"
     if ordered:
-        return "in-memory-order"
-    mode = _full_query_mode_override()
-    if mode == "whole-load":
-        return "whole-load"
+        return "ordered-stream"
     if (
         descriptor.get("persistent")
         and descriptor["full"].get("l1_path")
         and descriptor["full"].get("l2_path")
     ):
         return "compact-selective-ooc"
-    return "in-memory"
+    return "sidecar-stream"
 
 
 def _normalize_order_fields(
@@ -5737,21 +5915,179 @@ def _refine_secondary_order(
     return refined
 
 
+def _concat_order_parts(parts: list[np.ndarray], dtype: np.dtype) -> np.ndarray:
+    if not parts:
+        return np.empty(0, dtype=dtype)
+    return np.concatenate(parts) if len(parts) > 1 else np.asarray(parts[0], dtype=dtype)
+
+
+def _ordered_selection_filter(
+    exact_positions: np.ndarray, total_rows: int
+) -> tuple[np.ndarray | None, set[int] | None]:
+    normalized = np.asarray(exact_positions, dtype=np.int64)
+    if len(normalized) == 0:
+        return np.empty(0, dtype=np.int64), set()
+    unique_positions = np.unique(normalized)
+    if len(unique_positions) == total_rows:
+        return None, None
+    return unique_positions, set(unique_positions.tolist())
+
+
+def _ordered_positions_from_single_sorted_handle(
+    values_handle,
+    positions_handle,
+    dtype: np.dtype,
+    exact_positions: np.ndarray,
+    total_rows: int,
+    need_values: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    selected_positions, _ = _ordered_selection_filter(exact_positions, total_rows)
+    length = int(positions_handle.shape[0])
+    chunk_len = int(positions_handle.chunks[0]) if hasattr(positions_handle, "chunks") else length
+    position_parts = []
+    value_parts = [] if need_values else None
+
+    for start in range(0, length, chunk_len):
+        stop = min(start + chunk_len, length)
+        chunk_positions = _read_sidecar_span(positions_handle, start, stop).astype(np.int64, copy=False)
+        if selected_positions is None:
+            mask = None
+            kept_positions = chunk_positions
+        else:
+            mask = np.isin(chunk_positions, selected_positions, assume_unique=True)
+            if not np.any(mask):
+                continue
+            kept_positions = chunk_positions[mask]
+        position_parts.append(kept_positions)
+        if need_values:
+            chunk_values = _read_sidecar_span(values_handle, start, stop)
+            value_parts.append(chunk_values if mask is None else chunk_values[mask])
+
+    positions = _concat_order_parts(position_parts, np.dtype(np.int64))
+    if not need_values:
+        return positions, np.empty(0, dtype=dtype)
+    return positions, _concat_order_parts(value_parts, dtype)
+
+
+class _SortedSidecarCursor:
+    def __init__(self, values_handle, positions_handle, dtype: np.dtype):
+        self.values_handle = values_handle
+        self.positions_handle = positions_handle
+        self.dtype = np.dtype(dtype)
+        self.length = int(values_handle.shape[0])
+        self.chunk_len = int(values_handle.chunks[0]) if hasattr(values_handle, "chunks") else self.length
+        self.offset = 0
+        self.local_index = 0
+        self.values_chunk = np.empty(0, dtype=self.dtype)
+        self.positions_chunk = np.empty(0, dtype=np.int64)
+        self._fill_chunk()
+
+    def _fill_chunk(self) -> None:
+        if self.offset >= self.length:
+            self.values_chunk = np.empty(0, dtype=self.dtype)
+            self.positions_chunk = np.empty(0, dtype=np.int64)
+            self.local_index = 0
+            return
+        stop = min(self.offset + self.chunk_len, self.length)
+        self.values_chunk = _read_sidecar_span(self.values_handle, self.offset, stop)
+        self.positions_chunk = _read_sidecar_span(self.positions_handle, self.offset, stop).astype(
+            np.int64, copy=False
+        )
+        self.offset = stop
+        self.local_index = 0
+
+    @property
+    def exhausted(self) -> bool:
+        return len(self.values_chunk) == 0
+
+    def current_value(self):
+        return self.values_chunk[self.local_index]
+
+    def current_position(self) -> int:
+        return int(self.positions_chunk[self.local_index])
+
+    def advance(self) -> None:
+        self.local_index += 1
+        if self.local_index >= len(self.values_chunk):
+            self._fill_chunk()
+
+
+def _ordered_positions_from_stream_merge(
+    array: blosc2.NDArray,
+    descriptor: dict,
+    exact_positions: np.ndarray,
+    need_values: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    dtype = np.dtype(descriptor["dtype"])
+    total_rows = int(array.shape[0])
+    selected_positions, remaining = _ordered_selection_filter(exact_positions, total_rows)
+    full = descriptor["full"]
+    streams = [_load_full_sidecar_handles(array, descriptor)]
+    for run in full.get("runs", ()):
+        streams.append(_load_full_run_sidecar_handles(array, descriptor, run))
+
+    if len(streams) == 1:
+        return _ordered_positions_from_single_sorted_handle(
+            streams[0][0],
+            streams[0][1],
+            dtype,
+            exact_positions,
+            total_rows,
+            need_values,
+        )
+
+    cursors = [
+        _SortedSidecarCursor(values_handle, positions_handle, dtype)
+        for values_handle, positions_handle in streams
+    ]
+    cursors = [cursor for cursor in cursors if not cursor.exhausted]
+    if not cursors:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=dtype)
+
+    positions = []
+    values = [] if need_values else None
+
+    while cursors:
+        best_idx = 0
+        best_cursor = cursors[0]
+        best_value = best_cursor.current_value()
+        best_position = best_cursor.current_position()
+        for idx in range(1, len(cursors)):
+            candidate = cursors[idx]
+            candidate_value = candidate.current_value()
+            candidate_position = candidate.current_position()
+            if _pair_le(candidate_value, candidate_position, best_value, best_position, dtype):
+                best_idx = idx
+                best_cursor = candidate
+                best_value = candidate_value
+                best_position = candidate_position
+
+        if selected_positions is None or best_position in remaining:
+            positions.append(best_position)
+            if need_values:
+                values.append(best_value)
+            if remaining is not None:
+                remaining.remove(best_position)
+                if not remaining:
+                    break
+
+        best_cursor.advance()
+        if best_cursor.exhausted:
+            cursors.pop(best_idx)
+
+    ordered_positions = np.asarray(positions, dtype=np.int64)
+    if not need_values:
+        return ordered_positions, np.empty(0, dtype=dtype)
+    return ordered_positions, np.asarray(values, dtype=dtype)
+
+
 def _ordered_positions_from_exact_positions(
     array: blosc2.NDArray, descriptor: dict, exact_positions: np.ndarray, order_fields: list[str | None]
 ) -> np.ndarray:
-    sorted_values, sorted_positions = _load_full_arrays(array, descriptor)
-    if len(exact_positions) == len(sorted_positions):
-        selected_positions = np.asarray(sorted_positions, dtype=np.int64)
-        selected_values = np.asarray(sorted_values)
-    else:
-        keep = np.zeros(int(array.shape[0]), dtype=bool)
-        keep[np.asarray(exact_positions, dtype=np.int64)] = True
-        mask = keep[sorted_positions]
-        selected_positions = np.asarray(sorted_positions[mask], dtype=np.int64)
-        selected_values = np.asarray(sorted_values[mask])
-
     secondary_fields = [field for field in order_fields[1:] if field is not None]
+    selected_positions, selected_values = _ordered_positions_from_stream_merge(
+        array, descriptor, exact_positions, need_values=bool(secondary_fields)
+    )
     if secondary_fields:
         selected_positions = _refine_secondary_order(
             array, selected_positions, selected_values, np.dtype(descriptor["dtype"]), secondary_fields

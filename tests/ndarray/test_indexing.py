@@ -833,6 +833,40 @@ def test_persistent_compact_full_exact_query_avoids_whole_sidecar_load(monkeypat
     np.testing.assert_array_equal(expr.compute()[:], data[(data >= 50_000) & (data < 50_010)])
 
 
+@pytest.mark.parametrize(
+    ("kind", "blocked"),
+    [
+        ("light", {("light", "values"), ("light", "bucket_positions"), ("light", "offsets")}),
+        ("medium", {("reduced", "values"), ("reduced", "positions"), ("reduced", "offsets")}),
+        ("full", {("full", "values"), ("full", "positions")}),
+    ],
+)
+def test_in_memory_exact_queries_avoid_whole_loading_index_payloads(monkeypatch, kind, blocked):
+    data = np.arange(120_000, dtype=np.int64)
+    arr = blosc2.asarray(data, chunks=(12_000,), blocks=(2_000,))
+    arr.create_index(kind=kind)
+
+    indexing = __import__("blosc2.indexing", fromlist=["_load_array_sidecar", "_load_full_arrays"])
+    original_load = indexing._load_array_sidecar
+
+    def guarded_load(array, token, category, name, sidecar_path):
+        if (category, name) in blocked:
+            raise AssertionError(f"{kind} exact lookup should not whole-load {category}.{name}")
+        return original_load(array, token, category, name, sidecar_path)
+
+    monkeypatch.setattr(indexing, "_load_array_sidecar", guarded_load)
+
+    if kind == "full":
+
+        def guarded_load_full_arrays(*args, **kwargs):
+            raise AssertionError("in-memory full exact lookup should not use _load_full_arrays")
+
+        monkeypatch.setattr(indexing, "_load_full_arrays", guarded_load_full_arrays)
+
+    expr = ((arr >= 50_000) & (arr < 50_010)).where(arr)
+    np.testing.assert_array_equal(expr.compute()[:], data[(data >= 50_000) & (data < 50_010)])
+
+
 @pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_expression_index_matches_scan(kind):
     rng = np.random.default_rng(9)
@@ -889,6 +923,31 @@ def test_full_expression_index_reuses_ordered_access():
     assert explained["ordered_access"] is True
     assert explained["target"]["source"] == "expression"
     assert explained["target"]["expression_key"] == "abs(x)"
+
+
+def test_ordered_full_query_streams_sidecars(monkeypatch):
+    dtype = np.dtype([("x", np.int64), ("payload", np.int32)])
+    data = np.array(
+        [(-8, 0), (5, 1), (-2, 2), (11, 3), (3, 4), (-3, 5), (2, 6), (-5, 7)],
+        dtype=dtype,
+    )
+    arr = blosc2.asarray(data, chunks=(4,), blocks=(2,))
+    arr.create_expr_index("abs(x)", kind="full", name="abs_x")
+
+    indexing = __import__("blosc2.indexing", fromlist=["_load_full_arrays"])
+
+    def guarded_load_full_arrays(*args, **kwargs):
+        raise AssertionError("ordered full queries should stream sidecars instead of _load_full_arrays")
+
+    monkeypatch.setattr(indexing, "_load_full_arrays", guarded_load_full_arrays)
+
+    expr = blosc2.lazyexpr("(abs(x) >= 2) & (abs(x) < 8)", arr.fields).where(arr)
+    mask = (np.abs(data["x"]) >= 2) & (np.abs(data["x"]) < 8)
+    filtered_positions = np.where(mask)[0]
+    filtered_order = np.argsort(np.abs(data["x"][mask]), kind="stable")
+    np.testing.assert_array_equal(
+        expr.indices(order="abs(x)").compute()[:], filtered_positions[filtered_order]
+    )
 
 
 def test_persistent_expression_index_survives_reopen(tmp_path):
