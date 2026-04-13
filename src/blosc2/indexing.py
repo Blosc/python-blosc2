@@ -2835,6 +2835,7 @@ def _build_full_descriptor_ooc(
             )
         )
 
+    merge_buffer_items = max(int(array.chunks[0]), FULL_OOC_MERGE_BUFFER_ITEMS)
     merge_id = 0
     while len(runs) > 1:
         next_runs = []
@@ -2849,7 +2850,7 @@ def _build_full_descriptor_ooc(
                     workdir,
                     dtype,
                     merge_id,
-                    FULL_OOC_MERGE_BUFFER_ITEMS,
+                    merge_buffer_items,
                     tracker,
                     cparams,
                 )
@@ -3724,6 +3725,7 @@ def compact_index(array: blosc2.NDArray, field: str | None = None, name: str | N
     with tempfile.TemporaryDirectory(prefix="blosc2-index-compact-") as tmpdir:
         workdir = Path(tmpdir)
         runs = _full_compaction_runs(array, descriptor, workdir)
+        merge_buffer_items = max(int(array.chunks[0]), FULL_OOC_MERGE_BUFFER_ITEMS)
         merge_id = 0
         while len(runs) > 1:
             next_runs = []
@@ -3732,9 +3734,7 @@ def compact_index(array: blosc2.NDArray, field: str | None = None, name: str | N
                     next_runs.append(runs[idx])
                     continue
                 next_runs.append(
-                    _merge_run_pair(
-                        runs[idx], runs[idx + 1], workdir, dtype, merge_id, FULL_OOC_MERGE_BUFFER_ITEMS
-                    )
+                    _merge_run_pair(runs[idx], runs[idx + 1], workdir, dtype, merge_id, merge_buffer_items)
                 )
                 merge_id += 1
             runs = next_runs
