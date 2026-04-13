@@ -845,7 +845,7 @@ def _open_sidecar_handle(array: blosc2.NDArray, token: str, category: str, name:
             raise RuntimeError("sidecar handle path is not available")
         handle = legacy if isinstance(legacy, blosc2.NDArray) else blosc2.asarray(np.asarray(legacy))
     else:
-        handle = blosc2.open(path)
+        handle = blosc2.open(path, mmap_mode=_INDEX_MMAP_MODE)
     _SIDECAR_HANDLE_CACHE[cache_key] = handle
     return handle
 
@@ -1095,20 +1095,15 @@ def _plain_index_cparams(cparams: dict | blosc2.CParams | None) -> dict | None:
     return {key: _plain_value(value) for key, value in cparams.items()}
 
 
-def _load_array_sidecar(
-    array: blosc2.NDArray, token: str, category: str, name: str, path: str | None
-) -> np.ndarray:
+def _load_array_sidecar(array: blosc2.NDArray, token: str, category: str, name: str) -> np.ndarray:
     cache_key = _data_cache_key(array, token, category, name)
     cached = _DATA_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    if path is None:
-        handle = _SIDECAR_HANDLE_CACHE.get(_sidecar_handle_cache_key(array, token, category, name))
-        if handle is None:
-            raise RuntimeError("in-memory index metadata is missing from the current process")
-        data = _read_sidecar_span(handle, 0, int(handle.shape[0]))
-    else:
-        data = blosc2.open(path)[:]
+    handle = _SIDECAR_HANDLE_CACHE.get(_sidecar_handle_cache_key(array, token, category, name))
+    if handle is None:
+        raise RuntimeError("in-memory index metadata is missing from the current process")
+    data = _read_sidecar_span(handle, 0, int(handle.shape[0]))
     _DATA_CACHE[cache_key] = data
     return data
 
@@ -1502,13 +1497,6 @@ def _index_build_threads(cparams: dict | blosc2.CParams | None = None) -> int:
             cparams_threads = 1
         return _python_executor_threads(cparams_threads)
     return _python_executor_threads(int(getattr(blosc2, "nthreads", 1) or 1))
-
-
-def _sidecar_block_len(sidecar: dict, fallback_block_len: int) -> int:
-    path = sidecar.get("path")
-    if path is None:
-        return fallback_block_len
-    return int(blosc2.open(path).blocks[0])
 
 
 def _medium_nav_segment_divisor(optlevel: int) -> int:
@@ -3199,14 +3187,14 @@ def _component_nbytes(array: blosc2.NDArray, descriptor: dict, component: IndexC
     if component.path is not None:
         return int(blosc2.open(component.path, mmap_mode=_INDEX_MMAP_MODE).nbytes)
     token = descriptor["token"]
-    return int(_load_array_sidecar(array, token, component.category, component.name, component.path).nbytes)
+    return int(_load_array_sidecar(array, token, component.category, component.name).nbytes)
 
 
 def _component_cbytes(array: blosc2.NDArray, descriptor: dict, component: IndexComponent) -> int:
     if component.path is not None:
         return int(blosc2.open(component.path, mmap_mode=_INDEX_MMAP_MODE).cbytes)
     token = descriptor["token"]
-    sidecar = _load_array_sidecar(array, token, component.category, component.name, component.path)
+    sidecar = _load_array_sidecar(array, token, component.category, component.name)
     kwargs = {}
     cparams = descriptor.get("cparams")
     if cparams is not None:
@@ -3345,7 +3333,7 @@ def _replace_levels_descriptor_tail(
     for level, level_info in descriptor["levels"].items():
         segment_len = int(level_info["segment_len"])
         start_segment = old_size // segment_len
-        prefix = _load_level_summaries(array, descriptor, level)[:start_segment]
+        prefix = _open_level_summary_handle(array, descriptor, level)[:start_segment]
         tail_start = start_segment * segment_len
         tail_values = _slice_values_for_target(array, target, tail_start, new_size)
         tail_summaries = _compute_segment_summaries(tail_values, dtype, segment_len)
@@ -3805,11 +3793,6 @@ def _descriptor_for_target(array: blosc2.NDArray, target: dict) -> dict | None:
     if tuple(descriptor.get("chunks", ())) != tuple(array.chunks):
         return None
     return descriptor
-
-
-def _load_level_summaries(array: blosc2.NDArray, descriptor: dict, level: str) -> np.ndarray:
-    level_info = descriptor["levels"][level]
-    return _load_array_sidecar(array, descriptor["token"], "summary", level, level_info["path"])
 
 
 def _open_level_summary_handle(array: blosc2.NDArray, descriptor: dict, level: str):
