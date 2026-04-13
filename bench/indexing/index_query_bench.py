@@ -355,7 +355,25 @@ def _with_full_query_mode(full_query_mode: str):
     return _FullQueryModeScope()
 
 
-def index_sizes(descriptor: dict) -> tuple[int, int]:
+def _with_index_sidecar_mmap(no_mmap: bool):
+    class _IndexSidecarMmapScope:
+        def __enter__(self):
+            self.previous = blosc2_indexing._INDEX_MMAP_MODE
+            if no_mmap:
+                blosc2_indexing._INDEX_MMAP_MODE = None
+
+        def __exit__(self, exc_type, exc, tb):
+            blosc2_indexing._INDEX_MMAP_MODE = self.previous
+
+    return _IndexSidecarMmapScope()
+
+
+def _open_index_sidecar(path: str | os.PathLike[str], no_mmap: bool):
+    mmap_mode = None if no_mmap else blosc2_indexing._INDEX_MMAP_MODE
+    return blosc2.open(path, mmap_mode=mmap_mode)
+
+
+def index_sizes(descriptor: dict, *, no_mmap: bool) -> tuple[int, int]:
     logical = 0
     disk = 0
     for level_info in descriptor["levels"].values():
@@ -367,15 +385,15 @@ def index_sizes(descriptor: dict) -> tuple[int, int]:
     light = descriptor.get("light")
     if light is not None:
         for key in ("values_path", "bucket_positions_path", "offsets_path"):
-            array = blosc2.open(light[key])
+            array = _open_index_sidecar(light[key], no_mmap)
             logical += int(np.prod(array.shape)) * array.dtype.itemsize
             disk += os.path.getsize(light[key])
 
     reduced = descriptor.get("reduced")
     if reduced is not None:
-        values = blosc2.open(reduced["values_path"])
-        positions = blosc2.open(reduced["positions_path"])
-        offsets = blosc2.open(reduced["offsets_path"])
+        values = _open_index_sidecar(reduced["values_path"], no_mmap)
+        positions = _open_index_sidecar(reduced["positions_path"], no_mmap)
+        offsets = _open_index_sidecar(reduced["offsets_path"], no_mmap)
         logical += values.shape[0] * values.dtype.itemsize
         logical += positions.shape[0] * positions.dtype.itemsize
         logical += offsets.shape[0] * offsets.dtype.itemsize
@@ -385,8 +403,8 @@ def index_sizes(descriptor: dict) -> tuple[int, int]:
 
     full = descriptor.get("full")
     if full is not None:
-        values = blosc2.open(full["values_path"])
-        positions = blosc2.open(full["positions_path"])
+        values = _open_index_sidecar(full["values_path"], no_mmap)
+        positions = _open_index_sidecar(full["positions_path"], no_mmap)
         logical += values.shape[0] * values.dtype.itemsize
         logical += positions.shape[0] * positions.dtype.itemsize
         disk += os.path.getsize(full["values_path"])
@@ -462,6 +480,7 @@ def _open_or_build_indexed_array(
     codec: blosc2.Codec | None,
     clevel: int | None,
     nthreads: int | None,
+    no_mmap: bool,
 ) -> tuple[blosc2.NDArray, float]:
     if path.exists():
         arr = blosc2.open(path, mode="a")
@@ -483,7 +502,8 @@ def _open_or_build_indexed_array(
         cparams["nthreads"] = nthreads
     if cparams:
         kwargs["cparams"] = cparams
-    arr.create_index(**kwargs)
+    with _with_index_sidecar_mmap(no_mmap):
+        arr.create_index(**kwargs)
     return arr, time.perf_counter() - build_start
 
 
@@ -503,6 +523,8 @@ def benchmark_size(
     clevel: int | None,
     nthreads: int | None,
     kinds: tuple[str, ...],
+    repeats: int,
+    no_mmap: bool,
     cold_row_callback=None,
 ) -> list[dict]:
     arr = _open_or_build_persistent_array(
@@ -545,14 +567,21 @@ def benchmark_size(
             codec,
             clevel,
             nthreads,
+            no_mmap,
         )
         idx_cond = blosc2.lazyexpr(condition_str, idx_arr.fields)
         idx_expr = idx_cond.where(idx_arr)
-        with _with_full_query_mode(full_query_mode):
+        with _with_full_query_mode(full_query_mode), _with_index_sidecar_mmap(no_mmap):
             explanation = idx_expr.explain()
             cold_time, index_len = benchmark_index_once(idx_arr, idx_cond)
+            warm_ms = None
+            warm_speedup = None
+            if repeats > 0:
+                index_runs = [benchmark_index_once(idx_arr, idx_cond)[0] for _ in range(repeats)]
+                warm_ms = statistics.median(index_runs) * 1_000 if index_runs else None
+                warm_speedup = None if warm_ms is None else scan_ms / warm_ms
         descriptor = idx_arr.indexes[0]
-        logical_index_bytes, disk_index_bytes = index_sizes(descriptor)
+        logical_index_bytes, disk_index_bytes = index_sizes(descriptor, no_mmap=no_mmap)
 
         row = {
             "size": size,
@@ -566,36 +595,23 @@ def benchmark_size(
             "scan_ms": scan_ms,
             "cold_ms": cold_time * 1_000,
             "cold_speedup": scan_ms / (cold_time * 1_000),
-            "warm_ms": None,
-            "warm_speedup": None,
+            "warm_ms": warm_ms,
+            "warm_speedup": warm_speedup,
             "candidate_units": explanation["candidate_units"],
             "total_units": explanation["total_units"],
             "lookup_path": explanation.get("lookup_path"),
             "full_query_mode": full_query_mode,
+            "no_mmap": no_mmap,
             "logical_index_bytes": logical_index_bytes,
             "disk_index_bytes": disk_index_bytes,
             "index_pct": logical_index_bytes / base_bytes * 100,
             "index_pct_disk": disk_index_bytes / compressed_base_bytes * 100,
-            "_arr": idx_arr,
-            "_cond": idx_cond,
         }
         rows.append(row)
         if cold_row_callback is not None:
             cold_row_callback(row)
+        del idx_expr, idx_cond, idx_arr
     return rows
-
-
-def measure_warm_queries(rows: list[dict], repeats: int) -> None:
-    if repeats <= 0:
-        return
-    for result in rows:
-        arr = result["_arr"]
-        cond = result["_cond"]
-        with _with_full_query_mode(result["full_query_mode"]):
-            index_runs = [benchmark_index_once(arr, cond)[0] for _ in range(repeats)]
-        warm_ms = statistics.median(index_runs) * 1_000 if index_runs else None
-        result["warm_ms"] = warm_ms
-        result["warm_speedup"] = None if warm_ms is None else result["scan_ms"] / warm_ms
 
 
 def parse_human_size(value: str) -> int:
@@ -728,6 +744,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Number of threads to use for index creation. Default: use blosc2.nthreads.",
     )
+    parser.add_argument(
+        "--no-mmap",
+        action="store_true",
+        default=False,
+        help="Disable mmap for index sidecar opens during benchmark planning/querying. Default: use mmap when supported.",
+    )
     return parser.parse_args()
 
 
@@ -772,6 +794,7 @@ def main() -> None:
                 codec,
                 args.clevel,
                 args.nthreads,
+                args.no_mmap,
             )
     else:
         args.outdir.mkdir(parents=True, exist_ok=True)
@@ -793,6 +816,7 @@ def main() -> None:
             codec,
             args.clevel,
             args.nthreads,
+            args.no_mmap,
         )
 
 
@@ -814,6 +838,7 @@ def run_benchmarks(
     codec: blosc2.Codec | None,
     clevel: int | None,
     nthreads: int | None,
+    no_mmap: bool,
 ) -> None:
     all_results = []
 
@@ -831,7 +856,8 @@ def run_benchmarks(
         f"query_single_value={query_single_value}, "
         f"full_query_mode={full_query_mode}, index_codec={'auto' if codec is None else codec.name}, "
         f"index_clevel={'auto' if clevel is None else clevel}, "
-        f"index_nthreads={'auto' if nthreads is None else nthreads}"
+        f"index_nthreads={'auto' if nthreads is None else nthreads}, "
+        f"index_mmap={'off' if no_mmap else 'on'}"
     )
     cold_widths = progress_widths(COLD_COLUMNS, sizes, dists, kinds, id_dtype)
     print()
@@ -860,11 +886,12 @@ def run_benchmarks(
                 clevel,
                 nthreads,
                 kinds,
+                repeats,
+                no_mmap,
                 cold_row_callback=cold_progress_callback,
             )
             all_results.extend(size_results)
     if repeats > 0:
-        measure_warm_queries(all_results, repeats)
         warm_widths = table_widths(all_results, WARM_COLUMNS)
         shared_width_by_header = {}
         for (header, _), width in zip(COLD_COLUMNS, cold_widths, strict=True):

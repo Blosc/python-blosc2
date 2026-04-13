@@ -490,7 +490,7 @@ def test_chunk_local_index_descriptor_and_lookup_path(tmp_path, kind):
     np.testing.assert_array_equal(expr.compute()[:], data[data == 123_456])
 
 
-@pytest.mark.parametrize("kind", ["light", "medium", "full"])
+@pytest.mark.parametrize("kind", ["ultralight", "light", "medium", "full"])
 def test_small_default_index_builder_uses_ooc(kind):
     data = np.arange(100_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(10_000,), blocks=(2_000,))
@@ -500,7 +500,7 @@ def test_small_default_index_builder_uses_ooc(kind):
     assert descriptor["ooc"] is True
 
 
-@pytest.mark.parametrize("kind", ["light", "medium", "full"])
+@pytest.mark.parametrize("kind", ["ultralight", "light", "medium", "full"])
 def test_in_mem_override_disables_ooc_builder(kind):
     data = np.arange(120_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(12_000,), blocks=(3_000,))
@@ -508,6 +508,29 @@ def test_in_mem_override_disables_ooc_builder(kind):
     descriptor = arr.create_index(kind=kind, in_mem=True)
 
     assert descriptor["ooc"] is False
+
+
+@pytest.mark.parametrize("use_expression", [False, True])
+def test_ultralight_ooc_build_does_not_materialize_full_target(monkeypatch, tmp_path, use_expression):
+    path = tmp_path / ("indexed_expr_ultralight.b2nd" if use_expression else "indexed_ultralight.b2nd")
+    if use_expression:
+        data = np.zeros(120_000, dtype=[("x", np.int64)])
+        data["x"] = np.arange(-60_000, 60_000, dtype=np.int64)
+    else:
+        data = np.arange(120_000, dtype=np.int64)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(12_000,), blocks=(2_000,))
+
+    def fail_values_for_target(array, target):
+        raise AssertionError("_values_for_target should not be used by the ultralight OOC builder")
+
+    monkeypatch.setattr(indexing, "_values_for_target", fail_values_for_target)
+
+    if use_expression:
+        descriptor = arr.create_expr_index("abs(x)", kind="ultralight")
+    else:
+        descriptor = arr.create_index(kind="ultralight")
+
+    assert descriptor["ooc"] is True
 
 
 @pytest.mark.parametrize("kind", ["light", "medium"])
@@ -846,7 +869,7 @@ def test_in_memory_exact_queries_avoid_whole_loading_index_payloads(monkeypatch,
     arr = blosc2.asarray(data, chunks=(12_000,), blocks=(2_000,))
     arr.create_index(kind=kind)
 
-    indexing = __import__("blosc2.indexing", fromlist=["_load_array_sidecar", "_load_full_arrays"])
+    indexing = __import__("blosc2.indexing", fromlist=["_load_array_sidecar"])
     original_load = indexing._load_array_sidecar
 
     def guarded_load(array, token, category, name, sidecar_path):
@@ -855,13 +878,6 @@ def test_in_memory_exact_queries_avoid_whole_loading_index_payloads(monkeypatch,
         return original_load(array, token, category, name, sidecar_path)
 
     monkeypatch.setattr(indexing, "_load_array_sidecar", guarded_load)
-
-    if kind == "full":
-
-        def guarded_load_full_arrays(*args, **kwargs):
-            raise AssertionError("in-memory full exact lookup should not use _load_full_arrays")
-
-        monkeypatch.setattr(indexing, "_load_full_arrays", guarded_load_full_arrays)
 
     expr = ((arr >= 50_000) & (arr < 50_010)).where(arr)
     np.testing.assert_array_equal(expr.compute()[:], data[(data >= 50_000) & (data < 50_010)])
@@ -934,12 +950,15 @@ def test_ordered_full_query_streams_sidecars(monkeypatch):
     arr = blosc2.asarray(data, chunks=(4,), blocks=(2,))
     arr.create_expr_index("abs(x)", kind="full", name="abs_x")
 
-    indexing = __import__("blosc2.indexing", fromlist=["_load_full_arrays"])
+    indexing = __import__("blosc2.indexing", fromlist=["_load_array_sidecar"])
+    original_load = indexing._load_array_sidecar
 
-    def guarded_load_full_arrays(*args, **kwargs):
-        raise AssertionError("ordered full queries should stream sidecars instead of _load_full_arrays")
+    def guarded_load(array, token, category, name, sidecar_path):
+        if (category, name) in {("full", "values"), ("full", "positions")}:
+            raise AssertionError("ordered full queries should stream sidecars instead of whole-loading them")
+        return original_load(array, token, category, name, sidecar_path)
 
-    monkeypatch.setattr(indexing, "_load_full_arrays", guarded_load_full_arrays)
+    monkeypatch.setattr(indexing, "_load_array_sidecar", guarded_load)
 
     expr = blosc2.lazyexpr("(abs(x) >= 2) & (abs(x) < 8)", arr.fields).where(arr)
     mask = (np.abs(data["x"]) >= 2) & (np.abs(data["x"]) < 8)
@@ -1084,6 +1103,42 @@ def test_compact_full_expression_index_preserves_results():
     np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
 
 
+@pytest.mark.parametrize("persistent", [False, True])
+def test_compact_full_index_rebuilds_navigation_without_whole_loading(monkeypatch, tmp_path, persistent):
+    dtype = np.dtype([("a", np.int64), ("b", np.int64)])
+    data = np.array([(3, 9), (1, 8), (2, 7), (1, 6)], dtype=dtype)
+    kwargs = {"chunks": (2,), "blocks": (2,)}
+    if persistent:
+        kwargs.update({"urlpath": tmp_path / "compact_full_nav_only.b2nd", "mode": "w"})
+    arr = blosc2.asarray(data, **kwargs)
+    arr.create_csindex("a")
+
+    descriptor = indexing._descriptor_for(arr, "a")
+    descriptor["full"]["l1_path"] = None
+    descriptor["full"]["l2_path"] = None
+    indexing._save_store(arr, indexing._load_store(arr))
+
+    original_load = indexing._load_array_sidecar
+
+    def guarded_load(array, token, category, name, sidecar_path):
+        if (category, name) in {("full", "values"), ("full", "positions")}:
+            raise AssertionError(
+                "compact_index should rebuild navigation without whole-loading full payloads"
+            )
+        return original_load(array, token, category, name, sidecar_path)
+
+    monkeypatch.setattr(indexing, "_load_array_sidecar", guarded_load)
+
+    compacted = arr.compact_index("a")
+    assert compacted["full"]["runs"] == []
+    assert compacted["full"]["l1_path"] is not None or not persistent
+    assert compacted["full"]["l2_path"] is not None or not persistent
+
+    expr = blosc2.lazyexpr("(a >= 1) & (a < 4)", arr.fields).where(arr)
+    expected = data[(data["a"] >= 1) & (data["a"] < 4)]
+    np.testing.assert_array_equal(expr.compute()[:], expected)
+
+
 def test_persistent_large_run_full_query_uses_bounded_fallback(monkeypatch, tmp_path):
     path = tmp_path / "large_run_fallback.b2nd"
     dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
@@ -1097,12 +1152,17 @@ def test_persistent_large_run_full_query_uses_bounded_fallback(monkeypatch, tmp_
 
     del arr
     reopened = blosc2.open(path, mode="a")
-    indexing = __import__("blosc2.indexing", fromlist=["_load_full_arrays"])
+    indexing = __import__("blosc2.indexing", fromlist=["_load_array_sidecar"])
+    original_load = indexing._load_array_sidecar
 
-    def guarded_load_full_arrays(*args, **kwargs):
-        raise AssertionError("large-run bounded fallback should avoid _load_full_arrays")
+    def guarded_load(array, token, category, name, sidecar_path):
+        if category in {"full", "full_run"} and name.endswith(("values", "positions")):
+            raise AssertionError(
+                "large-run bounded fallback should avoid whole-loading full payload sidecars"
+            )
+        return original_load(array, token, category, name, sidecar_path)
 
-    monkeypatch.setattr(indexing, "_load_full_arrays", guarded_load_full_arrays)
+    monkeypatch.setattr(indexing, "_load_array_sidecar", guarded_load)
     expr = blosc2.lazyexpr("(id >= 103) & (id <= 106)", reopened.fields).where(reopened)
     explained = expr.explain()
     assert explained["lookup_path"] == "run-bounded-ooc"
@@ -1120,12 +1180,17 @@ def test_large_run_full_expression_query_uses_bounded_fallback(monkeypatch):
     for run, value in enumerate(range(20, 28)):
         arr.append(np.array([(value, 10 + run)], dtype=dtype))
 
-    indexing = __import__("blosc2.indexing", fromlist=["_load_full_arrays"])
+    indexing = __import__("blosc2.indexing", fromlist=["_load_array_sidecar"])
+    original_load = indexing._load_array_sidecar
 
-    def guarded_load_full_arrays(*args, **kwargs):
-        raise AssertionError("large-run bounded fallback should avoid _load_full_arrays")
+    def guarded_load(array, token, category, name, sidecar_path):
+        if category in {"full", "full_run"} and name.endswith(("values", "positions")):
+            raise AssertionError(
+                "large-run bounded fallback should avoid whole-loading full payload sidecars"
+            )
+        return original_load(array, token, category, name, sidecar_path)
 
-    monkeypatch.setattr(indexing, "_load_full_arrays", guarded_load_full_arrays)
+    monkeypatch.setattr(indexing, "_load_array_sidecar", guarded_load)
     expr = blosc2.lazyexpr("(abs(x) >= 22) & (abs(x) <= 25)", arr.fields).where(arr)
     explained = expr.explain()
     assert explained["lookup_path"] == "run-bounded-ooc"

@@ -976,6 +976,22 @@ def _compute_sorted_boundaries_from_sidecar(
     return boundaries
 
 
+def _compute_sorted_boundaries_from_handle(
+    handle, dtype: np.dtype, length: int, segment_len: int
+) -> np.ndarray:
+    nsegments = math.ceil(length / segment_len)
+    boundaries = np.empty(nsegments, dtype=_boundary_dtype(dtype))
+    start_value = np.empty(1, dtype=dtype)
+    end_value = np.empty(1, dtype=dtype)
+    for idx in range(nsegments):
+        start = idx * segment_len
+        stop = min(start + segment_len, length)
+        _read_ndarray_linear_span(handle, start, start_value)
+        _read_ndarray_linear_span(handle, stop - 1, end_value)
+        boundaries[idx] = (start_value[0], end_value[0])
+    return boundaries
+
+
 def _store_array_sidecar(
     array: blosc2.NDArray,
     token: str,
@@ -1248,6 +1264,31 @@ def _rebuild_full_navigation_sidecars_from_path(
     full["l2_dtype"] = l2_sidecar["dtype"]
 
 
+def _rebuild_full_navigation_sidecars_from_handle(
+    array: blosc2.NDArray,
+    token: str,
+    kind: str,
+    full: dict,
+    values_handle,
+    dtype: np.dtype,
+    length: int,
+    persistent: bool,
+    cparams: dict | None = None,
+) -> None:
+    chunk_len = int(values_handle.chunks[0]) if hasattr(values_handle, "chunks") else int(array.chunks[0])
+    block_len = int(values_handle.blocks[0]) if hasattr(values_handle, "blocks") else int(array.blocks[0])
+    l1 = _compute_sorted_boundaries_from_handle(values_handle, dtype, length, chunk_len)
+    l2 = _compute_sorted_boundaries_from_handle(values_handle, dtype, length, block_len)
+    l1_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l1", l1, persistent, cparams=cparams)
+    l2_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l2", l2, persistent, cparams=cparams)
+    full["l1_path"] = l1_sidecar["path"]
+    full["l2_path"] = l2_sidecar["path"]
+    full["sidecar_chunk_len"] = int(chunk_len)
+    full["sidecar_block_len"] = int(block_len)
+    full["l1_dtype"] = l1_sidecar["dtype"]
+    full["l2_dtype"] = l2_sidecar["dtype"]
+
+
 def _stream_copy_sidecar_array(
     source_path: Path | str,
     dest_path: Path | str,
@@ -1358,7 +1399,7 @@ def _position_dtype(max_value: int) -> np.dtype:
 
 
 def _resolve_ooc_mode(kind: str, in_mem: bool) -> bool:
-    if kind not in {"light", "medium", "full"}:
+    if kind not in {"ultralight", "light", "medium", "full"}:
         return False
     return not in_mem
 
@@ -2609,6 +2650,26 @@ def _copy_sidecar_to_temp_run(
     return out_path
 
 
+def _copy_sidecar_handle_to_temp_run(
+    handle,
+    length: int,
+    dtype: np.dtype,
+    workdir: Path,
+    prefix: str,
+    tracker: TempRunTracker | None = None,
+    cparams: dict | None = None,
+) -> Path:
+    out_path = workdir / f"{prefix}.b2nd"
+    output = _create_blosc2_temp_array(out_path, length, dtype, FULL_OOC_MERGE_BUFFER_ITEMS, cparams)
+    chunk_len = int(handle.chunks[0]) if hasattr(handle, "chunks") else length
+    for start in range(0, length, chunk_len):
+        stop = min(start + chunk_len, length)
+        output[start:stop] = _read_sidecar_span(handle, start, stop)
+    del output
+    _tracker_register_create(tracker, out_path)
+    return out_path
+
+
 def _refill_run_buffer(
     values_src, positions_src, cursor: int, buffer_items: int
 ) -> tuple[np.ndarray, np.ndarray, int]:
@@ -2890,7 +2951,7 @@ def create_index(
         persistent = _is_persistent_array(array)
     use_ooc = _resolve_ooc_mode(kind, in_mem)
 
-    if use_ooc and kind in {"light", "medium", "full"}:
+    if use_ooc:
         levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent, cparams)
         light = (
             _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
@@ -2993,7 +3054,7 @@ def create_expr_index(
     use_ooc = _resolve_ooc_mode(kind, in_mem)
     token = _target_token(target)
 
-    if use_ooc and kind in {"light", "medium", "full"}:
+    if use_ooc:
         levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent, cparams)
         light = (
             _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
@@ -3270,25 +3331,6 @@ def _drop_descriptor_sidecars(descriptor: dict) -> None:
         for run in descriptor["full"].get("runs", ()):
             _remove_sidecar_path(run.get("values_path"))
             _remove_sidecar_path(run.get("positions_path"))
-
-
-def _replace_levels_descriptor(array: blosc2.NDArray, descriptor: dict, kind: str, persistent: bool) -> None:
-    size = int(array.shape[0])
-    target = descriptor["target"]
-    token = descriptor["token"]
-    cparams = _normalize_index_cparams(descriptor.get("cparams"))
-    for level, level_info in descriptor["levels"].items():
-        segment_len = int(level_info["segment_len"])
-        start = 0
-        summaries = _compute_segment_summaries(
-            _slice_values_for_target(array, target, start, size), np.dtype(descriptor["dtype"]), segment_len
-        )
-        sidecar = _store_array_sidecar(
-            array, token, kind, "summary", level, summaries, persistent, cparams=cparams
-        )
-        level_info["path"] = sidecar["path"]
-        level_info["dtype"] = sidecar["dtype"]
-        level_info["nsegments"] = len(summaries)
 
 
 def _replace_levels_descriptor_tail(
@@ -3589,21 +3631,25 @@ def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | N
 def _full_compaction_runs(array: blosc2.NDArray, descriptor: dict, workdir: Path) -> list[SortedRun]:
     full = descriptor["full"]
     dtype = np.dtype(descriptor["dtype"])
-    token = descriptor["token"]
     runs = []
+    base_length = int(array.shape[0]) - sum(int(run["length"]) for run in full.get("runs", ()))
     if full["values_path"] is not None and full["positions_path"] is not None:
-        length = int(array.shape[0]) - sum(int(run["length"]) for run in full.get("runs", ()))
         base_values_path = _copy_sidecar_to_temp_run(
-            full["values_path"], length, dtype, workdir, "compact_base_values"
+            full["values_path"], base_length, dtype, workdir, "compact_base_values"
         )
         base_positions_path = _copy_sidecar_to_temp_run(
-            full["positions_path"], length, np.dtype(np.int64), workdir, "compact_base_positions"
+            full["positions_path"], base_length, np.dtype(np.int64), workdir, "compact_base_positions"
         )
-        runs.append(SortedRun(base_values_path, base_positions_path, length))
+        runs.append(SortedRun(base_values_path, base_positions_path, base_length))
     else:
-        values = _load_array_sidecar(array, token, "full", "values", full["values_path"])
-        positions = _load_array_sidecar(array, token, "full", "positions", full["positions_path"])
-        runs.append(_materialize_sorted_run(values, positions, len(values), dtype, workdir, "compact_base"))
+        values_handle, positions_handle = _load_full_sidecar_handles(array, descriptor)
+        base_values_path = _copy_sidecar_handle_to_temp_run(
+            values_handle, base_length, dtype, workdir, "compact_base_values"
+        )
+        base_positions_path = _copy_sidecar_handle_to_temp_run(
+            positions_handle, base_length, np.dtype(np.int64), workdir, "compact_base_positions"
+        )
+        runs.append(SortedRun(base_values_path, base_positions_path, base_length))
 
     for run in full.get("runs", ()):
         run_length = int(run["length"])
@@ -3617,10 +3663,14 @@ def _full_compaction_runs(array: blosc2.NDArray, descriptor: dict, workdir: Path
             )
             runs.append(SortedRun(run_values_path, run_positions_path, run_length))
             continue
-        run_values, run_positions = _load_full_run_arrays(array, descriptor, run)
-        runs.append(
-            _materialize_sorted_run(run_values, run_positions, run_length, dtype, workdir, f"run_{run_id}")
+        run_values_handle, run_positions_handle = _load_full_run_sidecar_handles(array, descriptor, run)
+        run_values_path = _copy_sidecar_handle_to_temp_run(
+            run_values_handle, run_length, dtype, workdir, f"run_{run_id}_values"
         )
+        run_positions_path = _copy_sidecar_handle_to_temp_run(
+            run_positions_handle, run_length, np.dtype(np.int64), workdir, f"run_{run_id}_positions"
+        )
+        runs.append(SortedRun(run_values_path, run_positions_path, run_length))
     return runs
 
 
@@ -3636,8 +3686,35 @@ def compact_index(array: blosc2.NDArray, field: str | None = None, name: str | N
     full = descriptor["full"]
     if not full.get("runs"):
         if full.get("l1_path") is None or full.get("l2_path") is None:
-            sorted_values, positions = _load_full_arrays(array, descriptor)
-            _replace_full_descriptor(array, descriptor, sorted_values, positions, descriptor["persistent"])
+            cparams = _normalize_index_cparams(descriptor.get("cparams"))
+            dtype = np.dtype(descriptor["dtype"])
+            _remove_sidecar_path(full.get("l1_path"))
+            _remove_sidecar_path(full.get("l2_path"))
+            if descriptor["persistent"] and full.get("values_path") is not None:
+                _rebuild_full_navigation_sidecars_from_path(
+                    array,
+                    descriptor["token"],
+                    descriptor["kind"],
+                    full,
+                    full["values_path"],
+                    dtype,
+                    int(array.shape[0]),
+                    descriptor["persistent"],
+                    cparams,
+                )
+            else:
+                values_handle, _ = _load_full_sidecar_handles(array, descriptor)
+                _rebuild_full_navigation_sidecars_from_handle(
+                    array,
+                    descriptor["token"],
+                    descriptor["kind"],
+                    full,
+                    values_handle,
+                    dtype,
+                    int(array.shape[0]),
+                    descriptor["persistent"],
+                    cparams,
+                )
         _clear_full_merge_cache(array, descriptor["token"])
         _save_store(array, store)
         _invalidate_query_cache(array)
@@ -3796,30 +3873,6 @@ def _clear_full_merge_cache(array: blosc2.NDArray, token: str) -> None:
     _DATA_CACHE.pop(_full_merge_cache_key(array, token, "positions"), None)
 
 
-def _load_full_run_arrays(
-    array: blosc2.NDArray, descriptor: dict, run: dict
-) -> tuple[np.ndarray, np.ndarray]:
-    run_id = int(run["id"])
-    token = descriptor["token"]
-    values = _load_array_sidecar(array, token, "full_run", f"{run_id}.values", run["values_path"])
-    positions = _load_array_sidecar(array, token, "full_run", f"{run_id}.positions", run["positions_path"])
-    return values, positions
-
-
-def _load_full_navigation_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarray, np.ndarray]:
-    full = descriptor.get("full")
-    if full is None:
-        raise RuntimeError("full index metadata is not available")
-    l1_path = full.get("l1_path")
-    l2_path = full.get("l2_path")
-    if l1_path is None or l2_path is None:
-        raise RuntimeError("full index navigation metadata is not available")
-    token = descriptor["token"]
-    l1 = _load_array_sidecar(array, token, "full_nav", "l1", l1_path)
-    l2 = _load_array_sidecar(array, token, "full_nav", "l2", l2_path)
-    return l1, l2
-
-
 def _load_full_navigation_handles(array: blosc2.NDArray, descriptor: dict):
     full = descriptor.get("full")
     if full is None:
@@ -3854,69 +3907,6 @@ def _load_full_run_sidecar_handles(array: blosc2.NDArray, descriptor: dict, run:
     return values_sidecar, positions_sidecar
 
 
-def _load_full_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarray, np.ndarray]:
-    full = descriptor.get("full")
-    if full is None:
-        raise RuntimeError("full index metadata is not available")
-    token = descriptor["token"]
-    runs = full.get("runs", ())
-    if runs:
-        cached_values = _DATA_CACHE.get(_full_merge_cache_key(array, token, "values"))
-        cached_positions = _DATA_CACHE.get(_full_merge_cache_key(array, token, "positions"))
-        if cached_values is not None and cached_positions is not None:
-            return cached_values, cached_positions
-
-    values = _load_array_sidecar(array, token, "full", "values", full["values_path"])
-    positions = _load_array_sidecar(array, token, "full", "positions", full["positions_path"])
-    if runs:
-        dtype = np.dtype(descriptor["dtype"])
-        merged_values = values
-        merged_positions = positions
-        for run in runs:
-            run_values, run_positions = _load_full_run_arrays(array, descriptor, run)
-            merged_values, merged_positions = _merge_sorted_slices(
-                merged_values, merged_positions, run_values, run_positions, dtype
-            )
-        _DATA_CACHE[_full_merge_cache_key(array, token, "values")] = merged_values
-        _DATA_CACHE[_full_merge_cache_key(array, token, "positions")] = merged_positions
-        return merged_values, merged_positions
-    return values, positions
-
-
-def _load_reduced_arrays(
-    array: blosc2.NDArray, descriptor: dict
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    reduced = descriptor.get("reduced")
-    if reduced is None:
-        raise RuntimeError("reduced index metadata is not available")
-    values = _load_array_sidecar(array, descriptor["token"], "reduced", "values", reduced["values_path"])
-    positions = _load_array_sidecar(
-        array, descriptor["token"], "reduced", "positions", reduced["positions_path"]
-    )
-    offsets = _load_array_sidecar(array, descriptor["token"], "reduced", "offsets", reduced["offsets_path"])
-    return values, positions, offsets
-
-
-def _load_reduced_navigation_arrays(
-    array: blosc2.NDArray, descriptor: dict
-) -> tuple[np.ndarray, np.ndarray]:
-    reduced = descriptor.get("reduced")
-    if reduced is None:
-        raise RuntimeError("reduced index metadata is not available")
-    token = descriptor["token"]
-    l1 = _load_array_sidecar(array, token, "reduced_nav", "l1", reduced["l1_path"])
-    l2 = _load_array_sidecar(array, token, "reduced_nav", "l2", reduced["l2_path"])
-    return l1, l2
-
-
-def _load_reduced_l1_array(array: blosc2.NDArray, descriptor: dict) -> np.ndarray:
-    reduced = descriptor.get("reduced")
-    if reduced is None:
-        raise RuntimeError("reduced index metadata is not available")
-    token = descriptor["token"]
-    return _load_array_sidecar(array, token, "reduced_nav", "l1", reduced["l1_path"])
-
-
 def _load_reduced_l1_handle(array: blosc2.NDArray, descriptor: dict):
     reduced = descriptor.get("reduced")
     if reduced is None:
@@ -3944,36 +3934,6 @@ def _load_reduced_offsets_handle(array: blosc2.NDArray, descriptor: dict):
         raise RuntimeError("reduced index metadata is not available")
     token = descriptor["token"]
     return _open_sidecar_handle(array, token, "reduced_handle", "offsets", reduced["offsets_path"])
-
-
-def _load_light_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    light = descriptor.get("light")
-    if light is None:
-        raise RuntimeError("light index metadata is not available")
-    values = _load_array_sidecar(array, descriptor["token"], "light", "values", light["values_path"])
-    positions = _load_array_sidecar(
-        array, descriptor["token"], "light", "bucket_positions", light["bucket_positions_path"]
-    )
-    offsets = _load_array_sidecar(array, descriptor["token"], "light", "offsets", light["offsets_path"])
-    return values, positions, offsets
-
-
-def _load_light_navigation_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarray, np.ndarray]:
-    light = descriptor.get("light")
-    if light is None:
-        raise RuntimeError("light index metadata is not available")
-    token = descriptor["token"]
-    l1 = _load_array_sidecar(array, token, "light_nav", "l1", light["l1_path"])
-    l2 = _load_array_sidecar(array, token, "light_nav", "l2", light["l2_path"])
-    return l1, l2
-
-
-def _load_light_l1_array(array: blosc2.NDArray, descriptor: dict) -> np.ndarray:
-    light = descriptor.get("light")
-    if light is None:
-        raise RuntimeError("light index metadata is not available")
-    token = descriptor["token"]
-    return _load_array_sidecar(array, token, "light_nav", "l1", light["l1_path"])
 
 
 def _load_light_l1_handle(array: blosc2.NDArray, descriptor: dict):
