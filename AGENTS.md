@@ -46,3 +46,8 @@ without ticket prefixes. For pull requests: branch from `main`, add tests for
 behavior changes, update docs for API changes, ensure the test suite passes,
 and avoid introducing new compiler warnings. Link issues when applicable and
 include clear reproduction steps for bug fixes.
+
+**IMPORTANT — Agent commit policy**: Never run `git commit`, `git push`,
+`git reset`, `git rebase`, or any other destructive/state-changing git operation.
+Do not ask for permission to do so either. Committing and all repo state changes
+are exclusively the user’s decision. Just do the code work and stop there.
