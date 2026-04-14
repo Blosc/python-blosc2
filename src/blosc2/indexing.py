@@ -259,6 +259,19 @@ def _is_persistent_array(array: blosc2.NDArray) -> bool:
     return array.urlpath is not None
 
 
+def _tmpdir_for_array(array: blosc2.NDArray) -> str | None:
+    """Return a directory on the same filesystem as *array* for temp files.
+
+    When the array is backed by a file on disk we place temporaries next
+    to it so that they share the same filesystem.  This avoids hitting
+    size limits on ``/tmp`` (commonly a tmpfs with only a few GB).
+    For in-memory arrays we fall back to the system default (``None``).
+    """
+    if array.urlpath is not None:
+        return str(Path(array.urlpath).resolve().parent)
+    return None
+
+
 def _load_store(array: blosc2.NDArray) -> dict:
     if _is_persistent_array(array):
         key = _array_key(array)
@@ -3020,7 +3033,9 @@ def create_index(
         )
         full = None
         if kind == "full":
-            with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
+            with tempfile.TemporaryDirectory(
+                prefix="blosc2-index-ooc-", dir=_tmpdir_for_array(array)
+            ) as tmpdir:
                 full = _build_full_descriptor_ooc(
                     array, target, token, kind, dtype, persistent, Path(tmpdir), cparams
                 )
@@ -3123,7 +3138,9 @@ def create_expr_index(
         )
         full = None
         if kind == "full":
-            with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
+            with tempfile.TemporaryDirectory(
+                prefix="blosc2-index-ooc-", dir=_tmpdir_for_array(array)
+            ) as tmpdir:
                 full = _build_full_descriptor_ooc(
                     array, target, token, kind, dtype, persistent, Path(tmpdir), cparams
                 )
@@ -3776,7 +3793,7 @@ def compact_index(array: blosc2.NDArray, field: str | None = None, name: str | N
         return _copy_descriptor(descriptor)
 
     dtype = np.dtype(descriptor["dtype"])
-    with tempfile.TemporaryDirectory(prefix="blosc2-index-compact-") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="blosc2-index-compact-", dir=_tmpdir_for_array(array)) as tmpdir:
         workdir = Path(tmpdir)
         runs = _full_compaction_runs(array, descriptor, workdir)
         merge_buffer_items = max(int(array.chunks[0]), FULL_OOC_MERGE_BUFFER_ITEMS)
