@@ -272,6 +272,18 @@ def _tmpdir_for_array(array: blosc2.NDArray) -> str | None:
     return None
 
 
+def _resolve_full_index_tmpdir(array: blosc2.NDArray, tmpdir: str | None) -> str | None:
+    """Resolve the workspace for temporary files used by OOC full index builds.
+
+    An explicit ``tmpdir`` wins. Otherwise, persistent arrays default to the
+    directory that stores the array so temporary sidecars stay on the same
+    filesystem. In-memory arrays fall back to the system temporary directory.
+    """
+    if tmpdir is not None:
+        return tmpdir
+    return _tmpdir_for_array(array)
+
+
 def _load_store(array: blosc2.NDArray) -> dict:
     if _is_persistent_array(array):
         key = _array_key(array)
@@ -3006,8 +3018,16 @@ def create_index(
     persistent: bool | None = None,
     in_mem: bool = False,
     name: str | None = None,
+    tmpdir: str | None = None,
     **kwargs,
 ) -> dict:
+    """Create an index descriptor for a 1-D array or structured field.
+
+    Parameters are equivalent to :meth:`blosc2.NDArray.create_index`.
+    ``tmpdir`` controls where temporary files for out-of-core ``kind="full"``
+    builds are created. If ``None``, persistent arrays default to their own
+    directory and in-memory arrays use the system temporary directory.
+    """
     cparams = _normalize_index_cparams(kwargs.pop("cparams", None))
     del kwargs
     dtype = _validate_index_target(array, field)
@@ -3034,7 +3054,7 @@ def create_index(
         full = None
         if kind == "full":
             with tempfile.TemporaryDirectory(
-                prefix="blosc2-index-ooc-", dir=_tmpdir_for_array(array)
+                prefix="blosc2-index-ooc-", dir=_resolve_full_index_tmpdir(array, tmpdir)
             ) as tmpdir:
                 full = _build_full_descriptor_ooc(
                     array, target, token, kind, dtype, persistent, Path(tmpdir), cparams
@@ -3201,8 +3221,15 @@ def create_expr_index(
     return _copy_descriptor(descriptor)
 
 
-def create_csindex(array: blosc2.NDArray, field: str | None = None, **kwargs) -> dict:
-    return create_index(array, field=field, kind="full", **kwargs)
+def create_csindex(
+    array: blosc2.NDArray, field: str | None = None, tmpdir: str | None = None, **kwargs
+) -> dict:
+    """Create a full sorted index descriptor.
+
+    This is shorthand for :func:`create_index` with ``kind="full"``.
+    ``tmpdir`` has the same meaning as in :func:`create_index`.
+    """
+    return create_index(array, field=field, kind="full", tmpdir=tmpdir, **kwargs)
 
 
 def _resolve_index_token(store: dict, field: str | None, name: str | None) -> str:

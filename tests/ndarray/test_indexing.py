@@ -1123,6 +1123,50 @@ def test_forced_ooc_full_index_merge_preserves_sorted_sidecars(monkeypatch, tmp_
     np.testing.assert_array_equal(values_sidecar[:], data[positions_sidecar[:]])
 
 
+def test_create_index_full_ooc_defaults_tmpdir_to_array_directory(monkeypatch, tmp_path):
+    path = tmp_path / "default_tmpdir_full.b2nd"
+    data = np.arange(4096, dtype=np.int64)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(256,), blocks=(64,))
+
+    recorded = {}
+    real_temporary_directory = indexing.tempfile.TemporaryDirectory
+
+    def tracking_temporary_directory(*args, **kwargs):
+        recorded["dir"] = kwargs.get("dir")
+        return real_temporary_directory(*args, **kwargs)
+
+    monkeypatch.setattr(indexing.tempfile, "TemporaryDirectory", tracking_temporary_directory)
+
+    descriptor = arr.create_index(kind="full")
+
+    assert descriptor["ooc"] is True
+    assert recorded["dir"] == str(path.parent.resolve())
+
+
+def test_create_csindex_full_ooc_uses_explicit_tmpdir(monkeypatch, tmp_path):
+    path = tmp_path / "explicit_tmpdir_full.b2nd"
+    custom_tmpdir = tmp_path / "custom-index-tmp"
+    custom_tmpdir.mkdir()
+    dtype = np.dtype([("a", np.int64), ("payload", np.int32)])
+    data = np.zeros(4096, dtype=dtype)
+    data["a"] = np.arange(data.shape[0], dtype=np.int64)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(256,), blocks=(64,))
+
+    recorded = {}
+    real_temporary_directory = indexing.tempfile.TemporaryDirectory
+
+    def tracking_temporary_directory(*args, **kwargs):
+        recorded["dir"] = kwargs.get("dir")
+        return real_temporary_directory(*args, **kwargs)
+
+    monkeypatch.setattr(indexing.tempfile, "TemporaryDirectory", tracking_temporary_directory)
+
+    descriptor = arr.create_csindex("a", tmpdir=str(custom_tmpdir))
+
+    assert descriptor["ooc"] is True
+    assert recorded["dir"] == str(custom_tmpdir)
+
+
 @pytest.mark.parametrize("persistent", [False, True])
 def test_compact_full_index_rebuilds_navigation_without_whole_loading(monkeypatch, tmp_path, persistent):
     dtype = np.dtype([("a", np.int64), ("b", np.int64)])

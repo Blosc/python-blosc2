@@ -4763,6 +4763,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         persistent: bool | None = None,
         in_mem: bool = False,
         name: str | None = None,
+        tmpdir: str | None = None,
         **kwargs: Any,
     ) -> dict:
         """Create an index for a 1-D array or structured field.
@@ -4791,6 +4792,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
             Optional logical label stored in the descriptor. Index identity is
             still driven by the target field, so creating another index on the
             same field replaces the previous one.
+        tmpdir : str or None, optional
+            Directory to use for temporary files during out-of-core
+            ``kind="full"`` builds. If ``None``, persistent arrays use the same
+            directory as the array being indexed so temporaries stay on the
+            same filesystem. In-memory arrays fall back to the system
+            temporary directory.
         kwargs : dict, optional
             Keyword arguments forwarded to the index builder. At the moment the
             supported option is ``cparams``. Pass ``cparams`` to control the
@@ -4822,19 +4829,22 @@ class NDArray(blosc2_ext.NDArray, Operand):
             persistent=persistent,
             in_mem=in_mem,
             name=name,
+            tmpdir=tmpdir,
             **kwargs,
         )
 
-    def create_csindex(self, field: str | None = None, **kwargs: Any) -> dict:
+    def create_csindex(self, field: str | None = None, tmpdir: str | None = None, **kwargs: Any) -> dict:
         """Create a fully sorted index for a 1-D array or structured field.
 
         This is a convenience wrapper for ``create_index(kind="full")`` and is
         the required index tier for direct ordered reuse in
         ``sort(order=...)``, ``indices(order=...)``, and ``itersorted(...)``.
+        ``tmpdir`` controls where temporary files for out-of-core full builds
+        are created, following the same rules as :meth:`create_index`.
         """
         from . import indexing
 
-        return indexing.create_csindex(self, field=field, **kwargs)
+        return indexing.create_csindex(self, field=field, tmpdir=tmpdir, **kwargs)
 
     def create_expr_index(
         self,
