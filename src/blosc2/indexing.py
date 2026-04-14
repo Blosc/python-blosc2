@@ -1517,7 +1517,7 @@ def _build_block_sorted_payload(
     return sorted_values, positions, offsets, position_dtype
 
 
-def _build_reduced_descriptor(
+def _build_partial_descriptor(
     array: blosc2.NDArray,
     token: str,
     kind: str,
@@ -1527,12 +1527,14 @@ def _build_reduced_descriptor(
     cparams: dict | None = None,
 ) -> dict:
     chunk_len = int(array.chunks[0])
-    nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(int(array.blocks[0]), chunk_len, optlevel)
+    nav_segment_len, nav_segment_divisor = _partial_nav_segment_len(
+        int(array.blocks[0]), chunk_len, optlevel
+    )
     sorted_values, positions, offsets, l2, _ = _build_chunk_sorted_payload(
         values, chunk_len, nav_segment_len, cparams
     )
     l1 = _compute_sorted_boundaries(sorted_values, np.dtype(values.dtype), chunk_len)
-    reduced = _chunk_index_payload_storage(
+    partial = _chunk_index_payload_storage(
         array,
         token,
         kind,
@@ -1549,9 +1551,9 @@ def _build_reduced_descriptor(
         nav_segment_len,
         cparams,
     )
-    reduced["position_dtype"] = positions.dtype.str
-    reduced["nav_segment_divisor"] = nav_segment_divisor
-    return reduced
+    partial["position_dtype"] = positions.dtype.str
+    partial["nav_segment_divisor"] = nav_segment_divisor
+    return partial
 
 
 def _segment_row_count(chunk_len: int, nav_segment_len: int) -> int:
@@ -1591,7 +1593,7 @@ def _index_build_threads(cparams: dict | blosc2.CParams | None = None) -> int:
     return _python_executor_threads(int(getattr(blosc2, "nthreads", 1) or 1))
 
 
-def _medium_nav_segment_divisor(optlevel: int) -> int:
+def _partial_nav_segment_divisor(optlevel: int) -> int:
     if optlevel <= 1:
         return 1
     if optlevel <= 3:
@@ -1601,8 +1603,8 @@ def _medium_nav_segment_divisor(optlevel: int) -> int:
     return 8
 
 
-def _medium_nav_segment_len(block_len: int, chunk_len: int, optlevel: int) -> tuple[int, int]:
-    divisor = min(block_len, _medium_nav_segment_divisor(int(optlevel)))
+def _partial_nav_segment_len(block_len: int, chunk_len: int, optlevel: int) -> tuple[int, int]:
+    divisor = min(block_len, _partial_nav_segment_divisor(int(optlevel)))
     max_segments_per_chunk = 2048
     chunk_floor = max(1, math.ceil(int(chunk_len) / max_segments_per_chunk))
     return max(1, block_len // divisor, chunk_floor), divisor
@@ -1798,7 +1800,7 @@ def _sort_chunk_intra_chunk(
     return runs[0]
 
 
-def _build_reduced_chunk_payloads_intra_chunk(
+def _build_partial_chunk_payloads_intra_chunk(
     array: blosc2.NDArray,
     target: dict,
     dtype: np.dtype,
@@ -2004,7 +2006,7 @@ def _finalize_chunk_index_payload_storage(
     }
 
 
-def _build_reduced_descriptor_ooc(
+def _build_partial_descriptor_ooc(
     array: blosc2.NDArray,
     target: dict,
     token: str,
@@ -2017,7 +2019,7 @@ def _build_reduced_descriptor_ooc(
     if persistent:
         size = int(array.shape[0])
         chunk_len = int(array.chunks[0])
-        nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(
+        nav_segment_len, nav_segment_divisor = _partial_nav_segment_len(
             int(array.blocks[0]), chunk_len, optlevel
         )
         nchunks = math.ceil(size / chunk_len)
@@ -2072,7 +2074,7 @@ def _build_reduced_descriptor_ooc(
                         l2[row_start + segment_id] = l2[row_start + segment_count - 1]
                 cursor = next_cursor
             del values_handle, positions_handle
-            reduced = _finalize_chunk_index_payload_storage(
+            partial = _finalize_chunk_index_payload_storage(
                 array,
                 token,
                 kind,
@@ -2093,16 +2095,18 @@ def _build_reduced_descriptor_ooc(
             if positions_sidecar is not None:
                 _remove_sidecar_path(positions_sidecar["path"])
             raise
-        reduced["position_dtype"] = position_dtype.str
-        reduced["nav_segment_divisor"] = nav_segment_divisor
-        return reduced
+        partial["position_dtype"] = position_dtype.str
+        partial["nav_segment_divisor"] = nav_segment_divisor
+        return partial
 
     chunk_len = int(array.chunks[0])
-    nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(int(array.blocks[0]), chunk_len, optlevel)
-    sorted_values, positions, offsets, l1, l2 = _build_reduced_chunk_payloads_intra_chunk(
+    nav_segment_len, nav_segment_divisor = _partial_nav_segment_len(
+        int(array.blocks[0]), chunk_len, optlevel
+    )
+    sorted_values, positions, offsets, l1, l2 = _build_partial_chunk_payloads_intra_chunk(
         array, target, dtype, chunk_len, nav_segment_len, cparams
     )
-    reduced = _chunk_index_payload_storage(
+    partial = _chunk_index_payload_storage(
         array,
         token,
         kind,
@@ -2119,12 +2123,12 @@ def _build_reduced_descriptor_ooc(
         nav_segment_len,
         cparams,
     )
-    reduced["position_dtype"] = positions.dtype.str
-    reduced["nav_segment_divisor"] = nav_segment_divisor
-    return reduced
+    partial["position_dtype"] = positions.dtype.str
+    partial["nav_segment_divisor"] = nav_segment_divisor
+    return partial
 
 
-def _light_bucket_count(block_len: int) -> int:
+def _bucket_bucket_count(block_len: int) -> int:
     return max(1, min(64, block_len))
 
 
@@ -2135,7 +2139,7 @@ def _pack_bucket_mask(bucket_ids: np.ndarray) -> np.uint64:
     return mask
 
 
-def _light_value_lossy_bits(dtype: np.dtype, optlevel: int) -> int:
+def _bucket_value_lossy_bits(dtype: np.dtype, optlevel: int) -> int:
     dtype = np.dtype(dtype)
     if dtype.kind in {"i", "u"} or dtype == np.dtype(np.float32) or dtype == np.dtype(np.float64):
         max_bits = dtype.itemsize
@@ -2219,7 +2223,7 @@ def _quantize_float_scalar(value, dtype: np.dtype, bits: int):
     return _float_from_ordered_uint(ordered, dtype)[0]
 
 
-def _quantize_light_values_array(values: np.ndarray, bits: int) -> np.ndarray:
+def _quantize_bucket_values_array(values: np.ndarray, bits: int) -> np.ndarray:
     dtype = np.dtype(values.dtype)
     if bits <= 0:
         return values
@@ -2230,7 +2234,7 @@ def _quantize_light_values_array(values: np.ndarray, bits: int) -> np.ndarray:
     return values
 
 
-def _quantize_light_value_scalar(value, dtype: np.dtype, bits: int):
+def _quantize_bucket_value_scalar(value, dtype: np.dtype, bits: int):
     dtype = np.dtype(dtype)
     if bits <= 0:
         return np.asarray(value, dtype=dtype)[()]
@@ -2241,7 +2245,7 @@ def _quantize_light_value_scalar(value, dtype: np.dtype, bits: int):
     return np.asarray(value, dtype=dtype)[()]
 
 
-def _build_light_chunk_payloads(
+def _build_bucket_chunk_payloads(
     array: blosc2.NDArray,
     target: dict,
     dtype: np.dtype,
@@ -2273,7 +2277,7 @@ def _build_light_chunk_payloads(
         chunk_sorted = chunk[order]
         stored_chunk_sorted = chunk_sorted
         if value_lossy_bits > 0:
-            stored_chunk_sorted = _quantize_light_values_array(chunk_sorted, value_lossy_bits)
+            stored_chunk_sorted = _quantize_bucket_values_array(chunk_sorted, value_lossy_bits)
         local_positions = order.astype(position_dtype, copy=False)
         sorted_values[cursor:next_cursor] = stored_chunk_sorted
         bucket_positions[cursor:next_cursor] = (local_positions // bucket_len).astype(
@@ -2295,7 +2299,7 @@ def _build_light_chunk_payloads(
     return sorted_values, bucket_positions, offsets, l1, l2
 
 
-def _build_light_chunk_payloads_intra_chunk(
+def _build_bucket_chunk_payloads_intra_chunk(
     array: blosc2.NDArray,
     target: dict,
     dtype: np.dtype,
@@ -2329,7 +2333,7 @@ def _build_light_chunk_payloads_intra_chunk(
         next_cursor = cursor + chunk_size
         stored_chunk_sorted = chunk_sorted
         if value_lossy_bits > 0:
-            stored_chunk_sorted = _quantize_light_values_array(chunk_sorted, value_lossy_bits)
+            stored_chunk_sorted = _quantize_bucket_values_array(chunk_sorted, value_lossy_bits)
         sorted_values[cursor:next_cursor] = stored_chunk_sorted
         bucket_positions[cursor:next_cursor] = (local_positions // bucket_len).astype(
             bucket_dtype, copy=False
@@ -2350,7 +2354,7 @@ def _build_light_chunk_payloads_intra_chunk(
     return sorted_values, bucket_positions, offsets, l1, l2
 
 
-def _build_light_descriptor(
+def _build_bucket_descriptor(
     array: blosc2.NDArray,
     token: str,
     kind: str,
@@ -2363,16 +2367,16 @@ def _build_light_descriptor(
     nav_segment_len = int(array.blocks[0])
     bucket_len = max(1, math.ceil(nav_segment_len / 64))
     bucket_count = math.ceil(chunk_len / bucket_len)
-    value_lossy_bits = _light_value_lossy_bits(values.dtype, optlevel)
+    value_lossy_bits = _bucket_value_lossy_bits(values.dtype, optlevel)
     sorted_values, positions, offsets, l2, _ = _build_chunk_sorted_payload(
         values, chunk_len, nav_segment_len, cparams
     )
     if value_lossy_bits > 0:
-        sorted_values = _quantize_light_values_array(sorted_values, value_lossy_bits)
+        sorted_values = _quantize_bucket_values_array(sorted_values, value_lossy_bits)
     bucket_dtype = _position_dtype(bucket_count - 1)
     bucket_positions = (positions // bucket_len).astype(bucket_dtype, copy=False)
     l1 = _compute_sorted_boundaries(sorted_values, np.dtype(sorted_values.dtype), chunk_len)
-    light = _chunk_index_payload_storage(
+    bucket = _chunk_index_payload_storage(
         array,
         token,
         kind,
@@ -2389,14 +2393,14 @@ def _build_light_descriptor(
         nav_segment_len,
         cparams,
     )
-    light["bucket_count"] = bucket_count
-    light["bucket_len"] = bucket_len
-    light["value_lossy_bits"] = value_lossy_bits
-    light["bucket_dtype"] = bucket_positions.dtype.str
-    return light
+    bucket["bucket_count"] = bucket_count
+    bucket["bucket_len"] = bucket_len
+    bucket["value_lossy_bits"] = value_lossy_bits
+    bucket["bucket_dtype"] = bucket_positions.dtype.str
+    return bucket
 
 
-def _build_light_descriptor_ooc(
+def _build_bucket_descriptor_ooc(
     array: blosc2.NDArray,
     target: dict,
     token: str,
@@ -2410,7 +2414,7 @@ def _build_light_descriptor_ooc(
     nav_segment_len = int(array.blocks[0])
     bucket_len = max(1, math.ceil(nav_segment_len / 64))
     bucket_count = math.ceil(chunk_len / bucket_len)
-    value_lossy_bits = _light_value_lossy_bits(dtype, optlevel)
+    value_lossy_bits = _bucket_value_lossy_bits(dtype, optlevel)
     bucket_dtype = _position_dtype(bucket_count - 1)
 
     if persistent:
@@ -2459,7 +2463,7 @@ def _build_light_descriptor_ooc(
                 )
                 stored_chunk_sorted = chunk_sorted
                 if value_lossy_bits > 0:
-                    stored_chunk_sorted = _quantize_light_values_array(chunk_sorted, value_lossy_bits)
+                    stored_chunk_sorted = _quantize_bucket_values_array(chunk_sorted, value_lossy_bits)
                 if values_handle is not None:
                     values_handle[cursor:next_cursor] = stored_chunk_sorted
                 if bucket_handle is not None:
@@ -2479,7 +2483,7 @@ def _build_light_descriptor_ooc(
                         l2[row_start + segment_id] = l2[row_start + segment_count - 1]
                 cursor = next_cursor
             del values_handle, bucket_handle
-            light = _finalize_chunk_index_payload_storage(
+            bucket = _finalize_chunk_index_payload_storage(
                 array,
                 token,
                 kind,
@@ -2500,14 +2504,14 @@ def _build_light_descriptor_ooc(
             if bucket_sidecar is not None:
                 _remove_sidecar_path(bucket_sidecar["path"])
             raise
-        light["bucket_count"] = bucket_count
-        light["bucket_len"] = bucket_len
-        light["value_lossy_bits"] = value_lossy_bits
-        light["bucket_dtype"] = bucket_dtype.str
-        return light
+        bucket["bucket_count"] = bucket_count
+        bucket["bucket_len"] = bucket_len
+        bucket["value_lossy_bits"] = value_lossy_bits
+        bucket["bucket_dtype"] = bucket_dtype.str
+        return bucket
 
     # Non-persistent path: full staging in RAM is acceptable.
-    sorted_values, bucket_positions, offsets, l1, l2 = _build_light_chunk_payloads_intra_chunk(
+    sorted_values, bucket_positions, offsets, l1, l2 = _build_bucket_chunk_payloads_intra_chunk(
         array,
         target,
         dtype,
@@ -2518,7 +2522,7 @@ def _build_light_descriptor_ooc(
         bucket_dtype,
         cparams,
     )
-    light = _chunk_index_payload_storage(
+    bucket = _chunk_index_payload_storage(
         array,
         token,
         kind,
@@ -2535,11 +2539,11 @@ def _build_light_descriptor_ooc(
         nav_segment_len,
         cparams,
     )
-    light["bucket_count"] = bucket_count
-    light["bucket_len"] = bucket_len
-    light["value_lossy_bits"] = value_lossy_bits
-    light["bucket_dtype"] = bucket_positions.dtype.str
-    return light
+    bucket["bucket_count"] = bucket_count
+    bucket["bucket_len"] = bucket_len
+    bucket["value_lossy_bits"] = value_lossy_bits
+    bucket["bucket_dtype"] = bucket_positions.dtype.str
+    return bucket
 
 
 def _scalar_compare(left, right, dtype: np.dtype) -> int:
@@ -3115,12 +3119,12 @@ def create_index(
     if use_ooc:
         levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent, cparams)
         bucket = (
-            _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
+            _build_bucket_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
             if kind == "bucket"
             else None
         )
         partial = (
-            _build_reduced_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
+            _build_partial_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
             if kind == "partial"
             else None
         )
@@ -3152,12 +3156,12 @@ def create_index(
         values = _values_for_target(array, target)
         levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent, cparams)
         bucket = (
-            _build_light_descriptor(array, token, kind, values, optlevel, persistent, cparams)
+            _build_bucket_descriptor(array, token, kind, values, optlevel, persistent, cparams)
             if kind == "bucket"
             else None
         )
         partial = (
-            _build_reduced_descriptor(array, token, kind, values, optlevel, persistent, cparams)
+            _build_partial_descriptor(array, token, kind, values, optlevel, persistent, cparams)
             if kind == "partial"
             else None
         )
@@ -3413,17 +3417,17 @@ def _replace_levels_descriptor_tail(
         level_info["nsegments"] = len(summaries)
 
 
-def _replace_reduced_descriptor_tail(
+def _replace_partial_descriptor_tail(
     array: blosc2.NDArray, descriptor: dict, old_size: int, persistent: bool
 ) -> None:
     del old_size
     target = descriptor["target"]
-    reduced = descriptor["partial"]
+    partial = descriptor["partial"]
     cparams = _normalize_index_cparams(descriptor.get("cparams"))
     for key in ("values_path", "positions_path", "offsets_path", "l1_path", "l2_path"):
-        _remove_sidecar_path(reduced.get(key))
+        _remove_sidecar_path(partial.get(key))
     if descriptor.get("ooc", False):
-        rebuilt = _build_reduced_descriptor_ooc(
+        rebuilt = _build_partial_descriptor_ooc(
             array,
             target,
             descriptor["token"],
@@ -3434,7 +3438,7 @@ def _replace_reduced_descriptor_tail(
             cparams,
         )
     else:
-        rebuilt = _build_reduced_descriptor(
+        rebuilt = _build_partial_descriptor(
             array,
             descriptor["token"],
             descriptor["kind"],
@@ -3446,17 +3450,17 @@ def _replace_reduced_descriptor_tail(
     descriptor["partial"] = rebuilt
 
 
-def _replace_light_descriptor_tail(
+def _replace_bucket_descriptor_tail(
     array: blosc2.NDArray, descriptor: dict, old_size: int, persistent: bool
 ) -> None:
     del old_size
     target = descriptor["target"]
-    light = descriptor["bucket"]
+    bucket = descriptor["bucket"]
     cparams = _normalize_index_cparams(descriptor.get("cparams"))
     for key in ("values_path", "bucket_positions_path", "offsets_path", "l1_path", "l2_path"):
-        _remove_sidecar_path(light.get(key))
+        _remove_sidecar_path(bucket.get(key))
     if descriptor.get("ooc", False):
-        rebuilt = _build_light_descriptor_ooc(
+        rebuilt = _build_bucket_descriptor_ooc(
             array,
             target,
             descriptor["token"],
@@ -3467,7 +3471,7 @@ def _replace_light_descriptor_tail(
             cparams,
         )
     else:
-        rebuilt = _build_light_descriptor(
+        rebuilt = _build_bucket_descriptor(
             array,
             descriptor["token"],
             descriptor["kind"],
@@ -3633,9 +3637,9 @@ def append_to_indexes(array: blosc2.NDArray, old_size: int, appended_values: np.
         if kind == "full":
             _append_full_descriptor(array, descriptor, old_size, target_values)
         elif kind == "partial":
-            _replace_reduced_descriptor_tail(array, descriptor, old_size, persistent)
+            _replace_partial_descriptor_tail(array, descriptor, old_size, persistent)
         elif kind == "bucket":
-            _replace_light_descriptor_tail(array, descriptor, old_size, persistent)
+            _replace_bucket_descriptor_tail(array, descriptor, old_size, persistent)
         _replace_levels_descriptor_tail(array, descriptor, kind, old_size, persistent)
         descriptor["shape"] = tuple(array.shape)
         descriptor["chunks"] = tuple(array.chunks)
@@ -3957,62 +3961,62 @@ def _load_full_run_sidecar_handles(array: blosc2.NDArray, descriptor: dict, run:
     return values_sidecar, positions_sidecar
 
 
-def _load_reduced_l1_handle(array: blosc2.NDArray, descriptor: dict):
-    reduced = descriptor.get("partial")
-    if reduced is None:
+def _load_partial_l1_handle(array: blosc2.NDArray, descriptor: dict):
+    partial = descriptor.get("partial")
+    if partial is None:
         raise RuntimeError("partial-index metadata is not available")
     token = descriptor["token"]
-    return _open_sidecar_handle(array, token, "partial_nav_handle", "l1", reduced["l1_path"])
+    return _open_sidecar_handle(array, token, "partial_nav_handle", "l1", partial["l1_path"])
 
 
-def _load_reduced_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
-    reduced = descriptor.get("partial")
-    if reduced is None:
+def _load_partial_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
+    partial = descriptor.get("partial")
+    if partial is None:
         raise RuntimeError("partial-index metadata is not available")
     token = descriptor["token"]
-    values_sidecar = _open_sidecar_handle(array, token, "partial_handle", "values", reduced["values_path"])
+    values_sidecar = _open_sidecar_handle(array, token, "partial_handle", "values", partial["values_path"])
     positions_sidecar = _open_sidecar_handle(
-        array, token, "partial_handle", "positions", reduced["positions_path"]
+        array, token, "partial_handle", "positions", partial["positions_path"]
     )
-    l2_sidecar = _open_sidecar_handle(array, token, "partial_nav_handle", "l2", reduced["l2_path"])
+    l2_sidecar = _open_sidecar_handle(array, token, "partial_nav_handle", "l2", partial["l2_path"])
     return values_sidecar, positions_sidecar, l2_sidecar
 
 
-def _load_reduced_offsets_handle(array: blosc2.NDArray, descriptor: dict):
-    reduced = descriptor.get("partial")
-    if reduced is None:
+def _load_partial_offsets_handle(array: blosc2.NDArray, descriptor: dict):
+    partial = descriptor.get("partial")
+    if partial is None:
         raise RuntimeError("partial-index metadata is not available")
     token = descriptor["token"]
-    return _open_sidecar_handle(array, token, "partial_handle", "offsets", reduced["offsets_path"])
+    return _open_sidecar_handle(array, token, "partial_handle", "offsets", partial["offsets_path"])
 
 
-def _load_light_l1_handle(array: blosc2.NDArray, descriptor: dict):
-    light = descriptor.get("bucket")
-    if light is None:
+def _load_bucket_l1_handle(array: blosc2.NDArray, descriptor: dict):
+    bucket = descriptor.get("bucket")
+    if bucket is None:
         raise RuntimeError("bucket index metadata is not available")
     token = descriptor["token"]
-    return _open_sidecar_handle(array, token, "bucket_nav_handle", "l1", light["l1_path"])
+    return _open_sidecar_handle(array, token, "bucket_nav_handle", "l1", bucket["l1_path"])
 
 
-def _load_light_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
-    light = descriptor.get("bucket")
-    if light is None:
+def _load_bucket_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
+    bucket = descriptor.get("bucket")
+    if bucket is None:
         raise RuntimeError("bucket index metadata is not available")
     token = descriptor["token"]
-    values_sidecar = _open_sidecar_handle(array, token, "bucket_handle", "values", light["values_path"])
+    values_sidecar = _open_sidecar_handle(array, token, "bucket_handle", "values", bucket["values_path"])
     bucket_sidecar = _open_sidecar_handle(
-        array, token, "bucket_handle", "bucket_positions", light["bucket_positions_path"]
+        array, token, "bucket_handle", "bucket_positions", bucket["bucket_positions_path"]
     )
-    l2_sidecar = _open_sidecar_handle(array, token, "bucket_nav_handle", "l2", light["l2_path"])
+    l2_sidecar = _open_sidecar_handle(array, token, "bucket_nav_handle", "l2", bucket["l2_path"])
     return values_sidecar, bucket_sidecar, l2_sidecar
 
 
-def _load_light_offsets_handle(array: blosc2.NDArray, descriptor: dict):
-    light = descriptor.get("bucket")
-    if light is None:
+def _load_bucket_offsets_handle(array: blosc2.NDArray, descriptor: dict):
+    bucket = descriptor.get("bucket")
+    if bucket is None:
         raise RuntimeError("bucket index metadata is not available")
     token = descriptor["token"]
-    return _open_sidecar_handle(array, token, "bucket_handle", "offsets", light["offsets_path"])
+    return _open_sidecar_handle(array, token, "bucket_handle", "offsets", bucket["offsets_path"])
 
 
 def _normalize_scalar(value, dtype: np.dtype):
@@ -4774,7 +4778,7 @@ def _chunk_nav_supports_selective_ooc_lookup(array: blosc2.NDArray, descriptor: 
         if meta.get("bucket_positions_path") is None:
             return False
         try:
-            values_sidecar, bucket_sidecar, l2_sidecar = _load_light_sidecar_handles(array, descriptor)
+            values_sidecar, bucket_sidecar, l2_sidecar = _load_bucket_sidecar_handles(array, descriptor)
         except Exception:
             return False
         return (
@@ -4786,7 +4790,7 @@ def _chunk_nav_supports_selective_ooc_lookup(array: blosc2.NDArray, descriptor: 
     if meta.get("positions_path") is None:
         return False
     try:
-        values_sidecar, positions_sidecar, l2_sidecar = _load_reduced_sidecar_handles(array, descriptor)
+        values_sidecar, positions_sidecar, l2_sidecar = _load_partial_sidecar_handles(array, descriptor)
     except Exception:
         return False
     return (
@@ -4848,11 +4852,11 @@ def _run_position_batches(chunk_ids: np.ndarray, thread_count: int, process_batc
     return _merge_position_batches(position_batches), total_candidate_segments
 
 
-def _light_batch_result_dtype(where_x) -> np.dtype:
+def _bucket_batch_result_dtype(where_x) -> np.dtype:
     return _where_output_dtype(where_x)
 
 
-def _light_worker_source(where_x):
+def _bucket_worker_source(where_x):
     if _supports_block_reads(where_x) and getattr(where_x, "urlpath", None) is not None:
         return blosc2.open(str(where_x.urlpath), mmap_mode=_INDEX_MMAP_MODE)
     return where_x
@@ -4877,7 +4881,7 @@ def _gather_mmap_source(where_x):
     return handle
 
 
-def _light_match_from_span(span: np.ndarray, plan: IndexPlan) -> np.ndarray:
+def _bucket_match_from_span(span: np.ndarray, plan: IndexPlan) -> np.ndarray:
     if plan.target is not None and plan.target.get("source") == "expression":
         field_values = _values_from_numpy_target(span, plan.target)
     else:
@@ -4890,7 +4894,7 @@ def _light_match_from_span(span: np.ndarray, plan: IndexPlan) -> np.ndarray:
     return match
 
 
-def _process_light_chunk_batch(
+def _process_bucket_chunk_batch(
     chunk_ids: np.ndarray,
     where_x,
     plan: IndexPlan,
@@ -4900,7 +4904,7 @@ def _process_light_chunk_batch(
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     value_parts = []
     position_parts = []
-    local_where_x = _light_worker_source(where_x)
+    local_where_x = _bucket_worker_source(where_x)
     for chunk_id in chunk_ids:
         bucket_mask = plan.bucket_masks[int(chunk_id)]
         chunk_start = int(chunk_id) * plan.chunk_len
@@ -4917,15 +4921,17 @@ def _process_light_chunk_batch(
                 local_where_x.get_1d_span_numpy(span, base_chunk_id, local_start, stop - start)
             else:
                 span = local_where_x[start:stop]
-            match = _light_match_from_span(span, plan)
+            match = _bucket_match_from_span(span, plan)
             if np.any(match):
                 value_parts.append(np.require(span[match], requirements="C"))
                 if return_positions:
                     position_parts.append(np.flatnonzero(match).astype(np.int64, copy=False) + start)
     if return_positions:
-        return _merge_value_position_batches(value_parts, position_parts, _light_batch_result_dtype(where_x))
+        return _merge_value_position_batches(
+            value_parts, position_parts, _bucket_batch_result_dtype(where_x)
+        )
     if not value_parts:
-        return np.empty(0, dtype=_light_batch_result_dtype(where_x))
+        return np.empty(0, dtype=_bucket_batch_result_dtype(where_x))
     return np.concatenate(value_parts) if len(value_parts) > 1 else value_parts[0]
 
 
@@ -5044,7 +5050,7 @@ def _sorted_boundary_search_bounds(boundaries: np.ndarray, plan: ExactPredicateP
     return lo, hi
 
 
-def _light_search_plan(
+def _bucket_search_plan(
     plan: ExactPredicatePlan, dtype: np.dtype, value_lossy_bits: int
 ) -> ExactPredicatePlan:
     if value_lossy_bits <= 0 or plan.lower is None:
@@ -5062,32 +5068,32 @@ def _light_search_plan(
         descriptor=plan.descriptor,
         target=plan.target,
         field=plan.field,
-        lower=_quantize_light_value_scalar(next_lower, dtype, value_lossy_bits),
+        lower=_quantize_bucket_value_scalar(next_lower, dtype, value_lossy_bits),
         lower_inclusive=True,
         upper=plan.upper,
         upper_inclusive=plan.upper_inclusive,
     )
 
 
-def _bucket_masks_from_light_chunk_nav_ooc(
+def _bucket_masks_from_bucket_chunk_nav_ooc(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> tuple[np.ndarray, int, int]:
-    light = descriptor["bucket"]
+    bucket = descriptor["bucket"]
     dtype = np.dtype(descriptor["dtype"])
-    value_lossy_bits = int(light.get("value_lossy_bits", 0))
-    search_plan = _light_search_plan(plan, dtype, value_lossy_bits)
-    offsets_handle = _load_light_offsets_handle(array, descriptor)
-    l1_handle = _load_light_l1_handle(array, descriptor)
+    value_lossy_bits = int(bucket.get("value_lossy_bits", 0))
+    search_plan = _bucket_search_plan(plan, dtype, value_lossy_bits)
+    offsets_handle = _load_bucket_offsets_handle(array, descriptor)
+    l1_handle = _load_bucket_l1_handle(array, descriptor)
     candidate_chunks = _candidate_units_from_boundaries_handle(l1_handle, search_plan)
-    bucket_masks = np.zeros((int(l1_handle.shape[0]), int(light["bucket_count"])), dtype=bool)
+    bucket_masks = np.zeros((int(l1_handle.shape[0]), int(bucket["bucket_count"])), dtype=bool)
     if not np.any(candidate_chunks):
         return bucket_masks, 0, 0
 
-    values_sidecar, bucket_sidecar, l2_sidecar = _load_light_sidecar_handles(array, descriptor)
-    chunk_len = int(light["chunk_len"])
-    nav_segment_len = int(light["nav_segment_len"])
-    nsegments_per_chunk = int(light["nsegments_per_chunk"])
-    bucket_dtype = np.dtype(light.get("bucket_dtype", np.uint16))
+    values_sidecar, bucket_sidecar, l2_sidecar = _load_bucket_sidecar_handles(array, descriptor)
+    chunk_len = int(bucket["chunk_len"])
+    nav_segment_len = int(bucket["nav_segment_len"])
+    nsegments_per_chunk = int(bucket["nsegments_per_chunk"])
+    bucket_dtype = np.dtype(bucket.get("bucket_dtype", np.uint16))
     total_candidate_segments = 0
     candidate_chunk_ids = np.flatnonzero(candidate_chunks).astype(np.intp, copy=False)
 
@@ -5096,18 +5102,18 @@ def _bucket_masks_from_light_chunk_nav_ooc(
             return [], 0
         batch_values = (
             values_sidecar
-            if light.get("values_path") is None
-            else blosc2.open(light["values_path"], mmap_mode=_INDEX_MMAP_MODE)
+            if bucket.get("values_path") is None
+            else blosc2.open(bucket["values_path"], mmap_mode=_INDEX_MMAP_MODE)
         )
         batch_buckets = (
             bucket_sidecar
-            if light.get("bucket_positions_path") is None
-            else blosc2.open(light["bucket_positions_path"], mmap_mode=_INDEX_MMAP_MODE)
+            if bucket.get("bucket_positions_path") is None
+            else blosc2.open(bucket["bucket_positions_path"], mmap_mode=_INDEX_MMAP_MODE)
         )
         batch_l2 = (
             l2_sidecar
-            if light.get("l2_path") is None
-            else blosc2.open(light["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
+            if bucket.get("l2_path") is None
+            else blosc2.open(bucket["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
         )
         batch_results = []
         batch_candidate_segments = 0
@@ -5123,7 +5129,7 @@ def _bucket_masks_from_light_chunk_nav_ooc(
             batch_candidate_segments += candidate_segments
             if not segment_runs:
                 continue
-            matched_buckets = np.zeros(int(light["bucket_count"]), dtype=bool)
+            matched_buckets = np.zeros(int(bucket["bucket_count"]), dtype=bool)
             for seg_start_idx, seg_stop_idx in segment_runs:
                 local_start = seg_start_idx * nav_segment_len
                 local_stop = min(seg_stop_idx * nav_segment_len, chunk_items)
@@ -5156,29 +5162,29 @@ def _bucket_masks_from_light_chunk_nav_ooc(
     return bucket_masks, int(np.count_nonzero(candidate_chunks)), total_candidate_segments
 
 
-def _exact_positions_from_reduced_chunk_nav_ooc(
+def _exact_positions_from_partial_chunk_nav_ooc(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> tuple[np.ndarray, int, int]:
-    reduced = descriptor["partial"]
-    offsets_handle = _load_reduced_offsets_handle(array, descriptor)
-    l1_handle = _load_reduced_l1_handle(array, descriptor)
+    partial = descriptor["partial"]
+    offsets_handle = _load_partial_offsets_handle(array, descriptor)
+    l1_handle = _load_partial_l1_handle(array, descriptor)
     candidate_chunks = _candidate_units_from_boundaries_handle(l1_handle, plan)
     if not np.any(candidate_chunks):
         return np.empty(0, dtype=np.int64), 0, 0
 
     dtype = np.dtype(descriptor["dtype"])
-    chunk_len = int(reduced["chunk_len"])
-    nav_segment_len = int(reduced["nav_segment_len"])
-    nsegments_per_chunk = int(reduced["nsegments_per_chunk"])
-    local_position_dtype = np.dtype(reduced.get("position_dtype", np.uint32))
+    chunk_len = int(partial["chunk_len"])
+    nav_segment_len = int(partial["nav_segment_len"])
+    nsegments_per_chunk = int(partial["nsegments_per_chunk"])
+    local_position_dtype = np.dtype(partial.get("position_dtype", np.uint32))
     candidate_chunk_ids = np.flatnonzero(candidate_chunks).astype(np.intp, copy=False)
     l2_boundary_dtype = _boundary_dtype(dtype)
-    values_sidecar, positions_sidecar, l2_sidecar = _load_reduced_sidecar_handles(array, descriptor)
+    values_sidecar, positions_sidecar, l2_sidecar = _load_partial_sidecar_handles(array, descriptor)
     thread_count = _index_query_thread_count(len(candidate_chunk_ids))
 
     try:
-        positions, total_candidate_segments = _reduced_chunk_nav_positions_cython(
-            reduced,
+        positions, total_candidate_segments = _partial_chunk_nav_positions_cython(
+            partial,
             offsets_handle,
             candidate_chunk_ids,
             thread_count,
@@ -5196,8 +5202,8 @@ def _exact_positions_from_reduced_chunk_nav_ooc(
     except TypeError:
         pass
 
-    parts, total_candidate_segments = _reduced_chunk_nav_positions_python(
-        reduced,
+    parts, total_candidate_segments = _partial_chunk_nav_positions_python(
+        partial,
         offsets_handle,
         candidate_chunk_ids,
         thread_count,
@@ -5223,8 +5229,8 @@ def _exact_positions_from_reduced_chunk_nav_ooc(
     )
 
 
-def _reduced_chunk_nav_positions_cython(
-    reduced: dict,
+def _partial_chunk_nav_positions_cython(
+    partial: dict,
     offsets_handle,
     candidate_chunk_ids: np.ndarray,
     thread_count: int,
@@ -5236,7 +5242,7 @@ def _reduced_chunk_nav_positions_cython(
     l2_boundary_dtype: np.dtype,
     plan: ExactPredicatePlan,
 ) -> tuple[np.ndarray, int]:
-    if reduced.get("values_path") is None:
+    if partial.get("values_path") is None:
         raise TypeError("cython chunk-nav path requires reopenable sidecars")
 
     offsets = _read_sidecar_span(offsets_handle, 0, int(offsets_handle.shape[0]))
@@ -5244,9 +5250,9 @@ def _reduced_chunk_nav_positions_cython(
     def process_cython_batch(chunk_ids: np.ndarray) -> tuple[np.ndarray, int]:
         if len(chunk_ids) == 0:
             return np.empty(0, dtype=np.int64), 0
-        batch_values = blosc2.open(reduced["values_path"], mmap_mode=_INDEX_MMAP_MODE)
-        batch_positions = blosc2.open(reduced["positions_path"], mmap_mode=_INDEX_MMAP_MODE)
-        batch_l2 = blosc2.open(reduced["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
+        batch_values = blosc2.open(partial["values_path"], mmap_mode=_INDEX_MMAP_MODE)
+        batch_positions = blosc2.open(partial["positions_path"], mmap_mode=_INDEX_MMAP_MODE)
+        batch_l2 = blosc2.open(partial["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
         batch_l2_row = np.empty(nsegments_per_chunk, dtype=l2_boundary_dtype)
         batch_span_values = np.empty(chunk_len, dtype=dtype)
         batch_local_positions = np.empty(chunk_len, dtype=local_position_dtype)
@@ -5271,8 +5277,8 @@ def _reduced_chunk_nav_positions_cython(
     return _reduced_positions_from_cython_batches(candidate_chunk_ids, thread_count, process_cython_batch)
 
 
-def _reduced_chunk_nav_positions_python(
-    reduced: dict,
+def _partial_chunk_nav_positions_python(
+    partial: dict,
     offsets_handle,
     candidate_chunk_ids: np.ndarray,
     thread_count: int,
@@ -5292,18 +5298,18 @@ def _reduced_chunk_nav_positions_python(
             return [], 0
         batch_values = (
             values_sidecar
-            if reduced.get("values_path") is None
-            else blosc2.open(reduced["values_path"], mmap_mode=_INDEX_MMAP_MODE)
+            if partial.get("values_path") is None
+            else blosc2.open(partial["values_path"], mmap_mode=_INDEX_MMAP_MODE)
         )
         batch_positions = (
             positions_sidecar
-            if reduced.get("positions_path") is None
-            else blosc2.open(reduced["positions_path"], mmap_mode=_INDEX_MMAP_MODE)
+            if partial.get("positions_path") is None
+            else blosc2.open(partial["positions_path"], mmap_mode=_INDEX_MMAP_MODE)
         )
         batch_l2 = (
             l2_sidecar
-            if reduced.get("l2_path") is None
-            else blosc2.open(reduced["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
+            if partial.get("l2_path") is None
+            else blosc2.open(partial["l2_path"], mmap_mode=_INDEX_MMAP_MODE)
         )
         batch_parts = []
         batch_candidate_segments = 0
@@ -5342,20 +5348,20 @@ def _bit_count_sum(masks: np.ndarray) -> int:
     return sum(int(mask).bit_count() for mask in masks.tolist())
 
 
-def _bucket_masks_from_light(
+def _bucket_masks_from_bucket(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> tuple[np.ndarray, int, int]:
     if _range_is_empty(plan):
         return np.empty((0, 0), dtype=bool), 0, 0
-    return _bucket_masks_from_light_chunk_nav_ooc(array, descriptor, plan)
+    return _bucket_masks_from_bucket_chunk_nav_ooc(array, descriptor, plan)
 
 
-def _exact_positions_from_reduced(
+def _exact_positions_from_partial(
     array: blosc2.NDArray, descriptor: dict, dtype: np.dtype, plan: ExactPredicatePlan
 ) -> tuple[np.ndarray, int, int]:
     if _range_is_empty(plan):
         return np.empty(0, dtype=np.int64), 0, 0
-    return _exact_positions_from_reduced_chunk_nav_ooc(array, descriptor, plan)
+    return _exact_positions_from_partial_chunk_nav_ooc(array, descriptor, plan)
 
 
 def _exact_positions_from_plan(plan: ExactPredicatePlan) -> np.ndarray | None:
@@ -5363,7 +5369,7 @@ def _exact_positions_from_plan(plan: ExactPredicatePlan) -> np.ndarray | None:
     if kind == "full":
         return _exact_positions_from_full(plan.base, plan.descriptor, plan)
     if kind == "partial":
-        return _exact_positions_from_reduced(
+        return _exact_positions_from_partial(
             plan.base, plan.descriptor, np.dtype(plan.descriptor["dtype"]), plan
         )[0]
     return None
@@ -5448,7 +5454,7 @@ def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
         )
     if kind == "partial":
         dtype = np.dtype(exact_plan.descriptor["dtype"])
-        exact_positions, candidate_chunks, candidate_nav_segments = _exact_positions_from_reduced(
+        exact_positions, candidate_chunks, candidate_nav_segments = _exact_positions_from_partial(
             exact_plan.base, exact_plan.descriptor, dtype, exact_plan
         )
         return IndexPlan(
@@ -5469,10 +5475,10 @@ def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
             if _chunk_nav_supports_selective_ooc_lookup(exact_plan.base, exact_plan.descriptor, "partial")
             else "chunk-nav",
         )
-    bucket_masks, candidate_chunks, candidate_nav_segments = _bucket_masks_from_light(
+    bucket_masks, candidate_chunks, candidate_nav_segments = _bucket_masks_from_bucket(
         exact_plan.base, exact_plan.descriptor, exact_plan
     )
-    light = exact_plan.descriptor["bucket"]
+    bucket = exact_plan.descriptor["bucket"]
     total_units = bucket_masks.size
     selected_units = _bit_count_sum(bucket_masks)
     if selected_units < total_units:
@@ -5487,8 +5493,8 @@ def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
             total_units=total_units,
             selected_units=selected_units,
             bucket_masks=bucket_masks,
-            bucket_len=int(light["bucket_len"]),
-            chunk_len=int(light["chunk_len"]),
+            bucket_len=int(bucket["bucket_len"]),
+            chunk_len=int(bucket["chunk_len"]),
             lower=exact_plan.lower,
             lower_inclusive=exact_plan.lower_inclusive,
             upper=exact_plan.upper,
@@ -5614,7 +5620,7 @@ def evaluate_segment_query(
     return _merge_segment_query_batches(parts, result_dtype, return_positions=return_positions)
 
 
-def evaluate_light_query(
+def evaluate_bucket_query(
     expression: str,
     operands: dict,
     ne_args: dict,
@@ -5637,7 +5643,7 @@ def evaluate_light_query(
     thread_count = _downstream_query_thread_count(len(candidate_chunk_ids), plan)
     if thread_count <= 1:
         parts = [
-            _process_light_chunk_batch(
+            _process_bucket_chunk_batch(
                 candidate_chunk_ids, where_x, plan, total_len, chunk_len, return_positions
             )
         ]
@@ -5646,7 +5652,7 @@ def evaluate_light_query(
         with ThreadPoolExecutor(max_workers=thread_count) as executor:
             parts = list(
                 executor.map(
-                    _process_light_chunk_batch,
+                    _process_bucket_chunk_batch,
                     batches,
                     [where_x] * len(batches),
                     [plan] * len(batches),

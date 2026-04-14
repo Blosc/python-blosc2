@@ -1889,7 +1889,7 @@ def slices_eval(  # noqa: C901
                 indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
                 return coords
             if index_plan.bucket_masks is not None:
-                _, coords = indexing.evaluate_light_query(
+                _, coords = indexing.evaluate_bucket_query(
                     expression, operands, ne_args, where, index_plan, return_positions=True
                 )
                 indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
@@ -1906,7 +1906,7 @@ def slices_eval(  # noqa: C901
                 indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
                 return indexing.evaluate_full_query(where, index_plan)
             if index_plan.bucket_masks is not None:
-                result, coords = indexing.evaluate_light_query(
+                result, coords = indexing.evaluate_bucket_query(
                     expression, operands, ne_args, where, index_plan, return_positions=True
                 )
                 indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)

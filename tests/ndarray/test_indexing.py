@@ -232,7 +232,7 @@ def test_random_field_point_query_matches_scan(kind):
         np.float64,
     ],
 )
-def test_medium_numeric_dtype_query_matches_scan(dtype):
+def test_partial_numeric_dtype_query_matches_scan(dtype):
     values = np.arange(2_000, dtype=dtype)
     if np.issubdtype(dtype, np.floating):
         values = values / dtype(10)
@@ -248,7 +248,7 @@ def test_medium_numeric_dtype_query_matches_scan(dtype):
 
 
 @pytest.mark.parametrize("dtype", [np.int32, np.uint32, np.float32, np.float64])
-def test_light_numeric_dtype_query_matches_scan(dtype):
+def test_bucket_numeric_dtype_query_matches_scan(dtype):
     values = np.arange(2_000, dtype=dtype)
     if np.issubdtype(dtype, np.floating):
         values = values / dtype(10)
@@ -277,7 +277,7 @@ def test_numeric_unsupported_dtype_fallback_matches_scan():
     np.testing.assert_array_equal(indexed, expected)
 
 
-def test_light_lossy_integer_values_match_scan():
+def test_bucket_lossy_integer_values_match_scan():
     rng = np.random.default_rng(2)
     dtype = np.dtype([("id", np.int64), ("payload", np.float32)])
     data = np.zeros(180_000, dtype=dtype)
@@ -298,7 +298,7 @@ def test_light_lossy_integer_values_match_scan():
     np.testing.assert_array_equal(indexed, data[(data["id"] >= -123) & (data["id"] < 456)])
 
 
-def test_light_lossy_float_values_match_scan():
+def test_bucket_lossy_float_values_match_scan():
     rng = np.random.default_rng(3)
     dtype = np.dtype([("x", np.float64), ("payload", np.float32)])
     data = np.zeros(160_000, dtype=dtype)
@@ -319,7 +319,7 @@ def test_light_lossy_float_values_match_scan():
     np.testing.assert_array_equal(indexed, data[(data["x"] >= -12.5) & (data["x"] < 17.25)])
 
 
-def test_ultralight_threaded_downstream_order_matches_scan(monkeypatch):
+def test_summary_threaded_downstream_order_matches_scan(monkeypatch):
     dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
     data = np.zeros(240_000, dtype=dtype)
     data["id"] = np.arange(data.shape[0], dtype=np.int64)
@@ -346,7 +346,7 @@ def test_ultralight_threaded_downstream_order_matches_scan(monkeypatch):
     np.testing.assert_array_equal(indexed, expected)
 
 
-def test_light_threaded_downstream_order_matches_scan(monkeypatch):
+def test_bucket_threaded_downstream_order_matches_scan(monkeypatch):
     dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
     data = np.zeros(240_000, dtype=dtype)
     data["id"] = np.arange(data.shape[0], dtype=np.int64)
@@ -530,7 +530,7 @@ def test_ultralight_ooc_build_does_not_materialize_full_target(monkeypatch, tmp_
     arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(12_000,), blocks=(2_000,))
 
     def fail_values_for_target(array, target):
-        raise AssertionError("_values_for_target should not be used by the ultralight OOC builder")
+        raise AssertionError("_values_for_target should not be used by the summary OOC builder")
 
     monkeypatch.setattr(indexing, "_values_for_target", fail_values_for_target)
 
@@ -864,7 +864,7 @@ def test_persistent_full_index_runs_survive_reopen(tmp_path):
     np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
 
 
-def test_persistent_compact_full_exact_query_avoids_whole_sidecar_load(monkeypatch, tmp_path):
+def test_persistent_compact_full_positional_query_avoids_whole_sidecar_load(monkeypatch, tmp_path):
     path = tmp_path / "full_selective_ooc.b2nd"
     rng = np.random.default_rng(12)
     data = np.arange(120_000, dtype=np.int64)
@@ -898,7 +898,7 @@ def test_persistent_compact_full_exact_query_avoids_whole_sidecar_load(monkeypat
         ("full", {("full", "values"), ("full", "positions")}),
     ],
 )
-def test_in_memory_exact_queries_avoid_whole_loading_index_payloads(monkeypatch, kind, blocked):
+def test_in_memory_positional_queries_avoid_whole_loading_index_payloads(monkeypatch, kind, blocked):
     data = np.arange(120_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(12_000,), blocks=(2_000,))
     arr.create_index(kind=_public_kind(kind))
