@@ -6778,6 +6778,12 @@ def sort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: An
     rows are gathered directly in ascending stable index order. Secondary keys
     refine ties after the primary indexed order. Field-based orders without a
     matching full index fall back to a scan-plus-sort path.
+
+    Sorting never mutates the input array in place. The result is always a new
+    array materialization. For persistent inputs, the sorted rows are returned
+    as a new in-memory :ref:`NDArray` by default; pass storage kwargs such as
+    ``urlpath`` (and typically ``mode="w"``) if the sorted output should also
+    be persisted on disk.
     """
     if not order:
         return array
