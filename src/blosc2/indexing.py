@@ -854,6 +854,15 @@ def _sidecar_storage_category(category: str) -> str:
     return category.removesuffix("_handle")
 
 
+def _invalidate_sidecar_cache_entries(array: blosc2.NDArray, token: str, category: str, name: str) -> None:
+    """Drop cached data/handles for a sidecar before replacing its storage."""
+    storage_category = _sidecar_storage_category(category)
+    categories = {storage_category, f"{storage_category}_handle"}
+    for cache_category in categories:
+        _DATA_CACHE.pop(_data_cache_key(array, token, cache_category, name), None)
+        _SIDECAR_HANDLE_CACHE.pop(_sidecar_handle_cache_key(array, token, cache_category, name), None)
+
+
 def _open_sidecar_handle(array: blosc2.NDArray, token: str, category: str, name: str, path: str | None):
     cache_key = _sidecar_handle_cache_key(array, token, category, name)
     cached = _SIDECAR_HANDLE_CACHE.get(cache_key)
@@ -1032,6 +1041,7 @@ def _store_array_sidecar(
 ) -> dict:
     cache_key = _data_cache_key(array, token, category, name)
     handle_cache_key = _sidecar_handle_cache_key(array, token, category, name)
+    _invalidate_sidecar_cache_entries(array, token, category, name)
     if persistent:
         path = _sidecar_path(array, token, kind, f"{category}.{name}")
         blosc2.remove_urlpath(path)
@@ -1074,6 +1084,7 @@ def _create_persistent_sidecar_handle(
     blocks: tuple[int, ...] | None = None,
     cparams: dict | None = None,
 ) -> tuple[blosc2.NDArray | None, dict]:
+    _invalidate_sidecar_cache_entries(array, token, category, name)
     path = _sidecar_path(array, token, kind, f"{category}.{name}")
     blosc2.remove_urlpath(path)
     kwargs = {"urlpath": path, "mode": "w"}
