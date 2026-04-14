@@ -482,6 +482,23 @@ def test_indices(order):
     assert np.array_equal(b[:], nb)
 
 
+@pytest.mark.parametrize("order", ["f0", "f1", "f2", None])
+def test_argsort_structured(order):
+    it = ((x + 1, x - 2, -x) for x in range(10))
+    a = blosc2.fromiter(it, dtype="i4, i4, i8", shape=(10,))
+    b = blosc2.argsort(a, order=order)
+    narr = a[:]
+    nb = np.argsort(narr, order=order, kind="stable")
+    assert np.array_equal(b[:], nb)
+
+
+def test_argsort_scalar():
+    data = np.array([7, 2, 9, 2, 1, 8], dtype=np.int64)
+    a = blosc2.asarray(data)
+    b = a.argsort()
+    np.testing.assert_array_equal(b[:], np.argsort(data, kind="stable"))
+
+
 def test_save():
     a = blosc2.arange(0, 10, 1, dtype="i4", shape=(10,))
     blosc2.save(a, "test.b2nd")

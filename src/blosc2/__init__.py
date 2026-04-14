@@ -533,6 +533,7 @@ from .ndarray import (
     eye,
     asarray,
     astype,
+    argsort,
     indices,
     sort,
     reshape,

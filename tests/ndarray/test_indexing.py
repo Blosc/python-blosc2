@@ -674,6 +674,29 @@ def test_full_index_reuses_primary_order_for_indices_and_sort():
     np.testing.assert_array_equal(arr.sort(order=["a", "b"])[:], np.sort(data, order=["a", "b"]))
 
 
+def test_full_index_reuses_primary_order_for_argsort():
+    dtype = np.dtype([("a", np.int64), ("b", np.int64)])
+    data = np.array(
+        [(2, 9), (1, 8), (2, 7), (1, 6), (2, 5), (1, 4), (2, 3), (1, 2), (2, 1), (1, 0)],
+        dtype=dtype,
+    )
+    arr = blosc2.asarray(data, chunks=(4,), blocks=(2,))
+    arr.create_csindex("a")
+
+    np.testing.assert_array_equal(arr.argsort(order=["a", "b"])[:], np.argsort(data, order=["a", "b"]))
+
+
+def test_persistent_scalar_argsort_uses_full_index(tmp_path):
+    path = tmp_path / "scalar_argsort.b2nd"
+    data = np.array([9, 1, 7, 3, 1, 5], dtype=np.int64)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(3,), blocks=(2,))
+    arr.create_index(kind="full")
+
+    result = blosc2.argsort(arr)
+
+    np.testing.assert_array_equal(result[:], np.argsort(data, kind="stable"))
+
+
 def test_filtered_ordered_queries_support_cross_field_exact_indexes():
     dtype = np.dtype([("a", np.int64), ("b", np.int64), ("payload", np.int32)])
     data = np.array(

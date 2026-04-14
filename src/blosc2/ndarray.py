@@ -5218,6 +5218,18 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return indices(self, order, **kwargs)
 
+    def argsort(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
+        """
+        Return the permutation that sorts the array.
+
+        This follows :func:`numpy.argsort` semantics more closely than
+        :meth:`indices`: plain 1-D arrays are supported, and ``order=None``
+        means "use the array's natural order" rather than "leave unsorted".
+
+        See full documentation in :func:`argsort`.
+        """
+        return argsort(self, order, **kwargs)
+
     def itersorted(
         self,
         order: str | list[str] | None = None,
@@ -6746,6 +6758,60 @@ def indices(array: blosc2.Array, order: str | list[str] | None = None, **kwargs:
     lbool = blosc2.lazyexpr(blosc2.ones(array.shape, dtype=np.bool_))
     larr = array[lbool]
     return larr.indices(order).compute(**kwargs)
+
+
+def argsort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
+    """
+    Return the indices that would sort the array.
+
+    This mirrors :func:`numpy.argsort` for 1-D arrays. Plain arrays sort by
+    their values. Structured arrays sort by ``order`` when provided, or by
+    their dtype field order when ``order=None``. Expression orders such as
+    ``"abs(x)"`` are also supported when a matching ``full`` expression index
+    exists.
+
+    Parameters
+    ----------
+    array: :ref:`blosc2.Array`
+        The 1-D array to be ordered.
+    order: str, list of str, optional
+        Primary and optional secondary order keys for structured arrays. When
+        omitted, NumPy's default record order is used for structured dtypes and
+        the array values themselves are used for plain dtypes.
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        The ordered logical positions as ``int64``.
+
+    Notes
+    -----
+    When the primary order key has a matching ``full`` field or expression
+    index, the permutation is returned directly from that index in ascending
+    stable order. Secondary keys refine ties after the primary indexed order.
+    Without a matching ``full`` index, :func:`argsort` falls back to
+    materializing the input values and delegating ordering to
+    :func:`numpy.argsort`.
+
+    The result is always a new array materialization. For persistent inputs,
+    the returned permutation is in memory by default; pass storage kwargs such
+    as ``urlpath`` (and typically ``mode="w"``) if the permutation should also
+    be persisted on disk.
+    """
+    if isinstance(array, blosc2.NDArray):
+        from . import indexing
+
+        ordered = indexing.ordered_indices(array, order=order)
+        if ordered is not None:
+            return blosc2.asarray(ordered, **kwargs)
+        if indexing.is_expression_order(array, order):
+            raise ValueError("expression order requires a matching full expression index")
+
+    values = array[:]
+    positions = np.argsort(values, order=order, kind="stable")
+    return blosc2.asarray(positions.astype(np.int64, copy=False), **kwargs)
 
 
 def sort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
