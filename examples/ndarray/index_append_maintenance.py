@@ -17,7 +17,7 @@ dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
 data = np.array([(2, 20), (0, 0), (3, 30), (1, 10)], dtype=dtype)
 arr = blosc2.asarray(data, chunks=(2,), blocks=(2,))
 
-arr.create_csindex("id")
+arr.create_index("id", kind=blosc2.IndexKind.FULL)
 
 to_append = np.array([(6, 60), (4, 40), (5, 50)], dtype=dtype)
 arr.append(to_append)

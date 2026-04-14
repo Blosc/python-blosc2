@@ -215,6 +215,21 @@ class FPAccuracy(Enum):
     DEFAULT = MEDIUM
 
 
+class IndexKind(Enum):
+    """
+    Available index kinds.
+    """
+
+    #: Segment summaries only. Cheapest to build and smallest on disk.
+    SUMMARY = "summary"
+    #: Bucketed chunk-local payloads for approximate pruning before exact evaluation.
+    BUCKET = "bucket"
+    #: Locally ordered payloads that provide exact positional matches for filtering.
+    PARTIAL = "partial"
+    #: Globally ordered payloads for exact filtering and direct ordered reuse.
+    FULL = "full"
+
+
 from .blosc2_ext import (
     DEFINED_CODECS_STOP,
     EXTENDED_HEADER_LENGTH,
@@ -534,7 +549,7 @@ from .ndarray import (
     asarray,
     astype,
     argsort,
-    indices,
+    iter_sorted,
     sort,
     reshape,
     copy,

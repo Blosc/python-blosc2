@@ -9,7 +9,7 @@ import numpy as np
 
 import blosc2
 
-# Intent: show how a full/csindex can be reused for direct sorted reads,
+# Intent: show how a sorted index can be reused for direct sorted reads,
 # sorted logical positions, and streaming ordered iteration.
 
 dtype = np.dtype([("id", np.int64), ("score", np.float64)])
@@ -27,14 +27,14 @@ data = np.array(
 )
 
 arr = blosc2.asarray(data, chunks=(4,), blocks=(2,))
-arr.create_csindex("id")
+arr.create_index("id", kind=blosc2.IndexKind.FULL)
 
-print("Sorted rows via full index:")
+print("Sorted rows via sorted index:")
 print(arr.sort(order=["id", "score"])[:])
 
 print("\nSorted logical positions:")
-print(arr.indices(order=["id", "score"])[:])
+print(arr.argsort(order=["id", "score"])[:])
 
 print("\nIterating in sorted order:")
-for row in arr.itersorted(order=["id", "score"], batch_size=3):
+for row in arr.iter_sorted(order=["id", "score"], batch_size=3):
     print(row)

@@ -19,7 +19,7 @@ data = np.array(
 )
 
 arr = blosc2.asarray(data, chunks=(4,), blocks=(2,))
-arr.create_expr_index("abs(x)", kind="full", name="abs_x")
+arr.create_index(expression="abs(x)", kind=blosc2.IndexKind.FULL, name="abs_x")
 
 expr = blosc2.lazyexpr("(abs(x) >= 2) & (abs(x) < 8)", arr.fields).where(arr)
 

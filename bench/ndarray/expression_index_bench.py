@@ -24,12 +24,13 @@ SIZES = (1_000_000, 2_000_000, 5_000_000, 10_000_000)
 CHUNK_LEN = 100_000
 BLOCK_LEN = 20_000
 DEFAULT_REPEATS = 3
-KINDS = ("ultralight", "light", "medium", "full")
+KINDS = ("summary", "bucket", "partial", "full")
 DISTS = ("sorted", "block-shuffled", "random")
 RNG_SEED = 0
 DEFAULT_OPLEVEL = 5
 EXPRESSION = "abs(x)"
 FULL_QUERY_MODES = ("auto", "selective-ooc", "whole-load")
+BUILD_MODES = ("auto", "memory", "ooc")
 
 
 def dtype_token(dtype: np.dtype) -> str:
@@ -84,9 +85,9 @@ def base_array_path(size_dir: Path, size: int, dist: str, x_dtype: np.dtype) -> 
 
 
 def indexed_array_path(
-    size_dir: Path, size: int, dist: str, kind: str, optlevel: int, x_dtype: np.dtype, in_mem: bool
+    size_dir: Path, size: int, dist: str, kind: str, optlevel: int, x_dtype: np.dtype, build: str
 ) -> Path:
-    mode = "mem" if in_mem else "ooc"
+    mode = "mem" if build == "memory" else "ooc"
     return size_dir / f"expr_size_{size}_{dist}_{dtype_token(x_dtype)}.{kind}.opt{optlevel}.{mode}.b2nd"
 
 
@@ -161,7 +162,7 @@ def _condition_expr(limit: object, dtype: np.dtype) -> str:
     return f"(abs(x) >= 0) & (abs(x) < {literal})"
 
 
-def _valid_index_descriptor(arr: blosc2.NDArray, kind: str, optlevel: int, in_mem: bool) -> dict | None:
+def _valid_index_descriptor(arr: blosc2.NDArray, kind: str, optlevel: int, build: str) -> dict | None:
     for descriptor in arr.indexes:
         if descriptor.get("version") != blosc2_indexing.INDEX_FORMAT_VERSION:
             continue
@@ -171,7 +172,7 @@ def _valid_index_descriptor(arr: blosc2.NDArray, kind: str, optlevel: int, in_me
             and target.get("expression_key") == EXPRESSION
             and descriptor.get("kind") == kind
             and int(descriptor.get("optlevel", -1)) == int(optlevel)
-            and bool(descriptor.get("ooc", False)) is (not bool(in_mem))
+            and bool(descriptor.get("ooc", False)) is (build != "memory")
             and not descriptor.get("stale", False)
         ):
             return descriptor
@@ -186,11 +187,11 @@ def _open_or_build_persistent_array(path: Path, get_data) -> blosc2.NDArray:
 
 
 def _open_or_build_indexed_array(
-    path: Path, get_data, kind: str, optlevel: int, in_mem: bool
+    path: Path, get_data, kind: str, optlevel: int, build: str
 ) -> tuple[blosc2.NDArray, float]:
     if path.exists():
         arr = blosc2.open(path, mode="a")
-        if _valid_index_descriptor(arr, kind, optlevel, in_mem) is not None:
+        if _valid_index_descriptor(arr, kind, optlevel, build) is not None:
             return arr, 0.0
         if arr.indexes:
             arr.drop_index(name=arr.indexes[0]["name"])
@@ -198,7 +199,9 @@ def _open_or_build_indexed_array(
 
     arr = build_persistent_array(get_data(), path)
     build_start = time.perf_counter()
-    arr.create_expr_index(EXPRESSION, kind=kind, optlevel=optlevel, in_mem=in_mem)
+    arr.create_index(
+        expression=EXPRESSION, kind=blosc2.IndexKind[kind.upper()], optlevel=optlevel, build=build
+    )
     return arr, time.perf_counter() - build_start
 
 
@@ -209,7 +212,7 @@ def benchmark_size(
     query_width: int,
     optlevel: int,
     x_dtype: np.dtype,
-    in_mem: bool,
+    build: str,
     full_query_mode: str,
 ) -> list[dict]:
     get_data = _source_data_factory(size, dist, x_dtype)
@@ -225,11 +228,11 @@ def benchmark_size(
     rows = []
     for kind in KINDS:
         idx_arr, build_time = _open_or_build_indexed_array(
-            indexed_array_path(size_dir, size, dist, kind, optlevel, x_dtype, in_mem),
+            indexed_array_path(size_dir, size, dist, kind, optlevel, x_dtype, build),
             get_data,
             kind,
             optlevel,
-            in_mem,
+            build,
         )
         idx_cond = blosc2.lazyexpr(condition_str, idx_arr.fields)
         idx_expr = idx_cond.where(idx_arr)
@@ -244,7 +247,7 @@ def benchmark_size(
                 "dist": dist,
                 "kind": kind,
                 "optlevel": optlevel,
-                "in_mem": in_mem,
+                "build": build,
                 "query_rows": index_len,
                 "build_s": build_time,
                 "create_idx_ms": build_time * 1_000,
@@ -332,10 +335,10 @@ def parse_args() -> argparse.Namespace:
         help="Distribution for the source field. Use 'all' to benchmark every distribution.",
     )
     parser.add_argument(
-        "--in-mem",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Use the in-memory index builders. Disabled by default; pass --in-mem to force them.",
+        "--build",
+        choices=BUILD_MODES,
+        default="auto",
+        help="Index builder policy: auto, memory, or ooc. Default: auto.",
     )
     parser.add_argument(
         "--full-query-mode",
@@ -376,19 +379,19 @@ def run_benchmarks(
     repeats: int,
     optlevel: int,
     x_dtype: np.dtype,
-    in_mem: bool,
+    build: str,
     full_query_mode: str,
 ) -> None:
     all_results = []
     print("Expression range-query benchmark across index kinds")
     print(
         f"expr={EXPRESSION}, chunks={CHUNK_LEN:,}, blocks={BLOCK_LEN:,}, repeats={repeats}, dist={dist_label}, "
-        f"query_width={query_width:,}, optlevel={optlevel}, dtype={x_dtype.name}, in_mem={in_mem}, "
+        f"query_width={query_width:,}, optlevel={optlevel}, dtype={x_dtype.name}, build={build}, "
         f"full_query_mode={full_query_mode}"
     )
     for dist in dists:
         for size in sizes:
-            size_results = benchmark_size(size, size_dir, dist, query_width, optlevel, x_dtype, in_mem, full_query_mode)
+            size_results = benchmark_size(size, size_dir, dist, query_width, optlevel, x_dtype, build, full_query_mode)
             all_results.extend(size_results)
 
     print()
@@ -398,7 +401,7 @@ def run_benchmarks(
         [
             ("rows", lambda result: f"{result['size']:,}"),
             ("dist", lambda result: result["dist"]),
-            ("builder", lambda result: "mem" if result["in_mem"] else "ooc"),
+            ("builder", lambda result: "mem" if result["build"] == "memory" else "ooc"),
             ("kind", lambda result: result["kind"]),
             ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
             ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
@@ -417,7 +420,7 @@ def run_benchmarks(
             [
                 ("rows", lambda result: f"{result['size']:,}"),
                 ("dist", lambda result: result["dist"]),
-                ("builder", lambda result: "mem" if result["in_mem"] else "ooc"),
+                ("builder", lambda result: "mem" if result["build"] == "memory" else "ooc"),
                 ("kind", lambda result: result["kind"]),
                 ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
                 ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
@@ -456,7 +459,7 @@ def main() -> None:
                 args.repeats,
                 args.optlevel,
                 x_dtype,
-                args.in_mem,
+                args.build,
                 args.full_query_mode,
             )
     else:
@@ -470,7 +473,7 @@ def main() -> None:
             args.repeats,
             args.optlevel,
             x_dtype,
-            args.in_mem,
+            args.build,
             args.full_query_mode,
         )
 

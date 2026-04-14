@@ -24,18 +24,19 @@ from blosc2 import indexing as blosc2_indexing
 
 SIZES = (1_000_000, 2_000_000, 5_000_000, 10_000_000)
 DEFAULT_REPEATS = 3
-KINDS = ("ultralight", "light", "medium", "full")
-DEFAULT_KIND = "light"
+KINDS = ("summary", "bucket", "partial", "full")
+DEFAULT_KIND = "bucket"
 DISTS = ("sorted", "block-shuffled", "permuted", "random")
 RNG_SEED = 0
 DEFAULT_OPLEVEL = 5
 FULL_QUERY_MODES = ("auto", "selective-ooc", "whole-load")
 DATASET_LAYOUT_VERSION = "payload-ramp-v1"
+BUILD_MODES = ("auto", "memory", "ooc")
 
 COLD_COLUMNS = [
     ("rows", lambda result: f"{result['size']:,}"),
     ("dist", lambda result: result["dist"]),
-    ("builder", lambda result: "mem" if result["in_mem"] else "ooc"),
+    ("builder", lambda result: "mem" if result["build"] == "memory" else "ooc"),
     ("kind", lambda result: result["kind"]),
     ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
     ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
@@ -50,7 +51,7 @@ COLD_COLUMNS = [
 WARM_COLUMNS = [
     ("rows", lambda result: f"{result['size']:,}"),
     ("dist", lambda result: result["dist"]),
-    ("builder", lambda result: "mem" if result["in_mem"] else "ooc"),
+    ("builder", lambda result: "mem" if result["build"] == "memory" else "ooc"),
     ("kind", lambda result: result["kind"]),
     ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
     ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
@@ -277,7 +278,7 @@ def build_persistent_array(
     for start in range(0, size, chunk_len):
         stop = min(start + chunk_len, size)
         chunk = np.zeros(stop - start, dtype=dtype)
-        if dist == "sorted":
+        if dist == "full":
             chunk["id"] = ordered_id_slice(size, start, stop, id_dtype)
         elif dist == "block-shuffled":
             _fill_block_shuffled_ids(chunk["id"], size, start, stop, block_len, block_order)
@@ -308,14 +309,14 @@ def indexed_array_path(
     kind: str,
     optlevel: int,
     id_dtype: np.dtype,
-    in_mem: bool,
+    build: str,
     chunks: int | None,
     blocks: int | None,
     codec: blosc2.Codec | None,
     clevel: int | None,
     nthreads: int | None,
 ) -> Path:
-    mode = "mem" if in_mem else "ooc"
+    mode = "mem" if build == "memory" else "ooc"
     codec_token = "codec-auto" if codec is None else f"codec-{codec.name}"
     clevel_token = "clevel-auto" if clevel is None else f"clevel-{clevel}"
     thread_token = "threads-auto" if nthreads is None else f"threads-{nthreads}"
@@ -442,11 +443,11 @@ def _condition_expr(lo: object, hi: object, dtype: np.dtype, *, query_single_val
     return f"(id >= {lo_literal}) & (id <= {hi_literal})"
 
 
-def _valid_index_descriptor(arr: blosc2.NDArray, kind: str, optlevel: int, in_mem: bool) -> dict | None:
+def _valid_index_descriptor(arr: blosc2.NDArray, kind: str, optlevel: int, build: str) -> dict | None:
     for descriptor in arr.indexes:
         if descriptor.get("version") != blosc2_indexing.INDEX_FORMAT_VERSION:
             continue
-        expected_ooc = descriptor.get("ooc", False) if kind == "ultralight" else (not bool(in_mem))
+        expected_ooc = build != "memory"
         if (
             descriptor.get("field") == "id"
             and descriptor.get("kind") == kind
@@ -474,7 +475,7 @@ def _open_or_build_indexed_array(
     id_dtype: np.dtype,
     kind: str,
     optlevel: int,
-    in_mem: bool,
+    build: str,
     chunks: int | None,
     blocks: int | None,
     codec: blosc2.Codec | None,
@@ -484,7 +485,7 @@ def _open_or_build_indexed_array(
 ) -> tuple[blosc2.NDArray, float]:
     if path.exists():
         arr = blosc2.open(path, mode="a")
-        if _valid_index_descriptor(arr, kind, optlevel, in_mem) is not None:
+        if _valid_index_descriptor(arr, kind, optlevel, build) is not None:
             return arr, 0.0
         if arr.indexes:
             arr.drop_index(field="id")
@@ -492,7 +493,12 @@ def _open_or_build_indexed_array(
 
     arr = build_persistent_array(size, dist, id_dtype, path, chunks, blocks)
     build_start = time.perf_counter()
-    kwargs = {"field": "id", "kind": kind, "optlevel": optlevel, "in_mem": in_mem}
+    kwargs = {
+        "field": "id",
+        "kind": blosc2.IndexKind[kind.upper()],
+        "optlevel": optlevel,
+        "build": build,
+    }
     cparams = {}
     if codec is not None:
         cparams["codec"] = codec
@@ -515,7 +521,7 @@ def benchmark_size(
     query_single_value: bool,
     optlevel: int,
     id_dtype: np.dtype,
-    in_mem: bool,
+    build: str,
     full_query_mode: str,
     chunks: int | None,
     blocks: int | None,
@@ -549,7 +555,7 @@ def benchmark_size(
                 kind,
                 optlevel,
                 id_dtype,
-                in_mem,
+                build,
                 chunks,
                 blocks,
                 codec,
@@ -561,7 +567,7 @@ def benchmark_size(
             id_dtype,
             kind,
             optlevel,
-            in_mem,
+            build,
             chunks,
             blocks,
             codec,
@@ -588,7 +594,7 @@ def benchmark_size(
             "dist": dist,
             "kind": kind,
             "optlevel": optlevel,
-            "in_mem": in_mem,
+            "build": build,
             "query_rows": index_len,
             "build_s": build_time,
             "create_idx_ms": build_time * 1_000,
@@ -714,10 +720,10 @@ def parse_args() -> argparse.Namespace:
         help=f"Index kind to benchmark. Use 'all' to benchmark every kind. Default: {DEFAULT_KIND}.",
     )
     parser.add_argument(
-        "--in-mem",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Use the in-memory index builders. Disabled by default; pass --in-mem to force them.",
+        "--build",
+        choices=BUILD_MODES,
+        default="auto",
+        help="Index builder policy: auto, memory, or ooc. Default: auto.",
     )
     parser.add_argument(
         "--full-query-mode",
@@ -787,7 +793,7 @@ def main() -> None:
                 args.repeats,
                 args.optlevel,
                 id_dtype,
-                args.in_mem,
+                args.build,
                 args.full_query_mode,
                 args.chunks,
                 args.blocks,
@@ -809,7 +815,7 @@ def main() -> None:
             args.repeats,
             args.optlevel,
             id_dtype,
-            args.in_mem,
+            args.build,
             args.full_query_mode,
             args.chunks,
             args.blocks,
@@ -831,7 +837,7 @@ def run_benchmarks(
     repeats: int,
     optlevel: int,
     id_dtype: np.dtype,
-    in_mem: bool,
+    build: str,
     full_query_mode: str,
     chunks: int | None,
     blocks: int | None,
@@ -852,7 +858,7 @@ def run_benchmarks(
     print("Structured range-query benchmark across index kinds")
     print(
         f"{geometry_label}, repeats={repeats}, dist={dist_label}, "
-        f"query_width={query_width:,}, optlevel={optlevel}, dtype={id_dtype.name}, in_mem={in_mem}, "
+        f"query_width={query_width:,}, optlevel={optlevel}, dtype={id_dtype.name}, build={build}, "
         f"query_single_value={query_single_value}, "
         f"full_query_mode={full_query_mode}, index_codec={'auto' if codec is None else codec.name}, "
         f"index_clevel={'auto' if clevel is None else clevel}, "
@@ -878,7 +884,7 @@ def run_benchmarks(
                 query_single_value,
                 optlevel,
                 id_dtype,
-                in_mem,
+                build,
                 full_query_mode,
                 chunks,
                 blocks,

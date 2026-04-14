@@ -41,9 +41,9 @@ FLAG_ALL_NAN = np.uint8(1 << 0)
 FLAG_HAS_NAN = np.uint8(1 << 1)
 
 SEGMENT_LEVELS_BY_KIND = {
-    "ultralight": ("chunk",),
-    "light": ("chunk", "block"),
-    "medium": ("chunk", "block", "subblock"),
+    "summary": ("chunk",),
+    "bucket": ("chunk", "block"),
+    "partial": ("chunk", "block", "subblock"),
     "full": ("chunk", "block", "subblock"),
 }
 
@@ -233,10 +233,10 @@ def _copy_descriptor(descriptor: dict) -> dict:
     copied["levels"] = _copy_nested_dict(descriptor.get("levels"))
     if descriptor.get("target") is not None:
         copied["target"] = descriptor["target"].copy()
-    if descriptor.get("light") is not None:
-        copied["light"] = descriptor["light"].copy()
-    if descriptor.get("reduced") is not None:
-        copied["reduced"] = descriptor["reduced"].copy()
+    if descriptor.get("bucket") is not None:
+        copied["bucket"] = descriptor["bucket"].copy()
+    if descriptor.get("partial") is not None:
+        copied["partial"] = descriptor["partial"].copy()
     if descriptor.get("full") is not None:
         copied["full"] = descriptor["full"].copy()
         if "runs" in copied["full"]:
@@ -273,7 +273,7 @@ def _tmpdir_for_array(array: blosc2.NDArray) -> str | None:
 
 
 def _resolve_full_index_tmpdir(array: blosc2.NDArray, tmpdir: str | None) -> str | None:
-    """Resolve the workspace for temporary files used by OOC full index builds.
+    """Resolve the workspace for temporary files used by OOC sorted index builds.
 
     An explicit ``tmpdir`` wins. Otherwise, persistent arrays default to the
     directory that stores the array so temporary sidecars stay on the same
@@ -746,6 +746,61 @@ def _validate_index_target(array: blosc2.NDArray, field: str | None) -> np.dtype
     if not _supported_index_dtype(dtype):
         raise TypeError(f"dtype {dtype} is not supported by the current index engine")
     return dtype
+
+
+def _normalize_index_kind(kind: blosc2.IndexKind | str) -> str:
+    if isinstance(kind, enum.Enum):
+        kind = kind.value
+    if kind not in SEGMENT_LEVELS_BY_KIND:
+        raise NotImplementedError(f"unsupported index kind {kind!r}")
+    return kind
+
+
+def _normalize_build_mode(build: str) -> str:
+    if build not in {"auto", "memory", "ooc"}:
+        raise ValueError("build must be one of 'auto', 'memory', or 'ooc'")
+    return build
+
+
+def _field_name_exists(array: blosc2.NDArray, field: str | None) -> bool:
+    return field is not None and array.dtype.fields is not None and field in array.dtype.fields
+
+
+def _normalize_create_index_target(
+    array: blosc2.NDArray,
+    field: str | None,
+    expression: str | None,
+    operands: dict | None,
+) -> tuple[dict, np.dtype]:
+    if field is not None and expression is not None:
+        raise ValueError("field and expression are mutually exclusive")
+
+    if expression is not None:
+        if operands is None:
+            operands = array.fields if array.dtype.fields is not None else {"value": array}
+        base, target, dtype = _normalize_expression_target(expression, operands)
+        if base is not array:
+            raise ValueError(
+                "expression index operands must resolve to the same array passed to create_index()"
+            )
+        return target, dtype
+
+    if operands is not None:
+        raise ValueError("operands can only be provided together with expression")
+
+    if _field_name_exists(array, field):
+        return _field_target_descriptor(field), _validate_index_target(array, field)
+
+    if field is not None:
+        base_operands = array.fields if array.dtype.fields is not None else {"value": array}
+        base, target, dtype = _normalize_expression_target(field, base_operands)
+        if base is not array:
+            raise ValueError(
+                "expression index operands must resolve to the same array passed to create_index()"
+            )
+        return target, dtype
+
+    return _field_target_descriptor(None), _validate_index_target(array, None)
 
 
 class _OperandCanonicalizer(ast.NodeTransformer):
@@ -1429,10 +1484,11 @@ def _position_dtype(max_value: int) -> np.dtype:
     return np.dtype(np.uint64)
 
 
-def _resolve_ooc_mode(kind: str, in_mem: bool) -> bool:
-    if kind not in {"ultralight", "light", "medium", "full"}:
+def _resolve_ooc_mode(kind: str, build: str) -> bool:
+    if kind not in {"summary", "bucket", "partial", "full"}:
         return False
-    return not in_mem
+    build = _normalize_build_mode(build)
+    return build != "memory"
 
 
 def _build_block_sorted_payload(
@@ -1480,7 +1536,7 @@ def _build_reduced_descriptor(
         array,
         token,
         kind,
-        "reduced",
+        "partial",
         "values",
         sorted_values,
         "positions",
@@ -1979,7 +2035,7 @@ def _build_reduced_descriptor_ooc(
                     array,
                     token,
                     kind,
-                    "reduced",
+                    "partial",
                     "values",
                     dtype,
                     "positions",
@@ -2020,7 +2076,7 @@ def _build_reduced_descriptor_ooc(
                 array,
                 token,
                 kind,
-                "reduced",
+                "partial",
                 "positions",
                 offsets,
                 l1,
@@ -2050,7 +2106,7 @@ def _build_reduced_descriptor_ooc(
         array,
         token,
         kind,
-        "reduced",
+        "partial",
         "values",
         sorted_values,
         "positions",
@@ -2320,7 +2376,7 @@ def _build_light_descriptor(
         array,
         token,
         kind,
-        "light",
+        "bucket",
         "values",
         sorted_values,
         "bucket_positions",
@@ -2379,7 +2435,7 @@ def _build_light_descriptor_ooc(
                     array,
                     token,
                     kind,
-                    "light",
+                    "bucket",
                     "values",
                     dtype,
                     "bucket_positions",
@@ -2427,7 +2483,7 @@ def _build_light_descriptor_ooc(
                 array,
                 token,
                 kind,
-                "light",
+                "bucket",
                 "bucket_positions",
                 offsets,
                 l1,
@@ -2466,7 +2522,7 @@ def _build_light_descriptor_ooc(
         array,
         token,
         kind,
-        "light",
+        "bucket",
         "values",
         sorted_values,
         "bucket_positions",
@@ -2794,7 +2850,7 @@ def _merge_run_pair(
                 _write_ndarray_linear_span(out_positions, out_cursor, right_positions)
             except Exception as exc:
                 raise RuntimeError(
-                    "full index OOC merge write failed while flushing right run remainder: "
+                    "sorted index OOC merge write failed while flushing right run remainder: "
                     f"merge_id={merge_id}, left_len={left.length}, right_len={right.length}, "
                     f"out_total={out_total}, out_cursor={out_cursor}, take={take}, "
                     f"left_cursor={left_cursor}, right_cursor={right_cursor}, buffer_items={buffer_items}"
@@ -2810,7 +2866,7 @@ def _merge_run_pair(
                 _write_ndarray_linear_span(out_positions, out_cursor, left_positions)
             except Exception as exc:
                 raise RuntimeError(
-                    "full index OOC merge write failed while flushing left run remainder: "
+                    "sorted index OOC merge write failed while flushing left run remainder: "
                     f"merge_id={merge_id}, left_len={left.length}, right_len={right.length}, "
                     f"out_total={out_total}, out_cursor={out_cursor}, take={take}, "
                     f"left_cursor={left_cursor}, right_cursor={right_cursor}, buffer_items={buffer_items}"
@@ -2844,7 +2900,7 @@ def _merge_run_pair(
             _write_ndarray_linear_span(out_positions, out_cursor, merged_positions)
         except Exception as exc:
             raise RuntimeError(
-                "full index OOC merge write failed for merged batch: "
+                "sorted index OOC merge write failed for merged batch: "
                 f"merge_id={merge_id}, left_len={left.length}, right_len={right.length}, "
                 f"out_total={out_total}, out_cursor={out_cursor}, take={take}, "
                 f"left_cursor={left_cursor}, right_cursor={right_cursor}, "
@@ -2859,7 +2915,7 @@ def _merge_run_pair(
 
     if out_cursor != out_total:
         raise RuntimeError(
-            "full index OOC merge produced an unexpected output length: "
+            "sorted index OOC merge produced an unexpected output length: "
             f"merge_id={merge_id}, left_len={left.length}, right_len={right.length}, "
             f"expected={out_total}, written={out_cursor}"
         )
@@ -2992,8 +3048,8 @@ def _build_descriptor(
     name: str | None,
     dtype: np.dtype,
     levels: dict,
-    light: dict | None,
-    reduced: dict | None,
+    bucket: dict | None,
+    partial: dict | None,
     full: dict | None,
     cparams: dict | None = None,
 ) -> dict:
@@ -3014,8 +3070,8 @@ def _build_descriptor(
         "chunks": tuple(array.chunks),
         "blocks": tuple(array.blocks),
         "levels": levels,
-        "light": light,
-        "reduced": reduced,
+        "bucket": bucket,
+        "partial": partial,
         "full": full,
         "cparams": _plain_index_cparams(cparams),
     }
@@ -3024,42 +3080,48 @@ def _build_descriptor(
 def create_index(
     array: blosc2.NDArray,
     field: str | None = None,
-    kind: str = "light",
+    *,
+    expression: str | None = None,
+    operands: dict | None = None,
+    kind: blosc2.IndexKind = blosc2.IndexKind.BUCKET,
     optlevel: int = 5,
     persistent: bool | None = None,
-    in_mem: bool = False,
+    build: str = "auto",
     name: str | None = None,
     tmpdir: str | None = None,
     **kwargs,
 ) -> dict:
-    """Create an index descriptor for a 1-D array or structured field.
+    """Create an index descriptor for a 1-D array, field, or expression.
 
     Parameters are equivalent to :meth:`blosc2.NDArray.create_index`.
-    ``tmpdir`` controls where temporary files for out-of-core ``kind="full"``
+    ``tmpdir`` controls where temporary files for out-of-core ``kind=FULL``
     builds are created. If ``None``, persistent arrays default to their own
     directory and in-memory arrays use the system temporary directory.
     """
     cparams = _normalize_index_cparams(kwargs.pop("cparams", None))
-    del kwargs
-    dtype = _validate_index_target(array, field)
-    target = _field_target_descriptor(field)
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"unexpected keyword argument(s): {unexpected}")
+    if not isinstance(kind, blosc2.IndexKind):
+        raise TypeError("kind must be a blosc2.IndexKind")
+    kind = _normalize_index_kind(kind)
+    build = _normalize_build_mode(build)
+    target, dtype = _normalize_create_index_target(array, field, expression, operands)
     token = _target_token(target)
-    if kind not in SEGMENT_LEVELS_BY_KIND:
-        raise NotImplementedError(f"unsupported index kind {kind!r}")
     if persistent is None:
         persistent = _is_persistent_array(array)
-    use_ooc = _resolve_ooc_mode(kind, in_mem)
+    use_ooc = _resolve_ooc_mode(kind, build)
 
     if use_ooc:
         levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent, cparams)
-        light = (
+        bucket = (
             _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
-            if kind == "light"
+            if kind == "bucket"
             else None
         )
-        reduced = (
+        partial = (
             _build_reduced_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
-            if kind == "medium"
+            if kind == "partial"
             else None
         )
         full = None
@@ -3081,22 +3143,22 @@ def create_index(
             name,
             dtype,
             levels,
-            light,
-            reduced,
+            bucket,
+            partial,
             full,
             cparams,
         )
     else:
         values = _values_for_target(array, target)
         levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent, cparams)
-        light = (
+        bucket = (
             _build_light_descriptor(array, token, kind, values, optlevel, persistent, cparams)
-            if kind == "light"
+            if kind == "bucket"
             else None
         )
-        reduced = (
+        partial = (
             _build_reduced_descriptor(array, token, kind, values, optlevel, persistent, cparams)
-            if kind == "medium"
+            if kind == "partial"
             else None
         )
         full = (
@@ -3115,8 +3177,8 @@ def create_index(
             name,
             dtype,
             levels,
-            light,
-            reduced,
+            bucket,
+            partial,
             full,
             cparams,
         )
@@ -3125,122 +3187,6 @@ def create_index(
     store["indexes"][token] = descriptor
     _save_store(array, store)
     return _copy_descriptor(descriptor)
-
-
-def create_expr_index(
-    array: blosc2.NDArray,
-    expression: str,
-    *,
-    operands: dict | None = None,
-    kind: str = "light",
-    optlevel: int = 5,
-    persistent: bool | None = None,
-    in_mem: bool = False,
-    name: str | None = None,
-    **kwargs,
-) -> dict:
-    cparams = _normalize_index_cparams(kwargs.pop("cparams", None))
-    del kwargs
-    if operands is None:
-        operands = array.fields if array.dtype.fields is not None else {"value": array}
-    base, target, dtype = _normalize_expression_target(expression, operands)
-    if base is not array:
-        raise ValueError(
-            "expression index operands must resolve to the same array passed to create_expr_index()"
-        )
-    if kind not in SEGMENT_LEVELS_BY_KIND:
-        raise NotImplementedError(f"unsupported index kind {kind!r}")
-    if persistent is None:
-        persistent = _is_persistent_array(array)
-    use_ooc = _resolve_ooc_mode(kind, in_mem)
-    token = _target_token(target)
-
-    if use_ooc:
-        levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent, cparams)
-        light = (
-            _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
-            if kind == "light"
-            else None
-        )
-        reduced = (
-            _build_reduced_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
-            if kind == "medium"
-            else None
-        )
-        full = None
-        if kind == "full":
-            with tempfile.TemporaryDirectory(
-                prefix="blosc2-index-ooc-", dir=_tmpdir_for_array(array)
-            ) as tmpdir:
-                full = _build_full_descriptor_ooc(
-                    array, target, token, kind, dtype, persistent, Path(tmpdir), cparams
-                )
-        descriptor = _build_descriptor(
-            array,
-            target,
-            token,
-            kind,
-            optlevel,
-            persistent,
-            True,
-            name,
-            dtype,
-            levels,
-            light,
-            reduced,
-            full,
-            cparams,
-        )
-    else:
-        values = _values_for_target(array, target)
-        levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent, cparams)
-        light = (
-            _build_light_descriptor(array, token, kind, values, optlevel, persistent, cparams)
-            if kind == "light"
-            else None
-        )
-        reduced = (
-            _build_reduced_descriptor(array, token, kind, values, optlevel, persistent, cparams)
-            if kind == "medium"
-            else None
-        )
-        full = (
-            _build_full_descriptor(array, token, kind, values, persistent, cparams)
-            if kind == "full"
-            else None
-        )
-        descriptor = _build_descriptor(
-            array,
-            target,
-            token,
-            kind,
-            optlevel,
-            persistent,
-            False,
-            name,
-            dtype,
-            levels,
-            light,
-            reduced,
-            full,
-            cparams,
-        )
-
-    store = _load_store(array)
-    store["indexes"][token] = descriptor
-    _save_store(array, store)
-    return _copy_descriptor(descriptor)
-
-
-def create_csindex(
-    array: blosc2.NDArray, field: str | None = None, tmpdir: str | None = None, **kwargs
-) -> dict:
-    """Create a full sorted index descriptor.
-
-    This is shorthand for :func:`create_index` with ``kind="full"``.
-    ``tmpdir`` has the same meaning as in :func:`create_index`.
-    """
-    return create_index(array, field=field, kind="full", tmpdir=tmpdir, **kwargs)
 
 
 def _resolve_index_token(store: dict, field: str | None, name: str | None) -> str:
@@ -3264,23 +3210,23 @@ def iter_index_components(array: blosc2.NDArray, descriptor: dict):
         level_info = descriptor["levels"][level]
         yield IndexComponent(f"summary.{level}", "summary", level, level_info.get("path"))
 
-    light = descriptor.get("light")
-    if light is not None:
-        yield IndexComponent("light.values", "light", "values", light.get("values_path"))
+    bucket = descriptor.get("bucket")
+    if bucket is not None:
+        yield IndexComponent("bucket.values", "bucket", "values", bucket.get("values_path"))
         yield IndexComponent(
-            "light.bucket_positions", "light", "bucket_positions", light.get("bucket_positions_path")
+            "bucket.bucket_positions", "bucket", "bucket_positions", bucket.get("bucket_positions_path")
         )
-        yield IndexComponent("light.offsets", "light", "offsets", light.get("offsets_path"))
-        yield IndexComponent("light_nav.l1", "light_nav", "l1", light.get("l1_path"))
-        yield IndexComponent("light_nav.l2", "light_nav", "l2", light.get("l2_path"))
+        yield IndexComponent("bucket.offsets", "bucket", "offsets", bucket.get("offsets_path"))
+        yield IndexComponent("bucket_nav.l1", "bucket_nav", "l1", bucket.get("l1_path"))
+        yield IndexComponent("bucket_nav.l2", "bucket_nav", "l2", bucket.get("l2_path"))
 
-    reduced = descriptor.get("reduced")
-    if reduced is not None:
-        yield IndexComponent("reduced.values", "reduced", "values", reduced.get("values_path"))
-        yield IndexComponent("reduced.positions", "reduced", "positions", reduced.get("positions_path"))
-        yield IndexComponent("reduced.offsets", "reduced", "offsets", reduced.get("offsets_path"))
-        yield IndexComponent("reduced_nav.l1", "reduced_nav", "l1", reduced.get("l1_path"))
-        yield IndexComponent("reduced_nav.l2", "reduced_nav", "l2", reduced.get("l2_path"))
+    partial = descriptor.get("partial")
+    if partial is not None:
+        yield IndexComponent("partial.values", "partial", "values", partial.get("values_path"))
+        yield IndexComponent("partial.positions", "partial", "positions", partial.get("positions_path"))
+        yield IndexComponent("partial.offsets", "partial", "offsets", partial.get("offsets_path"))
+        yield IndexComponent("partial_nav.l1", "partial_nav", "l1", partial.get("l1_path"))
+        yield IndexComponent("partial_nav.l2", "partial_nav", "l2", partial.get("l2_path"))
 
     full = descriptor.get("full")
     if full is not None:
@@ -3336,8 +3282,8 @@ class Index(Mapping):
         return _copy_descriptor_for_token(self._array, self._token)
 
     @property
-    def kind(self) -> str:
-        return self._descriptor()["kind"]
+    def kind(self) -> blosc2.IndexKind:
+        return blosc2.IndexKind(self._descriptor()["kind"])
 
     @property
     def field(self) -> str | None:
@@ -3421,18 +3367,18 @@ def _remove_sidecar_path(path: str | None) -> None:
 def _drop_descriptor_sidecars(descriptor: dict) -> None:
     for level_info in descriptor["levels"].values():
         _remove_sidecar_path(level_info["path"])
-    if descriptor.get("light") is not None:
-        _remove_sidecar_path(descriptor["light"]["values_path"])
-        _remove_sidecar_path(descriptor["light"]["bucket_positions_path"])
-        _remove_sidecar_path(descriptor["light"]["offsets_path"])
-        _remove_sidecar_path(descriptor["light"].get("l1_path"))
-        _remove_sidecar_path(descriptor["light"].get("l2_path"))
-    if descriptor.get("reduced") is not None:
-        _remove_sidecar_path(descriptor["reduced"]["values_path"])
-        _remove_sidecar_path(descriptor["reduced"]["positions_path"])
-        _remove_sidecar_path(descriptor["reduced"]["offsets_path"])
-        _remove_sidecar_path(descriptor["reduced"].get("l1_path"))
-        _remove_sidecar_path(descriptor["reduced"].get("l2_path"))
+    if descriptor.get("bucket") is not None:
+        _remove_sidecar_path(descriptor["bucket"]["values_path"])
+        _remove_sidecar_path(descriptor["bucket"]["bucket_positions_path"])
+        _remove_sidecar_path(descriptor["bucket"]["offsets_path"])
+        _remove_sidecar_path(descriptor["bucket"].get("l1_path"))
+        _remove_sidecar_path(descriptor["bucket"].get("l2_path"))
+    if descriptor.get("partial") is not None:
+        _remove_sidecar_path(descriptor["partial"]["values_path"])
+        _remove_sidecar_path(descriptor["partial"]["positions_path"])
+        _remove_sidecar_path(descriptor["partial"]["offsets_path"])
+        _remove_sidecar_path(descriptor["partial"].get("l1_path"))
+        _remove_sidecar_path(descriptor["partial"].get("l2_path"))
     if descriptor.get("full") is not None:
         _remove_sidecar_path(descriptor["full"]["values_path"])
         _remove_sidecar_path(descriptor["full"]["positions_path"])
@@ -3472,7 +3418,7 @@ def _replace_reduced_descriptor_tail(
 ) -> None:
     del old_size
     target = descriptor["target"]
-    reduced = descriptor["reduced"]
+    reduced = descriptor["partial"]
     cparams = _normalize_index_cparams(descriptor.get("cparams"))
     for key in ("values_path", "positions_path", "offsets_path", "l1_path", "l2_path"):
         _remove_sidecar_path(reduced.get(key))
@@ -3497,7 +3443,7 @@ def _replace_reduced_descriptor_tail(
             persistent,
             cparams,
         )
-    descriptor["reduced"] = rebuilt
+    descriptor["partial"] = rebuilt
 
 
 def _replace_light_descriptor_tail(
@@ -3505,7 +3451,7 @@ def _replace_light_descriptor_tail(
 ) -> None:
     del old_size
     target = descriptor["target"]
-    light = descriptor["light"]
+    light = descriptor["bucket"]
     cparams = _normalize_index_cparams(descriptor.get("cparams"))
     for key in ("values_path", "bucket_positions_path", "offsets_path", "l1_path", "l2_path"):
         _remove_sidecar_path(light.get(key))
@@ -3530,7 +3476,7 @@ def _replace_light_descriptor_tail(
             persistent,
             cparams,
         )
-    descriptor["light"] = rebuilt
+    descriptor["bucket"] = rebuilt
 
 
 def _replace_full_descriptor(
@@ -3654,7 +3600,7 @@ def _append_full_descriptor(
 ) -> None:
     full = descriptor.get("full")
     if full is None:
-        raise RuntimeError("full index metadata is not available")
+        raise RuntimeError("full-index metadata is not available")
     appended_positions = np.arange(old_size, old_size + len(appended_values), dtype=np.int64)
     order = np.lexsort((appended_positions, appended_values))
     run_id = int(full.get("next_run_id", 0))
@@ -3686,9 +3632,9 @@ def append_to_indexes(array: blosc2.NDArray, old_size: int, appended_values: np.
             continue
         if kind == "full":
             _append_full_descriptor(array, descriptor, old_size, target_values)
-        elif kind == "medium":
+        elif kind == "partial":
             _replace_reduced_descriptor_tail(array, descriptor, old_size, persistent)
-        elif kind == "light":
+        elif kind == "bucket":
             _replace_light_descriptor_tail(array, descriptor, old_size, persistent)
         _replace_levels_descriptor_tail(array, descriptor, kind, old_size, persistent)
         descriptor["shape"] = tuple(array.shape)
@@ -3717,23 +3663,23 @@ def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | N
     drop_index(array, field=descriptor["field"], name=descriptor["name"])
     if descriptor["target"]["source"] == "expression":
         operands = array.fields if array.dtype.fields is not None else {SELF_TARGET_NAME: array}
-        return create_expr_index(
+        return create_index(
             array,
-            descriptor["target"]["expression_key"],
+            expression=descriptor["target"]["expression_key"],
             operands=operands,
-            kind=descriptor["kind"],
+            kind=blosc2.IndexKind(descriptor["kind"]),
             optlevel=descriptor["optlevel"],
             persistent=descriptor["persistent"],
-            in_mem=not descriptor.get("ooc", False),
+            build="ooc" if descriptor.get("ooc", False) else "memory",
             name=descriptor["name"],
         )
     return create_index(
         array,
         field=descriptor["field"],
-        kind=descriptor["kind"],
+        kind=blosc2.IndexKind(descriptor["kind"]),
         optlevel=descriptor["optlevel"],
         persistent=descriptor["persistent"],
-        in_mem=not descriptor.get("ooc", False),
+        build="ooc" if descriptor.get("ooc", False) else "memory",
         name=descriptor["name"],
     )
 
@@ -3901,13 +3847,13 @@ def _descriptor_for_target(array: blosc2.NDArray, target: dict) -> dict | None:
         return None
     if descriptor.get("version") != INDEX_FORMAT_VERSION:
         return None
-    if descriptor.get("kind") == "light":
-        light = descriptor.get("light", {})
-        if light.get("layout") != "chunk-local-v1" or "values_path" not in light:
+    if descriptor.get("kind") == "bucket":
+        bucket = descriptor.get("bucket", {})
+        if bucket.get("layout") != "chunk-local-v1" or "values_path" not in bucket:
             return None
-    if descriptor.get("kind") == "medium":
-        reduced = descriptor.get("reduced", {})
-        if reduced.get("layout") != "chunk-local-v1" or "values_path" not in reduced:
+    if descriptor.get("kind") == "partial":
+        partial = descriptor.get("partial", {})
+        if partial.get("layout") != "chunk-local-v1" or "values_path" not in partial:
             return None
     if tuple(descriptor.get("shape", ())) != tuple(array.shape):
         return None
@@ -3980,7 +3926,7 @@ def _clear_full_merge_cache(array: blosc2.NDArray, token: str) -> None:
 def _load_full_navigation_handles(array: blosc2.NDArray, descriptor: dict):
     full = descriptor.get("full")
     if full is None:
-        raise RuntimeError("full index metadata is not available")
+        raise RuntimeError("full-index metadata is not available")
     token = descriptor["token"]
     l1 = _open_sidecar_handle(array, token, "full_nav_handle", "l1", full.get("l1_path"))
     l2 = _open_sidecar_handle(array, token, "full_nav_handle", "l2", full.get("l2_path"))
@@ -3990,7 +3936,7 @@ def _load_full_navigation_handles(array: blosc2.NDArray, descriptor: dict):
 def _load_full_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
     full = descriptor.get("full")
     if full is None:
-        raise RuntimeError("full index metadata is not available")
+        raise RuntimeError("full-index metadata is not available")
     token = descriptor["token"]
     values_sidecar = _open_sidecar_handle(array, token, "full_handle", "values", full["values_path"])
     positions_sidecar = _open_sidecar_handle(
@@ -4012,61 +3958,61 @@ def _load_full_run_sidecar_handles(array: blosc2.NDArray, descriptor: dict, run:
 
 
 def _load_reduced_l1_handle(array: blosc2.NDArray, descriptor: dict):
-    reduced = descriptor.get("reduced")
+    reduced = descriptor.get("partial")
     if reduced is None:
-        raise RuntimeError("reduced index metadata is not available")
+        raise RuntimeError("partial-index metadata is not available")
     token = descriptor["token"]
-    return _open_sidecar_handle(array, token, "reduced_nav_handle", "l1", reduced["l1_path"])
+    return _open_sidecar_handle(array, token, "partial_nav_handle", "l1", reduced["l1_path"])
 
 
 def _load_reduced_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
-    reduced = descriptor.get("reduced")
+    reduced = descriptor.get("partial")
     if reduced is None:
-        raise RuntimeError("reduced index metadata is not available")
+        raise RuntimeError("partial-index metadata is not available")
     token = descriptor["token"]
-    values_sidecar = _open_sidecar_handle(array, token, "reduced_handle", "values", reduced["values_path"])
+    values_sidecar = _open_sidecar_handle(array, token, "partial_handle", "values", reduced["values_path"])
     positions_sidecar = _open_sidecar_handle(
-        array, token, "reduced_handle", "positions", reduced["positions_path"]
+        array, token, "partial_handle", "positions", reduced["positions_path"]
     )
-    l2_sidecar = _open_sidecar_handle(array, token, "reduced_nav_handle", "l2", reduced["l2_path"])
+    l2_sidecar = _open_sidecar_handle(array, token, "partial_nav_handle", "l2", reduced["l2_path"])
     return values_sidecar, positions_sidecar, l2_sidecar
 
 
 def _load_reduced_offsets_handle(array: blosc2.NDArray, descriptor: dict):
-    reduced = descriptor.get("reduced")
+    reduced = descriptor.get("partial")
     if reduced is None:
-        raise RuntimeError("reduced index metadata is not available")
+        raise RuntimeError("partial-index metadata is not available")
     token = descriptor["token"]
-    return _open_sidecar_handle(array, token, "reduced_handle", "offsets", reduced["offsets_path"])
+    return _open_sidecar_handle(array, token, "partial_handle", "offsets", reduced["offsets_path"])
 
 
 def _load_light_l1_handle(array: blosc2.NDArray, descriptor: dict):
-    light = descriptor.get("light")
+    light = descriptor.get("bucket")
     if light is None:
-        raise RuntimeError("light index metadata is not available")
+        raise RuntimeError("bucket index metadata is not available")
     token = descriptor["token"]
-    return _open_sidecar_handle(array, token, "light_nav_handle", "l1", light["l1_path"])
+    return _open_sidecar_handle(array, token, "bucket_nav_handle", "l1", light["l1_path"])
 
 
 def _load_light_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
-    light = descriptor.get("light")
+    light = descriptor.get("bucket")
     if light is None:
-        raise RuntimeError("light index metadata is not available")
+        raise RuntimeError("bucket index metadata is not available")
     token = descriptor["token"]
-    values_sidecar = _open_sidecar_handle(array, token, "light_handle", "values", light["values_path"])
+    values_sidecar = _open_sidecar_handle(array, token, "bucket_handle", "values", light["values_path"])
     bucket_sidecar = _open_sidecar_handle(
-        array, token, "light_handle", "bucket_positions", light["bucket_positions_path"]
+        array, token, "bucket_handle", "bucket_positions", light["bucket_positions_path"]
     )
-    l2_sidecar = _open_sidecar_handle(array, token, "light_nav_handle", "l2", light["l2_path"])
+    l2_sidecar = _open_sidecar_handle(array, token, "bucket_nav_handle", "l2", light["l2_path"])
     return values_sidecar, bucket_sidecar, l2_sidecar
 
 
 def _load_light_offsets_handle(array: blosc2.NDArray, descriptor: dict):
-    light = descriptor.get("light")
+    light = descriptor.get("bucket")
     if light is None:
-        raise RuntimeError("light index metadata is not available")
+        raise RuntimeError("bucket index metadata is not available")
     token = descriptor["token"]
-    return _open_sidecar_handle(array, token, "light_handle", "offsets", light["offsets_path"])
+    return _open_sidecar_handle(array, token, "bucket_handle", "offsets", light["offsets_path"])
 
 
 def _normalize_scalar(value, dtype: np.dtype):
@@ -4320,7 +4266,7 @@ def _plan_exact_compare(node: ast.Compare, operands: dict) -> ExactPredicatePlan
         return None
     base, target_info, op, value = target
     descriptor = _descriptor_for_target(base, target_info)
-    if descriptor is None or descriptor.get("kind") not in {"light", "medium", "full"}:
+    if descriptor is None or descriptor.get("kind") not in {"bucket", "partial", "full"}:
         return None
     try:
         value = _normalize_scalar(value, np.dtype(descriptor["dtype"]))
@@ -4818,13 +4764,13 @@ def _exact_positions_from_full(
 def _chunk_nav_supports_selective_ooc_lookup(array: blosc2.NDArray, descriptor: dict, kind: str) -> bool:
     if descriptor.get("kind") != kind or not descriptor.get("persistent", False):
         return False
-    meta = descriptor.get("light" if kind == "light" else "reduced")
+    meta = descriptor.get("bucket" if kind == "bucket" else "partial")
     if meta is None or meta.get("layout") != "chunk-local-v1":
         return False
     required_paths = ("values_path", "l1_path", "l2_path")
     if any(meta.get(name) is None for name in required_paths):
         return False
-    if kind == "light":
+    if kind == "bucket":
         if meta.get("bucket_positions_path") is None:
             return False
         try:
@@ -5126,7 +5072,7 @@ def _light_search_plan(
 def _bucket_masks_from_light_chunk_nav_ooc(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> tuple[np.ndarray, int, int]:
-    light = descriptor["light"]
+    light = descriptor["bucket"]
     dtype = np.dtype(descriptor["dtype"])
     value_lossy_bits = int(light.get("value_lossy_bits", 0))
     search_plan = _light_search_plan(plan, dtype, value_lossy_bits)
@@ -5213,7 +5159,7 @@ def _bucket_masks_from_light_chunk_nav_ooc(
 def _exact_positions_from_reduced_chunk_nav_ooc(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> tuple[np.ndarray, int, int]:
-    reduced = descriptor["reduced"]
+    reduced = descriptor["partial"]
     offsets_handle = _load_reduced_offsets_handle(array, descriptor)
     l1_handle = _load_reduced_l1_handle(array, descriptor)
     candidate_chunks = _candidate_units_from_boundaries_handle(l1_handle, plan)
@@ -5416,7 +5362,7 @@ def _exact_positions_from_plan(plan: ExactPredicatePlan) -> np.ndarray | None:
     kind = plan.descriptor["kind"]
     if kind == "full":
         return _exact_positions_from_full(plan.base, plan.descriptor, plan)
-    if kind == "medium":
+    if kind == "partial":
         return _exact_positions_from_reduced(
             plan.base, plan.descriptor, np.dtype(plan.descriptor["dtype"]), plan
         )[0]
@@ -5463,20 +5409,20 @@ def _plan_multi_exact_query(plans: list[ExactPredicatePlan]) -> IndexPlan | None
         return None
     descriptor = _copy_descriptor(plans[0].descriptor)
     lookup_path = None
-    if descriptor["kind"] == "medium":
+    if descriptor["kind"] == "partial":
         lookup_path = (
             "chunk-nav-ooc"
-            if _chunk_nav_supports_selective_ooc_lookup(base, descriptor, "medium")
+            if _chunk_nav_supports_selective_ooc_lookup(base, descriptor, "partial")
             else "chunk-nav"
         )
     return IndexPlan(
         True,
-        "multi-field exact indexes selected",
+        "multi-field positional indexes selected",
         descriptor=descriptor,
         base=base,
         target=plans[0].descriptor.get("target"),
         field=None,
-        level="exact",
+        level="partial",
         total_units=int(base.shape[0]),
         selected_units=len(exact_positions),
         exact_positions=exact_positions,
@@ -5490,7 +5436,7 @@ def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
         exact_positions = _exact_positions_from_full(exact_plan.base, exact_plan.descriptor, exact_plan)
         return IndexPlan(
             True,
-            f"{kind} exact index selected",
+            f"{kind} index selected",
             descriptor=_copy_descriptor(exact_plan.descriptor),
             base=exact_plan.base,
             target=exact_plan.descriptor.get("target"),
@@ -5500,14 +5446,14 @@ def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
             selected_units=len(exact_positions),
             exact_positions=exact_positions,
         )
-    if kind == "medium":
+    if kind == "partial":
         dtype = np.dtype(exact_plan.descriptor["dtype"])
         exact_positions, candidate_chunks, candidate_nav_segments = _exact_positions_from_reduced(
             exact_plan.base, exact_plan.descriptor, dtype, exact_plan
         )
         return IndexPlan(
             True,
-            f"{kind} exact index selected",
+            f"{kind} index selected",
             descriptor=_copy_descriptor(exact_plan.descriptor),
             base=exact_plan.base,
             target=exact_plan.descriptor.get("target"),
@@ -5516,23 +5462,23 @@ def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
             total_units=exact_plan.base.shape[0],
             selected_units=len(exact_positions),
             exact_positions=exact_positions,
-            chunk_len=int(exact_plan.descriptor["reduced"]["chunk_len"]),
+            chunk_len=int(exact_plan.descriptor["partial"]["chunk_len"]),
             candidate_chunks=candidate_chunks,
             candidate_nav_segments=candidate_nav_segments,
             lookup_path="chunk-nav-ooc"
-            if _chunk_nav_supports_selective_ooc_lookup(exact_plan.base, exact_plan.descriptor, "medium")
+            if _chunk_nav_supports_selective_ooc_lookup(exact_plan.base, exact_plan.descriptor, "partial")
             else "chunk-nav",
         )
     bucket_masks, candidate_chunks, candidate_nav_segments = _bucket_masks_from_light(
         exact_plan.base, exact_plan.descriptor, exact_plan
     )
-    light = exact_plan.descriptor["light"]
+    light = exact_plan.descriptor["bucket"]
     total_units = bucket_masks.size
     selected_units = _bit_count_sum(bucket_masks)
     if selected_units < total_units:
         return IndexPlan(
             True,
-            "light approximate-order index selected",
+            "bucket approximate-order index selected",
             descriptor=_copy_descriptor(exact_plan.descriptor),
             base=exact_plan.base,
             target=exact_plan.descriptor.get("target"),
@@ -5550,10 +5496,10 @@ def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
             candidate_chunks=candidate_chunks,
             candidate_nav_segments=candidate_nav_segments,
             lookup_path="chunk-nav-ooc"
-            if _chunk_nav_supports_selective_ooc_lookup(exact_plan.base, exact_plan.descriptor, "light")
+            if _chunk_nav_supports_selective_ooc_lookup(exact_plan.base, exact_plan.descriptor, "bucket")
             else "chunk-nav",
         )
-    return IndexPlan(False, "available exact index does not prune any units for this predicate")
+    return IndexPlan(False, "available positional index does not prune any units for this predicate")
 
 
 def plan_query(expression: str, operands: dict, where: dict | None, *, use_index: bool = True) -> IndexPlan:
@@ -5680,7 +5626,7 @@ def evaluate_light_query(
     del expression, operands, ne_args
 
     if plan.base is None or plan.bucket_masks is None or plan.chunk_len is None or plan.bucket_len is None:
-        raise ValueError("light evaluation requires bucket masks and chunk geometry")
+        raise ValueError("bucket evaluation requires bucket masks and chunk geometry")
 
     total_len = int(plan.base.shape[0])
     chunk_len = int(plan.base.chunks[0])
@@ -5818,7 +5764,7 @@ def _gather_positions_by_block(
 
 def evaluate_full_query(where: dict, plan: IndexPlan) -> np.ndarray:
     if plan.exact_positions is None:
-        raise ValueError("full evaluation requires exact positions")
+        raise ValueError("full evaluation requires positional matches")
     if plan.base is not None:
         # Use a cached mmap handle when available so blosc2_schunk_get_lazychunk can return
         # a zero-copy pointer into the mapped region instead of malloc+pread per block.
@@ -6201,12 +6147,12 @@ def plan_ordered_query(
         )
     if filter_plan.base is not base or filter_plan.exact_positions is None:
         return OrderedIndexPlan(
-            False, "ordered access currently requires exact row positions from filtering"
+            False, "ordered access currently requires positional row matches from filtering"
         )
 
     return OrderedIndexPlan(
         True,
-        "ordered access will reuse a full index after exact filtering",
+        "ordered access will reuse a full index after positional filtering",
         descriptor=base_order_plan.descriptor,
         base=base,
         field=base_order_plan.field,

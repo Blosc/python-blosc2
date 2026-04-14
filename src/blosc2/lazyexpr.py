@@ -166,9 +166,9 @@ def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _
             # Return indices only makes sense when the where condition is a tuple with one element
             # and result is a boolean array
             if len(x.shape) > 1:
-                raise ValueError("indices() and sort() only support 1D arrays")
+                raise ValueError("argsort() and sort() only support 1D arrays")
             if result.dtype != np.bool_:
-                raise ValueError("indices() and sort() only support bool conditions")
+                raise ValueError("argsort() and sort() only support bool conditions")
             if _order:
                 # We need to cumulate all the fields in _order, as well as indices
                 chunk_indices = indices[result]
@@ -391,9 +391,9 @@ class LazyArray(ABC, blosc2.Operand):
         return self._vlmeta_proxy
 
     @abstractmethod
-    def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
+    def argsort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         """
-        Return an :ref:`LazyArray` containing the indices where self is True.
+        Return an :ref:`LazyArray` containing the positions selected by self.
 
         The LazyArray must be of bool dtype (e.g. a condition).
 
@@ -407,7 +407,7 @@ class LazyArray(ABC, blosc2.Operand):
         Returns
         -------
         out: :ref:`LazyArray`
-            The indices of the :ref:`LazyArray` self that are True.
+            The positions of the :ref:`LazyArray` self that are True.
         """
         pass
 
@@ -1863,7 +1863,7 @@ def slices_eval(  # noqa: C901
             elif indexing.is_expression_order(where["_where_x"], _order):
                 raise ValueError("expression order requires a matching full expression index")
 
-        # --- Indices-only path (.indices().compute()) ---
+        # --- Argsort-only path (.argsort().compute()) ---
         if _indices and _order is None:
             cached_coords = indexing.get_cached_coords(_cache_array, expression, _cache_tokens, None)
             if cached_coords is not None:
@@ -3749,12 +3749,12 @@ class LazyExpr(LazyArray):
 
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 
-    # TODO: indices and sort are repeated in LazyUDF; refactor
-    def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
+    # TODO: argsort and sort are repeated in LazyUDF; refactor
+    def argsort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         if self.dtype.fields is None:
-            raise NotImplementedError("indices() can only be used with structured arrays")
+            raise NotImplementedError("argsort() can only be used with structured arrays")
         if not hasattr(self, "_where_args") or len(self._where_args) != 1:
-            raise ValueError("indices() can only be used with conditions")
+            raise ValueError("argsort() can only be used with conditions")
         # Build a new lazy array
         lazy_expr = copy.copy(self)
         # ... and assign the new attributes
@@ -3798,7 +3798,7 @@ class LazyExpr(LazyArray):
             >>> import numpy as np
             >>> import blosc2
             >>> arr = blosc2.asarray(np.arange(10))
-            >>> _ = arr.create_index(kind="full")
+            >>> _ = arr.create_index(kind=blosc2.IndexKind.FULL)
             >>> expr = blosc2.lazyexpr("(a >= 3) & (a < 6)", {"a": arr}).where(arr)
             >>> info = expr.explain()
             >>> info["will_use_index"]
@@ -4150,12 +4150,12 @@ class LazyUDF(LazyArray):
             self._chunks, self._blocks = compute_chunks_blocks(self.shape, None, None, dtype=self.dtype)
         return self._blocks
 
-    # TODO: indices and sort are repeated in LazyExpr; refactor
-    def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
+    # TODO: argsort and sort are repeated in LazyExpr; refactor
+    def argsort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         if self.dtype.fields is None:
-            raise NotImplementedError("indices() can only be used with structured arrays")
+            raise NotImplementedError("argsort() can only be used with structured arrays")
         if not hasattr(self, "_where_args") or len(self._where_args) != 1:
-            raise ValueError("indices() can only be used with conditions")
+            raise ValueError("argsort() can only be used with conditions")
         # Build a new lazy array
         lazy_expr = copy.copy(self)
         # ... and assign the new attributes

@@ -473,10 +473,10 @@ def test_sort(order):
 
 
 @pytest.mark.parametrize("order", ["f0", "f1", "f2", None])
-def test_indices(order):
+def test_argsort_method(order):
     it = ((x + 1, x - 2, -x) for x in range(10))
     a = blosc2.fromiter(it, dtype="i4, i4, i8", shape=(10,))
-    b = a.indices(order=order)
+    b = a.argsort(order=order)
     narr = a[:]
     nb = np.argsort(narr, order=order)
     assert np.array_equal(b[:], nb)
