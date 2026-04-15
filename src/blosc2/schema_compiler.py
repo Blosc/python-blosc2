@@ -207,7 +207,7 @@ def validate_annotation_matches_spec(name: str, annotation: Any, spec: SchemaSpe
 # ---------------------------------------------------------------------------
 
 
-_RESERVED_COLUMN_NAMES: frozenset[str] = frozenset({"_meta", "_valid_rows", "_cols"})
+_RESERVED_COLUMN_NAMES: frozenset[str] = frozenset({"_meta", "_valid_rows", "_cols", "_indexes"})
 
 
 def _validate_column_name(name: str) -> None:

@@ -27,7 +27,7 @@ a = blosc2.frombuffer(bytes(nparray), nparray.shape, urlpath=urlpath, mode="w", 
 print(a.info)
 
 # Read a b2nd array from disk
-b = blosc2.open(urlpath)
+b = blosc2.open(urlpath, mode="r")
 
 # Deal with meta
 m1 = b.schunk.meta.get("m5", b"0000")

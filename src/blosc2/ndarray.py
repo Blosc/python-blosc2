@@ -494,9 +494,17 @@ def reshape(
     return dst
 
 
+def _normalize_expr_operand(value: Any) -> Any:
+    """Normalize foreign expression operands to the array-like object lazy ops expect."""
+    raw_col = getattr(value, "_raw_col", None)
+    return raw_col if raw_col is not None else value
+
+
 def _check_allowed_dtypes(
     value: bool | int | float | str | blosc2.Array,
 ):
+    value = _normalize_expr_operand(value)
+
     def _is_array_like(v: Any) -> bool:
         try:
             # Try Protocol runtime check first (works when possible)
@@ -3426,6 +3434,7 @@ class Operand:
 
     @is_documented_by(bitwise_and)
     def __and__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
+        value = _normalize_expr_operand(value)
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "&", value))
 
@@ -3437,6 +3446,8 @@ class Operand:
 
     @is_documented_by(bitwise_xor)
     def __xor__(self, other) -> blosc2.LazyExpr:
+        other = _normalize_expr_operand(other)
+        _check_allowed_dtypes(other)
         return blosc2.LazyExpr(new_op=(self, "^", other))
 
     def __ixor__(self, other) -> blosc2.LazyExpr:
@@ -3447,6 +3458,8 @@ class Operand:
 
     @is_documented_by(bitwise_or)
     def __or__(self, other) -> blosc2.LazyExpr:
+        other = _normalize_expr_operand(other)
+        _check_allowed_dtypes(other)
         return blosc2.LazyExpr(new_op=(self, "|", other))
 
     def __ior__(self, other) -> blosc2.LazyExpr:

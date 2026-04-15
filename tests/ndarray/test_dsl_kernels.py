@@ -872,7 +872,7 @@ def _save_reload_compute(kernel, inputs_np, inputs_b2, dtype, urlpaths, extra_kw
     """Save a LazyUDF backed by *kernel*, reload it, and return (reloaded_expr, result)."""
     lazy = blosc2.lazyudf(kernel, inputs_b2, dtype=dtype, **(extra_kwargs or {}))
     lazy.save(urlpath=urlpaths["lazy"])
-    reloaded = blosc2.open(urlpaths["lazy"])
+    reloaded = blosc2.open(urlpaths["lazy"], mode="r")
     return reloaded, reloaded.compute()
 
 
@@ -951,7 +951,7 @@ def test_dsl_save_getitem(tmp_path):
 
     lazy = blosc2.lazyudf(kernel_save_simple, (a, b), dtype=np.float64)
     lazy.save(urlpath=str(tmp_path / "lazy.b2nd"))
-    reloaded = blosc2.open(str(tmp_path / "lazy.b2nd"))
+    reloaded = blosc2.open(str(tmp_path / "lazy.b2nd"), mode="r")
 
     assert isinstance(reloaded.func, DSLKernel)
     expected = (na + nb) ** 2
@@ -970,7 +970,7 @@ def test_dsl_save_input_names_match(tmp_path):
 
     lazy = blosc2.lazyudf(kernel_save_simple, (a, b), dtype=np.float64)
     lazy.save(urlpath=str(tmp_path / "lazy.b2nd"))
-    reloaded = blosc2.open(str(tmp_path / "lazy.b2nd"))
+    reloaded = blosc2.open(str(tmp_path / "lazy.b2nd"), mode="r")
 
     assert isinstance(reloaded.func, DSLKernel)
     assert reloaded.func.input_names == ["x", "y"]

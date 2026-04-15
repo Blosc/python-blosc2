@@ -33,7 +33,7 @@ print(f"Defined expression, got metadata, and persisted it on disk in {round(dt 
 
 # Reopen persistent expression, compute, and write to disk with blosc2
 t0 = time.time()
-lexpr = blosc2.open(urlpath=url_path)
+lexpr = blosc2.open(urlpath=url_path, mode="r")
 dt = time.time() - t0
 print(f"In {round(dt * 1000, 3)} ms opened lazy expression: shape = {lexpr.shape}, dtype = {lexpr.dtype}")
 t1 = time.time()

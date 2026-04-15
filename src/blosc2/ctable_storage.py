@@ -19,6 +19,7 @@ Two concrete backends:
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from typing import Any
@@ -26,6 +27,10 @@ from typing import Any
 import numpy as np
 
 import blosc2
+
+# Directory inside the table root that holds per-column index sidecar files.
+_INDEXES_DIR = "_indexes"
+
 
 # ---------------------------------------------------------------------------
 # Abstract base
@@ -75,6 +80,9 @@ class TableStorage:
     def is_read_only(self) -> bool:
         raise NotImplementedError
 
+    def open_mode(self) -> str | None:
+        raise NotImplementedError
+
     def delete_column(self, name: str) -> None:
         raise NotImplementedError
 
@@ -82,6 +90,36 @@ class TableStorage:
         raise NotImplementedError
 
     def close(self) -> None:
+        raise NotImplementedError
+
+    # -- Index catalog and epoch helpers -------------------------------------
+
+    def load_index_catalog(self) -> dict:
+        """Return the current index catalog (column_name → descriptor dict)."""
+        raise NotImplementedError
+
+    def save_index_catalog(self, catalog: dict) -> None:
+        """Persist *catalog* (column_name → descriptor dict)."""
+        raise NotImplementedError
+
+    def get_epoch_counters(self) -> tuple[int, int]:
+        """Return ``(value_epoch, visibility_epoch)``."""
+        raise NotImplementedError
+
+    def bump_value_epoch(self) -> int:
+        """Increment and return the value epoch (data values changed)."""
+        raise NotImplementedError
+
+    def bump_visibility_epoch(self) -> int:
+        """Increment and return the visibility epoch (row set changed by delete)."""
+        raise NotImplementedError
+
+    def index_anchor_path(self, col_name: str) -> str | None:
+        """Return the urlpath used as the anchor for index sidecar naming.
+
+        Returns *None* for in-memory storage.  For file-backed storage returns
+        a path of the form ``<root>/_indexes/<col_name>/_anchor``.
+        """
         raise NotImplementedError
 
 
@@ -92,6 +130,11 @@ class TableStorage:
 
 class InMemoryTableStorage(TableStorage):
     """All arrays are plain in-memory blosc2.NDArray objects."""
+
+    def __init__(self) -> None:
+        self._index_catalog: dict = {}
+        self._value_epoch: int = 0
+        self._visibility_epoch: int = 0
 
     def create_column(self, name, *, dtype, shape, chunks, blocks, cparams, dparams):
         kwargs: dict[str, Any] = {"chunks": chunks, "blocks": blocks}
@@ -122,6 +165,9 @@ class InMemoryTableStorage(TableStorage):
     def is_read_only(self):
         return False
 
+    def open_mode(self) -> str | None:
+        return None
+
     def delete_column(self, name):
         raise RuntimeError("In-memory tables have no on-disk representation to mutate.")
 
@@ -130,6 +176,28 @@ class InMemoryTableStorage(TableStorage):
 
     def close(self):
         pass
+
+    # -- Index catalog and epoch helpers -------------------------------------
+
+    def load_index_catalog(self) -> dict:
+        return copy.deepcopy(self._index_catalog)
+
+    def save_index_catalog(self, catalog: dict) -> None:
+        self._index_catalog = copy.deepcopy(catalog)
+
+    def get_epoch_counters(self) -> tuple[int, int]:
+        return self._value_epoch, self._visibility_epoch
+
+    def bump_value_epoch(self) -> int:
+        self._value_epoch += 1
+        return self._value_epoch
+
+    def bump_visibility_epoch(self) -> int:
+        self._visibility_epoch += 1
+        return self._visibility_epoch
+
+    def index_anchor_path(self, col_name: str) -> str | None:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +274,9 @@ class FileTableStorage(TableStorage):
 
     def is_read_only(self) -> bool:
         return self._mode == "r"
+
+    def open_mode(self) -> str | None:
+        return self._mode
 
     def create_column(self, name, *, dtype, shape, chunks, blocks, cparams, dparams):
         kwargs: dict[str, Any] = {
@@ -298,3 +369,37 @@ class FileTableStorage(TableStorage):
             self._store.close()
             self._store = None
         self._meta = None
+
+    # -- Index catalog and epoch helpers -------------------------------------
+
+    def load_index_catalog(self) -> dict:
+        meta = self._open_meta()
+        raw = meta.vlmeta.get("index_catalog")
+        if isinstance(raw, dict):
+            return copy.deepcopy(raw)
+        return {}
+
+    def save_index_catalog(self, catalog: dict) -> None:
+        meta = self._open_meta()
+        meta.vlmeta["index_catalog"] = copy.deepcopy(catalog)
+
+    def get_epoch_counters(self) -> tuple[int, int]:
+        meta = self._open_meta()
+        ve = int(meta.vlmeta.get("value_epoch", 0) or 0)
+        vis_e = int(meta.vlmeta.get("visibility_epoch", 0) or 0)
+        return ve, vis_e
+
+    def bump_value_epoch(self) -> int:
+        meta = self._open_meta()
+        ve = int(meta.vlmeta.get("value_epoch", 0) or 0) + 1
+        meta.vlmeta["value_epoch"] = ve
+        return ve
+
+    def bump_visibility_epoch(self) -> int:
+        meta = self._open_meta()
+        vis_e = int(meta.vlmeta.get("visibility_epoch", 0) or 0) + 1
+        meta.vlmeta["visibility_epoch"] = vis_e
+        return vis_e
+
+    def index_anchor_path(self, col_name: str) -> str | None:
+        return os.path.join(self._root, _INDEXES_DIR, col_name, "_anchor")

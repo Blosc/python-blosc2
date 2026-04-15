@@ -618,8 +618,8 @@ def test_persistent_chunk_local_sidecars_use_cparams(tmp_path, kind):
     meta = descriptor["bucket"] if kind == "bucket" else descriptor["partial"]
     aux_key = "bucket_positions_path" if kind == "bucket" else "positions_path"
 
-    values_sidecar = blosc2.open(meta["values_path"])
-    aux_sidecar = blosc2.open(meta[aux_key])
+    values_sidecar = blosc2.open(meta["values_path"], mode="r")
+    aux_sidecar = blosc2.open(meta[aux_key], mode="r")
 
     for sidecar in (values_sidecar, aux_sidecar):
         assert sidecar.cparams.codec == blosc2.Codec.LZ4
@@ -1102,9 +1102,9 @@ def test_compact_full_index_clears_runs_and_preserves_results(tmp_path):
     assert reopened.indexes[0]["full"]["runs"] == []
     for values_path, positions_path in run_paths:
         with pytest.raises(FileNotFoundError):
-            blosc2.open(values_path)
+            blosc2.open(values_path, mode="r")
         with pytest.raises(FileNotFoundError):
-            blosc2.open(positions_path)
+            blosc2.open(positions_path, mode="r")
 
     expr = blosc2.lazyexpr("(a >= 1) & (a < 4)", reopened.fields).where(reopened)
     explained = expr.explain()
@@ -1150,8 +1150,8 @@ def test_forced_ooc_full_index_merge_preserves_sorted_sidecars(monkeypatch, tmp_
 
     descriptor = arr.create_index(kind=blosc2.IndexKind.FULL)
     meta = descriptor["full"]
-    values_sidecar = blosc2.open(meta["values_path"])
-    positions_sidecar = blosc2.open(meta["positions_path"])
+    values_sidecar = blosc2.open(meta["values_path"], mode="r")
+    positions_sidecar = blosc2.open(meta["positions_path"], mode="r")
 
     np.testing.assert_array_equal(values_sidecar[:], np.sort(data, kind="stable"))
     np.testing.assert_array_equal(values_sidecar[:], data[positions_sidecar[:]])

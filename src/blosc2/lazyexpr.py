@@ -579,7 +579,7 @@ class LazyArray(ABC, blosc2.Operand):
         >>> # Save the LazyExpr to disk
         >>> expr.save(urlpath='lazy_array.b2nd', mode='w')
         >>> # Open and load the LazyExpr from disk
-        >>> disk_expr = blosc2.open('lazy_array.b2nd')
+        >>> disk_expr = blosc2.open('lazy_array.b2nd', mode='r')
         >>> disk_expr[:2]
         [[0.   1.25 2.5 ]
         [3.75 5.   6.25]]
@@ -4682,7 +4682,7 @@ def open_lazyarray(array):
         if isinstance(v, str):
             v = parent_path / v
             try:
-                op = blosc2.open(v)
+                op = blosc2.open(v, mode="r")
             except FileNotFoundError:
                 missing_ops[key] = v
             else:

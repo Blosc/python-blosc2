@@ -43,7 +43,7 @@ def test_open_c2array(cat2_context):
     assert a1.cratio == a_open.cratio
 
     with pytest.raises(NotImplementedError):
-        _ = blosc2.open(urlpath)
+        _ = blosc2.open(urlpath, mode="a")
 
     with pytest.raises(NotImplementedError):
         _ = blosc2.open(urlpath, mode="r", offset=0, cparams={})

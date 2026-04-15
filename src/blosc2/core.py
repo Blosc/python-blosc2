@@ -834,7 +834,7 @@ def load_tensor(urlpath: str, dparams: dict | None = None) -> tensorflow.Tensor 
     :func:`~blosc2.save_tensor`
     :func:`~blosc2.pack_tensor`
     """
-    schunk = blosc2.open(urlpath, dparams=dparams)
+    schunk = blosc2.open(urlpath, mode="r", dparams=dparams)
     return _unpack_tensor(schunk)
 
 
