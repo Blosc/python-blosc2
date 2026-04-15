@@ -5,6 +5,32 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+# This is testing whether BatchArray works well as a batched storage
+# layer for many embedded Blosc2 objects represented as CFrames, and
+# how fast access is at three levels:
+# raw bytes, reconstructed array, and individual scalar.
+
+# Example of use:
+"""
+$ time python bench/batch_array_cframes.py --nbatches 1_000 --nframes-per-block 1_000 --nelements-per-frame 100_000_000 --nframes-per-batch 10_000 --clevel 1 --codec ZSTD --use-dict
+<clip>
+Executed in 59.65 secs
+$ python bench/batch_array_cframes.py --urlpath bench_batch_array_cframes.b2b --random-read-element 20
+Reading on-disk BatchArray with CFrame payloads
+  urlpath: bench_batch_array_cframes.b2b
+  seed: None
+  total frames: 10_000_000 (1.00e+07, 2**23.253)
+  nelements per frame: 100000000
+  total elements: 1_000_000_000_000_000 (1.00e+15, 2**49.829)
+
+random element reads: 20
+  mean: 927.89 us
+  min: 879.12 us
+  max: 1056.25 us
+  first sample: barr[43][8145][93832398] -> 3 in 1056.25 us
+"""
+
+
 from __future__ import annotations
 
 import argparse
@@ -19,7 +45,7 @@ import blosc2
 from blosc2.msgpack_utils import msgpack_packb
 
 
-URLPATH = "bench_batch_store_cframes.b2b"
+URLPATH = "bench_batch_array_cframes.b2b"
 DEFAULT_NFRAMES = 1_000
 DEFAULT_NELEMENTS = 1_000
 DEFAULT_NBATCHES = 1_000
@@ -28,10 +54,10 @@ _DICT_CODECS = {blosc2.Codec.ZSTD, blosc2.Codec.LZ4, blosc2.Codec.LZ4HC}
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build or read an on-disk BatchStore containing batches of Blosc2 CFrames.",
+        description="Build or read an on-disk BatchArray containing batches of Blosc2 CFrames.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--urlpath", type=str, default=None, help="Path to the BatchStore file.")
+    parser.add_argument("--urlpath", type=str, default=None, help="Path to the BatchArray file.")
     parser.add_argument(
         "--nframes-per-batch", type=int, default=DEFAULT_NFRAMES, help="Number of CFrames stored in each batch."
     )
@@ -55,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--random-read",
         type=int,
         default=1,
-        help="Read N random serialized CFrames and report timing. When passed explicitly, reads an existing store.",
+        help="Read N random serialized CFrames and report timing. When passed explicitly, reads an existing batch array.",
     )
     parser.add_argument(
         "--random-read-cframe",
@@ -105,14 +131,14 @@ def format_count(value: int) -> str:
     return f"{value:_} ({value:.2e}, 2**{math.log2(value):.3f})"
 
 
-def print_store_counts(store: blosc2.BatchStore) -> None:
-    total_frames = sum(len(batch) for batch in store)
+def print_barr_counts(barr: blosc2.BatchArray) -> None:
+    total_frames = sum(len(batch) for batch in barr)
     print(f"  total frames: {format_count(total_frames)}")
     if total_frames == 0:
         print("  total elements: 0")
         return
 
-    first_frame = store[0][0]
+    first_frame = barr[0][0]
     array = blosc2.ndarray_from_cframe(first_frame)
     nelements_per_frame = math.prod(array.shape)
     total_elements = total_frames * nelements_per_frame
@@ -120,8 +146,8 @@ def print_store_counts(store: blosc2.BatchStore) -> None:
     print(f"  total elements: {format_count(total_elements)}")
 
 
-def sample_random_reads(store: blosc2.BatchStore, nreads: int, rng: random.Random) -> list[tuple[int, int, int, int]]:
-    batch_lengths = [len(batch) for batch in store]
+def sample_random_reads(barr: blosc2.BatchArray, nreads: int, rng: random.Random) -> list[tuple[int, int, int, int]]:
+    batch_lengths = [len(batch) for batch in barr]
     total_frames = sum(batch_lengths)
     if total_frames == 0:
         return []
@@ -138,17 +164,17 @@ def sample_random_reads(store: blosc2.BatchStore, nreads: int, rng: random.Rando
         batch_index = bisect_right(prefix, flat_index) - 1
         frame_index = flat_index - prefix[batch_index]
         t0 = time.perf_counter_ns()
-        frame = store[batch_index][frame_index]
+        frame = barr[batch_index][frame_index]
         elapsed_ns = time.perf_counter_ns() - t0
         results.append((batch_index, frame_index, len(frame), elapsed_ns))
 
     return results
 
 
-def print_random_read_stats(store: blosc2.BatchStore, nreads: int, rng: random.Random) -> None:
-    samples = sample_random_reads(store, nreads, rng)
+def print_random_read_stats(barr: blosc2.BatchArray, nreads: int, rng: random.Random) -> None:
+    samples = sample_random_reads(barr, nreads, rng)
     if not samples:
-        print("random scalar reads: store is empty")
+        print("random scalar reads: barr is empty")
         return
 
     timings_ns = [elapsed_ns for _, _, _, elapsed_ns in samples]
@@ -158,15 +184,15 @@ def print_random_read_stats(store: blosc2.BatchStore, nreads: int, rng: random.R
     print(f"  max: {max(timings_ns) / 1_000:.2f} us")
     batch_index, frame_index, frame_len, elapsed_ns = samples[0]
     print(
-        f"  first sample: store[{batch_index}][{frame_index}] -> {frame_len} bytes "
+        f"  first sample: barr[{batch_index}][{frame_index}] -> {frame_len} bytes "
         f"in {elapsed_ns / 1_000:.2f} us"
     )
 
 
 def sample_random_cframe_reads(
-    store: blosc2.BatchStore, nreads: int, rng: random.Random
+    barr: blosc2.BatchArray, nreads: int, rng: random.Random
 ) -> list[tuple[int, int, tuple[int, ...], int]]:
-    batch_lengths = [len(batch) for batch in store]
+    batch_lengths = [len(batch) for batch in barr]
     total_frames = sum(batch_lengths)
     if total_frames == 0:
         return []
@@ -183,7 +209,7 @@ def sample_random_cframe_reads(
         batch_index = bisect_right(prefix, flat_index) - 1
         frame_index = flat_index - prefix[batch_index]
         t0 = time.perf_counter_ns()
-        frame = store[batch_index][frame_index]
+        frame = barr[batch_index][frame_index]
         array = blosc2.ndarray_from_cframe(frame)
         elapsed_ns = time.perf_counter_ns() - t0
         results.append((batch_index, frame_index, array.shape, elapsed_ns))
@@ -191,10 +217,10 @@ def sample_random_cframe_reads(
     return results
 
 
-def print_random_cframe_read_stats(store: blosc2.BatchStore, nreads: int, rng: random.Random) -> None:
-    samples = sample_random_cframe_reads(store, nreads, rng)
+def print_random_cframe_read_stats(barr: blosc2.BatchArray, nreads: int, rng: random.Random) -> None:
+    samples = sample_random_cframe_reads(barr, nreads, rng)
     if not samples:
-        print("random cframe reads: store is empty")
+        print("random cframe reads: batch array is empty")
         return
 
     timings_ns = [elapsed_ns for _, _, _, elapsed_ns in samples]
@@ -203,13 +229,13 @@ def print_random_cframe_read_stats(store: blosc2.BatchStore, nreads: int, rng: r
     print(f"  min: {min(timings_ns) / 1_000:.2f} us")
     print(f"  max: {max(timings_ns) / 1_000:.2f} us")
     batch_index, frame_index, shape, elapsed_ns = samples[0]
-    print(f"  first sample: store[{batch_index}][{frame_index}] -> shape={shape} in {elapsed_ns / 1_000:.2f} us")
+    print(f"  first sample: barr[{batch_index}][{frame_index}] -> shape={shape} in {elapsed_ns / 1_000:.2f} us")
 
 
 def sample_random_element_reads(
-    store: blosc2.BatchStore, nreads: int, rng: random.Random
+    barr: blosc2.BatchArray, nreads: int, rng: random.Random
 ) -> list[tuple[int, int, int, int | float | bool, int]]:
-    batch_lengths = [len(batch) for batch in store]
+    batch_lengths = [len(batch) for batch in barr]
     total_frames = sum(batch_lengths)
     if total_frames == 0:
         return []
@@ -224,7 +250,7 @@ def sample_random_element_reads(
         batch_index = bisect_right(prefix, flat_index) - 1
         frame_index = flat_index - prefix[batch_index]
         t0 = time.perf_counter_ns()
-        frame = store[batch_index][frame_index]
+        frame = barr[batch_index][frame_index]
         array = blosc2.ndarray_from_cframe(frame)
         element_index = rng.randrange(array.shape[0])
         value = array[element_index].item()
@@ -233,10 +259,10 @@ def sample_random_element_reads(
     return samples
 
 
-def print_random_element_read_stats(store: blosc2.BatchStore, nreads: int, rng: random.Random) -> None:
-    samples = sample_random_element_reads(store, nreads, rng)
+def print_random_element_read_stats(barr: blosc2.BatchArray, nreads: int, rng: random.Random) -> None:
+    samples = sample_random_element_reads(barr, nreads, rng)
     if not samples:
-        print("random element reads: store is empty")
+        print("random element reads: batch array is empty")
         return
 
     timings_ns = [elapsed_ns for *_, elapsed_ns in samples]
@@ -246,7 +272,7 @@ def print_random_element_read_stats(store: blosc2.BatchStore, nreads: int, rng: 
     print(f"  max: {max(timings_ns) / 1_000:.2f} us")
     batch_index, frame_index, element_index, value, elapsed_ns = samples[0]
     print(
-        f"  first sample: store[{batch_index}][{frame_index}][{element_index}] -> {value!r} "
+        f"  first sample: barr[{batch_index}][{frame_index}][{element_index}] -> {value!r} "
         f"in {elapsed_ns / 1_000:.2f} us"
     )
 
@@ -285,26 +311,26 @@ def main() -> None:
         print(f"Codec {codec.name} does not support use_dict; disabling it.")
 
     if random_read_requested or args.random_read_cframe > 0 or args.random_read_element > 0:
-        store = blosc2.open(args.urlpath, mode="r")
-        if not isinstance(store, blosc2.BatchStore):
-            raise TypeError(f"{args.urlpath!r} is not a BatchStore")
-        print("Reading on-disk BatchStore with CFrame payloads")
+        barr = blosc2.open(args.urlpath, mode="r")
+        if not isinstance(barr, blosc2.BatchArray):
+            raise TypeError(f"{args.urlpath!r} is not a BatchArray")
+        print("Reading on-disk BatchArray with CFrame payloads")
         print(f"  urlpath: {args.urlpath}")
         print(f"  seed: {args.seed}")
-        print_store_counts(store)
+        print_barr_counts(barr)
         print()
-        # print(store.info)
+        # print(barr.info)
         # print()
         if random_read_requested:
-            print_random_read_stats(store, args.random_read, rng)
+            print_random_read_stats(barr, args.random_read, rng)
         if args.random_read_cframe > 0:
             if random_read_requested:
                 print()
-            print_random_cframe_read_stats(store, args.random_read_cframe, rng)
+            print_random_cframe_read_stats(barr, args.random_read_cframe, rng)
         if args.random_read_element > 0:
             if random_read_requested or args.random_read_cframe > 0:
                 print()
-            print_random_element_read_stats(store, args.random_read_element, rng)
+            print_random_element_read_stats(barr, args.random_read_element, rng)
         return
 
     cparams = blosc2.CParams(codec=codec, clevel=args.clevel, use_dict=use_dict)
@@ -315,7 +341,7 @@ def main() -> None:
     frame = source.to_cframe()
     msgpack_frame = msgpack_packb(frame)
 
-    print("Building on-disk BatchStore with CFrame payloads")
+    print("Building on-disk BatchArray with CFrame payloads")
     print(f"  urlpath: {urlpath}")
     print(f"  nbatches: {args.nbatches}")
     print(f"  nframes per batch: {args.nframes_per_batch}")
@@ -330,20 +356,20 @@ def main() -> None:
     print(f"  use_dict: {use_dict}")
     print(f"  seed: {args.seed}")
 
-    with blosc2.BatchStore(
+    with blosc2.BatchArray(
         storage=blosc2.Storage(urlpath=urlpath, mode="w", contiguous=True),
         cparams=cparams,
         items_per_block=args.nframes_per_block,
-    ) as store:
+    ) as barr:
         batch = make_batch(args.nframes_per_batch, frame)
         for _ in range(args.nbatches):
-            store.append(batch)
+            barr.append(batch)
         print()
-        print(store.info)
-        uncompressed_nbytes = store.nbytes
+        print(barr.info)
+        uncompressed_nbytes = barr.nbytes
 
     size_nbytes = pathlib.Path(urlpath).stat().st_size
-    print(f"store file size: {format_size(size_nbytes)}")
+    print(f"BatchArray file size: {format_size(size_nbytes)}")
     print(
         f"average compressed bytes per frame: {size_nbytes / total_frames:.2f} "
         f"({uncompressed_nbytes / total_frames:.2f} uncompressed)"

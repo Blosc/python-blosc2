@@ -17,3 +17,6 @@ Tutorials
    tutorials/09.ucodecs-ufilters
    tutorials/10.prefilters
    tutorials/11.vlarray
+   tutorials/12.batcharray
+   tutorials/13.containers
+   tutorials/14.indexing-arrays

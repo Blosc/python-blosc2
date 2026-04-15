@@ -671,42 +671,42 @@ def test_external_vlarray_support():
     os.remove("test_vlarray_external.b2z")
 
 
-def test_external_batchstore_support(tmp_path):
-    store_path = tmp_path / "test_batchstore_external.b2d"
+def test_external_batcharray_support(tmp_path):
+    store_path = tmp_path / "test_batcharray_external.b2d"
 
     with TreeStore(str(store_path), mode="w", threshold=0) as tstore:
-        bstore = blosc2.BatchStore(items_per_block=2)
-        bstore.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
-        tstore["/data/batchstore"] = bstore
+        barr = blosc2.BatchArray(items_per_block=2)
+        barr.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
+        tstore["/data/batcharray"] = barr
 
-        batchstore_path = store_path / "data" / "batchstore.b2b"
-        assert batchstore_path.exists()
+        batcharray_path = store_path / "data" / "batcharray.b2b"
+        assert batcharray_path.exists()
 
     with TreeStore(str(store_path), mode="r") as tstore:
-        retrieved = tstore["/data/batchstore"]
-        assert isinstance(retrieved, blosc2.BatchStore)
+        retrieved = tstore["/data/batcharray"]
+        assert isinstance(retrieved, blosc2.BatchArray)
         assert [batch[:] for batch in retrieved] == [[{"id": 1}, {"id": 2}], [{"id": 3}]]
 
 
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
-def test_metadata_discovery_reopens_renamed_batchstore_leaf(storage_type, tmp_path):
-    store_path = tmp_path / f"test_batchstore_renamed.{storage_type}"
+def test_metadata_discovery_reopens_renamed_batcharray_leaf(storage_type, tmp_path):
+    store_path = tmp_path / f"test_batcharray_renamed.{storage_type}"
 
     with TreeStore(str(store_path), mode="w", threshold=0) as tstore:
-        bstore = blosc2.BatchStore(items_per_block=2)
-        bstore.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
-        tstore["/data/batchstore"] = bstore
+        barr = blosc2.BatchArray(items_per_block=2)
+        barr.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
+        tstore["/data/batcharray"] = barr
 
-    old_name = "data/batchstore.b2b"
-    new_name = "data/batchstore.odd"
+    old_name = "data/batcharray.b2b"
+    new_name = "data/batcharray.odd"
     _rename_store_member(str(store_path), old_name, new_name)
 
-    with pytest.warns(UserWarning, match=r"batchstore\.odd'.*BatchStore.*expected '\.b2b'"):
+    with pytest.warns(UserWarning, match=r"batcharray\.odd'.*BatchArray.*expected '\.b2b'"):
         tstore = TreeStore(str(store_path), mode="r")
     with tstore:
-        assert tstore.map_tree["/data/batchstore"] == new_name
-        retrieved = tstore["/data/batchstore"]
-        assert isinstance(retrieved, blosc2.BatchStore)
+        assert tstore.map_tree["/data/batcharray"] == new_name
+        retrieved = tstore["/data/batcharray"]
+        assert isinstance(retrieved, blosc2.BatchArray)
         assert [batch[:] for batch in retrieved] == [[{"id": 1}, {"id": 2}], [{"id": 3}]]
 
 

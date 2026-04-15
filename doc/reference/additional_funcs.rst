@@ -16,6 +16,7 @@ Their result is typically a :ref:`LazyExpr` instance, which can be evaluated (wi
     clip
     contains
     endswith
+    get_matmul_library
     imag
     lower
     real
@@ -30,6 +31,7 @@ Their result is typically a :ref:`LazyExpr` instance, which can be evaluated (wi
 .. autofunction:: blosc2.clip
 .. autofunction:: blosc2.contains
 .. autofunction:: blosc2.endswith
+.. autofunction:: blosc2.get_matmul_library
 .. autofunction:: blosc2.imag
 .. autofunction:: blosc2.lower
 .. autofunction:: blosc2.real

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import builtins
 import math
+import sys
 import warnings
+from contextlib import nullcontext
 from itertools import product
 from typing import TYPE_CHECKING, Any
 
@@ -21,6 +23,13 @@ from .utils import get_intersecting_chunks, nptranspose, npvecdot, slice_to_chun
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+try:
+    from threadpoolctl import threadpool_limits
+except ImportError:
+    threadpool_limits = None
+
+_MATMUL_CBLAS_THREAD_LIMIT_BLOCK_THRESHOLD = 192
 
 
 def _matmul_chunked(
@@ -93,6 +102,18 @@ def _matmul_can_use_fast_path(
     if x2.dtype.kind != "f":
         return False
     return x1.dtype == x2.dtype
+
+
+def _matmul_fast_path_context(result: blosc2.NDArray):
+    if threadpool_limits is None:
+        return nullcontext()
+    if sys.platform == "darwin":
+        return nullcontext()
+    if blosc2.blosc2_ext.get_selected_matmul_block_backend() != "cblas":
+        return nullcontext()
+    if max(result.blocks[-2:]) > _MATMUL_CBLAS_THREAD_LIMIT_BLOCK_THRESHOLD:
+        return nullcontext()
+    return threadpool_limits(limits=1, user_api="blas")
 
 
 def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArray:
@@ -190,12 +211,13 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
         if _matmul_can_use_fast_path(x1, x2, result, try_miniexpr):
             prefilter_set = False
             try:
-                result._set_pref_matmul({"x1": x1, "x2": x2}, fp_accuracy=blosc2.FPAccuracy.DEFAULT)
-                prefilter_set = True
-                # Data to compress is fetched from operands, so it can be uninitialized here
-                data = np.empty(result.schunk.chunksize, dtype=np.uint8)
-                for nchunk_out in range(result.schunk.nchunks):
-                    result.schunk.update_data(nchunk_out, data, copy=False)
+                with _matmul_fast_path_context(result):
+                    result._set_pref_matmul({"x1": x1, "x2": x2}, fp_accuracy=blosc2.FPAccuracy.DEFAULT)
+                    prefilter_set = True
+                    # Data to compress is fetched from operands, so it can be uninitialized here
+                    data = np.empty(result.schunk.chunksize, dtype=np.uint8)
+                    for nchunk_out in range(result.schunk.nchunks):
+                        result.schunk.update_data(nchunk_out, data, copy=False)
             except Exception as exc:
                 warnings.warn(
                     f"Fast matmul path unavailable; falling back to chunked path: {exc}", RuntimeWarning

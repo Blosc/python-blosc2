@@ -48,13 +48,13 @@ def _make_nested_blosc2_objects():
     nested_vlarray = blosc2.VLArray()
     nested_vlarray.extend(["alpha", {"beta": 2}])
 
-    nested_batchstore = blosc2.BatchStore(items_per_block=2)
-    nested_batchstore.extend([[1, 2], ["x", {"y": 3}]])
+    nested_batcharray = blosc2.BatchArray(items_per_block=2)
+    nested_batcharray.extend([[1, 2], ["x", {"y": 3}]])
 
     estore = blosc2.EmbedStore()
     estore["/node"] = blosc2.arange(3, dtype=np.int32)
 
-    return ndarray, schunk, nested_vlarray, nested_batchstore, estore
+    return ndarray, schunk, nested_vlarray, nested_batcharray, estore
 
 
 def _make_c2array(monkeypatch, path="@public/examples/ds-1d.b2nd", urlbase="https://cat2.cloud/demo/"):
@@ -190,7 +190,7 @@ def test_vlarray_from_cframe():
 
 
 def test_vlarray_msgpack_supports_blosc2_objects():
-    ndarray, schunk, nested_vlarray, nested_batchstore, estore = _make_nested_blosc2_objects()
+    ndarray, schunk, nested_vlarray, nested_batcharray, estore = _make_nested_blosc2_objects()
 
     vlarray = blosc2.VLArray()
     vlarray.append(
@@ -198,7 +198,7 @@ def test_vlarray_msgpack_supports_blosc2_objects():
             "ndarray": ndarray,
             "schunk": schunk,
             "vlarray": nested_vlarray,
-            "batchstore": nested_batchstore,
+            "batcharray": nested_batcharray,
             "estore": estore,
         }
     )
@@ -214,8 +214,8 @@ def test_vlarray_msgpack_supports_blosc2_objects():
     assert isinstance(restored["vlarray"], blosc2.VLArray)
     assert list(restored["vlarray"]) == list(nested_vlarray)
 
-    assert isinstance(restored["batchstore"], blosc2.BatchStore)
-    assert [batch[:] for batch in restored["batchstore"]] == [batch[:] for batch in nested_batchstore]
+    assert isinstance(restored["batcharray"], blosc2.BatchArray)
+    assert [batch[:] for batch in restored["batcharray"]] == [batch[:] for batch in nested_batcharray]
 
     assert isinstance(restored["estore"], blosc2.EmbedStore)
     assert list(restored["estore"].keys()) == ["/node"]

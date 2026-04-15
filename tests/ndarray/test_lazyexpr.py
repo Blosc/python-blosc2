@@ -1484,14 +1484,14 @@ def test_dtype_infer_scalars(cfunc):
     np.testing.assert_equal(res, nres)
 
 
-def test_indices():
+def test_argsort():
     shape = (20,)
     na = np.arange(shape[0])
     a = blosc2.asarray(na)
     expr = a > 1
     # TODO: Implement the indices method for LazyExpr more generally
     with pytest.raises(NotImplementedError):
-        expr.indices().compute()
+        expr.argsort().compute()
 
 
 def test_sort():

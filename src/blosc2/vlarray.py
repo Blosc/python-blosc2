@@ -34,7 +34,7 @@ class VLArray:
     Entries are serialized with msgpack before compression. Standard Python
     objects are supported, and Blosc2 containers such as
     :class:`blosc2.NDArray`, :class:`blosc2.SChunk`, :class:`blosc2.VLArray`,
-    :class:`blosc2.BatchStore`, and :class:`blosc2.EmbedStore` are serialized
+    :class:`blosc2.BatchArray`, and :class:`blosc2.EmbedStore` are serialized
     transparently via :meth:`to_cframe` / :func:`blosc2.from_cframe`.
 
     Msgpack also supports structured Blosc2 reference objects. Currently this

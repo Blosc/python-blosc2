@@ -512,7 +512,7 @@ def test_where_fusion6(array_fixture):
     ],
 )
 @pytest.mark.parametrize("order", ["a", "b", None])
-def test_indices(shape, chunks, blocks, field, order):
+def test_argsort(shape, chunks, blocks, field, order):
     na = np.arange(1, shape[0] + 1)
     nb = np.arange(2 * shape[0], shape[0], -1)
     nsa = np.empty(shape, dtype=[("a", np.int32), ("b", np.int32)])
@@ -521,7 +521,7 @@ def test_indices(shape, chunks, blocks, field, order):
     sa = blosc2.asarray(nsa)
 
     # The expression
-    res = sa[f"{field} > 2"].indices(order=order).compute()
+    res = sa[f"{field} > 2"].argsort(order=order).compute()
     assert res.dtype == np.int64
 
     # Emulate that expression with NumPy
@@ -575,7 +575,7 @@ def test_sort(shape, chunks, blocks, order):
         ((10,), (4,), (3,), None),
     ],
 )
-def test_sort_indices(shape, chunks, blocks, order):
+def test_sort_argsort(shape, chunks, blocks, order):
     na = np.arange(1, shape[0] + 1)
     nb = np.arange(2 * shape[0], shape[0], -1)
     nsa = np.empty(shape, dtype=[("a", np.int32), ("b", np.int32)])
@@ -584,7 +584,7 @@ def test_sort_indices(shape, chunks, blocks, order):
     sa = blosc2.asarray(nsa, chunks=chunks, blocks=blocks)
 
     # The expression
-    res = sa["a > 2"].indices(order).compute()
+    res = sa["a > 2"].argsort(order).compute()
 
     # Emulate that expression with NumPy
     mask = nsa["a"] > 2

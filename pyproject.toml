@@ -39,6 +39,7 @@ dependencies = [
     "numexpr>=2.14.1; platform_machine != 'wasm32'",
     "pydantic",
     "requests",
+    "threadpoolctl; platform_machine != 'wasm32'",
 ]
 version = "4.1.1.dev0"
 [project.entry-points."array_api"]

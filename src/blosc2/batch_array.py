@@ -21,9 +21,9 @@ import blosc2
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
-_BATCHSTORE_META = {"version": 1, "serializer": "msgpack", "items_per_block": None, "arrow_schema": None}
+_BATCHARRAY_META = {"version": 1, "serializer": "msgpack", "items_per_block": None, "arrow_schema": None}
 _SUPPORTED_SERIALIZERS = {"msgpack", "arrow"}
-_BATCHSTORE_VLMETA_KEY = "_batch_store_metadata"
+_BATCHARRAY_VLMETA_KEY = "_batch_array_metadata"
 
 
 def _check_serialized_size(buffer: bytes) -> None:
@@ -32,17 +32,17 @@ def _check_serialized_size(buffer: bytes) -> None:
 
 
 class Batch(Sequence[Any]):
-    """A lazy sequence representing one batch in a :class:`BatchStore`.
+    """A lazy sequence representing one batch in a :class:`BatchArray`.
 
     ``Batch`` provides sequence-style access to the items stored in a single
     batch. Integer indexing can use block-local reads when possible, while
     slicing materializes the full batch into Python items.
 
-    Batch instances are normally obtained via :class:`BatchStore` indexing or
+    Batch instances are normally obtained via :class:`BatchArray` indexing or
     iteration rather than constructed directly.
     """
 
-    def __init__(self, parent: BatchStore, nbatch: int, lazybatch: bytes) -> None:
+    def __init__(self, parent: BatchArray, nbatch: int, lazybatch: bytes) -> None:
         self._parent = parent
         self._nbatch = nbatch
         self._lazybatch = lazybatch
@@ -126,10 +126,10 @@ class Batch(Sequence[Any]):
         return f"Batch(len={len(self)}, nbytes={self.nbytes}, cbytes={self.cbytes})"
 
 
-class BatchStoreItems(Sequence[Any]):
-    """A read-only flat view over the items stored in a :class:`BatchStore`."""
+class BatchArrayItems(Sequence[Any]):
+    """A read-only flat view over the items stored in a :class:`BatchArray`."""
 
-    def __init__(self, parent: BatchStore) -> None:
+    def __init__(self, parent: BatchArray) -> None:
         self._parent = parent
 
     def __getitem__(self, index: int | slice) -> Any | list[Any]:
@@ -139,10 +139,10 @@ class BatchStoreItems(Sequence[Any]):
         return self._parent._get_total_item_count()
 
 
-class BatchStore:
+class BatchArray:
     """A batched container for variable-length Python items.
 
-    BatchStore stores data as a sequence of *batches*, where each batch contains
+    BatchArray stores data as a sequence of *batches*, where each batch contains
     one or more Python items. Each batch is stored in one compressed chunk, and
     each chunk is internally split into one or more variable-length blocks for
     efficient item access.
@@ -153,7 +153,7 @@ class BatchStore:
     - iterating the store yields batches
     - :meth:`iter_items` provides flat item-wise traversal
 
-    BatchStore is a good fit when:
+    BatchArray is a good fit when:
 
     - data arrives naturally in batches
     - batch-level append/update operations are important
@@ -169,7 +169,7 @@ class BatchStore:
         Serializer used for batch payloads. ``"msgpack"`` is the default and is
         the general-purpose choice for Python items, including nested Blosc2
         containers such as :class:`blosc2.NDArray`, :class:`blosc2.SChunk`,
-        :class:`blosc2.VLArray`, :class:`blosc2.BatchStore`, and
+        :class:`blosc2.VLArray`, :class:`blosc2.BatchArray`, and
         :class:`blosc2.EmbedStore`, which are serialized transparently via
         :meth:`to_cframe` / :func:`blosc2.from_cframe`. Msgpack also supports
         structured Blosc2 reference objects, currently
@@ -182,7 +182,7 @@ class BatchStore:
         are not serialized by msgpack. ``"arrow"`` is optional and requires
         ``pyarrow``.
     _from_schunk : blosc2.SChunk, optional
-        Internal hook used when reopening an already-tagged BatchStore.
+        Internal hook used when reopening an already-tagged BatchArray.
     **kwargs
         Storage, compression, and decompression arguments accepted by the
         constructor.
@@ -225,24 +225,24 @@ class BatchStore:
     @staticmethod
     def _validate_storage(storage: blosc2.Storage) -> None:
         if storage.mmap_mode not in (None, "r"):
-            raise ValueError("For BatchStore containers, mmap_mode must be None or 'r'")
+            raise ValueError("For BatchArray containers, mmap_mode must be None or 'r'")
         if storage.mmap_mode == "r" and storage.mode != "r":
-            raise ValueError("For BatchStore containers, mmap_mode='r' requires mode='r'")
+            raise ValueError("For BatchArray containers, mmap_mode='r' requires mode='r'")
 
     def _attach_schunk(self, schunk: blosc2.SChunk) -> None:
         self.schunk = schunk
         self.mode = schunk.mode
         self.mmap_mode = getattr(schunk, "mmap_mode", None)
         try:
-            batchstore_meta = self.schunk.meta["batchstore"]
+            batcharray_meta = self.schunk.meta["batcharray"]
         except KeyError:
-            batchstore_meta = {}
-        self._serializer = batchstore_meta.get("serializer", self._serializer)
-        self._items_per_block = batchstore_meta.get("items_per_block", self._items_per_block)
-        self._arrow_schema = batchstore_meta.get("arrow_schema", self._arrow_schema)
+            batcharray_meta = {}
+        self._serializer = batcharray_meta.get("serializer", self._serializer)
+        self._items_per_block = batcharray_meta.get("items_per_block", self._items_per_block)
+        self._arrow_schema = batcharray_meta.get("arrow_schema", self._arrow_schema)
         self._arrow_schema_obj = None
         self._batch_lengths = self._load_batch_lengths()
-        self._items = BatchStoreItems(self)
+        self._items = BatchArrayItems(self)
         self._item_prefix_sums: np.ndarray | None = None
         self._validate_tag()
 
@@ -272,16 +272,16 @@ class BatchStore:
         _from_schunk: blosc2.SChunk | None = None,
         **kwargs: Any,
     ) -> None:
-        """Create a new BatchStore or reopen an existing one.
+        """Create a new BatchArray or reopen an existing one.
 
-        When a persistent ``urlpath`` points to an existing BatchStore and the
+        When a persistent ``urlpath`` points to an existing BatchArray and the
         mode is ``"r"`` or ``"a"``, the container is reopened automatically.
         Otherwise a new empty store is created.
         """
         if items_per_block is not None and items_per_block <= 0:
             raise ValueError("items_per_block must be a positive integer")
         if serializer not in _SUPPORTED_SERIALIZERS:
-            raise ValueError(f"Unsupported BatchStore serializer: {serializer!r}")
+            raise ValueError(f"Unsupported BatchArray serializer: {serializer!r}")
         self._items_per_block: int | None = items_per_block
         self._serializer = serializer
         self._arrow_schema: bytes | None = None
@@ -300,7 +300,7 @@ class BatchStore:
 
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
-            raise ValueError(f"Unsupported BatchStore keyword argument(s): {unexpected}")
+            raise ValueError(f"Unsupported BatchArray keyword argument(s): {unexpected}")
 
         self._validate_storage(storage)
         cparams = self._set_typesize_one(cparams)
@@ -312,8 +312,8 @@ class BatchStore:
             return
 
         fixed_meta = dict(storage.meta or {})
-        fixed_meta["batchstore"] = {
-            **_BATCHSTORE_META,
+        fixed_meta["batcharray"] = {
+            **_BATCHARRAY_META,
             "serializer": self._serializer,
             "items_per_block": self._items_per_block,
             "arrow_schema": self._arrow_schema,
@@ -323,10 +323,10 @@ class BatchStore:
         self._attach_schunk(schunk)
 
     def _validate_tag(self) -> None:
-        if "batchstore" not in self.schunk.meta:
-            raise ValueError("The supplied SChunk is not tagged as a BatchStore")
+        if "batcharray" not in self.schunk.meta:
+            raise ValueError("The supplied SChunk is not tagged as a BatchArray")
         if self._serializer not in _SUPPORTED_SERIALIZERS:
-            raise ValueError(f"Unsupported BatchStore serializer in metadata: {self._serializer!r}")
+            raise ValueError(f"Unsupported BatchArray serializer in metadata: {self._serializer!r}")
         if self._serializer == "arrow":
             self._require_pyarrow()
 
@@ -337,25 +337,25 @@ class BatchStore:
             import pyarrow as pa
             import pyarrow.ipc as pa_ipc
         except ImportError as exc:
-            raise ImportError("BatchStore serializer='arrow' requires pyarrow") from exc
+            raise ImportError("BatchArray serializer='arrow' requires pyarrow") from exc
         return pa, pa_ipc
 
     def _check_writable(self) -> None:
         if self.mode == "r":
-            raise ValueError("Cannot modify a BatchStore opened in read-only mode")
+            raise ValueError("Cannot modify a BatchArray opened in read-only mode")
 
     def _normalize_index(self, index: int) -> int:
         if not isinstance(index, int):
-            raise TypeError("BatchStore indices must be integers")
+            raise TypeError("BatchArray indices must be integers")
         if index < 0:
             index += len(self)
         if index < 0 or index >= len(self):
-            raise IndexError("BatchStore index out of range")
+            raise IndexError("BatchArray index out of range")
         return index
 
     def _normalize_insert_index(self, index: int) -> int:
         if not isinstance(index, int):
-            raise TypeError("BatchStore indices must be integers")
+            raise TypeError("BatchArray indices must be integers")
         if index < 0:
             index += len(self)
             if index < 0:
@@ -372,7 +372,7 @@ class BatchStore:
 
     def _load_batch_lengths(self) -> list[int] | None:
         try:
-            metadata = self.schunk.vlmeta[_BATCHSTORE_VLMETA_KEY]
+            metadata = self.schunk.vlmeta[_BATCHARRAY_VLMETA_KEY]
         except KeyError:
             return None
         batch_lengths = metadata.get("batch_lengths")
@@ -384,10 +384,10 @@ class BatchStore:
         if self._batch_lengths is None:
             return
         if len(self._batch_lengths) == 0:
-            if _BATCHSTORE_VLMETA_KEY in self.vlmeta:
-                del self.vlmeta[_BATCHSTORE_VLMETA_KEY]
+            if _BATCHARRAY_VLMETA_KEY in self.vlmeta:
+                del self.vlmeta[_BATCHARRAY_VLMETA_KEY]
             return
-        self.schunk.vlmeta[_BATCHSTORE_VLMETA_KEY] = {"batch_lengths": list(self._batch_lengths)}
+        self.schunk.vlmeta[_BATCHARRAY_VLMETA_KEY] = {"batch_lengths": list(self._batch_lengths)}
 
     def _get_batch_lengths(self) -> list[int] | None:
         return self._batch_lengths
@@ -428,12 +428,12 @@ class BatchStore:
         if isinstance(index, slice):
             return [self._get_flat_item(i) for i in range(*index.indices(self._get_total_item_count()))]
         if not isinstance(index, int):
-            raise TypeError("BatchStore item indices must be integers")
+            raise TypeError("BatchArray item indices must be integers")
         nitems = self._get_total_item_count()
         if index < 0:
             index += nitems
         if index < 0 or index >= nitems:
-            raise IndexError("BatchStore item index out of range")
+            raise IndexError("BatchArray item index out of range")
 
         prefix_sums = self._get_item_prefix_sums()
         batch_index = int(np.searchsorted(prefix_sums, index, side="right") - 1)
@@ -475,16 +475,16 @@ class BatchStore:
         return total
 
     def _user_vlmeta_items(self) -> dict[str, Any]:
-        return {key: value for key, value in self.vlmeta.getall().items() if key != _BATCHSTORE_VLMETA_KEY}
+        return {key: value for key, value in self.vlmeta.getall().items() if key != _BATCHARRAY_VLMETA_KEY}
 
     def _normalize_msgpack_batch(self, value: object) -> list[Any]:
         if isinstance(value, (str, bytes, bytearray, memoryview)):
-            raise TypeError("BatchStore entries must be sequences of Python objects")
+            raise TypeError("BatchArray entries must be sequences of Python objects")
         if not isinstance(value, Sequence):
-            raise TypeError("BatchStore entries must be sequences of Python objects")
+            raise TypeError("BatchArray entries must be sequences of Python objects")
         values = list(value)
         if len(values) == 0:
-            raise ValueError("BatchStore entries cannot be empty")
+            raise ValueError("BatchArray entries cannot be empty")
         return values
 
     def _normalize_arrow_batch(self, value: object):
@@ -493,16 +493,16 @@ class BatchStore:
             value = value.combine_chunks()
         elif isinstance(value, pa.RecordBatch):
             if value.num_columns != 1:
-                raise TypeError("Arrow RecordBatch inputs for BatchStore must have exactly one column")
+                raise TypeError("Arrow RecordBatch inputs for BatchArray must have exactly one column")
             value = value.column(0)
         elif not isinstance(value, pa.Array):
             if isinstance(value, (str, bytes, bytearray, memoryview)):
-                raise TypeError("BatchStore entries must be Arrow arrays or sequences of Python objects")
+                raise TypeError("BatchArray entries must be Arrow arrays or sequences of Python objects")
             if not isinstance(value, Sequence):
-                raise TypeError("BatchStore entries must be Arrow arrays or sequences of Python objects")
+                raise TypeError("BatchArray entries must be Arrow arrays or sequences of Python objects")
             value = pa.array(list(value))
         if len(value) == 0:
-            raise ValueError("BatchStore entries cannot be empty")
+            raise ValueError("BatchArray entries cannot be empty")
         self._ensure_arrow_schema(value)
         return value
 
@@ -517,7 +517,7 @@ class BatchStore:
             return
         existing_schema = self._get_arrow_schema()
         if not existing_schema.equals(schema):
-            raise TypeError("All Arrow batches in a BatchStore must share the same schema")
+            raise TypeError("All Arrow batches in a BatchArray must share the same schema")
 
     def _get_arrow_schema(self):
         if self._serializer != "arrow":
@@ -562,8 +562,8 @@ class BatchStore:
         user_vlmeta = self._user_vlmeta_items() if len(self.vlmeta) > 0 else {}
         storage = self._make_storage()
         fixed_meta = dict(storage.meta or {})
-        fixed_meta["batchstore"] = {
-            **dict(fixed_meta.get("batchstore", {})),
+        fixed_meta["batcharray"] = {
+            **dict(fixed_meta.get("batcharray", {})),
             "items_per_block": self._items_per_block,
             "serializer": self._serializer,
             "arrow_schema": self._arrow_schema,
@@ -584,7 +584,7 @@ class BatchStore:
 
     def _guess_blocksize(self, payload_sizes: list[int]) -> int:
         if not payload_sizes:
-            raise ValueError("BatchStore entries cannot be empty")
+            raise ValueError("BatchArray entries cannot be empty")
         clevel = self.cparams.clevel
         if clevel == 9:
             return len(payload_sizes)
@@ -650,7 +650,7 @@ class BatchStore:
 
     def _compress_batch(self, batch: Any) -> bytes:
         if self._items_per_block is None:
-            raise RuntimeError("BatchStore items_per_block is not initialized")
+            raise RuntimeError("BatchArray items_per_block is not initialized")
         blocks = [
             self._serialize_block(batch[i : i + self._items_per_block])
             for i in range(0, self._batch_len(batch), self._items_per_block)
@@ -714,7 +714,7 @@ class BatchStore:
         """Remove and return the batch at ``index`` as a Python list."""
         self._check_writable()
         if isinstance(index, slice):
-            raise NotImplementedError("Slicing is not supported for BatchStore")
+            raise NotImplementedError("Slicing is not supported for BatchArray")
         index = self._normalize_index(index)
         value = self[index][:]
         self.delete(index)
@@ -840,7 +840,7 @@ class BatchStore:
         return self._items_per_block
 
     @property
-    def items(self) -> BatchStoreItems:
+    def items(self) -> BatchArrayItems:
         return self._items
 
     @property
@@ -910,7 +910,7 @@ class BatchStore:
         """Serialize the full store to a Blosc2 cframe buffer."""
         return self.schunk.to_cframe()
 
-    def copy(self, **kwargs: Any) -> BatchStore:
+    def copy(self, **kwargs: Any) -> BatchArray:
         """Create a copy of the store with optional constructor overrides."""
         if "meta" in kwargs:
             raise ValueError("meta should not be passed to copy")
@@ -933,20 +933,20 @@ class BatchStore:
             if "urlpath" in kwargs and "mode" not in kwargs:
                 kwargs["mode"] = "w"
 
-        out = BatchStore(**kwargs)
+        out = BatchArray(**kwargs)
         for key, value in user_vlmeta.items():
             out.vlmeta[key] = value
         out.extend(self)
         return out
 
-    def __enter__(self) -> BatchStore:
+    def __enter__(self) -> BatchArray:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         return False
 
     def __repr__(self) -> str:
-        return f"BatchStore(len={len(self)}, urlpath={self.urlpath!r})"
+        return f"BatchArray(len={len(self)}, urlpath={self.urlpath!r})"
 
     @property
     def serializer(self) -> str:
