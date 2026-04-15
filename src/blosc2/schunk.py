@@ -1824,18 +1824,40 @@ def open(
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
 
-    urlpath = _resolve_store_alias(urlpath)
+    # Keep explicit store paths on the direct dispatch path.  For regular
+    # Blosc containers, try the standard open first and only fall back to the
+    # more expensive store probing when that fails.
+    if urlpath.endswith((".b2d", ".b2z", ".b2e")):
+        special = _open_special_store(urlpath, mode, offset, **kwargs)
+        if special is not None:
+            if isinstance(special, blosc2.TreeStore):
+                return _open_treestore_root_object(special, urlpath, mode)
+            return special
 
-    special = _open_special_store(urlpath, mode, offset, **kwargs)
+    regular_exc = None
+    if os.path.exists(urlpath):
+        _set_default_dparams(kwargs)
+        try:
+            res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
+        except Exception as exc:
+            regular_exc = exc
+        else:
+            return process_opened_object(res)
+
+    resolved_urlpath = _resolve_store_alias(urlpath)
+    special_path = resolved_urlpath if resolved_urlpath != urlpath or not os.path.exists(urlpath) else urlpath
+    special = _open_special_store(special_path, mode, offset, **kwargs)
     if special is not None:
         if isinstance(special, blosc2.TreeStore):
-            return _open_treestore_root_object(special, urlpath, mode)
+            return _open_treestore_root_object(special, special_path, mode)
         return special
 
-    if not os.path.exists(urlpath):
-        raise FileNotFoundError(f"No such file or directory: {urlpath}")
+    if regular_exc is not None:
+        raise regular_exc
+    if not os.path.exists(special_path):
+        raise FileNotFoundError(f"No such file or directory: {special_path}")
 
     _set_default_dparams(kwargs)
-    res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
+    res = blosc2_ext.open(special_path, mode, offset, **kwargs)
 
     return process_opened_object(res)
