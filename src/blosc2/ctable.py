@@ -47,6 +47,108 @@ from blosc2.schema_compiler import (
     compute_display_width,
 )
 
+# ---------------------------------------------------------------------------
+# Index proxy and CTableIndex
+# ---------------------------------------------------------------------------
+
+
+class _FakeVlMeta:
+    """Minimal vlmeta stand-in that accepts writes without touching a real SChunk."""
+
+    def __init__(self):
+        self._data: dict = {}
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __setitem__(self, key, value):
+        self._data[key] = value
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+
+class _FakeSchunk:
+    """Minimal SChunk stand-in whose vlmeta stores in memory."""
+
+    def __init__(self):
+        self.vlmeta = _FakeVlMeta()
+
+
+class _CTableIndexProxy:
+    """Minimal shim that lets the ``indexing`` module build sidecars for a
+    CTable column without touching the column's own ``schunk.vlmeta``.
+
+    Attributes mirror those required by the internal build functions:
+    ``urlpath``, ``schunk``, ``shape``, ``ndim``, ``dtype``, ``chunks``,
+    ``blocks``, and item access via ``__getitem__``.
+    """
+
+    def __init__(self, col_array: blosc2.NDArray, anchor_urlpath: str | None) -> None:
+        self._col_array = col_array
+        self.urlpath = anchor_urlpath  # controls sidecar placement
+        self.schunk = _FakeSchunk()
+        self.shape = col_array.shape
+        self.ndim = col_array.ndim
+        self.dtype = col_array.dtype
+        self.chunks = col_array.chunks
+        self.blocks = col_array.blocks
+
+    def __getitem__(self, key):
+        return self._col_array[key]
+
+
+class CTableIndex:
+    """A handle on an index attached to a :class:`CTable` column.
+
+    Returned by :meth:`CTable.index` and items of :attr:`CTable.indexes`.
+    Provides :meth:`drop`, :meth:`rebuild`, and :meth:`compact` convenience
+    methods that delegate back to the owning table.
+    """
+
+    def __init__(self, table: CTable, col_name: str, descriptor: dict) -> None:
+        self._table = table
+        self._col_name = col_name
+        self._descriptor = descriptor
+
+    @property
+    def col_name(self) -> str:
+        """Column name this index targets."""
+        return self._col_name
+
+    @property
+    def kind(self) -> str:
+        """Index kind string (``'bucket'``, ``'partial'``, or ``'full'``)."""
+        return self._descriptor.get("kind", "")
+
+    @property
+    def stale(self) -> bool:
+        """True if the index is stale and needs rebuilding."""
+        return bool(self._descriptor.get("stale", False))
+
+    @property
+    def name(self) -> str | None:
+        """Optional human-readable name assigned at creation time."""
+        return self._descriptor.get("name") or None
+
+    def drop(self) -> None:
+        """Drop this index from the owning table."""
+        self._table.drop_index(self._col_name)
+
+    def rebuild(self) -> CTableIndex:
+        """Rebuild this index and return the updated handle."""
+        return self._table.rebuild_index(self._col_name)
+
+    def compact(self) -> CTableIndex:
+        """Compact this index (merge incremental runs) and return the updated handle."""
+        return self._table.compact_index(self._col_name)
+
+    def __repr__(self) -> str:
+        stale_str = " (stale)" if self.stale else ""
+        name_str = f" name={self.name!r}" if self.name else ""
+        return f"<CTableIndex col={self._col_name!r} kind={self.kind!r}{name_str}{stale_str}>"
+
+
 # RowT is intentionally left unbound so CTable works with both dataclasses
 # and legacy Pydantic models during the transition period.
 RowT = TypeVar("RowT")
@@ -61,7 +163,9 @@ def _arange(start, stop=None, step=1) -> blosc2.NDArray | np.ndarray:
     if stop is None:
         start, stop = 0, start
     n = len(range(start, stop, step))
-    return blosc2.arange(start, stop, step) if n >= _BLOSC2_ARANGE_THRESHOLD else np.arange(start, stop, step)
+    return (
+        blosc2.arange(start, stop, step) if n >= _BLOSC2_ARANGE_THRESHOLD else np.arange(start, stop, step)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +455,7 @@ class Column:
 
         else:
             raise TypeError(f"Invalid index type: {type(key)}")
+        self._table._root_table._mark_all_indexes_stale()
 
     def __iter__(self):
         arr = self._valid_rows
@@ -500,6 +605,7 @@ class Column:
             raise TypeError(f"Cannot coerce data to column dtype {self.dtype!r}: {exc}") from exc
         live_pos = np.where(self._valid_rows[:])[0]
         self._raw_col[live_pos] = arr
+        self._table._root_table._mark_all_indexes_stale()
 
     def unique(self) -> np.ndarray:
         """Return sorted array of unique live values.
@@ -2019,6 +2125,7 @@ class CTable(Generic[RowT]):
         self._valid_rows[: self._n_rows] = True
         self._valid_rows[self._n_rows :] = False
         self._last_pos = self._n_rows  # next write goes right after live rows
+        self._mark_all_indexes_stale()
 
     def _normalise_sort_keys(
         self,
@@ -2130,6 +2237,7 @@ class CTable(Generic[RowT]):
             self._valid_rows[n:] = False
             self._n_rows = n
             self._last_pos = n
+            self._mark_all_indexes_stale()
             return self
         else:
             # Build a new in-memory table with the sorted rows
@@ -2231,6 +2339,564 @@ class CTable(Generic[RowT]):
         """Return a JSON-compatible dict describing this table's schema."""
         return schema_to_dict(self._schema)
 
+    # ------------------------------------------------------------------
+    # Index management
+    # ------------------------------------------------------------------
+
+    @property
+    def _root_table(self) -> CTable:
+        """Return the root (non-view) table; *self* if not a view."""
+        t = self
+        while t.base is not None:
+            t = t.base
+        return t
+
+    def _mark_all_indexes_stale(self) -> None:
+        """Bump value_epoch and mark every catalog entry stale on the root table."""
+        root = self._root_table
+        root._storage.bump_value_epoch()
+        catalog = root._storage.load_index_catalog()
+        if not catalog:
+            return
+        changed = False
+        for desc in catalog.values():
+            if not desc.get("stale", False):
+                desc["stale"] = True
+                changed = True
+        if changed:
+            root._storage.save_index_catalog(catalog)
+
+    def _build_index_persistent(
+        self,
+        col_name: str,
+        col_arr: blosc2.NDArray,
+        *,
+        kind: str,
+        optlevel: int,
+        name_hint: str | None,
+        build: str,
+        tmpdir: str | None,
+        cparams_obj,
+    ) -> dict:
+        """Build index sidecar files for a persistent-table column; return the descriptor."""
+        import tempfile
+        from pathlib import Path
+
+        from blosc2.indexing import (
+            _PERSISTENT_INDEXES,
+            _array_key,
+            _build_bucket_descriptor,
+            _build_bucket_descriptor_ooc,
+            _build_descriptor,
+            _build_full_descriptor,
+            _build_full_descriptor_ooc,
+            _build_levels_descriptor,
+            _build_levels_descriptor_ooc,
+            _build_partial_descriptor,
+            _build_partial_descriptor_ooc,
+            _copy_descriptor,
+            _field_target_descriptor,
+            _resolve_full_index_tmpdir,
+            _resolve_ooc_mode,
+            _target_token,
+            _values_for_target,
+        )
+
+        anchor = self._storage.index_anchor_path(col_name)
+        os.makedirs(os.path.dirname(anchor), exist_ok=True)
+        proxy = _CTableIndexProxy(col_arr, anchor)
+        proxy_key = _array_key(proxy)
+        _PERSISTENT_INDEXES.pop(proxy_key, None)  # clear any stale cache entry
+
+        target = _field_target_descriptor(None)
+        token = _target_token(target)
+        persistent = True
+        dtype = col_arr.dtype
+        use_ooc = _resolve_ooc_mode(kind, build)
+
+        if use_ooc:
+            resolved_tmpdir = _resolve_full_index_tmpdir(proxy, tmpdir)
+            levels = _build_levels_descriptor_ooc(proxy, target, token, kind, dtype, persistent, cparams_obj)
+            bucket = (
+                _build_bucket_descriptor_ooc(
+                    proxy, target, token, kind, dtype, optlevel, persistent, cparams_obj
+                )
+                if kind == "bucket"
+                else None
+            )
+            partial = (
+                _build_partial_descriptor_ooc(
+                    proxy, target, token, kind, dtype, optlevel, persistent, cparams_obj
+                )
+                if kind == "partial"
+                else None
+            )
+            full = None
+            if kind == "full":
+                with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-", dir=resolved_tmpdir) as td:
+                    full = _build_full_descriptor_ooc(
+                        proxy, target, token, kind, dtype, persistent, Path(td), cparams_obj
+                    )
+            descriptor = _build_descriptor(
+                proxy,
+                target,
+                token,
+                kind,
+                optlevel,
+                persistent,
+                True,
+                name_hint,
+                dtype,
+                levels,
+                bucket,
+                partial,
+                full,
+                cparams_obj,
+            )
+        else:
+            values = _values_for_target(proxy, target)
+            levels = _build_levels_descriptor(
+                proxy, target, token, kind, dtype, values, persistent, cparams_obj
+            )
+            bucket = (
+                _build_bucket_descriptor(proxy, token, kind, values, optlevel, persistent, cparams_obj)
+                if kind == "bucket"
+                else None
+            )
+            partial = (
+                _build_partial_descriptor(proxy, token, kind, values, optlevel, persistent, cparams_obj)
+                if kind == "partial"
+                else None
+            )
+            full = (
+                _build_full_descriptor(proxy, token, kind, values, persistent, cparams_obj)
+                if kind == "full"
+                else None
+            )
+            descriptor = _build_descriptor(
+                proxy,
+                target,
+                token,
+                kind,
+                optlevel,
+                persistent,
+                False,
+                name_hint,
+                dtype,
+                levels,
+                bucket,
+                partial,
+                full,
+                cparams_obj,
+            )
+
+        result = _copy_descriptor(descriptor)
+        _PERSISTENT_INDEXES.pop(proxy_key, None)  # evict proxy to avoid memory leak
+        return result
+
+    def create_index(
+        self,
+        col_name: str,
+        *,
+        kind: blosc2.IndexKind = blosc2.IndexKind.BUCKET,
+        optlevel: int = 5,
+        name: str | None = None,
+        build: str = "auto",
+        tmpdir: str | None = None,
+        **kwargs,
+    ) -> CTableIndex:
+        """Build and register an index for a column.
+
+        Parameters
+        ----------
+        col_name:
+            Name of the column to index.
+        kind:
+            Index kind.  One of :attr:`blosc2.IndexKind.BUCKET` (default),
+            :attr:`blosc2.IndexKind.PARTIAL`, or :attr:`blosc2.IndexKind.FULL`.
+        optlevel:
+            Optimisation level (1–9).  Higher values give more precise pruning
+            at the cost of larger index files.  Default is 5.
+        name:
+            Optional human-readable label for the index.
+        build:
+            Build strategy: ``'auto'``, ``'memory'``, or ``'ooc'`` (out-of-core).
+        tmpdir:
+            Temporary directory for out-of-core builds.  ``None`` means use the
+            column's own directory (persistent tables) or the system temporary
+            directory (in-memory tables).
+        **kwargs:
+            Pass ``cparams=<CParams or dict>`` to customise index compression.
+
+        Returns
+        -------
+        CTableIndex
+            A handle on the newly created index.
+
+        Raises
+        ------
+        ValueError
+            If called on a view.
+        KeyError
+            If *col_name* is not a column of this table.
+        """
+        if self.base is not None:
+            raise ValueError("Cannot create an index on a view.")
+        if col_name not in self._cols:
+            raise KeyError(f"No column named {col_name!r}. Available: {self.col_names}")
+        catalog = self._storage.load_index_catalog()
+        if col_name in catalog:
+            raise ValueError(
+                f"Index already exists for column {col_name!r}. "
+                "Call rebuild_index() to replace it or drop_index() first."
+            )
+
+        from blosc2.indexing import (
+            _IN_MEMORY_INDEXES,
+            _copy_descriptor,
+            _normalize_build_mode,
+            _normalize_index_cparams,
+            _normalize_index_kind,
+        )
+        from blosc2.indexing import (
+            create_index as _ix_create_index,
+        )
+
+        cparams_obj = _normalize_index_cparams(kwargs.pop("cparams", None))
+        if kwargs:
+            raise TypeError(f"unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+
+        kind_str = _normalize_index_kind(kind)
+        build_str = _normalize_build_mode(build)
+        col_arr = self._cols[col_name]
+        is_persistent = self._storage.index_anchor_path(col_name) is not None
+
+        if is_persistent:
+            descriptor = self._build_index_persistent(
+                col_name,
+                col_arr,
+                kind=kind_str,
+                optlevel=optlevel,
+                name_hint=name,
+                build=build_str,
+                tmpdir=tmpdir,
+                cparams_obj=cparams_obj,
+            )
+        else:
+            _ix_create_index(
+                col_arr,
+                field=None,
+                kind=blosc2.IndexKind(kind_str),
+                optlevel=optlevel,
+                name=name,
+                build=build,
+                tmpdir=tmpdir,
+                cparams=cparams_obj,
+            )
+            store = _IN_MEMORY_INDEXES[id(col_arr)]
+            descriptor = _copy_descriptor(store["indexes"]["__self__"])
+
+        value_epoch, _ = self._storage.get_epoch_counters()
+        descriptor["built_value_epoch"] = value_epoch
+
+        catalog = self._storage.load_index_catalog()
+        catalog[col_name] = descriptor
+        self._storage.save_index_catalog(catalog)
+        return CTableIndex(self, col_name, descriptor)
+
+    def drop_index(self, col_name: str) -> None:
+        """Remove the index for *col_name* and delete any sidecar files.
+
+        Parameters
+        ----------
+        col_name:
+            Column whose index should be dropped.
+
+        Raises
+        ------
+        ValueError
+            If called on a view.
+        KeyError
+            If no index exists for *col_name*.
+        """
+        if self.base is not None:
+            raise ValueError("Cannot drop an index from a view.")
+
+        from pathlib import Path
+
+        from blosc2.indexing import (
+            _IN_MEMORY_INDEXES,
+            _PERSISTENT_INDEXES,
+            _array_key,
+            _clear_cached_data,
+            _drop_descriptor_sidecars,
+            _is_persistent_array,
+        )
+        from blosc2.indexing import (
+            drop_index as _ix_drop_index,
+        )
+
+        catalog = self._storage.load_index_catalog()
+        if col_name not in catalog:
+            raise KeyError(f"No index found for column {col_name!r}.")
+
+        descriptor = catalog.pop(col_name)
+        token = descriptor["token"]
+        col_arr = self._cols[col_name]
+
+        if _is_persistent_array(col_arr):
+            _drop_descriptor_sidecars(descriptor)
+            _clear_cached_data(col_arr, token)
+            arr_key = _array_key(col_arr)
+            store = _PERSISTENT_INDEXES.get(arr_key)
+            if store is not None:
+                store["indexes"].pop(token, None)
+            anchor = self._storage.index_anchor_path(col_name)
+            proxy_key = ("persistent", str(Path(anchor).resolve()))
+            _PERSISTENT_INDEXES.pop(proxy_key, None)
+            index_dir = os.path.dirname(anchor)
+            with contextlib.suppress(OSError):
+                os.rmdir(index_dir)
+        else:
+            with contextlib.suppress(Exception):
+                _ix_drop_index(col_arr, field=None)
+            store = _IN_MEMORY_INDEXES.get(id(col_arr))
+            if store is not None:
+                store["indexes"].pop(token, None)
+
+        self._storage.save_index_catalog(catalog)
+
+    def rebuild_index(self, col_name: str) -> CTableIndex:
+        """Drop and recreate the index for *col_name* with the same parameters.
+
+        Parameters
+        ----------
+        col_name:
+            Column whose index should be rebuilt.
+
+        Returns
+        -------
+        CTableIndex
+            A handle on the newly built index.
+
+        Raises
+        ------
+        ValueError
+            If called on a view.
+        KeyError
+            If no index exists for *col_name*.
+        """
+        if self.base is not None:
+            raise ValueError("Cannot rebuild an index on a view.")
+
+        catalog = self._storage.load_index_catalog()
+        if col_name not in catalog:
+            raise KeyError(f"No index found for column {col_name!r}.")
+
+        old_desc = catalog[col_name]
+        old_kind = old_desc["kind"]
+        old_optlevel = int(old_desc.get("optlevel", 5))
+        old_name = old_desc.get("name") or None
+        old_ooc = bool(old_desc.get("ooc", False))
+        old_cparams = old_desc.get("cparams")
+        build_str = "ooc" if old_ooc else "memory"
+
+        self.drop_index(col_name)
+        return self.create_index(
+            col_name,
+            kind=old_kind,
+            optlevel=old_optlevel,
+            name=old_name,
+            build=build_str,
+            cparams=old_cparams,
+        )
+
+    def compact_index(self, col_name: str) -> CTableIndex:
+        """Compact the index for *col_name*, merging any incremental append runs.
+
+        Only meaningful for ``kind='full'`` indexes.  For other kinds the call
+        is a no-op and returns the current handle.
+
+        Parameters
+        ----------
+        col_name:
+            Column whose index should be compacted.
+
+        Returns
+        -------
+        CTableIndex
+            A handle reflecting the (possibly updated) index descriptor.
+
+        Raises
+        ------
+        ValueError
+            If called on a view.
+        KeyError
+            If no index exists for *col_name*.
+        """
+        if self.base is not None:
+            raise ValueError("Cannot compact an index on a view.")
+
+        from blosc2.indexing import (
+            _IN_MEMORY_INDEXES,
+            _PERSISTENT_INDEXES,
+            _array_key,
+            _copy_descriptor,
+            _default_index_store,
+            _is_persistent_array,
+        )
+        from blosc2.indexing import (
+            compact_index as _ix_compact_index,
+        )
+
+        catalog = self._storage.load_index_catalog()
+        if col_name not in catalog:
+            raise KeyError(f"No index found for column {col_name!r}.")
+
+        col_arr = self._cols[col_name]
+        descriptor = catalog[col_name]
+
+        if _is_persistent_array(col_arr):
+            anchor = self._storage.index_anchor_path(col_name)
+            proxy = _CTableIndexProxy(col_arr, anchor)
+            proxy_key = _array_key(proxy)
+            store = _default_index_store()
+            store["indexes"][descriptor["token"]] = descriptor
+            _PERSISTENT_INDEXES[proxy_key] = store
+            try:
+                _ix_compact_index(proxy)
+                updated_store = _PERSISTENT_INDEXES.get(proxy_key) or store
+                updated_desc = _copy_descriptor(updated_store["indexes"][descriptor["token"]])
+            finally:
+                _PERSISTENT_INDEXES.pop(proxy_key, None)
+            updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
+            catalog[col_name] = updated_desc
+            self._storage.save_index_catalog(catalog)
+            return CTableIndex(self, col_name, updated_desc)
+        else:
+            _ix_compact_index(col_arr)
+            store = _IN_MEMORY_INDEXES.get(id(col_arr))
+            if store:
+                token = descriptor["token"]
+                updated_desc = _copy_descriptor(store["indexes"].get(token, descriptor))
+                updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
+                catalog[col_name] = updated_desc
+                self._storage.save_index_catalog(catalog)
+                return CTableIndex(self, col_name, updated_desc)
+            return CTableIndex(self, col_name, descriptor)
+
+    def index(self, col_name: str) -> CTableIndex:
+        """Return the index handle for *col_name*.
+
+        Parameters
+        ----------
+        col_name:
+            Column name to look up.
+
+        Returns
+        -------
+        CTableIndex
+
+        Raises
+        ------
+        KeyError
+            If no index exists for *col_name*.
+        """
+        catalog = self._root_table._storage.load_index_catalog()
+        if col_name not in catalog:
+            raise KeyError(f"No index found for column {col_name!r}.")
+        return CTableIndex(self, col_name, catalog[col_name])
+
+    @property
+    def indexes(self) -> list[CTableIndex]:
+        """Return a list of :class:`CTableIndex` handles for all active indexes."""
+        catalog = self._root_table._storage.load_index_catalog()
+        return [CTableIndex(self, col_name, desc) for col_name, desc in catalog.items()]
+
+    @staticmethod
+    def _find_indexed_column(root_cols, catalog, operands):
+        """Return ``(col_name, col_arr)`` for the first operand NDArray that maps
+        to a root-table column with a live (non-stale) catalog entry, or ``(None, None)``."""
+        for operand in operands.values():
+            if not isinstance(operand, blosc2.NDArray):
+                continue
+            for col_name, col_arr in root_cols.items():
+                if col_arr is operand and col_name in catalog and not catalog[col_name].get("stale", False):
+                    return col_name, col_arr
+        return None, None
+
+    def _try_index_where(self, expr_result: blosc2.LazyExpr) -> np.ndarray | None:
+        """Attempt to resolve *expr_result* via a column index.
+
+        Returns a 1-D int64 array of physical row positions that satisfy the
+        predicate, or ``None`` if no usable index was found (caller falls back
+        to a full scan).
+        """
+        from blosc2.indexing import (
+            _IN_MEMORY_INDEXES,
+            _PERSISTENT_INDEXES,
+            _array_key,
+            _default_index_store,
+            _is_persistent_array,
+            evaluate_bucket_query,
+            evaluate_segment_query,
+            plan_query,
+        )
+
+        root = self._root_table
+        catalog = root._storage.load_index_catalog()
+        if not catalog:
+            return None
+
+        expression = expr_result.expression
+        operands = dict(expr_result.operands)
+
+        # Find the first operand NDArray that maps to a root-table column with a live index.
+        primary_col_name, primary_col_arr = self._find_indexed_column(root._cols, catalog, operands)
+
+        if primary_col_arr is None:
+            return None
+
+        # Inject the catalog descriptor into the appropriate index store so that
+        # plan_query can find it via _load_store / _descriptor_for_target.
+        descriptor = catalog[primary_col_name]
+        arr_key = _array_key(primary_col_arr)
+        if _is_persistent_array(primary_col_arr):
+            store = _PERSISTENT_INDEXES.get(arr_key) or _default_index_store()
+            store["indexes"][descriptor["token"]] = descriptor
+            _PERSISTENT_INDEXES[arr_key] = store
+        else:
+            store = _IN_MEMORY_INDEXES.get(id(primary_col_arr)) or _default_index_store()
+            store["indexes"][descriptor["token"]] = descriptor
+            _IN_MEMORY_INDEXES[id(primary_col_arr)] = store
+
+        where_dict = {"_where_x": primary_col_arr}
+        merged_operands = {**operands, "_where_x": primary_col_arr}
+
+        try:
+            plan = plan_query(expression, merged_operands, where_dict)
+            if not plan.usable:
+                return None
+
+            if plan.exact_positions is not None:
+                return np.asarray(plan.exact_positions, dtype=np.int64)
+
+            if plan.bucket_masks is not None:
+                _, positions = evaluate_bucket_query(
+                    expression, merged_operands, {}, where_dict, plan, return_positions=True
+                )
+                return np.asarray(positions, dtype=np.int64)
+
+            if plan.candidate_units is not None and plan.segment_len is not None:
+                _, positions = evaluate_segment_query(
+                    expression, merged_operands, {}, where_dict, plan, return_positions=True
+                )
+                return np.asarray(positions, dtype=np.int64)
+
+            return None
+        except Exception:
+            return None
+
     def info(self) -> None:
         """Print a concise summary of the CTable."""
         ratio = (self.nbytes / self.cbytes) if self.cbytes > 0 else 0.0
@@ -2306,6 +2972,7 @@ class CTable(Generic[RowT]):
         self._valid_rows[pos] = True
         self._last_pos = pos + 1
         self._n_rows += 1
+        self._mark_all_indexes_stale()
 
     def delete(self, ind: int | slice | str | Iterable) -> None:
         if self._read_only:
@@ -2327,6 +2994,7 @@ class CTable(Generic[RowT]):
         self._valid_rows[:] = valid_rows_np  # write back in-place; no new array created
         self._n_rows -= n_deleted
         self._last_pos = None  # recalculate on next write
+        self._storage.bump_visibility_epoch()
 
     def extend(self, data: list | CTable | Any, *, validate: bool | None = None) -> None:
         if self._read_only:
@@ -2388,6 +3056,7 @@ class CTable(Generic[RowT]):
         self._valid_rows[start_pos:end_pos] = True
         self._last_pos = end_pos
         self._n_rows += new_nrows
+        self._mark_all_indexes_stale()
 
     # ------------------------------------------------------------------
     # Filtering
@@ -2400,6 +3069,17 @@ class CTable(Generic[RowT]):
             and (getattr(expr_result, "dtype", None) == np.bool_)
         ):
             raise TypeError(f"Expected boolean blosc2.NDArray or LazyExpr, got {type(expr_result).__name__}")
+
+        # Attempt index-accelerated filtering before falling back to a full scan.
+        if isinstance(expr_result, blosc2.LazyExpr):
+            positions = self._try_index_where(expr_result)
+            if positions is not None:
+                total = len(self._valid_rows)
+                mask = np.zeros(total, dtype=bool)
+                valid_pos = positions[(positions >= 0) & (positions < total)]
+                mask[valid_pos] = True
+                mask &= self._valid_rows[:]
+                return self.view(blosc2.asarray(mask))
 
         filter = expr_result.compute() if isinstance(expr_result, blosc2.LazyExpr) else expr_result
 
