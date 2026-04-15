@@ -10,11 +10,11 @@ from __future__ import annotations
 import builtins
 import inspect
 import math
-import tempfile
 from abc import abstractmethod
 from collections import OrderedDict, namedtuple
+from collections.abc import Mapping
 from functools import reduce
-from itertools import product
+from itertools import islice, product
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
 
 from numpy.exceptions import ComplexWarning
@@ -141,6 +141,41 @@ class Array(Protocol):
     def __getitem__(self, key: Any) -> Any:
         """Get items from the array."""
         ...
+
+
+class FieldsAccessor(Mapping):
+    """Read-only mapping of structured field views."""
+
+    def __init__(self, field_views: dict[str, Any]):
+        self._field_views = field_views
+
+    def __getitem__(self, key: str) -> Any:
+        return self._field_views[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._field_views)
+
+    def __len__(self) -> int:
+        return len(self._field_views)
+
+    def __setitem__(self, key: str, value: object) -> None:
+        raise TypeError(f'assign through the field view, e.g. array.fields["{key}"][:] = values')
+
+    def copy(self) -> dict[str, Any]:
+        return dict(self._field_views)
+
+    def __or__(self, other: object) -> dict[str, Any]:
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        return self.copy() | dict(other)
+
+    def __ror__(self, other: object) -> dict[str, Any]:
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        return dict(other) | self.copy()
+
+    def __repr__(self) -> str:
+        return repr(self._field_views)
 
 
 def is_documented_by(original):
@@ -3695,10 +3730,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         base = kwargs.pop("_base", None)
         super().__init__(kwargs["_array"], base=base)
         # Accessor to fields
-        self._fields = {}
+        field_views = {}
         if self.dtype.fields:
             for field in self.dtype.fields:
-                self._fields[field] = NDField(self, field)
+                field_views[field] = NDField(self, field)
+        self._fields = FieldsAccessor(field_views)
 
     @property
     def cparams(self) -> blosc2.CParams:
@@ -3747,14 +3783,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return self.schunk.vlmeta
 
     @property
-    def fields(self) -> dict:
+    def fields(self) -> Mapping[str, NDField]:
         """
-        Dictionary with the fields of the structured array.
+        Read-only mapping with the fields of the structured array.
 
         Returns
         -------
-        fields: dict
-            A dictionary with the fields of the structured array.
+        fields: Mapping
+            A read-only mapping with the fields of the structured array.
 
         See Also
         --------
@@ -3770,6 +3806,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> sa = blosc2.zeros(shape, dtype=dtype)
         >>> # Check that fields are equal
         >>> assert sa.fields['a'] == sa.fields['b']
+        >>> # Assign through the field view
+        >>> sa.fields['a'][:] = 1
         """
         return self._fields
 
@@ -4409,14 +4447,22 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     _slice = ndindex.ndindex(()).expand(self.shape)  # just get whole array
                 else:  # do nothing
                     return self
-            return self._get_set_findex_default(_slice, value=value)
+            result = self._get_set_findex_default(_slice, value=value)
+            from . import indexing
+
+            indexing.mark_indexes_stale(self)
+            return result
 
         start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
 
         if step != (1,) * self.ndim:  # handle non-unit or negative steps
             if np.any(none_mask):
                 raise ValueError("Cannot mix non-unit steps and None indexing for __setitem__.")
-            return self._get_set_nonunit_steps((start, stop, step, mask), value=value)
+            result = self._get_set_nonunit_steps((start, stop, step, mask), value=value)
+            from . import indexing
+
+            indexing.mark_indexes_stale(self)
+            return result
 
         shape = [sp - st for sp, st in zip(stop, start, strict=False)]
         if isinstance(value, blosc2.Operand):  # handles SimpleProxy, NDArray, LazyExpr etc.
@@ -4431,7 +4477,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 # when using complex functions (e.g. conj) with real arrays
                 value = value.real.astype(self.dtype)
 
-        return super().set_slice((start, stop), value)
+        result = super().set_slice((start, stop), value)
+        from . import indexing
+
+        indexing.mark_indexes_stale(self)
+        return result
 
     def __iter__(self):
         """Iterate over the (outer) elements of the array.
@@ -4705,6 +4755,181 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         super().copy(self.dtype, cparams=asdict(self.cparams), **kwargs)
 
+    def create_index(
+        self,
+        field: str | None = None,
+        *,
+        expression: str | None = None,
+        operands: dict | None = None,
+        kind: blosc2.IndexKind = blosc2.IndexKind.BUCKET,
+        optlevel: int = 5,
+        persistent: bool | None = None,
+        build: str = "auto",
+        name: str | None = None,
+        tmpdir: str | None = None,
+        **kwargs: Any,
+    ) -> dict:
+        """Create an index for a 1-D array, structured field, or expression.
+
+        Parameters
+        ----------
+        field : str or None, optional
+            Field to index for structured dtypes. If a positional string does
+            not match a field name, it is treated as an expression.
+        expression : str or None, optional
+            Deterministic scalar expression to materialize and index.
+            Expressions are matched by normalized identity.
+        operands : dict or None, optional
+            Operand mapping used for expression normalization and evaluation.
+            When omitted, structured arrays default to ``self.fields`` and
+            plain arrays use ``{"value": self}``.
+        kind : IndexKind, optional
+            Index tier to build. Use ``SUMMARY`` for the lightest pruning,
+            ``BUCKET`` for bucketed chunk-local pruning, ``PARTIAL`` for exact
+            filtering with local ordering, and ``FULL`` when ordered access via
+            ``sort(order=...)``, ``argsort(order=...)``, or
+            ``iter_sorted(...)`` should reuse the index directly.
+        optlevel : int, optional
+            Optimization level for index payload construction.
+        persistent : bool or None, optional
+            Whether index sidecars should be persisted. If ``None``, this
+            follows whether the base array is persistent.
+        build : {"auto", "memory", "ooc"}, optional
+            Builder policy. ``"memory"`` forces in-memory construction.
+            ``"ooc"`` forces out-of-core construction for supported kinds.
+            ``"auto"`` uses the default out-of-core-capable builders.
+        name : str or None, optional
+            Optional logical label stored in the descriptor. Index identity is
+            still driven by the target, so creating another index on the same
+            target replaces the previous one.
+        tmpdir : str or None, optional
+            Directory to use for temporary files during out-of-core
+            ``kind=FULL`` builds. If ``None``, persistent arrays use the same
+            directory as the array being indexed so temporaries stay on the
+            same filesystem. In-memory arrays fall back to the system
+            temporary directory.
+        kwargs : dict, optional
+            Keyword arguments forwarded to the index builder. At the moment the
+            supported option is ``cparams``. Pass ``cparams`` to control the
+            compression settings used for index sidecars, including
+            ``codec``, ``clevel``, and ``nthreads``. If provided,
+            ``cparams["nthreads"]`` becomes the default build-thread count for
+            intra-chunk sorting unless ``BLOSC2_INDEX_BUILD_THREADS`` overrides
+            it.
+
+        Notes
+        -----
+        The current indexing model supports one active index target per field
+        or normalized expression. Append operations keep compatible indexes
+        current, while general mutation and resize operations mark indexes as
+        stale until rebuild.
+
+        Chunk-local index creation uses parallel intra-chunk sorting by default.
+        Set ``BLOSC2_INDEX_BUILD_THREADS=1`` to disable parallel sorting. If
+        ``cparams`` is provided in ``kwargs``, its ``nthreads`` value becomes
+        the default build-thread count unless
+        ``BLOSC2_INDEX_BUILD_THREADS`` overrides it.
+        """
+        from . import indexing
+
+        return indexing.create_index(
+            self,
+            field=field,
+            expression=expression,
+            operands=operands,
+            kind=kind,
+            optlevel=optlevel,
+            persistent=persistent,
+            build=build,
+            name=name,
+            tmpdir=tmpdir,
+            **kwargs,
+        )
+
+    def drop_index(self, field: str | None = None, name: str | None = None) -> None:
+        """Drop an index by field or optional descriptor label."""
+        from . import indexing
+
+        indexing.drop_index(self, field=field, name=name)
+
+    def rebuild_index(self, field: str | None = None, name: str | None = None) -> dict:
+        """Rebuild an index by field or optional descriptor label."""
+        from . import indexing
+
+        return indexing.rebuild_index(self, field=field, name=name)
+
+    def compact_index(self, field: str | None = None, name: str | None = None) -> dict:
+        """Compact a ``full`` index by merging its compact base and append runs.
+
+        Parameters
+        ----------
+        field : str or None, optional
+            Structured field identifying the target ``full`` index. Use
+            ``None`` to compact the value index for a plain 1-D array.
+        name : str or None, optional
+            Optional logical index label. When omitted and the array has a
+            single index, that index is selected automatically.
+
+        Returns
+        -------
+        out : dict
+            The updated index descriptor after compaction.
+
+        Notes
+        -----
+        This is currently implemented only for ``kind=IndexKind.FULL`` indexes. It is
+        a structural maintenance operation: the compact base sidecars and any
+        pending append runs are merged into one compact full value sidecar
+        and one compact full position sidecar. For persistent indexes, the
+        compact lookup metadata is rebuilt as part of the process and
+        ``full["runs"]`` becomes empty afterwards.
+
+        Compaction does not change query results. It is useful after many
+        append operations, where full-index maintenance stays cheap on append by
+        recording ordered runs but later queries may still have extra work until
+        the index is consolidated explicitly.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
+        >>> data = np.array([(3, 9), (1, 8), (2, 7), (1, 6)], dtype=dtype)
+        >>> arr = blosc2.asarray(data, chunks=(2,), blocks=(2,))
+        >>> _ = arr.create_index(field="id", kind=blosc2.IndexKind.FULL)
+        >>> _ = arr.append(np.array([(0, 100), (3, 101)], dtype=dtype))
+        >>> len(arr.indexes[0]["full"]["runs"])
+        1
+        >>> compacted = arr.compact_index("id")
+        >>> compacted["full"]["runs"]
+        []
+        """
+        from . import indexing
+
+        return indexing.compact_index(self, field=field, name=name)
+
+    def index(self, field: str | None = None, name: str | None = None) -> blosc2.indexing.Index:
+        """Return a live view over one index.
+
+        Parameters
+        ----------
+        field : str or None, optional
+            Structured field identifying the target index. Use ``None`` for the
+            value index on a plain 1-D array.
+        name : str or None, optional
+            Optional logical index label. When omitted and the array has a
+            single index, that index is selected automatically.
+        """
+        from . import indexing
+
+        return indexing.get_index(self, field=field, name=name)
+
+    @property
+    def indexes(self) -> list[blosc2.indexing.Index]:
+        from . import indexing
+
+        return indexing.get_indexes(self)
+
     def resize(self, newshape: tuple | list) -> None:
         """Change the shape of the array by growing or shrinking one or more dimensions.
 
@@ -4745,6 +4970,57 @@ class NDArray(blosc2_ext.NDArray, Operand):
             )
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         super().resize(newshape)
+        from . import indexing
+
+        indexing.mark_indexes_stale(self)
+
+    def append(self, values: object) -> int:
+        """Append values to a 1-D array and keep indexes current when possible.
+
+        Parameters
+        ----------
+        values : object
+            Values to append. Scalars append one element; array-like inputs must be
+            compatible with ``self.dtype`` and flatten to one dimension.
+
+        Returns
+        -------
+        out : int
+            The new length of the array.
+
+        Notes
+        -----
+        Appending to indexed arrays updates the index sidecars as part of the
+        append path. For ``full`` indexes this extends the ordered payload
+        incrementally; for ``bucket`` and ``partial`` only the affected tail
+        segments and block payloads are recomputed. General slice updates and
+        resizes outside ``append()`` still mark indexes as stale.
+        """
+        if self.ndim != 1:
+            raise ValueError("append() is only supported for 1-D arrays")
+        if 0 in self.chunks or 0 in self.blocks:
+            raise ValueError("Cannot append to arrays with zero-sized chunks or blocks")
+
+        blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
+
+        appended = np.asarray(values, dtype=self.dtype)
+        if appended.ndim == 0:
+            appended = appended.reshape(1)
+        elif appended.ndim != 1:
+            appended = appended.reshape(-1)
+        if appended.dtype != self.dtype:
+            appended = appended.astype(self.dtype, copy=False)
+        if len(appended) == 0:
+            return int(self.shape[0])
+
+        old_size = int(self.shape[0])
+        super().resize((old_size + len(appended),))
+        super().set_slice(([old_size], [old_size + len(appended)]), appended)
+
+        from . import indexing
+
+        indexing.append_to_indexes(self, old_size, appended)
+        return int(self.shape[0])
 
     def slice(self, key: int | slice | Sequence[slice], **kwargs: Any) -> NDArray:
         """Get a (multidimensional) slice as a new :ref:`NDArray`.
@@ -4861,21 +5137,55 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return blosc2.squeeze(self, axis=axis)
 
-    def indices(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
+    def argsort(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
         """
-        Return the indices of a sorted array following the specified order.
+        Return the permutation that sorts the array.
 
-        This is only valid for 1-dim structured arrays.
+        This follows :func:`numpy.argsort` semantics more closely than the
+        older indexing-specific ``indices()`` helper: plain 1-D arrays are
+        supported, and ``order=None`` means "use the array's natural order"
+        rather than "leave unsorted".
 
-        See full documentation in :func:`indices`.
+        See full documentation in :func:`argsort`.
         """
-        return indices(self, order, **kwargs)
+        return argsort(self, order, **kwargs)
+
+    def iter_sorted(
+        self,
+        order: str | list[str] | None = None,
+        *,
+        start: int | None = None,
+        stop: int | None = None,
+        step: int | None = None,
+        batch_size: int | None = None,
+    ) -> Iterator[np.generic | np.void]:
+        """Iterate array values following a matching sorted index order.
+
+        Parameters
+        ----------
+        order : str, list of str, optional
+            Sort order to iterate. The first field must have an associated
+            ``full`` index. Traversal is ascending and stable; if only the
+            primary key is indexed, secondary keys refine ties after the primary
+            indexed order.
+        start, stop, step : int or None, optional
+            Optional slice applied to the ordered sequence before iteration.
+        batch_size : int or None, optional
+            Internal prefetch size used when reading ordered rows. Larger values
+            reduce read overhead at the cost of more temporary memory.
+        """
+        return iter_sorted(self, order, start=start, stop=stop, step=step, batch_size=batch_size)
 
     def sort(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
         """
         Return a sorted array following the specified order, or the order of the fields.
 
         This is only valid for 1-dim structured arrays.
+
+        When the primary order key has a matching ``full`` index, the ordered
+        rows are gathered directly from that index. Secondary keys refine ties
+        after the primary indexed order and the traversal is ascending and
+        stable.
 
         See full documentation in :func:`sort`.
         """
@@ -5478,7 +5788,7 @@ def arange(
         )
     dtype = _check_dtype(dtype)
 
-    if is_inside_new_expr() or NUM < 0:
+    if is_inside_new_expr() or NUM == 0:
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
@@ -5660,20 +5970,37 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
 def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
     """Create a new array from an iterable object.
 
+    The iterable is consumed exactly once and in a defined order.  Values are
+    never re-read, so plain generators and other one-pass sources are
+    fully supported.
+
     Parameters
     ----------
     iterable: iterable
-        An iterable object providing data for the array.
+        An iterable object providing data for the array.  It must yield at
+        least ``math.prod(shape)`` values; any surplus values are ignored.
+        If the iterable is exhausted before the array is full, a
+        ``ValueError`` is raised.
+
+        As a special fast path, if *iterable* is a :class:`numpy.ndarray` the
+        element-by-element Python iteration is skipped entirely: the array is
+        cast to *dtype* and written directly to the destination.
     shape: int, tuple or list
         The shape of the final array.
     dtype: np.dtype or list str
         The data type of the array elements in NumPy format.
     c_order: bool
-        Whether to store the array in C order (row-major) or insertion order.
-        Insertion order means that iterable values will be stored in the array
-        following the order of chunks in the array; this is more memory
-        efficient, as it does not require an intermediate copy of the array.
-        Default is C order.
+        Controls the order in which values are consumed from *iterable*.
+
+        * ``True`` (default) – values are consumed in standard C / row-major
+          order, matching ``numpy.fromiter(iterable, dtype).reshape(shape)``.
+          A temporary in-memory buffer equal to the full array size is used.
+        * ``False`` – values are consumed in *chunk-insertion order*: the
+          first ``chunk_size`` values fill the first chunk, the next
+          ``chunk_size`` values fill the second chunk, and so on.  A page
+          buffer (default 1 M elements) amortises the Python iterator
+          call overhead across chunks, so the number of :func:`numpy.fromiter`
+          calls is O(total / page) rather than O(n_chunks).
 
     Other Parameters
     ----------------
@@ -5694,32 +6021,88 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
     >>> print(array[:])
     [0 1 2 3 4 5 6 7 8 9]
     """
-
-    def iter_fill(inputs, output, offset):
-        nout = math.prod(output.shape)
-        (iterable,) = inputs
-        output[:] = np.fromiter(iterable, dtype=output.dtype, count=nout).reshape(output.shape)
-
+    # --- Optimisation C: numpy fast path ---
+    # If the caller already holds the data in a numpy array we can bypass all
+    # Python-level element iteration and write straight to the destination.
     dtype = _check_dtype(dtype)
+    shape = tuple(shape) if not isinstance(shape, tuple) else shape
+
+    if isinstance(iterable, np.ndarray):
+        dst = empty(shape, dtype=dtype, **kwargs)
+        if math.prod(shape) > 0:
+            dst[:] = np.asarray(iterable, dtype=dtype).reshape(shape)
+        return dst
 
     if is_inside_new_expr():
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype)
 
-    lshape = (math.prod(shape),)
-    inputs = (iterable,)
-    lazyarr = blosc2.lazyudf(iter_fill, inputs, dtype=dtype, shape=lshape)
+    # Ensure we hold a true one-shot iterator so that re-iterable objects
+    # (e.g. range, list) are consumed sequentially across all chunks.
+    iterable = iter(iterable)
 
-    if len(shape) == 1:
-        # C order is guaranteed, and no reshape is needed
-        return lazyarr.compute(**kwargs)
+    total_size = math.prod(shape)
+    dst = empty(shape, dtype=dtype, **kwargs)
 
-    # TODO: in principle, the next should work, but tests still fail:
-    # return reshape(lazyarr, shape, c_order=c_order, **kwargs)
-    # Creating a temporary file is a workaround for the issue
-    with tempfile.NamedTemporaryFile(suffix=".b2nd", delete=True) as tmp_file:
-        larr = lazyarr.compute(urlpath=tmp_file.name, mode="w")  # intermediate array
-        return reshape(larr, shape, c_order=c_order, **kwargs)
+    if total_size == 0:
+        return dst
+
+    if c_order or len(shape) == 1:
+        # --- Phase 3B: chunk-row buffering ---
+        # Process one "chunk row" at a time (all chunks sharing the same
+        # first-dimension chunk coordinate).  This bounds peak memory to
+        # O(chunks[0] * prod(shape[1:])) instead of O(total_size), while
+        # still using only one np.fromiter call per chunk row.
+        #
+        # For a (5 000, 5 000) array with chunks=(500, 500) this is
+        # 10 × 20 MB reads instead of one 200 MB allocation.
+        row_h = dst.chunks[0]  # elements in dim-0 per chunk row
+        tail_nelems = math.prod(shape[1:])  # elements per row in the remaining dims
+
+        for row_start in range(0, shape[0], row_h):
+            row_end = builtins.min(row_start + row_h, shape[0])
+            n = (row_end - row_start) * tail_nelems
+            buf = np.fromiter(islice(iterable, n), dtype=dtype, count=n)
+            dst[row_start:row_end] = buf.reshape((row_end - row_start,) + shape[1:])
+    else:
+        # --- Optimisation A: page-buffered chunk-insertion order ---
+        # Instead of calling np.fromiter once per chunk (O(n_chunks) calls),
+        # we pre-read a page of _PAGE_NELEMS elements at a time.  This reduces
+        # call overhead from O(n_chunks) to O(total / _PAGE_NELEMS), which is
+        # decisive when chunks are small (e.g. (10, 10) → 10 000 chunks vs
+        # ~1 page for a 1 000 × 1 000 array).
+        _PAGE_BYTES = 8 << 20  # 8 MB target page size
+        _PAGE_NELEMS = builtins.max(1, _PAGE_BYTES // dtype.itemsize)
+
+        page = np.empty(0, dtype=dtype)
+        page_start = 0  # index of the first unread element in `page`
+
+        for chunk_info in dst.iterchunks_info():
+            dst_slice = tuple(
+                slice(c * s, builtins.min((c + 1) * s, sh))
+                for c, s, sh in zip(chunk_info.coords, dst.chunks, dst.shape, strict=False)
+            )
+            chunk_shape = tuple(s.stop - s.start for s in dst_slice)
+            count = math.prod(chunk_shape)
+
+            available = len(page) - page_start
+            if available < count:
+                # Compact the leftover tail, then read a new page.
+                leftover = page[page_start:] if available > 0 else None
+                to_read = builtins.max(_PAGE_NELEMS, count)
+                new_data = np.fromiter(islice(iterable, to_read), dtype=dtype)
+                if available + len(new_data) < count:
+                    raise ValueError(
+                        f"iterator exhausted: chunk at coords {chunk_info.coords} "
+                        f"requires {count} elements but only {available + len(new_data)} remain"
+                    )
+                page = np.concatenate([leftover, new_data]) if leftover is not None else new_data
+                page_start = 0
+
+            dst[dst_slice] = page[page_start : page_start + count].reshape(chunk_shape)
+            page_start += count
+
+    return dst
 
 
 def frombuffer(
@@ -5958,6 +6341,32 @@ def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     array.save(urlpath, contiguous, **kwargs)
 
 
+def _ndarray_asarray_requires_copy(
+    array: NDArray, dtype: np.dtype, chunks, blocks, user_kwargs: dict[str, Any]
+) -> bool:
+    if np.dtype(dtype) != np.dtype(array.dtype):
+        return True
+    if "chunks" in user_kwargs and tuple(chunks) != tuple(array.chunks):
+        return True
+    if "blocks" in user_kwargs and tuple(blocks) != tuple(array.blocks):
+        return True
+
+    copy_keys = {
+        "cparams",
+        "dparams",
+        "meta",
+        "urlpath",
+        "contiguous",
+        "mode",
+        "mmap_mode",
+        "initial_mapping_size",
+        "storage",
+        "out",
+        "_chunksize_reduc_factor",
+    }
+    return builtins.any(key in user_kwargs for key in copy_keys)
+
+
 def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: Any) -> NDArray:
     """Convert the `array` to an `NDArray`.
 
@@ -5969,7 +6378,8 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     copy: bool | None, optional
         Whether to copy the input. If True, the function copies.
         If False, raise a ValueError if copy is necessary. If None and
-        input is NDArray, avoid copy by returning lazyexpr.
+        input is NDArray, return the original array when no dtype,
+        partition, or storage-related changes are requested.
         Default: None.
 
     kwargs: dict, optional
@@ -5977,8 +6387,9 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
 
     Returns
     -------
-    out: :ref:`NDArray` or :ref:`LazyExpr`
-        An new NDArray or LazyExpr made of :paramref:`array`.
+    out: :ref:`NDArray`
+        A new :ref:`NDArray` made of :paramref:`array`, or the original
+        array when a copy is not required.
 
     Notes
     -----
@@ -5996,7 +6407,11 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     >>> a = np.arange(0, np.prod(shape), dtype=np.int64).reshape(shape)
     >>> # Create a NDArray from a NumPy array
     >>> nda = blosc2.asarray(a)
+    >>> # NDArray inputs are returned as-is unless a copy is requested
+    >>> blosc2.asarray(nda) is nda
+    True
     """
+    user_kwargs = kwargs.copy()
     # Convert scalars to numpy array
     casting = kwargs.pop("casting", "unsafe")
     if casting != "unsafe":
@@ -6004,7 +6419,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     if not hasattr(array, "shape"):
         array = np.asarray(array)  # defaults if dtype=None
     dtype_ = blosc2.proxy.convert_dtype(array.dtype)
-    dtype = kwargs.pop("dtype", dtype_)  # check if dtype provided
+    dtype = blosc2.proxy.convert_dtype(kwargs.pop("dtype", dtype_))  # check if dtype provided
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
@@ -6016,9 +6431,17 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     if blocks is None and hasattr(array, "blocks") and isinstance(array.blocks, tuple | list):
         blocks = array.blocks
 
-    copy = True if copy is None and not isinstance(array, NDArray) else copy
+    requires_copy = isinstance(array, NDArray) and _ndarray_asarray_requires_copy(
+        array, dtype, chunks, blocks, user_kwargs
+    )
+    if copy is None:
+        copy = not isinstance(array, NDArray) or requires_copy
+    elif copy is False and requires_copy:
+        raise ValueError(
+            "Cannot satisfy dtype, partition, or storage changes with copy=False for NDArray input."
+        )
     if copy:
-        chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, dtype_, **kwargs)
+        chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, dtype, **kwargs)
         # Fast path for small arrays. This is not too expensive in terms of memory consumption.
         shape = array.shape
         small_size = 2**24  # 16 MB
@@ -6033,7 +6456,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
             return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
         # Create the empty array
-        ndarr = empty(shape, dtype_, chunks=chunks, blocks=blocks, **kwargs)
+        ndarr = empty(shape, dtype, chunks=chunks, blocks=blocks, **kwargs)
         behaved = are_partitions_behaved(shape, chunks, blocks)
 
         # Get the coordinates of the chunks
@@ -6204,39 +6627,58 @@ def get_slice_nchunks(
         return blosc2_ext.schunk_get_slice_nchunks(schunk, key)
 
 
-def indices(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
+def argsort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
     """
-    Return the indices of a sorted array following the specified order.
+    Return the indices that would sort the array.
 
-    This is only valid for 1-dim structured arrays.
+    This mirrors :func:`numpy.argsort` for 1-D arrays. Plain arrays sort by
+    their values. Structured arrays sort by ``order`` when provided, or by
+    their dtype field order when ``order=None``. Expression orders such as
+    ``"abs(x)"`` are also supported when a matching ``full`` expression index
+    exists.
 
     Parameters
     ----------
     array: :ref:`blosc2.Array`
-        The (structured) array to be sorted.
+        The 1-D array to be ordered.
     order: str, list of str, optional
-        Specifies which fields to compare first, second, etc. A single
-        field can be specified as a string. Not all fields need to be
-        specified, only the ones by which the array is to be sorted.
-        If None, the array is not sorted.
+        Primary and optional secondary order keys for structured arrays. When
+        omitted, NumPy's default record order is used for structured dtypes and
+        the array values themselves are used for plain dtypes.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
     out: :ref:`NDArray`
-        The sorted array.
-    """
-    if not order:
-        # Shortcut for this relatively rare case
-        return arange(array.shape[0], dtype=np.int64)
+        The ordered logical positions as ``int64``.
 
-    # Create a lazy array to access the sort machinery there
-    # This is a bit of a hack, but it is the simplest way to do it
-    # (the sorting mechanism in LazyExpr should be improved to avoid this)
-    lbool = blosc2.lazyexpr(blosc2.ones(array.shape, dtype=np.bool_))
-    larr = array[lbool]
-    return larr.indices(order).compute(**kwargs)
+    Notes
+    -----
+    When the primary order key has a matching ``full`` field or expression
+    index, the permutation is returned directly from that index in ascending
+    stable order. Secondary keys refine ties after the primary indexed order.
+    Without a matching ``full`` index, :func:`argsort` falls back to
+    materializing the input values and delegating ordering to
+    :func:`numpy.argsort`.
+
+    The result is always a new array materialization. For persistent inputs,
+    the returned permutation is in memory by default; pass storage kwargs such
+    as ``urlpath`` (and typically ``mode="w"``) if the permutation should also
+    be persisted on disk.
+    """
+    if isinstance(array, blosc2.NDArray):
+        from . import indexing
+
+        ordered = indexing.ordered_indices(array, order=order)
+        if ordered is not None:
+            return blosc2.asarray(ordered, **kwargs)
+        if indexing.is_expression_order(array, order):
+            raise ValueError("expression order requires a matching full expression index")
+
+    values = array[:]
+    positions = np.argsort(values, order=order, kind="stable")
+    return blosc2.asarray(positions.astype(np.int64, copy=False), **kwargs)
 
 
 def sort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
@@ -6251,8 +6693,10 @@ def sort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: An
         The (structured) array to be sorted.
     order: str, list of str, optional
         Specifies which fields to compare first, second, etc. A single
-        field can be specified as a string. Not all fields need to be
-        specified, only the ones by which the array is to be sorted.
+        field can be specified as a string. The primary order key may also be
+        an indexed expression such as ``"abs(x)"`` when a matching ``full``
+        expression index exists. Not all fields need to be specified, only the
+        ones by which the array is to be sorted.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -6260,9 +6704,31 @@ def sort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: An
     -------
     out: :ref:`NDArray`
         The sorted array.
+
+    Notes
+    -----
+    If the primary order key has a matching ``full`` field or expression index,
+    rows are gathered directly in ascending stable index order. Secondary keys
+    refine ties after the primary indexed order. Field-based orders without a
+    matching full index fall back to a scan-plus-sort path.
+
+    Sorting never mutates the input array in place. The result is always a new
+    array materialization. For persistent inputs, the sorted rows are returned
+    as a new in-memory :ref:`NDArray` by default; pass storage kwargs such as
+    ``urlpath`` (and typically ``mode="w"``) if the sorted output should also
+    be persisted on disk.
     """
     if not order:
         return array
+
+    if isinstance(array, blosc2.NDArray):
+        from . import indexing
+
+        ordered = indexing.read_sorted(array, order=order)
+        if ordered is not None:
+            return blosc2.asarray(ordered, **kwargs)
+        if indexing.is_expression_order(array, order):
+            raise ValueError("expression order requires a matching full expression index")
 
     # Create a lazy array to access the sort machinery there
     # This is a bit of a hack, but it is the simplest way to do it
@@ -6270,6 +6736,44 @@ def sort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: An
     lbool = blosc2.lazyexpr(blosc2.ones(array.shape, dtype=np.bool_))
     larr = array[lbool]
     return larr.sort(order).compute(**kwargs)
+
+
+def iter_sorted(
+    array: blosc2.Array,
+    order: str | list[str] | None = None,
+    *,
+    start: int | None = None,
+    stop: int | None = None,
+    step: int | None = None,
+    batch_size: int | None = None,
+) -> Iterator[np.generic | np.void]:
+    """
+    Iterate array values following a matching sorted index order.
+
+    Parameters
+    ----------
+    array : :ref:`blosc2.Array`
+        The array to iterate.
+    order : str, list of str, optional
+        Specifies which fields define the ordered traversal. The first field
+        must have an associated ``full`` index.
+    start, stop, step : int or None, optional
+        Optional slice applied to the ordered sequence before iteration.
+    batch_size : int or None, optional
+        Internal prefetch size used during iteration.
+
+    Notes
+    -----
+    This requires a matching ``full`` index on the primary order key. The
+    iteration order is ascending and stable. Secondary keys refine ties after
+    the primary indexed order.
+    """
+    if not isinstance(array, blosc2.NDArray):
+        raise TypeError("iter_sorted() is only supported on NDArray")
+
+    from . import indexing
+
+    return indexing.iter_sorted(array, order=order, start=start, stop=stop, step=step, batch_size=batch_size)
 
 
 # Class for dealing with fields in an NDArray

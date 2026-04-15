@@ -1,14 +1,8 @@
-API Reference
-=============
+Index
+=====
 
-.. toctree::
-    :maxdepth: 2
+.. currentmodule:: blosc2
 
-    classes
-    save_load
-    msgpack_serialization
-    storage
-    array_operations
-    utilities
-    low_level
-    misc
+.. autoclass:: Index
+    :members:
+    :member-order: groupwise

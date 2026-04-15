@@ -13,7 +13,7 @@ import blosc2
 
 
 def default_nthreads():
-    return blosc2.nthreads
+    return 1 if blosc2.IS_WASM else blosc2.nthreads
 
 
 def default_filters():

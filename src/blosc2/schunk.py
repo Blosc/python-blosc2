@@ -34,7 +34,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
 
     - CFrame-backed Blosc2 objects such as :class:`blosc2.NDArray`,
       :class:`blosc2.SChunk`, :class:`blosc2.VLArray`,
-      :class:`blosc2.BatchStore`, and :class:`blosc2.EmbedStore`
+      :class:`blosc2.BatchArray`, and :class:`blosc2.EmbedStore`
     - structured references and lazy objects such as :class:`blosc2.Ref`,
       :class:`blosc2.C2Array`, :class:`blosc2.LazyExpr`, and
       :class:`blosc2.LazyUDF` backed by :func:`blosc2.dsl_kernel`
@@ -1652,10 +1652,10 @@ def process_opened_object(res):
 
         return VLArray(_from_schunk=getattr(res, "schunk", res))
 
-    if "batchstore" in meta:
-        from blosc2.batch_store import BatchStore
+    if "batcharray" in meta:
+        from blosc2.batch_array import BatchArray
 
-        return BatchStore(_from_schunk=getattr(res, "schunk", res))
+        return BatchArray(_from_schunk=getattr(res, "schunk", res))
 
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
         return blosc2.open_lazyarray(res)
@@ -1711,7 +1711,7 @@ def open(
 ) -> (
     blosc2.SChunk
     | blosc2.NDArray
-    | blosc2.BatchStore
+    | blosc2.BatchArray
     | blosc2.VLArray
     | blosc2.C2Array
     | blosc2.LazyArray
@@ -1824,18 +1824,40 @@ def open(
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
 
-    urlpath = _resolve_store_alias(urlpath)
+    # Keep explicit store paths on the direct dispatch path.  For regular
+    # Blosc containers, try the standard open first and only fall back to the
+    # more expensive store probing when that fails.
+    if urlpath.endswith((".b2d", ".b2z", ".b2e")):
+        special = _open_special_store(urlpath, mode, offset, **kwargs)
+        if special is not None:
+            if isinstance(special, blosc2.TreeStore):
+                return _open_treestore_root_object(special, urlpath, mode)
+            return special
 
-    special = _open_special_store(urlpath, mode, offset, **kwargs)
+    regular_exc = None
+    if os.path.exists(urlpath):
+        _set_default_dparams(kwargs)
+        try:
+            res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
+        except Exception as exc:
+            regular_exc = exc
+        else:
+            return process_opened_object(res)
+
+    resolved_urlpath = _resolve_store_alias(urlpath)
+    special_path = resolved_urlpath if resolved_urlpath != urlpath or not os.path.exists(urlpath) else urlpath
+    special = _open_special_store(special_path, mode, offset, **kwargs)
     if special is not None:
         if isinstance(special, blosc2.TreeStore):
-            return _open_treestore_root_object(special, urlpath, mode)
+            return _open_treestore_root_object(special, special_path, mode)
         return special
 
-    if not os.path.exists(urlpath):
-        raise FileNotFoundError(f"No such file or directory: {urlpath}")
+    if regular_exc is not None:
+        raise regular_exc
+    if not os.path.exists(special_path):
+        raise FileNotFoundError(f"No such file or directory: {special_path}")
 
     _set_default_dparams(kwargs)
-    res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
+    res = blosc2_ext.open(special_path, mode, offset, **kwargs)
 
     return process_opened_object(res)

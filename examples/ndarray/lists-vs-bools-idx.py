@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# This example shows how to use the `indices()` method to get the indices an expression
-# and compare this with the bools version of the index.
+# This example shows how to use a lazy expression `argsort()` call to get
+# matching coordinates and compare this with the boolean-mask version.
 
 """
 The output of this script is:
@@ -83,7 +83,7 @@ print(f"vals: {vals[:3]}, len: {len(vals)}")
 
 # Get the list of indices for the expression "b >= c"
 t0 = time()
-indices = arr["b >= c"].indices().compute()
+indices = arr["b >= c"].argsort().compute()
 print(f"Time to get list indices: {time() - t0:.3f} s")
 print(f"storage required by indices: {indices.schunk.cbytes / 2**20:.2f} MB ({indices.schunk.cratio:.2f}x)")
 # print(f"indices: {indices[:10]}, len: {len(indices)}")

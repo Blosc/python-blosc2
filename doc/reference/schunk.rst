@@ -14,7 +14,7 @@ variable-length metadata can store not only ordinary msgpack-safe Python
 values, but also the currently supported Blosc2 objects and references,
 including:
 
-- ``NDArray``, ``SChunk``, ``VLArray``, ``BatchStore``, ``EmbedStore``
+- ``NDArray``, ``SChunk``, ``VLArray``, ``BatchArray``, ``EmbedStore``
 - ``Ref``
 - ``C2Array``
 - ``LazyExpr``
