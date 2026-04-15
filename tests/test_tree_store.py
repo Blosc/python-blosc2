@@ -1057,6 +1057,23 @@ def test_open_context_manager(populated_tree_store):
         assert np.array_equal(tstore["/child0/data"][:], np.array([1, 2, 3]))
 
 
+def test_extensionless_tree_store_defaults_to_directory(tmp_path):
+    path = tmp_path / "test_tstore_extless"
+
+    with TreeStore(str(path), mode="w") as tstore:
+        tstore["/group/node"] = np.arange(6)
+
+    assert path.is_dir()
+    assert (path / "embed.b2e").exists()
+
+    with TreeStore(str(path), mode="r") as tstore:
+        assert np.array_equal(tstore["/group/node"][:], np.arange(6))
+
+    opened = blosc2.open(str(path), mode="r")
+    assert isinstance(opened, TreeStore)
+    assert np.array_equal(opened["/group/node"][:], np.arange(6))
+
+
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
 def test_mmap_mode_read_access(storage_type, tmp_path):
     path = tmp_path / f"test_tstore_mmap.{storage_type}"

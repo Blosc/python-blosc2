@@ -114,6 +114,23 @@ def test_to_b2z_and_reopen(populated_dict_store):
         assert np.all(dstore_read["/nodeB"][:] == np.arange(6))
 
 
+def test_extensionless_dict_store_defaults_to_directory(tmp_path):
+    path = tmp_path / "test_dstore_extless"
+
+    with DictStore(str(path), mode="w") as dstore:
+        dstore["/node1"] = np.arange(4)
+
+    assert path.is_dir()
+    assert (path / "embed.b2e").exists()
+
+    with DictStore(str(path), mode="r") as dstore:
+        assert np.array_equal(dstore["/node1"][:], np.arange(4))
+
+    opened = blosc2.open(str(path), mode="r")
+    assert isinstance(opened, DictStore)
+    assert np.array_equal(opened["/node1"][:], np.arange(4))
+
+
 def test_to_b2z_from_readonly_b2d():
     b2d_path = "test_to_b2z_from_readonly.b2d"
     b2z_path = "test_to_b2z_from_readonly.b2z"

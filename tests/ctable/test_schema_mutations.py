@@ -145,11 +145,11 @@ def test_blosc2_open_raw_treestore_for_unknown_manifest_kind():
     assert np.array_equal(opened["/payload"][:], np.arange(3))
 
 
-def test_extensionless_ctable_path_resolves_to_b2d_store():
+def test_extensionless_ctable_path_uses_extensionless_store():
     path = os.path.join(TABLE_ROOT, "alias_ctable")
     t = CTable(Row, urlpath=path, mode="w", new_data=DATA10)
     t.close()
-    assert os.path.exists(path + ".b2d")
+    assert os.path.isdir(path)
     opened = blosc2.open(path, mode="r")
     assert isinstance(opened, CTable)
     np.testing.assert_array_equal(opened["id"].to_numpy(), np.arange(10))

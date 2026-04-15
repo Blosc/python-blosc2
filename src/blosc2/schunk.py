@@ -1529,11 +1529,11 @@ def _meta_from_store(urlpath, offset):
 
     if urlpath.endswith(".b2e") and offset == 0:
         return _open_meta(urlpath)
-    if urlpath.endswith(".b2d") and os.path.isdir(urlpath):
+    if os.path.isdir(urlpath):
         embed_path = os.path.join(urlpath, "embed.b2e")
         if os.path.exists(embed_path):
             return _open_meta(embed_path)
-    if urlpath.endswith(".b2z") and os.path.isfile(urlpath):
+    if os.path.isfile(urlpath) and not urlpath.endswith(".b2e"):
         try:
             with open(urlpath, "rb") as f, zipfile.ZipFile(f) as zf:
                 for info in zf.infolist():

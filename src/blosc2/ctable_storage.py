@@ -157,16 +157,10 @@ class FileTableStorage(TableStorage):
     def __init__(self, urlpath: str, mode: str) -> None:
         if mode not in ("r", "a", "w"):
             raise ValueError(f"mode must be 'r', 'a', or 'w'; got {mode!r}")
-        self._root = self._normalize_root(urlpath)
+        self._root = urlpath
         self._mode = mode
         self._meta: blosc2.SChunk | None = None
         self._store: blosc2.TreeStore | None = None
-
-    @staticmethod
-    def _normalize_root(urlpath: str) -> str:
-        if urlpath.endswith((".b2d", ".b2z")):
-            return urlpath
-        return f"{urlpath}.b2d"
 
     # ------------------------------------------------------------------
     # Key helpers
