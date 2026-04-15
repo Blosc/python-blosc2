@@ -1706,6 +1706,14 @@ def _open_treestore_root_object(store, urlpath, mode):
     return store
 
 
+def _finalize_special_open(special, urlpath, mode):
+    if special is None:
+        return None
+    if isinstance(special, blosc2.TreeStore):
+        return _open_treestore_root_object(special, urlpath, mode)
+    return special
+
+
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
 ) -> (
@@ -1829,9 +1837,8 @@ def open(
     # more expensive store probing when that fails.
     if urlpath.endswith((".b2d", ".b2z", ".b2e")):
         special = _open_special_store(urlpath, mode, offset, **kwargs)
+        special = _finalize_special_open(special, urlpath, mode)
         if special is not None:
-            if isinstance(special, blosc2.TreeStore):
-                return _open_treestore_root_object(special, urlpath, mode)
             return special
 
     regular_exc = None
@@ -1845,11 +1852,12 @@ def open(
             return process_opened_object(res)
 
     resolved_urlpath = _resolve_store_alias(urlpath)
-    special_path = resolved_urlpath if resolved_urlpath != urlpath or not os.path.exists(urlpath) else urlpath
+    special_path = (
+        resolved_urlpath if resolved_urlpath != urlpath or not os.path.exists(urlpath) else urlpath
+    )
     special = _open_special_store(special_path, mode, offset, **kwargs)
+    special = _finalize_special_open(special, special_path, mode)
     if special is not None:
-        if isinstance(special, blosc2.TreeStore):
-            return _open_treestore_root_object(special, special_path, mode)
         return special
 
     if regular_exc is not None:

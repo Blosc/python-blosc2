@@ -2022,6 +2022,13 @@ class CTable(Generic[RowT]):
         if len(self.col_names) == 1:
             raise ValueError("Cannot drop the last column.")
 
+        catalog = self._storage.load_index_catalog()
+        if name in catalog:
+            descriptor = catalog.pop(name)
+            self._validate_index_descriptor(name, descriptor)
+            self._drop_index_descriptor(name, descriptor)
+            self._storage.save_index_catalog(catalog)
+
         if isinstance(self._storage, FileTableStorage):
             self._storage.delete_column(name)
 
@@ -2060,6 +2067,15 @@ class CTable(Generic[RowT]):
             raise ValueError(f"Column {new!r} already exists.")
         _validate_column_name(new)
 
+        catalog = self._storage.load_index_catalog()
+        rebuild_kwargs = None
+        if old in catalog:
+            descriptor = catalog.pop(old)
+            self._validate_index_descriptor(old, descriptor)
+            rebuild_kwargs = self._index_create_kwargs_from_descriptor(descriptor)
+            self._drop_index_descriptor(old, descriptor)
+            self._storage.save_index_catalog(catalog)
+
         if isinstance(self._storage, FileTableStorage):
             self._cols[new] = self._storage.rename_column(old, new)
         else:
@@ -2088,6 +2104,8 @@ class CTable(Generic[RowT]):
         )
         if isinstance(self._storage, FileTableStorage):
             self._storage.save_schema(schema_to_dict(self._schema))
+        if rebuild_kwargs is not None:
+            self.create_index(new, **rebuild_kwargs)
 
     # ------------------------------------------------------------------
     # Column access
@@ -2366,6 +2384,73 @@ class CTable(Generic[RowT]):
         if changed:
             root._storage.save_index_catalog(catalog)
 
+    @staticmethod
+    def _validate_index_descriptor(col_name: str, descriptor: dict) -> None:
+        """Raise ValueError when an index catalog entry is malformed."""
+        if not isinstance(descriptor, dict):
+            raise ValueError(f"Malformed index metadata for column {col_name!r}: descriptor must be a dict.")
+        token = descriptor.get("token")
+        if not isinstance(token, str) or not token:
+            raise ValueError(f"Malformed index metadata for column {col_name!r}: missing token.")
+        kind = descriptor.get("kind")
+        if kind not in {"summary", "bucket", "partial", "full"}:
+            raise ValueError(f"Malformed index metadata for column {col_name!r}: invalid kind {kind!r}.")
+        if kind == "bucket" and not isinstance(descriptor.get("bucket"), dict):
+            raise ValueError(f"Malformed index metadata for column {col_name!r}: missing bucket payload.")
+        if kind == "partial" and not isinstance(descriptor.get("partial"), dict):
+            raise ValueError(f"Malformed index metadata for column {col_name!r}: missing partial payload.")
+        if kind == "full" and not isinstance(descriptor.get("full"), dict):
+            raise ValueError(f"Malformed index metadata for column {col_name!r}: missing full payload.")
+
+    def _drop_index_descriptor(self, col_name: str, descriptor: dict) -> None:
+        """Delete sidecars/cache for a catalog descriptor without touching the column mapping."""
+        from pathlib import Path
+
+        from blosc2.indexing import (
+            _IN_MEMORY_INDEXES,
+            _PERSISTENT_INDEXES,
+            _array_key,
+            _clear_cached_data,
+            _drop_descriptor_sidecars,
+            _is_persistent_array,
+        )
+
+        col_arr = self._cols.get(col_name)
+        token = descriptor["token"]
+
+        if col_arr is not None:
+            _clear_cached_data(col_arr, token)
+
+        if col_arr is not None and _is_persistent_array(col_arr):
+            arr_key = _array_key(col_arr)
+            store = _PERSISTENT_INDEXES.get(arr_key)
+            if store is not None:
+                store["indexes"].pop(token, None)
+        elif col_arr is not None:
+            store = _IN_MEMORY_INDEXES.get(id(col_arr))
+            if store is not None:
+                store["indexes"].pop(token, None)
+
+        _drop_descriptor_sidecars(descriptor)
+
+        anchor = self._storage.index_anchor_path(col_name)
+        if anchor is not None:
+            proxy_key = ("persistent", str(Path(anchor).resolve()))
+            _PERSISTENT_INDEXES.pop(proxy_key, None)
+            with contextlib.suppress(OSError):
+                os.rmdir(os.path.dirname(anchor))
+
+    def _index_create_kwargs_from_descriptor(self, descriptor: dict) -> dict[str, Any]:
+        """Return create_index kwargs that rebuild an existing descriptor."""
+        build = "ooc" if bool(descriptor.get("ooc", False)) else "memory"
+        return {
+            "kind": descriptor["kind"],
+            "optlevel": int(descriptor.get("optlevel", 5)),
+            "name": descriptor.get("name") or None,
+            "build": build,
+            "cparams": descriptor.get("cparams"),
+        }
+
     def _build_index_persistent(
         self,
         col_name: str,
@@ -2622,48 +2707,13 @@ class CTable(Generic[RowT]):
         if self.base is not None:
             raise ValueError("Cannot drop an index from a view.")
 
-        from pathlib import Path
-
-        from blosc2.indexing import (
-            _IN_MEMORY_INDEXES,
-            _PERSISTENT_INDEXES,
-            _array_key,
-            _clear_cached_data,
-            _drop_descriptor_sidecars,
-            _is_persistent_array,
-        )
-        from blosc2.indexing import (
-            drop_index as _ix_drop_index,
-        )
-
         catalog = self._storage.load_index_catalog()
         if col_name not in catalog:
             raise KeyError(f"No index found for column {col_name!r}.")
 
         descriptor = catalog.pop(col_name)
-        token = descriptor["token"]
-        col_arr = self._cols[col_name]
-
-        if _is_persistent_array(col_arr):
-            _drop_descriptor_sidecars(descriptor)
-            _clear_cached_data(col_arr, token)
-            arr_key = _array_key(col_arr)
-            store = _PERSISTENT_INDEXES.get(arr_key)
-            if store is not None:
-                store["indexes"].pop(token, None)
-            anchor = self._storage.index_anchor_path(col_name)
-            proxy_key = ("persistent", str(Path(anchor).resolve()))
-            _PERSISTENT_INDEXES.pop(proxy_key, None)
-            index_dir = os.path.dirname(anchor)
-            with contextlib.suppress(OSError):
-                os.rmdir(index_dir)
-        else:
-            with contextlib.suppress(Exception):
-                _ix_drop_index(col_arr, field=None)
-            store = _IN_MEMORY_INDEXES.get(id(col_arr))
-            if store is not None:
-                store["indexes"].pop(token, None)
-
+        self._validate_index_descriptor(col_name, descriptor)
+        self._drop_index_descriptor(col_name, descriptor)
         self._storage.save_index_catalog(catalog)
 
     def rebuild_index(self, col_name: str) -> CTableIndex:
@@ -2694,22 +2744,11 @@ class CTable(Generic[RowT]):
             raise KeyError(f"No index found for column {col_name!r}.")
 
         old_desc = catalog[col_name]
-        old_kind = old_desc["kind"]
-        old_optlevel = int(old_desc.get("optlevel", 5))
-        old_name = old_desc.get("name") or None
-        old_ooc = bool(old_desc.get("ooc", False))
-        old_cparams = old_desc.get("cparams")
-        build_str = "ooc" if old_ooc else "memory"
+        self._validate_index_descriptor(col_name, old_desc)
+        create_kwargs = self._index_create_kwargs_from_descriptor(old_desc)
 
         self.drop_index(col_name)
-        return self.create_index(
-            col_name,
-            kind=old_kind,
-            optlevel=old_optlevel,
-            name=old_name,
-            build=build_str,
-            cparams=old_cparams,
-        )
+        return self.create_index(col_name, **create_kwargs)
 
     def compact_index(self, col_name: str) -> CTableIndex:
         """Compact the index for *col_name*, merging any incremental append runs.
@@ -2814,16 +2853,23 @@ class CTable(Generic[RowT]):
         return [CTableIndex(self, col_name, desc) for col_name, desc in catalog.items()]
 
     @staticmethod
-    def _find_indexed_column(root_cols, catalog, operands):
-        """Return ``(col_name, col_arr)`` for the first operand NDArray that maps
-        to a root-table column with a live (non-stale) catalog entry, or ``(None, None)``."""
+    def _find_indexed_columns(root_cols, catalog, operands):
+        """Return live indexed columns referenced by *operands* in expression order."""
+        indexed = []
+        seen = set()
         for operand in operands.values():
             if not isinstance(operand, blosc2.NDArray):
                 continue
             for col_name, col_arr in root_cols.items():
-                if col_arr is operand and col_name in catalog and not catalog[col_name].get("stale", False):
-                    return col_name, col_arr
-        return None, None
+                if col_arr is not operand or col_name in seen or col_name not in catalog:
+                    continue
+                descriptor = catalog[col_name]
+                CTable._validate_index_descriptor(col_name, descriptor)
+                if descriptor.get("stale", False):
+                    continue
+                indexed.append((col_name, col_arr, descriptor))
+                seen.add(col_name)
+        return indexed
 
     def _try_index_where(self, expr_result: blosc2.LazyExpr) -> np.ndarray | None:
         """Attempt to resolve *expr_result* via a column index.
@@ -2851,51 +2897,47 @@ class CTable(Generic[RowT]):
         expression = expr_result.expression
         operands = dict(expr_result.operands)
 
-        # Find the first operand NDArray that maps to a root-table column with a live index.
-        primary_col_name, primary_col_arr = self._find_indexed_column(root._cols, catalog, operands)
-
-        if primary_col_arr is None:
+        indexed_columns = self._find_indexed_columns(root._cols, catalog, operands)
+        if not indexed_columns:
             return None
 
-        # Inject the catalog descriptor into the appropriate index store so that
-        # plan_query can find it via _load_store / _descriptor_for_target.
-        descriptor = catalog[primary_col_name]
-        arr_key = _array_key(primary_col_arr)
-        if _is_persistent_array(primary_col_arr):
-            store = _PERSISTENT_INDEXES.get(arr_key) or _default_index_store()
-            store["indexes"][descriptor["token"]] = descriptor
-            _PERSISTENT_INDEXES[arr_key] = store
-        else:
-            store = _IN_MEMORY_INDEXES.get(id(primary_col_arr)) or _default_index_store()
-            store["indexes"][descriptor["token"]] = descriptor
-            _IN_MEMORY_INDEXES[id(primary_col_arr)] = store
+        primary_col_name, primary_col_arr, _ = indexed_columns[0]
+
+        # Inject every usable table-owned descriptor so plan_query can combine them.
+        for _col_name, col_arr, descriptor in indexed_columns:
+            arr_key = _array_key(col_arr)
+            if _is_persistent_array(col_arr):
+                store = _PERSISTENT_INDEXES.get(arr_key) or _default_index_store()
+                store["indexes"][descriptor["token"]] = descriptor
+                _PERSISTENT_INDEXES[arr_key] = store
+            else:
+                store = _IN_MEMORY_INDEXES.get(id(col_arr)) or _default_index_store()
+                store["indexes"][descriptor["token"]] = descriptor
+                _IN_MEMORY_INDEXES[id(col_arr)] = store
 
         where_dict = {"_where_x": primary_col_arr}
         merged_operands = {**operands, "_where_x": primary_col_arr}
 
-        try:
-            plan = plan_query(expression, merged_operands, where_dict)
-            if not plan.usable:
-                return None
-
-            if plan.exact_positions is not None:
-                return np.asarray(plan.exact_positions, dtype=np.int64)
-
-            if plan.bucket_masks is not None:
-                _, positions = evaluate_bucket_query(
-                    expression, merged_operands, {}, where_dict, plan, return_positions=True
-                )
-                return np.asarray(positions, dtype=np.int64)
-
-            if plan.candidate_units is not None and plan.segment_len is not None:
-                _, positions = evaluate_segment_query(
-                    expression, merged_operands, {}, where_dict, plan, return_positions=True
-                )
-                return np.asarray(positions, dtype=np.int64)
-
+        plan = plan_query(expression, merged_operands, where_dict)
+        if not plan.usable:
             return None
-        except Exception:
-            return None
+
+        if plan.exact_positions is not None:
+            return np.asarray(plan.exact_positions, dtype=np.int64)
+
+        if plan.bucket_masks is not None:
+            _, positions = evaluate_bucket_query(
+                expression, merged_operands, {}, where_dict, plan, return_positions=True
+            )
+            return np.asarray(positions, dtype=np.int64)
+
+        if plan.candidate_units is not None and plan.segment_len is not None:
+            _, positions = evaluate_segment_query(
+                expression, merged_operands, {}, where_dict, plan, return_positions=True
+            )
+            return np.asarray(positions, dtype=np.int64)
+
+        return None
 
     def info(self) -> None:
         """Print a concise summary of the CTable."""

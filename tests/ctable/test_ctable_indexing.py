@@ -77,6 +77,15 @@ def test_drop_nonexistent_index_raises():
         t.drop_index("id")
 
 
+def test_drop_indexed_column_clears_catalog():
+    t = _make_table(20)
+    t.create_index("id")
+    t.drop_column("id")
+    assert [idx.col_name for idx in t.indexes] == []
+    with pytest.raises(KeyError, match="No index found"):
+        t.index("id")
+
+
 def test_where_with_index_matches_scan_in_memory():
     t = _make_table(200)
     t.create_index("id")
@@ -157,6 +166,20 @@ def test_compact_index_in_memory():
     t.compact_index("id")
 
 
+def test_multi_column_conjunction_uses_multiple_indexes_in_memory():
+    t = _make_table(200)
+    t.create_index("id", kind=blosc2.IndexKind.FULL)
+    t.create_index("category", kind=blosc2.IndexKind.FULL)
+    expr = (t["id"] >= 50) & (t["id"] < 120) & (t["category"] == 3)
+    result_idx = t.where(expr)
+    t.drop_index("id")
+    t.drop_index("category")
+    result_scan = t.where(expr)
+    ids_idx = sorted(int(v) for v in result_idx["id"].to_numpy())
+    ids_scan = sorted(int(v) for v in result_scan["id"].to_numpy())
+    assert ids_idx == ids_scan
+
+
 # ---------------------------------------------------------------------------
 # Persistent table tests
 # ---------------------------------------------------------------------------
@@ -232,6 +255,15 @@ def test_drop_index_persistent_catalog_cleared(tmpdir):
     assert len(t2.indexes) == 0
 
 
+def test_drop_indexed_column_removes_persistent_sidecars(tmpdir):
+    path = str(tmpdir / "table.b2d")
+    t = _make_table(30, persistent_path=path)
+    t.create_index("id")
+    t.drop_column("id")
+    assert len(t.indexes) == 0
+    assert not (Path(path) / "_indexes" / "id").exists()
+
+
 def test_rebuild_index_persistent(tmpdir):
     path = str(tmpdir / "table.b2d")
     t = _make_table(50, persistent_path=path)
@@ -299,6 +331,18 @@ def test_query_after_reopen_persistent(tmpdir):
     assert ids == list(range(91, 100))
 
 
+def test_rename_indexed_column_rebuilds_catalog_persistent(tmpdir):
+    path = str(tmpdir / "table.b2d")
+    t = _make_table(40, persistent_path=path)
+    t.create_index("id")
+    t.rename_column("id", "newid")
+    assert [idx.col_name for idx in t.indexes] == ["newid"]
+    assert not (Path(path) / "_indexes" / "id").exists()
+    assert (Path(path) / "_indexes" / "newid").exists()
+    result = t.where(t["newid"] > 35)
+    assert sorted(int(v) for v in result["newid"].to_numpy()) == [36, 37, 38, 39]
+
+
 # ---------------------------------------------------------------------------
 # View tests
 # ---------------------------------------------------------------------------
@@ -342,6 +386,13 @@ def test_view_query_uses_root_index():
     result_direct = t.where(t["id"] > 180)
     ids_direct = sorted(int(v) for v in result_direct["id"].to_numpy())
     assert ids_direct == list(range(181, 200))
+
+
+def test_malformed_catalog_entry_raises_clear_error():
+    t = _make_table(20)
+    t._storage.save_index_catalog({"id": {"kind": "bucket"}})
+    with pytest.raises(ValueError, match="Malformed index metadata"):
+        t.where(t["id"] > 5)
 
 
 # ---------------------------------------------------------------------------
