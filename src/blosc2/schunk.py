@@ -1635,13 +1635,17 @@ def _set_default_dparams(kwargs):
 def process_opened_object(res):
     meta = getattr(res, "schunk", res).meta
     if "proxy-source" in meta:
+        proxy_cache = res
+        cache_schunk = getattr(res, "schunk", res)
+        if getattr(cache_schunk, "urlpath", None) is not None and getattr(cache_schunk, "mode", None) == "r":
+            proxy_cache = blosc2_ext.open(cache_schunk.urlpath, "a", 0)
         proxy_src = meta["proxy-source"]
         if proxy_src["local_abspath"] is not None:
             src = blosc2.open(proxy_src["local_abspath"], mode="a")
-            return blosc2.Proxy(src, _cache=res)
+            return blosc2.Proxy(src, _cache=proxy_cache)
         elif proxy_src["urlpath"] is not None:
             src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
-            return blosc2.Proxy(src, _cache=res)
+            return blosc2.Proxy(src, _cache=proxy_cache)
         elif not proxy_src["caterva2_env"]:
             raise RuntimeError("Could not find the source when opening a Proxy")
 
