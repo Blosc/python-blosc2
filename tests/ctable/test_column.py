@@ -675,5 +675,15 @@ def test_repr_is_single_line():
     assert "\n" not in repr(t)
 
 
+def test_column_repr_shows_preview_values():
+    t = CTable(Row, new_data=DATA20)
+    r = repr(t["id"][:])
+    assert "Column('id'" in r
+    assert "dtype=int64" in r
+    assert "len=20" in r
+    assert "values=[0, 1, 2" in r
+    assert "..." in r
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

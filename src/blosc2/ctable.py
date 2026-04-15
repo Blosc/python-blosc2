@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import itertools
 import os
 import pprint
 import shutil
@@ -475,6 +476,8 @@ class _Row:
 
 
 class Column:
+    _REPR_PREVIEW_ITEMS = 8
+
     def __init__(self, table: CTable, col_name: str, mask=None):
         self._table = table
         self._col_name = col_name
@@ -596,6 +599,21 @@ class Column:
             mask_chunk = arr[chunk_start : chunk_start + actual_size]
             data_chunk = self._raw_col[chunk_start : chunk_start + actual_size]
             yield from data_chunk[mask_chunk]
+
+    def __repr__(self) -> str:
+        preview_items = []
+        for value in itertools.islice(self, self._REPR_PREVIEW_ITEMS + 1):
+            if isinstance(value, np.generic):
+                value = value.item()
+            preview_items.append(repr(value))
+
+        truncated = len(preview_items) > self._REPR_PREVIEW_ITEMS
+        if truncated:
+            preview_items = preview_items[: self._REPR_PREVIEW_ITEMS]
+            preview_items.append("...")
+
+        preview = ", ".join(preview_items)
+        return f"Column({self._col_name!r}, dtype={self.dtype}, len={len(self)}, values=[{preview}])"
 
     def __len__(self):
         return blosc2.count_nonzero(self._valid_rows)

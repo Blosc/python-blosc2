@@ -41,10 +41,12 @@ pt = None
 packed = None
 
 try:
+    print("Creating a CTable with mixed dtypes...")
     pt = blosc2.CTable(Measurement, urlpath=str(table_path), mode="w")
     load_rows(pt)
 
     # Create a couple of indexes on columns with different dtypes.
+    print("\nCreating indexes...")
     idx_sensor = pt.create_index("sensor_id", kind=blosc2.IndexKind.FULL)
     idx_active = pt.create_index("active")
     print("Indexes created:", pt.indexes)
@@ -54,8 +56,8 @@ try:
     # Queries can combine indexed and non-indexed predicates.
     recent_active = pt.where((pt["sensor_id"] >= 180) & pt["active"] & (pt["region"] == "north"))
     print("\nLive rows with sensor_id >= 180, active=True, region='north':", len(recent_active))
-    print("sensor_ids:", recent_active["sensor_id"].to_numpy().tolist())
-    print("statuses:", recent_active["status"].to_numpy().tolist())
+    print("sensor_ids:", recent_active["sensor_id"])
+    print("statuses:", recent_active["status"].to_numpy())
 
     # Close the table, pack the TreeStore into a single .b2z file, and reopen it.
     del pt
@@ -79,8 +81,8 @@ try:
     # Query directly against the .b2z bundle; no unpack step is needed.
     warm_active = packed.where(packed["active"] & (packed["status"] == "warm") & (packed["sensor_id"] > 100))
     print("\nRows from .b2z with active=True, status='warm', sensor_id > 100:", len(warm_active))
-    print("sensor_ids:", warm_active["sensor_id"].to_numpy().tolist())
-    print("regions:", warm_active["region"].to_numpy().tolist())
+    print("sensor_ids:", warm_active["sensor_id"])
+    print("regions:", warm_active["region"].to_numpy())
 
     print("\nThe packed file is kept on disk.")
     print(f"Inspect it later with: f = blosc2.open({bundle_path.name!r}, mode='r')")
