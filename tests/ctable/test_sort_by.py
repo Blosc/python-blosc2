@@ -255,11 +255,12 @@ def test_sort_readonly_inplace_raises():
     import pathlib
     import shutil
 
-    path = str(pathlib.Path(__file__).parent / "saved_ctable" / "_sort_ro_test")
-    os.makedirs(path, exist_ok=True)
+    path_obj = pathlib.Path(__file__).parent / "saved_ctable" / "_sort_ro_test.b2d"
+    path = str(path_obj)
+    os.makedirs(path_obj.parent, exist_ok=True)
     try:
         t = CTable(Row, urlpath=path, mode="w", new_data=DATA)
-        del t
+        t.close()
         t_ro = CTable.open(path, mode="r")
         with pytest.raises(ValueError, match="read-only"):
             t_ro.sort_by("id", inplace=True)

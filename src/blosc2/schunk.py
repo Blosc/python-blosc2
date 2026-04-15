@@ -1572,6 +1572,16 @@ def _store_from_extension(urlpath, mode, offset, **kwargs):
     return None
 
 
+def _resolve_store_alias(urlpath):
+    if os.path.exists(urlpath) or urlpath.endswith((".b2d", ".b2z", ".b2e")):
+        return urlpath
+    for suffix in (".b2d", ".b2z", ".b2e"):
+        candidate = urlpath + suffix
+        if os.path.exists(candidate):
+            return candidate
+    return urlpath
+
+
 def _open_special_store(urlpath, mode, offset, **kwargs):
     # Meta-based detection has priority over extension
     schunk_meta = _meta_from_store(urlpath, offset)
@@ -1651,6 +1661,49 @@ def process_opened_object(res):
         return blosc2.open_lazyarray(res)
     else:
         return res
+
+
+def _read_treestore_root_manifest(store):
+    try:
+        meta_obj = store["/_meta"]
+    except KeyError:
+        return None
+
+    if not isinstance(meta_obj, blosc2.SChunk):
+        raise ValueError("TreeStore root manifest '/_meta' must be an SChunk.")
+
+    vlmeta = meta_obj.vlmeta
+    try:
+        kind = vlmeta["kind"]
+    except KeyError as exc:
+        raise ValueError("TreeStore root manifest is missing required field 'kind'.") from exc
+    try:
+        version = vlmeta["version"]
+    except KeyError as exc:
+        raise ValueError("TreeStore root manifest is missing required field 'version'.") from exc
+
+    if isinstance(kind, bytes):
+        kind = kind.decode()
+    if not isinstance(kind, str):
+        raise ValueError("TreeStore root manifest field 'kind' must be a string.")
+    if not isinstance(version, int):
+        raise ValueError("TreeStore root manifest field 'version' must be an integer.")
+
+    return {"kind": kind, "version": version, "meta": meta_obj}
+
+
+def _open_treestore_root_object(store, urlpath, mode):
+    manifest = _read_treestore_root_manifest(store)
+    if manifest is None:
+        return store
+
+    if manifest["kind"] == "ctable":
+        if mode not in {"r", "a"}:
+            return store
+        store.close()
+        return blosc2.CTable.open(urlpath, mode=mode)
+
+    return store
 
 
 def open(
@@ -1771,8 +1824,12 @@ def open(
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
 
+    urlpath = _resolve_store_alias(urlpath)
+
     special = _open_special_store(urlpath, mode, offset, **kwargs)
     if special is not None:
+        if isinstance(special, blosc2.TreeStore):
+            return _open_treestore_root_object(special, urlpath, mode)
         return special
 
     if not os.path.exists(urlpath):

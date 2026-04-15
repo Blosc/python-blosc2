@@ -12,17 +12,9 @@ Two concrete backends:
 
 * :class:`InMemoryTableStorage` — all arrays live in RAM (default when
   ``urlpath`` is not provided).
-* :class:`FileTableStorage` — arrays are stored as individual Blosc2 files
-  under a table root directory; schema and kind metadata live in a small
-  :class:`blosc2.SChunk` whose ``vlmeta`` is the source of truth.
-
-Layout produced by :class:`FileTableStorage`::
-
-    <urlpath>/
-        _meta.b2frame       ← SChunk with vlmeta: kind, version, schema JSON
-        _valid_rows.b2nd    ← boolean NDArray (tombstone mask)
-        _cols/
-            <name>.b2nd     ← one NDArray per column
+* :class:`FileTableStorage` — arrays are stored inside a :class:`blosc2.TreeStore`
+  rooted at ``urlpath``; logical object metadata lives in ``/_meta`` and table
+  data lives under ``/_valid_rows`` and ``/_cols/<name>``.
 """
 
 from __future__ import annotations
@@ -83,6 +75,15 @@ class TableStorage:
     def is_read_only(self) -> bool:
         raise NotImplementedError
 
+    def delete_column(self, name: str) -> None:
+        raise NotImplementedError
+
+    def rename_column(self, old: str, new: str) -> blosc2.NDArray:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        raise NotImplementedError
+
 
 # ---------------------------------------------------------------------------
 # In-memory backend
@@ -121,23 +122,32 @@ class InMemoryTableStorage(TableStorage):
     def is_read_only(self):
         return False
 
+    def delete_column(self, name):
+        raise RuntimeError("In-memory tables have no on-disk representation to mutate.")
+
+    def rename_column(self, old: str, new: str):
+        raise RuntimeError("In-memory tables have no on-disk representation to mutate.")
+
+    def close(self):
+        pass
+
 
 # ---------------------------------------------------------------------------
 # File-backed backend
 # ---------------------------------------------------------------------------
 
-_META_FILE = "_meta.b2frame"
-_VALID_ROWS_FILE = "_valid_rows.b2nd"
+_META_KEY = "/_meta"
+_VALID_ROWS_KEY = "/_valid_rows"
 _COLS_DIR = "_cols"
 
 
 class FileTableStorage(TableStorage):
-    """Arrays stored as individual Blosc2 files inside *urlpath* directory.
+    """Arrays stored as TreeStore leaves inside *urlpath*.
 
     Parameters
     ----------
     urlpath:
-        Path to the table root directory.
+        Path to the backing TreeStore (typically ``.b2d`` or ``.b2z``).
     mode:
         ``'w'`` — create (overwrite existing files).
         ``'a'`` — open existing or create new.
@@ -147,89 +157,120 @@ class FileTableStorage(TableStorage):
     def __init__(self, urlpath: str, mode: str) -> None:
         if mode not in ("r", "a", "w"):
             raise ValueError(f"mode must be 'r', 'a', or 'w'; got {mode!r}")
-        self._root = urlpath
+        self._root = self._normalize_root(urlpath)
         self._mode = mode
         self._meta: blosc2.SChunk | None = None
+        self._store: blosc2.TreeStore | None = None
+
+    @staticmethod
+    def _normalize_root(urlpath: str) -> str:
+        if urlpath.endswith((".b2d", ".b2z")):
+            return urlpath
+        return f"{urlpath}.b2d"
 
     # ------------------------------------------------------------------
-    # Path helpers
+    # Key helpers
     # ------------------------------------------------------------------
 
     @property
     def _meta_path(self) -> str:
-        return os.path.join(self._root, _META_FILE)
+        return self._key_to_path(_META_KEY)
 
     @property
     def _valid_rows_path(self) -> str:
-        return os.path.join(self._root, _VALID_ROWS_FILE)
+        return self._key_to_path(_VALID_ROWS_KEY)
 
     def _col_path(self, name: str) -> str:
-        return os.path.join(self._root, _COLS_DIR, f"{name}.b2nd")
+        return self._key_to_path(self._col_key(name))
 
-    def _ensure_dirs(self) -> None:
-        os.makedirs(os.path.join(self._root, _COLS_DIR), exist_ok=True)
+    def _col_key(self, name: str) -> str:
+        return f"/{_COLS_DIR}/{name}"
+
+    def _key_to_path(self, key: str) -> str:
+        rel_key = key.lstrip("/")
+        suffix = ".b2f" if key == _META_KEY else ".b2nd"
+        if self._root.endswith(".b2d"):
+            return os.path.join(self._root, rel_key + suffix)
+        return os.path.join(self._root, rel_key + suffix)
+
+    def _open_store(self) -> blosc2.TreeStore:
+        if self._store is None:
+            kwargs: dict[str, Any] = {"mode": self._mode}
+            if self._mode != "r":
+                # Force table internals to be stored as proper external leaves so
+                # reopened arrays stay live and mutable through the TreeStore.
+                kwargs["threshold"] = 0
+            self._store = blosc2.TreeStore(self._root, **kwargs)
+        return self._store
 
     # ------------------------------------------------------------------
     # TableStorage interface
     # ------------------------------------------------------------------
 
     def table_exists(self) -> bool:
-        return os.path.exists(self._meta_path)
+        return os.path.exists(self._root)
 
     def is_read_only(self) -> bool:
         return self._mode == "r"
 
     def create_column(self, name, *, dtype, shape, chunks, blocks, cparams, dparams):
-        self._ensure_dirs()
         kwargs: dict[str, Any] = {
             "chunks": chunks,
             "blocks": blocks,
-            "urlpath": self._col_path(name),
-            "mode": "w",
         }
         if cparams is not None:
             kwargs["cparams"] = cparams
         if dparams is not None:
             kwargs["dparams"] = dparams
-        return blosc2.zeros(shape, dtype=dtype, **kwargs)
+        col = blosc2.zeros(shape, dtype=dtype, **kwargs)
+        store = self._open_store()
+        store[self._col_key(name)] = col
+        return store[self._col_key(name)]
 
     def open_column(self, name: str) -> blosc2.NDArray:
-        b2_mode = "r" if self._mode == "r" else "a"
-        return blosc2.open(self._col_path(name), mode=b2_mode)
+        return self._open_store()[self._col_key(name)]
 
     def create_valid_rows(self, *, shape, chunks, blocks):
-        self._ensure_dirs()
-        return blosc2.zeros(
+        valid_rows = blosc2.zeros(
             shape,
             dtype=np.bool_,
             chunks=chunks,
             blocks=blocks,
-            urlpath=self._valid_rows_path,
-            mode="w",
         )
+        store = self._open_store()
+        store[_VALID_ROWS_KEY] = valid_rows
+        return store[_VALID_ROWS_KEY]
 
     def open_valid_rows(self) -> blosc2.NDArray:
-        b2_mode = "r" if self._mode == "r" else "a"
-        return blosc2.open(self._valid_rows_path, mode=b2_mode)
+        return self._open_store()[_VALID_ROWS_KEY]
 
     def save_schema(self, schema_dict: dict[str, Any]) -> None:
-        """Write *schema_dict* (plus kind/version markers) to ``_meta.b2frame``."""
-        self._ensure_dirs()
-        # Always overwrite: save_schema is only called at table-creation time.
-        self._meta = blosc2.SChunk(urlpath=self._meta_path, mode="w")
-        self._meta.vlmeta["kind"] = "ctable"
-        self._meta.vlmeta["version"] = 1
-        self._meta.vlmeta["schema"] = json.dumps(schema_dict)
+        """Write *schema_dict* (plus kind/version markers) to ``/_meta``."""
+        meta = blosc2.SChunk()
+        meta.vlmeta["kind"] = "ctable"
+        meta.vlmeta["version"] = 1
+        meta.vlmeta["schema"] = json.dumps(schema_dict)
+        store = self._open_store()
+        store[_META_KEY] = meta
+        opened = store[_META_KEY]
+        if not isinstance(opened, blosc2.SChunk):
+            raise ValueError("CTable manifest '/_meta' must materialize as an SChunk.")
+        self._meta = opened
 
     def _open_meta(self) -> blosc2.SChunk:
-        """Open (or return cached) the ``_meta.b2frame`` SChunk."""
+        """Open (or return cached) the ``/_meta`` SChunk."""
         if self._meta is None:
-            b2_mode = "r" if self._mode == "r" else "a"
-            self._meta = blosc2.open(self._meta_path, mode=b2_mode)
+            try:
+                opened = self._open_store()[_META_KEY]
+            except KeyError as exc:
+                raise FileNotFoundError(f"No CTable manifest found at {self._root!r}") from exc
+            if not isinstance(opened, blosc2.SChunk):
+                raise ValueError(f"CTable manifest at {self._root!r} must be an SChunk.")
+            self._meta = opened
         return self._meta
 
     def load_schema(self) -> dict[str, Any]:
-        """Read and return the schema dict stored in ``_meta.b2frame``."""
+        """Read and return the schema dict stored in ``/_meta``."""
         raw = self._open_meta().vlmeta["schema"]
         if isinstance(raw, bytes):
             raw = raw.decode()
@@ -246,3 +287,20 @@ class FileTableStorage(TableStorage):
     def column_names_from_schema(self) -> list[str]:
         d = self.load_schema()
         return [c["name"] for c in d["columns"]]
+
+    def delete_column(self, name: str) -> None:
+        del self._open_store()[self._col_key(name)]
+
+    def rename_column(self, old: str, new: str) -> blosc2.NDArray:
+        store = self._open_store()
+        old_key = self._col_key(old)
+        new_key = self._col_key(new)
+        store[new_key] = store[old_key]
+        del store[old_key]
+        return store[new_key]
+
+    def close(self) -> None:
+        if self._store is not None:
+            self._store.close()
+            self._store = None
+        self._meta = None

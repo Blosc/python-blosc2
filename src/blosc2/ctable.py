@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import os
 import shutil
@@ -774,6 +775,23 @@ class CTable(Generic[RowT]):
             if new_data is not None:
                 self._load_initial_data(new_data)
 
+    def close(self) -> None:
+        """Close any persistent backing store held by this table."""
+        storage = getattr(self, "_storage", None)
+        if storage is not None and hasattr(storage, "close"):
+            storage.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        with contextlib.suppress(Exception):
+            self.close()
+
     def _init_columns(
         self, expected_size: int, default_chunks, default_blocks, storage: TableStorage
     ) -> None:
@@ -1047,10 +1065,15 @@ class CTable(Generic[RowT]):
         """
         if self.base is not None:
             raise ValueError("Cannot save a view — save the parent table instead.")
-        if os.path.exists(urlpath):
+        file_storage = FileTableStorage(urlpath, "w")
+        target_path = file_storage._root
+        if os.path.exists(target_path):
             if not overwrite:
-                raise ValueError(f"Path {urlpath!r} already exists. Use overwrite=True to replace.")
-            shutil.rmtree(urlpath)
+                raise ValueError(f"Path {target_path!r} already exists. Use overwrite=True to replace.")
+            if os.path.isdir(target_path):
+                shutil.rmtree(target_path)
+            else:
+                os.remove(target_path)
 
         # Collect live physical positions
         valid_np = self._valid_rows[:]
@@ -1058,7 +1081,6 @@ class CTable(Generic[RowT]):
         n_live = len(live_pos)
         capacity = max(n_live, 1)
 
-        file_storage = FileTableStorage(urlpath, "w")
         default_chunks, default_blocks = compute_chunks_blocks((capacity,))
 
         # --- valid_rows (all True, compacted) ---
@@ -1087,6 +1109,7 @@ class CTable(Generic[RowT]):
                 disk_col[:n_live] = self._cols[name][live_pos]
 
         file_storage.save_schema(schema_to_dict(self._schema))
+        file_storage.close()
 
     @classmethod
     def load(cls, urlpath: str) -> CTable:
@@ -1148,6 +1171,8 @@ class CTable(Generic[RowT]):
             if phys_size > 0:
                 mem_col[:phys_size] = disk_cols[name][:]
             mem_cols[name] = mem_col
+
+        file_storage.close()
 
         obj = cls.__new__(cls)
         obj._row_type = None
@@ -1861,7 +1886,7 @@ class CTable(Generic[RowT]):
     def drop_column(self, name: str) -> None:
         """Remove a column from the table.
 
-        On disk tables the corresponding ``.b2nd`` file is deleted.
+        On disk tables the corresponding persisted column leaf is deleted.
 
         Raises
         ------
@@ -1880,9 +1905,7 @@ class CTable(Generic[RowT]):
             raise ValueError("Cannot drop the last column.")
 
         if isinstance(self._storage, FileTableStorage):
-            col_path = self._storage._col_path(name)
-            if os.path.exists(col_path):
-                os.remove(col_path)
+            self._storage.delete_column(name)
 
         del self._cols[name]
         del self._col_widths[name]
@@ -1900,7 +1923,7 @@ class CTable(Generic[RowT]):
     def rename_column(self, old: str, new: str) -> None:
         """Rename a column.
 
-        On disk tables the corresponding ``.b2nd`` file is renamed.
+        On disk tables the corresponding persisted column leaf is renamed.
 
         Raises
         ------
@@ -1920,11 +1943,7 @@ class CTable(Generic[RowT]):
         _validate_column_name(new)
 
         if isinstance(self._storage, FileTableStorage):
-            old_path = self._storage._col_path(old)
-            new_path = self._storage._col_path(new)
-            os.rename(old_path, new_path)
-            b2_mode = "r" if self._read_only else "a"
-            self._cols[new] = blosc2.open(new_path, mode=b2_mode)
+            self._cols[new] = self._storage.rename_column(old, new)
         else:
             self._cols[new] = self._cols[old]
         del self._cols[old]
