@@ -50,7 +50,7 @@ db = b.copy(urlpath="b.b2nd", mode="w")
 
 # Get a LazyExpr instance
 (da**2 + db**2 + 2 * da * db + 1).save(urlpath="c.b2nd")
-dc = blosc2.open("c.b2nd")
+dc = blosc2.open("c.b2nd", mode="r")
 
 # Evaluate: output is a NDArray
 dc2 = dc.compute()

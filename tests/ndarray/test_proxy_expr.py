@@ -76,7 +76,7 @@ def test_expr_proxy_operands(chunks_blocks, cat2_context):
     urlpath = "expr_proxies.b2nd"
     expr.save(urlpath=urlpath, mode="w")
     del expr
-    expr_opened = blosc2.open("expr_proxies.b2nd")
+    expr_opened = blosc2.open("expr_proxies.b2nd", mode="r")
     assert isinstance(expr_opened, blosc2.LazyExpr)
 
     # All

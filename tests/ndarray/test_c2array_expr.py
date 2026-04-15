@@ -186,7 +186,7 @@ def test_save(cat2_context):
     for op in ops:
         del op
     del expr
-    expr = blosc2.open(urlpath)
+    expr = blosc2.open(urlpath, mode="r")
     res = expr.compute()
     assert res.dtype == np.float64
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)

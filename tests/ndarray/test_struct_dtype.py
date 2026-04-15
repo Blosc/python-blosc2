@@ -36,7 +36,7 @@ def test_scalar(shape, dtype, urlpath):
     assert a.dtype == b.dtype
 
     if urlpath is not None:
-        c = blosc2.open(urlpath)
+        c = blosc2.open(urlpath, mode="r")
         assert np.array_equal(c[:], b)
         assert c.shape == a.shape
         assert c.dtype == a.dtype

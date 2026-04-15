@@ -77,7 +77,7 @@ def test_shape_with_zeros(shape, urlpath):
     data = np.zeros(shape, dtype="int32")
     ndarray = blosc2.asarray(data, urlpath=urlpath, mode="w")
     if urlpath is not None:
-        ndarray = blosc2.open(urlpath)
+        ndarray = blosc2.open(urlpath, mode="r")
     assert isinstance(ndarray, blosc2.NDArray)
     assert ndarray.shape == shape
     assert ndarray.size == 0
@@ -502,11 +502,11 @@ def test_argsort_scalar():
 def test_save():
     a = blosc2.arange(0, 10, 1, dtype="i4", shape=(10,))
     blosc2.save(a, "test.b2nd")
-    c = blosc2.open("test.b2nd")
+    c = blosc2.open("test.b2nd", mode="r")
     assert np.array_equal(a[:], c[:])
     blosc2.remove_urlpath("test.b2nd")
     with pytest.raises(FileNotFoundError):
-        blosc2.open("test.b2nd")
+        blosc2.open("test.b2nd", mode="r")
 
 
 def test_oindex():

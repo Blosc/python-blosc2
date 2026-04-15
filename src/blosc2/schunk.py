@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import warnings
 import zipfile
 from collections import namedtuple
 from collections.abc import Iterator, Mapping, MutableMapping
@@ -198,82 +199,82 @@ class SChunk(blosc2_ext.SChunk):
     ) -> None:
         """Create a new super-chunk, or open an existing one.
 
-        Parameters
-        ----------
-        chunksize: int, optional
-            The size, in bytes, of the chunks in the super-chunk. If not provided,
-            it is set automatically to a reasonable value.
+            Parameters
+            ----------
+            chunksize: int, optional
+                The size, in bytes, of the chunks in the super-chunk. If not provided,
+                it is set automatically to a reasonable value.
 
-        data: bytes-like object, optional
-            The data to be split into different chunks of size :paramref:`chunksize`.
-            If None, the Schunk instance will be empty initially.
+            data: bytes-like object, optional
+                The data to be split into different chunks of size :paramref:`chunksize`.
+                If None, the Schunk instance will be empty initially.
 
-        kwargs: dict, optional
-            Storage parameters. The default values are in :class:`blosc2.Storage`.
-            Supported keyword arguments:
-                storage: :class:`blosc2.Storage` or dict
-                    All the storage parameters that you want to use as
-                    a :class:`blosc2.Storage` or dict instance.
-                cparams: :class:`blosc2.CParams` or dict
-                    All the compression parameters that you want to use as
-                    a :class:`blosc2.CParams` or dict instance.
-                dparams: :class:`blosc2.DParams` or dict
-                    All the decompression parameters that you want to use as
-                    a :class:`blosc2.DParams` or dict instance.
-                others: Any
-                    If `storage` is not passed, all the parameters of a :class:`blosc2.Storage`
-                    can be passed as keyword arguments.
+            kwargs: dict, optional
+                Storage parameters. The default values are in :class:`blosc2.Storage`.
+                Supported keyword arguments:
+                    storage: :class:`blosc2.Storage` or dict
+                        All the storage parameters that you want to use as
+                        a :class:`blosc2.Storage` or dict instance.
+                    cparams: :class:`blosc2.CParams` or dict
+                        All the compression parameters that you want to use as
+                        a :class:`blosc2.CParams` or dict instance.
+                    dparams: :class:`blosc2.DParams` or dict
+                        All the decompression parameters that you want to use as
+                        a :class:`blosc2.DParams` or dict instance.
+                    others: Any
+                        If `storage` is not passed, all the parameters of a :class:`blosc2.Storage`
+                        can be passed as keyword arguments.
 
-        Examples
-        --------
-        >>> import blosc2
-        >>> import numpy as np
-        >>> import os.path
-        >>> import shutil
-        >>> import tempfile
-        >>> cparams = blosc2.CParams()
-        >>> dparams = blosc2.DParams()
-        >>> storage = blosc2.Storage(contiguous=True)
-        >>> schunk = blosc2.SChunk(cparams=cparams, dparams=dparams, storage=storage)
+            Examples
+            --------
+            >>> import blosc2
+            >>> import numpy as np
+            >>> import os.path
+            >>> import shutil
+            >>> import tempfile
+            >>> cparams = blosc2.CParams()
+            >>> dparams = blosc2.DParams()
+            >>> storage = blosc2.Storage(contiguous=True)
+            >>> schunk = blosc2.SChunk(cparams=cparams, dparams=dparams, storage=storage)
 
-        In the following, we will write and read a super-chunk to and from disk
-        via memory-mapped files.
+            In the following, we will write and read a super-chunk to and from disk
+            via memory-mapped files.
 
-        >>> a = np.arange(3, dtype=np.int64)
-        >>> chunksize = a.size * a.itemsize
-        >>> n_chunks = 2
-        >>> tmpdirname = tempfile.mkdtemp()
-        >>> urlpath = os.path.join(tmpdirname, 'schunk.b2frame')
+            >>> a = np.arange(3, dtype=np.int64)
+            >>> chunksize = a.size * a.itemsize
+            >>> n_chunks = 2
+            >>> tmpdirname = tempfile.mkdtemp()
+            >>> urlpath = os.path.join(tmpdirname, 'schunk.b2frame')
 
-        Optional: we intend to write 2 chunks of 24 bytes each, and we expect
-        the compressed size to be smaller than the original size. Therefore, we
-        generously set the initial size of the mapping to 48 bytes
-        effectively avoiding remappings.
+            Optional: we intend to write 2 chunks of 24 bytes each, and we expect
+            the compressed size to be smaller than the original size. Therefore, we
+            generously set the initial size of the mapping to 48 bytes
+            effectively avoiding remappings.
 
-        >>> initial_mapping_size = chunksize * n_chunks
-        >>> schunk_mmap = blosc2.SChunk(
-        ...     chunksize=chunksize,
-        ...     mmap_mode="w+",
-        ...     initial_mapping_size=initial_mapping_size,
-        ...     urlpath=urlpath,
-        ... )
-        >>> schunk_mmap.append_data(a)
-        1
-        >>> schunk_mmap.append_data(a * 2)
-        2
+            >>> initial_mapping_size = chunksize * n_chunks
+            >>> schunk_mmap = blosc2.SChunk(
+            ...     chunksize=chunksize,
+            ...     mmap_mode="w+",
+            ...     initial_mapping_size=initial_mapping_size,
+            ...     urlpath=urlpath,
+            ... )
+            >>> schunk_mmap.append_data(a)
+            1
+            >>> schunk_mmap.append_data(a * 2)
+            2
 
-        Optional: explicitly close the file and free the mapping.
+            Optional: explicitly close the file and free the mapping.
 
-        >>> del schunk_mmap
+            >>> del schunk_mmap
 
-        Reading the data back again via memory-mapped files:
+            Reading the data back again via memory-mapped files:
 
-        >>> schunk_mmap = blosc2.open(urlpath, mmap_mode="r")
-        >>> np.frombuffer(schunk_mmap.decompress_chunk(0), dtype=np.int64).tolist()
-        [0, 1, 2]
-        >>> np.frombuffer(schunk_mmap.decompress_chunk(1), dtype=np.int64).tolist()
-        [0, 2, 4]
-        >>> shutil.rmtree(tmpdirname)
+        >>> schunk_mmap = blosc2.open(urlpath, mode="r", mmap_mode="r")
+            >>> np.frombuffer(schunk_mmap.decompress_chunk(0), dtype=np.int64).tolist()
+            [0, 1, 2]
+            >>> np.frombuffer(schunk_mmap.decompress_chunk(1), dtype=np.int64).tolist()
+            [0, 2, 4]
+            >>> shutil.rmtree(tmpdirname)
         """
         # Check only allowed kwarg are passed
         allowed_kwargs = [
@@ -1636,7 +1637,7 @@ def process_opened_object(res):
     if "proxy-source" in meta:
         proxy_src = meta["proxy-source"]
         if proxy_src["local_abspath"] is not None:
-            src = blosc2.open(proxy_src["local_abspath"])
+            src = blosc2.open(proxy_src["local_abspath"], mode="a")
             return blosc2.Proxy(src, _cache=res)
         elif proxy_src["urlpath"] is not None:
             src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
@@ -1714,8 +1715,14 @@ def _finalize_special_open(special, urlpath, mode):
     return special
 
 
+_OPEN_MODE_SENTINEL = object()
+
+
 def open(
-    urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
+    urlpath: str | pathlib.Path | blosc2.URLPath,
+    mode: str = _OPEN_MODE_SENTINEL,
+    offset: int = 0,
+    **kwargs: dict,
 ) -> (
     blosc2.SChunk
     | blosc2.NDArray
@@ -1741,7 +1748,10 @@ def open(
     mode: str, optional
         Persistence mode: 'r' means read only (must exist);
         'a' means read/write (create if it doesn't exist);
-        'w' means create (overwrite if it exists). Default is 'a'.
+        'w' means create (overwrite if it exists). Defaults to 'a' for now,
+        but will change to 'r' in a future release. Pass ``mode='a'``
+        explicitly to preserve writable behavior, or ``mode='r'`` for
+        read-only access.
     offset: int, optional
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
@@ -1801,7 +1811,7 @@ def open(
     >>> # Create SChunk and append data
     >>> schunk = blosc2.SChunk(chunksize=chunksize, data=data.tobytes(), storage=storage)
     >>> # Open SChunk
-    >>> sc_open = blosc2.open(urlpath=urlpath)
+    >>> sc_open = blosc2.open(urlpath=urlpath, mode="r")
     >>> for i in range(nchunks):
     ...     dest = np.empty(nelem // nchunks, dtype=data.dtype)
     ...     schunk.decompress_chunk(i, dest)
@@ -1816,12 +1826,24 @@ def open(
 
     To open the same schunk memory-mapped, we simply need to pass the `mmap_mode` parameter:
 
-    >>> sc_open_mmap = blosc2.open(urlpath=urlpath, mmap_mode="r")
+    >>> sc_open_mmap = blosc2.open(urlpath=urlpath, mode="r", mmap_mode="r")
     >>> sc_open.nchunks == sc_open_mmap.nchunks
     True
     >>> all(sc_open.decompress_chunk(i, dest1) == sc_open_mmap.decompress_chunk(i, dest1) for i in range(nchunks))
     True
     """
+    # Resolve the sentinel before URLPath check so we can raise the correct
+    # error without also triggering the deprecation warning for invalid calls.
+    if mode is _OPEN_MODE_SENTINEL:
+        warnings.warn(
+            "blosc2.open() currently defaults to mode='a', but this will change "
+            "to mode='r' in a future release. Pass mode='a' explicitly to keep "
+            "writable behavior, or mode='r' for read-only access.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        mode = "a"
+
     if isinstance(urlpath, blosc2.URLPath):
         if mode != "r" or offset != 0 or kwargs != {}:
             raise NotImplementedError(

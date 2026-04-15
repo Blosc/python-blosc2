@@ -20,6 +20,6 @@ nparray = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
 a = blosc2.asarray(nparray, urlpath=urlpath, mode="w")
 
 # Read the array from disk
-b = blosc2.open(urlpath)
+b = blosc2.open(urlpath, mode="r")
 # And see its contents
 print(b[...])

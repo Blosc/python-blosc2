@@ -229,7 +229,7 @@ def test_catalog_survives_reopen(tmpdir):
     t.create_index("id")
     del t  # close
 
-    t2 = blosc2.open(path)
+    t2 = blosc2.open(path, mode="r")
     idxs = t2.indexes
     assert len(idxs) == 1
     assert idxs[0].col_name == "id"
@@ -269,7 +269,7 @@ def test_drop_index_persistent_catalog_cleared(tmpdir):
     t.drop_index("id")
     del t
 
-    t2 = blosc2.open(path)
+    t2 = blosc2.open(path, mode="r")
     assert len(t2.indexes) == 0
 
 
@@ -321,7 +321,7 @@ def test_stale_persists_after_reopen(tmpdir):
     t.append([200, 300.0, 1])  # marks stale
     del t
 
-    t2 = blosc2.open(path)
+    t2 = blosc2.open(path, mode="r")
     assert t2.index("id").stale
 
 
@@ -343,7 +343,7 @@ def test_query_after_reopen_persistent(tmpdir):
     t.create_index("id")
     del t
 
-    t2 = blosc2.open(path)
+    t2 = blosc2.open(path, mode="r")
     result = t2.where(t2["id"] > 90)
     ids = sorted(int(v) for v in result["id"].to_numpy())
     assert ids == list(range(91, 100))

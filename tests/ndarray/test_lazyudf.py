@@ -483,7 +483,7 @@ def test_save_ludf():
 
     expr.save(urlpath=urlpath)
     del expr
-    expr = blosc2.open(urlpath)
+    expr = blosc2.open(urlpath, mode="r")
     assert isinstance(expr, blosc2.LazyUDF)
     res_lazyexpr = expr.compute()
     np.testing.assert_array_equal(res_lazyexpr[:], npc)
@@ -493,7 +493,7 @@ def test_save_ludf():
         expr = blosc2.lazyudf(udf1p_numba, (array,), np.float64)
         expr.save(urlpath=urlpath)
         del expr
-        expr = blosc2.open(urlpath)
+        expr = blosc2.open(urlpath, mode="r")
         assert isinstance(expr, blosc2.LazyUDF)
         res_lazyexpr = expr.compute()
         np.testing.assert_array_equal(res_lazyexpr[:], npc)
@@ -511,7 +511,7 @@ def test_lazyudf_vlmeta_roundtrip(tmp_path):
     expr.vlmeta["attrs"] = {"version": 1}
     expr.save(urlpath=str(expr_path))
 
-    restored = blosc2.open(str(expr_path))
+    restored = blosc2.open(str(expr_path), mode="r")
 
     assert isinstance(restored, blosc2.LazyUDF)
     assert restored.vlmeta["name"] == "increment"
