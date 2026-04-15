@@ -98,6 +98,24 @@ def test_where_with_index_matches_scan_in_memory():
     assert ids_idx == ids_scan
 
 
+def test_bool_column_composes_naturally_in_where():
+    @dataclasses.dataclass
+    class BoolRow:
+        sensor_id: int = blosc2.field(blosc2.int32())
+        region: str = blosc2.field(blosc2.string(max_length=8), default="")
+        active: bool = blosc2.field(blosc2.bool(), default=True)
+
+    t = blosc2.CTable(BoolRow)
+    for i in range(20):
+        t.append([i, "north" if i % 4 == 0 else "south", i % 2 == 0])
+
+    result = t.where((t["sensor_id"] >= 8) & t["active"] & (t["region"] == "north"))
+    assert sorted(int(v) for v in result["sensor_id"].to_numpy()) == [8, 12, 16]
+
+    result_bare = t.where(t["active"])
+    assert sorted(int(v) for v in result_bare["sensor_id"].to_numpy()) == list(range(0, 20, 2))
+
+
 def test_rebuild_index_in_memory():
     t = _make_table(30)
     t.create_index("id")

@@ -13,9 +13,11 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import os
+import pprint
 import shutil
 from collections.abc import Iterable
 from dataclasses import MISSING
+from textwrap import TextWrapper
 from typing import Any, Generic, TypeVar
 
 import numpy as np
@@ -37,6 +39,7 @@ except ImportError:
 
 
 import blosc2
+from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.schema import SchemaSpec
 from blosc2.schema_compiler import (
     ColumnConfig,
@@ -131,6 +134,85 @@ class CTableIndex:
         """Optional human-readable name assigned at creation time."""
         return self._descriptor.get("name") or None
 
+    @property
+    def nbytes(self) -> int:
+        """Total uncompressed size in bytes for this index payload."""
+        from blosc2.indexing import _component_nbytes, iter_index_components
+
+        root = self._table._root_table
+        col_arr = root._cols[self._col_name]
+        descriptor = self._descriptor
+        return sum(
+            _component_nbytes(col_arr, descriptor, component)
+            for component in iter_index_components(col_arr, descriptor)
+        )
+
+    @property
+    def cbytes(self) -> int:
+        """Total compressed size in bytes for this index payload."""
+        from blosc2.indexing import _component_cbytes, iter_index_components
+
+        root = self._table._root_table
+        col_arr = root._cols[self._col_name]
+        descriptor = self._descriptor
+        return sum(
+            _component_cbytes(col_arr, descriptor, component)
+            for component in iter_index_components(col_arr, descriptor)
+        )
+
+    @property
+    def cratio(self) -> float:
+        """Compression ratio for this index payload."""
+        cbytes = self.cbytes
+        if cbytes == 0:
+            return float("inf")
+        return self.nbytes / cbytes
+
+    def storage_stats(self) -> tuple[int, int, float] | None:
+        """Return ``(nbytes, cbytes, cratio)`` when sidecars are directly measurable."""
+        try:
+            nbytes = self.nbytes
+            cbytes = self.cbytes
+        except (FileNotFoundError, OSError, RuntimeError, KeyError, ValueError):
+            root = self._table._root_table
+            if not isinstance(root._storage, FileTableStorage):
+                return None
+
+            from blosc2.indexing import iter_index_components
+
+            descriptor = self._descriptor
+            col_arr = root._cols[self._col_name]
+            store = root._storage._open_store()
+            nbytes = 0
+            cbytes = 0
+            try:
+                for component in iter_index_components(col_arr, descriptor):
+                    if component.path is None:
+                        return None
+                    key = self._component_store_key(component.path)
+                    obj = store[key]
+                    nbytes += int(obj.nbytes)
+                    cbytes += int(obj.cbytes)
+            except (FileNotFoundError, OSError, RuntimeError, KeyError, ValueError):
+                return None
+        cratio = float("inf") if cbytes == 0 else nbytes / cbytes
+        return nbytes, cbytes, cratio
+
+    @staticmethod
+    def _component_store_key(path: str) -> str:
+        """Return the logical TreeStore key for an index component path."""
+        normalized = path.replace("\\", "/")
+        marker = "_indexes/"
+        idx = normalized.find(marker)
+        if idx < 0:
+            raise KeyError(f"Cannot resolve index component path {path!r} inside table store.")
+        relpath = normalized[idx:]
+        for suffix in (".b2nd", ".b2f"):
+            if relpath.endswith(suffix):
+                relpath = relpath[: -len(suffix)]
+                break
+        return "/" + relpath.lstrip("/")
+
     def drop(self) -> None:
         """Drop this index from the owning table."""
         self._table.drop_index(self._col_name)
@@ -147,6 +229,42 @@ class CTableIndex:
         stale_str = " (stale)" if self.stale else ""
         name_str = f" name={self.name!r}" if self.name else ""
         return f"<CTableIndex col={self._col_name!r} kind={self.kind!r}{name_str}{stale_str}>"
+
+
+class _CTableInfoReporter(InfoReporter):
+    """Info reporter that also preserves the historic ``t.info()`` call style."""
+
+    def __repr__(self) -> str:
+        items = self.obj.info_items
+        max_key_len = max(len(k) for k, _ in items)
+        parts = []
+        for key, value in items:
+            if isinstance(value, dict):
+                parts.append(f"{key.ljust(max_key_len)} :")
+                pretty = pprint.pformat(value, sort_dicts=False)
+                parts.extend(f" {line}" for line in pretty.splitlines())
+                continue
+
+            wrapper = TextWrapper(
+                width=96,
+                initial_indent=key.ljust(max_key_len) + " : ",
+                subsequent_indent=" " * max_key_len + " : ",
+            )
+            parts.append(wrapper.fill(str(value)))
+        return "\n".join(parts) + "\n"
+
+    def __call__(self) -> None:
+        print(repr(self), end="")
+
+
+class _InfoLiteral:
+    """Pretty-printer helper for unquoted literal values inside info dicts."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def __repr__(self) -> str:
+        return self.text
 
 
 # RowT is intentionally left unbound so CTable works with both dataclasses
@@ -2336,6 +2454,13 @@ class CTable(Generic[RowT]):
         return sum(col.nbytes for col in self._cols.values()) + self._valid_rows.nbytes
 
     @property
+    def cratio(self) -> float:
+        """Compression ratio for the whole table payload."""
+        if self.cbytes == 0:
+            return float("inf")
+        return self.nbytes / self.cbytes
+
+    @property
     def schema(self) -> CompiledSchema:
         """The compiled schema that drives this table's columns and validation."""
         return self._schema
@@ -2939,33 +3064,71 @@ class CTable(Generic[RowT]):
 
         return None
 
-    def info(self) -> None:
-        """Print a concise summary of the CTable."""
-        ratio = (self.nbytes / self.cbytes) if self.cbytes > 0 else 0.0
+    @property
+    def info_items(self) -> list[tuple[str, object]]:
+        """Structured summary items used by :meth:`info`."""
+        storage_type = "persistent" if isinstance(self._storage, FileTableStorage) else "in-memory"
+        urlpath = self._storage._root if isinstance(self._storage, FileTableStorage) else None
+        schema_summary = {
+            name: _InfoLiteral(self._dtype_info_label(self._cols[name].dtype)) for name in self.col_names
+        }
 
-        lines = []
-        lines.append("<class 'CTable'>")
-        lines.append(f"nºColumns: {self.ncols}")
-        lines.append(f"nºRows: {self.nrows}")
-        lines.append("")
+        index_summary = {}
+        for idx in self.indexes:
+            stale = " stale" if idx.stale else ""
+            label = f" name={idx.name!r}" if idx.name and idx.name != "__self__" else ""
+            stats = idx.storage_stats()
+            if stats is None:
+                suffix = "size=n/a (sidecars not directly addressable)"
+            else:
+                nbytes, cbytes, cratio = stats
+                suffix = (
+                    f"nbytes={format_nbytes_info(nbytes)}, "
+                    f"cbytes={format_nbytes_info(cbytes)}, cratio={cratio:.2f}x"
+                )
+            index_summary[idx.col_name] = f"[{idx.kind}{stale}{label}] {suffix}"
 
-        header = f" {'#':>3}   {'Column':<15} {'Itemsize':<12} {'Dtype':<15}"
-        lines.append(header)
-        lines.append(f" {'---':>3}  {'------':<15} {'--------':<12} {'-----':<15}")
+        items = [
+            ("type", self.__class__.__name__),
+            ("storage", storage_type),
+            ("rows", self.nrows),
+            ("columns", self.ncols),
+            ("capacity", len(self._valid_rows)),
+            ("view", self.base is not None),
+            ("read_only", self._read_only),
+            ("nbytes", format_nbytes_info(self.nbytes)),
+            ("cbytes", format_nbytes_info(self.cbytes)),
+            ("cratio", f"{self.cratio:.2f}"),
+            ("schema", schema_summary),
+            (
+                "valid_rows_mask",
+                f"nbytes={format_nbytes_info(self._valid_rows.nbytes)}, cbytes={format_nbytes_info(self._valid_rows.cbytes)}",
+            ),
+            ("indexes", index_summary if index_summary else "none"),
+        ]
+        if urlpath is not None:
+            items.insert(2, ("urlpath", urlpath))
+        return items
 
-        for i, name in enumerate(self.col_names):
-            col_array = self._cols[name]
-            dtype_str = str(col_array.dtype)
-            itemsize = f"{col_array.dtype.itemsize} B"
-            lines.append(f" {i:>3}   {name:<15} {itemsize:<12} {dtype_str:<15}")
+    @staticmethod
+    def _dtype_info_label(dtype: np.dtype) -> str:
+        """Return a compact dtype label for info reports."""
+        if dtype.kind == "U":
+            return f"U{dtype.itemsize // 4}"
+        if dtype.kind == "S":
+            return f"S{dtype.itemsize}"
+        return str(dtype)
 
-        lines.append("")
-        lines.append(f"memory usage: {_fmt_bytes(self.cbytes)}")
-        lines.append(f"uncompressed size: {_fmt_bytes(self.nbytes)}")
-        lines.append(f"compression ratio: {ratio:.2f}x")
-        lines.append("")
+    @property
+    def info(self) -> _CTableInfoReporter:
+        """Get information about this table.
 
-        print("\n".join(lines))
+        Examples
+        --------
+        >>> print(t.info)
+        >>> t.info()
+        """
+        return _CTableInfoReporter(self)
 
     # ------------------------------------------------------------------
     # Mutation: append / extend / delete
@@ -3106,6 +3269,9 @@ class CTable(Generic[RowT]):
 
     @profile
     def where(self, expr_result) -> CTable:
+        if isinstance(expr_result, Column):
+            expr_result = expr_result._raw_col
+
         if not (
             isinstance(expr_result, (blosc2.NDArray, blosc2.LazyExpr))
             and (getattr(expr_result, "dtype", None) == np.bool_)
