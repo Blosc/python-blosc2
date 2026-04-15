@@ -685,5 +685,64 @@ def test_column_repr_shows_preview_values():
     assert "..." in r
 
 
+def test_info_omits_capacity_and_read_only_for_in_memory_table():
+    t = CTable(Row, new_data=DATA20)
+    info = repr(t.info)
+    assert "capacity" not in info
+    assert "read_only" not in info
+    assert "open_mode" not in info
+
+
+def test_info_shows_open_mode_for_persistent_table(tmp_path):
+    path = str(tmp_path / "table.b2d")
+    t = CTable(Row, new_data=DATA20, urlpath=path, mode="w")
+    t.close()
+
+    opened = CTable.open(path)
+    info = repr(opened.info)
+    assert "capacity" not in info
+    assert "read_only" not in info
+    assert "open_mode       : r" in info
+    opened.close()
+
+
+def test_info_schema_expands_unicode_dtype_labels():
+    t = CTable(StrRow, new_data=[("alpha",), ("beta",)])
+    info = repr(t.info)
+    assert "U16 (Unicode, max 16 chars)" in info
+
+
+def test_info_valid_rows_mask_only_reports_cbytes():
+    t = CTable(Row, new_data=DATA20)
+    info = repr(t.info)
+    assert "valid_rows_mask : cbytes=" in info
+    assert "valid_rows_mask : nbytes=" not in info
+
+
+def test_info_indexes_only_report_cbytes(tmp_path):
+    @dataclass
+    class IndexedRow:
+        id: int = blosc2.field(blosc2.int32())
+        active: bool = blosc2.field(blosc2.bool(), default=True)
+
+    data = [(i, i % 2 == 0) for i in range(32)]
+    path = str(tmp_path / "indexed.b2d")
+    t = CTable(IndexedRow, new_data=data, urlpath=path, mode="w")
+    t.create_index("id", kind=blosc2.IndexKind.FULL)
+
+    info = repr(t.info)
+    index_block = info.split("indexes         :", 1)[1]
+    assert "cbytes=" in index_block
+    assert "nbytes=" not in index_block
+    assert "cratio=" not in index_block
+
+
+def test_info_cratio_uses_one_decimal_with_suffix():
+    t = CTable(Row, new_data=DATA20)
+    info = repr(t.info)
+    assert "cratio          :" in info
+    assert "x" in next(line for line in info.splitlines() if line.startswith("cratio"))
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

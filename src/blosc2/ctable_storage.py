@@ -80,6 +80,9 @@ class TableStorage:
     def is_read_only(self) -> bool:
         raise NotImplementedError
 
+    def open_mode(self) -> str | None:
+        raise NotImplementedError
+
     def delete_column(self, name: str) -> None:
         raise NotImplementedError
 
@@ -161,6 +164,9 @@ class InMemoryTableStorage(TableStorage):
 
     def is_read_only(self):
         return False
+
+    def open_mode(self) -> str | None:
+        return None
 
     def delete_column(self, name):
         raise RuntimeError("In-memory tables have no on-disk representation to mutate.")
@@ -268,6 +274,9 @@ class FileTableStorage(TableStorage):
 
     def is_read_only(self) -> bool:
         return self._mode == "r"
+
+    def open_mode(self) -> str | None:
+        return self._mode
 
     def create_column(self, name, *, dtype, shape, chunks, blocks, cparams, dparams):
         kwargs: dict[str, Any] = {

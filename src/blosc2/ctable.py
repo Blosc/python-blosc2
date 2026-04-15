@@ -3099,11 +3099,8 @@ class CTable(Generic[RowT]):
             if stats is None:
                 suffix = "size=n/a (sidecars not directly addressable)"
             else:
-                nbytes, cbytes, cratio = stats
-                suffix = (
-                    f"nbytes={format_nbytes_info(nbytes)}, "
-                    f"cbytes={format_nbytes_info(cbytes)}, cratio={cratio:.2f}x"
-                )
+                _, cbytes, _ = stats
+                suffix = f"cbytes={format_nbytes_info(cbytes)}"
             index_summary[idx.col_name] = f"[{idx.kind}{stale}{label}] {suffix}"
 
         items = [
@@ -3111,28 +3108,30 @@ class CTable(Generic[RowT]):
             ("storage", storage_type),
             ("rows", self.nrows),
             ("columns", self.ncols),
-            ("capacity", len(self._valid_rows)),
             ("view", self.base is not None),
-            ("read_only", self._read_only),
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),
-            ("cratio", f"{self.cratio:.2f}"),
+            ("cratio", f"{self.cratio:.1f}x"),
             ("schema", schema_summary),
             (
                 "valid_rows_mask",
-                f"nbytes={format_nbytes_info(self._valid_rows.nbytes)}, cbytes={format_nbytes_info(self._valid_rows.cbytes)}",
+                f"cbytes={format_nbytes_info(self._valid_rows.cbytes)}",
             ),
             ("indexes", index_summary if index_summary else "none"),
         ]
         if urlpath is not None:
             items.insert(2, ("urlpath", urlpath))
+            open_mode = self._storage.open_mode()
+            if open_mode is not None:
+                items.insert(3, ("open_mode", open_mode))
         return items
 
     @staticmethod
     def _dtype_info_label(dtype: np.dtype) -> str:
         """Return a compact dtype label for info reports."""
         if dtype.kind == "U":
-            return f"U{dtype.itemsize // 4}"
+            nchars = dtype.itemsize // 4
+            return f"U{nchars} (Unicode, max {nchars} chars)"
         if dtype.kind == "S":
             return f"S{dtype.itemsize}"
         return str(dtype)
