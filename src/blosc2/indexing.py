@@ -256,7 +256,7 @@ def _copy_descriptor_for_token(array: blosc2.NDArray, token: str) -> dict:
 
 
 def _is_persistent_array(array: blosc2.NDArray) -> bool:
-    return array.urlpath is not None
+    return getattr(array, "urlpath", None) is not None
 
 
 def _tmpdir_for_array(array: blosc2.NDArray) -> str | None:
@@ -267,8 +267,9 @@ def _tmpdir_for_array(array: blosc2.NDArray) -> str | None:
     size limits on ``/tmp`` (commonly a tmpfs with only a few GB).
     For in-memory arrays we fall back to the system default (``None``).
     """
-    if array.urlpath is not None:
-        return str(Path(array.urlpath).resolve().parent)
+    urlpath = getattr(array, "urlpath", None)
+    if urlpath is not None:
+        return str(Path(urlpath).resolve().parent)
     return None
 
 
