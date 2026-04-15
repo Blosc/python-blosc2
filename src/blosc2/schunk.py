@@ -1835,6 +1835,7 @@ def open(
     # Resolve the sentinel before URLPath check so we can raise the correct
     # error without also triggering the deprecation warning for invalid calls.
     if mode is _OPEN_MODE_SENTINEL:
+        # TODO: remove the sentinel/FutureWarning path once blosc2.open() defaults to mode="r".
         warnings.warn(
             "blosc2.open() currently defaults to mode='a', but this will change "
             "to mode='r' in a future release. Pass mode='a' explicitly to keep "
