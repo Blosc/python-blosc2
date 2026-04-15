@@ -7,6 +7,8 @@ Main Classes
 ------------
 .. autosummary::
 
+    CTable
+    Column
     NDArray
     NDField
     LazyArray
@@ -26,6 +28,7 @@ Main Classes
 .. toctree::
     :maxdepth: 1
 
+    ctable
     ndarray
     ndfield
     lazyarray

@@ -6,7 +6,7 @@
 #######################################################################
 
 # Column aggregates: sum, min, max, mean, std, unique, value_counts,
-# describe, and covariance matrix.
+# describe, covariance matrix, and null-aware aggregation.
 
 from dataclasses import dataclass
 
@@ -18,7 +18,8 @@ import blosc2
 @dataclass
 class Reading:
     sensor_id: int = blosc2.field(blosc2.int32(ge=0, le=9))
-    temperature: float = blosc2.field(blosc2.float64(ge=-50.0, le=60.0), default=20.0)
+    # null_value=-999 means "sensor offline" — excluded from aggregates
+    temperature: float = blosc2.field(blosc2.float64(ge=-50.0, le=60.0, null_value=-999.0), default=-999.0)
     humidity: float = blosc2.field(blosc2.float64(ge=0.0, le=100.0), default=50.0)
     alert: bool = blosc2.field(blosc2.bool(), default=False)
 
@@ -31,20 +32,25 @@ temperatures = rng.normal(20.0, 8.0, size=N).clip(-50, 60).astype(np.float64)
 humidities = rng.uniform(30.0, 90.0, size=N).astype(np.float64)
 alerts = rng.random(N) < 0.05
 
+# Simulate ~5 % of sensors being offline (temperature = null sentinel)
+offline = rng.random(N) < 0.05
+temperatures[offline] = -999.0
+
 data = list(
     zip(station_ids.tolist(), temperatures.tolist(), humidities.tolist(), alerts.tolist(), strict=False)
 )
 
 t = blosc2.CTable(Reading, new_data=data)
-print(f"Table: {len(t)} rows\n")
+print(f"Table: {len(t)} rows  ({t['temperature'].null_count()} offline sensors)\n")
 
-# -- per-column aggregates --------------------------------------------------
+# -- per-column aggregates (null sentinels are skipped automatically) --------
 temp = t["temperature"]
-print(f"temperature  sum  : {temp.sum():.2f}")
-print(f"temperature  mean : {temp.mean():.2f}")
-print(f"temperature  std  : {temp.std():.2f}")
-print(f"temperature  min  : {temp.min():.2f}")
-print(f"temperature  max  : {temp.max():.2f}")
+print(f"temperature  null  : {temp.null_count()} offline readings")
+print(f"temperature  sum   : {temp.sum():.2f}")
+print(f"temperature  mean  : {temp.mean():.2f}")
+print(f"temperature  std   : {temp.std():.2f}")
+print(f"temperature  min   : {temp.min():.2f}")
+print(f"temperature  max   : {temp.max():.2f}")
 
 print(f"\nalert  any : {t['alert'].any()}")
 print(f"alert  all : {t['alert'].all()}")

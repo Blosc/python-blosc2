@@ -47,6 +47,57 @@ def build_validator_model(schema: CompiledSchema) -> type[BaseModel]:
     return model_cls
 
 
+def _is_null_value(val, null_value) -> bool:
+    """Return True if *val* equals the null sentinel, handling NaN correctly."""
+    import math
+
+    if null_value is None:
+        return False
+    try:
+        if isinstance(null_value, float) and math.isnan(null_value):
+            return isinstance(val, float) and math.isnan(val)
+    except TypeError:
+        pass
+    return val == null_value
+
+
+def _safe_placeholder(col) -> Any:
+    """Return a value that passes Pydantic validation for *col* (used for null bypass)."""
+    spec = col.spec
+    ge = getattr(spec, "ge", None)
+    gt = getattr(spec, "gt", None)
+    if ge is not None:
+        return ge
+    if gt is not None:
+        return gt + 1
+    # For string/bytes, use an empty string
+    if col.dtype.kind in ("U", "S"):
+        return ""
+    # For bool
+    if col.dtype.kind == "b":
+        return False
+    return 0
+
+
+def _mask_nulls(schema: CompiledSchema, row: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Replace null sentinel values with safe placeholders.
+
+    Returns (masked_row, null_positions) where null_positions maps
+    column name → original null value for columns that were masked.
+    """
+    masked = dict(row)
+    nulled: dict[str, Any] = {}
+    for col in schema.columns:
+        nv = getattr(col.spec, "null_value", None)
+        if nv is None:
+            continue
+        val = row.get(col.name)
+        if val is not None and _is_null_value(val, nv):
+            nulled[col.name] = val
+            masked[col.name] = _safe_placeholder(col)
+    return masked, nulled
+
+
 def validate_row(schema: CompiledSchema, row: dict[str, Any]) -> dict[str, Any]:
     """Validate a single row dict and return the coerced values.
 
@@ -69,12 +120,15 @@ def validate_row(schema: CompiledSchema, row: dict[str, Any]) -> dict[str, Any]:
         name and the violated constraint.
     """
     model_cls = build_validator_model(schema)
+    masked_row, nulled = _mask_nulls(schema, row)
     try:
-        instance = model_cls(**row)
+        instance = model_cls(**masked_row)
     except ValidationError as exc:
         # Re-raise as a plain ValueError so callers don't need to import Pydantic.
         raise ValueError(str(exc)) from exc
-    return instance.model_dump()
+    result = instance.model_dump()
+    result.update(nulled)
+    return result
 
 
 def validate_rows_rowwise(schema: CompiledSchema, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -96,9 +150,12 @@ def validate_rows_rowwise(schema: CompiledSchema, rows: list[dict[str, Any]]) ->
     model_cls = build_validator_model(schema)
     result = []
     for i, row in enumerate(rows):
+        masked_row, nulled = _mask_nulls(schema, row)
         try:
-            instance = model_cls(**row)
+            instance = model_cls(**masked_row)
         except ValidationError as exc:
             raise ValueError(f"Row {i}: {exc}") from exc
-        result.append(instance.model_dump())
+        validated = instance.model_dump()
+        validated.update(nulled)
+        result.append(validated)
     return result

@@ -44,6 +44,21 @@ def _validate_string_lengths(col: CompiledColumn, arr: Any) -> None:
             )
 
 
+def _null_mask_for_spec(arr: np.ndarray, spec) -> np.ndarray | None:
+    """Return a boolean mask True where values are the null sentinel, or None if no null_value."""
+    null_value = getattr(spec, "null_value", None)
+    if null_value is None:
+        return None
+    try:
+        import math
+
+        if isinstance(null_value, float) and math.isnan(null_value):
+            return np.isnan(arr)
+    except TypeError:
+        pass
+    return arr == null_value
+
+
 def validate_column_values(col: CompiledColumn, values: Any) -> None:
     """Check all constraint attributes of *col*'s spec against *values*.
 
@@ -62,33 +77,43 @@ def validate_column_values(col: CompiledColumn, values: Any) -> None:
     spec = col.spec
     arr = np.asarray(values)
 
+    # Compute null mask so sentinels bypass constraint checks
+    null_mask = _null_mask_for_spec(arr, spec)
+    # non_null is a boolean array True for positions that must be validated
+    if null_mask is not None:
+        non_null = ~null_mask
+        check = arr[non_null]
+    else:
+        non_null = None
+        check = arr
+
     # Numeric bounds
     if getattr(spec, "ge", None) is not None:
-        bad = arr < spec.ge
+        bad = check < spec.ge
         if np.any(bad):
-            first = arr[bad][0]
+            first = check[bad][0]
             raise ValueError(f"Column '{col.name}': value {first!r} violates constraint ge={spec.ge}")
     if getattr(spec, "gt", None) is not None:
-        bad = arr <= spec.gt
+        bad = check <= spec.gt
         if np.any(bad):
-            first = arr[bad][0]
+            first = check[bad][0]
             raise ValueError(f"Column '{col.name}': value {first!r} violates constraint gt={spec.gt}")
     if getattr(spec, "le", None) is not None:
-        bad = arr > spec.le
+        bad = check > spec.le
         if np.any(bad):
-            first = arr[bad][0]
+            first = check[bad][0]
             raise ValueError(f"Column '{col.name}': value {first!r} violates constraint le={spec.le}")
     if getattr(spec, "lt", None) is not None:
-        bad = arr >= spec.lt
+        bad = check >= spec.lt
         if np.any(bad):
-            first = arr[bad][0]
+            first = check[bad][0]
             raise ValueError(f"Column '{col.name}': value {first!r} violates constraint lt={spec.lt}")
 
     # String / bytes length bounds
     # np.char.str_len is a true C-level vectorized operation for 'U' and 'S'
     # dtypes.  Fall back to np.vectorize(len) only for unexpected object arrays.
     if getattr(spec, "max_length", None) is not None or getattr(spec, "min_length", None) is not None:
-        _validate_string_lengths(col, arr)
+        _validate_string_lengths(col, check)
 
 
 def validate_column_batch(schema: CompiledSchema, columns: dict[str, Any]) -> None:
