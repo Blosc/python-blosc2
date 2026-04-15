@@ -51,6 +51,18 @@ from blosc2.schema_compiler import (
 # and legacy Pydantic models during the transition period.
 RowT = TypeVar("RowT")
 
+# Arrays larger than this threshold use blosc2.arange instead of np.arange to
+# avoid large transient allocations when mapping logical to physical row positions.
+_BLOSC2_ARANGE_THRESHOLD = 1_000_000
+
+
+def _arange(start, stop=None, step=1) -> blosc2.NDArray | np.ndarray:
+    """Return a range array, using blosc2 for large n to save memory."""
+    if stop is None:
+        start, stop = 0, start
+    n = len(range(start, stop, step))
+    return blosc2.arange(start, stop, step) if n >= _BLOSC2_ARANGE_THRESHOLD else np.arange(start, stop, step)
+
 
 # ---------------------------------------------------------------------------
 # Legacy Pydantic-compat helpers
@@ -268,7 +280,7 @@ class Column:
             return self._raw_col[int(pos_true)]
 
         elif isinstance(key, slice):
-            real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
+            real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
             start, stop, step = key.indices(len(real_pos))
             mask = blosc2.zeros(len(self._table._valid_rows), dtype=np.bool_)
             if step == 1:
@@ -276,7 +288,7 @@ class Column:
                 phys_stop = real_pos[stop - 1]
                 mask[phys_start : phys_stop + 1] = True
             else:
-                lindices = np.arange(start, stop, step)
+                lindices = _arange(start, stop, step)
                 phys_indices = real_pos[lindices]
                 mask[phys_indices[:]] = True
             return Column(self._table, self._col_name, mask=mask)
@@ -294,7 +306,7 @@ class Column:
             return self._raw_col[phys_indices]
 
         elif isinstance(key, (list, tuple, np.ndarray)):
-            real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
+            real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
             phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
             return self._raw_col[phys_indices]
 
@@ -326,7 +338,7 @@ class Column:
             self._raw_col[phys_indices] = value
 
         elif isinstance(key, (slice, list, tuple, np.ndarray)):
-            real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
+            real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
             if isinstance(key, slice):
                 lindices = range(*key.indices(len(real_pos)))
                 phys_indices = np.array([real_pos[i] for i in lindices], dtype=np.int64)
