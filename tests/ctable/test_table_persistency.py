@@ -59,7 +59,7 @@ def test_create_layout_files_exist():
     t = CTable(Row, urlpath=path, mode="w", expected_size=16)
     t.append((1, 50.0, True))
 
-    assert os.path.exists(os.path.join(path, "_meta.b2frame"))
+    assert os.path.exists(os.path.join(path, "_meta.b2f"))
     assert os.path.exists(os.path.join(path, "_valid_rows.b2nd"))
     assert os.path.exists(os.path.join(path, "_cols", "id.b2nd"))
     assert os.path.exists(os.path.join(path, "_cols", "score.b2nd"))
@@ -67,11 +67,11 @@ def test_create_layout_files_exist():
 
 
 def test_schema_saved_in_meta_vlmeta():
-    """Schema JSON and kind marker are present in _meta.b2frame."""
+    """Schema JSON and kind marker are present in _meta.b2f."""
     path = table_path("people")
     CTable(Row, urlpath=path, mode="w", expected_size=16)
 
-    meta = blosc2.open(os.path.join(path, "_meta.b2frame"))
+    meta = blosc2.open(os.path.join(path, "_meta.b2f"), mode="r")
     assert meta.vlmeta["kind"] == "ctable"
     assert meta.vlmeta["version"] == 1
     schema = json.loads(meta.vlmeta["schema"])
@@ -204,7 +204,7 @@ def test_valid_rows_persisted():
     t.delete(1)  # mark row 1 (id=2) as invalid
 
     # _valid_rows on disk: slots 0 and 2 are True, slot 1 is False
-    vr = blosc2.open(os.path.join(path, "_valid_rows.b2nd"))
+    vr = blosc2.open(os.path.join(path, "_valid_rows.b2nd"), mode="r")
     raw = vr[:3]
     assert raw[0]
     assert not raw[1]
@@ -299,15 +299,16 @@ def test_open_nonexistent_raises():
 
 
 def test_open_wrong_kind_raises(tmp_path):
-    """A path with a _meta.b2frame that is not a ctable raises ValueError."""
-    import blosc2
-
-    meta_path = str(tmp_path / "_meta.b2frame")
-    sc = blosc2.SChunk(urlpath=meta_path, mode="w")
+    """A path with a _meta.b2f that is not a ctable raises ValueError."""
+    path = str(tmp_path / "fake_table")
+    store = blosc2.TreeStore(path, mode="w", threshold=0)
+    sc = blosc2.SChunk()
     sc.vlmeta["kind"] = "something_else"
+    store["/_meta"] = sc
+    store.close()
 
     with pytest.raises(ValueError, match="CTable"):
-        CTable.open(str(tmp_path))
+        CTable.open(path)
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +387,7 @@ def test_save_creates_disk_layout():
     path = table_path("saved")
     t.save(path)
 
-    assert os.path.exists(os.path.join(path, "_meta.b2frame"))
+    assert os.path.exists(os.path.join(path, "_meta.b2f"))
     assert os.path.exists(os.path.join(path, "_valid_rows.b2nd"))
     assert os.path.exists(os.path.join(path, "_cols", "id.b2nd"))
     assert os.path.exists(os.path.join(path, "_cols", "score.b2nd"))

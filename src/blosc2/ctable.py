@@ -1063,6 +1063,11 @@ class CTable(Generic[RowT]):
 
         # Choose storage backend
         if urlpath is not None:
+            if mode == "w" and os.path.exists(urlpath):
+                if os.path.isdir(urlpath):
+                    shutil.rmtree(urlpath)
+                else:
+                    os.remove(urlpath)
             storage: TableStorage = FileTableStorage(urlpath, mode)
         else:
             storage = InMemoryTableStorage()
