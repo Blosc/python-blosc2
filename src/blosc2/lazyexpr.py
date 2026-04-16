@@ -1182,7 +1182,7 @@ def get_chunk(arr, info, nchunk):
 async def async_read_chunks(arrs, info, queue):
     loop = asyncio.get_event_loop()
     shape, chunks_ = arrs[0].shape, arrs[0].chunks
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
         my_chunk_iter = range(arrs[0].schunk.nchunks)
         if len(info) == 5:
             if info[-1] is not None:

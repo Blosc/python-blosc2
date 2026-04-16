@@ -476,7 +476,7 @@ cdef extern from "blosc2.h":
     int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, c_bool* needs_free) nogil
     void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, c_bool avoid_cframe_free)
     int64_t blosc2_schunk_to_file(blosc2_schunk* schunk, const char* urlpath)
-    int64_t blosc2_schunk_free(blosc2_schunk *schunk)
+    int64_t blosc2_schunk_free(blosc2_schunk *schunk) nogil
     int64_t blosc2_schunk_append_chunk(blosc2_schunk *schunk, uint8_t *chunk, c_bool copy)
     int64_t blosc2_schunk_update_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t *chunk, c_bool copy)
     int64_t blosc2_schunk_insert_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t *chunk, c_bool copy)
@@ -2339,6 +2339,7 @@ cdef class SChunk:
             self.schunk.cctx = NULL
 
     def __dealloc__(self):
+        cdef blosc2_schunk *schunk_ptr
         if self.schunk != NULL and not self._is_view:
             # Free prefilters and postfilters params
             if self.schunk.storage.cparams.prefilter != NULL:
@@ -2346,7 +2347,15 @@ cdef class SChunk:
             if self.schunk.storage.dparams.postfilter != NULL:
                 self.remove_postfilter(func_name=None, _new_ctx=False)
 
-            blosc2_schunk_free(self.schunk)
+            # Release the GIL while freeing the C-Blosc2 super-chunk.
+            # blosc2_schunk_free -> blosc2_free_ctx -> release_threadpool
+            # joins worker pthreads; holding the GIL here can cause hangs
+            # when thousands of SChunks are finalized at once (e.g. during
+            # gc.collect() in Python 3.14+ where gen-2 threshold is 0).
+            schunk_ptr = self.schunk
+            self.schunk = NULL
+            with nogil:
+                blosc2_schunk_free(schunk_ptr)
 
 
 # postfilter
