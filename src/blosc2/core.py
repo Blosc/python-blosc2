@@ -834,7 +834,7 @@ def load_tensor(urlpath: str, dparams: dict | None = None) -> tensorflow.Tensor 
     :func:`~blosc2.save_tensor`
     :func:`~blosc2.pack_tensor`
     """
-    schunk = blosc2.open(urlpath, dparams=dparams)
+    schunk = blosc2.open(urlpath, mode="r", dparams=dparams)
     return _unpack_tensor(schunk)
 
 
@@ -1439,7 +1439,10 @@ def get_chunksize(blocksize, l3_minimum=4 * 2**20, l3_maximum=2**26, reduc_facto
     if isinstance(l2_cache_size, int) and l2_cache_size > chunksize:
         # Apple Silicon has a large L2 cache, and memory bandwidth is high,
         # so we can use a larger chunksize based on L2 cache size.
-        chunksize = l2_cache_size * 4
+        # chunksize = l2_cache_size * 4
+        # But experiments show that using such a large chunksize
+        # can make indexes too large. Going back to using just L2.
+        chunksize = l2_cache_size
 
     # Ensure a minimum size
     if chunksize < l3_minimum:
@@ -1918,9 +1921,11 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
 
 def from_cframe(
     cframe: bytes | str, copy: bool = True
-) -> blosc2.EmbedStore | blosc2.NDArray | blosc2.SChunk | blosc2.BatchStore | blosc2.VLArray:
+) -> (
+    blosc2.EmbedStore | blosc2.NDArray | blosc2.SChunk | blosc2.BatchArray | blosc2.VLArray | blosc2.C2Array
+):
     """Create a :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>`, :ref:`SChunk <SChunk>`,
-    :ref:`BatchStore <BatchStore>` or :ref:`VLArray <VLArray>` instance
+    :ref:`BatchArray <BatchArray>` or :ref:`VLArray <VLArray>` instance
     from a contiguous frame buffer.
 
     Parameters
@@ -1938,7 +1943,7 @@ def from_cframe(
     Returns
     -------
     out: :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>`, :ref:`SChunk <SChunk>`,
-         :ref:`BatchStore <BatchStore>` or :ref:`VLArray <VLArray>`
+         :ref:`BatchArray <BatchArray>` or :ref:`VLArray <VLArray>`
         A new instance of the appropriate type containing the data passed.
 
     See Also
@@ -1952,10 +1957,12 @@ def from_cframe(
     # Check the metalayer to determine the type
     if "b2embed" in schunk.meta:
         return blosc2.estore_from_cframe(cframe, copy=copy)
-    if "batchstore" in schunk.meta:
-        return blosc2.BatchStore(_from_schunk=schunk_from_cframe(cframe, copy=copy))
+    if "batcharray" in schunk.meta:
+        return blosc2.BatchArray(_from_schunk=schunk_from_cframe(cframe, copy=copy))
     if "vlarray" in schunk.meta:
         return blosc2.vlarray_from_cframe(cframe, copy=copy)
+    if "b2o" in schunk.meta:
+        return blosc2.open_b2object(ndarray_from_cframe(cframe, copy=copy))
     if "b2nd" in schunk.meta:
         return ndarray_from_cframe(cframe, copy=copy)
     return schunk_from_cframe(cframe, copy=copy)

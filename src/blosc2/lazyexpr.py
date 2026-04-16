@@ -24,6 +24,7 @@ import sys
 import textwrap
 import threading
 from abc import ABC, abstractmethod, abstractproperty
+from collections.abc import MutableMapping
 from dataclasses import asdict
 from enum import Enum
 from pathlib import Path
@@ -42,22 +43,29 @@ import numpy as np
 
 import blosc2
 
-from .dsl_kernel import DSLKernel, DSLSyntaxError, _DSLValidator, specialize_miniexpr_inputs
+from .b2objects import (
+    encode_b2object_payload,
+    make_b2object_carrier,
+    read_b2object_user_vlmeta,
+    write_b2object_payload,
+    write_b2object_user_vlmeta,
+)
+from .dsl_kernel import DSLKernel, DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
 
 if blosc2._HAS_NUMBA:
     import numba
+
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
 
-from .proxy import _convert_dtype
+from .proxy import convert_dtype
 from .utils import (
-    _format_expr_scalar,
-    _get_chunk_operands,
-    _sliced_chunk_iter,
     check_smaller_shape,
     compute_smaller_slice,
     constructors,
     elementwise_funcs,
+    format_expr_scalar,
+    get_chunk_operands,
     get_chunks_idx,
     get_intersecting_chunks,
     infer_shape,
@@ -68,6 +76,7 @@ from .utils import (
     process_key,
     reducers,
     safe_numpy_globals,
+    sliced_chunk_iter,
     try_miniexpr,
 )
 
@@ -157,9 +166,9 @@ def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _
             # Return indices only makes sense when the where condition is a tuple with one element
             # and result is a boolean array
             if len(x.shape) > 1:
-                raise ValueError("indices() and sort() only support 1D arrays")
+                raise ValueError("argsort() and sort() only support 1D arrays")
             if result.dtype != np.bool_:
-                raise ValueError("indices() and sort() only support bool conditions")
+                raise ValueError("argsort() and sort() only support bool conditions")
             if _order:
                 # We need to cumulate all the fields in _order, as well as indices
                 chunk_indices = indices[result]
@@ -275,7 +284,7 @@ def get_expr_globals(expression):
 
 if not hasattr(enum, "member"):
     # copy-pasted from Lib/enum.py
-    class _mymember:
+    class MyMember:
         """
         Forces item to become an Enum member during class creation.
         """
@@ -283,7 +292,7 @@ if not hasattr(enum, "member"):
         def __init__(self, value):
             self.value = value
 else:
-    _mymember = enum.member  # only available after python 3.11
+    MyMember = enum.member  # only available after python 3.11
 
 
 class ReduceOp(Enum):
@@ -293,25 +302,25 @@ class ReduceOp(Enum):
 
     # wrap as enum.member so that Python doesn't treat some funcs
     # as class methods (rather than Enum members)
-    SUM = _mymember(np.add)
-    PROD = _mymember(np.multiply)
-    MEAN = _mymember(np.mean)
-    STD = _mymember(np.std)
-    VAR = _mymember(np.var)
+    SUM = MyMember(np.add)
+    PROD = MyMember(np.multiply)
+    MEAN = MyMember(np.mean)
+    STD = MyMember(np.std)
+    VAR = MyMember(np.var)
     # Computing a median from partial results is not straightforward because the median
     # is a positional statistic, which means it depends on the relative ordering of all
     # the data points. Unlike statistics such as the sum or mean, you can't compute a median
     # from partial results without knowing the entire dataset, and this is way too expensive
     # for arrays that cannot typically fit in-memory (e.g. disk-based NDArray).
     # MEDIAN = np.median
-    MAX = _mymember(np.maximum)
-    MIN = _mymember(np.minimum)
-    ANY = _mymember(np.any)
-    ALL = _mymember(np.all)
-    ARGMAX = _mymember(np.argmax)
-    ARGMIN = _mymember(np.argmin)
-    CUMULATIVE_SUM = _mymember(npcumsum)
-    CUMULATIVE_PROD = _mymember(npcumprod)
+    MAX = MyMember(np.maximum)
+    MIN = MyMember(np.minimum)
+    ANY = MyMember(np.any)
+    ALL = MyMember(np.all)
+    ARGMAX = MyMember(np.argmax)
+    ARGMIN = MyMember(np.argmin)
+    CUMULATIVE_SUM = MyMember(npcumsum)
+    CUMULATIVE_PROD = MyMember(npcumprod)
 
 
 class LazyArrayEnum(Enum):
@@ -323,11 +332,68 @@ class LazyArrayEnum(Enum):
     UDF = 1
 
 
+class LazyArrayVLMeta(MutableMapping):
+    """User metadata attached to a LazyArray."""
+
+    def __init__(self, lazyarr: LazyArray):
+        self.lazyarr = lazyarr
+
+    def __getitem__(self, key):
+        return self.lazyarr._get_user_vlmeta()[key]
+
+    def __setitem__(self, key, value):
+        data = self.lazyarr._get_user_vlmeta()
+        data[key] = value
+        self.lazyarr._sync_user_vlmeta()
+
+    def __delitem__(self, key):
+        data = self.lazyarr._get_user_vlmeta()
+        del data[key]
+        self.lazyarr._sync_user_vlmeta()
+
+    def __iter__(self):
+        return iter(self.lazyarr._get_user_vlmeta())
+
+    def __len__(self):
+        return len(self.lazyarr._get_user_vlmeta())
+
+    def getall(self):
+        return self.lazyarr._get_user_vlmeta().copy()
+
+    def __repr__(self):
+        return repr(self.getall())
+
+    def __str__(self):
+        return str(self.getall())
+
+
 class LazyArray(ABC, blosc2.Operand):
+    def _get_user_vlmeta(self) -> dict[str, Any]:
+        if not hasattr(self, "_vlmeta_user"):
+            self._vlmeta_user = {}
+        return self._vlmeta_user
+
+    def _set_user_vlmeta(self, metadata: dict[str, Any], *, sync: bool = True) -> None:
+        self._vlmeta_user = dict(metadata)
+        if sync:
+            self._sync_user_vlmeta()
+
+    def _sync_user_vlmeta(self) -> None:
+        array = getattr(self, "array", None)
+        if array is not None:
+            write_b2object_user_vlmeta(array, self._get_user_vlmeta())
+
+    @property
+    def vlmeta(self) -> LazyArrayVLMeta:
+        """User variable-length metadata for this LazyArray."""
+        if not hasattr(self, "_vlmeta_proxy"):
+            self._vlmeta_proxy = LazyArrayVLMeta(self)
+        return self._vlmeta_proxy
+
     @abstractmethod
-    def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
+    def argsort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         """
-        Return an :ref:`LazyArray` containing the indices where self is True.
+        Return an :ref:`LazyArray` containing the positions selected by self.
 
         The LazyArray must be of bool dtype (e.g. a condition).
 
@@ -341,7 +407,7 @@ class LazyArray(ABC, blosc2.Operand):
         Returns
         -------
         out: :ref:`LazyArray`
-            The indices of the :ref:`LazyArray` self that are True.
+            The positions of the :ref:`LazyArray` self that are True.
         """
         pass
 
@@ -492,6 +558,9 @@ class LazyArray(ABC, blosc2.Operand):
           section for more info).
         * This is currently only supported for :ref:`LazyExpr` and :ref:`LazyUDF`
           (including kernels decorated with :func:`blosc2.dsl_kernel`).
+        * User metadata can be attached via :attr:`vlmeta`. For in-memory LazyArrays
+          this stays in memory; for persisted LazyArrays it is serialized and restored
+          on reopen.
 
         Examples
         --------
@@ -510,7 +579,7 @@ class LazyArray(ABC, blosc2.Operand):
         >>> # Save the LazyExpr to disk
         >>> expr.save(urlpath='lazy_array.b2nd', mode='w')
         >>> # Open and load the LazyExpr from disk
-        >>> disk_expr = blosc2.open('lazy_array.b2nd')
+        >>> disk_expr = blosc2.open('lazy_array.b2nd', mode='r')
         >>> disk_expr[:2]
         [[0.   1.25 2.5 ]
         [3.75 5.   6.25]]
@@ -570,7 +639,7 @@ def convert_inputs(inputs):
         return []
     inputs_ = []
     for obj in inputs:
-        if not isinstance(obj, (np.ndarray, blosc2.Operand)) and not np.isscalar(obj):
+        if not isinstance(obj, np.ndarray | blosc2.Operand) and not np.isscalar(obj):
             try:
                 obj = blosc2.SimpleProxy(obj)
             except Exception:
@@ -1116,7 +1185,7 @@ async def async_read_chunks(arrs, info, queue):
         my_chunk_iter = range(arrs[0].schunk.nchunks)
         if len(info) == 5:
             if info[-1] is not None:
-                my_chunk_iter = _sliced_chunk_iter(chunks_, (), shape, axis=info[-1], nchunk=True)
+                my_chunk_iter = sliced_chunk_iter(chunks_, (), shape, axis=info[-1], nchunk=True)
             info = info[:4]
         for i, nchunk in enumerate(my_chunk_iter):
             futures = [
@@ -1290,7 +1359,7 @@ def _format_dsl_parse_error_hint(expr_text: str, backend_msg: str):
     line_no = expr_text.count("\n", 0, err_pos) + 1
     line_start = expr_text.rfind("\n", 0, err_pos) + 1
     col_no = err_pos - line_start + 1
-    dump = _DSLValidator(expr_text)._format_source_with_pointer(line_no, col_no)
+    dump = DSLValidator(expr_text)._format_source_with_pointer(line_no, col_no)
     return f"Parse error location (line {line_no}, col {col_no}, offset {err_pos}):\n{dump}"
 
 
@@ -1689,6 +1758,7 @@ def slices_eval(  # noqa: C901
         ne_args = {}
     chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
+    use_index = kwargs.pop("_use_index", True)
     _indices = kwargs.pop("_indices", False)
     if _indices and (not where or len(where) != 1):
         raise NotImplementedError("Indices can only be used with one where condition")
@@ -1754,7 +1824,10 @@ def slices_eval(  # noqa: C901
         # Get the dtype of the array to sort
         dtype_ = operands["_where_x"].dtype
         # Now, use only the fields that are necessary for the sorting
-        dtype_ = np.dtype([(f, dtype_[f]) for f in _order])
+        if dtype_.fields is not None and all(f in dtype_.fields for f in _order):
+            dtype_ = np.dtype([(f, dtype_[f]) for f in _order])
+        else:
+            dtype_ = np.dtype(np.int64)
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
@@ -1767,6 +1840,83 @@ def slices_eval(  # noqa: C901
         if 0 not in chunks
         else np.asarray(shape)
     )
+    index_plan = None
+    if where is not None and len(where) == 1 and use_index and _slice == ():
+        from . import indexing
+
+        _cache_array = where["_where_x"]
+        _cache_tokens = [indexing.SELF_TARGET_NAME]
+
+        # --- Ordered path ---
+        if _order is not None:
+            ordered_plan = indexing.plan_ordered_query(expression, operands, where, _order)
+            if ordered_plan.usable:
+                cached_coords = indexing.get_cached_coords(_cache_array, expression, _cache_tokens, _order)
+                if cached_coords is not None:
+                    return cached_coords
+                ordered_positions = indexing.ordered_query_indices(expression, operands, where, _order)
+                if ordered_positions is not None:
+                    indexing.store_cached_coords(
+                        _cache_array, expression, _cache_tokens, _order, ordered_positions
+                    )
+                    return ordered_positions
+            elif indexing.is_expression_order(where["_where_x"], _order):
+                raise ValueError("expression order requires a matching full expression index")
+
+        # --- Argsort-only path (.argsort().compute()) ---
+        if _indices and _order is None:
+            cached_coords = indexing.get_cached_coords(_cache_array, expression, _cache_tokens, None)
+            if cached_coords is not None:
+                return cached_coords
+
+        # --- Value-returning path (arr[cond][:]) — cache check before plan_query ---
+        _cache_urlpath = getattr(_cache_array, "urlpath", None) or getattr(
+            getattr(_cache_array, "ndarr", None), "urlpath", None
+        )
+        if not _indices and _order is None:
+            cached_coords = indexing.get_cached_coords(_cache_array, expression, _cache_tokens, None)
+            if cached_coords is not None:
+                cached_plan = indexing.IndexPlan(
+                    usable=True, reason="cache-hit", base=_cache_array, exact_positions=cached_coords
+                )
+                return indexing.evaluate_full_query(where, cached_plan)
+
+        index_plan = indexing.plan_query(expression, operands, where, use_index=use_index)
+
+        if _indices and _order is None and index_plan.usable:
+            if index_plan.exact_positions is not None:
+                coords = np.asarray(index_plan.exact_positions, dtype=np.int64)
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return coords
+            if index_plan.bucket_masks is not None:
+                _, coords = indexing.evaluate_bucket_query(
+                    expression, operands, ne_args, where, index_plan, return_positions=True
+                )
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return coords
+            if index_plan.candidate_units is not None and index_plan.segment_len is not None:
+                _, coords = indexing.evaluate_segment_query(
+                    expression, operands, ne_args, where, index_plan, return_positions=True
+                )
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return coords
+        if index_plan.usable and not (_indices or _order):
+            if index_plan.exact_positions is not None:
+                coords = np.asarray(index_plan.exact_positions, dtype=np.int64)
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return indexing.evaluate_full_query(where, index_plan)
+            if index_plan.bucket_masks is not None:
+                result, coords = indexing.evaluate_bucket_query(
+                    expression, operands, ne_args, where, index_plan, return_positions=True
+                )
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return result
+            if index_plan.candidate_units is not None and index_plan.segment_len is not None:
+                result, coords = indexing.evaluate_segment_query(
+                    expression, operands, ne_args, where, index_plan, return_positions=True
+                )
+                indexing.store_cached_coords(_cache_array, expression, _cache_tokens, None, coords)
+                return result
 
     for chunk_slice in intersecting_chunks:
         # Check whether current cslice intersects with _slice
@@ -1782,12 +1932,21 @@ def slices_eval(  # noqa: C901
         offset = tuple(s.start for s in cslice)  # offset for the udf
         cslice_shape = tuple(s.stop - s.start for s in cslice)
         len_chunk = math.prod(cslice_shape)
+        if (
+            index_plan is not None
+            and index_plan.usable
+            and index_plan.level == "chunk"
+            and not index_plan.candidate_units[nchunk]
+        ):
+            if _indices or _order:
+                leninputs += len_chunk
+            continue
         # get local index of part of out that is to be updated
         cslice_subidx = (
             ndindex.ndindex(cslice).as_subindex(_slice).raw
         )  # in the case _slice=(), just gives cslice
 
-        _get_chunk_operands(operands, cslice, chunk_operands, shape)
+        get_chunk_operands(operands, cslice, chunk_operands, shape)
 
         if out is None:
             shape_ = shape_slice if shape_slice is not None else shape
@@ -2336,7 +2495,7 @@ def reduce_slices(  # noqa: C901
                 axis=reduce_args["axis"] if np.isscalar(reduce_args["axis"]) else None,
             )
         else:
-            _get_chunk_operands(operands, cslice, chunk_operands, shape)
+            get_chunk_operands(operands, cslice, chunk_operands, shape)
 
         if reduce_op in {ReduceOp.CUMULATIVE_PROD, ReduceOp.CUMULATIVE_SUM}:
             reduced_slice = (
@@ -2690,7 +2849,7 @@ def chunked_eval(  # noqa: C901
                 unit_steps = np.all([s.step == 1 for s in item.raw if isinstance(s, slice)])
                 # shape of slice, if non-unit steps have to decompress full array into memory
                 shape_operands = item.newshape(shape) if unit_steps else shape
-                _dtype = kwargs.get("dtype", np.float64)
+                _dtype = np.dtype(kwargs.get("dtype", np.float64))
                 size_operands = math.prod(shape_operands) * len(operands) * _dtype.itemsize
                 # Only take the fast path if the size of operands is relatively small
                 if size_operands < blosc2.MAX_FAST_PATH_SIZE:
@@ -2855,9 +3014,9 @@ def result_type(
     # Follow NumPy rules for scalar-array operations
     # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
     arrs = [
-        (np.array(value).dtype if isinstance(value, (str, bytes)) else value)
+        (np.array(value).dtype if isinstance(value, str | bytes) else value)
         if (np.isscalar(value) or not hasattr(value, "dtype"))
-        else np.array([0], dtype=_convert_dtype(value.dtype))
+        else np.array([0], dtype=convert_dtype(value.dtype))
         for value in arrays_and_dtypes
     ]
     return np.result_type(*arrs)
@@ -2902,7 +3061,7 @@ class LazyExpr(LazyArray):
         # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
         value1 = (
             blosc2.SimpleProxy(value1)
-            if not (isinstance(value1, (blosc2.Operand, np.ndarray)) or np.isscalar(value1))
+            if not (isinstance(value1, blosc2.Operand | np.ndarray) or np.isscalar(value1))
             else value1
         )
         # Reset values represented as np.int64 etc. to be set as Python natives
@@ -2926,7 +3085,7 @@ class LazyExpr(LazyArray):
             return
         value2 = (
             blosc2.SimpleProxy(value2)
-            if not (isinstance(value2, (blosc2.Operand, np.ndarray)) or np.isscalar(value2))
+            if not (isinstance(value2, blosc2.Operand | np.ndarray) or np.isscalar(value2))
             else value2
         )
         # Reset values represented as np.int64 etc. to be set as Python natives
@@ -2944,15 +3103,15 @@ class LazyExpr(LazyArray):
         elif op in funcs_2args:
             if np.isscalar(value1) and np.isscalar(value2):
                 self.expression = "o0"
-                svalue1 = _format_expr_scalar(value1)
-                svalue2 = _format_expr_scalar(value2)
+                svalue1 = format_expr_scalar(value1)
+                svalue2 = format_expr_scalar(value2)
                 self.operands = {"o0": ne_evaluate(f"{op}({svalue1}, {svalue2})")}  # eager evaluation
             elif np.isscalar(value2):
                 self.operands = {"o0": value1}
-                self.expression = f"{op}(o0, {_format_expr_scalar(value2)})"
+                self.expression = f"{op}(o0, {format_expr_scalar(value2)})"
             elif np.isscalar(value1):
                 self.operands = {"o0": value2}
-                self.expression = f"{op}({_format_expr_scalar(value1)}, o0)"
+                self.expression = f"{op}({format_expr_scalar(value1)}, o0)"
             else:
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"{op}(o0, o1)"
@@ -3026,9 +3185,9 @@ class LazyExpr(LazyArray):
                 def_operands = value1.operands
             elif isinstance(value1, LazyExpr):
                 if np.isscalar(value2):
-                    v2 = _format_expr_scalar(value2)
+                    v2 = format_expr_scalar(value2)
                 elif hasattr(value2, "shape") and value2.shape == ():
-                    v2 = _format_expr_scalar(value2[()])
+                    v2 = format_expr_scalar(value2[()])
                 else:
                     operand_to_key = {id(v): k for k, v in value1.operands.items()}
                     try:
@@ -3047,9 +3206,9 @@ class LazyExpr(LazyArray):
                 def_operands = value1.operands
             else:
                 if np.isscalar(value1):
-                    v1 = _format_expr_scalar(value1)
+                    v1 = format_expr_scalar(value1)
                 elif hasattr(value1, "shape") and value1.shape == ():
-                    v1 = _format_expr_scalar(value1[()])
+                    v1 = format_expr_scalar(value1[()])
                 else:
                     operand_to_key = {id(v): k for k, v in value2.operands.items()}
                     try:
@@ -3590,12 +3749,12 @@ class LazyExpr(LazyArray):
 
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 
-    # TODO: indices and sort are repeated in LazyUDF; refactor
-    def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
+    # TODO: argsort and sort are repeated in LazyUDF; refactor
+    def argsort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         if self.dtype.fields is None:
-            raise NotImplementedError("indices() can only be used with structured arrays")
+            raise NotImplementedError("argsort() can only be used with structured arrays")
         if not hasattr(self, "_where_args") or len(self._where_args) != 1:
-            raise ValueError("indices() can only be used with conditions")
+            raise ValueError("argsort() can only be used with conditions")
         # Build a new lazy array
         lazy_expr = copy.copy(self)
         # ... and assign the new attributes
@@ -3617,6 +3776,39 @@ class LazyExpr(LazyArray):
         if order:
             lazy_expr._order = order
         return lazy_expr
+
+    def will_use_index(self) -> bool:
+        """Return whether the current lazy query can use an index."""
+        from . import indexing
+
+        return indexing.will_use_index(self)
+
+    def explain(self) -> dict:
+        """Explain how this lazy query will be executed.
+
+        Returns a dictionary describing the planner decision for the current
+        query. Typical fields include whether an index will be used, the chosen
+        index kind and level, candidate counts, and the lookup path selected
+        for ``full`` indexes.
+
+        Returns:
+            dict: Query planning metadata for the current expression.
+
+        Examples:
+            >>> import numpy as np
+            >>> import blosc2
+            >>> arr = blosc2.asarray(np.arange(10))
+            >>> _ = arr.create_index(kind=blosc2.IndexKind.FULL)
+            >>> expr = blosc2.lazyexpr("(a >= 3) & (a < 6)", {"a": arr}).where(arr)
+            >>> info = expr.explain()
+            >>> info["will_use_index"]
+            True
+            >>> info["kind"]
+            'full'
+        """
+        from . import indexing
+
+        return indexing.explain_query(self)
 
     def compute(
         self,
@@ -3666,6 +3858,7 @@ class LazyExpr(LazyArray):
                 "_indices",
                 "_order",
                 "_ne_args",
+                "_use_index",
                 "dtype",
                 "shape",
                 "fp_accuracy",
@@ -3711,44 +3904,59 @@ class LazyExpr(LazyArray):
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
 
+        kwargs["urlpath"] = urlpath
+        kwargs["mode"] = "w"  # always overwrite the file in urlpath
+        self._to_b2object_carrier(**kwargs)
+
+    def to_cframe(self) -> bytes:
+        return self._to_b2object_carrier().to_cframe()
+
+    def _to_b2object_carrier(self, **kwargs):
         expression = self.expression_tosave if hasattr(self, "expression_tosave") else self.expression
         operands_ = self.operands_tosave if hasattr(self, "operands_tosave") else self.operands
-        # Validate expression
         validate_expr(expression)
 
-        meta = kwargs.get("meta", {})
-        meta["LazyArray"] = LazyArrayEnum.Expr.value
-        kwargs["urlpath"] = urlpath
-        kwargs["meta"] = meta
-        kwargs["mode"] = "w"  # always overwrite the file in urlpath
-
-        # Create an empty array; useful for providing the shape and dtype of the outcome
-        array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
-
-        # Save the expression and operands in the metadata
-        operands = {}
+        payload = {"kind": "lazyexpr", "version": 1, "expression": expression, "operands": {}}
+        carrier_urlpath = kwargs.get("urlpath")
+        carrier_parent = Path(carrier_urlpath).parent if carrier_urlpath is not None else None
         for key, value in operands_.items():
             if isinstance(value, blosc2.C2Array):
-                operands[key] = {
-                    "path": str(value.path),
-                    "urlbase": value.urlbase,
-                }
+                payload["operands"][key] = encode_b2object_payload(value)
                 continue
             if isinstance(value, blosc2.Proxy):
-                # Take the required info from the Proxy._cache container
                 value = value._cache
+            ref = getattr(value, "_blosc2_ref", None)
+            if isinstance(ref, blosc2.Ref):
+                payload["operands"][key] = ref.to_dict()
+                continue
             if not hasattr(value, "schunk"):
                 raise ValueError(
                     "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
                 )
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
-            operands[key] = value.schunk.urlpath
-        array.schunk.vlmeta["_LazyArray"] = {
-            "expression": expression,
-            "UDF": None,
-            "operands": operands,
-        }
+            operand_urlpath = Path(value.schunk.urlpath)
+            if carrier_parent is not None and not operand_urlpath.is_absolute():
+                ref_urlpath = operand_urlpath.as_posix()
+            elif carrier_parent is not None:
+                try:
+                    ref_urlpath = operand_urlpath.relative_to(carrier_parent).as_posix()
+                except ValueError:
+                    ref_urlpath = operand_urlpath.as_posix()
+            else:
+                ref_urlpath = operand_urlpath.as_posix()
+            payload["operands"][key] = {"kind": "urlpath", "version": 1, "urlpath": ref_urlpath}
+        array = make_b2object_carrier(
+            "lazyexpr",
+            self.shape,
+            self.dtype,
+            chunks=self.chunks,
+            blocks=self.blocks,
+            **kwargs,
+        )
+        write_b2object_payload(array, payload)
+        write_b2object_user_vlmeta(array, self._get_user_vlmeta())
+        return array
 
     @classmethod
     def _new_expr(cls, expression, operands, guess, out=None, where=None, ne_args=None):
@@ -3764,7 +3972,7 @@ class LazyExpr(LazyArray):
             _operands = operands | local_vars
             # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
             for op, val in _operands.items():
-                if not (isinstance(val, (blosc2.Operand, np.ndarray)) or np.isscalar(val)):
+                if not (isinstance(val, blosc2.Operand | np.ndarray) or np.isscalar(val)):
                     _operands[op] = blosc2.SimpleProxy(val)
             # for scalars just return value (internally converts to () if necessary)
             opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in _operands.items()}
@@ -3942,12 +4150,12 @@ class LazyUDF(LazyArray):
             self._chunks, self._blocks = compute_chunks_blocks(self.shape, None, None, dtype=self.dtype)
         return self._blocks
 
-    # TODO: indices and sort are repeated in LazyExpr; refactor
-    def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
+    # TODO: argsort and sort are repeated in LazyExpr; refactor
+    def argsort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         if self.dtype.fields is None:
-            raise NotImplementedError("indices() can only be used with structured arrays")
+            raise NotImplementedError("argsort() can only be used with structured arrays")
         if not hasattr(self, "_where_args") or len(self._where_args) != 1:
-            raise ValueError("indices() can only be used with conditions")
+            raise ValueError("argsort() can only be used with conditions")
         # Build a new lazy array
         lazy_expr = copy.copy(self)
         # ... and assign the new attributes
@@ -4060,50 +4268,93 @@ class LazyUDF(LazyArray):
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
 
-        meta = kwargs.get("meta", {})
-        meta["LazyArray"] = LazyArrayEnum.UDF.value
         kwargs["urlpath"] = urlpath
-        kwargs["meta"] = meta
         kwargs["mode"] = "w"  # always overwrite the file in urlpath
-
-        # Create an empty array; useful for providing the shape and dtype of the outcome
-        array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
-
-        # Save the expression and operands in the metadata
-        operands = {}
-        operands_ = self.inputs_dict
-        for i, (_key, value) in enumerate(operands_.items()):
-            pos_key = f"o{i}"  # always use positional keys for consistent loading
-            if isinstance(value, blosc2.C2Array):
-                operands[pos_key] = {
-                    "path": str(value.path),
-                    "urlbase": value.urlbase,
-                }
-                continue
-            if isinstance(value, blosc2.Proxy):
-                # Take the required info from the Proxy._cache container
-                value = value._cache
-            if not hasattr(value, "schunk"):
-                raise ValueError(
-                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
-                )
-            if value.schunk.urlpath is None:
-                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
-            operands[pos_key] = value.schunk.urlpath
-        udf_func = self.func.func if isinstance(self.func, DSLKernel) else self.func
-        udf_name = getattr(udf_func, "__name__", self.func.__name__)
         try:
-            udf_source = textwrap.dedent(inspect.getsource(udf_func)).lstrip()
-        except Exception:
-            udf_source = None
-        meta = {
-            "UDF": udf_source,
-            "operands": operands,
-            "name": udf_name,
-        }
-        if isinstance(self.func, DSLKernel) and self.func.dsl_source is not None:
-            meta["dsl_source"] = self.func.dsl_source
-        array.schunk.vlmeta["_LazyArray"] = meta
+            self._to_b2object_carrier(**kwargs)
+        except (TypeError, ValueError):
+            meta = kwargs.get("meta", {})
+            meta["LazyArray"] = LazyArrayEnum.UDF.value
+            kwargs["meta"] = meta
+
+            # Create an empty array; useful for providing the shape and dtype of the outcome
+            array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
+
+            # Save the expression and operands in the metadata
+            operands = {}
+            operands_ = self.inputs_dict
+            for i, (_key, value) in enumerate(operands_.items()):
+                pos_key = f"o{i}"  # always use positional keys for consistent loading
+                if isinstance(value, blosc2.C2Array):
+                    operands[pos_key] = {
+                        "path": str(value.path),
+                        "urlbase": value.urlbase,
+                    }
+                    continue
+                if isinstance(value, blosc2.Proxy):
+                    # Take the required info from the Proxy._cache container
+                    value = value._cache
+                if not hasattr(value, "schunk"):
+                    raise ValueError(
+                        "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
+                    ) from None
+                if value.schunk.urlpath is None:
+                    raise ValueError(
+                        "To save a LazyArray, all operands must be stored on disk/network"
+                    ) from None
+                operands[pos_key] = value.schunk.urlpath
+            udf_func = self.func.func if isinstance(self.func, DSLKernel) else self.func
+            udf_name = getattr(udf_func, "__name__", self.func.__name__)
+            try:
+                udf_source = textwrap.dedent(inspect.getsource(udf_func)).lstrip()
+            except Exception:
+                udf_source = None
+            meta = {
+                "UDF": udf_source,
+                "operands": operands,
+                "name": udf_name,
+            }
+            if isinstance(self.func, DSLKernel) and self.func.dsl_source is not None:
+                meta["dsl_source"] = self.func.dsl_source
+            array.schunk.vlmeta["_LazyArray"] = meta
+            write_b2object_user_vlmeta(array, self._get_user_vlmeta())
+
+    def to_cframe(self) -> bytes:
+        return self._to_b2object_carrier().to_cframe()
+
+    def _to_b2object_carrier(self, **kwargs):
+        payload = encode_b2object_payload(self)
+        if payload is None:
+            raise TypeError("Persistent Blosc2 object payload is not supported for this LazyUDF")
+
+        carrier_urlpath = kwargs.get("urlpath")
+        carrier_parent = Path(carrier_urlpath).parent if carrier_urlpath is not None else None
+        for operand_payload in payload["operands"].values():
+            if operand_payload["kind"] not in {"urlpath", "dictstore_key"}:
+                continue
+            operand_urlpath = Path(operand_payload["urlpath"])
+            if carrier_parent is not None and not operand_urlpath.is_absolute():
+                ref_urlpath = operand_urlpath.as_posix()
+            elif carrier_parent is not None:
+                try:
+                    ref_urlpath = operand_urlpath.relative_to(carrier_parent).as_posix()
+                except ValueError:
+                    ref_urlpath = operand_urlpath.as_posix()
+            else:
+                ref_urlpath = operand_urlpath.as_posix()
+            operand_payload["urlpath"] = ref_urlpath
+
+        array = make_b2object_carrier(
+            "lazyudf",
+            self.shape,
+            self.dtype,
+            chunks=self.chunks,
+            blocks=self.blocks,
+            **kwargs,
+        )
+        write_b2object_payload(array, payload)
+        write_b2object_user_vlmeta(array, self._get_user_vlmeta())
+        return array
 
 
 def _numpy_eval_expr(expression, operands, prefer_blosc=False):
@@ -4413,7 +4664,7 @@ def _reconstruct_lazyudf(expr, lazyarray, operands_dict, array):
     )
 
 
-def _open_lazyarray(array):
+def open_lazyarray(array):
     value = array.schunk.meta["LazyArray"]
     lazyarray = array.schunk.vlmeta["_LazyArray"]
     if value == LazyArrayEnum.Expr.value:
@@ -4431,7 +4682,7 @@ def _open_lazyarray(array):
         if isinstance(v, str):
             v = parent_path / v
             try:
-                op = blosc2.open(v)
+                op = blosc2.open(v, mode="r")
             except FileNotFoundError:
                 missing_ops[key] = v
             else:
@@ -4461,6 +4712,7 @@ def _open_lazyarray(array):
     new_expr.array = array
     # We want to expose schunk too, so that .info() can be used on the LazyArray
     new_expr.schunk = array.schunk
+    new_expr._set_user_vlmeta(read_b2object_user_vlmeta(array), sync=False)
     return new_expr
 
 

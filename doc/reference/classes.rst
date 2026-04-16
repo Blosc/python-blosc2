@@ -10,6 +10,7 @@ Main Classes
     CTable
     Column
     NDArray
+    Index
     NDField
     LazyArray
     C2Array
@@ -18,8 +19,9 @@ Main Classes
     DictStore
     TreeStore
     EmbedStore
-    BatchStore
+    BatchArray
     VLArray
+    Ref
     Proxy
     ProxySource
     ProxyNDSource
@@ -30,6 +32,7 @@ Main Classes
 
     ctable
     ndarray
+    index
     ndfield
     lazyarray
     c2array
@@ -38,8 +41,9 @@ Main Classes
     dict_store
     tree_store
     embed_store
-    batch_store
+    batch_array
     vlarray
+    ref
     proxy
     proxysource
     proxyndsource
@@ -61,4 +65,5 @@ Other Classes
     Storage
     Tuner
     URLPath
+    Ref
     FPAccuracy

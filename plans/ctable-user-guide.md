@@ -98,8 +98,9 @@ t = b2.CTable(Row, cparams={"codec": b2.Codec.ZSTD, "clevel": 5})
 
 ### Persistent tables
 
-Pass `urlpath` to store the table on disk. The table root is a directory containing
-compressed array files — everything is handled automatically.
+Pass `urlpath` to store the table on disk. Persistent `CTable` is backed by a
+`TreeStore`, and `blosc2.open(urlpath)` can materialize it directly from the
+root `/_meta` manifest.
 
 ```python
 # Create a new persistent table (overwrites any existing table at that path)
@@ -116,6 +117,9 @@ t = b2.CTable.open("people", mode="r")  # explicit
 
 # Open read/write via the classmethod
 t = b2.CTable.open("people", mode="a")
+
+# Generic open() also materializes the richer object
+t = b2.open("people")
 ```
 
 `mode` values:
@@ -129,12 +133,18 @@ t = b2.CTable.open("people", mode="a")
 In-memory tables (`urlpath=None`, the default) behave exactly as before — no
 `mode` or path handling is involved.
 
-### Disk layout
+Recommended conventions:
+
+- extensionless paths default to directory-backed stores
+- `.b2d` and `.b2z` are still valid and useful conventions, but no longer required
+
+### Store layout
 
 ```
-people/
-    _meta.b2frame       ← schema JSON, kind marker, version (in vlmeta)
-    _valid_rows.b2nd    ← tombstone mask
+people/                  ← TreeStore root (extensionless directory-backed example)
+    embed.b2e            ← internal store metadata
+    _meta.b2f            ← SChunk manifest with kind/version/schema in vlmeta
+    _valid_rows.b2nd     ← tombstone mask
     _cols/
         id.b2nd
         score.b2nd
@@ -146,7 +156,8 @@ You can inspect the raw metadata:
 ```python
 import blosc2, json
 
-meta = blosc2.open("people/_meta.b2frame")
+store = blosc2.TreeStore("people", mode="r")
+meta = store["/_meta"]
 print(meta.vlmeta["kind"])  # "ctable"
 print(meta.vlmeta["version"])  # 1
 schema = json.loads(meta.vlmeta["schema"])

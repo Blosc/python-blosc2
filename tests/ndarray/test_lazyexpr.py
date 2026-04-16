@@ -466,7 +466,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
             expr = blosc2.LazyExpr(new_op=(a1, function, a2))
             if urlpath is not None:
                 expr.save(urlpath=urlpath_save)
-                expr = blosc2.open(urlpath_save)
+                expr = blosc2.open(urlpath_save, mode="r")
             res_lazyexpr = expr.compute()
             # Evaluate using NumExpr
             if function == "**":
@@ -480,7 +480,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
             expr = blosc2.LazyExpr(new_op=(a1, function, value2))
             if urlpath is not None:
                 expr.save(urlpath=urlpath_save)
-                expr = blosc2.open(urlpath_save)
+                expr = blosc2.open(urlpath_save, mode="r")
             res_lazyexpr = expr.compute()
             # Evaluate using NumExpr
             if function == "**":
@@ -496,7 +496,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
         expr = blosc2.LazyExpr(new_op=(value1, function, a2))
         if urlpath is not None:
             expr.save(urlpath=urlpath_save)
-            expr = blosc2.open(urlpath_save)
+            expr = blosc2.open(urlpath_save, mode="r")
         res_lazyexpr = expr.compute()
         # Evaluate using NumExpr
         if function == "**":
@@ -716,7 +716,7 @@ def test_save():
     )
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
 
-    expr = blosc2.open(urlpath_save)
+    expr = blosc2.open(urlpath_save, mode="r")
     # After opening, check that a lazy expression does have an array
     # and schunk attributes. This is to allow the .info() method to work.
     assert hasattr(expr, "array") is True
@@ -735,7 +735,7 @@ def test_save():
     var_dict = {"a1": ops[0], "a2": ops[1], "a3": ops[2], "a4": ops[3], "x": x}
     lazy_expr = eval(expr, var_dict)
     lazy_expr.save(urlpath=urlpath_save2)
-    expr = blosc2.open(urlpath_save2)
+    expr = blosc2.open(urlpath_save2, mode="r")
     assert expr.array.dtype == np.float64
     res = expr.compute()
     nres = ne_evaluate("na1 / na2 + na2 - na3 * na4**3")
@@ -759,7 +759,7 @@ def test_save_unsafe():
     expr.save(urlpath=urlpath)
     disk_arrays.append(urlpath)
 
-    expr = blosc2.open(urlpath)
+    expr = blosc2.open(urlpath, mode="r")
     # Replace expression by a (potentially) unsafe expression
     expr.expression = "import os; os.system('touch /tmp/unsafe')"
     with pytest.raises(ValueError) as excinfo:
@@ -807,7 +807,7 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
     expr = blosc2.LazyExpr(new_op=(a1, function, None))
     expr.save(urlpath=urlpath_save)
     del expr
-    expr = blosc2.open(urlpath_save)
+    expr = blosc2.open(urlpath_save, mode="r")
     res_lazyexpr = expr.compute()
 
     # Evaluate using NumExpr
@@ -823,7 +823,7 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
     res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol)
 
-    expr = blosc2.open(urlpath_save)
+    expr = blosc2.open(urlpath_save, mode="r")
     res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol)
 
@@ -847,7 +847,7 @@ def test_save_contains(values):
             # Construct the lazy expression
             expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", value2))
             expr_lazy.save(urlpath=urlpath_save)
-            expr_lazy = blosc2.open(urlpath_save)
+            expr_lazy = blosc2.open(urlpath_save, mode="r")
             # Evaluate using NumExpr
             expr_numexpr = f"{'contains'}(a1, value2)"
             res_numexpr = ne_evaluate(expr_numexpr)
@@ -857,7 +857,7 @@ def test_save_contains(values):
             # Construct the lazy expression
             expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", a2_blosc))
             expr_lazy.save(urlpath=urlpath_save)
-            expr_lazy = blosc2.open(urlpath_save)
+            expr_lazy = blosc2.open(urlpath_save, mode="r")
             # Evaluate using NumExpr
             res_numexpr = ne_evaluate("contains(a2, a1)")
     else:  # ("str", "NDArray")
@@ -867,7 +867,7 @@ def test_save_contains(values):
         # Construct the lazy expression
         expr_lazy = blosc2.LazyExpr(new_op=(value1, "contains", a2_blosc))
         expr_lazy.save(urlpath=urlpath_save)
-        expr_lazy = blosc2.open(urlpath_save)
+        expr_lazy = blosc2.open(urlpath_save, mode="r")
         # Evaluate using NumExpr
         res_numexpr = ne_evaluate("contains(value1, a2)")
     res_lazyexpr = expr_lazy.compute()
@@ -901,7 +901,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
     res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol, atol=atol)
 
-    expr = blosc2.open(urlpath_save)
+    expr = blosc2.open(urlpath_save, mode="r")
     res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol, atol=atol)
 
@@ -946,7 +946,7 @@ def test_save_constructor(disk, shape, dtype, constructor):
         a = b2func(lshape, dtype=dtype, shape=shape, urlpath=urlpath, mode="w")
         expr = f"a + {constructor}({lshape}, dtype={dtype}, shape={shape}) + 1"
     if disk:
-        a = blosc2.open(urlpath)
+        a = blosc2.open(urlpath, mode="r")
     npfunc = getattr(np, constructor)
     if constructor == "linspace":
         na = npfunc(0, 10, lshape, dtype=dtype).reshape(shape)
@@ -964,7 +964,7 @@ def test_save_constructor(disk, shape, dtype, constructor):
     assert lexpr.shape == a.shape
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd")
+        lexpr = blosc2.open("out.b2nd", mode="r")
     res = lexpr.compute()
     nres = na + na + 1
     assert np.allclose(res[()], nres)
@@ -986,7 +986,7 @@ def test_save_2_constructors(shape, disk):
     lexpr = blosc2.lazyexpr(expr)
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd")
+        lexpr = blosc2.open("out.b2nd", mode="r")
     res = lexpr.compute()
     na = np.arange(lshape).reshape(shape)
     nb = np.ones(shape)
@@ -1013,7 +1013,7 @@ def test_save_constructor_reshape(shape, disk):
     lexpr = blosc2.lazyexpr(expr)
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd")
+        lexpr = blosc2.open("out.b2nd", mode="r")
     res = lexpr.compute()
     na = np.arange(lshape).reshape(shape)
     nb = np.ones(shape)
@@ -1037,7 +1037,7 @@ def test_save_2equal_constructors(shape, disk):
     lexpr = blosc2.lazyexpr(expr)
     if disk:
         lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd")
+        lexpr = blosc2.open("out.b2nd", mode="r")
     res = lexpr.compute()
     na = np.ones(shape, dtype=np.int8)
     nb = np.ones(shape)
@@ -1360,9 +1360,9 @@ def test_fill_disk_operands(chunks, blocks, disk, fill_value):
         b = blosc2.zeros((N, N), urlpath=bpath, mode="w", chunks=chunks, blocks=blocks)
         c = blosc2.zeros((N, N), urlpath=cpath, mode="w", chunks=chunks, blocks=blocks)
     if disk:
-        a = blosc2.open("a.b2nd")
-        b = blosc2.open("b.b2nd")
-        c = blosc2.open("c.b2nd")
+        a = blosc2.open("a.b2nd", mode="r")
+        b = blosc2.open("b.b2nd", mode="r")
+        c = blosc2.open("c.b2nd", mode="r")
 
     expr = ((a**3 + blosc2.sin(c * 2)) < b) & ~(c > 0)
 
@@ -1484,14 +1484,14 @@ def test_dtype_infer_scalars(cfunc):
     np.testing.assert_equal(res, nres)
 
 
-def test_indices():
+def test_argsort():
     shape = (20,)
     na = np.arange(shape[0])
     a = blosc2.asarray(na)
     expr = a > 1
     # TODO: Implement the indices method for LazyExpr more generally
     with pytest.raises(NotImplementedError):
-        expr.indices().compute()
+        expr.argsort().compute()
 
 
 def test_sort():
@@ -1709,7 +1709,7 @@ def test_missing_operator():
     blosc2.remove_urlpath("b.b2nd")
     # Re-open the lazy expression
     with pytest.raises(blosc2.exceptions.MissingOperands) as excinfo:
-        blosc2.open("expr.b2nd")
+        blosc2.open("expr.b2nd", mode="r")
 
     # Check that some operand is missing
     assert "a" not in excinfo.value.missing_ops
@@ -1719,6 +1719,76 @@ def test_missing_operator():
     # Clean up
     blosc2.remove_urlpath("a.b2nd")
     blosc2.remove_urlpath("expr.b2nd")
+
+
+def test_save_dictstore_operands(tmp_path):
+    store_path = tmp_path / "operands.b2z"
+    ext_a = tmp_path / "a.b2nd"
+    ext_b = tmp_path / "b.b2nd"
+    expr_path = tmp_path / "expr.b2nd"
+    expected = np.arange(5, dtype=np.int64) * 3
+
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(ext_a), mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=str(ext_b), mode="w")
+    with blosc2.DictStore(str(store_path), mode="w", threshold=None) as dstore:
+        dstore["/a"] = a
+        dstore["/b"] = b
+
+    with blosc2.DictStore(str(store_path), mode="r") as dstore:
+        a = dstore["/a"]
+        b = dstore["/b"]
+        expr = blosc2.lazyexpr("a + b")
+        expr.save(expr_path)
+
+    carrier = blosc2.open(expr_path, mode="r").array
+    assert carrier.schunk.vlmeta["b2o"]["operands"] == {
+        "a": {"kind": "dictstore_key", "version": 1, "urlpath": str(store_path), "key": "/a"},
+        "b": {"kind": "dictstore_key", "version": 1, "urlpath": str(store_path), "key": "/b"},
+    }
+
+    restored = blosc2.open(expr_path, mode="r")
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
+
+
+def test_save_proxy_operands_reopen_default_mode(tmp_path):
+    src_path = tmp_path / "src.b2nd"
+    proxy_path = tmp_path / "proxy.b2nd"
+    expr_path = tmp_path / "expr.b2nd"
+
+    src = blosc2.asarray(np.arange(10, dtype=np.int64), urlpath=str(src_path), mode="w")
+    proxy = blosc2.Proxy(src, urlpath=str(proxy_path), mode="w")
+    expr = proxy + proxy
+    expr.save(str(expr_path))
+
+    restored = blosc2.open(str(expr_path), mode="r")
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], np.arange(10, dtype=np.int64) * 2)
+
+
+def test_lazyexpr_vlmeta_in_memory_and_persisted(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(tmp_path / "a.b2nd"), mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(tmp_path / "b.b2nd"), mode="w")
+    expr = a + b
+
+    expr.vlmeta["name"] = "sum"
+    expr.vlmeta["config"] = {"scale": 1}
+    assert expr.vlmeta["name"] == "sum"
+    assert expr.vlmeta["config"] == {"scale": 1}
+
+    expr_path = tmp_path / "expr_vlmeta.b2nd"
+    expr.save(str(expr_path))
+    restored = blosc2.open(str(expr_path), mode="r")
+
+    assert restored.vlmeta["name"] == "sum"
+    assert restored.vlmeta["config"] == {"scale": 1}
+
+    restored.vlmeta["note"] = "persisted"
+    reopened = blosc2.open(str(expr_path), mode="r")
+    assert reopened.vlmeta["note"] == "persisted"
+    np.testing.assert_array_equal(reopened[:], np.arange(5, dtype=np.int64) * 2)
 
 
 # Test the chaining of multiple lazy expressions
@@ -1792,19 +1862,19 @@ def test_chain_persistentexpressions():
 
     le1_ = blosc2.lazyexpr("a ** 3 + sin(a ** 2)", {"a": a})
     le1_.save("expr1.b2nd", mode="w")
-    myle1 = blosc2.open("expr1.b2nd")
+    myle1 = blosc2.open("expr1.b2nd", mode="r")
 
     le2_ = blosc2.lazyexpr("(le1 < c)", {"le1": myle1, "c": c})
     le2_.save("expr2.b2nd", mode="w")
-    myle2 = blosc2.open("expr2.b2nd")
+    myle2 = blosc2.open("expr2.b2nd", mode="r")
 
     le3_ = blosc2.lazyexpr("(b < 0)", {"b": b})
     le3_.save("expr3.b2nd", mode="w")
-    myle3 = blosc2.open("expr3.b2nd")
+    myle3 = blosc2.open("expr3.b2nd", mode="r")
 
     le4_ = blosc2.lazyexpr("(le2 & le3)", {"le2": myle2, "le3": myle3})
     le4_.save("expr4.b2nd", mode="w")
-    myle4 = blosc2.open("expr4.b2nd")
+    myle4 = blosc2.open("expr4.b2nd", mode="r")
     assert (myle4[:] == le4[:]).all()
 
     # Remove files
@@ -1843,12 +1913,8 @@ def test_to_cframe():
     dtype = "float64"
     a = blosc2.linspace(0, 1, N * N, dtype=dtype, shape=(N, N))
     expr = a**3 + blosc2.sin(a**2)
-    cframe = expr.to_cframe()
-    assert len(cframe) > 0
-    arr = blosc2.ndarray_from_cframe(cframe)
-    assert arr.shape == expr.shape
-    assert arr.dtype == expr.dtype
-    assert np.allclose(arr[:], expr[:])
+    with pytest.raises(ValueError, match="stored on disk/network"):
+        expr.to_cframe()
 
 
 # Test for the bug where multiplying two complex lazy expressions would fail with:

@@ -114,6 +114,23 @@ def test_to_b2z_and_reopen(populated_dict_store):
         assert np.all(dstore_read["/nodeB"][:] == np.arange(6))
 
 
+def test_extensionless_dict_store_defaults_to_directory(tmp_path):
+    path = tmp_path / "test_dstore_extless"
+
+    with DictStore(str(path), mode="w") as dstore:
+        dstore["/node1"] = np.arange(4)
+
+    assert path.is_dir()
+    assert (path / "embed.b2e").exists()
+
+    with DictStore(str(path), mode="r") as dstore:
+        assert np.array_equal(dstore["/node1"][:], np.arange(4))
+
+    opened = blosc2.open(str(path), mode="r")
+    assert isinstance(opened, DictStore)
+    assert np.array_equal(opened["/node1"][:], np.arange(4))
+
+
 def test_to_b2z_from_readonly_b2d():
     b2d_path = "test_to_b2z_from_readonly.b2d"
     b2z_path = "test_to_b2z_from_readonly.b2z"
@@ -401,7 +418,7 @@ def test_metadata_discovery_reopens_renamed_external_vlarray(storage_type, tmp_p
         assert value.vlmeta["description"] == "Renamed VLArray"
 
 
-def test_metadata_discovery_warns_and_skips_unsupported_blosc2_leaf(tmp_path):
+def test_metadata_discovery_reopens_lazyexpr_leaf(tmp_path):
     path = tmp_path / "test_unsupported_lazyexpr.b2d"
 
     with DictStore(str(path), mode="w") as dstore:
@@ -413,13 +430,13 @@ def test_metadata_discovery_warns_and_skips_unsupported_blosc2_leaf(tmp_path):
     expr_path = path / "unsupported_lazyexpr.b2nd"
     expr.save(str(expr_path))
 
-    with pytest.warns(
-        UserWarning, match=r"Ignoring unsupported Blosc2 object.*unsupported_lazyexpr\.b2nd.*LazyExpr"
-    ):
-        dstore_read = DictStore(str(path), mode="r")
+    dstore_read = DictStore(str(path), mode="r")
     with dstore_read:
-        assert "/unsupported_lazyexpr" not in dstore_read
+        assert "/unsupported_lazyexpr" in dstore_read
         assert "/embedded" in dstore_read
+        value = dstore_read["/unsupported_lazyexpr"]
+        assert isinstance(value, blosc2.LazyExpr)
+        np.testing.assert_array_equal(value[:], np.arange(5) * 2)
 
 
 def _digest_value(value):
@@ -676,3 +693,25 @@ def test_mmap_mode_validation(tmp_path):
 
     with pytest.raises(ValueError, match="mmap_mode='r' requires mode='r'"):
         DictStore(str(path), mode="a", mmap_mode="r")
+
+
+def test_b2z_double_open_append_no_corruption(tmp_path):
+    """Opening a .b2z store twice in append mode must not corrupt the archive.
+
+    Regression test: previously, GC of the first open's DictStore triggered
+    ``to_b2z()`` which overwrote the archive with a near-empty ZIP, causing the
+    second open to fail with ``blosc2_schunk_open_offset`` returning NULL.
+    """
+    path = str(tmp_path / "double_open.b2z")
+
+    with DictStore(path, mode="w") as ds:
+        ds["/arr"] = blosc2.arange(20)
+
+    # First open — no explicit close (simulates the GC-triggered path)
+    ds1 = DictStore(path, mode="a")
+    assert np.array_equal(ds1["/arr"][:], np.arange(20))
+    del ds1  # GC; must NOT corrupt the archive
+
+    # Second open — must succeed and see correct data
+    with DictStore(path, mode="a") as ds2:
+        assert np.array_equal(ds2["/arr"][:], np.arange(20))

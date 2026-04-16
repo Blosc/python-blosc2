@@ -32,7 +32,7 @@ def test_persistency(shape, chunks, blocks, urlpath, contiguous, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
     _ = blosc2.asarray(nparray, chunks=chunks, blocks=blocks, urlpath=urlpath, contiguous=contiguous)
-    b = blosc2.open(urlpath)
+    b = blosc2.open(urlpath, mode="r")
 
     bc = b[:]
 

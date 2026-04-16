@@ -87,6 +87,30 @@ Python-Blosc2 version.
 """
 
 
+def get_matmul_library() -> str | None:
+    """
+    Return the library used by the active matmul fast backend, if any.
+
+    Returns
+    -------
+    str | None
+        ``"Accelerate.framework"`` when the selected backend is Accelerate,
+        the loaded CBLAS library path for runtime-discovered CBLAS backends,
+        or ``None`` when the selected backend is ``naive``.
+    """
+    from . import blosc2_ext
+
+    selected_backend = blosc2_ext.get_selected_matmul_block_backend()
+    if selected_backend == "accelerate":
+        return "Accelerate.framework"
+    if selected_backend == "cblas":
+        get_loaded_cblas = getattr(blosc2_ext, "get_loaded_matmul_cblas_library", None)
+        if get_loaded_cblas is None:
+            return None
+        return get_loaded_cblas()
+    return None
+
+
 class Codec(Enum):
     """
     Available codecs.
@@ -191,6 +215,21 @@ class FPAccuracy(Enum):
     DEFAULT = MEDIUM
 
 
+class IndexKind(Enum):
+    """
+    Available index kinds.
+    """
+
+    #: Segment summaries only. Cheapest to build and smallest on disk.
+    SUMMARY = "summary"
+    #: Bucketed chunk-local payloads for approximate pruning before exact evaluation.
+    BUCKET = "bucket"
+    #: Locally ordered payloads that provide exact positional matches for filtering.
+    PARTIAL = "partial"
+    #: Globally ordered payloads for exact filtering and direct ordered reuse.
+    FULL = "full"
+
+
 from .blosc2_ext import (
     DEFINED_CODECS_STOP,
     EXTENDED_HEADER_LENGTH,
@@ -253,7 +292,7 @@ VERSION_STRING = VERSION_STRING
 The C-Blosc2 version's string."""
 
 if IS_WASM:
-    from ._wasm_jit import init_wasm_jit_helpers
+    from .wasm_jit import init_wasm_jit_helpers
 
     _WASM_MINIEXPR_ENABLED = init_wasm_jit_helpers()
 
@@ -498,7 +537,8 @@ from .ndarray import (
     eye,
     asarray,
     astype,
-    indices,
+    argsort,
+    iter_sorted,
     sort,
     reshape,
     copy,
@@ -524,8 +564,10 @@ from .ndarray import (
 from .embed_store import EmbedStore, estore_from_cframe
 from .dict_store import DictStore
 from .tree_store import TreeStore
-from .batch_store import Batch, BatchStore
+from .batch_array import Batch, BatchArray
 from .vlarray import VLArray, vlarray_from_cframe
+from .ref import Ref
+from .b2objects import open_b2object
 
 from .c2array import c2context, C2Array, URLPath
 
@@ -536,7 +578,7 @@ from .lazyexpr import (
     lazyexpr,
     LazyArray,
     LazyUDF,
-    _open_lazyarray,
+    open_lazyarray,
     get_expr_operands,
     validate_expr,
     evaluate,
@@ -544,6 +586,7 @@ from .lazyexpr import (
     can_cast,
 )
 from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit, as_simpleproxy
+from .indexing import Index
 
 from .schunk import SChunk, open
 from . import linalg
@@ -748,13 +791,14 @@ __all__ = [  # noqa : RUF022
     "C2Array",
     "CParams",
     "Batch",
-    "BatchStore",
+    "BatchArray",
     # Enums
     "Codec",
     "DParams",
     "DictStore",
     "EmbedStore",
     "Filter",
+    "Index",
     "LazyArray",
     "DSLKernel",
     "DSLSyntaxError",
@@ -767,6 +811,7 @@ __all__ = [  # noqa : RUF022
     "ProxyNDField",
     "ProxyNDSource",
     "ProxySource",
+    "Ref",
     "SChunk",
     "SimpleProxy",
     "SpecialValue",
@@ -864,6 +909,7 @@ __all__ = [  # noqa : RUF022
     "get_compressor",
     "get_cpu_info",
     "get_expr_operands",
+    "get_matmul_library",
     "get_slice_nchunks",
     "greater",
     "greater_equal",

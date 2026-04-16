@@ -5,9 +5,22 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import numpy as np
 import pytest
 
 import blosc2
+import blosc2.c2array as blosc2_c2array
+
+
+@blosc2.dsl_kernel
+def _kernel_add_twice(x, y):
+    return x + y * 2
+
+
+def _python_udf_add(inputs_tuple, output, offset):
+    x, y = inputs_tuple
+    output[:] = x + y
+
 
 VALUES = [
     b"bytes\x00payload",
@@ -24,6 +37,65 @@ VALUES = [
 
 def _storage(contiguous, urlpath, mode="w"):
     return blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode=mode)
+
+
+def _make_nested_blosc2_objects():
+    ndarray = blosc2.arange(6, dtype=np.int32)
+
+    schunk = blosc2.SChunk(chunksize=16)
+    schunk.append_data(np.arange(4, dtype=np.int32))
+
+    nested_vlarray = blosc2.VLArray()
+    nested_vlarray.extend(["alpha", {"beta": 2}])
+
+    nested_batcharray = blosc2.BatchArray(items_per_block=2)
+    nested_batcharray.extend([[1, 2], ["x", {"y": 3}]])
+
+    estore = blosc2.EmbedStore()
+    estore["/node"] = blosc2.arange(3, dtype=np.int32)
+
+    return ndarray, schunk, nested_vlarray, nested_batcharray, estore
+
+
+def _make_c2array(monkeypatch, path="@public/examples/ds-1d.b2nd", urlbase="https://cat2.cloud/demo/"):
+    def fake_info(path_, urlbase_, params=None, headers=None, model=None, auth_token=None):
+        return {"schunk": {"cparams": dict(blosc2.cparams_dflts)}}
+
+    monkeypatch.setattr(blosc2_c2array, "info", fake_info)
+    return blosc2.C2Array(path, urlbase=urlbase)
+
+
+def _make_persistent_lazyexpr(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=tmp_path / "a.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=tmp_path / "b.b2nd", mode="w")
+    expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+    expected = np.arange(5, dtype=np.int64) * 3
+    return expr, expected
+
+
+def _make_in_memory_lazyexpr():
+    a = blosc2.asarray(np.arange(5, dtype=np.int64))
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2)
+    return blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+
+
+def _make_persistent_lazyudf(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.float32), urlpath=tmp_path / "a_udf.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.float32) * 2, urlpath=tmp_path / "b_udf.b2nd", mode="w")
+    udf = blosc2.lazyudf(_kernel_add_twice, (a, b), dtype=a.dtype, shape=a.shape)
+    expected = a[:] + b[:] * 2
+    return udf, expected
+
+
+def _make_persistent_python_lazyudf(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.float32), urlpath=tmp_path / "a_pyudf.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.float32) * 2, urlpath=tmp_path / "b_pyudf.b2nd", mode="w")
+    return blosc2.lazyudf(_python_udf_add, (a, b), dtype=a.dtype, shape=a.shape)
+
+
+def _make_persistent_ref(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=tmp_path / "a_ref.b2nd", mode="w")
+    return blosc2.Ref.from_object(a), a[:]
 
 
 @pytest.mark.parametrize(
@@ -115,6 +187,121 @@ def test_vlarray_from_cframe():
     restored2 = blosc2.vlarray_from_cframe(vlarray.to_cframe())
     assert isinstance(restored2, blosc2.VLArray)
     assert list(restored2) == expected
+
+
+def test_vlarray_msgpack_supports_blosc2_objects():
+    ndarray, schunk, nested_vlarray, nested_batcharray, estore = _make_nested_blosc2_objects()
+
+    vlarray = blosc2.VLArray()
+    vlarray.append(
+        {
+            "ndarray": ndarray,
+            "schunk": schunk,
+            "vlarray": nested_vlarray,
+            "batcharray": nested_batcharray,
+            "estore": estore,
+        }
+    )
+
+    restored = vlarray[0]
+
+    assert isinstance(restored["ndarray"], blosc2.NDArray)
+    assert np.array_equal(restored["ndarray"][:], ndarray[:])
+
+    assert isinstance(restored["schunk"], blosc2.SChunk)
+    assert restored["schunk"].decompress_chunk(0) == schunk.decompress_chunk(0)
+
+    assert isinstance(restored["vlarray"], blosc2.VLArray)
+    assert list(restored["vlarray"]) == list(nested_vlarray)
+
+    assert isinstance(restored["batcharray"], blosc2.BatchArray)
+    assert [batch[:] for batch in restored["batcharray"]] == [batch[:] for batch in nested_batcharray]
+
+    assert isinstance(restored["estore"], blosc2.EmbedStore)
+    assert list(restored["estore"].keys()) == ["/node"]
+    assert np.array_equal(restored["estore"]["/node"][:], estore["/node"][:])
+
+
+def test_vlarray_msgpack_supports_c2array(monkeypatch):
+    c2array = _make_c2array(monkeypatch)
+
+    vlarray = blosc2.VLArray()
+    vlarray.append(c2array)
+
+    restored = vlarray[0]
+
+    assert isinstance(restored, blosc2.C2Array)
+    assert restored.path == c2array.path
+    assert restored.urlbase == c2array.urlbase
+    assert restored.auth_token is None
+
+
+def test_vlarray_msgpack_supports_ref(tmp_path):
+    ref, expected = _make_persistent_ref(tmp_path)
+
+    vlarray = blosc2.VLArray()
+    vlarray.append(ref)
+
+    restored = vlarray[0]
+
+    assert isinstance(restored, blosc2.Ref)
+    assert restored == ref
+    np.testing.assert_array_equal(restored.open()[:], expected)
+
+
+def test_vlarray_msgpack_supports_lazyexpr(tmp_path):
+    expr, expected = _make_persistent_lazyexpr(tmp_path)
+
+    vlarray = blosc2.VLArray()
+    vlarray.append(expr)
+
+    restored = vlarray[0]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
+
+
+def test_vlarray_msgpack_supports_lazyudf_dslkernel(tmp_path):
+    udf, expected = _make_persistent_lazyudf(tmp_path)
+
+    vlarray = blosc2.VLArray()
+    vlarray.append(udf)
+    restored = vlarray[0]
+
+    assert isinstance(restored, blosc2.LazyUDF)
+    np.testing.assert_allclose(restored[:], expected)
+
+
+def test_vlarray_msgpack_rejects_lazyexpr_with_in_memory_operands():
+    expr = _make_in_memory_lazyexpr()
+
+    vlarray = blosc2.VLArray()
+    with pytest.raises(ValueError, match="stored on disk/network"):
+        vlarray.append(expr)
+
+
+def test_vlarray_msgpack_rejects_plain_python_lazyudf(tmp_path):
+    udf = _make_persistent_python_lazyudf(tmp_path)
+
+    vlarray = blosc2.VLArray()
+    with pytest.raises(TypeError, match="DSLKernel"):
+        vlarray.append(udf)
+
+
+@pytest.mark.network
+def test_vlarray_msgpack_roundtrip_c2array_network(cat2_context):
+    path = "@public/expr/ds-1-2-linspace-float64-b2-(5,)d.b2nd"
+    original = blosc2.C2Array(path)
+
+    vlarray = blosc2.VLArray()
+    vlarray.append(original)
+
+    restored = vlarray[0]
+
+    assert isinstance(restored, blosc2.C2Array)
+    assert restored.path == original.path
+    assert restored.urlbase == original.urlbase
+    np.testing.assert_allclose(restored[:], original[:])
 
 
 def test_vlarray_info():

@@ -49,7 +49,7 @@ lazy_expr.save(urlpath=url_path, mode="w")
 
 url_path = "my_expr.b2nd"
 # Open the saved file
-lazy_expr = blosc2.open(urlpath=url_path)
+lazy_expr = blosc2.open(urlpath=url_path, mode="r")
 print(lazy_expr)
 print(f"expr (after open) shape: {lazy_expr.shape}; dtype: {lazy_expr.dtype}")
 # Evaluate and print the result of the lazy expression (should be a 2x4 arr)

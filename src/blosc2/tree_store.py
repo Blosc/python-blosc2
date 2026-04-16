@@ -105,7 +105,8 @@ class TreeStore(DictStore):
         File mode ('r', 'w', 'a'). Default is 'a'.
     tmpdir : str or None, optional
         Temporary directory to use when working with `.b2z` files. If None,
-        a system temporary directory will be managed. Default is None.
+        a temporary directory is created in the same directory as the `.b2z`
+        file, so that unpacked data stays on the same filesystem. Default is None.
     cparams : dict or None, optional
         Compression parameters for the internal embed store.
         If None, the default Blosc2 parameters are used.
@@ -154,8 +155,12 @@ class TreeStore(DictStore):
         It supports the same arguments as :class:`blosc2.DictStore`.
         """
         if _from_parent_store is not None:
-            # This is a subtree view, copy state from parent
+            # This is a subtree view, copy state from parent.
+            # Mark it as closed so DictStore.__del__ does not attempt to pack
+            # or clean up the shared backing store when this ephemeral view
+            # is garbage-collected.
             self.__dict__.update(_from_parent_store.__dict__)
+            self._closed = True
         else:
             # Call initialization and mark this storage as a b2tree object
             super().__init__(*args, **kwargs, _storage_meta={"b2tree": {"version": 1}})
@@ -227,7 +232,7 @@ class TreeStore(DictStore):
         return key
 
     def __setitem__(
-        self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchStore
+        self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchArray
     ) -> None:
         """Add a node with hierarchical key validation.
 
@@ -272,7 +277,7 @@ class TreeStore(DictStore):
 
     def __getitem__(
         self, key: str
-    ) -> NDArray | C2Array | SChunk | blosc2.VLArray | blosc2.BatchStore | TreeStore:
+    ) -> NDArray | C2Array | SChunk | blosc2.VLArray | blosc2.BatchArray | TreeStore:
         """Retrieve a node or subtree view.
 
         If the key points to a subtree (intermediate path with children),
@@ -286,7 +291,7 @@ class TreeStore(DictStore):
 
         Returns
         -------
-        out : blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or blosc2.VLArray or blosc2.BatchStore or TreeStore
+        out : blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or blosc2.VLArray or blosc2.BatchArray or TreeStore
             The stored array/chunk if key is a leaf node, or a TreeStore subtree view
             if key is an intermediate path with children.
 

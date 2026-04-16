@@ -6,6 +6,7 @@
 #######################################################################
 
 import contextlib
+import argparse
 import time
 
 import numpy as np
@@ -15,6 +16,18 @@ import importlib
 
 lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
 where = np.where
+sin = np.sin
+cos = np.cos
+tanh = np.tanh
+sqrt = np.sqrt
+exp = np.exp
+expm1 = np.expm1
+log = np.log
+log1p = np.log1p
+abs = np.abs
+
+DSL_JIT = True
+DSL_JIT_BACKEND = "tcc"
 
 
 @blosc2.dsl_kernel
@@ -111,6 +124,51 @@ def expr_nested2() -> str:
     return " + ".join(terms)
 
 
+def expr_transcendentals() -> str:
+    return "log(exp(x) + tanh(x) + log1p(abs(x)) + sqrt(abs(x)) + expm1(x))"
+
+
+def expr_transcend1() -> str:
+    return "log(exp(x))"
+
+
+def expr_transcend2() -> str:
+    return "tanh(x)"
+
+
+def expr_transcend3() -> str:
+    return "log1p(abs(x))"
+
+
+def expr_sincos_identity() -> str:
+    return "sin(x) ** 2 + cos(x) ** 2"
+
+
+@blosc2.dsl_kernel
+def kernel_transcend1(x):
+    return log(exp(x))
+
+
+@blosc2.dsl_kernel
+def kernel_transcend2(x):
+    return tanh(x)
+
+
+@blosc2.dsl_kernel
+def kernel_transcend3(x):
+    return log1p(abs(x))
+
+
+@blosc2.dsl_kernel
+def kernel_transcend4(x):
+    return log(exp(x) + tanh(x) + log1p(abs(x)) + sqrt(abs(x)) + expm1(x))
+
+
+@blosc2.dsl_kernel
+def kernel_sincos_identity(x):
+    return sin(x) ** 2 + cos(x) ** 2
+
+
 @contextlib.contextmanager
 def miniexpr_enabled(enabled: bool):
     old = lazyexpr_mod.try_miniexpr
@@ -131,6 +189,37 @@ def time_it(fn, niter=3):
     return best, out
 
 
+def bench_transcend_case(name, kernel, expr, a):
+    gb = a.nbytes * 2 / 1e9
+
+    with miniexpr_enabled(False):
+        lazy_expr_base = blosc2.lazyexpr(expr, {"x": a})
+        res_base = lazy_expr_base.compute()
+        base_time, _ = time_it(lambda: lazy_expr_base.compute())
+
+    with miniexpr_enabled(True):
+        lazy_expr_fast = blosc2.lazyexpr(expr, {"x": a})
+        res_fast = lazy_expr_fast.compute()
+        expr_time, _ = time_it(lambda: lazy_expr_fast.compute())
+
+        lazy_dsl = blosc2.lazyudf(kernel, (a,), dtype=a.dtype, jit=DSL_JIT, jit_backend=DSL_JIT_BACKEND)
+        res_dsl = lazy_dsl.compute()
+        dsl_time, _ = time_it(lambda: lazy_dsl.compute())
+
+    np.testing.assert_allclose(res_fast[...], res_base[...], rtol=1e-5, atol=2e-6)
+    np.testing.assert_allclose(res_dsl[...], res_base[...], rtol=1e-5, atol=2e-6)
+
+    return {
+        "case": name,
+        "baseline": base_time,
+        "lazyexpr": expr_time,
+        "dsl": dsl_time,
+        "baseline_gbps": gb / base_time,
+        "lazyexpr_gbps": gb / expr_time,
+        "dsl_gbps": gb / dsl_time,
+    }
+
+
 def bench_case(name, kernel, expr, a, b, dtype, gb):
     if kernel.dsl_source is None:
         raise RuntimeError(f"DSL extraction failed for {name}")
@@ -145,7 +234,7 @@ def bench_case(name, kernel, expr, a, b, dtype, gb):
         _ = lazy_expr_fast.compute()
         expr_time, _ = time_it(lambda: lazy_expr_fast.compute())
 
-        lazy_dsl = blosc2.lazyudf(kernel, (a, b), dtype=dtype)
+        lazy_dsl = blosc2.lazyudf(kernel, (a, b), dtype=dtype, jit=DSL_JIT, jit_backend=DSL_JIT_BACKEND)
         res_dsl = lazy_dsl.compute()
         dsl_time, _ = time_it(lambda: lazy_dsl.compute())
 
@@ -213,7 +302,11 @@ def format_row(row):
 
 
 def main():
-    n = 10_000
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--transcend", action="store_true", help="Run only the transcendental lazyexpr cases")
+    args = parser.parse_args()
+
+    n = 1_000
     dtype = np.float32
     cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ, clevel=1)
 
@@ -229,11 +322,30 @@ def main():
         ("nested2", kernel_nested2, expr_nested2()),
     ]
 
+    transcendental_cases = [
+        ("transcend1", kernel_transcend1, expr_transcend1()),
+        ("transcend2", kernel_transcend2, expr_transcend2()),
+        ("transcend3", kernel_transcend3, expr_transcend3()),
+        ("transcend4", kernel_transcend4, expr_transcendentals()),
+        ("sincos_id", kernel_sincos_identity, expr_sincos_identity()),
+    ]
+
+    if not args.transcend:
+        headers, fmt, sep = table_formatter()
+        print(fmt.format(*headers), flush=True)
+        print(sep, flush=True)
+        for name, kernel, expr in cases:
+            row = bench_case(name, kernel, expr, a, b, dtype, gb)
+            print(fmt.format(*format_row(row)), flush=True)
+
+    if not args.transcend:
+        print()
+    print("Transcendental lazyexpr cases", flush=True)
     headers, fmt, sep = table_formatter()
     print(fmt.format(*headers), flush=True)
     print(sep, flush=True)
-    for name, kernel, expr in cases:
-        row = bench_case(name, kernel, expr, a, b, dtype, gb)
+    for name, kernel, expr in transcendental_cases:
+        row = bench_transcend_case(name, kernel, expr, a)
         print(fmt.format(*format_row(row)), flush=True)
 
 

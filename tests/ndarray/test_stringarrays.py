@@ -124,7 +124,7 @@ def test_unicode_roundtrip_on_disk(tmp_path, shape):
     )
 
     # Re-open from disk
-    out = blosc2.open(path)
+    out = blosc2.open(path, mode="r")
 
     assert out.dtype == arr.dtype
     assert np.array_equal(out, arr)
@@ -153,7 +153,7 @@ def test_unicode_on_disk_partial_io(tmp_path):
     b2[6:10] = replacement
     arr[6:10] = replacement
 
-    reopened = blosc2.open(path)
+    reopened = blosc2.open(path, mode="r")
     assert np.array_equal(reopened, arr)
 
 
@@ -167,7 +167,7 @@ def test_unicode_on_disk_persistence(tmp_path):
     b2 = blosc2.open(path, mode="a")
     b2[:] = arr2
 
-    reopened = blosc2.open(path)
+    reopened = blosc2.open(path, mode="r")
     assert np.array_equal(reopened, arr2)
 
 

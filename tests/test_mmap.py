@@ -53,7 +53,9 @@ def test_initial_mapping_size(tmp_path, monkeypatch, capfd, initial_mapping_size
     # Reading via open
     for mmap_mode in ["r", "r+", "c"]:
         open_mapping_size = None if mmap_mode == "r" else initial_mapping_size
-        schunk_open = blosc2.open(urlpath, mmap_mode=mmap_mode, initial_mapping_size=open_mapping_size)
+        schunk_open = blosc2.open(
+            urlpath, mode="r", mmap_mode=mmap_mode, initial_mapping_size=open_mapping_size
+        )
         for i in range(nchunks):
             buffer = i * np.arange(chunk_nitems, dtype=dtype)
             bytes_obj = buffer.tobytes()
@@ -95,13 +97,13 @@ def test_initial_mapping_size(tmp_path, monkeypatch, capfd, initial_mapping_size
 
     # Error handling
     with pytest.raises(ValueError, match=r"w\+ mmap_mode cannot be used to open an existing file"):
-        blosc2.open(urlpath, mmap_mode="w+")
+        blosc2.open(urlpath, mode="a", mmap_mode="w+")
 
     with pytest.raises(ValueError, match="initial_mapping_size can only be used with writing modes"):
-        blosc2.open(urlpath, mmap_mode="r", initial_mapping_size=100)
+        blosc2.open(urlpath, mode="a", mmap_mode="r", initial_mapping_size=100)
 
     with pytest.raises(ValueError, match="initial_mapping_size can only be used with mmap_mode"):
-        blosc2.open(urlpath, mmap_mode=None, initial_mapping_size=100)
+        blosc2.open(urlpath, mode="a", mmap_mode=None, initial_mapping_size=100)
 
     with pytest.raises(ValueError, match="initial_mapping_size can only be used with writing modes"):
         blosc2.SChunk(mmap_mode="r", initial_mapping_size=100, **storage)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import warnings
 import zipfile
 from collections import namedtuple
 from collections.abc import Iterator, Mapping, MutableMapping
@@ -19,14 +20,28 @@ import numpy as np
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
-from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
+from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     """
     Class providing access to user metadata on an :ref:`SChunk`.
     It is available via the `.vlmeta` property of an :ref:`SChunk`.
+
+    Values are serialized using the general Blosc2 msgpack extensions; see
+    :ref:`Msgpack Serialization <MsgpackSerialization>`. Besides ordinary
+    msgpack-safe Python values, this includes:
+
+    - CFrame-backed Blosc2 objects such as :class:`blosc2.NDArray`,
+      :class:`blosc2.SChunk`, :class:`blosc2.VLArray`,
+      :class:`blosc2.BatchArray`, and :class:`blosc2.EmbedStore`
+    - structured references and lazy objects such as :class:`blosc2.Ref`,
+      :class:`blosc2.C2Array`, :class:`blosc2.LazyExpr`, and
+      :class:`blosc2.LazyUDF` backed by :func:`blosc2.dsl_kernel`
+
+    Lazy expressions and supported lazy UDFs still require durable operand
+    references only; purely in-memory operands are intentionally rejected.
     """
 
     def __init__(self, schunk, urlpath, mode, mmap_mode, initial_mapping_size):
@@ -72,7 +87,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
         Return all the variable length metalayers as a dictionary
 
         """
-        return super().to_dict()
+        return {name: self[name] for name in self}
 
     def __repr__(self):
         return repr(self.getall())
@@ -184,82 +199,82 @@ class SChunk(blosc2_ext.SChunk):
     ) -> None:
         """Create a new super-chunk, or open an existing one.
 
-        Parameters
-        ----------
-        chunksize: int, optional
-            The size, in bytes, of the chunks in the super-chunk. If not provided,
-            it is set automatically to a reasonable value.
+            Parameters
+            ----------
+            chunksize: int, optional
+                The size, in bytes, of the chunks in the super-chunk. If not provided,
+                it is set automatically to a reasonable value.
 
-        data: bytes-like object, optional
-            The data to be split into different chunks of size :paramref:`chunksize`.
-            If None, the Schunk instance will be empty initially.
+            data: bytes-like object, optional
+                The data to be split into different chunks of size :paramref:`chunksize`.
+                If None, the Schunk instance will be empty initially.
 
-        kwargs: dict, optional
-            Storage parameters. The default values are in :class:`blosc2.Storage`.
-            Supported keyword arguments:
-                storage: :class:`blosc2.Storage` or dict
-                    All the storage parameters that you want to use as
-                    a :class:`blosc2.Storage` or dict instance.
-                cparams: :class:`blosc2.CParams` or dict
-                    All the compression parameters that you want to use as
-                    a :class:`blosc2.CParams` or dict instance.
-                dparams: :class:`blosc2.DParams` or dict
-                    All the decompression parameters that you want to use as
-                    a :class:`blosc2.DParams` or dict instance.
-                others: Any
-                    If `storage` is not passed, all the parameters of a :class:`blosc2.Storage`
-                    can be passed as keyword arguments.
+            kwargs: dict, optional
+                Storage parameters. The default values are in :class:`blosc2.Storage`.
+                Supported keyword arguments:
+                    storage: :class:`blosc2.Storage` or dict
+                        All the storage parameters that you want to use as
+                        a :class:`blosc2.Storage` or dict instance.
+                    cparams: :class:`blosc2.CParams` or dict
+                        All the compression parameters that you want to use as
+                        a :class:`blosc2.CParams` or dict instance.
+                    dparams: :class:`blosc2.DParams` or dict
+                        All the decompression parameters that you want to use as
+                        a :class:`blosc2.DParams` or dict instance.
+                    others: Any
+                        If `storage` is not passed, all the parameters of a :class:`blosc2.Storage`
+                        can be passed as keyword arguments.
 
-        Examples
-        --------
-        >>> import blosc2
-        >>> import numpy as np
-        >>> import os.path
-        >>> import shutil
-        >>> import tempfile
-        >>> cparams = blosc2.CParams()
-        >>> dparams = blosc2.DParams()
-        >>> storage = blosc2.Storage(contiguous=True)
-        >>> schunk = blosc2.SChunk(cparams=cparams, dparams=dparams, storage=storage)
+            Examples
+            --------
+            >>> import blosc2
+            >>> import numpy as np
+            >>> import os.path
+            >>> import shutil
+            >>> import tempfile
+            >>> cparams = blosc2.CParams()
+            >>> dparams = blosc2.DParams()
+            >>> storage = blosc2.Storage(contiguous=True)
+            >>> schunk = blosc2.SChunk(cparams=cparams, dparams=dparams, storage=storage)
 
-        In the following, we will write and read a super-chunk to and from disk
-        via memory-mapped files.
+            In the following, we will write and read a super-chunk to and from disk
+            via memory-mapped files.
 
-        >>> a = np.arange(3, dtype=np.int64)
-        >>> chunksize = a.size * a.itemsize
-        >>> n_chunks = 2
-        >>> tmpdirname = tempfile.mkdtemp()
-        >>> urlpath = os.path.join(tmpdirname, 'schunk.b2frame')
+            >>> a = np.arange(3, dtype=np.int64)
+            >>> chunksize = a.size * a.itemsize
+            >>> n_chunks = 2
+            >>> tmpdirname = tempfile.mkdtemp()
+            >>> urlpath = os.path.join(tmpdirname, 'schunk.b2frame')
 
-        Optional: we intend to write 2 chunks of 24 bytes each, and we expect
-        the compressed size to be smaller than the original size. Therefore, we
-        generously set the initial size of the mapping to 48 bytes
-        effectively avoiding remappings.
+            Optional: we intend to write 2 chunks of 24 bytes each, and we expect
+            the compressed size to be smaller than the original size. Therefore, we
+            generously set the initial size of the mapping to 48 bytes
+            effectively avoiding remappings.
 
-        >>> initial_mapping_size = chunksize * n_chunks
-        >>> schunk_mmap = blosc2.SChunk(
-        ...     chunksize=chunksize,
-        ...     mmap_mode="w+",
-        ...     initial_mapping_size=initial_mapping_size,
-        ...     urlpath=urlpath,
-        ... )
-        >>> schunk_mmap.append_data(a)
-        1
-        >>> schunk_mmap.append_data(a * 2)
-        2
+            >>> initial_mapping_size = chunksize * n_chunks
+            >>> schunk_mmap = blosc2.SChunk(
+            ...     chunksize=chunksize,
+            ...     mmap_mode="w+",
+            ...     initial_mapping_size=initial_mapping_size,
+            ...     urlpath=urlpath,
+            ... )
+            >>> schunk_mmap.append_data(a)
+            1
+            >>> schunk_mmap.append_data(a * 2)
+            2
 
-        Optional: explicitly close the file and free the mapping.
+            Optional: explicitly close the file and free the mapping.
 
-        >>> del schunk_mmap
+            >>> del schunk_mmap
 
-        Reading the data back again via memory-mapped files:
+            Reading the data back again via memory-mapped files:
 
-        >>> schunk_mmap = blosc2.open(urlpath, mmap_mode="r")
-        >>> np.frombuffer(schunk_mmap.decompress_chunk(0), dtype=np.int64).tolist()
-        [0, 1, 2]
-        >>> np.frombuffer(schunk_mmap.decompress_chunk(1), dtype=np.int64).tolist()
-        [0, 2, 4]
-        >>> shutil.rmtree(tmpdirname)
+        >>> schunk_mmap = blosc2.open(urlpath, mode="r", mmap_mode="r")
+            >>> np.frombuffer(schunk_mmap.decompress_chunk(0), dtype=np.int64).tolist()
+            [0, 1, 2]
+            >>> np.frombuffer(schunk_mmap.decompress_chunk(1), dtype=np.int64).tolist()
+            [0, 2, 4]
+            >>> shutil.rmtree(tmpdirname)
         """
         # Check only allowed kwarg are passed
         allowed_kwargs = [
@@ -1515,11 +1530,11 @@ def _meta_from_store(urlpath, offset):
 
     if urlpath.endswith(".b2e") and offset == 0:
         return _open_meta(urlpath)
-    if urlpath.endswith(".b2d") and os.path.isdir(urlpath):
+    if os.path.isdir(urlpath):
         embed_path = os.path.join(urlpath, "embed.b2e")
         if os.path.exists(embed_path):
             return _open_meta(embed_path)
-    if urlpath.endswith(".b2z") and os.path.isfile(urlpath):
+    if os.path.isfile(urlpath) and not urlpath.endswith(".b2e"):
         try:
             with open(urlpath, "rb") as f, zipfile.ZipFile(f) as zf:
                 for info in zf.infolist():
@@ -1556,6 +1571,16 @@ def _store_from_extension(urlpath, mode, offset, **kwargs):
 
         return EmbedStore(urlpath, mode=mode, **kwargs)
     return None
+
+
+def _resolve_store_alias(urlpath):
+    if os.path.exists(urlpath) or urlpath.endswith((".b2d", ".b2z", ".b2e")):
+        return urlpath
+    for suffix in (".b2d", ".b2z", ".b2e"):
+        candidate = urlpath + suffix
+        if os.path.exists(candidate):
+            return candidate
+    return urlpath
 
 
 def _open_special_store(urlpath, mode, offset, **kwargs):
@@ -1607,41 +1632,109 @@ def _set_default_dparams(kwargs):
             kwargs["dparams"] = dparams
 
 
-def _process_opened_object(res):
+def process_opened_object(res):
     meta = getattr(res, "schunk", res).meta
     if "proxy-source" in meta:
+        proxy_cache = res
+        cache_schunk = getattr(res, "schunk", res)
+        if getattr(cache_schunk, "urlpath", None) is not None and getattr(cache_schunk, "mode", None) == "r":
+            proxy_cache = blosc2_ext.open(cache_schunk.urlpath, "a", 0)
         proxy_src = meta["proxy-source"]
         if proxy_src["local_abspath"] is not None:
-            src = blosc2.open(proxy_src["local_abspath"])
-            return blosc2.Proxy(src, _cache=res)
+            src = blosc2.open(proxy_src["local_abspath"], mode="a")
+            return blosc2.Proxy(src, _cache=proxy_cache)
         elif proxy_src["urlpath"] is not None:
             src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
-            return blosc2.Proxy(src, _cache=res)
+            return blosc2.Proxy(src, _cache=proxy_cache)
         elif not proxy_src["caterva2_env"]:
             raise RuntimeError("Could not find the source when opening a Proxy")
+
+    if "b2o" in meta:
+        return blosc2.open_b2object(res)
 
     if "vlarray" in meta:
         from blosc2.vlarray import VLArray
 
         return VLArray(_from_schunk=getattr(res, "schunk", res))
 
-    if "batchstore" in meta:
-        from blosc2.batch_store import BatchStore
+    if "batcharray" in meta:
+        from blosc2.batch_array import BatchArray
 
-        return BatchStore(_from_schunk=getattr(res, "schunk", res))
+        return BatchArray(_from_schunk=getattr(res, "schunk", res))
 
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
-        return blosc2._open_lazyarray(res)
+        return blosc2.open_lazyarray(res)
     else:
         return res
 
 
+def _read_treestore_root_manifest(store):
+    try:
+        meta_obj = store["/_meta"]
+    except KeyError:
+        return None
+
+    if not isinstance(meta_obj, blosc2.SChunk):
+        raise ValueError("TreeStore root manifest '/_meta' must be an SChunk.")
+
+    vlmeta = meta_obj.vlmeta
+    try:
+        kind = vlmeta["kind"]
+    except KeyError as exc:
+        raise ValueError("TreeStore root manifest is missing required field 'kind'.") from exc
+    try:
+        version = vlmeta["version"]
+    except KeyError as exc:
+        raise ValueError("TreeStore root manifest is missing required field 'version'.") from exc
+
+    if isinstance(kind, bytes):
+        kind = kind.decode()
+    if not isinstance(kind, str):
+        raise ValueError("TreeStore root manifest field 'kind' must be a string.")
+    if not isinstance(version, int):
+        raise ValueError("TreeStore root manifest field 'version' must be an integer.")
+
+    return {"kind": kind, "version": version, "meta": meta_obj}
+
+
+def _open_treestore_root_object(store, urlpath, mode):
+    manifest = _read_treestore_root_manifest(store)
+    if manifest is None:
+        return store
+
+    if manifest["kind"] == "ctable":
+        if mode not in {"r", "a"}:
+            return store
+        # Discard the probe store without repacking — it was only opened
+        # to peek at the manifest.  A full close() would trigger to_b2z()
+        # even though nothing was modified, and CTable.open() below will
+        # create its own store anyway.
+        store.discard()
+        return blosc2.CTable.open(urlpath, mode=mode)
+
+    return store
+
+
+def _finalize_special_open(special, urlpath, mode):
+    if special is None:
+        return None
+    if isinstance(special, blosc2.TreeStore):
+        return _open_treestore_root_object(special, urlpath, mode)
+    return special
+
+
+_OPEN_MODE_SENTINEL = object()
+
+
 def open(
-    urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
+    urlpath: str | pathlib.Path | blosc2.URLPath,
+    mode: str = _OPEN_MODE_SENTINEL,
+    offset: int = 0,
+    **kwargs: dict,
 ) -> (
     blosc2.SChunk
     | blosc2.NDArray
-    | blosc2.BatchStore
+    | blosc2.BatchArray
     | blosc2.VLArray
     | blosc2.C2Array
     | blosc2.LazyArray
@@ -1663,7 +1756,10 @@ def open(
     mode: str, optional
         Persistence mode: 'r' means read only (must exist);
         'a' means read/write (create if it doesn't exist);
-        'w' means create (overwrite if it exists). Default is 'a'.
+        'w' means create (overwrite if it exists). Defaults to 'a' for now,
+        but will change to 'r' in a future release. Pass ``mode='a'``
+        explicitly to preserve writable behavior, or ``mode='r'`` for
+        read-only access.
     offset: int, optional
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
@@ -1723,7 +1819,7 @@ def open(
     >>> # Create SChunk and append data
     >>> schunk = blosc2.SChunk(chunksize=chunksize, data=data.tobytes(), storage=storage)
     >>> # Open SChunk
-    >>> sc_open = blosc2.open(urlpath=urlpath)
+    >>> sc_open = blosc2.open(urlpath=urlpath, mode="r")
     >>> for i in range(nchunks):
     ...     dest = np.empty(nelem // nchunks, dtype=data.dtype)
     ...     schunk.decompress_chunk(i, dest)
@@ -1738,12 +1834,25 @@ def open(
 
     To open the same schunk memory-mapped, we simply need to pass the `mmap_mode` parameter:
 
-    >>> sc_open_mmap = blosc2.open(urlpath=urlpath, mmap_mode="r")
+    >>> sc_open_mmap = blosc2.open(urlpath=urlpath, mode="r", mmap_mode="r")
     >>> sc_open.nchunks == sc_open_mmap.nchunks
     True
     >>> all(sc_open.decompress_chunk(i, dest1) == sc_open_mmap.decompress_chunk(i, dest1) for i in range(nchunks))
     True
     """
+    # Resolve the sentinel before URLPath check so we can raise the correct
+    # error without also triggering the deprecation warning for invalid calls.
+    if mode is _OPEN_MODE_SENTINEL:
+        # TODO: remove the sentinel/FutureWarning path once blosc2.open() defaults to mode="r".
+        warnings.warn(
+            "blosc2.open() currently defaults to mode='a', but this will change "
+            "to mode='r' in a future release. Pass mode='a' explicitly to keep "
+            "writable behavior, or mode='r' for read-only access.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        mode = "a"
+
     if isinstance(urlpath, blosc2.URLPath):
         if mode != "r" or offset != 0 or kwargs != {}:
             raise NotImplementedError(
@@ -1754,14 +1863,40 @@ def open(
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
 
-    special = _open_special_store(urlpath, mode, offset, **kwargs)
+    # Keep explicit store paths on the direct dispatch path.  For regular
+    # Blosc containers, try the standard open first and only fall back to the
+    # more expensive store probing when that fails.
+    if urlpath.endswith((".b2d", ".b2z", ".b2e")):
+        special = _open_special_store(urlpath, mode, offset, **kwargs)
+        special = _finalize_special_open(special, urlpath, mode)
+        if special is not None:
+            return special
+
+    regular_exc = None
+    if os.path.exists(urlpath):
+        _set_default_dparams(kwargs)
+        try:
+            res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
+        except Exception as exc:
+            regular_exc = exc
+        else:
+            return process_opened_object(res)
+
+    resolved_urlpath = _resolve_store_alias(urlpath)
+    special_path = (
+        resolved_urlpath if resolved_urlpath != urlpath or not os.path.exists(urlpath) else urlpath
+    )
+    special = _open_special_store(special_path, mode, offset, **kwargs)
+    special = _finalize_special_open(special, special_path, mode)
     if special is not None:
         return special
 
-    if not os.path.exists(urlpath):
-        raise FileNotFoundError(f"No such file or directory: {urlpath}")
+    if regular_exc is not None:
+        raise regular_exc
+    if not os.path.exists(special_path):
+        raise FileNotFoundError(f"No such file or directory: {special_path}")
 
     _set_default_dparams(kwargs)
-    res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
+    res = blosc2_ext.open(special_path, mode, offset, **kwargs)
 
-    return _process_opened_object(res)
+    return process_opened_object(res)

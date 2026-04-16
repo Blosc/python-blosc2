@@ -24,7 +24,7 @@ initial_mapping_size = a.size * a.itemsize
 blosc2.asarray(a, urlpath=urlpath, mmap_mode="w+", initial_mapping_size=initial_mapping_size)
 
 # Read the ndarray back via the general open function
-a_read = blosc2.open(urlpath, mmap_mode="r")
+a_read = blosc2.open(urlpath, mode="r", mmap_mode="r")
 
 assert np.all(a == a_read)
 blosc2.remove_urlpath(urlpath)

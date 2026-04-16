@@ -43,7 +43,7 @@ def clean_dir():
 
 
 def table_path(name):
-    return os.path.join(TABLE_ROOT, name)
+    return os.path.join(TABLE_ROOT, f"{name}.b2d")
 
 
 # ===========================================================================
@@ -96,7 +96,7 @@ def test_view_blocks_compact():
 def test_readonly_disk_table_blocks_assign():
     path = table_path("ro")
     t = CTable(Row, urlpath=path, mode="w", new_data=DATA10)
-    del t
+    t.close()
     t_ro = CTable.open(path, mode="r")
     with pytest.raises(ValueError, match="read-only"):
         t_ro["score"].assign(np.ones(len(t_ro)))
@@ -105,10 +105,54 @@ def test_readonly_disk_table_blocks_assign():
 def test_readonly_disk_table_blocks_setitem():
     path = table_path("ro_setitem")
     t = CTable(Row, urlpath=path, mode="w", new_data=DATA10)
-    del t
+    t.close()
     t_ro = CTable.open(path, mode="r")
     with pytest.raises(ValueError, match="read-only"):
         t_ro["score"][0] = 99.0
+
+
+def test_blosc2_open_materializes_ctable():
+    path = table_path("open_ctable")
+    t = CTable(Row, urlpath=path, mode="w", new_data=DATA10)
+    t.close()
+    opened = blosc2.open(path, mode="r")
+    assert isinstance(opened, CTable)
+    assert opened.col_names == ["id", "score", "active"]
+    np.testing.assert_array_equal(opened["id"].to_numpy(), np.arange(10))
+
+
+def test_blosc2_open_raw_treestore_without_manifest():
+    path = table_path("raw_store")
+    with blosc2.TreeStore(path, mode="w", threshold=0) as tstore:
+        tstore["/group/node"] = np.arange(5)
+
+    opened = blosc2.open(path, mode="r")
+    assert isinstance(opened, blosc2.TreeStore)
+    assert np.array_equal(opened["/group/node"][:], np.arange(5))
+
+
+def test_blosc2_open_raw_treestore_for_unknown_manifest_kind():
+    path = table_path("unknown_manifest")
+    with blosc2.TreeStore(path, mode="w", threshold=0) as tstore:
+        meta = blosc2.SChunk()
+        meta.vlmeta["kind"] = "mystery"
+        meta.vlmeta["version"] = 1
+        tstore["/_meta"] = meta
+        tstore["/payload"] = np.arange(3)
+
+    opened = blosc2.open(path, mode="r")
+    assert isinstance(opened, blosc2.TreeStore)
+    assert np.array_equal(opened["/payload"][:], np.arange(3))
+
+
+def test_extensionless_ctable_path_uses_extensionless_store():
+    path = os.path.join(TABLE_ROOT, "alias_ctable")
+    t = CTable(Row, urlpath=path, mode="w", new_data=DATA10)
+    t.close()
+    assert os.path.isdir(path)
+    opened = blosc2.open(path, mode="r")
+    assert isinstance(opened, CTable)
+    np.testing.assert_array_equal(opened["id"].to_numpy(), np.arange(10))
 
 
 # ===========================================================================
@@ -187,7 +231,7 @@ def test_add_column_persists_on_disk():
     path = table_path("add_col")
     t = CTable(Row, urlpath=path, mode="w", new_data=DATA10)
     t.add_column("weight", blosc2.float64(), 7.0)
-    del t
+    t.close()
     t2 = CTable.open(path)
     assert "weight" in t2.col_names
     np.testing.assert_array_equal(t2["weight"].to_numpy(), np.full(10, 7.0))
@@ -272,7 +316,7 @@ def test_drop_column_persists_schema_on_disk():
     path = table_path("drop_schema")
     t = CTable(Row, urlpath=path, mode="w", new_data=DATA10)
     t.drop_column("active")
-    del t
+    t.close()
     t2 = CTable.open(path)
     assert "active" not in t2.col_names
     assert t2.ncols == 2
@@ -333,7 +377,7 @@ def test_rename_column_persists_on_disk():
     path = table_path("rename_col")
     t = CTable(Row, urlpath=path, mode="w", new_data=DATA10)
     t.rename_column("score", "points")
-    del t
+    t.close()
     t2 = CTable.open(path)
     assert "points" in t2.col_names
     assert "score" not in t2.col_names

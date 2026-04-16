@@ -59,11 +59,11 @@ def clean() -> None:
 # Section 1: bulk creation — extend()
 # ---------------------------------------------------------------------------
 
-sep("1. extend() — bulk insert: in-memory vs file-backed")
+sep("1. extend() — bulk insert: in-memory vs TreeStore-backed")
 
 SIZES = [1_000, 10_000, 100_000, 1_000_000]
 
-print(f"{'rows':>12}  {'in-memory (s)':>16}  {'file-backed (s)':>16}  {'overhead':>10}")
+print(f"{'rows':>12}  {'in-memory (s)':>16}  {'store-backed (s)':>16}  {'overhead':>10}")
 print(f"{'----':>12}  {'-------------':>16}  {'---------------':>16}  {'--------':>10}")
 
 for N in SIZES:
@@ -77,6 +77,7 @@ for N in SIZES:
         clean()
         t = blosc2.CTable(Row, urlpath=TABLE_DIR + "/ext", mode="w", expected_size=N)
         t.extend(data, validate=False)
+        t.close()
 
     t_mem = tmin(bench_mem)
     t_file = tmin(bench_file)
@@ -89,8 +90,8 @@ for N in SIZES:
 
 sep("2. open() — time to reopen a persistent table")
 
-print(f"{'rows':>12}  {'CTable.open() (s)':>20}  {'CTable(..., mode=a) (s)':>24}")
-print(f"{'----':>12}  {'------------------':>20}  {'------------------------':>24}")
+print(f"{'rows':>12}  {'blosc2.open() (s)':>18}  {'CTable.open() (s)':>20}  {'CTable(..., mode=a) (s)':>24}")
+print(f"{'----':>12}  {'----------------':>18}  {'------------------':>20}  {'------------------------':>24}")
 
 for N in SIZES:
     data = [(i, float(i % 100), i % 2 == 0) for i in range(N)]
@@ -98,7 +99,11 @@ for N in SIZES:
     path = TABLE_DIR + "/reopen"
     t = blosc2.CTable(Row, urlpath=path, mode="w", expected_size=N)
     t.extend(data, validate=False)
-    del t
+    t.close()
+
+    def bench_blosc2_open(path=path):
+        t2 = blosc2.open(path, mode="r")
+        _ = len(t2)
 
     def bench_open(path=path):
         t2 = blosc2.CTable.open(path, mode="r")
@@ -108,15 +113,16 @@ for N in SIZES:
         t2 = blosc2.CTable(Row, urlpath=path, mode="a")
         _ = len(t2)
 
+    t_b2_open = tmin(bench_blosc2_open)
     t_open = tmin(bench_open)
     t_ctor = tmin(bench_ctor)
-    print(f"{N:>12,}  {t_open:>20.4f}  {t_ctor:>24.4f}")
+    print(f"{N:>12,}  {t_b2_open:>18.4f}  {t_open:>20.4f}  {t_ctor:>24.4f}")
 
 # ---------------------------------------------------------------------------
 # Section 3: append() — single-row inserts after reopen
 # ---------------------------------------------------------------------------
 
-sep("3. append() — 1 000 single-row inserts: in-memory vs file-backed")
+sep("3. append() — 1 000 single-row inserts: in-memory vs TreeStore-backed")
 
 APPEND_N = 1_000
 PREALLOCATE = 10_000  # avoid resize noise
@@ -146,7 +152,8 @@ for label, fn in [("in-memory", bench_append_mem), ("file-backed", bench_append_
     # Reset file table before each run
     if label == "file-backed":
         clean()
-        blosc2.CTable(Row, urlpath=path, mode="w", expected_size=PREALLOCATE)
+        t = blosc2.CTable(Row, urlpath=path, mode="w", expected_size=PREALLOCATE)
+        t.close()
     elapsed = tmin(fn)
     us_per_row = elapsed / APPEND_N * 1e6
     print(f"{label:>14}  {elapsed:>12.4f}  {us_per_row:>12.1f}")
@@ -155,9 +162,9 @@ for label, fn in [("in-memory", bench_append_mem), ("file-backed", bench_append_
 # Section 4: column read — to_numpy() after reopen
 # ---------------------------------------------------------------------------
 
-sep("4. column read — to_numpy() on 'id': in-memory vs file-backed")
+sep("4. column read — to_numpy() on 'id': in-memory vs TreeStore-backed")
 
-print(f"{'rows':>12}  {'in-memory (s)':>16}  {'file-backed (s)':>16}  {'ratio':>8}")
+print(f"{'rows':>12}  {'in-memory (s)':>16}  {'store-backed (s)':>16}  {'ratio':>8}")
 print(f"{'----':>12}  {'-------------':>16}  {'---------------':>16}  {'-----':>8}")
 
 for N in SIZES:
@@ -170,6 +177,7 @@ for N in SIZES:
     path = TABLE_DIR + "/read"
     t_file_table = blosc2.CTable(Row, urlpath=path, mode="w", expected_size=N)
     t_file_table.extend(data, validate=False)
+    t_file_table.close()
     # Reopen read-only (simulates a real read workload)
     t_ro = blosc2.CTable.open(path, mode="r")
 

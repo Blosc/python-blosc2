@@ -14,6 +14,11 @@ You can get an object following the LazyArray API with any of the following ways
 
 The LazyArray object is a thin wrapper around the expression or user-defined function that allows for lazy computation. This means that the expression is not computed until the ``compute`` or ``__getitem__`` methods are called. The ``compute`` method will return a new NDArray object with the result of the expression evaluation. The ``__getitem__`` method will return an NumPy object instead.
 
+LazyArray objects also support user metadata via :attr:`LazyArray.vlmeta`. For
+in-memory objects, this metadata lives on the Python object itself. For
+persisted LazyArrays reopened from disk, metadata is synchronized with the
+underlying carrier and survives reopening.
+
 See the `LazyExpr`_ and `LazyUDF`_ sections for more information.
 
 .. currentmodule:: blosc2
@@ -28,10 +33,16 @@ See the `LazyExpr`_ and `LazyUDF`_ sections for more information.
     .. autosummary::
 
         __getitem__
+        will_use_index
 
     Methods
     ---------------
     .. automethod:: __getitem__
+    .. automethod:: will_use_index
+
+    Attributes
+    ----------
+    .. autoattribute:: vlmeta
 
 .. _LazyExpr:
 
@@ -51,7 +62,7 @@ LazyUDF
 
 For getting a LazyUDF object (which is LazyArray-compliant) from a user-defined Python function, you can use the lazyudf constructor below. See  `a tutorial on how this works <../getting_started/tutorials/03.lazyarray-udf.html>`_.
 
-This object follows the `LazyArray`_ API for computation, although storage is not supported yet.
+This object follows the `LazyArray`_ API for computation and storage.
 
 .. autofunction:: lazyudf
 

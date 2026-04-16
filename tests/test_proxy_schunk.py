@@ -68,9 +68,9 @@ def test_open(urlpath, chunksize, nchunks):
     del schunk
     if urlpath is None:
         with pytest.raises(RuntimeError):
-            _ = blosc2.open(proxy_urlpath)
+            _ = blosc2.open(proxy_urlpath, mode="a")
     else:
-        proxy = blosc2.open(proxy_urlpath)
+        proxy = blosc2.open(proxy_urlpath, mode="a")
         assert proxy[0 : len(data) * 4] == bytes_obj
 
     blosc2.remove_urlpath(urlpath)
