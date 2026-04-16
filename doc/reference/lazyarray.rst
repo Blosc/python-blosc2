@@ -7,10 +7,10 @@ This is an API interface for computing an expression or a Python user defined fu
 
 You can get an object following the LazyArray API with any of the following ways:
 
-* Any expression that involves one or more NDArray objects. e.g. ``a + b``, where ``a`` and ``b`` are NDArray objects (see  `this tutorial <../getting_started/tutorials/03.lazyarray-expressions.html>`_).
+* Any expression that involves one or more NDArray objects. e.g. ``a + b``, where ``a`` and ``b`` are NDArray objects (see  `the lazyarray expressions tutorial <../getting_started/tutorials/03.lazyarray-expressions.html>`_).
 * Using the ``lazyexpr`` constructor.
 * Using the ``lazyudf`` constructor (see `a tutorial <../getting_started/tutorials/03.lazyarray-udf.html>`_).
-* Using ``@dsl_kernel`` and ``lazyudf`` for miniexpr-backed DSL kernels (see `this tutorial <../getting_started/tutorials/03.lazyarray-udf-kernels.html>`_).
+* Using ``@dsl_kernel`` and ``lazyudf`` for miniexpr-backed DSL kernels (see `the DSL kernels tutorial <../getting_started/tutorials/03.lazyarray-udf-kernels.html>`_).
 
 The LazyArray object is a thin wrapper around the expression or user-defined function that allows for lazy computation. This means that the expression is not computed until the ``compute`` or ``__getitem__`` methods are called. The ``compute`` method will return a new NDArray object with the result of the expression evaluation. The ``__getitem__`` method will return an NumPy object instead.
 
@@ -33,12 +33,10 @@ See the `LazyExpr`_ and `LazyUDF`_ sections for more information.
     .. autosummary::
 
         __getitem__
-        will_use_index
 
     Methods
     ---------------
     .. automethod:: __getitem__
-    .. automethod:: will_use_index
 
     Attributes
     ----------

@@ -10,17 +10,17 @@ Main Classes
     CTable
     Column
     NDArray
-    Index
     NDField
     LazyArray
     C2Array
     Array
+    BatchArray
+    VLArray
     SChunk
     DictStore
     TreeStore
     EmbedStore
-    BatchArray
-    VLArray
+    Index
     Ref
     Proxy
     ProxySource
@@ -32,8 +32,7 @@ Main Classes
 
     ctable
     ndarray
-    index
-    ndfield
+    index_class
     lazyarray
     c2array
     array
@@ -43,6 +42,7 @@ Main Classes
     embed_store
     batch_array
     vlarray
+    ndfield
     ref
     proxy
     proxysource

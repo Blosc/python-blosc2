@@ -30,7 +30,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     It is available via the `.vlmeta` property of an :ref:`SChunk`.
 
     Values are serialized using the general Blosc2 msgpack extensions; see
-    :ref:`Msgpack Serialization <MsgpackSerialization>`. Besides ordinary
+    :ref:`MsgpackSerialization`. Besides ordinary
     msgpack-safe Python values, this includes:
 
     - CFrame-backed Blosc2 objects such as :class:`blosc2.NDArray`,
@@ -199,82 +199,83 @@ class SChunk(blosc2_ext.SChunk):
     ) -> None:
         """Create a new super-chunk, or open an existing one.
 
-            Parameters
-            ----------
-            chunksize: int, optional
-                The size, in bytes, of the chunks in the super-chunk. If not provided,
-                it is set automatically to a reasonable value.
+        Parameters
+        ----------
+        chunksize: int, optional
+            The size, in bytes, of the chunks in the super-chunk. If not provided,
+            it is set automatically to a reasonable value.
 
-            data: bytes-like object, optional
-                The data to be split into different chunks of size :paramref:`chunksize`.
-                If None, the Schunk instance will be empty initially.
+        data: bytes-like object, optional
+            The data to be split into different chunks of size :paramref:`chunksize`.
+            If None, the Schunk instance will be empty initially.
 
-            kwargs: dict, optional
-                Storage parameters. The default values are in :class:`blosc2.Storage`.
-                Supported keyword arguments:
-                    storage: :class:`blosc2.Storage` or dict
-                        All the storage parameters that you want to use as
-                        a :class:`blosc2.Storage` or dict instance.
-                    cparams: :class:`blosc2.CParams` or dict
-                        All the compression parameters that you want to use as
-                        a :class:`blosc2.CParams` or dict instance.
-                    dparams: :class:`blosc2.DParams` or dict
-                        All the decompression parameters that you want to use as
-                        a :class:`blosc2.DParams` or dict instance.
-                    others: Any
-                        If `storage` is not passed, all the parameters of a :class:`blosc2.Storage`
-                        can be passed as keyword arguments.
+        kwargs: dict, optional
+            Storage parameters. The default values are in :class:`blosc2.Storage`.
+            Supported keyword arguments:
 
-            Examples
-            --------
-            >>> import blosc2
-            >>> import numpy as np
-            >>> import os.path
-            >>> import shutil
-            >>> import tempfile
-            >>> cparams = blosc2.CParams()
-            >>> dparams = blosc2.DParams()
-            >>> storage = blosc2.Storage(contiguous=True)
-            >>> schunk = blosc2.SChunk(cparams=cparams, dparams=dparams, storage=storage)
+                storage: :class:`blosc2.Storage` or dict
+                    All the storage parameters that you want to use as
+                    a :class:`blosc2.Storage` or dict instance.
+                cparams: :class:`blosc2.CParams` or dict
+                    All the compression parameters that you want to use as
+                    a :class:`blosc2.CParams` or dict instance.
+                dparams: :class:`blosc2.DParams` or dict
+                    All the decompression parameters that you want to use as
+                    a :class:`blosc2.DParams` or dict instance.
+                others: Any
+                    If `storage` is not passed, all the parameters of a :class:`blosc2.Storage`
+                    can be passed as keyword arguments.
 
-            In the following, we will write and read a super-chunk to and from disk
-            via memory-mapped files.
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> import os.path
+        >>> import shutil
+        >>> import tempfile
+        >>> cparams = blosc2.CParams()
+        >>> dparams = blosc2.DParams()
+        >>> storage = blosc2.Storage(contiguous=True)
+        >>> schunk = blosc2.SChunk(cparams=cparams, dparams=dparams, storage=storage)
 
-            >>> a = np.arange(3, dtype=np.int64)
-            >>> chunksize = a.size * a.itemsize
-            >>> n_chunks = 2
-            >>> tmpdirname = tempfile.mkdtemp()
-            >>> urlpath = os.path.join(tmpdirname, 'schunk.b2frame')
+        In the following, we will write and read a super-chunk to and from disk
+        via memory-mapped files.
 
-            Optional: we intend to write 2 chunks of 24 bytes each, and we expect
-            the compressed size to be smaller than the original size. Therefore, we
-            generously set the initial size of the mapping to 48 bytes
-            effectively avoiding remappings.
+        >>> a = np.arange(3, dtype=np.int64)
+        >>> chunksize = a.size * a.itemsize
+        >>> n_chunks = 2
+        >>> tmpdirname = tempfile.mkdtemp()
+        >>> urlpath = os.path.join(tmpdirname, 'schunk.b2frame')
 
-            >>> initial_mapping_size = chunksize * n_chunks
-            >>> schunk_mmap = blosc2.SChunk(
-            ...     chunksize=chunksize,
-            ...     mmap_mode="w+",
-            ...     initial_mapping_size=initial_mapping_size,
-            ...     urlpath=urlpath,
-            ... )
-            >>> schunk_mmap.append_data(a)
-            1
-            >>> schunk_mmap.append_data(a * 2)
-            2
+        Optional: we intend to write 2 chunks of 24 bytes each, and we expect
+        the compressed size to be smaller than the original size. Therefore, we
+        generously set the initial size of the mapping to 48 bytes
+        effectively avoiding remappings.
 
-            Optional: explicitly close the file and free the mapping.
+        >>> initial_mapping_size = chunksize * n_chunks
+        >>> schunk_mmap = blosc2.SChunk(
+        ...     chunksize=chunksize,
+        ...     mmap_mode="w+",
+        ...     initial_mapping_size=initial_mapping_size,
+        ...     urlpath=urlpath,
+        ... )
+        >>> schunk_mmap.append_data(a)
+        1
+        >>> schunk_mmap.append_data(a * 2)
+        2
 
-            >>> del schunk_mmap
+        Optional: explicitly close the file and free the mapping.
 
-            Reading the data back again via memory-mapped files:
+        >>> del schunk_mmap
 
-        >>> schunk_mmap = blosc2.open(urlpath, mode="r", mmap_mode="r")
-            >>> np.frombuffer(schunk_mmap.decompress_chunk(0), dtype=np.int64).tolist()
-            [0, 1, 2]
-            >>> np.frombuffer(schunk_mmap.decompress_chunk(1), dtype=np.int64).tolist()
-            [0, 2, 4]
-            >>> shutil.rmtree(tmpdirname)
+        Reading the data back again via memory-mapped files:
+
+        >>> schunk_mmap = blosc2.open(urlpath, mmap_mode="r")
+        >>> np.frombuffer(schunk_mmap.decompress_chunk(0), dtype=np.int64).tolist()
+        [0, 1, 2]
+        >>> np.frombuffer(schunk_mmap.decompress_chunk(1), dtype=np.int64).tolist()
+        [0, 2, 4]
+        >>> shutil.rmtree(tmpdirname)
         """
         # Check only allowed kwarg are passed
         allowed_kwargs = [

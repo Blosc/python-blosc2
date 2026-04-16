@@ -270,9 +270,9 @@ def tensordot(
         * If N equals 2, the result is the tensor double contraction (default).
 
         * If axes is a tuple of two sequences (x1_axes, x2_axes), the first sequence applies to x1 and the second sequence to x2.
-        Both sequences must have the same length. Each axis (dimension) x1_axes[i] for x1 must have the same size as the respective
-        axis (dimension) x2_axes[i] for x2. Each index referred to in a sequence must be unique. If x1 has rank (i.e, number of dimensions) N,
-        a valid x1 axis must reside on the half-open interval [-N, N). If x2 has rank M, a valid x2 axis must reside on the half-open interval [-M, M).
+          Both sequences must have the same length. Each axis (dimension) x1_axes[i] for x1 must have the same size as the respective
+          axis (dimension) x2_axes[i] for x2. Each index referred to in a sequence must be unique. If x1 has rank (i.e, number of dimensions) N,
+          a valid x1 axis must reside on the half-open interval [-N, N). If x2 has rank M, a valid x2 axis must reside on the half-open interval [-M, M).
 
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
@@ -505,7 +505,7 @@ def permute_dims(
 
     Parameters
     ----------
-    arr: :ref:`blosc2.NDArray` | np.ndarray
+    arr: :ref:`NDArray` | np.ndarray
         The input array.
     axes: tuple[int], list[int], optional
         The desired permutation of axes. If None, the axes are reversed by default.
@@ -518,8 +518,8 @@ def permute_dims(
 
     Returns
     -------
-    out: :ref:`blosc2.NDArray`
-        A Blosc2 :ref:`blosc2.NDArray` with axes transposed.
+    out: :ref:`NDArray`
+        A Blosc2 :ref:`NDArray` with axes transposed.
 
     Raises
     ------
@@ -623,14 +623,14 @@ def transpose(x, **kwargs: Any) -> blosc2.NDArray:
 
     Parameters
     ----------
-    x: :ref:`blosc2.NDArray`
+    x: :ref:`NDArray`
         The input array.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
-    out: :ref:`blosc2.NDArray`
+    out: :ref:`NDArray`
         The Blosc2 blosc2.NDArray with axes transposed.
 
     References
@@ -661,14 +661,14 @@ def matrix_transpose(arr: blosc2.Array, **kwargs: Any) -> blosc2.NDArray:
 
     Parameters
     ----------
-    arr: :ref:`blosc2.NDArray` | np.ndarray
+    arr: :ref:`NDArray` | np.ndarray
         The input blosc2.NDArray having shape ``(..., M, N)`` and whose innermost two dimensions form
         ``MxN`` matrices.
 
     Returns
     -------
-    out: :ref:`blosc2.NDArray`
-        A new :ref:`blosc2.NDArray` containing the transpose for each matrix and having shape
+    out: :ref:`NDArray`
+        A new :ref:`NDArray` containing the transpose for each matrix and having shape
         ``(..., N, M)``.
     """
     axes = None

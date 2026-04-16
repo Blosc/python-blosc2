@@ -1,5 +1,5 @@
 Indexing and Manipulation Functions and Utilities
-=======================================
+=================================================
 
 The following functions are useful for performing indexing and other associated operations.
 
@@ -7,12 +7,10 @@ The following functions are useful for performing indexing and other associated 
 
 .. autosummary::
 
-    argsort
     broadcast_to
     concat
     count_nonzero
     expand_dims
-    iter_sorted
     meshgrid
     sort
     squeeze
@@ -22,12 +20,10 @@ The following functions are useful for performing indexing and other associated 
 
 
 
-.. autofunction:: blosc2.argsort
 .. autofunction:: blosc2.broadcast_to
 .. autofunction:: blosc2.concat
 .. autofunction:: blosc2.count_nonzero
 .. autofunction:: blosc2.expand_dims
-.. autofunction:: blosc2.iter_sorted
 .. autofunction:: blosc2.meshgrid
 .. autofunction:: blosc2.sort
 .. autofunction:: blosc2.squeeze

@@ -81,7 +81,7 @@ Quickstart
     .. autofunction:: estore_from_cframe
 
     Dictionary Interface
-    -------------------
+    --------------------
     .. automethod:: __getitem__
     .. automethod:: __setitem__
     .. automethod:: __delitem__

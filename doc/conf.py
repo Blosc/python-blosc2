@@ -6,7 +6,7 @@ import sys
 import numpy as np
 
 import blosc2
-from blosc2.utils import constructors, elementwise_funcs, reducers
+from blosc2.utils import elementwise_funcs, reducers
 
 
 def genbody(f, func_list, lib="blosc2"):
@@ -149,38 +149,6 @@ The following functions are useful for working with datatypes.
     )
     genbody(f, blosc2_dtypefuncs)
 
-# GENERATE index_funcs.rst
-blosc2_indexfuncs = sorted(
-    [
-        "count_nonzero",
-        "squeeze",
-        "expand_dims",
-        "sort",
-        "take",
-        "take_along_axis",
-        "broadcast_to",
-        "meshgrid",
-        "indices",
-        "concat",
-        "stack",
-    ]
-)
-
-with open("reference/index_funcs.rst", "w") as f:
-    f.write(
-        """Indexing and Manipulation Functions and Utilities
-=======================================
-
-The following functions are useful for performing indexing and other associated operations.
-
-.. currentmodule:: blosc2
-
-.. autosummary::
-
-"""
-    )
-    genbody(f, blosc2_indexfuncs)
-
 # GENERATE linear_algebra.rst
 linalg_funcs = [
     name
@@ -218,50 +186,6 @@ Reduction operations can be used with any of :ref:`NDArray <NDArray>`, :ref:`C2A
 """
     )
     genbody(f, sorted(reducers))
-
-with open("reference/ndarray.rst", "w") as f:
-    f.write(
-        """.. _NDArray:
-
-NDArray
-=======
-
-The multidimensional data array class. Instances may be constructed using the constructor functions in the list below `NDArrayConstructors`_.
-In addition, all the functions from the :ref:`Lazy Functions <lazy_functions>` section can be used with NDArray instances.
-
-.. currentmodule:: blosc2
-
-.. autoclass:: NDArray
-    :members:
-    :inherited-members:
-    :exclude-members: get_slice, set_slice, get_slice_numpy, get_oindex_numpy, set_oindex_numpy
-    :member-order: groupwise
-
-    :Special Methods:
-
-    .. autosummary::
-
-        __iter__
-        __len__
-        __getitem__
-        __setitem__
-
-    Utility Methods
-    ---------------
-
-    .. automethod:: __iter__
-    .. automethod:: __len__
-    .. automethod:: __getitem__
-    .. automethod:: __setitem__
-
-Constructors
-------------
-.. _NDArrayConstructors:
-.. autosummary::
-
-"""
-    )
-    genbody(f, sorted(constructors))
 
 hidden = "_ignore_multiple_size"
 

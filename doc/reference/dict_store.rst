@@ -70,7 +70,7 @@ Quick example
     .. automethod:: __init__
 
     Dictionary Interface
-    -------------------
+    --------------------
     .. automethod:: __getitem__
     .. automethod:: __setitem__
     .. automethod:: __delitem__
