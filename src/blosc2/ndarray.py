@@ -10,6 +10,7 @@ from __future__ import annotations
 import builtins
 import inspect
 import math
+import weakref
 from abc import abstractmethod
 from collections import OrderedDict, namedtuple
 from collections.abc import Mapping
@@ -146,23 +147,33 @@ class Array(Protocol):
 class FieldsAccessor(Mapping):
     """Read-only mapping of structured field views."""
 
-    def __init__(self, field_views: dict[str, Any]):
-        self._field_views = field_views
+    def __init__(self, ndarr, field_names: Sequence[str]):
+        self._ndarr_ref = weakref.ref(ndarr)
+        self._field_names = tuple(field_names)
+
+    def _ndarr(self):
+        ndarr = self._ndarr_ref()
+        if ndarr is None:
+            raise ReferenceError("owning NDArray has been released")
+        return ndarr
 
     def __getitem__(self, key: str) -> Any:
-        return self._field_views[key]
+        if key not in self._field_names:
+            raise KeyError(key)
+        return NDField(self._ndarr(), key)
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self._field_views)
+        return iter(self._field_names)
 
     def __len__(self) -> int:
-        return len(self._field_views)
+        return len(self._field_names)
 
     def __setitem__(self, key: str, value: object) -> None:
         raise TypeError(f'assign through the field view, e.g. array.fields["{key}"][:] = values')
 
     def copy(self) -> dict[str, Any]:
-        return dict(self._field_views)
+        ndarr = self._ndarr()
+        return {field: NDField(ndarr, field) for field in self._field_names}
 
     def __or__(self, other: object) -> dict[str, Any]:
         if not isinstance(other, Mapping):
@@ -175,7 +186,7 @@ class FieldsAccessor(Mapping):
         return dict(other) | self.copy()
 
     def __repr__(self) -> str:
-        return repr(self._field_views)
+        return repr(dict(self))
 
 
 def is_documented_by(original):
@@ -3730,11 +3741,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         base = kwargs.pop("_base", None)
         super().__init__(kwargs["_array"], base=base)
         # Accessor to fields
-        field_views = {}
-        if self.dtype.fields:
-            for field in self.dtype.fields:
-                field_views[field] = NDField(self, field)
-        self._fields = FieldsAccessor(field_views)
+        field_names = tuple(self.dtype.fields) if self.dtype.fields else ()
+        self._fields = FieldsAccessor(self, field_names)
 
     @property
     def cparams(self) -> blosc2.CParams:

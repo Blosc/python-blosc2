@@ -1182,7 +1182,8 @@ def get_chunk(arr, info, nchunk):
 async def async_read_chunks(arrs, info, queue):
     loop = asyncio.get_event_loop()
     shape, chunks_ = arrs[0].shape, arrs[0].chunks
-    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
+    max_workers = max(1, min(len(arrs), int(getattr(blosc2, "nthreads", 1) or 1)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         my_chunk_iter = range(arrs[0].schunk.nchunks)
         if len(info) == 5:
             if info[-1] is not None:
@@ -1213,20 +1214,38 @@ def async_read_chunks_thread(arrs, info, queue):
 def sync_read_chunks(arrs, info):
     queue_size = 2  # maximum number of chunks in the queue
     queue = Queue(maxsize=queue_size)
+    worker_exc = None
+
+    def _run_async_reader():
+        nonlocal worker_exc
+        try:
+            async_read_chunks_thread(arrs, info, queue)
+        except BaseException as exc:
+            worker_exc = exc
+            queue.put(None)
 
     # Start the async file reading in a separate thread
-    thread = threading.Thread(target=async_read_chunks_thread, args=(arrs, info, queue))
+    thread = threading.Thread(target=_run_async_reader)
     thread.start()
 
-    # Read the chunks synchronously from the queue
-    while True:
-        try:
-            chunks = queue.get(timeout=1)  # Wait for the next chunk
-            if chunks is None:  # End of chunks
-                break
-            yield chunks
-        except Empty:
-            continue
+    try:
+        # Read the chunks synchronously from the queue
+        while True:
+            try:
+                chunks = queue.get(timeout=1)  # Wait for the next chunk
+                if chunks is None:  # End of chunks
+                    if worker_exc is not None:
+                        raise worker_exc
+                    break
+                yield chunks
+            except Empty:
+                if not thread.is_alive():
+                    if worker_exc is not None:
+                        raise worker_exc
+                    break
+                continue
+    finally:
+        thread.join()
 
 
 def read_nchunk(arrs, info):
