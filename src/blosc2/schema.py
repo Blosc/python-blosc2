@@ -34,10 +34,25 @@ class SchemaSpec:
 
     Subclasses carry the logical type, storage dtype, and optional
     validation constraints for one column.
+
+    Numpy dtype attributes (``itemsize``, ``kind``, ``type``, ``str``,
+    ``name``) are mirrored at class level so that schema spec classes can
+    be used anywhere blosc2 internals expect a dtype-like object.
     """
 
     dtype: np.dtype
     python_type: type
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # Mirror numpy dtype attributes at class level for duck-typing.
+        _np_dtype = cls.__dict__.get("dtype")
+        if isinstance(_np_dtype, np.dtype):
+            cls.itemsize = _np_dtype.itemsize
+            cls.kind = _np_dtype.kind
+            cls.type = _np_dtype.type
+            cls.str = _np_dtype.str
+            cls.name = _np_dtype.name
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         """Return kwargs for building a Pydantic field annotation."""
@@ -62,13 +77,15 @@ class _NumericSpec(SchemaSpec):
 
     _kind: str  # set by each concrete subclass
 
-    def __init__(self, *, ge=None, gt=None, le=None, lt=None):
+    def __init__(self, *, ge=None, gt=None, le=None, lt=None, null_value=None):
         self.ge = ge
         self.gt = gt
         self.le = le
         self.lt = lt
+        self.null_value = null_value
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
+        # null_value is not a Pydantic constraint — exclude it from Pydantic kwargs.
         return {
             k: v
             for k, v in {"ge": self.ge, "gt": self.gt, "le": self.le, "lt": self.lt}.items()
@@ -76,7 +93,10 @@ class _NumericSpec(SchemaSpec):
         }
 
     def to_metadata_dict(self) -> dict[str, Any]:
-        return {"kind": self._kind, **self.to_pydantic_kwargs()}
+        d: dict[str, Any] = {"kind": self._kind, **self.to_pydantic_kwargs()}
+        if self.null_value is not None:
+            d["null_value"] = self.null_value
+        return d
 
 
 # ── Signed integers ──────────────────────────────────────────────────────────
@@ -238,10 +258,11 @@ class string(SchemaSpec):
     python_type = str
     _DEFAULT_MAX_LENGTH = 32
 
-    def __init__(self, *, min_length=None, max_length=None, pattern=None):
+    def __init__(self, *, min_length=None, max_length=None, pattern=None, null_value=None):
         self.min_length = min_length
         self.max_length = max_length if max_length is not None else self._DEFAULT_MAX_LENGTH
         self.pattern = pattern
+        self.null_value = null_value
         self.dtype = np.dtype(f"U{self.max_length}")
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -255,7 +276,10 @@ class string(SchemaSpec):
         return d
 
     def to_metadata_dict(self) -> dict[str, Any]:
-        return {"kind": "string", **self.to_pydantic_kwargs()}
+        d: dict[str, Any] = {"kind": "string", **self.to_pydantic_kwargs()}
+        if self.null_value is not None:
+            d["null_value"] = self.null_value
+        return d
 
 
 class bytes(SchemaSpec):
@@ -273,9 +297,10 @@ class bytes(SchemaSpec):
     python_type = _builtin_bytes
     _DEFAULT_MAX_LENGTH = 32
 
-    def __init__(self, *, min_length=None, max_length=None):
+    def __init__(self, *, min_length=None, max_length=None, null_value=None):
         self.min_length = min_length
         self.max_length = max_length if max_length is not None else self._DEFAULT_MAX_LENGTH
+        self.null_value = null_value
         self.dtype = np.dtype(f"S{self.max_length}")
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -287,7 +312,10 @@ class bytes(SchemaSpec):
         return d
 
     def to_metadata_dict(self) -> dict[str, Any]:
-        return {"kind": "bytes", **self.to_pydantic_kwargs()}
+        d: dict[str, Any] = {"kind": "bytes", **self.to_pydantic_kwargs()}
+        if self.null_value is not None:
+            d["null_value"] = self.null_value
+        return d
 
 
 # ---------------------------------------------------------------------------

@@ -743,19 +743,84 @@ class Column:
         self._raw_col[live_pos] = arr
         self._table._root_table._mark_all_indexes_stale()
 
-    def unique(self) -> np.ndarray:
-        """Return sorted array of unique live values.
+    # ------------------------------------------------------------------
+    # Null sentinel support
+    # ------------------------------------------------------------------
 
+    @property
+    def null_value(self):
+        """The sentinel value that represents NULL for this column, or ``None``."""
+        col_info = self._table._schema.columns_by_name.get(self._col_name)
+        if col_info is None:
+            return None
+        return getattr(col_info.spec, "null_value", None)
+
+    def _null_mask_for(self, arr: np.ndarray) -> np.ndarray:
+        """Return a bool array True where *arr* contains the null sentinel.
+
+        Always returns an array of the same length as *arr*; all False when
+        no null_value is configured.
+        """
+        nv = self.null_value
+        if nv is None:
+            return np.zeros(len(arr), dtype=np.bool_)
+        if isinstance(nv, float) and np.isnan(nv):
+            return np.isnan(arr)
+        return arr == nv
+
+    def is_null(self) -> np.ndarray:
+        """Return a boolean array True where the live value is the null sentinel."""
+        return self._null_mask_for(self.to_numpy())
+
+    def notnull(self) -> np.ndarray:
+        """Return a boolean array True where the live value is *not* the null sentinel."""
+        return ~self.is_null()
+
+    def null_count(self) -> int:
+        """Return the number of live rows whose value equals the null sentinel.
+
+        Returns ``0`` in O(1) if no ``null_value`` is configured for this column.
+        """
+        if self.null_value is None:
+            return 0
+        return int(self.is_null().sum())
+
+    def _nonnull_chunks(self):
+        """Yield chunks of live, non-null values.
+
+        Each yielded array has the null sentinel values removed.  If no
+        null_value is configured this behaves identically to
+        :meth:`iter_chunks`.
+        """
+        nv = self.null_value
+        if nv is None:
+            yield from self.iter_chunks()
+            return
+        is_nan_nv = isinstance(nv, float) and np.isnan(nv)
+        for chunk in self.iter_chunks():
+            if is_nan_nv:
+                mask = ~np.isnan(chunk)
+            else:
+                mask = chunk != nv
+            filtered = chunk[mask]
+            if len(filtered) > 0:
+                yield filtered
+
+    def unique(self) -> np.ndarray:
+        """Return sorted array of unique live, non-null values.
+
+        Null sentinel values are excluded.
         Processes data in chunks — never loads the full column at once.
         """
         seen: set = set()
-        for chunk in self.iter_chunks():
+        for chunk in self._nonnull_chunks():
             seen.update(chunk.tolist())
         return np.array(sorted(seen), dtype=self.dtype)
 
     def value_counts(self) -> dict:
         """Return a ``{value: count}`` dict sorted by count descending.
 
+        Null sentinel values are excluded.
         Processes data in chunks — never loads the full column at once.
 
         Example
@@ -764,7 +829,7 @@ class Column:
         {True: 8432, False: 1568}
         """
         counts: dict = {}
-        for chunk in self.iter_chunks():
+        for chunk in self._nonnull_chunks():
             for val in chunk.tolist():
                 counts[val] = counts.get(val, 0) + 1
         return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
@@ -799,10 +864,11 @@ class Column:
     # ------------------------------------------------------------------
 
     def sum(self):
-        """Sum of all live values.
+        """Sum of all live, non-null values.
 
         Supported dtypes: bool, int, uint, float, complex.
         Bool values are counted as 0 / 1.
+        Null sentinel values are skipped.
         """
         self._require_kind("biufc", "sum")
         self._require_nonempty("sum")
@@ -815,7 +881,7 @@ class Column:
             )
         )
         result = acc_dtype(0)
-        for chunk in self.iter_chunks():
+        for chunk in self._nonnull_chunks():
             result += chunk.sum(dtype=acc_dtype)
         # Return in the column's natural dtype when it fits, else keep wide
         if self.dtype.kind in "biu":
@@ -823,56 +889,65 @@ class Column:
         return result
 
     def min(self):
-        """Minimum live value.
+        """Minimum live, non-null value.
 
         Supported dtypes: bool, int, uint, float, string, bytes.
         Strings are compared lexicographically.
+        Null sentinel values are skipped.
         """
         self._require_kind("biufUS", "min")
         self._require_nonempty("min")
         result = None
         is_str = self.dtype.kind in "US"
-        for chunk in self.iter_chunks():
+        for chunk in self._nonnull_chunks():
             # numpy .min()/.max() don't support string dtypes in recent NumPy;
             # fall back to Python's built-in min/max which work on any comparable type.
             chunk_min = min(chunk) if is_str else chunk.min()
             if result is None or chunk_min < result:
                 result = chunk_min
+        if result is None:
+            raise ValueError("min() called on a column where all values are null.")
         return result
 
     def max(self):
-        """Maximum live value.
+        """Maximum live, non-null value.
 
         Supported dtypes: bool, int, uint, float, string, bytes.
         Strings are compared lexicographically.
+        Null sentinel values are skipped.
         """
         self._require_kind("biufUS", "max")
         self._require_nonempty("max")
         result = None
         is_str = self.dtype.kind in "US"
-        for chunk in self.iter_chunks():
+        for chunk in self._nonnull_chunks():
             chunk_max = max(chunk) if is_str else chunk.max()
             if result is None or chunk_max > result:
                 result = chunk_max
+        if result is None:
+            raise ValueError("max() called on a column where all values are null.")
         return result
 
     def mean(self) -> float:
-        """Arithmetic mean of all live values.
+        """Arithmetic mean of all live, non-null values.
 
         Supported dtypes: bool, int, uint, float.
+        Null sentinel values are skipped.
         Always returns a Python float.
         """
         self._require_kind("biuf", "mean")
         self._require_nonempty("mean")
         total = np.float64(0)
         count = 0
-        for chunk in self.iter_chunks():
+        for chunk in self._nonnull_chunks():
             total += chunk.sum(dtype=np.float64)
             count += len(chunk)
+        if count == 0:
+            return float("nan")
         return float(total / count)
 
     def std(self, ddof: int = 0) -> float:
-        """Standard deviation of all live values (single-pass, Welford's algorithm).
+        """Standard deviation of all live, non-null values (single-pass, Welford's algorithm).
 
         Parameters
         ----------
@@ -881,6 +956,7 @@ class Column:
             std; ``1`` gives the sample std (divides by N-1).
 
         Supported dtypes: bool, int, uint, float.
+        Null sentinel values are skipped.
         Always returns a Python float.
         """
         self._require_kind("biuf", "std")
@@ -892,7 +968,7 @@ class Column:
         mean_total = np.float64(0)
         M2_total = np.float64(0)
 
-        for chunk in self.iter_chunks():
+        for chunk in self._nonnull_chunks():
             chunk = chunk.astype(np.float64)
             n_b = np.int64(len(chunk))
             mean_b = chunk.mean()
@@ -913,22 +989,24 @@ class Column:
         return float(np.sqrt(M2_total / divisor))
 
     def any(self) -> bool:
-        """Return True if at least one live value is True.
+        """Return True if at least one live, non-null value is True.
 
         Supported dtypes: bool.
+        Null sentinel values are skipped.
         Short-circuits on the first True found.
         """
         self._require_kind("b", "any")
-        return any(chunk.any() for chunk in self.iter_chunks())
+        return any(chunk.any() for chunk in self._nonnull_chunks())
 
     def all(self) -> bool:
-        """Return True if every live value is True.
+        """Return True if every live, non-null value is True.
 
         Supported dtypes: bool.
+        Null sentinel values are skipped.
         Short-circuits on the first False found.
         """
         self._require_kind("b", "all")
-        return all(chunk.all() for chunk in self.iter_chunks())
+        return all(chunk.all() for chunk in self._nonnull_chunks())
 
 
 # ---------------------------------------------------------------------------
@@ -947,6 +1025,9 @@ def _fmt_bytes(n: int) -> str:
     return f"{n / 1024**3:.2f} GB"
 
 
+_EXPECTED_SIZE_DEFAULT = 1_048_576
+
+
 class CTable(Generic[RowT]):
     def __init__(
         self,
@@ -955,12 +1036,20 @@ class CTable(Generic[RowT]):
         *,
         urlpath: str | None = None,
         mode: str = "a",
-        expected_size: int = 1_048_576,
+        expected_size: int | None = None,
         compact: bool = False,
         validate: bool = True,
         cparams: dict[str, Any] | None = None,
         dparams: dict[str, Any] | None = None,
     ) -> None:
+        # Auto-size: if the caller didn't specify expected_size and new_data has a
+        # known length, pre-allocate just enough (×2 for headroom, min 64).
+        # Fall back to 1 M when new_data has no __len__ or is absent.
+        if expected_size is None:
+            if new_data is not None and hasattr(new_data, "__len__"):
+                expected_size = max(len(new_data) * 2, 64)
+            else:
+                expected_size = _EXPECTED_SIZE_DEFAULT
         self._row_type = row_type
         self._validate = validate
         self._table_cparams = cparams
@@ -1197,8 +1286,14 @@ class CTable(Generic[RowT]):
 
         sep = "  ".join("─" * (w + 2) for w in widths.values())
 
+        def fmt_cell(value, width: int) -> str:
+            s = str(value)
+            if len(s) > width:
+                s = s[: width - 1] + "…"
+            return f" {s:<{width}} "
+
         def fmt_row(values: dict) -> str:
-            return "  ".join(f" {values[n]!s:<{widths[n]}} " for n in self.col_names)
+            return "  ".join(fmt_cell(values[n], widths[n]) for n in self.col_names)
 
         # -- batch-fetch values (one read per column, not one per cell) --
         def rows_to_dicts(positions) -> list[dict]:
@@ -1353,7 +1448,10 @@ class CTable(Generic[RowT]):
         # --- columns ---
         for col in self._schema.columns:
             name = col.name
-            col_storage = self._resolve_column_storage(col, default_chunks, default_blocks)
+            # Use dtype-aware defaults so large-itemsize columns (e.g. U4096) get
+            # sensible chunk/block sizes rather than the uint8-based defaults.
+            dtype_chunks, dtype_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
+            col_storage = self._resolve_column_storage(col, dtype_chunks, dtype_blocks)
             disk_col = file_storage.create_column(
                 name,
                 dtype=col.dtype,
@@ -1404,12 +1502,12 @@ class CTable(Generic[RowT]):
         capacity = max(phys_size, 1)
 
         mem_storage = InMemoryTableStorage()
-        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        bool_chunks, bool_blocks = compute_chunks_blocks((capacity,), dtype=np.dtype(np.bool_))
 
         mem_valid = mem_storage.create_valid_rows(
             shape=(capacity,),
-            chunks=default_chunks,
-            blocks=default_blocks,
+            chunks=bool_chunks,
+            blocks=bool_blocks,
         )
         if phys_size > 0:
             mem_valid[:phys_size] = disk_valid[:]
@@ -1417,12 +1515,13 @@ class CTable(Generic[RowT]):
         mem_cols: dict[str, blosc2.NDArray] = {}
         for col in schema.columns:
             name = col.name
+            col_chunks, col_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
             mem_col = mem_storage.create_column(
                 name,
                 dtype=col.dtype,
                 shape=(capacity,),
-                chunks=default_chunks,
-                blocks=default_blocks,
+                chunks=col_chunks,
+                blocks=col_blocks,
                 cparams=None,
                 dparams=None,
             )
@@ -1478,6 +1577,8 @@ class CTable(Generic[RowT]):
         return obj
 
     def view(self, new_valid_rows):
+        if isinstance(new_valid_rows, np.ndarray) and new_valid_rows.dtype == np.bool_:
+            new_valid_rows = blosc2.asarray(new_valid_rows)
         if not (
             isinstance(new_valid_rows, (blosc2.NDArray, blosc2.LazyExpr))
             and (getattr(new_valid_rows, "dtype", None) == np.bool_)
@@ -1644,33 +1745,51 @@ class CTable(Generic[RowT]):
                 lines.append("")
                 continue
 
+            nc = col.null_count()
+            n_nonnull = n - nc
+
             if dtype.kind in "biufc" and dtype.kind != "c":
                 # numeric + bool
                 if dtype.kind == "b":
                     arr = col.to_numpy()
+                    # Exclude null sentinels from true/false counts
+                    if col.null_value is not None:
+                        arr = arr[col.notnull()]
                     true_n = int(arr.sum())
                     lines.append(f"    count : {n:,}")
+                    if nc > 0:
+                        lines.append(f"    null  : {nc:,}  ({nc / n * 100:.1f} %)")
                     lines.append(f"    true  : {true_n:,}  ({true_n / n * 100:.1f} %)")
-                    lines.append(f"    false : {n - true_n:,}  ({(n - true_n) / n * 100:.1f} %)")
+                    lines.append(f"    false : {n - true_n - nc:,}  ({(n - true_n - nc) / n * 100:.1f} %)")
                 else:
-                    mn = col.min()
-                    mx = col.max()
-                    avg = col.mean()
-                    sd = col.std()
                     fmt = ".4g"
                     lines.append(f"    count : {n:,}")
-                    lines.append(f"    mean  : {avg:{fmt}}")
-                    lines.append(f"    std   : {sd:{fmt}}")
-                    lines.append(f"    min   : {mn:{fmt}}")
-                    lines.append(f"    max   : {mx:{fmt}}")
+                    if nc > 0:
+                        lines.append(f"    null  : {nc:,}  ({nc / n * 100:.1f} %)")
+                    if n_nonnull > 0:
+                        mn = col.min()
+                        mx = col.max()
+                        avg = col.mean()
+                        sd = col.std()
+                        lines.append(f"    mean  : {avg:{fmt}}")
+                        lines.append(f"    std   : {sd:{fmt}}")
+                        lines.append(f"    min   : {mn:{fmt}}")
+                        lines.append(f"    max   : {mx:{fmt}}")
+                    else:
+                        lines.append("    (all values are null)")
             elif dtype.kind in "US":
-                mn = col.min()
-                mx = col.max()
                 nu = len(col.unique())
                 lines.append(f"    count   : {n:,}")
+                if nc > 0:
+                    lines.append(f"    null    : {nc:,}  ({nc / n * 100:.1f} %)")
                 lines.append(f"    unique  : {nu:,}")
-                lines.append(f"    min     : {mn!r}")
-                lines.append(f"    max     : {mx!r}")
+                if n_nonnull > 0:
+                    mn = col.min()
+                    mx = col.max()
+                    lines.append(f"    min     : {str(mn)!r}")
+                    lines.append(f"    max     : {str(mx)!r}")
+                else:
+                    lines.append("    (all values are null)")
             else:
                 lines.append(f"    count : {n:,}")
                 lines.append(f"    (stats not available for dtype {dtype})")
@@ -1712,15 +1831,34 @@ class CTable(Generic[RowT]):
         if self._n_rows < 2:
             raise ValueError(f"cov() requires at least 2 live rows, got {self._n_rows}.")
 
-        # Build (n_cols, n_rows) matrix — one row per column
-        arrays = []
+        # Build (n_cols, n_rows) matrix — one row per column.
+        # Compute a combined null mask: any row that is null in *any* column
+        # is excluded from all columns (listwise deletion).
+        raw_arrays = []
+        null_union = None
         for name in self.col_names:
-            arr = self[name].to_numpy()
+            col = self[name]
+            arr = col.to_numpy()
+            nm = col._null_mask_for(arr)
+            if nm.any():
+                null_union = nm if null_union is None else (null_union | nm)
+            raw_arrays.append(arr)
+
+        arrays = []
+        for arr in raw_arrays:
+            if null_union is not None:
+                arr = arr[~null_union]
             if arr.dtype == np.bool_:
                 arr = arr.astype(np.int8)
             arrays.append(arr.astype(np.float64))
 
-        data = np.stack(arrays, axis=0)  # shape (ncols, n_live)
+        n_valid = len(arrays[0]) if arrays else 0
+        if n_valid < 2:
+            raise ValueError(
+                f"cov() requires at least 2 non-null rows, got {n_valid} after excluding nulls."
+            )
+
+        data = np.stack(arrays, axis=0)  # shape (ncols, n_valid)
         return np.atleast_2d(np.cov(data))
 
     # ------------------------------------------------------------------
@@ -1750,13 +1888,28 @@ class CTable(Generic[RowT]):
         for name in self.col_names:
             col = self[name]
             arr = col.to_numpy()
+            # Only compute null mask when a sentinel is actually configured —
+            # avoids allocating a 1M-element zeros array for every non-nullable column.
+            nv = col.null_value
+            if nv is not None:
+                null_mask = col._null_mask_for(arr)
+                has_nulls = bool(null_mask.any())
+            else:
+                null_mask = None
+                has_nulls = False
             kind = arr.dtype.kind
             if kind == "U":
-                pa_arr = pa.array(arr.tolist(), type=pa.string())
+                values = arr.tolist()
+                if has_nulls:
+                    values = [None if null_mask[i] else v for i, v in enumerate(values)]
+                pa_arr = pa.array(values, type=pa.string())
             elif kind == "S":
-                pa_arr = pa.array(arr.tolist(), type=pa.large_binary())
+                values = arr.tolist()
+                if has_nulls:
+                    values = [None if null_mask[i] else v for i, v in enumerate(values)]
+                pa_arr = pa.array(values, type=pa.large_binary())
             else:
-                pa_arr = pa.array(arr)
+                pa_arr = pa.array(arr, mask=null_mask if has_nulls else None)
             arrays[name] = pa_arr
 
         return pa.table(arrays)
@@ -1940,6 +2093,24 @@ class CTable(Generic[RowT]):
             for row in zip(*arrays, strict=True):
                 writer.writerow(row)
 
+    @staticmethod
+    def _csv_col_to_array(raw: list[str], col, nv) -> np.ndarray:
+        """Convert a list of raw CSV strings to a numpy array for *col*."""
+        if col.dtype == np.bool_:
+
+            def _parse(v, _nv=nv):
+                stripped = v.strip()
+                if stripped == "" and _nv is not None:
+                    return _nv
+                return stripped in ("True", "true", "1")
+
+            return np.array([_parse(v) for v in raw], dtype=np.bool_)
+        if col.dtype.kind == "S":
+            prepared: list = [nv if (v.strip() == "" and nv is not None) else v.encode() for v in raw]
+            return np.array(prepared, dtype=col.dtype)
+        prepared2 = [nv if (v.strip() == "" and nv is not None) else v for v in raw]
+        return np.array(prepared2, dtype=col.dtype)
+
     @classmethod
     def from_csv(
         cls,
@@ -2041,15 +2212,8 @@ class CTable(Generic[RowT]):
 
         if n > 0:
             for i, col in enumerate(schema.columns):
-                if col.dtype == np.bool_:
-                    # np.array(["False"], dtype=bool) treats any non-empty
-                    # string as True.  Parse "True"/"False"/"1"/"0" explicitly.
-                    arr = np.array(
-                        [v.strip() in ("True", "true", "1") for v in col_data[i]],
-                        dtype=np.bool_,
-                    )
-                else:
-                    arr = np.array(col_data[i], dtype=col.dtype)
+                nv = getattr(col.spec, "null_value", None)
+                arr = cls._csv_col_to_array(col_data[i], col, nv)
                 new_cols[col.name][:n] = arr
             new_valid[:n] = True
             obj._n_rows = n
@@ -2316,10 +2480,19 @@ class CTable(Generic[RowT]):
         live_pos: np.ndarray,
         n: int,
     ) -> list[np.ndarray]:
-        """Build the key list for np.lexsort (innermost = last = primary key)."""
+        """Build the key list for np.lexsort (innermost = last = primary key).
+
+        For nullable columns a null-indicator key (0=non-null, 1=null) is
+        inserted immediately after the value key, making it more significant.
+        This ensures nulls sort last regardless of ascending/descending order.
+        """
         lex_keys = []
         for name, asc in zip(reversed(cols), reversed(ascending), strict=True):
             raw = self._cols[name][live_pos]
+            col_info = self._schema.columns_by_name.get(name)
+            nv = getattr(col_info.spec, "null_value", None) if col_info else None
+
+            # Value key
             if not asc:
                 if raw.dtype.kind in "US":
                     # strings can't be negated — invert via rank
@@ -2331,6 +2504,16 @@ class CTable(Generic[RowT]):
                     lex_keys.append(-raw)
             else:
                 lex_keys.append(raw)
+
+            # Null indicator key — more significant than the value key above,
+            # so nulls always sort last (0 before 1 → non-null before null).
+            if nv is not None:
+                if isinstance(nv, float) and np.isnan(nv):
+                    null_ind = np.isnan(raw).astype(np.intp)
+                else:
+                    null_ind = (raw == nv).astype(np.intp)
+                lex_keys.append(null_ind)
+
         return lex_keys
 
     def sort_by(
@@ -3290,6 +3473,8 @@ class CTable(Generic[RowT]):
 
     @profile
     def where(self, expr_result) -> CTable:
+        if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:
+            expr_result = blosc2.asarray(expr_result)
         if isinstance(expr_result, Column):
             expr_result = expr_result._raw_col
 

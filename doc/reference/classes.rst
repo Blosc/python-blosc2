@@ -7,6 +7,8 @@ Main Classes
 ------------
 .. autosummary::
 
+    CTable
+    Column
     NDArray
     Index
     NDField
@@ -28,6 +30,7 @@ Main Classes
 .. toctree::
     :maxdepth: 1
 
+    ctable
     ndarray
     index
     ndfield
