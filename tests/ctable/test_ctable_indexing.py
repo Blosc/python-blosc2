@@ -10,6 +10,7 @@
 import dataclasses
 import shutil
 import tempfile
+import weakref
 from pathlib import Path
 
 import numpy as np
@@ -223,6 +224,33 @@ def test_create_index_persistent(tmpdir):
     assert sidecars, "No sidecar .b2nd files found"
 
 
+def test_create_index_persistent_does_not_cache_sidecar_handles(tmpdir):
+    import blosc2.indexing as indexing
+
+    path = str(tmpdir / "table.b2d")
+    t = _make_table(50, persistent_path=path)
+    t.create_index("id", kind=blosc2.IndexKind.FULL)
+
+    cached = [
+        key
+        for key in indexing._SIDECAR_HANDLE_CACHE
+        if key[0][0] == "persistent" and str(tmpdir) in key[0][1]
+    ]
+    assert cached == []
+
+
+def test_persistent_ctable_releases_immediately_without_gc(tmpdir):
+    path = str(tmpdir / "table.b2d")
+
+    def build_table():
+        t = _make_table(50, persistent_path=path)
+        t.create_index("id", kind=blosc2.IndexKind.FULL)
+        return weakref.ref(t)
+
+    table_ref = build_table()
+    assert table_ref() is None
+
+
 def test_catalog_survives_reopen(tmpdir):
     path = str(tmpdir / "table.b2d")
     t = _make_table(30, persistent_path=path)
@@ -248,6 +276,28 @@ def test_where_with_index_matches_scan_persistent(tmpdir):
     ids_idx = sorted(int(v) for v in result_idx["id"].to_numpy())
     ids_scan = sorted(int(v) for v in result_scan["id"].to_numpy())
     assert ids_idx == ids_scan
+
+
+def test_persistent_index_drop_releases_sidecars_without_gc(tmpdir):
+    import gc
+
+    def run_query_and_drop():
+        path = str(tmpdir / "table.b2d")
+        t = _make_table(200, persistent_path=path)
+        t.create_index("id")
+        result = t.where(t["id"] > 150)
+        ids = sorted(int(v) for v in result["id"].to_numpy())
+        assert ids == list(range(151, 200))
+        t.drop_index("id")
+
+    run_query_and_drop()
+
+    sidecars = [
+        obj
+        for obj in gc.get_objects()
+        if isinstance(obj, blosc2.NDArray) and obj.urlpath and str(tmpdir) in obj.urlpath and "__index__" in obj.urlpath
+    ]
+    assert sidecars == []
 
 
 def test_drop_index_persistent(tmpdir):
@@ -465,3 +515,23 @@ def test_indexed_ctable_b2z_double_open_append_no_corruption(tmp_path):
     assert t2.nrows == 50
     assert len(t2.indexes) == 1
     del t2
+
+
+def test_indexing_purges_stale_persistent_caches():
+    import blosc2.indexing as indexing
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = str(Path(tmpdir) / "table.b2d")
+        t = _make_table(50, persistent_path=path)
+        t.create_index("id")
+        _ = t.where(t["id"] > 10)
+        t.close()
+
+        assert any(tmpdir in key[1] for key in indexing._PERSISTENT_INDEXES if key[0] == "persistent")
+
+    indexing._purge_stale_persistent_caches()
+
+    assert all(tmpdir not in key[1] for key in indexing._PERSISTENT_INDEXES if key[0] == "persistent")
+    assert all(tmpdir not in key[0][1] for key in indexing._SIDECAR_HANDLE_CACHE if key[0][0] == "persistent")
+    assert all(tmpdir not in path for path in indexing._QUERY_CACHE_STORE_HANDLES)
+    assert all(tmpdir not in path for path in indexing._GATHER_MMAP_HANDLES)

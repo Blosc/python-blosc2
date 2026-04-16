@@ -16,6 +16,7 @@ import itertools
 import os
 import pprint
 import shutil
+import weakref
 from collections.abc import Iterable
 from dataclasses import MISSING
 from textwrap import TextWrapper
@@ -448,10 +449,13 @@ def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
 
 class _RowIndexer:
     def __init__(self, table):
-        self._table = table
+        self._table_ref = weakref.ref(table)
 
     def __getitem__(self, item):
-        return self._table._run_row_logic(item)
+        table = self._table_ref()
+        if table is None:
+            raise ReferenceError("owning CTable has been released")
+        return table._run_row_logic(item)
 
 
 class _Row:

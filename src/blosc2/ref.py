@@ -118,7 +118,9 @@ class Ref:
         import blosc2
 
         if self.kind == "urlpath":
-            return blosc2.open(self.urlpath, mode="a")
+            # Structured refs are used to reopen operands for persisted recipes.
+            # Read-only access avoids allocating unnecessary writable state.
+            return blosc2.open(self.urlpath, mode="r")
         if self.kind == "dictstore_key":
             return blosc2.DictStore(self.urlpath, mode="r")[self.key]
         if self.kind == "c2array":
