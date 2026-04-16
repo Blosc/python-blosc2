@@ -34,9 +34,9 @@ and tools in the Python ecosystem, including:
 * DSL kernels for miniexpr-backed UDF authoring and validation (see
   `this tutorial <https://www.blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-udf-kernels.html>`_).
 * By making use of the simple and open
-`C-Blosc2 format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_
-for storing compressed data, Python-Blosc2 facilitates seamless integration with many other
-systems and tools.
+  `C-Blosc2 format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_
+  for storing compressed data, Python-Blosc2 facilitates seamless integration with many other
+  systems and tools.
 
 Python-Blosc2's compute engine
 ==============================
@@ -211,7 +211,7 @@ libraries such as NumExpr. Python-Blosc2's compression and chunking means the
 arrays may be stored compressed in memory and then processed chunk-by-chunk;
 both memory footprint and execution time is greatly reduced compared to
 Dask+Zarr, which also uses compression (see the
-`benchmark here <https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-large.ipynb>`_).
+`larger benchmark here <https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-large.ipynb>`_).
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-dask-large.png?raw=true
   :width: 100%
@@ -255,7 +255,7 @@ expression, where the operands are on disk, with the result being a
 1D array stored in memory (or optionally on disk via the ``out=``
 parameter in ``compute()`` or ``sum()`` functions). For a more in-depth look at
 this example, with performance comparisons, see this
-`blog post <https://ironarray.io/blog/compute-bigger>`_.
+`compute-bigger blog post <https://ironarray.io/blog/compute-bigger>`_.
 
 Hopefully, this overview has provided a good understanding of Python-Blosc2's
 capabilities. To begin your journey with Python-Blosc2, proceed to the

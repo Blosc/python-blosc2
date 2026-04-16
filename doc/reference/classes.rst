@@ -8,7 +8,6 @@ Main Classes
 .. autosummary::
 
     NDArray
-    Index
     NDField
     LazyArray
     C2Array
@@ -19,6 +18,7 @@ Main Classes
     DictStore
     TreeStore
     EmbedStore
+    Index
     Ref
     Proxy
     ProxySource
@@ -29,8 +29,7 @@ Main Classes
     :maxdepth: 1
 
     ndarray
-    index
-    ndfield
+    index_class
     lazyarray
     c2array
     array
@@ -40,6 +39,7 @@ Main Classes
     embed_store
     batch_array
     vlarray
+    ndfield
     ref
     proxy
     proxysource

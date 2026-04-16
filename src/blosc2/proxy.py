@@ -537,24 +537,24 @@ class ProxyNDField(blosc2.Operand):
     @property
     def dtype(self) -> np.dtype:
         """
-        Get the data type of the :ref:`ProxyNDField`.
+        Get the data type of the :class:`ProxyNDField`.
 
         Returns
         -------
         out: np.dtype
-            The data type of the :ref:`ProxyNDField`.
+            The data type of the :class:`ProxyNDField`.
         """
         return self._dtype
 
     @property
     def shape(self) -> tuple[int]:
         """
-        Get the shape of the :ref:`ProxyNDField`.
+        Get the shape of the :class:`ProxyNDField`.
 
         Returns
         -------
         out: tuple
-            The shape of the :ref:`ProxyNDField`.
+            The shape of the :class:`ProxyNDField`.
         """
         return self._shape
 

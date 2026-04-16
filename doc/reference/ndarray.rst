@@ -4,7 +4,7 @@ NDArray
 =======
 
 The multidimensional data array class. Instances may be constructed using the constructor functions in the list below `NDArrayConstructors`_.
-In addition, all the functions from the :ref:`Lazy Functions <lazy_functions>` section can be used with NDArray instances.
+In addition, all the functions from the :ref:`LazyArray` section can be used with NDArray instances.
 
 .. currentmodule:: blosc2
 

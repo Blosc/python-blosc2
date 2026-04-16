@@ -449,14 +449,15 @@ class LazyArray(ABC, blosc2.Operand):
             the evaluated result. This difference between slicing operands and slicing the final expression
             is important when reductions or a where clause are used in the expression.
 
-        fp_accuracy: :ref:`blosc2.FPAccuracy`, optional
+        fp_accuracy: :class:`blosc2.FPAccuracy`, optional
             Specifies the floating-point accuracy to be used during computation.
-            By default, :ref:`blosc2.FPAccuracy.DEFAULT` is used.
+            By default, :attr:`blosc2.FPAccuracy.DEFAULT` is used.
 
         kwargs: Any, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
             These arguments will be set in the resulting :ref:`NDArray`.
             Additionally, the following special kwargs are supported:
+
             - ``strict_miniexpr`` (bool): controls whether miniexpr compilation/execution
               failures are raised instead of silently falling back to regular chunked eval
               for non-DSL expressions.
@@ -552,7 +553,7 @@ class LazyArray(ABC, blosc2.Operand):
 
         Notes
         -----
-        * All the operands of the LazyArray must be Python scalars, or :ref:`blosc2.Array` objects.
+        * All the operands of the LazyArray must be Python scalars, or :class:`blosc2.Array` objects.
         * If an operand is a :ref:`Proxy`, keep in mind that Python-Blosc2 will only be able to reopen it as such
           if its source is a :ref:`SChunk`, :ref:`NDArray` or a :ref:`C2Array` (see :func:`blosc2.open` notes
           section for more info).
@@ -4418,10 +4419,13 @@ def lazyudf(
     func: Python function
         The user-defined function to apply to each block. This function will
         always receive the following parameters:
+
         - `inputs_tuple`: A tuple containing the corresponding slice for the block of each input
-        in :paramref:`inputs`.
+          in :paramref:`inputs`.
         - `output`: The buffer to be filled as a multidimensional numpy.ndarray.
-        - `offset`: The multidimensional offset corresponding to the start of the block being computed:
+        - `offset`: The multidimensional offset corresponding to the start of the block
+          being computed. Example signature::
+
             def myudf(inputs_tuple, output, offset):
                 x, y = inputs_tuple
                 ...
@@ -4449,7 +4453,9 @@ def lazyudf(
         :meth:`LazyArray.compute` methods. The
         last one will ignore the `urlpath` parameter passed in this function.
         In addition, one may provide ``in_place``, a bool (default False), which indicates whether
-        the function should modify the output directly, (rather than chunks of the output, which are later written to output):
+        the function should modify the output directly (rather than chunks of the output, which
+        are later written to output). Example::
+
             def inplace_udf(inputs_tuple, output, offset):
                 x, y = inputs_tuple
                 ...

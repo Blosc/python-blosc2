@@ -29,7 +29,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     It is available via the `.vlmeta` property of an :ref:`SChunk`.
 
     Values are serialized using the general Blosc2 msgpack extensions; see
-    :ref:`Msgpack Serialization <MsgpackSerialization>`. Besides ordinary
+    :ref:`MsgpackSerialization`. Besides ordinary
     msgpack-safe Python values, this includes:
 
     - CFrame-backed Blosc2 objects such as :class:`blosc2.NDArray`,
@@ -211,6 +211,7 @@ class SChunk(blosc2_ext.SChunk):
         kwargs: dict, optional
             Storage parameters. The default values are in :class:`blosc2.Storage`.
             Supported keyword arguments:
+
                 storage: :class:`blosc2.Storage` or dict
                     All the storage parameters that you want to use as
                     a :class:`blosc2.Storage` or dict instance.
