@@ -50,6 +50,7 @@ class SchemaSpec:
         if isinstance(_np_dtype, np.dtype):
             cls.itemsize = _np_dtype.itemsize
             cls.kind = _np_dtype.kind
+            cls.type = _np_dtype.type
             cls.str = _np_dtype.str
             cls.name = _np_dtype.name
 

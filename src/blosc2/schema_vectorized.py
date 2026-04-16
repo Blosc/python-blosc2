@@ -79,12 +79,9 @@ def validate_column_values(col: CompiledColumn, values: Any) -> None:
 
     # Compute null mask so sentinels bypass constraint checks
     null_mask = _null_mask_for_spec(arr, spec)
-    # non_null is a boolean array True for positions that must be validated
     if null_mask is not None:
-        non_null = ~null_mask
-        check = arr[non_null]
+        check = arr[~null_mask]
     else:
-        non_null = None
         check = arr
 
     # Numeric bounds

@@ -29,6 +29,11 @@ def build_validator_model(schema: CompiledSchema) -> type[BaseModel]:
     The model enforces all constraints declared in each column's
     :class:`~blosc2.schema.SchemaSpec` (``ge``, ``le``, ``gt``, ``lt``,
     ``max_length``, ``min_length``, ``pattern``).
+
+    Nullable columns (those with a ``null_value``) are typed as
+    ``Optional[T]`` with ``default=None`` so that null sentinels can be
+    passed as ``None`` and bypass constraint validation entirely — no
+    placeholder guessing required.
     """
     if schema.validator_model is not None:
         return schema.validator_model
@@ -36,10 +41,17 @@ def build_validator_model(schema: CompiledSchema) -> type[BaseModel]:
     field_definitions: dict[str, Any] = {}
     for col in schema.columns:
         pydantic_kwargs = col.spec.to_pydantic_kwargs()
+        is_nullable = getattr(col.spec, "null_value", None) is not None
+        py_type = col.py_type | None if is_nullable else col.py_type
+
         if col.default is MISSING:
-            field_definitions[col.name] = (col.py_type, Field(**pydantic_kwargs))
+            default = None if is_nullable else MISSING
+            if default is MISSING:
+                field_definitions[col.name] = (py_type, Field(**pydantic_kwargs))
+            else:
+                field_definitions[col.name] = (py_type, Field(default=default, **pydantic_kwargs))
         else:
-            field_definitions[col.name] = (col.py_type, Field(default=col.default, **pydantic_kwargs))
+            field_definitions[col.name] = (py_type, Field(default=col.default, **pydantic_kwargs))
 
     cls_name = schema.row_cls.__name__ if schema.row_cls is not None else "Unknown"
     model_cls = create_model(f"_Validator_{cls_name}", **field_definitions)
@@ -61,29 +73,15 @@ def _is_null_value(val, null_value) -> bool:
     return val == null_value
 
 
-def _safe_placeholder(col) -> Any:
-    """Return a value that passes Pydantic validation for *col* (used for null bypass)."""
-    spec = col.spec
-    ge = getattr(spec, "ge", None)
-    gt = getattr(spec, "gt", None)
-    if ge is not None:
-        return ge
-    if gt is not None:
-        return gt + 1
-    # For string/bytes, use an empty string
-    if col.dtype.kind in ("U", "S"):
-        return ""
-    # For bool
-    if col.dtype.kind == "b":
-        return False
-    return 0
-
-
 def _mask_nulls(schema: CompiledSchema, row: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Replace null sentinel values with safe placeholders.
+    """Replace null sentinel values with ``None`` so Pydantic skips constraint checks.
 
-    Returns (masked_row, null_positions) where null_positions maps
-    column name → original null value for columns that were masked.
+    Nullable columns are declared as ``Optional[T]`` in the validator model,
+    so passing ``None`` is always valid regardless of ``ge``/``le``/``pattern``
+    constraints.  The original sentinel is stashed in *nulled* and restored
+    after validation.
+
+    Returns (masked_row, nulled) where nulled maps column name → sentinel value.
     """
     masked = dict(row)
     nulled: dict[str, Any] = {}
@@ -92,9 +90,9 @@ def _mask_nulls(schema: CompiledSchema, row: dict[str, Any]) -> tuple[dict[str, 
         if nv is None:
             continue
         val = row.get(col.name)
-        if val is not None and _is_null_value(val, nv):
+        if _is_null_value(val, nv):
             nulled[col.name] = val
-            masked[col.name] = _safe_placeholder(col)
+            masked[col.name] = None
     return masked, nulled
 
 

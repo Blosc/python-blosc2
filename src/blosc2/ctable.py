@@ -1010,8 +1010,14 @@ class CTable(Generic[RowT]):
 
         sep = "  ".join("─" * (w + 2) for w in widths.values())
 
+        def fmt_cell(value, width: int) -> str:
+            s = str(value)
+            if len(s) > width:
+                s = s[: width - 1] + "…"
+            return f" {s:<{width}} "
+
         def fmt_row(values: dict) -> str:
-            return "  ".join(f" {values[n]!s:<{widths[n]}} " for n in self.col_names)
+            return "  ".join(fmt_cell(values[n], widths[n]) for n in self.col_names)
 
         # -- batch-fetch values (one read per column, not one per cell) --
         def rows_to_dicts(positions) -> list[dict]:
@@ -1162,7 +1168,10 @@ class CTable(Generic[RowT]):
         # --- columns ---
         for col in self._schema.columns:
             name = col.name
-            col_storage = self._resolve_column_storage(col, default_chunks, default_blocks)
+            # Use dtype-aware defaults so large-itemsize columns (e.g. U4096) get
+            # sensible chunk/block sizes rather than the uint8-based defaults.
+            dtype_chunks, dtype_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
+            col_storage = self._resolve_column_storage(col, dtype_chunks, dtype_blocks)
             disk_col = file_storage.create_column(
                 name,
                 dtype=col.dtype,
@@ -1212,12 +1221,12 @@ class CTable(Generic[RowT]):
         capacity = max(phys_size, 1)
 
         mem_storage = InMemoryTableStorage()
-        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        bool_chunks, bool_blocks = compute_chunks_blocks((capacity,), dtype=np.dtype(np.bool_))
 
         mem_valid = mem_storage.create_valid_rows(
             shape=(capacity,),
-            chunks=default_chunks,
-            blocks=default_blocks,
+            chunks=bool_chunks,
+            blocks=bool_blocks,
         )
         if phys_size > 0:
             mem_valid[:phys_size] = disk_valid[:]
@@ -1225,12 +1234,13 @@ class CTable(Generic[RowT]):
         mem_cols: dict[str, blosc2.NDArray] = {}
         for col in schema.columns:
             name = col.name
+            col_chunks, col_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
             mem_col = mem_storage.create_column(
                 name,
                 dtype=col.dtype,
                 shape=(capacity,),
-                chunks=default_chunks,
-                blocks=default_blocks,
+                chunks=col_chunks,
+                blocks=col_blocks,
                 cparams=None,
                 dparams=None,
             )
@@ -1284,6 +1294,8 @@ class CTable(Generic[RowT]):
         return obj
 
     def view(self, new_valid_rows):
+        if isinstance(new_valid_rows, np.ndarray) and new_valid_rows.dtype == np.bool_:
+            new_valid_rows = blosc2.asarray(new_valid_rows)
         if not (
             isinstance(new_valid_rows, (blosc2.NDArray, blosc2.LazyExpr))
             and (getattr(new_valid_rows, "dtype", None) == np.bool_)
@@ -1798,6 +1810,24 @@ class CTable(Generic[RowT]):
             for row in zip(*arrays, strict=True):
                 writer.writerow(row)
 
+    @staticmethod
+    def _csv_col_to_array(raw: list[str], col, nv) -> np.ndarray:
+        """Convert a list of raw CSV strings to a numpy array for *col*."""
+        if col.dtype == np.bool_:
+
+            def _parse(v, _nv=nv):
+                stripped = v.strip()
+                if stripped == "" and _nv is not None:
+                    return _nv
+                return stripped in ("True", "true", "1")
+
+            return np.array([_parse(v) for v in raw], dtype=np.bool_)
+        if col.dtype.kind == "S":
+            prepared: list = [nv if (v.strip() == "" and nv is not None) else v.encode() for v in raw]
+            return np.array(prepared, dtype=col.dtype)
+        prepared2 = [nv if (v.strip() == "" and nv is not None) else v for v in raw]
+        return np.array(prepared2, dtype=col.dtype)
+
     @classmethod
     def from_csv(
         cls,
@@ -1900,25 +1930,7 @@ class CTable(Generic[RowT]):
         if n > 0:
             for i, col in enumerate(schema.columns):
                 nv = getattr(col.spec, "null_value", None)
-                if col.dtype == np.bool_:
-                    # np.array(["False"], dtype=bool) treats any non-empty
-                    # string as True.  Parse "True"/"False"/"1"/"0" explicitly.
-                    # Empty cells → null_value (or False if no null_value).
-                    def _parse_bool(v, _nv=nv):
-                        stripped = v.strip()
-                        if stripped == "" and _nv is not None:
-                            return _nv
-                        return stripped in ("True", "true", "1")
-
-                    arr = np.array([_parse_bool(v) for v in col_data[i]], dtype=np.bool_)
-                else:
-                    raw_strings = col_data[i]
-                    if nv is not None:
-                        # Replace empty cells with the null sentinel string representation,
-                        # then cast. For numeric types, store nv directly.
-                        nv_str = str(nv)
-                        raw_strings = [nv_str if v.strip() == "" else v for v in raw_strings]
-                    arr = np.array(raw_strings, dtype=col.dtype)
+                arr = cls._csv_col_to_array(col_data[i], col, nv)
                 new_cols[col.name][:n] = arr
             new_valid[:n] = True
             obj._n_rows = n
@@ -2535,6 +2547,8 @@ class CTable(Generic[RowT]):
 
     @profile
     def where(self, expr_result) -> CTable:
+        if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:
+            expr_result = blosc2.asarray(expr_result)
         if not (
             isinstance(expr_result, (blosc2.NDArray, blosc2.LazyExpr))
             and (getattr(expr_result, "dtype", None) == np.bool_)
