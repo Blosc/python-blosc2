@@ -693,3 +693,25 @@ def test_mmap_mode_validation(tmp_path):
 
     with pytest.raises(ValueError, match="mmap_mode='r' requires mode='r'"):
         DictStore(str(path), mode="a", mmap_mode="r")
+
+
+def test_b2z_double_open_append_no_corruption(tmp_path):
+    """Opening a .b2z store twice in append mode must not corrupt the archive.
+
+    Regression test: previously, GC of the first open's DictStore triggered
+    ``to_b2z()`` which overwrote the archive with a near-empty ZIP, causing the
+    second open to fail with ``blosc2_schunk_open_offset`` returning NULL.
+    """
+    path = str(tmp_path / "double_open.b2z")
+
+    with DictStore(path, mode="w") as ds:
+        ds["/arr"] = blosc2.arange(20)
+
+    # First open — no explicit close (simulates the GC-triggered path)
+    ds1 = DictStore(path, mode="a")
+    assert np.array_equal(ds1["/arr"][:], np.arange(20))
+    del ds1  # GC; must NOT corrupt the archive
+
+    # Second open — must succeed and see correct data
+    with DictStore(path, mode="a") as ds2:
+        assert np.array_equal(ds2["/arr"][:], np.arange(20))

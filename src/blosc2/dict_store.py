@@ -141,6 +141,8 @@ class DictStore:
         self.offsets = {}
         self.map_tree = {}
         self._temp_dir_obj = None
+        self._closed = False
+        self._modified = False
 
         self._setup_paths_and_dirs(tmpdir)
 
@@ -315,6 +317,12 @@ class DictStore:
         """Initialize store in write/append mode."""
         if self.mode == "a" and os.path.exists(self.localpath):
             if self.is_zip_store:
+                # When using an explicit tmpdir the directory may already contain
+                # stale files from a previous open that was never closed.  Clear
+                # it before extracting so we always start from a clean slate.
+                if self._temp_dir_obj is None:
+                    shutil.rmtree(self.working_dir, ignore_errors=True)
+                    os.makedirs(self.working_dir, exist_ok=True)
                 with zipfile.ZipFile(self.localpath, "r") as zf:
                     zf.extractall(self.working_dir)
             elif not os.path.isdir(self.working_dir):
@@ -387,6 +395,7 @@ class DictStore:
         self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchArray
     ) -> None:
         """Add a node to the DictStore."""
+        self._modified = True
         if isinstance(value, np.ndarray):
             value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
         # C2Array should always go to embed store; let estore handle it directly
@@ -488,6 +497,7 @@ class DictStore:
 
     def __delitem__(self, key: str) -> None:
         """Remove a node from the DictStore."""
+        self._modified = True
         if key in self.map_tree:
             # Remove from map_tree and delete the external file
             filepath = self.map_tree[key]
@@ -672,6 +682,10 @@ class DictStore:
 
     def close(self) -> None:
         """Persist changes and cleanup."""
+        if self._closed:
+            return
+        self._closed = True
+
         # Repack estore
         # TODO: for some reason this is not working
         # if self.mode != "r":
@@ -680,12 +694,45 @@ class DictStore:
         #         f.write(cframe)
 
         if self.is_zip_store and self.mode in ("w", "a"):
-            # Serialize to b2z file
+            # Serialize to b2z file.
             self.to_b2z(overwrite=True)
 
         # Clean up temporary directory if we created it
         if self._temp_dir_obj is not None:
             self._temp_dir_obj.cleanup()
+
+    def discard(self) -> None:
+        """Clean up resources *without* repacking the .b2z file.
+
+        Use this instead of :meth:`close` when the store was opened only for
+        inspection and should be thrown away without persisting any changes
+        back to the archive.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        if self._temp_dir_obj is not None:
+            self._temp_dir_obj.cleanup()
+
+    def __del__(self):
+        """Ensure the temporary directory is removed and, if writes were made
+        through this store's own API, the store is flushed back to the .b2z
+        file.
+
+        When no Python-level writes went through ``__setitem__`` / ``__delitem__``
+        (``_modified`` is False), we skip ``to_b2z()`` to avoid repacking a
+        potentially partial temp dir during garbage collection.  Explicit
+        ``close()`` / ``__exit__`` always repacks regardless.
+        """
+        try:
+            if not self._closed and self.is_zip_store and self.mode in ("w", "a") and not self._modified:
+                # Skip repacking — discard is safe and avoids corrupting the
+                # archive when the temp dir is torn down during GC.
+                self.discard()
+            else:
+                self.close()
+        except Exception:
+            pass
 
     def __enter__(self):
         """Context manager enter."""

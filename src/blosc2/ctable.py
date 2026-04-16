@@ -1044,7 +1044,11 @@ class CTable(Generic[RowT]):
 
     def __del__(self):
         with contextlib.suppress(Exception):
-            self.close()
+            storage = getattr(self, "_storage", None)
+            if storage is not None and hasattr(storage, "discard"):
+                storage.discard()
+            elif storage is not None and hasattr(storage, "close"):
+                storage.close()
 
     def _init_columns(
         self, expected_size: int, default_chunks, default_blocks, storage: TableStorage

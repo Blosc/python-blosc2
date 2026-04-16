@@ -154,8 +154,12 @@ class TreeStore(DictStore):
         It supports the same arguments as :class:`blosc2.DictStore`.
         """
         if _from_parent_store is not None:
-            # This is a subtree view, copy state from parent
+            # This is a subtree view, copy state from parent.
+            # Mark it as closed so DictStore.__del__ does not attempt to pack
+            # or clean up the shared backing store when this ephemeral view
+            # is garbage-collected.
             self.__dict__.update(_from_parent_store.__dict__)
+            self._closed = True
         else:
             # Call initialization and mark this storage as a b2tree object
             super().__init__(*args, **kwargs, _storage_meta={"b2tree": {"version": 1}})

@@ -436,3 +436,32 @@ def test_indexes_multiple_columns():
     assert len(t.indexes) == 2
     col_names = {idx.col_name for idx in t.indexes}
     assert col_names == {"id", "category"}
+
+
+def test_indexed_ctable_b2z_double_open_append_no_corruption(tmp_path):
+    """Opening an indexed CTable .b2z in append mode twice must not corrupt it.
+
+    Regression test: GC of a CTable opened from .b2z was calling close() →
+    to_b2z() even when nothing was modified, overwriting the archive with a
+    near-empty ZIP that broke subsequent opens.
+    """
+    path = str(tmp_path / "indexed.b2z")
+    b2d_path = str(tmp_path / "indexed.b2d")
+
+    t = _make_table(50, persistent_path=b2d_path)
+    t.create_index("id")
+    t._storage._store.to_b2z(filename=path, overwrite=True)
+    t._storage._store.close()
+    shutil.rmtree(b2d_path)
+
+    # First open without explicit close — GC must not corrupt the archive
+    t1 = blosc2.open(path, mode="a")
+    assert t1.nrows == 50
+    assert len(t1.indexes) == 1
+    del t1  # triggers __del__; must NOT repack/corrupt
+
+    # Second open must succeed and see correct data
+    t2 = blosc2.open(path, mode="a")
+    assert t2.nrows == 50
+    assert len(t2.indexes) == 1
+    del t2

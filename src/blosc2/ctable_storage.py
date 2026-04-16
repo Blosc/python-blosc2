@@ -92,6 +92,10 @@ class TableStorage:
     def close(self) -> None:
         raise NotImplementedError
 
+    def discard(self) -> None:
+        """Clean up resources without persisting changes back to the archive."""
+        self.close()
+
     # -- Index catalog and epoch helpers -------------------------------------
 
     def load_index_catalog(self) -> dict:
@@ -367,6 +371,13 @@ class FileTableStorage(TableStorage):
     def close(self) -> None:
         if self._store is not None:
             self._store.close()
+            self._store = None
+        self._meta = None
+
+    def discard(self) -> None:
+        """Clean up without repacking the .b2z archive."""
+        if self._store is not None:
+            self._store.discard()
             self._store = None
         self._meta = None
 
