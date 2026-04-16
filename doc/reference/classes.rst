@@ -13,12 +13,12 @@ Main Classes
     LazyArray
     C2Array
     Array
+    BatchArray
+    VLArray
     SChunk
     DictStore
     TreeStore
     EmbedStore
-    BatchArray
-    VLArray
     Ref
     Proxy
     ProxySource
