@@ -105,7 +105,8 @@ class TreeStore(DictStore):
         File mode ('r', 'w', 'a'). Default is 'a'.
     tmpdir : str or None, optional
         Temporary directory to use when working with `.b2z` files. If None,
-        a system temporary directory will be managed. Default is None.
+        a temporary directory is created in the same directory as the `.b2z`
+        file, so that unpacked data stays on the same filesystem. Default is None.
     cparams : dict or None, optional
         Compression parameters for the internal embed store.
         If None, the default Blosc2 parameters are used.

@@ -58,7 +58,8 @@ class DictStore:
         and only when ``mode="r"``. Default is None.
     tmpdir : str or None, optional
         Temporary directory to use when working with ".b2z" files. If None,
-        a system temporary directory will be managed. Default is None.
+        a temporary directory is created in the same directory as the ".b2z"
+        file, so that unpacked data stays on the same filesystem. Default is None.
     cparams : dict or None, optional
         Compression parameters for the internal embed store.
         If None, the default Blosc2 parameters are used.
@@ -165,7 +166,8 @@ class DictStore:
             self.is_zip_store = False
         if self.is_zip_store:
             if tmpdir is None:
-                self._temp_dir_obj = tempfile.TemporaryDirectory()
+                b2z_parent = os.path.dirname(os.path.abspath(self.localpath))
+                self._temp_dir_obj = tempfile.TemporaryDirectory(dir=b2z_parent)
                 self.working_dir = self._temp_dir_obj.name
             else:
                 self.working_dir = tmpdir
