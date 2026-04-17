@@ -20,3 +20,4 @@ Tutorials
    tutorials/12.batcharray
    tutorials/13.containers
    tutorials/14.indexing-arrays
+   tutorials/15.indexing-ctables

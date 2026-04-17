@@ -580,7 +580,7 @@ class LazyArray(ABC, blosc2.Operand):
         >>> # Save the LazyExpr to disk
         >>> expr.save(urlpath='lazy_array.b2nd', mode='w')
         >>> # Open and load the LazyExpr from disk
-        >>> disk_expr = blosc2.open('lazy_array.b2nd')
+        >>> disk_expr = blosc2.open('lazy_array.b2nd', mode='r')
         >>> disk_expr[:2]
         [[0.   1.25 2.5 ]
         [3.75 5.   6.25]]
@@ -1241,7 +1241,7 @@ def sync_read_chunks(arrs, info):
             except Empty:
                 if not thread.is_alive():
                     if worker_exc is not None:
-                        raise worker_exc
+                        raise worker_exc from None
                     break
                 continue
     finally:
@@ -2869,7 +2869,7 @@ def chunked_eval(  # noqa: C901
                 unit_steps = np.all([s.step == 1 for s in item.raw if isinstance(s, slice)])
                 # shape of slice, if non-unit steps have to decompress full array into memory
                 shape_operands = item.newshape(shape) if unit_steps else shape
-                _dtype = kwargs.get("dtype", np.float64)
+                _dtype = np.dtype(kwargs.get("dtype", np.float64))
                 size_operands = math.prod(shape_operands) * len(operands) * _dtype.itemsize
                 # Only take the fast path if the size of operands is relatively small
                 if size_operands < blosc2.MAX_FAST_PATH_SIZE:
@@ -4707,7 +4707,7 @@ def open_lazyarray(array):
         if isinstance(v, str):
             v = parent_path / v
             try:
-                op = blosc2.open(v)
+                op = blosc2.open(v, mode="r")
             except FileNotFoundError:
                 missing_ops[key] = v
             else:

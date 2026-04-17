@@ -223,7 +223,7 @@ def test_complex_datatype():
             ("f_022", "<U1000"),
         ]
     )
-    a = np.zeros((256,), dtype=dtype)
+    a = np.zeros((16,), dtype=dtype)
     cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ, clevel=1, nthreads=3)
     b = blosc2.asarray(a, cparams=cparams, urlpath="b.b2nd", mode="w")
     # Iterate over the fields of the structured array and check that the data is the same

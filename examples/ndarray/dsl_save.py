@@ -46,7 +46,7 @@ lazy.save(urlpath="heat_step.b2nd")
 print("LazyUDF saved to heat_step.b2nd")
 
 # ── reload in a 'fresh' context (no reference to heat_step) ─────────
-reloaded = blosc2.open("heat_step.b2nd")
+reloaded = blosc2.open("heat_step.b2nd", mode="r")
 assert isinstance(reloaded, blosc2.LazyUDF), "Expected a LazyUDF after open()"
 assert isinstance(reloaded.func, DSLKernel), "func must be a DSLKernel after reload"
 assert reloaded.func.dsl_source is not None, "dsl_source must survive the round-trip"
@@ -64,7 +64,7 @@ u2 = result.copy(urlpath="u2.b2nd", mode="w")
 lazy2 = blosc2.lazyudf(heat_step, (u2, v), dtype=np.float64)
 lazy2.save(urlpath="heat_step2.b2nd")
 
-reloaded2 = blosc2.open("heat_step2.b2nd")
+reloaded2 = blosc2.open("heat_step2.b2nd", mode="r")
 result2 = reloaded2.compute()
 expected2 = u2[()] + 0.1 * (v[()] - u2[()])
 assert np.allclose(result2[()], expected2)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import warnings
 import zipfile
 from collections import namedtuple
 from collections.abc import Iterator, Mapping, MutableMapping
@@ -1530,11 +1531,11 @@ def _meta_from_store(urlpath, offset):
 
     if urlpath.endswith(".b2e") and offset == 0:
         return _open_meta(urlpath)
-    if urlpath.endswith(".b2d") and os.path.isdir(urlpath):
+    if os.path.isdir(urlpath):
         embed_path = os.path.join(urlpath, "embed.b2e")
         if os.path.exists(embed_path):
             return _open_meta(embed_path)
-    if urlpath.endswith(".b2z") and os.path.isfile(urlpath):
+    if os.path.isfile(urlpath) and not urlpath.endswith(".b2e"):
         try:
             with open(urlpath, "rb") as f, zipfile.ZipFile(f) as zf:
                 for info in zf.infolist():
@@ -1571,6 +1572,16 @@ def _store_from_extension(urlpath, mode, offset, **kwargs):
 
         return EmbedStore(urlpath, mode=mode, **kwargs)
     return None
+
+
+def _resolve_store_alias(urlpath):
+    if os.path.exists(urlpath) or urlpath.endswith((".b2d", ".b2z", ".b2e")):
+        return urlpath
+    for suffix in (".b2d", ".b2z", ".b2e"):
+        candidate = urlpath + suffix
+        if os.path.exists(candidate):
+            return candidate
+    return urlpath
 
 
 def _open_special_store(urlpath, mode, offset, **kwargs):
@@ -1625,13 +1636,17 @@ def _set_default_dparams(kwargs):
 def process_opened_object(res):
     meta = getattr(res, "schunk", res).meta
     if "proxy-source" in meta:
+        proxy_cache = res
+        cache_schunk = getattr(res, "schunk", res)
+        if getattr(cache_schunk, "urlpath", None) is not None and getattr(cache_schunk, "mode", None) == "r":
+            proxy_cache = blosc2_ext.open(cache_schunk.urlpath, "a", 0)
         proxy_src = meta["proxy-source"]
         if proxy_src["local_abspath"] is not None:
-            src = blosc2.open(proxy_src["local_abspath"])
-            return blosc2.Proxy(src, _cache=res)
+            src = blosc2.open(proxy_src["local_abspath"], mode="a")
+            return blosc2.Proxy(src, _cache=proxy_cache)
         elif proxy_src["urlpath"] is not None:
             src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
-            return blosc2.Proxy(src, _cache=res)
+            return blosc2.Proxy(src, _cache=proxy_cache)
         elif not proxy_src["caterva2_env"]:
             raise RuntimeError("Could not find the source when opening a Proxy")
 
@@ -1654,8 +1669,69 @@ def process_opened_object(res):
         return res
 
 
+def _read_treestore_root_manifest(store):
+    try:
+        meta_obj = store["/_meta"]
+    except KeyError:
+        return None
+
+    if not isinstance(meta_obj, blosc2.SChunk):
+        raise ValueError("TreeStore root manifest '/_meta' must be an SChunk.")
+
+    vlmeta = meta_obj.vlmeta
+    try:
+        kind = vlmeta["kind"]
+    except KeyError as exc:
+        raise ValueError("TreeStore root manifest is missing required field 'kind'.") from exc
+    try:
+        version = vlmeta["version"]
+    except KeyError as exc:
+        raise ValueError("TreeStore root manifest is missing required field 'version'.") from exc
+
+    if isinstance(kind, bytes):
+        kind = kind.decode()
+    if not isinstance(kind, str):
+        raise ValueError("TreeStore root manifest field 'kind' must be a string.")
+    if not isinstance(version, int):
+        raise ValueError("TreeStore root manifest field 'version' must be an integer.")
+
+    return {"kind": kind, "version": version, "meta": meta_obj}
+
+
+def _open_treestore_root_object(store, urlpath, mode):
+    manifest = _read_treestore_root_manifest(store)
+    if manifest is None:
+        return store
+
+    if manifest["kind"] == "ctable":
+        if mode not in {"r", "a"}:
+            return store
+        # Discard the probe store without repacking — it was only opened
+        # to peek at the manifest.  A full close() would trigger to_b2z()
+        # even though nothing was modified, and CTable.open() below will
+        # create its own store anyway.
+        store.discard()
+        return blosc2.CTable.open(urlpath, mode=mode)
+
+    return store
+
+
+def _finalize_special_open(special, urlpath, mode):
+    if special is None:
+        return None
+    if isinstance(special, blosc2.TreeStore):
+        return _open_treestore_root_object(special, urlpath, mode)
+    return special
+
+
+_OPEN_MODE_SENTINEL = object()
+
+
 def open(
-    urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
+    urlpath: str | pathlib.Path | blosc2.URLPath,
+    mode: str = _OPEN_MODE_SENTINEL,
+    offset: int = 0,
+    **kwargs: dict,
 ) -> (
     blosc2.SChunk
     | blosc2.NDArray
@@ -1681,7 +1757,10 @@ def open(
     mode: str, optional
         Persistence mode: 'r' means read only (must exist);
         'a' means read/write (create if it doesn't exist);
-        'w' means create (overwrite if it exists). Default is 'a'.
+        'w' means create (overwrite if it exists). Defaults to 'a' for now,
+        but will change to 'r' in a future release. Pass ``mode='a'``
+        explicitly to preserve writable behavior, or ``mode='r'`` for
+        read-only access.
     offset: int, optional
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
@@ -1741,7 +1820,7 @@ def open(
     >>> # Create SChunk and append data
     >>> schunk = blosc2.SChunk(chunksize=chunksize, data=data.tobytes(), storage=storage)
     >>> # Open SChunk
-    >>> sc_open = blosc2.open(urlpath=urlpath)
+    >>> sc_open = blosc2.open(urlpath=urlpath, mode="r")
     >>> for i in range(nchunks):
     ...     dest = np.empty(nelem // nchunks, dtype=data.dtype)
     ...     schunk.decompress_chunk(i, dest)
@@ -1756,12 +1835,25 @@ def open(
 
     To open the same schunk memory-mapped, we simply need to pass the `mmap_mode` parameter:
 
-    >>> sc_open_mmap = blosc2.open(urlpath=urlpath, mmap_mode="r")
+    >>> sc_open_mmap = blosc2.open(urlpath=urlpath, mode="r", mmap_mode="r")
     >>> sc_open.nchunks == sc_open_mmap.nchunks
     True
     >>> all(sc_open.decompress_chunk(i, dest1) == sc_open_mmap.decompress_chunk(i, dest1) for i in range(nchunks))
     True
     """
+    # Resolve the sentinel before URLPath check so we can raise the correct
+    # error without also triggering the deprecation warning for invalid calls.
+    if mode is _OPEN_MODE_SENTINEL:
+        # TODO: remove the sentinel/FutureWarning path once blosc2.open() defaults to mode="r".
+        warnings.warn(
+            "blosc2.open() currently defaults to mode='a', but this will change "
+            "to mode='r' in a future release. Pass mode='a' explicitly to keep "
+            "writable behavior, or mode='r' for read-only access.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        mode = "a"
+
     if isinstance(urlpath, blosc2.URLPath):
         if mode != "r" or offset != 0 or kwargs != {}:
             raise NotImplementedError(
@@ -1772,14 +1864,40 @@ def open(
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
 
-    special = _open_special_store(urlpath, mode, offset, **kwargs)
+    # Keep explicit store paths on the direct dispatch path.  For regular
+    # Blosc containers, try the standard open first and only fall back to the
+    # more expensive store probing when that fails.
+    if urlpath.endswith((".b2d", ".b2z", ".b2e")):
+        special = _open_special_store(urlpath, mode, offset, **kwargs)
+        special = _finalize_special_open(special, urlpath, mode)
+        if special is not None:
+            return special
+
+    regular_exc = None
+    if os.path.exists(urlpath):
+        _set_default_dparams(kwargs)
+        try:
+            res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
+        except Exception as exc:
+            regular_exc = exc
+        else:
+            return process_opened_object(res)
+
+    resolved_urlpath = _resolve_store_alias(urlpath)
+    special_path = (
+        resolved_urlpath if resolved_urlpath != urlpath or not os.path.exists(urlpath) else urlpath
+    )
+    special = _open_special_store(special_path, mode, offset, **kwargs)
+    special = _finalize_special_open(special, special_path, mode)
     if special is not None:
         return special
 
-    if not os.path.exists(urlpath):
-        raise FileNotFoundError(f"No such file or directory: {urlpath}")
+    if regular_exc is not None:
+        raise regular_exc
+    if not os.path.exists(special_path):
+        raise FileNotFoundError(f"No such file or directory: {special_path}")
 
     _set_default_dparams(kwargs)
-    res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
+    res = blosc2_ext.open(special_path, mode, offset, **kwargs)
 
     return process_opened_object(res)

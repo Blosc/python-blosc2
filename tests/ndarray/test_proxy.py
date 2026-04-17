@@ -90,10 +90,10 @@ def test_open(urlpath, shape, chunks, blocks, slices, dtype):
     del b
     if urlpath is None:
         with pytest.raises(RuntimeError):
-            _ = blosc2.open(proxy_urlpath)
+            _ = blosc2.open(proxy_urlpath, mode="a")
     else:
-        b = blosc2.open(proxy_urlpath)
-        a = blosc2.open(urlpath)
+        b = blosc2.open(proxy_urlpath, mode="a")
+        a = blosc2.open(urlpath, mode="r")
         if not struct_dtype:
             np.testing.assert_almost_equal(b[...], a[...])
         else:

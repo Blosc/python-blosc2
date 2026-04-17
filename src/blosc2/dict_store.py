@@ -29,7 +29,7 @@ class DictStore:
     """
     Directory-based storage for compressed data using Blosc2.
 
-    Manages arrays in a directory (.b2d) or zip (.b2z) format.
+    Manages arrays in a directory or zip-file backed format.
 
     Supports the following types:
 
@@ -46,10 +46,11 @@ class DictStore:
     Parameters
     ----------
     localpath : str
-        Local path for the directory (".b2d") or file (".b2z"); other extensions
-        are not supported. If a directory is specified, it will be treated as
-        a Blosc2 directory format (B2DIR). If a file is specified, it
-        will be treated as a Blosc2 zip format (B2ZIP).
+        Local path for the directory or zip file. Paths ending in ``.b2d`` and
+        ``.b2z`` remain the recommended conventions. If the path already exists,
+        directories are treated as Blosc2 directory format (B2DIR) and files as
+        Blosc2 zip format (B2ZIP). For new extensionless paths, directory-backed
+        storage is used by default.
     mode : str, optional
         File mode ('r', 'w', 'a'). Default is 'a'.
     mmap_mode : str or None, optional
@@ -57,7 +58,8 @@ class DictStore:
         and only when ``mode="r"``. Default is None.
     tmpdir : str or None, optional
         Temporary directory to use when working with ".b2z" files. If None,
-        a system temporary directory will be managed. Default is None.
+        a temporary directory is created in the same directory as the ".b2z"
+        file, so that unpacked data stays on the same filesystem. Default is None.
     cparams : dict or None, optional
         Compression parameters for the internal embed store.
         If None, the default Blosc2 parameters are used.
@@ -117,8 +119,6 @@ class DictStore:
         See :class:`DictStore` for full documentation of parameters.
         """
         self.localpath = localpath if isinstance(localpath, str | bytes) else str(localpath)
-        if not self.localpath.endswith((".b2z", ".b2d")):
-            raise ValueError(f"localpath must have a .b2z or .b2d extension; you passed: {self.localpath}")
         if mode not in ("r", "w", "a"):
             raise ValueError("For DictStore containers, mode must be 'r', 'w', or 'a'")
         if mmap_mode not in (None, "r"):
@@ -142,6 +142,8 @@ class DictStore:
         self.offsets = {}
         self.map_tree = {}
         self._temp_dir_obj = None
+        self._closed = False
+        self._modified = False
 
         self._setup_paths_and_dirs(tmpdir)
 
@@ -152,20 +154,33 @@ class DictStore:
 
     def _setup_paths_and_dirs(self, tmpdir: str | None):
         """Set up working directories and paths."""
-        self.is_zip_store = self.localpath.endswith(".b2z")
+        localpath_exists = os.path.exists(self.localpath)
+        if localpath_exists:
+            self.is_zip_store = os.path.isfile(self.localpath)
+        elif self.localpath.endswith(".b2z"):
+            self.is_zip_store = True
+        elif self.localpath.endswith(".b2d"):
+            self.is_zip_store = False
+        else:
+            # Default extensionless new stores to directory-backed layout.
+            self.is_zip_store = False
         if self.is_zip_store:
             if tmpdir is None:
-                self._temp_dir_obj = tempfile.TemporaryDirectory()
+                b2z_parent = os.path.dirname(os.path.abspath(self.localpath))
+                self._temp_dir_obj = tempfile.TemporaryDirectory(dir=b2z_parent)
                 self.working_dir = self._temp_dir_obj.name
             else:
                 self.working_dir = tmpdir
                 os.makedirs(tmpdir, exist_ok=True)
             self.b2z_path = self.localpath
-        else:  # .b2d
+        else:
             self.working_dir = self.localpath
             if self.mode in ("w", "a"):
                 os.makedirs(self.working_dir, exist_ok=True)
-            self.b2z_path = self.localpath[:-4] + ".b2z"
+            if self.localpath.endswith(".b2d"):
+                self.b2z_path = self.localpath[:-4] + ".b2z"
+            else:
+                self.b2z_path = self.localpath + ".b2z"
 
         self.estore_path = os.path.join(self.working_dir, "embed.b2e")
 
@@ -304,6 +319,12 @@ class DictStore:
         """Initialize store in write/append mode."""
         if self.mode == "a" and os.path.exists(self.localpath):
             if self.is_zip_store:
+                # When using an explicit tmpdir the directory may already contain
+                # stale files from a previous open that was never closed.  Clear
+                # it before extracting so we always start from a clean slate.
+                if self._temp_dir_obj is None:
+                    shutil.rmtree(self.working_dir, ignore_errors=True)
+                    os.makedirs(self.working_dir, exist_ok=True)
                 with zipfile.ZipFile(self.localpath, "r") as zf:
                     zf.extractall(self.working_dir)
             elif not os.path.isdir(self.working_dir):
@@ -376,6 +397,7 @@ class DictStore:
         self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchArray
     ) -> None:
         """Add a node to the DictStore."""
+        self._modified = True
         if isinstance(value, np.ndarray):
             value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
         # C2Array should always go to embed store; let estore handle it directly
@@ -477,6 +499,7 @@ class DictStore:
 
     def __delitem__(self, key: str) -> None:
         """Remove a node from the DictStore."""
+        self._modified = True
         if key in self.map_tree:
             # Remove from map_tree and delete the external file
             filepath = self.map_tree[key]
@@ -661,6 +684,10 @@ class DictStore:
 
     def close(self) -> None:
         """Persist changes and cleanup."""
+        if self._closed:
+            return
+        self._closed = True
+
         # Repack estore
         # TODO: for some reason this is not working
         # if self.mode != "r":
@@ -669,12 +696,45 @@ class DictStore:
         #         f.write(cframe)
 
         if self.is_zip_store and self.mode in ("w", "a"):
-            # Serialize to b2z file
+            # Serialize to b2z file.
             self.to_b2z(overwrite=True)
 
         # Clean up temporary directory if we created it
         if self._temp_dir_obj is not None:
             self._temp_dir_obj.cleanup()
+
+    def discard(self) -> None:
+        """Clean up resources *without* repacking the .b2z file.
+
+        Use this instead of :meth:`close` when the store was opened only for
+        inspection and should be thrown away without persisting any changes
+        back to the archive.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        if self._temp_dir_obj is not None:
+            self._temp_dir_obj.cleanup()
+
+    def __del__(self):
+        """Ensure the temporary directory is removed and, if writes were made
+        through this store's own API, the store is flushed back to the .b2z
+        file.
+
+        When no Python-level writes went through ``__setitem__`` / ``__delitem__``
+        (``_modified`` is False), we skip ``to_b2z()`` to avoid repacking a
+        potentially partial temp dir during garbage collection.  Explicit
+        ``close()`` / ``__exit__`` always repacks regardless.
+        """
+        try:
+            if not self._closed and self.is_zip_store and self.mode in ("w", "a") and not self._modified:
+                # Skip repacking — discard is safe and avoids corrupting the
+                # archive when the temp dir is torn down during GC.
+                self.discard()
+            else:
+                self.close()
+        except Exception:
+            pass
 
     def __enter__(self):
         """Context manager enter."""

@@ -24,13 +24,13 @@ b = blosc2.asarray(npb, urlpath="b.b2nd", mode="w")
 # Get a LazyExpr instance
 c = a**2 + b**2 + 2 * a * b + 1
 c.save(urlpath="c.b2nd")
-c = blosc2.open("c.b2nd")
+c = blosc2.open("c.b2nd", mode="r")
 # Evaluate: output is a NDArray
 d = blosc2.lazyexpr("a + c.sum() + a.std()", operands={"a": a, "c": c})
 d.save(urlpath="lazy-d.b2nd")
 
 # Load the expression from disk
-d = blosc2.open("lazy-d.b2nd")
+d = blosc2.open("lazy-d.b2nd", mode="r")
 print(f"Expression: {d}")
 assert isinstance(d, blosc2.LazyExpr)
 e = d.compute()
