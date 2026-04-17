@@ -115,13 +115,17 @@ def _persistent_cache_path_exists(path: str | int) -> bool:
 
 def _purge_stale_persistent_caches() -> None:
     stale_scopes = {
-        key for key in _PERSISTENT_INDEXES if key[0] == "persistent" and not _persistent_cache_path_exists(key[1])
+        key
+        for key in tuple(_PERSISTENT_INDEXES)
+        if key[0] == "persistent" and not _persistent_cache_path_exists(key[1])
     }
     for key in stale_scopes:
         _PERSISTENT_INDEXES.pop(key, None)
 
     stale_data_keys = {
-        key for key in _DATA_CACHE if key[0][0] == "persistent" and not _persistent_cache_path_exists(key[0][1])
+        key
+        for key in tuple(_DATA_CACHE)
+        if key[0][0] == "persistent" and not _persistent_cache_path_exists(key[0][1])
     }
     stale_scopes.update(key[0] for key in stale_data_keys)
     for key in stale_data_keys:
@@ -129,18 +133,18 @@ def _purge_stale_persistent_caches() -> None:
 
     stale_handle_keys = {
         key
-        for key in _SIDECAR_HANDLE_CACHE
+        for key in tuple(_SIDECAR_HANDLE_CACHE)
         if key[0][0] == "persistent" and not _persistent_cache_path_exists(key[0][1])
     }
     stale_scopes.update(key[0] for key in stale_handle_keys)
     for key in stale_handle_keys:
         _SIDECAR_HANDLE_CACHE.pop(key, None)
 
-    stale_query_paths = [path for path in _QUERY_CACHE_STORE_HANDLES if not Path(path).exists()]
+    stale_query_paths = [path for path in tuple(_QUERY_CACHE_STORE_HANDLES) if not Path(path).exists()]
     for path in stale_query_paths:
         _QUERY_CACHE_STORE_HANDLES.pop(path, None)
 
-    stale_gather_paths = [path for path in _GATHER_MMAP_HANDLES if not Path(path).exists()]
+    stale_gather_paths = [path for path in tuple(_GATHER_MMAP_HANDLES) if not Path(path).exists()]
     for path in stale_gather_paths:
         _GATHER_MMAP_HANDLES.pop(path, None)
 

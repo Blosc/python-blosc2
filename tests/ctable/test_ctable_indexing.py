@@ -535,3 +535,28 @@ def test_indexing_purges_stale_persistent_caches():
     assert all(tmpdir not in key[0][1] for key in indexing._SIDECAR_HANDLE_CACHE if key[0][0] == "persistent")
     assert all(tmpdir not in path for path in indexing._QUERY_CACHE_STORE_HANDLES)
     assert all(tmpdir not in path for path in indexing._GATHER_MMAP_HANDLES)
+
+
+def test_indexing_purge_tolerates_reentrant_sidecar_handle_cache_mutation(monkeypatch):
+    import blosc2.indexing as indexing
+
+    stale_scope = ("persistent", "/tmp/stale-index.b2nd")
+    stale_key = (stale_scope, "token", "partial_handle", "offsets")
+    injected_key = (("memory", 12345), "token", "partial_handle", "offsets")
+    sentinel = object()
+    original_exists = indexing._persistent_cache_path_exists
+
+    indexing._SIDECAR_HANDLE_CACHE[stale_key] = sentinel
+
+    def mutating_exists(path):
+        indexing._SIDECAR_HANDLE_CACHE[injected_key] = sentinel
+        if path == stale_scope[1]:
+            return False
+        return original_exists(path)
+
+    monkeypatch.setattr(indexing, "_persistent_cache_path_exists", mutating_exists)
+
+    indexing._purge_stale_persistent_caches()
+
+    assert stale_key not in indexing._SIDECAR_HANDLE_CACHE
+    indexing._SIDECAR_HANDLE_CACHE.pop(injected_key, None)
