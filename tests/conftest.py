@@ -25,6 +25,17 @@ _GC_COLLECT_INTERVAL = 50  # collect every N tests
 _test_counter = 0
 
 
+# Each SChunk allocates C-level thread pools (pthreads) for its compression
+# and decompression contexts.  Python 3.14 changed the GC gen-2 threshold
+# to 0, so long-lived objects are never collected automatically; they
+# accumulate until an explicit gc.collect() (e.g. pytest session cleanup).
+# Joining thousands of idle pthreads at once can hit the macOS thread-count
+# ceiling (6 144) and hang.  Periodically forcing a full collection keeps
+# the thread count bounded.
+_GC_COLLECT_INTERVAL = 50  # collect every N tests
+_test_counter = 0
+
+
 def expected_nthreads(nthreads: int) -> int:
     return 1 if blosc2.IS_WASM else nthreads
 
