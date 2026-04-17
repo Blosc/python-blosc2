@@ -527,11 +527,17 @@ def test_indexing_purges_stale_persistent_caches():
         _ = t.where(t["id"] > 10)
         t.close()
 
-        assert any(tmpdir in key[1] for key in indexing._PERSISTENT_INDEXES if key[0] == "persistent")
+        persistent_scope = ("persistent", str(Path(path).resolve()))
+        indexing._PERSISTENT_INDEXES[persistent_scope] = {"version": 1, "indexes": {}}
+        indexing._DATA_CACHE[(persistent_scope, "token", "partial", "offsets")] = np.arange(3, dtype=np.int64)
+        indexing._SIDECAR_HANDLE_CACHE[(persistent_scope, "token", "partial_handle", "offsets")] = object()
+        indexing._QUERY_CACHE_STORE_HANDLES[str(Path(tmpdir) / "query-cache.b2frame")] = object()
+        indexing._GATHER_MMAP_HANDLES[str(Path(tmpdir) / "gather-cache.b2nd")] = object()
 
     indexing._purge_stale_persistent_caches()
 
     assert all(tmpdir not in key[1] for key in indexing._PERSISTENT_INDEXES if key[0] == "persistent")
+    assert all(tmpdir not in key[0][1] for key in indexing._DATA_CACHE if key[0][0] == "persistent")
     assert all(tmpdir not in key[0][1] for key in indexing._SIDECAR_HANDLE_CACHE if key[0][0] == "persistent")
     assert all(tmpdir not in path for path in indexing._QUERY_CACHE_STORE_HANDLES)
     assert all(tmpdir not in path for path in indexing._GATHER_MMAP_HANDLES)
