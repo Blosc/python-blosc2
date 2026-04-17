@@ -1241,7 +1241,7 @@ def sync_read_chunks(arrs, info):
             except Empty:
                 if not thread.is_alive():
                     if worker_exc is not None:
-                        raise worker_exc
+                        raise worker_exc from None
                     break
                 continue
     finally:

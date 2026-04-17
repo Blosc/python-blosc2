@@ -14,7 +14,6 @@ import requests
 
 import blosc2
 
-
 # Each SChunk allocates C-level thread pools (pthreads) for its compression
 # and decompression contexts.  Python 3.14 changed the GC gen-2 threshold
 # to 0, so long-lived objects are never collected automatically; they
