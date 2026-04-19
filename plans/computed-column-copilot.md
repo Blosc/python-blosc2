@@ -24,6 +24,11 @@ t["total"][:]              # full materialisation
 t.where(t["total"] > 500)  # filtering works
 ```
 
+> Note: for a minimal route to indexable computed results, see
+> [plans/materialized-computed-column.md](/Users/faltet/blosc/python-blosc2.proves/plans/materialized-computed-column.md),
+> which proposes snapshot materialization into a normal stored column instead
+> of direct indexing of virtual computed columns.
+
 ---
 
 ## 1  Data Model
