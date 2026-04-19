@@ -94,8 +94,8 @@ def test_where_with_index_matches_scan_in_memory():
     # Drop index to force scan
     t.drop_index("id")
     result_scan = t.where(t["id"] > 100)
-    ids_idx = sorted(int(v) for v in result_idx["id"].to_numpy())
-    ids_scan = sorted(int(v) for v in result_scan["id"].to_numpy())
+    ids_idx = sorted(int(v) for v in result_idx["id"][:])
+    ids_scan = sorted(int(v) for v in result_scan["id"][:])
     assert ids_idx == ids_scan
 
 
@@ -111,10 +111,10 @@ def test_bool_column_composes_naturally_in_where():
         t.append([i, "north" if i % 4 == 0 else "south", i % 2 == 0])
 
     result = t.where((t["sensor_id"] >= 8) & t["active"] & (t["region"] == "north"))
-    assert sorted(int(v) for v in result["sensor_id"].to_numpy()) == [8, 12, 16]
+    assert sorted(int(v) for v in result["sensor_id"][:]) == [8, 12, 16]
 
     result_bare = t.where(t["active"])
-    assert sorted(int(v) for v in result_bare["sensor_id"].to_numpy()) == list(range(0, 20, 2))
+    assert sorted(int(v) for v in result_bare["sensor_id"][:]) == list(range(0, 20, 2))
 
 
 def test_rebuild_index_in_memory():
@@ -173,7 +173,7 @@ def test_stale_fallback_to_scan_in_memory():
     t.append([200, 200.0, 0])  # marks stale
     # Query should still work (falls back to scan)
     result = t.where(t["id"] > 40)
-    ids = sorted(int(v) for v in result["id"].to_numpy())
+    ids = sorted(int(v) for v in result["id"][:])
     assert 200 in ids
     assert 41 in ids
 
@@ -194,8 +194,8 @@ def test_multi_column_conjunction_uses_multiple_indexes_in_memory():
     t.drop_index("id")
     t.drop_index("category")
     result_scan = t.where(expr)
-    ids_idx = sorted(int(v) for v in result_idx["id"].to_numpy())
-    ids_scan = sorted(int(v) for v in result_scan["id"].to_numpy())
+    ids_idx = sorted(int(v) for v in result_idx["id"][:])
+    ids_scan = sorted(int(v) for v in result_scan["id"][:])
     assert ids_idx == ids_scan
 
 
@@ -273,8 +273,8 @@ def test_where_with_index_matches_scan_persistent(tmpdir):
     t.drop_index("id")
     result_scan = t.where(t["id"] > 150)
 
-    ids_idx = sorted(int(v) for v in result_idx["id"].to_numpy())
-    ids_scan = sorted(int(v) for v in result_scan["id"].to_numpy())
+    ids_idx = sorted(int(v) for v in result_idx["id"][:])
+    ids_scan = sorted(int(v) for v in result_scan["id"][:])
     assert ids_idx == ids_scan
 
 
@@ -286,7 +286,7 @@ def test_persistent_index_drop_releases_sidecars_without_gc(tmpdir):
         t = _make_table(200, persistent_path=path)
         t.create_index("id")
         result = t.where(t["id"] > 150)
-        ids = sorted(int(v) for v in result["id"].to_numpy())
+        ids = sorted(int(v) for v in result["id"][:])
         assert ids == list(range(151, 200))
         t.drop_index("id")
 
@@ -351,7 +351,7 @@ def test_compact_index_persistent(tmpdir):
     t.compact_index("id")
     # Query should still work after compact
     result = t.where(t["id"] > 40)
-    ids = sorted(int(v) for v in result["id"].to_numpy())
+    ids = sorted(int(v) for v in result["id"][:])
     expected = list(range(41, 50))
     assert ids == expected
 
@@ -395,7 +395,7 @@ def test_query_after_reopen_persistent(tmpdir):
 
     t2 = blosc2.open(path, mode="r")
     result = t2.where(t2["id"] > 90)
-    ids = sorted(int(v) for v in result["id"].to_numpy())
+    ids = sorted(int(v) for v in result["id"][:])
     assert ids == list(range(91, 100))
 
 
@@ -408,7 +408,7 @@ def test_rename_indexed_column_rebuilds_catalog_persistent(tmpdir):
     assert not (Path(path) / "_indexes" / "id").exists()
     assert (Path(path) / "_indexes" / "newid").exists()
     result = t.where(t["newid"] > 35)
-    assert sorted(int(v) for v in result["newid"].to_numpy()) == [36, 37, 38, 39]
+    assert sorted(int(v) for v in result["newid"][:]) == [36, 37, 38, 39]
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +452,7 @@ def test_view_query_uses_root_index():
     t.create_index("id")
     # Query on the original table
     result_direct = t.where(t["id"] > 180)
-    ids_direct = sorted(int(v) for v in result_direct["id"].to_numpy())
+    ids_direct = sorted(int(v) for v in result_direct["id"][:])
     assert ids_direct == list(range(181, 200))
 
 

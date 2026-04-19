@@ -62,9 +62,12 @@ def test_column_getitem_no_holes():
     assert col[-1] == 19
     assert col[-5] == 15
 
-    # slice returns a Column view
-    assert isinstance(col[0:5], blosc2.Column)
-    assert isinstance(col[10:15], blosc2.Column)
+    # slice returns values (numpy array)
+    np.testing.assert_array_equal(col[0:5], np.arange(0, 5, dtype=np.int64))
+    np.testing.assert_array_equal(col[10:15], np.arange(10, 15, dtype=np.int64))
+    # .view[slice] returns a Column sub-view
+    assert isinstance(col.view[0:5], blosc2.Column)
+    assert isinstance(col.view[10:15], blosc2.Column)
 
     # list
     assert list(col[[0, 5, 10, 15]]) == [0, 5, 10, 15]
@@ -92,9 +95,9 @@ def test_column_getitem_with_holes():
     tabla2.delete([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])
     col2 = tabla2.id
 
-    assert list(col2[0:5].to_numpy()) == [0, 2, 4, 6, 8]
-    assert list(col2[5:10].to_numpy()) == [10, 12, 14, 16, 18]
-    assert list(col2[::2].to_numpy()) == [0, 4, 8, 12, 16]
+    np.testing.assert_array_equal(col2[0:5], [0, 2, 4, 6, 8])
+    np.testing.assert_array_equal(col2[5:10], [10, 12, 14, 16, 18])
+    np.testing.assert_array_equal(col2[::2], [0, 4, 8, 12, 16])
 
 
 def test_column_getitem_out_of_range():
@@ -124,7 +127,7 @@ def test_column_setitem_no_holes():
     assert col[-1] == 777
 
     col[0:5] = [100, 101, 102, 103, 104]
-    assert list(col[0:5].to_numpy()) == [100, 101, 102, 103, 104]
+    np.testing.assert_array_equal(col[0:5], [100, 101, 102, 103, 104])
 
     col[[0, 5, 10]] = [10, 50, 100]
     assert col[0] == 10
@@ -224,33 +227,43 @@ def test_column_edge_cases():
 # -------------------------------------------------------------------
 
 
-def test_column_slice_returns_view():
-    """Column[slice] returns a Column instance with a non-None mask."""
+def test_column_view_returns_column():
+    """col.view[slice] returns a Column sub-view; col[slice] returns numpy."""
     tabla = CTable(Row, new_data=DATA20)
     col = tabla.id
 
-    view = col[0:5]
+    # slice via .view → Column sub-view
+    view = col.view[0:5]
     assert isinstance(view, blosc2.Column)
     assert view._mask is not None
     assert view._table is tabla
     assert view._col_name == "id"
 
+    # slice directly → numpy array
+    arr = col[0:5]
+    assert isinstance(arr, np.ndarray)
+    np.testing.assert_array_equal(arr, np.arange(0, 5, dtype=np.int64))
+
+    # ColumnViewIndexer repr
+    vi = col.view
+    assert "id" in repr(vi)
+
 
 def test_to_array_slices():
-    """to_array() on slice views: full table and with holes."""
+    """col[slice] returns numpy directly; no [:] needed."""
     # No holes
     tabla = CTable(Row, new_data=DATA20)
     col = tabla.id
-    np.testing.assert_array_equal(col[0:5].to_numpy(), np.array([0, 1, 2, 3, 4], dtype=np.int64))
-    np.testing.assert_array_equal(col[5:10].to_numpy(), np.array([5, 6, 7, 8, 9], dtype=np.int64))
-    np.testing.assert_array_equal(col[15:20].to_numpy(), np.array([15, 16, 17, 18, 19], dtype=np.int64))
-    np.testing.assert_array_equal(col[0:20].to_numpy(), np.arange(20, dtype=np.int64))
+    np.testing.assert_array_equal(col[0:5], np.array([0, 1, 2, 3, 4], dtype=np.int64))
+    np.testing.assert_array_equal(col[5:10], np.array([5, 6, 7, 8, 9], dtype=np.int64))
+    np.testing.assert_array_equal(col[15:20], np.array([15, 16, 17, 18, 19], dtype=np.int64))
+    np.testing.assert_array_equal(col[0:20], np.arange(20, dtype=np.int64))
 
     # With holes: delete odd indices → keep evens 0,2,4,...,18
     tabla.delete([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])
     col = tabla.id
-    np.testing.assert_array_equal(col[0:5].to_numpy(), np.array([0, 2, 4, 6, 8], dtype=np.int64))
-    np.testing.assert_array_equal(col[5:10].to_numpy(), np.array([10, 12, 14, 16, 18], dtype=np.int64))
+    np.testing.assert_array_equal(col[0:5], np.array([0, 2, 4, 6, 8], dtype=np.int64))
+    np.testing.assert_array_equal(col[5:10], np.array([10, 12, 14, 16, 18], dtype=np.int64))
 
 
 def test_to_array_full_column():
@@ -260,7 +273,7 @@ def test_to_array_full_column():
     col = tabla.id
 
     expected = np.array([i for i in range(20) if i not in {0, 10, 19}], dtype=np.int64)
-    np.testing.assert_array_equal(col[0 : len(col)].to_numpy(), expected)
+    np.testing.assert_array_equal(col[0 : len(col)], expected)
 
 
 def test_to_array_mask_does_not_include_deleted():
@@ -271,7 +284,7 @@ def test_to_array_mask_does_not_include_deleted():
     col = tabla.id
 
     # logical [0:5] should now map to physical rows 0,1,4,5,6
-    result = col[0:5].to_numpy()
+    result = col[0:5]
     np.testing.assert_array_equal(result, np.array([0, 1, 4, 5, 6], dtype=np.int64))
 
 
@@ -280,9 +293,9 @@ def test_column_view_mask_is_independent():
     tabla = CTable(Row, new_data=DATA20)
     col = tabla.id
 
-    view_a = col[0:5]
+    view_a = col.view[0:5]
 
-    np.testing.assert_array_equal(view_a.to_numpy(), np.arange(0, 5, dtype=np.int64))
+    np.testing.assert_array_equal(view_a[:], np.arange(0, 5, dtype=np.int64))
 
 
 # -------------------------------------------------------------------
@@ -291,9 +304,9 @@ def test_column_view_mask_is_independent():
 
 
 def test_iter_chunks_full_table():
-    """iter_chunks reassembles to the same values as to_numpy()."""
+    """iter_chunks reassembles to the same values as col[:]."""
     tabla = CTable(Row, new_data=DATA20)
-    expected = tabla["id"].to_numpy()
+    expected = tabla["id"][:]
     got = np.concatenate(list(tabla["id"].iter_chunks(size=7)))
     np.testing.assert_array_equal(got, expected)
 
@@ -611,8 +624,8 @@ def test_sample_returns_correct_count():
 def test_sample_rows_are_subset():
     t = CTable(Row, new_data=DATA20)
     s = t.sample(7, seed=42)
-    all_ids = set(t["id"].to_numpy().tolist())
-    sample_ids = set(s["id"].to_numpy().tolist())
+    all_ids = set(t["id"][:].tolist())
+    sample_ids = set(s["id"][:].tolist())
     assert sample_ids.issubset(all_ids)
 
 
@@ -627,7 +640,7 @@ def test_sample_seed_reproducible():
     t = CTable(Row, new_data=DATA20)
     s1 = t.sample(5, seed=7)
     s2 = t.sample(5, seed=7)
-    np.testing.assert_array_equal(s1["id"].to_numpy(), s2["id"].to_numpy())
+    np.testing.assert_array_equal(s1["id"][:], s2["id"][:])
 
 
 def test_sample_n_larger_than_table():
@@ -677,7 +690,7 @@ def test_repr_is_single_line():
 
 def test_column_repr_shows_preview_values():
     t = CTable(Row, new_data=DATA20)
-    r = repr(t["id"][:])
+    r = repr(t["id"])  # Column repr — t["id"][:] is now a numpy array
     assert "Column('id'" in r
     assert "dtype=int64" in r
     assert "len=20" in r
@@ -742,6 +755,102 @@ def test_info_cratio_uses_one_decimal_with_suffix():
     info = repr(t.info)
     assert "cratio          :" in info
     assert "x" in next(line for line in info.splitlines() if line.startswith("cratio"))
+
+
+# -------------------------------------------------------------------
+# ColumnViewIndexer — new .view[...] API
+# -------------------------------------------------------------------
+
+
+def test_view_slice_returns_column():
+    """col.view[slice] returns a Column sub-view with a non-None mask."""
+    t = CTable(Row, new_data=DATA20)
+    view = t.id.view[2:7]
+    assert isinstance(view, blosc2.Column)
+    assert view._mask is not None
+    np.testing.assert_array_equal(view[:], np.arange(2, 7, dtype=np.int64))
+
+
+def test_view_bool_mask_returns_column():
+    """col.view[bool_mask] returns a Column sub-view."""
+    t = CTable(Row, new_data=DATA20)
+    mask = np.array([i % 2 == 0 for i in range(20)])
+    view = t.id.view[mask]
+    assert isinstance(view, blosc2.Column)
+    np.testing.assert_array_equal(view[:], np.arange(0, 20, 2, dtype=np.int64))
+
+
+def test_view_list_returns_column():
+    """col.view[[i,...]] returns a Column sub-view."""
+    t = CTable(Row, new_data=DATA20)
+    view = t.id.view[[0, 5, 10, 15]]
+    assert isinstance(view, blosc2.Column)
+    np.testing.assert_array_equal(view[:], [0, 5, 10, 15])
+
+
+def test_view_write_through():
+    """Writes via .view[slice][:] = values propagate to the table."""
+    t = CTable(Row, new_data=DATA20)
+    t.id.view[0:5][:] = [100, 101, 102, 103, 104]
+    np.testing.assert_array_equal(t.id[0:5], [100, 101, 102, 103, 104])
+
+
+def test_view_step_slice():
+    """col.view[::2] selects every other logical row."""
+    t = CTable(Row, new_data=DATA20)
+    view = t.id.view[::2]
+    np.testing.assert_array_equal(view[:], np.arange(0, 20, 2, dtype=np.int64))
+
+
+def test_view_empty_slice():
+    """col.view[5:3] yields an empty Column sub-view."""
+    t = CTable(Row, new_data=DATA20)
+    view = t.id.view[5:3]
+    assert len(view) == 0
+    assert view[:].tolist() == []
+
+
+def test_slice_empty_returns_empty_array():
+    """col[5:3] yields an empty numpy array (not an error)."""
+    t = CTable(Row, new_data=DATA20)
+    arr = t.id[5:3]
+    assert isinstance(arr, np.ndarray)
+    assert len(arr) == 0
+
+
+def test_view_on_already_masked_column():
+    """Applying .view on a masked Column (e.g. from head()) composes correctly."""
+    t = CTable(Row, new_data=DATA20)
+    t.delete([1, 3, 5])  # live ids: 0,2,4,6,7,...,19
+    masked_col = t.head(5).id  # logical rows 0-4 of the 17-row live set
+    view = masked_col.view[1:3]  # logical rows 1-2 of that masked col
+    assert isinstance(view, blosc2.Column)
+    assert len(view) == 2
+
+
+def test_view_bad_key_raises():
+    """col.view[int] raises TypeError: scalar views are not supported."""
+    t = CTable(Row, new_data=DATA20)
+    with pytest.raises(TypeError, match=r"view\[\]"):
+        t.id.view[5]
+
+
+def test_view_computed_column():
+    """Computed columns also support .view[slice] as a read-only sub-view."""
+    t = CTable(Row, new_data=DATA20)
+    t.add_computed_column("id2", lambda c: c["id"] * 2)
+    view = t.id2.view[0:5]
+    assert isinstance(view, blosc2.Column)
+    np.testing.assert_array_equal(view[:], np.arange(0, 10, 2, dtype=np.int64))
+
+
+def test_slice_returns_numpy_not_column():
+    """Verify col[slice] is numpy; col.view[slice] is Column."""
+    t = CTable(Row, new_data=DATA20)
+    assert isinstance(t.id[0:5], np.ndarray)
+    assert isinstance(t.id.view[0:5], blosc2.Column)
+    assert isinstance(t.id[:], np.ndarray)
+    assert isinstance(t.id.view[:], blosc2.Column)
 
 
 if __name__ == "__main__":

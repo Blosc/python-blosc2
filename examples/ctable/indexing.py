@@ -57,7 +57,7 @@ try:
     recent_active = pt.where((pt["sensor_id"] >= 180) & pt["active"] & (pt["region"] == "north"))
     print("\nLive rows with sensor_id >= 180, active=True, region='north':", len(recent_active))
     print("sensor_ids:", recent_active["sensor_id"])
-    print("statuses:", recent_active["status"].to_numpy())
+    print("statuses:", recent_active["status"][:])
 
     # Close the table, pack the TreeStore into a single .b2z file, and reopen it.
     del pt
@@ -82,7 +82,7 @@ try:
     warm_active = packed.where(packed["active"] & (packed["status"] == "warm") & (packed["sensor_id"] > 100))
     print("\nRows from .b2z with active=True, status='warm', sensor_id > 100:", len(warm_active))
     print("sensor_ids:", warm_active["sensor_id"])
-    print("regions:", warm_active["region"].to_numpy())
+    print("regions:", warm_active["region"][:])
 
     print("\nThe packed file is kept on disk.")
     print(f"Inspect it later with: f = blosc2.open({bundle_path.name!r}, mode='r')")

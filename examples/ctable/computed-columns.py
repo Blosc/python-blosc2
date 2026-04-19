@@ -73,8 +73,8 @@ print(f"ncols : {t.ncols}  (3 stored + 3 computed)\n")
 # 2. Reading computed values
 # ---------------------------------------------------------------------------
 
-# to_numpy() — materialise the full column
-mv = t["market_value"].to_numpy()
+# col[:] — materialise the full column as a numpy array
+mv = t["market_value"][:]          # np.ndarray — col[:] materialises directly
 print("market_value per trade:")
 for i, (row, val) in enumerate(zip(TRADES, mv)):
     print(f"  {row[0]:6s}  {row[1]:8.2f} × {row[2]:4d}  = {val:10,.2f}")
@@ -82,8 +82,9 @@ for i, (row, val) in enumerate(zip(TRADES, mv)):
 # Scalar access — logical row index
 print(f"\nRow 0 net_value : {np.asarray(t['net_value'][0]).ravel()[0]:,.2f}")
 
-# Slice access returns a Column view — call to_numpy() to get the array
-print(f"Rows 0-2 fee    : {t['fee'][0:3].to_numpy()}")
+# col[slice] → numpy array directly; col.view[slice] → Column sub-view for chaining
+fee_slice = t["fee"][0:3]          # np.ndarray of logical rows 0-2
+print(f"Rows 0-2 fee    : {fee_slice}")
 
 # ---------------------------------------------------------------------------
 # 3. Computed columns in display
@@ -210,7 +211,7 @@ try:
     # CTable.load() — in-memory copy; computed columns are rebuilt automatically
     loaded = blosc2.CTable.load(path)
     print(f"Loaded  : {len(loaded)} rows, computed cols = {list(loaded.computed_columns)}")
-    assert np.allclose(loaded["market_value"].to_numpy(), mv)
+    assert np.allclose(loaded["market_value"][:], mv)
 
     # CTable.open() — memory-mapped; computed columns are also restored
     opened = blosc2.CTable.open(path, mode="r")
@@ -228,6 +229,6 @@ finally:
 t3.drop_computed_column("market_value")
 print(f"\nAfter drop_computed_column: {t3.col_names}")
 print(f"  'market_value' still in _cols : {'market_value' in t3._cols}")       # False
-print(f"  'net_value' still available   : {t3['net_value'].to_numpy()[0]:,.2f}")  # still works
+print(f"  'net_value' still available   : {t3['net_value'][:][0]:,.2f}")
 
 print("\nDone.")

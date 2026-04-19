@@ -398,6 +398,29 @@ def _compile_pydantic_schema(row_cls: type) -> CompiledSchema:
 
 
 # ---------------------------------------------------------------------------
+# ColumnViewIndexer
+# ---------------------------------------------------------------------------
+
+
+class ColumnViewIndexer:
+    """Returned by :attr:`Column.view`; indexing returns a Column sub-view.
+
+    Use ``t.price.view[2:10]`` to obtain a writable logical sub-view for
+    chained operations (``sum()``, ``[:] = values``, …).
+    Use ``t.price[2:10]`` to materialise values as a NumPy array.
+    """
+
+    def __init__(self, column: Column) -> None:
+        self._column = column
+
+    def __getitem__(self, key) -> Column:
+        return self._column._view_from_key(key)
+
+    def __repr__(self) -> str:
+        return f"<ColumnViewIndexer col={self._column._col_name!r}>"
+
+
+# ---------------------------------------------------------------------------
 # Internal row/indexing helpers (unchanged)
 # ---------------------------------------------------------------------------
 
@@ -511,6 +534,19 @@ class Column:
         return (self._table._valid_rows & self._mask).compute()
 
     def __getitem__(self, key: int | slice | list | np.ndarray):
+        """Return values for the given logical index.
+
+        - ``int``              → scalar
+        - ``slice``            → :class:`numpy.ndarray`
+        - ``list / np.ndarray`` → :class:`numpy.ndarray`
+        - ``bool np.ndarray``  → :class:`numpy.ndarray`
+
+        For a writable logical sub-view use :attr:`view`.
+        """
+        return self._values_from_key(key)
+
+    def _values_from_key(self, key):
+        """Materialise values for a logical index key."""
         if isinstance(key, int):
             n_rows = len(self)
             if key < 0:
@@ -521,22 +557,19 @@ class Column:
             return self._raw_col[int(pos_true)]
 
         elif isinstance(key, slice):
-            real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
+            valid = self._valid_rows
+            real_pos = blosc2.where(valid, _arange(len(valid))).compute()
             start, stop, step = key.indices(len(real_pos))
-            mask = blosc2.zeros(len(self._table._valid_rows), dtype=np.bool_)
-            if step == 1:
-                phys_start = real_pos[start]
-                phys_stop = real_pos[stop - 1]
-                mask[phys_start : phys_stop + 1] = True
-            else:
-                lindices = _arange(start, stop, step)
-                phys_indices = real_pos[lindices]
-                mask[phys_indices[:]] = True
-            return Column(self._table, self._col_name, mask=mask)
+            if start >= stop:
+                return np.array([], dtype=self.dtype)
+            selected_pos = real_pos[start:stop:step]  # physical row positions
+            if self.is_computed:
+                lo, hi = int(selected_pos.min()), int(selected_pos.max())
+                chunk = np.asarray(self._raw_col[lo : hi + 1])
+                return chunk[selected_pos - lo]
+            return np.asarray(self._raw_col[selected_pos])
 
         elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
-            # Boolean mask in logical space — same convention as numpy/pandas.
-            # key[i] == True means "include logical row i".
             n_live = len(self)
             if len(key) != n_live:
                 raise IndexError(
@@ -545,7 +578,6 @@ class Column:
             all_pos = np.where(self._valid_rows[:])[0]
             phys_indices = all_pos[key]
             if self.is_computed:
-                # LazyExpr does not support fancy indexing; materialise full physical array
                 raw_np = np.asarray(self._raw_col[:])
                 return raw_np[phys_indices]
             return self._raw_col[phys_indices]
@@ -559,6 +591,70 @@ class Column:
             return self._raw_col[phys_indices]
 
         raise TypeError(f"Invalid index type: {type(key)}")
+
+    def _view_from_key(self, key) -> Column:
+        """Build a Column sub-view for the given logical index key.
+
+        Called by :class:`ColumnViewIndexer`.  Supports slice, boolean mask,
+        and integer list / array keys.  The returned :class:`Column` shares
+        the underlying physical storage and writes through to the table.
+        """
+        if isinstance(key, slice):
+            valid = self._valid_rows
+            real_pos = blosc2.where(valid, _arange(len(valid))).compute()
+            start, stop, step = key.indices(len(real_pos))
+            mask = blosc2.zeros(len(self._table._valid_rows), dtype=np.bool_)
+            if start < stop:
+                if step == 1:
+                    phys_start = real_pos[start]
+                    phys_stop = real_pos[stop - 1]
+                    mask[phys_start : phys_stop + 1] = True
+                else:
+                    lindices = _arange(start, stop, step)
+                    phys_indices = real_pos[lindices]
+                    mask[phys_indices[:]] = True
+            return Column(self._table, self._col_name, mask=mask)
+
+        elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
+            n_live = len(self)
+            if len(key) != n_live:
+                raise IndexError(
+                    f"Boolean mask length {len(key)} does not match number of live rows {n_live}."
+                )
+            all_pos = np.where(self._valid_rows[:])[0]
+            phys_indices = all_pos[key]
+            mask_np = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
+            mask_np[phys_indices] = True
+            return Column(self._table, self._col_name, mask=blosc2.asarray(mask_np))
+
+        elif isinstance(key, (list, tuple, np.ndarray)):
+            real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
+            phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
+            mask_np = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
+            mask_np[phys_indices] = True
+            return Column(self._table, self._col_name, mask=blosc2.asarray(mask_np))
+
+        raise TypeError(
+            f"Column.view[] does not support key type {type(key).__name__!r}. "
+            "Supported: slice, boolean array, list / integer array."
+        )
+
+    @property
+    def view(self) -> ColumnViewIndexer:
+        """Return a :class:`ColumnViewIndexer` for creating logical sub-views.
+
+        Examples
+        --------
+        Read a sub-view for chained aggregates::
+
+            sub = t.price.view[2:10]
+            sub.sum()
+
+        Bulk write through a sub-view::
+
+            t.price.view[0:5][:] = np.zeros(5)
+        """
+        return ColumnViewIndexer(self)
 
     def __setitem__(self, key: int | slice | list | np.ndarray, value):
         if self._table._read_only:
@@ -734,13 +830,6 @@ class Column:
         if pending:
             yield np.concatenate(pending)
 
-    def to_numpy(self) -> np.ndarray:
-        """Return all live values as a NumPy array."""
-        parts = list(self.iter_chunks(size=max(1, len(self))))
-        if not parts:
-            return np.array([], dtype=self.dtype)
-        return np.concatenate(parts) if len(parts) > 1 else parts[0]
-
     def _iter_chunks_computed(self, size):
         """Yield live values from a computed column, chunk-by-chunk.
 
@@ -852,7 +941,7 @@ class Column:
 
     def is_null(self) -> np.ndarray:
         """Return a boolean array True where the live value is the null sentinel."""
-        return self._null_mask_for(self.to_numpy())
+        return self._null_mask_for(self[:])
 
     def notnull(self) -> np.ndarray:
         """Return a boolean array True where the live value is *not* the null sentinel."""
@@ -1857,7 +1946,7 @@ class CTable(Generic[RowT]):
             if dtype.kind in "biufc" and dtype.kind != "c":
                 # numeric + bool
                 if dtype.kind == "b":
-                    arr = col.to_numpy()
+                    arr = col[:]
                     # Exclude null sentinels from true/false counts
                     if col.null_value is not None:
                         arr = arr[col.notnull()]
@@ -1944,7 +2033,7 @@ class CTable(Generic[RowT]):
         null_union = None
         for name in self.col_names:
             col = self[name]
-            arr = col.to_numpy()
+            arr = col[:]
             nm = col._null_mask_for(arr)
             if nm.any():
                 null_union = nm if null_union is None else (null_union | nm)
@@ -1974,7 +2063,7 @@ class CTable(Generic[RowT]):
     def to_arrow(self):
         """Convert all live rows to a :class:`pyarrow.Table`.
 
-        Each column is materialized via :meth:`Column.to_numpy` and wrapped
+        Each column is materialized via ``col[:]`` and wrapped
         in a ``pyarrow.array``.  String columns are emitted as ``pa.string()``
         (variable-length UTF-8); bytes columns as ``pa.large_binary()``.
 
@@ -1993,7 +2082,7 @@ class CTable(Generic[RowT]):
         arrays = {}
         for name in self.col_names:
             col = self[name]
-            arr = col.to_numpy()
+            arr = col[:]
             # Only compute null mask when a sentinel is actually configured —
             # avoids allocating a 1M-element zeros array for every non-nullable column.
             nv = col.null_value
@@ -2153,7 +2242,7 @@ class CTable(Generic[RowT]):
         if n > 0:
             # Write each column directly — one bulk slice assignment per column.
             # String columns (dtype.kind == 'U') can't go through Arrow's zero-copy
-            # to_numpy(), so we convert via to_pylist() and let NumPy handle the
+            # path, so we convert via to_pylist() and let NumPy handle the
             # fixed-width unicode coercion.  All other types use zero-copy numpy.
             for col in columns:
                 arrow_col = arrow_table.column(col.name)
@@ -2177,7 +2266,7 @@ class CTable(Generic[RowT]):
         """Write all live rows to a CSV file.
 
         Uses Python's stdlib ``csv`` module — no extra dependency required.
-        Each column is materialised once via :meth:`Column.to_numpy`; rows
+        Each column is materialised once via ``col[:]``; rows
         are then written one at a time.
 
         Parameters
@@ -2191,7 +2280,7 @@ class CTable(Generic[RowT]):
         """
         import csv
 
-        arrays = [self[name].to_numpy() for name in self.col_names]
+        arrays = [self[name][:] for name in self.col_names]
 
         with open(path, "w", newline="") as f:
             writer = csv.writer(f, delimiter=sep)

@@ -93,8 +93,8 @@ def test_reopen_with_ctable_constructor():
 
     t2 = CTable(Row, urlpath=path, mode="a")
     assert len(t2) == 3
-    assert list(t2["id"].to_numpy()) == [1, 2, 3]
-    assert list(t2["score"].to_numpy()) == [10.0, 20.0, 30.0]
+    assert list(t2["id"][:]) == [1, 2, 3]
+    assert list(t2["score"][:]) == [10.0, 20.0, 30.0]
 
 
 def test_reopen_with_open_classmethod():
@@ -105,7 +105,7 @@ def test_reopen_with_open_classmethod():
 
     t2 = CTable.open(path)
     assert len(t2) == 2
-    assert list(t2["id"].to_numpy()) == [10, 20]
+    assert list(t2["id"][:]) == [10, 20]
 
 
 def test_column_order_preserved_after_reopen():
@@ -153,7 +153,7 @@ def test_append_after_reopen():
     # Verify it's visible in a third open
     t3 = CTable(Row, urlpath=path, mode="a")
     assert len(t3) == 3
-    assert list(t3["id"].to_numpy()) == [1, 2, 3]
+    assert list(t3["id"][:]) == [1, 2, 3]
 
 
 def test_extend_after_reopen():
@@ -168,7 +168,7 @@ def test_extend_after_reopen():
 
     t3 = CTable(Row, urlpath=path, mode="a")
     assert len(t3) == 10
-    assert list(t3["id"].to_numpy()) == list(range(10))
+    assert list(t3["id"][:]) == list(range(10))
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +188,7 @@ def test_delete_after_reopen():
 
     t3 = CTable(Row, urlpath=path, mode="a")
     assert len(t3) == 2
-    assert list(t3["id"].to_numpy()) == [1, 3]
+    assert list(t3["id"][:]) == [1, 3]
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +281,7 @@ def test_read_only_allows_reads():
     t2 = CTable.open(path, mode="r")
     assert len(t2) == 3
     assert t2.row[0].id[0] == 1
-    assert list(t2["score"].to_numpy()) == [10.0, 20.0, 30.0]
+    assert list(t2["score"][:]) == [10.0, 20.0, 30.0]
     assert len(t2.head(2)) == 2
     assert len(t2.tail(1)) == 1
     view = t2.where(t2["id"] > 1)
@@ -371,7 +371,7 @@ def test_grow_persists():
 
     t2 = CTable(Row, urlpath=path, mode="a")
     assert len(t2) == 10
-    assert list(t2["id"].to_numpy()) == list(range(10))
+    assert list(t2["id"][:]) == list(range(10))
 
 
 # ---------------------------------------------------------------------------
@@ -404,8 +404,8 @@ def test_save_then_open_round_trip():
 
     t2 = CTable.open(path)
     assert len(t2) == 5
-    assert list(t2["id"].to_numpy()) == list(range(5))
-    assert list(t2["score"].to_numpy()) == [float(i * 10) for i in range(5)]
+    assert list(t2["id"][:]) == list(range(5))
+    assert list(t2["score"][:]) == [float(i * 10) for i in range(5)]
 
 
 def test_save_compacts_deleted_rows():
@@ -420,7 +420,7 @@ def test_save_compacts_deleted_rows():
 
     t2 = CTable.open(path)
     assert len(t2) == 3
-    assert list(t2["id"].to_numpy()) == [1, 3, 5]
+    assert list(t2["id"][:]) == [1, 3, 5]
 
 
 def test_save_existing_path_raises_by_default():
@@ -472,7 +472,7 @@ def test_load_returns_in_memory_table():
 
     loaded = CTable.load(path)
     assert len(loaded) == 4
-    assert list(loaded["id"].to_numpy()) == [0, 1, 2, 3]
+    assert list(loaded["id"][:]) == [0, 1, 2, 3]
     # Must be writable
     loaded.append((100, 50.0, True))
     assert len(loaded) == 5
@@ -493,7 +493,7 @@ def test_load_does_not_modify_disk():
     # Re-open the original persistent table — should be unchanged
     t2 = CTable.open(path)
     assert len(t2) == 3
-    assert list(t2["id"].to_numpy()) == [0, 1, 2]
+    assert list(t2["id"][:]) == [0, 1, 2]
 
 
 def test_load_nonexistent_raises():

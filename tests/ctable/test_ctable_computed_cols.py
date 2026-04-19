@@ -91,10 +91,9 @@ def test_computed_column_expression_string():
 def test_computed_column_read_slice():
     t = _make_invoice_table(5)  # price=[1,2,3,4,5], qty=[1,2,3,4,5]
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
-    result = t["total"][0:3]
-    # Column.__getitem__ with slice returns a Column sub-view; to_numpy to get values
+    result = t["total"][0:3]  # col[slice] → numpy array directly
     expected = np.array([1.0, 4.0, 9.0])
-    np.testing.assert_array_equal(result.to_numpy(), expected)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_computed_column_read_scalar():
@@ -104,10 +103,10 @@ def test_computed_column_read_scalar():
     assert np.isclose(float(np.asarray(val).ravel()[0]), 9.0)
 
 
-def test_computed_column_to_numpy():
+def test_computed_column_materialise():
     t = _make_invoice_table(5)
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
-    arr = t["total"].to_numpy()
+    arr = t["total"][:]
     expected = np.array([1.0, 4.0, 9.0, 16.0, 25.0])
     np.testing.assert_allclose(arr, expected)
 
@@ -194,7 +193,7 @@ def test_computed_column_after_append():
     t = _make_invoice_table(3)
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
     t.append((4.0, 4, 0.1))
-    arr = t["total"].to_numpy()
+    arr = t["total"][:]
     assert np.isclose(arr[-1], 16.0)
 
 
@@ -202,7 +201,7 @@ def test_computed_column_after_delete():
     t = _make_invoice_table(5)
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
     t.delete(0)  # remove first row (total=1)
-    arr = t["total"].to_numpy()
+    arr = t["total"][:]
     assert len(arr) == 4
     assert np.isclose(arr[0], 4.0)
 
@@ -408,7 +407,7 @@ def test_computed_column_select_stored_and_computed():
     view = t.select(["price", "total"])
     assert view.col_names == ["price", "total"]
     assert "total" in view._computed_cols
-    arr = view["total"].to_numpy()
+    arr = view["total"][:]
     assert len(arr) == 4
 
 
@@ -418,7 +417,7 @@ def test_computed_column_select_computed_only():
     # Selecting only the computed col is allowed
     view = t.select(["total"])
     assert view.col_names == ["total"]
-    assert view["total"].to_numpy().tolist() == pytest.approx([1.0, 4.0, 9.0])
+    assert view["total"][:].tolist() == pytest.approx([1.0, 4.0, 9.0])
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +430,7 @@ def test_computed_column_view():
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
     view = t.head(3)
     assert "total" in view._computed_cols
-    arr = view["total"].to_numpy()
+    arr = view["total"][:]
     np.testing.assert_allclose(arr, [1.0, 4.0, 9.0])
 
 
@@ -441,7 +440,7 @@ def test_computed_column_where_view():
     lazy_total = t._computed_cols["total"]["lazy"]
     view = t.where(lazy_total > 5)
     assert "total" in view._computed_cols
-    arr = view["total"].to_numpy()
+    arr = view["total"][:]
     assert all(v > 5 for v in arr)
 
 
@@ -454,7 +453,7 @@ def test_sort_by_computed_column():
     t = _make_invoice_table(5)
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
     sorted_t = t.sort_by("total", ascending=False)
-    arr = sorted_t["total"].to_numpy()
+    arr = sorted_t["total"][:]
     # Should be descending: 25, 16, 9, 4, 1
     assert list(arr) == pytest.approx([25.0, 16.0, 9.0, 4.0, 1.0])
 
@@ -463,7 +462,7 @@ def test_sort_by_computed_column_inplace():
     t = _make_invoice_table(5)
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
     t.sort_by("total", ascending=False, inplace=True)
-    arr = t["total"].to_numpy()
+    arr = t["total"][:]
     assert list(arr) == pytest.approx([25.0, 16.0, 9.0, 4.0, 1.0])
 
 
@@ -566,7 +565,7 @@ def test_computed_column_save_load(tmp_path):
     t2 = CTable.load(path)
     assert "total" in t2._computed_cols
     assert "total" in t2.col_names
-    arr = t2["total"].to_numpy()
+    arr = t2["total"][:]
     np.testing.assert_allclose(arr, [1.0, 4.0, 9.0, 16.0, 25.0])
 
 
@@ -578,7 +577,7 @@ def test_computed_column_open(tmp_path):
     # Reopen in read mode
     t2 = CTable.open(path, mode="r")
     assert "total" in t2._computed_cols
-    arr = t2["total"].to_numpy()
+    arr = t2["total"][:]
     np.testing.assert_allclose(arr, [1.0, 4.0, 9.0, 16.0, 25.0])
 
 
@@ -591,7 +590,7 @@ def test_computed_column_open_append(tmp_path):
     t2 = CTable(Invoice, urlpath=path, mode="a")
     assert "total" in t2._computed_cols
     t2.append((4.0, 4, 0.1))
-    arr = t2["total"].to_numpy()
+    arr = t2["total"][:]
     np.testing.assert_allclose(arr, [1.0, 4.0, 9.0, 16.0])
 
 
@@ -630,7 +629,7 @@ def test_computed_column_compact():
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
     t.delete(1)
     t.compact()
-    arr = t["total"].to_numpy()
+    arr = t["total"][:]
     # After compact, live rows are price=1,3,4,5 and qty=1,3,4,5
     expected = np.array([1.0, 9.0, 16.0, 25.0])
     np.testing.assert_allclose(arr, expected)

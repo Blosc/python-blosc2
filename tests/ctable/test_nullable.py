@@ -273,7 +273,7 @@ def test_extend_null_bypasses_constraint():
     """extend() with null sentinel should not raise a constraint error."""
     t = CTable(IntRow)
     t.extend([(1, 10), (2, -1), (3, 20)])
-    scores = t["score"].to_numpy()
+    scores = t["score"][:]
     assert scores[1] == -1
 
 
@@ -291,7 +291,7 @@ def test_extend_normal_value_still_validated():
 def test_sort_nulls_last_ascending():
     t = CTable(IntRow, new_data=[(1, 5), (2, -1), (3, 2), (4, -1), (5, 8)])
     s = t.sort_by("score")
-    scores = list(s["score"].to_numpy())
+    scores = list(s["score"][:])
     # Non-null values sorted first, nulls (-1) at end
     assert scores[:3] == [2, 5, 8]
     assert scores[3] == -1
@@ -301,7 +301,7 @@ def test_sort_nulls_last_ascending():
 def test_sort_nulls_last_descending():
     t = CTable(IntRow, new_data=[(1, 5), (2, -1), (3, 2), (4, -1), (5, 8)])
     s = t.sort_by("score", ascending=False)
-    scores = list(s["score"].to_numpy())
+    scores = list(s["score"][:])
     # Non-null values sorted descending first, nulls last
     assert scores[:3] == [8, 5, 2]
     assert scores[3] == -1
@@ -311,7 +311,7 @@ def test_sort_nulls_last_descending():
 def test_sort_nulls_last_nan():
     t = CTable(FloatRow, new_data=[("a", 3.0), ("b", float("nan")), ("c", 1.0)])
     s = t.sort_by("value")
-    values = list(s["value"].to_numpy())
+    values = list(s["value"][:])
     assert values[0] == pytest.approx(1.0)
     assert values[1] == pytest.approx(3.0)
     assert math.isnan(values[2])
@@ -320,8 +320,8 @@ def test_sort_nulls_last_nan():
 def test_sort_multi_nulls_last():
     t = CTable(IntRow, new_data=[(1, -1), (2, 5), (3, -1), (4, 5)])
     s = t.sort_by(["score", "id"])
-    scores = list(s["score"].to_numpy())
-    ids = list(s["id"].to_numpy())
+    scores = list(s["score"][:])
+    ids = list(s["id"][:])
     # score 5 rows first (id 2, then id 4), then score -1 rows
     assert scores[:2] == [5, 5]
     assert ids[:2] == [2, 4]
@@ -333,7 +333,7 @@ def test_sort_no_nulls_unchanged():
     """Columns without null_value still sort normally."""
     t = CTable(IntRow, new_data=[(3, 30), (1, 10), (2, 20)])
     s = t.sort_by("id")
-    np.testing.assert_array_equal(s["id"].to_numpy(), [1, 2, 3])
+    np.testing.assert_array_equal(s["id"][:], [1, 2, 3])
 
 
 # ===========================================================================
@@ -421,7 +421,7 @@ def test_from_csv_empty_cell_to_null():
         fname = f.name
     try:
         t = CTable.from_csv(fname, IntRow)
-        scores = t["score"].to_numpy()
+        scores = t["score"][:]
         assert scores[0] == 10
         assert scores[1] == -1  # null sentinel
         assert scores[2] == 20
@@ -439,7 +439,7 @@ def test_from_csv_empty_string_cell_to_null():
         fname = f.name
     try:
         t = CTable.from_csv(fname, StrRow)
-        labels = t["label"].to_numpy()
+        labels = t["label"][:]
         assert labels[0] == "hello"
         assert labels[1] == ""  # null sentinel
         assert labels[2] == "world"
@@ -463,7 +463,7 @@ def test_from_csv_no_null_value_non_empty_cells():
         fname = f.name
     try:
         t = CTable.from_csv(fname, SimpleRow)
-        arr = t["x"].to_numpy()
+        arr = t["x"][:]
         assert list(arr) == [5, 7, 10]
         assert t["x"].null_count() == 0
     finally:

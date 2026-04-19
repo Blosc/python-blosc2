@@ -57,7 +57,7 @@ def test_view_allows_column_setitem():
     view = t.where(t["id"] > 4)  # rows 5-9
     # double scores of those rows using __setitem__
     indices = list(range(len(view)))
-    new_scores = view["score"].to_numpy() * 2
+    new_scores = view["score"][:] * 2
     view["score"][indices] = new_scores
     # check parent was modified
     assert t["score"][5] == pytest.approx(100.0)  # was 50.0
@@ -118,7 +118,7 @@ def test_blosc2_open_materializes_ctable():
     opened = blosc2.open(path, mode="r")
     assert isinstance(opened, CTable)
     assert opened.col_names == ["id", "score", "active"]
-    np.testing.assert_array_equal(opened["id"].to_numpy(), np.arange(10))
+    np.testing.assert_array_equal(opened["id"][:], np.arange(10))
 
 
 def test_blosc2_open_raw_treestore_without_manifest():
@@ -152,7 +152,7 @@ def test_extensionless_ctable_path_uses_extensionless_store():
     assert os.path.isdir(path)
     opened = blosc2.open(path, mode="r")
     assert isinstance(opened, CTable)
-    np.testing.assert_array_equal(opened["id"].to_numpy(), np.arange(10))
+    np.testing.assert_array_equal(opened["id"][:], np.arange(10))
 
 
 # ===========================================================================
@@ -163,13 +163,13 @@ def test_extensionless_ctable_path_uses_extensionless_store():
 def test_assign_replaces_all_values():
     t = CTable(Row, new_data=DATA10)
     t["score"].assign([99.0] * 10)
-    assert list(t["score"].to_numpy()) == [99.0] * 10
+    assert list(t["score"][:]) == [99.0] * 10
 
 
 def test_assign_coerces_python_ints_to_float():
     t = CTable(Row, new_data=DATA10)
     t["score"].assign(list(range(10)))  # Python ints → float64
-    np.testing.assert_array_equal(t["score"].to_numpy(), np.arange(10, dtype=np.float64))
+    np.testing.assert_array_equal(t["score"][:], np.arange(10, dtype=np.float64))
 
 
 def test_assign_wrong_length_raises():
@@ -183,7 +183,7 @@ def test_assign_through_view_touches_only_matching_rows():
     view = t.where(t["id"] < 5)  # rows 0-4
     view["score"].assign([0.0] * 5)
     # rows 0-4 → 0, rows 5-9 unchanged
-    scores = t["score"].to_numpy()
+    scores = t["score"][:]
     np.testing.assert_array_equal(scores[:5], np.zeros(5))
     np.testing.assert_array_equal(scores[5:], np.arange(5, 10, dtype=np.float64) * 10)
 
@@ -192,8 +192,8 @@ def test_assign_respects_deleted_rows():
     t = CTable(Row, new_data=DATA10)
     t.delete([0])  # delete id=0; 9 live rows remain
     t["score"].assign([1.0] * 9)
-    assert len(t["score"].to_numpy()) == 9
-    assert all(v == 1.0 for v in t["score"].to_numpy())
+    assert len(t["score"][:]) == 9
+    assert all(v == 1.0 for v in t["score"][:])
 
 
 # ===========================================================================
@@ -210,7 +210,7 @@ def test_add_column_appears_in_col_names():
 def test_add_column_fills_default_for_existing_rows():
     t = CTable(Row, new_data=DATA10)
     t.add_column("weight", blosc2.float64(), 5.5)
-    np.testing.assert_array_equal(t["weight"].to_numpy(), np.full(10, 5.5))
+    np.testing.assert_array_equal(t["weight"][:], np.full(10, 5.5))
 
 
 def test_add_column_new_rows_can_use_it():
@@ -234,7 +234,7 @@ def test_add_column_persists_on_disk():
     t.close()
     t2 = CTable.open(path)
     assert "weight" in t2.col_names
-    np.testing.assert_array_equal(t2["weight"].to_numpy(), np.full(10, 7.0))
+    np.testing.assert_array_equal(t2["weight"][:], np.full(10, 7.0))
 
 
 def test_add_column_view_raises():
@@ -260,7 +260,7 @@ def test_add_column_skips_deleted_rows():
     t = CTable(Row, new_data=DATA10)
     t.delete([0, 1])  # 8 live rows
     t.add_column("weight", blosc2.float64(), 3.0)
-    vals = t["weight"].to_numpy()
+    vals = t["weight"][:]
     assert len(vals) == 8
     assert all(v == 3.0 for v in vals)
 
@@ -336,9 +336,9 @@ def test_rename_column_updates_col_names():
 
 def test_rename_column_data_intact():
     t = CTable(Row, new_data=DATA10)
-    original = t["score"].to_numpy().copy()
+    original = t["score"][:].copy()
     t.rename_column("score", "points")
-    np.testing.assert_array_equal(t["points"].to_numpy(), original)
+    np.testing.assert_array_equal(t["points"][:], original)
 
 
 def test_rename_column_schema_updated():
@@ -392,16 +392,16 @@ def test_rename_column_persists_on_disk():
 
 def test_bool_mask_getitem():
     t = CTable(Row, new_data=DATA10)
-    mask = t["id"].to_numpy() % 2 == 0  # even ids
+    mask = t["id"][:] % 2 == 0  # even ids
     result = t["score"][mask]
     np.testing.assert_array_equal(result, np.array([0.0, 20.0, 40.0, 60.0, 80.0]))
 
 
 def test_bool_mask_setitem():
     t = CTable(Row, new_data=DATA10)
-    mask = t["id"].to_numpy() % 2 == 0
+    mask = t["id"][:] % 2 == 0
     t["score"][mask] = 0.0
-    scores = t["score"].to_numpy()
+    scores = t["score"][:]
     np.testing.assert_array_equal(scores[0::2], np.zeros(5))  # evens zeroed
     np.testing.assert_array_equal(scores[1::2], np.array([10.0, 30.0, 50.0, 70.0, 90.0]))
 
@@ -409,9 +409,9 @@ def test_bool_mask_setitem():
 def test_bool_mask_inplace_multiply():
     """The pandas idiom: col[mask] *= scalar."""
     t = CTable(Row, new_data=DATA10)
-    mask = t["id"].to_numpy() % 2 == 0
+    mask = t["id"][:] % 2 == 0
     t["score"][mask] *= 2
-    scores = t["score"].to_numpy()
+    scores = t["score"][:]
     np.testing.assert_array_equal(scores[0::2], np.array([0.0, 40.0, 80.0, 120.0, 160.0]))
     np.testing.assert_array_equal(scores[1::2], np.array([10.0, 30.0, 50.0, 70.0, 90.0]))
 
@@ -427,7 +427,7 @@ def test_bool_mask_through_view():
     """Boolean mask indexing works on views too."""
     t = CTable(Row, new_data=DATA10)
     view = t.where(t["id"] < 6)  # rows 0-5
-    mask = view["id"].to_numpy() % 2 == 0
+    mask = view["id"][:] % 2 == 0
     view["score"][mask] *= 10
     # rows 0,2,4 in view → ids 0,2,4 in parent → scores 0,20,40 * 10
     assert t["score"][0] == pytest.approx(0.0)
