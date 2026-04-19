@@ -2576,12 +2576,24 @@ class CTable(Generic[RowT]):
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
             raise ValueError("Cannot rename a column in a view.")
-        if old not in self._cols:
+        if old not in self._cols and old not in self._computed_cols:
             raise KeyError(f"No column named {old!r}. Available: {self.col_names}")
         if new in self._cols or new in self._computed_cols:
             raise ValueError(f"Column {new!r} already exists.")
         _validate_column_name(new)
-        # Guard: refuse rename if any computed column depends on this column
+
+        # Computed columns have no physical storage or schema entry.  Renaming
+        # them only updates the computed-column registry and visible names.
+        if old in self._computed_cols:
+            self._computed_cols[new] = self._computed_cols.pop(old)
+            idx = self.col_names.index(old)
+            self.col_names[idx] = new
+            self._col_widths[new] = max(len(new), self._col_widths.pop(old))
+            if isinstance(self._storage, FileTableStorage):
+                self._storage.save_schema(self._schema_dict_with_computed())
+            return
+
+        # Guard: refuse rename if any computed column depends on this stored column
         dependents = [
             cc_name
             for cc_name, cc in self._computed_cols.items()

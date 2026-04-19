@@ -303,6 +303,24 @@ def test_computed_column_describe(capsys):
     assert "total" in captured.out
 
 
+def test_computed_column_view_str_and_info():
+    t = _make_invoice_table(5)
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+    view = t.select(["price", "total"]).head(3)
+
+    s = str(view)
+    assert "price" in s
+    assert "total" in s
+    assert "1.0" in s or "1" in s
+    assert "9.0" in s or "9" in s
+
+    info = repr(view.info)
+    assert "view" in info
+    assert "True" in info
+    assert "total" in info
+    assert "computed: (price * qty)" in info
+
+
 def test_ncols_includes_computed():
     t = _make_invoice_table()
     assert t.ncols == 3
@@ -372,6 +390,18 @@ def test_rename_dependency_raises():
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
     with pytest.raises(ValueError, match="'total'"):
         t.rename_column("price", "unit_price")
+
+
+def test_rename_computed_column_itself():
+    t = _make_invoice_table()
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+    t.rename_column("total", "gross")
+
+    assert "gross" in t.col_names
+    assert "gross" in t._computed_cols
+    assert "total" not in t.col_names
+    assert "total" not in t._computed_cols
+    np.testing.assert_allclose(t["gross"][:], [float((i + 1) ** 2) for i in range(10)])
 
 
 def test_drop_dependency_after_drop_computed():
