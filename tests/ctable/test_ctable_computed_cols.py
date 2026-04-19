@@ -426,6 +426,83 @@ def test_computed_column_index_raises():
         t.create_index("total")
 
 
+def test_materialize_computed_column_basic():
+    t = _make_invoice_table(5)
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+
+    t.materialize_computed_column("total", new_name="total_stored")
+
+    assert "total_stored" in t._cols
+    assert "total_stored" in t.col_names
+    np.testing.assert_allclose(t["total_stored"][:], [1.0, 4.0, 9.0, 16.0, 25.0])
+    np.testing.assert_allclose(t["total"][:], t["total_stored"][:])
+
+
+
+def test_materialize_computed_column_physical_rows():
+    t = _make_invoice_table(5)
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+    t.delete(1)
+
+    t.materialize_computed_column("total", new_name="total_stored")
+
+    np.testing.assert_allclose(t["total_stored"][:], [1.0, 9.0, 16.0, 25.0])
+    live_pos = np.where(t._valid_rows[:])[0]
+    all_expected = np.asarray(t._computed_cols["total"]["lazy"][:])
+    np.testing.assert_allclose(t._cols["total_stored"][live_pos], all_expected[live_pos])
+
+
+
+def test_materialize_computed_column_dtype_override():
+    t = _make_invoice_table(4)
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+
+    t.materialize_computed_column("total", new_name="total_f32", dtype=np.float32)
+
+    assert t._cols["total_f32"].dtype == np.dtype(np.float32)
+    np.testing.assert_allclose(t["total_f32"][:], np.array([1.0, 4.0, 9.0, 16.0], dtype=np.float32))
+
+
+
+def test_materialize_computed_column_indexing_workflow():
+    t = _make_invoice_table(5)
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+    t.materialize_computed_column("total", new_name="total_stored")
+
+    t.create_index("total_stored", kind=blosc2.IndexKind.FULL)
+
+    view = t.where(t["total_stored"] >= 9)
+    np.testing.assert_allclose(view["total_stored"][:], [9.0, 16.0, 25.0])
+
+
+
+def test_materialize_computed_column_name_collision():
+    t = _make_invoice_table()
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+
+    with pytest.raises(ValueError, match="already exists"):
+        t.materialize_computed_column("total", new_name="price")
+
+    with pytest.raises(ValueError, match="already exists"):
+        t.materialize_computed_column("total", new_name="total")
+
+
+
+def test_materialize_computed_column_missing_raises():
+    t = _make_invoice_table()
+    with pytest.raises(KeyError, match="not a computed column"):
+        t.materialize_computed_column("missing")
+
+
+
+def test_materialize_computed_column_view_raises():
+    t = _make_invoice_table()
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+
+    with pytest.raises(ValueError, match="view"):
+        t.head(2).materialize_computed_column("total")
+
+
 # ---------------------------------------------------------------------------
 # 14. select() with computed columns
 # ---------------------------------------------------------------------------
@@ -622,6 +699,20 @@ def test_computed_column_open_append(tmp_path):
     t2.append((4.0, 4, 0.1))
     arr = t2["total"][:]
     np.testing.assert_allclose(arr, [1.0, 4.0, 9.0, 16.0])
+
+
+
+def test_materialize_computed_column_open_roundtrip(tmp_path):
+    path = str(tmp_path / "tbl")
+    t = CTable(Invoice, [(float(i + 1), i + 1, 0.1) for i in range(5)], urlpath=path, mode="w")
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+    t.materialize_computed_column("total", new_name="total_stored")
+    t.create_index("total_stored", kind=blosc2.IndexKind.FULL)
+
+    t2 = CTable.open(path, mode="r")
+    assert "total_stored" in t2._cols
+    np.testing.assert_allclose(t2["total_stored"][:], [1.0, 4.0, 9.0, 16.0, 25.0])
+    assert t2.index("total_stored").kind == "full"
 
 
 # ---------------------------------------------------------------------------

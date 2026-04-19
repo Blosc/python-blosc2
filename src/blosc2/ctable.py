@@ -43,7 +43,24 @@ except ImportError:
 
 import blosc2
 from blosc2.info import InfoReporter, format_nbytes_info
-from blosc2.schema import SchemaSpec
+from blosc2.schema import (
+    SchemaSpec,
+    bool as b2_bool,
+    bytes as b2_bytes,
+    complex64,
+    complex128,
+    float32,
+    float64,
+    int8,
+    int16,
+    int32,
+    int64,
+    string,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+)
 from blosc2.schema_compiler import (
     ColumnConfig,
     CompiledColumn,
@@ -56,6 +73,23 @@ from blosc2.schema_compiler import (
 # ---------------------------------------------------------------------------
 # Index proxy and CTableIndex
 # ---------------------------------------------------------------------------
+
+
+_DTYPE_SPEC_FACTORIES = {
+    np.dtype(np.int8): int8,
+    np.dtype(np.int16): int16,
+    np.dtype(np.int32): int32,
+    np.dtype(np.int64): int64,
+    np.dtype(np.uint8): uint8,
+    np.dtype(np.uint16): uint16,
+    np.dtype(np.uint32): uint32,
+    np.dtype(np.uint64): uint64,
+    np.dtype(np.float32): float32,
+    np.dtype(np.float64): float64,
+    np.dtype(np.complex64): complex64,
+    np.dtype(np.complex128): complex128,
+    np.dtype(np.bool_): b2_bool,
+}
 
 
 class _FakeVlMeta:
@@ -2738,6 +2772,162 @@ class CTable(Generic[RowT]):
             }
             self.col_names.append(name)
             self._col_widths[name] = max(len(name), 15)
+
+    def _require_computed_column(self, name: str) -> dict:
+        """Return metadata for computed column *name* or raise ``KeyError``."""
+        try:
+            return self._computed_cols[name]
+        except KeyError:
+            raise KeyError(
+                f"{name!r} is not a computed column. Computed columns: {list(self._computed_cols)}"
+            ) from None
+
+    @staticmethod
+    def _schema_spec_from_dtype(dtype: np.dtype) -> SchemaSpec:
+        """Build a minimal schema spec for a stored column with *dtype*."""
+        dtype = np.dtype(dtype)
+        spec_factory = _DTYPE_SPEC_FACTORIES.get(dtype)
+        if spec_factory is not None:
+            return spec_factory()
+        if dtype.kind == "U":
+            max_length = max(1, dtype.itemsize // np.dtype("U1").itemsize)
+            return string(max_length=max_length)
+        if dtype.kind == "S":
+            return b2_bytes(max_length=max(1, dtype.itemsize))
+        raise TypeError(f"Cannot materialize a computed column with unsupported dtype {dtype!r}.")
+
+    def _create_empty_stored_column(
+        self,
+        name: str,
+        dtype: np.dtype,
+        *,
+        cparams: dict | None = None,
+    ) -> None:
+        """Create an empty stored column aligned with the table's physical row space."""
+        spec = self._schema_spec_from_dtype(dtype)
+        default = np.array(0, dtype=dtype).item() if dtype.kind not in {"U", "S"} else dtype.type()
+
+        capacity = len(self._valid_rows)
+        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        new_col = self._storage.create_column(
+            name,
+            dtype=dtype,
+            shape=(capacity,),
+            chunks=default_chunks,
+            blocks=default_blocks,
+            cparams=cparams,
+            dparams=None,
+        )
+
+        compiled_col = CompiledColumn(
+            name=name,
+            py_type=spec.python_type,
+            spec=spec,
+            dtype=dtype,
+            default=default,
+            config=ColumnConfig(cparams=cparams, dparams=None, chunks=None, blocks=None),
+            display_width=compute_display_width(spec),
+        )
+        self._cols[name] = new_col
+        self.col_names.append(name)
+        self._col_widths[name] = max(len(name), compiled_col.display_width)
+
+        new_columns = self._schema.columns + [compiled_col]
+        self._schema = CompiledSchema(
+            row_cls=self._schema.row_cls,
+            columns=new_columns,
+            columns_by_name={**self._schema.columns_by_name, name: compiled_col},
+        )
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(self._schema_dict_with_computed())
+
+    def _fill_stored_column_from_computed(
+        self,
+        target_name: str,
+        computed_name: str,
+        *,
+        dtype: np.dtype,
+    ) -> None:
+        """Evaluate computed column *computed_name* into stored column *target_name*."""
+        cc = self._require_computed_column(computed_name)
+        operands = {f"o{i}": self._cols[dep] for i, dep in enumerate(cc["col_deps"])}
+        lazy = blosc2.lazyexpr(cc["expression"], operands)
+        capacity = len(self._valid_rows)
+        step = int(self._valid_rows.chunks[0]) if self._valid_rows.chunks else 65536
+
+        for start in range(0, capacity, step):
+            stop = min(start + step, capacity)
+            values = lazy[start:stop]
+            if isinstance(values, blosc2.NDArray):
+                values = values[:]
+            try:
+                values = np.asarray(values, dtype=dtype)
+            except (TypeError, ValueError) as exc:
+                raise TypeError(f"Cannot coerce computed values to dtype {dtype!r}: {exc}") from exc
+            if values.ndim != 1:
+                raise TypeError(
+                    f"Computed column {computed_name!r} produced {values.ndim}-D values; expected 1-D slices."
+                )
+            if len(values) != stop - start:
+                raise ValueError(
+                    f"Computed column {computed_name!r} produced {len(values)} values for slice "
+                    f"[{start}:{stop}], expected {stop - start}."
+                )
+            self._cols[target_name][start:stop] = values
+
+    def materialize_computed_column(
+        self,
+        name: str,
+        *,
+        new_name: str | None = None,
+        dtype: np.dtype | None = None,
+        cparams: dict | blosc2.CParams | None = None,
+    ) -> None:
+        """Materialize a computed column into a new stored snapshot column.
+
+        Parameters
+        ----------
+        name:
+            Existing computed column to materialize.
+        new_name:
+            Name of the new stored column. Defaults to ``f"{name}_stored"``.
+        dtype:
+            Optional target dtype for the stored column. Defaults to the
+            computed column dtype.
+        cparams:
+            Optional compression parameters for the new stored column.
+
+        Raises
+        ------
+        ValueError
+            If called on a view, on a read-only table, or if the target name
+            collides with an existing stored or computed column.
+        KeyError
+            If *name* is not a computed column.
+        TypeError
+            If *dtype* is incompatible with the computed values.
+        """
+        if self.base is not None:
+            raise ValueError("Cannot materialize a computed column from a view.")
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
+
+        cc = self._require_computed_column(name)
+        target_name = new_name or f"{name}_stored"
+        _validate_column_name(target_name)
+        if target_name in self._cols:
+            raise ValueError(f"A stored column named {target_name!r} already exists.")
+        if target_name in self._computed_cols:
+            raise ValueError(f"A computed column named {target_name!r} already exists.")
+        target_dtype = np.dtype(dtype) if dtype is not None else np.dtype(cc["dtype"])
+
+        self._create_empty_stored_column(target_name, target_dtype, cparams=cparams)
+        try:
+            self._fill_stored_column_from_computed(target_name, name, dtype=target_dtype)
+        except Exception:
+            with contextlib.suppress(Exception):
+                self.drop_column(target_name)
+            raise
 
     def add_computed_column(
         self,
