@@ -14,6 +14,12 @@
 #   - auto-update    (reflect appended / deleted rows without any extra step)
 #   - participate in display, filtering, sorting, aggregates, and export
 #   - survive save / load / open round-trips for persistent tables
+#
+# Materialized computed columns:
+#   - are normal stored snapshot columns created from a computed column
+#   - can be indexed like any other stored column
+#   - auto-fill omitted values on future append()/extend() calls
+#   - do not retroactively refresh old rows if source columns are edited
 
 import shutil
 import tempfile
@@ -162,7 +168,33 @@ print(f"  New portfolio market value : {t['market_value'].sum():>12,.2f}")
 print(f"  New total net value        : {t['net_value'].sum():>12,.2f}")
 
 # ---------------------------------------------------------------------------
-# 9. Auto-update after delete
+# 9. Materialize a computed column into stored data
+# ---------------------------------------------------------------------------
+
+mt = blosc2.CTable(Trade, new_data=TRADES)
+mt.add_computed_column("market_value", lambda c: c["price"] * c["shares"])
+mt.materialize_computed_column("market_value", new_name="market_value_stored")
+mt.create_index("market_value_stored", kind=blosc2.IndexKind.FULL)
+
+print("\nMaterialized stored column values:")
+print(mt["market_value_stored"][:5])
+print(f"Index kind on materialized column: {mt.index('market_value_stored').kind}")
+
+# append()/extend() can omit the materialized stored column; it will be auto-filled
+mt.append(("IBM", 170.0, 20, 0.10))
+mt.extend([
+    ("ORCL", 125.0, 40, 0.10),
+    ("SAP", 198.0, 15, 0.08),
+])
+print("After append/extend auto-fill on materialized column:")
+print(mt.select(["ticker", "market_value_stored"]).tail(3))
+
+# Explicit values still win if you provide them yourself
+mt.append({"ticker": "ADBE", "price": 450.0, "shares": 2, "fee_pct": 0.10, "market_value_stored": 999.0})
+print(f"Explicit override for ADBE stored market value: {mt['market_value_stored'][-1]}")
+
+# ---------------------------------------------------------------------------
+# 10. Auto-update after delete
 # ---------------------------------------------------------------------------
 
 mv_before = t["market_value"].sum()
@@ -171,7 +203,7 @@ mv_after = t["market_value"].sum()
 print(f"\nAfter removing AAPL: portfolio dropped by {mv_before - mv_after:,.2f}")
 
 # ---------------------------------------------------------------------------
-# 10. cbytes / nbytes are unchanged (computed columns use no storage)
+# 11. cbytes / nbytes are unchanged (computed columns use no storage)
 # ---------------------------------------------------------------------------
 
 t2 = blosc2.CTable(Trade, new_data=TRADES)  # fresh copy without computed cols
@@ -185,7 +217,7 @@ print(f"\nStorage with 0 computed cols : {t2.cbytes:,} B compressed")
 print(f"Storage with 2 computed cols : {t3.cbytes:,} B compressed  (identical ✓)")
 
 # ---------------------------------------------------------------------------
-# 11. Write guard
+# 12. Write guard
 # ---------------------------------------------------------------------------
 
 try:
@@ -194,7 +226,7 @@ except ValueError as exc:
     print(f"\nWrite guard : {exc}")
 
 # ---------------------------------------------------------------------------
-# 12. Persistence: save → load / open
+# 13. Persistence: save → load / open
 # ---------------------------------------------------------------------------
 
 tmpdir = tempfile.mkdtemp(prefix="blosc2_computed_")
@@ -205,6 +237,7 @@ try:
     pt = blosc2.CTable(Trade, new_data=TRADES)
     pt.add_computed_column("market_value", lambda c: c["price"] * c["shares"])
     pt.add_computed_column("net_value", "price * shares * (1.0 - fee_pct / 100.0)")
+    pt.materialize_computed_column("market_value", new_name="market_value_stored")
     pt.save(path, overwrite=True)
     print(f"\nSaved to '{path}'")
 
@@ -212,18 +245,21 @@ try:
     loaded = blosc2.CTable.load(path)
     print(f"Loaded  : {len(loaded)} rows, computed cols = {list(loaded.computed_columns)}")
     assert np.allclose(loaded["market_value"][:], mv)
+    print(f"  materialized stored cols present  : {'market_value_stored' in loaded._cols}")
 
-    # CTable.open() — memory-mapped; computed columns are also restored
-    opened = blosc2.CTable.open(path, mode="r")
+    # CTable.open() — memory-mapped; computed columns and materialized metadata are restored
+    opened = blosc2.CTable.open(path, mode="a")
     print(f"Opened  : {len(opened)} rows, computed cols = {list(opened.computed_columns)}")
     print(f"  max market_value via opened table : {opened['market_value'].max():,.2f}")
+    opened.append(("INTC", 31.0, 300, 0.10))
+    print(f"  auto-filled materialized value on reopen : {opened['market_value_stored'][-1]:,.2f}")
 
 finally:
     shutil.rmtree(tmpdir)
     print("Temporary files removed.")
 
 # ---------------------------------------------------------------------------
-# 13. drop_computed_column()
+# 14. drop_computed_column()
 # ---------------------------------------------------------------------------
 
 t3.drop_computed_column("market_value")

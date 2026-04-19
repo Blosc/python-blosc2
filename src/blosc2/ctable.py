@@ -1274,6 +1274,7 @@ class CTable(Generic[RowT]):
         self._table_dparams = dparams
         self._cols: dict[str, blosc2.NDArray] = {}
         self._computed_cols: dict[str, dict] = {}  # virtual/computed columns
+        self._materialized_cols: dict[str, dict] = {}  # stored columns auto-filled from expressions
         self._col_widths: dict[str, int] = {}
         self.col_names: list[str] = []
         self.row = _RowIndexer(self)
@@ -1316,9 +1317,11 @@ class CTable(Generic[RowT]):
                 self._col_widths[name] = max(len(name), cc.display_width)
             self._n_rows = int(blosc2.count_nonzero(self._valid_rows))
             self._last_pos = None  # resolve lazily on first write
-            # ---- Restore computed columns (if any) ----
+            # ---- Restore computed/materialized column metadata (if any) ----
             self._computed_cols = {}
+            self._materialized_cols = {}
             self._load_computed_cols_from_schema(schema_dict)
+            self._load_materialized_cols_from_schema(schema_dict)
         else:
             # ---- Create new table ----
             if storage.is_read_only():
@@ -1416,7 +1419,7 @@ class CTable(Generic[RowT]):
         - dataclass     → ``dataclasses.asdict``
         - np.void / structured scalar → field-name access
         """
-        stored = self._stored_col_names
+        stored = self._append_input_col_names
         if isinstance(data, dict):
             return data
         if isinstance(data, (list, tuple)):
@@ -1620,7 +1623,9 @@ class CTable(Generic[RowT]):
         obj._n_rows = int(blosc2.count_nonzero(obj._valid_rows))
         obj._last_pos = None  # resolve lazily on first write
         obj._computed_cols = {}
+        obj._materialized_cols = {}
         obj._load_computed_cols_from_schema(schema_dict)
+        obj._load_materialized_cols_from_schema(schema_dict)
         return obj
 
     def save(self, urlpath: str, *, overwrite: bool = False) -> None:
@@ -1775,7 +1780,9 @@ class CTable(Generic[RowT]):
         obj._n_rows = n_live
         obj._last_pos = None  # resolve lazily on first write
         obj._computed_cols = {}
+        obj._materialized_cols = {}
         obj._load_computed_cols_from_schema(schema_dict)
+        obj._load_materialized_cols_from_schema(schema_dict)
         return obj
 
     @classmethod
@@ -1791,6 +1798,7 @@ class CTable(Generic[RowT]):
         obj._schema = parent._schema
         obj._cols = parent._cols  # shared — views cannot change row structure
         obj._computed_cols = parent._computed_cols  # shared — LazyExpr refs remain valid
+        obj._materialized_cols = parent._materialized_cols
         obj._col_widths = parent._col_widths
         obj.col_names = parent.col_names
         obj.row = _RowIndexer(obj)
@@ -1932,6 +1940,7 @@ class CTable(Generic[RowT]):
         # Stored columns — same NDArray objects, no copy
         obj._cols = {name: self._cols[name] for name in cols if name in self._cols}
         obj.col_names = list(cols)
+        obj._materialized_cols = {name: dict(self._materialized_cols[name]) for name in cols if name in self._materialized_cols}
 
         # Computed columns — share the same definitions (LazyExpr refs remain valid)
         obj._computed_cols = {name: self._computed_cols[name] for name in cols if name in self._computed_cols}
@@ -2269,6 +2278,7 @@ class CTable(Generic[RowT]):
         obj.auto_compact = False
         obj.base = None
         obj._computed_cols = {}  # from_arrow creates no computed columns
+        obj._materialized_cols = {}
         obj._valid_rows = new_valid
         obj._n_rows = 0
         obj._last_pos = 0
@@ -2437,6 +2447,7 @@ class CTable(Generic[RowT]):
         obj.auto_compact = False
         obj.base = None
         obj._computed_cols = {}  # from_csv creates no computed columns
+        obj._materialized_cols = {}
         obj._valid_rows = new_valid
         obj._n_rows = 0
         obj._last_pos = 0
@@ -2581,6 +2592,7 @@ class CTable(Generic[RowT]):
         if isinstance(self._storage, FileTableStorage):
             self._storage.delete_column(name)
 
+        self._materialized_cols.pop(name, None)
         del self._cols[name]
         del self._col_widths[name]
         self.col_names.remove(name)
@@ -2675,6 +2687,8 @@ class CTable(Generic[RowT]):
             columns=new_columns,
             columns_by_name={c.name: c for c in new_columns},
         )
+        if old in self._materialized_cols:
+            self._materialized_cols[new] = self._materialized_cols.pop(old)
         if isinstance(self._storage, FileTableStorage):
             self._storage.save_schema(self._schema_dict_with_computed())
         if rebuild_kwargs is not None:
@@ -2688,6 +2702,11 @@ class CTable(Generic[RowT]):
     def _stored_col_names(self) -> list[str]:
         """Column names backed by physical NDArrays (excludes computed columns)."""
         return [n for n in self.col_names if n not in self._computed_cols]
+
+    @property
+    def _append_input_col_names(self) -> list[str]:
+        """Stored columns that callers must normally provide on insert."""
+        return [n for n in self._stored_col_names if n not in self._materialized_cols]
 
     @property
     def computed_columns(self) -> dict[str, dict]:
@@ -2735,9 +2754,7 @@ class CTable(Generic[RowT]):
         return self._cols[name][positions]
 
     def _schema_dict_with_computed(self) -> dict:
-        """Return the schema dict (from :func:`schema_to_dict`) extended with
-        computed-column metadata so the full table definition can be persisted.
-        """
+        """Return the schema dict extended with computed/materialized metadata."""
         d = schema_to_dict(self._schema)
         if self._computed_cols:
             d["computed_columns"] = [
@@ -2748,6 +2765,17 @@ class CTable(Generic[RowT]):
                     "dtype": str(cc["dtype"]),
                 }
                 for name, cc in self._computed_cols.items()
+            ]
+        if self._materialized_cols:
+            d["materialized_columns"] = [
+                {
+                    "name": name,
+                    "computed_column": meta["computed_column"],
+                    "expression": meta["expression"],
+                    "col_deps": meta["col_deps"],
+                    "dtype": str(meta["dtype"]),
+                }
+                for name, meta in self._materialized_cols.items()
             ]
         return d
 
@@ -2773,6 +2801,16 @@ class CTable(Generic[RowT]):
             self.col_names.append(name)
             self._col_widths[name] = max(len(name), 15)
 
+    def _load_materialized_cols_from_schema(self, schema_dict: dict) -> None:
+        """Reconstruct ``_materialized_cols`` from persisted metadata."""
+        for meta in schema_dict.get("materialized_columns", []):
+            self._materialized_cols[meta["name"]] = {
+                "computed_column": meta["computed_column"],
+                "expression": meta["expression"],
+                "col_deps": list(meta["col_deps"]),
+                "dtype": np.dtype(meta["dtype"]),
+            }
+
     def _require_computed_column(self, name: str) -> dict:
         """Return metadata for computed column *name* or raise ``KeyError``."""
         try:
@@ -2781,6 +2819,48 @@ class CTable(Generic[RowT]):
             raise KeyError(
                 f"{name!r} is not a computed column. Computed columns: {list(self._computed_cols)}"
             ) from None
+
+    def _autofill_materialized_row_values(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Fill omitted materialized-column values for a single inserted row."""
+        row = dict(row)
+        for name, meta in self._materialized_cols.items():
+            if name in row:
+                continue
+            missing = [dep for dep in meta["col_deps"] if dep not in row]
+            if missing:
+                raise ValueError(
+                    f"Cannot auto-fill materialized column {name!r}: missing dependency columns {missing!r}."
+                )
+            operands = {f"o{i}": np.asarray([row[dep]]) for i, dep in enumerate(meta["col_deps"])}
+            values = blosc2.lazyexpr(meta["expression"], operands)[:]
+            row[name] = np.asarray(values, dtype=meta["dtype"])[0]
+        return row
+
+    def _autofill_materialized_batch_columns(
+        self, raw_columns: dict[str, Any], row_count: int, *, provided_names: set[str]
+    ) -> dict[str, Any]:
+        """Fill omitted materialized-column arrays for batch inserts."""
+        raw_columns = dict(raw_columns)
+        for name, meta in self._materialized_cols.items():
+            if name in provided_names or name in raw_columns:
+                continue
+            missing = [dep for dep in meta["col_deps"] if dep not in raw_columns]
+            if missing:
+                raise ValueError(
+                    f"Cannot auto-fill materialized column {name!r}: missing dependency columns {missing!r}."
+                )
+            operands = {
+                f"o{i}": blosc2.asarray(raw_columns[dep], dtype=self._cols[dep].dtype)
+                for i, dep in enumerate(meta["col_deps"])
+            }
+            values = blosc2.lazyexpr(meta["expression"], operands)[:]
+            values = np.asarray(values, dtype=meta["dtype"])
+            if len(values) != row_count:
+                raise ValueError(
+                    f"Materialized column {name!r} produced {len(values)} values, expected {row_count}."
+                )
+            raw_columns[name] = values
+        return raw_columns
 
     @staticmethod
     def _schema_spec_from_dtype(dtype: np.dtype) -> SchemaSpec:
@@ -2922,6 +3002,14 @@ class CTable(Generic[RowT]):
         target_dtype = np.dtype(dtype) if dtype is not None else np.dtype(cc["dtype"])
 
         self._create_empty_stored_column(target_name, target_dtype, cparams=cparams)
+        self._materialized_cols[target_name] = {
+            "computed_column": name,
+            "expression": cc["expression"],
+            "col_deps": list(cc["col_deps"]),
+            "dtype": target_dtype,
+        }
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(self._schema_dict_with_computed())
         try:
             self._fill_stored_column_from_computed(target_name, name, dtype=target_dtype)
         except Exception:
@@ -3269,6 +3357,7 @@ class CTable(Generic[RowT]):
         obj._cols = new_cols
         obj._col_widths = self._col_widths.copy()
         obj.col_names = [col.name for col in self._schema.columns]
+        obj._materialized_cols = {name: dict(meta) for name, meta in self._materialized_cols.items()}
         # Rebuild computed columns with the new NDArray objects as operands
         obj._computed_cols = {}
         for cc_name, cc in self._computed_cols.items():
@@ -4032,6 +4121,7 @@ class CTable(Generic[RowT]):
 
         # Normalize → validate → coerce
         row = self._normalize_row_input(data)
+        row = self._autofill_materialized_row_values(row)
         if self._validate:
             from blosc2.schema_validation import validate_row
 
@@ -4086,34 +4176,42 @@ class CTable(Generic[RowT]):
         start_pos = self._resolve_last_pos()
 
         current_col_names = self._stored_col_names  # skip computed columns
-        columns_to_insert = []
+        input_col_names = self._append_input_col_names
         new_nrows = 0
+        provided_names: set[str] = set()
 
         if hasattr(data, "_cols") and hasattr(data, "_n_rows"):
-            for name in current_col_names:
-                col = data._cols[name][: data._n_rows]
-                columns_to_insert.append(col)
             new_nrows = data._n_rows
+            raw_columns = {}
+            for name in current_col_names:
+                if name in data._cols:
+                    raw_columns[name] = data._cols[name][: data._n_rows]
+                    provided_names.add(name)
         else:
             if isinstance(data, np.ndarray) and data.dtype.names is not None:
-                for name in current_col_names:
-                    columns_to_insert.append(data[name])
                 new_nrows = len(data)
+                raw_columns = {name: data[name] for name in data.dtype.names if name in current_col_names}
+                provided_names = set(raw_columns)
             else:
-                columns_to_insert = list(zip(*data, strict=False))
                 new_nrows = len(data)
+                batch_columns = list(zip(*data, strict=False))
+                raw_columns = {
+                    input_col_names[i]: batch_columns[i] for i in range(min(len(input_col_names), len(batch_columns)))
+                }
+                provided_names = set(raw_columns)
+
+        raw_columns = self._autofill_materialized_batch_columns(raw_columns, new_nrows, provided_names=provided_names)
 
         # Validate constraints column-by-column before writing
         if do_validate:
             from blosc2.schema_vectorized import validate_column_batch
 
-            raw_columns = {current_col_names[i]: columns_to_insert[i] for i in range(len(current_col_names))}
             validate_column_batch(self._schema, raw_columns)
 
         processed_cols = []
-        for i, raw_col in enumerate(columns_to_insert):
-            target_dtype = self._cols[current_col_names[i]].dtype
-            b2_arr = blosc2.asarray(raw_col, dtype=target_dtype)
+        for name in current_col_names:
+            target_dtype = self._cols[name].dtype
+            b2_arr = blosc2.asarray(raw_columns[name], dtype=target_dtype)
             processed_cols.append(b2_arr)
 
         end_pos = start_pos + new_nrows

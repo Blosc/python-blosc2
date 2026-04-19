@@ -476,6 +476,39 @@ def test_materialize_computed_column_indexing_workflow():
 
 
 
+def test_materialize_computed_column_append_autofill():
+    t = _make_invoice_table(2)
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+    t.materialize_computed_column("total", new_name="total_stored")
+
+    t.append((3.0, 3, 0.1))
+
+    np.testing.assert_allclose(t["total_stored"][:], [1.0, 4.0, 9.0])
+
+
+
+def test_materialize_computed_column_extend_autofill():
+    t = _make_invoice_table(2)
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+    t.materialize_computed_column("total", new_name="total_stored")
+
+    t.extend([(3.0, 3, 0.1), (4.0, 4, 0.1)])
+
+    np.testing.assert_allclose(t["total_stored"][:], [1.0, 4.0, 9.0, 16.0])
+
+
+
+def test_materialize_computed_column_explicit_append_value_wins():
+    t = _make_invoice_table(2)
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+    t.materialize_computed_column("total", new_name="total_stored")
+
+    t.append({"price": 3.0, "qty": 3, "tax": 0.1, "total_stored": 123.0})
+
+    np.testing.assert_allclose(t["total_stored"][:], [1.0, 4.0, 123.0])
+
+
+
 def test_materialize_computed_column_name_collision():
     t = _make_invoice_table()
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
@@ -713,6 +746,19 @@ def test_materialize_computed_column_open_roundtrip(tmp_path):
     assert "total_stored" in t2._cols
     np.testing.assert_allclose(t2["total_stored"][:], [1.0, 4.0, 9.0, 16.0, 25.0])
     assert t2.index("total_stored").kind == "full"
+
+
+
+def test_materialize_computed_column_open_append_autofill(tmp_path):
+    path = str(tmp_path / "tbl")
+    t = CTable(Invoice, [(1.0, 1, 0.1), (2.0, 2, 0.1)], urlpath=path, mode="w")
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+    t.materialize_computed_column("total", new_name="total_stored")
+
+    t2 = CTable.open(path, mode="a")
+    t2.append((3.0, 3, 0.1))
+
+    np.testing.assert_allclose(t2["total_stored"][:], [1.0, 4.0, 9.0])
 
 
 # ---------------------------------------------------------------------------

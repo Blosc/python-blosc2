@@ -124,12 +124,19 @@ columns.  Computed columns are read-only, use no extra storage, participate in
 display, filtering, sorting, and aggregates, and are persisted across
 :meth:`CTable.save`, :meth:`CTable.load`, and :meth:`CTable.open`.
 
+When a computed result should become a normal stored column, use
+:meth:`CTable.materialize_computed_column`.  The materialized column is a stored
+snapshot that can be indexed like any other stored column.  New rows inserted
+later via :meth:`CTable.append` or :meth:`CTable.extend` auto-fill omitted
+materialized-column values from the recorded expression metadata.
+
 .. autosummary::
 
     CTable.delete
     CTable.compact
     CTable.add_column
     CTable.add_computed_column
+    CTable.materialize_computed_column
     CTable.drop_computed_column
     CTable.drop_column
     CTable.rename_column
@@ -138,6 +145,7 @@ display, filtering, sorting, and aggregates, and are persisted across
 .. automethod:: CTable.compact
 .. automethod:: CTable.add_column
 .. automethod:: CTable.add_computed_column
+.. automethod:: CTable.materialize_computed_column
 .. automethod:: CTable.drop_computed_column
 .. automethod:: CTable.drop_column
 .. automethod:: CTable.rename_column
