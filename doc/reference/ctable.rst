@@ -55,6 +55,7 @@ Attributes
 .. autosummary::
 
     CTable.col_names
+    CTable.computed_columns
     CTable.nrows
     CTable.ncols
     CTable.cbytes
@@ -62,6 +63,7 @@ Attributes
     CTable.schema
     CTable.base
 
+.. autoproperty:: CTable.computed_columns
 .. autoproperty:: CTable.nrows
 .. autoproperty:: CTable.ncols
 .. autoproperty:: CTable.cbytes
@@ -116,17 +118,27 @@ Aggregates & statistics
 Mutations
 ---------
 
+In addition to physical schema changes such as :meth:`CTable.add_column`,
+CTables can host **computed columns** backed by a lazy expression over stored
+columns.  Computed columns are read-only, use no extra storage, participate in
+display, filtering, sorting, and aggregates, and are persisted across
+:meth:`CTable.save`, :meth:`CTable.load`, and :meth:`CTable.open`.
+
 .. autosummary::
 
     CTable.delete
     CTable.compact
     CTable.add_column
+    CTable.add_computed_column
+    CTable.drop_computed_column
     CTable.drop_column
     CTable.rename_column
 
 .. automethod:: CTable.delete
 .. automethod:: CTable.compact
 .. automethod:: CTable.add_column
+.. automethod:: CTable.add_computed_column
+.. automethod:: CTable.drop_computed_column
 .. automethod:: CTable.drop_column
 .. automethod:: CTable.rename_column
 
@@ -206,11 +218,11 @@ Data access
 
 .. autosummary::
 
-    Column.to_numpy
+    Column.view
     Column.iter_chunks
     Column.assign
 
-.. automethod:: Column.to_numpy
+.. autoproperty:: Column.view
 .. automethod:: Column.iter_chunks
 .. automethod:: Column.assign
 
