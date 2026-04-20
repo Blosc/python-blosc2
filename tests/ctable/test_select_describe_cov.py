@@ -62,8 +62,8 @@ def test_select_row_count_unchanged():
 def test_select_data_correct():
     t = CTable(Row, new_data=DATA10)
     v = t.select(["id", "score"])
-    np.testing.assert_array_equal(v["id"].to_numpy(), t["id"].to_numpy())
-    np.testing.assert_array_equal(v["score"].to_numpy(), t["score"].to_numpy())
+    np.testing.assert_array_equal(v["id"][:], t["id"][:])
+    np.testing.assert_array_equal(v["score"][:], t["score"][:])
 
 
 def test_select_base_is_parent():
@@ -84,7 +84,7 @@ def test_select_combined_with_deletions():
     t.delete([0, 1])
     v = t.select(["id", "score"])
     assert len(v) == 8
-    np.testing.assert_array_equal(v["id"].to_numpy(), t["id"].to_numpy())
+    np.testing.assert_array_equal(v["id"][:], t["id"][:])
 
 
 def test_select_schema_updated():
@@ -204,8 +204,8 @@ def test_cov_symmetric():
 
 def test_cov_diagonal_equals_variance():
     t = CTable(Row, new_data=DATA10)
-    ids = t["id"].to_numpy().astype(np.float64)
-    scores = t["score"].to_numpy().astype(np.float64)
+    ids = t["id"][:].astype(np.float64)
+    scores = t["score"][:].astype(np.float64)
     c = t.select(["id", "score"]).cov()
     assert c[0, 0] == pytest.approx(np.var(ids, ddof=1))
     assert c[1, 1] == pytest.approx(np.var(scores, ddof=1))
@@ -215,7 +215,7 @@ def test_cov_single_column_is_scalar():
     t = CTable(Row, new_data=DATA10)
     c = t.select(["id"]).cov()
     assert c.shape == (1, 1)
-    ids = t["id"].to_numpy().astype(np.float64)
+    ids = t["id"][:].astype(np.float64)
     assert c[0, 0] == pytest.approx(np.var(ids, ddof=1))
 
 
@@ -229,7 +229,7 @@ def test_cov_bool_column_cast_to_int():
 def test_cov_skips_deleted_rows():
     t = CTable(Row, new_data=DATA10)
     t.delete([0])  # remove id=0
-    ids = t["id"].to_numpy().astype(np.float64)
+    ids = t["id"][:].astype(np.float64)
     c = t.select(["id"]).cov()
     assert c[0, 0] == pytest.approx(np.var(ids, ddof=1))
 

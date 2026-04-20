@@ -140,28 +140,28 @@ def test_from_arrow_int_values():
     t = CTable(Row, new_data=DATA10)
     at = t.to_arrow()
     t2 = CTable.from_arrow(at)
-    np.testing.assert_array_equal(t2["id"].to_numpy(), t["id"].to_numpy())
+    np.testing.assert_array_equal(t2["id"][:], t["id"][:])
 
 
 def test_from_arrow_float_values():
     t = CTable(Row, new_data=DATA10)
     at = t.to_arrow()
     t2 = CTable.from_arrow(at)
-    np.testing.assert_allclose(t2["score"].to_numpy(), t["score"].to_numpy())
+    np.testing.assert_allclose(t2["score"][:], t["score"][:])
 
 
 def test_from_arrow_bool_values():
     t = CTable(Row, new_data=DATA10)
     at = t.to_arrow()
     t2 = CTable.from_arrow(at)
-    np.testing.assert_array_equal(t2["active"].to_numpy(), t["active"].to_numpy())
+    np.testing.assert_array_equal(t2["active"][:], t["active"][:])
 
 
 def test_from_arrow_string_values():
     t = CTable(Row, new_data=DATA10)
     at = t.to_arrow()
     t2 = CTable.from_arrow(at)
-    assert t2["label"].to_numpy().tolist() == t["label"].to_numpy().tolist()
+    assert t2["label"][:].tolist() == t["label"][:].tolist()
 
 
 def test_from_arrow_empty_table():
@@ -182,8 +182,8 @@ def test_from_arrow_roundtrip():
     t = CTable(Row, new_data=DATA10)
     t2 = CTable.from_arrow(t.to_arrow())
     for name in ["id", "score", "active"]:
-        np.testing.assert_array_equal(t2[name].to_numpy(), t[name].to_numpy())
-    assert t2["label"].to_numpy().tolist() == t["label"].to_numpy().tolist()
+        np.testing.assert_array_equal(t2[name][:], t[name][:])
+    assert t2["label"][:].tolist() == t["label"][:].tolist()
 
 
 def test_from_arrow_all_numeric_types():

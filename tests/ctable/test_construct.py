@@ -49,7 +49,7 @@ def assert_table_equals_data(table: CTable, expected_data: list):
     # Transpose: expected_data is list-of-rows → list-of-columns
     expected_cols = list(zip(*expected_data, strict=False))
     for col_idx, col_name in enumerate(col_names):
-        actual = table[col_name].to_numpy()
+        actual = table[col_name][:]
         expected = expected_cols[col_idx]
         if isinstance(expected[0], (float, complex)):
             np.testing.assert_allclose(actual, expected, err_msg=f"col {col_name}")

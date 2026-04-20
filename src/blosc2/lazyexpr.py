@@ -2781,7 +2781,7 @@ def _eval_zero_input_dsl_if_needed(
     return True, full_res
 
 
-def chunked_eval(  # noqa: C901
+def chunked_eval(
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=(), **kwargs
 ):
     """
@@ -3163,7 +3163,7 @@ class LazyExpr(LazyArray):
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"(o0 {op} o1)"
 
-    def update_expr(self, new_op):  # noqa: C901
+    def update_expr(self, new_op):
         prev_flag = blosc2._disable_overloaded_equal
         # We use a lot of the original NDArray.__eq__ as 'is', so deactivate the overloaded one
         blosc2._disable_overloaded_equal = True

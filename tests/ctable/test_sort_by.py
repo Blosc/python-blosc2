@@ -46,32 +46,32 @@ DATA = [
 def test_sort_single_col_ascending():
     t = CTable(Row, new_data=DATA)
     s = t.sort_by("id")
-    np.testing.assert_array_equal(s["id"].to_numpy(), [0, 1, 2, 3, 4])
+    np.testing.assert_array_equal(s["id"][:], [0, 1, 2, 3, 4])
 
 
 def test_sort_single_col_descending():
     t = CTable(Row, new_data=DATA)
     s = t.sort_by("score", ascending=False)
-    np.testing.assert_array_equal(s["score"].to_numpy(), [90.0, 80.0, 70.0, 50.0, 50.0])
+    np.testing.assert_array_equal(s["score"][:], [90.0, 80.0, 70.0, 50.0, 50.0])
 
 
 def test_sort_bool_column():
     t = CTable(Row, new_data=DATA)
     s = t.sort_by("active")
     # False < True → False rows first
-    assert list(s["active"].to_numpy()) == [False, False, True, True, True]
+    assert list(s["active"][:]) == [False, False, True, True, True]
 
 
 def test_sort_string_column():
     t = CTable(StrRow, new_data=[("charlie", 3), ("alice", 1), ("dave", 4), ("bob", 2)])
     s = t.sort_by("label")
-    assert list(s["label"].to_numpy()) == ["alice", "bob", "charlie", "dave"]
+    assert list(s["label"][:]) == ["alice", "bob", "charlie", "dave"]
 
 
 def test_sort_string_column_descending():
     t = CTable(StrRow, new_data=[("charlie", 3), ("alice", 1), ("dave", 4), ("bob", 2)])
     s = t.sort_by("label", ascending=False)
-    assert list(s["label"].to_numpy()) == ["dave", "charlie", "bob", "alice"]
+    assert list(s["label"][:]) == ["dave", "charlie", "bob", "alice"]
 
 
 # ===========================================================================
@@ -82,8 +82,8 @@ def test_sort_string_column_descending():
 def test_sort_multi_col_both_asc():
     t = CTable(Row, new_data=DATA)
     s = t.sort_by(["score", "id"], ascending=[True, True])
-    scores = s["score"].to_numpy()
-    ids = s["id"].to_numpy()
+    scores = s["score"][:]
+    ids = s["id"][:]
     # score asc; tiebreak: id asc (both 50.0 rows → id 1 before id 2)
     assert scores[0] == pytest.approx(50.0)
     assert ids[0] == 1
@@ -94,8 +94,8 @@ def test_sort_multi_col_both_asc():
 def test_sort_multi_col_mixed():
     t = CTable(Row, new_data=DATA)
     s = t.sort_by(["score", "id"], ascending=[True, False])
-    scores = s["score"].to_numpy()
-    ids = s["id"].to_numpy()
+    scores = s["score"][:]
+    ids = s["id"][:]
     # score asc; tiebreak: id desc (both 50.0 rows → id 2 before id 1)
     assert scores[0] == pytest.approx(50.0)
     assert ids[0] == 2
@@ -107,7 +107,7 @@ def test_sort_multi_col_ascending_list_notation():
     """Passing ascending=True (single bool) applies to all keys."""
     t = CTable(Row, new_data=DATA)
     s = t.sort_by(["score", "id"], ascending=True)
-    np.testing.assert_array_equal(s["id"].to_numpy()[:2], [1, 2])
+    np.testing.assert_array_equal(s["id"][:][:2], [1, 2])
 
 
 # ===========================================================================
@@ -117,9 +117,9 @@ def test_sort_multi_col_ascending_list_notation():
 
 def test_sort_does_not_modify_original():
     t = CTable(Row, new_data=DATA)
-    original_ids = t["id"].to_numpy().copy()
+    original_ids = t["id"][:].copy()
     _ = t.sort_by("id")
-    np.testing.assert_array_equal(t["id"].to_numpy(), original_ids)
+    np.testing.assert_array_equal(t["id"][:], original_ids)
 
 
 def test_sort_returns_new_table():
@@ -142,7 +142,7 @@ def test_sort_inplace_returns_self():
 def test_sort_inplace_modifies_table():
     t = CTable(Row, new_data=DATA)
     t.sort_by("id", inplace=True)
-    np.testing.assert_array_equal(t["id"].to_numpy(), [0, 1, 2, 3, 4])
+    np.testing.assert_array_equal(t["id"][:], [0, 1, 2, 3, 4])
 
 
 def test_sort_inplace_descending():
@@ -161,7 +161,7 @@ def test_sort_skips_deleted_rows():
     t = CTable(Row, new_data=DATA)
     t.delete([0])  # delete id=3 (first row)
     s = t.sort_by("id")
-    np.testing.assert_array_equal(s["id"].to_numpy(), [0, 1, 2, 4])
+    np.testing.assert_array_equal(s["id"][:], [0, 1, 2, 4])
     assert len(s) == 4
 
 
@@ -169,7 +169,7 @@ def test_sort_inplace_skips_deleted_rows():
     t = CTable(Row, new_data=DATA)
     t.delete([0, 2])  # delete id=3 and id=4
     t.sort_by("id", inplace=True)
-    np.testing.assert_array_equal(t["id"].to_numpy(), [0, 1, 2])
+    np.testing.assert_array_equal(t["id"][:], [0, 1, 2])
     assert len(t) == 3
 
 
@@ -177,8 +177,8 @@ def test_sort_all_columns_consistent():
     """All columns move together when sorted."""
     t = CTable(Row, new_data=DATA)
     s = t.sort_by("id")
-    ids = s["id"].to_numpy()
-    scores = s["score"].to_numpy()
+    ids = s["id"][:]
+    scores = s["score"][:]
     # Original DATA: id→score mapping: 0→70, 1→50, 2→50, 3→80, 4→90
     expected = {0: 70.0, 1: 50.0, 2: 50.0, 3: 80.0, 4: 90.0}
     for i, v in zip(ids, scores, strict=True):
@@ -206,14 +206,14 @@ def test_sort_already_sorted():
     data = [(i, float(i * 10), True) for i in range(5)]
     t = CTable(Row, new_data=data)
     s = t.sort_by("id")
-    np.testing.assert_array_equal(s["id"].to_numpy(), list(range(5)))
+    np.testing.assert_array_equal(s["id"][:], list(range(5)))
 
 
 def test_sort_reverse_sorted():
     data = [(i, float(i * 10), True) for i in range(5, 0, -1)]
     t = CTable(Row, new_data=data)
     s = t.sort_by("id")
-    np.testing.assert_array_equal(s["id"].to_numpy(), [1, 2, 3, 4, 5])
+    np.testing.assert_array_equal(s["id"][:], [1, 2, 3, 4, 5])
 
 
 # ===========================================================================

@@ -10,11 +10,13 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import dataclasses
 import itertools
 import os
 import pprint
+import re
 import shutil
 import weakref
 from collections.abc import Iterable
@@ -42,7 +44,28 @@ except ImportError:
 
 import blosc2
 from blosc2.info import InfoReporter, format_nbytes_info
-from blosc2.schema import SchemaSpec
+from blosc2.schema import (
+    SchemaSpec,
+    complex64,
+    complex128,
+    float32,
+    float64,
+    int8,
+    int16,
+    int32,
+    int64,
+    string,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+)
+from blosc2.schema import (
+    bool as b2_bool,
+)
+from blosc2.schema import (
+    bytes as b2_bytes,
+)
 from blosc2.schema_compiler import (
     ColumnConfig,
     CompiledColumn,
@@ -55,6 +78,23 @@ from blosc2.schema_compiler import (
 # ---------------------------------------------------------------------------
 # Index proxy and CTableIndex
 # ---------------------------------------------------------------------------
+
+
+_DTYPE_SPEC_FACTORIES = {
+    np.dtype(np.int8): int8,
+    np.dtype(np.int16): int16,
+    np.dtype(np.int32): int32,
+    np.dtype(np.int64): int64,
+    np.dtype(np.uint8): uint8,
+    np.dtype(np.uint16): uint16,
+    np.dtype(np.uint32): uint32,
+    np.dtype(np.uint64): uint64,
+    np.dtype(np.float32): float32,
+    np.dtype(np.float64): float64,
+    np.dtype(np.complex64): complex64,
+    np.dtype(np.complex128): complex128,
+    np.dtype(np.bool_): b2_bool,
+}
 
 
 class _FakeVlMeta:
@@ -104,7 +144,7 @@ class _CTableIndexProxy:
 
 
 class CTableIndex:
-    """A handle on an index attached to a :class:`CTable` column.
+    """A handle on an index attached to a :class:`CTable` target.
 
     Returned by :meth:`CTable.index` and items of :attr:`CTable.indexes`.
     Provides :meth:`drop`, :meth:`rebuild`, and :meth:`compact` convenience
@@ -116,9 +156,12 @@ class CTableIndex:
         self._col_name = col_name
         self._descriptor = descriptor
 
+    def _target_array(self) -> blosc2.NDArray:
+        return self._table._root_table._index_target_array(self._col_name, self._descriptor)
+
     @property
     def col_name(self) -> str:
-        """Column name this index targets."""
+        """Lookup key for this index target."""
         return self._col_name
 
     @property
@@ -141,12 +184,11 @@ class CTableIndex:
         """Total uncompressed size in bytes for this index payload."""
         from blosc2.indexing import _component_nbytes, iter_index_components
 
-        root = self._table._root_table
-        col_arr = root._cols[self._col_name]
+        target_arr = self._target_array()
         descriptor = self._descriptor
         return sum(
-            _component_nbytes(col_arr, descriptor, component)
-            for component in iter_index_components(col_arr, descriptor)
+            _component_nbytes(target_arr, descriptor, component)
+            for component in iter_index_components(target_arr, descriptor)
         )
 
     @property
@@ -154,12 +196,11 @@ class CTableIndex:
         """Total compressed size in bytes for this index payload."""
         from blosc2.indexing import _component_cbytes, iter_index_components
 
-        root = self._table._root_table
-        col_arr = root._cols[self._col_name]
+        target_arr = self._target_array()
         descriptor = self._descriptor
         return sum(
-            _component_cbytes(col_arr, descriptor, component)
-            for component in iter_index_components(col_arr, descriptor)
+            _component_cbytes(target_arr, descriptor, component)
+            for component in iter_index_components(target_arr, descriptor)
         )
 
     @property
@@ -183,12 +224,12 @@ class CTableIndex:
             from blosc2.indexing import iter_index_components
 
             descriptor = self._descriptor
-            col_arr = root._cols[self._col_name]
+            target_arr = self._target_array()
             store = root._storage._open_store()
             nbytes = 0
             cbytes = 0
             try:
-                for component in iter_index_components(col_arr, descriptor):
+                for component in iter_index_components(target_arr, descriptor):
                     if component.path is None:
                         return None
                     key = self._component_store_key(component.path)
@@ -217,20 +258,32 @@ class CTableIndex:
 
     def drop(self) -> None:
         """Drop this index from the owning table."""
-        self._table.drop_index(self._col_name)
+        target = self._descriptor.get("target") or {}
+        if target.get("source") == "expression":
+            self._table.drop_index(expression=target.get("expression"), name=self.name)
+        else:
+            self._table.drop_index(self._col_name)
 
     def rebuild(self) -> CTableIndex:
         """Rebuild this index and return the updated handle."""
+        target = self._descriptor.get("target") or {}
+        if target.get("source") == "expression":
+            return self._table.rebuild_index(expression=target.get("expression"), name=self.name)
         return self._table.rebuild_index(self._col_name)
 
     def compact(self) -> CTableIndex:
         """Compact this index (merge incremental runs) and return the updated handle."""
+        target = self._descriptor.get("target") or {}
+        if target.get("source") == "expression":
+            return self._table.compact_index(expression=target.get("expression"), name=self.name)
         return self._table.compact_index(self._col_name)
 
     def __repr__(self) -> str:
         stale_str = " (stale)" if self.stale else ""
         name_str = f" name={self.name!r}" if self.name else ""
-        return f"<CTableIndex col={self._col_name!r} kind={self.kind!r}{name_str}{stale_str}>"
+        target = self._descriptor.get("target") or {}
+        target_label = self._col_name if target.get("source") != "expression" else target.get("expression")
+        return f"<CTableIndex col={target_label!r} kind={self.kind!r}{name_str}{stale_str}>"
 
 
 class _CTableInfoReporter(InfoReporter):
@@ -397,6 +450,29 @@ def _compile_pydantic_schema(row_cls: type) -> CompiledSchema:
 
 
 # ---------------------------------------------------------------------------
+# ColumnViewIndexer
+# ---------------------------------------------------------------------------
+
+
+class ColumnViewIndexer:
+    """Returned by :attr:`Column.view`; indexing returns a Column sub-view.
+
+    Use ``t.price.view[2:10]`` to obtain a writable logical sub-view for
+    chained operations (``sum()``, ``[:] = values``, …).
+    Use ``t.price[2:10]`` to materialise values as a NumPy array.
+    """
+
+    def __init__(self, column: Column) -> None:
+        self._column = column
+
+    def __getitem__(self, key) -> Column:
+        return self._column._view_from_key(key)
+
+    def __repr__(self) -> str:
+        return f"<ColumnViewIndexer col={self._column._col_name!r}>"
+
+
+# ---------------------------------------------------------------------------
 # Internal row/indexing helpers (unchanged)
 # ---------------------------------------------------------------------------
 
@@ -471,6 +547,9 @@ class _Row:
     def __getitem__(self, col_name: str):
         if self._real_pos is None:
             self._get_real_pos()
+        cc = self._table._computed_cols.get(col_name)
+        if cc is not None:
+            return cc["lazy"][self._real_pos]
         return self._table._cols[col_name][self._real_pos]
 
 
@@ -489,7 +568,15 @@ class Column:
 
     @property
     def _raw_col(self):
+        cc = self._table._computed_cols.get(self._col_name)
+        if cc is not None:
+            return cc["lazy"]
         return self._table._cols[self._col_name]
+
+    @property
+    def is_computed(self) -> bool:
+        """True if this column is a virtual computed column (read-only)."""
+        return self._col_name in self._table._computed_cols
 
     @property
     def _valid_rows(self):
@@ -499,6 +586,19 @@ class Column:
         return (self._table._valid_rows & self._mask).compute()
 
     def __getitem__(self, key: int | slice | list | np.ndarray):
+        """Return values for the given logical index.
+
+        - ``int``              → scalar
+        - ``slice``            → :class:`numpy.ndarray`
+        - ``list / np.ndarray`` → :class:`numpy.ndarray`
+        - ``bool np.ndarray``  → :class:`numpy.ndarray`
+
+        For a writable logical sub-view use :attr:`view`.
+        """
+        return self._values_from_key(key)
+
+    def _values_from_key(self, key):
+        """Materialise values for a logical index key."""
         if isinstance(key, int):
             n_rows = len(self)
             if key < 0:
@@ -509,22 +609,19 @@ class Column:
             return self._raw_col[int(pos_true)]
 
         elif isinstance(key, slice):
-            real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
+            valid = self._valid_rows
+            real_pos = blosc2.where(valid, _arange(len(valid))).compute()
             start, stop, step = key.indices(len(real_pos))
-            mask = blosc2.zeros(len(self._table._valid_rows), dtype=np.bool_)
-            if step == 1:
-                phys_start = real_pos[start]
-                phys_stop = real_pos[stop - 1]
-                mask[phys_start : phys_stop + 1] = True
-            else:
-                lindices = _arange(start, stop, step)
-                phys_indices = real_pos[lindices]
-                mask[phys_indices[:]] = True
-            return Column(self._table, self._col_name, mask=mask)
+            if start >= stop:
+                return np.array([], dtype=self.dtype)
+            selected_pos = real_pos[start:stop:step]  # physical row positions
+            if self.is_computed:
+                lo, hi = int(selected_pos.min()), int(selected_pos.max())
+                chunk = np.asarray(self._raw_col[lo : hi + 1])
+                return chunk[selected_pos - lo]
+            return np.asarray(self._raw_col[selected_pos])
 
         elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
-            # Boolean mask in logical space — same convention as numpy/pandas.
-            # key[i] == True means "include logical row i".
             n_live = len(self)
             if len(key) != n_live:
                 raise IndexError(
@@ -532,18 +629,90 @@ class Column:
                 )
             all_pos = np.where(self._valid_rows[:])[0]
             phys_indices = all_pos[key]
+            if self.is_computed:
+                raw_np = np.asarray(self._raw_col[:])
+                return raw_np[phys_indices]
             return self._raw_col[phys_indices]
 
         elif isinstance(key, (list, tuple, np.ndarray)):
             real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
             phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
+            if self.is_computed:
+                raw_np = np.asarray(self._raw_col[:])
+                return raw_np[phys_indices]
             return self._raw_col[phys_indices]
 
         raise TypeError(f"Invalid index type: {type(key)}")
 
+    def _view_from_key(self, key) -> Column:
+        """Build a Column sub-view for the given logical index key.
+
+        Called by :class:`ColumnViewIndexer`.  Supports slice, boolean mask,
+        and integer list / array keys.  The returned :class:`Column` shares
+        the underlying physical storage and writes through to the table.
+        """
+        if isinstance(key, slice):
+            valid = self._valid_rows
+            real_pos = blosc2.where(valid, _arange(len(valid))).compute()
+            start, stop, step = key.indices(len(real_pos))
+            mask = blosc2.zeros(len(self._table._valid_rows), dtype=np.bool_)
+            if start < stop:
+                if step == 1:
+                    phys_start = real_pos[start]
+                    phys_stop = real_pos[stop - 1]
+                    mask[phys_start : phys_stop + 1] = True
+                else:
+                    lindices = _arange(start, stop, step)
+                    phys_indices = real_pos[lindices]
+                    mask[phys_indices[:]] = True
+            return Column(self._table, self._col_name, mask=mask)
+
+        elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
+            n_live = len(self)
+            if len(key) != n_live:
+                raise IndexError(
+                    f"Boolean mask length {len(key)} does not match number of live rows {n_live}."
+                )
+            all_pos = np.where(self._valid_rows[:])[0]
+            phys_indices = all_pos[key]
+            mask_np = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
+            mask_np[phys_indices] = True
+            return Column(self._table, self._col_name, mask=blosc2.asarray(mask_np))
+
+        elif isinstance(key, (list, tuple, np.ndarray)):
+            real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
+            phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
+            mask_np = np.zeros(len(self._table._valid_rows), dtype=np.bool_)
+            mask_np[phys_indices] = True
+            return Column(self._table, self._col_name, mask=blosc2.asarray(mask_np))
+
+        raise TypeError(
+            f"Column.view[] does not support key type {type(key).__name__!r}. "
+            "Supported: slice, boolean array, list / integer array."
+        )
+
+    @property
+    def view(self) -> ColumnViewIndexer:
+        """Return a :class:`ColumnViewIndexer` for creating logical sub-views.
+
+        Examples
+        --------
+        Read a sub-view for chained aggregates::
+
+            sub = t.price.view[2:10]
+            sub.sum()
+
+        Bulk write through a sub-view::
+
+            t.price.view[0:5][:] = np.zeros(5)
+        """
+        return ColumnViewIndexer(self)
+
     def __setitem__(self, key: int | slice | list | np.ndarray, value):
         if self._table._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
+        if self.is_computed:
+            raise ValueError(f"Column {self._col_name!r} is a computed column and cannot be written to.")
         if isinstance(key, int):
             n_rows = len(self)
             if key < 0:
@@ -583,6 +752,9 @@ class Column:
         self._table._root_table._mark_all_indexes_stale()
 
     def __iter__(self):
+        if self.is_computed:
+            yield from self._iter_chunks_computed(size=None)
+            return
         arr = self._valid_rows
         chunk_size = arr.chunks[0]
 
@@ -665,6 +837,9 @@ class Column:
         >>> for chunk in t["score"].iter_chunks(size=100_000):
         ...     process(chunk)
         """
+        if self.is_computed:
+            yield from self._iter_chunks_computed(size=size)
+            return
         valid = self._valid_rows
         raw = self._raw_col
         arr_len = len(valid)
@@ -705,12 +880,50 @@ class Column:
         if pending:
             yield np.concatenate(pending)
 
-    def to_numpy(self) -> np.ndarray:
-        """Return all live values as a NumPy array."""
-        parts = list(self.iter_chunks(size=max(1, len(self))))
-        if not parts:
-            return np.array([], dtype=self.dtype)
-        return np.concatenate(parts) if len(parts) > 1 else parts[0]
+    def _iter_chunks_computed(self, size):
+        """Yield live values from a computed column, chunk-by-chunk.
+
+        Evaluates the LazyExpr slice-by-slice using the physical chunk layout
+        of *valid_rows* and applies the valid-rows mask before accumulating.
+        When *size* is None (used by ``__iter__``), each physical chunk is
+        yielded directly.
+        """
+        lazy = self._raw_col  # a LazyExpr
+        valid = self._valid_rows
+        phys_len = len(valid)
+        chunk_size = valid.chunks[0]
+
+        pending: list[np.ndarray] = []
+        pending_n = 0
+
+        for chunk_start in range(0, phys_len, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, phys_len)
+            mask = valid[chunk_start:chunk_end]  # numpy bool array
+            n_live = int(np.count_nonzero(mask))
+            if n_live == 0:
+                continue
+
+            # Evaluate the expression only for this physical slice
+            data_chunk = np.asarray(lazy[chunk_start:chunk_end])
+            segment = data_chunk[mask] if n_live < (chunk_end - chunk_start) else data_chunk
+
+            if size is None:
+                # __iter__ path: yield each chunk directly
+                yield from segment
+                continue
+
+            pending.append(segment)
+            pending_n += len(segment)
+
+            while pending_n >= size:
+                combined = np.concatenate(pending)
+                yield combined[:size]
+                rest = combined[size:]
+                pending = [rest] if len(rest) > 0 else []
+                pending_n = len(rest)
+
+        if size is not None and pending:
+            yield np.concatenate(pending)
 
     def assign(self, data) -> None:
         """Replace all live values in this column with *data*.
@@ -735,6 +948,8 @@ class Column:
         """
         if self._table._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
+        if self.is_computed:
+            raise ValueError(f"Column {self._col_name!r} is a computed column and cannot be written to.")
         n_live = len(self)
         arr = np.asarray(data)
         if len(arr) != n_live:
@@ -774,7 +989,7 @@ class Column:
 
     def is_null(self) -> np.ndarray:
         """Return a boolean array True where the live value is the null sentinel."""
-        return self._null_mask_for(self.to_numpy())
+        return self._null_mask_for(self[:])
 
     def notnull(self) -> np.ndarray:
         """Return a boolean array True where the live value is *not* the null sentinel."""
@@ -1031,6 +1246,19 @@ def _fmt_bytes(n: int) -> str:
 
 _EXPECTED_SIZE_DEFAULT = 1_048_576
 
+# ---------------------------------------------------------------------------
+# Computed-column definition (virtual columns backed by a LazyExpr)
+# ---------------------------------------------------------------------------
+
+# Each entry in CTable._computed_cols maps column name → this dict shape:
+#   {
+#     "expression": str,        # LazyExpr.expression string (for serialization)
+#     "col_deps":  list[str],   # dep column names in operand order (o0=col_deps[0], …)
+#     "lazy":      LazyExpr,    # the live lazy expression (holds NDArray refs)
+#     "dtype":     np.dtype,    # result dtype
+#   }
+# We use a plain dict so that nothing extra needs to be imported.
+
 
 class CTable(Generic[RowT]):
     def __init__(
@@ -1059,6 +1287,9 @@ class CTable(Generic[RowT]):
         self._table_cparams = cparams
         self._table_dparams = dparams
         self._cols: dict[str, blosc2.NDArray] = {}
+        self._computed_cols: dict[str, dict] = {}  # virtual/computed columns
+        self._materialized_cols: dict[str, dict] = {}  # stored columns auto-filled from expressions
+        self._expr_index_arrays: dict[str, blosc2.NDArray] = {}
         self._col_widths: dict[str, int] = {}
         self.col_names: list[str] = []
         self.row = _RowIndexer(self)
@@ -1101,6 +1332,12 @@ class CTable(Generic[RowT]):
                 self._col_widths[name] = max(len(name), cc.display_width)
             self._n_rows = int(blosc2.count_nonzero(self._valid_rows))
             self._last_pos = None  # resolve lazily on first write
+            # ---- Restore computed/materialized column metadata (if any) ----
+            self._computed_cols = {}
+            self._materialized_cols = {}
+            self._expr_index_arrays = {}
+            self._load_computed_cols_from_schema(schema_dict)
+            self._load_materialized_cols_from_schema(schema_dict)
         else:
             # ---- Create new table ----
             if storage.is_read_only():
@@ -1193,21 +1430,22 @@ class CTable(Generic[RowT]):
         """Normalize a row input to a ``{col_name: value}`` dict.
 
         Accepted shapes:
-        - list / tuple  → positional, zipped with ``col_names``
+        - list / tuple  → positional, zipped with stored column names (computed columns skipped)
         - dict          → used as-is
         - dataclass     → ``dataclasses.asdict``
         - np.void / structured scalar → field-name access
         """
+        stored = self._append_input_col_names
         if isinstance(data, dict):
             return data
         if isinstance(data, (list, tuple)):
-            return dict(zip(self.col_names, data, strict=False))
+            return dict(zip(stored, data, strict=False))
         if dataclasses.is_dataclass(data) and not isinstance(data, type):
             return dataclasses.asdict(data)
         if isinstance(data, (np.void, np.record)):
-            return {name: data[name] for name in self.col_names}
+            return {name: data[name] for name in stored}
         # Fallback: try positional indexing
-        return {name: data[i] for i, name in enumerate(self.col_names)}
+        return {name: data[i] for i, name in enumerate(stored)}
 
     def _coerce_row_to_storage(self, row: dict[str, Any]) -> dict[str, Any]:
         """Coerce each value in *row* to the column's storage dtype."""
@@ -1290,7 +1528,7 @@ class CTable(Generic[RowT]):
         for name in self.col_names:
             widths[name] = max(
                 self._col_widths[name],
-                len(str(self._cols[name].dtype)),
+                len(str(self._col_dtype(name))),
             )
 
         sep = "  ".join("─" * (w + 2) for w in widths.values())
@@ -1308,12 +1546,12 @@ class CTable(Generic[RowT]):
         def rows_to_dicts(positions) -> list[dict]:
             if len(positions) == 0:
                 return []
-            col_data = {n: self._cols[n][positions] for n in self.col_names}
+            col_data = {n: self._fetch_col_at_positions(n, positions) for n in self.col_names}
             return [{n: col_data[n][i].item() for n in self.col_names} for i in range(len(positions))]
 
         lines = [
             fmt_row({n: n for n in self.col_names}),
-            fmt_row({n: str(self._cols[n].dtype) for n in self.col_names}),
+            fmt_row({n: str(self._col_dtype(n)) for n in self.col_names}),
             sep,
         ]
 
@@ -1400,11 +1638,12 @@ class CTable(Generic[RowT]):
 
         obj._n_rows = int(blosc2.count_nonzero(obj._valid_rows))
         obj._last_pos = None  # resolve lazily on first write
+        obj._computed_cols = {}
+        obj._materialized_cols = {}
+        obj._expr_index_arrays = {}
+        obj._load_computed_cols_from_schema(schema_dict)
+        obj._load_materialized_cols_from_schema(schema_dict)
         return obj
-
-    # ------------------------------------------------------------------
-    # Save / Load (in-memory ↔ disk)
-    # ------------------------------------------------------------------
 
     def save(self, urlpath: str, *, overwrite: bool = False) -> None:
         """Copy this (in-memory) table to disk at *urlpath*.
@@ -1473,7 +1712,7 @@ class CTable(Generic[RowT]):
             if n_live > 0:
                 disk_col[:n_live] = self._cols[name][live_pos]
 
-        file_storage.save_schema(schema_to_dict(self._schema))
+        file_storage.save_schema(self._schema_dict_with_computed())
         file_storage.close()
 
     @classmethod
@@ -1557,11 +1796,12 @@ class CTable(Generic[RowT]):
         obj._valid_rows = mem_valid
         obj._n_rows = n_live
         obj._last_pos = None  # resolve lazily on first write
+        obj._computed_cols = {}
+        obj._materialized_cols = {}
+        obj._expr_index_arrays = {}
+        obj._load_computed_cols_from_schema(schema_dict)
+        obj._load_materialized_cols_from_schema(schema_dict)
         return obj
-
-    # ------------------------------------------------------------------
-    # View / filtering
-    # ------------------------------------------------------------------
 
     @classmethod
     def _make_view(cls, parent: CTable, new_valid_rows: blosc2.NDArray) -> CTable:
@@ -1575,6 +1815,9 @@ class CTable(Generic[RowT]):
         obj._read_only = parent._read_only  # inherit: only True for mode="r" disk tables
         obj._schema = parent._schema
         obj._cols = parent._cols  # shared — views cannot change row structure
+        obj._computed_cols = parent._computed_cols  # shared — LazyExpr refs remain valid
+        obj._materialized_cols = parent._materialized_cols
+        obj._expr_index_arrays = parent._expr_index_arrays
         obj._col_widths = parent._col_widths
         obj.col_names = parent.col_names
         obj.row = _RowIndexer(obj)
@@ -1697,7 +1940,7 @@ class CTable(Generic[RowT]):
         if not cols:
             raise ValueError("select() requires at least one column name.")
         for name in cols:
-            if name not in self._cols:
+            if name not in self._cols and name not in self._computed_cols:
                 raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
 
         obj = CTable.__new__(CTable)
@@ -1713,15 +1956,25 @@ class CTable(Generic[RowT]):
         obj.auto_compact = self.auto_compact
         obj.base = self
 
-        # Subset of columns — same NDArray objects, no copy
-        obj._cols = {name: self._cols[name] for name in cols}
+        # Stored columns — same NDArray objects, no copy
+        obj._cols = {name: self._cols[name] for name in cols if name in self._cols}
         obj.col_names = list(cols)
+        obj._materialized_cols = {
+            name: dict(self._materialized_cols[name]) for name in cols if name in self._materialized_cols
+        }
+        obj._expr_index_arrays = self._expr_index_arrays
 
-        # Rebuild schema for the selected columns only
-        sel_set = set(cols)
+        # Computed columns — share the same definitions (LazyExpr refs remain valid)
+        obj._computed_cols = {
+            name: self._computed_cols[name] for name in cols if name in self._computed_cols
+        }
+
+        # Rebuild schema for the selected stored columns only
+        stored_sel = [n for n in cols if n in self._cols]
+        sel_set = set(stored_sel)
         sel_compiled = [c for c in self._schema.columns if c.name in sel_set]
         # Preserve caller-specified order
-        order = {name: i for i, name in enumerate(cols)}
+        order = {name: i for i, name in enumerate(stored_sel)}
         sel_compiled.sort(key=lambda c: order[c.name])
         obj._schema = CompiledSchema(
             columns=sel_compiled,
@@ -1760,7 +2013,7 @@ class CTable(Generic[RowT]):
             if dtype.kind in "biufc" and dtype.kind != "c":
                 # numeric + bool
                 if dtype.kind == "b":
-                    arr = col.to_numpy()
+                    arr = col[:]
                     # Exclude null sentinels from true/false counts
                     if col.null_value is not None:
                         arr = arr[col.notnull()]
@@ -1828,7 +2081,7 @@ class CTable(Generic[RowT]):
             If the table has fewer than 2 live rows (covariance undefined).
         """
         for name in self.col_names:
-            dtype = self._cols[name].dtype
+            dtype = self._col_dtype(name)
             if not (
                 np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.floating) or dtype == np.bool_
             ):
@@ -1847,7 +2100,7 @@ class CTable(Generic[RowT]):
         null_union = None
         for name in self.col_names:
             col = self[name]
-            arr = col.to_numpy()
+            arr = col[:]
             nm = col._null_mask_for(arr)
             if nm.any():
                 null_union = nm if null_union is None else (null_union | nm)
@@ -1877,7 +2130,7 @@ class CTable(Generic[RowT]):
     def to_arrow(self):
         """Convert all live rows to a :class:`pyarrow.Table`.
 
-        Each column is materialized via :meth:`Column.to_numpy` and wrapped
+        Each column is materialized via ``col[:]`` and wrapped
         in a ``pyarrow.array``.  String columns are emitted as ``pa.string()``
         (variable-length UTF-8); bytes columns as ``pa.large_binary()``.
 
@@ -1896,7 +2149,7 @@ class CTable(Generic[RowT]):
         arrays = {}
         for name in self.col_names:
             col = self[name]
-            arr = col.to_numpy()
+            arr = col[:]
             # Only compute null mask when a sentinel is actually configured —
             # avoids allocating a 1M-element zeros array for every non-nullable column.
             nv = col.null_value
@@ -2048,6 +2301,9 @@ class CTable(Generic[RowT]):
         obj.row = _RowIndexer(obj)
         obj.auto_compact = False
         obj.base = None
+        obj._computed_cols = {}  # from_arrow creates no computed columns
+        obj._materialized_cols = {}
+        obj._expr_index_arrays = {}
         obj._valid_rows = new_valid
         obj._n_rows = 0
         obj._last_pos = 0
@@ -2055,7 +2311,7 @@ class CTable(Generic[RowT]):
         if n > 0:
             # Write each column directly — one bulk slice assignment per column.
             # String columns (dtype.kind == 'U') can't go through Arrow's zero-copy
-            # to_numpy(), so we convert via to_pylist() and let NumPy handle the
+            # path, so we convert via to_pylist() and let NumPy handle the
             # fixed-width unicode coercion.  All other types use zero-copy numpy.
             for col in columns:
                 arrow_col = arrow_table.column(col.name)
@@ -2079,7 +2335,7 @@ class CTable(Generic[RowT]):
         """Write all live rows to a CSV file.
 
         Uses Python's stdlib ``csv`` module — no extra dependency required.
-        Each column is materialised once via :meth:`Column.to_numpy`; rows
+        Each column is materialised once via ``col[:]``; rows
         are then written one at a time.
 
         Parameters
@@ -2093,7 +2349,7 @@ class CTable(Generic[RowT]):
         """
         import csv
 
-        arrays = [self[name].to_numpy() for name in self.col_names]
+        arrays = [self[name][:] for name in self.col_names]
 
         with open(path, "w", newline="") as f:
             writer = csv.writer(f, delimiter=sep)
@@ -2215,6 +2471,9 @@ class CTable(Generic[RowT]):
         obj.row = _RowIndexer(obj)
         obj.auto_compact = False
         obj.base = None
+        obj._computed_cols = {}  # from_csv creates no computed columns
+        obj._materialized_cols = {}
+        obj._expr_index_arrays = {}
         obj._valid_rows = new_valid
         obj._n_rows = 0
         obj._last_pos = 0
@@ -2270,6 +2529,8 @@ class CTable(Generic[RowT]):
         _validate_column_name(name)
         if name in self._cols:
             raise ValueError(f"Column {name!r} already exists.")
+        if name in self._computed_cols:
+            raise ValueError(f"A computed column named {name!r} already exists.")
 
         try:
             default_val = spec.dtype.type(default)
@@ -2312,7 +2573,7 @@ class CTable(Generic[RowT]):
             columns_by_name={**self._schema.columns_by_name, name: compiled_col},
         )
         if isinstance(self._storage, FileTableStorage):
-            self._storage.save_schema(schema_to_dict(self._schema))
+            self._storage.save_schema(self._schema_dict_with_computed())
 
     def drop_column(self, name: str) -> None:
         """Remove a column from the table.
@@ -2332,8 +2593,16 @@ class CTable(Generic[RowT]):
             raise ValueError("Cannot drop a column from a view.")
         if name not in self._cols:
             raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
-        if len(self.col_names) == 1:
+        if len(self._stored_col_names) == 1:
             raise ValueError("Cannot drop the last column.")
+        # Guard: refuse if any computed column depends on this column
+        dependents = [cc_name for cc_name, cc in self._computed_cols.items() if name in cc["col_deps"]]
+        if dependents:
+            raise ValueError(
+                f"Cannot drop column {name!r}: it is used by computed column(s) "
+                + ", ".join(repr(d) for d in dependents)
+                + ". Drop those computed columns first."
+            )
 
         catalog = self._storage.load_index_catalog()
         if name in catalog:
@@ -2345,6 +2614,7 @@ class CTable(Generic[RowT]):
         if isinstance(self._storage, FileTableStorage):
             self._storage.delete_column(name)
 
+        self._materialized_cols.pop(name, None)
         del self._cols[name]
         del self._col_widths[name]
         self.col_names.remove(name)
@@ -2356,7 +2626,7 @@ class CTable(Generic[RowT]):
             columns_by_name={c.name: c for c in new_columns},
         )
         if isinstance(self._storage, FileTableStorage):
-            self._storage.save_schema(schema_to_dict(self._schema))
+            self._storage.save_schema(self._schema_dict_with_computed())
 
     def rename_column(self, old: str, new: str) -> None:
         """Rename a column.
@@ -2374,11 +2644,31 @@ class CTable(Generic[RowT]):
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
             raise ValueError("Cannot rename a column in a view.")
-        if old not in self._cols:
+        if old not in self._cols and old not in self._computed_cols:
             raise KeyError(f"No column named {old!r}. Available: {self.col_names}")
-        if new in self._cols:
+        if new in self._cols or new in self._computed_cols:
             raise ValueError(f"Column {new!r} already exists.")
         _validate_column_name(new)
+
+        # Computed columns have no physical storage or schema entry.  Renaming
+        # them only updates the computed-column registry and visible names.
+        if old in self._computed_cols:
+            self._computed_cols[new] = self._computed_cols.pop(old)
+            idx = self.col_names.index(old)
+            self.col_names[idx] = new
+            self._col_widths[new] = max(len(new), self._col_widths.pop(old))
+            if isinstance(self._storage, FileTableStorage):
+                self._storage.save_schema(self._schema_dict_with_computed())
+            return
+
+        # Guard: refuse rename if any computed column depends on this stored column
+        dependents = [cc_name for cc_name, cc in self._computed_cols.items() if old in cc["col_deps"]]
+        if dependents:
+            raise ValueError(
+                f"Cannot rename column {old!r}: it is used by computed column(s) "
+                + ", ".join(repr(d) for d in dependents)
+                + ". Drop those computed columns first."
+            )
 
         catalog = self._storage.load_index_catalog()
         rebuild_kwargs = None
@@ -2415,22 +2705,461 @@ class CTable(Generic[RowT]):
             columns=new_columns,
             columns_by_name={c.name: c for c in new_columns},
         )
+        if old in self._materialized_cols:
+            self._materialized_cols[new] = self._materialized_cols.pop(old)
         if isinstance(self._storage, FileTableStorage):
-            self._storage.save_schema(schema_to_dict(self._schema))
+            self._storage.save_schema(self._schema_dict_with_computed())
         if rebuild_kwargs is not None:
             self.create_index(new, **rebuild_kwargs)
+
+    # ------------------------------------------------------------------
+    # Computed / virtual columns
+    # ------------------------------------------------------------------
+
+    @property
+    def _stored_col_names(self) -> list[str]:
+        """Column names backed by physical NDArrays (excludes computed columns)."""
+        return [n for n in self.col_names if n not in self._computed_cols]
+
+    @property
+    def _append_input_col_names(self) -> list[str]:
+        """Stored columns that callers must normally provide on insert."""
+        return [n for n in self._stored_col_names if n not in self._materialized_cols]
+
+    @property
+    def computed_columns(self) -> dict[str, dict]:
+        """Read-only view of the computed-column definitions.
+
+        Each value is a dict with keys ``expression``, ``col_deps``,
+        ``lazy`` (:class:`blosc2.LazyExpr`), and ``dtype``.
+        """
+        return dict(self._computed_cols)  # shallow copy so callers can't mutate
+
+    def _col_dtype(self, name: str) -> np.dtype:
+        """Return the dtype for *name*, routing through computed cols."""
+        cc = self._computed_cols.get(name)
+        if cc is not None:
+            return cc["dtype"]
+        return self._cols[name].dtype
+
+    @staticmethod
+    def _readable_computed_expr(cc: dict) -> str:
+        """Return the expression string with ``o0``, ``o1``, … replaced by
+        their actual column names, for human-readable display.
+
+        Example: ``"(o0 * o1)"`` with ``col_deps=["price", "qty"]``
+        becomes ``"(price * qty)"``.
+        """
+        col_deps = cc["col_deps"]
+
+        def _sub(m: re.Match) -> str:
+            idx = int(m.group(1))
+            return col_deps[idx] if idx < len(col_deps) else m.group(0)
+
+        return re.sub(r"\bo(\d+)\b", _sub, cc["expression"])
+
+    def _fetch_col_at_positions(self, name: str, positions: np.ndarray) -> np.ndarray:
+        """Fetch values at *positions* (physical indices) — used for display."""
+        cc = self._computed_cols.get(name)
+        if cc is not None:
+            if len(positions) == 0:
+                return np.array([], dtype=cc["dtype"])
+            # Evaluate element-by-element for scattered display positions (max ~20).
+            return np.array(
+                [np.asarray(cc["lazy"][int(p)]).ravel()[0] for p in positions],
+                dtype=cc["dtype"],
+            )
+        return self._cols[name][positions]
+
+    def _schema_dict_with_computed(self) -> dict:
+        """Return the schema dict extended with computed/materialized metadata."""
+        d = schema_to_dict(self._schema)
+        if self._computed_cols:
+            d["computed_columns"] = [
+                {
+                    "name": name,
+                    "expression": cc["expression"],
+                    "col_deps": cc["col_deps"],
+                    "dtype": str(cc["dtype"]),
+                }
+                for name, cc in self._computed_cols.items()
+            ]
+        if self._materialized_cols:
+            d["materialized_columns"] = [
+                {
+                    "name": name,
+                    "computed_column": meta["computed_column"],
+                    "expression": meta["expression"],
+                    "col_deps": meta["col_deps"],
+                    "dtype": str(meta["dtype"]),
+                }
+                for name, meta in self._materialized_cols.items()
+            ]
+        return d
+
+    def _load_computed_cols_from_schema(self, schema_dict: dict) -> None:
+        """Reconstruct ``_computed_cols`` from persisted metadata.
+
+        Called from ``__init__``, ``open``, and ``load`` after all stored
+        columns have been opened into ``self._cols``.
+        """
+        for cc_meta in schema_dict.get("computed_columns", []):
+            name = cc_meta["name"]
+            expression = cc_meta["expression"]
+            col_deps = cc_meta["col_deps"]
+            dtype = np.dtype(cc_meta["dtype"])
+            operands = {f"o{i}": self._cols[dep] for i, dep in enumerate(col_deps)}
+            lazy = blosc2.lazyexpr(expression, operands)
+            self._computed_cols[name] = {
+                "expression": expression,
+                "col_deps": col_deps,
+                "lazy": lazy,
+                "dtype": dtype,
+            }
+            self.col_names.append(name)
+            self._col_widths[name] = max(len(name), 15)
+
+    def _load_materialized_cols_from_schema(self, schema_dict: dict) -> None:
+        """Reconstruct ``_materialized_cols`` from persisted metadata."""
+        for meta in schema_dict.get("materialized_columns", []):
+            self._materialized_cols[meta["name"]] = {
+                "computed_column": meta["computed_column"],
+                "expression": meta["expression"],
+                "col_deps": list(meta["col_deps"]),
+                "dtype": np.dtype(meta["dtype"]),
+            }
+
+    def _require_computed_column(self, name: str) -> dict:
+        """Return metadata for computed column *name* or raise ``KeyError``."""
+        try:
+            return self._computed_cols[name]
+        except KeyError:
+            raise KeyError(
+                f"{name!r} is not a computed column. Computed columns: {list(self._computed_cols)}"
+            ) from None
+
+    def _autofill_materialized_row_values(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Fill omitted materialized-column values for a single inserted row."""
+        row = dict(row)
+        for name, meta in self._materialized_cols.items():
+            if name in row:
+                continue
+            missing = [dep for dep in meta["col_deps"] if dep not in row]
+            if missing:
+                raise ValueError(
+                    f"Cannot auto-fill materialized column {name!r}: missing dependency columns {missing!r}."
+                )
+            operands = {f"o{i}": np.asarray([row[dep]]) for i, dep in enumerate(meta["col_deps"])}
+            values = blosc2.lazyexpr(meta["expression"], operands)[:]
+            row[name] = np.asarray(values, dtype=meta["dtype"])[0]
+        return row
+
+    def _autofill_materialized_batch_columns(
+        self, raw_columns: dict[str, Any], row_count: int, *, provided_names: set[str]
+    ) -> dict[str, Any]:
+        """Fill omitted materialized-column arrays for batch inserts."""
+        raw_columns = dict(raw_columns)
+        for name, meta in self._materialized_cols.items():
+            if name in provided_names or name in raw_columns:
+                continue
+            missing = [dep for dep in meta["col_deps"] if dep not in raw_columns]
+            if missing:
+                raise ValueError(
+                    f"Cannot auto-fill materialized column {name!r}: missing dependency columns {missing!r}."
+                )
+            operands = {
+                f"o{i}": blosc2.asarray(raw_columns[dep], dtype=self._cols[dep].dtype)
+                for i, dep in enumerate(meta["col_deps"])
+            }
+            values = blosc2.lazyexpr(meta["expression"], operands)[:]
+            values = np.asarray(values, dtype=meta["dtype"])
+            if len(values) != row_count:
+                raise ValueError(
+                    f"Materialized column {name!r} produced {len(values)} values, expected {row_count}."
+                )
+            raw_columns[name] = values
+        return raw_columns
+
+    @staticmethod
+    def _schema_spec_from_dtype(dtype: np.dtype) -> SchemaSpec:
+        """Build a minimal schema spec for a stored column with *dtype*."""
+        dtype = np.dtype(dtype)
+        spec_factory = _DTYPE_SPEC_FACTORIES.get(dtype)
+        if spec_factory is not None:
+            return spec_factory()
+        if dtype.kind == "U":
+            max_length = max(1, dtype.itemsize // np.dtype("U1").itemsize)
+            return string(max_length=max_length)
+        if dtype.kind == "S":
+            return b2_bytes(max_length=max(1, dtype.itemsize))
+        raise TypeError(f"Cannot materialize a computed column with unsupported dtype {dtype!r}.")
+
+    def _create_empty_stored_column(
+        self,
+        name: str,
+        dtype: np.dtype,
+        *,
+        cparams: dict | None = None,
+    ) -> None:
+        """Create an empty stored column aligned with the table's physical row space."""
+        spec = self._schema_spec_from_dtype(dtype)
+        default = np.array(0, dtype=dtype).item() if dtype.kind not in {"U", "S"} else dtype.type()
+
+        capacity = len(self._valid_rows)
+        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        new_col = self._storage.create_column(
+            name,
+            dtype=dtype,
+            shape=(capacity,),
+            chunks=default_chunks,
+            blocks=default_blocks,
+            cparams=cparams,
+            dparams=None,
+        )
+
+        compiled_col = CompiledColumn(
+            name=name,
+            py_type=spec.python_type,
+            spec=spec,
+            dtype=dtype,
+            default=default,
+            config=ColumnConfig(cparams=cparams, dparams=None, chunks=None, blocks=None),
+            display_width=compute_display_width(spec),
+        )
+        self._cols[name] = new_col
+        self.col_names.append(name)
+        self._col_widths[name] = max(len(name), compiled_col.display_width)
+
+        new_columns = self._schema.columns + [compiled_col]
+        self._schema = CompiledSchema(
+            row_cls=self._schema.row_cls,
+            columns=new_columns,
+            columns_by_name={**self._schema.columns_by_name, name: compiled_col},
+        )
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(self._schema_dict_with_computed())
+
+    def _fill_stored_column_from_computed(
+        self,
+        target_name: str,
+        computed_name: str,
+        *,
+        dtype: np.dtype,
+    ) -> None:
+        """Evaluate computed column *computed_name* into stored column *target_name*."""
+        cc = self._require_computed_column(computed_name)
+        operands = {f"o{i}": self._cols[dep] for i, dep in enumerate(cc["col_deps"])}
+        lazy = blosc2.lazyexpr(cc["expression"], operands)
+        capacity = len(self._valid_rows)
+        step = int(self._valid_rows.chunks[0]) if self._valid_rows.chunks else 65536
+
+        for start in range(0, capacity, step):
+            stop = min(start + step, capacity)
+            values = lazy[start:stop]
+            if isinstance(values, blosc2.NDArray):
+                values = values[:]
+            try:
+                values = np.asarray(values, dtype=dtype)
+            except (TypeError, ValueError) as exc:
+                raise TypeError(f"Cannot coerce computed values to dtype {dtype!r}: {exc}") from exc
+            if values.ndim != 1:
+                raise TypeError(
+                    f"Computed column {computed_name!r} produced {values.ndim}-D values; expected 1-D slices."
+                )
+            if len(values) != stop - start:
+                raise ValueError(
+                    f"Computed column {computed_name!r} produced {len(values)} values for slice "
+                    f"[{start}:{stop}], expected {stop - start}."
+                )
+            self._cols[target_name][start:stop] = values
+
+    def materialize_computed_column(
+        self,
+        name: str,
+        *,
+        new_name: str | None = None,
+        dtype: np.dtype | None = None,
+        cparams: dict | blosc2.CParams | None = None,
+    ) -> None:
+        """Materialize a computed column into a new stored snapshot column.
+
+        Parameters
+        ----------
+        name:
+            Existing computed column to materialize.
+        new_name:
+            Name of the new stored column. Defaults to ``f"{name}_stored"``.
+        dtype:
+            Optional target dtype for the stored column. Defaults to the
+            computed column dtype.
+        cparams:
+            Optional compression parameters for the new stored column.
+
+        Raises
+        ------
+        ValueError
+            If called on a view, on a read-only table, or if the target name
+            collides with an existing stored or computed column.
+        KeyError
+            If *name* is not a computed column.
+        TypeError
+            If *dtype* is incompatible with the computed values.
+        """
+        if self.base is not None:
+            raise ValueError("Cannot materialize a computed column from a view.")
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
+
+        cc = self._require_computed_column(name)
+        target_name = new_name or f"{name}_stored"
+        _validate_column_name(target_name)
+        if target_name in self._cols:
+            raise ValueError(f"A stored column named {target_name!r} already exists.")
+        if target_name in self._computed_cols:
+            raise ValueError(f"A computed column named {target_name!r} already exists.")
+        target_dtype = np.dtype(dtype) if dtype is not None else np.dtype(cc["dtype"])
+
+        self._create_empty_stored_column(target_name, target_dtype, cparams=cparams)
+        self._materialized_cols[target_name] = {
+            "computed_column": name,
+            "expression": cc["expression"],
+            "col_deps": list(cc["col_deps"]),
+            "dtype": target_dtype,
+        }
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(self._schema_dict_with_computed())
+        try:
+            self._fill_stored_column_from_computed(target_name, name, dtype=target_dtype)
+        except Exception:
+            with contextlib.suppress(Exception):
+                self.drop_column(target_name)
+            raise
+
+    def add_computed_column(
+        self,
+        name: str,
+        expr,
+        *,
+        dtype: np.dtype | None = None,
+    ) -> None:
+        """Add a read-only virtual column whose values are computed from other columns.
+
+        The column stores no data — it is evaluated on-the-fly when read.
+        It participates in display, filtering, sorting, export (to_arrow / to_csv),
+        and aggregates, but cannot be written to, indexed, or included in
+        ``append`` / ``extend`` inputs.
+
+        Parameters
+        ----------
+        name:
+            Column name.  Must not collide with any existing stored or computed
+            column and must satisfy the usual naming rules.
+        expr:
+            Either a **callable** ``(cols: dict[str, NDArray]) -> LazyExpr``
+            or an **expression string** (e.g. ``"price * qty"``) where column
+            names are referenced directly and resolved from stored columns.
+        dtype:
+            Override the inferred result dtype.  When omitted the dtype is
+            taken from the :class:`blosc2.LazyExpr`.
+
+        Raises
+        ------
+        ValueError
+            If called on a view, the table is read-only, *name* already
+            exists, or an operand is not a stored column of this table.
+        TypeError
+            If *expr* is not a callable or string, or does not return a
+            :class:`blosc2.LazyExpr`.
+        """
+        if self.base is not None:
+            raise ValueError("Cannot add a computed column to a view.")
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
+        _validate_column_name(name)
+        if name in self._cols:
+            raise ValueError(f"A stored column named {name!r} already exists.")
+        if name in self._computed_cols:
+            raise ValueError(f"A computed column named {name!r} already exists.")
+
+        # Build the LazyExpr
+        if callable(expr):
+            lazy = expr(self._cols)
+        elif isinstance(expr, str):
+            lazy = blosc2.lazyexpr(expr, self._cols)
+        else:
+            raise TypeError(f"expr must be a callable or an expression string, got {type(expr).__name__!r}.")
+        if not isinstance(lazy, blosc2.LazyExpr):
+            raise TypeError(f"expr must return a blosc2.LazyExpr, got {type(lazy).__name__!r}.")
+
+        # Verify all operands are stored columns of *this* table and record their names
+        owned_ids = {id(arr): cname for cname, arr in self._cols.items()}
+        sorted_keys = sorted(lazy.operands.keys())  # ["o0", "o1", ...]
+        col_deps = []
+        for key in sorted_keys:
+            arr = lazy.operands[key]
+            cname = owned_ids.get(id(arr))
+            if cname is None:
+                raise ValueError(
+                    f"Operand {key!r} in the expression does not reference a stored "
+                    f"column of this table.  Only stored columns may be used as "
+                    f"dependencies (for v1 computed columns cannot depend on each other)."
+                )
+            col_deps.append(cname)
+
+        result_dtype = np.dtype(dtype) if dtype is not None else lazy.dtype
+
+        self._computed_cols[name] = {
+            "expression": lazy.expression,
+            "col_deps": col_deps,
+            "lazy": lazy,
+            "dtype": result_dtype,
+        }
+        self.col_names.append(name)
+        self._col_widths[name] = max(len(name), 15)
+
+        # Persist metadata if backed by a file store
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(self._schema_dict_with_computed())
+
+    def drop_computed_column(self, name: str) -> None:
+        """Remove a computed column from the table.
+
+        Parameters
+        ----------
+        name:
+            Name of the computed column to remove.
+
+        Raises
+        ------
+        KeyError
+            If *name* is not a computed column.
+        ValueError
+            If called on a view.
+        """
+        if self.base is not None:
+            raise ValueError("Cannot drop a computed column from a view.")
+        if name not in self._computed_cols:
+            raise KeyError(
+                f"{name!r} is not a computed column. Computed columns: {list(self._computed_cols)}"
+            )
+        del self._computed_cols[name]
+        self.col_names.remove(name)
+        self._col_widths.pop(name, None)
+
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(self._schema_dict_with_computed())
 
     # ------------------------------------------------------------------
     # Column access
     # ------------------------------------------------------------------
 
     def __getitem__(self, s: str):
-        if s in self._cols:
+        if s in self._cols or s in self._computed_cols:
             return Column(self, s)
         return None
 
     def __getattr__(self, s: str):
-        if s in self._cols:
+        if s in self._cols or s in self._computed_cols:
             return Column(self, s)
         return super().__getattribute__(s)
 
@@ -2473,14 +3202,64 @@ class CTable(Generic[RowT]):
                 f"'ascending' must have the same length as 'cols' ({len(cols)}), got {len(ascending)}."
             )
         for name in cols:
-            if name not in self._cols:
+            if name not in self._cols and name not in self._computed_cols:
                 raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
-            dtype = self._cols[name].dtype
+            dtype = self._col_dtype(name)
             if np.issubdtype(dtype, np.complexfloating):
                 raise TypeError(
                     f"Column {name!r} has complex dtype {dtype} which does not support ordering."
                 )
         return cols, ascending
+
+    def _sorted_positions_from_full_index(self, name: str, ascending: bool) -> np.ndarray | None:
+        """Return live physical positions from a matching FULL index, if available."""
+        from blosc2.indexing import ordered_indices
+
+        root = self._root_table
+        catalog = root._storage.load_index_catalog()
+        descriptor = None
+        target_arr = None
+
+        if name in root._cols:
+            descriptor = catalog.get(name)
+            if (
+                descriptor is not None
+                and descriptor.get("kind") == "full"
+                and not descriptor.get("stale", False)
+            ):
+                target_arr = root._cols[name]
+            else:
+                descriptor = None
+        elif name in root._computed_cols:
+            cc = root._computed_cols[name]
+            for lookup_key, candidate in catalog.items():
+                target = candidate.get("target") or {}
+                if (
+                    target.get("source") == "expression"
+                    and candidate.get("kind") == "full"
+                    and not candidate.get("stale", False)
+                    and target.get("expression_key") == cc["expression"]
+                    and list(target.get("dependencies", [])) == list(cc["col_deps"])
+                ):
+                    descriptor = candidate
+                    target_arr = root._index_target_array(lookup_key, candidate)
+                    break
+        if descriptor is None or target_arr is None:
+            return None
+
+        positions = ordered_indices(target_arr, require_full=True)
+        if positions is None:
+            return None
+        valid = root._valid_rows[:]
+        positions = np.asarray(positions, dtype=np.int64)
+        positions = positions[(positions >= 0) & (positions < len(valid))]
+        positions = positions[valid[positions]]
+        if self is not root:
+            current_valid = self._valid_rows[:]
+            positions = positions[current_valid[positions]]
+        if not ascending:
+            positions = positions[::-1]
+        return positions
 
     def _build_lex_keys(
         self,
@@ -2497,7 +3276,12 @@ class CTable(Generic[RowT]):
         """
         lex_keys = []
         for name, asc in zip(reversed(cols), reversed(ascending), strict=True):
-            raw = self._cols[name][live_pos]
+            cc = self._computed_cols.get(name)
+            if cc is not None:
+                # Materialise computed column values at live positions
+                raw = np.asarray(cc["lazy"][:])[live_pos]
+            else:
+                raw = self._cols[name][live_pos]
             col_info = self._schema.columns_by_name.get(name)
             nv = getattr(col_info.spec, "null_value", None) if col_info else None
 
@@ -2576,9 +3360,15 @@ class CTable(Generic[RowT]):
                 return self
             return self._empty_copy()
 
-        order = np.lexsort(self._build_lex_keys(cols, ascending, live_pos, n))
+        sorted_pos = None
+        if len(cols) == 1:
+            sorted_pos = self._sorted_positions_from_full_index(cols[0], ascending[0])
+            if sorted_pos is not None and len(sorted_pos) != n:
+                sorted_pos = None
 
-        sorted_pos = live_pos[order]
+        if sorted_pos is None:
+            order = np.lexsort(self._build_lex_keys(cols, ascending, live_pos, n))
+            sorted_pos = live_pos[order]
 
         if inplace:
             for _col_name, arr in self._cols.items():
@@ -2634,8 +3424,23 @@ class CTable(Generic[RowT]):
         obj._storage = mem_storage
         obj._valid_rows = new_valid
         obj._cols = new_cols
-        obj._col_widths = self._col_widths
+        obj._col_widths = self._col_widths.copy()
         obj.col_names = [col.name for col in self._schema.columns]
+        obj._materialized_cols = {name: dict(meta) for name, meta in self._materialized_cols.items()}
+        obj._expr_index_arrays = dict(self._expr_index_arrays)
+        # Rebuild computed columns with the new NDArray objects as operands
+        obj._computed_cols = {}
+        for cc_name, cc in self._computed_cols.items():
+            operands = {f"o{i}": new_cols[dep] for i, dep in enumerate(cc["col_deps"])}
+            new_lazy = blosc2.lazyexpr(cc["expression"], operands)
+            obj._computed_cols[cc_name] = {
+                "expression": cc["expression"],
+                "col_deps": cc["col_deps"],
+                "lazy": new_lazy,
+                "dtype": cc["dtype"],
+            }
+            obj.col_names.append(cc_name)
+            obj._col_widths.setdefault(cc_name, max(len(cc_name), 15))
         obj.row = _RowIndexer(obj)
         obj._n_rows = 0
         obj._last_pos = None
@@ -2655,7 +3460,8 @@ class CTable(Generic[RowT]):
 
     @property
     def ncols(self) -> int:
-        return len(self._cols)
+        """Total number of columns, including computed (virtual) columns."""
+        return len(self.col_names)
 
     @property
     def cbytes(self) -> int:
@@ -2754,8 +3560,10 @@ class CTable(Generic[RowT]):
             _is_persistent_array,
         )
 
-        col_arr = self._cols.get(col_name)
         token = descriptor["token"]
+        col_arr = None
+        with contextlib.suppress(Exception):
+            col_arr = self._index_target_array(col_name, descriptor)
 
         if col_arr is not None:
             _clear_cached_data(col_arr, token)
@@ -2771,6 +3579,12 @@ class CTable(Generic[RowT]):
                 store["indexes"].pop(token, None)
 
         _drop_descriptor_sidecars(descriptor)
+        self._root_table._expr_index_arrays.pop(token, None)
+
+        expr_values_path = descriptor.get("expr_values_path")
+        if expr_values_path is not None:
+            with contextlib.suppress(OSError):
+                os.remove(expr_values_path)
 
         anchor = self._storage.index_anchor_path(col_name)
         if anchor is not None:
@@ -2782,13 +3596,150 @@ class CTable(Generic[RowT]):
     def _index_create_kwargs_from_descriptor(self, descriptor: dict) -> dict[str, Any]:
         """Return create_index kwargs that rebuild an existing descriptor."""
         build = "ooc" if bool(descriptor.get("ooc", False)) else "memory"
-        return {
+        kwargs = {
             "kind": descriptor["kind"],
             "optlevel": int(descriptor.get("optlevel", 5)),
             "name": descriptor.get("name") or None,
             "build": build,
             "cparams": descriptor.get("cparams"),
         }
+        target = descriptor.get("target") or {}
+        if target.get("source") == "expression":
+            kwargs["expression"] = target.get("expression")
+        return kwargs
+
+    def _normalize_table_expression_target(
+        self, expression: str, operands: dict | None = None
+    ) -> tuple[dict, np.dtype]:
+        """Normalize a same-table expression target and infer its dtype."""
+        if operands is None:
+            operands = self._cols
+        try:
+            ast.parse(expression, mode="eval")
+        except SyntaxError as exc:
+            raise ValueError("expression is not valid Python syntax") from exc
+
+        owned_ids = {id(arr): name for name, arr in self._root_table._cols.items()}
+        dependencies: list[str] = []
+        valid = True
+
+        class _Canonicalizer(ast.NodeTransformer):
+            def visit_Name(self_inner, node: ast.Name) -> ast.AST:
+                nonlocal valid
+                operand = operands.get(node.id)
+                if operand is None or not isinstance(operand, blosc2.NDArray):
+                    return node
+                cname = owned_ids.get(id(operand))
+                if cname is None:
+                    valid = False
+                    return node
+                dependencies.append(cname)
+                return ast.copy_location(ast.Name(id=cname, ctx=node.ctx), node)
+
+        normalized = _Canonicalizer().visit(
+            ast.fix_missing_locations(ast.parse(expression, mode="eval")).body
+        )
+        if not valid or not dependencies:
+            raise ValueError("expression indexes require operands from stored columns of the same table")
+        dependencies = list(dict.fromkeys(dependencies))
+        expression_key = ast.unparse(normalized)
+        lazy = blosc2.lazyexpr(expression_key, {dep: self._root_table._cols[dep] for dep in dependencies})
+        sample_stop = min(
+            len(self._root_table._valid_rows), max(1, int(self._root_table._valid_rows.blocks[0]))
+        )
+        sample = lazy[:sample_stop]
+        if isinstance(sample, blosc2.NDArray):
+            sample = sample[:]
+        sample = np.asarray(sample)
+        dtype = np.dtype(sample.dtype)
+        if sample.ndim != 1:
+            raise ValueError("expression indexes require expressions returning a 1-D scalar stream")
+        target = {
+            "source": "expression",
+            "expression": expression,
+            "expression_key": expression_key,
+            "dependencies": dependencies,
+        }
+        return target, dtype
+
+    def _expression_index_values_path(self, token: str) -> str | None:
+        anchor = self._storage.index_anchor_path(token)
+        if anchor is None:
+            return None
+        return os.path.join(os.path.dirname(anchor), "values.b2nd")
+
+    def _build_expression_values_array(self, target: dict, dtype: np.dtype, cparams=None) -> blosc2.NDArray:
+        """Build a physical 1-D values array for a table expression target."""
+        from blosc2.indexing import _target_token
+
+        root = self._root_table
+        capacity = len(root._valid_rows)
+        chunks, blocks = compute_chunks_blocks((capacity,), dtype=dtype)
+        urlpath = root._expression_index_values_path(_target_token(target))
+        if urlpath is not None:
+            os.makedirs(os.path.dirname(urlpath), exist_ok=True)
+            arr = blosc2.zeros(
+                (capacity,), dtype=dtype, urlpath=urlpath, mode="w", chunks=chunks, blocks=blocks
+            )
+        else:
+            arr = blosc2.zeros((capacity,), dtype=dtype, chunks=chunks, blocks=blocks)
+        lazy = blosc2.lazyexpr(
+            target["expression_key"], {dep: root._cols[dep] for dep in target["dependencies"]}
+        )
+        step = int(root._valid_rows.chunks[0]) if root._valid_rows.chunks else 65536
+        for start in range(0, capacity, step):
+            stop = min(start + step, capacity)
+            values = lazy[start:stop]
+            if isinstance(values, blosc2.NDArray):
+                values = values[:]
+            arr[start:stop] = np.asarray(values, dtype=dtype)
+        root._expr_index_arrays[_target_token(target)] = arr
+        return arr
+
+    def _index_target_array(self, lookup_key: str, descriptor: dict) -> blosc2.NDArray:
+        """Return the physical array backing a column or expression index."""
+        target = descriptor.get("target") or {}
+        if target.get("source") != "expression":
+            return self._root_table._cols[lookup_key]
+        token = descriptor["token"]
+        root = self._root_table
+        arr = root._expr_index_arrays.get(token)
+        if arr is not None:
+            return arr
+        path = descriptor.get("expr_values_path")
+        if path is None:
+            raise KeyError(f"No backing array found for expression index {token!r}.")
+        arr = blosc2.open(path, mode="r" if root._read_only else "a")
+        root._expr_index_arrays[token] = arr
+        return arr
+
+    def _resolve_index_catalog_entry(
+        self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
+    ) -> tuple[str, dict]:
+        """Resolve an index catalog entry by column, expression, or label."""
+        catalog = self._root_table._storage.load_index_catalog()
+        if col_name is not None and expression is not None:
+            raise ValueError("col_name and expression are mutually exclusive")
+        if col_name is not None:
+            if col_name not in catalog:
+                raise KeyError(f"No index found for column {col_name!r}.")
+            return col_name, catalog[col_name]
+        if expression is not None:
+            from blosc2.indexing import _target_token
+
+            target, _ = self._normalize_table_expression_target(expression)
+            token = _target_token(target)
+            if token not in catalog:
+                raise KeyError(f"No index found for expression {expression!r}.")
+            return token, catalog[token]
+        if name is not None:
+            matches = [(key, desc) for key, desc in catalog.items() if desc.get("name") == name]
+            if not matches:
+                raise KeyError(f"No index found with name {name!r}.")
+            if len(matches) > 1:
+                raise ValueError(f"Multiple indexes found with name {name!r}; specify a target explicitly.")
+            return matches[0]
+        raise TypeError("must specify col_name, expression, or name")
 
     def _build_index_persistent(
         self,
@@ -2920,8 +3871,11 @@ class CTable(Generic[RowT]):
 
     def create_index(
         self,
-        col_name: str,
+        col_name: str | None = None,
         *,
+        field: str | None = None,
+        expression: str | None = None,
+        operands: dict | None = None,
         kind: blosc2.IndexKind = blosc2.IndexKind.BUCKET,
         optlevel: int = 5,
         name: str | None = None,
@@ -2929,51 +3883,16 @@ class CTable(Generic[RowT]):
         tmpdir: str | None = None,
         **kwargs,
     ) -> CTableIndex:
-        """Build and register an index for a column.
-
-        Parameters
-        ----------
-        col_name:
-            Name of the column to index.
-        kind:
-            Index kind.  One of :attr:`blosc2.IndexKind.BUCKET` (default),
-            :attr:`blosc2.IndexKind.PARTIAL`, or :attr:`blosc2.IndexKind.FULL`.
-        optlevel:
-            Optimisation level (1–9).  Higher values give more precise pruning
-            at the cost of larger index files.  Default is 5.
-        name:
-            Optional human-readable label for the index.
-        build:
-            Build strategy: ``'auto'``, ``'memory'``, or ``'ooc'`` (out-of-core).
-        tmpdir:
-            Temporary directory for out-of-core builds.  ``None`` means use the
-            column's own directory (persistent tables) or the system temporary
-            directory (in-memory tables).
-        **kwargs:
-            Pass ``cparams=<CParams or dict>`` to customise index compression.
-
-        Returns
-        -------
-        CTableIndex
-            A handle on the newly created index.
-
-        Raises
-        ------
-        ValueError
-            If called on a view.
-        KeyError
-            If *col_name* is not a column of this table.
-        """
+        """Build and register an index for a stored column or table expression."""
         if self.base is not None:
             raise ValueError("Cannot create an index on a view.")
-        if col_name not in self._cols:
-            raise KeyError(f"No column named {col_name!r}. Available: {self.col_names}")
-        catalog = self._storage.load_index_catalog()
-        if col_name in catalog:
-            raise ValueError(
-                f"Index already exists for column {col_name!r}. "
-                "Call rebuild_index() to replace it or drop_index() first."
-            )
+        if col_name is not None and field is not None:
+            raise ValueError("col_name and field are mutually exclusive")
+        if expression is not None and (col_name is not None or field is not None):
+            raise ValueError("column targets and expression are mutually exclusive")
+        if operands is not None and expression is None:
+            raise ValueError("operands can only be provided together with expression")
+        col_name = field if field is not None else col_name
 
         from blosc2.indexing import (
             _IN_MEMORY_INDEXES,
@@ -2981,10 +3900,9 @@ class CTable(Generic[RowT]):
             _normalize_build_mode,
             _normalize_index_cparams,
             _normalize_index_kind,
+            _target_token,
         )
-        from blosc2.indexing import (
-            create_index as _ix_create_index,
-        )
+        from blosc2.indexing import create_index as _ix_create_index
 
         cparams_obj = _normalize_index_cparams(kwargs.pop("cparams", None))
         if kwargs:
@@ -2992,6 +3910,57 @@ class CTable(Generic[RowT]):
 
         kind_str = _normalize_index_kind(kind)
         build_str = _normalize_build_mode(build)
+        catalog = self._storage.load_index_catalog()
+
+        if expression is not None:
+            target, dtype = self._normalize_table_expression_target(expression, operands)
+            token = _target_token(target)
+            if token in catalog:
+                raise ValueError(
+                    f"Index already exists for expression {expression!r}. "
+                    "Call rebuild_index() to replace it or drop_index() first."
+                )
+            expr_arr = self._build_expression_values_array(target, dtype, cparams=cparams_obj)
+            _ix_create_index(
+                expr_arr,
+                kind=blosc2.IndexKind(kind_str),
+                optlevel=optlevel,
+                name=name,
+                build=build,
+                tmpdir=tmpdir,
+                cparams=cparams_obj,
+            )
+            store = _IN_MEMORY_INDEXES.get(id(expr_arr))
+            if store is None:
+                from blosc2.indexing import _load_store
+
+                store = _load_store(expr_arr)
+            descriptor = _copy_descriptor(store["indexes"]["__self__"])
+            descriptor["target"] = target
+            descriptor["token"] = token
+            descriptor["dtype"] = str(np.dtype(dtype))
+            descriptor["expr_values_path"] = getattr(expr_arr, "urlpath", None)
+            value_epoch, _ = self._storage.get_epoch_counters()
+            descriptor["built_value_epoch"] = value_epoch
+            catalog[token] = descriptor
+            self._storage.save_index_catalog(catalog)
+            return CTableIndex(self, token, descriptor)
+
+        if col_name is None:
+            raise TypeError("must specify col_name/field or expression")
+        if col_name in self._computed_cols:
+            raise ValueError(
+                f"Cannot create an index on computed column {col_name!r}: "
+                "computed columns have no physical storage."
+            )
+        if col_name not in self._cols:
+            raise KeyError(f"No column named {col_name!r}. Available: {self.col_names}")
+        if col_name in catalog:
+            raise ValueError(
+                f"Index already exists for column {col_name!r}. "
+                "Call rebuild_index() to replace it or drop_index() first."
+            )
+
         col_arr = self._cols[col_name]
         is_persistent = self._storage.index_anchor_path(col_name) is not None
 
@@ -3028,90 +3997,42 @@ class CTable(Generic[RowT]):
         self._storage.save_index_catalog(catalog)
         return CTableIndex(self, col_name, descriptor)
 
-    def drop_index(self, col_name: str) -> None:
-        """Remove the index for *col_name* and delete any sidecar files.
-
-        Parameters
-        ----------
-        col_name:
-            Column whose index should be dropped.
-
-        Raises
-        ------
-        ValueError
-            If called on a view.
-        KeyError
-            If no index exists for *col_name*.
-        """
+    def drop_index(
+        self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
+    ) -> None:
+        """Remove an index and delete any sidecar files."""
         if self.base is not None:
             raise ValueError("Cannot drop an index from a view.")
 
+        lookup_key, descriptor = self._resolve_index_catalog_entry(
+            col_name, expression=expression, name=name
+        )
         catalog = self._storage.load_index_catalog()
-        if col_name not in catalog:
-            raise KeyError(f"No index found for column {col_name!r}.")
-
-        descriptor = catalog.pop(col_name)
-        self._validate_index_descriptor(col_name, descriptor)
-        self._drop_index_descriptor(col_name, descriptor)
+        catalog.pop(lookup_key, None)
+        self._validate_index_descriptor(lookup_key, descriptor)
+        self._drop_index_descriptor(lookup_key, descriptor)
         self._storage.save_index_catalog(catalog)
 
-    def rebuild_index(self, col_name: str) -> CTableIndex:
-        """Drop and recreate the index for *col_name* with the same parameters.
-
-        Parameters
-        ----------
-        col_name:
-            Column whose index should be rebuilt.
-
-        Returns
-        -------
-        CTableIndex
-            A handle on the newly built index.
-
-        Raises
-        ------
-        ValueError
-            If called on a view.
-        KeyError
-            If no index exists for *col_name*.
-        """
+    def rebuild_index(
+        self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
+    ) -> CTableIndex:
+        """Drop and recreate an index with the same parameters."""
         if self.base is not None:
             raise ValueError("Cannot rebuild an index on a view.")
 
-        catalog = self._storage.load_index_catalog()
-        if col_name not in catalog:
-            raise KeyError(f"No index found for column {col_name!r}.")
-
-        old_desc = catalog[col_name]
-        self._validate_index_descriptor(col_name, old_desc)
+        lookup_key, old_desc = self._resolve_index_catalog_entry(col_name, expression=expression, name=name)
+        self._validate_index_descriptor(lookup_key, old_desc)
         create_kwargs = self._index_create_kwargs_from_descriptor(old_desc)
 
-        self.drop_index(col_name)
-        return self.create_index(col_name, **create_kwargs)
+        self.drop_index(col_name, expression=expression, name=name)
+        if "expression" in create_kwargs:
+            return self.create_index(expression=create_kwargs.pop("expression"), **create_kwargs)
+        return self.create_index(lookup_key, **create_kwargs)
 
-    def compact_index(self, col_name: str) -> CTableIndex:
-        """Compact the index for *col_name*, merging any incremental append runs.
-
-        Only meaningful for ``kind='full'`` indexes.  For other kinds the call
-        is a no-op and returns the current handle.
-
-        Parameters
-        ----------
-        col_name:
-            Column whose index should be compacted.
-
-        Returns
-        -------
-        CTableIndex
-            A handle reflecting the (possibly updated) index descriptor.
-
-        Raises
-        ------
-        ValueError
-            If called on a view.
-        KeyError
-            If no index exists for *col_name*.
-        """
+    def compact_index(
+        self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
+    ) -> CTableIndex:
+        """Compact an index, merging any incremental append runs."""
         if self.base is not None:
             raise ValueError("Cannot compact an index on a view.")
 
@@ -3123,19 +4044,16 @@ class CTable(Generic[RowT]):
             _default_index_store,
             _is_persistent_array,
         )
-        from blosc2.indexing import (
-            compact_index as _ix_compact_index,
+        from blosc2.indexing import compact_index as _ix_compact_index
+
+        lookup_key, descriptor = self._resolve_index_catalog_entry(
+            col_name, expression=expression, name=name
         )
-
+        col_arr = self._index_target_array(lookup_key, descriptor)
         catalog = self._storage.load_index_catalog()
-        if col_name not in catalog:
-            raise KeyError(f"No index found for column {col_name!r}.")
-
-        col_arr = self._cols[col_name]
-        descriptor = catalog[col_name]
 
         if _is_persistent_array(col_arr):
-            anchor = self._storage.index_anchor_path(col_name)
+            anchor = self._storage.index_anchor_path(lookup_key)
             proxy = _CTableIndexProxy(col_arr, anchor)
             proxy_key = _array_key(proxy)
             store = _default_index_store()
@@ -3148,9 +4066,9 @@ class CTable(Generic[RowT]):
             finally:
                 _PERSISTENT_INDEXES.pop(proxy_key, None)
             updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
-            catalog[col_name] = updated_desc
+            catalog[lookup_key] = updated_desc
             self._storage.save_index_catalog(catalog)
-            return CTableIndex(self, col_name, updated_desc)
+            return CTableIndex(self, lookup_key, updated_desc)
         else:
             _ix_compact_index(col_arr)
             store = _IN_MEMORY_INDEXES.get(id(col_arr))
@@ -3158,38 +4076,91 @@ class CTable(Generic[RowT]):
                 token = descriptor["token"]
                 updated_desc = _copy_descriptor(store["indexes"].get(token, descriptor))
                 updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
-                catalog[col_name] = updated_desc
+                catalog[lookup_key] = updated_desc
                 self._storage.save_index_catalog(catalog)
-                return CTableIndex(self, col_name, updated_desc)
-            return CTableIndex(self, col_name, descriptor)
+                return CTableIndex(self, lookup_key, updated_desc)
+            return CTableIndex(self, lookup_key, descriptor)
 
-    def index(self, col_name: str) -> CTableIndex:
-        """Return the index handle for *col_name*.
-
-        Parameters
-        ----------
-        col_name:
-            Column name to look up.
-
-        Returns
-        -------
-        CTableIndex
-
-        Raises
-        ------
-        KeyError
-            If no index exists for *col_name*.
-        """
-        catalog = self._root_table._storage.load_index_catalog()
-        if col_name not in catalog:
-            raise KeyError(f"No index found for column {col_name!r}.")
-        return CTableIndex(self, col_name, catalog[col_name])
+    def index(
+        self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
+    ) -> CTableIndex:
+        """Return the index handle for a stored-column or expression target."""
+        lookup_key, descriptor = self._resolve_index_catalog_entry(
+            col_name, expression=expression, name=name
+        )
+        return CTableIndex(self, lookup_key, descriptor)
 
     @property
     def indexes(self) -> list[CTableIndex]:
         """Return a list of :class:`CTableIndex` handles for all active indexes."""
         catalog = self._root_table._storage.load_index_catalog()
         return [CTableIndex(self, col_name, desc) for col_name, desc in catalog.items()]
+
+    def _rewrite_expression_query_for_index(
+        self, expression: str, operands: dict, target: dict
+    ) -> str | None:
+        """Rewrite matching table-expression subtrees to ``_where_x`` for planning."""
+        try:
+            tree = ast.parse(expression, mode="eval")
+        except SyntaxError:
+            return None
+
+        class _Rewriter(ast.NodeTransformer):
+            def __init__(self, outer):
+                self.outer = outer
+                self.changed = False
+
+            def generic_visit(self, node):
+                normalized = None
+                with contextlib.suppress(Exception):
+                    normalized, _ = self.outer._normalize_table_expression_target(
+                        ast.unparse(node), operands
+                    )
+                if normalized is not None and normalized.get("expression_key") == target.get(
+                    "expression_key"
+                ):
+                    self.changed = True
+                    return ast.copy_location(ast.Name(id="_where_x", ctx=ast.Load()), node)
+                return super().generic_visit(node)
+
+        rewriter = _Rewriter(self)
+        new_body = rewriter.visit(tree.body)
+        if not rewriter.changed:
+            return None
+        return ast.unparse(new_body)
+
+    def _try_expression_index_where(self, expr_result: blosc2.LazyExpr, catalog: dict) -> np.ndarray | None:
+        """Attempt to resolve *expr_result* via a direct table expression index."""
+        from blosc2.indexing import evaluate_bucket_query, evaluate_segment_query, plan_query
+
+        expression = expr_result.expression
+        operands = dict(expr_result.operands)
+        for lookup_key, descriptor in catalog.items():
+            target = descriptor.get("target") or {}
+            if target.get("source") != "expression" or descriptor.get("stale", False):
+                continue
+            rewritten = self._rewrite_expression_query_for_index(expression, operands, target)
+            if rewritten is None:
+                continue
+            expr_arr = self._index_target_array(lookup_key, descriptor)
+            where_dict = {"_where_x": expr_arr}
+            merged_operands = {"_where_x": expr_arr}
+            plan = plan_query(rewritten, merged_operands, where_dict)
+            if not plan.usable:
+                continue
+            if plan.exact_positions is not None:
+                return np.asarray(plan.exact_positions, dtype=np.int64)
+            if plan.bucket_masks is not None:
+                _, positions = evaluate_bucket_query(
+                    rewritten, merged_operands, {}, where_dict, plan, return_positions=True
+                )
+                return np.asarray(positions, dtype=np.int64)
+            if plan.candidate_units is not None and plan.segment_len is not None:
+                _, positions = evaluate_segment_query(
+                    rewritten, merged_operands, {}, where_dict, plan, return_positions=True
+                )
+                return np.asarray(positions, dtype=np.int64)
+        return None
 
     @staticmethod
     def _find_indexed_columns(root_cols, catalog, operands):
@@ -3232,6 +4203,10 @@ class CTable(Generic[RowT]):
         catalog = root._storage.load_index_catalog()
         if not catalog:
             return None
+
+        positions = self._try_expression_index_where(expr_result, catalog)
+        if positions is not None:
+            return positions
 
         expression = expr_result.expression
         operands = dict(expr_result.operands)
@@ -3283,9 +4258,15 @@ class CTable(Generic[RowT]):
         """Structured summary items used by :meth:`info`."""
         storage_type = "persistent" if isinstance(self._storage, FileTableStorage) else "in-memory"
         urlpath = self._storage._root if isinstance(self._storage, FileTableStorage) else None
-        schema_summary = {
-            name: _InfoLiteral(self._dtype_info_label(self._cols[name].dtype)) for name in self.col_names
-        }
+        schema_summary = {}
+        for name in self.col_names:
+            if name in self._computed_cols:
+                cc = self._computed_cols[name]
+                schema_summary[name] = _InfoLiteral(
+                    f"{cc['dtype']} (computed: {self._readable_computed_expr(cc)})"
+                )
+            else:
+                schema_summary[name] = _InfoLiteral(self._dtype_info_label(self._cols[name].dtype))
 
         index_summary = {}
         for idx in self.indexes:
@@ -3374,6 +4355,7 @@ class CTable(Generic[RowT]):
 
         # Normalize → validate → coerce
         row = self._normalize_row_input(data)
+        row = self._autofill_materialized_row_values(row)
         if self._validate:
             from blosc2.schema_validation import validate_row
 
@@ -3427,35 +4409,46 @@ class CTable(Generic[RowT]):
 
         start_pos = self._resolve_last_pos()
 
-        current_col_names = self.col_names
-        columns_to_insert = []
+        current_col_names = self._stored_col_names  # skip computed columns
+        input_col_names = self._append_input_col_names
         new_nrows = 0
+        provided_names: set[str] = set()
 
         if hasattr(data, "_cols") and hasattr(data, "_n_rows"):
-            for name in current_col_names:
-                col = data._cols[name][: data._n_rows]
-                columns_to_insert.append(col)
             new_nrows = data._n_rows
+            raw_columns = {}
+            for name in current_col_names:
+                if name in data._cols:
+                    raw_columns[name] = data._cols[name][: data._n_rows]
+                    provided_names.add(name)
         else:
             if isinstance(data, np.ndarray) and data.dtype.names is not None:
-                for name in current_col_names:
-                    columns_to_insert.append(data[name])
                 new_nrows = len(data)
+                raw_columns = {name: data[name] for name in data.dtype.names if name in current_col_names}
+                provided_names = set(raw_columns)
             else:
-                columns_to_insert = list(zip(*data, strict=False))
                 new_nrows = len(data)
+                batch_columns = list(zip(*data, strict=False))
+                raw_columns = {
+                    input_col_names[i]: batch_columns[i]
+                    for i in range(min(len(input_col_names), len(batch_columns)))
+                }
+                provided_names = set(raw_columns)
+
+        raw_columns = self._autofill_materialized_batch_columns(
+            raw_columns, new_nrows, provided_names=provided_names
+        )
 
         # Validate constraints column-by-column before writing
         if do_validate:
             from blosc2.schema_vectorized import validate_column_batch
 
-            raw_columns = {current_col_names[i]: columns_to_insert[i] for i in range(len(current_col_names))}
             validate_column_batch(self._schema, raw_columns)
 
         processed_cols = []
-        for i, raw_col in enumerate(columns_to_insert):
-            target_dtype = self._cols[current_col_names[i]].dtype
-            b2_arr = blosc2.asarray(raw_col, dtype=target_dtype)
+        for name in current_col_names:
+            target_dtype = self._cols[name].dtype
+            b2_arr = blosc2.asarray(raw_columns[name], dtype=target_dtype)
             processed_cols.append(b2_arr)
 
         end_pos = start_pos + new_nrows

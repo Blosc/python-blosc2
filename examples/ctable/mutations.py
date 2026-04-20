@@ -58,7 +58,7 @@ print("After add_column('bonus'):")
 print(t)
 
 # -- assign(): fill the new column with computed values ---------------------
-bonuses = t["salary"].to_numpy() * 0.10
+bonuses = t["salary"][:] * 0.10
 t["bonus"].assign(bonuses)
 print("After assigning 10% bonuses:")
 print(t)

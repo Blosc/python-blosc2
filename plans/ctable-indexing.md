@@ -12,6 +12,11 @@ Add persistent, table-owned indexing to `CTable` so that:
 This plan is for design and implementation guidance only. It does not assume
 that all pieces must land in one patch.
 
+> Note: indexing true virtual computed columns is a larger design problem. For
+> the minimal alternative based on first materializing a computed column into a
+> normal stored one, see
+> [plans/materialized-computed-column.md](/Users/faltet/blosc/python-blosc2.proves/plans/materialized-computed-column.md).
+
 ## Current Situation
 
 ### What already exists

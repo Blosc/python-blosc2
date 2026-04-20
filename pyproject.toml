@@ -135,5 +135,5 @@ ignore = [
 "tests/**" = ["F841", "C901"]
 
 [tool.ruff.lint.mccabe]
-# Raise complexity from the default 10 to 13
-max-complexity = 13
+# Raise complexity from the default 10 to 14
+max-complexity = 14

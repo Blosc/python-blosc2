@@ -163,33 +163,33 @@ def test_from_csv_column_names(table10, tmp_csv):
 def test_from_csv_int_values(table10, tmp_csv):
     table10.to_csv(tmp_csv)
     t2 = CTable.from_csv(tmp_csv, Row)
-    np.testing.assert_array_equal(t2["id"].to_numpy(), table10["id"].to_numpy())
+    np.testing.assert_array_equal(t2["id"][:], table10["id"][:])
 
 
 def test_from_csv_float_values(table10, tmp_csv):
     table10.to_csv(tmp_csv)
     t2 = CTable.from_csv(tmp_csv, Row)
-    np.testing.assert_allclose(t2["score"].to_numpy(), table10["score"].to_numpy())
+    np.testing.assert_allclose(t2["score"][:], table10["score"][:])
 
 
 def test_from_csv_bool_values(table10, tmp_csv):
     table10.to_csv(tmp_csv)
     t2 = CTable.from_csv(tmp_csv, Row)
     # bool is serialised as "True"/"False"; np.array(..., dtype=bool) parses that
-    np.testing.assert_array_equal(t2["active"].to_numpy(), table10["active"].to_numpy())
+    np.testing.assert_array_equal(t2["active"][:], table10["active"][:])
 
 
 def test_from_csv_string_values(table10, tmp_csv):
     table10.to_csv(tmp_csv)
     t2 = CTable.from_csv(tmp_csv, Row)
-    assert t2["label"].to_numpy().tolist() == table10["label"].to_numpy().tolist()
+    assert t2["label"][:].tolist() == table10["label"][:].tolist()
 
 
 def test_from_csv_no_header(table10, tmp_csv):
     table10.to_csv(tmp_csv, header=False)
     t2 = CTable.from_csv(tmp_csv, Row, header=False)
     assert len(t2) == 10
-    np.testing.assert_array_equal(t2["id"].to_numpy(), table10["id"].to_numpy())
+    np.testing.assert_array_equal(t2["id"][:], table10["id"][:])
 
 
 def test_from_csv_custom_separator(table10, tmp_csv):
@@ -211,9 +211,9 @@ def test_from_csv_roundtrip(table10, tmp_csv):
     table10.to_csv(tmp_csv)
     t2 = CTable.from_csv(tmp_csv, Row)
     for name in ["id", "score"]:
-        np.testing.assert_array_equal(t2[name].to_numpy(), table10[name].to_numpy())
-    np.testing.assert_array_equal(t2["active"].to_numpy(), table10["active"].to_numpy())
-    assert t2["label"].to_numpy().tolist() == table10["label"].to_numpy().tolist()
+        np.testing.assert_array_equal(t2[name][:], table10[name][:])
+    np.testing.assert_array_equal(t2["active"][:], table10["active"][:])
+    assert t2["label"][:].tolist() == table10["label"][:].tolist()
 
 
 def test_from_csv_wrong_field_count_raises(tmp_csv):

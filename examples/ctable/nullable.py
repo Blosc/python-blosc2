@@ -67,7 +67,7 @@ loc_null = t["location"].is_null()
 print(f"location is_null   : {loc_null.tolist()}")
 
 # Use notnull() as a filter mask
-valid_temps = t["temperature"].to_numpy()[t["temperature"].notnull()]
+valid_temps = t["temperature"][:][t["temperature"].notnull()]
 print(f"Valid temperatures  : {valid_temps}")
 
 # ---------------------------------------------------------------------------
@@ -101,11 +101,11 @@ assert t["temperature"].null_count() == 3
 print("\n--- sort_by: nulls go last ---")
 s_asc = t.sort_by("temperature")
 print("Ascending (nulls last):")
-print([round(v, 1) for v in s_asc["temperature"].to_numpy().tolist()])
+print([round(v, 1) for v in s_asc["temperature"][:].tolist()])
 
 s_desc = t.sort_by("temperature", ascending=False)
 print("Descending (nulls still last):")
-print([round(v, 1) for v in s_desc["temperature"].to_numpy().tolist()])
+print([round(v, 1) for v in s_desc["temperature"][:].tolist()])
 
 # ---------------------------------------------------------------------------
 # Arrow interop: null sentinels become proper Arrow nulls

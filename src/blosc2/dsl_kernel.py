@@ -166,7 +166,7 @@ def _replace_scalar_names_preserving_source(
     return out
 
 
-def _fold_numeric_cast_calls_preserving_source(text: str, body_start: int):  # noqa: C901
+def _fold_numeric_cast_calls_preserving_source(text: str, body_start: int):
     """Fold float(<number>) and int(<number>) calls into literals.
 
     miniexpr parses DSL function calls in a restricted way, and scalar specialization can
