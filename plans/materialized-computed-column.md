@@ -92,7 +92,7 @@ This means the cleanest design is:
 
 ## `CTable.materialize_computed_column`
 
-```python
+```text
 def materialize_computed_column(
     self,
     name: str,
@@ -146,7 +146,7 @@ This is intentional and keeps the feature minimal.
 
 Suggested user-facing behavior:
 
-```python
+```pycon
 >>> t.add_computed_column("total", "price * qty")
 >>> t.materialize_computed_column("total", new_name="total_stored")
 >>> t.create_index("total_stored")
@@ -201,8 +201,7 @@ To keep `CTable` maintainable, factor the work into private helpers.
 #### 1. Resolve metadata
 
 ```python
-def _require_computed_column(self, name: str) -> dict:
-    ...
+def _require_computed_column(self, name: str) -> dict: ...
 ```
 
 Responsibilities:
@@ -219,8 +218,7 @@ def _create_empty_stored_column(
     dtype: np.dtype,
     *,
     cparams: dict | blosc2.CParams | None = None,
-):
-    ...
+): ...
 ```
 
 Responsibilities:
@@ -245,8 +243,7 @@ def _fill_stored_column_from_computed(
     computed_name: str,
     *,
     dtype: np.dtype,
-) -> None:
-    ...
+) -> None: ...
 ```
 
 Responsibilities:
@@ -422,7 +419,7 @@ for example:
     "materialized_from": {
         "computed_column": "total",
         "expression": "o0 * o1",
-        "col_deps": ["price", "qty"]
+        "col_deps": ["price", "qty"],
     }
 }
 ```

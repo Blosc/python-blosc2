@@ -112,11 +112,11 @@ Reasons:
 ### Data access
 
 ```python
-t.price[0]          # scalar
-t.price[:10]        # NumPy array
+t.price[0]  # scalar
+t.price[:10]  # NumPy array
 t.price[[1, 3, 5]]  # NumPy array
-t.price[mask]       # NumPy array
-t.price[:]          # full NumPy array
+t.price[mask]  # NumPy array
+t.price[:]  # full NumPy array
 ```
 
 ### Logical views
@@ -134,8 +134,8 @@ evens[0] = 99
 Computed columns should follow the same front-end API:
 
 ```python
-t.gross[:]          # values
-t.gross[2:10]       # values
+t.gross[:]  # values
+t.gross[2:10]  # values
 t.gross.view[2:10]  # logical read-only view or explicit unsupported operation
 ```
 

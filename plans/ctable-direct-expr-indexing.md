@@ -10,7 +10,9 @@ The intended end-state API is:
 
 ```python
 t.create_index(expression="price * qty", kind=blosc2.IndexKind.FULL, name="total")
-t.create_index(expression="abs(price - baseline)", kind=blosc2.IndexKind.BUCKET, name="abs_delta")
+t.create_index(
+    expression="abs(price - baseline)", kind=blosc2.IndexKind.BUCKET, name="abs_delta"
+)
 ```
 
 This should work for both in-memory and persistent tables, and should integrate
@@ -61,8 +63,12 @@ t.create_index(expression="price * qty", kind=blosc2.IndexKind.PARTIAL, name="to
 view = t.where((t["price"] * t["qty"]) > 100)
 
 # Ordered reuse
-t.create_index(expression="abs(score - baseline)", kind=blosc2.IndexKind.FULL, name="abs_delta")
-result = t.where((abs(t["score"] - t["baseline"]) >= 5) & (abs(t["score"] - t["baseline"]) < 20))
+t.create_index(
+    expression="abs(score - baseline)", kind=blosc2.IndexKind.FULL, name="abs_delta"
+)
+result = t.where(
+    (abs(t["score"] - t["baseline"]) >= 5) & (abs(t["score"] - t["baseline"]) < 20)
+)
 ```
 
 This is analogous to current `NDArray` support such as:
@@ -210,7 +216,7 @@ targets too.
 
 Suggested signature:
 
-```python
+```text
 def create_index(
     self,
     col_name: str | None = None,
@@ -281,7 +287,9 @@ So these should coexist:
 
 ```python
 t.create_index(expression="price * qty", kind=blosc2.IndexKind.FULL, name="total")
-t.create_index(expression="abs(price - baseline)", kind=blosc2.IndexKind.BUCKET, name="abs_delta")
+t.create_index(
+    expression="abs(price - baseline)", kind=blosc2.IndexKind.BUCKET, name="abs_delta"
+)
 ```
 
 but repeated creation of the same normalized expression target should raise an
@@ -400,7 +408,7 @@ Recommended shape for a table expression target:
 {
     "source": "expression",
     "expression": "price * qty",
-    "expression_key": "o0 * o1",   # or whatever canonical form the shared normalizer uses
+    "expression_key": "o0 * o1",  # or whatever canonical form the shared normalizer uses
     "dependencies": ["price", "qty"],
 }
 ```
@@ -444,7 +452,7 @@ The only difference is the `target` metadata in the descriptor.
 
 The table index catalog should be able to store entries like:
 
-```python
+```text
 {
     "token": "expr:<normalized-token>",
     "target": {
@@ -559,7 +567,9 @@ Expression `FULL` indexes are especially valuable for ordered reuse.
 Examples:
 
 ```python
-t.create_index(expression="abs(score - baseline)", kind=blosc2.IndexKind.FULL, name="abs_delta")
+t.create_index(
+    expression="abs(score - baseline)", kind=blosc2.IndexKind.FULL, name="abs_delta"
+)
 ```
 
 This should eventually allow table ordering/query paths to reuse that sorted
@@ -1008,7 +1018,9 @@ for example:
 
 ```python
 t.create_index(expression="price * qty", kind=blosc2.IndexKind.FULL, name="total")
-t.create_index(expression="abs(price - baseline)", kind=blosc2.IndexKind.BUCKET, name="abs_delta")
+t.create_index(
+    expression="abs(price - baseline)", kind=blosc2.IndexKind.BUCKET, name="abs_delta"
+)
 ```
 
 while keeping computed columns and materialized columns as separate, optional

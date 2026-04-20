@@ -11,7 +11,8 @@ mutations that target it raise an error.
 @dataclass
 class Row:
     price: float = blosc2.field(blosc2.float64())
-    qty: int     = blosc2.field(blosc2.int64())
+    qty: int = blosc2.field(blosc2.int64())
+
 
 t = CTable(Row, data)
 
@@ -19,8 +20,8 @@ t = CTable(Row, data)
 t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
 
 # Read it — lazy, chunk-by-chunk
-t["total"][0:100]          # np.ndarray of 100 values
-t["total"][:]              # full materialisation
+t["total"][0:100]  # np.ndarray of 100 values
+t["total"][:]  # full materialisation
 t.where(t["total"] > 500)  # filtering works
 ```
 
@@ -78,7 +79,7 @@ This is used internally wherever only physical columns should be visited
 
 ### 2.1  `CTable.add_computed_column()`
 
-```python
+```text
 def add_computed_column(
     self,
     name: str,
@@ -112,7 +113,7 @@ Steps:
 
 ### 2.2  `CTable.drop_computed_column()`
 
-```python
+```text
 def drop_computed_column(self, name: str) -> None:
 ```
 
@@ -193,8 +194,9 @@ def iter_chunks(self, size=65536):
         return
     # ... existing code ...
 
+
 def _iter_chunks_computed(self, size):
-    raw = self._raw_col           # LazyExpr
+    raw = self._raw_col  # LazyExpr
     valid = self._valid_rows
     phys_len = len(valid)
     chunk_size = valid.chunks[0]
@@ -207,7 +209,7 @@ def _iter_chunks_computed(self, size):
         n_live = int(np.count_nonzero(mask))
         if n_live == 0:
             continue
-        data = raw[start:end]     # triggers LazyExpr evaluation for this slice
+        data = raw[start:end]  # triggers LazyExpr evaluation for this slice
         if isinstance(data, blosc2.NDArray):
             data = data[:]
         segment = data[mask] if n_live < (end - start) else data
@@ -390,9 +392,7 @@ attach sidecars to).  `create_index` must reject computed column names:
 
 ```python
 if col_name in self._computed_cols:
-    raise ValueError(
-        f"Cannot create an index on computed column {col_name!r}."
-    )
+    raise ValueError(f"Cannot create an index on computed column {col_name!r}.")
 ```
 
 However, `where()` filtering by a computed column expression still works via
@@ -416,6 +416,7 @@ def _fetch_col_slice(self, name, positions):
     if cc is not None:
         return cc["lazy"][positions]
     return self._cols[name][positions]
+
 
 col_data = {n: self._fetch_col_slice(n, positions) for n in self.col_names}
 ```
