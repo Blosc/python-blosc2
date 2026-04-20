@@ -9,16 +9,13 @@
 
 from __future__ import annotations
 
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import pytest
 
 import blosc2
 from blosc2 import CTable
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / row types
@@ -70,9 +67,7 @@ def test_computed_column_dtype():
 
 def test_computed_column_dtype_override():
     t = _make_invoice_table()
-    t.add_computed_column(
-        "total", lambda cols: cols["price"] * cols["qty"], dtype=np.float32
-    )
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"], dtype=np.float32)
     assert t._computed_cols["total"]["dtype"] == np.dtype(np.float32)
 
 
@@ -235,7 +230,7 @@ def test_computed_column_iter():
     vals = list(t["total"])
     expected = [1.0, 4.0, 9.0, 16.0, 25.0]
     assert len(vals) == 5
-    for got, exp in zip(vals, expected):
+    for got, exp in zip(vals, expected, strict=False):
         assert np.isclose(float(np.asarray(got).ravel()[0]), exp)
 
 
@@ -438,7 +433,6 @@ def test_materialize_computed_column_basic():
     np.testing.assert_allclose(t["total"][:], t["total_stored"][:])
 
 
-
 def test_materialize_computed_column_physical_rows():
     t = _make_invoice_table(5)
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
@@ -452,7 +446,6 @@ def test_materialize_computed_column_physical_rows():
     np.testing.assert_allclose(t._cols["total_stored"][live_pos], all_expected[live_pos])
 
 
-
 def test_materialize_computed_column_dtype_override():
     t = _make_invoice_table(4)
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
@@ -461,7 +454,6 @@ def test_materialize_computed_column_dtype_override():
 
     assert t._cols["total_f32"].dtype == np.dtype(np.float32)
     np.testing.assert_allclose(t["total_f32"][:], np.array([1.0, 4.0, 9.0, 16.0], dtype=np.float32))
-
 
 
 def test_materialize_computed_column_indexing_workflow():
@@ -475,7 +467,6 @@ def test_materialize_computed_column_indexing_workflow():
     np.testing.assert_allclose(view["total_stored"][:], [9.0, 16.0, 25.0])
 
 
-
 def test_materialize_computed_column_append_autofill():
     t = _make_invoice_table(2)
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
@@ -484,7 +475,6 @@ def test_materialize_computed_column_append_autofill():
     t.append((3.0, 3, 0.1))
 
     np.testing.assert_allclose(t["total_stored"][:], [1.0, 4.0, 9.0])
-
 
 
 def test_materialize_computed_column_extend_autofill():
@@ -497,7 +487,6 @@ def test_materialize_computed_column_extend_autofill():
     np.testing.assert_allclose(t["total_stored"][:], [1.0, 4.0, 9.0, 16.0])
 
 
-
 def test_materialize_computed_column_explicit_append_value_wins():
     t = _make_invoice_table(2)
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
@@ -506,7 +495,6 @@ def test_materialize_computed_column_explicit_append_value_wins():
     t.append({"price": 3.0, "qty": 3, "tax": 0.1, "total_stored": 123.0})
 
     np.testing.assert_allclose(t["total_stored"][:], [1.0, 4.0, 123.0])
-
 
 
 def test_materialize_computed_column_name_collision():
@@ -520,12 +508,10 @@ def test_materialize_computed_column_name_collision():
         t.materialize_computed_column("total", new_name="total")
 
 
-
 def test_materialize_computed_column_missing_raises():
     t = _make_invoice_table()
     with pytest.raises(KeyError, match="not a computed column"):
         t.materialize_computed_column("missing")
-
 
 
 def test_materialize_computed_column_view_raises():
@@ -662,7 +648,7 @@ def test_computed_column_to_csv(tmp_path):
     t.to_csv(str(csv_path))
     text = csv_path.read_text()
     assert "total" in text.splitlines()[0]
-    lines = [l for l in text.splitlines() if l.strip()]
+    lines = [_ for _ in text.splitlines() if _.strip()]
     assert len(lines) == 4  # header + 3 data rows
 
 
@@ -734,7 +720,6 @@ def test_computed_column_open_append(tmp_path):
     np.testing.assert_allclose(arr, [1.0, 4.0, 9.0, 16.0])
 
 
-
 def test_materialize_computed_column_open_roundtrip(tmp_path):
     path = str(tmp_path / "tbl")
     t = CTable(Invoice, [(float(i + 1), i + 1, 0.1) for i in range(5)], urlpath=path, mode="w")
@@ -746,7 +731,6 @@ def test_materialize_computed_column_open_roundtrip(tmp_path):
     assert "total_stored" in t2._cols
     np.testing.assert_allclose(t2["total_stored"][:], [1.0, 4.0, 9.0, 16.0, 25.0])
     assert t2.index("total_stored").kind == "full"
-
 
 
 def test_materialize_computed_column_open_append_autofill(tmp_path):

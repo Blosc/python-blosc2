@@ -35,7 +35,6 @@ import numpy as np
 
 import blosc2
 
-
 # ---------------------------------------------------------------------------
 # Schema: stock portfolio trades
 #   market_value  = price * shares            (computed)
@@ -86,16 +85,16 @@ print(f"ncols : {t.ncols}  (3 stored + 3 computed)\n")
 # ---------------------------------------------------------------------------
 
 # col[:] — materialise the full column as a numpy array
-mv = t["market_value"][:]          # np.ndarray — col[:] materialises directly
+mv = t["market_value"][:]  # np.ndarray — col[:] materialises directly
 print("market_value per trade:")
-for i, (row, val) in enumerate(zip(TRADES, mv)):
+for _i, (row, val) in enumerate(zip(TRADES, mv, strict=False)):
     print(f"  {row[0]:6s}  {row[1]:8.2f} × {row[2]:4d}  = {val:10,.2f}")
 
 # Scalar access — logical row index
 print(f"\nRow 0 net_value : {np.asarray(t['net_value'][0]).ravel()[0]:,.2f}")
 
 # col[slice] → numpy array directly; col.view[slice] → Column sub-view for chaining
-fee_slice = t["fee"][0:3]          # np.ndarray of logical rows 0-2
+fee_slice = t["fee"][0:3]  # np.ndarray of logical rows 0-2
 print(f"Rows 0-2 fee    : {fee_slice}")
 
 # ---------------------------------------------------------------------------
@@ -118,7 +117,9 @@ total_fees = t["fee"].sum()
 total_net = t["net_value"].sum()
 
 print(f"Portfolio market value : {total_market:>12,.2f}")
-print(f"Total fees             : {total_fees:>12,.2f}  ({total_fees / total_market * 100:.2f} % of market value)")
+print(
+    f"Total fees             : {total_fees:>12,.2f}  ({total_fees / total_market * 100:.2f} % of market value)"
+)
 print(f"Total net value        : {total_net:>12,.2f}\n")
 
 print(f"Largest trade (market value) : {t['market_value'].max():,.2f}")
@@ -164,10 +165,12 @@ print(slim)
 
 # Input rows need only stored column values — computed columns are excluded
 t.append(("BRK.B", 410.00, 25, 0.08))
-t.extend([
-    ("JPM", 204.50, 90, 0.10),
-    ("V", 275.30, 110, 0.08),
-])
+t.extend(
+    [
+        ("JPM", 204.50, 90, 0.10),
+        ("V", 275.30, 110, 0.08),
+    ]
+)
 
 print(f"\nAfter 3 more trades: {len(t)} rows")
 print(f"  New portfolio market value : {t['market_value'].sum():>12,.2f}")
@@ -188,10 +191,12 @@ print(f"Index kind on materialized column: {mt.index('market_value_stored').kind
 
 # append()/extend() can omit the materialized stored column; it will be auto-filled
 mt.append(("IBM", 170.0, 20, 0.10))
-mt.extend([
-    ("ORCL", 125.0, 40, 0.10),
-    ("SAP", 198.0, 15, 0.08),
-])
+mt.extend(
+    [
+        ("ORCL", 125.0, 40, 0.10),
+        ("SAP", 198.0, 15, 0.08),
+    ]
+)
 print("After append/extend auto-fill on materialized column:")
 print(mt.select(["ticker", "market_value_stored"]).tail(3))
 
@@ -286,7 +291,7 @@ finally:
 
 t3.drop_computed_column("market_value")
 print(f"\nAfter drop_computed_column: {t3.col_names}")
-print(f"  'market_value' still in _cols : {'market_value' in t3._cols}")       # False
+print(f"  'market_value' still in _cols : {'market_value' in t3._cols}")  # False
 print(f"  'net_value' still available   : {t3['net_value'][:][0]:,.2f}")
 
 print("\nDone.")
