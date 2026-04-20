@@ -218,6 +218,29 @@ def test_multi_column_conjunction_uses_multiple_indexes_in_memory():
     assert ids_idx == ids_scan
 
 
+def test_full_index_large_ctable_column_matches_scan_in_memory():
+    @dataclasses.dataclass
+    class SensorRow:
+        sensor_id: int = blosc2.field(blosc2.int32())
+
+    n = 300_000
+    rng = np.random.default_rng(42)
+    data = np.empty(n, dtype=np.dtype([("sensor_id", np.int32)]))
+    data["sensor_id"] = rng.integers(0, n // 10, size=n, dtype=np.int32)
+
+    t = blosc2.CTable(SensorRow, expected_size=n)
+    t.extend(data)
+    t.create_index("sensor_id", kind=blosc2.IndexKind.FULL)
+
+    result_idx = t.where(t["sensor_id"] > 29_000)
+    t.drop_index("sensor_id")
+    result_scan = t.where(t["sensor_id"] > 29_000)
+
+    ids_idx = np.sort(np.asarray(result_idx["sensor_id"][:]))
+    ids_scan = np.sort(np.asarray(result_scan["sensor_id"][:]))
+    assert np.array_equal(ids_idx, ids_scan)
+
+
 # ---------------------------------------------------------------------------
 # Persistent table tests
 # ---------------------------------------------------------------------------

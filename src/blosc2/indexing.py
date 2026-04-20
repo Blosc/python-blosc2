@@ -4655,7 +4655,7 @@ def _exact_positions_from_sorted_chunks(
         if lo >= hi:
             continue
         matched = np.empty(hi - lo, dtype=np.int64)
-        positions_sidecar.get_1d_span_numpy(matched, int(chunk_id), lo, hi - lo)
+        _read_ndarray_linear_span(positions_sidecar, chunk_start + lo, matched)
         parts.append(matched)
 
     if not parts:
@@ -4708,7 +4708,7 @@ def _exact_positions_from_compact_full_base(
             if lo >= hi:
                 continue
             matched = np.empty(hi - lo, dtype=np.int64)
-            positions_sidecar.get_1d_span_numpy(matched, int(chunk_id), local_start + lo, hi - lo)
+            _read_ndarray_linear_span(positions_sidecar, span_start + lo, matched)
             parts.append(matched)
 
     if not parts:
