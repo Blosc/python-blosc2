@@ -20,6 +20,12 @@
 #   - can be indexed like any other stored column
 #   - auto-fill omitted values on future append()/extend() calls
 #   - do not retroactively refresh old rows if source columns are edited
+#
+# Direct expression indexes:
+#   - index an expression over stored columns without adding a new column
+#   - can accelerate where() on matching expressions
+#   - FULL expression indexes can also be reused by sort_by() on a computed
+#     column backed by the same expression
 
 import shutil
 import tempfile
@@ -194,7 +200,23 @@ mt.append({"ticker": "ADBE", "price": 450.0, "shares": 2, "fee_pct": 0.10, "mark
 print(f"Explicit override for ADBE stored market value: {mt['market_value_stored'][-1]}")
 
 # ---------------------------------------------------------------------------
-# 10. Auto-update after delete
+# 10. Direct expression indexes (no explicit computed/materialized column needed)
+# ---------------------------------------------------------------------------
+
+xt = blosc2.CTable(Trade, new_data=TRADES)
+xt.add_computed_column("market_value", lambda c: c["price"] * c["shares"])
+xt.create_index(expression="price * shares", kind=blosc2.IndexKind.FULL, name="mv_expr")
+
+expr_view = xt.where((xt._cols["price"] * xt._cols["shares"]) >= 30_000)
+print("\nRows matched via direct expression index:")
+print(expr_view.select(["ticker", "market_value"]))
+
+expr_sorted = xt.sort_by("market_value", ascending=False)
+print("Top trades sorted by computed column using matching FULL expression index:")
+print(expr_sorted.select(["ticker", "market_value"]).head(5))
+
+# ---------------------------------------------------------------------------
+# 11. Auto-update after delete
 # ---------------------------------------------------------------------------
 
 mv_before = t["market_value"].sum()
@@ -203,7 +225,7 @@ mv_after = t["market_value"].sum()
 print(f"\nAfter removing AAPL: portfolio dropped by {mv_before - mv_after:,.2f}")
 
 # ---------------------------------------------------------------------------
-# 11. cbytes / nbytes are unchanged (computed columns use no storage)
+# 12. cbytes / nbytes are unchanged (computed columns use no storage)
 # ---------------------------------------------------------------------------
 
 t2 = blosc2.CTable(Trade, new_data=TRADES)  # fresh copy without computed cols
@@ -217,7 +239,7 @@ print(f"\nStorage with 0 computed cols : {t2.cbytes:,} B compressed")
 print(f"Storage with 2 computed cols : {t3.cbytes:,} B compressed  (identical ✓)")
 
 # ---------------------------------------------------------------------------
-# 12. Write guard
+# 13. Write guard
 # ---------------------------------------------------------------------------
 
 try:
@@ -226,7 +248,7 @@ except ValueError as exc:
     print(f"\nWrite guard : {exc}")
 
 # ---------------------------------------------------------------------------
-# 13. Persistence: save → load / open
+# 14. Persistence: save → load / open
 # ---------------------------------------------------------------------------
 
 tmpdir = tempfile.mkdtemp(prefix="blosc2_computed_")
@@ -259,7 +281,7 @@ finally:
     print("Temporary files removed.")
 
 # ---------------------------------------------------------------------------
-# 14. drop_computed_column()
+# 15. drop_computed_column()
 # ---------------------------------------------------------------------------
 
 t3.drop_computed_column("market_value")

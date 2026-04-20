@@ -130,6 +130,13 @@ snapshot that can be indexed like any other stored column.  New rows inserted
 later via :meth:`CTable.append` or :meth:`CTable.extend` auto-fill omitted
 materialized-column values from the recorded expression metadata.
 
+CTable indexes can also target **direct expressions** over stored columns via
+``create_index(expression=...)``.  This lets queries reuse indexes for derived
+predicates without adding either a computed column or a materialized stored one.
+A matching ``FULL`` direct-expression index can also be reused by ordering paths
+such as :meth:`CTable.sort_by` when sorting by a computed column backed by the
+same expression.
+
 .. autosummary::
 
     CTable.delete

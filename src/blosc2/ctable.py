@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import dataclasses
 import re
@@ -139,7 +140,7 @@ class _CTableIndexProxy:
 
 
 class CTableIndex:
-    """A handle on an index attached to a :class:`CTable` column.
+    """A handle on an index attached to a :class:`CTable` target.
 
     Returned by :meth:`CTable.index` and items of :attr:`CTable.indexes`.
     Provides :meth:`drop`, :meth:`rebuild`, and :meth:`compact` convenience
@@ -151,9 +152,12 @@ class CTableIndex:
         self._col_name = col_name
         self._descriptor = descriptor
 
+    def _target_array(self) -> blosc2.NDArray:
+        return self._table._root_table._index_target_array(self._col_name, self._descriptor)
+
     @property
     def col_name(self) -> str:
-        """Column name this index targets."""
+        """Lookup key for this index target."""
         return self._col_name
 
     @property
@@ -176,12 +180,11 @@ class CTableIndex:
         """Total uncompressed size in bytes for this index payload."""
         from blosc2.indexing import _component_nbytes, iter_index_components
 
-        root = self._table._root_table
-        col_arr = root._cols[self._col_name]
+        target_arr = self._target_array()
         descriptor = self._descriptor
         return sum(
-            _component_nbytes(col_arr, descriptor, component)
-            for component in iter_index_components(col_arr, descriptor)
+            _component_nbytes(target_arr, descriptor, component)
+            for component in iter_index_components(target_arr, descriptor)
         )
 
     @property
@@ -189,12 +192,11 @@ class CTableIndex:
         """Total compressed size in bytes for this index payload."""
         from blosc2.indexing import _component_cbytes, iter_index_components
 
-        root = self._table._root_table
-        col_arr = root._cols[self._col_name]
+        target_arr = self._target_array()
         descriptor = self._descriptor
         return sum(
-            _component_cbytes(col_arr, descriptor, component)
-            for component in iter_index_components(col_arr, descriptor)
+            _component_cbytes(target_arr, descriptor, component)
+            for component in iter_index_components(target_arr, descriptor)
         )
 
     @property
@@ -218,12 +220,12 @@ class CTableIndex:
             from blosc2.indexing import iter_index_components
 
             descriptor = self._descriptor
-            col_arr = root._cols[self._col_name]
+            target_arr = self._target_array()
             store = root._storage._open_store()
             nbytes = 0
             cbytes = 0
             try:
-                for component in iter_index_components(col_arr, descriptor):
+                for component in iter_index_components(target_arr, descriptor):
                     if component.path is None:
                         return None
                     key = self._component_store_key(component.path)
@@ -252,20 +254,32 @@ class CTableIndex:
 
     def drop(self) -> None:
         """Drop this index from the owning table."""
-        self._table.drop_index(self._col_name)
+        target = self._descriptor.get("target") or {}
+        if target.get("source") == "expression":
+            self._table.drop_index(expression=target.get("expression"), name=self.name)
+        else:
+            self._table.drop_index(self._col_name)
 
     def rebuild(self) -> CTableIndex:
         """Rebuild this index and return the updated handle."""
+        target = self._descriptor.get("target") or {}
+        if target.get("source") == "expression":
+            return self._table.rebuild_index(expression=target.get("expression"), name=self.name)
         return self._table.rebuild_index(self._col_name)
 
     def compact(self) -> CTableIndex:
         """Compact this index (merge incremental runs) and return the updated handle."""
+        target = self._descriptor.get("target") or {}
+        if target.get("source") == "expression":
+            return self._table.compact_index(expression=target.get("expression"), name=self.name)
         return self._table.compact_index(self._col_name)
 
     def __repr__(self) -> str:
         stale_str = " (stale)" if self.stale else ""
         name_str = f" name={self.name!r}" if self.name else ""
-        return f"<CTableIndex col={self._col_name!r} kind={self.kind!r}{name_str}{stale_str}>"
+        target = self._descriptor.get("target") or {}
+        target_label = self._col_name if target.get("source") != "expression" else target.get("expression")
+        return f"<CTableIndex col={target_label!r} kind={self.kind!r}{name_str}{stale_str}>"
 
 
 class _CTableInfoReporter(InfoReporter):
@@ -1275,6 +1289,7 @@ class CTable(Generic[RowT]):
         self._cols: dict[str, blosc2.NDArray] = {}
         self._computed_cols: dict[str, dict] = {}  # virtual/computed columns
         self._materialized_cols: dict[str, dict] = {}  # stored columns auto-filled from expressions
+        self._expr_index_arrays: dict[str, blosc2.NDArray] = {}
         self._col_widths: dict[str, int] = {}
         self.col_names: list[str] = []
         self.row = _RowIndexer(self)
@@ -1320,6 +1335,7 @@ class CTable(Generic[RowT]):
             # ---- Restore computed/materialized column metadata (if any) ----
             self._computed_cols = {}
             self._materialized_cols = {}
+            self._expr_index_arrays = {}
             self._load_computed_cols_from_schema(schema_dict)
             self._load_materialized_cols_from_schema(schema_dict)
         else:
@@ -1624,6 +1640,7 @@ class CTable(Generic[RowT]):
         obj._last_pos = None  # resolve lazily on first write
         obj._computed_cols = {}
         obj._materialized_cols = {}
+        obj._expr_index_arrays = {}
         obj._load_computed_cols_from_schema(schema_dict)
         obj._load_materialized_cols_from_schema(schema_dict)
         return obj
@@ -1781,6 +1798,7 @@ class CTable(Generic[RowT]):
         obj._last_pos = None  # resolve lazily on first write
         obj._computed_cols = {}
         obj._materialized_cols = {}
+        obj._expr_index_arrays = {}
         obj._load_computed_cols_from_schema(schema_dict)
         obj._load_materialized_cols_from_schema(schema_dict)
         return obj
@@ -1799,6 +1817,7 @@ class CTable(Generic[RowT]):
         obj._cols = parent._cols  # shared — views cannot change row structure
         obj._computed_cols = parent._computed_cols  # shared — LazyExpr refs remain valid
         obj._materialized_cols = parent._materialized_cols
+        obj._expr_index_arrays = parent._expr_index_arrays
         obj._col_widths = parent._col_widths
         obj.col_names = parent.col_names
         obj.row = _RowIndexer(obj)
@@ -1941,6 +1960,7 @@ class CTable(Generic[RowT]):
         obj._cols = {name: self._cols[name] for name in cols if name in self._cols}
         obj.col_names = list(cols)
         obj._materialized_cols = {name: dict(self._materialized_cols[name]) for name in cols if name in self._materialized_cols}
+        obj._expr_index_arrays = self._expr_index_arrays
 
         # Computed columns — share the same definitions (LazyExpr refs remain valid)
         obj._computed_cols = {name: self._computed_cols[name] for name in cols if name in self._computed_cols}
@@ -2279,6 +2299,7 @@ class CTable(Generic[RowT]):
         obj.base = None
         obj._computed_cols = {}  # from_arrow creates no computed columns
         obj._materialized_cols = {}
+        obj._expr_index_arrays = {}
         obj._valid_rows = new_valid
         obj._n_rows = 0
         obj._last_pos = 0
@@ -2448,6 +2469,7 @@ class CTable(Generic[RowT]):
         obj.base = None
         obj._computed_cols = {}  # from_csv creates no computed columns
         obj._materialized_cols = {}
+        obj._expr_index_arrays = {}
         obj._valid_rows = new_valid
         obj._n_rows = 0
         obj._last_pos = 0
@@ -3198,6 +3220,52 @@ class CTable(Generic[RowT]):
                 )
         return cols, ascending
 
+    def _sorted_positions_from_full_index(self, name: str, ascending: bool) -> np.ndarray | None:
+        """Return live physical positions from a matching FULL index, if available."""
+        from blosc2.indexing import ordered_indices
+
+        root = self._root_table
+        catalog = root._storage.load_index_catalog()
+        descriptor = None
+        target_arr = None
+
+        if name in root._cols:
+            descriptor = catalog.get(name)
+            if descriptor is not None and descriptor.get("kind") == "full" and not descriptor.get("stale", False):
+                target_arr = root._cols[name]
+            else:
+                descriptor = None
+        elif name in root._computed_cols:
+            cc = root._computed_cols[name]
+            for lookup_key, candidate in catalog.items():
+                target = candidate.get("target") or {}
+                if (
+                    target.get("source") == "expression"
+                    and candidate.get("kind") == "full"
+                    and not candidate.get("stale", False)
+                    and target.get("expression_key") == cc["expression"]
+                    and list(target.get("dependencies", [])) == list(cc["col_deps"])
+                ):
+                    descriptor = candidate
+                    target_arr = root._index_target_array(lookup_key, candidate)
+                    break
+        if descriptor is None or target_arr is None:
+            return None
+
+        positions = ordered_indices(target_arr, require_full=True)
+        if positions is None:
+            return None
+        valid = root._valid_rows[:]
+        positions = np.asarray(positions, dtype=np.int64)
+        positions = positions[(positions >= 0) & (positions < len(valid))]
+        positions = positions[valid[positions]]
+        if self is not root:
+            current_valid = self._valid_rows[:]
+            positions = positions[current_valid[positions]]
+        if not ascending:
+            positions = positions[::-1]
+        return positions
+
     def _build_lex_keys(
         self,
         cols: list[str],
@@ -3297,9 +3365,15 @@ class CTable(Generic[RowT]):
                 return self
             return self._empty_copy()
 
-        order = np.lexsort(self._build_lex_keys(cols, ascending, live_pos, n))
+        sorted_pos = None
+        if len(cols) == 1:
+            sorted_pos = self._sorted_positions_from_full_index(cols[0], ascending[0])
+            if sorted_pos is not None and len(sorted_pos) != n:
+                sorted_pos = None
 
-        sorted_pos = live_pos[order]
+        if sorted_pos is None:
+            order = np.lexsort(self._build_lex_keys(cols, ascending, live_pos, n))
+            sorted_pos = live_pos[order]
 
         if inplace:
             for _col_name, arr in self._cols.items():
@@ -3358,6 +3432,7 @@ class CTable(Generic[RowT]):
         obj._col_widths = self._col_widths.copy()
         obj.col_names = [col.name for col in self._schema.columns]
         obj._materialized_cols = {name: dict(meta) for name, meta in self._materialized_cols.items()}
+        obj._expr_index_arrays = dict(self._expr_index_arrays)
         # Rebuild computed columns with the new NDArray objects as operands
         obj._computed_cols = {}
         for cc_name, cc in self._computed_cols.items():
@@ -3490,8 +3565,10 @@ class CTable(Generic[RowT]):
             _is_persistent_array,
         )
 
-        col_arr = self._cols.get(col_name)
         token = descriptor["token"]
+        col_arr = None
+        with contextlib.suppress(Exception):
+            col_arr = self._index_target_array(col_name, descriptor)
 
         if col_arr is not None:
             _clear_cached_data(col_arr, token)
@@ -3507,6 +3584,12 @@ class CTable(Generic[RowT]):
                 store["indexes"].pop(token, None)
 
         _drop_descriptor_sidecars(descriptor)
+        self._root_table._expr_index_arrays.pop(token, None)
+
+        expr_values_path = descriptor.get("expr_values_path")
+        if expr_values_path is not None:
+            with contextlib.suppress(OSError):
+                os.remove(expr_values_path)
 
         anchor = self._storage.index_anchor_path(col_name)
         if anchor is not None:
@@ -3518,13 +3601,140 @@ class CTable(Generic[RowT]):
     def _index_create_kwargs_from_descriptor(self, descriptor: dict) -> dict[str, Any]:
         """Return create_index kwargs that rebuild an existing descriptor."""
         build = "ooc" if bool(descriptor.get("ooc", False)) else "memory"
-        return {
+        kwargs = {
             "kind": descriptor["kind"],
             "optlevel": int(descriptor.get("optlevel", 5)),
             "name": descriptor.get("name") or None,
             "build": build,
             "cparams": descriptor.get("cparams"),
         }
+        target = descriptor.get("target") or {}
+        if target.get("source") == "expression":
+            kwargs["expression"] = target.get("expression")
+        return kwargs
+
+    def _normalize_table_expression_target(self, expression: str, operands: dict | None = None) -> tuple[dict, np.dtype]:
+        """Normalize a same-table expression target and infer its dtype."""
+        if operands is None:
+            operands = self._cols
+        try:
+            tree = ast.parse(expression, mode="eval")
+        except SyntaxError as exc:
+            raise ValueError("expression is not valid Python syntax") from exc
+
+        owned_ids = {id(arr): name for name, arr in self._root_table._cols.items()}
+        dependencies: list[str] = []
+        valid = True
+
+        class _Canonicalizer(ast.NodeTransformer):
+            def visit_Name(self_inner, node: ast.Name) -> ast.AST:
+                nonlocal valid
+                operand = operands.get(node.id)
+                if operand is None or not isinstance(operand, blosc2.NDArray):
+                    return node
+                cname = owned_ids.get(id(operand))
+                if cname is None:
+                    valid = False
+                    return node
+                dependencies.append(cname)
+                return ast.copy_location(ast.Name(id=cname, ctx=node.ctx), node)
+
+        normalized = _Canonicalizer().visit(ast.fix_missing_locations(ast.parse(expression, mode="eval")).body)
+        if not valid or not dependencies:
+            raise ValueError("expression indexes require operands from stored columns of the same table")
+        dependencies = list(dict.fromkeys(dependencies))
+        expression_key = ast.unparse(normalized)
+        lazy = blosc2.lazyexpr(expression_key, {dep: self._root_table._cols[dep] for dep in dependencies})
+        sample_stop = min(int(len(self._root_table._valid_rows)), max(1, int(self._root_table._valid_rows.blocks[0])))
+        sample = lazy[:sample_stop]
+        if isinstance(sample, blosc2.NDArray):
+            sample = sample[:]
+        sample = np.asarray(sample)
+        dtype = np.dtype(sample.dtype)
+        if sample.ndim != 1:
+            raise ValueError("expression indexes require expressions returning a 1-D scalar stream")
+        target = {
+            "source": "expression",
+            "expression": expression,
+            "expression_key": expression_key,
+            "dependencies": dependencies,
+        }
+        return target, dtype
+
+    def _expression_index_values_path(self, token: str) -> str | None:
+        anchor = self._storage.index_anchor_path(token)
+        if anchor is None:
+            return None
+        return os.path.join(os.path.dirname(anchor), "values.b2nd")
+
+    def _build_expression_values_array(self, target: dict, dtype: np.dtype, cparams=None) -> blosc2.NDArray:
+        """Build a physical 1-D values array for a table expression target."""
+        from blosc2.indexing import _target_token
+
+        root = self._root_table
+        capacity = len(root._valid_rows)
+        chunks, blocks = compute_chunks_blocks((capacity,), dtype=dtype)
+        urlpath = root._expression_index_values_path(_target_token(target))
+        if urlpath is not None:
+            os.makedirs(os.path.dirname(urlpath), exist_ok=True)
+            arr = blosc2.zeros((capacity,), dtype=dtype, urlpath=urlpath, mode="w", chunks=chunks, blocks=blocks)
+        else:
+            arr = blosc2.zeros((capacity,), dtype=dtype, chunks=chunks, blocks=blocks)
+        lazy = blosc2.lazyexpr(target["expression_key"], {dep: root._cols[dep] for dep in target["dependencies"]})
+        step = int(root._valid_rows.chunks[0]) if root._valid_rows.chunks else 65536
+        for start in range(0, capacity, step):
+            stop = min(start + step, capacity)
+            values = lazy[start:stop]
+            if isinstance(values, blosc2.NDArray):
+                values = values[:]
+            arr[start:stop] = np.asarray(values, dtype=dtype)
+        root._expr_index_arrays[_target_token(target)] = arr
+        return arr
+
+    def _index_target_array(self, lookup_key: str, descriptor: dict) -> blosc2.NDArray:
+        """Return the physical array backing a column or expression index."""
+        target = descriptor.get("target") or {}
+        if target.get("source") != "expression":
+            return self._root_table._cols[lookup_key]
+        token = descriptor["token"]
+        root = self._root_table
+        arr = root._expr_index_arrays.get(token)
+        if arr is not None:
+            return arr
+        path = descriptor.get("expr_values_path")
+        if path is None:
+            raise KeyError(f"No backing array found for expression index {token!r}.")
+        arr = blosc2.open(path, mode="r" if root._read_only else "a")
+        root._expr_index_arrays[token] = arr
+        return arr
+
+    def _resolve_index_catalog_entry(
+        self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
+    ) -> tuple[str, dict]:
+        """Resolve an index catalog entry by column, expression, or label."""
+        catalog = self._root_table._storage.load_index_catalog()
+        if col_name is not None and expression is not None:
+            raise ValueError("col_name and expression are mutually exclusive")
+        if col_name is not None:
+            if col_name not in catalog:
+                raise KeyError(f"No index found for column {col_name!r}.")
+            return col_name, catalog[col_name]
+        if expression is not None:
+            from blosc2.indexing import _target_token
+
+            target, _ = self._normalize_table_expression_target(expression)
+            token = _target_token(target)
+            if token not in catalog:
+                raise KeyError(f"No index found for expression {expression!r}.")
+            return token, catalog[token]
+        if name is not None:
+            matches = [(key, desc) for key, desc in catalog.items() if desc.get("name") == name]
+            if not matches:
+                raise KeyError(f"No index found with name {name!r}.")
+            if len(matches) > 1:
+                raise ValueError(f"Multiple indexes found with name {name!r}; specify a target explicitly.")
+            return matches[0]
+        raise TypeError("must specify col_name, expression, or name")
 
     def _build_index_persistent(
         self,
@@ -3656,8 +3866,11 @@ class CTable(Generic[RowT]):
 
     def create_index(
         self,
-        col_name: str,
+        col_name: str | None = None,
         *,
+        field: str | None = None,
+        expression: str | None = None,
+        operands: dict | None = None,
         kind: blosc2.IndexKind = blosc2.IndexKind.BUCKET,
         optlevel: int = 5,
         name: str | None = None,
@@ -3665,56 +3878,16 @@ class CTable(Generic[RowT]):
         tmpdir: str | None = None,
         **kwargs,
     ) -> CTableIndex:
-        """Build and register an index for a column.
-
-        Parameters
-        ----------
-        col_name:
-            Name of the column to index.
-        kind:
-            Index kind.  One of :attr:`blosc2.IndexKind.BUCKET` (default),
-            :attr:`blosc2.IndexKind.PARTIAL`, or :attr:`blosc2.IndexKind.FULL`.
-        optlevel:
-            Optimisation level (1–9).  Higher values give more precise pruning
-            at the cost of larger index files.  Default is 5.
-        name:
-            Optional human-readable label for the index.
-        build:
-            Build strategy: ``'auto'``, ``'memory'``, or ``'ooc'`` (out-of-core).
-        tmpdir:
-            Temporary directory for out-of-core builds.  ``None`` means use the
-            column's own directory (persistent tables) or the system temporary
-            directory (in-memory tables).
-        **kwargs:
-            Pass ``cparams=<CParams or dict>`` to customise index compression.
-
-        Returns
-        -------
-        CTableIndex
-            A handle on the newly created index.
-
-        Raises
-        ------
-        ValueError
-            If called on a view.
-        KeyError
-            If *col_name* is not a column of this table.
-        """
+        """Build and register an index for a stored column or table expression."""
         if self.base is not None:
             raise ValueError("Cannot create an index on a view.")
-        if col_name in self._computed_cols:
-            raise ValueError(
-                f"Cannot create an index on computed column {col_name!r}: "
-                "computed columns have no physical storage."
-            )
-        if col_name not in self._cols:
-            raise KeyError(f"No column named {col_name!r}. Available: {self.col_names}")
-        catalog = self._storage.load_index_catalog()
-        if col_name in catalog:
-            raise ValueError(
-                f"Index already exists for column {col_name!r}. "
-                "Call rebuild_index() to replace it or drop_index() first."
-            )
+        if col_name is not None and field is not None:
+            raise ValueError("col_name and field are mutually exclusive")
+        if expression is not None and (col_name is not None or field is not None):
+            raise ValueError("column targets and expression are mutually exclusive")
+        if operands is not None and expression is None:
+            raise ValueError("operands can only be provided together with expression")
+        col_name = field if field is not None else col_name
 
         from blosc2.indexing import (
             _IN_MEMORY_INDEXES,
@@ -3722,10 +3895,9 @@ class CTable(Generic[RowT]):
             _normalize_build_mode,
             _normalize_index_cparams,
             _normalize_index_kind,
+            _target_token,
         )
-        from blosc2.indexing import (
-            create_index as _ix_create_index,
-        )
+        from blosc2.indexing import create_index as _ix_create_index
 
         cparams_obj = _normalize_index_cparams(kwargs.pop("cparams", None))
         if kwargs:
@@ -3733,6 +3905,57 @@ class CTable(Generic[RowT]):
 
         kind_str = _normalize_index_kind(kind)
         build_str = _normalize_build_mode(build)
+        catalog = self._storage.load_index_catalog()
+
+        if expression is not None:
+            target, dtype = self._normalize_table_expression_target(expression, operands)
+            token = _target_token(target)
+            if token in catalog:
+                raise ValueError(
+                    f"Index already exists for expression {expression!r}. "
+                    "Call rebuild_index() to replace it or drop_index() first."
+                )
+            expr_arr = self._build_expression_values_array(target, dtype, cparams=cparams_obj)
+            _ix_create_index(
+                expr_arr,
+                kind=blosc2.IndexKind(kind_str),
+                optlevel=optlevel,
+                name=name,
+                build=build,
+                tmpdir=tmpdir,
+                cparams=cparams_obj,
+            )
+            store = _IN_MEMORY_INDEXES.get(id(expr_arr))
+            if store is None:
+                from blosc2.indexing import _load_store
+
+                store = _load_store(expr_arr)
+            descriptor = _copy_descriptor(store["indexes"]["__self__"])
+            descriptor["target"] = target
+            descriptor["token"] = token
+            descriptor["dtype"] = str(np.dtype(dtype))
+            descriptor["expr_values_path"] = getattr(expr_arr, "urlpath", None)
+            value_epoch, _ = self._storage.get_epoch_counters()
+            descriptor["built_value_epoch"] = value_epoch
+            catalog[token] = descriptor
+            self._storage.save_index_catalog(catalog)
+            return CTableIndex(self, token, descriptor)
+
+        if col_name is None:
+            raise TypeError("must specify col_name/field or expression")
+        if col_name in self._computed_cols:
+            raise ValueError(
+                f"Cannot create an index on computed column {col_name!r}: "
+                "computed columns have no physical storage."
+            )
+        if col_name not in self._cols:
+            raise KeyError(f"No column named {col_name!r}. Available: {self.col_names}")
+        if col_name in catalog:
+            raise ValueError(
+                f"Index already exists for column {col_name!r}. "
+                "Call rebuild_index() to replace it or drop_index() first."
+            )
+
         col_arr = self._cols[col_name]
         is_persistent = self._storage.index_anchor_path(col_name) is not None
 
@@ -3769,90 +3992,38 @@ class CTable(Generic[RowT]):
         self._storage.save_index_catalog(catalog)
         return CTableIndex(self, col_name, descriptor)
 
-    def drop_index(self, col_name: str) -> None:
-        """Remove the index for *col_name* and delete any sidecar files.
-
-        Parameters
-        ----------
-        col_name:
-            Column whose index should be dropped.
-
-        Raises
-        ------
-        ValueError
-            If called on a view.
-        KeyError
-            If no index exists for *col_name*.
-        """
+    def drop_index(self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None) -> None:
+        """Remove an index and delete any sidecar files."""
         if self.base is not None:
             raise ValueError("Cannot drop an index from a view.")
 
+        lookup_key, descriptor = self._resolve_index_catalog_entry(col_name, expression=expression, name=name)
         catalog = self._storage.load_index_catalog()
-        if col_name not in catalog:
-            raise KeyError(f"No index found for column {col_name!r}.")
-
-        descriptor = catalog.pop(col_name)
-        self._validate_index_descriptor(col_name, descriptor)
-        self._drop_index_descriptor(col_name, descriptor)
+        catalog.pop(lookup_key, None)
+        self._validate_index_descriptor(lookup_key, descriptor)
+        self._drop_index_descriptor(lookup_key, descriptor)
         self._storage.save_index_catalog(catalog)
 
-    def rebuild_index(self, col_name: str) -> CTableIndex:
-        """Drop and recreate the index for *col_name* with the same parameters.
-
-        Parameters
-        ----------
-        col_name:
-            Column whose index should be rebuilt.
-
-        Returns
-        -------
-        CTableIndex
-            A handle on the newly built index.
-
-        Raises
-        ------
-        ValueError
-            If called on a view.
-        KeyError
-            If no index exists for *col_name*.
-        """
+    def rebuild_index(
+        self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
+    ) -> CTableIndex:
+        """Drop and recreate an index with the same parameters."""
         if self.base is not None:
             raise ValueError("Cannot rebuild an index on a view.")
 
-        catalog = self._storage.load_index_catalog()
-        if col_name not in catalog:
-            raise KeyError(f"No index found for column {col_name!r}.")
-
-        old_desc = catalog[col_name]
-        self._validate_index_descriptor(col_name, old_desc)
+        lookup_key, old_desc = self._resolve_index_catalog_entry(col_name, expression=expression, name=name)
+        self._validate_index_descriptor(lookup_key, old_desc)
         create_kwargs = self._index_create_kwargs_from_descriptor(old_desc)
 
-        self.drop_index(col_name)
-        return self.create_index(col_name, **create_kwargs)
+        self.drop_index(col_name, expression=expression, name=name)
+        if "expression" in create_kwargs:
+            return self.create_index(expression=create_kwargs.pop("expression"), **create_kwargs)
+        return self.create_index(lookup_key, **create_kwargs)
 
-    def compact_index(self, col_name: str) -> CTableIndex:
-        """Compact the index for *col_name*, merging any incremental append runs.
-
-        Only meaningful for ``kind='full'`` indexes.  For other kinds the call
-        is a no-op and returns the current handle.
-
-        Parameters
-        ----------
-        col_name:
-            Column whose index should be compacted.
-
-        Returns
-        -------
-        CTableIndex
-            A handle reflecting the (possibly updated) index descriptor.
-
-        Raises
-        ------
-        ValueError
-            If called on a view.
-        KeyError
-            If no index exists for *col_name*.
-        """
+    def compact_index(
+        self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
+    ) -> CTableIndex:
+        """Compact an index, merging any incremental append runs."""
         if self.base is not None:
             raise ValueError("Cannot compact an index on a view.")
 
@@ -3864,19 +4035,14 @@ class CTable(Generic[RowT]):
             _default_index_store,
             _is_persistent_array,
         )
-        from blosc2.indexing import (
-            compact_index as _ix_compact_index,
-        )
+        from blosc2.indexing import compact_index as _ix_compact_index
 
+        lookup_key, descriptor = self._resolve_index_catalog_entry(col_name, expression=expression, name=name)
+        col_arr = self._index_target_array(lookup_key, descriptor)
         catalog = self._storage.load_index_catalog()
-        if col_name not in catalog:
-            raise KeyError(f"No index found for column {col_name!r}.")
-
-        col_arr = self._cols[col_name]
-        descriptor = catalog[col_name]
 
         if _is_persistent_array(col_arr):
-            anchor = self._storage.index_anchor_path(col_name)
+            anchor = self._storage.index_anchor_path(lookup_key)
             proxy = _CTableIndexProxy(col_arr, anchor)
             proxy_key = _array_key(proxy)
             store = _default_index_store()
@@ -3889,9 +4055,9 @@ class CTable(Generic[RowT]):
             finally:
                 _PERSISTENT_INDEXES.pop(proxy_key, None)
             updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
-            catalog[col_name] = updated_desc
+            catalog[lookup_key] = updated_desc
             self._storage.save_index_catalog(catalog)
-            return CTableIndex(self, col_name, updated_desc)
+            return CTableIndex(self, lookup_key, updated_desc)
         else:
             _ix_compact_index(col_arr)
             store = _IN_MEMORY_INDEXES.get(id(col_arr))
@@ -3899,38 +4065,79 @@ class CTable(Generic[RowT]):
                 token = descriptor["token"]
                 updated_desc = _copy_descriptor(store["indexes"].get(token, descriptor))
                 updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
-                catalog[col_name] = updated_desc
+                catalog[lookup_key] = updated_desc
                 self._storage.save_index_catalog(catalog)
-                return CTableIndex(self, col_name, updated_desc)
-            return CTableIndex(self, col_name, descriptor)
+                return CTableIndex(self, lookup_key, updated_desc)
+            return CTableIndex(self, lookup_key, descriptor)
 
-    def index(self, col_name: str) -> CTableIndex:
-        """Return the index handle for *col_name*.
-
-        Parameters
-        ----------
-        col_name:
-            Column name to look up.
-
-        Returns
-        -------
-        CTableIndex
-
-        Raises
-        ------
-        KeyError
-            If no index exists for *col_name*.
-        """
-        catalog = self._root_table._storage.load_index_catalog()
-        if col_name not in catalog:
-            raise KeyError(f"No index found for column {col_name!r}.")
-        return CTableIndex(self, col_name, catalog[col_name])
+    def index(
+        self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
+    ) -> CTableIndex:
+        """Return the index handle for a stored-column or expression target."""
+        lookup_key, descriptor = self._resolve_index_catalog_entry(col_name, expression=expression, name=name)
+        return CTableIndex(self, lookup_key, descriptor)
 
     @property
     def indexes(self) -> list[CTableIndex]:
         """Return a list of :class:`CTableIndex` handles for all active indexes."""
         catalog = self._root_table._storage.load_index_catalog()
         return [CTableIndex(self, col_name, desc) for col_name, desc in catalog.items()]
+
+    def _rewrite_expression_query_for_index(self, expression: str, operands: dict, target: dict) -> str | None:
+        """Rewrite matching table-expression subtrees to ``_where_x`` for planning."""
+        try:
+            tree = ast.parse(expression, mode="eval")
+        except SyntaxError:
+            return None
+
+        class _Rewriter(ast.NodeTransformer):
+            def __init__(self, outer):
+                self.outer = outer
+                self.changed = False
+
+            def generic_visit(self, node):
+                normalized = None
+                with contextlib.suppress(Exception):
+                    normalized, _ = self.outer._normalize_table_expression_target(ast.unparse(node), operands)
+                if normalized is not None and normalized.get("expression_key") == target.get("expression_key"):
+                    self.changed = True
+                    return ast.copy_location(ast.Name(id="_where_x", ctx=ast.Load()), node)
+                return super().generic_visit(node)
+
+        rewriter = _Rewriter(self)
+        new_body = rewriter.visit(tree.body)
+        if not rewriter.changed:
+            return None
+        return ast.unparse(new_body)
+
+    def _try_expression_index_where(self, expr_result: blosc2.LazyExpr, catalog: dict) -> np.ndarray | None:
+        """Attempt to resolve *expr_result* via a direct table expression index."""
+        from blosc2.indexing import evaluate_bucket_query, evaluate_segment_query, plan_query
+
+        expression = expr_result.expression
+        operands = dict(expr_result.operands)
+        for lookup_key, descriptor in catalog.items():
+            target = descriptor.get("target") or {}
+            if target.get("source") != "expression" or descriptor.get("stale", False):
+                continue
+            rewritten = self._rewrite_expression_query_for_index(expression, operands, target)
+            if rewritten is None:
+                continue
+            expr_arr = self._index_target_array(lookup_key, descriptor)
+            where_dict = {"_where_x": expr_arr}
+            merged_operands = {"_where_x": expr_arr}
+            plan = plan_query(rewritten, merged_operands, where_dict)
+            if not plan.usable:
+                continue
+            if plan.exact_positions is not None:
+                return np.asarray(plan.exact_positions, dtype=np.int64)
+            if plan.bucket_masks is not None:
+                _, positions = evaluate_bucket_query(rewritten, merged_operands, {}, where_dict, plan, return_positions=True)
+                return np.asarray(positions, dtype=np.int64)
+            if plan.candidate_units is not None and plan.segment_len is not None:
+                _, positions = evaluate_segment_query(rewritten, merged_operands, {}, where_dict, plan, return_positions=True)
+                return np.asarray(positions, dtype=np.int64)
+        return None
 
     @staticmethod
     def _find_indexed_columns(root_cols, catalog, operands):
@@ -3973,6 +4180,10 @@ class CTable(Generic[RowT]):
         catalog = root._storage.load_index_catalog()
         if not catalog:
             return None
+
+        positions = self._try_expression_index_where(expr_result, catalog)
+        if positions is not None:
+            return positions
 
         expression = expr_result.expression
         operands = dict(expr_result.operands)

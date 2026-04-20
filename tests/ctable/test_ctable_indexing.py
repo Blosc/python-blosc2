@@ -99,6 +99,26 @@ def test_where_with_index_matches_scan_in_memory():
     assert ids_idx == ids_scan
 
 
+def test_create_expression_index_in_memory():
+    t = _make_table(50)
+    idx = t.create_index(expression="value * category", kind=blosc2.IndexKind.FULL, name="vc")
+    assert idx.kind == "full"
+    assert t.index(expression="value * category").name == "vc"
+    assert t.index(name="vc").name == "vc"
+
+
+
+def test_where_with_expression_index_matches_scan_in_memory():
+    t = _make_table(200)
+    t.create_index(expression="value * category", kind=blosc2.IndexKind.FULL, name="vc")
+    result_idx = t.where((t._cols["value"] * t._cols["category"]) >= 150)
+    t.drop_index(expression="value * category")
+    result_scan = t.where((t._cols["value"] * t._cols["category"]) >= 150)
+    ids_idx = sorted(int(v) for v in result_idx["id"][:])
+    ids_scan = sorted(int(v) for v in result_scan["id"][:])
+    assert ids_idx == ids_scan
+
+
 def test_bool_column_composes_naturally_in_where():
     @dataclasses.dataclass
     class BoolRow:
@@ -310,6 +330,38 @@ def test_drop_index_persistent(tmpdir):
     # After drop, index dir should be gone (or empty)
     sidecars = list(index_dir.glob("**/*.b2nd")) if index_dir.exists() else []
     assert sidecars == []
+
+
+
+def test_expression_index_persistent_roundtrip(tmpdir):
+    path = str(tmpdir / "table.b2d")
+    t = _make_table(50, persistent_path=path)
+    t.create_index(expression="value * category", kind=blosc2.IndexKind.FULL, name="vc")
+
+    reopened = blosc2.CTable.open(path, mode="r")
+    idx = reopened.index(expression="value * category")
+    assert idx.kind == "full"
+    result = reopened.where((reopened._cols["value"] * reopened._cols["category"]) >= 60)
+    assert len(result) > 0
+
+
+
+def test_sort_by_computed_column_with_expression_full_index():
+    t = _make_table(40)
+    t.add_computed_column("score", "value * category")
+    t.create_index(expression="value * category", kind=blosc2.IndexKind.FULL, name="score_expr")
+
+    sorted_t = t.sort_by("score")
+    expected = np.sort(np.asarray(t._computed_cols["score"]["lazy"][:])[t._valid_rows[:]])
+    np.testing.assert_allclose(sorted_t["score"][:], expected)
+
+
+
+def test_sort_by_stored_column_with_full_index():
+    t = _make_table(40)
+    t.create_index("id", kind=blosc2.IndexKind.FULL)
+    sorted_t = t.sort_by("id", ascending=False)
+    np.testing.assert_array_equal(sorted_t["id"][:], np.arange(39, -1, -1, dtype=np.int32))
 
 
 def test_drop_index_persistent_catalog_cleared(tmpdir):
