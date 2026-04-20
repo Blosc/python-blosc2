@@ -1247,6 +1247,7 @@ def decompress2(src, dst=None, **kwargs):
     cdef int32_t nbytes
     cdef int32_t cbytes
     cdef int32_t blocksize
+    cdef int32_t srcsize = <int32_t>typed_view_src.nbytes
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     cdef Py_buffer buf
     if dst is not None:
@@ -1255,11 +1256,13 @@ def decompress2(src, dst=None, **kwargs):
             blosc2_free_ctx(dctx)
             raise ValueError("The dst length must be greater than 0")
         view = <void*>&typed_view_src[0]
+        # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
+        # The decode context needs the full source buffer length.
         if RELEASEGIL:
             with nogil:
-                size = blosc2_decompress_ctx(dctx, view, cbytes, buf.buf, nbytes)
+                size = blosc2_decompress_ctx(dctx, view, srcsize, buf.buf, nbytes)
         else:
-            size = blosc2_decompress_ctx(dctx, view, cbytes, buf.buf, nbytes)
+            size = blosc2_decompress_ctx(dctx, view, srcsize, buf.buf, nbytes)
         blosc2_free_ctx(dctx)
         PyBuffer_Release(&buf)
     else:
@@ -1269,11 +1272,13 @@ def decompress2(src, dst=None, **kwargs):
             raise RuntimeError("Could not get a bytes object")
         dst_buf = <char*>dst
         view = <void*>&typed_view_src[0]
+        # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
+        # The decode context needs the full source buffer length.
         if RELEASEGIL:
             with nogil:
-                size = blosc2_decompress_ctx(dctx, view, cbytes, <void*>dst_buf, nbytes)
+                size = blosc2_decompress_ctx(dctx, view, srcsize, <void*>dst_buf, nbytes)
         else:
-            size = blosc2_decompress_ctx(dctx, view, cbytes, <void*>dst_buf, nbytes)
+            size = blosc2_decompress_ctx(dctx, view, srcsize, <void*>dst_buf, nbytes)
         blosc2_free_ctx(dctx)
         if size >= 0:
             return dst
@@ -1365,6 +1370,7 @@ def vldecompress(src, **kwargs):
     cdef int32_t nbytes
     cdef int32_t cbytes
     cdef int32_t nblocks
+    cdef int32_t srcsize = <int32_t>typed_view_src.nbytes
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &nblocks)
     if nblocks <= 0:
         blosc2_free_ctx(dctx)
@@ -1382,7 +1388,9 @@ def vldecompress(src, **kwargs):
         raise MemoryError()
 
     try:
-        rc = blosc2_vldecompress_ctx(dctx, <void*>&typed_view_src[0], cbytes, dests, destsizes, nblocks)
+        # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
+        # The decode context needs the full source buffer length.
+        rc = blosc2_vldecompress_ctx(dctx, <void*>&typed_view_src[0], srcsize, dests, destsizes, nblocks)
         if rc < 0:
             raise RuntimeError("Could not decompress the data")
         for i in range(rc):
@@ -3499,10 +3507,11 @@ cdef class NDArray:
         cdef blosc2_context *dctx = self.array.sc.dctx
         cdef Py_buffer view
         cdef int rc
+        cdef int32_t lazychunk_cbytes
         cdef c_bool owns_dctx = False
 
-        rc = blosc2_schunk_get_lazychunk(self.array.sc, nchunk, &chunk, &needs_free)
-        if rc < 0:
+        lazychunk_cbytes = blosc2_schunk_get_lazychunk(self.array.sc, nchunk, &chunk, &needs_free)
+        if lazychunk_cbytes < 0:
             raise RuntimeError("Error while getting the lazy chunk")
 
         rc = blosc2_cbuffer_sizes(chunk, &chunk_nbytes, &chunk_cbytes, &block_nbytes)
@@ -3530,7 +3539,10 @@ cdef class NDArray:
             if needs_free:
                 free(chunk)
             raise RuntimeError("Could not create decompression context")
-        rc = blosc2_getitem_ctx(dctx, chunk, chunk_cbytes, start, nitems, view.buf, view.len)
+        # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
+        # blosc2_getitem_ctx() needs the full lazy chunk size returned by
+        # blosc2_schunk_get_lazychunk().
+        rc = blosc2_getitem_ctx(dctx, chunk, lazychunk_cbytes, start, nitems, view.buf, view.len)
         if owns_dctx:
             blosc2_free_ctx(dctx)
         PyBuffer_Release(&view)

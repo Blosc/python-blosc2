@@ -2723,9 +2723,13 @@ def _read_ndarray_linear_span(array: blosc2.NDArray | np.ndarray, start: int, ou
         chunk_id = cursor // chunk_len
         local_start = cursor % chunk_len
         take = min(len(out) - out_cursor, chunk_len - local_start)
-        array.get_1d_span_numpy(
-            out[out_cursor : out_cursor + take], int(chunk_id), int(local_start), int(take)
-        )
+        target = out[out_cursor : out_cursor + take]
+        try:
+            array.get_1d_span_numpy(target, int(chunk_id), int(local_start), int(take))
+        except RuntimeError:
+            # Newer c-blosc2 builds can reject getitem on some tiny persistent
+            # sidecars even though normal ndarray slicing still succeeds.
+            target[...] = array[cursor : cursor + take]
         cursor += take
         out_cursor += take
 
