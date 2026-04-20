@@ -702,7 +702,7 @@ def as_simpleproxy(*arrs: Sequence[blosc2.Array]) -> tuple[SimpleProxy | blosc2.
     return out[0] if len(out) == 1 else out
 
 
-def jit(func=None, *, out=None, disable=False, **kwargs):  # noqa: C901
+def jit(func=None, *, out=None, disable=False, **kwargs):
     """
     Prepare a function so that it can be used with the Blosc2 compute engine.
 

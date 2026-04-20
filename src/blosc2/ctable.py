@@ -13,10 +13,10 @@ from __future__ import annotations
 import ast
 import contextlib
 import dataclasses
-import re
 import itertools
 import os
 import pprint
+import re
 import shutil
 import weakref
 from collections.abc import Iterable
@@ -46,8 +46,6 @@ import blosc2
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.schema import (
     SchemaSpec,
-    bool as b2_bool,
-    bytes as b2_bytes,
     complex64,
     complex128,
     float32,
@@ -61,6 +59,12 @@ from blosc2.schema import (
     uint16,
     uint32,
     uint64,
+)
+from blosc2.schema import (
+    bool as b2_bool,
+)
+from blosc2.schema import (
+    bytes as b2_bytes,
 )
 from blosc2.schema_compiler import (
     ColumnConfig,
@@ -708,9 +712,7 @@ class Column:
         if self._table._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.is_computed:
-            raise ValueError(
-                f"Column {self._col_name!r} is a computed column and cannot be written to."
-            )
+            raise ValueError(f"Column {self._col_name!r} is a computed column and cannot be written to.")
         if isinstance(key, int):
             n_rows = len(self)
             if key < 0:
@@ -947,9 +949,7 @@ class Column:
         if self._table._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.is_computed:
-            raise ValueError(
-                f"Column {self._col_name!r} is a computed column and cannot be written to."
-            )
+            raise ValueError(f"Column {self._col_name!r} is a computed column and cannot be written to.")
         n_live = len(self)
         arr = np.asarray(data)
         if len(arr) != n_live:
@@ -1959,11 +1959,15 @@ class CTable(Generic[RowT]):
         # Stored columns — same NDArray objects, no copy
         obj._cols = {name: self._cols[name] for name in cols if name in self._cols}
         obj.col_names = list(cols)
-        obj._materialized_cols = {name: dict(self._materialized_cols[name]) for name in cols if name in self._materialized_cols}
+        obj._materialized_cols = {
+            name: dict(self._materialized_cols[name]) for name in cols if name in self._materialized_cols
+        }
         obj._expr_index_arrays = self._expr_index_arrays
 
         # Computed columns — share the same definitions (LazyExpr refs remain valid)
-        obj._computed_cols = {name: self._computed_cols[name] for name in cols if name in self._computed_cols}
+        obj._computed_cols = {
+            name: self._computed_cols[name] for name in cols if name in self._computed_cols
+        }
 
         # Rebuild schema for the selected stored columns only
         stored_sel = [n for n in cols if n in self._cols]
@@ -2592,11 +2596,7 @@ class CTable(Generic[RowT]):
         if len(self._stored_col_names) == 1:
             raise ValueError("Cannot drop the last column.")
         # Guard: refuse if any computed column depends on this column
-        dependents = [
-            cc_name
-            for cc_name, cc in self._computed_cols.items()
-            if name in cc["col_deps"]
-        ]
+        dependents = [cc_name for cc_name, cc in self._computed_cols.items() if name in cc["col_deps"]]
         if dependents:
             raise ValueError(
                 f"Cannot drop column {name!r}: it is used by computed column(s) "
@@ -2662,11 +2662,7 @@ class CTable(Generic[RowT]):
             return
 
         # Guard: refuse rename if any computed column depends on this stored column
-        dependents = [
-            cc_name
-            for cc_name, cc in self._computed_cols.items()
-            if old in cc["col_deps"]
-        ]
+        dependents = [cc_name for cc_name, cc in self._computed_cols.items() if old in cc["col_deps"]]
         if dependents:
             raise ValueError(
                 f"Cannot rename column {old!r}: it is used by computed column(s) "
@@ -3091,13 +3087,9 @@ class CTable(Generic[RowT]):
         elif isinstance(expr, str):
             lazy = blosc2.lazyexpr(expr, self._cols)
         else:
-            raise TypeError(
-                f"expr must be a callable or an expression string, got {type(expr).__name__!r}."
-            )
+            raise TypeError(f"expr must be a callable or an expression string, got {type(expr).__name__!r}.")
         if not isinstance(lazy, blosc2.LazyExpr):
-            raise TypeError(
-                f"expr must return a blosc2.LazyExpr, got {type(lazy).__name__!r}."
-            )
+            raise TypeError(f"expr must return a blosc2.LazyExpr, got {type(lazy).__name__!r}.")
 
         # Verify all operands are stored columns of *this* table and record their names
         owned_ids = {id(arr): cname for cname, arr in self._cols.items()}
@@ -3148,8 +3140,7 @@ class CTable(Generic[RowT]):
             raise ValueError("Cannot drop a computed column from a view.")
         if name not in self._computed_cols:
             raise KeyError(
-                f"{name!r} is not a computed column. "
-                f"Computed columns: {list(self._computed_cols)}"
+                f"{name!r} is not a computed column. Computed columns: {list(self._computed_cols)}"
             )
         del self._computed_cols[name]
         self.col_names.remove(name)
@@ -3231,7 +3222,11 @@ class CTable(Generic[RowT]):
 
         if name in root._cols:
             descriptor = catalog.get(name)
-            if descriptor is not None and descriptor.get("kind") == "full" and not descriptor.get("stale", False):
+            if (
+                descriptor is not None
+                and descriptor.get("kind") == "full"
+                and not descriptor.get("stale", False)
+            ):
                 target_arr = root._cols[name]
             else:
                 descriptor = None
@@ -3613,12 +3608,14 @@ class CTable(Generic[RowT]):
             kwargs["expression"] = target.get("expression")
         return kwargs
 
-    def _normalize_table_expression_target(self, expression: str, operands: dict | None = None) -> tuple[dict, np.dtype]:
+    def _normalize_table_expression_target(
+        self, expression: str, operands: dict | None = None
+    ) -> tuple[dict, np.dtype]:
         """Normalize a same-table expression target and infer its dtype."""
         if operands is None:
             operands = self._cols
         try:
-            tree = ast.parse(expression, mode="eval")
+            ast.parse(expression, mode="eval")
         except SyntaxError as exc:
             raise ValueError("expression is not valid Python syntax") from exc
 
@@ -3639,13 +3636,17 @@ class CTable(Generic[RowT]):
                 dependencies.append(cname)
                 return ast.copy_location(ast.Name(id=cname, ctx=node.ctx), node)
 
-        normalized = _Canonicalizer().visit(ast.fix_missing_locations(ast.parse(expression, mode="eval")).body)
+        normalized = _Canonicalizer().visit(
+            ast.fix_missing_locations(ast.parse(expression, mode="eval")).body
+        )
         if not valid or not dependencies:
             raise ValueError("expression indexes require operands from stored columns of the same table")
         dependencies = list(dict.fromkeys(dependencies))
         expression_key = ast.unparse(normalized)
         lazy = blosc2.lazyexpr(expression_key, {dep: self._root_table._cols[dep] for dep in dependencies})
-        sample_stop = min(int(len(self._root_table._valid_rows)), max(1, int(self._root_table._valid_rows.blocks[0])))
+        sample_stop = min(
+            len(self._root_table._valid_rows), max(1, int(self._root_table._valid_rows.blocks[0]))
+        )
         sample = lazy[:sample_stop]
         if isinstance(sample, blosc2.NDArray):
             sample = sample[:]
@@ -3677,10 +3678,14 @@ class CTable(Generic[RowT]):
         urlpath = root._expression_index_values_path(_target_token(target))
         if urlpath is not None:
             os.makedirs(os.path.dirname(urlpath), exist_ok=True)
-            arr = blosc2.zeros((capacity,), dtype=dtype, urlpath=urlpath, mode="w", chunks=chunks, blocks=blocks)
+            arr = blosc2.zeros(
+                (capacity,), dtype=dtype, urlpath=urlpath, mode="w", chunks=chunks, blocks=blocks
+            )
         else:
             arr = blosc2.zeros((capacity,), dtype=dtype, chunks=chunks, blocks=blocks)
-        lazy = blosc2.lazyexpr(target["expression_key"], {dep: root._cols[dep] for dep in target["dependencies"]})
+        lazy = blosc2.lazyexpr(
+            target["expression_key"], {dep: root._cols[dep] for dep in target["dependencies"]}
+        )
         step = int(root._valid_rows.chunks[0]) if root._valid_rows.chunks else 65536
         for start in range(0, capacity, step):
             stop = min(start + step, capacity)
@@ -3992,12 +3997,16 @@ class CTable(Generic[RowT]):
         self._storage.save_index_catalog(catalog)
         return CTableIndex(self, col_name, descriptor)
 
-    def drop_index(self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None) -> None:
+    def drop_index(
+        self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
+    ) -> None:
         """Remove an index and delete any sidecar files."""
         if self.base is not None:
             raise ValueError("Cannot drop an index from a view.")
 
-        lookup_key, descriptor = self._resolve_index_catalog_entry(col_name, expression=expression, name=name)
+        lookup_key, descriptor = self._resolve_index_catalog_entry(
+            col_name, expression=expression, name=name
+        )
         catalog = self._storage.load_index_catalog()
         catalog.pop(lookup_key, None)
         self._validate_index_descriptor(lookup_key, descriptor)
@@ -4037,7 +4046,9 @@ class CTable(Generic[RowT]):
         )
         from blosc2.indexing import compact_index as _ix_compact_index
 
-        lookup_key, descriptor = self._resolve_index_catalog_entry(col_name, expression=expression, name=name)
+        lookup_key, descriptor = self._resolve_index_catalog_entry(
+            col_name, expression=expression, name=name
+        )
         col_arr = self._index_target_array(lookup_key, descriptor)
         catalog = self._storage.load_index_catalog()
 
@@ -4074,7 +4085,9 @@ class CTable(Generic[RowT]):
         self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
     ) -> CTableIndex:
         """Return the index handle for a stored-column or expression target."""
-        lookup_key, descriptor = self._resolve_index_catalog_entry(col_name, expression=expression, name=name)
+        lookup_key, descriptor = self._resolve_index_catalog_entry(
+            col_name, expression=expression, name=name
+        )
         return CTableIndex(self, lookup_key, descriptor)
 
     @property
@@ -4083,7 +4096,9 @@ class CTable(Generic[RowT]):
         catalog = self._root_table._storage.load_index_catalog()
         return [CTableIndex(self, col_name, desc) for col_name, desc in catalog.items()]
 
-    def _rewrite_expression_query_for_index(self, expression: str, operands: dict, target: dict) -> str | None:
+    def _rewrite_expression_query_for_index(
+        self, expression: str, operands: dict, target: dict
+    ) -> str | None:
         """Rewrite matching table-expression subtrees to ``_where_x`` for planning."""
         try:
             tree = ast.parse(expression, mode="eval")
@@ -4098,8 +4113,12 @@ class CTable(Generic[RowT]):
             def generic_visit(self, node):
                 normalized = None
                 with contextlib.suppress(Exception):
-                    normalized, _ = self.outer._normalize_table_expression_target(ast.unparse(node), operands)
-                if normalized is not None and normalized.get("expression_key") == target.get("expression_key"):
+                    normalized, _ = self.outer._normalize_table_expression_target(
+                        ast.unparse(node), operands
+                    )
+                if normalized is not None and normalized.get("expression_key") == target.get(
+                    "expression_key"
+                ):
                     self.changed = True
                     return ast.copy_location(ast.Name(id="_where_x", ctx=ast.Load()), node)
                 return super().generic_visit(node)
@@ -4132,10 +4151,14 @@ class CTable(Generic[RowT]):
             if plan.exact_positions is not None:
                 return np.asarray(plan.exact_positions, dtype=np.int64)
             if plan.bucket_masks is not None:
-                _, positions = evaluate_bucket_query(rewritten, merged_operands, {}, where_dict, plan, return_positions=True)
+                _, positions = evaluate_bucket_query(
+                    rewritten, merged_operands, {}, where_dict, plan, return_positions=True
+                )
                 return np.asarray(positions, dtype=np.int64)
             if plan.candidate_units is not None and plan.segment_len is not None:
-                _, positions = evaluate_segment_query(rewritten, merged_operands, {}, where_dict, plan, return_positions=True)
+                _, positions = evaluate_segment_query(
+                    rewritten, merged_operands, {}, where_dict, plan, return_positions=True
+                )
                 return np.asarray(positions, dtype=np.int64)
         return None
 
@@ -4407,11 +4430,14 @@ class CTable(Generic[RowT]):
                 new_nrows = len(data)
                 batch_columns = list(zip(*data, strict=False))
                 raw_columns = {
-                    input_col_names[i]: batch_columns[i] for i in range(min(len(input_col_names), len(batch_columns)))
+                    input_col_names[i]: batch_columns[i]
+                    for i in range(min(len(input_col_names), len(batch_columns)))
                 }
                 provided_names = set(raw_columns)
 
-        raw_columns = self._autofill_materialized_batch_columns(raw_columns, new_nrows, provided_names=provided_names)
+        raw_columns = self._autofill_materialized_batch_columns(
+            raw_columns, new_nrows, provided_names=provided_names
+        )
 
         # Validate constraints column-by-column before writing
         if do_validate:
