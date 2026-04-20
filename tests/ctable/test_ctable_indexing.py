@@ -107,7 +107,6 @@ def test_create_expression_index_in_memory():
     assert t.index(name="vc").name == "vc"
 
 
-
 def test_where_with_expression_index_matches_scan_in_memory():
     t = _make_table(200)
     t.create_index(expression="value * category", kind=blosc2.IndexKind.FULL, name="vc")
@@ -315,7 +314,10 @@ def test_persistent_index_drop_releases_sidecars_without_gc(tmpdir):
     sidecars = [
         obj
         for obj in gc.get_objects()
-        if isinstance(obj, blosc2.NDArray) and obj.urlpath and str(tmpdir) in obj.urlpath and "__index__" in obj.urlpath
+        if isinstance(obj, blosc2.NDArray)
+        and obj.urlpath
+        and str(tmpdir) in obj.urlpath
+        and "__index__" in obj.urlpath
     ]
     assert sidecars == []
 
@@ -332,7 +334,6 @@ def test_drop_index_persistent(tmpdir):
     assert sidecars == []
 
 
-
 def test_expression_index_persistent_roundtrip(tmpdir):
     path = str(tmpdir / "table.b2d")
     t = _make_table(50, persistent_path=path)
@@ -345,7 +346,6 @@ def test_expression_index_persistent_roundtrip(tmpdir):
     assert len(result) > 0
 
 
-
 def test_sort_by_computed_column_with_expression_full_index():
     t = _make_table(40)
     t.add_computed_column("score", "value * category")
@@ -354,7 +354,6 @@ def test_sort_by_computed_column_with_expression_full_index():
     sorted_t = t.sort_by("score")
     expected = np.sort(np.asarray(t._computed_cols["score"]["lazy"][:])[t._valid_rows[:]])
     np.testing.assert_allclose(sorted_t["score"][:], expected)
-
 
 
 def test_sort_by_stored_column_with_full_index():
@@ -581,7 +580,9 @@ def test_indexing_purges_stale_persistent_caches():
 
         persistent_scope = ("persistent", str(Path(path).resolve()))
         indexing._PERSISTENT_INDEXES[persistent_scope] = {"version": 1, "indexes": {}}
-        indexing._DATA_CACHE[(persistent_scope, "token", "partial", "offsets")] = np.arange(3, dtype=np.int64)
+        indexing._DATA_CACHE[(persistent_scope, "token", "partial", "offsets")] = np.arange(
+            3, dtype=np.int64
+        )
         indexing._SIDECAR_HANDLE_CACHE[(persistent_scope, "token", "partial_handle", "offsets")] = object()
         indexing._QUERY_CACHE_STORE_HANDLES[str(Path(tmpdir) / "query-cache.b2frame")] = object()
         indexing._GATHER_MMAP_HANDLES[str(Path(tmpdir) / "gather-cache.b2nd")] = object()
@@ -590,7 +591,9 @@ def test_indexing_purges_stale_persistent_caches():
 
     assert all(tmpdir not in key[1] for key in indexing._PERSISTENT_INDEXES if key[0] == "persistent")
     assert all(tmpdir not in key[0][1] for key in indexing._DATA_CACHE if key[0][0] == "persistent")
-    assert all(tmpdir not in key[0][1] for key in indexing._SIDECAR_HANDLE_CACHE if key[0][0] == "persistent")
+    assert all(
+        tmpdir not in key[0][1] for key in indexing._SIDECAR_HANDLE_CACHE if key[0][0] == "persistent"
+    )
     assert all(tmpdir not in path for path in indexing._QUERY_CACHE_STORE_HANDLES)
     assert all(tmpdir not in path for path in indexing._GATHER_MMAP_HANDLES)
 
