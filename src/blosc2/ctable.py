@@ -4589,11 +4589,6 @@ class CTable(Generic[RowT]):
         # Resolve effective validate flag: per-call override takes precedence
         do_validate = self._validate if validate is None else validate
 
-        if any(self._is_list_column(col) for col in self._schema.columns):
-            for row in data:
-                self.append(row)
-            return
-
         start_pos = self._resolve_last_pos()
 
         current_col_names = self._stored_col_names  # skip computed columns
@@ -4632,11 +4627,15 @@ class CTable(Generic[RowT]):
 
             validate_column_batch(self._schema, raw_columns)
 
-        processed_cols = []
+        scalar_processed_cols: dict[str, blosc2.NDArray] = {}
+        list_processed_cols: dict[str, list] = {}
         for name in current_col_names:
-            target_dtype = self._cols[name].dtype
-            b2_arr = blosc2.asarray(raw_columns[name], dtype=target_dtype)
-            processed_cols.append(b2_arr)
+            col_meta = self._schema.columns_by_name[name]
+            if self._is_list_column(col_meta):
+                list_processed_cols[name] = list(raw_columns[name])
+            else:
+                target_dtype = self._cols[name].dtype
+                scalar_processed_cols[name] = blosc2.asarray(raw_columns[name], dtype=target_dtype)
 
         end_pos = start_pos + new_nrows
 
@@ -4648,8 +4647,12 @@ class CTable(Generic[RowT]):
         while end_pos > len(self._valid_rows):
             self._grow()
 
-        for j, name in enumerate(current_col_names):
-            self._cols[name][start_pos:end_pos] = processed_cols[j][:]
+        for name in current_col_names:
+            col_meta = self._schema.columns_by_name[name]
+            if self._is_list_column(col_meta):
+                self._cols[name].extend(list_processed_cols[name])
+            else:
+                self._cols[name][start_pos:end_pos] = scalar_processed_cols[name][:]
 
         self._valid_rows[start_pos:end_pos] = True
         self._last_pos = end_pos

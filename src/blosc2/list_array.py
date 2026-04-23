@@ -159,6 +159,9 @@ class ListArray:
         _validate_list_spec(self.spec)
         self._pending_cells: list[list[Any] | None] = []
         self._persisted_row_count = 0
+        self._persisted_prefix_cache: list[int] | None = None
+        self._cached_batch_index: int | None = None
+        self._cached_batch_values: list[list[Any] | None] | None = None
 
         storage_obj = self._coerce_storage(kwargs)
         fixed_meta = dict(storage_obj.meta or {})
@@ -195,6 +198,9 @@ class ListArray:
         la_meta = meta["listarray"]
         self.spec = ListSpec.from_metadata_dict(la_meta)
         self._pending_cells = []
+        self._persisted_prefix_cache = None
+        self._cached_batch_index = None
+        self._cached_batch_values = None
         if self.spec.storage == "vl":
             if "vlarray" not in meta:
                 raise ValueError("ListArray metadata says backend='vl' but VLArray tag is missing")
@@ -206,6 +212,11 @@ class ListArray:
             self._backend = BatchArray(_from_schunk=schunk)
             self._persisted_row_count = self._persisted_rows_count()
 
+    def _invalidate_batch_caches(self) -> None:
+        self._persisted_prefix_cache = None
+        self._cached_batch_index = None
+        self._cached_batch_values = None
+
     def _persisted_rows_count(self) -> int:
         if self.spec.storage == "vl":
             return len(self._backend)
@@ -213,13 +224,24 @@ class ListArray:
         return int(sum(lengths))
 
     def _persisted_prefix_sums(self) -> list[int]:
+        if self._persisted_prefix_cache is not None:
+            return self._persisted_prefix_cache
         lengths = self._backend._load_or_compute_batch_lengths()
         prefix = [0]
         total = 0
         for length in lengths:
             total += int(length)
             prefix.append(total)
+        self._persisted_prefix_cache = prefix
         return prefix
+
+    def _get_batch_values(self, batch_index: int) -> list[list[Any] | None]:
+        if self._cached_batch_index == batch_index and self._cached_batch_values is not None:
+            return self._cached_batch_values
+        batch_values = self._backend[batch_index][:]
+        self._cached_batch_index = batch_index
+        self._cached_batch_values = batch_values
+        return batch_values
 
     def _normalize_index(self, index: int) -> int:
         if not isinstance(index, int):
@@ -248,6 +270,7 @@ class ListArray:
             self._backend.append(batch)
             self._pending_cells = self._pending_cells[batch_rows:]
             self._persisted_row_count += len(batch)
+            self._invalidate_batch_caches()
 
     def append(self, value: Any) -> int:
         cell = coerce_list_cell(self.spec, value)
@@ -276,6 +299,7 @@ class ListArray:
             self._backend.append(batch)
             self._persisted_row_count += len(batch)
             self._pending_cells.clear()
+            self._invalidate_batch_caches()
 
     def close(self) -> None:
         self.flush()
@@ -289,7 +313,7 @@ class ListArray:
         if index >= self._persisted_row_count:
             return self._pending_cells[index - self._persisted_row_count]
         batch_index, inner_index = self._locate_persisted_row(index)
-        return self._backend[batch_index][inner_index]
+        return self._get_batch_values(batch_index)[inner_index]
 
     def __setitem__(self, index: int, value: Any) -> None:
         cell = coerce_list_cell(self.spec, value)
@@ -301,9 +325,11 @@ class ListArray:
             self._pending_cells[index - self._persisted_row_count] = cell
             return
         batch_index, inner_index = self._locate_persisted_row(index)
-        batch = self._backend[batch_index][:]
+        batch = self._get_batch_values(batch_index).copy()
         batch[inner_index] = cell
         self._backend[batch_index] = batch
+        self._cached_batch_index = batch_index
+        self._cached_batch_values = batch
 
     def __len__(self) -> int:
         if self.spec.storage == "vl":
