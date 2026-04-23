@@ -1008,7 +1008,7 @@ def shape_chunks_blocks_4d(request):
         np.complex128(2 - 4j),  # NumPy complex128
     },
 )
-def test_tranpose_scalars(scalar):
+def test_transpose_scalars(scalar):
     scalar_t = blosc2.permute_dims(scalar)
     np_scalar_t = np.transpose(scalar)
     np.testing.assert_allclose(scalar_t, np_scalar_t)
@@ -1154,7 +1154,7 @@ def test_T_raises(shape):
         _ = arr.T
 
 
-def test_tranpose_disk():
+def test_transpose_disk():
     a = blosc2.linspace(0, 1, shape=(3, 4), urlpath="a_test.b2nd", mode="w")
     c = blosc2.permute_dims(a, urlpath="c_test.b2nd", mode="w")
 
