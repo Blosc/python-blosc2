@@ -11,7 +11,7 @@
 #   3. An existing CTable (previously created from Python lists, 1M rows)
 
 from dataclasses import dataclass
-from time import time
+from time import perf_counter as time
 
 import numpy as np
 

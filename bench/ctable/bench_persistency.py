@@ -182,10 +182,10 @@ for N in SIZES:
     t_ro = blosc2.CTable.open(path, mode="r")
 
     def bench_read_mem(t=t_mem_table):
-        _ = t["id"].to_numpy()
+        _ = t["id"][:]
 
     def bench_read_file(t=t_ro):
-        _ = t["id"].to_numpy()
+        _ = t["id"][:]
 
     t_m = tmin(bench_read_mem)
     t_f = tmin(bench_read_file)

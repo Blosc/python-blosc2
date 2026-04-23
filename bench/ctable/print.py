@@ -5,11 +5,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Benchmark: iterative ingestion comparison — Pandas vs CTable
-#   Data source: randomly generated numpy structured array
+# Benchmark: CTable str() / head() rendering time vs pandas.
+#
+# Measures how long it takes to render the first 10 rows as a table
+# for both CTable (head()) and pandas (DataFrame.to_string()),
+# plus ingestion time and memory footprint comparison.
 
-import time
 from dataclasses import dataclass
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
@@ -19,8 +22,8 @@ import blosc2
 
 @dataclass
 class Row:
-    id: int = blosc2.field(blosc2.int64())
-    name: str = blosc2.field(blosc2.string(max_length=9), default="")
+    id:    int   = blosc2.field(blosc2.int64())
+    name:  str   = blosc2.field(blosc2.string(max_length=9), default="")
     score: float = blosc2.field(blosc2.float64(ge=0), default=0.0)
 
 
@@ -41,68 +44,38 @@ def make_data(n: int) -> np.ndarray:
     return arr
 
 
-print(f"=== BENCHMARK: Iterative Ingestion ({N:,} rows) ===\n")
-
-# ─────────────────────────────────────────────────────────────
-# 1. PANDAS
-# ─────────────────────────────────────────────────────────────
-print("--- 1. PANDAS (structured array -> DataFrame) ---")
 data = make_data(N)
 
-t0 = time.perf_counter()
+t0 = perf_counter()
 df = pd.DataFrame(data)
-t_pandas = time.perf_counter() - t0
+t_pandas = perf_counter() - t0
 
-mem_pandas = df.memory_usage(deep=True).sum() / (1024 ** 2)
-print(f"Total time:   {t_pandas:.4f} s")
-print(f"Memory (RAM): {mem_pandas:.2f} MB")
-
-print("\n--- PANDAS: First 10 rows ---")
-t0_print = time.perf_counter()
-print(df.head(10).to_string())
-t_print_pandas = time.perf_counter() - t0_print
-print(f"\nPrint time: {t_print_pandas:.6f} s")
-
-# ─────────────────────────────────────────────────────────────
-# 2. BLOSC2 CTable
-# ─────────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("--- 2. BLOSC2 CTable (structured array -> extend) ---")
-data = make_data(N)
-
-t0 = time.perf_counter()
+t0 = perf_counter()
 ct = blosc2.CTable(Row, expected_size=N)
 ct.extend(data)
-t_blosc = time.perf_counter() - t0
+t_blosc = perf_counter() - t0
 
-fields = ct.col_names
-mem_blosc_c  = (sum(col.cbytes for col in ct._cols.values()) + ct._valid_rows.cbytes) / (1024 ** 2)
-mem_blosc_uc = (sum(col.nbytes for col in ct._cols.values()) + ct._valid_rows.nbytes) / (1024 ** 2)
+t0 = perf_counter()
+_ = df.head(10).to_string()
+t_print_pandas = perf_counter() - t0
 
-print(f"Total time:            {t_blosc:.4f} s")
-print(f"Memory (uncompressed): {mem_blosc_uc:.2f} MB")
-print(f"Memory (compressed):   {mem_blosc_c:.2f} MB")
+t0 = perf_counter()
+_ = ct.head(10)
+t_print_blosc = perf_counter() - t0
 
-print("\n--- BLOSC2: First 10 rows ---")
-t0_print = time.perf_counter()
-print(ct.head(10))
-t_print_blosc = time.perf_counter() - t0_print
-print(f"\nPrint time: {t_print_blosc:.6f} s")
+mem_pandas   = df.memory_usage(deep=True).sum() / 1024**2
+mem_blosc_c  = (sum(c.cbytes for c in ct._cols.values()) + ct._valid_rows.cbytes) / 1024**2
+mem_blosc_uc = (sum(c.nbytes for c in ct._cols.values()) + ct._valid_rows.nbytes) / 1024**2
 
-# ─────────────────────────────────────────────────────────────
-# SUMMARY
-# ─────────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("--- SUMMARY ---")
-speedup   = t_pandas / t_blosc
-direction = "faster" if t_blosc < t_pandas else "slower"
-
-print(f"{'METRIC':<30} {'Pandas':>12} {'Blosc2':>12}")
-print("-" * 55)
-print(f"{'Ingestion time (s)':<30} {t_pandas:>12.4f} {t_blosc:>12.4f}")
-print(f"{'Memory (MB)':<30} {mem_pandas:>12.2f} {mem_blosc_c:>12.2f}")
-print(f"{'Print time (s)':<30} {t_print_pandas:>12.6f} {t_print_blosc:>12.6f}")
-print("-" * 55)
-print(f"\nSpeedup:               {speedup:.2f}x {direction}")
-print(f"Compression ratio:     {mem_blosc_uc / mem_blosc_c:.2f}x")
-print(f"Blosc2 vs Pandas size: {mem_blosc_c / mem_pandas * 100:.1f}%")
+print(f"CTable vs pandas — ingestion + print  |  N = {N:,}")
+print()
+print(f"  {'METRIC':<30}  {'pandas':>10}  {'CTable':>10}")
+print(f"  {'─'*30}  {'─'*10}  {'─'*10}")
+print(f"  {'Ingestion time (s)':<30}  {t_pandas:>10.4f}  {t_blosc:>10.4f}")
+print(f"  {'Memory compressed (MB)':<30}  {mem_pandas:>10.2f}  {mem_blosc_c:>10.2f}")
+print(f"  {'Memory uncompressed (MB)':<30}  {mem_pandas:>10.2f}  {mem_blosc_uc:>10.2f}")
+print(f"  {'head(10) render time (s)':<30}  {t_print_pandas:>10.6f}  {t_print_blosc:>10.6f}")
+print()
+print(f"  Ingestion speedup CTable vs pandas:  {t_pandas / t_blosc:.2f}×")
+print(f"  Compression ratio CTable:            {mem_blosc_uc / mem_blosc_c:.2f}×")
+print(f"  CTable compressed vs pandas RAM:     {mem_blosc_c / mem_pandas * 100:.1f}%")

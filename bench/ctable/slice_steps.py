@@ -8,7 +8,7 @@
 # Benchmark for measuring Column[::step].to_array() with varying step sizes.
 
 from dataclasses import dataclass
-from time import time
+from time import perf_counter as time
 
 import numpy as np
 
@@ -54,7 +54,7 @@ print("-" * 60)
 col = ct["score"]
 for step in steps:
     t0 = time()
-    arr = col[::step].to_numpy()
+    arr = col[::step]
     t_total = time() - t0
     print(f"::{ step:<8} {len(arr):>15,} {t_total:>12.6f}")
 

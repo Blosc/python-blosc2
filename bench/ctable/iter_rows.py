@@ -5,93 +5,54 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+# Benchmark: row iteration cost with different access patterns.
+#
+# Measures:
+#   1. Iteration without column access (loop overhead only)
+#   2. Iteration accessing 1 column per row
+#   3. Iteration accessing 3 columns per row
+#   4. Iteration with deleted rows (holes in _valid_rows)
+
 from dataclasses import dataclass
-from time import time
+from time import perf_counter
 
 import blosc2
-from blosc2 import CTable
 
 
 @dataclass
 class Row:
-    id: int = blosc2.field(blosc2.int64(ge=0))
-    score: float = blosc2.field(blosc2.float64(ge=0, le=100))
-    active: bool = blosc2.field(blosc2.bool(), default=True)
+    id:     int   = blosc2.field(blosc2.int64(ge=0))
+    score:  float = blosc2.field(blosc2.float64(ge=0, le=100))
+    active: bool  = blosc2.field(blosc2.bool(), default=True)
 
 
-N = 1_000  # start small, increase when confident
+N = 100_000
 
 data = [(i, float(i % 100), i % 2 == 0) for i in range(N)]
-tabla = CTable(Row, new_data=data)
+ct = blosc2.CTable(Row, expected_size=N)
+ct.extend(data)
 
-print(f"Table created with {len(tabla)} rows\n")
+ct_holes = blosc2.CTable(Row, expected_size=N)
+ct_holes.extend(data)
+ct_holes.delete(list(range(0, N, 2)))   # keep only odd rows
 
-# -------------------------------------------------------------------
-# Test 1: iterate without accessing any column (minimum cost)
-# -------------------------------------------------------------------
-t0 = time()
-for _row in tabla:
-    pass
-t1 = time()
-print(f"[Test 1] Iter without accessing columns:    {(t1 - t0)*1000:.3f} ms")
+print(f"Row iteration benchmark  |  N = {N:,}  |  holes table: {len(ct_holes):,} rows")
+print()
+print(f"  {'PATTERN':<35}  {'TIME (ms)':>10}  {'µs/row':>8}")
+print(f"  {'─'*35}  {'─'*10}  {'─'*8}")
 
-# -------------------------------------------------------------------
-# Test 2: iterate accessing a single column (real_pos cached once)
-# -------------------------------------------------------------------
-t0 = time()
-for row in tabla:
-    _ = row["id"]
-t1 = time()
-print(f"[Test 2] Iter accessing 'id':               {(t1 - t0)*1000:.3f} ms")
+cases = [
+    ("no column access",          ct,       lambda row: None),
+    ("access 1 col (id)",         ct,       lambda row: row["id"]),
+    ("access 3 cols",             ct,       lambda row: (row["id"], row["score"], row["active"])),
+    ("access 1 col — with holes", ct_holes, lambda row: row["id"]),
+]
 
-# -------------------------------------------------------------------
-# Test 3: iterate accessing all columns (real_pos cached once per row)
-# -------------------------------------------------------------------
-t0 = time()
-for row in tabla:
-    _ = row["id"]
-    _ = row["score"]
-    _ = row["active"]
-t1 = time()
-print(f"[Test 3] Iter accessing 3 columns:          {(t1 - t0)*1000:.3f} ms")
-
-# -------------------------------------------------------------------
-# Test 4: correctness — values match expected
-# -------------------------------------------------------------------
-errors = 0
-for row in tabla:
-    if row["id"] != row._nrow:
-        errors += 1
-    if row["score"] != float(row._nrow % 100):
-        errors += 1
-    if row["active"] != (row._nrow % 2 == 0):
-        errors += 1
-
-print(f"\n[Test 4] Correctness errors: {errors} (expected: 0)")
-
-# -------------------------------------------------------------------
-# Test 5: with holes (deleted rows)
-# -------------------------------------------------------------------
-tabla2 = CTable(Row, new_data=data)
-tabla2.delete(list(range(0, N, 2)))  # delete even rows, keep odd ones
-
-print(f"\nTable with holes: {len(tabla2)} rows (expected: {N // 2})")
-
-t0 = time()
-ids = []
-for row in tabla2:
-    ids.append(row["id"])
-t1 = time()
-
-expected_ids = [i for i in range(N) if i % 2 != 0]
-ok = ids == expected_ids
-print(f"[Test 5] Iter with holes ({N//2} rows):        {(t1 - t0)*1000:.3f} ms  |  correctness: {ok}")
-
-# -------------------------------------------------------------------
-# Test 6: real_pos is cached correctly (not recomputed)
-# -------------------------------------------------------------------
-row0 = next(iter(tabla))
-assert row0._real_pos is None, "real_pos should be None before first access"
-_ = row0["id"]
-assert row0._real_pos is not None, "real_pos should be cached after first access"
-print(f"\n[Test 6] real_pos caching: OK (real_pos={row0._real_pos})")
+for label, table, accessor in cases:
+    n = len(table)
+    t0 = perf_counter()
+    for row in table:
+        accessor(row)
+    elapsed = perf_counter() - t0
+    us = elapsed / n * 1e6
+    print(f"  {label:<35}  {elapsed*1e3:>10.2f}  {us:>8.2f}")
