@@ -308,10 +308,48 @@ class ListArray:
     def close(self) -> None:
         self.flush()
 
-    def _get_many(self, indices: list[int]) -> list[Any]:
-        if self.spec.storage == "vl":
-            return [self._backend[index] for index in indices]
+    def _get_many_monotonic(self, indices: list[int]) -> list[Any]:
+        out: list[Any] = [None] * len(indices)
+        prefix = self._persisted_prefix_sums()
+        batch_index = 0
+        batch_values: list[list[Any] | None] | None = None
 
+        i = 0
+        while i < len(indices):
+            index = indices[i]
+            if index >= self._persisted_row_count:
+                pending_start = index - self._persisted_row_count
+                j = i + 1
+                while (
+                    j < len(indices)
+                    and indices[j] >= self._persisted_row_count
+                    and indices[j] == indices[j - 1] + 1
+                ):
+                    j += 1
+                span = j - i
+                out[i:j] = self._pending_cells[pending_start : pending_start + span]
+                i = j
+                continue
+
+            while batch_index + 1 < len(prefix) and index >= prefix[batch_index + 1]:
+                batch_index += 1
+                batch_values = None
+            if batch_values is None:
+                batch_values = self._get_batch_values(batch_index)
+
+            batch_start = prefix[batch_index]
+            batch_end = prefix[batch_index + 1]
+            local_start = index - batch_start
+            j = i + 1
+            while j < len(indices) and indices[j] == indices[j - 1] + 1 and indices[j] < batch_end:
+                j += 1
+            span = j - i
+            out[i:j] = batch_values[local_start : local_start + span]
+            i = j
+
+        return out
+
+    def _get_many_grouped(self, indices: list[int]) -> list[Any]:
         out: list[Any] = [None] * len(indices)
         grouped: dict[int, list[tuple[int, int]]] = defaultdict(list)
         for out_i, index in enumerate(indices):
@@ -326,6 +364,22 @@ class ListArray:
             for out_i, inner_index in refs:
                 out[out_i] = batch_values[inner_index]
         return out
+
+    def _get_many(self, indices: list[int]) -> list[Any]:
+        if self.spec.storage == "vl":
+            return [self._backend[index] for index in indices]
+        if len(indices) <= 1:
+            return self._get_many_grouped(indices)
+        monotonic = True
+        prev = indices[0]
+        for index in indices[1:]:
+            if index < prev:
+                monotonic = False
+                break
+            prev = index
+        if monotonic:
+            return self._get_many_monotonic(indices)
+        return self._get_many_grouped(indices)
 
     def __getitem__(self, index: int | slice | list[int] | tuple[int, ...] | np.ndarray) -> Any:
         if isinstance(index, slice):
