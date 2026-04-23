@@ -33,6 +33,7 @@ def test_listarray_append_extend_and_replace(storage, tmp_path):
     assert arr[1] == []
     assert arr[2] is None
     assert arr[1:4] == [[], None, ["c"]]
+    assert arr[[0, 2, 4]] == [["a", "b"], None, ["d", "e"]]
 
     arr[3] = ["x", "y"]
     assert arr[3] == ["x", "y"]
@@ -65,6 +66,13 @@ def test_listarray_rejects_invalid_cells():
         arr.append("abc")
     with pytest.raises(ValueError):
         arr.append([1, None])
+
+
+def test_listarray_boolean_fancy_indexing():
+    arr = blosc2.ListArray(item_spec=blosc2.int32(), nullable=True, storage="batch", batch_rows=2)
+    arr.extend([[1], None, [], [2, 3]])
+    assert arr[[3, 0]] == [[2, 3], [1]]
+    assert arr[blosc2.asarray([True, False, True, False])[:]] == [[1], []]
 
 
 def test_listarray_arrow_roundtrip():

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 from bisect import bisect_right
+from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from functools import lru_cache
 from typing import Any
@@ -253,6 +254,9 @@ class ListArray:
             raise IndexError("ListArray index out of range")
         return index
 
+    def _normalize_indices(self, indices: Iterable[int]) -> list[int]:
+        return [self._normalize_index(int(index)) for index in indices]
+
     def _locate_persisted_row(self, row_index: int) -> tuple[int, int]:
         prefix = self._persisted_prefix_sums()
         batch_index = bisect_right(prefix, row_index) - 1
@@ -304,9 +308,39 @@ class ListArray:
     def close(self) -> None:
         self.flush()
 
-    def __getitem__(self, index: int | slice) -> Any:
+    def _get_many(self, indices: list[int]) -> list[Any]:
+        if self.spec.storage == "vl":
+            return [self._backend[index] for index in indices]
+
+        out: list[Any] = [None] * len(indices)
+        grouped: dict[int, list[tuple[int, int]]] = defaultdict(list)
+        for out_i, index in enumerate(indices):
+            if index >= self._persisted_row_count:
+                out[out_i] = self._pending_cells[index - self._persisted_row_count]
+            else:
+                batch_index, inner_index = self._locate_persisted_row(index)
+                grouped[batch_index].append((out_i, inner_index))
+
+        for batch_index, refs in grouped.items():
+            batch_values = self._get_batch_values(batch_index)
+            for out_i, inner_index in refs:
+                out[out_i] = batch_values[inner_index]
+        return out
+
+    def __getitem__(self, index: int | slice | list[int] | tuple[int, ...] | np.ndarray) -> Any:
         if isinstance(index, slice):
-            return [self[i] for i in range(*index.indices(len(self)))]
+            indices = list(range(*index.indices(len(self))))
+            return self._get_many(indices)
+        if isinstance(index, np.ndarray):
+            if index.dtype == np.bool_:
+                if len(index) != len(self):
+                    raise IndexError(
+                        f"Boolean mask length {len(index)} does not match ListArray length {len(self)}"
+                    )
+                return self._get_many(np.flatnonzero(index).tolist())
+            return self._get_many(self._normalize_indices(index.tolist()))
+        if isinstance(index, (list, tuple)):
+            return self._get_many(self._normalize_indices(index))
         index = self._normalize_index(index)
         if self.spec.storage == "vl":
             return self._backend[index]
@@ -337,8 +371,7 @@ class ListArray:
         return self._persisted_row_count + len(self._pending_cells)
 
     def __iter__(self) -> Iterator[Any]:
-        for i in range(len(self)):
-            yield self[i]
+        yield from self[:]
 
     def copy(self, **kwargs: Any) -> ListArray:
         out = ListArray(spec=self.spec, **kwargs)

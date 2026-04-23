@@ -627,7 +627,7 @@ class Column:
                 chunk = np.asarray(self._raw_col[lo : hi + 1])
                 return chunk[selected_pos - lo]
             if self.is_list:
-                return [self._raw_col[int(pos)] for pos in selected_pos]
+                return self._raw_col[selected_pos]
             return np.asarray(self._raw_col[selected_pos])
 
         elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
@@ -642,7 +642,7 @@ class Column:
                 raw_np = np.asarray(self._raw_col[:])
                 return raw_np[phys_indices]
             if self.is_list:
-                return [self._raw_col[int(pos)] for pos in phys_indices]
+                return self._raw_col[phys_indices]
             return self._raw_col[phys_indices]
 
         elif isinstance(key, (list, tuple, np.ndarray)):
@@ -652,7 +652,7 @@ class Column:
                 raw_np = np.asarray(self._raw_col[:])
                 return raw_np[phys_indices]
             if self.is_list:
-                return [self._raw_col[int(pos)] for pos in phys_indices]
+                return self._raw_col[phys_indices]
             return self._raw_col[phys_indices]
 
         raise TypeError(f"Invalid index type: {type(key)}")
@@ -780,8 +780,7 @@ class Column:
             yield from self._iter_chunks_computed(size=None)
             return
         if self.is_list:
-            for pos in np.where(self._valid_rows[:])[0]:
-                yield self._raw_col[int(pos)]
+            yield from self._raw_col[np.where(self._valid_rows[:])[0]]
             return
         arr = self._valid_rows
         chunk_size = arr.chunks[0]
@@ -2906,7 +2905,7 @@ class CTable(Generic[RowT]):
         col = self._cols[name]
         spec = self._schema.columns_by_name[name].spec
         if self._is_list_spec(spec):
-            return [col[int(p)] for p in positions]
+            return col[positions]
         return col[positions]
 
     def _schema_dict_with_computed(self) -> dict:

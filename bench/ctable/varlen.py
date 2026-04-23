@@ -169,12 +169,20 @@ def run_storage_bench(storage: str, rows, *, batch_size: int, repeats: int, nsam
     max_start = max(1, len(table) - slice_width - 1)
     indices = [((i * 104729) % max_start) for i in range(nsamples)]
     starts = [((i * 8191) % max_start) for i in range(nsamples)]
+    clustered_indices = [i % min(max_start, 4096) for i in range(nsamples)]
+    clustered_starts = [i % min(max_start, 2048) for i in range(nsamples)]
 
     single_sum = bench_getitem_single(table, indices)
     single_time = median_time(lambda: bench_getitem_single(table, indices), repeats=repeats)
+    single_clustered_time = median_time(
+        lambda: bench_getitem_single(table, clustered_indices), repeats=repeats
+    )
 
     slice_sum = bench_getitem_slices(table, starts, slice_width)
     slice_time = median_time(lambda: bench_getitem_slices(table, starts, slice_width), repeats=repeats)
+    slice_clustered_time = median_time(
+        lambda: bench_getitem_slices(table, clustered_starts, slice_width), repeats=repeats
+    )
 
     print("append/extend")
     print(f"  append rows:     {append_time:8.4f} s   {format_rate(len(rows), append_time)}")
@@ -187,12 +195,20 @@ def run_storage_bench(storage: str, rows, *, batch_size: int, repeats: int, nsam
 
     print("getitem")
     print(
-        f"  single row:      {single_time:8.4f} s   "
+        f"  single row random:   {single_time:8.4f} s   "
         f"{format_rate(nsamples, single_time)}   checksum={single_sum}"
     )
     print(
-        f"  slice[{slice_width}]:     {slice_time:8.4f} s   "
+        f"  single row local:    {single_clustered_time:8.4f} s   "
+        f"{format_rate(nsamples, single_clustered_time)}"
+    )
+    print(
+        f"  slice[{slice_width}] random: {slice_time:8.4f} s   "
         f"{format_rate(nsamples, slice_time)}   checksum={slice_sum}"
+    )
+    print(
+        f"  slice[{slice_width}] local:  {slice_clustered_time:8.4f} s   "
+        f"{format_rate(nsamples, slice_clustered_time)}"
     )
 
 
