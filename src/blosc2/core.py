@@ -1922,7 +1922,13 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
 def from_cframe(
     cframe: bytes | str, copy: bool = True
 ) -> (
-    blosc2.EmbedStore | blosc2.NDArray | blosc2.SChunk | blosc2.BatchArray | blosc2.VLArray | blosc2.C2Array
+    blosc2.EmbedStore
+    | blosc2.NDArray
+    | blosc2.SChunk
+    | blosc2.ListArray
+    | blosc2.BatchArray
+    | blosc2.VLArray
+    | blosc2.C2Array
 ):
     """Create a :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>`, :ref:`SChunk <SChunk>`,
     :ref:`BatchArray <BatchArray>` or :ref:`VLArray <VLArray>` instance
@@ -1957,6 +1963,8 @@ def from_cframe(
     # Check the metalayer to determine the type
     if "b2embed" in schunk.meta:
         return blosc2.estore_from_cframe(cframe, copy=copy)
+    if "listarray" in schunk.meta:
+        return blosc2.ListArray(_from_schunk=schunk_from_cframe(cframe, copy=copy))
     if "batcharray" in schunk.meta:
         return blosc2.BatchArray(_from_schunk=schunk_from_cframe(cframe, copy=copy))
     if "vlarray" in schunk.meta:

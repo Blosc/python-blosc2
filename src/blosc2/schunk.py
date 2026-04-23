@@ -1653,6 +1653,11 @@ def process_opened_object(res):
     if "b2o" in meta:
         return blosc2.open_b2object(res)
 
+    if "listarray" in meta:
+        from blosc2.list_array import ListArray
+
+        return ListArray(_from_schunk=getattr(res, "schunk", res))
+
     if "vlarray" in meta:
         from blosc2.vlarray import VLArray
 
