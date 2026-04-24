@@ -876,6 +876,35 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().update_chunk(nchunk, chunk)
 
+    def reorder_offsets(self, order: Any) -> None:
+        """Reorder the chunk offsets of the SChunk in place.
+
+        This is a low-level storage operation that changes the physical chunk
+        order of the underlying SChunk. Higher-level containers backed by this
+        SChunk will observe the reordered chunk traversal afterwards.
+
+        Parameters
+        ----------
+        order: array-like of int
+            A one-dimensional permutation of ``range(self.nchunks)`` describing
+            the new chunk order.
+
+        Raises
+        ------
+        ValueError
+            If ``order`` is not one-dimensional or its length does not match
+            the number of chunks in the SChunk.
+        RuntimeError
+            If the underlying reorder operation fails.
+        """
+        blosc2_ext.check_access_mode(self.urlpath, self.mode)
+        order = np.asarray(order, dtype=np.int64)
+        if order.ndim != 1:
+            raise ValueError("`order` must be a one-dimensional sequence")
+        if len(order) != self.nchunks:
+            raise ValueError("`order` must have exactly `self.nchunks` elements")
+        super().reorder_offsets(order)
+
     def update_data(self, nchunk: int, data: object, copy: bool) -> int:
         """Update the chunk in the specified position with the given data.
 
@@ -1652,6 +1681,11 @@ def process_opened_object(res):
 
     if "b2o" in meta:
         return blosc2.open_b2object(res)
+
+    if "listarray" in meta:
+        from blosc2.list_array import ListArray
+
+        return ListArray(_from_schunk=getattr(res, "schunk", res))
 
     if "vlarray" in meta:
         from blosc2.vlarray import VLArray

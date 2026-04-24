@@ -565,6 +565,7 @@ from .embed_store import EmbedStore, estore_from_cframe
 from .dict_store import DictStore
 from .tree_store import TreeStore
 from .batch_array import Batch, BatchArray
+from .list_array import ListArray
 from .vlarray import VLArray, vlarray_from_cframe
 from .ref import Ref
 from .b2objects import open_b2object
@@ -744,6 +745,7 @@ from .schema import (
     int16,
     int32,
     int64,
+    list,
     string,
     uint8,
     uint16,
@@ -782,6 +784,7 @@ __all__ = [  # noqa : RUF022
     "int16",
     "int32",
     "int64",
+    "list",
     "string",
     "uint8",
     "uint16",
@@ -804,6 +807,7 @@ __all__ = [  # noqa : RUF022
     "DSLSyntaxError",
     "LazyExpr",
     "LazyUDF",
+    "ListArray",
     "NDArray",
     "NDField",
     "Operand",

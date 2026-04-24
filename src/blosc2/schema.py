@@ -22,6 +22,7 @@ BLOSC2_FIELD_METADATA_KEY = "blosc2"
 # after our spec classes shadow them.
 _builtin_bool = bool
 _builtin_bytes = bytes
+_builtin_list = list
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +317,107 @@ class bytes(SchemaSpec):
         if self.null_value is not None:
             d["null_value"] = self.null_value
         return d
+
+
+# ---------------------------------------------------------------------------
+# List spec
+# ---------------------------------------------------------------------------
+
+
+class ListSpec(SchemaSpec):
+    """Logical schema descriptor for a list-valued column."""
+
+    python_type = _builtin_list
+    dtype = None
+
+    def __init__(
+        self,
+        item_spec: SchemaSpec,
+        *,
+        nullable: bool = False,
+        storage: str = "batch",
+        serializer: str = "msgpack",
+        batch_rows: int | None = None,
+        items_per_block: int | None = None,
+    ):
+        if not isinstance(item_spec, SchemaSpec):
+            raise TypeError("ListSpec item_spec must be a SchemaSpec instance")
+        if isinstance(item_spec, ListSpec):
+            raise TypeError("Nested list item specs are not supported in V1")
+        if storage not in {"batch", "vl"}:
+            raise ValueError("storage must be 'batch' or 'vl'")
+        if serializer not in {"msgpack", "arrow"}:
+            raise ValueError("serializer must be 'msgpack' or 'arrow'")
+        if storage == "vl" and serializer != "msgpack":
+            raise ValueError("storage='vl' only supports serializer='msgpack'")
+        if serializer == "arrow" and storage != "batch":
+            raise ValueError("serializer='arrow' requires storage='batch'")
+        self.item_spec = item_spec
+        self.nullable = nullable
+        self.storage = storage
+        self.serializer = serializer
+        self.batch_rows = batch_rows
+        self.items_per_block = items_per_block
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        d = {
+            "kind": "list",
+            "item": self.item_spec.to_metadata_dict(),
+            "nullable": self.nullable,
+            "storage": self.storage,
+            "serializer": self.serializer,
+        }
+        if self.batch_rows is not None:
+            d["batch_rows"] = self.batch_rows
+        if self.items_per_block is not None:
+            d["items_per_block"] = self.items_per_block
+        return d
+
+    def to_listarray_metadata(self) -> dict[str, Any]:
+        d = {"version": 1, **self.to_metadata_dict()}
+        d["backend"] = d.pop("storage")
+        return d
+
+    def display_label(self) -> str:
+        item_kind = self.item_spec.to_metadata_dict().get("kind", type(self.item_spec).__name__)
+        return f"list[{item_kind}]"
+
+    @classmethod
+    def from_metadata_dict(cls, data: dict[str, Any]) -> ListSpec:
+        from blosc2.schema_compiler import spec_from_metadata_dict
+
+        backend = data.get("backend")
+        return cls(
+            spec_from_metadata_dict(data["item_spec"] if "item_spec" in data else data["item"]),
+            nullable=data.get("nullable", False),
+            storage=backend if backend is not None else data.get("storage", "batch"),
+            serializer=data.get("serializer", "msgpack"),
+            batch_rows=data.get("batch_rows"),
+            items_per_block=data.get("items_per_block"),
+        )
+
+
+def list(
+    item_spec: SchemaSpec,
+    *,
+    nullable: bool = False,
+    storage: str = "batch",
+    serializer: str = "msgpack",
+    batch_rows: int | None = None,
+    items_per_block: int | None = None,
+) -> ListSpec:
+    """Build a list-valued schema descriptor for CTable and ListArray."""
+    return ListSpec(
+        item_spec,
+        nullable=nullable,
+        storage=storage,
+        serializer=serializer,
+        batch_rows=batch_rows,
+        items_per_block=items_per_block,
+    )
 
 
 # ---------------------------------------------------------------------------

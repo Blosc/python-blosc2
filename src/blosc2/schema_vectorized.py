@@ -19,6 +19,8 @@ from typing import Any
 
 import numpy as np
 
+from blosc2.list_array import coerce_list_cell
+from blosc2.schema import ListSpec
 from blosc2.schema_compiler import CompiledColumn, CompiledSchema  # noqa: TC001
 
 
@@ -75,6 +77,11 @@ def validate_column_values(col: CompiledColumn, values: Any) -> None:
         If any value violates a constraint declared on the column's spec.
     """
     spec = col.spec
+    if isinstance(spec, ListSpec):
+        for value in values:
+            coerce_list_cell(spec, value)
+        return
+
     arr = np.asarray(values)
 
     # Compute null mask so sentinels bypass constraint checks

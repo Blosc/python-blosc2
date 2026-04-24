@@ -3,10 +3,12 @@
 CTable
 ======
 
-A columnar compressed table backed by one :class:`~blosc2.NDArray` per column.
-Each column is stored, compressed, and queried independently; rows are never
-materialised in their entirety unless you explicitly call :meth:`~blosc2.CTable.to_arrow`
-or iterate with :meth:`~blosc2.CTable.__iter__`.
+A columnar compressed table backed by one physical container per column.
+Scalar columns use :class:`~blosc2.NDArray`; list-valued columns use
+:class:`~blosc2.ListArray`. Each column is stored, compressed, and queried
+independently; rows are never materialised in their entirety unless you
+explicitly call :meth:`~blosc2.CTable.to_arrow` or iterate with
+:meth:`~blosc2.CTable.__iter__`.
 
 .. currentmodule:: blosc2
 
@@ -361,6 +363,27 @@ Text & binary
 
     string
     bytes
+    list
 
 .. autoclass:: string
 .. autoclass:: bytes
+.. autofunction:: list
+
+List columns
+------------
+
+List columns are declared with :func:`blosc2.list`, for example::
+
+    from dataclasses import dataclass
+    import blosc2 as b2
+
+    @dataclass
+    class Product:
+        code: str = b2.field(b2.string(max_length=8))
+        tags: list[str] = b2.field(b2.list(b2.string(), nullable=True))
+
+Whole-cell replacement is supported, so users should reassign modified lists::
+
+    row_tags = table.tags[0]
+    row_tags.append("extra")      # local Python list only
+    table.tags[0] = row_tags      # explicit write-back

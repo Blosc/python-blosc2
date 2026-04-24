@@ -22,11 +22,15 @@ from __future__ import annotations
 import copy
 import json
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 import blosc2
+from blosc2.list_array import ListArray
+
+if TYPE_CHECKING:
+    from blosc2.schema import ListSpec
 
 # Directory inside the table root that holds per-column index sidecar files.
 _INDEXES_DIR = "_indexes"
@@ -54,6 +58,19 @@ class TableStorage:
         raise NotImplementedError
 
     def open_column(self, name: str) -> blosc2.NDArray:
+        raise NotImplementedError
+
+    def create_list_column(
+        self,
+        name: str,
+        *,
+        spec: ListSpec,
+        cparams: dict[str, Any] | None,
+        dparams: dict[str, Any] | None,
+    ) -> ListArray:
+        raise NotImplementedError
+
+    def open_list_column(self, name: str) -> ListArray:
         raise NotImplementedError
 
     def create_valid_rows(
@@ -149,6 +166,17 @@ class InMemoryTableStorage(TableStorage):
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
     def open_column(self, name):
+        raise RuntimeError("In-memory tables have no on-disk representation to open.")
+
+    def create_list_column(self, name, *, spec, cparams, dparams):
+        kwargs = {}
+        if cparams is not None:
+            kwargs["cparams"] = cparams
+        if dparams is not None:
+            kwargs["dparams"] = dparams
+        return ListArray(spec=spec, **kwargs)
+
+    def open_list_column(self, name):
         raise RuntimeError("In-memory tables have no on-disk representation to open.")
 
     def create_valid_rows(self, *, shape, chunks, blocks):
@@ -249,6 +277,10 @@ class FileTableStorage(TableStorage):
     def _col_path(self, name: str) -> str:
         return self._key_to_path(self._col_key(name))
 
+    def _list_col_path(self, name: str) -> str:
+        rel_key = self._col_key(name).lstrip("/")
+        return os.path.join(self._root, rel_key + ".b2b")
+
     def _col_key(self, name: str) -> str:
         return f"/{_COLS_DIR}/{name}"
 
@@ -298,6 +330,17 @@ class FileTableStorage(TableStorage):
 
     def open_column(self, name: str) -> blosc2.NDArray:
         return self._open_store()[self._col_key(name)]
+
+    def create_list_column(self, name, *, spec, cparams, dparams):
+        kwargs: dict[str, Any] = {"urlpath": self._list_col_path(name), "mode": "w", "contiguous": True}
+        if cparams is not None:
+            kwargs["cparams"] = cparams
+        if dparams is not None:
+            kwargs["dparams"] = dparams
+        return ListArray(spec=spec, **kwargs)
+
+    def open_list_column(self, name: str) -> ListArray:
+        return blosc2.open(self._list_col_path(name), mode=self._mode)
 
     def create_valid_rows(self, *, shape, chunks, blocks):
         valid_rows = blosc2.zeros(
@@ -358,15 +401,31 @@ class FileTableStorage(TableStorage):
         return [c["name"] for c in d["columns"]]
 
     def delete_column(self, name: str) -> None:
-        del self._open_store()[self._col_key(name)]
+        key = self._col_key(name)
+        if key in self._open_store():
+            del self._open_store()[key]
+            return
+        list_path = self._list_col_path(name)
+        if os.path.exists(list_path):
+            blosc2.remove_urlpath(list_path)
+            return
+        raise KeyError(name)
 
-    def rename_column(self, old: str, new: str) -> blosc2.NDArray:
+    def rename_column(self, old: str, new: str):
         store = self._open_store()
         old_key = self._col_key(old)
         new_key = self._col_key(new)
-        store[new_key] = store[old_key]
-        del store[old_key]
-        return store[new_key]
+        if old_key in store:
+            store[new_key] = store[old_key]
+            del store[old_key]
+            return store[new_key]
+        old_path = self._list_col_path(old)
+        new_path = self._list_col_path(new)
+        if os.path.exists(old_path):
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+            os.replace(old_path, new_path)
+            return blosc2.open(new_path, mode=self._mode)
+        raise KeyError(old)
 
     def close(self) -> None:
         if self._store is not None:
