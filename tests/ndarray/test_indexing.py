@@ -47,6 +47,24 @@ def test_scalar_index_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data >= 120_000) & (data < 125_000)])
 
 
+def test_opsi_index_accepts_non_multiple_chunk_and_block_lengths():
+    rng = np.random.default_rng(42)
+    data = rng.random(5_000, dtype=np.float64)
+    arr = blosc2.asarray(data, chunks=(781,), blocks=(160,))
+    descriptor = arr.create_index(kind=blosc2.IndexKind.OPSI)
+
+    opsi = descriptor["opsi"]
+    assert opsi["chunk_len"] % opsi["block_len"] == 0
+
+    lo = np.nextafter(data[1234], -np.inf)
+    hi = np.nextafter(data[1234], np.inf)
+    expr = ((arr >= lo) & (arr <= hi)).where(arr)
+
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    np.testing.assert_array_equal(indexed, scanned)
+
+
 @pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "full", "opsi"])
 def test_structured_field_index_matches_scan(kind):
     dtype = np.dtype([("id", np.int64), ("payload", np.float64)])

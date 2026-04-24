@@ -3196,6 +3196,17 @@ def _opsi_write_block_boundaries(
     _write_ndarray_linear_span(stage.maxs, first_block, maxs)
 
 
+def _opsi_storage_chunk_len(chunk_len: int, block_len: int) -> int:
+    """Return an OPSI sidecar chunk length aligned to whole OPSI blocks."""
+    chunk_len = max(1, int(chunk_len))
+    block_len = max(1, int(block_len))
+    if chunk_len % block_len == 0:
+        return chunk_len
+    if chunk_len >= block_len:
+        return (chunk_len // block_len) * block_len
+    return block_len
+
+
 def _opsi_build_stage1(
     array: blosc2.NDArray,
     target: dict,
@@ -3209,10 +3220,9 @@ def _opsi_build_stage1(
     cparams: dict | blosc2.CParams | None = None,
 ) -> OpsiStageSidecars:
     size = int(array.shape[0])
-    chunk_len = int(array.chunks[0])
+    source_chunk_len = int(array.chunks[0])
     block_len = int(array.blocks[0])
-    if chunk_len % block_len != 0:
-        raise ValueError("OPSI requires chunk length to be a multiple of block length")
+    chunk_len = _opsi_storage_chunk_len(source_chunk_len, block_len)
     nblocks = math.ceil(size / block_len)
     stage = _opsi_stage_create(
         array, token, kind, cycle, size, nblocks, dtype, persistent, chunk_len, block_len, cparams
@@ -3374,7 +3384,7 @@ def _build_opsi_descriptor(
             "positions_path": positions_sidecar["path"],
             "mins_path": mins_sidecar["path"],
             "maxs_path": maxs_sidecar["path"],
-            "chunk_len": int(array.chunks[0]),
+            "chunk_len": _opsi_storage_chunk_len(int(array.chunks[0]), int(array.blocks[0])),
             "block_len": int(array.blocks[0]),
             "nblocks": 0,
             "cycles": 0,
