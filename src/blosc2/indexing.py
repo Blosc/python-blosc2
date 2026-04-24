@@ -45,6 +45,7 @@ SEGMENT_LEVELS_BY_KIND = {
     "bucket": ("chunk", "block"),
     "partial": ("chunk", "block", "subblock"),
     "full": ("chunk", "block", "subblock"),
+    "opsi": ("chunk", "block", "subblock"),
 }
 
 _IN_MEMORY_INDEXES: dict[int, dict] = {}
@@ -287,6 +288,8 @@ def _copy_descriptor(descriptor: dict) -> dict:
         copied["full"] = descriptor["full"].copy()
         if "runs" in copied["full"]:
             copied["full"]["runs"] = [run.copy() for run in copied["full"]["runs"]]
+    if descriptor.get("opsi") is not None:
+        copied["opsi"] = descriptor["opsi"].copy()
     return copied
 
 
@@ -814,8 +817,8 @@ def _normalize_build_mode(build: str) -> str:
 def _normalize_full_build_method(method: str | None) -> str:
     if method is None:
         return "global-sort"
-    if method not in {"global-sort", "opsi"}:
-        raise ValueError("full index method must be one of 'global-sort' or 'opsi'")
+    if method != "global-sort":
+        raise ValueError("full index method must be 'global-sort'; use kind=IndexKind.OPSI for OPSI indexes")
     return method
 
 
@@ -1545,7 +1548,7 @@ def _position_dtype(max_value: int) -> np.dtype:
 
 
 def _resolve_ooc_mode(kind: str, build: str) -> bool:
-    if kind not in {"summary", "bucket", "partial", "full"}:
+    if kind not in {"summary", "bucket", "partial", "full", "opsi"}:
         return False
     build = _normalize_build_mode(build)
     return build != "memory"
@@ -3277,7 +3280,7 @@ def _opsi_compute_block_order(stage: OpsiStageSidecars, key_kind: str, size: int
     return block_ids
 
 
-def _build_full_descriptor_opsi(
+def _build_opsi_descriptor(
     array: blosc2.NDArray,
     target: dict,
     token: str,
@@ -3287,50 +3290,59 @@ def _build_full_descriptor_opsi(
     cparams: dict | blosc2.CParams | None = None,
     max_cycles: int = 3,
 ) -> dict:
-    if int(array.shape[0]) == 0:
-        full = _build_full_descriptor(array, token, kind, np.empty(0, dtype=dtype), persistent, cparams)
-        full["build_method"] = "opsi"
-        full["opsi_cycles"] = 0
-        full["opsi_max_cycles"] = int(max_cycles)
-        return full
+    max_cycles = max(0, int(max_cycles))
+    size = int(array.shape[0])
+    if size == 0:
+        values_sidecar = _store_array_sidecar(
+            array, token, kind, "opsi", "values", np.empty(0, dtype=dtype), persistent, cparams=cparams
+        )
+        positions_sidecar = _store_array_sidecar(
+            array,
+            token,
+            kind,
+            "opsi",
+            "positions",
+            np.empty(0, dtype=np.int64),
+            persistent,
+            cparams=cparams,
+        )
+        return {
+            "values_path": values_sidecar["path"],
+            "positions_path": positions_sidecar["path"],
+            "chunk_len": int(array.chunks[0]),
+            "block_len": int(array.blocks[0]),
+            "cycles": 0,
+            "max_cycles": max_cycles,
+            "is_csi": True,
+        }
+
     previous = None
     block_order = None
-    cycle = 0
+    current = None
     try:
-        while True:
+        for cycle in range(max_cycles):
             current = _opsi_build_stage1(
                 array, target, token, kind, dtype, persistent, cycle, previous, block_order, cparams
             )
-            if _opsi_is_csi(current, dtype):
-                full = {
+            is_csi = _opsi_is_csi(current, dtype)
+            if is_csi or cycle == max_cycles - 1:
+                opsi = {
                     "values_path": current.values_path,
                     "positions_path": current.positions_path,
-                    "runs": [],
-                    "next_run_id": 0,
-                    "build_method": "opsi",
-                    "opsi_cycles": cycle + 1,
-                    "opsi_max_cycles": int(max_cycles),
+                    "chunk_len": current.chunk_len,
+                    "block_len": current.block_len,
+                    "cycles": cycle + 1,
+                    "max_cycles": max_cycles,
+                    "is_csi": is_csi,
                 }
-                if persistent:
-                    _rebuild_full_navigation_sidecars_from_handle(
-                        array,
-                        token,
-                        kind,
-                        full,
-                        current.values,
-                        dtype,
-                        int(array.shape[0]),
-                        persistent,
-                        cparams,
-                    )
-                else:
+                if not persistent:
                     values = np.asarray(current.values)
                     positions = np.asarray(current.positions)
                     values_sidecar = _store_array_sidecar(
                         array,
                         token,
                         kind,
-                        "full",
+                        "opsi",
                         "values",
                         values,
                         persistent,
@@ -3342,7 +3354,7 @@ def _build_full_descriptor_opsi(
                         array,
                         token,
                         kind,
-                        "full",
+                        "opsi",
                         "positions",
                         positions,
                         persistent,
@@ -3350,44 +3362,20 @@ def _build_full_descriptor_opsi(
                         blocks=(current.block_len,),
                         cparams=cparams,
                     )
-                    full["values_path"] = values_sidecar["path"]
-                    full["positions_path"] = positions_sidecar["path"]
-                    _rebuild_full_navigation_sidecars(array, token, kind, full, values, persistent, cparams)
+                    opsi["values_path"] = values_sidecar["path"]
+                    opsi["positions_path"] = positions_sidecar["path"]
                 _opsi_drop_stage(previous)
                 _opsi_drop_stage(current, keep_payload=persistent)
-                return full
-            if cycle >= max_cycles:
-                if os.getenv("BLOSC_TRACE") or os.getenv("BLOSC_OPSI_TRACE"):
-                    print(
-                        "BLOSC_TRACE: OPSI exceeded opsi_max_cycles="
-                        f"{int(max_cycles)} without reaching CSI; falling back to full method "
-                        "'global-sort'",
-                        file=sys.stderr,
-                    )
-                _opsi_drop_stage(previous)
-                _opsi_drop_stage(current)
-                if persistent:
-                    with tempfile.TemporaryDirectory(
-                        prefix="blosc2-index-opsi-fallback-", dir=_resolve_full_index_tmpdir(array, None)
-                    ) as tmpdir:
-                        full = _build_full_descriptor_ooc(
-                            array, target, token, kind, dtype, persistent, Path(tmpdir), cparams
-                        )
-                else:
-                    values = _values_for_target(array, target)
-                    full = _build_full_descriptor(array, token, kind, values, persistent, cparams)
-                full["build_method"] = "opsi"
-                full["opsi_cycles"] = cycle + 1
-                full["opsi_max_cycles"] = int(max_cycles)
-                full["opsi_fallback"] = "global-sort"
-                return full
+                return opsi
             key_kind = ("min", "median", "max")[cycle % 3]
-            block_order = _opsi_compute_block_order(current, key_kind=key_kind, size=int(array.shape[0]))
+            block_order = _opsi_compute_block_order(current, key_kind=key_kind, size=size)
             _opsi_drop_stage(previous)
             previous = current
-            cycle += 1
+            current = None
+        raise RuntimeError("OPSI max_cycles must be greater than zero")
     except Exception:
         _opsi_drop_stage(previous)
+        _opsi_drop_stage(current)
         raise
 
 
@@ -3510,6 +3498,7 @@ def _build_descriptor(
     partial: dict | None,
     full: dict | None,
     cparams: dict | None = None,
+    opsi: dict | None = None,
 ) -> dict:
     return {
         "name": name
@@ -3531,6 +3520,7 @@ def _build_descriptor(
         "bucket": bucket,
         "partial": partial,
         "full": full,
+        "opsi": opsi,
         "cparams": _plain_index_cparams(cparams),
     }
 
@@ -3558,7 +3548,7 @@ def create_index(
     """
     cparams = _normalize_index_cparams(kwargs.pop("cparams", None))
     method = kwargs.pop("method", None)
-    opsi_max_cycles = int(kwargs.pop("opsi_max_cycles", 3))
+    opsi_max_cycles_arg = kwargs.pop("opsi_max_cycles", None)
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"unexpected keyword argument(s): {unexpected}")
@@ -3566,7 +3556,12 @@ def create_index(
         raise TypeError("kind must be a blosc2.IndexKind")
     kind = _normalize_index_kind(kind)
     build = _normalize_build_mode(build)
-    full_method = _normalize_full_build_method(method) if kind == "full" else None
+    if opsi_max_cycles_arg is None:
+        opsi_max_cycles = max(1, optlevel if optlevel < 8 else optlevel * 2)
+    else:
+        opsi_max_cycles = max(1, int(opsi_max_cycles_arg))
+    if kind == "full":
+        _normalize_full_build_method(method)
     if method is not None and kind != "full":
         raise ValueError("method is only supported for kind=IndexKind.FULL")
     target, dtype = _normalize_create_index_target(array, field, expression, operands)
@@ -3588,19 +3583,19 @@ def create_index(
             else None
         )
         full = None
+        opsi = None
         if kind == "full":
             with tempfile.TemporaryDirectory(
                 prefix="blosc2-index-ooc-", dir=_resolve_full_index_tmpdir(array, tmpdir)
             ) as tmpdir:
-                if full_method == "opsi":
-                    full = _build_full_descriptor_opsi(
-                        array, target, token, kind, dtype, persistent, cparams, opsi_max_cycles
-                    )
-                else:
-                    full = _build_full_descriptor_ooc(
-                        array, target, token, kind, dtype, persistent, Path(tmpdir), cparams
-                    )
-                    full["build_method"] = "global-sort"
+                full = _build_full_descriptor_ooc(
+                    array, target, token, kind, dtype, persistent, Path(tmpdir), cparams
+                )
+                full["build_method"] = "global-sort"
+        if kind == "opsi":
+            opsi = _build_opsi_descriptor(
+                array, target, token, kind, dtype, persistent, cparams, opsi_max_cycles
+            )
         descriptor = _build_descriptor(
             array,
             target,
@@ -3616,6 +3611,7 @@ def create_index(
             partial,
             full,
             cparams,
+            opsi,
         )
     else:
         values = _values_for_target(array, target)
@@ -3631,14 +3627,14 @@ def create_index(
             else None
         )
         full = None
+        opsi = None
         if kind == "full":
-            if full_method == "opsi":
-                full = _build_full_descriptor_opsi(
-                    array, target, token, kind, dtype, persistent, cparams, opsi_max_cycles
-                )
-            else:
-                full = _build_full_descriptor(array, token, kind, values, persistent, cparams)
-                full["build_method"] = "global-sort"
+            full = _build_full_descriptor(array, token, kind, values, persistent, cparams)
+            full["build_method"] = "global-sort"
+        if kind == "opsi":
+            opsi = _build_opsi_descriptor(
+                array, target, token, kind, dtype, persistent, cparams, opsi_max_cycles
+            )
         descriptor = _build_descriptor(
             array,
             target,
@@ -3654,6 +3650,7 @@ def create_index(
             partial,
             full,
             cparams,
+            opsi,
         )
 
     store = _load_store(array)
@@ -3721,6 +3718,11 @@ def iter_index_components(array: blosc2.NDArray, descriptor: dict):
                 f"{run_id}.positions",
                 run.get("positions_path"),
             )
+
+    opsi = descriptor.get("opsi")
+    if opsi is not None:
+        yield IndexComponent("opsi.values", "opsi", "values", opsi.get("values_path"))
+        yield IndexComponent("opsi.positions", "opsi", "positions", opsi.get("positions_path"))
 
 
 def _component_nbytes(array: blosc2.NDArray, descriptor: dict, component: IndexComponent) -> int:
@@ -3860,6 +3862,9 @@ def _drop_descriptor_sidecars(descriptor: dict) -> None:
         for run in descriptor["full"].get("runs", ()):
             _remove_sidecar_path(run.get("values_path"))
             _remove_sidecar_path(run.get("positions_path"))
+    if descriptor.get("opsi") is not None:
+        _remove_sidecar_path(descriptor["opsi"]["values_path"])
+        _remove_sidecar_path(descriptor["opsi"]["positions_path"])
 
 
 def _replace_levels_descriptor_tail(
@@ -4133,6 +4138,11 @@ def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | N
     store = _load_store(array)
     token = _resolve_index_token(store, field, name)
     descriptor = store["indexes"][token]
+    rebuild_kwargs = {}
+    if descriptor["kind"] == "full":
+        rebuild_kwargs["method"] = descriptor.get("full", {}).get("build_method")
+    if descriptor["kind"] == "opsi":
+        rebuild_kwargs["opsi_max_cycles"] = descriptor.get("opsi", {}).get("max_cycles")
     drop_index(array, field=descriptor["field"], name=descriptor["name"])
     if descriptor["target"]["source"] == "expression":
         operands = array.fields if array.dtype.fields is not None else {SELF_TARGET_NAME: array}
@@ -4145,7 +4155,7 @@ def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | N
             persistent=descriptor["persistent"],
             build="ooc" if descriptor.get("ooc", False) else "memory",
             name=descriptor["name"],
-            method=descriptor.get("full", {}).get("build_method") if descriptor["kind"] == "full" else None,
+            **rebuild_kwargs,
         )
     return create_index(
         array,
@@ -4155,7 +4165,7 @@ def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | N
         persistent=descriptor["persistent"],
         build="ooc" if descriptor.get("ooc", False) else "memory",
         name=descriptor["name"],
-        method=descriptor.get("full", {}).get("build_method") if descriptor["kind"] == "full" else None,
+        **rebuild_kwargs,
     )
 
 
@@ -4416,6 +4426,18 @@ def _load_full_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
     values_sidecar = _open_sidecar_handle(array, token, "full_handle", "values", full["values_path"])
     positions_sidecar = _open_sidecar_handle(
         array, token, "full_handle", "positions", full["positions_path"]
+    )
+    return values_sidecar, positions_sidecar
+
+
+def _load_opsi_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
+    opsi = descriptor.get("opsi")
+    if opsi is None:
+        raise RuntimeError("OPSI-index metadata is not available")
+    token = descriptor["token"]
+    values_sidecar = _open_sidecar_handle(array, token, "opsi_handle", "values", opsi["values_path"])
+    positions_sidecar = _open_sidecar_handle(
+        array, token, "opsi_handle", "positions", opsi["positions_path"]
     )
     return values_sidecar, positions_sidecar
 
@@ -4741,7 +4763,7 @@ def _plan_exact_compare(node: ast.Compare, operands: dict) -> ExactPredicatePlan
         return None
     base, target_info, op, value = target
     descriptor = _descriptor_for_target(base, target_info)
-    if descriptor is None or descriptor.get("kind") not in {"bucket", "partial", "full"}:
+    if descriptor is None or descriptor.get("kind") not in {"bucket", "partial", "full", "opsi"}:
         return None
     try:
         value = _normalize_scalar(value, np.dtype(descriptor["dtype"]))
@@ -5199,6 +5221,34 @@ def _exact_positions_from_full_selective_ooc(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> np.ndarray:
     return _exact_positions_from_compact_full_base(array, descriptor, plan)
+
+
+def _exact_positions_from_opsi(
+    array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
+) -> np.ndarray:
+    if _range_is_empty(plan):
+        return np.empty(0, dtype=np.int64)
+    dtype = np.dtype(descriptor["dtype"])
+    values_sidecar, positions_sidecar = _load_opsi_sidecar_handles(array, descriptor)
+    chunk_boundaries = _sorted_chunk_boundaries_from_handle(
+        array,
+        descriptor["token"],
+        "opsi_bounds",
+        "chunks",
+        values_sidecar,
+        dtype,
+    )
+    positions = _exact_positions_from_sorted_chunks(
+        values_sidecar,
+        positions_sidecar,
+        chunk_boundaries,
+        plan,
+        int(descriptor["opsi"].get("chunk_len", values_sidecar.chunks[0])),
+        dtype,
+    )
+    if len(positions) == 0:
+        return np.empty(0, dtype=np.int64)
+    return np.sort(positions.astype(np.int64, copy=False), kind="stable")
 
 
 def _exact_positions_from_full(
@@ -5840,6 +5890,8 @@ def _exact_positions_from_plan(plan: ExactPredicatePlan) -> np.ndarray | None:
     kind = plan.descriptor["kind"]
     if kind == "full":
         return _exact_positions_from_full(plan.base, plan.descriptor, plan)
+    if kind == "opsi":
+        return _exact_positions_from_opsi(plan.base, plan.descriptor, plan)
     if kind == "partial":
         return _exact_positions_from_partial(
             plan.base, plan.descriptor, np.dtype(plan.descriptor["dtype"]), plan
@@ -5910,8 +5962,12 @@ def _plan_multi_exact_query(plans: list[ExactPredicatePlan]) -> IndexPlan | None
 
 def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
     kind = exact_plan.descriptor["kind"]
-    if kind == "full":
-        exact_positions = _exact_positions_from_full(exact_plan.base, exact_plan.descriptor, exact_plan)
+    if kind in {"full", "opsi"}:
+        exact_positions = (
+            _exact_positions_from_full(exact_plan.base, exact_plan.descriptor, exact_plan)
+            if kind == "full"
+            else _exact_positions_from_opsi(exact_plan.base, exact_plan.descriptor, exact_plan)
+        )
         return IndexPlan(
             True,
             f"{kind} index selected",

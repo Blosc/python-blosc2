@@ -3605,6 +3605,8 @@ class CTable(Generic[RowT]):
         }
         if descriptor.get("kind") == "full":
             kwargs["method"] = descriptor.get("full", {}).get("build_method", "global-sort")
+        if descriptor.get("kind") == "opsi":
+            kwargs["opsi_max_cycles"] = descriptor.get("opsi", {}).get("max_cycles")
         target = descriptor.get("target") or {}
         if target.get("source") == "expression":
             kwargs["expression"] = target.get("expression")
@@ -3755,6 +3757,7 @@ class CTable(Generic[RowT]):
         tmpdir: str | None,
         cparams_obj,
         method: str | None = None,
+        opsi_max_cycles: int | None = None,
     ) -> dict:
         """Build index sidecar files for a persistent-table column; return the descriptor."""
         import tempfile
@@ -3768,9 +3771,9 @@ class CTable(Generic[RowT]):
             _build_descriptor,
             _build_full_descriptor,
             _build_full_descriptor_ooc,
-            _build_full_descriptor_opsi,
             _build_levels_descriptor,
             _build_levels_descriptor_ooc,
+            _build_opsi_descriptor,
             _build_partial_descriptor,
             _build_partial_descriptor_ooc,
             _copy_descriptor,
@@ -3792,6 +3795,8 @@ class CTable(Generic[RowT]):
         persistent = True
         dtype = col_arr.dtype
         use_ooc = _resolve_ooc_mode(kind, build)
+        if opsi_max_cycles is None:
+            opsi_max_cycles = max(1, optlevel if optlevel < 8 else optlevel * 2)
 
         if use_ooc:
             resolved_tmpdir = _resolve_full_index_tmpdir(proxy, tmpdir)
@@ -3811,17 +3816,17 @@ class CTable(Generic[RowT]):
                 else None
             )
             full = None
+            opsi = None
             if kind == "full":
-                if method == "opsi":
-                    full = _build_full_descriptor_opsi(
-                        proxy, target, token, kind, dtype, persistent, cparams_obj
+                with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-", dir=resolved_tmpdir) as td:
+                    full = _build_full_descriptor_ooc(
+                        proxy, target, token, kind, dtype, persistent, Path(td), cparams_obj
                     )
-                else:
-                    with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-", dir=resolved_tmpdir) as td:
-                        full = _build_full_descriptor_ooc(
-                            proxy, target, token, kind, dtype, persistent, Path(td), cparams_obj
-                        )
-                        full["build_method"] = "global-sort"
+                    full["build_method"] = "global-sort"
+            if kind == "opsi":
+                opsi = _build_opsi_descriptor(
+                    proxy, target, token, kind, dtype, persistent, cparams_obj, opsi_max_cycles
+                )
             descriptor = _build_descriptor(
                 proxy,
                 target,
@@ -3837,6 +3842,7 @@ class CTable(Generic[RowT]):
                 partial,
                 full,
                 cparams_obj,
+                opsi,
             )
         else:
             values = _values_for_target(proxy, target)
@@ -3854,14 +3860,14 @@ class CTable(Generic[RowT]):
                 else None
             )
             full = None
+            opsi = None
             if kind == "full":
-                if method == "opsi":
-                    full = _build_full_descriptor_opsi(
-                        proxy, target, token, kind, dtype, persistent, cparams_obj
-                    )
-                else:
-                    full = _build_full_descriptor(proxy, token, kind, values, persistent, cparams_obj)
-                    full["build_method"] = "global-sort"
+                full = _build_full_descriptor(proxy, token, kind, values, persistent, cparams_obj)
+                full["build_method"] = "global-sort"
+            if kind == "opsi":
+                opsi = _build_opsi_descriptor(
+                    proxy, target, token, kind, dtype, persistent, cparams_obj, opsi_max_cycles
+                )
             descriptor = _build_descriptor(
                 proxy,
                 target,
@@ -3877,6 +3883,7 @@ class CTable(Generic[RowT]):
                 partial,
                 full,
                 cparams_obj,
+                opsi,
             )
 
         result = _copy_descriptor(descriptor)
@@ -3921,6 +3928,9 @@ class CTable(Generic[RowT]):
 
         cparams_obj = _normalize_index_cparams(kwargs.pop("cparams", None))
         method = kwargs.pop("method", None)
+        opsi_max_cycles = kwargs.pop("opsi_max_cycles", None)
+        if opsi_max_cycles is not None:
+            opsi_max_cycles = max(1, int(opsi_max_cycles))
         if kwargs:
             raise TypeError(f"unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
 
@@ -3949,6 +3959,7 @@ class CTable(Generic[RowT]):
                 tmpdir=tmpdir,
                 cparams=cparams_obj,
                 method=method_str,
+                opsi_max_cycles=opsi_max_cycles,
             )
             store = _IN_MEMORY_INDEXES.get(id(expr_arr))
             if store is None:
@@ -3995,6 +4006,7 @@ class CTable(Generic[RowT]):
                 tmpdir=tmpdir,
                 cparams_obj=cparams_obj,
                 method=method_str,
+                opsi_max_cycles=opsi_max_cycles,
             )
         else:
             _ix_create_index(
@@ -4007,6 +4019,7 @@ class CTable(Generic[RowT]):
                 tmpdir=tmpdir,
                 cparams=cparams_obj,
                 method=method_str,
+                opsi_max_cycles=opsi_max_cycles,
             )
             store = _IN_MEMORY_INDEXES[id(col_arr)]
             descriptor = _copy_descriptor(store["indexes"]["__self__"])

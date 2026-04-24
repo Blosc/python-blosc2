@@ -135,7 +135,10 @@ CTable indexes can also target **direct expressions** over stored columns via
 predicates without adding either a computed column or a materialized stored one.
 A matching ``FULL`` direct-expression index can also be reused by ordering paths
 such as :meth:`CTable.sort_by` when sorting by a computed column backed by the
-same expression.
+same expression.  ``OPSI`` indexes are a separate exact-filtering tier with a
+tunable number of iterative ordering cycles; they are not intended to converge
+to a completely sorted ``FULL``/CSI index, so use ``FULL`` when globally sorted
+ordered reuse is required.
 
 .. autosummary::
 
