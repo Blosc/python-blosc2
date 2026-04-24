@@ -4830,13 +4830,15 @@ class NDArray(blosc2_ext.NDArray, Operand):
             same filesystem. In-memory arrays fall back to the system
             temporary directory.
         kwargs : dict, optional
-            Keyword arguments forwarded to the index builder. At the moment the
-            supported option is ``cparams``. Pass ``cparams`` to control the
-            compression settings used for index sidecars, including
-            ``codec``, ``clevel``, and ``nthreads``. If provided,
-            ``cparams["nthreads"]`` becomes the default build-thread count for
-            intra-chunk sorting unless ``BLOSC2_INDEX_BUILD_THREADS`` overrides
-            it.
+            Keyword arguments forwarded to the index builder. Supported options
+            include ``cparams`` and, for ``kind=FULL``, ``method``. Pass
+            ``method="global-sort"`` to select the current full-index builder
+            explicitly, or ``method="opsi"`` to select the iterative OPSI full
+            builder. Pass ``cparams`` to control the compression settings used
+            for index sidecars, including ``codec``, ``clevel``, and
+            ``nthreads``. If provided, ``cparams["nthreads"]`` becomes the
+            default build-thread count for intra-chunk sorting unless
+            ``BLOSC2_INDEX_BUILD_THREADS`` overrides it.
 
         Notes
         -----

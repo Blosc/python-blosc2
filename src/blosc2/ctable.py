@@ -3603,6 +3603,8 @@ class CTable(Generic[RowT]):
             "build": build,
             "cparams": descriptor.get("cparams"),
         }
+        if descriptor.get("kind") == "full":
+            kwargs["method"] = descriptor.get("full", {}).get("build_method", "global-sort")
         target = descriptor.get("target") or {}
         if target.get("source") == "expression":
             kwargs["expression"] = target.get("expression")
@@ -3752,6 +3754,7 @@ class CTable(Generic[RowT]):
         build: str,
         tmpdir: str | None,
         cparams_obj,
+        method: str | None = None,
     ) -> dict:
         """Build index sidecar files for a persistent-table column; return the descriptor."""
         import tempfile
@@ -3765,6 +3768,7 @@ class CTable(Generic[RowT]):
             _build_descriptor,
             _build_full_descriptor,
             _build_full_descriptor_ooc,
+            _build_full_descriptor_opsi,
             _build_levels_descriptor,
             _build_levels_descriptor_ooc,
             _build_partial_descriptor,
@@ -3808,10 +3812,16 @@ class CTable(Generic[RowT]):
             )
             full = None
             if kind == "full":
-                with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-", dir=resolved_tmpdir) as td:
-                    full = _build_full_descriptor_ooc(
-                        proxy, target, token, kind, dtype, persistent, Path(td), cparams_obj
+                if method == "opsi":
+                    full = _build_full_descriptor_opsi(
+                        proxy, target, token, kind, dtype, persistent, cparams_obj
                     )
+                else:
+                    with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-", dir=resolved_tmpdir) as td:
+                        full = _build_full_descriptor_ooc(
+                            proxy, target, token, kind, dtype, persistent, Path(td), cparams_obj
+                        )
+                        full["build_method"] = "global-sort"
             descriptor = _build_descriptor(
                 proxy,
                 target,
@@ -3843,11 +3853,15 @@ class CTable(Generic[RowT]):
                 if kind == "partial"
                 else None
             )
-            full = (
-                _build_full_descriptor(proxy, token, kind, values, persistent, cparams_obj)
-                if kind == "full"
-                else None
-            )
+            full = None
+            if kind == "full":
+                if method == "opsi":
+                    full = _build_full_descriptor_opsi(
+                        proxy, target, token, kind, dtype, persistent, cparams_obj
+                    )
+                else:
+                    full = _build_full_descriptor(proxy, token, kind, values, persistent, cparams_obj)
+                    full["build_method"] = "global-sort"
             descriptor = _build_descriptor(
                 proxy,
                 target,
@@ -3869,7 +3883,7 @@ class CTable(Generic[RowT]):
         _PERSISTENT_INDEXES.pop(proxy_key, None)  # evict proxy to avoid memory leak
         return result
 
-    def create_index(
+    def create_index(  # noqa: C901
         self,
         col_name: str | None = None,
         *,
@@ -3898,6 +3912,7 @@ class CTable(Generic[RowT]):
             _IN_MEMORY_INDEXES,
             _copy_descriptor,
             _normalize_build_mode,
+            _normalize_full_build_method,
             _normalize_index_cparams,
             _normalize_index_kind,
             _target_token,
@@ -3905,11 +3920,15 @@ class CTable(Generic[RowT]):
         from blosc2.indexing import create_index as _ix_create_index
 
         cparams_obj = _normalize_index_cparams(kwargs.pop("cparams", None))
+        method = kwargs.pop("method", None)
         if kwargs:
             raise TypeError(f"unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
 
         kind_str = _normalize_index_kind(kind)
         build_str = _normalize_build_mode(build)
+        method_str = _normalize_full_build_method(method) if kind_str == "full" else None
+        if method is not None and kind_str != "full":
+            raise ValueError("method is only supported for kind=IndexKind.FULL")
         catalog = self._storage.load_index_catalog()
 
         if expression is not None:
@@ -3929,6 +3948,7 @@ class CTable(Generic[RowT]):
                 build=build,
                 tmpdir=tmpdir,
                 cparams=cparams_obj,
+                method=method_str,
             )
             store = _IN_MEMORY_INDEXES.get(id(expr_arr))
             if store is None:
@@ -3974,6 +3994,7 @@ class CTable(Generic[RowT]):
                 build=build_str,
                 tmpdir=tmpdir,
                 cparams_obj=cparams_obj,
+                method=method_str,
             )
         else:
             _ix_create_index(
@@ -3985,6 +4006,7 @@ class CTable(Generic[RowT]):
                 build=build,
                 tmpdir=tmpdir,
                 cparams=cparams_obj,
+                method=method_str,
             )
             store = _IN_MEMORY_INDEXES[id(col_arr)]
             descriptor = _copy_descriptor(store["indexes"]["__self__"])

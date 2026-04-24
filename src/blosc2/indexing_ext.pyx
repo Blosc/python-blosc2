@@ -13,6 +13,10 @@ import cython
 from libc.stdint cimport int8_t, int16_t, int32_t, int64_t, uint8_t, uint16_t, uint32_t, uint64_t
 
 
+DEF KEYSORT_STACK = 128
+DEF KEYSORT_INSERTION_CUTOFF = 16
+
+
 ctypedef fused sort_float_t:
     np.float32_t
     np.float64_t
@@ -27,6 +31,160 @@ ctypedef fused sort_ordered_t:
     np.uint16_t
     np.uint32_t
     np.uint64_t
+
+
+ctypedef fused keysort_t:
+    np.float32_t
+    np.float64_t
+    np.int8_t
+    np.int16_t
+    np.int32_t
+    np.int64_t
+    np.uint8_t
+    np.uint16_t
+    np.uint32_t
+    np.uint64_t
+
+
+cdef inline bint _keysort_pair_lt(
+    keysort_t left_value,
+    int64_t left_position,
+    keysort_t right_value,
+    int64_t right_position,
+) noexcept nogil:
+    cdef bint left_nan
+    cdef bint right_nan
+    if keysort_t is np.float32_t or keysort_t is np.float64_t:
+        left_nan = left_value != left_value
+        right_nan = right_value != right_value
+        if left_nan:
+            if right_nan:
+                return left_position < right_position
+            return False
+        if right_nan:
+            return True
+    if left_value < right_value:
+        return True
+    if left_value > right_value:
+        return False
+    return left_position < right_position
+
+
+cdef inline void _keysort_pair_swap(
+    keysort_t[:] values,
+    np.int64_t[:] positions,
+    Py_ssize_t left,
+    Py_ssize_t right,
+) noexcept nogil:
+    cdef keysort_t value_tmp
+    cdef int64_t position_tmp
+    if left == right:
+        return
+    value_tmp = values[left]
+    values[left] = values[right]
+    values[right] = value_tmp
+    position_tmp = positions[left]
+    positions[left] = positions[right]
+    positions[right] = position_tmp
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cdef void _keysort_pair_insertion(
+    keysort_t[:] values,
+    np.int64_t[:] positions,
+    Py_ssize_t left,
+    Py_ssize_t right,
+) noexcept nogil:
+    cdef Py_ssize_t i
+    cdef Py_ssize_t j
+    cdef keysort_t value_tmp
+    cdef int64_t position_tmp
+    for i in range(left + 1, right + 1):
+        value_tmp = values[i]
+        position_tmp = positions[i]
+        j = i
+        while j > left and _keysort_pair_lt(value_tmp, position_tmp, values[j - 1], positions[j - 1]):
+            values[j] = values[j - 1]
+            positions[j] = positions[j - 1]
+            j -= 1
+        values[j] = value_tmp
+        positions[j] = position_tmp
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cdef void _keysort_pair_quicksort(keysort_t[:] values, np.int64_t[:] positions) noexcept nogil:
+    cdef Py_ssize_t n = values.shape[0]
+    cdef Py_ssize_t left = 0
+    cdef Py_ssize_t right = n - 1
+    cdef Py_ssize_t mid
+    cdef Py_ssize_t i
+    cdef Py_ssize_t j
+    cdef Py_ssize_t left_size
+    cdef Py_ssize_t right_size
+    cdef Py_ssize_t stack_left[KEYSORT_STACK]
+    cdef Py_ssize_t stack_right[KEYSORT_STACK]
+    cdef int stack_top = 0
+    cdef keysort_t pivot_value
+    cdef int64_t pivot_position
+
+    if n <= 1:
+        return
+
+    while True:
+        while right - left > KEYSORT_INSERTION_CUTOFF:
+            mid = left + ((right - left) >> 1)
+
+            if _keysort_pair_lt(values[mid], positions[mid], values[left], positions[left]):
+                _keysort_pair_swap(values, positions, mid, left)
+            if _keysort_pair_lt(values[right], positions[right], values[mid], positions[mid]):
+                _keysort_pair_swap(values, positions, right, mid)
+            if _keysort_pair_lt(values[mid], positions[mid], values[left], positions[left]):
+                _keysort_pair_swap(values, positions, mid, left)
+
+            pivot_value = values[mid]
+            pivot_position = positions[mid]
+            _keysort_pair_swap(values, positions, mid, right - 1)
+
+            i = left
+            j = right - 1
+            while True:
+                i += 1
+                while _keysort_pair_lt(values[i], positions[i], pivot_value, pivot_position):
+                    i += 1
+                j -= 1
+                while _keysort_pair_lt(pivot_value, pivot_position, values[j], positions[j]):
+                    j -= 1
+                if i >= j:
+                    break
+                _keysort_pair_swap(values, positions, i, j)
+
+            _keysort_pair_swap(values, positions, i, right - 1)
+
+            left_size = i - left
+            right_size = right - i
+            if left_size < right_size:
+                if i + 1 < right:
+                    stack_left[stack_top] = i + 1
+                    stack_right[stack_top] = right
+                    stack_top += 1
+                right = i - 1
+            else:
+                if left < i - 1:
+                    stack_left[stack_top] = left
+                    stack_right[stack_top] = i - 1
+                    stack_top += 1
+                left = i + 1
+
+        if left < right:
+            _keysort_pair_insertion(values, positions, left, right)
+
+        if stack_top == 0:
+            break
+        stack_top -= 1
+        left = stack_left[stack_top]
+        right = stack_right[stack_top]
 
 
 cdef inline bint _le_float_pair(
@@ -2193,3 +2351,147 @@ def index_collect_reduced_chunk_nav_positions(
             lower, lower_inclusive, upper, upper_inclusive
         )
     raise TypeError("unsupported dtype for index_collect_reduced_chunk_nav_positions")
+
+
+cdef void _keysort_ndarray_float32(np.ndarray values, np.ndarray positions):
+    cdef np.float32_t[:] values_mv = values
+    cdef np.int64_t[:] positions_mv = positions
+    with nogil:
+        _keysort_pair_quicksort(values_mv, positions_mv)
+
+
+cdef void _keysort_ndarray_float64(np.ndarray values, np.ndarray positions):
+    cdef np.float64_t[:] values_mv = values
+    cdef np.int64_t[:] positions_mv = positions
+    with nogil:
+        _keysort_pair_quicksort(values_mv, positions_mv)
+
+
+cdef void _keysort_ndarray_int8(np.ndarray values, np.ndarray positions):
+    cdef np.int8_t[:] values_mv = values
+    cdef np.int64_t[:] positions_mv = positions
+    with nogil:
+        _keysort_pair_quicksort(values_mv, positions_mv)
+
+
+cdef void _keysort_ndarray_int16(np.ndarray values, np.ndarray positions):
+    cdef np.int16_t[:] values_mv = values
+    cdef np.int64_t[:] positions_mv = positions
+    with nogil:
+        _keysort_pair_quicksort(values_mv, positions_mv)
+
+
+cdef void _keysort_ndarray_int32(np.ndarray values, np.ndarray positions):
+    cdef np.int32_t[:] values_mv = values
+    cdef np.int64_t[:] positions_mv = positions
+    with nogil:
+        _keysort_pair_quicksort(values_mv, positions_mv)
+
+
+cdef void _keysort_ndarray_int64(np.ndarray values, np.ndarray positions):
+    cdef np.int64_t[:] values_mv = values
+    cdef np.int64_t[:] positions_mv = positions
+    with nogil:
+        _keysort_pair_quicksort(values_mv, positions_mv)
+
+
+cdef void _keysort_ndarray_uint8(np.ndarray values, np.ndarray positions):
+    cdef np.uint8_t[:] values_mv = values
+    cdef np.int64_t[:] positions_mv = positions
+    with nogil:
+        _keysort_pair_quicksort(values_mv, positions_mv)
+
+
+cdef void _keysort_ndarray_uint16(np.ndarray values, np.ndarray positions):
+    cdef np.uint16_t[:] values_mv = values
+    cdef np.int64_t[:] positions_mv = positions
+    with nogil:
+        _keysort_pair_quicksort(values_mv, positions_mv)
+
+
+cdef void _keysort_ndarray_uint32(np.ndarray values, np.ndarray positions):
+    cdef np.uint32_t[:] values_mv = values
+    cdef np.int64_t[:] positions_mv = positions
+    with nogil:
+        _keysort_pair_quicksort(values_mv, positions_mv)
+
+
+cdef void _keysort_ndarray_uint64(np.ndarray values, np.ndarray positions):
+    cdef np.uint64_t[:] values_mv = values
+    cdef np.int64_t[:] positions_mv = positions
+    with nogil:
+        _keysort_pair_quicksort(values_mv, positions_mv)
+
+
+cdef void _keysort_ndarray(np.ndarray values, np.ndarray positions):
+    cdef np.dtype dtype = values.dtype
+    if dtype == np.dtype(np.float32):
+        _keysort_ndarray_float32(values, positions)
+        return
+    if dtype == np.dtype(np.float64):
+        _keysort_ndarray_float64(values, positions)
+        return
+    if dtype == np.dtype(np.int8):
+        _keysort_ndarray_int8(values, positions)
+        return
+    if dtype == np.dtype(np.int16):
+        _keysort_ndarray_int16(values, positions)
+        return
+    if dtype == np.dtype(np.int32):
+        _keysort_ndarray_int32(values, positions)
+        return
+    if dtype == np.dtype(np.int64):
+        _keysort_ndarray_int64(values, positions)
+        return
+    if dtype == np.dtype(np.uint8):
+        _keysort_ndarray_uint8(values, positions)
+        return
+    if dtype == np.dtype(np.uint16):
+        _keysort_ndarray_uint16(values, positions)
+        return
+    if dtype == np.dtype(np.uint32):
+        _keysort_ndarray_uint32(values, positions)
+        return
+    if dtype == np.dtype(np.uint64):
+        _keysort_ndarray_uint64(values, positions)
+        return
+    if dtype == np.dtype(np.bool_):
+        _keysort_ndarray_uint8(values.view(np.uint8), positions)
+        return
+    if dtype.kind in {"m", "M"}:
+        _keysort_ndarray_int64(values.view(np.int64), positions)
+        return
+    raise TypeError("unsupported dtype for keysort")
+
+
+def keysort_values_positions(np.ndarray values, np.ndarray positions):
+    """Sort *values* in-place and carry int64 *positions* in lockstep.
+
+    Sort order is deterministic: primary key is the value and secondary key is
+    the int64 position.  Float NaNs sort last and NaNs with equal primary order
+    are tie-broken by position.
+    """
+    if values.ndim != 1 or positions.ndim != 1:
+        raise ValueError("values and positions must be 1-D arrays")
+    if values.shape[0] != positions.shape[0]:
+        raise ValueError("values and positions must have the same length")
+    if positions.dtype != np.dtype(np.int64):
+        raise TypeError("positions must have dtype int64")
+    if values.shape[0] <= 1:
+        return None
+    _keysort_ndarray(values, positions)
+    return None
+
+
+def keysort_keys_indices(np.ndarray keys, np.ndarray indices):
+    """Sort scalar *keys* in-place and carry int64 *indices* in lockstep."""
+    if keys.ndim != 1 or indices.ndim != 1:
+        raise ValueError("keys and indices must be 1-D arrays")
+    if keys.shape[0] != indices.shape[0]:
+        raise ValueError("keys and indices must have the same length")
+    if indices.dtype != np.dtype(np.int64):
+        raise TypeError("indices must have dtype int64")
+    if keys.shape[0] <= 1:
+        return None
+    _keysort_ndarray(keys, indices)
+    return None
