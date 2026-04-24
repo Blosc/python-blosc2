@@ -1510,6 +1510,18 @@ def _stream_copy_temp_run_to_full_sidecars(
     )
 
 
+def _keysort_values_with_positions(values: np.ndarray, start: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """Return values sorted with original/global positions carried in lockstep."""
+    sorted_values = np.array(values, copy=True)
+    positions = np.arange(start, start + sorted_values.size, dtype=np.int64)
+    try:
+        indexing_ext.keysort_values_positions(sorted_values, positions)
+        return sorted_values, positions
+    except (AttributeError, TypeError):
+        order = np.argsort(values, kind="stable")
+        return values[order], (order + start).astype(np.int64, copy=False)
+
+
 def _build_full_descriptor(
     array: blosc2.NDArray,
     token: str,
@@ -1518,9 +1530,7 @@ def _build_full_descriptor(
     persistent: bool,
     cparams: dict | None = None,
 ) -> dict:
-    order = np.argsort(values, kind="stable")
-    positions = order.astype(np.int64, copy=False)
-    sorted_values = values[order]
+    sorted_values, positions = _keysort_values_with_positions(values)
     values_sidecar = _store_array_sidecar(
         array, token, kind, "full", "values", sorted_values, persistent, cparams=cparams
     )
@@ -3522,12 +3532,20 @@ def _build_full_descriptor_ooc(
         }
         _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent, cparams)
         return full
-    run_items = max(int(array.chunks[0]), min(size, FULL_OOC_RUN_ITEMS))
+    run_items_env = os.getenv("BLOSC2_FULL_OOC_RUN_ITEMS")
+    if run_items_env is not None:
+        try:
+            run_item_budget = max(1, int(run_items_env))
+        except ValueError:
+            run_item_budget = FULL_OOC_RUN_ITEMS
+    else:
+        run_item_budget = FULL_OOC_RUN_ITEMS
+    run_items = max(int(array.chunks[0]), min(size, run_item_budget))
     runs = []
     for run_id, start in enumerate(range(0, size, run_items)):
         stop = min(start + run_items, size)
         values = _slice_values_for_target(array, target, start, stop)
-        sorted_values, sorted_positions = indexing_ext.intra_chunk_sort_run(values, start, np.int64)
+        sorted_values, sorted_positions = _keysort_values_with_positions(values, start)
         runs.append(
             _materialize_sorted_run(
                 sorted_values,
