@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import math
 import os
 import re
@@ -271,6 +272,9 @@ def build_duckdb_file(
     *,
     layout: str,
     batch_size: int,
+    duckdb_threads: int,
+    duckdb_memory_limit: str | None,
+    preserve_insertion_order: bool,
 ) -> float:
     path.parent.mkdir(parents=True, exist_ok=True)
     _remove_duckdb_path(path)
@@ -283,7 +287,10 @@ def build_duckdb_file(
     start_time = time.perf_counter()
     con = duckdb.connect(str(path))
     try:
-        con.execute("PRAGMA threads=8")
+        con.execute(f"PRAGMA threads={int(duckdb_threads)}")
+        con.execute(f"SET preserve_insertion_order={'true' if preserve_insertion_order else 'false'}")
+        if duckdb_memory_limit is not None:
+            con.execute(f"SET memory_limit = {duckdb_memory_limit!r}")
         con.execute(f"CREATE TABLE data (id {id_type}, payload FLOAT)")
         for start in range(0, size, batch_size):
             stop = min(start + batch_size, size)
@@ -305,6 +312,16 @@ def build_duckdb_file(
             con.execute("INSERT INTO data SELECT * FROM batch_arrow")
             con.unregister("batch_arrow")
 
+        # For random distributions, random_ids can be very large (e.g. 8 GB
+        # for 1G float64 rows).  Release it, and the final Arrow batch objects,
+        # before building DuckDB's ART index; otherwise both the source payload
+        # and DuckDB's index builder compete for memory.
+        random_ids = None
+        ids = None
+        payload = None
+        batch = None
+        gc.collect()
+
         if layout == "art-index":
             con.execute("CREATE INDEX data_id_idx ON data(id)")
         elif layout != "zonemap":
@@ -324,10 +341,23 @@ def _open_or_build_duckdb_file(
     *,
     layout: str,
     batch_size: int,
+    duckdb_threads: int,
+    duckdb_memory_limit: str | None,
+    preserve_insertion_order: bool,
 ) -> float:
     if _valid_duckdb_file(path, layout):
         return 0.0
-    return build_duckdb_file(size, dist, id_dtype, path, layout=layout, batch_size=batch_size)
+    return build_duckdb_file(
+        size,
+        dist,
+        id_dtype,
+        path,
+        layout=layout,
+        batch_size=batch_size,
+        duckdb_threads=duckdb_threads,
+        duckdb_memory_limit=duckdb_memory_limit,
+        preserve_insertion_order=preserve_insertion_order,
+    )
 
 
 def _query_bounds(size: int, query_width: int, dtype: np.dtype) -> tuple[object, object]:
@@ -421,9 +451,22 @@ def benchmark_layout(
     batch_size: int,
     repeats: int,
     exact_query: bool,
+    duckdb_threads: int,
+    duckdb_memory_limit: str | None,
+    preserve_insertion_order: bool,
 ) -> dict:
     path = duckdb_path(outdir, size, dist, id_dtype, layout, batch_size)
-    create_s = _open_or_build_duckdb_file(size, dist, id_dtype, path, layout=layout, batch_size=batch_size)
+    create_s = _open_or_build_duckdb_file(
+        size,
+        dist,
+        id_dtype,
+        path,
+        layout=layout,
+        batch_size=batch_size,
+        duckdb_threads=duckdb_threads,
+        duckdb_memory_limit=duckdb_memory_limit,
+        preserve_insertion_order=preserve_insertion_order,
+    )
     lo, hi = _query_bounds(size, query_width, id_dtype)
 
     cold_scan_elapsed, warm_scan_elapsed, third_scan_elapsed, scan_rows = benchmark_scan_once(
@@ -469,7 +512,7 @@ def benchmark_layout(
 
 def parse_human_int(value: str) -> int:
     value = value.strip().lower().replace("_", "")
-    multipliers = {"k": 1_000, "m": 1_000_000}
+    multipliers = {"k": 1_000, "m": 1_000_000, "g": 1_000_000_000}
     if value[-1:] in multipliers:
         return int(float(value[:-1]) * multipliers[value[-1]])
     return int(value)
@@ -484,11 +527,16 @@ def print_results(
     query_width: int,
     id_dtype: np.dtype,
     exact_query: bool,
+    duckdb_threads: int,
+    duckdb_memory_limit: str | None,
+    preserve_insertion_order: bool,
 ) -> None:
     print("DuckDB range-query benchmark via SQL filtered reads")
     print(
         f"batch_size={batch_size:,}, repeats={repeats}, dist={dist}, query_width={query_width:,}, "
-        f"dtype={id_dtype.name}, query_single_value={exact_query}"
+        f"dtype={id_dtype.name}, query_single_value={exact_query}, duckdb_threads={duckdb_threads}, "
+        f"duckdb_memory_limit={'auto' if duckdb_memory_limit is None else duckdb_memory_limit}, "
+        f"preserve_insertion_order={preserve_insertion_order}"
     )
     print("Note: 'zonemap' is DuckDB's default table layout with automatic min/max pruning.")
     print("      'art-index' adds an explicit secondary index on id.")
@@ -561,10 +609,29 @@ def main() -> None:
         help="Batch size used while loading the table. Default: 1.25M.",
     )
     parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS, help="Benchmark repeats. Default: 3.")
+    parser.add_argument(
+        "--duckdb-threads",
+        type=int,
+        default=8,
+        help="DuckDB thread count used while building tables/indexes. Default: 8.",
+    )
+    parser.add_argument(
+        "--duckdb-memory-limit",
+        default=None,
+        help="Optional DuckDB memory_limit setting, e.g. '12GB'. Default: DuckDB auto limit.",
+    )
+    parser.add_argument(
+        "--preserve-insertion-order",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="DuckDB preserve_insertion_order setting during build. Default: false to reduce memory.",
+    )
     args = parser.parse_args()
 
     if args.query_single_value and args.query_width != 1:
         raise ValueError("--query-single-value requires --query-width 1")
+    if args.duckdb_threads <= 0:
+        raise ValueError("--duckdb-threads must be positive")
 
     id_dtype = np.dtype(args.dtype)
     sizes = SIZES if args.size == "all" else (parse_human_int(args.size),)
@@ -586,6 +653,9 @@ def main() -> None:
                         args.batch_size,
                         args.repeats,
                         args.query_single_value,
+                        args.duckdb_threads,
+                        args.duckdb_memory_limit,
+                        args.preserve_insertion_order,
                     )
                 )
 
@@ -597,6 +667,9 @@ def main() -> None:
         query_width=args.query_width,
         id_dtype=id_dtype,
         exact_query=args.query_single_value,
+        duckdb_threads=args.duckdb_threads,
+        duckdb_memory_limit=args.duckdb_memory_limit,
+        preserve_insertion_order=args.preserve_insertion_order,
     )
 
 

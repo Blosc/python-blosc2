@@ -255,10 +255,42 @@ def _fill_permuted_ids(ids: np.ndarray, size: int, start: int, stop: int, step: 
     ids[:] = ordered_ids_from_positions(shuffled_positions, size, ids.dtype)
 
 
-def _randomized_ids(size: int, dtype: np.dtype) -> np.ndarray:
-    ids = make_ordered_ids(size, dtype)
-    np.random.default_rng(RNG_SEED).shuffle(ids)
-    return ids
+def _feistel_permute_uint64(values: np.ndarray, nbits: int) -> np.ndarray:
+    half_bits = (nbits + 1) // 2
+    left_bits = nbits - half_bits
+    right_mask = np.uint64((1 << half_bits) - 1)
+    left_mask = np.uint64((1 << left_bits) - 1)
+    left = (values >> np.uint64(half_bits)) & left_mask
+    right = values & right_mask
+    # Fixed deterministic odd constants.  This is not cryptographic; it is a
+    # vectorized bijective mixer for benchmark data generation.
+    keys = (0x9E3779B97F4A7C15, 0xBF58476D1CE4E5B9, 0x94D049BB133111EB, 0xD2B74407B1CE6E93)
+    for key in keys:
+        mixed = (right * np.uint64(key) + np.uint64(key >> 17)) & left_mask
+        left, right = right, (left ^ mixed) & left_mask
+    return (left << np.uint64(half_bits)) | right
+
+
+def _randomized_positions_slice(size: int, start: int, stop: int) -> np.ndarray:
+    if size <= 1:
+        return np.zeros(stop - start, dtype=np.int64)
+    nbits = max(2, int(size - 1).bit_length())
+    if nbits % 2:
+        nbits += 1
+    positions = np.arange(start, stop, dtype=np.uint64)
+    positions = _feistel_permute_uint64(positions, nbits)
+    # Cycle-walk the small fraction that lands outside [0, size).  For the
+    # benchmark sizes used here this normally needs at most one extra pass.
+    size_u = np.uint64(size)
+    mask = positions >= size_u
+    while np.any(mask):
+        positions[mask] = _feistel_permute_uint64(positions[mask], nbits)
+        mask = positions >= size_u
+    return positions.astype(np.int64, copy=False)
+
+
+def _fill_randomized_ids(ids: np.ndarray, size: int, start: int, stop: int) -> None:
+    ids[:] = ordered_ids_from_positions(_randomized_positions_slice(size, start, stop), size, ids.dtype)
 
 
 def build_persistent_array(
@@ -275,18 +307,17 @@ def build_persistent_array(
     block_len = int(arr.blocks[0])
     block_order = _block_order(size, block_len) if dist == "block-shuffled" else None
     permuted_step, permuted_offset = _permuted_position_params(size) if dist == "permuted" else (1, 0)
-    random_ids = _randomized_ids(size, id_dtype) if dist == "random" else None
     for start in range(0, size, chunk_len):
         stop = min(start + chunk_len, size)
         chunk = np.zeros(stop - start, dtype=dtype)
-        if dist == "full":
+        if dist == "sorted":
             chunk["id"] = ordered_id_slice(size, start, stop, id_dtype)
         elif dist == "block-shuffled":
             _fill_block_shuffled_ids(chunk["id"], size, start, stop, block_len, block_order)
         elif dist == "permuted":
             _fill_permuted_ids(chunk["id"], size, start, stop, permuted_step, permuted_offset)
         elif dist == "random":
-            chunk["id"] = random_ids[start:stop]
+            _fill_randomized_ids(chunk["id"], size, start, stop)
         else:
             raise ValueError(f"unsupported distribution {dist!r}")
         chunk["payload"] = payload_slice(start, stop)
