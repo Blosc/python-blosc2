@@ -24,7 +24,7 @@ from blosc2 import indexing as blosc2_indexing
 
 SIZES = (1_000_000, 2_000_000, 5_000_000, 10_000_000)
 DEFAULT_REPEATS = 3
-KINDS = ("summary", "bucket", "partial", "full")
+KINDS = ("summary", "bucket", "partial", "full", "opsi")
 DEFAULT_KIND = "bucket"
 DISTS = ("sorted", "block-shuffled", "permuted", "random")
 RNG_SEED = 0
@@ -32,6 +32,7 @@ DEFAULT_OPLEVEL = 5
 FULL_QUERY_MODES = ("auto", "selective-ooc", "whole-load")
 DATASET_LAYOUT_VERSION = "payload-ramp-v1"
 BUILD_MODES = ("auto", "memory", "ooc")
+FULL_INDEX_METHODS = ("global-sort",)
 
 COLD_COLUMNS = [
     ("rows", lambda result: f"{result['size']:,}"),
@@ -377,39 +378,40 @@ def _open_index_sidecar(path: str | os.PathLike[str], no_mmap: bool):
 def index_sizes(descriptor: dict, *, no_mmap: bool) -> tuple[int, int]:
     logical = 0
     disk = 0
+
+    def add_sidecar(path: str | None) -> None:
+        nonlocal logical, disk
+        if not path:
+            return
+        array = _open_index_sidecar(path, no_mmap)
+        logical += int(np.prod(array.shape)) * array.dtype.itemsize
+        disk += os.path.getsize(path)
+
     for level_info in descriptor["levels"].values():
-        dtype = np.dtype(level_info["dtype"])
-        logical += dtype.itemsize * level_info["nsegments"]
-        if level_info["path"]:
-            disk += os.path.getsize(level_info["path"])
+        add_sidecar(level_info.get("path"))
 
-    light = descriptor.get("light")
-    if light is not None:
-        for key in ("values_path", "bucket_positions_path", "offsets_path"):
-            array = _open_index_sidecar(light[key], no_mmap)
-            logical += int(np.prod(array.shape)) * array.dtype.itemsize
-            disk += os.path.getsize(light[key])
+    bucket = descriptor.get("bucket")
+    if bucket is not None:
+        for key in ("values_path", "bucket_positions_path", "offsets_path", "l1_path", "l2_path"):
+            add_sidecar(bucket.get(key))
 
-    reduced = descriptor.get("reduced")
-    if reduced is not None:
-        values = _open_index_sidecar(reduced["values_path"], no_mmap)
-        positions = _open_index_sidecar(reduced["positions_path"], no_mmap)
-        offsets = _open_index_sidecar(reduced["offsets_path"], no_mmap)
-        logical += values.shape[0] * values.dtype.itemsize
-        logical += positions.shape[0] * positions.dtype.itemsize
-        logical += offsets.shape[0] * offsets.dtype.itemsize
-        disk += os.path.getsize(reduced["values_path"])
-        disk += os.path.getsize(reduced["positions_path"])
-        disk += os.path.getsize(reduced["offsets_path"])
+    partial = descriptor.get("partial")
+    if partial is not None:
+        for key in ("values_path", "positions_path", "offsets_path", "l1_path", "l2_path"):
+            add_sidecar(partial.get(key))
 
     full = descriptor.get("full")
     if full is not None:
-        values = _open_index_sidecar(full["values_path"], no_mmap)
-        positions = _open_index_sidecar(full["positions_path"], no_mmap)
-        logical += values.shape[0] * values.dtype.itemsize
-        logical += positions.shape[0] * positions.dtype.itemsize
-        disk += os.path.getsize(full["values_path"])
-        disk += os.path.getsize(full["positions_path"])
+        for key in ("values_path", "positions_path", "l1_path", "l2_path"):
+            add_sidecar(full.get(key))
+        for run in full.get("runs", ()):
+            add_sidecar(run.get("values_path"))
+            add_sidecar(run.get("positions_path"))
+
+    opsi = descriptor.get("opsi")
+    if opsi is not None:
+        for key in ("values_path", "positions_path", "mins_path", "maxs_path"):
+            add_sidecar(opsi.get(key))
     return logical, disk
 
 
@@ -443,19 +445,31 @@ def _condition_expr(lo: object, hi: object, dtype: np.dtype, *, query_single_val
     return f"(id >= {lo_literal}) & (id <= {hi_literal})"
 
 
+def _index_kind_method(kind: str) -> tuple[str, str | None]:
+    if kind == "full":
+        return "full", "global-sort"
+    return kind, None
+
+
 def _valid_index_descriptor(arr: blosc2.NDArray, kind: str, optlevel: int, build: str) -> dict | None:
+    actual_kind, method = _index_kind_method(kind)
     for descriptor in arr.indexes:
         if descriptor.get("version") != blosc2_indexing.INDEX_FORMAT_VERSION:
             continue
         expected_ooc = build != "memory"
-        if (
+        if not (
             descriptor.get("field") == "id"
-            and descriptor.get("kind") == kind
+            and descriptor.get("kind") == actual_kind
             and int(descriptor.get("optlevel", -1)) == int(optlevel)
             and bool(descriptor.get("ooc", False)) is bool(expected_ooc)
             and not descriptor.get("stale", False)
         ):
-            return descriptor
+            continue
+        if method is not None:
+            build_method = descriptor.get("full", {}).get("build_method", "global-sort")
+            if build_method != method:
+                continue
+        return descriptor
     return None
 
 
@@ -482,6 +496,7 @@ def _open_or_build_indexed_array(
     clevel: int | None,
     nthreads: int | None,
     no_mmap: bool,
+    opsi_max_cycles: int | None,
 ) -> tuple[blosc2.NDArray, float]:
     if path.exists():
         arr = blosc2.open(path, mode="a")
@@ -493,12 +508,17 @@ def _open_or_build_indexed_array(
 
     arr = build_persistent_array(size, dist, id_dtype, path, chunks, blocks)
     build_start = time.perf_counter()
+    actual_kind, method = _index_kind_method(kind)
     kwargs = {
         "field": "id",
-        "kind": blosc2.IndexKind[kind.upper()],
+        "kind": blosc2.IndexKind[actual_kind.upper()],
         "optlevel": optlevel,
         "build": build,
     }
+    if method is not None:
+        kwargs["method"] = method
+    if actual_kind == "opsi" and opsi_max_cycles is not None:
+        kwargs["opsi_max_cycles"] = opsi_max_cycles
     cparams = {}
     if codec is not None:
         cparams["codec"] = codec
@@ -531,6 +551,7 @@ def benchmark_size(
     kinds: tuple[str, ...],
     repeats: int,
     no_mmap: bool,
+    opsi_max_cycles: int | None,
     cold_row_callback=None,
 ) -> list[dict]:
     arr = _open_or_build_persistent_array(
@@ -574,6 +595,7 @@ def benchmark_size(
             clevel,
             nthreads,
             no_mmap,
+            opsi_max_cycles,
         )
         idx_cond = blosc2.lazyexpr(condition_str, idx_arr.fields)
         idx_expr = idx_cond.where(idx_arr)
@@ -726,10 +748,28 @@ def parse_args() -> argparse.Namespace:
         help="Index builder policy: auto, memory, or ooc. Default: auto.",
     )
     parser.add_argument(
+        "--method",
+        choices=FULL_INDEX_METHODS,
+        default="global-sort",
+        help=(
+            "Full-index build method. OPSI is a separate index kind; use --kind opsi to benchmark it. "
+            "Default: global-sort."
+        ),
+    )
+    parser.add_argument(
         "--full-query-mode",
         choices=FULL_QUERY_MODES,
         default="auto",
         help="How full exact queries should run during the benchmark: auto, selective-ooc, or whole-load.",
+    )
+    parser.add_argument(
+        "--opsi-max-cycles",
+        type=int,
+        default=None,
+        help=(
+            "Maximum OPSI cycles for --kind opsi. Default: derive from optlevel "
+            "(optlevel for optlevel < 8, optlevel * 2 otherwise)."
+        ),
     )
     parser.add_argument(
         "--codec",
@@ -776,6 +816,8 @@ def main() -> None:
         raise SystemExit("--clevel must be >= 0")
     if args.nthreads is not None and args.nthreads <= 0:
         raise SystemExit("--nthreads must be a positive integer")
+    if args.opsi_max_cycles is not None and args.opsi_max_cycles < 0:
+        raise SystemExit("--opsi-max-cycles must be >= 0")
     sizes = (args.size,) if args.size is not None else SIZES
     dists = DISTS if args.dist == "all" else (args.dist,)
     kinds = KINDS if args.kind == "all" else (args.kind,)
@@ -801,6 +843,7 @@ def main() -> None:
                 args.clevel,
                 args.nthreads,
                 args.no_mmap,
+                args.opsi_max_cycles,
             )
     else:
         args.outdir.mkdir(parents=True, exist_ok=True)
@@ -823,6 +866,7 @@ def main() -> None:
             args.clevel,
             args.nthreads,
             args.no_mmap,
+            args.opsi_max_cycles,
         )
 
 
@@ -845,6 +889,7 @@ def run_benchmarks(
     clevel: int | None,
     nthreads: int | None,
     no_mmap: bool,
+    opsi_max_cycles: int | None,
 ) -> None:
     all_results = []
 
@@ -863,7 +908,8 @@ def run_benchmarks(
         f"full_query_mode={full_query_mode}, index_codec={'auto' if codec is None else codec.name}, "
         f"index_clevel={'auto' if clevel is None else clevel}, "
         f"index_nthreads={'auto' if nthreads is None else nthreads}, "
-        f"index_mmap={'off' if no_mmap else 'on'}"
+        f"index_mmap={'off' if no_mmap else 'on'}, "
+        f"opsi_max_cycles={'optlevel' if opsi_max_cycles is None else opsi_max_cycles}"
     )
     cold_widths = progress_widths(COLD_COLUMNS, sizes, dists, kinds, id_dtype)
     print()
@@ -894,6 +940,7 @@ def run_benchmarks(
                 kinds,
                 repeats,
                 no_mmap,
+                opsi_max_cycles,
                 cold_row_callback=cold_progress_callback,
             )
             all_results.extend(size_results)

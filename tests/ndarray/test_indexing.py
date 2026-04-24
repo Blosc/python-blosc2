@@ -21,10 +21,11 @@ def _public_kind(kind: str) -> blosc2.IndexKind:
         "bucket": blosc2.IndexKind.BUCKET,
         "partial": blosc2.IndexKind.PARTIAL,
         "full": blosc2.IndexKind.FULL,
+        "opsi": blosc2.IndexKind.OPSI,
     }[kind]
 
 
-@pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "full"])
+@pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "full", "opsi"])
 def test_scalar_index_matches_scan(kind):
     data = np.arange(200_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(10_000,), blocks=(2_000,))
@@ -46,7 +47,7 @@ def test_scalar_index_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data >= 120_000) & (data < 125_000)])
 
 
-@pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "full"])
+@pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "full", "opsi"])
 def test_structured_field_index_matches_scan(kind):
     dtype = np.dtype([("id", np.int64), ("payload", np.float64)])
     data = np.empty(120_000, dtype=dtype)

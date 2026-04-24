@@ -4807,11 +4807,20 @@ class NDArray(blosc2_ext.NDArray, Operand):
         kind : IndexKind, optional
             Index tier to build. Use ``SUMMARY`` for the lightest pruning,
             ``BUCKET`` for bucketed chunk-local pruning, ``PARTIAL`` for exact
-            filtering with local ordering, and ``FULL`` when ordered access via
+            filtering with local ordering, ``OPSI`` for a tunable iterative
+            ordering index, and ``FULL`` when ordered access via
             ``sort(order=...)``, ``argsort(order=...)``, or
-            ``iter_sorted(...)`` should reuse the index directly.
+            ``iter_sorted(...)`` should reuse the index directly. ``OPSI`` is a
+            separate exact-filtering index kind; it incrementally improves
+            physical ordering but does not try to produce a completely sorted
+            full/CSI payload.
         optlevel : int, optional
-            Optimization level for index payload construction.
+            Optimization level for index payload construction. For
+            ``kind=OPSI``, this controls the default number of iterative OPSI
+            cycles: ``optlevel`` cycles for levels below 8, and
+            ``2 * optlevel`` cycles for levels 8 and above. More cycles can
+            improve cold-query locality and compression, but increase build
+            time.
         persistent : bool or None, optional
             Whether index sidecars should be persisted. If ``None``, this
             follows whether the base array is persistent.
@@ -4830,13 +4839,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
             same filesystem. In-memory arrays fall back to the system
             temporary directory.
         kwargs : dict, optional
-            Keyword arguments forwarded to the index builder. At the moment the
-            supported option is ``cparams``. Pass ``cparams`` to control the
-            compression settings used for index sidecars, including
-            ``codec``, ``clevel``, and ``nthreads``. If provided,
-            ``cparams["nthreads"]`` becomes the default build-thread count for
-            intra-chunk sorting unless ``BLOSC2_INDEX_BUILD_THREADS`` overrides
-            it.
+            Keyword arguments forwarded to the index builder. Supported options
+            include ``cparams``, ``opsi_max_cycles`` for ``kind=OPSI``, and,
+            for ``kind=FULL``, ``method``. Pass ``method="global-sort"`` to
+            select the full-index builder explicitly. OPSI is selected with
+            ``kind=IndexKind.OPSI`` rather than as a full-index method. Pass
+            ``opsi_max_cycles`` to override the optlevel-derived cycle count.
+            Pass ``cparams`` to control the compression settings used for index
+            sidecars, including ``codec``, ``clevel``, and ``nthreads``. If
+            provided, ``cparams["nthreads"]`` becomes the default build-thread
+            count for intra-chunk sorting unless ``BLOSC2_INDEX_BUILD_THREADS``
+            overrides it.
 
         Notes
         -----
