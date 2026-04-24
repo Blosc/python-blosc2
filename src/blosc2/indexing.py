@@ -3256,6 +3256,53 @@ def _opsi_is_csi(stage: OpsiStageSidecars, dtype: np.dtype) -> bool:
     return bool(np.all(_opsi_ordered_le_array(maxs, mins, dtype)))
 
 
+def _opsi_block_pruning_score(stage: OpsiStageSidecars, dtype: np.dtype) -> tuple[float, int, float, float]:
+    """Estimate point-query block lookup cost; lower is better.
+
+    A candidate block count alone is not enough for out-of-core lookups: many
+    isolated candidate blocks can be slower than a slightly larger but more
+    contiguous set because each run becomes a separate sidecar read.  Score both
+    total candidate blocks and run fragmentation, using a small read-run penalty
+    so higher optlevels do not select layouts that prune more blocks but scatter
+    the remaining candidates across the file.
+    """
+    if stage.nblocks <= 1:
+        return (1.0, 1, 1.0, 1.0)
+    mins = _read_sidecar_span(stage.mins, 0, stage.nblocks)
+    medians = _read_sidecar_span(stage.medians, 0, stage.nblocks)
+    maxs = _read_sidecar_span(stage.maxs, 0, stage.nblocks)
+    sample_count = min(129, stage.nblocks)
+    try:
+        samples = np.sort(medians, kind="stable")
+    except TypeError:
+        samples = medians
+    if sample_count < stage.nblocks:
+        sample_ids = np.linspace(0, stage.nblocks - 1, sample_count, dtype=np.int64)
+        samples = samples[sample_ids]
+    costs = []
+    counts = []
+    runs = []
+    read_run_penalty = 8.0
+    for sample in samples:
+        candidates = (mins <= sample) & (maxs >= sample)
+        true_ids = np.flatnonzero(candidates)
+        count = int(true_ids.size)
+        if count == 0:
+            run_count = 0
+        else:
+            run_count = int(np.count_nonzero(np.diff(true_ids) != 1) + 1)
+        counts.append(count)
+        runs.append(run_count)
+        costs.append(count + read_run_penalty * run_count)
+    nsamples = max(1, len(costs))
+    return (
+        float(sum(costs)) / nsamples,
+        max(costs, default=0),
+        float(sum(counts)) / nsamples,
+        float(sum(runs)) / nsamples,
+    )
+
+
 def _opsi_compute_block_order(stage: OpsiStageSidecars, key_kind: str, size: int) -> np.ndarray:
     # Whole-block relocation assumes fixed-size destination block slots.  Keep
     # a final partial block, when present, in the final slot for now.
@@ -3306,11 +3353,20 @@ def _build_opsi_descriptor(
             persistent,
             cparams=cparams,
         )
+        mins_sidecar = _store_array_sidecar(
+            array, token, kind, "opsi_nav", "mins", np.empty(0, dtype=dtype), persistent, cparams=cparams
+        )
+        maxs_sidecar = _store_array_sidecar(
+            array, token, kind, "opsi_nav", "maxs", np.empty(0, dtype=dtype), persistent, cparams=cparams
+        )
         return {
             "values_path": values_sidecar["path"],
             "positions_path": positions_sidecar["path"],
+            "mins_path": mins_sidecar["path"],
+            "maxs_path": maxs_sidecar["path"],
             "chunk_len": int(array.chunks[0]),
             "block_len": int(array.blocks[0]),
+            "nblocks": 0,
             "cycles": 0,
             "max_cycles": max_cycles,
             "is_csi": True,
@@ -3319,25 +3375,77 @@ def _build_opsi_descriptor(
     previous = None
     block_order = None
     current = None
+    best = None
+    best_cycle = 0
+    best_is_csi = False
+    best_score = (math.inf, math.inf, math.inf, math.inf)
+    no_improve_patience = 3
     try:
         for cycle in range(max_cycles):
+            old_previous = previous
             current = _opsi_build_stage1(
                 array, target, token, kind, dtype, persistent, cycle, previous, block_order, cparams
             )
             is_csi = _opsi_is_csi(current, dtype)
-            if is_csi or cycle == max_cycles - 1:
+            score = (1.0, 1, 1.0, 1.0) if is_csi else _opsi_block_pruning_score(current, dtype)
+            if score < best_score:
+                if best is not None and best is not old_previous and best is not current:
+                    _opsi_drop_stage(best)
+                best = current
+                best_cycle = cycle + 1
+                best_is_csi = is_csi
+                best_score = score
+
+            exhausted_budget = cycle == max_cycles - 1
+            stalled = (cycle + 1 - best_cycle) >= no_improve_patience
+            if is_csi or exhausted_budget or stalled:
+                final = best if best is not None else current
+                mins = _read_sidecar_span(final.mins, 0, final.nblocks)
+                maxs = _read_sidecar_span(final.maxs, 0, final.nblocks)
+                nav_chunk = max(1, min(final.nblocks, final.chunk_len // final.block_len))
+                mins_sidecar = _store_array_sidecar(
+                    array,
+                    token,
+                    kind,
+                    "opsi_nav",
+                    "mins",
+                    mins,
+                    persistent,
+                    chunks=(nav_chunk,),
+                    blocks=(nav_chunk,),
+                    cparams=cparams,
+                )
+                maxs_sidecar = _store_array_sidecar(
+                    array,
+                    token,
+                    kind,
+                    "opsi_nav",
+                    "maxs",
+                    maxs,
+                    persistent,
+                    chunks=(nav_chunk,),
+                    blocks=(nav_chunk,),
+                    cparams=cparams,
+                )
                 opsi = {
-                    "values_path": current.values_path,
-                    "positions_path": current.positions_path,
-                    "chunk_len": current.chunk_len,
-                    "block_len": current.block_len,
-                    "cycles": cycle + 1,
+                    "values_path": final.values_path,
+                    "positions_path": final.positions_path,
+                    "mins_path": mins_sidecar["path"],
+                    "maxs_path": maxs_sidecar["path"],
+                    "chunk_len": final.chunk_len,
+                    "block_len": final.block_len,
+                    "nblocks": final.nblocks,
+                    "cycles": best_cycle,
+                    "attempted_cycles": cycle + 1,
                     "max_cycles": max_cycles,
-                    "is_csi": is_csi,
+                    "is_csi": best_is_csi,
+                    "block_pruning_score": best_score[0],
+                    "block_pruning_blocks": best_score[2],
+                    "block_pruning_runs": best_score[3],
                 }
                 if not persistent:
-                    values = np.asarray(current.values)
-                    positions = np.asarray(current.positions)
+                    values = np.asarray(final.values)
+                    positions = np.asarray(final.positions)
                     values_sidecar = _store_array_sidecar(
                         array,
                         token,
@@ -3346,8 +3454,8 @@ def _build_opsi_descriptor(
                         "values",
                         values,
                         persistent,
-                        chunks=(current.chunk_len,),
-                        blocks=(current.block_len,),
+                        chunks=(final.chunk_len,),
+                        blocks=(final.block_len,),
                         cparams=cparams,
                     )
                     positions_sidecar = _store_array_sidecar(
@@ -3358,24 +3466,30 @@ def _build_opsi_descriptor(
                         "positions",
                         positions,
                         persistent,
-                        chunks=(current.chunk_len,),
-                        blocks=(current.block_len,),
+                        chunks=(final.chunk_len,),
+                        blocks=(final.block_len,),
                         cparams=cparams,
                     )
                     opsi["values_path"] = values_sidecar["path"]
                     opsi["positions_path"] = positions_sidecar["path"]
-                _opsi_drop_stage(previous)
-                _opsi_drop_stage(current, keep_payload=persistent)
+                if old_previous is not final:
+                    _opsi_drop_stage(old_previous)
+                if current is not final:
+                    _opsi_drop_stage(current)
+                _opsi_drop_stage(final, keep_payload=persistent)
                 return opsi
             key_kind = ("min", "median", "max")[cycle % 3]
             block_order = _opsi_compute_block_order(current, key_kind=key_kind, size=size)
-            _opsi_drop_stage(previous)
+            if old_previous is not best:
+                _opsi_drop_stage(old_previous)
             previous = current
             current = None
         raise RuntimeError("OPSI max_cycles must be greater than zero")
     except Exception:
         _opsi_drop_stage(previous)
         _opsi_drop_stage(current)
+        if best is not previous and best is not current:
+            _opsi_drop_stage(best)
         raise
 
 
@@ -3723,6 +3837,8 @@ def iter_index_components(array: blosc2.NDArray, descriptor: dict):
     if opsi is not None:
         yield IndexComponent("opsi.values", "opsi", "values", opsi.get("values_path"))
         yield IndexComponent("opsi.positions", "opsi", "positions", opsi.get("positions_path"))
+        yield IndexComponent("opsi_nav.mins", "opsi_nav", "mins", opsi.get("mins_path"))
+        yield IndexComponent("opsi_nav.maxs", "opsi_nav", "maxs", opsi.get("maxs_path"))
 
 
 def _component_nbytes(array: blosc2.NDArray, descriptor: dict, component: IndexComponent) -> int:
@@ -3865,6 +3981,8 @@ def _drop_descriptor_sidecars(descriptor: dict) -> None:
     if descriptor.get("opsi") is not None:
         _remove_sidecar_path(descriptor["opsi"]["values_path"])
         _remove_sidecar_path(descriptor["opsi"]["positions_path"])
+        _remove_sidecar_path(descriptor["opsi"].get("mins_path"))
+        _remove_sidecar_path(descriptor["opsi"].get("maxs_path"))
 
 
 def _replace_levels_descriptor_tail(
@@ -4440,6 +4558,16 @@ def _load_opsi_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
         array, token, "opsi_handle", "positions", opsi["positions_path"]
     )
     return values_sidecar, positions_sidecar
+
+
+def _load_opsi_navigation_handles(array: blosc2.NDArray, descriptor: dict):
+    opsi = descriptor.get("opsi")
+    if opsi is None:
+        raise RuntimeError("OPSI-index metadata is not available")
+    token = descriptor["token"]
+    mins_sidecar = _open_sidecar_handle(array, token, "opsi_nav_handle", "mins", opsi.get("mins_path"))
+    maxs_sidecar = _open_sidecar_handle(array, token, "opsi_nav_handle", "maxs", opsi.get("maxs_path"))
+    return mins_sidecar, maxs_sidecar
 
 
 def _load_full_run_sidecar_handles(array: blosc2.NDArray, descriptor: dict, run: dict):
@@ -5223,11 +5351,81 @@ def _exact_positions_from_full_selective_ooc(
     return _exact_positions_from_compact_full_base(array, descriptor, plan)
 
 
+def _opsi_block_boundaries_from_handles(
+    array: blosc2.NDArray, descriptor: dict, mins_sidecar, maxs_sidecar, dtype: np.dtype
+) -> np.ndarray:
+    cache_key = _data_cache_key(array, descriptor["token"], "opsi_bounds", "blocks")
+    cached = _DATA_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    nblocks = int(mins_sidecar.shape[0])
+    boundaries = np.empty(nblocks, dtype=_boundary_dtype(dtype))
+    if nblocks:
+        boundaries["start"] = _read_sidecar_span(mins_sidecar, 0, nblocks)
+        boundaries["end"] = _read_sidecar_span(maxs_sidecar, 0, nblocks)
+    _DATA_CACHE[cache_key] = boundaries
+    return boundaries
+
+
+def _exact_positions_from_opsi_block_nav(
+    array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
+) -> np.ndarray:
+    dtype = np.dtype(descriptor["dtype"])
+    opsi = descriptor["opsi"]
+    values_sidecar, positions_sidecar = _load_opsi_sidecar_handles(array, descriptor)
+    mins_sidecar, maxs_sidecar = _load_opsi_navigation_handles(array, descriptor)
+    boundaries = _opsi_block_boundaries_from_handles(array, descriptor, mins_sidecar, maxs_sidecar, dtype)
+    candidate_blocks = _candidate_units_from_boundaries(boundaries, plan)
+    if not np.any(candidate_blocks):
+        return np.empty(0, dtype=np.int64)
+
+    chunk_len = int(opsi.get("chunk_len", values_sidecar.chunks[0]))
+    block_len = int(opsi.get("block_len", values_sidecar.blocks[0]))
+    blocks_per_chunk = max(1, chunk_len // block_len)
+    size = int(values_sidecar.shape[0])
+    parts = []
+    span_count = 0
+
+    first_chunk = int(np.flatnonzero(candidate_blocks)[0]) // blocks_per_chunk
+    last_chunk = int(np.flatnonzero(candidate_blocks)[-1]) // blocks_per_chunk
+    for chunk_id in range(first_chunk, last_chunk + 1):
+        first_block = chunk_id * blocks_per_chunk
+        last_block = min(first_block + blocks_per_chunk, len(candidate_blocks))
+        block_mask = np.asarray(candidate_blocks[first_block:last_block], dtype=bool)
+        if not np.any(block_mask):
+            continue
+        for block_start_idx, block_stop_idx in _contiguous_true_runs(block_mask):
+            span_count += 1
+            span_start = (first_block + block_start_idx) * block_len
+            span_stop = min((first_block + block_stop_idx) * block_len, size)
+            if span_start >= span_stop:
+                continue
+            local_start = span_start - chunk_id * chunk_len
+            span_items = span_stop - span_start
+            span_values = np.empty(span_items, dtype=dtype)
+            values_sidecar.get_1d_span_numpy(span_values, chunk_id, local_start, span_items)
+            lo, hi = _search_bounds(span_values, plan)
+            if lo >= hi:
+                continue
+            matched = np.empty(hi - lo, dtype=np.int64)
+            _read_ndarray_linear_span(positions_sidecar, span_start + lo, matched)
+            parts.append(matched)
+
+    if not parts:
+        return np.empty(0, dtype=np.int64)
+    positions = np.concatenate(parts) if len(parts) > 1 else parts[0]
+    return np.sort(positions.astype(np.int64, copy=False), kind="stable")
+
+
 def _exact_positions_from_opsi(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> np.ndarray:
     if _range_is_empty(plan):
         return np.empty(0, dtype=np.int64)
+    try:
+        return _exact_positions_from_opsi_block_nav(array, descriptor, plan)
+    except Exception:
+        pass
     dtype = np.dtype(descriptor["dtype"])
     values_sidecar, positions_sidecar = _load_opsi_sidecar_handles(array, descriptor)
     chunk_boundaries = _sorted_chunk_boundaries_from_handle(

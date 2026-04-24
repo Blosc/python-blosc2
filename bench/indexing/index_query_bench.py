@@ -410,7 +410,7 @@ def index_sizes(descriptor: dict, *, no_mmap: bool) -> tuple[int, int]:
 
     opsi = descriptor.get("opsi")
     if opsi is not None:
-        for key in ("values_path", "positions_path"):
+        for key in ("values_path", "positions_path", "mins_path", "maxs_path"):
             add_sidecar(opsi.get(key))
     return logical, disk
 
