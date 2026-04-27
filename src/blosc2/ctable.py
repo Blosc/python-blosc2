@@ -3820,7 +3820,7 @@ class CTable(Generic[RowT]):
             if kind == "full":
                 with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-", dir=resolved_tmpdir) as td:
                     full = _build_full_descriptor_ooc(
-                        proxy, target, token, kind, dtype, persistent, Path(td), cparams_obj
+                        proxy, target, token, kind, dtype, persistent, Path(td), cparams_obj, optlevel
                     )
                     full["build_method"] = "global-sort"
             if kind == "opsi":
@@ -3862,7 +3862,7 @@ class CTable(Generic[RowT]):
             full = None
             opsi = None
             if kind == "full":
-                full = _build_full_descriptor(proxy, token, kind, values, persistent, cparams_obj)
+                full = _build_full_descriptor(proxy, token, kind, values, persistent, cparams_obj, optlevel)
                 full["build_method"] = "global-sort"
             if kind == "opsi":
                 opsi = _build_opsi_descriptor(

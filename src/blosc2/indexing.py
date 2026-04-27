@@ -75,7 +75,7 @@ _QUERY_CACHE_STORE_HANDLES: dict[str, object] = {}
 _GATHER_MMAP_HANDLES: dict[str, object] = {}
 _HOT_CACHE_GLOBAL_SCOPE = ("global", 0)
 
-FULL_OOC_RUN_ITEMS = 8_000_000
+FULL_OOC_RUN_ITEMS = 10_000_000
 FULL_OOC_MERGE_BUFFER_ITEMS = 500_000
 FULL_SELECTIVE_OOC_MAX_SPANS = 128
 FULL_RUN_BOUNDED_FALLBACK_RUNS = 8
@@ -1377,7 +1377,9 @@ def _rebuild_full_navigation_sidecars(
     cparams: dict | None = None,
 ) -> None:
     chunk_len, block_len = _sidecar_storage_geometry(
-        full.get("values_path"), int(array.chunks[0]), int(array.blocks[0])
+        full.get("values_path"),
+        int(full.get("sidecar_chunk_len", array.chunks[0])),
+        int(full.get("sidecar_block_len", array.blocks[0])),
     )
     l1 = _compute_sorted_boundaries(sorted_values, np.dtype(sorted_values.dtype), chunk_len)
     l2 = _compute_sorted_boundaries(sorted_values, np.dtype(sorted_values.dtype), block_len)
@@ -1462,6 +1464,13 @@ def _stream_copy_sidecar_array(
     del source, dest
 
 
+def _full_sidecar_geometry(array: blosc2.NDArray, optlevel: int) -> tuple[tuple[int], tuple[int], int]:
+    chunk_multiplier = _index_chunk_multiplier_for_optlevel(optlevel)
+    block_len = int(array.blocks[0])
+    chunk_len = _opsi_storage_chunk_len(int(array.chunks[0]), block_len, chunk_multiplier)
+    return (chunk_len,), (block_len,), chunk_multiplier
+
+
 def _stream_copy_temp_run_to_full_sidecars(
     array: blosc2.NDArray,
     token: str,
@@ -1472,12 +1481,14 @@ def _stream_copy_temp_run_to_full_sidecars(
     persistent: bool,
     tracker: TempRunTracker | None = None,
     cparams: dict | None = None,
+    optlevel: int = 5,
 ) -> None:
     if not persistent:
         raise ValueError("temp-run streaming only supports persistent runs")
 
     values_path = _sidecar_path(array, token, kind, "full.values")
     positions_path = _sidecar_path(array, token, kind, "full.positions")
+    sidecar_chunks, sidecar_blocks, chunk_multiplier = _full_sidecar_geometry(array, optlevel)
     _remove_sidecar_path(values_path)
     _remove_sidecar_path(positions_path)
     _stream_copy_sidecar_array(
@@ -1485,8 +1496,8 @@ def _stream_copy_temp_run_to_full_sidecars(
         values_path,
         run.length,
         dtype,
-        (int(array.chunks[0]),),
-        (int(array.blocks[0]),),
+        sidecar_chunks,
+        sidecar_blocks,
         cparams,
     )
     _stream_copy_sidecar_array(
@@ -1494,8 +1505,8 @@ def _stream_copy_temp_run_to_full_sidecars(
         positions_path,
         run.length,
         np.dtype(np.int64),
-        (int(array.chunks[0]),),
-        (int(array.blocks[0]),),
+        sidecar_chunks,
+        sidecar_blocks,
         cparams,
     )
     _tracker_register_delete(tracker, run.values_path, run.positions_path)
@@ -1503,6 +1514,7 @@ def _stream_copy_temp_run_to_full_sidecars(
     run.positions_path.unlink(missing_ok=True)
     full["values_path"] = values_path
     full["positions_path"] = positions_path
+    full["chunk_multiplier"] = chunk_multiplier
     full["runs"] = []
     full["next_run_id"] = 0
     _rebuild_full_navigation_sidecars_from_path(
@@ -1529,17 +1541,40 @@ def _build_full_descriptor(
     values: np.ndarray,
     persistent: bool,
     cparams: dict | None = None,
+    optlevel: int = 5,
 ) -> dict:
     sorted_values, positions = _keysort_values_with_positions(values)
+    sidecar_chunks, sidecar_blocks, chunk_multiplier = _full_sidecar_geometry(array, optlevel)
     values_sidecar = _store_array_sidecar(
-        array, token, kind, "full", "values", sorted_values, persistent, cparams=cparams
+        array,
+        token,
+        kind,
+        "full",
+        "values",
+        sorted_values,
+        persistent,
+        chunks=sidecar_chunks,
+        blocks=sidecar_blocks,
+        cparams=cparams,
     )
     positions_sidecar = _store_array_sidecar(
-        array, token, kind, "full", "positions", positions, persistent, cparams=cparams
+        array,
+        token,
+        kind,
+        "full",
+        "positions",
+        positions,
+        persistent,
+        chunks=sidecar_chunks,
+        blocks=sidecar_blocks,
+        cparams=cparams,
     )
     full = {
         "values_path": values_sidecar["path"],
         "positions_path": positions_sidecar["path"],
+        "chunk_multiplier": chunk_multiplier,
+        "sidecar_chunk_len": sidecar_chunks[0],
+        "sidecar_block_len": sidecar_blocks[0],
         "runs": [],
         "next_run_id": 0,
     }
@@ -3564,6 +3599,10 @@ def _build_opsi_descriptor(
         raise
 
 
+def _full_ooc_run_item_budget_for_optlevel(optlevel: int) -> int:
+    return FULL_OOC_RUN_ITEMS * _index_chunk_multiplier_for_optlevel(optlevel)
+
+
 def _build_full_descriptor_ooc(
     array: blosc2.NDArray,
     target: dict,
@@ -3573,34 +3612,62 @@ def _build_full_descriptor_ooc(
     persistent: bool,
     workdir: Path,
     cparams: dict | None = None,
+    optlevel: int = 5,
 ) -> dict:
     size = int(array.shape[0])
     tracker = TempRunTracker()
     if size == 0:
         sorted_values = np.empty(0, dtype=dtype)
         positions = np.empty(0, dtype=np.int64)
+        sidecar_chunks, sidecar_blocks, chunk_multiplier = _full_sidecar_geometry(array, optlevel)
         values_sidecar = _store_array_sidecar(
-            array, token, kind, "full", "values", sorted_values, persistent, cparams=cparams
+            array,
+            token,
+            kind,
+            "full",
+            "values",
+            sorted_values,
+            persistent,
+            chunks=sidecar_chunks,
+            blocks=sidecar_blocks,
+            cparams=cparams,
         )
         positions_sidecar = _store_array_sidecar(
-            array, token, kind, "full", "positions", positions, persistent, cparams=cparams
+            array,
+            token,
+            kind,
+            "full",
+            "positions",
+            positions,
+            persistent,
+            chunks=sidecar_chunks,
+            blocks=sidecar_blocks,
+            cparams=cparams,
         )
         full = {
             "values_path": values_sidecar["path"],
             "positions_path": positions_sidecar["path"],
+            "chunk_multiplier": chunk_multiplier,
+            "sidecar_chunk_len": sidecar_chunks[0],
+            "sidecar_block_len": sidecar_blocks[0],
             "runs": [],
             "next_run_id": 0,
+            "ooc_run_items": 0,
+            "ooc_run_item_budget": 0,
+            "ooc_run_item_budget_source": "empty",
         }
         _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent, cparams)
         return full
     run_items_env = os.getenv("BLOSC2_FULL_OOC_RUN_ITEMS")
+    run_item_budget_source = "optlevel"
     if run_items_env is not None:
         try:
             run_item_budget = max(1, int(run_items_env))
+            run_item_budget_source = "env"
         except ValueError:
-            run_item_budget = FULL_OOC_RUN_ITEMS
+            run_item_budget = _full_ooc_run_item_budget_for_optlevel(optlevel)
     else:
-        run_item_budget = FULL_OOC_RUN_ITEMS
+        run_item_budget = _full_ooc_run_item_budget_for_optlevel(optlevel)
     run_items = max(int(array.chunks[0]), min(size, run_item_budget))
     runs = []
     for run_id, start in enumerate(range(0, size, run_items)):
@@ -3652,22 +3719,47 @@ def _build_full_descriptor_ooc(
         "temp_backend": "blosc2",
         "temp_peak_disk_bytes": tracker.peak_disk_bytes,
         "temp_total_written_bytes": tracker.total_written_bytes,
+        "ooc_run_items": run_items,
+        "ooc_run_item_budget": run_item_budget,
+        "ooc_run_item_budget_source": run_item_budget_source,
     }
     if persistent:
         _stream_copy_temp_run_to_full_sidecars(
-            array, token, kind, full, final_run, dtype, persistent, tracker, cparams
+            array, token, kind, full, final_run, dtype, persistent, tracker, cparams, optlevel
         )
     else:
         sorted_values = blosc2.open(str(final_run.values_path), mode="r", mmap_mode=_INDEX_MMAP_MODE)[:]
         positions = blosc2.open(str(final_run.positions_path), mode="r", mmap_mode=_INDEX_MMAP_MODE)[:]
+        sidecar_chunks, sidecar_blocks, chunk_multiplier = _full_sidecar_geometry(array, optlevel)
         values_sidecar = _store_array_sidecar(
-            array, token, kind, "full", "values", sorted_values, persistent, cparams=cparams
+            array,
+            token,
+            kind,
+            "full",
+            "values",
+            sorted_values,
+            persistent,
+            chunks=sidecar_chunks,
+            blocks=sidecar_blocks,
+            cparams=cparams,
         )
         positions_sidecar = _store_array_sidecar(
-            array, token, kind, "full", "positions", positions, persistent, cparams=cparams
+            array,
+            token,
+            kind,
+            "full",
+            "positions",
+            positions,
+            persistent,
+            chunks=sidecar_chunks,
+            blocks=sidecar_blocks,
+            cparams=cparams,
         )
         full["values_path"] = values_sidecar["path"]
         full["positions_path"] = positions_sidecar["path"]
+        full["chunk_multiplier"] = chunk_multiplier
+        full["sidecar_chunk_len"] = sidecar_chunks[0]
+        full["sidecar_block_len"] = sidecar_blocks[0]
         _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent, cparams)
         del sorted_values, positions
         _tracker_register_delete(tracker, final_run.values_path, final_run.positions_path)
@@ -3782,7 +3874,7 @@ def create_index(
                 prefix="blosc2-index-ooc-", dir=_resolve_full_index_tmpdir(array, tmpdir)
             ) as tmpdir:
                 full = _build_full_descriptor_ooc(
-                    array, target, token, kind, dtype, persistent, Path(tmpdir), cparams
+                    array, target, token, kind, dtype, persistent, Path(tmpdir), cparams, optlevel
                 )
                 full["build_method"] = "global-sort"
         if kind == "opsi":
@@ -3822,7 +3914,7 @@ def create_index(
         full = None
         opsi = None
         if kind == "full":
-            full = _build_full_descriptor(array, token, kind, values, persistent, cparams)
+            full = _build_full_descriptor(array, token, kind, values, persistent, cparams, optlevel)
             full["build_method"] = "global-sort"
         if kind == "opsi":
             opsi = _build_opsi_descriptor(

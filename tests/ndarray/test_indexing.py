@@ -1236,6 +1236,53 @@ def test_forced_ooc_full_index_merge_preserves_sorted_sidecars(monkeypatch, tmp_
     np.testing.assert_array_equal(values_sidecar[:], data[positions_sidecar[:]])
 
 
+@pytest.mark.parametrize(
+    ("optlevel", "expected_budget"),
+    [
+        (1, 256),
+        (3, 256),
+        (4, 512),
+        (6, 512),
+        (7, 1024),
+        (9, 1024),
+    ],
+)
+def test_full_ooc_run_items_follow_optlevel(monkeypatch, tmp_path, optlevel, expected_budget):
+    path = tmp_path / f"full_ooc_optlevel_{optlevel}.b2nd"
+    data = np.arange(4096, dtype=np.int64)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(256,), blocks=(64,))
+    indexing = __import__("blosc2.indexing", fromlist=["FULL_OOC_RUN_ITEMS"])
+    monkeypatch.setattr(indexing, "FULL_OOC_RUN_ITEMS", 512)
+
+    descriptor = arr.create_index(kind=blosc2.IndexKind.FULL, optlevel=optlevel)
+    full = descriptor["full"]
+
+    assert full["ooc_run_item_budget"] == expected_budget
+    assert full["ooc_run_items"] == expected_budget
+    assert full["ooc_run_item_budget_source"] == "optlevel"
+    assert full["chunk_multiplier"] == expected_budget // 256
+    assert full["sidecar_chunk_len"] == expected_budget
+    assert full["sidecar_block_len"] == arr.blocks[0]
+    values_sidecar = blosc2.open(full["values_path"], mode="r")
+    assert values_sidecar.chunks[0] == expected_budget
+    assert values_sidecar.blocks[0] == arr.blocks[0]
+
+
+@pytest.mark.parametrize("optlevel", [1, 5, 9])
+def test_full_ooc_run_items_env_overrides_optlevel(monkeypatch, tmp_path, optlevel):
+    path = tmp_path / f"full_ooc_env_{optlevel}.b2nd"
+    data = np.arange(4096, dtype=np.int64)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(256,), blocks=(64,))
+    monkeypatch.setenv("BLOSC2_FULL_OOC_RUN_ITEMS", "768")
+
+    descriptor = arr.create_index(kind=blosc2.IndexKind.FULL, optlevel=optlevel)
+    full = descriptor["full"]
+
+    assert full["ooc_run_item_budget"] == 768
+    assert full["ooc_run_items"] == 768
+    assert full["ooc_run_item_budget_source"] == "env"
+
+
 def test_create_index_full_ooc_defaults_tmpdir_to_array_directory(monkeypatch, tmp_path):
     path = tmp_path / "default_tmpdir_full.b2nd"
     data = np.arange(4096, dtype=np.int64)
