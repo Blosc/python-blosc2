@@ -3196,15 +3196,38 @@ def _opsi_write_block_boundaries(
     _write_ndarray_linear_span(stage.maxs, first_block, maxs)
 
 
-def _opsi_storage_chunk_len(chunk_len: int, block_len: int) -> int:
+def _opsi_chunk_multiplier_for_optlevel(optlevel: int) -> int:
+    """Return the OPSI logical/sidecar chunk multiplier for *optlevel*."""
+    optlevel = int(optlevel)
+    if optlevel <= 3:
+        return 1
+    if optlevel <= 6:
+        return 2
+    return 4
+
+
+def _opsi_max_cycles_for_optlevel(optlevel: int) -> int:
+    """Return the OPSI max cycles for *optlevel*."""
+    optlevel = int(optlevel)
+    if optlevel <= 3:
+        return 1
+    if optlevel <= 6:
+        return 2
+    return 4
+
+
+def _opsi_storage_chunk_len(chunk_len: int, block_len: int, multiplier: int = 1) -> int:
     """Return an OPSI sidecar chunk length aligned to whole OPSI blocks."""
     chunk_len = max(1, int(chunk_len))
     block_len = max(1, int(block_len))
+    multiplier = max(1, int(multiplier))
     if chunk_len % block_len == 0:
-        return chunk_len
-    if chunk_len >= block_len:
-        return (chunk_len // block_len) * block_len
-    return block_len
+        aligned_chunk_len = chunk_len
+    elif chunk_len >= block_len:
+        aligned_chunk_len = (chunk_len // block_len) * block_len
+    else:
+        aligned_chunk_len = block_len
+    return max(block_len, aligned_chunk_len * multiplier)
 
 
 def _opsi_build_stage1(
@@ -3218,11 +3241,12 @@ def _opsi_build_stage1(
     previous: OpsiStageSidecars | None,
     block_order: np.ndarray | None,
     cparams: dict | blosc2.CParams | None = None,
+    chunk_multiplier: int = 1,
 ) -> OpsiStageSidecars:
     size = int(array.shape[0])
     source_chunk_len = int(array.chunks[0])
     block_len = int(array.blocks[0])
-    chunk_len = _opsi_storage_chunk_len(source_chunk_len, block_len)
+    chunk_len = _opsi_storage_chunk_len(source_chunk_len, block_len, chunk_multiplier)
     nblocks = math.ceil(size / block_len)
     stage = _opsi_stage_create(
         array, token, kind, cycle, size, nblocks, dtype, persistent, chunk_len, block_len, cparams
@@ -3356,8 +3380,10 @@ def _build_opsi_descriptor(
     persistent: bool,
     cparams: dict | blosc2.CParams | None = None,
     max_cycles: int = 3,
+    optlevel: int = 5,
 ) -> dict:
     max_cycles = max(0, int(max_cycles))
+    chunk_multiplier = _opsi_chunk_multiplier_for_optlevel(optlevel)
     size = int(array.shape[0])
     if size == 0:
         values_sidecar = _store_array_sidecar(
@@ -3384,8 +3410,11 @@ def _build_opsi_descriptor(
             "positions_path": positions_sidecar["path"],
             "mins_path": mins_sidecar["path"],
             "maxs_path": maxs_sidecar["path"],
-            "chunk_len": _opsi_storage_chunk_len(int(array.chunks[0]), int(array.blocks[0])),
+            "chunk_len": _opsi_storage_chunk_len(
+                int(array.chunks[0]), int(array.blocks[0]), chunk_multiplier
+            ),
             "block_len": int(array.blocks[0]),
+            "chunk_multiplier": chunk_multiplier,
             "nblocks": 0,
             "cycles": 0,
             "max_cycles": max_cycles,
@@ -3404,7 +3433,17 @@ def _build_opsi_descriptor(
         for cycle in range(max_cycles):
             old_previous = previous
             current = _opsi_build_stage1(
-                array, target, token, kind, dtype, persistent, cycle, previous, block_order, cparams
+                array,
+                target,
+                token,
+                kind,
+                dtype,
+                persistent,
+                cycle,
+                previous,
+                block_order,
+                cparams,
+                chunk_multiplier,
             )
             is_csi = _opsi_is_csi(current, dtype)
             score = (1.0, 1, 1.0, 1.0) if is_csi else _opsi_block_pruning_score(current, dtype)
@@ -3454,6 +3493,7 @@ def _build_opsi_descriptor(
                     "maxs_path": maxs_sidecar["path"],
                     "chunk_len": final.chunk_len,
                     "block_len": final.block_len,
+                    "chunk_multiplier": chunk_multiplier,
                     "nblocks": final.nblocks,
                     "cycles": best_cycle,
                     "attempted_cycles": cycle + 1,
@@ -3699,7 +3739,7 @@ def create_index(
     kind = _normalize_index_kind(kind)
     build = _normalize_build_mode(build)
     if opsi_max_cycles_arg is None:
-        opsi_max_cycles = max(1, optlevel if optlevel < 8 else optlevel * 2)
+        opsi_max_cycles = _opsi_max_cycles_for_optlevel(optlevel)
     else:
         opsi_max_cycles = max(1, int(opsi_max_cycles_arg))
     if kind == "full":
@@ -3736,7 +3776,7 @@ def create_index(
                 full["build_method"] = "global-sort"
         if kind == "opsi":
             opsi = _build_opsi_descriptor(
-                array, target, token, kind, dtype, persistent, cparams, opsi_max_cycles
+                array, target, token, kind, dtype, persistent, cparams, opsi_max_cycles, optlevel
             )
         descriptor = _build_descriptor(
             array,
@@ -3775,7 +3815,7 @@ def create_index(
             full["build_method"] = "global-sort"
         if kind == "opsi":
             opsi = _build_opsi_descriptor(
-                array, target, token, kind, dtype, persistent, cparams, opsi_max_cycles
+                array, target, token, kind, dtype, persistent, cparams, opsi_max_cycles, optlevel
             )
         descriptor = _build_descriptor(
             array,

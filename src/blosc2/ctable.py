@@ -3825,7 +3825,7 @@ class CTable(Generic[RowT]):
                     full["build_method"] = "global-sort"
             if kind == "opsi":
                 opsi = _build_opsi_descriptor(
-                    proxy, target, token, kind, dtype, persistent, cparams_obj, opsi_max_cycles
+                    proxy, target, token, kind, dtype, persistent, cparams_obj, opsi_max_cycles, optlevel
                 )
             descriptor = _build_descriptor(
                 proxy,
@@ -3866,7 +3866,7 @@ class CTable(Generic[RowT]):
                 full["build_method"] = "global-sort"
             if kind == "opsi":
                 opsi = _build_opsi_descriptor(
-                    proxy, target, token, kind, dtype, persistent, cparams_obj, opsi_max_cycles
+                    proxy, target, token, kind, dtype, persistent, cparams_obj, opsi_max_cycles, optlevel
                 )
             descriptor = _build_descriptor(
                 proxy,
