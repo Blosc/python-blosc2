@@ -1710,6 +1710,8 @@ def _partial_nav_segment_divisor(optlevel: int) -> int:
         return 2
     if optlevel <= 6:
         return 4
+    if optlevel == 9:
+        return 16
     return 8
 
 
@@ -3244,21 +3246,25 @@ def _opsi_write_block_boundaries(
 
 def _index_chunk_multiplier_for_optlevel(optlevel: int) -> int:
     """Return the chunk-local index chunk multiplier for *optlevel*."""
-    optlevel = int(optlevel)
-    if optlevel <= 3:
+    if optlevel <= 1:
         return 1
-    if optlevel <= 6:
+    if optlevel <= 3:
         return 2
-    return 4
+    if optlevel <= 6:
+        return 4
+    if optlevel == 9:
+        return 16
+    return 8
 
 
 def _opsi_max_cycles_for_optlevel(optlevel: int) -> int:
     """Return the OPSI max cycles for *optlevel*."""
-    optlevel = int(optlevel)
-    if optlevel <= 3:
+    if optlevel <= 1:
         return 1
-    if optlevel <= 6:
+    if optlevel <= 3:
         return 2
+    if optlevel <= 6:
+        return 3
     return 4
 
 
