@@ -1237,17 +1237,19 @@ def test_forced_ooc_full_index_merge_preserves_sorted_sidecars(monkeypatch, tmp_
 
 
 @pytest.mark.parametrize(
-    ("optlevel", "expected_budget"),
+    ("optlevel", "expected_multiplier", "expected_budget"),
     [
-        (1, 256),
-        (3, 256),
-        (4, 512),
-        (6, 512),
-        (7, 1024),
-        (9, 1024),
+        (1, 1, 512),
+        (3, 1, 512),
+        (4, 2, 1024),
+        (6, 2, 1024),
+        (7, 4, 2048),
+        (9, 4, 2048),
     ],
 )
-def test_full_ooc_run_items_follow_optlevel(monkeypatch, tmp_path, optlevel, expected_budget):
+def test_full_ooc_run_items_follow_optlevel(
+    monkeypatch, tmp_path, optlevel, expected_multiplier, expected_budget
+):
     path = tmp_path / f"full_ooc_optlevel_{optlevel}.b2nd"
     data = np.arange(4096, dtype=np.int64)
     arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(256,), blocks=(64,))
@@ -1257,14 +1259,15 @@ def test_full_ooc_run_items_follow_optlevel(monkeypatch, tmp_path, optlevel, exp
     descriptor = arr.create_index(kind=blosc2.IndexKind.FULL, optlevel=optlevel)
     full = descriptor["full"]
 
+    expected_sidecar_chunk_len = arr.chunks[0] * expected_multiplier
     assert full["ooc_run_item_budget"] == expected_budget
     assert full["ooc_run_items"] == expected_budget
     assert full["ooc_run_item_budget_source"] == "optlevel"
-    assert full["chunk_multiplier"] == expected_budget // 256
-    assert full["sidecar_chunk_len"] == expected_budget
+    assert full["chunk_multiplier"] == expected_multiplier
+    assert full["sidecar_chunk_len"] == expected_sidecar_chunk_len
     assert full["sidecar_block_len"] == arr.blocks[0]
     values_sidecar = blosc2.open(full["values_path"], mode="r")
-    assert values_sidecar.chunks[0] == expected_budget
+    assert values_sidecar.chunks[0] == expected_sidecar_chunk_len
     assert values_sidecar.blocks[0] == arr.blocks[0]
 
 
