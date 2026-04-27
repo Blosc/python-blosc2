@@ -3251,10 +3251,10 @@ def _index_chunk_multiplier_for_optlevel(optlevel: int) -> int:
     if optlevel <= 3:
         return 2
     if optlevel <= 6:
-        return 4
+        return 3
     if optlevel == 9:
-        return 16
-    return 8
+        return 5
+    return 4
 
 
 def _opsi_max_cycles_for_optlevel(optlevel: int) -> int:
