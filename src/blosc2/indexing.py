@@ -1599,7 +1599,8 @@ def _build_partial_descriptor(
     persistent: bool,
     cparams: dict | None = None,
 ) -> dict:
-    chunk_len = int(array.chunks[0])
+    chunk_multiplier = _index_chunk_multiplier_for_optlevel(optlevel)
+    chunk_len = int(array.chunks[0]) * chunk_multiplier
     nav_segment_len, nav_segment_divisor = _partial_nav_segment_len(
         int(array.blocks[0]), chunk_len, optlevel
     )
@@ -1626,6 +1627,7 @@ def _build_partial_descriptor(
     )
     partial["position_dtype"] = positions.dtype.str
     partial["nav_segment_divisor"] = nav_segment_divisor
+    partial["chunk_multiplier"] = chunk_multiplier
     return partial
 
 
@@ -2091,7 +2093,8 @@ def _build_partial_descriptor_ooc(
 ) -> dict:
     if persistent:
         size = int(array.shape[0])
-        chunk_len = int(array.chunks[0])
+        chunk_multiplier = _index_chunk_multiplier_for_optlevel(optlevel)
+        chunk_len = int(array.chunks[0]) * chunk_multiplier
         nav_segment_len, nav_segment_divisor = _partial_nav_segment_len(
             int(array.blocks[0]), chunk_len, optlevel
         )
@@ -2170,9 +2173,11 @@ def _build_partial_descriptor_ooc(
             raise
         partial["position_dtype"] = position_dtype.str
         partial["nav_segment_divisor"] = nav_segment_divisor
+        partial["chunk_multiplier"] = chunk_multiplier
         return partial
 
-    chunk_len = int(array.chunks[0])
+    chunk_multiplier = _index_chunk_multiplier_for_optlevel(optlevel)
+    chunk_len = int(array.chunks[0]) * chunk_multiplier
     nav_segment_len, nav_segment_divisor = _partial_nav_segment_len(
         int(array.blocks[0]), chunk_len, optlevel
     )
@@ -2198,6 +2203,7 @@ def _build_partial_descriptor_ooc(
     )
     partial["position_dtype"] = positions.dtype.str
     partial["nav_segment_divisor"] = nav_segment_divisor
+    partial["chunk_multiplier"] = chunk_multiplier
     return partial
 
 
@@ -2436,7 +2442,8 @@ def _build_bucket_descriptor(
     persistent: bool,
     cparams: dict | None = None,
 ) -> dict:
-    chunk_len = int(array.chunks[0])
+    chunk_multiplier = _index_chunk_multiplier_for_optlevel(optlevel)
+    chunk_len = int(array.chunks[0]) * chunk_multiplier
     nav_segment_len = int(array.blocks[0])
     bucket_len = max(1, math.ceil(nav_segment_len / 64))
     bucket_count = math.ceil(chunk_len / bucket_len)
@@ -2468,6 +2475,7 @@ def _build_bucket_descriptor(
     )
     bucket["bucket_count"] = bucket_count
     bucket["bucket_len"] = bucket_len
+    bucket["chunk_multiplier"] = chunk_multiplier
     bucket["value_lossy_bits"] = value_lossy_bits
     bucket["bucket_dtype"] = bucket_positions.dtype.str
     return bucket
@@ -2483,7 +2491,8 @@ def _build_bucket_descriptor_ooc(
     persistent: bool,
     cparams: dict | None = None,
 ) -> dict:
-    chunk_len = int(array.chunks[0])
+    chunk_multiplier = _index_chunk_multiplier_for_optlevel(optlevel)
+    chunk_len = int(array.chunks[0]) * chunk_multiplier
     nav_segment_len = int(array.blocks[0])
     bucket_len = max(1, math.ceil(nav_segment_len / 64))
     bucket_count = math.ceil(chunk_len / bucket_len)
@@ -2579,6 +2588,7 @@ def _build_bucket_descriptor_ooc(
             raise
         bucket["bucket_count"] = bucket_count
         bucket["bucket_len"] = bucket_len
+        bucket["chunk_multiplier"] = chunk_multiplier
         bucket["value_lossy_bits"] = value_lossy_bits
         bucket["bucket_dtype"] = bucket_dtype.str
         return bucket
@@ -2614,6 +2624,7 @@ def _build_bucket_descriptor_ooc(
     )
     bucket["bucket_count"] = bucket_count
     bucket["bucket_len"] = bucket_len
+    bucket["chunk_multiplier"] = chunk_multiplier
     bucket["value_lossy_bits"] = value_lossy_bits
     bucket["bucket_dtype"] = bucket_positions.dtype.str
     return bucket
@@ -3196,8 +3207,8 @@ def _opsi_write_block_boundaries(
     _write_ndarray_linear_span(stage.maxs, first_block, maxs)
 
 
-def _opsi_chunk_multiplier_for_optlevel(optlevel: int) -> int:
-    """Return the OPSI logical/sidecar chunk multiplier for *optlevel*."""
+def _index_chunk_multiplier_for_optlevel(optlevel: int) -> int:
+    """Return the chunk-local index chunk multiplier for *optlevel*."""
     optlevel = int(optlevel)
     if optlevel <= 3:
         return 1
@@ -3383,7 +3394,7 @@ def _build_opsi_descriptor(
     optlevel: int = 5,
 ) -> dict:
     max_cycles = max(0, int(max_cycles))
-    chunk_multiplier = _opsi_chunk_multiplier_for_optlevel(optlevel)
+    chunk_multiplier = _index_chunk_multiplier_for_optlevel(optlevel)
     size = int(array.shape[0])
     if size == 0:
         values_sidecar = _store_array_sidecar(
@@ -5687,7 +5698,6 @@ def _process_bucket_chunk_batch(
     where_x,
     plan: IndexPlan,
     total_len: int,
-    chunk_len: int,
     return_positions: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     value_parts = []
@@ -5704,9 +5714,7 @@ def _process_bucket_chunk_batch(
                 continue
             if _supports_block_reads(local_where_x):
                 span = np.empty(stop - start, dtype=local_where_x.dtype)
-                base_chunk_id = start // chunk_len
-                local_start = start - base_chunk_id * chunk_len
-                local_where_x.get_1d_span_numpy(span, base_chunk_id, local_start, stop - start)
+                _read_ndarray_linear_span(local_where_x, start, span)
             else:
                 span = local_where_x[start:stop]
             match = _bucket_match_from_span(span, plan)
@@ -6429,7 +6437,6 @@ def evaluate_bucket_query(
         raise ValueError("bucket evaluation requires bucket masks and chunk geometry")
 
     total_len = int(plan.base.shape[0])
-    chunk_len = int(plan.base.chunks[0])
     where_x = where["_where_x"]
     candidate_chunk_ids = np.flatnonzero(np.any(plan.bucket_masks, axis=1)).astype(np.intp, copy=False)
     result_dtype = _where_output_dtype(where["_where_x"])
@@ -6437,9 +6444,7 @@ def evaluate_bucket_query(
     thread_count = _downstream_query_thread_count(len(candidate_chunk_ids), plan)
     if thread_count <= 1:
         parts = [
-            _process_bucket_chunk_batch(
-                candidate_chunk_ids, where_x, plan, total_len, chunk_len, return_positions
-            )
+            _process_bucket_chunk_batch(candidate_chunk_ids, where_x, plan, total_len, return_positions)
         ]
     else:
         batches = _chunk_batches(candidate_chunk_ids, thread_count)
@@ -6451,7 +6456,6 @@ def evaluate_bucket_query(
                     [where_x] * len(batches),
                     [plan] * len(batches),
                     [total_len] * len(batches),
-                    [chunk_len] * len(batches),
                     [return_positions] * len(batches),
                 )
             )

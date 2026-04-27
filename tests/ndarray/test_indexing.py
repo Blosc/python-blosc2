@@ -93,6 +93,35 @@ def test_opsi_optlevel_controls_chunk_multiplier(optlevel, expected_multiplier):
     np.testing.assert_array_equal(np.sort(indexed), np.sort(scanned))
 
 
+@pytest.mark.parametrize("kind", ["bucket", "partial"])
+@pytest.mark.parametrize(
+    ("optlevel", "expected_multiplier"),
+    [
+        (1, 1),
+        (3, 1),
+        (4, 2),
+        (6, 2),
+        (7, 4),
+        (9, 4),
+    ],
+)
+def test_chunk_local_indexes_optlevel_controls_chunk_multiplier(kind, optlevel, expected_multiplier):
+    rng = np.random.default_rng(44)
+    data = rng.integers(0, 100_000, size=20_000, dtype=np.int64)
+    arr = blosc2.asarray(data, chunks=(1_000,), blocks=(200,))
+    descriptor = arr.create_index(kind=_public_kind(kind), optlevel=optlevel)
+
+    meta = descriptor[kind]
+    assert meta["chunk_multiplier"] == expected_multiplier
+    assert meta["chunk_len"] == arr.chunks[0] * expected_multiplier
+    assert meta["nav_segment_len"] >= 1
+
+    expr = ((arr >= 10_000) & (arr < 20_000)).where(arr)
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    np.testing.assert_array_equal(np.sort(indexed), np.sort(scanned))
+
+
 @pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "full", "opsi"])
 def test_structured_field_index_matches_scan(kind):
     dtype = np.dtype([("id", np.int64), ("payload", np.float64)])
@@ -525,9 +554,12 @@ def test_chunk_local_index_descriptor_and_lookup_path(tmp_path, kind):
     meta = descriptor["bucket"] if kind == "bucket" else descriptor["partial"]
 
     assert meta["layout"] == "chunk-local-v1"
-    assert meta["chunk_len"] == arr.chunks[0]
+    expected_chunk_multiplier = 2
+    expected_chunk_len = arr.chunks[0] * expected_chunk_multiplier
+    assert meta["chunk_multiplier"] == expected_chunk_multiplier
+    assert meta["chunk_len"] == expected_chunk_len
     expected_nav_len = (
-        arr.blocks[0] if kind == "bucket" else max(arr.blocks[0] // 4, math.ceil(arr.chunks[0] / 2048))
+        arr.blocks[0] if kind == "bucket" else max(arr.blocks[0] // 4, math.ceil(expected_chunk_len / 2048))
     )
     assert meta["nav_segment_len"] == expected_nav_len
     assert meta["l1_path"] is not None
