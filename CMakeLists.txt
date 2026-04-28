@@ -137,7 +137,7 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG fac9c5a476d813355311ff76aeab5e0439a2e486
+        GIT_TAG 96cf6006c5ade15a1743de73ebbaa08050c5085f
         # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../c-blosc2
     )
     FetchContent_MakeAvailable(blosc2)
