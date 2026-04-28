@@ -70,10 +70,10 @@ def test_opsi_index_accepts_non_multiple_chunk_and_block_lengths():
     [
         (1, 1),
         (3, 2),
-        (4, 4),
-        (6, 4),
-        (7, 8),
-        (9, 16),
+        (4, 2),
+        (6, 2),
+        (7, 3),
+        (9, 4),
     ],
 )
 def test_opsi_optlevel_controls_chunk_multiplier(optlevel, expected_multiplier):
@@ -99,10 +99,10 @@ def test_opsi_optlevel_controls_chunk_multiplier(optlevel, expected_multiplier):
     [
         (1, 1),
         (3, 2),
-        (4, 4),
-        (6, 4),
-        (7, 8),
-        (9, 16),
+        (4, 2),
+        (6, 2),
+        (7, 3),
+        (9, 4),
     ],
 )
 def test_chunk_local_indexes_optlevel_controls_chunk_multiplier(kind, optlevel, expected_multiplier):
@@ -554,7 +554,7 @@ def test_chunk_local_index_descriptor_and_lookup_path(tmp_path, kind):
     meta = descriptor["bucket"] if kind == "bucket" else descriptor["partial"]
 
     assert meta["layout"] == "chunk-local-v1"
-    expected_chunk_multiplier = 4
+    expected_chunk_multiplier = 2
     expected_chunk_len = arr.chunks[0] * expected_chunk_multiplier
     assert meta["chunk_multiplier"] == expected_chunk_multiplier
     assert meta["chunk_len"] == expected_chunk_len
@@ -1237,21 +1237,20 @@ def test_forced_ooc_full_index_merge_preserves_sorted_sidecars(monkeypatch, tmp_
 
 
 @pytest.mark.parametrize(
-    ("optlevel", "expected_multiplier", "expected_budget"),
+    ("optlevel", "expected_multiplier"),
     [
-        (1, 1, 1024 / 2),
-        (3, 2, 1 * 1024),
-        (4, 4, 2 * 1024),
-        (6, 4, 2 * 1024),
-        (7, 8, 4 * 1024),
-        (9, 16, 8 * 1024),
+        (1, 1),
+        (3, 2),
+        (4, 2),
+        (6, 2),
+        (7, 3),
+        (9, 4),
     ],
 )
-def test_full_ooc_run_items_follow_optlevel(
-    monkeypatch, tmp_path, optlevel, expected_multiplier, expected_budget
-):
+def test_full_ooc_run_items_follow_optlevel(monkeypatch, tmp_path, optlevel, expected_multiplier):
+    nitems = 4096
     path = tmp_path / f"full_ooc_optlevel_{optlevel}.b2nd"
-    data = np.arange(4096, dtype=np.int64)
+    data = np.arange(nitems, dtype=np.int64)
     arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(256,), blocks=(64,))
     indexing = __import__("blosc2.indexing", fromlist=["FULL_OOC_RUN_ITEMS"])
     monkeypatch.setattr(indexing, "FULL_OOC_RUN_ITEMS", 512)
@@ -1260,6 +1259,7 @@ def test_full_ooc_run_items_follow_optlevel(
     full = descriptor["full"]
 
     expected_sidecar_chunk_len = arr.chunks[0] * expected_multiplier
+    expected_budget = expected_multiplier * (nitems / 8)
     assert full["ooc_run_item_budget"] == expected_budget
     assert full["ooc_run_items"] == max(expected_sidecar_chunk_len, min(arr.size, expected_budget))
     assert full["ooc_run_item_budget_source"] == "optlevel"

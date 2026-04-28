@@ -3248,24 +3248,20 @@ def _index_chunk_multiplier_for_optlevel(optlevel: int) -> int:
     """Return the chunk-local index chunk multiplier for *optlevel*."""
     if optlevel <= 1:
         return 1
-    if optlevel <= 3:
-        return 2
     if optlevel <= 6:
-        return 3
+        return 2
     if optlevel == 9:
-        return 5
-    return 4
+        return 4
+    return 3
 
 
 def _opsi_max_cycles_for_optlevel(optlevel: int) -> int:
     """Return the OPSI max cycles for *optlevel*."""
     if optlevel <= 1:
         return 1
-    if optlevel <= 3:
-        return 2
     if optlevel <= 6:
-        return 3
-    return 4
+        return 2
+    return 3
 
 
 def _opsi_storage_chunk_len(chunk_len: int, block_len: int, multiplier: int = 1) -> int:
