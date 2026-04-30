@@ -81,6 +81,8 @@ jobs:
       id: build_non_windows
       run: pip install -e . --group test
 
-    - name: Test Windows DSL shutdown reproducer only
+    - name: Test Windows full suite with stdout diagnostics
       if: runner.os == 'Windows'
-      run: python -m pytest -s tests/ndarray/test_windows_dsl_shutdown_repro.py tests/ndarray/test_dsl_kernels.py
+      run: python -m pytest -s --tb=short -m "not heavy and (network or not network)"
+      env:
+        PYTHONFAULTHANDLER: "1"
