@@ -135,7 +135,7 @@ def test_windows_dsl_scalar_only_flat_idx_shutdown_stress():
         """
     )
 
-    nrepeat = 100 if sys.platform == "win32" else 5
+    nrepeat = 1000 if sys.platform == "win32" else 5
     with tempfile.TemporaryDirectory() as tmpdir:
         script = Path(tmpdir) / "dsl_shutdown_stress.py"
         script.write_text(code, encoding="utf-8")

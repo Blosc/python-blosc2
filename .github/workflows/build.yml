@@ -86,3 +86,9 @@ jobs:
       run: python -m pytest -s --tb=short -m "not heavy and (network or not network)"
       env:
         PYTHONFAULTHANDLER: "1"
+
+    - name: Post-suite Windows DSL shutdown stress
+      if: runner.os == 'Windows'
+      run: python -m pytest -s --tb=short tests/ndarray/test_windows_dsl_shutdown_repro.py::test_windows_dsl_scalar_only_flat_idx_shutdown_stress
+      env:
+        PYTHONFAULTHANDLER: "1"
