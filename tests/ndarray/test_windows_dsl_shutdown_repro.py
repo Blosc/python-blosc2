@@ -110,3 +110,42 @@ def test_windows_dsl_scalar_only_flat_idx_shutdown_repro(case_name, lazyudf_kwar
         f"stdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )
+
+
+def test_windows_dsl_scalar_only_flat_idx_shutdown_stress():
+    """Run the original minimal subprocess many times to catch intermittent Windows AVs."""
+    if blosc2.IS_WASM:
+        pytest.skip("subprocess is not supported on emscripten/wasm32")
+
+    code = textwrap.dedent(
+        """
+        import numpy as np
+        import blosc2
+
+        @blosc2.dsl_kernel
+        def kernel(start, stop, nitems):
+            step = (float(stop) - float(start)) / float(nitems)
+            return float(start) + _flat_idx * step  # noqa: F821
+
+        shape = (10, 100)
+        arr = blosc2.lazyudf(kernel, (-10, 10, 999), dtype=np.float32, shape=shape).compute()
+        exp = np.linspace(-10, 10, np.prod(shape), dtype=np.float32).reshape(shape)
+        np.testing.assert_allclose(arr, exp, rtol=1e-6, atol=1e-6)
+        print("ok", flush=True)
+        """
+    )
+
+    nrepeat = 100 if sys.platform == "win32" else 5
+    with tempfile.TemporaryDirectory() as tmpdir:
+        script = Path(tmpdir) / "dsl_shutdown_stress.py"
+        script.write_text(code, encoding="utf-8")
+        for i in range(nrepeat):
+            result = subprocess.run(
+                [sys.executable, str(script)], capture_output=True, text=True, check=False
+            )
+            assert result.returncode == 0, (
+                f"subprocess failed on iteration {i + 1}/{nrepeat}: returncode={result.returncode}\n"
+                f"stdout:\n{result.stdout}\n"
+                f"stderr:\n{result.stderr}"
+            )
+            assert "ok" in result.stdout

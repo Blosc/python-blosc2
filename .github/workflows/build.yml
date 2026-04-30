@@ -83,4 +83,4 @@ jobs:
 
     - name: Test Windows DSL shutdown reproducer only
       if: runner.os == 'Windows'
-      run: python -m pytest -s tests/ndarray/test_windows_dsl_shutdown_repro.py
+      run: python -m pytest -s tests/ndarray/test_windows_dsl_shutdown_repro.py tests/ndarray/test_dsl_kernels.py
