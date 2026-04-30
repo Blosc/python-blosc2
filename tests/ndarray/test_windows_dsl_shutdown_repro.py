@@ -19,14 +19,15 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    ("case_name", "lazyudf_kwargs"),
+    ("case_name", "lazyudf_kwargs", "cleanup_mode"),
     [
-        ("default_jit_policy", ""),
-        ("jit_false", ", jit=False"),
-        ("jit_true", ", jit=True"),
+        ("original_no_cleanup", "", "none"),
+        ("default_jit_policy_with_cleanup", "", "explicit"),
+        ("jit_false_no_cleanup", ", jit=False", "none"),
+        ("jit_true_no_cleanup", ", jit=True", "none"),
     ],
 )
-def test_windows_dsl_scalar_only_flat_idx_shutdown_repro(case_name, lazyudf_kwargs):
+def test_windows_dsl_scalar_only_flat_idx_shutdown_repro(case_name, lazyudf_kwargs, cleanup_mode):
     """Exercise the suspected crash path in a child process.
 
     The child prints milestones with flush=True.  If Windows returns
@@ -78,18 +79,23 @@ def test_windows_dsl_scalar_only_flat_idx_shutdown_repro(case_name, lazyudf_kwar
         np.testing.assert_allclose(arr, exp, rtol=1e-6, atol=1e-6)
         print("assert-ok", flush=True)
 
-        del exp
-        print("del-exp", flush=True)
-        gc.collect()
-        print("gc-after-exp", flush=True)
-        del arr
-        print("del-arr", flush=True)
-        gc.collect()
-        print("gc-after-arr", flush=True)
-        del expr
-        print("del-expr", flush=True)
-        gc.collect()
-        print("gc-after-expr", flush=True)
+        cleanup_mode = {cleanup_mode!r}
+        print("cleanup-mode=" + cleanup_mode, flush=True)
+        if cleanup_mode == "explicit":
+            del exp
+            print("del-exp", flush=True)
+            gc.collect()
+            print("gc-after-exp", flush=True)
+            del arr
+            print("del-arr", flush=True)
+            gc.collect()
+            print("gc-after-arr", flush=True)
+            del expr
+            print("del-expr", flush=True)
+            gc.collect()
+            print("gc-after-expr", flush=True)
+        else:
+            print("leaving-arr-expr-live-for-interpreter-shutdown", flush=True)
         print("script-end", flush=True)
         """
     )
