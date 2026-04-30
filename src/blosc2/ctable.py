@@ -1674,6 +1674,79 @@ class CTable(Generic[RowT]):
         for i in range(self.nrows):
             yield _Row(self, i)
 
+    def iter_sorted(
+        self,
+        cols: str | list[str],
+        ascending: bool | list[bool] = True,
+        *,
+        start: int | None = None,
+        stop: int | None = None,
+        step: int | None = None,
+        batch_size: int = 4096,
+    ):
+        """Iterate rows in sorted order without materializing a full copy.
+
+        Uses a FULL index when available (no sort needed); otherwise falls
+        back to ``np.lexsort`` on live physical positions.  Yields :class:`_Row`
+        objects in the same way as ``__iter__``.
+
+        The sorted positions array is stored as a compressed ``blosc2.NDArray``
+        to keep RAM usage low for large tables.  ``batch_size`` positions are
+        decompressed at a time during iteration.
+
+        Parameters
+        ----------
+        cols:
+            Column name or list of column names to sort by.
+        ascending:
+            Sort direction.  A single bool applies to all keys; a list must
+            have the same length as *cols*.
+        start, stop, step:
+            Optional slice applied to the sorted sequence before iteration.
+            E.g. ``stop=10`` yields only the top-10 rows; ``step=2`` yields
+            every other row in sorted order.
+        batch_size:
+            Number of positions decompressed per iteration step.  Larger
+            values reduce decompression overhead; smaller values use less
+            transient RAM.  Default is 4096.
+        """
+        cols, ascending = self._normalise_sort_keys(cols, ascending)
+
+        valid_np = self._valid_rows[:]
+        live_pos = np.where(valid_np)[0]
+        n = len(live_pos)
+
+        if n == 0:
+            return
+
+        sorted_pos = None
+        if len(cols) == 1:
+            sorted_pos = self._sorted_positions_from_full_index(cols[0], ascending[0])
+            if sorted_pos is not None and len(sorted_pos) != n:
+                sorted_pos = None
+
+        if sorted_pos is None:
+            order = np.lexsort(self._build_lex_keys(cols, ascending, live_pos, n))
+            sorted_pos = live_pos[order]
+
+        if start is not None or stop is not None or step is not None:
+            sorted_pos = sorted_pos[start:stop:step]
+
+        # Compress positions into an NDArray to reduce RAM usage for large tables.
+        # The uncompressed numpy array is released immediately after.
+        sorted_pos_nd = blosc2.asarray(np.asarray(sorted_pos, dtype=np.int64))
+        del sorted_pos
+
+        # physical → logical index mapping
+        phys_to_logical = np.empty(valid_np.shape[0], dtype=np.intp)
+        phys_to_logical[live_pos] = np.arange(n, dtype=np.intp)
+
+        total = len(sorted_pos_nd)
+        for i in range(0, total, batch_size):
+            chunk = sorted_pos_nd[i : i + batch_size]
+            for phys in chunk:
+                yield _Row(self, int(phys_to_logical[phys]))
+
     # ------------------------------------------------------------------
     # Open existing table (classmethod)
     # ------------------------------------------------------------------
@@ -3369,27 +3442,23 @@ class CTable(Generic[RowT]):
         return cols, ascending
 
     def _sorted_positions_from_full_index(self, name: str, ascending: bool) -> np.ndarray | None:
-        """Return live physical positions from a matching FULL index, if available."""
-        from blosc2.indexing import ordered_indices
+        """Return live physical positions from a matching FULL index, if available.
 
+        Reads the pre-sorted positions sidecar directly rather than going through
+        the ordered_indices query machinery, which is optimised for selective range
+        queries and is much slower for full-table streaming.
+        """
         root = self._root_table
         catalog = root._storage.load_index_catalog()
         descriptor = None
-        target_arr = None
 
         if name in root._cols:
             descriptor = catalog.get(name)
-            if (
-                descriptor is not None
-                and descriptor.get("kind") == "full"
-                and not descriptor.get("stale", False)
-            ):
-                target_arr = root._cols[name]
-            else:
+            if descriptor is None or descriptor.get("kind") != "full" or descriptor.get("stale", False):
                 descriptor = None
         elif name in root._computed_cols:
             cc = root._computed_cols[name]
-            for lookup_key, candidate in catalog.items():
+            for _lookup_key, candidate in catalog.items():
                 target = candidate.get("target") or {}
                 if (
                     target.get("source") == "expression"
@@ -3399,14 +3468,32 @@ class CTable(Generic[RowT]):
                     and list(target.get("dependencies", [])) == list(cc["col_deps"])
                 ):
                     descriptor = candidate
-                    target_arr = root._index_target_array(lookup_key, candidate)
                     break
-        if descriptor is None or target_arr is None:
+        if descriptor is None:
             return None
 
-        positions = ordered_indices(target_arr, require_full=True)
-        if positions is None:
-            return None
+        positions_path = descriptor.get("full", {}).get("positions_path")
+
+        # Read pre-sorted positions directly — bypasses the ordered_indices query
+        # machinery which is built for selective range queries and is ~70x slower
+        # for full-table streaming.
+        if positions_path is not None:
+            # Persistent table: positions live in a sidecar .b2nd file.
+            positions_nd = blosc2.open(positions_path, mode="r")
+        else:
+            # In-memory table: positions live in the sidecar handle cache.
+            from blosc2.indexing import _SIDECAR_HANDLE_CACHE, _sidecar_handle_cache_key
+
+            target_arr = root._cols.get(name)
+            if target_arr is None:
+                return None
+            token = descriptor["token"]
+            cache_key = _sidecar_handle_cache_key(target_arr, token, "full", "positions")
+            positions_nd = _SIDECAR_HANDLE_CACHE.get(cache_key)
+            if positions_nd is None:
+                return None
+
+        positions = np.asarray(positions_nd[:], dtype=np.int64)
         valid = root._valid_rows[:]
         positions = np.asarray(positions, dtype=np.int64)
         positions = positions[(positions >= 0) & (positions < len(valid))]
