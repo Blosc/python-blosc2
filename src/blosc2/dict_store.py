@@ -231,7 +231,7 @@ class DictStore:
         """Return the canonical write-time suffix for a supported external leaf kind."""
         if kind == "ndarray":
             return ".b2nd"
-        if kind == "batcharray":
+        if kind in ("batcharray", "listarray"):
             return ".b2b"
         return ".b2f"
 
@@ -260,6 +260,8 @@ class DictStore:
                 kind = "ndarray"
             elif isinstance(processed, SChunk):
                 kind = "schunk"
+            elif processed_name == "ListArray":
+                kind = "listarray"
             else:
                 warnings.warn(
                     f"Ignoring unsupported Blosc2 object at '{rel_path}' during DictStore discovery: "

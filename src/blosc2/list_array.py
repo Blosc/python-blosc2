@@ -286,14 +286,21 @@ class ListArray:
         self._flush_full_batches()
         return len(self)
 
-    def extend(self, values: Iterable[Any]) -> None:
+    def extend(self, values: Iterable[Any], *, validate: bool = True) -> None:
+        if validate:
+            cells = [coerce_list_cell(self.spec, v) for v in values]
+        else:
+            cells = [v if v is not None else [] for v in values]
         if self.spec.storage == "vl":
-            self._backend.extend(coerce_list_cell(self.spec, value) for value in values)
+            self._backend.extend(iter(cells))
             self._persisted_row_count = len(self._backend)
             return
-        for value in values:
-            self._pending_cells.append(coerce_list_cell(self.spec, value))
-            self._flush_full_batches()
+        batch_rows = self.batch_rows
+        if batch_rows is None:
+            self._pending_cells.extend(cells)
+            return
+        self._pending_cells.extend(cells)
+        self._flush_full_batches()
 
     def flush(self) -> None:
         if self.spec.storage != "batch":

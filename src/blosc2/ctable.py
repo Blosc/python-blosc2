@@ -1457,12 +1457,18 @@ class CTable(Generic[RowT]):
                     dparams=col_storage.get("dparams"),
                 )
                 continue
+            # Recompute chunks/blocks using the actual dtype so that wide
+            # string columns (e.g. U183642) don't produce multi-GB chunks.
+            chunks = col_storage["chunks"]
+            blocks = col_storage["blocks"]
+            if col.config.chunks is None and col.config.blocks is None:
+                chunks, blocks = compute_chunks_blocks((expected_size,), dtype=col.dtype)
             self._cols[col.name] = storage.create_column(
                 col.name,
                 dtype=col.dtype,
                 shape=(expected_size,),
-                chunks=col_storage["chunks"],
-                blocks=col_storage["blocks"],
+                chunks=chunks,
+                blocks=blocks,
                 cparams=col_storage.get("cparams"),
                 dparams=col_storage.get("dparams"),
             )
@@ -3494,8 +3500,10 @@ class CTable(Generic[RowT]):
             If a column used as a sort key does not support ordering
             (e.g. complex numbers).
         """
-        if self.base is not None:
-            raise ValueError("Cannot sort a view. Materialise it first with .to_table() or sort the parent.")
+        if self.base is not None and inplace:
+            raise ValueError(
+                "Cannot sort a view inplace (would modify shared column data). Use sort_by(inplace=False) to get a sorted copy."
+            )
         if inplace and self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
 
@@ -3522,8 +3530,15 @@ class CTable(Generic[RowT]):
             sorted_pos = live_pos[order]
 
         if inplace:
-            for _col_name, arr in self._cols.items():
-                arr[:n] = arr[sorted_pos]
+            for col in self._schema.columns:
+                arr = self._cols[col.name]
+                if self._is_list_column(col):
+                    new_arr = ListArray(spec=col.spec)
+                    new_arr.extend((arr[int(pos)] for pos in sorted_pos), validate=False)
+                    new_arr.flush()
+                    self._cols[col.name] = new_arr
+                else:
+                    arr[:n] = arr[sorted_pos]
             self._valid_rows[:n] = True
             self._valid_rows[n:] = False
             self._n_rows = n
@@ -3537,7 +3552,7 @@ class CTable(Generic[RowT]):
                 col_name = col.name
                 arr = self._cols[col_name]
                 if self._is_list_column(col):
-                    result._cols[col_name].extend(arr[int(pos)] for pos in sorted_pos)
+                    result._cols[col_name].extend((arr[int(pos)] for pos in sorted_pos), validate=False)
                     result._cols[col_name].flush()
                 else:
                     result._cols[col_name][:n] = arr[sorted_pos]
@@ -3547,11 +3562,66 @@ class CTable(Generic[RowT]):
             result._last_pos = n
             return result
 
-    def _empty_copy(self) -> CTable:
+    def copy(self, compact: bool = True) -> CTable:
+        """Return a new standalone in-memory copy of this table.
+
+        Parameters
+        ----------
+        compact:
+            If ``True`` (default), only live (non-deleted) rows are copied.
+            The result is a dense table with no tombstones and no parent
+            dependency — ideal for materialising a filtered view.
+            If ``False``, all physical slots are copied including deleted gaps,
+            preserving the tombstone state exactly.
+        """
+        valid_np = self._valid_rows[:]
+        live_pos = np.where(valid_np)[0]
+        n_live = len(live_pos)
+
+        if compact:
+            n = n_live
+        else:
+            # High watermark: number of slots ever written.
+            # List columns are written sequentially with no gaps — their length
+            # is the exact high watermark.  For scalar-only tables fall back to
+            # the last live position + 1 (writes are always sequential so no
+            # deleted slot can exist beyond the last live one).
+            n = 0
+            for col in self._schema.columns:
+                if self._is_list_column(col):
+                    n = len(self._cols[col.name])
+                    break
+            if n == 0:
+                n = int(live_pos[-1]) + 1 if n_live > 0 else 0
+
+        result = self._empty_copy(capacity=n)
+
+        for col in self._schema.columns:
+            col_name = col.name
+            arr = self._cols[col_name]
+            if self._is_list_column(col):
+                src = (arr[int(pos)] for pos in live_pos) if compact else (arr[i] for i in range(n))
+                result._cols[col_name].extend(src, validate=False)
+                result._cols[col_name].flush()
+            else:
+                result._cols[col_name][:n] = arr[live_pos] if compact else arr[:n]
+
+        if compact:
+            result._valid_rows[:n] = True
+            result._n_rows = n
+            result._last_pos = n - 1 if n > 0 else None
+        else:
+            result._valid_rows[:n] = valid_np[:n]
+            result._n_rows = n_live
+            result._last_pos = None  # recomputed lazily on next append
+
+        return result
+
+    def _empty_copy(self, capacity: int | None = None) -> CTable:
         """Return a new empty in-memory CTable with the same schema and capacity."""
         from blosc2 import compute_chunks_blocks
 
-        capacity = max(self._n_rows, 1)
+        capacity = max(capacity if capacity is not None else self._n_rows, 1)
         default_chunks, default_blocks = compute_chunks_blocks((capacity,))
         mem_storage = InMemoryTableStorage()
 
@@ -4385,10 +4455,18 @@ class CTable(Generic[RowT]):
         primary_col_name, primary_col_arr, _ = indexed_columns[0]
 
         # Inject every usable table-owned descriptor so plan_query can combine them.
+        # In .b2z read mode all columns share the same urlpath, so _array_key()
+        # returns the same key for every column — causing _SIDECAR_HANDLE_CACHE
+        # collisions across queries.  Clear stale handles before each injection so
+        # the upcoming query always loads the correct sidecar for this column.
+        from blosc2.indexing import _clear_cached_data
+
         for _col_name, col_arr, descriptor in indexed_columns:
             arr_key = _array_key(col_arr)
             if _is_persistent_array(col_arr):
                 store = _PERSISTENT_INDEXES.get(arr_key) or _default_index_store()
+                if store["indexes"].get(descriptor["token"]) is not descriptor:
+                    _clear_cached_data(col_arr, descriptor["token"])
                 store["indexes"][descriptor["token"]] = descriptor
                 _PERSISTENT_INDEXES[arr_key] = store
             else:
@@ -4603,7 +4681,11 @@ class CTable(Generic[RowT]):
                     raw_columns[name] = data._cols[name][: data._n_rows]
                     provided_names.add(name)
         else:
-            if isinstance(data, np.ndarray) and data.dtype.names is not None:
+            if isinstance(data, dict):
+                provided_names = set(data) & set(current_col_names)
+                new_nrows = len(next(iter(data.values())))
+                raw_columns = {name: data[name] for name in provided_names}
+            elif isinstance(data, np.ndarray) and data.dtype.names is not None:
                 new_nrows = len(data)
                 raw_columns = {name: data[name] for name in data.dtype.names if name in current_col_names}
                 provided_names = set(raw_columns)
@@ -4634,7 +4716,7 @@ class CTable(Generic[RowT]):
                 list_processed_cols[name] = list(raw_columns[name])
             else:
                 target_dtype = self._cols[name].dtype
-                scalar_processed_cols[name] = blosc2.asarray(raw_columns[name], dtype=target_dtype)
+                scalar_processed_cols[name] = np.ascontiguousarray(raw_columns[name], dtype=target_dtype)
 
         end_pos = start_pos + new_nrows
 
@@ -4649,7 +4731,7 @@ class CTable(Generic[RowT]):
         for name in current_col_names:
             col_meta = self._schema.columns_by_name[name]
             if self._is_list_column(col_meta):
-                self._cols[name].extend(list_processed_cols[name])
+                self._cols[name].extend(list_processed_cols[name], validate=do_validate)
             else:
                 self._cols[name][start_pos:end_pos] = scalar_processed_cols[name][:]
 

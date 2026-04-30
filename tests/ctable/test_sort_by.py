@@ -221,11 +221,19 @@ def test_sort_reverse_sorted():
 # ===========================================================================
 
 
-def test_sort_view_raises():
+def test_sort_view_inplace_raises():
     t = CTable(Row, new_data=DATA)
     view = t.where(t["id"] > 2)
-    with pytest.raises(ValueError, match="view"):
-        view.sort_by("id")
+    with pytest.raises(ValueError, match="inplace"):
+        view.sort_by("id", inplace=True)
+
+
+def test_sort_view_copy_works():
+    t = CTable(Row, new_data=DATA)
+    view = t.where(t["id"] > 2)
+    sorted_view = view.sort_by("id", ascending=False)
+    ids = [sorted_view["id"][i] for i in range(len(sorted_view))]
+    assert ids == sorted(ids, reverse=True)
 
 
 def test_sort_unknown_column_raises():
