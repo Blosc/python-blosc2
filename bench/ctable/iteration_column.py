@@ -11,7 +11,7 @@
 #   3. ct["score"][0:N].to_array()  — slice view + to_array()
 
 from dataclasses import dataclass
-from time import time
+from time import perf_counter as time
 
 import numpy as np
 
@@ -68,11 +68,11 @@ print(f"np.array(list(col)):         {t_list:.4f} s")
 
 # 3. slice view + to_array()
 t0 = time()
-arr = col[0:N].to_numpy()
+arr = col[0:N]
 for _val in arr:
     pass
 t_toarray = time() - t0
-print(f"col[0:N].to_array():         {t_toarray:.4f} s")
+print(f"col[0:N] (full slice):       {t_toarray:.4f} s")
 
 print("=" * 60)
 print(f"Speedup to_array vs iter:    {t_iter / t_toarray:.2f}x")

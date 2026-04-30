@@ -9,7 +9,7 @@
 # different sizes and positions: small, large, and middle of the array.
 
 from dataclasses import dataclass
-from time import time
+from time import perf_counter as time
 
 import numpy as np
 
@@ -63,7 +63,7 @@ print("-" * 65)
 col = ct["score"]
 for label, s in slices:
     t0 = time()
-    arr = col[s].to_numpy()
+    arr = col[s]
     t_total = time() - t0
     n_rows = s.stop - s.start
     print(f"{label:<25} {n_rows:>8,} {t_total:>12.6f}")
