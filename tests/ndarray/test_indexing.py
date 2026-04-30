@@ -21,10 +21,11 @@ def _public_kind(kind: str) -> blosc2.IndexKind:
         "bucket": blosc2.IndexKind.BUCKET,
         "partial": blosc2.IndexKind.PARTIAL,
         "full": blosc2.IndexKind.FULL,
+        "opsi": blosc2.IndexKind.OPSI,
     }[kind]
 
 
-@pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "full"])
+@pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "full", "opsi"])
 def test_scalar_index_matches_scan(kind):
     data = np.arange(200_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(10_000,), blocks=(2_000,))
@@ -46,7 +47,82 @@ def test_scalar_index_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data >= 120_000) & (data < 125_000)])
 
 
-@pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "full"])
+def test_opsi_index_accepts_non_multiple_chunk_and_block_lengths():
+    rng = np.random.default_rng(42)
+    data = rng.random(5_000, dtype=np.float64)
+    arr = blosc2.asarray(data, chunks=(781,), blocks=(160,))
+    descriptor = arr.create_index(kind=blosc2.IndexKind.OPSI)
+
+    opsi = descriptor["opsi"]
+    assert opsi["chunk_len"] % opsi["block_len"] == 0
+
+    lo = np.nextafter(data[1234], -np.inf)
+    hi = np.nextafter(data[1234], np.inf)
+    expr = ((arr >= lo) & (arr <= hi)).where(arr)
+
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    np.testing.assert_array_equal(indexed, scanned)
+
+
+@pytest.mark.parametrize(
+    ("optlevel", "expected_multiplier"),
+    [
+        (1, 1),
+        (3, 2),
+        (4, 2),
+        (6, 2),
+        (7, 3),
+        (9, 4),
+    ],
+)
+def test_opsi_optlevel_controls_chunk_multiplier(optlevel, expected_multiplier):
+    rng = np.random.default_rng(43)
+    data = rng.integers(0, 100_000, size=20_000, dtype=np.int64)
+    arr = blosc2.asarray(data, chunks=(1_000,), blocks=(200,))
+    descriptor = arr.create_index(kind=blosc2.IndexKind.OPSI, optlevel=optlevel)
+
+    opsi = descriptor["opsi"]
+    assert opsi["chunk_multiplier"] == expected_multiplier
+    assert opsi["chunk_len"] == arr.chunks[0] * expected_multiplier
+    assert opsi["block_len"] == arr.blocks[0]
+
+    expr = ((arr >= 10_000) & (arr < 20_000)).where(arr)
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    np.testing.assert_array_equal(np.sort(indexed), np.sort(scanned))
+
+
+@pytest.mark.parametrize("kind", ["bucket", "partial"])
+@pytest.mark.parametrize(
+    ("optlevel", "expected_multiplier"),
+    [
+        (1, 1),
+        (3, 2),
+        (4, 2),
+        (6, 2),
+        (7, 3),
+        (9, 4),
+    ],
+)
+def test_chunk_local_indexes_optlevel_controls_chunk_multiplier(kind, optlevel, expected_multiplier):
+    rng = np.random.default_rng(44)
+    data = rng.integers(0, 100_000, size=20_000, dtype=np.int64)
+    arr = blosc2.asarray(data, chunks=(1_000,), blocks=(200,))
+    descriptor = arr.create_index(kind=_public_kind(kind), optlevel=optlevel)
+
+    meta = descriptor[kind]
+    assert meta["chunk_multiplier"] == expected_multiplier
+    assert meta["chunk_len"] == arr.chunks[0] * expected_multiplier
+    assert meta["nav_segment_len"] >= 1
+
+    expr = ((arr >= 10_000) & (arr < 20_000)).where(arr)
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    np.testing.assert_array_equal(np.sort(indexed), np.sort(scanned))
+
+
+@pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "full", "opsi"])
 def test_structured_field_index_matches_scan(kind):
     dtype = np.dtype([("id", np.int64), ("payload", np.float64)])
     data = np.empty(120_000, dtype=dtype)
@@ -478,9 +554,12 @@ def test_chunk_local_index_descriptor_and_lookup_path(tmp_path, kind):
     meta = descriptor["bucket"] if kind == "bucket" else descriptor["partial"]
 
     assert meta["layout"] == "chunk-local-v1"
-    assert meta["chunk_len"] == arr.chunks[0]
+    expected_chunk_multiplier = 2
+    expected_chunk_len = arr.chunks[0] * expected_chunk_multiplier
+    assert meta["chunk_multiplier"] == expected_chunk_multiplier
+    assert meta["chunk_len"] == expected_chunk_len
     expected_nav_len = (
-        arr.blocks[0] if kind == "bucket" else max(arr.blocks[0] // 4, math.ceil(arr.chunks[0] / 2048))
+        arr.blocks[0] if kind == "bucket" else max(arr.blocks[0] // 4, math.ceil(expected_chunk_len / 2048))
     )
     assert meta["nav_segment_len"] == expected_nav_len
     assert meta["l1_path"] is not None
@@ -1155,6 +1234,56 @@ def test_forced_ooc_full_index_merge_preserves_sorted_sidecars(monkeypatch, tmp_
 
     np.testing.assert_array_equal(values_sidecar[:], np.sort(data, kind="stable"))
     np.testing.assert_array_equal(values_sidecar[:], data[positions_sidecar[:]])
+
+
+@pytest.mark.parametrize(
+    ("optlevel", "expected_multiplier"),
+    [
+        (1, 1),
+        (3, 2),
+        (4, 2),
+        (6, 2),
+        (7, 3),
+        (9, 4),
+    ],
+)
+def test_full_ooc_run_items_follow_optlevel(monkeypatch, tmp_path, optlevel, expected_multiplier):
+    nitems = 4096
+    path = tmp_path / f"full_ooc_optlevel_{optlevel}.b2nd"
+    data = np.arange(nitems, dtype=np.int64)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(256,), blocks=(64,))
+    indexing = __import__("blosc2.indexing", fromlist=["FULL_OOC_RUN_ITEMS"])
+    monkeypatch.setattr(indexing, "FULL_OOC_RUN_ITEMS", 512)
+
+    descriptor = arr.create_index(kind=blosc2.IndexKind.FULL, optlevel=optlevel)
+    full = descriptor["full"]
+
+    expected_sidecar_chunk_len = arr.chunks[0] * expected_multiplier
+    expected_budget = expected_multiplier * (nitems / 8)
+    assert full["ooc_run_item_budget"] == expected_budget
+    assert full["ooc_run_items"] == max(expected_sidecar_chunk_len, min(arr.size, expected_budget))
+    assert full["ooc_run_item_budget_source"] == "optlevel"
+    assert full["chunk_multiplier"] == expected_multiplier
+    assert full["sidecar_chunk_len"] == expected_sidecar_chunk_len
+    assert full["sidecar_block_len"] == arr.blocks[0]
+    values_sidecar = blosc2.open(full["values_path"], mode="r")
+    assert values_sidecar.chunks[0] == expected_sidecar_chunk_len
+    assert values_sidecar.blocks[0] == arr.blocks[0]
+
+
+@pytest.mark.parametrize("optlevel", [1, 5, 9])
+def test_full_ooc_run_items_env_overrides_optlevel(monkeypatch, tmp_path, optlevel):
+    path = tmp_path / f"full_ooc_env_{optlevel}.b2nd"
+    data = np.arange(4096, dtype=np.int64)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(256,), blocks=(64,))
+    monkeypatch.setenv("BLOSC2_FULL_OOC_RUN_ITEMS", "768")
+
+    descriptor = arr.create_index(kind=blosc2.IndexKind.FULL, optlevel=optlevel)
+    full = descriptor["full"]
+
+    assert full["ooc_run_item_budget"] == 768
+    assert full["ooc_run_items"] == 768
+    assert full["ooc_run_item_budget_source"] == "env"
 
 
 def test_create_index_full_ooc_defaults_tmpdir_to_array_directory(monkeypatch, tmp_path):

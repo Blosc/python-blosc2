@@ -22,7 +22,7 @@ The constructor for the `Table` object should take some parameters to specify pr
     * `.where()`: an iterator for querying with conditions that are evaluated with the internal compute engine.
     * `.index()` for indexing a column and getting better performance in queries (desirable, but optional for 4.0).
 
-In particular, it should try to mimic much of the functionality of data-querying libraries such as ``pandas`` (see [this blog](https://datapythonista.me/blog/whats-new-in-pandas-3) for much of the followin). Hence, one should be able to filter rows of the `Table` via querying on multiple columns (accessed via `.` or perhaps ``__getitem__``), with conditions to select rows implemented via `.index`, `.where` like so
+In particular, it should try to mimic much of the functionality of data-querying libraries such as ``pandas`` (see [this blog](https://datapythonista.me/blog/whats-new-in-pandas-3) for much of the following). Hence, one should be able to filter rows of the `Table` via querying on multiple columns (accessed via `.` or perhaps ``__getitem__``), with conditions to select rows implemented via `.index`, `.where` like so
 
 ```
 tbl.where((tbl.property_type == "hotel") & (tbl.country == "us"))

@@ -228,6 +228,8 @@ class IndexKind(Enum):
     PARTIAL = "partial"
     #: Globally ordered payloads for exact filtering and direct ordered reuse.
     FULL = "full"
+    #: Tunable iterative-ordering payloads for exact filtering; not a full/CSI index.
+    OPSI = "opsi"
 
 
 from .blosc2_ext import (
