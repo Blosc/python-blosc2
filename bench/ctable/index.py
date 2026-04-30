@@ -15,7 +15,6 @@ import numpy as np
 
 import blosc2
 
-
 @dataclass
 class Row:
     id: int = blosc2.field(blosc2.int64(ge=0))
