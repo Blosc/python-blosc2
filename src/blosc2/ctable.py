@@ -2413,224 +2413,402 @@ class CTable(Generic[RowT]):
     # Arrow interop
     # ------------------------------------------------------------------
 
-    def to_arrow(self):
-        """Convert all live rows to a :class:`pyarrow.Table`.
-
-        Each column is materialized via ``col[:]`` and wrapped
-        in a ``pyarrow.array``.  String columns are emitted as ``pa.string()``
-        (variable-length UTF-8); bytes columns as ``pa.large_binary()``.
-
-        Raises
-        ------
-        ImportError
-            If ``pyarrow`` is not installed.
-        """
+    @staticmethod
+    def _require_pyarrow(context: str):
         try:
             import pyarrow as pa
         except ImportError:
             raise ImportError(
-                "pyarrow is required for to_arrow(). Install it with: pip install pyarrow"
+                f"pyarrow is required for {context}. Install it with: pip install pyarrow"
             ) from None
+        return pa
 
+    @staticmethod
+    def _require_pyarrow_parquet(context: str):
+        try:
+            import pyarrow.parquet as pq
+        except ImportError:
+            raise ImportError(
+                f"pyarrow is required for {context}. Install it with: pip install pyarrow"
+            ) from None
+        return pq
+
+    @staticmethod
+    def _validate_arrow_batch_size(batch_size: int) -> None:
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than 0")
+
+    def _resolve_arrow_columns(self, columns, include_computed: bool = True) -> list[str]:
+        if columns is None:
+            names = list(self.col_names)
+            if not include_computed:
+                names = [name for name in names if name not in self._computed_cols]
+        else:
+            names = list(columns)
+        if len(set(names)) != len(names):
+            raise ValueError("columns must be unique")
+        for name in names:
+            if name not in self.col_names:
+                raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
+        return names
+
+    @staticmethod
+    def _pa_type_from_spec(pa, spec):
+        if isinstance(spec, ListSpec):
+            return pa.list_(CTable._pa_type_from_spec(pa, spec.item_spec))
+        dtype = getattr(spec, "dtype", None)
+        if dtype is None:
+            raise TypeError(f"No Arrow type for blosc2 spec {spec!r}")
+        kind = dtype.kind
+        if kind == "U":
+            return pa.string()
+        if kind == "S":
+            return pa.large_binary()
+        return pa.from_numpy_dtype(dtype)
+
+    def _arrow_schema_for_columns(self, columns=None, *, include_computed: bool = True):
+        pa = self._require_pyarrow("to_arrow()/to_parquet()")
+        names = self._resolve_arrow_columns(columns, include_computed=include_computed)
+        fields = []
+        for name in names:
+            cc = self._schema.columns_by_name.get(name)
+            if cc is not None:
+                pa_type = self._pa_type_from_spec(pa, cc.spec)
+            else:
+                pa_type = pa.from_numpy_dtype(np.asarray(self[name][:0]).dtype)
+            fields.append(pa.field(name, pa_type))
+        return pa.schema(fields)
+
+    def iter_arrow_batches(
+        self,
+        *,
+        columns: list[str] | None = None,
+        batch_size: int = 65_536,
+        include_computed: bool = True,
+    ):
+        """Yield live rows as bounded-size :class:`pyarrow.RecordBatch` objects."""
+        pa = self._require_pyarrow("iter_arrow_batches()")
+        self._validate_arrow_batch_size(batch_size)
         self._flush_varlen_columns()
-        arrays = {}
-        for name in self.col_names:
-            col = self[name]
-            if col.is_list:
-                arrays[name] = self._cols[name].to_arrow()
-                continue
-            arr = col[:]
-            nv = col.null_value
-            if nv is not None:
-                null_mask = col._null_mask_for(arr)
-                has_nulls = bool(null_mask.any())
-            else:
-                null_mask = None
-                has_nulls = False
-            kind = arr.dtype.kind
-            if kind == "U":
-                values = arr.tolist()
-                if has_nulls:
-                    values = [None if null_mask[i] else v for i, v in enumerate(values)]
-                pa_arr = pa.array(values, type=pa.string())
-            elif kind == "S":
-                values = arr.tolist()
-                if has_nulls:
-                    values = [None if null_mask[i] else v for i, v in enumerate(values)]
-                pa_arr = pa.array(values, type=pa.large_binary())
-            else:
-                pa_arr = pa.array(arr, mask=null_mask if has_nulls else None)
-            arrays[name] = pa_arr
+        names = self._resolve_arrow_columns(columns, include_computed=include_computed)
 
-        return pa.table(arrays)
+        for start in range(0, self._n_rows, batch_size):
+            stop = min(start + batch_size, self._n_rows)
+            arrays = []
+            for name in names:
+                col = self[name]
+                if col.is_list:
+                    arrays.append(pa.array(col[start:stop]))
+                    continue
+                arr = np.asarray(col[start:stop])
+                nv = col.null_value
+                null_mask = col._null_mask_for(arr) if nv is not None else None
+                has_nulls = null_mask is not None and bool(null_mask.any())
+                if arr.dtype.kind == "U":
+                    values = arr.tolist()
+                    if has_nulls:
+                        values = [None if null_mask[i] else v for i, v in enumerate(values)]
+                    arrays.append(pa.array(values, type=pa.string()))
+                elif arr.dtype.kind == "S":
+                    values = arr.tolist()
+                    if has_nulls:
+                        values = [None if null_mask[i] else v for i, v in enumerate(values)]
+                    arrays.append(pa.array(values, type=pa.large_binary()))
+                else:
+                    arrays.append(pa.array(arr, mask=null_mask if has_nulls else None))
+            yield pa.RecordBatch.from_arrays(arrays, names=names)
 
-    @classmethod
-    def from_arrow(cls, arrow_table) -> CTable:
-        """Build a :class:`CTable` from a :class:`pyarrow.Table`.
+    def to_arrow(self):
+        """Convert all live rows to a :class:`pyarrow.Table`."""
+        pa = self._require_pyarrow("to_arrow()")
+        batches = list(self.iter_arrow_batches())
+        schema = self._arrow_schema_for_columns()
+        return pa.Table.from_batches(batches, schema=schema)
 
-        Schema is inferred from the Arrow field types.  String columns
-        (``pa.string()``, ``pa.large_string()``) are stored with
-        ``max_length`` set to the longest value found in the data.
-
-        Parameters
-        ----------
-        arrow_table:
-            A ``pyarrow.Table`` instance.
-
-        Returns
-        -------
-        CTable
-            A new in-memory CTable containing all rows from *arrow_table*.
-
-        Raises
-        ------
-        ImportError
-            If ``pyarrow`` is not installed.
-        TypeError
-            If an Arrow field type has no corresponding blosc2 spec.
-        """
-        try:
-            import pyarrow as pa
-        except ImportError:
-            raise ImportError(
-                "pyarrow is required for from_arrow(). Install it with: pip install pyarrow"
-            ) from None
-
+    @staticmethod
+    def _arrow_type_to_spec(pa, pa_type, arrow_col=None, *, string_max_length=None):
         import blosc2.schema as b2s
 
-        def _arrow_type_to_spec(pa_type, arrow_col):
-            """Map a pyarrow DataType to a blosc2 SchemaSpec."""
-            mapping = [
-                (pa.int8(), b2s.int8),
-                (pa.int16(), b2s.int16),
-                (pa.int32(), b2s.int32),
-                (pa.int64(), b2s.int64),
-                (pa.uint8(), b2s.uint8),
-                (pa.uint16(), b2s.uint16),
-                (pa.uint32(), b2s.uint32),
-                (pa.uint64(), b2s.uint64),
-                (pa.float32(), b2s.float32),
-                (pa.float64(), b2s.float64),
-                (pa.bool_(), b2s.bool),
-            ]
-            for arrow_t, spec_cls in mapping:
-                if pa_type == arrow_t:
-                    return spec_cls()
+        mapping = [
+            (pa.int8(), b2s.int8),
+            (pa.int16(), b2s.int16),
+            (pa.int32(), b2s.int32),
+            (pa.int64(), b2s.int64),
+            (pa.uint8(), b2s.uint8),
+            (pa.uint16(), b2s.uint16),
+            (pa.uint32(), b2s.uint32),
+            (pa.uint64(), b2s.uint64),
+            (pa.float32(), b2s.float32),
+            (pa.float64(), b2s.float64),
+            (pa.bool_(), b2s.bool),
+        ]
+        for arrow_t, spec_cls in mapping:
+            if pa_type == arrow_t:
+                return spec_cls()
 
-            if pa.types.is_list(pa_type) or pa.types.is_large_list(pa_type):
-                py_values = arrow_col.to_pylist()
-                flat_values = [item for cell in py_values if cell is not None for item in cell]
-                item_arrow_col = pa.array(flat_values, type=pa_type.value_type)
-                item_spec = _arrow_type_to_spec(pa_type.value_type, item_arrow_col)
-                nullable = any(v is None for v in py_values)
-                return b2s.list(item_spec, nullable=nullable, storage="batch", serializer="msgpack")
+        if pa.types.is_list(pa_type) or pa.types.is_large_list(pa_type):
+            py_values = arrow_col.to_pylist() if arrow_col is not None else []
+            flat_values = [item for cell in py_values if cell is not None for item in cell]
+            item_arrow_col = pa.array(flat_values, type=pa_type.value_type)
+            item_spec = CTable._arrow_type_to_spec(pa, pa_type.value_type, item_arrow_col)
+            nullable = any(v is None for v in py_values)
+            return b2s.list(item_spec, nullable=nullable, storage="batch", serializer="msgpack")
 
-            # String types: determine max_length from the data
-            if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
-                values = [v for v in arrow_col.to_pylist() if v is not None]
-                max_len = max((len(v) for v in values), default=1)
-                return b2s.string(max_length=max(max_len, 1))
+        if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+            if string_max_length is None:
+                values = arrow_col.to_pylist() if arrow_col is not None else []
+                string_max_length = max((len(v) for v in values if v is not None), default=1)
+            return b2s.string(max_length=max(string_max_length, 1))
 
-            raise TypeError(
-                f"No blosc2 spec for Arrow type {pa_type!r}. "
-                "Supported: int8/16/32/64, uint8/16/32/64, float32/64, bool, string."
-            )
+        if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
+            if string_max_length is None:
+                values = arrow_col.to_pylist() if arrow_col is not None else []
+                string_max_length = max((len(v) for v in values if v is not None), default=1)
+            return b2s.bytes(max_length=max(string_max_length, 1))
 
-        # Build CompiledSchema from Arrow schema
-        columns: list[CompiledColumn] = []
-        for field in arrow_table.schema:
-            name = field.name
-            _validate_column_name(name)
-            spec = _arrow_type_to_spec(field.type, arrow_table.column(name))
-            col_config = ColumnConfig(cparams=None, dparams=None, chunks=None, blocks=None)
-            columns.append(
-                CompiledColumn(
-                    name=name,
-                    py_type=spec.python_type,
-                    spec=spec,
-                    dtype=getattr(spec, "dtype", None),
-                    default=MISSING,
-                    config=col_config,
-                    display_width=compute_display_width(spec),
-                )
-            )
-
-        schema = CompiledSchema(
-            row_cls=None,
-            columns=columns,
-            columns_by_name={col.name: col for col in columns},
+        raise TypeError(
+            f"No blosc2 spec for Arrow type {pa_type!r}. Supported: int8/16/32/64, "
+            "uint8/16/32/64, float32/64, bool, string, binary, and list."
         )
 
-        n = len(arrow_table)
-        capacity = max(n, 1)
-        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
-        mem_storage = InMemoryTableStorage()
+    @classmethod
+    def _compiled_columns_from_arrow(cls, pa, schema, table_for_inference, string_max_length):
+        columns: list[CompiledColumn] = []
+        for field in schema:
+            name = field.name
+            _validate_column_name(name)
+            arrow_col = table_for_inference.column(name)
+            field_is_list = pa.types.is_list(field.type) or pa.types.is_large_list(field.type)
+            if arrow_col.null_count and not field_is_list:
+                raise TypeError(
+                    f"Column {name!r} contains Parquet nulls. Provide a CTable schema with a "
+                    "null_value sentinel for this column."
+                )
+            spec = cls._arrow_type_to_spec(pa, field.type, arrow_col, string_max_length=string_max_length)
+            columns.append(cls._compiled_column_from_spec(name, spec))
+        return columns
 
-        new_valid = mem_storage.create_valid_rows(
-            shape=(capacity,),
-            chunks=default_chunks,
-            blocks=default_blocks,
+    @staticmethod
+    def _compiled_column_from_spec(name: str, spec: SchemaSpec) -> CompiledColumn:
+        col_config = ColumnConfig(cparams=None, dparams=None, chunks=None, blocks=None)
+        return CompiledColumn(
+            name=name,
+            py_type=spec.python_type,
+            spec=spec,
+            dtype=getattr(spec, "dtype", None),
+            default=MISSING,
+            config=col_config,
+            display_width=compute_display_width(spec),
+        )
+
+    @staticmethod
+    def _storage_for_arrow_import(urlpath: str | None, mode: str) -> TableStorage:
+        if urlpath is None:
+            return InMemoryTableStorage()
+        if mode == "w" and os.path.exists(urlpath):
+            if os.path.isdir(urlpath):
+                shutil.rmtree(urlpath)
+            else:
+                os.remove(urlpath)
+        return FileTableStorage(urlpath, mode)
+
+    @classmethod
+    def _create_arrow_import_columns(
+        cls, storage: TableStorage, columns: list[CompiledColumn], capacity: int, cparams, dparams
+    ):
+        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        new_valid = storage.create_valid_rows(
+            shape=(capacity,), chunks=default_chunks, blocks=default_blocks
         )
         new_cols: dict[str, blosc2.NDArray | ListArray] = {}
         for col in columns:
             if cls._is_list_column(col):
-                new_cols[col.name] = mem_storage.create_list_column(
-                    col.name, spec=col.spec, cparams=None, dparams=None
+                new_cols[col.name] = storage.create_list_column(
+                    col.name, spec=col.spec, cparams=cparams, dparams=dparams
                 )
             else:
-                new_cols[col.name] = mem_storage.create_column(
+                chunks, blocks = default_chunks, default_blocks
+                if col.dtype is not None:
+                    chunks, blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
+                new_cols[col.name] = storage.create_column(
                     col.name,
                     dtype=col.dtype,
                     shape=(capacity,),
-                    chunks=default_chunks,
-                    blocks=default_blocks,
-                    cparams=None,
-                    dparams=None,
+                    chunks=chunks,
+                    blocks=blocks,
+                    cparams=cparams,
+                    dparams=dparams,
                 )
+        return new_cols, new_valid
 
+    @classmethod
+    def _new_arrow_import_ctable(
+        cls, compiled, storage, new_cols, new_valid, columns, *, cparams, dparams, validate
+    ):
         obj = cls.__new__(cls)
         obj._row_type = None
-        obj._validate = False
-        obj._table_cparams = None
-        obj._table_dparams = None
-        obj._storage = mem_storage
-        obj._read_only = False
-        obj._schema = schema
+        obj._validate = validate
+        obj._table_cparams = cparams
+        obj._table_dparams = dparams
+        obj._storage = storage
+        obj._read_only = storage.is_read_only()
+        obj._schema = compiled
         obj._cols = new_cols
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in columns}
         obj.col_names = [col.name for col in columns]
         obj.row = _RowIndexer(obj)
         obj.auto_compact = False
         obj.base = None
-        obj._computed_cols = {}  # from_arrow creates no computed columns
+        obj._computed_cols = {}
         obj._materialized_cols = {}
         obj._expr_index_arrays = {}
         obj._valid_rows = new_valid
         obj._n_rows = 0
         obj._last_pos = 0
-
-        if n > 0:
-            # Write each column directly — one bulk slice assignment per column.
-            # String columns (dtype.kind == 'U') can't go through Arrow's zero-copy
-            # path, so we convert via to_pylist() and let NumPy handle the
-            # fixed-width unicode coercion.  All other types use zero-copy numpy.
-            for col in columns:
-                arrow_col = arrow_table.column(col.name)
-                if cls._is_list_column(col):
-                    new_cols[col.name].extend(arrow_col.to_pylist())
-                    new_cols[col.name].flush()
-                elif col.dtype.kind in "US":
-                    arr = np.array(arrow_col.to_pylist(), dtype=col.dtype)
-                    new_cols[col.name][:n] = arr
-                else:
-                    arr = arrow_col.to_numpy(zero_copy_only=False).astype(col.dtype)
-                    new_cols[col.name][:n] = arr
-
-            new_valid[:n] = True
-            obj._n_rows = n
-            obj._last_pos = n
-
         return obj
+
+    @classmethod
+    def _write_arrow_batches(cls, obj, batches, columns, new_cols, new_valid) -> None:
+        pos = 0
+        for batch in batches:
+            pos = cls._write_arrow_batch(batch, columns, new_cols, new_valid, pos)
+        for col in columns:
+            if cls._is_list_column(col):
+                new_cols[col.name].flush()
+        obj._n_rows = pos
+        obj._last_pos = pos
+
+    @classmethod
+    def _write_arrow_batch(cls, batch, columns, new_cols, new_valid, pos: int) -> int:
+        m = len(batch)
+        if m == 0:
+            return pos
+        for col in columns:
+            arrow_col = batch.column(batch.schema.get_field_index(col.name))
+            if cls._is_list_column(col):
+                new_cols[col.name].extend(arrow_col.to_pylist())
+            else:
+                new_cols[col.name][pos : pos + m] = cls._arrow_column_to_numpy(arrow_col, col)
+        new_valid[pos : pos + m] = True
+        return pos + m
+
+    @staticmethod
+    def _arrow_column_to_numpy(arrow_col, col: CompiledColumn) -> np.ndarray:
+        if col.dtype.kind in "US":
+            values = arrow_col.to_pylist()
+            max_len = col.spec.max_length
+            too_long = [v for v in values if v is not None and len(v) > max_len]
+            if too_long:
+                raise ValueError(f"Column {col.name!r} contains values longer than max_length={max_len}.")
+            return np.array(values, dtype=col.dtype)
+        return arrow_col.to_numpy(zero_copy_only=False).astype(col.dtype)
+
+    @classmethod
+    def from_arrow_batches(
+        cls,
+        schema,
+        batches,
+        *,
+        urlpath: str | None = None,
+        mode: str = "w",
+        cparams=None,
+        dparams=None,
+        validate: bool = False,
+        string_max_length: int | None = None,
+    ) -> CTable:
+        """Build a :class:`CTable` from an iterable of Arrow record batches."""
+        pa = cls._require_pyarrow("from_arrow_batches()")
+        batches = list(batches)
+        table_for_inference = pa.Table.from_batches(batches, schema=schema)
+        columns = cls._compiled_columns_from_arrow(pa, schema, table_for_inference, string_max_length)
+        compiled = CompiledSchema(
+            row_cls=None,
+            columns=columns,
+            columns_by_name={col.name: col for col in columns},
+        )
+        capacity = max(sum(len(batch) for batch in batches), 1)
+        storage = cls._storage_for_arrow_import(urlpath, mode)
+        new_cols, new_valid = cls._create_arrow_import_columns(storage, columns, capacity, cparams, dparams)
+        storage.save_schema(schema_to_dict(compiled))
+        obj = cls._new_arrow_import_ctable(
+            compiled,
+            storage,
+            new_cols,
+            new_valid,
+            columns,
+            cparams=cparams,
+            dparams=dparams,
+            validate=validate,
+        )
+        cls._write_arrow_batches(obj, batches, columns, new_cols, new_valid)
+        return obj
+
+    @classmethod
+    def from_arrow(cls, arrow_table, **kwargs) -> CTable:
+        """Build a :class:`CTable` from a :class:`pyarrow.Table`."""
+        cls._require_pyarrow("from_arrow()")
+        return cls.from_arrow_batches(arrow_table.schema, arrow_table.to_batches(), **kwargs)
+
+    def to_parquet(
+        self,
+        path,
+        *,
+        columns: list[str] | None = None,
+        batch_size: int = 65_536,
+        compression: str | None = "zstd",
+        row_group_size: int | None = None,
+        include_computed: bool = True,
+        **kwargs,
+    ) -> None:
+        """Write this table to a Parquet file batch-wise using pyarrow."""
+        pq = self._require_pyarrow_parquet("to_parquet()")
+        pa = self._require_pyarrow("to_parquet()")
+        self._validate_arrow_batch_size(batch_size)
+        schema = self._arrow_schema_for_columns(columns, include_computed=include_computed)
+        with pq.ParquetWriter(path, schema, compression=compression, **kwargs) as writer:
+            for batch in self.iter_arrow_batches(
+                columns=columns, batch_size=batch_size, include_computed=include_computed
+            ):
+                table = pa.Table.from_batches([batch], schema=batch.schema)
+                writer.write_table(table, row_group_size=row_group_size or len(batch))
+
+    @classmethod
+    def from_parquet(
+        cls,
+        path,
+        *,
+        columns: list[str] | None = None,
+        batch_size: int = 65_536,
+        urlpath: str | None = None,
+        mode: str = "w",
+        cparams=None,
+        dparams=None,
+        validate: bool = False,
+        **kwargs,
+    ) -> CTable:
+        """Read a Parquet file into a :class:`CTable` batch-wise using pyarrow."""
+        pq = cls._require_pyarrow_parquet("from_parquet()")
+        pa = cls._require_pyarrow("from_parquet()")
+        cls._validate_arrow_batch_size(batch_size)
+        string_max_length = kwargs.pop("string_max_length", None)
+        pf = pq.ParquetFile(path, **kwargs)
+        arrow_schema = pf.schema_arrow
+        if columns is not None:
+            if len(set(columns)) != len(columns):
+                raise ValueError("columns must be unique")
+            fields = [arrow_schema.field(name) for name in columns]
+            arrow_schema = pa.schema(fields)
+        batches = pf.iter_batches(batch_size=batch_size, columns=columns)
+        return cls.from_arrow_batches(
+            arrow_schema,
+            batches,
+            urlpath=urlpath,
+            mode=mode,
+            cparams=cparams,
+            dparams=dparams,
+            validate=validate,
+            string_max_length=string_max_length,
+        )
 
     # ------------------------------------------------------------------
     # CSV interop
