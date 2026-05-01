@@ -209,6 +209,28 @@ class TestParquetRoundTrip:
         assert t2["vals"][1] == [4, 5]
         assert t2["vals"][2] == []
 
+    def test_roundtrip_list_struct_column(self, tmp_path):
+        struct_type = pa.struct([pa.field("a", pa.int32()), pa.field("b", pa.string())])
+        at = pa.table(
+            {
+                "items": pa.array(
+                    [[{"a": 1, "b": "x"}], None, [{"a": 2, "b": "yy"}]],
+                    type=pa.list_(struct_type),
+                )
+            }
+        )
+        path = tmp_path / "list_struct.parquet"
+        pq.write_table(at, path)
+        t = CTable.from_parquet(path)
+        assert t["items"][0] == [{"a": 1, "b": "x"}]
+        assert t["items"][1] is None
+        out = tmp_path / "list_struct_out.parquet"
+        t.to_parquet(out)
+        rt = pq.read_table(out)
+        assert rt.schema == at.schema
+        assert rt["items"].to_pylist() == at["items"].to_pylist()
+        assert "arrow" in t._schema.metadata
+
     def test_empty_table_export_import(self, tmp_path):
         t = CTable(Row)
         path = tmp_path / "empty.parquet"

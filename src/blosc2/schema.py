@@ -324,6 +324,46 @@ class bytes(SchemaSpec):
 # ---------------------------------------------------------------------------
 
 
+class StructSpec(SchemaSpec):
+    """Logical schema descriptor for dict-like structured values."""
+
+    python_type = dict
+    dtype = None
+
+    def __init__(self, fields: dict[str, SchemaSpec]):
+        if not isinstance(fields, dict) or not fields:
+            raise TypeError("StructSpec fields must be a non-empty dict")
+        for name, spec in fields.items():
+            if not isinstance(name, str):
+                raise TypeError("StructSpec field names must be strings")
+            if not isinstance(spec, SchemaSpec):
+                raise TypeError("StructSpec field values must be SchemaSpec instances")
+        self.fields = dict(fields)
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "struct",
+            "fields": [{"name": name, **spec.to_metadata_dict()} for name, spec in self.fields.items()],
+        }
+
+    def display_label(self) -> str:
+        return "struct[" + ", ".join(self.fields) + "]"
+
+    @classmethod
+    def from_metadata_dict(cls, data: dict[str, Any]) -> StructSpec:
+        from blosc2.schema_compiler import spec_from_metadata_dict
+
+        fields = {}
+        for field in data["fields"]:
+            field = dict(field)
+            name = field.pop("name")
+            fields[name] = spec_from_metadata_dict(field)
+        return cls(fields)
+
+
 class ListSpec(SchemaSpec):
     """Logical schema descriptor for a list-valued column."""
 
@@ -398,6 +438,11 @@ class ListSpec(SchemaSpec):
             batch_rows=data.get("batch_rows"),
             items_per_block=data.get("items_per_block"),
         )
+
+
+def struct(fields: dict[str, SchemaSpec]) -> StructSpec:
+    """Build a structured schema descriptor for nested CTable values."""
+    return StructSpec(fields)
 
 
 def list(

@@ -19,7 +19,7 @@ import numpy as np
 import blosc2
 from blosc2.batch_array import BatchArray
 from blosc2.info import InfoReporter, format_nbytes_info
-from blosc2.schema import ListSpec, SchemaSpec
+from blosc2.schema import ListSpec, SchemaSpec, StructSpec
 from blosc2.schema import list as list_spec_builder
 from blosc2.vlarray import VLArray
 
@@ -48,6 +48,56 @@ def _require_pyarrow():
     return pa
 
 
+def _arrow_type_for_spec(pa, spec: SchemaSpec):
+    if isinstance(spec, StructSpec):
+        return pa.struct(
+            [pa.field(name, _arrow_type_for_spec(pa, child)) for name, child in spec.fields.items()]
+        )
+    mapping = {
+        "int8": pa.int8(),
+        "int16": pa.int16(),
+        "int32": pa.int32(),
+        "int64": pa.int64(),
+        "uint8": pa.uint8(),
+        "uint16": pa.uint16(),
+        "uint32": pa.uint32(),
+        "uint64": pa.uint64(),
+        "float32": pa.float32(),
+        "float64": pa.float64(),
+        "bool": pa.bool_(),
+        "string": pa.string(),
+        "bytes": pa.large_binary(),
+    }
+    return mapping.get(spec.to_metadata_dict()["kind"])
+
+
+def _arrow_list_item_type_to_spec(pa, value_type):
+    import blosc2.schema as b2s
+
+    mapping = {
+        pa.int8(): b2s.int8(),
+        pa.int16(): b2s.int16(),
+        pa.int32(): b2s.int32(),
+        pa.int64(): b2s.int64(),
+        pa.uint8(): b2s.uint8(),
+        pa.uint16(): b2s.uint16(),
+        pa.uint32(): b2s.uint32(),
+        pa.uint64(): b2s.uint64(),
+        pa.float32(): b2s.float32(),
+        pa.float64(): b2s.float64(),
+        pa.bool_(): b2s.bool(),
+        pa.string(): b2s.string(),
+        pa.large_string(): b2s.string(),
+        pa.binary(): b2s.bytes(),
+        pa.large_binary(): b2s.bytes(),
+    }
+    if pa.types.is_struct(value_type):
+        return b2s.struct(
+            {field.name: _arrow_list_item_type_to_spec(pa, field.type) for field in value_type}
+        )
+    return mapping.get(value_type)
+
+
 def _validate_list_spec(spec: ListSpec) -> None:
     if spec.storage not in _SUPPORTED_STORAGES:
         raise ValueError(f"Unsupported list storage: {spec.storage!r}")
@@ -65,9 +115,23 @@ def _validate_list_spec(spec: ListSpec) -> None:
         raise ValueError("items_per_block must be a positive integer")
 
 
-def _coerce_scalar_item(spec: SchemaSpec, value: Any) -> Any:
+def _coerce_struct_item(spec: StructSpec, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        value = dict(value)
+    result = {}
+    for name, child_spec in spec.fields.items():
+        if name not in value:
+            raise ValueError(f"Struct list item is missing field {name!r}")
+        result[name] = None if value[name] is None else _coerce_scalar_item(child_spec, value[name])
+    return result
+
+
+def _coerce_scalar_item(spec: SchemaSpec, value: Any) -> Any:  # noqa: C901
     if value is None:
         raise ValueError("ListArray does not support nullable items inside a list in V1")
+
+    if isinstance(spec, StructSpec):
+        return _coerce_struct_item(spec, value)
 
     if getattr(spec, "python_type", None) is str:
         if not isinstance(value, str):
@@ -527,6 +591,13 @@ class ListArray:
             "string": pa.string(),
             "bytes": pa.large_binary(),
         }
+        if isinstance(self.spec.item_spec, StructSpec):
+            return pa.struct(
+                [
+                    pa.field(name, _arrow_type_for_spec(pa, child_spec))
+                    for name, child_spec in self.spec.item_spec.fields.items()
+                ]
+            )
         return mapping.get(kind)
 
     def to_arrow(self):
@@ -574,7 +645,12 @@ class ListArray:
                 pa.binary(): b2s.bytes(),
                 pa.large_binary(): b2s.bytes(),
             }
-            item_spec = mapping.get(value_type)
+            if pa.types.is_struct(value_type):
+                item_spec = b2s.struct(
+                    {field.name: _arrow_list_item_type_to_spec(pa, field.type) for field in value_type}
+                )
+            else:
+                item_spec = mapping.get(value_type)
             if item_spec is None:
                 raise TypeError(f"Unsupported Arrow list item type {value_type!r}")
         arr = cls(

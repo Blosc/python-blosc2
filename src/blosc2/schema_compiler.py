@@ -21,6 +21,7 @@ from blosc2.schema import (
     BLOSC2_FIELD_METADATA_KEY,
     ListSpec,
     SchemaSpec,
+    StructSpec,
     complex64,
     complex128,
     float32,
@@ -154,6 +155,7 @@ class CompiledSchema:
     columns: list[CompiledColumn]
     columns_by_name: dict[str, CompiledColumn]
     validator_model: type[Any] | None = None  # filled in by schema_validation
+    metadata: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +362,8 @@ def spec_from_metadata_dict(data: dict[str, Any]) -> SchemaSpec:
     if kind == "list":
         item_spec = spec_from_metadata_dict(data.pop("item"))
         return ListSpec(item_spec, **data)
+    if kind == "struct":
+        return StructSpec.from_metadata_dict({"fields": data.pop("fields")})
     spec_cls = _KIND_TO_SPEC.get(kind)
     if spec_cls is None:
         raise ValueError(f"Unknown column kind {kind!r}")
@@ -400,11 +404,14 @@ def schema_to_dict(schema: CompiledSchema) -> dict[str, Any]:
             entry["blocks"] = list(col.config.blocks)
         cols.append(entry)
 
-    return {
+    result = {
         "version": 1,
         "row_cls": schema.row_cls.__name__ if schema.row_cls is not None else None,
         "columns": cols,
     }
+    if schema.metadata:
+        result["metadata"] = schema.metadata
+    return result
 
 
 def schema_from_dict(data: dict[str, Any]) -> CompiledSchema:
@@ -452,4 +459,5 @@ def schema_from_dict(data: dict[str, Any]) -> CompiledSchema:
         row_cls=None,
         columns=columns,
         columns_by_name={col.name: col for col in columns},
+        metadata=dict(data.get("metadata", {})),
     )

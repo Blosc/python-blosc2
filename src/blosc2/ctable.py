@@ -34,6 +34,7 @@ from blosc2.list_array import ListArray, coerce_list_cell
 from blosc2.schema import (
     ListSpec,
     SchemaSpec,
+    StructSpec,
     complex64,
     complex128,
     float32,
@@ -2456,6 +2457,10 @@ class CTable(Generic[RowT]):
     def _pa_type_from_spec(pa, spec):
         if isinstance(spec, ListSpec):
             return pa.list_(CTable._pa_type_from_spec(pa, spec.item_spec))
+        if isinstance(spec, StructSpec):
+            return pa.struct(
+                [pa.field(name, CTable._pa_type_from_spec(pa, child)) for name, child in spec.fields.items()]
+            )
         dtype = getattr(spec, "dtype", None)
         if dtype is None:
             raise TypeError(f"No Arrow type for blosc2 spec {spec!r}")
@@ -2498,7 +2503,8 @@ class CTable(Generic[RowT]):
             for name in names:
                 col = self[name]
                 if col.is_list:
-                    arrays.append(pa.array(col[start:stop]))
+                    spec = self._schema.columns_by_name[name].spec
+                    arrays.append(pa.array(col[start:stop], type=self._pa_type_from_spec(pa, spec)))
                     continue
                 arr = np.asarray(col[start:stop])
                 nv = col.null_value
@@ -2553,6 +2559,17 @@ class CTable(Generic[RowT]):
             item_spec = CTable._arrow_type_to_spec(pa, pa_type.value_type, item_arrow_col)
             nullable = any(v is None for v in py_values)
             return b2s.list(item_spec, nullable=nullable, storage="batch", serializer="msgpack")
+
+        if pa.types.is_struct(pa_type):
+            fields = {}
+            for field in pa_type:
+                child_col = None
+                if arrow_col is not None:
+                    child_col = arrow_col.field(field.name)
+                fields[field.name] = CTable._arrow_type_to_spec(
+                    pa, field.type, child_col, string_max_length=string_max_length
+                )
+            return b2s.struct(fields)
 
         if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
             if string_max_length is None:
@@ -2703,6 +2720,20 @@ class CTable(Generic[RowT]):
             return np.array(values, dtype=col.dtype)
         return arrow_col.to_numpy(zero_copy_only=False).astype(col.dtype)
 
+    @staticmethod
+    def _arrow_schema_metadata(schema) -> dict[str, Any]:
+        import base64
+
+        try:
+            schema_ipc = schema.serialize().to_pybytes()
+            schema_ipc_base64 = base64.b64encode(schema_ipc).decode("ascii")
+        except Exception:
+            schema_ipc_base64 = None
+        arrow_meta = {"schema_string": schema.to_string()}
+        if schema_ipc_base64 is not None:
+            arrow_meta["schema_ipc_base64"] = schema_ipc_base64
+        return {"arrow": arrow_meta}
+
     @classmethod
     def from_arrow_batches(
         cls,
@@ -2725,6 +2756,7 @@ class CTable(Generic[RowT]):
             row_cls=None,
             columns=columns,
             columns_by_name={col.name: col for col in columns},
+            metadata=cls._arrow_schema_metadata(schema),
         )
         capacity = max(sum(len(batch) for batch in batches), 1)
         storage = cls._storage_for_arrow_import(urlpath, mode)
