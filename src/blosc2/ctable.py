@@ -2583,7 +2583,7 @@ class CTable(Generic[RowT]):
         return None
 
     @staticmethod
-    def _arrow_type_to_spec(
+    def _arrow_type_to_spec(  # noqa: C901
         pa,
         pa_type,
         arrow_col=None,
@@ -2615,11 +2615,20 @@ class CTable(Generic[RowT]):
                 return spec_cls()
 
         if pa.types.is_list(pa_type) or pa.types.is_large_list(pa_type):
-            py_values = arrow_col.to_pylist() if arrow_col is not None else []
-            flat_values = [item for cell in py_values if cell is not None for item in cell]
-            item_arrow_col = pa.array(flat_values, type=pa_type.value_type)
-            item_spec = CTable._arrow_type_to_spec(pa, pa_type.value_type, item_arrow_col)
-            nullable = any(v is None for v in py_values)
+            if arrow_col is not None:
+                py_values = arrow_col.to_pylist()
+                flat_values = [item for cell in py_values if cell is not None for item in cell]
+                item_arrow_col = pa.array(flat_values, type=pa_type.value_type)
+                nullable = any(v is None for v in py_values)
+            else:
+                item_arrow_col = None
+                nullable = True
+            item_string_max_length = string_max_length
+            if pa_type.value_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+                item_string_max_length = max(string_max_length or 1, 1_000_000)
+            item_spec = CTable._arrow_type_to_spec(
+                pa, pa_type.value_type, item_arrow_col, string_max_length=item_string_max_length
+            )
             return b2s.list(item_spec, nullable=nullable, storage="batch", serializer="msgpack")
 
         if pa.types.is_struct(pa_type):
@@ -2628,8 +2637,11 @@ class CTable(Generic[RowT]):
                 child_col = None
                 if arrow_col is not None:
                     child_col = arrow_col.field(field.name)
+                child_string_max_length = string_max_length
+                if field.type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+                    child_string_max_length = max(string_max_length or 1, 1_000_000)
                 fields[field.name] = CTable._arrow_type_to_spec(
-                    pa, field.type, child_col, string_max_length=string_max_length
+                    pa, field.type, child_col, string_max_length=child_string_max_length
                 )
             return b2s.struct(fields)
 
@@ -2668,7 +2680,7 @@ class CTable(Generic[RowT]):
         for field in schema:
             name = field.name
             _validate_column_name(name)
-            arrow_col = table_for_inference.column(name)
+            arrow_col = table_for_inference.column(name) if table_for_inference is not None else None
             field_is_list = pa.types.is_list(field.type) or pa.types.is_large_list(field.type)
             field_is_struct = pa.types.is_struct(field.type)
             null_value = None
@@ -2679,7 +2691,12 @@ class CTable(Generic[RowT]):
                     string_null_value=string_null_value,
                     bytes_null_value=bytes_null_value,
                 )
-            if arrow_col.null_count and not (field_is_list or field_is_struct) and null_value is None:
+            if (
+                arrow_col is not None
+                and arrow_col.null_count
+                and not (field_is_list or field_is_struct)
+                and null_value is None
+            ):
                 raise TypeError(
                     f"Column {name!r} contains Parquet nulls. Provide a CTable schema with a "
                     "null_value sentinel for this column."
@@ -2773,6 +2790,10 @@ class CTable(Generic[RowT]):
     def _write_arrow_batches(cls, obj, batches, columns, new_cols, new_valid) -> None:
         pos = 0
         for batch in batches:
+            end = pos + len(batch)
+            while end > len(new_valid):
+                obj._grow()
+                new_valid = obj._valid_rows
             pos = cls._write_arrow_batch(batch, columns, new_cols, new_valid, pos)
         for col in columns:
             if cls._is_list_column(col):
@@ -2842,6 +2863,7 @@ class CTable(Generic[RowT]):
         cparams=None,
         dparams=None,
         validate: bool = False,
+        capacity_hint: int | None = None,
         string_max_length: int | None = None,
         auto_null_sentinels: bool = True,
         string_null_value: str = "__BLOSC2_NULL__",
@@ -2849,8 +2871,13 @@ class CTable(Generic[RowT]):
     ) -> CTable:
         """Build a :class:`CTable` from an iterable of Arrow record batches."""
         pa = cls._require_pyarrow("from_arrow_batches()")
-        batches = list(batches)
-        table_for_inference = pa.Table.from_batches(batches, schema=schema)
+        batches = iter(batches)
+        first_batch = None
+        table_for_inference = None
+        if string_max_length is None:
+            first_batch = next(batches, None)
+            if first_batch is not None:
+                table_for_inference = pa.Table.from_batches([first_batch], schema=schema)
         columns = cls._compiled_columns_from_arrow(
             pa,
             schema,
@@ -2866,7 +2893,11 @@ class CTable(Generic[RowT]):
             columns_by_name={col.name: col for col in columns},
             metadata=cls._arrow_schema_metadata(schema),
         )
-        capacity = max(sum(len(batch) for batch in batches), 1)
+        if first_batch is not None:
+            import itertools as _it
+
+            batches = _it.chain([first_batch], batches)
+        capacity = max(capacity_hint or 1, 1)
         storage = cls._storage_for_arrow_import(urlpath, mode)
         new_cols, new_valid = cls._create_arrow_import_columns(storage, columns, capacity, cparams, dparams)
         storage.save_schema(schema_to_dict(compiled))
@@ -2950,6 +2981,7 @@ class CTable(Generic[RowT]):
             cparams=cparams,
             dparams=dparams,
             validate=validate,
+            capacity_hint=pf.metadata.num_rows if pf.metadata is not None else None,
             string_max_length=string_max_length,
             auto_null_sentinels=auto_null_sentinels,
             string_null_value=string_null_value,
