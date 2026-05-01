@@ -3077,6 +3077,8 @@ class LazyExpr(LazyArray):
             self.operands = {}
             return
         value1, op, value2 = new_op
+        value1 = value1._raw_col if hasattr(value1, "_raw_col") else value1
+        value2 = value2._raw_col if hasattr(value2, "_raw_col") else value2
         dtype_ = check_dtype(op, value1, value2)  # perform some checks
         # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
         value1 = (
@@ -3170,6 +3172,8 @@ class LazyExpr(LazyArray):
         # One of the two operands are LazyExpr instances
         try:
             value1, op, value2 = new_op
+            value1 = value1._raw_col if hasattr(value1, "_raw_col") else value1
+            value2 = value2._raw_col if hasattr(value2, "_raw_col") else value2
             dtype_ = check_dtype(op, value1, value2)  # conserve dtype
             # The new expression and operands
             expression = None

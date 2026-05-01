@@ -26,25 +26,11 @@ from typing import Any, Generic, TypeVar
 
 import numpy as np
 
+import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.ctable_storage import FileTableStorage, InMemoryTableStorage, TableStorage
-from blosc2.list_array import ListArray, coerce_list_cell
-from blosc2.schema_compiler import schema_from_dict, schema_to_dict
-
-try:
-    from line_profiler import profile
-except ImportError:
-
-    def profile(func):
-        def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        wrapper.__name__ = func.__name__
-        return wrapper
-
-
-import blosc2
 from blosc2.info import InfoReporter, format_nbytes_info
+from blosc2.list_array import ListArray, coerce_list_cell
 from blosc2.schema import (
     ListSpec,
     SchemaSpec,
@@ -75,6 +61,8 @@ from blosc2.schema_compiler import (
     _validate_column_name,
     compile_schema,
     compute_display_width,
+    schema_from_dict,
+    schema_to_dict,
 )
 
 # ---------------------------------------------------------------------------
@@ -821,23 +809,78 @@ class Column:
     def __len__(self):
         return blosc2.count_nonzero(self._valid_rows)
 
+    @staticmethod
+    def _unwrap_operand(other):
+        return other._raw_col if isinstance(other, Column) else other
+
+    def __neg__(self):
+        return -self._raw_col
+
+    def __pos__(self):
+        return +self._raw_col
+
+    def __abs__(self):
+        return abs(self._raw_col)
+
+    def __add__(self, other):
+        return self._raw_col + self._unwrap_operand(other)
+
+    def __radd__(self, other):
+        return self._unwrap_operand(other) + self._raw_col
+
+    def __sub__(self, other):
+        return self._raw_col - self._unwrap_operand(other)
+
+    def __rsub__(self, other):
+        return self._unwrap_operand(other) - self._raw_col
+
+    def __mul__(self, other):
+        return self._raw_col * self._unwrap_operand(other)
+
+    def __rmul__(self, other):
+        return self._unwrap_operand(other) * self._raw_col
+
+    def __truediv__(self, other):
+        return self._raw_col / self._unwrap_operand(other)
+
+    def __rtruediv__(self, other):
+        return self._unwrap_operand(other) / self._raw_col
+
+    def __floordiv__(self, other):
+        return self._raw_col // self._unwrap_operand(other)
+
+    def __rfloordiv__(self, other):
+        return self._unwrap_operand(other) // self._raw_col
+
+    def __mod__(self, other):
+        return self._raw_col % self._unwrap_operand(other)
+
+    def __rmod__(self, other):
+        return self._unwrap_operand(other) % self._raw_col
+
+    def __pow__(self, other):
+        return self._raw_col ** self._unwrap_operand(other)
+
+    def __rpow__(self, other):
+        return self._unwrap_operand(other) ** self._raw_col
+
     def __lt__(self, other):
-        return self._raw_col < other
+        return self._raw_col < self._unwrap_operand(other)
 
     def __le__(self, other):
-        return self._raw_col <= other
+        return self._raw_col <= self._unwrap_operand(other)
 
     def __eq__(self, other):
-        return self._raw_col == other
+        return self._raw_col == self._unwrap_operand(other)
 
     def __ne__(self, other):
-        return self._raw_col != other
+        return self._raw_col != self._unwrap_operand(other)
 
     def __gt__(self, other):
-        return self._raw_col > other
+        return self._raw_col > self._unwrap_operand(other)
 
     def __ge__(self, other):
-        return self._raw_col >= other
+        return self._raw_col >= self._unwrap_operand(other)
 
     @property
     def dtype(self):
@@ -4866,8 +4909,73 @@ class CTable(Generic[RowT]):
     # Filtering
     # ------------------------------------------------------------------
 
-    @profile
-    def where(self, expr_result) -> CTable:
+    def _where_expression_operands(self) -> dict[str, blosc2.NDArray | blosc2.LazyExpr]:
+        operands = dict(self._cols)
+        operands.update({name: cc["lazy"] for name, cc in self._computed_cols.items()})
+        return operands
+
+    def where(
+        self,
+        expr_result: str | np.ndarray | blosc2.NDArray | blosc2.LazyExpr | Column,
+    ) -> CTable:
+        """Return a row-filtered view matching a boolean predicate.
+
+        Signature::
+
+            where(expr_result) -> CTable
+
+        The predicate can be supplied as a boolean :class:`blosc2.LazyExpr`,
+        a boolean :class:`blosc2.NDArray`, a boolean NumPy array, a boolean
+        ``Column``, or a string expression evaluated against this table's
+        columns.  String expressions can reference stored and computed columns
+        directly by name.
+
+        The returned object is a :class:`CTable` view sharing the original
+        column data.  The row-selection mask is evaluated immediately and
+        intersected with the table's current live rows; selected column data is
+        not copied.
+
+        Parameters
+        ----------
+        expr_result:
+            Boolean predicate selecting rows.  Strings are converted to a
+            lazy expression with table columns as operands, e.g.
+            ``"value * category >= 150"``.  Column objects can also be used in
+            Python expressions, e.g. ``(t.value * t.category) >= 150``.
+
+        Returns
+        -------
+        CTable
+            A view over the same columns containing only rows where the
+            predicate is true and the source row is live.
+
+        Raises
+        ------
+        TypeError
+            If *expr_result* does not evaluate to a boolean Blosc2/NumPy
+            array or lazy expression.
+
+        Examples
+        --------
+        Filter using a string expression::
+
+            view = t.where("value * category >= 150")
+
+        Filter using column arithmetic::
+
+            view = t.where((t.value * t.category) >= 150)
+
+        Blosc2 lazy functions can be used in column expressions::
+
+            view = t.where(((t.value + 2) * blosc2.sin(t.category)) >= 10)
+
+        For column names that are not valid Python identifiers, use item
+        access::
+
+            view = t.where((t["unit price"] * t["quantity"]) > 100)
+        """
+        if isinstance(expr_result, str):
+            expr_result = blosc2.lazyexpr(expr_result, self._where_expression_operands())
         if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:
             expr_result = blosc2.asarray(expr_result)
         if isinstance(expr_result, Column):
