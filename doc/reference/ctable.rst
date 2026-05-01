@@ -88,6 +88,27 @@ Inserting data
 Querying
 --------
 
+Boolean expressions
+~~~~~~~~~~~~~~~~~~~
+
+Use bitwise operators (``&``, ``|``, ``~``) or string expressions for
+row-wise boolean logic.  Python's logical operators ``and``, ``or`` and
+``not`` cannot be overloaded and therefore do not build lazy column
+expressions.
+
+Use column expressions with explicit parentheses around comparisons::
+
+    t.where((t.amount > 100) & (t.region == "North"))
+    t.where(~t.returned)
+
+or use string expressions when that reads better::
+
+    t.where("amount > 100 and region == 'North'")
+    t.where("not returned")
+
+The last two forms for negating a boolean column are equivalent: ``t.where(~t.returned)``
+and ``t.where("not returned")``.
+
 .. autosummary::
 
     CTable.where

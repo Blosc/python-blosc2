@@ -71,15 +71,15 @@ print(f"Full dataset: {len(t):,} rows ({N_STATIONS} stations × {N_DAYS} days)")
 t.info()
 
 # -- Filter to station 3 ----------------------------------------------------
-station3 = t.where(t["station_id"] == 3)
+station3 = t.where(t.station_id == 3)
 print(f"Station 3: {len(station3)} readings")
-print(f"  mean temperature : {station3['temperature'].mean():.1f} °C")
-print(f"  mean humidity    : {station3['humidity'].mean():.1f} %")
-print(f"  mean wind speed  : {station3['wind_speed'].mean():.1f} km/h\n")
+print(f"  mean temperature : {station3.temperature.mean():.1f} °C")
+print(f"  mean humidity    : {station3.humidity.mean():.1f} %")
+print(f"  mean wind speed  : {station3.wind_speed.mean():.1f} km/h\n")
 
 # -- 5 hottest days at station 3 (sort full table, then filter) ------------
 sorted_by_temp = t.sort_by("temperature", ascending=False)
-hottest_s3 = sorted_by_temp.where(sorted_by_temp["station_id"] == 3)
+hottest_s3 = sorted_by_temp.where(sorted_by_temp.station_id == 3)
 print("5 hottest days at station 3:")
 print(hottest_s3.head(5))
 

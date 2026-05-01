@@ -54,7 +54,7 @@ print("-" * 70)
 
 for threshold in thresholds:
     t0 = time()
-    result = ct.where(ct["id"] < threshold)
+    result = ct.where(ct.id < threshold)
     t_where = time() - t0
     selectivity = threshold / N * 100
     print(f"id < {threshold:<10,} {len(result):>15,} {selectivity:>12.1f}% {t_where:>12.6f}")

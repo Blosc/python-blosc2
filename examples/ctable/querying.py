@@ -36,16 +36,16 @@ data = [
 t = blosc2.CTable(Sale, new_data=data)
 
 # -- where(): row filter ----------------------------------------------------
-high_value = t.where(t["amount"] > 200)
+high_value = t.where(t.amount > 200)
 print(f"Sales > $200: {len(high_value)} rows")
 print(high_value)
 
-not_returned = t.where(not t["returned"])
+not_returned = t.where("not returned")
 print(f"Not returned: {len(not_returned)} rows")
 
 # -- chained filters (views are composable) ---------------------------------
-north = t.where(t["region"] == "North")
-north_big = north.where(north["amount"] > 100)
+north = t.where(t.region == "North")
+north_big = north.where(north.amount > 100)
 print(f"North region + amount > 100: {len(north_big)} rows")
 print(north_big)
 
@@ -55,6 +55,6 @@ print("id + amount only:")
 print(slim)
 
 # -- combined: select columns, then filter rows -----------------------------
-result = t.select(["region", "amount"]).where(not t["returned"])
+result = t.where("not returned").select(["region", "amount"])
 print("Region + amount for non-returned sales:")
 print(result)

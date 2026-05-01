@@ -59,7 +59,7 @@ print(f"Loaded into CTable: {len(t)} rows")
 print(t.head())
 
 # -- apply a filter before exporting ----------------------------------------
-cold_days = t.where(t["temperature"] < 0)
+cold_days = t.where(t.temperature < 0)
 print(f"\nCold days (temp < 0°C): {len(cold_days)} rows")
 print(cold_days.head())
 

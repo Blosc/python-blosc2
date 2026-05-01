@@ -54,7 +54,7 @@ try:
     print("active stale?", idx_active.stale)
 
     # Queries can combine indexed and non-indexed predicates.
-    recent_active = pt.where((pt["sensor_id"] >= 180) & pt["active"] & (pt["region"] == "north"))
+    recent_active = pt.where((pt.sensor_id >= 180) & pt.active & (pt.region == "north"))
     print("\nLive rows with sensor_id >= 180, active=True, region='north':", len(recent_active))
     print("sensor_ids:", recent_active["sensor_id"])
     print("statuses:", recent_active["status"][:])
@@ -79,7 +79,7 @@ try:
     print("Indexes after reopen from .b2z:", packed.indexes)
 
     # Query directly against the .b2z bundle; no unpack step is needed.
-    warm_active = packed.where(packed["active"] & (packed["status"] == "warm") & (packed["sensor_id"] > 100))
+    warm_active = packed.where(packed.active & (packed.status == "warm") & (packed.sensor_id > 100))
     print("\nRows from .b2z with active=True, status='warm', sensor_id > 100:", len(warm_active))
     print("sensor_ids:", warm_active["sensor_id"])
     print("regions:", warm_active["region"][:])

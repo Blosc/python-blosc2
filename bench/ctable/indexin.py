@@ -62,7 +62,7 @@ def bench_gt(table, threshold, reps=REPS):
     times = []
     for _ in range(reps):
         t0 = perf_counter()
-        result = table.where(table["sensor_id"] > threshold)
+        result = table.where(table.sensor_id > threshold)
         times.append(perf_counter() - t0)
     return float(np.median(times)), len(result)
 
@@ -70,7 +70,7 @@ def bench_eq(table, value, reps=REPS):
     times = []
     for _ in range(reps):
         t0 = perf_counter()
-        result = table.where(table["sensor_id"] == value)
+        result = table.where(table.sensor_id == value)
         times.append(perf_counter() - t0)
     return float(np.median(times)), len(result)
 
@@ -79,7 +79,7 @@ def bench_compound(table, threshold, region, reps=REPS):
     for _ in range(reps):
         t0 = perf_counter()
         result = table.where(
-            (table["sensor_id"] > threshold) & (table["region"] == region)
+            (table.sensor_id > threshold) & (table.region == region)
         )
         times.append(perf_counter() - t0)
     return float(np.median(times)), len(result)

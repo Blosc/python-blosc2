@@ -809,6 +809,21 @@ class Column:
     def __len__(self):
         return blosc2.count_nonzero(self._valid_rows)
 
+    @property
+    def shape(self) -> tuple[int]:
+        """Logical shape of the live column values."""
+        return (len(self),)
+
+    @property
+    def ndim(self) -> int:
+        """Number of logical dimensions."""
+        return 1
+
+    @property
+    def size(self) -> int:
+        """Number of live values in the column."""
+        return len(self)
+
     @staticmethod
     def _unwrap_operand(other):
         return other._raw_col if isinstance(other, Column) else other
@@ -863,6 +878,27 @@ class Column:
 
     def __rpow__(self, other):
         return self._unwrap_operand(other) ** self._raw_col
+
+    def __and__(self, other):
+        return self._raw_col & self._unwrap_operand(other)
+
+    def __rand__(self, other):
+        return self._unwrap_operand(other) & self._raw_col
+
+    def __or__(self, other):
+        return self._raw_col | self._unwrap_operand(other)
+
+    def __ror__(self, other):
+        return self._unwrap_operand(other) | self._raw_col
+
+    def __xor__(self, other):
+        return self._raw_col ^ self._unwrap_operand(other)
+
+    def __rxor__(self, other):
+        return self._unwrap_operand(other) ^ self._raw_col
+
+    def __invert__(self):
+        return ~self._raw_col
 
     def __lt__(self, other):
         return self._raw_col < self._unwrap_operand(other)
@@ -1163,28 +1199,41 @@ class Column:
     # Aggregates
     # ------------------------------------------------------------------
 
-    def sum(self):
+    def sum(self, dtype=None):
         """Sum of all live, non-null values.
 
         Supported dtypes: bool, int, uint, float, complex.
         Bool values are counted as 0 / 1.
         Null sentinel values are skipped.
+
+        Parameters
+        ----------
+        dtype:
+            Optional accumulator dtype.  When omitted, float columns use
+            ``np.float64``, complex columns use ``np.complex128``, and integer
+            / bool columns use ``np.int64``.
         """
         self._require_kind("biufc", "sum")
         self._require_nonempty("sum")
         # Use a wide accumulator to reduce overflow risk
-        acc_dtype = (
-            np.float64
-            if self.dtype.kind == "f"
-            else (
-                np.complex128 if self.dtype.kind == "c" else np.int64 if self.dtype.kind in "biu" else None
+        acc_dtype = np.dtype(dtype).type if dtype is not None else None
+        if acc_dtype is None:
+            acc_dtype = (
+                np.float64
+                if self.dtype.kind == "f"
+                else (
+                    np.complex128
+                    if self.dtype.kind == "c"
+                    else np.int64
+                    if self.dtype.kind in "biu"
+                    else None
+                )
             )
-        )
         result = acc_dtype(0)
         for chunk in self._nonnull_chunks():
             result += chunk.sum(dtype=acc_dtype)
-        # Return in the column's natural dtype when it fits, else keep wide
-        if self.dtype.kind in "biu":
+        # Return in the column's natural dtype when it fits, else keep the requested/wide dtype
+        if dtype is None and self.dtype.kind in "biu":
             return int(result)
         return result
 
@@ -4973,6 +5022,24 @@ class CTable(Generic[RowT]):
         access::
 
             view = t.where((t["unit price"] * t["quantity"]) > 100)
+
+        Notes
+        -----
+        Use bitwise operators (``&``, ``|``, ``~``) or string expressions for
+        element-wise boolean logic.  Python's logical operators ``and``, ``or``
+        and ``not`` cannot be overloaded and therefore do not build lazy column
+        expressions.
+
+        Use::
+
+            t.where((t.x > 0) & (t.y < 10))
+            t.where(~t.returned)
+            t.where("not returned")
+
+        not::
+
+            t.where((t.x > 0) and (t.y < 10))
+            t.where(not t.returned)
         """
         if isinstance(expr_result, str):
             expr_result = blosc2.lazyexpr(expr_result, self._where_expression_operands())

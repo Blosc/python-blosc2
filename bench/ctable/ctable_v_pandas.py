@@ -86,7 +86,7 @@ print(f"{'Column access to numpy (full)':<30} {t_ct_col:>12.4f} {t_pd_col:>12.4f
 
 # 3. Filtering
 t0 = time()
-result_ct = ct.where((ct["id"] > 250_000) & (ct["id"] < 750_000))
+result_ct = ct.where((ct.id > 250_000) & (ct.id < 750_000))
 t_ct_filter = time() - t0
 
 t0 = time()

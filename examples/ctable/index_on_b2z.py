@@ -66,11 +66,11 @@ print(f"  saved → {B2Z}  ({os.path.getsize(B2Z) / 1e6:.1f} MB)")
 # ---------------------------------------------------------------------------
 
 QUERIES = [
-    ("value > 100.0", lambda ct: ct.where(ct["value"] > 100.0)),
-    ("value > 120.0", lambda ct: ct.where(ct["value"] > 120.0)),
-    ("value between 0 and 10", lambda ct: ct.where((ct["value"] >= 0.0) & (ct["value"] <= 10.0))),
-    ("timestamp > 450_000", lambda ct: ct.where(ct["timestamp"] > 4_500_000)),
-    ("timestamp > 4_999_000", lambda ct: ct.where(ct["timestamp"] > 4_999_000)),
+    ("value > 100.0", lambda ct: ct.where(ct.value > 100.0)),
+    ("value > 120.0", lambda ct: ct.where(ct.value > 120.0)),
+    ("value between 0 and 10", lambda ct: ct.where((ct.value >= 0.0) & (ct.value <= 10.0))),
+    ("timestamp > 450_000", lambda ct: ct.where(ct.timestamp > 4_500_000)),
+    ("timestamp > 4_999_000", lambda ct: ct.where(ct.timestamp > 4_999_000)),
 ]
 
 
