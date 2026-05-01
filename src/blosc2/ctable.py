@@ -829,6 +829,15 @@ class Column:
     def _unwrap_operand(other):
         return other._raw_col if isinstance(other, Column) else other
 
+    @property
+    def _is_nullable_bool(self) -> bool:
+        col = self._table._schema.columns_by_name.get(self._col_name)
+        return (
+            col is not None
+            and col.spec.to_metadata_dict().get("kind") == "bool"
+            and getattr(col.spec, "null_value", None) is not None
+        )
+
     def __neg__(self):
         return -self._raw_col
 
@@ -899,6 +908,8 @@ class Column:
         return self._unwrap_operand(other) ^ self._raw_col
 
     def __invert__(self):
+        if self._is_nullable_bool:
+            return self._raw_col == 0
         return ~self._raw_col
 
     def __lt__(self, other):
@@ -908,9 +919,13 @@ class Column:
         return self._raw_col <= self._unwrap_operand(other)
 
     def __eq__(self, other):
+        if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
+            return self._raw_col == int(other)
         return self._raw_col == self._unwrap_operand(other)
 
     def __ne__(self, other):
+        if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
+            return self._raw_col == int(not other)
         return self._raw_col != self._unwrap_operand(other)
 
     def __gt__(self, other):
@@ -2461,6 +2476,8 @@ class CTable(Generic[RowT]):
             return pa.struct(
                 [pa.field(name, CTable._pa_type_from_spec(pa, child)) for name, child in spec.fields.items()]
             )
+        if spec.to_metadata_dict().get("kind") == "bool":
+            return pa.bool_()
         dtype = getattr(spec, "dtype", None)
         if dtype is None:
             raise TypeError(f"No Arrow type for blosc2 spec {spec!r}")
@@ -2520,6 +2537,11 @@ class CTable(Generic[RowT]):
                     if has_nulls:
                         values = [None if null_mask[i] else v for i, v in enumerate(values)]
                     arrays.append(pa.array(values, type=pa.large_binary()))
+                elif (
+                    self._schema.columns_by_name.get(name) is not None
+                    and self._schema.columns_by_name[name].spec.to_metadata_dict().get("kind") == "bool"
+                ):
+                    arrays.append(pa.array(arr == 1, mask=null_mask if has_nulls else None, type=pa.bool_()))
                 else:
                     arrays.append(pa.array(arr, mask=null_mask if has_nulls else None))
             yield pa.RecordBatch.from_arrays(arrays, names=names)
@@ -2532,7 +2554,43 @@ class CTable(Generic[RowT]):
         return pa.Table.from_batches(batches, schema=schema)
 
     @staticmethod
-    def _arrow_type_to_spec(pa, pa_type, arrow_col=None, *, string_max_length=None):
+    @staticmethod
+    def _auto_null_sentinel(pa, pa_type, *, string_null_value, bytes_null_value):
+        if pa_type == pa.int8():
+            return np.iinfo(np.int8).min
+        if pa_type == pa.int16():
+            return np.iinfo(np.int16).min
+        if pa_type == pa.int32():
+            return np.iinfo(np.int32).min
+        if pa_type == pa.int64():
+            return np.iinfo(np.int64).min
+        if pa_type == pa.uint8():
+            return np.iinfo(np.uint8).max
+        if pa_type == pa.uint16():
+            return np.iinfo(np.uint16).max
+        if pa_type == pa.uint32():
+            return np.iinfo(np.uint32).max
+        if pa_type == pa.uint64():
+            return np.iinfo(np.uint64).max
+        if pa_type in (pa.float32(), pa.float64()):
+            return float("nan")
+        if pa_type == pa.bool_():
+            return 255
+        if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+            return string_null_value
+        if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
+            return bytes_null_value
+        return None
+
+    @staticmethod
+    def _arrow_type_to_spec(
+        pa,
+        pa_type,
+        arrow_col=None,
+        *,
+        string_max_length=None,
+        null_value=None,
+    ):
         import blosc2.schema as b2s
 
         mapping = [
@@ -2550,6 +2608,10 @@ class CTable(Generic[RowT]):
         ]
         for arrow_t, spec_cls in mapping:
             if pa_type == arrow_t:
+                if null_value is not None and hasattr(spec_cls(), "null_value"):
+                    return spec_cls(null_value=null_value)
+                if null_value is not None and spec_cls is b2s.bool:
+                    return spec_cls(null_value=null_value)
                 return spec_cls()
 
         if pa.types.is_list(pa_type) or pa.types.is_large_list(pa_type):
@@ -2575,13 +2637,15 @@ class CTable(Generic[RowT]):
             if string_max_length is None:
                 values = arrow_col.to_pylist() if arrow_col is not None else []
                 string_max_length = max((len(v) for v in values if v is not None), default=1)
-            return b2s.string(max_length=max(string_max_length, 1))
+            max_length = max(string_max_length, len(null_value) if null_value is not None else 1, 1)
+            return b2s.string(max_length=max_length, null_value=null_value)
 
         if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
             if string_max_length is None:
                 values = arrow_col.to_pylist() if arrow_col is not None else []
                 string_max_length = max((len(v) for v in values if v is not None), default=1)
-            return b2s.bytes(max_length=max(string_max_length, 1))
+            max_length = max(string_max_length, len(null_value) if null_value is not None else 1, 1)
+            return b2s.bytes(max_length=max_length, null_value=null_value)
 
         raise TypeError(
             f"No blosc2 spec for Arrow type {pa_type!r}. Supported: int8/16/32/64, "
@@ -2589,19 +2653,40 @@ class CTable(Generic[RowT]):
         )
 
     @classmethod
-    def _compiled_columns_from_arrow(cls, pa, schema, table_for_inference, string_max_length):
+    def _compiled_columns_from_arrow(
+        cls,
+        pa,
+        schema,
+        table_for_inference,
+        string_max_length,
+        *,
+        auto_null_sentinels: bool,
+        string_null_value,
+        bytes_null_value,
+    ):
         columns: list[CompiledColumn] = []
         for field in schema:
             name = field.name
             _validate_column_name(name)
             arrow_col = table_for_inference.column(name)
             field_is_list = pa.types.is_list(field.type) or pa.types.is_large_list(field.type)
-            if arrow_col.null_count and not field_is_list:
+            field_is_struct = pa.types.is_struct(field.type)
+            null_value = None
+            if auto_null_sentinels and field.nullable and not (field_is_list or field_is_struct):
+                null_value = cls._auto_null_sentinel(
+                    pa,
+                    field.type,
+                    string_null_value=string_null_value,
+                    bytes_null_value=bytes_null_value,
+                )
+            if arrow_col.null_count and not (field_is_list or field_is_struct) and null_value is None:
                 raise TypeError(
                     f"Column {name!r} contains Parquet nulls. Provide a CTable schema with a "
                     "null_value sentinel for this column."
                 )
-            spec = cls._arrow_type_to_spec(pa, field.type, arrow_col, string_max_length=string_max_length)
+            spec = cls._arrow_type_to_spec(
+                pa, field.type, arrow_col, string_max_length=string_max_length, null_value=null_value
+            )
             columns.append(cls._compiled_column_from_spec(name, spec))
         return columns
 
@@ -2711,13 +2796,25 @@ class CTable(Generic[RowT]):
 
     @staticmethod
     def _arrow_column_to_numpy(arrow_col, col: CompiledColumn) -> np.ndarray:
+        nv = getattr(col.spec, "null_value", None)
+        if col.spec.to_metadata_dict().get("kind") == "bool" and col.dtype == np.dtype(np.uint8):
+            return np.array([nv if v is None else int(v) for v in arrow_col.to_pylist()], dtype=np.uint8)
         if col.dtype.kind in "US":
             values = arrow_col.to_pylist()
+            if nv is not None:
+                values = [nv if v is None else v for v in values]
             max_len = col.spec.max_length
             too_long = [v for v in values if v is not None and len(v) > max_len]
             if too_long:
                 raise ValueError(f"Column {col.name!r} contains values longer than max_length={max_len}.")
             return np.array(values, dtype=col.dtype)
+        if arrow_col.null_count:
+            if nv is None:
+                raise TypeError(
+                    f"Column {col.name!r} contains Arrow/Parquet nulls. Provide a CTable schema "
+                    "with a null_value sentinel for this column."
+                )
+            arrow_col = arrow_col.fill_null(nv)
         return arrow_col.to_numpy(zero_copy_only=False).astype(col.dtype)
 
     @staticmethod
@@ -2746,12 +2843,23 @@ class CTable(Generic[RowT]):
         dparams=None,
         validate: bool = False,
         string_max_length: int | None = None,
+        auto_null_sentinels: bool = True,
+        string_null_value: str = "__BLOSC2_NULL__",
+        bytes_null_value: bytes = b"__BLOSC2_NULL__",
     ) -> CTable:
         """Build a :class:`CTable` from an iterable of Arrow record batches."""
         pa = cls._require_pyarrow("from_arrow_batches()")
         batches = list(batches)
         table_for_inference = pa.Table.from_batches(batches, schema=schema)
-        columns = cls._compiled_columns_from_arrow(pa, schema, table_for_inference, string_max_length)
+        columns = cls._compiled_columns_from_arrow(
+            pa,
+            schema,
+            table_for_inference,
+            string_max_length,
+            auto_null_sentinels=auto_null_sentinels,
+            string_null_value=string_null_value,
+            bytes_null_value=bytes_null_value,
+        )
         compiled = CompiledSchema(
             row_cls=None,
             columns=columns,
@@ -2816,6 +2924,9 @@ class CTable(Generic[RowT]):
         cparams=None,
         dparams=None,
         validate: bool = False,
+        auto_null_sentinels: bool = True,
+        string_null_value: str = "__BLOSC2_NULL__",
+        bytes_null_value: bytes = b"__BLOSC2_NULL__",
         **kwargs,
     ) -> CTable:
         """Read a Parquet file into a :class:`CTable` batch-wise using pyarrow."""
@@ -2840,6 +2951,9 @@ class CTable(Generic[RowT]):
             dparams=dparams,
             validate=validate,
             string_max_length=string_max_length,
+            auto_null_sentinels=auto_null_sentinels,
+            string_null_value=string_null_value,
+            bytes_null_value=bytes_null_value,
         )
 
     # ------------------------------------------------------------------
@@ -3755,6 +3869,9 @@ class CTable(Generic[RowT]):
         descriptor = None
 
         if name in root._cols:
+            col_info = root._schema.columns_by_name.get(name)
+            if col_info is not None and getattr(col_info.spec, "null_value", None) is not None:
+                return None
             descriptor = catalog.get(name)
             if descriptor is None or descriptor.get("kind") != "full" or descriptor.get("stale", False):
                 descriptor = None
@@ -4842,7 +4959,7 @@ class CTable(Generic[RowT]):
                 seen.add(col_name)
         return indexed
 
-    def _try_index_where(self, expr_result: blosc2.LazyExpr) -> np.ndarray | None:
+    def _try_index_where(self, expr_result: blosc2.LazyExpr) -> np.ndarray | None:  # noqa: C901
         """Attempt to resolve *expr_result* via a column index.
 
         Returns a 1-D int64 array of physical row positions that satisfy the
@@ -4877,6 +4994,15 @@ class CTable(Generic[RowT]):
             return None
 
         primary_col_name, primary_col_arr, _ = indexed_columns[0]
+        nullable_indexed = [
+            name
+            for name, _arr, _descriptor in indexed_columns
+            if getattr(root._schema.columns_by_name[name].spec, "null_value", None) is not None
+        ]
+
+        # Global null post-filtering is not correct for OR expressions.
+        if nullable_indexed and ("|" in expr_result.expression or " or " in expr_result.expression):
+            return None
 
         # Inject every usable table-owned descriptor so plan_query can combine them.
         # In .b2z read mode all columns share the same urlpath, so _array_key()
@@ -4905,20 +5031,33 @@ class CTable(Generic[RowT]):
         if not plan.usable:
             return None
 
+        def _exclude_null_positions(positions):
+            positions = np.asarray(positions, dtype=np.int64)
+            for name in nullable_indexed:
+                col = root._schema.columns_by_name[name]
+                raw = root._cols[name][positions]
+                nv = getattr(col.spec, "null_value", None)
+                if isinstance(nv, float) and np.isnan(nv):
+                    keep = ~np.isnan(raw)
+                else:
+                    keep = raw != nv
+                positions = positions[keep]
+            return positions
+
         if plan.exact_positions is not None:
-            return np.asarray(plan.exact_positions, dtype=np.int64)
+            return _exclude_null_positions(plan.exact_positions)
 
         if plan.bucket_masks is not None:
             _, positions = evaluate_bucket_query(
                 expression, merged_operands, {}, where_dict, plan, return_positions=True
             )
-            return np.asarray(positions, dtype=np.int64)
+            return _exclude_null_positions(positions)
 
         if plan.candidate_units is not None and plan.segment_len is not None:
             _, positions = evaluate_segment_query(
                 expression, merged_operands, {}, where_dict, plan, return_positions=True
             )
-            return np.asarray(positions, dtype=np.int64)
+            return _exclude_null_positions(positions)
 
         return None
 
@@ -5256,7 +5395,9 @@ class CTable(Generic[RowT]):
         if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:
             expr_result = blosc2.asarray(expr_result)
         if isinstance(expr_result, Column):
-            expr_result = expr_result._raw_col
+            expr_result = (
+                expr_result._raw_col == 1 if expr_result._is_nullable_bool else expr_result._raw_col
+            )
 
         if not (
             isinstance(expr_result, (blosc2.NDArray, blosc2.LazyExpr))

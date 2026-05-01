@@ -373,7 +373,7 @@ class TestNullHandling:
         path = tmp_path / "nulls.parquet"
         pq.write_table(at, path)
         with pytest.raises(TypeError, match="null_value sentinel"):
-            CTable.from_parquet(path)
+            CTable.from_parquet(path, auto_null_sentinels=False)
 
     def test_scalar_null_exported_as_parquet_null(self, tmp_path):
         """Sentinel values become Parquet nulls on export."""
@@ -388,6 +388,43 @@ class TestNullHandling:
         at = pq.read_table(path)
         nulls = at["score"].is_null().to_pylist()
         assert nulls == [False, True, False]
+
+    def test_auto_nullable_scalars_roundtrip(self, tmp_path):
+        at = pa.table(
+            {
+                "i": pa.array([1, None, 3], type=pa.int32()),
+                "f": pa.array([1.0, None, 3.0], type=pa.float64()),
+                "s": pa.array(["a", None, "c"], type=pa.string()),
+                "b": pa.array([b"a", None, b"c"], type=pa.large_binary()),
+                "flag": pa.array([True, None, False], type=pa.bool_()),
+            }
+        )
+        path = tmp_path / "nullable_scalars.parquet"
+        pq.write_table(at, path)
+        t = CTable.from_parquet(path)
+        assert t["i"].null_count() == 1
+        assert t["f"].null_count() == 1
+        assert t["s"].null_count() == 1
+        assert t["b"].null_count() == 1
+        assert t["flag"].null_count() == 1
+        assert t["flag"][:].tolist() == [1, 255, 0]
+        out = tmp_path / "nullable_scalars_out.parquet"
+        t.to_parquet(out)
+        rt = pq.read_table(out)
+        assert rt.schema == at.schema
+        assert rt.to_pylist() == at.to_pylist()
+
+    def test_nullable_bool_filter_semantics(self, tmp_path):
+        at = pa.table({"flag": pa.array([True, None, False], type=pa.bool_())})
+        path = tmp_path / "nullable_bool.parquet"
+        pq.write_table(at, path)
+        t = CTable.from_parquet(path)
+        assert t.where(t.flag).flag[:].tolist() == [1]
+        assert t.where(~t.flag).flag[:].tolist() == [0]
+        assert t.where(t.flag == True).flag[:].tolist() == [1]  # noqa: E712
+        assert t.where(t.flag == False).flag[:].tolist() == [0]  # noqa: E712
+        assert t.where(t.flag != True).flag[:].tolist() == [0]  # noqa: E712
+        assert t.where(t.flag != False).flag[:].tolist() == [1]  # noqa: E712
 
 
 # ---------------------------------------------------------------------------

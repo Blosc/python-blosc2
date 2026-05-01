@@ -222,19 +222,33 @@ class complex128(SchemaSpec):
 
 
 class bool(SchemaSpec):
-    """Boolean column."""
+    """Boolean column.
+
+    Nullable bool columns use uint8 physical storage with values
+    ``0`` (false), ``1`` (true), and ``255`` (null).
+    """
 
     dtype = np.dtype(np.bool_)
     python_type = _builtin_bool
 
-    def __init__(self):
-        pass
+    def __init__(self, *, nullable: bool = False, null_value=None):
+        if nullable and null_value is None:
+            null_value = 255
+        if null_value is not None and null_value != 255:
+            raise ValueError("Nullable bool null_value must be 255")
+        self.null_value = null_value
+        self.nullable = null_value is not None
+        self.dtype = np.dtype(np.uint8) if self.nullable else np.dtype(np.bool_)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         return {}
 
     def to_metadata_dict(self) -> dict[str, Any]:
-        return {"kind": "bool"}
+        d: dict[str, Any] = {"kind": "bool"}
+        if self.nullable:
+            d["nullable"] = True
+            d["null_value"] = self.null_value
+        return d
 
 
 # ---------------------------------------------------------------------------
