@@ -343,6 +343,26 @@ class TestParquetRoundTrip:
         assert len(t) == 3
         assert t.col_names == ["x", "y"]
 
+    def test_from_arrow_batches_list_batch_rows_default(self):
+        at = pa.table({"vals": pa.array([[1], [2, 3]], type=pa.list_(pa.int64()))})
+        t = CTable.from_arrow_batches(at.schema, at.to_batches())
+        assert t._schema.columns_by_name["vals"].spec.batch_rows == 2048
+        assert t["vals"][0] == [1]
+        assert t["vals"][1] == [2, 3]
+
+    def test_from_arrow_batches_list_batch_rows_override_and_none(self):
+        at = pa.table({"vals": pa.array([[1], [2], [3]], type=pa.list_(pa.int64()))})
+        t = CTable.from_arrow_batches(at.schema, at.to_batches(max_chunksize=1), list_batch_rows=2)
+        assert t._schema.columns_by_name["vals"].spec.batch_rows == 2
+
+        t2 = CTable.from_arrow_batches(at.schema, at.to_batches(max_chunksize=1), list_batch_rows=None)
+        assert t2._schema.columns_by_name["vals"].spec.batch_rows is None
+
+    def test_from_arrow_batches_invalid_list_batch_rows_raises(self):
+        at = pa.table({"vals": pa.array([[1]], type=pa.list_(pa.int64()))})
+        with pytest.raises(ValueError, match="list_batch_rows"):
+            CTable.from_arrow_batches(at.schema, at.to_batches(), list_batch_rows=0)
+
 
 # ---------------------------------------------------------------------------
 # Null handling

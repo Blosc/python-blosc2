@@ -2868,9 +2868,17 @@ class CTable(Generic[RowT]):
         auto_null_sentinels: bool = True,
         string_null_value: str = "__BLOSC2_NULL__",
         bytes_null_value: bytes = b"__BLOSC2_NULL__",
+        list_batch_rows: int | None = 2048,
     ) -> CTable:
-        """Build a :class:`CTable` from an iterable of Arrow record batches."""
+        """Build a :class:`CTable` from an iterable of Arrow record batches.
+
+        ``list_batch_rows`` controls how many rows are buffered before list-valued
+        columns are flushed to their backend. Set it to ``None`` to keep list
+        columns pending until the final flush.
+        """
         pa = cls._require_pyarrow("from_arrow_batches()")
+        if list_batch_rows is not None and list_batch_rows <= 0:
+            raise ValueError("list_batch_rows must be a positive integer or None")
         batches = iter(batches)
         first_batch = None
         table_for_inference = None
@@ -2887,6 +2895,10 @@ class CTable(Generic[RowT]):
             string_null_value=string_null_value,
             bytes_null_value=bytes_null_value,
         )
+        if list_batch_rows is not None:
+            for col in columns:
+                if cls._is_list_column(col) and getattr(col.spec, "storage", None) == "batch":
+                    col.spec.batch_rows = list_batch_rows
         compiled = CompiledSchema(
             row_cls=None,
             columns=columns,
@@ -2958,6 +2970,7 @@ class CTable(Generic[RowT]):
         auto_null_sentinels: bool = True,
         string_null_value: str = "__BLOSC2_NULL__",
         bytes_null_value: bytes = b"__BLOSC2_NULL__",
+        list_batch_rows: int | None = 2048,
         **kwargs,
     ) -> CTable:
         """Read a Parquet file into a :class:`CTable` batch-wise using pyarrow."""
@@ -2986,6 +2999,7 @@ class CTable(Generic[RowT]):
             auto_null_sentinels=auto_null_sentinels,
             string_null_value=string_null_value,
             bytes_null_value=bytes_null_value,
+            list_batch_rows=list_batch_rows,
         )
 
     # ------------------------------------------------------------------
