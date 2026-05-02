@@ -42,13 +42,61 @@ Construction
     CTable.open
     CTable.load
     CTable.from_arrow
+    CTable.from_parquet
     CTable.from_csv
 
 .. automethod:: CTable.__init__
 .. automethod:: CTable.open
 .. automethod:: CTable.load
 .. automethod:: CTable.from_arrow
+.. automethod:: CTable.from_parquet
 .. automethod:: CTable.from_csv
+
+
+Null policy
+-----------
+
+Nullable scalar CTable columns are represented with per-column sentinel values,
+not native validity bitmaps.  When CTable has to infer those sentinels, the
+selection can be customized with :class:`NullPolicy` and scoped with
+:func:`null_policy`::
+
+    policy = blosc2.NullPolicy(
+        signed_int_strategy="max",
+        string_value="<NULL>",
+        column_null_values={"user_id": -1, "country": "NA"},
+    )
+
+    with blosc2.null_policy(policy):
+        table = blosc2.CTable.from_parquet("data.parquet")
+
+The same policy is used by explicit nullable schema specs when no
+``null_value`` is supplied::
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class Row:
+        user_id: int = blosc2.field(blosc2.int64(nullable=True))
+        country: str = blosc2.field(blosc2.string(nullable=True))
+
+    with blosc2.null_policy(policy):
+        table = blosc2.CTable(Row)
+
+Sentinels are resolved in this order: explicit ``null_value`` in the schema,
+``NullPolicy.column_null_values`` for a matching column, then the type-wide
+``NullPolicy`` default.  Columns without ``nullable=True`` or an explicit
+``null_value`` are not nullable.
+
+.. autosummary::
+
+    NullPolicy
+    null_policy
+    get_null_policy
+
+.. autoclass:: NullPolicy
+.. autofunction:: null_policy
+.. autofunction:: get_null_policy
 
 
 Attributes

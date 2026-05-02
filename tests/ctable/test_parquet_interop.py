@@ -6,7 +6,7 @@
 #######################################################################
 
 """Tests for CTable.to_parquet(), from_parquet(), iter_arrow_batches(),
-and from_arrow_batches()."""
+and from_arrow()."""
 
 from dataclasses import dataclass
 
@@ -156,7 +156,7 @@ class TestParquetRoundTrip:
                 "f64": pa.array([1.0, 2.0, 3.0], type=pa.float64()),
             }
         )
-        t = CTable.from_arrow(at)
+        t = CTable.from_arrow(at.schema, at.to_batches())
         path = tmp_path / "numeric.parquet"
         t.to_parquet(path)
         t2 = CTable.from_parquet(path)
@@ -165,7 +165,7 @@ class TestParquetRoundTrip:
 
     def test_roundtrip_bool(self, tmp_path):
         at = pa.table({"flag": pa.array([True, False, True], type=pa.bool_())})
-        t = CTable.from_arrow(at)
+        t = CTable.from_arrow(at.schema, at.to_batches())
         path = tmp_path / "bool.parquet"
         t.to_parquet(path)
         t2 = CTable.from_parquet(path)
@@ -173,7 +173,7 @@ class TestParquetRoundTrip:
 
     def test_roundtrip_strings(self, tmp_path):
         at = pa.table({"name": pa.array(["alice", "bob", "carol"], type=pa.string())})
-        t = CTable.from_arrow(at)
+        t = CTable.from_arrow(at.schema, at.to_batches())
         path = tmp_path / "strings.parquet"
         t.to_parquet(path)
         t2 = CTable.from_parquet(path)
@@ -181,7 +181,7 @@ class TestParquetRoundTrip:
 
     def test_roundtrip_bytes(self, tmp_path):
         at = pa.table({"data": pa.array([b"hello", b"world", b"foo"], type=pa.large_binary())})
-        t = CTable.from_arrow(at)
+        t = CTable.from_arrow(at.schema, at.to_batches())
         path = tmp_path / "bytes.parquet"
         t.to_parquet(path)
         t2 = CTable.from_parquet(path)
@@ -343,25 +343,25 @@ class TestParquetRoundTrip:
         assert len(t) == 3
         assert t.col_names == ["x", "y"]
 
-    def test_from_arrow_batches_list_batch_rows_default(self):
+    def test_from_arrow_list_batch_rows_default(self):
         at = pa.table({"vals": pa.array([[1], [2, 3]], type=pa.list_(pa.int64()))})
-        t = CTable.from_arrow_batches(at.schema, at.to_batches())
+        t = CTable.from_arrow(at.schema, at.to_batches())
         assert t._schema.columns_by_name["vals"].spec.batch_rows == 2048
         assert t["vals"][0] == [1]
         assert t["vals"][1] == [2, 3]
 
-    def test_from_arrow_batches_list_batch_rows_override_and_none(self):
+    def test_from_arrow_list_batch_rows_override_and_none(self):
         at = pa.table({"vals": pa.array([[1], [2], [3]], type=pa.list_(pa.int64()))})
-        t = CTable.from_arrow_batches(at.schema, at.to_batches(max_chunksize=1), list_batch_rows=2)
+        t = CTable.from_arrow(at.schema, at.to_batches(max_chunksize=1), list_batch_rows=2)
         assert t._schema.columns_by_name["vals"].spec.batch_rows == 2
 
-        t2 = CTable.from_arrow_batches(at.schema, at.to_batches(max_chunksize=1), list_batch_rows=None)
+        t2 = CTable.from_arrow(at.schema, at.to_batches(max_chunksize=1), list_batch_rows=None)
         assert t2._schema.columns_by_name["vals"].spec.batch_rows is None
 
-    def test_from_arrow_batches_invalid_list_batch_rows_raises(self):
+    def test_from_arrow_invalid_list_batch_rows_raises(self):
         at = pa.table({"vals": pa.array([[1]], type=pa.list_(pa.int64()))})
         with pytest.raises(ValueError, match="list_batch_rows"):
-            CTable.from_arrow_batches(at.schema, at.to_batches(), list_batch_rows=0)
+            CTable.from_arrow(at.schema, at.to_batches(), list_batch_rows=0)
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +433,56 @@ class TestNullHandling:
         rt = pq.read_table(out)
         assert rt.schema == at.schema
         assert rt.to_pylist() == at.to_pylist()
+
+    def test_null_policy_controls_default_sentinels(self):
+        at = pa.table(
+            {
+                "i": pa.array([1, None, 3], type=pa.int32()),
+                "s": pa.array(["a", None, "c"], type=pa.string()),
+            }
+        )
+        policy = blosc2.NullPolicy(signed_int_strategy="max", string_value="<NULL>")
+        with blosc2.null_policy(policy):
+            t = CTable.from_arrow(at.schema, at.to_batches())
+        assert blosc2.get_null_policy() is blosc2.DEFAULT_NULL_POLICY
+        assert t._schema.columns_by_name["i"].spec.null_value == np.iinfo(np.int32).max
+        assert t._schema.columns_by_name["s"].spec.null_value == "<NULL>"
+        assert t["i"].null_count() == 1
+        assert t["s"].null_count() == 1
+
+    def test_null_values_override_policy_and_auto_false(self, tmp_path):
+        at = pa.table(
+            {
+                "i": pa.array([1, None, 3], type=pa.int32()),
+                "s": pa.array(["a", None, "c"], type=pa.string()),
+            }
+        )
+        policy = blosc2.NullPolicy(column_null_values={"i": -1, "s": "NA"})
+        with blosc2.null_policy(policy):
+            t = CTable.from_arrow(at.schema, at.to_batches(), auto_null_sentinels=False)
+        assert t._schema.columns_by_name["i"].spec.null_value == -1
+        assert t._schema.columns_by_name["s"].spec.null_value == "NA"
+        assert t["i"].null_count() == 1
+        assert t["s"].null_count() == 1
+
+        path = tmp_path / "null_values.parquet"
+        pq.write_table(at, path)
+        with blosc2.null_policy(policy):
+            t2 = CTable.from_parquet(path, auto_null_sentinels=False)
+        assert t2._schema.columns_by_name["i"].spec.null_value == -1
+        assert t2._schema.columns_by_name["s"].spec.null_value == "NA"
+
+    def test_null_policy_unknown_column_raises(self):
+        at = pa.table({"i": pa.array([1, None], type=pa.int32())})
+        policy = blosc2.NullPolicy(column_null_values={"missing": -1})
+        with blosc2.null_policy(policy), pytest.raises(KeyError, match="unknown columns"):
+            CTable.from_arrow(at.schema, at.to_batches())
+
+    def test_null_policy_rejects_list_columns(self):
+        at = pa.table({"vals": pa.array([[1], None], type=pa.list_(pa.int64()))})
+        policy = blosc2.NullPolicy(column_null_values={"vals": []})
+        with blosc2.null_policy(policy), pytest.raises(TypeError, match="only supports scalar columns"):
+            CTable.from_arrow(at.schema, at.to_batches())
 
     def test_nullable_bool_filter_semantics(self, tmp_path):
         at = pa.table({"flag": pa.array([True, None, False], type=pa.bool_())})

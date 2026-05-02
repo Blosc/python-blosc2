@@ -98,7 +98,8 @@ tmpdir = tempfile.mkdtemp(prefix="blosc2_weather_")
 path = f"{tmpdir}/station3"
 try:
     # Views cannot be sorted or saved directly — materialise via Arrow first
-    s3_copy = blosc2.CTable.from_arrow(station3.to_arrow())
+    arrow = station3.to_arrow()
+    s3_copy = blosc2.CTable.from_arrow(arrow.schema, arrow.to_batches())
     s3_copy.sort_by("day_of_year", inplace=True)
     sorted_s3 = s3_copy
     sorted_s3.save(path, overwrite=True)

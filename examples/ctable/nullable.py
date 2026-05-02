@@ -5,17 +5,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Nullable columns: null_value sentinels, null-aware aggregates,
-# is_null / notnull, sort nulls-last, Arrow null masking, CSV empty cells.
+# Nullable columns: null_value sentinels, nullable=True, NullPolicy,
+# null-aware aggregates, is_null / notnull, sort nulls-last, Arrow null masking,
+# and CSV empty cells.
 #
 # CTable does not have a built-in "missing" bit per row like pandas does.
-# Instead it uses a *sentinel value* approach: you choose a specific value
-# that represents "null" for a column, and the library treats it
-# transparently in aggregates, sorting, unique(), value_counts(), and
-# Arrow export.
+# Instead it uses a *sentinel value* approach: each nullable column stores a
+# specific value that represents "null".  The library treats that value
+# transparently in aggregates, sorting, unique(), value_counts(), and Arrow
+# export.
 #
-# This is especially useful for integer and string columns that have no
-# natural null (unlike float, which can use NaN).
+# You can either choose sentinels explicitly with null_value=, or ask CTable to
+# choose them from the active NullPolicy with nullable=True.
 
 import os
 import tempfile
@@ -24,23 +25,56 @@ from dataclasses import dataclass
 import blosc2
 
 # ---------------------------------------------------------------------------
-# Schema with nullable columns
+# Schema with explicit null_value sentinels
 # ---------------------------------------------------------------------------
-# Use null_value= on any spec to declare the sentinel.
-# The sentinel bypasses validation constraints (ge/le etc.) so you can
-# store it even when it would otherwise violate them.
+# Use null_value= on any spec to declare the sentinel.  The sentinel bypasses
+# validation constraints (ge/le etc.) so you can store it even when it would
+# otherwise violate them.
 
 
 @dataclass
 class Reading:
     sensor_id: int = blosc2.field(blosc2.int32(ge=0))
     # -999 is "no reading" for temperature (normally ge=-50, le=60)
-    temperature: float = blosc2.field(blosc2.float64(ge=-50.0, le=60.0, null_value=-999.0), default=-999.0)
+    temperature: float = blosc2.field(blosc2.float64(ge=-50.0, le=60.0, null_value=-999.0))
     # "" is "unknown" for location (string)
-    location: str = blosc2.field(blosc2.string(max_length=16, null_value=""), default="")
+    location: str = blosc2.field(blosc2.string(max_length=16, null_value=""))
     # -1 is "not measured" for signal strength (normally ge=0, le=100)
-    signal: int = blosc2.field(blosc2.int8(ge=0, le=100, null_value=-1), default=-1)
+    signal: int = blosc2.field(blosc2.int8(ge=0, le=100, null_value=-1))
 
+
+# ---------------------------------------------------------------------------
+# Schema using nullable=True and NullPolicy
+# ---------------------------------------------------------------------------
+# nullable=True means "make this column nullable and choose the sentinel from
+# the current NullPolicy".  column_null_values overrides the type-wide policy for
+# specific columns.
+
+
+@dataclass
+class AutoReading:
+    sensor_id: int = blosc2.field(blosc2.int32(ge=0))
+    temperature: float = blosc2.field(blosc2.float64(ge=-50.0, le=60.0, nullable=True))
+    location: str = blosc2.field(blosc2.string(max_length=16, nullable=True))
+    signal: int = blosc2.field(blosc2.int8(ge=0, le=100, nullable=True))
+
+
+policy = blosc2.NullPolicy(
+    float_value=-999.0,
+    string_value="",
+    column_null_values={"signal": -1},
+)
+with blosc2.null_policy(policy):
+    auto = blosc2.CTable(AutoReading)
+
+print("NullPolicy + nullable=True selected these sentinels:")
+print(f"temperature: {auto['temperature'].null_value!r}")
+print(f"location   : {auto['location'].null_value!r}")
+print(f"signal     : {auto['signal'].null_value!r}")
+
+# ---------------------------------------------------------------------------
+# Work with nullable columns
+# ---------------------------------------------------------------------------
 
 data = [
     (0, 22.3, "roof", 87),
@@ -52,7 +86,7 @@ data = [
 ]
 
 t = blosc2.CTable(Reading, new_data=data)
-print("Table with nullable columns:")
+print("\nTable with nullable columns:")
 print(t)
 
 # ---------------------------------------------------------------------------
@@ -74,7 +108,7 @@ print(f"Valid temperatures  : {valid_temps}")
 # Null-aware aggregates
 # ---------------------------------------------------------------------------
 print("\n--- Aggregates skip null sentinels ---")
-print(f"temperature.mean() = {t['temperature'].mean():.2f}   (only 3 non-null readings)")
+print(f"temperature.mean() = {t['temperature'].mean():.2f}   (only 4 non-null readings)")
 print(f"temperature.min()  = {t['temperature'].min():.2f}")
 print(f"temperature.max()  = {t['temperature'].max():.2f}")
 print(f"signal.sum()       = {t['signal'].sum()}   (non-null: 87+41+62+95 = 285)")

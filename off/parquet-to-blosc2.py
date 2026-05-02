@@ -8,7 +8,7 @@
 
 """Import/export Parquet datasets through a CTable store.
 
-Default mode imports parquet -> .b2z/.b2d using CTable.from_arrow_batches().
+Default mode imports parquet -> .b2z/.b2d using CTable.from_arrow().
 The output extension selects the storage layout: .b2z is compact/zip-backed,
 .b2d is sparse directory-backed.  Additional modes:
 
@@ -546,7 +546,7 @@ def import_once(args, input_path: Path, output_path: Path, force_list_strings: s
 
     t0 = time.perf_counter()
     maybe_memory_report(args, "before CTable import", pa)
-    ct = blosc2.CTable.from_arrow_batches(
+    ct = blosc2.CTable.from_arrow(
         arrow_schema,
         progress_batches(pa, pf, args, selected_cols, list_wrap_cols),
         urlpath=str(output_path),

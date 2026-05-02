@@ -129,6 +129,7 @@ ignore = [
     "RUF015",
     "RUF059",
     "SIM108",
+    "SIM117",
 ]
 
 [tool.ruff.lint.extend-per-file-ignores]

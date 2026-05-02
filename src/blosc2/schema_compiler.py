@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import typing
 from dataclasses import MISSING
@@ -287,7 +288,7 @@ def compile_schema(row_cls: type[Any]) -> CompiledSchema:
 
         if meta is not None:
             # Explicit b2.field(...) path
-            spec = meta["spec"]
+            spec = copy.deepcopy(meta["spec"])
             if not isinstance(spec, SchemaSpec):
                 raise TypeError(
                     f"Column {name!r}: b2.field() requires a SchemaSpec as its first "

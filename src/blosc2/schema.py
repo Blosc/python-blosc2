@@ -74,15 +74,21 @@ class SchemaSpec:
 
 
 class _NumericSpec(SchemaSpec):
-    """Mixin for numeric specs that support ge / gt / le / lt constraints."""
+    """Mixin for numeric specs that support constraints and null sentinels.
+
+    ``nullable=True`` asks CTable to choose a null sentinel from the current
+    null policy when the schema is compiled.  An explicit ``null_value`` takes
+    precedence.
+    """
 
     _kind: str  # set by each concrete subclass
 
-    def __init__(self, *, ge=None, gt=None, le=None, lt=None, null_value=None):
+    def __init__(self, *, ge=None, gt=None, le=None, lt=None, nullable: bool = False, null_value=None):
         self.ge = ge
         self.gt = gt
         self.le = le
         self.lt = lt
+        self.nullable = nullable or null_value is not None
         self.null_value = null_value
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -95,6 +101,8 @@ class _NumericSpec(SchemaSpec):
 
     def to_metadata_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"kind": self._kind, **self.to_pydantic_kwargs()}
+        if self.nullable:
+            d["nullable"] = True
         if self.null_value is not None:
             d["null_value"] = self.null_value
         return d
@@ -232,12 +240,10 @@ class bool(SchemaSpec):
     python_type = _builtin_bool
 
     def __init__(self, *, nullable: bool = False, null_value=None):
-        if nullable and null_value is None:
-            null_value = 255
         if null_value is not None and null_value != 255:
             raise ValueError("Nullable bool null_value must be 255")
+        self.nullable = nullable or null_value is not None
         self.null_value = null_value
-        self.nullable = null_value is not None
         self.dtype = np.dtype(np.uint8) if self.nullable else np.dtype(np.bool_)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -268,15 +274,23 @@ class string(SchemaSpec):
         Minimum number of characters (validation only, no effect on dtype).
     pattern:
         Regex pattern the value must match (validation only).
+    nullable:
+        If ``True`` and ``null_value`` is not set, choose a null sentinel from
+        the current CTable null policy when the schema is compiled.
+    null_value:
+        Explicit null sentinel.  Takes precedence over ``nullable=True``.
     """
 
     python_type = str
     _DEFAULT_MAX_LENGTH = 32
 
-    def __init__(self, *, min_length=None, max_length=None, pattern=None, null_value=None):
+    def __init__(
+        self, *, min_length=None, max_length=None, pattern=None, nullable: bool = False, null_value=None
+    ):
         self.min_length = min_length
         self.max_length = max_length if max_length is not None else self._DEFAULT_MAX_LENGTH
         self.pattern = pattern
+        self.nullable = nullable or null_value is not None
         self.null_value = null_value
         self.dtype = np.dtype(f"U{self.max_length}")
 
@@ -292,6 +306,8 @@ class string(SchemaSpec):
 
     def to_metadata_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"kind": "string", **self.to_pydantic_kwargs()}
+        if self.nullable:
+            d["nullable"] = True
         if self.null_value is not None:
             d["null_value"] = self.null_value
         return d
@@ -307,14 +323,20 @@ class bytes(SchemaSpec):
         Defaults to 32 if not specified.
     min_length:
         Minimum number of bytes (validation only, no effect on dtype).
+    nullable:
+        If ``True`` and ``null_value`` is not set, choose a null sentinel from
+        the current CTable null policy when the schema is compiled.
+    null_value:
+        Explicit null sentinel.  Takes precedence over ``nullable=True``.
     """
 
     python_type = _builtin_bytes
     _DEFAULT_MAX_LENGTH = 32
 
-    def __init__(self, *, min_length=None, max_length=None, null_value=None):
+    def __init__(self, *, min_length=None, max_length=None, nullable: bool = False, null_value=None):
         self.min_length = min_length
         self.max_length = max_length if max_length is not None else self._DEFAULT_MAX_LENGTH
+        self.nullable = nullable or null_value is not None
         self.null_value = null_value
         self.dtype = np.dtype(f"S{self.max_length}")
 
@@ -328,6 +350,8 @@ class bytes(SchemaSpec):
 
     def to_metadata_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"kind": "bytes", **self.to_pydantic_kwargs()}
+        if self.nullable:
+            d["nullable"] = True
         if self.null_value is not None:
             d["null_value"] = self.null_value
         return d

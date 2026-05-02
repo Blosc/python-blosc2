@@ -633,7 +633,7 @@ Disable the overloaded equal operator.
 # Delayed imports for avoiding overwriting of python builtins.
 # Note: bool, bytes, string shadow builtins in the blosc2 namespace by design —
 # they are schema spec constructors (b2.bool(), b2.bytes(), etc.).
-from .ctable import Column, CTable
+from .ctable import DEFAULT_NULL_POLICY, Column, CTable, NullPolicy, get_null_policy, null_policy
 from .ndarray import (
     abs,
     acos,
@@ -769,6 +769,7 @@ __all__ = [  # noqa : RUF022
     "DEFAULT_FLOAT",
     "DEFAULT_INDEX",
     "DEFAULT_INT",
+    "DEFAULT_NULL_POLICY",
     # Mathematical constants
     "e",
     "pi",
@@ -812,6 +813,7 @@ __all__ = [  # noqa : RUF022
     "LazyExpr",
     "LazyUDF",
     "ListArray",
+    "NullPolicy",
     "NDArray",
     "NDField",
     "Operand",
@@ -1029,4 +1031,6 @@ __all__ = [  # noqa : RUF022
     "where",
     "zeros",
     "zeros_like",
+    "get_null_policy",
+    "null_policy",
 ]

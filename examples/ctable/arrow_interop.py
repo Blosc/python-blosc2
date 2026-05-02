@@ -40,7 +40,7 @@ print(t)
 at = t.to_arrow()
 print(f"Arrow table: {len(at)} rows, schema={at.schema}\n")
 
-# -- from_arrow(): schema is inferred from Arrow types ---------------------
+# -- from_arrow(): import an Arrow schema and record batches ---------------
 at2 = pa.table(
     {
         "x": pa.array([1.0, 2.0, 3.0], type=pa.float32()),
@@ -48,7 +48,7 @@ at2 = pa.table(
         "label": pa.array(["a", "bb", "ccc"], type=pa.string()),
     }
 )
-t2 = blosc2.CTable.from_arrow(at2)
+t2 = blosc2.CTable.from_arrow(at2.schema, at2.to_batches())
 print("CTable from Arrow (inferred schema):")
 print(t2)
 print(f"  label dtype: {t2['label'].dtype}  (max_length inferred from data)")
@@ -69,7 +69,8 @@ try:
     print(df_original)
 
     # pandas → Arrow → CTable
-    t_from_pd = blosc2.CTable.from_arrow(pa.Table.from_pandas(df_original, preserve_index=False))
+    at_pd = pa.Table.from_pandas(df_original, preserve_index=False)
+    t_from_pd = blosc2.CTable.from_arrow(at_pd.schema, at_pd.to_batches())
     print("\nCTable from pandas:")
     print(t_from_pd)
 

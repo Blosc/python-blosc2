@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import contextvars
 import dataclasses
 import itertools
 import os
@@ -19,10 +20,11 @@ import pprint
 import re
 import shutil
 import weakref
-from collections.abc import Iterable
-from dataclasses import MISSING
+from collections.abc import Iterable, Mapping
+from dataclasses import MISSING, dataclass
+from dataclasses import field as dataclass_field
 from textwrap import TextWrapper
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 import numpy as np
 
@@ -65,6 +67,106 @@ from blosc2.schema_compiler import (
     schema_from_dict,
     schema_to_dict,
 )
+
+
+@dataclass(frozen=True)
+class NullPolicy:
+    """Default sentinels for inferred CTable scalar nulls.
+
+    CTable nullable scalar columns are represented with per-column sentinel
+    values. This policy is used when CTable has to infer those sentinels, such
+    as when importing nullable scalar Arrow or Parquet columns without an
+    explicit column-level null sentinel. The selected sentinel is stored in the
+    resulting CTable schema, so existing tables remain self-describing.
+
+    Examples
+    --------
+    Use :func:`blosc2.null_policy` to apply a policy while creating a CTable
+    from data with nullable scalar columns::
+
+        policy = blosc2.NullPolicy(
+            signed_int_strategy="max",
+            string_value="<NULL>",
+            column_null_values={"user_id": -1, "country": "NA"},
+        )
+
+        with blosc2.null_policy(policy):
+            table = blosc2.CTable.from_parquet("data.parquet")
+
+    The same policy is used for explicit nullable schema specs::
+
+        @dataclass
+        class Row:
+            user_id: int = blosc2.field(blosc2.int64(nullable=True))
+            country: str = blosc2.field(blosc2.string(nullable=True))
+
+        with blosc2.null_policy(policy):
+            table = blosc2.CTable(Row)
+
+    ``column_null_values`` takes precedence over the type-wide defaults in the
+    policy.  This is useful when a particular column needs a sentinel that is
+    known not to collide with its real values.
+    """
+
+    string_value: str = "__BLOSC2_NULL__"
+    bytes_value: bytes = b"__BLOSC2_NULL__"
+    float_value: float = float("nan")
+    bool_value: int = 255
+    signed_int_strategy: Literal["min", "max"] = "min"
+    unsigned_int_strategy: Literal["min", "max"] = "max"
+    column_null_values: Mapping[str, Any] = dataclass_field(default_factory=dict)
+
+    def sentinel_for_arrow_type(self, pa, pa_type):
+        """Return the default sentinel for *pa_type*, or ``None`` if unsupported."""
+        signed_ints = [
+            (pa.int8(), np.int8),
+            (pa.int16(), np.int16),
+            (pa.int32(), np.int32),
+            (pa.int64(), np.int64),
+        ]
+        unsigned_ints = [
+            (pa.uint8(), np.uint8),
+            (pa.uint16(), np.uint16),
+            (pa.uint32(), np.uint32),
+            (pa.uint64(), np.uint64),
+        ]
+        for arrow_type, dtype in signed_ints:
+            if pa_type == arrow_type:
+                info = np.iinfo(dtype)
+                return info.min if self.signed_int_strategy == "min" else info.max
+        for arrow_type, dtype in unsigned_ints:
+            if pa_type == arrow_type:
+                info = np.iinfo(dtype)
+                return info.min if self.unsigned_int_strategy == "min" else info.max
+        if pa_type in (pa.float32(), pa.float64()):
+            return self.float_value
+        if pa_type == pa.bool_():
+            return self.bool_value
+        if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+            return self.string_value
+        if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
+            return self.bytes_value
+        return None
+
+
+DEFAULT_NULL_POLICY = NullPolicy()
+_NULL_POLICY = contextvars.ContextVar("blosc2_null_policy", default=DEFAULT_NULL_POLICY)
+
+
+def get_null_policy() -> NullPolicy:
+    """Return the current default null policy."""
+    return _NULL_POLICY.get()
+
+
+@contextlib.contextmanager
+def null_policy(policy: NullPolicy):
+    """Temporarily set the default policy for CTable null sentinel inference."""
+    token = _NULL_POLICY.set(policy)
+    try:
+        yield
+    finally:
+        _NULL_POLICY.reset(token)
+
 
 # ---------------------------------------------------------------------------
 # Index proxy and CTableIndex
@@ -1497,6 +1599,7 @@ class CTable(Generic[RowT]):
                 self._schema = compile_schema(row_type)
             else:
                 self._schema = _compile_pydantic_schema(row_type)
+            self._resolve_nullable_specs(self._schema)
 
             self._n_rows = 0
             self._last_pos = 0
@@ -1543,6 +1646,84 @@ class CTable(Generic[RowT]):
     @staticmethod
     def _is_list_spec(spec: SchemaSpec) -> bool:
         return isinstance(spec, ListSpec)
+
+    @staticmethod
+    def _policy_null_value_for_spec(spec: SchemaSpec, policy: NullPolicy):
+        if isinstance(spec, (int8, int16, int32, int64)):
+            info = np.iinfo(spec.dtype)
+            return info.min if policy.signed_int_strategy == "min" else info.max
+        if isinstance(spec, (uint8, uint16, uint32, uint64)):
+            info = np.iinfo(spec.dtype)
+            return info.min if policy.unsigned_int_strategy == "min" else info.max
+        if isinstance(spec, (float32, float64)):
+            return policy.float_value
+        if isinstance(spec, b2_bool):
+            return policy.bool_value
+        if isinstance(spec, string):
+            return policy.string_value
+        if isinstance(spec, b2_bytes):
+            return policy.bytes_value
+        return None
+
+    @staticmethod
+    def _validate_null_value_for_spec(name: str, spec: SchemaSpec, null_value) -> None:
+        if isinstance(spec, (int8, int16, int32, int64, uint8, uint16, uint32, uint64)):
+            if isinstance(null_value, (bool, np.bool_)) or not isinstance(null_value, (int, np.integer)):
+                raise TypeError(f"Null sentinel for column {name!r} must be an integer")
+            info = np.iinfo(spec.dtype)
+            if not info.min <= int(null_value) <= info.max:
+                raise ValueError(
+                    f"Null sentinel for column {name!r}={null_value!r} is outside {spec.dtype} range"
+                )
+            return
+        if isinstance(spec, (float32, float64)):
+            if not isinstance(null_value, (int, float, np.integer, np.floating)):
+                raise TypeError(f"Null sentinel for column {name!r} must be numeric")
+            return
+        if isinstance(spec, b2_bool):
+            if null_value != 255:
+                raise ValueError(f"Null sentinel for nullable bool column {name!r} must be 255")
+            return
+        if isinstance(spec, string):
+            if not isinstance(null_value, str):
+                raise TypeError(f"Null sentinel for string column {name!r} must be str")
+            return
+        if isinstance(spec, b2_bytes) and not isinstance(null_value, bytes):
+            raise TypeError(f"Null sentinel for bytes column {name!r} must be bytes")
+
+    @classmethod
+    def _resolve_nullable_specs(
+        cls, schema: CompiledSchema, *, validate_column_null_values: bool = True
+    ) -> None:
+        policy = get_null_policy()
+        schema_names = {col.name for col in schema.columns}
+        unknown_null_values = set(policy.column_null_values) - schema_names
+        if validate_column_null_values and unknown_null_values:
+            names = ", ".join(sorted(unknown_null_values))
+            raise KeyError(f"column_null_values contains unknown columns: {names}")
+        for col in schema.columns:
+            spec = col.spec
+            if isinstance(spec, ListSpec) or getattr(spec, "null_value", None) is not None:
+                continue
+            if not getattr(spec, "nullable", False):
+                continue
+            null_value = policy.column_null_values.get(col.name)
+            if null_value is None:
+                null_value = cls._policy_null_value_for_spec(spec, policy)
+            if null_value is None:
+                raise TypeError(f"Column {col.name!r} is nullable, but no null policy sentinel is available")
+            cls._validate_null_value_for_spec(col.name, spec, null_value)
+            spec.null_value = null_value
+            if isinstance(spec, string):
+                spec.max_length = max(spec.max_length, len(null_value), 1)
+                spec.dtype = np.dtype(f"U{spec.max_length}")
+            elif isinstance(spec, b2_bytes):
+                spec.max_length = max(spec.max_length, len(null_value), 1)
+                spec.dtype = np.dtype(f"S{spec.max_length}")
+            elif isinstance(spec, b2_bool):
+                spec.dtype = np.dtype(np.uint8)
+            col.dtype = getattr(spec, "dtype", None)
+            col.display_width = compute_display_width(spec)
 
     def _flush_varlen_columns(self) -> None:
         for col in self._schema.columns:
@@ -2554,33 +2735,8 @@ class CTable(Generic[RowT]):
         return pa.Table.from_batches(batches, schema=schema)
 
     @staticmethod
-    @staticmethod
-    def _auto_null_sentinel(pa, pa_type, *, string_null_value, bytes_null_value):
-        if pa_type == pa.int8():
-            return np.iinfo(np.int8).min
-        if pa_type == pa.int16():
-            return np.iinfo(np.int16).min
-        if pa_type == pa.int32():
-            return np.iinfo(np.int32).min
-        if pa_type == pa.int64():
-            return np.iinfo(np.int64).min
-        if pa_type == pa.uint8():
-            return np.iinfo(np.uint8).max
-        if pa_type == pa.uint16():
-            return np.iinfo(np.uint16).max
-        if pa_type == pa.uint32():
-            return np.iinfo(np.uint32).max
-        if pa_type == pa.uint64():
-            return np.iinfo(np.uint64).max
-        if pa_type in (pa.float32(), pa.float64()):
-            return float("nan")
-        if pa_type == pa.bool_():
-            return 255
-        if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
-            return string_null_value
-        if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
-            return bytes_null_value
-        return None
+    def _auto_null_sentinel(pa, pa_type, *, null_policy: NullPolicy):
+        return null_policy.sentinel_for_arrow_type(pa, pa_type)
 
     @staticmethod
     def _arrow_type_to_spec(  # noqa: C901
@@ -2673,9 +2829,14 @@ class CTable(Generic[RowT]):
         string_max_length,
         *,
         auto_null_sentinels: bool,
-        string_null_value,
-        bytes_null_value,
     ):
+        null_policy = get_null_policy()
+        column_null_values = null_policy.column_null_values
+        schema_names = set(schema.names)
+        unknown_null_values = set(column_null_values) - schema_names
+        if unknown_null_values:
+            names = ", ".join(sorted(unknown_null_values))
+            raise KeyError(f"column_null_values contains unknown columns: {names}")
         columns: list[CompiledColumn] = []
         for field in schema:
             name = field.name
@@ -2684,13 +2845,13 @@ class CTable(Generic[RowT]):
             field_is_list = pa.types.is_list(field.type) or pa.types.is_large_list(field.type)
             field_is_struct = pa.types.is_struct(field.type)
             null_value = None
-            if auto_null_sentinels and field.nullable and not (field_is_list or field_is_struct):
-                null_value = cls._auto_null_sentinel(
-                    pa,
-                    field.type,
-                    string_null_value=string_null_value,
-                    bytes_null_value=bytes_null_value,
-                )
+            has_null_value_override = name in column_null_values
+            if has_null_value_override and (field_is_list or field_is_struct):
+                raise TypeError(f"column_null_values only supports scalar columns; {name!r} is not scalar")
+            if has_null_value_override:
+                null_value = column_null_values[name]
+            elif auto_null_sentinels and field.nullable and not (field_is_list or field_is_struct):
+                null_value = cls._auto_null_sentinel(pa, field.type, null_policy=null_policy)
             if (
                 arrow_col is not None
                 and arrow_col.null_count
@@ -2704,11 +2865,13 @@ class CTable(Generic[RowT]):
             spec = cls._arrow_type_to_spec(
                 pa, field.type, arrow_col, string_max_length=string_max_length, null_value=null_value
             )
+            if null_value is not None and not (field_is_list or field_is_struct):
+                cls._validate_null_value_for_spec(name, spec, null_value)
             columns.append(cls._compiled_column_from_spec(name, spec))
         return columns
 
-    @staticmethod
-    def _compiled_column_from_spec(name: str, spec: SchemaSpec) -> CompiledColumn:
+    @classmethod
+    def _compiled_column_from_spec(cls, name: str, spec: SchemaSpec) -> CompiledColumn:
         col_config = ColumnConfig(cparams=None, dparams=None, chunks=None, blocks=None)
         return CompiledColumn(
             name=name,
@@ -2853,7 +3016,7 @@ class CTable(Generic[RowT]):
         return {"arrow": arrow_meta}
 
     @classmethod
-    def from_arrow_batches(
+    def from_arrow(
         cls,
         schema,
         batches,
@@ -2866,17 +3029,15 @@ class CTable(Generic[RowT]):
         capacity_hint: int | None = None,
         string_max_length: int | None = None,
         auto_null_sentinels: bool = True,
-        string_null_value: str = "__BLOSC2_NULL__",
-        bytes_null_value: bytes = b"__BLOSC2_NULL__",
         list_batch_rows: int | None = 2048,
     ) -> CTable:
-        """Build a :class:`CTable` from an iterable of Arrow record batches.
+        """Build a :class:`CTable` from an Arrow schema and iterable of record batches.
 
         ``list_batch_rows`` controls how many rows are buffered before list-valued
         columns are flushed to their backend. Set it to ``None`` to keep list
         columns pending until the final flush.
         """
-        pa = cls._require_pyarrow("from_arrow_batches()")
+        pa = cls._require_pyarrow("from_arrow()")
         if list_batch_rows is not None and list_batch_rows <= 0:
             raise ValueError("list_batch_rows must be a positive integer or None")
         batches = iter(batches)
@@ -2892,8 +3053,6 @@ class CTable(Generic[RowT]):
             table_for_inference,
             string_max_length,
             auto_null_sentinels=auto_null_sentinels,
-            string_null_value=string_null_value,
-            bytes_null_value=bytes_null_value,
         )
         if list_batch_rows is not None:
             for col in columns:
@@ -2925,12 +3084,6 @@ class CTable(Generic[RowT]):
         )
         cls._write_arrow_batches(obj, batches, columns, new_cols, new_valid)
         return obj
-
-    @classmethod
-    def from_arrow(cls, arrow_table, **kwargs) -> CTable:
-        """Build a :class:`CTable` from a :class:`pyarrow.Table`."""
-        cls._require_pyarrow("from_arrow()")
-        return cls.from_arrow_batches(arrow_table.schema, arrow_table.to_batches(), **kwargs)
 
     def to_parquet(
         self,
@@ -2968,8 +3121,6 @@ class CTable(Generic[RowT]):
         dparams=None,
         validate: bool = False,
         auto_null_sentinels: bool = True,
-        string_null_value: str = "__BLOSC2_NULL__",
-        bytes_null_value: bytes = b"__BLOSC2_NULL__",
         list_batch_rows: int | None = 2048,
         **kwargs,
     ) -> CTable:
@@ -2986,7 +3137,7 @@ class CTable(Generic[RowT]):
             fields = [arrow_schema.field(name) for name in columns]
             arrow_schema = pa.schema(fields)
         batches = pf.iter_batches(batch_size=batch_size, columns=columns)
-        return cls.from_arrow_batches(
+        return cls.from_arrow(
             arrow_schema,
             batches,
             urlpath=urlpath,
@@ -2997,8 +3148,6 @@ class CTable(Generic[RowT]):
             capacity_hint=pf.metadata.num_rows if pf.metadata is not None else None,
             string_max_length=string_max_length,
             auto_null_sentinels=auto_null_sentinels,
-            string_null_value=string_null_value,
-            bytes_null_value=bytes_null_value,
             list_batch_rows=list_batch_rows,
         )
 
@@ -3095,6 +3244,7 @@ class CTable(Generic[RowT]):
         import csv
 
         schema = compile_schema(row_cls)
+        cls._resolve_nullable_specs(schema)
         ncols = len(schema.columns)
 
         # Accumulate values per column as Python lists (one pass through file)
@@ -3207,6 +3357,12 @@ class CTable(Generic[RowT]):
         if name in self._computed_cols:
             raise ValueError(f"A computed column named {name!r} already exists.")
 
+        compiled_col = self._compiled_column_from_spec(name, spec)
+        self._resolve_nullable_specs(
+            CompiledSchema(row_cls=None, columns=[compiled_col], columns_by_name={name: compiled_col}),
+            validate_column_null_values=False,
+        )
+        spec = compiled_col.spec
         try:
             default_val = spec.dtype.type(default)
         except (ValueError, OverflowError) as exc:
@@ -3228,15 +3384,8 @@ class CTable(Generic[RowT]):
         if len(live_pos) > 0:
             new_col[live_pos] = default_val
 
-        compiled_col = CompiledColumn(
-            name=name,
-            py_type=spec.python_type,
-            spec=spec,
-            dtype=spec.dtype,
-            default=default,
-            config=ColumnConfig(cparams=cparams, dparams=None, chunks=None, blocks=None),
-            display_width=compute_display_width(spec),
-        )
+        compiled_col.default = default
+        compiled_col.config = ColumnConfig(cparams=cparams, dparams=None, chunks=None, blocks=None)
         self._cols[name] = new_col
         self.col_names.append(name)
         self._col_widths[name] = max(len(name), compiled_col.display_width)

@@ -78,5 +78,5 @@ def test_ctable_varlen_arrow_roundtrip():
     arrow = t.to_arrow()
     assert arrow.column("tags").to_pylist() == [["x", "y"], [], None, ["z"]]
 
-    roundtrip = blosc2.CTable.from_arrow(arrow)
+    roundtrip = blosc2.CTable.from_arrow(arrow.schema, arrow.to_batches())
     assert roundtrip.tags[:] == [["x", "y"], [], None, ["z"]]
