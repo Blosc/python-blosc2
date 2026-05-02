@@ -19,6 +19,14 @@ For large files, scalar string sizing defaults to sampling plus slack.  If a
 later batch contains a string that does not fit in the sampled fixed-width
 schema, the offending column is promoted to list<string>, the partial output is
 removed, and the import restarts from the beginning.
+
+During import, some exceptions may raise.  For example, for importing the
+Open Food Facts dataset (https://world.openfoodfacts.org/data), this should
+work:
+```bash
+python parquet-to-blosc2.py food.parquet food.b2z --overwrite \
+    --force-list-string owner,creator,last_editor,last_modified_by,code
+```
 """
 
 from __future__ import annotations
