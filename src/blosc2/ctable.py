@@ -33,10 +33,13 @@ from blosc2 import compute_chunks_blocks
 from blosc2.ctable_storage import FileTableStorage, InMemoryTableStorage, TableStorage
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.list_array import ListArray, coerce_list_cell
+from blosc2.scalar_array import _ScalarVarLenArray
 from blosc2.schema import (
     ListSpec,
     SchemaSpec,
     StructSpec,
+    VLBytesSpec,
+    VLStringSpec,
     complex64,
     complex128,
     float32,
@@ -677,6 +680,12 @@ class Column:
         return col is not None and isinstance(col.spec, ListSpec)
 
     @property
+    def is_varlen_scalar(self) -> bool:
+        """True if this column holds variable-length scalar strings or bytes."""
+        col = self._table._schema.columns_by_name.get(self._col_name)
+        return col is not None and isinstance(col.spec, (VLStringSpec, VLBytesSpec))
+
+    @property
     def _valid_rows(self):
         if self._mask is None:
             return self._table._valid_rows
@@ -711,13 +720,13 @@ class Column:
             real_pos = blosc2.where(valid, _arange(len(valid))).compute()
             start, stop, step = key.indices(len(real_pos))
             if start >= stop:
-                return [] if self.is_list else np.array([], dtype=self.dtype)
+                return [] if (self.is_list or self.is_varlen_scalar) else np.array([], dtype=self.dtype)
             selected_pos = real_pos[start:stop:step]  # physical row positions
             if self.is_computed:
                 lo, hi = int(selected_pos.min()), int(selected_pos.max())
                 chunk = np.asarray(self._raw_col[lo : hi + 1])
                 return chunk[selected_pos - lo]
-            if self.is_list:
+            if self.is_list or self.is_varlen_scalar:
                 return self._raw_col[selected_pos]
             return np.asarray(self._raw_col[selected_pos])
 
@@ -732,7 +741,7 @@ class Column:
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
                 return raw_np[phys_indices]
-            if self.is_list:
+            if self.is_list or self.is_varlen_scalar:
                 return self._raw_col[phys_indices]
             return self._raw_col[phys_indices]
 
@@ -742,7 +751,7 @@ class Column:
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
                 return raw_np[phys_indices]
-            if self.is_list:
+            if self.is_list or self.is_varlen_scalar:
                 return self._raw_col[phys_indices]
             return self._raw_col[phys_indices]
 
@@ -834,7 +843,7 @@ class Column:
                 )
             all_pos = np.where(self._valid_rows[:])[0]
             phys_indices = all_pos[key]
-            if self.is_list:
+            if self.is_list or self.is_varlen_scalar:
                 if len(value) != len(phys_indices):
                     raise ValueError("Length mismatch in list-column assignment")
                 for pos, cell in zip(phys_indices, value, strict=True):
@@ -852,7 +861,7 @@ class Column:
             else:
                 phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
 
-            if self.is_list:
+            if self.is_list or self.is_varlen_scalar:
                 if len(value) != len(phys_indices):
                     raise ValueError("Length mismatch in list-column assignment")
                 for pos, cell in zip(phys_indices, value, strict=True):
@@ -870,7 +879,7 @@ class Column:
         if self.is_computed:
             yield from self._iter_chunks_computed(size=None)
             return
-        if self.is_list:
+        if self.is_list or self.is_varlen_scalar:
             yield from self._raw_col[np.where(self._valid_rows[:])[0]]
             return
         arr = self._valid_rows
@@ -1066,6 +1075,8 @@ class Column:
             return
         if self.is_list:
             raise TypeError("Column.iter_chunks() is not supported for list columns in V1.")
+        if self.is_varlen_scalar:
+            raise TypeError("Column.iter_chunks() is not supported for varlen scalar columns.")
         valid = self._valid_rows
         raw = self._raw_col
         arr_len = len(valid)
@@ -1223,7 +1234,14 @@ class Column:
         return arr == nv
 
     def is_null(self) -> np.ndarray:
-        """Return a boolean array True where the live value is the null sentinel."""
+        """Return a boolean array True where the live value is the null sentinel.
+
+        For varlen scalar columns (vlstring/vlbytes) nullability is represented
+        as native ``None`` values, so this returns True wherever the value is
+        ``None``.
+        """
+        if self.is_varlen_scalar:
+            return np.array([v is None for v in self], dtype=np.bool_)
         return self._null_mask_for(self[:])
 
     def notnull(self) -> np.ndarray:
@@ -1233,8 +1251,11 @@ class Column:
     def null_count(self) -> int:
         """Return the number of live rows whose value equals the null sentinel.
 
-        Returns ``0`` in O(1) if no ``null_value`` is configured for this column.
+        Returns ``0`` in O(1) if no ``null_value`` is configured for this column
+        and the column is not a varlen scalar column.
         """
+        if self.is_varlen_scalar:
+            return sum(1 for v in self if v is None)
         if self.null_value is None:
             return 0
         return int(self.is_null().sum())
@@ -1644,6 +1665,10 @@ class CTable(Generic[RowT]):
         return isinstance(col.spec, ListSpec)
 
     @staticmethod
+    def _is_varlen_scalar_column(col: CompiledColumn) -> bool:
+        return isinstance(col.spec, (VLStringSpec, VLBytesSpec))
+
+    @staticmethod
     def _is_list_spec(spec: SchemaSpec) -> bool:
         return isinstance(spec, ListSpec)
 
@@ -1703,7 +1728,10 @@ class CTable(Generic[RowT]):
             raise KeyError(f"column_null_values contains unknown columns: {names}")
         for col in schema.columns:
             spec = col.spec
-            if isinstance(spec, ListSpec) or getattr(spec, "null_value", None) is not None:
+            if (
+                isinstance(spec, (ListSpec, VLStringSpec, VLBytesSpec))
+                or getattr(spec, "null_value", None) is not None
+            ):
                 continue
             if not getattr(spec, "nullable", False):
                 continue
@@ -1727,7 +1755,7 @@ class CTable(Generic[RowT]):
 
     def _flush_varlen_columns(self) -> None:
         for col in self._schema.columns:
-            if self._is_list_column(col):
+            if self._is_list_column(col) or self._is_varlen_scalar_column(col):
                 self._cols[col.name].flush()
 
     def _init_columns(
@@ -1740,6 +1768,14 @@ class CTable(Generic[RowT]):
             col_storage = self._resolve_column_storage(col, default_chunks, default_blocks)
             if self._is_list_column(col):
                 self._cols[col.name] = storage.create_list_column(
+                    col.name,
+                    spec=col.spec,
+                    cparams=col_storage.get("cparams"),
+                    dparams=col_storage.get("dparams"),
+                )
+                continue
+            if self._is_varlen_scalar_column(col):
+                self._cols[col.name] = storage.create_varlen_scalar_column(
                     col.name,
                     spec=col.spec,
                     cparams=col_storage.get("cparams"),
@@ -1815,6 +1851,9 @@ class CTable(Generic[RowT]):
             val = row[col.name]
             if self._is_list_column(col):
                 result[col.name] = coerce_list_cell(col.spec, val)
+            elif self._is_varlen_scalar_column(col):
+                # Coercion is handled inside _ScalarVarLenArray.append.
+                result[col.name] = val
             else:
                 result[col.name] = np.array(val, dtype=col.dtype).item()
         return result
@@ -1861,7 +1900,8 @@ class CTable(Generic[RowT]):
         """Double the scalar-column capacity and the valid_rows mask."""
         c = len(self._valid_rows)
         for name, col_arr in self._cols.items():
-            if self._is_list_column(self._schema.columns_by_name[name]):
+            cc = self._schema.columns_by_name[name]
+            if self._is_list_column(cc) or self._is_varlen_scalar_column(cc):
                 continue
             col_arr.resize((c * 2,))
         self._valid_rows.resize((c * 2,))
@@ -2088,6 +2128,8 @@ class CTable(Generic[RowT]):
             cc = schema.columns_by_name[name]
             if obj._is_list_column(cc):
                 obj._cols[name] = storage.open_list_column(name)
+            elif obj._is_varlen_scalar_column(cc):
+                obj._cols[name] = storage.open_varlen_scalar_column(name, cc.spec)
             else:
                 obj._cols[name] = storage.open_column(name)
             obj._col_widths[name] = max(len(name), cc.display_width)
@@ -2165,6 +2207,17 @@ class CTable(Generic[RowT]):
                     disk_col.extend(self._cols[name][int(pos)] for pos in live_pos)
                     disk_col.flush()
                 continue
+            if self._is_varlen_scalar_column(col):
+                disk_col = file_storage.create_varlen_scalar_column(
+                    name,
+                    spec=col.spec,
+                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
+                    dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
+                )
+                if n_live > 0:
+                    disk_col.extend(self._cols[name][int(pos)] for pos in live_pos)
+                    disk_col.flush()
+                continue
             dtype_chunks, dtype_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
             col_storage = self._resolve_column_storage(col, dtype_chunks, dtype_blocks)
             disk_col = file_storage.create_column(
@@ -2215,6 +2268,8 @@ class CTable(Generic[RowT]):
         for col in schema.columns:
             if cls._is_list_column(col):
                 disk_cols[col.name] = file_storage.open_list_column(col.name)
+            elif cls._is_varlen_scalar_column(col):
+                disk_cols[col.name] = file_storage.open_varlen_scalar_column(col.name, col.spec)
             else:
                 disk_cols[col.name] = file_storage.open_column(col.name)
         phys_size = len(disk_valid)
@@ -2232,12 +2287,18 @@ class CTable(Generic[RowT]):
         if phys_size > 0:
             mem_valid[:phys_size] = disk_valid[:]
 
-        mem_cols: dict[str, blosc2.NDArray | ListArray] = {}
+        mem_cols: dict[str, blosc2.NDArray | ListArray | _ScalarVarLenArray] = {}
         for col in schema.columns:
             name = col.name
             if cls._is_list_column(col):
                 mem_col = mem_storage.create_list_column(name, spec=col.spec, cparams=None, dparams=None)
                 mem_col.extend(disk_cols[name][:])
+                mem_col.flush()
+                mem_cols[name] = mem_col
+                continue
+            if cls._is_varlen_scalar_column(col):
+                mem_col = mem_storage.create_varlen_scalar_column(name, spec=col.spec)
+                mem_col.extend(iter(disk_cols[name]))
                 mem_col.flush()
                 mem_cols[name] = mem_col
                 continue
@@ -2651,6 +2712,10 @@ class CTable(Generic[RowT]):
 
     @staticmethod
     def _pa_type_from_spec(pa, spec):
+        if isinstance(spec, VLStringSpec):
+            return pa.string()
+        if isinstance(spec, VLBytesSpec):
+            return pa.large_binary()
         if isinstance(spec, ListSpec):
             return pa.list_(CTable._pa_type_from_spec(pa, spec.item_spec))
         if isinstance(spec, StructSpec):
@@ -2703,6 +2768,11 @@ class CTable(Generic[RowT]):
                 if col.is_list:
                     spec = self._schema.columns_by_name[name].spec
                     arrays.append(pa.array(col[start:stop], type=self._pa_type_from_spec(pa, spec)))
+                    continue
+                if col.is_varlen_scalar:
+                    spec = self._schema.columns_by_name[name].spec
+                    values = col[start:stop]  # list of str/bytes/None
+                    arrays.append(pa.array(values, type=self._pa_type_from_spec(pa, spec)))
                     continue
                 arr = np.asarray(col[start:stop])
                 nv = col.null_value
@@ -2902,10 +2972,14 @@ class CTable(Generic[RowT]):
         new_valid = storage.create_valid_rows(
             shape=(capacity,), chunks=default_chunks, blocks=default_blocks
         )
-        new_cols: dict[str, blosc2.NDArray | ListArray] = {}
+        new_cols: dict[str, blosc2.NDArray | ListArray | _ScalarVarLenArray] = {}
         for col in columns:
             if cls._is_list_column(col):
                 new_cols[col.name] = storage.create_list_column(
+                    col.name, spec=col.spec, cparams=cparams, dparams=dparams
+                )
+            elif cls._is_varlen_scalar_column(col):
+                new_cols[col.name] = storage.create_varlen_scalar_column(
                     col.name, spec=col.spec, cparams=cparams, dparams=dparams
                 )
             else:
@@ -2959,7 +3033,7 @@ class CTable(Generic[RowT]):
                 new_valid = obj._valid_rows
             pos = cls._write_arrow_batch(batch, columns, new_cols, new_valid, pos)
         for col in columns:
-            if cls._is_list_column(col):
+            if cls._is_list_column(col) or cls._is_varlen_scalar_column(col):
                 new_cols[col.name].flush()
         obj._n_rows = pos
         obj._last_pos = pos
@@ -2971,7 +3045,7 @@ class CTable(Generic[RowT]):
             return pos
         for col in columns:
             arrow_col = batch.column(batch.schema.get_field_index(col.name))
-            if cls._is_list_column(col):
+            if cls._is_list_column(col) or cls._is_varlen_scalar_column(col):
                 new_cols[col.name].extend(arrow_col.to_pylist())
             else:
                 new_cols[col.name][pos : pos + m] = cls._arrow_column_to_numpy(arrow_col, col)
@@ -3363,26 +3437,38 @@ class CTable(Generic[RowT]):
             validate_column_null_values=False,
         )
         spec = compiled_col.spec
-        try:
-            default_val = spec.dtype.type(default)
-        except (ValueError, OverflowError) as exc:
-            raise TypeError(f"Cannot coerce default {default!r} to dtype {spec.dtype!r}: {exc}") from exc
 
-        capacity = len(self._valid_rows)
-        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
-        new_col = self._storage.create_column(
-            name,
-            dtype=spec.dtype,
-            shape=(capacity,),
-            chunks=default_chunks,
-            blocks=default_blocks,
-            cparams=cparams,
-            dparams=None,
-        )
+        if self._is_varlen_scalar_column(compiled_col):
+            # Varlen scalar columns don't use fixed-width NDArray storage.
+            new_col = self._storage.create_varlen_scalar_column(name, spec=spec, cparams=cparams)
+            live_pos = np.where(self._valid_rows[:])[0]
+            for _ in live_pos:
+                new_col.append(default)
+            new_col.flush()
+        elif self._is_list_column(compiled_col):
+            raise TypeError(
+                "add_column() does not support list columns; use the constructor with a full schema."
+            )
+        else:
+            try:
+                default_val = spec.dtype.type(default)
+            except (ValueError, OverflowError) as exc:
+                raise TypeError(f"Cannot coerce default {default!r} to dtype {spec.dtype!r}: {exc}") from exc
 
-        live_pos = np.where(self._valid_rows[:])[0]
-        if len(live_pos) > 0:
-            new_col[live_pos] = default_val
+            capacity = len(self._valid_rows)
+            default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+            new_col = self._storage.create_column(
+                name,
+                dtype=spec.dtype,
+                shape=(capacity,),
+                chunks=default_chunks,
+                blocks=default_blocks,
+                cparams=cparams,
+                dparams=None,
+            )
+            live_pos = np.where(self._valid_rows[:])[0]
+            if len(live_pos) > 0:
+                new_col[live_pos] = default_val
 
         compiled_col.default = default
         compiled_col.config = ColumnConfig(cparams=cparams, dparams=None, chunks=None, blocks=None)
@@ -3594,7 +3680,7 @@ class CTable(Generic[RowT]):
             )
         col = self._cols[name]
         spec = self._schema.columns_by_name[name].spec
-        if self._is_list_spec(spec):
+        if self._is_list_spec(spec) or isinstance(spec, (VLStringSpec, VLBytesSpec)):
             return col[positions]
         return col[positions]
 
@@ -4011,6 +4097,13 @@ class CTable(Generic[RowT]):
                 replacement.flush()
                 self._cols[name] = replacement
                 continue
+            if self._is_varlen_scalar_column(col):
+                compacted = [v[int(pos)] for pos in real_poss[: self._n_rows]]
+                replacement = _ScalarVarLenArray(col.spec)
+                replacement.extend(compacted)
+                replacement.flush()
+                self._cols[name] = replacement
+                continue
             start = 0
             block_size = self._valid_rows.blocks[0]
             end = min(block_size, self._n_rows)
@@ -4043,6 +4136,11 @@ class CTable(Generic[RowT]):
                 raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
             dtype = self._col_dtype(name)
             if dtype is None:
+                cc = self._schema.columns_by_name.get(name)
+                if cc is not None and isinstance(cc.spec, (VLStringSpec, VLBytesSpec)):
+                    raise TypeError(
+                        f"Column {name!r} is a varlen scalar column and does not support sort ordering."
+                    )
                 raise TypeError(
                     f"Column {name!r} is a list column and does not support sort ordering in V1."
                 )
@@ -4931,6 +5029,11 @@ class CTable(Generic[RowT]):
         col_arr = self._cols[col_name]
         if isinstance(self._schema.columns_by_name[col_name].spec, ListSpec):
             raise ValueError(f"Cannot create an index on list column {col_name!r} in V1.")
+        if isinstance(self._schema.columns_by_name[col_name].spec, (VLStringSpec, VLBytesSpec)):
+            raise NotImplementedError(
+                f"Cannot create an index on varlen scalar column {col_name!r}: "
+                "indexing for vlstring/vlbytes columns is not supported yet."
+            )
         is_persistent = self._storage.index_anchor_path(col_name) is not None
 
         if is_persistent:
@@ -5314,6 +5417,10 @@ class CTable(Generic[RowT]):
     @staticmethod
     def _dtype_info_label(dtype: np.dtype | None, spec: SchemaSpec | None = None) -> str:
         """Return a compact dtype label for info reports."""
+        if isinstance(spec, VLStringSpec):
+            return "vlstring"
+        if isinstance(spec, VLBytesSpec):
+            return "vlbytes"
         if isinstance(spec, ListSpec):
             return spec.display_label()
         if dtype is None:
@@ -5381,7 +5488,7 @@ class CTable(Generic[RowT]):
         for col in self._schema.columns:
             name = col.name
             col_array = self._cols[name]
-            if self._is_list_column(col):
+            if self._is_list_column(col) or self._is_varlen_scalar_column(col):
                 col_array.append(row[name])
             else:
                 col_array[pos] = row[name]
@@ -5468,10 +5575,13 @@ class CTable(Generic[RowT]):
 
         scalar_processed_cols: dict[str, blosc2.NDArray] = {}
         list_processed_cols: dict[str, list] = {}
+        varlen_scalar_processed_cols: dict[str, list] = {}
         for name in current_col_names:
             col_meta = self._schema.columns_by_name[name]
             if self._is_list_column(col_meta):
                 list_processed_cols[name] = list(raw_columns[name])
+            elif self._is_varlen_scalar_column(col_meta):
+                varlen_scalar_processed_cols[name] = list(raw_columns[name])
             else:
                 target_dtype = self._cols[name].dtype
                 scalar_processed_cols[name] = np.ascontiguousarray(raw_columns[name], dtype=target_dtype)
@@ -5490,6 +5600,8 @@ class CTable(Generic[RowT]):
             col_meta = self._schema.columns_by_name[name]
             if self._is_list_column(col_meta):
                 self._cols[name].extend(list_processed_cols[name], validate=do_validate)
+            elif self._is_varlen_scalar_column(col_meta):
+                self._cols[name].extend(varlen_scalar_processed_cols[name])
             else:
                 self._cols[name][start_pos:end_pos] = scalar_processed_cols[name][:]
 

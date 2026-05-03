@@ -27,7 +27,13 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 import blosc2
+from blosc2.batch_array import BatchArray
 from blosc2.list_array import ListArray
+from blosc2.scalar_array import (
+    _make_persistent_backend,
+    _open_persistent_backend,
+    _ScalarVarLenArray,
+)
 from blosc2.schunk import process_opened_object
 
 if TYPE_CHECKING:
@@ -72,6 +78,19 @@ class TableStorage:
         raise NotImplementedError
 
     def open_list_column(self, name: str) -> ListArray:
+        raise NotImplementedError
+
+    def create_varlen_scalar_column(
+        self,
+        name: str,
+        *,
+        spec,
+        cparams=None,
+        dparams=None,
+    ) -> _ScalarVarLenArray:
+        raise NotImplementedError
+
+    def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
         raise NotImplementedError
 
     def create_valid_rows(
@@ -178,6 +197,12 @@ class InMemoryTableStorage(TableStorage):
         return ListArray(spec=spec, **kwargs)
 
     def open_list_column(self, name):
+        raise RuntimeError("In-memory tables have no on-disk representation to open.")
+
+    def create_varlen_scalar_column(self, name, *, spec, cparams=None, dparams=None):
+        return _ScalarVarLenArray(spec)
+
+    def open_varlen_scalar_column(self, name, spec):
         raise RuntimeError("In-memory tables have no on-disk representation to open.")
 
     def create_valid_rows(self, *, shape, chunks, blocks):
@@ -352,6 +377,27 @@ class FileTableStorage(TableStorage):
             opened = blosc2.blosc2_ext.open(store.b2z_path, mode="r", offset=store.offsets[rel]["offset"])
             return process_opened_object(opened)
         return blosc2.open(self._list_col_path(name), mode=self._mode)
+
+    def create_varlen_scalar_column(self, name, *, spec, cparams=None, dparams=None) -> _ScalarVarLenArray:
+        urlpath = self._list_col_path(name)
+        backend = _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
+        return _ScalarVarLenArray(spec, backend)
+
+    def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
+        store = self._open_store()
+        path = self._list_col_path(name)
+        if store.is_zip_store and self._mode == "r":
+            rel = f"{_COLS_DIR}/{name}.b2b"
+            if rel not in store.offsets:
+                raise KeyError(f"Varlen scalar column {name!r} not found in {self._root!r}")
+            backend = BatchArray(
+                _from_schunk=blosc2.blosc2_ext.open(
+                    store.b2z_path, mode="r", offset=store.offsets[rel]["offset"]
+                )
+            )
+        else:
+            backend = _open_persistent_backend(path, self._mode)
+        return _ScalarVarLenArray(spec, backend)
 
     def create_valid_rows(self, *, shape, chunks, blocks):
         valid_rows = blosc2.zeros(

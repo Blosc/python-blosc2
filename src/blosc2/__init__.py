@@ -754,6 +754,8 @@ from .schema import (
     uint16,
     uint32,
     uint64,
+    vlbytes,
+    vlstring,
 )
 
 __all__ = [  # noqa : RUF022
@@ -795,6 +797,8 @@ __all__ = [  # noqa : RUF022
     "uint16",
     "uint32",
     "uint64",
+    "vlbytes",
+    "vlstring",
     # Classes
     "C2Array",
     "CParams",

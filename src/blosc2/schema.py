@@ -478,6 +478,162 @@ class ListSpec(SchemaSpec):
         )
 
 
+# ---------------------------------------------------------------------------
+# Variable-length scalar spec classes
+# ---------------------------------------------------------------------------
+
+
+class VLStringSpec(SchemaSpec):
+    """Variable-length scalar string column backed by batched object storage.
+
+    Unlike :class:`string`, this spec does not use a fixed-width NumPy dtype.
+    Each row value is a plain Python ``str`` (or ``None`` when nullable).
+    Physical storage uses batched msgpack serialization via
+    :class:`blosc2.BatchArray` internally.
+
+    Parameters
+    ----------
+    nullable:
+        If ``True``, ``None`` is a valid row value representing a missing entry.
+        Nullability is represented natively — no sentinel value is used.
+    serializer:
+        Serialization backend.  Currently only ``"msgpack"`` is supported.
+    batch_rows:
+        Target number of rows per storage batch.  Defaults to 2048.
+    items_per_block:
+        Optional items-per-block hint passed to the underlying BatchArray.
+    """
+
+    python_type = str
+    dtype = None
+
+    def __init__(
+        self,
+        *,
+        nullable: bool = False,
+        serializer: str = "msgpack",
+        batch_rows: int | None = 2048,
+        items_per_block: int | None = None,
+    ):
+        self.nullable = nullable
+        self.serializer = serializer
+        self.batch_rows = batch_rows
+        self.items_per_block = items_per_block
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "kind": "vlstring",
+            "nullable": self.nullable,
+            "serializer": self.serializer,
+        }
+        if self.batch_rows is not None:
+            d["batch_rows"] = self.batch_rows
+        if self.items_per_block is not None:
+            d["items_per_block"] = self.items_per_block
+        return d
+
+
+class VLBytesSpec(SchemaSpec):
+    """Variable-length scalar bytes column backed by batched object storage.
+
+    Unlike :class:`bytes`, this spec does not use a fixed-width NumPy dtype.
+    Each row value is a plain Python ``bytes`` (or ``None`` when nullable).
+    Physical storage uses batched msgpack serialization via
+    :class:`blosc2.BatchArray` internally.
+
+    Parameters
+    ----------
+    nullable:
+        If ``True``, ``None`` is a valid row value representing a missing entry.
+        Nullability is represented natively — no sentinel value is used.
+    serializer:
+        Serialization backend.  Currently only ``"msgpack"`` is supported.
+    batch_rows:
+        Target number of rows per storage batch.  Defaults to 2048.
+    items_per_block:
+        Optional items-per-block hint passed to the underlying BatchArray.
+    """
+
+    python_type = _builtin_bytes
+    dtype = None
+
+    def __init__(
+        self,
+        *,
+        nullable: bool = False,
+        serializer: str = "msgpack",
+        batch_rows: int | None = 2048,
+        items_per_block: int | None = None,
+    ):
+        self.nullable = nullable
+        self.serializer = serializer
+        self.batch_rows = batch_rows
+        self.items_per_block = items_per_block
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "kind": "vlbytes",
+            "nullable": self.nullable,
+            "serializer": self.serializer,
+        }
+        if self.batch_rows is not None:
+            d["batch_rows"] = self.batch_rows
+        if self.items_per_block is not None:
+            d["items_per_block"] = self.items_per_block
+        return d
+
+
+def vlstring(
+    *,
+    nullable: bool = False,
+    serializer: str = "msgpack",
+    batch_rows: int | None = 2048,
+    items_per_block: int | None = None,
+) -> VLStringSpec:
+    """Build a variable-length scalar string schema descriptor.
+
+    Use this as an explicit opt-in when a CTable column holds long or
+    wildly variable-length strings that would waste space in a fixed-width
+    ``string(max_length=N)`` column.  Must be requested via
+    ``blosc2.field(blosc2.vlstring())`` — it is never inferred automatically
+    from plain ``str`` annotations.
+    """
+    return VLStringSpec(
+        nullable=nullable,
+        serializer=serializer,
+        batch_rows=batch_rows,
+        items_per_block=items_per_block,
+    )
+
+
+def vlbytes(
+    *,
+    nullable: bool = False,
+    serializer: str = "msgpack",
+    batch_rows: int | None = 2048,
+    items_per_block: int | None = None,
+) -> VLBytesSpec:
+    """Build a variable-length scalar bytes schema descriptor.
+
+    Use this as an explicit opt-in when a CTable column holds long or
+    wildly variable-length byte strings.  Must be requested via
+    ``blosc2.field(blosc2.vlbytes())`` — it is never inferred automatically
+    from plain ``bytes`` annotations.
+    """
+    return VLBytesSpec(
+        nullable=nullable,
+        serializer=serializer,
+        batch_rows=batch_rows,
+        items_per_block=items_per_block,
+    )
+
+
 def struct(fields: dict[str, SchemaSpec]) -> StructSpec:
     """Build a structured schema descriptor for nested CTable values."""
     return StructSpec(fields)

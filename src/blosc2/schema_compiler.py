@@ -23,6 +23,8 @@ from blosc2.schema import (
     ListSpec,
     SchemaSpec,
     StructSpec,
+    VLBytesSpec,
+    VLStringSpec,
     complex64,
     complex128,
     float32,
@@ -62,10 +64,12 @@ _KIND_TO_SPEC: dict[str, type[SchemaSpec]] = {
     # complex
     "complex64": complex64,
     "complex128": complex128,
-    # bool / string / bytes
+    # bool / string / bytes / varlen
     "bool": b2_bool,
     "string": string,
     "bytes": b2_bytes,
+    "vlstring": VLStringSpec,
+    "vlbytes": VLBytesSpec,
 }
 
 # ---------------------------------------------------------------------------
@@ -91,9 +95,13 @@ _DTYPE_DISPLAY_WIDTH: dict[str, int] = {
 
 def compute_display_width(spec: SchemaSpec) -> int:
     """Return a reasonable terminal display width for *spec*'s column."""
+    if isinstance(spec, (VLStringSpec, VLBytesSpec)):
+        return 40
     if isinstance(spec, ListSpec):
         return max(18, len(spec.display_label()) + 4)
     dtype = spec.dtype
+    if dtype is None:
+        return 20
     if dtype.kind == "U":  # fixed-width unicode (string spec)
         return max(10, min(dtype.itemsize // 4, 50))
     if dtype.kind == "S":  # fixed-width bytes
@@ -208,6 +216,8 @@ def validate_annotation_matches_spec(name: str, annotation: Any, spec: SchemaSpe
             )
         return
 
+    # VLStringSpec and VLBytesSpec are only reachable via blosc2.field(blosc2.vlstring()/vlbytes()),
+    # so annotation must match python_type (str or bytes respectively).
     expected = spec.python_type
     if annotation is not expected:
         raise TypeError(
