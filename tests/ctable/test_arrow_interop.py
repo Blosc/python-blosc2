@@ -158,10 +158,12 @@ def test_from_arrow_bool_values():
 
 
 def test_from_arrow_string_values():
+    # Without string_max_length, scalar strings become vlstring columns.
+    # Accessing [:] on a vlstring column returns a Python list, not an ndarray.
     t = CTable(Row, new_data=DATA10)
     at = t.to_arrow()
     t2 = CTable.from_arrow(at.schema, at.to_batches())
-    assert t2["label"][:].tolist() == t["label"][:].tolist()
+    assert list(t2["label"][:]) == t["label"][:].tolist()
 
 
 def test_from_arrow_empty_table():
@@ -184,7 +186,8 @@ def test_from_arrow_roundtrip():
     t2 = CTable.from_arrow(at.schema, at.to_batches())
     for name in ["id", "score", "active"]:
         np.testing.assert_array_equal(t2[name][:], t[name][:])
-    assert t2["label"][:].tolist() == t["label"][:].tolist()
+    # label is re-imported as vlstring (no string_max_length given) → compare as lists
+    assert list(t2["label"][:]) == t["label"][:].tolist()
 
 
 def test_from_arrow_all_numeric_types():
@@ -208,12 +211,23 @@ def test_from_arrow_all_numeric_types():
     assert t.col_names == list(at.column_names)
 
 
-def test_from_arrow_string_max_length():
-    """String max_length is set from the longest value in the data."""
+def test_from_arrow_string_default_is_vlstring():
+    """Without string_max_length, scalar string columns become vlstring (variable-length)."""
     at = pa.table({"name": pa.array(["hi", "hello world", "!"], type=pa.string())})
     t = CTable.from_arrow(at.schema, at.to_batches())
-    # "hello world" is 11 chars — stored dtype must accommodate it
+    assert t["name"].is_varlen_scalar
+    assert t["name"].dtype is None
+    assert list(t["name"][:]) == ["hi", "hello world", "!"]
+
+
+def test_from_arrow_string_fixed_width_with_max_length():
+    """Passing string_max_length gives a fixed-width NDArray string column."""
+    at = pa.table({"name": pa.array(["hi", "hello world", "!"], type=pa.string())})
+    t = CTable.from_arrow(at.schema, at.to_batches(), string_max_length=32)
+    # "hello world" is 11 chars — stored dtype must accommodate string_max_length
     assert t["name"].dtype.itemsize // 4 >= 11
+    assert not t["name"].is_varlen_scalar
+    assert t["name"][:].tolist() == ["hi", "hello world", "!"]
 
 
 def test_from_arrow_unsupported_type_raises():

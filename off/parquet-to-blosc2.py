@@ -15,18 +15,13 @@ The output extension selects the storage layout: .b2z is compact/zip-backed,
 * --export: export an existing .b2z/.b2d -> parquet.
 * --roundtrip: import parquet -> .b2z/.b2d -> parquet and assess differences.
 
-For large files, scalar string sizing defaults to sampling plus slack.  If a
-later batch contains a string that does not fit in the sampled fixed-width
-schema, the offending column is promoted to list<string>, the partial output is
-removed, and the import restarts from the beginning.
+Scalar string columns are stored as vlstring (variable-length, no length
+limit).  Scalar binary columns are stored as vlbytes.  Nullable string/binary
+columns are represented with native None — no sentinel value is needed.
 
-During import, some exceptions may raise.  For example, for importing the
-Open Food Facts dataset (https://world.openfoodfacts.org/data), this should
-work:
-```bash
-python parquet-to-blosc2.py food.parquet food.b2z --overwrite \
-    --force-list-string owner,creator,last_editor,last_modified_by,code
-```
+Struct-valued columns are wrapped as list<struct> (one-element lists) so they
+round-trip through the list column machinery.  True list columns pass through
+unchanged.  Unsupported types (nested lists, timestamps, etc.) are skipped.
 """
 
 from __future__ import annotations
@@ -36,8 +31,6 @@ import base64
 import contextlib
 import gc
 import os
-import re
-import resource
 import shutil
 import sys
 import time
@@ -50,26 +43,17 @@ DEFAULT_INPUT = Path(__file__).with_name("off-1pct.parquet")
 DEFAULT_B2Z = Path(__file__).with_name("off-1pct-gpt.b2z")
 DEFAULT_ROUNDTRIP_PARQUET = Path(__file__).with_name("off-1pct-gpt-roundtrip.parquet")
 DEFAULT_BATCH_SIZE = 2048
-DEFAULT_STRING_FIXED_THRESHOLD = 64
-DEFAULT_SAMPLE_ROWS = 100_000
-DEFAULT_SAMPLE_ROW_GROUPS = 16
-DEFAULT_STRING_SLACK = 1.5
-DEFAULT_STRING_MIN = 32
-DEFAULT_STRING_PROMOTE_RATIO = 0.75
-DEFAULT_STRING_SCAN_COLUMNS = 8
-DEFAULT_MAX_RESTARTS = 3
 
 
 def require_pyarrow():
     try:
         import pyarrow as pa
-        import pyarrow.compute as pc
         import pyarrow.parquet as pq
     except ImportError as exc:
         raise ImportError(
             "parquet-to-b2z.py requires pyarrow; install it with: pip install pyarrow"
         ) from exc
-    return pa, pc, pq
+    return pa, pq
 
 
 def _format_bytes(n: int | None) -> str:
@@ -84,6 +68,8 @@ def _format_bytes(n: int | None) -> str:
 
 
 def _peak_rss_bytes() -> int:
+    import resource
+
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == "darwin":
         return int(peak)
@@ -135,52 +121,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("input_path", nargs="?", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("output_path", nargs="?", type=Path, default=None)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    parser.add_argument(
-        "--string-fixed-threshold",
-        type=int,
-        default=DEFAULT_STRING_FIXED_THRESHOLD,
-        help="Scalar strings with estimated max length above this are stored as nullable list<string>.",
-    )
-    parser.add_argument(
-        "--string-scan",
-        choices=["head", "spread", "full"],
-        default="spread",
-        help="How to estimate scalar string max lengths before import.",
-    )
-    parser.add_argument("--sample-rows", type=int, default=DEFAULT_SAMPLE_ROWS)
-    parser.add_argument(
-        "--sample-row-groups",
-        type=int,
-        default=DEFAULT_SAMPLE_ROW_GROUPS,
-        help="Maximum number of evenly spread row groups to sample when --string-scan=spread.",
-    )
-    parser.add_argument("--string-slack", type=float, default=DEFAULT_STRING_SLACK)
-    parser.add_argument("--string-min", type=int, default=DEFAULT_STRING_MIN)
-    parser.add_argument(
-        "--string-promote-ratio",
-        type=float,
-        default=DEFAULT_STRING_PROMOTE_RATIO,
-        help="Promote sampled scalar strings to list<string> when estimated length reaches this fraction of the fixed threshold.",
-    )
-    parser.add_argument(
-        "--string-scan-columns",
-        type=int,
-        default=DEFAULT_STRING_SCAN_COLUMNS,
-        help="Maximum scalar string columns decoded at once during the preliminary length scan.",
-    )
-    parser.add_argument(
-        "--force-list-string",
-        action="append",
-        default=[],
-        metavar="NAME[,NAME...]",
-        help="Force scalar string columns to be imported as list<string>. Can be repeated or comma-separated.",
-    )
-    parser.add_argument(
-        "--max-restarts",
-        type=int,
-        default=DEFAULT_MAX_RESTARTS,
-        help="Maximum automatic restarts after promoting overflowing string columns to list<string>.",
-    )
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[c.name for c in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
     parser.add_argument(
@@ -215,14 +155,6 @@ def prepare_output(path: Path, overwrite: bool) -> None:
         path.unlink()
 
 
-def remove_partial_output(path: Path) -> None:
-    if path.exists():
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
-
-
 def encode_arrow_schema(schema) -> str:
     return base64.b64encode(schema.serialize().to_pybytes()).decode("ascii")
 
@@ -231,110 +163,35 @@ def decode_arrow_schema(pa, encoded: str):
     return pa.ipc.read_schema(pa.BufferReader(base64.b64decode(encoded)))
 
 
-def scalar_string_names(pa, schema) -> list[str]:
-    return [
-        field.name
-        for field in schema
-        if pa.types.is_string(field.type) or pa.types.is_large_string(field.type)
-    ]
-
-
-def _update_string_lengths(pc, batch, names: list[str], lengths: dict[str, int]) -> None:
-    for name in names:
-        arr = batch.column(name).drop_null()
-        observed = int(pc.max(pc.utf8_length(arr)).as_py() or 0) if len(arr) else 0
-        lengths[name] = max(lengths[name], observed)
-
-
-def _spread_row_groups(num_row_groups: int, max_groups: int) -> list[int]:
-    count = min(num_row_groups, max(max_groups, 1))
-    if count <= 1:
-        return [0]
-    return sorted({round(i * (num_row_groups - 1) / (count - 1)) for i in range(count)})
-
-
-def _chunks(seq: list[str], size: int):
-    for start in range(0, len(seq), size):
-        yield seq[start : start + size]
-
-
 def _release_arrow_temporaries(pa) -> None:
     gc.collect()
     with contextlib.suppress(Exception):
         pa.default_memory_pool().release_unused()
 
 
-def scan_string_max_lengths(pa, pc, pq, input_path: Path, args) -> dict[str, int]:
-    pf = pq.ParquetFile(input_path)
-    names = scalar_string_names(pa, pf.schema_arrow)
-    if not names:
-        return {}
+def classify_columns(pa, schema):
+    """Classify Parquet schema columns into importable categories.
 
-    lengths = dict.fromkeys(names, 0)
-    col_groups = list(_chunks(names, args.string_scan_columns))
-    rows_seen = 0
-    if args.string_scan == "spread" and pf.metadata.num_row_groups > 0:
-        row_groups = _spread_row_groups(pf.metadata.num_row_groups, args.sample_row_groups)
-        rows_per_group = max(1, (args.sample_rows + len(row_groups) - 1) // len(row_groups))
-        scan_batch_size = max(1, min(args.batch_size, rows_per_group))
-        for row_group in row_groups:
-            group_rows_seen = 0
-            for col_names in col_groups:
-                batch_iter = pf.iter_batches(
-                    batch_size=scan_batch_size, columns=col_names, row_groups=[row_group]
-                )
-                batch = next(batch_iter, None)
-                if batch is None:
-                    continue
-                _update_string_lengths(pc, batch, col_names, lengths)
-                group_rows_seen = max(group_rows_seen, len(batch))
-                del batch, batch_iter
-                _release_arrow_temporaries(pa)
-            rows_seen += group_rows_seen
-            maybe_memory_report(args, f"string scan row_group {row_group} rows_seen={rows_seen:,}", pa)
-            if rows_seen >= args.sample_rows:
-                break
-    else:
-        rows_seen = 0
-        for col_names in col_groups:
-            col_rows_seen = 0
-            for scan_batch_n, batch in enumerate(
-                pf.iter_batches(batch_size=args.batch_size, columns=col_names), start=1
-            ):
-                _update_string_lengths(pc, batch, col_names, lengths)
-                col_rows_seen += len(batch)
-                if args.mem_report and scan_batch_n % args.mem_every == 0:
-                    memory_report(f"string scan columns {col_names[0]}.. rows_seen={col_rows_seen:,}", pa)
-                del batch
-                _release_arrow_temporaries(pa)
-                if args.string_scan == "head" and col_rows_seen >= args.sample_rows:
-                    break
-            rows_seen = max(rows_seen, col_rows_seen)
-
-    result = {}
-    for name, observed in lengths.items():
-        estimated = int(observed * args.string_slack) if args.string_scan != "full" else observed
-        result[name] = max(estimated, args.string_min)
-    return result
-
-
-def classify_columns(
-    pa,
-    schema,
-    string_max_lengths: dict[str, int],
-    string_fixed_threshold: int,
-    force_list_strings: set[str],
-    string_promote_ratio: float,
-):
+    Returns
+    -------
+    fixed_cols : dict[str, field]
+        Scalar numeric/bool columns and list columns passed through unchanged.
+    struct_wrap_cols : dict[str, pa.DataType]
+        Struct columns wrapped as list<struct> for import.
+    conversions : dict[str, dict]
+        Metadata describing what happened to each column (for round-trip export).
+    nullable_scalars : list[str]
+        Non-string scalar columns that are nullable (need sentinels).
+    """
     fixed_cols: dict[str, object] = {}
-    list_wrap_cols: dict[str, object] = {}
+    struct_wrap_cols: dict[str, object] = {}
     conversions: dict[str, dict] = {}
     nullable_scalars: list[str] = []
 
     for field in schema:
         t = field.type
         if pa.types.is_struct(t):
-            list_wrap_cols[field.name] = pa.list_(t)
+            struct_wrap_cols[field.name] = pa.list_(t)
             conversions[field.name] = {"conversion": "struct_wrapped_as_singleton_list"}
             continue
         if pa.types.is_list(t) or pa.types.is_large_list(t):
@@ -357,42 +214,48 @@ def classify_columns(
                 conversions[field.name] = {"conversion": "nullable_scalar_sentinel"}
             continue
         if pa.types.is_string(t) or pa.types.is_large_string(t):
-            max_len = string_max_lengths.get(field.name, 1)
-            promote_cutoff = string_fixed_threshold * string_promote_ratio
-            if field.name in force_list_strings or max_len >= promote_cutoff:
-                list_wrap_cols[field.name] = pa.list_(pa.string())
-                reason = (
-                    "scalar_string_promoted_after_overflow"
-                    if field.name in force_list_strings
-                    else "long_nullable_scalar_wrapped_as_singleton_list"
-                )
-                conversions[field.name] = {"conversion": reason}
+            # Scalar strings → vlstring (variable-length, handles any length, nullable natively)
+            fixed_cols[field.name] = field
+            if field.nullable:
+                conversions[field.name] = {"conversion": "vlstring_nullable"}
             else:
-                fixed_cols[field.name] = field
-                if field.nullable:
-                    nullable_scalars.append(field.name)
-                    conversions[field.name] = {"conversion": "nullable_scalar_sentinel"}
+                conversions[field.name] = {"conversion": "vlstring"}
+            continue
+        if pa.types.is_binary(t) or pa.types.is_large_binary(t):
+            # Scalar bytes → vlbytes (variable-length, handles any length, nullable natively)
+            fixed_cols[field.name] = field
+            if field.nullable:
+                conversions[field.name] = {"conversion": "vlbytes_nullable"}
+            else:
+                conversions[field.name] = {"conversion": "vlbytes"}
             continue
         conversions[field.name] = {"conversion": "skipped", "reason": f"unsupported: {t}"}
 
-    return fixed_cols, list_wrap_cols, conversions, nullable_scalars
+    return fixed_cols, struct_wrap_cols, conversions, nullable_scalars
 
 
-def build_arrow_schema(pa, original_schema, fixed_cols: dict, list_wrap_cols: dict):
+def build_import_schema(pa, original_schema, fixed_cols: dict, struct_wrap_cols: dict):
+    """Build the Arrow schema passed to CTable.from_arrow().
+
+    Struct columns become list<struct>; all other importable columns keep their
+    original Arrow type unchanged (vlstring/vlbytes conversion happens inside
+    CTable.from_arrow when string_max_length=None).
+    """
     fields = []
     for field in original_schema:
-        if field.name in list_wrap_cols:
-            fields.append(pa.field(field.name, list_wrap_cols[field.name], nullable=True))
+        if field.name in struct_wrap_cols:
+            fields.append(pa.field(field.name, struct_wrap_cols[field.name], nullable=True))
         elif field.name in fixed_cols:
             fields.append(field)
     return pa.schema(fields)
 
 
-def transform_batch(pa, batch, selected_cols: list[str], list_wrap_cols: dict):
-    if not list_wrap_cols:
+def transform_batch(pa, batch, selected_cols: list[str], struct_wrap_cols: dict):
+    """Wrap struct-valued cells as singleton lists; pass everything else through."""
+    if not struct_wrap_cols:
         return batch
     arrays = list(batch.columns)
-    for name, target_type in list_wrap_cols.items():
+    for name, target_type in struct_wrap_cols.items():
         try:
             idx = batch.schema.get_field_index(name)
         except KeyError:
@@ -435,50 +298,44 @@ def ctable_store_kind(path: Path) -> str:
 
 
 def print_import_plan(
-    pa,
     args,
     input_path,
     output_path,
     pf,
     parquet_schema,
     fixed_cols,
-    list_wrap_cols,
+    struct_wrap_cols,
     conversions,
     nullable_scalars,
-    force_list_strings,
 ):
-    long_strings = [name for name, typ in list_wrap_cols.items() if typ == pa.list_(pa.string())]
-    wrapped_structs = [name for name in list_wrap_cols if name not in long_strings]
-    skipped = {name: entry for name, entry in conversions.items() if entry["conversion"] == "skipped"}
+    vlstring_cols = [
+        n for n, e in conversions.items() if e.get("conversion") in {"vlstring", "vlstring_nullable"}
+    ]
+    vlbytes_cols = [
+        n for n, e in conversions.items() if e.get("conversion") in {"vlbytes", "vlbytes_nullable"}
+    ]
+    wrapped_structs = list(struct_wrap_cols)
+    skipped = {n: e for n, e in conversions.items() if e.get("conversion") == "skipped"}
     print(f"Input:                 {input_path} ({input_path.stat().st_size / 1e6:.1f} MB)")
     print(f"Output:                {output_path}")
     print(f"CTable store:          {ctable_store_kind(output_path)}")
     print(f"Rows:                  {pf.metadata.num_rows:,}")
     print(f"Parquet columns:       {len(parquet_schema)}")
-    print(f"Imported columns:      {len(fixed_cols) + len(list_wrap_cols)}")
-    print(f"  Direct/fixed:        {len(fixed_cols)}")
+    print(f"Imported columns:      {len(fixed_cols) + len(struct_wrap_cols)}")
+    print(f"  Fixed-width:         {len(fixed_cols) - len(vlstring_cols) - len(vlbytes_cols)}")
+    print(f"  vlstring:            {len(vlstring_cols)}")
+    print(f"  vlbytes:             {len(vlbytes_cols)}")
     print(f"  Struct→list:         {len(wrapped_structs)}")
-    print(f"  String→list:         {len(long_strings)}")
-    print(f"  Forced string→list:  {len(force_list_strings)}")
     print(f"  Nullable scalars:    {len(nullable_scalars)}")
     print(f"  Skipped unsupported: {len(skipped)}")
     for name, entry in skipped.items():
         print(f"    - {name}: {entry['reason']}")
     print(f"Batch size:            {args.batch_size:,}")
-    print(f"String scan:           {args.string_scan}")
-    if args.string_scan in {"head", "spread"}:
-        print(f"Sample rows/slack:     {args.sample_rows:,} / {args.string_slack}")
-    if args.string_scan == "spread":
-        print(f"Sample row groups:     {args.sample_row_groups}")
-    print(f"String min:            {args.string_min}")
-    print(f"String fixed thresh:   {args.string_fixed_threshold}")
-    print(f"String promote ratio:  {args.string_promote_ratio}")
-    print(f"String scan columns:   {args.string_scan_columns}")
     print(f"Codec / level:         {args.codec} / {args.clevel}")
     print()
 
 
-def progress_batches(pa, pf, args, selected_cols, list_wrap_cols):
+def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols):
     rows_done = 0
     t0 = time.perf_counter()
     total = pf.metadata.num_rows
@@ -488,7 +345,7 @@ def progress_batches(pa, pf, args, selected_cols, list_wrap_cols):
         report_batch_mem = args.mem_report and batch_n % args.mem_every == 0
         if report_batch_mem:
             memory_report(f"batch {batch_n} after parquet read", pa)
-        batch = transform_batch(pa, raw_batch, selected_cols, list_wrap_cols)
+        batch = transform_batch(pa, raw_batch, selected_cols, struct_wrap_cols)
         if report_batch_mem:
             memory_report(f"batch {batch_n} after transform", pa)
         rows_done += len(batch)
@@ -508,64 +365,60 @@ def progress_batches(pa, pf, args, selected_cols, list_wrap_cols):
             memory_report(f"batch {batch_n} after ctable write", pa)
 
 
-def overflowing_string_column(exc: Exception) -> str | None:
-    match = re.search(r"Column '([^']+)' contains values longer than max_length", str(exc))
-    return match.group(1) if match else None
+def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be positive")
+    if args.mem_every <= 0:
+        raise ValueError("--mem-every must be positive")
+    if args.batch_report_every <= 0:
+        raise ValueError("--batch-report-every must be positive")
+    if args.output_path is not None and output_path.suffix not in {".b2z", ".b2d"}:
+        raise ValueError("output_path must use the .b2z (compact) or .b2d (sparse) extension")
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+    prepare_output(output_path, args.overwrite)
 
-
-def import_once(args, input_path: Path, output_path: Path, force_list_strings: set[str]):
-    pa, pc, pq = require_pyarrow()
+    pa, pq = require_pyarrow()
     maybe_memory_report(args, "after pyarrow import", pa)
     pf = pq.ParquetFile(input_path)
     maybe_memory_report(args, "after ParquetFile open", pa)
     parquet_schema = pf.schema_arrow
 
-    print(
-        "Estimating scalar string lengths"
-        f" ({args.string_scan}{', rows=' + format(args.sample_rows, ',') if args.string_scan in {'head', 'spread'} else ''})…"
-    )
-    string_max_lengths = scan_string_max_lengths(pa, pc, pq, input_path, args)
-    maybe_memory_report(args, "after string length scan", pa)
-    fixed_cols, list_wrap_cols, conversions, nullable_scalars = classify_columns(
-        pa,
-        parquet_schema,
-        string_max_lengths,
-        args.string_fixed_threshold,
-        force_list_strings,
-        args.string_promote_ratio,
-    )
+    fixed_cols, struct_wrap_cols, conversions, nullable_scalars = classify_columns(pa, parquet_schema)
     maybe_memory_report(args, "after column classification", pa)
-    selected_cols = [f.name for f in parquet_schema if f.name in fixed_cols or f.name in list_wrap_cols]
-    arrow_schema = build_arrow_schema(pa, parquet_schema, fixed_cols, list_wrap_cols)
+
+    selected_cols = [f.name for f in parquet_schema if f.name in fixed_cols or f.name in struct_wrap_cols]
+    import_schema = build_import_schema(pa, parquet_schema, fixed_cols, struct_wrap_cols)
     maybe_memory_report(args, "after import schema build", pa)
+
     print_import_plan(
-        pa,
         args,
         input_path,
         output_path,
         pf,
         parquet_schema,
         fixed_cols,
-        list_wrap_cols,
+        struct_wrap_cols,
         conversions,
         nullable_scalars,
-        force_list_strings,
     )
 
     t0 = time.perf_counter()
     maybe_memory_report(args, "before CTable import", pa)
+
+    # string_max_length=None → scalar string/binary columns become vlstring/vlbytes automatically
     ct = blosc2.CTable.from_arrow(
-        arrow_schema,
-        progress_batches(pa, pf, args, selected_cols, list_wrap_cols),
+        import_schema,
+        progress_batches(pa, pf, args, selected_cols, struct_wrap_cols),
         urlpath=str(output_path),
         mode="w",
         cparams=blosc2.CParams(codec=blosc2.Codec[args.codec], clevel=args.clevel),
         capacity_hint=pf.metadata.num_rows,
-        string_max_length=args.string_fixed_threshold,
+        string_max_length=None,
         auto_null_sentinels=True,
     )
     maybe_memory_report(args, "after CTable import", pa)
-    store_original_arrow_metadata(ct, parquet_schema, arrow_schema, conversions)
+    store_original_arrow_metadata(ct, parquet_schema, import_schema, conversions)
     maybe_memory_report(args, "after metadata save", pa)
     elapsed = time.perf_counter() - t0
     rows = len(ct)
@@ -585,56 +438,6 @@ def import_once(args, input_path: Path, output_path: Path, force_list_strings: s
     return selected_cols
 
 
-def parse_force_list_strings(values: list[str]) -> set[str]:
-    names: set[str] = set()
-    for value in values:
-        for name in value.split(","):
-            name = name.strip()
-            if name:
-                names.add(name)
-    return names
-
-
-def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
-    if args.batch_size <= 0:
-        raise ValueError("--batch-size must be positive")
-    if args.sample_rows <= 0:
-        raise ValueError("--sample-rows must be positive")
-    if args.string_slack < 1:
-        raise ValueError("--string-slack must be >= 1")
-    if args.sample_row_groups <= 0:
-        raise ValueError("--sample-row-groups must be positive")
-    if args.string_scan_columns <= 0:
-        raise ValueError("--string-scan-columns must be positive")
-    if not (0 < args.string_promote_ratio <= 1):
-        raise ValueError("--string-promote-ratio must be in the interval (0, 1]")
-    if args.mem_every <= 0:
-        raise ValueError("--mem-every must be positive")
-    if args.batch_report_every <= 0:
-        raise ValueError("--batch-report-every must be positive")
-    if args.output_path is not None and output_path.suffix not in {".b2z", ".b2d"}:
-        raise ValueError("output_path must use the .b2z (compact) or .b2d (sparse) extension")
-    if not input_path.exists():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-    prepare_output(output_path, args.overwrite)
-
-    force_list_strings = parse_force_list_strings(args.force_list_string)
-    for attempt in range(args.max_restarts + 1):
-        remove_partial_output(output_path)
-        try:
-            return import_once(args, input_path, output_path, force_list_strings)
-        except ValueError as exc:
-            col = overflowing_string_column(exc)
-            if col is None or col in force_list_strings or attempt >= args.max_restarts:
-                raise
-            print(
-                f"\nString overflow in column {col!r}; promoting it to list<string> "
-                f"and restarting import ({attempt + 1}/{args.max_restarts})…\n"
-            )
-            force_list_strings.add(col)
-    raise RuntimeError("unreachable")
-
-
 def original_schema_from_ctable(pa, ct):
     arrow_meta = ct._schema.metadata.get("arrow", {})
     encoded = arrow_meta.get("schema_ipc_base64")
@@ -650,7 +453,7 @@ def unwrap_singleton_list(pa, arr, arrow_type):
 
 
 def export_ctable_to_parquet(input_path: Path, output_path: Path, *, batch_size: int, overwrite: bool):
-    pa, _, pq = require_pyarrow()
+    pa, pq = require_pyarrow()
     if batch_size <= 0:
         raise ValueError("--batch-size must be positive")
     prepare_output(output_path, overwrite)
@@ -668,6 +471,15 @@ def export_ctable_to_parquet(input_path: Path, output_path: Path, *, batch_size:
         else ct._arrow_schema_for_columns(export_names)
     )
 
+    # Conversions that stored data differently and need unwrapping on export.
+    _SINGLETON_LIST_CONVERSIONS = {
+        "struct_wrapped_as_singleton_list",
+        # Legacy reasons kept for reading older CTable stores:
+        "nullable_scalar_wrapped_as_singleton_list",
+        "long_nullable_scalar_wrapped_as_singleton_list",
+        "scalar_string_promoted_after_overflow",
+    }
+
     t0 = time.perf_counter()
     with pq.ParquetWriter(output_path, export_schema, compression="zstd") as writer:
         for batch in ct.iter_arrow_batches(columns=export_names, batch_size=batch_size):
@@ -676,13 +488,18 @@ def export_ctable_to_parquet(input_path: Path, output_path: Path, *, batch_size:
                 arr = batch.column(name)
                 meta = fields_meta.get(name, {})
                 field = export_schema.field(name)
-                if meta.get("conversion") in {
-                    "struct_wrapped_as_singleton_list",
-                    "nullable_scalar_wrapped_as_singleton_list",
-                    "long_nullable_scalar_wrapped_as_singleton_list",
-                    "scalar_string_promoted_after_overflow",
-                }:
+                conversion = meta.get("conversion", "")
+                if conversion in _SINGLETON_LIST_CONVERSIONS:
                     arr = unwrap_singleton_list(pa, arr, field.type)
+                elif conversion in {"vlstring", "vlstring_nullable"}:
+                    # vlstring columns export as pa.string() — already correct from iter_arrow_batches.
+                    # Cast to original Arrow type in case it was large_string in the source.
+                    if str(arr.type) != str(field.type):
+                        arr = arr.cast(field.type)
+                elif conversion in {"vlbytes", "vlbytes_nullable"}:
+                    # vlbytes columns export as pa.large_binary() — cast to original if needed.
+                    if str(arr.type) != str(field.type):
+                        arr = arr.cast(field.type)
                 elif str(arr.type) != str(field.type):
                     arr = pa.array(arr.to_pylist(), type=field.type)
                 arrays.append(arr)
@@ -696,7 +513,7 @@ def export_ctable_to_parquet(input_path: Path, output_path: Path, *, batch_size:
 
 
 def assess_parquet_difference(original_path: Path, roundtrip_path: Path, exported_cols: list[str]):
-    pa, _, pq = require_pyarrow()
+    pa, pq = require_pyarrow()
     orig_pf = pq.ParquetFile(original_path)
     rt_pf = pq.ParquetFile(roundtrip_path)
     original_schema = orig_pf.schema_arrow

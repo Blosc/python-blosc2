@@ -2816,6 +2816,7 @@ class CTable(Generic[RowT]):
         *,
         string_max_length=None,
         null_value=None,
+        nullable=False,
     ):
         import blosc2.schema as b2s
 
@@ -2873,15 +2874,15 @@ class CTable(Generic[RowT]):
 
         if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
             if string_max_length is None:
-                values = arrow_col.to_pylist() if arrow_col is not None else []
-                string_max_length = max((len(v) for v in values if v is not None), default=1)
+                # No fixed-width threshold given: store as variable-length scalar string.
+                return b2s.vlstring(nullable=nullable)
             max_length = max(string_max_length, len(null_value) if null_value is not None else 1, 1)
             return b2s.string(max_length=max_length, null_value=null_value)
 
         if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
             if string_max_length is None:
-                values = arrow_col.to_pylist() if arrow_col is not None else []
-                string_max_length = max((len(v) for v in values if v is not None), default=1)
+                # No fixed-width threshold given: store as variable-length scalar bytes.
+                return b2s.vlbytes(nullable=nullable)
             max_length = max(string_max_length, len(null_value) if null_value is not None else 1, 1)
             return b2s.bytes(max_length=max_length, null_value=null_value)
 
@@ -2914,18 +2915,38 @@ class CTable(Generic[RowT]):
             arrow_col = table_for_inference.column(name) if table_for_inference is not None else None
             field_is_list = pa.types.is_list(field.type) or pa.types.is_large_list(field.type)
             field_is_struct = pa.types.is_struct(field.type)
+            field_is_varlen_scalar = (
+                not field_is_list
+                and not field_is_struct
+                and string_max_length is None
+                and (
+                    pa.types.is_string(field.type)
+                    or pa.types.is_large_string(field.type)
+                    or pa.types.is_binary(field.type)
+                    or pa.types.is_large_binary(field.type)
+                )
+            )
             null_value = None
             has_null_value_override = name in column_null_values
             if has_null_value_override and (field_is_list or field_is_struct):
                 raise TypeError(f"column_null_values only supports scalar columns; {name!r} is not scalar")
+            if has_null_value_override and field_is_varlen_scalar:
+                raise TypeError(
+                    f"column_null_values is not supported for vlstring/vlbytes column {name!r}; "
+                    "these columns represent nulls as native None."
+                )
             if has_null_value_override:
                 null_value = column_null_values[name]
-            elif auto_null_sentinels and field.nullable and not (field_is_list or field_is_struct):
+            elif (
+                auto_null_sentinels
+                and field.nullable
+                and not (field_is_list or field_is_struct or field_is_varlen_scalar)
+            ):
                 null_value = cls._auto_null_sentinel(pa, field.type, null_policy=null_policy)
             if (
                 arrow_col is not None
                 and arrow_col.null_count
-                and not (field_is_list or field_is_struct)
+                and not (field_is_list or field_is_struct or field_is_varlen_scalar)
                 and null_value is None
             ):
                 raise TypeError(
@@ -2933,9 +2954,14 @@ class CTable(Generic[RowT]):
                     "null_value sentinel for this column."
                 )
             spec = cls._arrow_type_to_spec(
-                pa, field.type, arrow_col, string_max_length=string_max_length, null_value=null_value
+                pa,
+                field.type,
+                arrow_col,
+                string_max_length=string_max_length,
+                null_value=null_value,
+                nullable=field.nullable,
             )
-            if null_value is not None and not (field_is_list or field_is_struct):
+            if null_value is not None and not (field_is_list or field_is_struct or field_is_varlen_scalar):
                 cls._validate_null_value_for_spec(name, spec, null_value)
             columns.append(cls._compiled_column_from_spec(name, spec))
         return columns
@@ -3107,9 +3133,20 @@ class CTable(Generic[RowT]):
     ) -> CTable:
         """Build a :class:`CTable` from an Arrow schema and iterable of record batches.
 
-        ``list_batch_rows`` controls how many rows are buffered before list-valued
-        columns are flushed to their backend. Set it to ``None`` to keep list
-        columns pending until the final flush.
+        When *string_max_length* is ``None`` (the default), scalar Arrow
+        ``string`` / ``large_string`` columns are imported as
+        :func:`~blosc2.vlstring` columns and ``binary`` / ``large_binary``
+        columns are imported as :func:`~blosc2.vlbytes` columns.  Null values
+        are represented as native ``None`` with no sentinel needed.
+
+        When *string_max_length* is set to a positive integer, scalar string
+        and binary columns are imported as fixed-width
+        :func:`~blosc2.string` / :func:`~blosc2.bytes` columns whose dtype is
+        sized to *string_max_length* characters/bytes.
+
+        ``list_batch_rows`` controls how many rows are buffered before
+        list-valued columns are flushed to their backend.  Set it to ``None``
+        to keep list columns pending until the final flush.
         """
         pa = cls._require_pyarrow("from_arrow()")
         if list_batch_rows is not None and list_batch_rows <= 0:

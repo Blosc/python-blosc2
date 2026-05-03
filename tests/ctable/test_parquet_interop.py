@@ -139,7 +139,8 @@ class TestParquetRoundTrip:
         np.testing.assert_array_equal(t2["id"][:], t["id"][:])
         np.testing.assert_allclose(t2["score"][:], t["score"][:])
         np.testing.assert_array_equal(t2["active"][:], t["active"][:])
-        assert t2["label"][:].tolist() == t["label"][:].tolist()
+        # label is re-imported as vlstring when no string_max_length is given
+        assert list(t2["label"][:]) == t["label"][:].tolist()
 
     def test_roundtrip_all_numeric_types(self, tmp_path):
         at = pa.table(
@@ -177,7 +178,8 @@ class TestParquetRoundTrip:
         path = tmp_path / "strings.parquet"
         t.to_parquet(path)
         t2 = CTable.from_parquet(path)
-        assert t2["name"][:].tolist() == ["alice", "bob", "carol"]
+        # vlstring column — [:] returns a Python list, not a numpy array
+        assert list(t2["name"][:]) == ["alice", "bob", "carol"]
 
     def test_roundtrip_bytes(self, tmp_path):
         at = pa.table({"data": pa.array([b"hello", b"world", b"foo"], type=pa.large_binary())})
@@ -185,12 +187,9 @@ class TestParquetRoundTrip:
         path = tmp_path / "bytes.parquet"
         t.to_parquet(path)
         t2 = CTable.from_parquet(path)
+        # vlbytes column — [:] returns a Python list of bytes objects
         raw = t2["data"][:]
-        assert [raw[i].tobytes().rstrip(b"\x00") for i in range(3)] == [
-            b"hello",
-            b"world",
-            b"foo",
-        ]
+        assert raw == [b"hello", b"world", b"foo"]
 
     def test_roundtrip_list_column(self, tmp_path):
         @dataclass
@@ -363,6 +362,51 @@ class TestParquetRoundTrip:
         with pytest.raises(ValueError, match="list_batch_rows"):
             CTable.from_arrow(at.schema, at.to_batches(), list_batch_rows=0)
 
+    def test_vlstring_arrow_roundtrip_no_singleton_list(self):
+        """Scalar string columns import as vlstring (not list<string>) without singleton wrapping."""
+        long_str = "x" * 500
+        at = pa.table({"txt": pa.array(["short", long_str, None, "end"], type=pa.string())})
+        t = CTable.from_arrow(at.schema, at.to_batches())
+        assert t["txt"].is_varlen_scalar
+        assert list(t["txt"][:]) == ["short", long_str, None, "end"]
+        # Export back to Arrow → still a scalar string column, not list<string>
+        out = t.to_arrow()
+        assert pa.types.is_string(out.schema.field("txt").type)
+        assert out.column("txt").to_pylist() == ["short", long_str, None, "end"]
+
+    def test_vlbytes_arrow_roundtrip_no_singleton_list(self):
+        """Scalar binary columns import as vlbytes (not list<binary>) without singleton wrapping."""
+        long_bin = b"b" * 500
+        at = pa.table({"bin": pa.array([b"short", long_bin, None, b"end"], type=pa.large_binary())})
+        t = CTable.from_arrow(at.schema, at.to_batches())
+        assert t["bin"].is_varlen_scalar
+        assert list(t["bin"][:]) == [b"short", long_bin, None, b"end"]
+        out = t.to_arrow()
+        assert pa.types.is_large_binary(out.schema.field("bin").type)
+        assert out.column("bin").to_pylist() == [b"short", long_bin, None, b"end"]
+
+    def test_vlstring_parquet_roundtrip(self, tmp_path):
+        """Parquet import/export round-trips long scalar strings without singleton-list wrapping."""
+        long_str = "y" * 1000
+        at = pa.table(
+            {
+                "id": pa.array([0, 1, 2, 3], type=pa.int64()),
+                "txt": pa.array(["short", long_str, None, "end"], type=pa.string()),
+            }
+        )
+        path = tmp_path / "vlstring.parquet"
+        pq.write_table(at, path)
+
+        t = CTable.from_parquet(path)
+        assert t["txt"].is_varlen_scalar
+        assert list(t["txt"][:]) == ["short", long_str, None, "end"]
+
+        out = tmp_path / "vlstring_out.parquet"
+        t.to_parquet(out)
+        rt = pq.read_table(out)
+        assert pa.types.is_string(rt.schema.field("txt").type)
+        assert rt.column("txt").to_pylist() == ["short", long_str, None, "end"]
+
 
 # ---------------------------------------------------------------------------
 # Null handling
@@ -435,6 +479,23 @@ class TestNullHandling:
         assert rt.to_pylist() == at.to_pylist()
 
     def test_null_policy_controls_default_sentinels(self):
+        # Null policy sentinels apply to fixed-width scalar columns (int, float, bool, string
+        # with an explicit string_max_length).  vlstring / vlbytes columns represent
+        # nulls natively as None and do NOT use sentinels.
+        at = pa.table(
+            {
+                "i": pa.array([1, None, 3], type=pa.int32()),
+            }
+        )
+        policy = blosc2.NullPolicy(signed_int_strategy="max")
+        with blosc2.null_policy(policy):
+            t = CTable.from_arrow(at.schema, at.to_batches())
+        assert blosc2.get_null_policy() is blosc2.DEFAULT_NULL_POLICY
+        assert t._schema.columns_by_name["i"].spec.null_value == np.iinfo(np.int32).max
+        assert t["i"].null_count() == 1
+
+    def test_null_policy_string_value_applies_to_fixed_width_strings(self):
+        """string_value in NullPolicy applies when string_max_length is given explicitly."""
         at = pa.table(
             {
                 "i": pa.array([1, None, 3], type=pa.int32()),
@@ -443,34 +504,39 @@ class TestNullHandling:
         )
         policy = blosc2.NullPolicy(signed_int_strategy="max", string_value="<NULL>")
         with blosc2.null_policy(policy):
-            t = CTable.from_arrow(at.schema, at.to_batches())
-        assert blosc2.get_null_policy() is blosc2.DEFAULT_NULL_POLICY
+            t = CTable.from_arrow(at.schema, at.to_batches(), string_max_length=32)
         assert t._schema.columns_by_name["i"].spec.null_value == np.iinfo(np.int32).max
         assert t._schema.columns_by_name["s"].spec.null_value == "<NULL>"
         assert t["i"].null_count() == 1
         assert t["s"].null_count() == 1
 
     def test_null_values_override_policy_and_auto_false(self, tmp_path):
+        # column_null_values only applies to fixed-width scalar columns.
+        # vlstring / vlbytes columns represent nulls as native None and do not
+        # accept column_null_values overrides.
         at = pa.table(
             {
                 "i": pa.array([1, None, 3], type=pa.int32()),
-                "s": pa.array(["a", None, "c"], type=pa.string()),
             }
         )
-        policy = blosc2.NullPolicy(column_null_values={"i": -1, "s": "NA"})
+        policy = blosc2.NullPolicy(column_null_values={"i": -1})
         with blosc2.null_policy(policy):
             t = CTable.from_arrow(at.schema, at.to_batches(), auto_null_sentinels=False)
         assert t._schema.columns_by_name["i"].spec.null_value == -1
-        assert t._schema.columns_by_name["s"].spec.null_value == "NA"
         assert t["i"].null_count() == 1
-        assert t["s"].null_count() == 1
 
         path = tmp_path / "null_values.parquet"
         pq.write_table(at, path)
         with blosc2.null_policy(policy):
             t2 = CTable.from_parquet(path, auto_null_sentinels=False)
         assert t2._schema.columns_by_name["i"].spec.null_value == -1
-        assert t2._schema.columns_by_name["s"].spec.null_value == "NA"
+
+    def test_null_policy_rejects_vlstring_column_null_values(self):
+        """Passing column_null_values for a vlstring column raises TypeError."""
+        at = pa.table({"s": pa.array(["a", None, "c"], type=pa.string())})
+        policy = blosc2.NullPolicy(column_null_values={"s": "NA"})
+        with blosc2.null_policy(policy), pytest.raises(TypeError, match="vlstring"):
+            CTable.from_arrow(at.schema, at.to_batches())
 
     def test_null_policy_unknown_column_raises(self):
         at = pa.table({"i": pa.array([1, None], type=pa.int32())})
