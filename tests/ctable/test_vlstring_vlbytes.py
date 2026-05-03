@@ -31,6 +31,11 @@ def test_vlstring_spec_defaults():
     assert spec.python_type is str
 
 
+def test_vlstring_rejects_unsupported_serializer():
+    with pytest.raises(ValueError, match="serializer='msgpack'"):
+        blosc2.vlstring(serializer="arrow")
+
+
 def test_vlbytes_spec_defaults():
     spec = blosc2.vlbytes()
     assert spec.nullable is False
@@ -382,6 +387,32 @@ def test_ctable_vlstring_save_load(tmp_path):
     ct2.close()
 
 
+def test_ctable_vlstring_backend_role_metadata(tmp_path):
+    urlpath = str(tmp_path / "vl_meta.b2d")
+    ct = blosc2.CTable(VLRow, new_data=ROWS[:2], urlpath=urlpath, mode="w")
+    ct.close()
+
+    backend = blosc2.open(str(tmp_path / "vl_meta.b2d" / "_cols" / "text.b2b"), mode="r")
+    assert backend.schunk.meta["ctable_varlen_scalar"] == {
+        "version": 1,
+        "py_type": "str",
+        "nullable": False,
+        "batch_rows": 2048,
+    }
+
+
+def test_ctable_constructor_reopens_vlstring_persistent_table(tmp_path):
+    urlpath = str(tmp_path / "vl_ctor_reopen.b2d")
+    ct = blosc2.CTable(VLRow, new_data=ROWS[:2], urlpath=urlpath, mode="w")
+    ct.close()
+
+    reopened = blosc2.CTable(VLRow, urlpath=urlpath, mode="a")
+    assert reopened.text[1] == ROWS[1][1]
+    reopened.append((42, "ctor append", b"ctor bytes"))
+    assert reopened.text[2] == "ctor append"
+    reopened.close()
+
+
 def test_ctable_vlstring_save_reload_b2z(tmp_path):
     urlpath = str(tmp_path / "vl_test.b2z")
     ct = blosc2.CTable(VLRow, new_data=ROWS, urlpath=urlpath, mode="w")
@@ -477,6 +508,14 @@ def test_ctable_vlstring_sort_raises():
     gen = ct.iter_sorted("text")
     with pytest.raises(TypeError, match="varlen scalar"):
         next(gen)
+
+
+def test_ctable_vlstring_lazy_expression_raises():
+    ct = blosc2.CTable(VLRow, new_data=ROWS)
+    with pytest.raises(NotImplementedError, match="vlstring/vlbytes"):
+        ct.where('text == "hello world"')
+    with pytest.raises(NotImplementedError, match="vlstring/vlbytes"):
+        _ = ct.text == "hello world"
 
 
 def test_ctable_vlstring_build_index_raises(tmp_path):

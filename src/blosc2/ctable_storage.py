@@ -33,6 +33,7 @@ from blosc2.scalar_array import (
     _make_persistent_backend,
     _open_persistent_backend,
     _ScalarVarLenArray,
+    _validate_role_metadata,
 )
 from blosc2.schunk import process_opened_object
 
@@ -396,7 +397,8 @@ class FileTableStorage(TableStorage):
                 )
             )
         else:
-            backend = _open_persistent_backend(path, self._mode)
+            backend = _open_persistent_backend(path, self._mode, spec=spec)
+        _validate_role_metadata(backend, spec)
         return _ScalarVarLenArray(spec, backend)
 
     def create_valid_rows(self, *, shape, chunks, blocks):

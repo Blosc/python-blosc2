@@ -936,9 +936,19 @@ class Column:
         """Number of live values in the column."""
         return len(self)
 
+    def _ensure_queryable(self) -> None:
+        if self.is_varlen_scalar:
+            raise NotImplementedError(
+                f"Column {self._col_name!r} is a vlstring/vlbytes column; "
+                "lazy expressions and vectorized comparisons are not supported yet."
+            )
+
     @staticmethod
     def _unwrap_operand(other):
-        return other._raw_col if isinstance(other, Column) else other
+        if isinstance(other, Column):
+            other._ensure_queryable()
+            return other._raw_col
+        return other
 
     @property
     def _is_nullable_bool(self) -> bool:
@@ -950,99 +960,129 @@ class Column:
         )
 
     def __neg__(self):
+        self._ensure_queryable()
         return -self._raw_col
 
     def __pos__(self):
+        self._ensure_queryable()
         return +self._raw_col
 
     def __abs__(self):
+        self._ensure_queryable()
         return abs(self._raw_col)
 
     def __add__(self, other):
+        self._ensure_queryable()
         return self._raw_col + self._unwrap_operand(other)
 
     def __radd__(self, other):
+        self._ensure_queryable()
         return self._unwrap_operand(other) + self._raw_col
 
     def __sub__(self, other):
+        self._ensure_queryable()
         return self._raw_col - self._unwrap_operand(other)
 
     def __rsub__(self, other):
+        self._ensure_queryable()
         return self._unwrap_operand(other) - self._raw_col
 
     def __mul__(self, other):
+        self._ensure_queryable()
         return self._raw_col * self._unwrap_operand(other)
 
     def __rmul__(self, other):
+        self._ensure_queryable()
         return self._unwrap_operand(other) * self._raw_col
 
     def __truediv__(self, other):
+        self._ensure_queryable()
         return self._raw_col / self._unwrap_operand(other)
 
     def __rtruediv__(self, other):
+        self._ensure_queryable()
         return self._unwrap_operand(other) / self._raw_col
 
     def __floordiv__(self, other):
+        self._ensure_queryable()
         return self._raw_col // self._unwrap_operand(other)
 
     def __rfloordiv__(self, other):
+        self._ensure_queryable()
         return self._unwrap_operand(other) // self._raw_col
 
     def __mod__(self, other):
+        self._ensure_queryable()
         return self._raw_col % self._unwrap_operand(other)
 
     def __rmod__(self, other):
+        self._ensure_queryable()
         return self._unwrap_operand(other) % self._raw_col
 
     def __pow__(self, other):
+        self._ensure_queryable()
         return self._raw_col ** self._unwrap_operand(other)
 
     def __rpow__(self, other):
+        self._ensure_queryable()
         return self._unwrap_operand(other) ** self._raw_col
 
     def __and__(self, other):
+        self._ensure_queryable()
         return self._raw_col & self._unwrap_operand(other)
 
     def __rand__(self, other):
+        self._ensure_queryable()
         return self._unwrap_operand(other) & self._raw_col
 
     def __or__(self, other):
+        self._ensure_queryable()
         return self._raw_col | self._unwrap_operand(other)
 
     def __ror__(self, other):
+        self._ensure_queryable()
         return self._unwrap_operand(other) | self._raw_col
 
     def __xor__(self, other):
+        self._ensure_queryable()
         return self._raw_col ^ self._unwrap_operand(other)
 
     def __rxor__(self, other):
+        self._ensure_queryable()
         return self._unwrap_operand(other) ^ self._raw_col
 
     def __invert__(self):
+        self._ensure_queryable()
         if self._is_nullable_bool:
             return self._raw_col == 0
         return ~self._raw_col
 
     def __lt__(self, other):
+        self._ensure_queryable()
         return self._raw_col < self._unwrap_operand(other)
 
     def __le__(self, other):
+        self._ensure_queryable()
         return self._raw_col <= self._unwrap_operand(other)
 
     def __eq__(self, other):
+        self._ensure_queryable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._raw_col == int(other)
         return self._raw_col == self._unwrap_operand(other)
 
     def __ne__(self, other):
+        self._ensure_queryable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._raw_col == int(not other)
         return self._raw_col != self._unwrap_operand(other)
 
     def __gt__(self, other):
+        self._ensure_queryable()
         return self._raw_col > self._unwrap_operand(other)
 
     def __ge__(self, other):
+        self._ensure_queryable()
         return self._raw_col >= self._unwrap_operand(other)
 
     @property
@@ -1598,6 +1638,8 @@ class CTable(Generic[RowT]):
                 cc = self._schema.columns_by_name[name]
                 if self._is_list_column(cc):
                     col = storage.open_list_column(name)
+                elif self._is_varlen_scalar_column(cc):
+                    col = storage.open_varlen_scalar_column(name, cc.spec)
                 else:
                     col = storage.open_column(name)
                 self._cols[name] = col
@@ -5656,6 +5698,16 @@ class CTable(Generic[RowT]):
         operands.update({name: cc["lazy"] for name, cc in self._computed_cols.items()})
         return operands
 
+    def _guard_varlen_scalar_expression(self, expr: str) -> None:
+        for col in self._schema.columns:
+            if self._is_varlen_scalar_column(col) and re.search(
+                rf"(?<!\w){re.escape(col.name)}(?!\w)", expr
+            ):
+                raise NotImplementedError(
+                    f"Column {col.name!r} is a vlstring/vlbytes column; "
+                    "lazy expressions are not supported yet."
+                )
+
     def where(
         self,
         expr_result: str | np.ndarray | blosc2.NDArray | blosc2.LazyExpr | Column,
@@ -5735,6 +5787,7 @@ class CTable(Generic[RowT]):
             t.where(not t.returned)
         """
         if isinstance(expr_result, str):
+            self._guard_varlen_scalar_expression(expr_result)
             expr_result = blosc2.lazyexpr(expr_result, self._where_expression_operands())
         if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:
             expr_result = blosc2.asarray(expr_result)

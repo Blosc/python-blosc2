@@ -515,6 +515,12 @@ class VLStringSpec(SchemaSpec):
         batch_rows: int | None = 2048,
         items_per_block: int | None = None,
     ):
+        if serializer != "msgpack":
+            raise ValueError("vlstring currently only supports serializer='msgpack'")
+        if batch_rows is not None and batch_rows <= 0:
+            raise ValueError("batch_rows must be positive or None")
+        if items_per_block is not None and items_per_block <= 0:
+            raise ValueError("items_per_block must be positive or None")
         self.nullable = nullable
         self.serializer = serializer
         self.batch_rows = batch_rows
@@ -568,6 +574,12 @@ class VLBytesSpec(SchemaSpec):
         batch_rows: int | None = 2048,
         items_per_block: int | None = None,
     ):
+        if serializer != "msgpack":
+            raise ValueError("vlbytes currently only supports serializer='msgpack'")
+        if batch_rows is not None and batch_rows <= 0:
+            raise ValueError("batch_rows must be positive or None")
+        if items_per_block is not None and items_per_block <= 0:
+            raise ValueError("items_per_block must be positive or None")
         self.nullable = nullable
         self.serializer = serializer
         self.batch_rows = batch_rows

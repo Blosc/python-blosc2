@@ -33,9 +33,47 @@ from blosc2.batch_array import BatchArray
 _CTABLE_VARLEN_SCALAR_META_KEY = "ctable_varlen_scalar"
 
 
+def _role_metadata_for_spec(spec) -> dict[str, Any]:
+    """Return the fixed metadata role tag for a CTable varlen scalar backend."""
+    return {
+        "version": 1,
+        "py_type": "str" if spec.python_type is str else "bytes",
+        "nullable": bool(getattr(spec, "nullable", False)),
+        "batch_rows": getattr(spec, "batch_rows", 2048),
+    }
+
+
+def _storage_with_role_meta(spec, **storage_kwargs: Any):
+    import blosc2
+
+    storage = blosc2.Storage(**storage_kwargs)
+    fixed_meta = dict(storage.meta or {})
+    fixed_meta[_CTABLE_VARLEN_SCALAR_META_KEY] = _role_metadata_for_spec(spec)
+    storage.meta = fixed_meta
+    return storage
+
+
+def _validate_role_metadata(backend: BatchArray, spec) -> None:
+    """Validate the optional CTable varlen scalar role tag on an opened backend."""
+    meta = backend.schunk.meta
+    if _CTABLE_VARLEN_SCALAR_META_KEY not in meta:
+        # Older local artifacts may only have the BatchArray tag; the CTable schema
+        # still identifies the logical role, so keep reopen tolerant.
+        return
+    role = meta[_CTABLE_VARLEN_SCALAR_META_KEY]
+    expected_py_type = "str" if spec.python_type is str else "bytes"
+    if role.get("py_type") != expected_py_type:
+        raise ValueError(
+            f"Varlen scalar backend type mismatch: expected {expected_py_type!r}, "
+            f"found {role.get('py_type')!r}."
+        )
+
+
 def _make_backend(spec) -> BatchArray:
     """Create a fresh in-memory BatchArray for a varlen scalar spec."""
+    storage = _storage_with_role_meta(spec)
     return BatchArray(
+        storage=storage,
         items_per_block=getattr(spec, "items_per_block", None),
         serializer=getattr(spec, "serializer", "msgpack"),
     )
@@ -43,25 +81,26 @@ def _make_backend(spec) -> BatchArray:
 
 def _make_persistent_backend(spec, urlpath: str, mode: str, *, cparams=None, dparams=None) -> BatchArray:
     """Create or open a persistent BatchArray for a varlen scalar spec."""
-    kwargs: dict[str, Any] = {
-        "urlpath": urlpath,
-        "mode": mode,
-        "contiguous": True,
-    }
+    kwargs: dict[str, Any] = {}
     if cparams is not None:
         kwargs["cparams"] = cparams
     if dparams is not None:
         kwargs["dparams"] = dparams
+    storage = _storage_with_role_meta(spec, urlpath=urlpath, mode=mode, contiguous=True)
     return BatchArray(
+        storage=storage,
         items_per_block=getattr(spec, "items_per_block", None),
         serializer=getattr(spec, "serializer", "msgpack"),
         **kwargs,
     )
 
 
-def _open_persistent_backend(urlpath: str, mode: str) -> BatchArray:
+def _open_persistent_backend(urlpath: str, mode: str, spec=None) -> BatchArray:
     """Reopen an existing persistent BatchArray (any mode)."""
-    return BatchArray(urlpath=urlpath, mode=mode)
+    backend = BatchArray(urlpath=urlpath, mode=mode)
+    if spec is not None:
+        _validate_role_metadata(backend, spec)
+    return backend
 
 
 class _ScalarVarLenArray:
