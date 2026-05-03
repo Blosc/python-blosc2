@@ -13,7 +13,7 @@ row-addressable list data.
 Internally, ListArray uses one of two lower-level backends:
 
 - :class:`blosc2.BatchArray` for append/scan-oriented workloads
-- :class:`blosc2.VLArray` for simpler row-level replacement semantics
+- :class:`blosc2.ObjectArray` for simpler row-level replacement semantics
 
 Quick example
 -------------

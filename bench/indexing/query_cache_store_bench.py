@@ -257,7 +257,7 @@ def _active_cache_store_cparams(arr: blosc2.NDArray) -> blosc2.CParams:
     coords = np.asarray([0], dtype=np.int64)
     indexing.store_cached_coords(arr, "(id >= 0) & (id <= 0)", [indexing.SELF_TARGET_NAME], None, coords)
     payload_path = indexing._query_cache_payload_path(arr)
-    store = blosc2.VLArray(storage=blosc2.Storage(urlpath=payload_path, mode="r"))
+    store = blosc2.ObjectArray(storage=blosc2.Storage(urlpath=payload_path, mode="r"))
     return store.cparams
 
 

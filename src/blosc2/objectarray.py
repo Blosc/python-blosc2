@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
     from blosc2.schunk import SChunk
 
+# On-disk metadata tag is kept as "vlarray" for backward compatibility with
+# existing stored files.  The public class name is ObjectArray.
 _VLARRAY_META = {"version": 1, "serializer": "msgpack"}
 
 
@@ -28,12 +30,12 @@ def _check_serialized_size(buffer: bytes) -> None:
         raise ValueError(f"Serialized objects cannot be larger than {blosc2.MAX_BUFFERSIZE} bytes")
 
 
-class VLArray:
+class ObjectArray:
     """A variable-length array backed by an :class:`blosc2.SChunk`.
 
     Entries are serialized with msgpack before compression. Standard Python
     objects are supported, and Blosc2 containers such as
-    :class:`blosc2.NDArray`, :class:`blosc2.SChunk`, :class:`blosc2.VLArray`,
+    :class:`blosc2.NDArray`, :class:`blosc2.SChunk`, :class:`blosc2.ObjectArray`,
     :class:`blosc2.BatchArray`, and :class:`blosc2.EmbedStore` are serialized
     transparently via :meth:`to_cframe` / :func:`blosc2.from_cframe`.
 
@@ -61,14 +63,14 @@ class VLArray:
         if isinstance(cparams, blosc2.CParams):
             cparams.typesize = 1
             if auto_use_dict and cparams.codec == blosc2.Codec.ZSTD and cparams.clevel > 0:
-                # VLArray stores many small serialized payloads, where Zstd dicts help materially.
+                # ObjectArray stores many small serialized payloads; Zstd dicts help materially.
                 cparams.use_dict = True
         else:
             cparams["typesize"] = 1
             codec = cparams.get("codec", blosc2.Codec.ZSTD)
             clevel = cparams.get("clevel", 5)
             if auto_use_dict and codec == blosc2.Codec.ZSTD and clevel > 0:
-                # VLArray stores many small serialized payloads, where Zstd dicts help materially.
+                # ObjectArray stores many small serialized payloads; Zstd dicts help materially.
                 cparams["use_dict"] = True
         return cparams
 
@@ -94,9 +96,9 @@ class VLArray:
     @staticmethod
     def _validate_storage(storage: blosc2.Storage) -> None:
         if storage.mmap_mode not in (None, "r"):
-            raise ValueError("For VLArray containers, mmap_mode must be None or 'r'")
+            raise ValueError("For ObjectArray containers, mmap_mode must be None or 'r'")
         if storage.mmap_mode == "r" and storage.mode != "r":
-            raise ValueError("For VLArray containers, mmap_mode='r' requires mode='r'")
+            raise ValueError("For ObjectArray containers, mmap_mode='r' requires mode='r'")
 
     def _attach_schunk(self, schunk: SChunk) -> None:
         self.schunk = schunk
@@ -145,7 +147,7 @@ class VLArray:
 
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
-            raise ValueError(f"Unsupported VLArray keyword argument(s): {unexpected}")
+            raise ValueError(f"Unsupported ObjectArray keyword argument(s): {unexpected}")
 
         self._validate_storage(storage)
         cparams = self._set_typesize_one(cparams)
@@ -168,24 +170,24 @@ class VLArray:
 
     def _validate_tag(self) -> None:
         if "vlarray" not in self.schunk.meta:
-            raise ValueError("The supplied SChunk is not tagged as a VLArray")
+            raise ValueError("The supplied SChunk is not tagged as an ObjectArray")
 
     def _check_writable(self) -> None:
         if self.mode == "r":
-            raise ValueError("Cannot modify a VLArray opened in read-only mode")
+            raise ValueError("Cannot modify an ObjectArray opened in read-only mode")
 
     def _normalize_index(self, index: int) -> int:
         if not isinstance(index, int):
-            raise TypeError("VLArray indices must be integers")
+            raise TypeError("ObjectArray indices must be integers")
         if index < 0:
             index += len(self)
         if index < 0 or index >= len(self):
-            raise IndexError("VLArray index out of range")
+            raise IndexError("ObjectArray index out of range")
         return index
 
     def _normalize_insert_index(self, index: int) -> int:
         if not isinstance(index, int):
-            raise TypeError("VLArray indices must be integers")
+            raise TypeError("ObjectArray indices must be integers")
         if index < 0:
             index += len(self)
             if index < 0:
@@ -244,7 +246,7 @@ class VLArray:
         """Remove and return the value at ``index``."""
         self._check_writable()
         if isinstance(index, slice):
-            raise NotImplementedError("Slicing is not supported for VLArray")
+            raise NotImplementedError("Slicing is not supported for ObjectArray.pop()")
         index = self._normalize_index(index)
         value = self[index]
         self.schunk.delete_chunk(index)
@@ -362,12 +364,12 @@ class VLArray:
 
     @property
     def info(self) -> InfoReporter:
-        """Print information about this VLArray."""
+        """Print information about this ObjectArray."""
         return InfoReporter(self)
 
     @property
     def info_items(self) -> list:
-        """A list of tuples with summary information about this VLArray."""
+        """A list of tuples with summary information about this ObjectArray."""
         item_nbytes, chunk_cbytes = self._item_size_stats()
         avg_item_nbytes = sum(item_nbytes) / len(item_nbytes) if item_nbytes else 0.0
         avg_chunk_cbytes = sum(chunk_cbytes) / len(chunk_cbytes) if chunk_cbytes else 0.0
@@ -390,7 +392,7 @@ class VLArray:
     def to_cframe(self) -> bytes:
         return self.schunk.to_cframe()
 
-    def copy(self, **kwargs: Any) -> VLArray:
+    def copy(self, **kwargs: Any) -> ObjectArray:
         """Create a copy of the container with optional constructor overrides."""
         if "meta" in kwargs:
             raise ValueError("meta should not be passed to copy")
@@ -405,22 +407,22 @@ class VLArray:
             if "urlpath" in kwargs and "mode" not in kwargs:
                 kwargs["mode"] = "w"
 
-        out = VLArray(**kwargs)
+        out = ObjectArray(**kwargs)
         out.extend(self)
         return out
 
-    def __enter__(self) -> VLArray:
+    def __enter__(self) -> ObjectArray:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         return False
 
     def __repr__(self) -> str:
-        return f"VLArray(len={len(self)}, urlpath={self.urlpath!r})"
+        return f"ObjectArray(len={len(self)}, urlpath={self.urlpath!r})"
 
 
-def vlarray_from_cframe(cframe: bytes, copy: bool = True) -> VLArray:
-    """Deserialize a CFrame buffer into a :class:`VLArray`."""
+def objectarray_from_cframe(cframe: bytes, copy: bool = True) -> ObjectArray:
+    """Deserialize a CFrame buffer into an :class:`ObjectArray`."""
 
     schunk = blosc2.schunk_from_cframe(cframe, copy=copy)
-    return VLArray(_from_schunk=schunk)
+    return ObjectArray(_from_schunk=schunk)

@@ -324,47 +324,47 @@ def test_external_schunk_file_and_reopen():
         os.remove(path)
 
 
-def test_store_and_retrieve_vlarray_in_dict(tmp_path):
-    path = tmp_path / "test_dstore_vlarray_embed.b2z"
+def test_store_and_retrieve_objectarray_in_dict(tmp_path):
+    path = tmp_path / "test_dstore_objectarray_embed.b2z"
     values = [{"name": "alpha", "count": 1}, None, ("tuple", 2), [1, "two", b"three"]]
 
-    vlarray = blosc2.VLArray()
-    vlarray.extend(values)
+    oarr = blosc2.ObjectArray()
+    oarr.extend(values)
 
     with DictStore(str(path), mode="w") as dstore:
-        dstore["/vlarray"] = vlarray
-        value = dstore["/vlarray"]
-        assert isinstance(value, blosc2.VLArray)
+        dstore["/objectarray"] = oarr
+        value = dstore["/objectarray"]
+        assert isinstance(value, blosc2.ObjectArray)
         assert list(value) == values
 
     with DictStore(str(path), mode="r") as dstore_read:
-        value = dstore_read["/vlarray"]
-        assert isinstance(value, blosc2.VLArray)
+        value = dstore_read["/objectarray"]
+        assert isinstance(value, blosc2.ObjectArray)
         assert list(value) == values
 
 
-def test_external_vlarray_file_and_reopen(tmp_path):
-    ext_path = tmp_path / "ext_vlarray.b2frame"
-    path = tmp_path / "test_dstore_vlarray_external.b2z"
+def test_external_objectarray_file_and_reopen(tmp_path):
+    ext_path = tmp_path / "ext_objectarray.b2frame"
+    path = tmp_path / "test_dstore_objectarray_external.b2z"
     values = ["alpha", {"nested": True}, None, (1, 2, 3)]
 
-    vlarray = blosc2.VLArray(urlpath=str(ext_path), mode="w", contiguous=True)
-    vlarray.extend(values)
-    vlarray.vlmeta["description"] = "External VLArray"
+    oarr = blosc2.ObjectArray(urlpath=str(ext_path), mode="w", contiguous=True)
+    oarr.extend(values)
+    oarr.vlmeta["description"] = "External ObjectArray"
 
     with DictStore(str(path), mode="w", threshold=None) as dstore:
-        dstore["/dir1/vlarray_ext"] = vlarray
-        assert "/dir1/vlarray_ext" in dstore.map_tree
-        assert dstore.map_tree["/dir1/vlarray_ext"].endswith(".b2f")
+        dstore["/dir1/objectarray_ext"] = oarr
+        assert "/dir1/objectarray_ext" in dstore.map_tree
+        assert dstore.map_tree["/dir1/objectarray_ext"].endswith(".b2f")
 
     with zipfile.ZipFile(path, "r") as zf:
-        assert "dir1/vlarray_ext.b2f" in zf.namelist()
+        assert "dir1/objectarray_ext.b2f" in zf.namelist()
 
     with DictStore(str(path), mode="r") as dstore_read:
-        value = dstore_read["/dir1/vlarray_ext"]
-        assert isinstance(value, blosc2.VLArray)
+        value = dstore_read["/dir1/objectarray_ext"]
+        assert isinstance(value, blosc2.ObjectArray)
         assert list(value) == values
-        assert value.vlmeta["description"] == "External VLArray"
+        assert value.vlmeta["description"] == "External ObjectArray"
 
 
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
@@ -392,30 +392,30 @@ def test_metadata_discovery_reopens_renamed_external_ndarray(storage_type, tmp_p
 
 
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
-def test_metadata_discovery_reopens_renamed_external_vlarray(storage_type, tmp_path):
-    path = tmp_path / f"test_renamed_vlarray.{storage_type}"
-    ext_path = tmp_path / "renamed_vlarray_source.b2frame"
+def test_metadata_discovery_reopens_renamed_external_objectarray(storage_type, tmp_path):
+    path = tmp_path / f"test_renamed_objectarray.{storage_type}"
+    ext_path = tmp_path / "renamed_objectarray_source.b2frame"
     values = ["alpha", {"nested": True}, None, (1, 2, 3)]
 
-    vlarray = blosc2.VLArray(urlpath=str(ext_path), mode="w", contiguous=True)
-    vlarray.extend(values)
-    vlarray.vlmeta["description"] = "Renamed VLArray"
+    oarr = blosc2.ObjectArray(urlpath=str(ext_path), mode="w", contiguous=True)
+    oarr.extend(values)
+    oarr.vlmeta["description"] = "Renamed ObjectArray"
 
     with DictStore(str(path), mode="w", threshold=None) as dstore:
-        dstore["/dir1/vlarray_ext"] = vlarray
+        dstore["/dir1/objectarray_ext"] = oarr
 
-    old_name = "dir1/vlarray_ext.b2f"
-    new_name = "dir1/vlarray_ext.renamed"
+    old_name = "dir1/objectarray_ext.b2f"
+    new_name = "dir1/objectarray_ext.renamed"
     _rename_store_member(str(path), old_name, new_name)
 
-    with pytest.warns(UserWarning, match=r"vlarray_ext\.renamed'.*VLArray.*expected '\.b2f'"):
+    with pytest.warns(UserWarning, match=r"objectarray_ext\.renamed'.*ObjectArray.*expected '\.b2f'"):
         dstore_read = DictStore(str(path), mode="r")
     with dstore_read:
-        assert dstore_read.map_tree["/dir1/vlarray_ext"] == new_name
-        value = dstore_read["/dir1/vlarray_ext"]
-        assert isinstance(value, blosc2.VLArray)
+        assert dstore_read.map_tree["/dir1/objectarray_ext"] == new_name
+        value = dstore_read["/dir1/objectarray_ext"]
+        assert isinstance(value, blosc2.ObjectArray)
         assert list(value) == values
-        assert value.vlmeta["description"] == "Renamed VLArray"
+        assert value.vlmeta["description"] == "Renamed ObjectArray"
 
 
 def test_metadata_discovery_reopens_lazyexpr_leaf(tmp_path):

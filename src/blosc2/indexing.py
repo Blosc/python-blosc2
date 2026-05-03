@@ -69,7 +69,7 @@ _HOT_CACHE: dict[tuple[tuple[str, str | int], str], np.ndarray] = {}
 _HOT_CACHE_ORDER: list[tuple[tuple[str, str | int], str]] = []
 # Total bytes of arrays currently in the hot cache.
 _HOT_CACHE_BYTES: int = 0
-# Persistent VLArray handles: resolved urlpath -> open VLArray object.
+# Persistent ObjectArray handles: resolved urlpath -> open ObjectArray object.
 _QUERY_CACHE_STORE_HANDLES: dict[str, object] = {}
 # Cached mmap handles for data arrays used in full-query gather: urlpath -> NDArray.
 _GATHER_MMAP_HANDLES: dict[str, object] = {}
@@ -380,7 +380,7 @@ def _save_store(array: blosc2.NDArray, store: dict) -> None:
 
 
 def _query_cache_payload_path(array: blosc2.NDArray) -> str:
-    """Return the path for the persistent query-cache VLArray payload store."""
+    """Return the path for the persistent query-cache ObjectArray payload store."""
     path, root = _sanitize_sidecar_root(array.urlpath)
     return str(path.with_name(f"{root}.__query_cache__.b2frame"))
 
@@ -450,7 +450,7 @@ def _save_query_cache_catalog(array: blosc2.NDArray, catalog: dict) -> None:
 
 
 def _open_query_cache_store(array: blosc2.NDArray, *, create: bool = False):
-    """Return an open (writable) VLArray for the persistent payload store.
+    """Return an open (writable) ObjectArray for the persistent payload store.
 
     Returns ``None`` if the array is not persistent.  When *create* is True the
     store is created if it does not yet exist.
@@ -463,18 +463,18 @@ def _open_query_cache_store(array: blosc2.NDArray, *, create: bool = False):
     if cached is not None:
         return cached
     if Path(path).exists():
-        vla = blosc2.VLArray(storage=blosc2.Storage(urlpath=path, mode="a"))
+        vla = blosc2.ObjectArray(storage=blosc2.Storage(urlpath=path, mode="a"))
         _QUERY_CACHE_STORE_HANDLES[path] = vla
         return vla
     if not create:
         return None
-    vla = blosc2.VLArray(storage=blosc2.Storage(urlpath=path, mode="w"))
+    vla = blosc2.ObjectArray(storage=blosc2.Storage(urlpath=path, mode="w"))
     _QUERY_CACHE_STORE_HANDLES[path] = vla
     return vla
 
 
 def _close_query_cache_store(path: str) -> None:
-    """Drop a cached VLArray handle for *path*."""
+    """Drop a cached ObjectArray handle for *path*."""
     _QUERY_CACHE_STORE_HANDLES.pop(path, None)
 
 

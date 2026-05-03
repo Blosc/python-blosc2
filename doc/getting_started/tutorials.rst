@@ -16,7 +16,7 @@ Tutorials
    tutorials/08.schunk-slicing_and_beyond
    tutorials/09.ucodecs-ufilters
    tutorials/10.prefilters
-   tutorials/11.vlarray
+   tutorials/11.objectarray
    tutorials/12.batcharray
    tutorials/13.containers
    tutorials/14.indexing-arrays

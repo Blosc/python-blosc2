@@ -169,7 +169,7 @@ class BatchArray:
         Serializer used for batch payloads. ``"msgpack"`` is the default and is
         the general-purpose choice for Python items, including nested Blosc2
         containers such as :class:`blosc2.NDArray`, :class:`blosc2.SChunk`,
-        :class:`blosc2.VLArray`, :class:`blosc2.BatchArray`, and
+        :class:`blosc2.ObjectArray`, :class:`blosc2.BatchArray`, and
         :class:`blosc2.EmbedStore`, which are serialized transparently via
         :meth:`to_cframe` / :func:`blosc2.from_cframe`. Msgpack also supports
         structured Blosc2 reference objects, currently

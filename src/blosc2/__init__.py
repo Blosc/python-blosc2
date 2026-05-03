@@ -568,7 +568,7 @@ from .dict_store import DictStore
 from .tree_store import TreeStore
 from .batch_array import Batch, BatchArray
 from .list_array import ListArray
-from .vlarray import VLArray, vlarray_from_cframe
+from .objectarray import ObjectArray, objectarray_from_cframe
 from .ref import Ref
 from .b2objects import open_b2object
 
@@ -830,7 +830,7 @@ __all__ = [  # noqa : RUF022
     "TreeStore",
     "Tuner",
     "URLPath",
-    "VLArray",
+    "ObjectArray",
     # Version
     "__version__",
     # Utils
@@ -1027,7 +1027,7 @@ __all__ = [  # noqa : RUF022
     "validate_expr",
     "var",
     "vecdot",
-    "vlarray_from_cframe",
+    "objectarray_from_cframe",
     "where",
     "zeros",
     "zeros_like",

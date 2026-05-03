@@ -1927,11 +1927,11 @@ def from_cframe(
     | blosc2.SChunk
     | blosc2.ListArray
     | blosc2.BatchArray
-    | blosc2.VLArray
+    | blosc2.ObjectArray
     | blosc2.C2Array
 ):
     """Create a :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>`, :ref:`SChunk <SChunk>`,
-    :ref:`BatchArray <BatchArray>` or :ref:`VLArray <VLArray>` instance
+    :ref:`BatchArray <BatchArray>` or :ref:`ObjectArray <ObjectArray>` instance
     from a contiguous frame buffer.
 
     Parameters
@@ -1949,7 +1949,7 @@ def from_cframe(
     Returns
     -------
     out: :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>`, :ref:`SChunk <SChunk>`,
-         :ref:`BatchArray <BatchArray>` or :ref:`VLArray <VLArray>`
+         :ref:`BatchArray <BatchArray>` or :ref:`ObjectArray <ObjectArray>`
         A new instance of the appropriate type containing the data passed.
 
     See Also
@@ -1968,7 +1968,7 @@ def from_cframe(
     if "batcharray" in schunk.meta:
         return blosc2.BatchArray(_from_schunk=schunk_from_cframe(cframe, copy=copy))
     if "vlarray" in schunk.meta:
-        return blosc2.vlarray_from_cframe(cframe, copy=copy)
+        return blosc2.objectarray_from_cframe(cframe, copy=copy)
     if "b2o" in schunk.meta:
         return blosc2.open_b2object(ndarray_from_cframe(cframe, copy=copy))
     if "b2nd" in schunk.meta:

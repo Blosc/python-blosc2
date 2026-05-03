@@ -19,9 +19,9 @@ import numpy as np
 import blosc2
 from blosc2.batch_array import BatchArray
 from blosc2.info import InfoReporter, format_nbytes_info
+from blosc2.objectarray import ObjectArray
 from blosc2.schema import ListSpec, SchemaSpec, StructSpec
 from blosc2.schema import list as list_spec_builder
-from blosc2.vlarray import VLArray
 
 _SUPPORTED_SERIALIZERS = {"msgpack", "arrow"}
 _SUPPORTED_STORAGES = {"batch", "vl"}
@@ -186,7 +186,7 @@ def coerce_list_cell(spec: ListSpec, value: Any) -> list[Any] | None:
 class ListArray:
     """A row-oriented container for list-valued data.
 
-    Backed internally by either :class:`blosc2.VLArray` or
+    Backed internally by either :class:`blosc2.ObjectArray` or
     :class:`blosc2.BatchArray`.
     """
 
@@ -234,7 +234,7 @@ class ListArray:
         storage_obj.meta = fixed_meta
 
         if self.spec.storage == "vl":
-            self._backend = VLArray(storage=storage_obj, **kwargs)
+            self._backend = ObjectArray(storage=storage_obj, **kwargs)
         else:
             self._backend = BatchArray(
                 storage=storage_obj,
@@ -268,8 +268,8 @@ class ListArray:
         self._cached_batch_values = None
         if self.spec.storage == "vl":
             if "vlarray" not in meta:
-                raise ValueError("ListArray metadata says backend='vl' but VLArray tag is missing")
-            self._backend = VLArray(_from_schunk=schunk)
+                raise ValueError("ListArray metadata says backend='vl' but ObjectArray tag is missing")
+            self._backend = ObjectArray(_from_schunk=schunk)
             self._persisted_row_count = len(self._backend)
         else:
             if "batcharray" not in meta:
