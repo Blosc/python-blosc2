@@ -2950,6 +2950,12 @@ class CTable(Generic[RowT]):
             "uint8/16/32/64, float32/64, bool, string, binary, and list."
         )
 
+    @staticmethod
+    def _string_max_length_for_column(string_max_length, name: str):
+        if isinstance(string_max_length, Mapping):
+            return string_max_length.get(name)
+        return string_max_length
+
     @classmethod
     def _compiled_columns_from_arrow(
         cls,
@@ -2974,10 +2980,11 @@ class CTable(Generic[RowT]):
             arrow_col = table_for_inference.column(name) if table_for_inference is not None else None
             field_is_list = pa.types.is_list(field.type) or pa.types.is_large_list(field.type)
             field_is_struct = pa.types.is_struct(field.type)
+            column_string_max_length = cls._string_max_length_for_column(string_max_length, name)
             field_is_varlen_scalar = (
                 not field_is_list
                 and not field_is_struct
-                and string_max_length is None
+                and column_string_max_length is None
                 and (
                     pa.types.is_string(field.type)
                     or pa.types.is_large_string(field.type)
@@ -3016,7 +3023,7 @@ class CTable(Generic[RowT]):
                 pa,
                 field.type,
                 arrow_col,
-                string_max_length=string_max_length,
+                string_max_length=column_string_max_length,
                 null_value=null_value,
                 nullable=field.nullable,
             )
@@ -3189,7 +3196,7 @@ class CTable(Generic[RowT]):
         dparams=None,
         validate: bool = False,
         capacity_hint: int | None = None,
-        string_max_length: int | None = None,
+        string_max_length: int | Mapping[str, int] | None = None,
         auto_null_sentinels: bool = True,
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
     ) -> CTable:
@@ -3204,7 +3211,9 @@ class CTable(Generic[RowT]):
         When *string_max_length* is set to a positive integer, scalar string
         and binary columns are imported as fixed-width
         :func:`~blosc2.string` / :func:`~blosc2.bytes` columns whose dtype is
-        sized to *string_max_length* characters/bytes.
+        sized to *string_max_length* characters/bytes. It may also be a mapping
+        from column name to max length; omitted string/binary columns remain
+        :func:`~blosc2.vlstring` / :func:`~blosc2.vlbytes` columns.
 
         ``blosc2_batch_size`` controls how many rows are buffered before
         BatchArray-backed imported columns (list columns and varlen scalar
@@ -3217,7 +3226,7 @@ class CTable(Generic[RowT]):
         batches = iter(batches)
         first_batch = None
         table_for_inference = None
-        if string_max_length is None:
+        if string_max_length is None or isinstance(string_max_length, Mapping):
             first_batch = next(batches, None)
             if first_batch is not None:
                 table_for_inference = pa.Table.from_batches([first_batch], schema=schema)

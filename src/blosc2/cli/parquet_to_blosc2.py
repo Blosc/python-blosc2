@@ -147,6 +147,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--parquet-batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument(
+        "--fixed-str-maxlen",
+        type=int,
+        default=None,
+        help=(
+            "Pre-scan string columns and import columns whose maximum character length is at most "
+            "this value as fixed-width, indexable strings. Other string columns remain vlstring."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-bytes-maxlen",
+        type=int,
+        default=None,
+        help=(
+            "Pre-scan binary columns and import columns whose maximum byte length is at most this value "
+            "as fixed-width, indexable bytes. Other binary columns remain vlbytes."
+        ),
+    )
+    parser.add_argument(
         "--max-rows",
         type=int,
         default=None,
@@ -217,12 +235,19 @@ def _release_arrow_temporaries(pa) -> None:
         pa.default_memory_pool().release_unused()
 
 
-def classify_columns(pa, schema):
+def classify_columns(
+    pa,
+    schema,
+    fixed_string_lengths: dict[str, int] | None = None,
+    fixed_bytes_lengths: dict[str, int] | None = None,
+):
     """Classify Parquet schema columns into importable categories."""
     fixed_cols: dict[str, object] = {}
     struct_wrap_cols: dict[str, object] = {}
     conversions: dict[str, dict[str, Any]] = {}
     nullable_scalars: list[str] = []
+    fixed_string_lengths = fixed_string_lengths or {}
+    fixed_bytes_lengths = fixed_bytes_lengths or {}
 
     for field in schema:
         t = field.type
@@ -251,11 +276,25 @@ def classify_columns(pa, schema):
             continue
         if pa.types.is_string(t) or pa.types.is_large_string(t):
             fixed_cols[field.name] = field
-            conversions[field.name] = {"conversion": "vlstring_nullable" if field.nullable else "vlstring"}
+            if field.name in fixed_string_lengths:
+                conversions[field.name] = {
+                    "conversion": "fixed_string_nullable" if field.nullable else "fixed_string",
+                    "max_length": fixed_string_lengths[field.name],
+                }
+            else:
+                conversions[field.name] = {
+                    "conversion": "vlstring_nullable" if field.nullable else "vlstring"
+                }
             continue
         if pa.types.is_binary(t) or pa.types.is_large_binary(t):
             fixed_cols[field.name] = field
-            conversions[field.name] = {"conversion": "vlbytes_nullable" if field.nullable else "vlbytes"}
+            if field.name in fixed_bytes_lengths:
+                conversions[field.name] = {
+                    "conversion": "fixed_bytes_nullable" if field.nullable else "fixed_bytes",
+                    "max_length": fixed_bytes_lengths[field.name],
+                }
+            else:
+                conversions[field.name] = {"conversion": "vlbytes_nullable" if field.nullable else "vlbytes"}
             continue
         conversions[field.name] = {"conversion": "skipped", "reason": f"unsupported: {t}"}
 
@@ -271,6 +310,101 @@ def build_import_schema(pa, original_schema, fixed_cols: dict, struct_wrap_cols:
         elif field.name in fixed_cols:
             fields.append(field)
     return pa.schema(fields)
+
+
+def candidate_fixed_scalar_columns(pa, schema, *, scan_strings: bool, scan_bytes: bool) -> list[str]:
+    columns = []
+    for field in schema:
+        if (scan_strings and (pa.types.is_string(field.type) or pa.types.is_large_string(field.type))) or (
+            scan_bytes and (pa.types.is_binary(field.type) or pa.types.is_large_binary(field.type))
+        ):
+            columns.append(field.name)
+    return columns
+
+
+def update_string_and_bytes_max_lengths(pa, pc, batch, max_lengths: dict[str, int]) -> None:
+    for field in batch.schema:
+        arr = batch.column(field.name)
+        if pa.types.is_string(field.type) or pa.types.is_large_string(field.type):
+            lengths = pc.utf8_length(arr)
+        else:
+            lengths = pc.binary_length(arr)
+        batch_max = pc.max(lengths).as_py()
+        if batch_max is not None:
+            max_lengths[field.name] = max(max_lengths[field.name], int(batch_max))
+
+
+def nullable_sentinel_adjusted_length(pa, field, max_length: int, null_policy) -> int:
+    if not field.nullable:
+        return max_length
+    null_value = null_policy.column_null_values.get(
+        field.name, null_policy.sentinel_for_arrow_type(pa, field.type)
+    )
+    return max(max_length, len(null_value)) if null_value is not None else max_length
+
+
+def fixed_string_and_bytes_lengths_from_scan(pa, schema, args, max_lengths: dict[str, int]):
+    from blosc2.ctable import get_null_policy
+
+    null_policy = get_null_policy()
+    fixed_string_lengths = {}
+    fixed_bytes_lengths = {}
+    for field in schema:
+        max_length = max_lengths.get(field.name)
+        if max_length is None:
+            continue
+        max_length = nullable_sentinel_adjusted_length(pa, field, max_length, null_policy)
+        if (
+            args.fixed_str_maxlen is not None
+            and (pa.types.is_string(field.type) or pa.types.is_large_string(field.type))
+            and max_length <= args.fixed_str_maxlen
+        ):
+            fixed_string_lengths[field.name] = args.fixed_str_maxlen
+        elif (
+            args.fixed_bytes_maxlen is not None
+            and (pa.types.is_binary(field.type) or pa.types.is_large_binary(field.type))
+            and max_length <= args.fixed_bytes_maxlen
+        ):
+            fixed_bytes_lengths[field.name] = args.fixed_bytes_maxlen
+    return fixed_string_lengths, fixed_bytes_lengths
+
+
+def scan_string_and_bytes_lengths(pa, pf, args, schema) -> tuple[dict[str, int], dict[str, int]]:
+    if args.fixed_str_maxlen is None and args.fixed_bytes_maxlen is None:
+        return {}, {}
+
+    import pyarrow.compute as pc
+
+    columns = candidate_fixed_scalar_columns(
+        pa,
+        schema,
+        scan_strings=args.fixed_str_maxlen is not None,
+        scan_bytes=args.fixed_bytes_maxlen is not None,
+    )
+    if not columns:
+        return {}, {}
+
+    print("Pre-scanning string/binary column lengths...")
+    rows_done = 0
+    total = pf.metadata.num_rows if args.max_rows is None else min(args.max_rows, pf.metadata.num_rows)
+    max_lengths = dict.fromkeys(columns, 0)
+    for batch in pf.iter_batches(batch_size=args.parquet_batch_size, columns=columns):
+        remaining = total - rows_done
+        if remaining <= 0:
+            break
+        if len(batch) > remaining:
+            batch = batch.slice(0, remaining)
+        update_string_and_bytes_max_lengths(pa, pc, batch, max_lengths)
+        rows_done += len(batch)
+
+    fixed_string_lengths, fixed_bytes_lengths = fixed_string_and_bytes_lengths_from_scan(
+        pa, schema, args, max_lengths
+    )
+    print(
+        f"  fixed string columns: {len(fixed_string_lengths):,}; "
+        f"fixed bytes columns: {len(fixed_bytes_lengths):,}"
+    )
+    return fixed_string_lengths, fixed_bytes_lengths
 
 
 def transform_batch(pa, batch, selected_cols: list[str], struct_wrap_cols: dict):
@@ -337,6 +471,12 @@ def print_import_plan(
     vlbytes_cols = [
         n for n, e in conversions.items() if e.get("conversion") in {"vlbytes", "vlbytes_nullable"}
     ]
+    fixed_string_cols = [
+        n for n, e in conversions.items() if e.get("conversion") in {"fixed_string", "fixed_string_nullable"}
+    ]
+    fixed_bytes_cols = [
+        n for n, e in conversions.items() if e.get("conversion") in {"fixed_bytes", "fixed_bytes_nullable"}
+    ]
     wrapped_structs = list(struct_wrap_cols)
     skipped = {n: e for n, e in conversions.items() if e.get("conversion") == "skipped"}
     print(f"Input:                 {input_path} ({input_path.stat().st_size / 1e6:.1f} MB)")
@@ -348,6 +488,8 @@ def print_import_plan(
     print(f"Parquet columns:       {len(parquet_schema)}")
     print(f"Imported columns:      {len(fixed_cols) + len(struct_wrap_cols)}")
     print(f"  Fixed-width:         {len(fixed_cols) - len(vlstring_cols) - len(vlbytes_cols)}")
+    print(f"  Fixed strings:       {len(fixed_string_cols)}")
+    print(f"  Fixed bytes:         {len(fixed_bytes_cols)}")
     print(f"  vlstring:            {len(vlstring_cols)}")
     print(f"  vlbytes:             {len(vlbytes_cols)}")
     print(f"  Struct→list:         {len(wrapped_structs)}")
@@ -355,6 +497,10 @@ def print_import_plan(
     print(f"  Skipped unsupported: {len(skipped)}")
     for name, entry in skipped.items():
         print(f"    - {name}: {entry['reason']}")
+    if args.fixed_str_maxlen is not None:
+        print(f"Fixed string maxlen:   {args.fixed_str_maxlen:,} characters")
+    if args.fixed_bytes_maxlen is not None:
+        print(f"Fixed bytes maxlen:    {args.fixed_bytes_maxlen:,} bytes")
     print(f"Parquet batch size:    {args.parquet_batch_size:,}")
     print(f"Blosc2 batch size:     {args.blosc2_batch_size:,}")
     print(f"Codec / level:         {args.codec} / {args.clevel}")
@@ -401,6 +547,10 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         raise ValueError("--parquet-batch-size must be positive")
     if args.blosc2_batch_size <= 0:
         raise ValueError("--blosc2-batch-size must be positive")
+    if args.fixed_str_maxlen is not None and args.fixed_str_maxlen <= 0:
+        raise ValueError("--fixed-str-maxlen must be positive")
+    if args.fixed_bytes_maxlen is not None and args.fixed_bytes_maxlen <= 0:
+        raise ValueError("--fixed-bytes-maxlen must be positive")
     if args.max_rows is not None and args.max_rows < 0:
         raise ValueError("--max-rows must be non-negative")
     if args.mem_every <= 0:
@@ -419,11 +569,17 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
     maybe_memory_report(args, "after ParquetFile open", pa)
     parquet_schema = pf.schema_arrow
 
-    fixed_cols, struct_wrap_cols, conversions, nullable_scalars = classify_columns(pa, parquet_schema)
+    fixed_string_lengths, fixed_bytes_lengths = scan_string_and_bytes_lengths(pa, pf, args, parquet_schema)
+    maybe_memory_report(args, "after string/binary length scan", pa)
+
+    fixed_cols, struct_wrap_cols, conversions, nullable_scalars = classify_columns(
+        pa, parquet_schema, fixed_string_lengths, fixed_bytes_lengths
+    )
     maybe_memory_report(args, "after column classification", pa)
 
     selected_cols = [f.name for f in parquet_schema if f.name in fixed_cols or f.name in struct_wrap_cols]
     import_schema = build_import_schema(pa, parquet_schema, fixed_cols, struct_wrap_cols)
+    fixed_scalar_lengths = {**fixed_string_lengths, **fixed_bytes_lengths} or None
     maybe_memory_report(args, "after import schema build", pa)
 
     print_import_plan(
@@ -450,7 +606,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         capacity_hint=(
             pf.metadata.num_rows if args.max_rows is None else min(args.max_rows, pf.metadata.num_rows)
         ),
-        string_max_length=None,
+        string_max_length=fixed_scalar_lengths,
         auto_null_sentinels=True,
         blosc2_batch_size=args.blosc2_batch_size,
     )

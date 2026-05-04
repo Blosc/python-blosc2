@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import dataclasses
 import typing
@@ -348,12 +349,22 @@ def compile_schema(row_cls: type[Any]) -> CompiledSchema:
 # ---------------------------------------------------------------------------
 
 
+def _bytes_to_json(value: bytes) -> dict[str, Any]:
+    return {"__bytes__": True, "base64": base64.b64encode(value).decode("ascii")}
+
+
+def _json_to_bytes(value: dict[str, Any]) -> bytes:
+    return base64.b64decode(value["base64"])
+
+
 def _default_to_json(value: Any) -> Any:
     """Convert a field default to a JSON-compatible value."""
     if value is MISSING:
         return None
     if isinstance(value, complex):
         return {"__complex__": True, "real": value.real, "imag": value.imag}
+    if isinstance(value, bytes):
+        return _bytes_to_json(value)
     return value
 
 
@@ -363,6 +374,8 @@ def _default_from_json(value: Any) -> Any:
         return MISSING
     if isinstance(value, dict) and value.get("__complex__"):
         return complex(value["real"], value["imag"])
+    if isinstance(value, dict) and value.get("__bytes__"):
+        return _json_to_bytes(value)
     return value
 
 
@@ -370,6 +383,8 @@ def spec_from_metadata_dict(data: dict[str, Any]) -> SchemaSpec:
     """Reconstruct one SchemaSpec from serialized metadata."""
     data = dict(data)
     kind = data.pop("kind")
+    if isinstance(data.get("null_value"), dict) and data["null_value"].get("__bytes__"):
+        data["null_value"] = _json_to_bytes(data["null_value"])
     if kind == "list":
         item_spec = spec_from_metadata_dict(data.pop("item"))
         return ListSpec(item_spec, **data)
@@ -404,6 +419,8 @@ def schema_to_dict(schema: CompiledSchema) -> dict[str, Any]:
     for col in schema.columns:
         entry: dict[str, Any] = {"name": col.name}
         entry.update(col.spec.to_metadata_dict())  # adds "kind" + constraints
+        if isinstance(entry.get("null_value"), bytes):
+            entry["null_value"] = _bytes_to_json(entry["null_value"])
         entry["default"] = _default_to_json(col.default)
         if col.config.cparams is not None:
             entry["cparams"] = col.config.cparams
