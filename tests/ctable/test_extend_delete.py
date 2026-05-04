@@ -189,13 +189,13 @@ def test_complex_scenarios():
         Row, new_data=[(1, 1j, 10.0, True), (2, 2j, 20.0, False), (3, 3j, 30.0, True)], expected_size=10
     )
     t3.delete(1)
-    assert t3.row[0].id[0] == 1
-    assert t3.row[1].id[0] == 3
+    assert t3[0].id == 1
+    assert t3[1].id == 3
     t3.extend([(10, 10j, 100.0, True), (11, 11j, 100.0, False)])
-    assert t3.row[0].id[0] == 1
-    assert t3.row[1].id[0] == 3
-    assert t3.row[2].id[0] == 10
-    assert t3.row[3].id[0] == 11
+    assert t3[0].id == 1
+    assert t3[1].id == 3
+    assert t3[2].id == 10
+    assert t3[3].id == 11
 
     # Full workflow
     t4 = CTable(Row, expected_size=20, compact=False)

@@ -81,6 +81,7 @@ def test_vlstring_display_width():
 
     assert compute_display_width(blosc2.vlstring()) == 40
     assert compute_display_width(blosc2.vlbytes()) == 40
+    assert compute_display_width(blosc2.list(blosc2.int64())) == 40
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Querying: where() filters, select() column projection, and chaining.
+# Querying: expression indexing, where() filters, projection, and chaining.
 
 from dataclasses import dataclass
 
@@ -40,7 +40,7 @@ high_value = t.where(t.amount > 200)
 print(f"Sales > $200: {len(high_value)} rows")
 print(high_value)
 
-not_returned = t.where("not returned")
+not_returned = t["not returned"]
 print(f"Not returned: {len(not_returned)} rows")
 
 # -- chained filters (views are composable) ---------------------------------
@@ -49,12 +49,12 @@ north_big = north.where(north.amount > 100)
 print(f"North region + amount > 100: {len(north_big)} rows")
 print(north_big)
 
-# -- select(): column projection (no data copy) -----------------------------
-slim = t.select(["id", "amount"])
+# -- column projection via [] (no data copy) --------------------------------
+slim = t[["id", "amount"]]
 print("id + amount only:")
 print(slim)
 
-# -- combined: select columns, then filter rows -----------------------------
-result = t.where("not returned").select(["region", "amount"])
+# -- combined filter + projection -------------------------------------------
+result = t.where("not returned", columns=["region", "amount"])
 print("Region + amount for non-returned sales:")
 print(result)

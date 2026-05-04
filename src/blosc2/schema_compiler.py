@@ -98,7 +98,7 @@ def compute_display_width(spec: SchemaSpec) -> int:
     if isinstance(spec, (VLStringSpec, VLBytesSpec)):
         return 40
     if isinstance(spec, ListSpec):
-        return max(18, len(spec.display_label()) + 4)
+        return max(40, len(spec.display_label()) + 4)
     dtype = spec.dtype
     if dtype is None:
         return 20

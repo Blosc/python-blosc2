@@ -19,7 +19,7 @@ import os
 import pprint
 import re
 import shutil
-import weakref
+from collections import namedtuple
 from collections.abc import Iterable, Mapping
 from dataclasses import MISSING, dataclass
 from dataclasses import field as dataclass_field
@@ -619,34 +619,29 @@ def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
     raise IndexError("Unexpected error finding physical index.")
 
 
-class _RowIndexer:
-    def __init__(self, table):
-        self._table_ref = weakref.ref(table)
+def _make_namedtuple_row_type(col_names: tuple[str, ...]):
+    base = namedtuple("CTableRow", col_names, rename=True)
+    field_name_map = dict(zip(col_names, base._fields, strict=True))
 
-    def __getitem__(self, item):
-        table = self._table_ref()
-        if table is None:
-            raise ReferenceError("owning CTable has been released")
-        return table._run_row_logic(item)
+    class CTableRow(base):
+        __slots__ = ()
+        _field_name_map = field_name_map
+        _original_fields = col_names
 
+        def __getitem__(self, key):
+            if isinstance(key, str):
+                try:
+                    return getattr(self, self._field_name_map[key])
+                except KeyError as exc:
+                    raise KeyError(
+                        f"No field named {key!r}. Available: {list(self._original_fields)}"
+                    ) from exc
+            return tuple.__getitem__(self, key)
 
-class _Row:
-    def __init__(self, table: CTable, nrow: int):
-        self._table = table
-        self._nrow = nrow
-        self._real_pos = None
+        def as_dict(self) -> dict[str, Any]:
+            return {name: self[name] for name in self._original_fields}
 
-    def _get_real_pos(self) -> int:
-        self._real_pos = _find_physical_index(self._table._valid_rows, self._nrow)
-        return self._real_pos
-
-    def __getitem__(self, col_name: str):
-        if self._real_pos is None:
-            self._get_real_pos()
-        cc = self._table._computed_cols.get(col_name)
-        if cc is not None:
-            return cc["lazy"][self._real_pos]
-        return self._table._cols[col_name][self._real_pos]
+    return CTableRow
 
 
 # ---------------------------------------------------------------------------
@@ -1601,7 +1596,6 @@ class CTable(Generic[RowT]):
         self._expr_index_arrays: dict[str, blosc2.NDArray] = {}
         self._col_widths: dict[str, int] = {}
         self.col_names: list[str] = []
-        self.row = _RowIndexer(self)
         self.auto_compact = compact
         self.base = None
 
@@ -1879,8 +1873,6 @@ class CTable(Generic[RowT]):
             return dict(zip(stored, data, strict=False))
         if dataclasses.is_dataclass(data) and not isinstance(data, type):
             return dataclasses.asdict(data)
-        if isinstance(data, _Row):
-            return {name: data[name] for name in stored}
         if isinstance(data, (np.void, np.record)):
             return {name: data[name] for name in stored}
         # Fallback: try positional indexing
@@ -1952,86 +1944,78 @@ class CTable(Generic[RowT]):
     # Display
     # ------------------------------------------------------------------
 
-    def __str__(self) -> str:
-        _HEAD_TAIL = 10  # rows shown at each end
-
+    def _display_positions(self, head_tail: int = 10):
         nrows = self._n_rows
-        ncols = len(self.col_names)
-        hidden = max(0, nrows - _HEAD_TAIL * 2)
-
-        # -- physical positions for head and tail rows --
+        hidden = max(0, nrows - head_tail * 2)
         valid_np = self._valid_rows[:]
         all_pos = np.where(valid_np)[0]
+        if nrows <= head_tail * 2:
+            return all_pos, np.array([], dtype=all_pos.dtype), 0
+        return all_pos[:head_tail], all_pos[-head_tail:], hidden
 
-        if nrows <= _HEAD_TAIL * 2:
-            head_pos = all_pos
-            tail_pos = np.array([], dtype=all_pos.dtype)
-            hidden = 0
-        else:
-            head_pos = all_pos[:_HEAD_TAIL]
-            tail_pos = all_pos[-_HEAD_TAIL:]
-
-        # -- per-column display widths --
+    def _display_widths(self) -> dict[str, int]:
         widths: dict[str, int] = {}
+        single_col = len(self.col_names) == 1
         for name in self.col_names:
             spec = self._schema.columns_by_name.get(name)
             dtype_label = self._dtype_info_label(self._col_dtype(name), spec.spec if spec else None)
             widths[name] = max(self._col_widths[name], len(dtype_label))
+            if single_col:
+                widths[name] = max(widths[name], 80)
+        return widths
 
+    @staticmethod
+    def _format_cell(value, width: int) -> str:
+        s = str(value)
+        if len(s) > width:
+            s = s[: width - 1] + "…"
+        return f" {s:<{width}} "
+
+    def _format_display_row(self, values: dict, widths: dict[str, int]) -> str:
+        return "  ".join(self._format_cell(values[n], widths[n]) for n in self.col_names)
+
+    def _rows_to_dicts(self, positions) -> list[dict]:
+        if len(positions) == 0:
+            return []
+        col_data = {n: self._fetch_col_at_positions(n, positions) for n in self.col_names}
+        rows = []
+        for i in range(len(positions)):
+            row = {}
+            for n in self.col_names:
+                row[n] = self._normalize_scalar_value(col_data[n][i])
+            rows.append(row)
+        return rows
+
+    def __str__(self) -> str:
+        nrows = self._n_rows
+        ncols = len(self.col_names)
+        head_pos, tail_pos, hidden = self._display_positions()
+        widths = self._display_widths()
         sep = "  ".join("─" * (w + 2) for w in widths.values())
 
-        def fmt_cell(value, width: int) -> str:
-            s = str(value)
-            if len(s) > width:
-                s = s[: width - 1] + "…"
-            return f" {s:<{width}} "
-
-        def fmt_row(values: dict) -> str:
-            return "  ".join(fmt_cell(values[n], widths[n]) for n in self.col_names)
-
-        # -- batch-fetch values (one read per column, not one per cell) --
-        def rows_to_dicts(positions) -> list[dict]:
-            if len(positions) == 0:
-                return []
-            col_data = {n: self._fetch_col_at_positions(n, positions) for n in self.col_names}
-            rows = []
-            for i in range(len(positions)):
-                row = {}
-                for n in self.col_names:
-                    value = col_data[n][i]
-                    row[n] = value.item() if isinstance(value, np.generic) else value
-                rows.append(row)
-            return rows
-
         lines = [
-            fmt_row({n: n for n in self.col_names}),
-            fmt_row(
+            self._format_display_row({n: n for n in self.col_names}, widths),
+            self._format_display_row(
                 {
                     n: self._dtype_info_label(
                         self._col_dtype(n),
                         self._schema.columns_by_name[n].spec if n in self._schema.columns_by_name else None,
                     )
                     for n in self.col_names
-                }
+                },
+                widths,
             ),
             sep,
         ]
-
-        for row in rows_to_dicts(head_pos):
-            lines.append(fmt_row(row))
-
+        lines.extend(self._format_display_row(row, widths) for row in self._rows_to_dicts(head_pos))
         if hidden > 0:
-            lines.append(fmt_row(dict.fromkeys(self.col_names, "...")))
-
-        for row in rows_to_dicts(tail_pos):
-            lines.append(fmt_row(row))
-
+            lines.append(self._format_display_row(dict.fromkeys(self.col_names, "..."), widths))
+        lines.extend(self._format_display_row(row, widths) for row in self._rows_to_dicts(tail_pos))
         lines.append(sep)
         footer = f"{nrows:,} rows × {ncols} columns"
         if hidden > 0:
             footer += f"  ({hidden:,} rows hidden)"
         lines.append(footer)
-
         return "\n".join(lines)
 
     def __repr__(self) -> str:
@@ -2043,7 +2027,38 @@ class CTable(Generic[RowT]):
 
     def __iter__(self):
         for i in range(self.nrows):
-            yield _Row(self, i)
+            yield self._materialize_row(i)
+
+    def _row_namedtuple_type(self):
+        visible = tuple(self.col_names)
+        if getattr(self, "_row_namedtuple_type_cache_cols", None) != visible:
+            self._row_namedtuple_type_cache = _make_namedtuple_row_type(visible)
+            self._row_namedtuple_type_cache_cols = visible
+        return self._row_namedtuple_type_cache
+
+    @staticmethod
+    def _normalize_scalar_value(value):
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, np.ndarray) and value.ndim == 0:
+            return value.item()
+        return value
+
+    def _physical_row_value(self, col_name: str, pos: int):
+        cc = self._computed_cols.get(col_name)
+        if cc is not None:
+            return self._normalize_scalar_value(np.asarray(cc["lazy"][pos]).ravel()[0])
+        return self._normalize_scalar_value(self._cols[col_name][pos])
+
+    def _materialize_row(self, index: int):
+        n_rows = self.nrows
+        if index < 0:
+            index += n_rows
+        if not (0 <= index < n_rows):
+            raise IndexError(f"row index {index} is out of bounds for table with {n_rows} rows")
+        pos = _find_physical_index(self._valid_rows, index)
+        row_type = self._row_namedtuple_type()
+        return row_type(*(self._physical_row_value(name, int(pos)) for name in self.col_names))
 
     def iter_sorted(
         self,
@@ -2058,8 +2073,8 @@ class CTable(Generic[RowT]):
         """Iterate rows in sorted order without materializing a full copy.
 
         Uses a FULL index when available (no sort needed); otherwise falls
-        back to ``np.lexsort`` on live physical positions.  Yields :class:`_Row`
-        objects in the same way as ``__iter__``.
+        back to ``np.lexsort`` on live physical positions.  Yields namedtuple-like
+        row objects in the same way as ``__iter__``.
 
         The sorted positions array is stored as a compressed ``blosc2.NDArray``
         to keep RAM usage low for large tables.  ``batch_size`` positions are
@@ -2116,7 +2131,7 @@ class CTable(Generic[RowT]):
         for i in range(0, total, batch_size):
             chunk = sorted_pos_nd[i : i + batch_size]
             for phys in chunk:
-                yield _Row(self, int(phys_to_logical[phys]))
+                yield self._materialize_row(int(phys_to_logical[phys]))
 
     # ------------------------------------------------------------------
     # Open existing table (classmethod)
@@ -2161,7 +2176,6 @@ class CTable(Generic[RowT]):
         obj._cols = {}
         obj._col_widths = {}
         obj.col_names = col_names
-        obj.row = _RowIndexer(obj)
         obj.auto_compact = False
         obj.base = None
 
@@ -2371,7 +2385,6 @@ class CTable(Generic[RowT]):
         obj._cols = mem_cols
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
         obj.col_names = col_names
-        obj.row = _RowIndexer(obj)
         obj.auto_compact = False
         obj.base = None
         obj._valid_rows = mem_valid
@@ -2401,7 +2414,6 @@ class CTable(Generic[RowT]):
         obj._expr_index_arrays = parent._expr_index_arrays
         obj._col_widths = parent._col_widths
         obj.col_names = parent.col_names
-        obj.row = _RowIndexer(obj)
         obj.auto_compact = parent.auto_compact
         obj.base = parent
         obj._valid_rows = new_valid_rows
@@ -2563,7 +2575,6 @@ class CTable(Generic[RowT]):
             row_cls=self._schema.row_cls,
         )
         obj._col_widths = {name: self._col_widths[name] for name in cols if name in self._col_widths}
-        obj.row = _RowIndexer(obj)
         return obj
 
     def describe(self) -> None:
@@ -3080,7 +3091,6 @@ class CTable(Generic[RowT]):
         obj._cols = new_cols
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in columns}
         obj.col_names = [col.name for col in columns]
-        obj.row = _RowIndexer(obj)
         obj.auto_compact = False
         obj.base = None
         obj._computed_cols = {}
@@ -3446,7 +3456,6 @@ class CTable(Generic[RowT]):
         obj._cols = new_cols
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
         obj.col_names = [col.name for col in schema.columns]
-        obj.row = _RowIndexer(obj)
         obj.auto_compact = False
         obj.base = None
         obj._computed_cols = {}  # from_csv creates no computed columns
@@ -4142,13 +4151,86 @@ class CTable(Generic[RowT]):
             self._storage.save_schema(self._schema_dict_with_computed())
 
     # ------------------------------------------------------------------
-    # Column access
+    # Column / row access
     # ------------------------------------------------------------------
 
-    def __getitem__(self, s: str):
-        if s in self._cols or s in self._computed_cols:
-            return Column(self, s)
-        return None
+    @staticmethod
+    def _all_strings(seq) -> bool:
+        return all(isinstance(v, str) for v in seq)
+
+    @staticmethod
+    def _all_ints(seq) -> bool:
+        return all(isinstance(v, (int, np.integer)) and not isinstance(v, (bool, np.bool_)) for v in seq)
+
+    def _getitem_arraylike(self, key):
+        if len(key) == 0:
+            return self._run_row_logic(key)
+        if getattr(key, "dtype", None) is not None:
+            if key.dtype == np.bool_:
+                return self._run_row_logic(key)
+            if np.issubdtype(key.dtype, np.integer):
+                return self._run_row_logic(key)
+            if key.dtype.kind in {"U", "S"}:
+                return self.select(key.tolist())
+        values = key.tolist() if hasattr(key, "tolist") else list(key)
+        if self._all_strings(values):
+            return self.select(values)
+        return self._run_row_logic(key)
+
+    def _getitem_row_selector(self, key):
+        if isinstance(key, (int, np.integer)) and not isinstance(key, (bool, np.bool_)):
+            return self._materialize_row(int(key))
+        if isinstance(key, slice):
+            return self._run_row_logic(key)
+        if isinstance(key, np.ndarray):
+            return self._getitem_arraylike(key)
+        if isinstance(key, list):
+            if key and self._all_strings(key):
+                return self.select(key)
+            return self._run_row_logic(key)
+        if isinstance(key, Iterable) and not isinstance(key, (str, bytes, tuple)):
+            key = list(key)
+            if key and self._all_strings(key):
+                return self.select(key)
+            return self._run_row_logic(key)
+        raise TypeError(
+            "Row selectors must be an int, slice, integer array/list, or boolean mask; "
+            f"got {type(key).__name__}"
+        )
+
+    def _structured_array_dtype(self) -> np.dtype:
+        fields = []
+        for name in self.col_names:
+            col_info = self._schema.columns_by_name.get(name)
+            if col_info is None:
+                dtype = np.asarray(self[name][:0]).dtype
+            elif self._is_list_column(col_info) or self._is_varlen_scalar_column(col_info):
+                dtype = np.dtype(object)
+            else:
+                dtype = col_info.dtype if col_info.dtype is not None else np.dtype(object)
+            fields.append((name, dtype))
+        return np.dtype(fields)
+
+    def __array__(self, dtype=None, copy=None):
+        arr = np.empty(self.nrows, dtype=self._structured_array_dtype())
+        for name in self.col_names:
+            values = self[name][:]
+            target_dtype = arr.dtype.fields[name][0]
+            if target_dtype == np.dtype(object) and isinstance(values, np.ndarray):
+                values = values.tolist()
+            arr[name] = values
+        if dtype is not None:
+            arr = arr.astype(dtype, copy=True if copy is None else copy)
+        return arr.copy() if copy else arr
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            if key in self._cols or key in self._computed_cols:
+                return Column(self, key)
+            return self.where(key)
+        if isinstance(key, tuple):
+            raise TypeError("Tuple indexing is not supported for CTable in V1")
+        return self._getitem_row_selector(key)
 
     def __getattr__(self, s: str):
         if s in self._cols or s in self._computed_cols:
@@ -4554,7 +4636,6 @@ class CTable(Generic[RowT]):
             }
             obj.col_names.append(cc_name)
             obj._col_widths.setdefault(cc_name, max(len(cc_name), 15))
-        obj.row = _RowIndexer(obj)
         obj._n_rows = 0
         obj._last_pos = None
         obj._read_only = False
@@ -5694,7 +5775,11 @@ class CTable(Generic[RowT]):
     # ------------------------------------------------------------------
 
     def _where_expression_operands(self) -> dict[str, blosc2.NDArray | blosc2.LazyExpr]:
-        operands = dict(self._cols)
+        operands = {}
+        for name, arr in self._cols.items():
+            col = self._schema.columns_by_name.get(name)
+            if col is not None and not (self._is_list_column(col) or self._is_varlen_scalar_column(col)):
+                operands[name] = arr
         operands.update({name: cc["lazy"] for name, cc in self._computed_cols.items()})
         return operands
 
@@ -5711,6 +5796,8 @@ class CTable(Generic[RowT]):
     def where(
         self,
         expr_result: str | np.ndarray | blosc2.NDArray | blosc2.LazyExpr | Column,
+        *,
+        columns: list[str] | tuple[str, ...] | None = None,
     ) -> CTable:
         """Return a row-filtered view matching a boolean predicate.
 
@@ -5741,7 +5828,9 @@ class CTable(Generic[RowT]):
         -------
         CTable
             A view over the same columns containing only rows where the
-            predicate is true and the source row is live.
+            predicate is true and the source row is live.  When ``columns`` is
+            provided, the returned view is additionally projected to that
+            ordered subset of columns.
 
         Raises
         ------
@@ -5754,6 +5843,7 @@ class CTable(Generic[RowT]):
         Filter using a string expression::
 
             view = t.where("value * category >= 150")
+            slim = t.where("value * category >= 150", columns=["value", "category"])
 
         Filter using column arithmetic::
 
@@ -5811,7 +5901,8 @@ class CTable(Generic[RowT]):
                 valid_pos = positions[(positions >= 0) & (positions < total)]
                 mask[valid_pos] = True
                 mask &= self._valid_rows[:]
-                return self.view(blosc2.asarray(mask))
+                result = self.view(blosc2.asarray(mask))
+                return result if columns is None else result.select(list(columns))
 
         filter = expr_result.compute() if isinstance(expr_result, blosc2.LazyExpr) else expr_result
 
@@ -5826,7 +5917,8 @@ class CTable(Generic[RowT]):
 
         filter = (filter & self._valid_rows).compute()
 
-        return self.view(filter)
+        result = self.view(filter)
+        return result if columns is None else result.select(list(columns))
 
     def _run_row_logic(self, ind: int | slice | str | Iterable) -> CTable:
         valid_rows_np = self._valid_rows[:]

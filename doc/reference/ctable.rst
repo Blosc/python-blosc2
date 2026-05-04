@@ -153,9 +153,35 @@ or use string expressions when that reads better::
 
     t.where("amount > 100 and region == 'North'")
     t.where("not returned")
+    t["not returned"]
 
-The last two forms for negating a boolean column are equivalent: ``t.where(~t.returned)``
-and ``t.where("not returned")``.
+The last three forms for negating a boolean column are equivalent:
+``t.where(~t.returned)``, ``t.where("not returned")``, and
+``t["not returned"]``.
+
+Indexing & projection
+~~~~~~~~~~~~~~~~~~~~~
+
+CTable indexing is type-driven::
+
+    t["amount"]                 # column access
+    t[3]                        # one row as a namedtuple-like object
+    t[3:8]                      # row view
+    t[[1, 4, 7]]                # gathered-row view
+    t[mask]                     # filtered row view
+    t[["region", "amount"]]   # projected column view
+
+String keys first try exact column-name lookup.  If the string is not a
+column name, it is interpreted as a boolean expression and behaves like
+:meth:`CTable.where`.
+
+For explicit filtered projection, use::
+
+    t.where("amount > 100", columns=["region", "amount"])
+
+When a NumPy structured array is needed, materialize explicitly::
+
+    np.asarray(t[:10])
 
 .. autosummary::
 

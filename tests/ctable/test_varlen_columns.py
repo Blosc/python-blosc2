@@ -32,7 +32,7 @@ def test_ctable_varlen_append_extend_and_reads():
     assert len(t) == 4
     assert t.tags[0] == ["x", "y"]
     assert t.tags[1:4] == [[], None, ["z"]]
-    assert t.row[2].tags[0] is None
+    assert t[2].tags is None
 
     t.tags[2] = ["r", "s"]
     assert t.tags[2] == ["r", "s"]

@@ -148,7 +148,7 @@ def test_append_after_reopen():
     t2 = CTable(Row, urlpath=path, mode="a")
     t2.append((3, 30.0, True))
     assert len(t2) == 3
-    assert t2.row[2].id[0] == 3
+    assert t2[2].id == 3
 
     # Verify it's visible in a third open
     t3 = CTable(Row, urlpath=path, mode="a")
@@ -280,7 +280,7 @@ def test_read_only_allows_reads():
 
     t2 = CTable.open(path, mode="r")
     assert len(t2) == 3
-    assert t2.row[0].id[0] == 1
+    assert t2[0].id == 1
     assert list(t2["score"][:]) == [10.0, 20.0, 30.0]
     assert len(t2.head(2)) == 2
     assert len(t2.tail(1)) == 1
