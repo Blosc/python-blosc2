@@ -220,11 +220,27 @@ def linkcode_resolve(domain, info):
     except Exception:
         return None
 
-    # Replace this with your repo info
     github_base_url = "https://github.com/Blosc/python-blosc2/blob/main/"
-    # Get the path relative to the repository root, not the module directory
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(blosc2.__file__), "..", ".."))
-    relpath = os.path.relpath(fn, start=repo_root)
+    fn = os.path.abspath(fn)
+
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    try:
+        relpath = os.path.relpath(fn, start=repo_root)
+    except ValueError:
+        relpath = None
+    if relpath is None or relpath.startswith(".."):
+        # Release docs may be built from an installed wheel/sdist, where source
+        # files live under site-packages/blosc2 instead of the repository's
+        # src/blosc2 tree.  Map those installed package paths back to the repo.
+        package_root = os.path.abspath(os.path.dirname(blosc2.__file__))
+        try:
+            package_relpath = os.path.relpath(fn, start=package_root)
+        except ValueError:
+            return None
+        if package_relpath.startswith(".."):
+            return None
+        relpath = os.path.join("src", "blosc2", package_relpath)
+
     return f"{github_base_url}{relpath}#L{lineno}"
 
 
