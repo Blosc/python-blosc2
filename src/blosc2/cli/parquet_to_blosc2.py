@@ -147,6 +147,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--parquet-batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument(
+        "--max-rows",
+        type=int,
+        default=None,
+        help="Maximum number of rows to import from the source parquet file; imports all rows by default.",
+    )
+    parser.add_argument(
         "--batch-size",
         dest="parquet_batch_size",
         type=int,
@@ -337,6 +343,8 @@ def print_import_plan(
     print(f"Output:                {output_path}")
     print(f"CTable store:          {ctable_store_kind(output_path)}")
     print(f"Rows:                  {pf.metadata.num_rows:,}")
+    if args.max_rows is not None:
+        print(f"Rows to import:        {min(args.max_rows, pf.metadata.num_rows):,}")
     print(f"Parquet columns:       {len(parquet_schema)}")
     print(f"Imported columns:      {len(fixed_cols) + len(struct_wrap_cols)}")
     print(f"  Fixed-width:         {len(fixed_cols) - len(vlstring_cols) - len(vlbytes_cols)}")
@@ -356,10 +364,15 @@ def print_import_plan(
 def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols):
     rows_done = 0
     t0 = time.perf_counter()
-    total = pf.metadata.num_rows
+    total = pf.metadata.num_rows if args.max_rows is None else min(args.max_rows, pf.metadata.num_rows)
     for batch_n, raw_batch in enumerate(
         pf.iter_batches(batch_size=args.parquet_batch_size, columns=selected_cols), start=1
     ):
+        remaining = total - rows_done
+        if remaining <= 0:
+            break
+        if len(raw_batch) > remaining:
+            raw_batch = raw_batch.slice(0, remaining)
         report_batch_mem = args.mem_report and batch_n % args.mem_every == 0
         if report_batch_mem:
             memory_report(f"batch {batch_n} after parquet read", pa)
@@ -388,6 +401,8 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         raise ValueError("--parquet-batch-size must be positive")
     if args.blosc2_batch_size <= 0:
         raise ValueError("--blosc2-batch-size must be positive")
+    if args.max_rows is not None and args.max_rows < 0:
+        raise ValueError("--max-rows must be non-negative")
     if args.mem_every <= 0:
         raise ValueError("--mem-every must be positive")
     if args.batch_report_every <= 0:
@@ -432,7 +447,9 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         urlpath=str(output_path),
         mode="w",
         cparams=blosc2.CParams(codec=blosc2.Codec[args.codec], clevel=args.clevel),
-        capacity_hint=pf.metadata.num_rows,
+        capacity_hint=(
+            pf.metadata.num_rows if args.max_rows is None else min(args.max_rows, pf.metadata.num_rows)
+        ),
         string_max_length=None,
         auto_null_sentinels=True,
         blosc2_batch_size=args.blosc2_batch_size,
@@ -524,7 +541,27 @@ def export_ctable_to_parquet(input_path: Path, output_path: Path, *, batch_size:
     return export_names
 
 
-def assess_parquet_difference(original_path: Path, roundtrip_path: Path, exported_cols: list[str]):
+def read_parquet_prefix(pa, pq, path: Path, columns: list[str], max_rows: int | None):
+    if max_rows is None:
+        return pq.read_table(path, columns=columns)
+    pf = pq.ParquetFile(path)
+    schema = pa.schema([pf.schema_arrow.field(name) for name in columns])
+    batches = []
+    rows_done = 0
+    for batch in pf.iter_batches(batch_size=DEFAULT_BATCH_SIZE, columns=columns):
+        remaining = max_rows - rows_done
+        if remaining <= 0:
+            break
+        if len(batch) > remaining:
+            batch = batch.slice(0, remaining)
+        batches.append(batch)
+        rows_done += len(batch)
+    return pa.Table.from_batches(batches, schema=schema)
+
+
+def assess_parquet_difference(
+    original_path: Path, roundtrip_path: Path, exported_cols: list[str], max_rows: int | None = None
+):
     pa, pq = require_pyarrow()
     orig_pf = pq.ParquetFile(original_path)
     rt_pf = pq.ParquetFile(roundtrip_path)
@@ -535,7 +572,7 @@ def assess_parquet_difference(original_path: Path, roundtrip_path: Path, exporte
     ]
     missing = [name for name in original_schema.names if name not in roundtrip_schema.names]
 
-    orig = pq.read_table(original_path, columns=common)
+    orig = read_parquet_prefix(pa, pq, original_path, common, max_rows)
     rt = pq.read_table(roundtrip_path, columns=common)
     differing = []
     type_diffs = []
@@ -550,6 +587,8 @@ def assess_parquet_difference(original_path: Path, roundtrip_path: Path, exporte
 
     print("\nRoundtrip assessment")
     print(f"  Original rows:       {orig_pf.metadata.num_rows:,}")
+    if max_rows is not None:
+        print(f"  Original rows compared: {orig.num_rows:,}")
     print(f"  Roundtrip rows:      {rt_pf.metadata.num_rows:,}")
     print(f"  Original columns:    {len(original_schema)}")
     print(f"  Roundtrip columns:   {len(roundtrip_schema)}")
@@ -589,7 +628,7 @@ def _run_command(args) -> int:
         exported = export_ctable_to_parquet(
             b2_path, roundtrip_path, batch_size=args.parquet_batch_size, overwrite=True
         )
-        assess_parquet_difference(input_path, roundtrip_path, exported or selected)
+        assess_parquet_difference(input_path, roundtrip_path, exported or selected, max_rows=args.max_rows)
         return 0
 
     output_path = args.output_path or _default_import_output(args.input_path)
