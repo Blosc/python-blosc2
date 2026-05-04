@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import typing
 from dataclasses import MISSING
@@ -19,7 +20,11 @@ import numpy as np  # noqa: TC002
 
 from blosc2.schema import (
     BLOSC2_FIELD_METADATA_KEY,
+    ListSpec,
     SchemaSpec,
+    StructSpec,
+    VLBytesSpec,
+    VLStringSpec,
     complex64,
     complex128,
     float32,
@@ -59,10 +64,12 @@ _KIND_TO_SPEC: dict[str, type[SchemaSpec]] = {
     # complex
     "complex64": complex64,
     "complex128": complex128,
-    # bool / string / bytes
+    # bool / string / bytes / varlen
     "bool": b2_bool,
     "string": string,
     "bytes": b2_bytes,
+    "vlstring": VLStringSpec,
+    "vlbytes": VLBytesSpec,
 }
 
 # ---------------------------------------------------------------------------
@@ -88,7 +95,13 @@ _DTYPE_DISPLAY_WIDTH: dict[str, int] = {
 
 def compute_display_width(spec: SchemaSpec) -> int:
     """Return a reasonable terminal display width for *spec*'s column."""
+    if isinstance(spec, (VLStringSpec, VLBytesSpec)):
+        return 40
+    if isinstance(spec, ListSpec):
+        return max(40, len(spec.display_label()) + 4)
     dtype = spec.dtype
+    if dtype is None:
+        return 20
     if dtype.kind == "U":  # fixed-width unicode (string spec)
         return max(10, min(dtype.itemsize // 4, 50))
     if dtype.kind == "S":  # fixed-width bytes
@@ -132,7 +145,7 @@ class CompiledColumn:
     name: str
     py_type: Any
     spec: SchemaSpec
-    dtype: np.dtype
+    dtype: np.dtype | None
     default: Any  # MISSING means required (no default)
     config: ColumnConfig
     display_width: int = 20  # terminal column width for __str__ / info()
@@ -151,6 +164,7 @@ class CompiledSchema:
     columns: list[CompiledColumn]
     columns_by_name: dict[str, CompiledColumn]
     validator_model: type[Any] | None = None  # filled in by schema_validation
+    metadata: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -183,17 +197,27 @@ def infer_spec_from_annotation(annotation: Any) -> SchemaSpec:
 
 
 def validate_annotation_matches_spec(name: str, annotation: Any, spec: SchemaSpec) -> None:
-    """Raise :exc:`TypeError` if *annotation* is incompatible with *spec*.
+    """Raise :exc:`TypeError` if *annotation* is incompatible with *spec*."""
+    if isinstance(spec, ListSpec):
+        origin = typing.get_origin(annotation)
+        if origin not in (list, list):
+            raise TypeError(
+                f"Column {name!r}: annotation {annotation!r} is incompatible with list spec; expected list[T]."
+            )
+        args = typing.get_args(annotation)
+        if len(args) != 1:
+            raise TypeError(f"Column {name!r}: list annotations must specify exactly one item type.")
+        item_annotation = args[0]
+        expected = spec.item_spec.python_type
+        if item_annotation is not expected:
+            raise TypeError(
+                f"Column {name!r}: list item annotation {item_annotation!r} is incompatible with "
+                f"item spec {type(spec.item_spec).__name__!r} (expected {expected.__name__!r})."
+            )
+        return
 
-    Parameters
-    ----------
-    name:
-        Column name, used only in the error message.
-    annotation:
-        The resolved Python type from the dataclass field.
-    spec:
-        The :class:`SchemaSpec` attached via ``b2.field(...)``.
-    """
+    # VLStringSpec and VLBytesSpec are only reachable via blosc2.field(blosc2.vlstring()/vlbytes()),
+    # so annotation must match python_type (str or bytes respectively).
     expected = spec.python_type
     if annotation is not expected:
         raise TypeError(
@@ -274,7 +298,7 @@ def compile_schema(row_cls: type[Any]) -> CompiledSchema:
 
         if meta is not None:
             # Explicit b2.field(...) path
-            spec = meta["spec"]
+            spec = copy.deepcopy(meta["spec"])
             if not isinstance(spec, SchemaSpec):
                 raise TypeError(
                     f"Column {name!r}: b2.field() requires a SchemaSpec as its first "
@@ -305,7 +329,7 @@ def compile_schema(row_cls: type[Any]) -> CompiledSchema:
                 name=name,
                 py_type=annotation,
                 spec=spec,
-                dtype=spec.dtype,
+                dtype=getattr(spec, "dtype", None),
                 default=default,
                 config=config,
                 display_width=compute_display_width(spec),
@@ -342,6 +366,21 @@ def _default_from_json(value: Any) -> Any:
     return value
 
 
+def spec_from_metadata_dict(data: dict[str, Any]) -> SchemaSpec:
+    """Reconstruct one SchemaSpec from serialized metadata."""
+    data = dict(data)
+    kind = data.pop("kind")
+    if kind == "list":
+        item_spec = spec_from_metadata_dict(data.pop("item"))
+        return ListSpec(item_spec, **data)
+    if kind == "struct":
+        return StructSpec.from_metadata_dict({"fields": data.pop("fields")})
+    spec_cls = _KIND_TO_SPEC.get(kind)
+    if spec_cls is None:
+        raise ValueError(f"Unknown column kind {kind!r}")
+    return spec_cls(**data)
+
+
 def schema_to_dict(schema: CompiledSchema) -> dict[str, Any]:
     """Serialize *schema* to a JSON-compatible dict.
 
@@ -376,11 +415,14 @@ def schema_to_dict(schema: CompiledSchema) -> dict[str, Any]:
             entry["blocks"] = list(col.config.blocks)
         cols.append(entry)
 
-    return {
+    result = {
         "version": 1,
         "row_cls": schema.row_cls.__name__ if schema.row_cls is not None else None,
         "columns": cols,
     }
+    if schema.metadata:
+        result["metadata"] = schema.metadata
+    return result
 
 
 def schema_from_dict(data: dict[str, Any]) -> CompiledSchema:
@@ -410,19 +452,14 @@ def schema_from_dict(data: dict[str, Any]) -> CompiledSchema:
         chunks = tuple(entry.pop("chunks")) if "chunks" in entry else None
         blocks = tuple(entry.pop("blocks")) if "blocks" in entry else None
 
-        spec_cls = _KIND_TO_SPEC.get(kind)
-        if spec_cls is None:
-            raise ValueError(f"Unknown column kind {kind!r}")
-
-        # Remaining keys in entry are constraint kwargs (ge, le, max_length, …)
-        spec = spec_cls(**entry)
+        spec = spec_from_metadata_dict({"kind": kind, **entry})
 
         columns.append(
             CompiledColumn(
                 name=name,
                 py_type=spec.python_type,
                 spec=spec,
-                dtype=spec.dtype,
+                dtype=getattr(spec, "dtype", None),
                 default=default,
                 config=ColumnConfig(cparams=cparams, dparams=dparams, chunks=chunks, blocks=blocks),
                 display_width=compute_display_width(spec),
@@ -433,4 +470,5 @@ def schema_from_dict(data: dict[str, Any]) -> CompiledSchema:
         row_cls=None,
         columns=columns,
         columns_by_name={col.name: col for col in columns},
+        metadata=dict(data.get("metadata", {})),
     )

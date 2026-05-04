@@ -130,16 +130,13 @@ print(f"Average market value         : {t['market_value'].mean():,.2f}\n")
 # 5. Filtering via a computed column
 # ---------------------------------------------------------------------------
 
-# Build a filter expression from the computed column's underlying LazyExpr
-lazy_mv = t.computed_columns["market_value"]["lazy"]
-
-big_trades = t.where(lazy_mv >= 30_000)
+# Build a filter expression by referencing the computed column directly
+big_trades = t.where(t.market_value >= 30_000)
 print(f"Trades worth ≥ $30 000 : {len(big_trades)}")
 print(big_trades)
 
 # Compound filter: large trades AND low fee
-lazy_fee_pct = t._cols["fee_pct"]
-cheap_big = t.where((lazy_mv >= 20_000) & (lazy_fee_pct <= 0.10))
+cheap_big = t.where((t.market_value >= 20_000) & (t.fee_pct <= 0.10))
 print(f"\nLarge trades (≥ $20 000) with fee ≤ 0.10 % : {len(cheap_big)}")
 print(cheap_big)
 
@@ -212,7 +209,7 @@ xt = blosc2.CTable(Trade, new_data=TRADES)
 xt.add_computed_column("market_value", lambda c: c["price"] * c["shares"])
 xt.create_index(expression="price * shares", kind=blosc2.IndexKind.FULL, name="mv_expr")
 
-expr_view = xt.where((xt._cols["price"] * xt._cols["shares"]) >= 30_000)
+expr_view = xt.where((xt.price * xt.shares) >= 30_000)
 print("\nRows matched via direct expression index:")
 print(expr_view.select(["ticker", "market_value"]))
 

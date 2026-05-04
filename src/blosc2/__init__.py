@@ -567,7 +567,8 @@ from .embed_store import EmbedStore, estore_from_cframe
 from .dict_store import DictStore
 from .tree_store import TreeStore
 from .batch_array import Batch, BatchArray
-from .vlarray import VLArray, vlarray_from_cframe
+from .list_array import ListArray
+from .objectarray import ObjectArray, objectarray_from_cframe
 from .ref import Ref
 from .b2objects import open_b2object
 
@@ -632,7 +633,7 @@ Disable the overloaded equal operator.
 # Delayed imports for avoiding overwriting of python builtins.
 # Note: bool, bytes, string shadow builtins in the blosc2 namespace by design —
 # they are schema spec constructors (b2.bool(), b2.bytes(), etc.).
-from .ctable import Column, CTable
+from .ctable import DEFAULT_NULL_POLICY, Column, CTable, NullPolicy, get_null_policy, null_policy
 from .ndarray import (
     abs,
     acos,
@@ -746,11 +747,15 @@ from .schema import (
     int16,
     int32,
     int64,
+    list,
     string,
+    struct,
     uint8,
     uint16,
     uint32,
     uint64,
+    vlbytes,
+    vlstring,
 )
 
 __all__ = [  # noqa : RUF022
@@ -766,6 +771,7 @@ __all__ = [  # noqa : RUF022
     "DEFAULT_FLOAT",
     "DEFAULT_INDEX",
     "DEFAULT_INT",
+    "DEFAULT_NULL_POLICY",
     # Mathematical constants
     "e",
     "pi",
@@ -784,11 +790,15 @@ __all__ = [  # noqa : RUF022
     "int16",
     "int32",
     "int64",
+    "list",
     "string",
+    "struct",
     "uint8",
     "uint16",
     "uint32",
     "uint64",
+    "vlbytes",
+    "vlstring",
     # Classes
     "C2Array",
     "CParams",
@@ -806,6 +816,8 @@ __all__ = [  # noqa : RUF022
     "DSLSyntaxError",
     "LazyExpr",
     "LazyUDF",
+    "ListArray",
+    "NullPolicy",
     "NDArray",
     "NDField",
     "Operand",
@@ -822,7 +834,7 @@ __all__ = [  # noqa : RUF022
     "TreeStore",
     "Tuner",
     "URLPath",
-    "VLArray",
+    "ObjectArray",
     # Version
     "__version__",
     # Utils
@@ -1019,8 +1031,10 @@ __all__ = [  # noqa : RUF022
     "validate_expr",
     "var",
     "vecdot",
-    "vlarray_from_cframe",
+    "objectarray_from_cframe",
     "where",
     "zeros",
     "zeros_like",
+    "get_null_policy",
+    "null_policy",
 ]

@@ -9,7 +9,7 @@
 # Filters: 250k < id < 750k, active == False, 25.0 < score < 75.0
 
 from dataclasses import dataclass
-from time import time
+from time import perf_counter as time
 
 import numpy as np
 
@@ -51,20 +51,20 @@ print("=" * 70)
 
 # 1. Three chained where() calls
 t0 = time()
-r1 = ct.where(ct["id"] > 250_000)
-r2 = r1.where(ct["id"] < 750_000)
-r3 = r2.where(ct["score"] > 25.0)
-r4 = r3.where(ct["score"] < 75.0)
-r5 = r4.where(not ct["active"])
+r1 = ct.where(ct.id > 250_000)
+r2 = r1.where(ct.id < 750_000)
+r3 = r2.where(ct.score > 25.0)
+r4 = r3.where(ct.score < 75.0)
+r5 = r4.where(ct.active == False)
 t_chained = time() - t0
 print(f"Chained where() (5 calls):  {t_chained:.6f} s   rows: {len(r5):,}")
 
 # 2. Single combined where() call
 t0 = time()
 result = ct.where(
-    (ct["id"] > 250_000) & (ct["id"] < 750_000) &
-    (not ct["active"]) &
-    (ct["score"] > 25.0) & (ct["score"] < 75.0)
+    (ct.id > 250_000) & (ct.id < 750_000) &
+    (ct.active == False) &
+    (ct.score > 25.0) & (ct.score < 75.0)
 )
 t_combined = time() - t0
 print(f"Combined where() (1 call):  {t_combined:.6f} s   rows: {len(result):,}")

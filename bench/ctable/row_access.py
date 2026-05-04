@@ -5,11 +5,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Benchmark for measuring row[int] access (full row via _RowIndexer),
+# Benchmark for measuring row[int] access via CTable.__getitem__,
 # testing access at different positions across the array.
 
 from dataclasses import dataclass
-from time import time
+from time import perf_counter as time
 
 import numpy as np
 
@@ -54,7 +54,7 @@ print("-" * 60)
 
 for idx in indices:
     t0 = time()
-    row = ct.row[idx]
+    row = ct[idx]
     t_access = time() - t0
     position = f"{idx / N * 100:.0f}% into array"
     print(f"{idx:<15,} {position:>12}   {t_access:.6f}")

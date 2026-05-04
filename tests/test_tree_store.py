@@ -621,54 +621,54 @@ def test_schunk_support():
     os.remove("test_schunk.b2z")
 
 
-def test_vlarray_support():
-    """Test that TreeStore supports embedded VLArray objects."""
+def test_objectarray_support():
+    """Test that TreeStore supports embedded ObjectArray objects."""
     values = [{"name": "alpha", "count": 1}, None, ("tuple", 2), [1, "two", b"three"]]
-    with TreeStore("test_vlarray.b2z", mode="w") as tstore:
-        vlarray = blosc2.VLArray()
-        vlarray.extend(values)
-        tstore["/data/vlarray1"] = vlarray
+    with TreeStore("test_objectarray.b2z", mode="w") as tstore:
+        oarr = blosc2.ObjectArray()
+        oarr.extend(values)
+        tstore["/data/objectarray1"] = oarr
 
-        retrieved = tstore["/data/vlarray1"]
-        assert isinstance(retrieved, blosc2.VLArray)
+        retrieved = tstore["/data/objectarray1"]
+        assert isinstance(retrieved, blosc2.ObjectArray)
         assert list(retrieved) == values
 
         data_subtree = tstore["/data"]
         assert isinstance(data_subtree, TreeStore)
-        assert set(data_subtree.keys()) == {"/vlarray1"}
+        assert set(data_subtree.keys()) == {"/objectarray1"}
 
-    with TreeStore("test_vlarray.b2z", mode="r") as tstore:
-        retrieved = tstore["/data/vlarray1"]
-        assert isinstance(retrieved, blosc2.VLArray)
+    with TreeStore("test_objectarray.b2z", mode="r") as tstore:
+        retrieved = tstore["/data/objectarray1"]
+        assert isinstance(retrieved, blosc2.ObjectArray)
         assert list(retrieved) == values
 
-    os.remove("test_vlarray.b2z")
+    os.remove("test_objectarray.b2z")
 
 
-def test_external_vlarray_support():
-    """Test that TreeStore supports external VLArray objects."""
-    ext_path = "ext_vlarray.b2frame"
+def test_external_objectarray_support():
+    """Test that TreeStore supports external ObjectArray objects."""
+    ext_path = "ext_objectarray.b2frame"
     values = ["alpha", {"nested": True}, None, (1, 2, 3)]
     if os.path.exists(ext_path):
         os.remove(ext_path)
 
-    vlarray = blosc2.VLArray(urlpath=ext_path, mode="w", contiguous=True)
-    vlarray.extend(values)
-    vlarray.vlmeta["description"] = "External VLArray for TreeStore"
+    oarr = blosc2.ObjectArray(urlpath=ext_path, mode="w", contiguous=True)
+    oarr.extend(values)
+    oarr.vlmeta["description"] = "External ObjectArray for TreeStore"
 
-    with TreeStore("test_vlarray_external.b2z", mode="w", threshold=None) as tstore:
-        tstore["/data/vlarray_ext"] = vlarray
-        assert "/data/vlarray_ext" in tstore
+    with TreeStore("test_objectarray_external.b2z", mode="w", threshold=None) as tstore:
+        tstore["/data/objectarray_ext"] = oarr
+        assert "/data/objectarray_ext" in tstore
 
-    with TreeStore("test_vlarray_external.b2z", mode="r") as tstore:
-        retrieved = tstore["/data/vlarray_ext"]
-        assert isinstance(retrieved, blosc2.VLArray)
+    with TreeStore("test_objectarray_external.b2z", mode="r") as tstore:
+        retrieved = tstore["/data/objectarray_ext"]
+        assert isinstance(retrieved, blosc2.ObjectArray)
         assert list(retrieved) == values
-        assert retrieved.vlmeta["description"] == "External VLArray for TreeStore"
+        assert retrieved.vlmeta["description"] == "External ObjectArray for TreeStore"
 
     if os.path.exists(ext_path):
         os.remove(ext_path)
-    os.remove("test_vlarray_external.b2z")
+    os.remove("test_objectarray_external.b2z")
 
 
 def test_external_batcharray_support(tmp_path):

@@ -1,27 +1,30 @@
-.. _VLArray:
+.. _ObjectArray:
 
-VLArray
-=======
+ObjectArray
+===========
 
 Overview
 --------
-VLArray is a variable-length array container backed by a single Blosc2 ``SChunk``.
+ObjectArray is a variable-length array container backed by a single Blosc2 ``SChunk``.
 
 Each entry is stored as one compressed chunk:
 
 - entries can be any serializable Python object
 - items are serialized with msgpack before compression
-- Blosc2 containers (:class:`NDArray`, :class:`SChunk`, :class:`VLArray`,
+- Blosc2 containers (:class:`NDArray`, :class:`SChunk`, :class:`ObjectArray`,
   :class:`BatchArray`, :class:`EmbedStore`) are serialized transparently
   via :meth:`to_cframe` / :func:`blosc2.from_cframe`
 - structured Blosc2 reference objects (:class:`C2Array`, :class:`LazyExpr`,
   and :class:`LazyUDF` backed by :func:`blosc2.dsl_kernel`) are also supported
 
-VLArray is a good fit when you need:
+ObjectArray is a good fit when you need:
 
 - a persistent, compressed list of arbitrary Python objects
 - per-item random access and mutation
 - compact summary information via ``.info``
+
+See :class:`blosc2.BatchArray` for the batched counterpart, where many objects
+are packed into each chunk for higher throughput.
 
 Quick example
 -------------
@@ -30,14 +33,14 @@ Quick example
 
     import blosc2
 
-    vl = blosc2.VLArray(urlpath="example.b2z", mode="w", contiguous=True)
-    vl.append({"x": 1, "y": 2})
-    vl.append([3, 4, 5])
-    vl.append("hello")
+    oarr = blosc2.ObjectArray(urlpath="example.b2z", mode="w", contiguous=True)
+    oarr.append({"x": 1, "y": 2})
+    oarr.append([3, 4, 5])
+    oarr.append("hello")
 
-    print(vl[0])  # {'x': 1, 'y': 2}
-    print(vl[1])  # [3, 4, 5]
-    print(len(vl))  # 3
+    print(oarr[0])  # {'x': 1, 'y': 2}
+    print(oarr[1])  # [3, 4, 5]
+    print(len(oarr))  # 3
 
     reopened = blosc2.open("example.b2z", mode="r")
     print(type(reopened).__name__)
@@ -45,7 +48,7 @@ Quick example
 
 .. currentmodule:: blosc2
 
-.. autoclass:: VLArray
+.. autoclass:: ObjectArray
 
     Constructors
     ------------
@@ -80,4 +83,4 @@ Quick example
 
 Constructors
 ------------
-.. autofunction:: blosc2.vlarray_from_cframe
+.. autofunction:: blosc2.objectarray_from_cframe

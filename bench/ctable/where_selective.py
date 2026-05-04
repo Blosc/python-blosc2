@@ -9,7 +9,7 @@
 # Filter: id < threshold, with thresholds covering 1%, 10%, 50%, 90%, 100%
 
 from dataclasses import dataclass
-from time import time
+from time import perf_counter as time
 
 import numpy as np
 
@@ -54,7 +54,7 @@ print("-" * 70)
 
 for threshold in thresholds:
     t0 = time()
-    result = ct.where(ct["id"] < threshold)
+    result = ct.where(ct.id < threshold)
     t_where = time() - t0
     selectivity = threshold / N * 100
     print(f"id < {threshold:<10,} {len(result):>15,} {selectivity:>12.1f}% {t_where:>12.6f}")

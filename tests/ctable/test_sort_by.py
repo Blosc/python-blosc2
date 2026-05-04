@@ -29,6 +29,14 @@ class StrRow:
     rank: int = blosc2.field(blosc2.int64(ge=0), default=0)
 
 
+@dataclass
+class ListRow:
+    id: int = blosc2.field(blosc2.int64(ge=0))
+    tags: list[str] = blosc2.field(  # noqa: RUF009
+        blosc2.list(blosc2.string(max_length=16), nullable=True, batch_rows=2)
+    )
+
+
 DATA = [
     (3, 80.0, True),
     (1, 50.0, False),
@@ -185,6 +193,28 @@ def test_sort_all_columns_consistent():
         assert v == pytest.approx(expected[int(i)])
 
 
+def test_sort_copy_keeps_list_columns_aligned():
+    data = [(3, ["c"]), (1, ["a", "one"]), (4, ["d"]), (2, None), (0, [])]
+    t = CTable(ListRow, new_data=data)
+
+    s = t.sort_by("id")
+
+    assert list(s["id"][:]) == [0, 1, 2, 3, 4]
+    assert s["tags"][:] == [[], ["a", "one"], None, ["c"], ["d"]]
+    assert t["tags"][:] == [["c"], ["a", "one"], ["d"], None, []]
+
+
+def test_sort_inplace_keeps_list_columns_aligned():
+    data = [(3, ["c"]), (1, ["a", "one"]), (4, ["d"]), (2, None), (0, [])]
+    t = CTable(ListRow, new_data=data)
+
+    result = t.sort_by("id", inplace=True)
+
+    assert result is t
+    assert list(t["id"][:]) == [0, 1, 2, 3, 4]
+    assert t["tags"][:] == [[], ["a", "one"], None, ["c"], ["d"]]
+
+
 # ===========================================================================
 # Edge cases
 # ===========================================================================
@@ -221,11 +251,19 @@ def test_sort_reverse_sorted():
 # ===========================================================================
 
 
-def test_sort_view_raises():
+def test_sort_view_inplace_raises():
     t = CTable(Row, new_data=DATA)
     view = t.where(t["id"] > 2)
-    with pytest.raises(ValueError, match="view"):
-        view.sort_by("id")
+    with pytest.raises(ValueError, match="inplace"):
+        view.sort_by("id", inplace=True)
+
+
+def test_sort_view_copy_works():
+    t = CTable(Row, new_data=DATA)
+    view = t.where(t["id"] > 2)
+    sorted_view = view.sort_by("id", ascending=False)
+    ids = [sorted_view["id"][i] for i in range(len(sorted_view))]
+    assert ids == sorted(ids, reverse=True)
 
 
 def test_sort_unknown_column_raises():

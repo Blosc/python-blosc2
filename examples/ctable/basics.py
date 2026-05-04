@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# CTable basics: creation, append, extend, head/tail, len.
+# CTable basics: creation, append, extend, row access, head/tail, len.
 
 from dataclasses import dataclass
 
@@ -41,7 +41,8 @@ arr["id"] = np.arange(10, 15)
 arr["price"] = np.linspace(10.0, 14.0, 5)
 arr["active"] = [True, False, True, False, True]
 t.extend(arr)
-print(f"After numpy extend: {len(t)} rows\n")
+print(f"After numpy extend: {len(t)} rows")
+print(f"Row 0 via t[0]: {t[0]}\n")
 
 # -- display: head / tail / full table --------------------------------------
 print("head(3):")

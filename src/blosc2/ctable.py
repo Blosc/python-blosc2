@@ -12,40 +12,34 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import contextvars
 import dataclasses
 import itertools
 import os
 import pprint
 import re
 import shutil
-import weakref
-from collections.abc import Iterable
-from dataclasses import MISSING
+from collections import namedtuple
+from collections.abc import Iterable, Mapping
+from dataclasses import MISSING, dataclass
+from dataclasses import field as dataclass_field
 from textwrap import TextWrapper
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 import numpy as np
 
+import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.ctable_storage import FileTableStorage, InMemoryTableStorage, TableStorage
-from blosc2.schema_compiler import schema_from_dict, schema_to_dict
-
-try:
-    from line_profiler import profile
-except ImportError:
-
-    def profile(func):
-        def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        wrapper.__name__ = func.__name__
-        return wrapper
-
-
-import blosc2
 from blosc2.info import InfoReporter, format_nbytes_info
+from blosc2.list_array import ListArray, coerce_list_cell
+from blosc2.scalar_array import _ScalarVarLenArray
 from blosc2.schema import (
+    ListSpec,
     SchemaSpec,
+    StructSpec,
+    VLBytesSpec,
+    VLStringSpec,
     complex64,
     complex128,
     float32,
@@ -73,7 +67,109 @@ from blosc2.schema_compiler import (
     _validate_column_name,
     compile_schema,
     compute_display_width,
+    schema_from_dict,
+    schema_to_dict,
 )
+
+
+@dataclass(frozen=True)
+class NullPolicy:
+    """Default sentinels for inferred CTable scalar nulls.
+
+    CTable nullable scalar columns are represented with per-column sentinel
+    values. This policy is used when CTable has to infer those sentinels, such
+    as when importing nullable scalar Arrow or Parquet columns without an
+    explicit column-level null sentinel. The selected sentinel is stored in the
+    resulting CTable schema, so existing tables remain self-describing.
+
+    Examples
+    --------
+    Use :func:`blosc2.null_policy` to apply a policy while creating a CTable
+    from data with nullable scalar columns::
+
+        policy = blosc2.NullPolicy(
+            signed_int_strategy="max",
+            string_value="<NULL>",
+            column_null_values={"user_id": -1, "country": "NA"},
+        )
+
+        with blosc2.null_policy(policy):
+            table = blosc2.CTable.from_parquet("data.parquet")
+
+    The same policy is used for explicit nullable schema specs::
+
+        @dataclass
+        class Row:
+            user_id: int = blosc2.field(blosc2.int64(nullable=True))
+            country: str = blosc2.field(blosc2.string(nullable=True))
+
+        with blosc2.null_policy(policy):
+            table = blosc2.CTable(Row)
+
+    ``column_null_values`` takes precedence over the type-wide defaults in the
+    policy.  This is useful when a particular column needs a sentinel that is
+    known not to collide with its real values.
+    """
+
+    string_value: str = "__BLOSC2_NULL__"
+    bytes_value: bytes = b"__BLOSC2_NULL__"
+    float_value: float = float("nan")
+    bool_value: int = 255
+    signed_int_strategy: Literal["min", "max"] = "min"
+    unsigned_int_strategy: Literal["min", "max"] = "max"
+    column_null_values: Mapping[str, Any] = dataclass_field(default_factory=dict)
+
+    def sentinel_for_arrow_type(self, pa, pa_type):
+        """Return the default sentinel for *pa_type*, or ``None`` if unsupported."""
+        signed_ints = [
+            (pa.int8(), np.int8),
+            (pa.int16(), np.int16),
+            (pa.int32(), np.int32),
+            (pa.int64(), np.int64),
+        ]
+        unsigned_ints = [
+            (pa.uint8(), np.uint8),
+            (pa.uint16(), np.uint16),
+            (pa.uint32(), np.uint32),
+            (pa.uint64(), np.uint64),
+        ]
+        for arrow_type, dtype in signed_ints:
+            if pa_type == arrow_type:
+                info = np.iinfo(dtype)
+                return info.min if self.signed_int_strategy == "min" else info.max
+        for arrow_type, dtype in unsigned_ints:
+            if pa_type == arrow_type:
+                info = np.iinfo(dtype)
+                return info.min if self.unsigned_int_strategy == "min" else info.max
+        if pa_type in (pa.float32(), pa.float64()):
+            return self.float_value
+        if pa_type == pa.bool_():
+            return self.bool_value
+        if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+            return self.string_value
+        if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
+            return self.bytes_value
+        return None
+
+
+DEFAULT_NULL_POLICY = NullPolicy()
+_NULL_POLICY = contextvars.ContextVar("blosc2_null_policy", default=DEFAULT_NULL_POLICY)
+
+
+def get_null_policy() -> NullPolicy:
+    """Return the current default null policy."""
+    return _NULL_POLICY.get()
+
+
+@contextlib.contextmanager
+def null_policy(policy: NullPolicy):
+    """Temporarily set the default policy for CTable null sentinel inference."""
+    token = _NULL_POLICY.set(policy)
+    try:
+        yield
+    finally:
+        _NULL_POLICY.reset(token)
+
 
 # ---------------------------------------------------------------------------
 # Index proxy and CTableIndex
@@ -523,34 +619,29 @@ def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
     raise IndexError("Unexpected error finding physical index.")
 
 
-class _RowIndexer:
-    def __init__(self, table):
-        self._table_ref = weakref.ref(table)
+def _make_namedtuple_row_type(col_names: tuple[str, ...]):
+    base = namedtuple("CTableRow", col_names, rename=True)
+    field_name_map = dict(zip(col_names, base._fields, strict=True))
 
-    def __getitem__(self, item):
-        table = self._table_ref()
-        if table is None:
-            raise ReferenceError("owning CTable has been released")
-        return table._run_row_logic(item)
+    class CTableRow(base):
+        __slots__ = ()
+        _field_name_map = field_name_map
+        _original_fields = col_names
 
+        def __getitem__(self, key):
+            if isinstance(key, str):
+                try:
+                    return getattr(self, self._field_name_map[key])
+                except KeyError as exc:
+                    raise KeyError(
+                        f"No field named {key!r}. Available: {list(self._original_fields)}"
+                    ) from exc
+            return tuple.__getitem__(self, key)
 
-class _Row:
-    def __init__(self, table: CTable, nrow: int):
-        self._table = table
-        self._nrow = nrow
-        self._real_pos = None
+        def as_dict(self) -> dict[str, Any]:
+            return {name: self[name] for name in self._original_fields}
 
-    def _get_real_pos(self) -> int:
-        self._real_pos = _find_physical_index(self._table._valid_rows, self._nrow)
-        return self._real_pos
-
-    def __getitem__(self, col_name: str):
-        if self._real_pos is None:
-            self._get_real_pos()
-        cc = self._table._computed_cols.get(col_name)
-        if cc is not None:
-            return cc["lazy"][self._real_pos]
-        return self._table._cols[col_name][self._real_pos]
+    return CTableRow
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +670,17 @@ class Column:
         return self._col_name in self._table._computed_cols
 
     @property
+    def is_list(self) -> bool:
+        col = self._table._schema.columns_by_name.get(self._col_name)
+        return col is not None and isinstance(col.spec, ListSpec)
+
+    @property
+    def is_varlen_scalar(self) -> bool:
+        """True if this column holds variable-length scalar strings or bytes."""
+        col = self._table._schema.columns_by_name.get(self._col_name)
+        return col is not None and isinstance(col.spec, (VLStringSpec, VLBytesSpec))
+
+    @property
     def _valid_rows(self):
         if self._mask is None:
             return self._table._valid_rows
@@ -597,7 +699,7 @@ class Column:
         """
         return self._values_from_key(key)
 
-    def _values_from_key(self, key):
+    def _values_from_key(self, key):  # noqa: C901
         """Materialise values for a logical index key."""
         if isinstance(key, int):
             n_rows = len(self)
@@ -613,12 +715,14 @@ class Column:
             real_pos = blosc2.where(valid, _arange(len(valid))).compute()
             start, stop, step = key.indices(len(real_pos))
             if start >= stop:
-                return np.array([], dtype=self.dtype)
+                return [] if (self.is_list or self.is_varlen_scalar) else np.array([], dtype=self.dtype)
             selected_pos = real_pos[start:stop:step]  # physical row positions
             if self.is_computed:
                 lo, hi = int(selected_pos.min()), int(selected_pos.max())
                 chunk = np.asarray(self._raw_col[lo : hi + 1])
                 return chunk[selected_pos - lo]
+            if self.is_list or self.is_varlen_scalar:
+                return self._raw_col[selected_pos]
             return np.asarray(self._raw_col[selected_pos])
 
         elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
@@ -632,6 +736,8 @@ class Column:
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
                 return raw_np[phys_indices]
+            if self.is_list or self.is_varlen_scalar:
+                return self._raw_col[phys_indices]
             return self._raw_col[phys_indices]
 
         elif isinstance(key, (list, tuple, np.ndarray)):
@@ -640,6 +746,8 @@ class Column:
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
                 return raw_np[phys_indices]
+            if self.is_list or self.is_varlen_scalar:
+                return self._raw_col[phys_indices]
             return self._raw_col[phys_indices]
 
         raise TypeError(f"Invalid index type: {type(key)}")
@@ -708,7 +816,7 @@ class Column:
         """
         return ColumnViewIndexer(self)
 
-    def __setitem__(self, key: int | slice | list | np.ndarray, value):
+    def __setitem__(self, key: int | slice | list | np.ndarray, value):  # noqa: C901
         if self._table._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.is_computed:
@@ -723,7 +831,6 @@ class Column:
             self._raw_col[int(pos_true)] = value
 
         elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
-            # Boolean mask in logical space.
             n_live = len(self)
             if len(key) != n_live:
                 raise IndexError(
@@ -731,9 +838,15 @@ class Column:
                 )
             all_pos = np.where(self._valid_rows[:])[0]
             phys_indices = all_pos[key]
-            if isinstance(value, (list, tuple)):
-                value = np.array(value, dtype=self._raw_col.dtype)
-            self._raw_col[phys_indices] = value
+            if self.is_list or self.is_varlen_scalar:
+                if len(value) != len(phys_indices):
+                    raise ValueError("Length mismatch in list-column assignment")
+                for pos, cell in zip(phys_indices, value, strict=True):
+                    self._raw_col[int(pos)] = cell
+            else:
+                if isinstance(value, (list, tuple)):
+                    value = np.array(value, dtype=self._raw_col.dtype)
+                self._raw_col[phys_indices] = value
 
         elif isinstance(key, (slice, list, tuple, np.ndarray)):
             real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
@@ -743,9 +856,15 @@ class Column:
             else:
                 phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
 
-            if isinstance(value, (list, tuple)):
-                value = np.array(value, dtype=self._raw_col.dtype)
-            self._raw_col[phys_indices] = value
+            if self.is_list or self.is_varlen_scalar:
+                if len(value) != len(phys_indices):
+                    raise ValueError("Length mismatch in list-column assignment")
+                for pos, cell in zip(phys_indices, value, strict=True):
+                    self._raw_col[int(pos)] = cell
+            else:
+                if isinstance(value, (list, tuple)):
+                    value = np.array(value, dtype=self._raw_col.dtype)
+                self._raw_col[phys_indices] = value
 
         else:
             raise TypeError(f"Invalid index type: {type(key)}")
@@ -754,6 +873,9 @@ class Column:
     def __iter__(self):
         if self.is_computed:
             yield from self._iter_chunks_computed(size=None)
+            return
+        if self.is_list or self.is_varlen_scalar:
+            yield from self._raw_col[np.where(self._valid_rows[:])[0]]
             return
         arr = self._valid_rows
         chunk_size = arr.chunks[0]
@@ -794,27 +916,173 @@ class Column:
     def __len__(self):
         return blosc2.count_nonzero(self._valid_rows)
 
+    @property
+    def shape(self) -> tuple[int]:
+        """Logical shape of the live column values."""
+        return (len(self),)
+
+    @property
+    def ndim(self) -> int:
+        """Number of logical dimensions."""
+        return 1
+
+    @property
+    def size(self) -> int:
+        """Number of live values in the column."""
+        return len(self)
+
+    def _ensure_queryable(self) -> None:
+        if self.is_varlen_scalar:
+            raise NotImplementedError(
+                f"Column {self._col_name!r} is a vlstring/vlbytes column; "
+                "lazy expressions and vectorized comparisons are not supported yet."
+            )
+
+    @staticmethod
+    def _unwrap_operand(other):
+        if isinstance(other, Column):
+            other._ensure_queryable()
+            return other._raw_col
+        return other
+
+    @property
+    def _is_nullable_bool(self) -> bool:
+        col = self._table._schema.columns_by_name.get(self._col_name)
+        return (
+            col is not None
+            and col.spec.to_metadata_dict().get("kind") == "bool"
+            and getattr(col.spec, "null_value", None) is not None
+        )
+
+    def __neg__(self):
+        self._ensure_queryable()
+        return -self._raw_col
+
+    def __pos__(self):
+        self._ensure_queryable()
+        return +self._raw_col
+
+    def __abs__(self):
+        self._ensure_queryable()
+        return abs(self._raw_col)
+
+    def __add__(self, other):
+        self._ensure_queryable()
+        return self._raw_col + self._unwrap_operand(other)
+
+    def __radd__(self, other):
+        self._ensure_queryable()
+        return self._unwrap_operand(other) + self._raw_col
+
+    def __sub__(self, other):
+        self._ensure_queryable()
+        return self._raw_col - self._unwrap_operand(other)
+
+    def __rsub__(self, other):
+        self._ensure_queryable()
+        return self._unwrap_operand(other) - self._raw_col
+
+    def __mul__(self, other):
+        self._ensure_queryable()
+        return self._raw_col * self._unwrap_operand(other)
+
+    def __rmul__(self, other):
+        self._ensure_queryable()
+        return self._unwrap_operand(other) * self._raw_col
+
+    def __truediv__(self, other):
+        self._ensure_queryable()
+        return self._raw_col / self._unwrap_operand(other)
+
+    def __rtruediv__(self, other):
+        self._ensure_queryable()
+        return self._unwrap_operand(other) / self._raw_col
+
+    def __floordiv__(self, other):
+        self._ensure_queryable()
+        return self._raw_col // self._unwrap_operand(other)
+
+    def __rfloordiv__(self, other):
+        self._ensure_queryable()
+        return self._unwrap_operand(other) // self._raw_col
+
+    def __mod__(self, other):
+        self._ensure_queryable()
+        return self._raw_col % self._unwrap_operand(other)
+
+    def __rmod__(self, other):
+        self._ensure_queryable()
+        return self._unwrap_operand(other) % self._raw_col
+
+    def __pow__(self, other):
+        self._ensure_queryable()
+        return self._raw_col ** self._unwrap_operand(other)
+
+    def __rpow__(self, other):
+        self._ensure_queryable()
+        return self._unwrap_operand(other) ** self._raw_col
+
+    def __and__(self, other):
+        self._ensure_queryable()
+        return self._raw_col & self._unwrap_operand(other)
+
+    def __rand__(self, other):
+        self._ensure_queryable()
+        return self._unwrap_operand(other) & self._raw_col
+
+    def __or__(self, other):
+        self._ensure_queryable()
+        return self._raw_col | self._unwrap_operand(other)
+
+    def __ror__(self, other):
+        self._ensure_queryable()
+        return self._unwrap_operand(other) | self._raw_col
+
+    def __xor__(self, other):
+        self._ensure_queryable()
+        return self._raw_col ^ self._unwrap_operand(other)
+
+    def __rxor__(self, other):
+        self._ensure_queryable()
+        return self._unwrap_operand(other) ^ self._raw_col
+
+    def __invert__(self):
+        self._ensure_queryable()
+        if self._is_nullable_bool:
+            return self._raw_col == 0
+        return ~self._raw_col
+
     def __lt__(self, other):
-        return self._raw_col < other
+        self._ensure_queryable()
+        return self._raw_col < self._unwrap_operand(other)
 
     def __le__(self, other):
-        return self._raw_col <= other
+        self._ensure_queryable()
+        return self._raw_col <= self._unwrap_operand(other)
 
     def __eq__(self, other):
-        return self._raw_col == other
+        self._ensure_queryable()
+        if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
+            return self._raw_col == int(other)
+        return self._raw_col == self._unwrap_operand(other)
 
     def __ne__(self, other):
-        return self._raw_col != other
+        self._ensure_queryable()
+        if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
+            return self._raw_col == int(not other)
+        return self._raw_col != self._unwrap_operand(other)
 
     def __gt__(self, other):
-        return self._raw_col > other
+        self._ensure_queryable()
+        return self._raw_col > self._unwrap_operand(other)
 
     def __ge__(self, other):
-        return self._raw_col >= other
+        self._ensure_queryable()
+        return self._raw_col >= self._unwrap_operand(other)
 
     @property
     def dtype(self):
-        return self._raw_col.dtype
+        return getattr(self._raw_col, "dtype", None)
 
     def iter_chunks(self, size: int = 65536):
         """Iterate over live column values in chunks of *size* rows.
@@ -840,6 +1108,10 @@ class Column:
         if self.is_computed:
             yield from self._iter_chunks_computed(size=size)
             return
+        if self.is_list:
+            raise TypeError("Column.iter_chunks() is not supported for list columns in V1.")
+        if self.is_varlen_scalar:
+            raise TypeError("Column.iter_chunks() is not supported for varlen scalar columns.")
         valid = self._valid_rows
         raw = self._raw_col
         arr_len = len(valid)
@@ -950,6 +1222,15 @@ class Column:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.is_computed:
             raise ValueError(f"Column {self._col_name!r} is a computed column and cannot be written to.")
+        if self.is_list:
+            values = list(data)
+            if len(values) != len(self):
+                raise ValueError(f"assign() requires {len(self)} values (live rows), got {len(values)}.")
+            live_pos = np.where(self._valid_rows[:])[0]
+            for pos, cell in zip(live_pos, values, strict=True):
+                self._raw_col[int(pos)] = cell
+            self._table._root_table._mark_all_indexes_stale()
+            return
         n_live = len(self)
         arr = np.asarray(data)
         if len(arr) != n_live:
@@ -988,7 +1269,14 @@ class Column:
         return arr == nv
 
     def is_null(self) -> np.ndarray:
-        """Return a boolean array True where the live value is the null sentinel."""
+        """Return a boolean array True where the live value is the null sentinel.
+
+        For varlen scalar columns (vlstring/vlbytes) nullability is represented
+        as native ``None`` values, so this returns True wherever the value is
+        ``None``.
+        """
+        if self.is_varlen_scalar:
+            return np.array([v is None for v in self], dtype=np.bool_)
         return self._null_mask_for(self[:])
 
     def notnull(self) -> np.ndarray:
@@ -998,8 +1286,11 @@ class Column:
     def null_count(self) -> int:
         """Return the number of live rows whose value equals the null sentinel.
 
-        Returns ``0`` in O(1) if no ``null_value`` is configured for this column.
+        Returns ``0`` in O(1) if no ``null_value`` is configured for this column
+        and the column is not a varlen scalar column.
         """
+        if self.is_varlen_scalar:
+            return sum(1 for v in self if v is None)
         if self.null_value is None:
             return 0
         return int(self.is_null().sum())
@@ -1082,28 +1373,41 @@ class Column:
     # Aggregates
     # ------------------------------------------------------------------
 
-    def sum(self):
+    def sum(self, dtype=None):
         """Sum of all live, non-null values.
 
         Supported dtypes: bool, int, uint, float, complex.
         Bool values are counted as 0 / 1.
         Null sentinel values are skipped.
+
+        Parameters
+        ----------
+        dtype:
+            Optional accumulator dtype.  When omitted, float columns use
+            ``np.float64``, complex columns use ``np.complex128``, and integer
+            / bool columns use ``np.int64``.
         """
         self._require_kind("biufc", "sum")
         self._require_nonempty("sum")
         # Use a wide accumulator to reduce overflow risk
-        acc_dtype = (
-            np.float64
-            if self.dtype.kind == "f"
-            else (
-                np.complex128 if self.dtype.kind == "c" else np.int64 if self.dtype.kind in "biu" else None
+        acc_dtype = np.dtype(dtype).type if dtype is not None else None
+        if acc_dtype is None:
+            acc_dtype = (
+                np.float64
+                if self.dtype.kind == "f"
+                else (
+                    np.complex128
+                    if self.dtype.kind == "c"
+                    else np.int64
+                    if self.dtype.kind in "biu"
+                    else None
+                )
             )
-        )
         result = acc_dtype(0)
         for chunk in self._nonnull_chunks():
             result += chunk.sum(dtype=acc_dtype)
-        # Return in the column's natural dtype when it fits, else keep wide
-        if self.dtype.kind in "biu":
+        # Return in the column's natural dtype when it fits, else keep the requested/wide dtype
+        if dtype is None and self.dtype.kind in "biu":
             return int(result)
         return result
 
@@ -1245,6 +1549,7 @@ def _fmt_bytes(n: int) -> str:
 
 
 _EXPECTED_SIZE_DEFAULT = 1_048_576
+_BATCH_SIZE_DEFAULT = 2048
 
 # ---------------------------------------------------------------------------
 # Computed-column definition (virtual columns backed by a LazyExpr)
@@ -1286,13 +1591,12 @@ class CTable(Generic[RowT]):
         self._validate = validate
         self._table_cparams = cparams
         self._table_dparams = dparams
-        self._cols: dict[str, blosc2.NDArray] = {}
+        self._cols: dict[str, blosc2.NDArray | ListArray] = {}
         self._computed_cols: dict[str, dict] = {}  # virtual/computed columns
         self._materialized_cols: dict[str, dict] = {}  # stored columns auto-filled from expressions
         self._expr_index_arrays: dict[str, blosc2.NDArray] = {}
         self._col_widths: dict[str, int] = {}
         self.col_names: list[str] = []
-        self.row = _RowIndexer(self)
         self.auto_compact = compact
         self.base = None
 
@@ -1326,9 +1630,14 @@ class CTable(Generic[RowT]):
             self.col_names = [c["name"] for c in schema_dict["columns"]]
             self._valid_rows = storage.open_valid_rows()
             for name in self.col_names:
-                col = storage.open_column(name)
-                self._cols[name] = col
                 cc = self._schema.columns_by_name[name]
+                if self._is_list_column(cc):
+                    col = storage.open_list_column(name)
+                elif self._is_varlen_scalar_column(cc):
+                    col = storage.open_varlen_scalar_column(name, cc.spec)
+                else:
+                    col = storage.open_column(name)
+                self._cols[name] = col
                 self._col_widths[name] = max(len(name), cc.display_width)
             self._n_rows = int(blosc2.count_nonzero(self._valid_rows))
             self._last_pos = None  # resolve lazily on first write
@@ -1348,6 +1657,7 @@ class CTable(Generic[RowT]):
                 self._schema = compile_schema(row_type)
             else:
                 self._schema = _compile_pydantic_schema(row_type)
+            self._resolve_nullable_specs(self._schema)
 
             self._n_rows = 0
             self._last_pos = 0
@@ -1367,6 +1677,13 @@ class CTable(Generic[RowT]):
     def close(self) -> None:
         """Close any persistent backing store held by this table."""
         storage = getattr(self, "_storage", None)
+        try:
+            self._flush_varlen_columns()
+        except Exception:
+            with contextlib.suppress(Exception):
+                if storage is not None and hasattr(storage, "close"):
+                    storage.close()
+            raise
         if storage is not None and hasattr(storage, "close"):
             storage.close()
 
@@ -1385,20 +1702,140 @@ class CTable(Generic[RowT]):
             elif storage is not None and hasattr(storage, "close"):
                 storage.close()
 
+    @staticmethod
+    def _is_list_column(col: CompiledColumn) -> bool:
+        return isinstance(col.spec, ListSpec)
+
+    @staticmethod
+    def _is_varlen_scalar_column(col: CompiledColumn) -> bool:
+        return isinstance(col.spec, (VLStringSpec, VLBytesSpec))
+
+    @staticmethod
+    def _is_list_spec(spec: SchemaSpec) -> bool:
+        return isinstance(spec, ListSpec)
+
+    @staticmethod
+    def _policy_null_value_for_spec(spec: SchemaSpec, policy: NullPolicy):
+        if isinstance(spec, (int8, int16, int32, int64)):
+            info = np.iinfo(spec.dtype)
+            return info.min if policy.signed_int_strategy == "min" else info.max
+        if isinstance(spec, (uint8, uint16, uint32, uint64)):
+            info = np.iinfo(spec.dtype)
+            return info.min if policy.unsigned_int_strategy == "min" else info.max
+        if isinstance(spec, (float32, float64)):
+            return policy.float_value
+        if isinstance(spec, b2_bool):
+            return policy.bool_value
+        if isinstance(spec, string):
+            return policy.string_value
+        if isinstance(spec, b2_bytes):
+            return policy.bytes_value
+        return None
+
+    @staticmethod
+    def _validate_null_value_for_spec(name: str, spec: SchemaSpec, null_value) -> None:
+        if isinstance(spec, (int8, int16, int32, int64, uint8, uint16, uint32, uint64)):
+            if isinstance(null_value, (bool, np.bool_)) or not isinstance(null_value, (int, np.integer)):
+                raise TypeError(f"Null sentinel for column {name!r} must be an integer")
+            info = np.iinfo(spec.dtype)
+            if not info.min <= int(null_value) <= info.max:
+                raise ValueError(
+                    f"Null sentinel for column {name!r}={null_value!r} is outside {spec.dtype} range"
+                )
+            return
+        if isinstance(spec, (float32, float64)):
+            if not isinstance(null_value, (int, float, np.integer, np.floating)):
+                raise TypeError(f"Null sentinel for column {name!r} must be numeric")
+            return
+        if isinstance(spec, b2_bool):
+            if null_value != 255:
+                raise ValueError(f"Null sentinel for nullable bool column {name!r} must be 255")
+            return
+        if isinstance(spec, string):
+            if not isinstance(null_value, str):
+                raise TypeError(f"Null sentinel for string column {name!r} must be str")
+            return
+        if isinstance(spec, b2_bytes) and not isinstance(null_value, bytes):
+            raise TypeError(f"Null sentinel for bytes column {name!r} must be bytes")
+
+    @classmethod
+    def _resolve_nullable_specs(
+        cls, schema: CompiledSchema, *, validate_column_null_values: bool = True
+    ) -> None:
+        policy = get_null_policy()
+        schema_names = {col.name for col in schema.columns}
+        unknown_null_values = set(policy.column_null_values) - schema_names
+        if validate_column_null_values and unknown_null_values:
+            names = ", ".join(sorted(unknown_null_values))
+            raise KeyError(f"column_null_values contains unknown columns: {names}")
+        for col in schema.columns:
+            spec = col.spec
+            if (
+                isinstance(spec, (ListSpec, VLStringSpec, VLBytesSpec))
+                or getattr(spec, "null_value", None) is not None
+            ):
+                continue
+            if not getattr(spec, "nullable", False):
+                continue
+            null_value = policy.column_null_values.get(col.name)
+            if null_value is None:
+                null_value = cls._policy_null_value_for_spec(spec, policy)
+            if null_value is None:
+                raise TypeError(f"Column {col.name!r} is nullable, but no null policy sentinel is available")
+            cls._validate_null_value_for_spec(col.name, spec, null_value)
+            spec.null_value = null_value
+            if isinstance(spec, string):
+                spec.max_length = max(spec.max_length, len(null_value), 1)
+                spec.dtype = np.dtype(f"U{spec.max_length}")
+            elif isinstance(spec, b2_bytes):
+                spec.max_length = max(spec.max_length, len(null_value), 1)
+                spec.dtype = np.dtype(f"S{spec.max_length}")
+            elif isinstance(spec, b2_bool):
+                spec.dtype = np.dtype(np.uint8)
+            col.dtype = getattr(spec, "dtype", None)
+            col.display_width = compute_display_width(spec)
+
+    def _flush_varlen_columns(self) -> None:
+        for col in self._schema.columns:
+            if self._is_list_column(col) or self._is_varlen_scalar_column(col):
+                self._cols[col.name].flush()
+
     def _init_columns(
         self, expected_size: int, default_chunks, default_blocks, storage: TableStorage
     ) -> None:
-        """Create one NDArray per column using the compiled schema."""
+        """Create one physical column per compiled schema column."""
         for col in self._schema.columns:
             self.col_names.append(col.name)
             self._col_widths[col.name] = max(len(col.name), col.display_width)
             col_storage = self._resolve_column_storage(col, default_chunks, default_blocks)
+            if self._is_list_column(col):
+                self._cols[col.name] = storage.create_list_column(
+                    col.name,
+                    spec=col.spec,
+                    cparams=col_storage.get("cparams"),
+                    dparams=col_storage.get("dparams"),
+                )
+                continue
+            if self._is_varlen_scalar_column(col):
+                self._cols[col.name] = storage.create_varlen_scalar_column(
+                    col.name,
+                    spec=col.spec,
+                    cparams=col_storage.get("cparams"),
+                    dparams=col_storage.get("dparams"),
+                )
+                continue
+            # Recompute chunks/blocks using the actual dtype so that wide
+            # string columns (e.g. U183642) don't produce multi-GB chunks.
+            chunks = col_storage["chunks"]
+            blocks = col_storage["blocks"]
+            if col.config.chunks is None and col.config.blocks is None:
+                chunks, blocks = compute_chunks_blocks((expected_size,), dtype=col.dtype)
             self._cols[col.name] = storage.create_column(
                 col.name,
                 dtype=col.dtype,
                 shape=(expected_size,),
-                chunks=col_storage["chunks"],
-                blocks=col_storage["blocks"],
+                chunks=chunks,
+                blocks=blocks,
                 cparams=col_storage.get("cparams"),
                 dparams=col_storage.get("dparams"),
             )
@@ -1448,11 +1885,17 @@ class CTable(Generic[RowT]):
         return {name: data[i] for i, name in enumerate(stored)}
 
     def _coerce_row_to_storage(self, row: dict[str, Any]) -> dict[str, Any]:
-        """Coerce each value in *row* to the column's storage dtype."""
+        """Coerce each value in *row* to the column's storage representation."""
         result = {}
         for col in self._schema.columns:
             val = row[col.name]
-            result[col.name] = np.array(val, dtype=col.dtype).item()
+            if self._is_list_column(col):
+                result[col.name] = coerce_list_cell(col.spec, val)
+            elif self._is_varlen_scalar_column(col):
+                # Coercion is handled inside _ScalarVarLenArray.append.
+                result[col.name] = val
+            else:
+                result[col.name] = np.array(val, dtype=col.dtype).item()
         return result
 
     def _resolve_last_pos(self) -> int:
@@ -1494,9 +1937,12 @@ class CTable(Generic[RowT]):
         return self._last_pos
 
     def _grow(self) -> None:
-        """Double the physical capacity of all columns and the valid_rows mask."""
+        """Double the scalar-column capacity and the valid_rows mask."""
         c = len(self._valid_rows)
-        for col_arr in self._cols.values():
+        for name, col_arr in self._cols.items():
+            cc = self._schema.columns_by_name[name]
+            if self._is_list_column(cc) or self._is_varlen_scalar_column(cc):
+                continue
             col_arr.resize((c * 2,))
         self._valid_rows.resize((c * 2,))
 
@@ -1504,72 +1950,78 @@ class CTable(Generic[RowT]):
     # Display
     # ------------------------------------------------------------------
 
-    def __str__(self) -> str:
-        _HEAD_TAIL = 10  # rows shown at each end
-
+    def _display_positions(self, head_tail: int = 10):
         nrows = self._n_rows
-        ncols = len(self.col_names)
-        hidden = max(0, nrows - _HEAD_TAIL * 2)
-
-        # -- physical positions for head and tail rows --
+        hidden = max(0, nrows - head_tail * 2)
         valid_np = self._valid_rows[:]
         all_pos = np.where(valid_np)[0]
+        if nrows <= head_tail * 2:
+            return all_pos, np.array([], dtype=all_pos.dtype), 0
+        return all_pos[:head_tail], all_pos[-head_tail:], hidden
 
-        if nrows <= _HEAD_TAIL * 2:
-            head_pos = all_pos
-            tail_pos = np.array([], dtype=all_pos.dtype)
-            hidden = 0
-        else:
-            head_pos = all_pos[:_HEAD_TAIL]
-            tail_pos = all_pos[-_HEAD_TAIL:]
-
-        # -- per-column display widths --
+    def _display_widths(self) -> dict[str, int]:
         widths: dict[str, int] = {}
+        single_col = len(self.col_names) == 1
         for name in self.col_names:
-            widths[name] = max(
-                self._col_widths[name],
-                len(str(self._col_dtype(name))),
-            )
+            spec = self._schema.columns_by_name.get(name)
+            dtype_label = self._dtype_info_label(self._col_dtype(name), spec.spec if spec else None)
+            widths[name] = max(self._col_widths[name], len(dtype_label))
+            if single_col:
+                widths[name] = max(widths[name], 80)
+        return widths
 
+    @staticmethod
+    def _format_cell(value, width: int) -> str:
+        s = str(value)
+        if len(s) > width:
+            s = s[: width - 1] + "…"
+        return f" {s:<{width}} "
+
+    def _format_display_row(self, values: dict, widths: dict[str, int]) -> str:
+        return "  ".join(self._format_cell(values[n], widths[n]) for n in self.col_names)
+
+    def _rows_to_dicts(self, positions) -> list[dict]:
+        if len(positions) == 0:
+            return []
+        col_data = {n: self._fetch_col_at_positions(n, positions) for n in self.col_names}
+        rows = []
+        for i in range(len(positions)):
+            row = {}
+            for n in self.col_names:
+                row[n] = self._normalize_scalar_value(col_data[n][i])
+            rows.append(row)
+        return rows
+
+    def __str__(self) -> str:
+        nrows = self._n_rows
+        ncols = len(self.col_names)
+        head_pos, tail_pos, hidden = self._display_positions()
+        widths = self._display_widths()
         sep = "  ".join("─" * (w + 2) for w in widths.values())
 
-        def fmt_cell(value, width: int) -> str:
-            s = str(value)
-            if len(s) > width:
-                s = s[: width - 1] + "…"
-            return f" {s:<{width}} "
-
-        def fmt_row(values: dict) -> str:
-            return "  ".join(fmt_cell(values[n], widths[n]) for n in self.col_names)
-
-        # -- batch-fetch values (one read per column, not one per cell) --
-        def rows_to_dicts(positions) -> list[dict]:
-            if len(positions) == 0:
-                return []
-            col_data = {n: self._fetch_col_at_positions(n, positions) for n in self.col_names}
-            return [{n: col_data[n][i].item() for n in self.col_names} for i in range(len(positions))]
-
         lines = [
-            fmt_row({n: n for n in self.col_names}),
-            fmt_row({n: str(self._col_dtype(n)) for n in self.col_names}),
+            self._format_display_row({n: n for n in self.col_names}, widths),
+            self._format_display_row(
+                {
+                    n: self._dtype_info_label(
+                        self._col_dtype(n),
+                        self._schema.columns_by_name[n].spec if n in self._schema.columns_by_name else None,
+                    )
+                    for n in self.col_names
+                },
+                widths,
+            ),
             sep,
         ]
-
-        for row in rows_to_dicts(head_pos):
-            lines.append(fmt_row(row))
-
+        lines.extend(self._format_display_row(row, widths) for row in self._rows_to_dicts(head_pos))
         if hidden > 0:
-            lines.append(fmt_row(dict.fromkeys(self.col_names, "...")))
-
-        for row in rows_to_dicts(tail_pos):
-            lines.append(fmt_row(row))
-
+            lines.append(self._format_display_row(dict.fromkeys(self.col_names, "..."), widths))
+        lines.extend(self._format_display_row(row, widths) for row in self._rows_to_dicts(tail_pos))
         lines.append(sep)
         footer = f"{nrows:,} rows × {ncols} columns"
         if hidden > 0:
             footer += f"  ({hidden:,} rows hidden)"
         lines.append(footer)
-
         return "\n".join(lines)
 
     def __repr__(self) -> str:
@@ -1581,7 +2033,111 @@ class CTable(Generic[RowT]):
 
     def __iter__(self):
         for i in range(self.nrows):
-            yield _Row(self, i)
+            yield self._materialize_row(i)
+
+    def _row_namedtuple_type(self):
+        visible = tuple(self.col_names)
+        if getattr(self, "_row_namedtuple_type_cache_cols", None) != visible:
+            self._row_namedtuple_type_cache = _make_namedtuple_row_type(visible)
+            self._row_namedtuple_type_cache_cols = visible
+        return self._row_namedtuple_type_cache
+
+    @staticmethod
+    def _normalize_scalar_value(value):
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, np.ndarray) and value.ndim == 0:
+            return value.item()
+        return value
+
+    def _physical_row_value(self, col_name: str, pos: int):
+        cc = self._computed_cols.get(col_name)
+        if cc is not None:
+            return self._normalize_scalar_value(np.asarray(cc["lazy"][pos]).ravel()[0])
+        return self._normalize_scalar_value(self._cols[col_name][pos])
+
+    def _materialize_row(self, index: int):
+        n_rows = self.nrows
+        if index < 0:
+            index += n_rows
+        if not (0 <= index < n_rows):
+            raise IndexError(f"row index {index} is out of bounds for table with {n_rows} rows")
+        pos = _find_physical_index(self._valid_rows, index)
+        row_type = self._row_namedtuple_type()
+        return row_type(*(self._physical_row_value(name, int(pos)) for name in self.col_names))
+
+    def iter_sorted(
+        self,
+        cols: str | list[str],
+        ascending: bool | list[bool] = True,
+        *,
+        start: int | None = None,
+        stop: int | None = None,
+        step: int | None = None,
+        batch_size: int = 4096,
+    ):
+        """Iterate rows in sorted order without materializing a full copy.
+
+        Uses a FULL index when available (no sort needed); otherwise falls
+        back to ``np.lexsort`` on live physical positions.  Yields namedtuple-like
+        row objects in the same way as ``__iter__``.
+
+        The sorted positions array is stored as a compressed ``blosc2.NDArray``
+        to keep RAM usage low for large tables.  ``batch_size`` positions are
+        decompressed at a time during iteration.
+
+        Parameters
+        ----------
+        cols:
+            Column name or list of column names to sort by.
+        ascending:
+            Sort direction.  A single bool applies to all keys; a list must
+            have the same length as *cols*.
+        start, stop, step:
+            Optional slice applied to the sorted sequence before iteration.
+            E.g. ``stop=10`` yields only the top-10 rows; ``step=2`` yields
+            every other row in sorted order.
+        batch_size:
+            Number of positions decompressed per iteration step.  Larger
+            values reduce decompression overhead; smaller values use less
+            transient RAM.  Default is 4096.
+        """
+        cols, ascending = self._normalise_sort_keys(cols, ascending)
+
+        valid_np = self._valid_rows[:]
+        live_pos = np.where(valid_np)[0]
+        n = len(live_pos)
+
+        if n == 0:
+            return
+
+        sorted_pos = None
+        if len(cols) == 1:
+            sorted_pos = self._sorted_positions_from_full_index(cols[0], ascending[0])
+            if sorted_pos is not None and len(sorted_pos) != n:
+                sorted_pos = None
+
+        if sorted_pos is None:
+            order = np.lexsort(self._build_lex_keys(cols, ascending, live_pos, n))
+            sorted_pos = live_pos[order]
+
+        if start is not None or stop is not None or step is not None:
+            sorted_pos = sorted_pos[start:stop:step]
+
+        # Compress positions into an NDArray to reduce RAM usage for large tables.
+        # The uncompressed numpy array is released immediately after.
+        sorted_pos_nd = blosc2.asarray(np.asarray(sorted_pos, dtype=np.int64))
+        del sorted_pos
+
+        # physical → logical index mapping
+        phys_to_logical = np.empty(valid_np.shape[0], dtype=np.intp)
+        phys_to_logical[live_pos] = np.arange(n, dtype=np.intp)
+
+        total = len(sorted_pos_nd)
+        for i in range(0, total, batch_size):
+            chunk = sorted_pos_nd[i : i + batch_size]
+            for phys in chunk:
+                yield self._materialize_row(int(phys_to_logical[phys]))
 
     # ------------------------------------------------------------------
     # Open existing table (classmethod)
@@ -1626,14 +2182,18 @@ class CTable(Generic[RowT]):
         obj._cols = {}
         obj._col_widths = {}
         obj.col_names = col_names
-        obj.row = _RowIndexer(obj)
         obj.auto_compact = False
         obj.base = None
 
         obj._valid_rows = storage.open_valid_rows()
         for name in col_names:
-            obj._cols[name] = storage.open_column(name)
             cc = schema.columns_by_name[name]
+            if obj._is_list_column(cc):
+                obj._cols[name] = storage.open_list_column(name)
+            elif obj._is_varlen_scalar_column(cc):
+                obj._cols[name] = storage.open_varlen_scalar_column(name, cc.spec)
+            else:
+                obj._cols[name] = storage.open_column(name)
             obj._col_widths[name] = max(len(name), cc.display_width)
 
         obj._n_rows = int(blosc2.count_nonzero(obj._valid_rows))
@@ -1676,6 +2236,8 @@ class CTable(Generic[RowT]):
             else:
                 os.remove(target_path)
 
+        self._flush_varlen_columns()
+
         # Collect live physical positions
         valid_np = self._valid_rows[:]
         live_pos = np.where(valid_np)[0]
@@ -1696,8 +2258,28 @@ class CTable(Generic[RowT]):
         # --- columns ---
         for col in self._schema.columns:
             name = col.name
-            # Use dtype-aware defaults so large-itemsize columns (e.g. U4096) get
-            # sensible chunk/block sizes rather than the uint8-based defaults.
+            if self._is_list_column(col):
+                disk_col = file_storage.create_list_column(
+                    name,
+                    spec=col.spec,
+                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
+                    dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
+                )
+                if n_live > 0:
+                    disk_col.extend(self._cols[name][int(pos)] for pos in live_pos)
+                    disk_col.flush()
+                continue
+            if self._is_varlen_scalar_column(col):
+                disk_col = file_storage.create_varlen_scalar_column(
+                    name,
+                    spec=col.spec,
+                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
+                    dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
+                )
+                if n_live > 0:
+                    disk_col.extend(self._cols[name][int(pos)] for pos in live_pos)
+                    disk_col.flush()
+                continue
             dtype_chunks, dtype_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
             col_storage = self._resolve_column_storage(col, dtype_chunks, dtype_blocks)
             disk_col = file_storage.create_column(
@@ -1744,7 +2326,14 @@ class CTable(Generic[RowT]):
         col_names = [c["name"] for c in schema_dict["columns"]]
 
         disk_valid = file_storage.open_valid_rows()
-        disk_cols = {name: file_storage.open_column(name) for name in col_names}
+        disk_cols = {}
+        for col in schema.columns:
+            if cls._is_list_column(col):
+                disk_cols[col.name] = file_storage.open_list_column(col.name)
+            elif cls._is_varlen_scalar_column(col):
+                disk_cols[col.name] = file_storage.open_varlen_scalar_column(col.name, col.spec)
+            else:
+                disk_cols[col.name] = file_storage.open_column(col.name)
         phys_size = len(disk_valid)
         n_live = int(blosc2.count_nonzero(disk_valid))
         capacity = max(phys_size, 1)
@@ -1760,9 +2349,21 @@ class CTable(Generic[RowT]):
         if phys_size > 0:
             mem_valid[:phys_size] = disk_valid[:]
 
-        mem_cols: dict[str, blosc2.NDArray] = {}
+        mem_cols: dict[str, blosc2.NDArray | ListArray | _ScalarVarLenArray] = {}
         for col in schema.columns:
             name = col.name
+            if cls._is_list_column(col):
+                mem_col = mem_storage.create_list_column(name, spec=col.spec, cparams=None, dparams=None)
+                mem_col.extend(disk_cols[name][:])
+                mem_col.flush()
+                mem_cols[name] = mem_col
+                continue
+            if cls._is_varlen_scalar_column(col):
+                mem_col = mem_storage.create_varlen_scalar_column(name, spec=col.spec)
+                mem_col.extend(iter(disk_cols[name]))
+                mem_col.flush()
+                mem_cols[name] = mem_col
+                continue
             col_chunks, col_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
             mem_col = mem_storage.create_column(
                 name,
@@ -1790,7 +2391,6 @@ class CTable(Generic[RowT]):
         obj._cols = mem_cols
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
         obj.col_names = col_names
-        obj.row = _RowIndexer(obj)
         obj.auto_compact = False
         obj.base = None
         obj._valid_rows = mem_valid
@@ -1820,7 +2420,6 @@ class CTable(Generic[RowT]):
         obj._expr_index_arrays = parent._expr_index_arrays
         obj._col_widths = parent._col_widths
         obj.col_names = parent.col_names
-        obj.row = _RowIndexer(obj)
         obj.auto_compact = parent.auto_compact
         obj.base = parent
         obj._valid_rows = new_valid_rows
@@ -1982,7 +2581,6 @@ class CTable(Generic[RowT]):
             row_cls=self._schema.row_cls,
         )
         obj._col_widths = {name: self._col_widths[name] for name in cols if name in self._col_widths}
-        obj.row = _RowIndexer(obj)
         return obj
 
     def describe(self) -> None:
@@ -2000,7 +2598,9 @@ class CTable(Generic[RowT]):
         for name in self.col_names:
             col = self[name]
             dtype = col.dtype
-            lines.append(f"  {name}  [{dtype}]")
+            spec = self._schema.columns_by_name.get(name)
+            label = self._dtype_info_label(dtype, spec.spec if spec else None)
+            lines.append(f"  {name}  [{label}]")
 
             if n == 0:
                 lines.append("    (empty)")
@@ -2010,7 +2610,10 @@ class CTable(Generic[RowT]):
             nc = col.null_count()
             n_nonnull = n - nc
 
-            if dtype.kind in "biufc" and dtype.kind != "c":
+            if isinstance(spec.spec, ListSpec) if spec is not None else False:
+                lines.append(f"    count : {n:,}")
+                lines.append("    (stats not available for list columns)")
+            elif dtype.kind in "biufc" and dtype.kind != "c":
                 # numeric + bool
                 if dtype.kind == "b":
                     arr = col[:]
@@ -2082,7 +2685,7 @@ class CTable(Generic[RowT]):
         """
         for name in self.col_names:
             dtype = self._col_dtype(name)
-            if not (
+            if dtype is None or not (
                 np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.floating) or dtype == np.bool_
             ):
                 raise TypeError(
@@ -2127,205 +2730,602 @@ class CTable(Generic[RowT]):
     # Arrow interop
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _require_pyarrow(context: str):
+        try:
+            import pyarrow as pa
+        except ImportError:
+            raise ImportError(
+                f"pyarrow is required for {context}. Install it with: pip install pyarrow"
+            ) from None
+        return pa
+
+    @staticmethod
+    def _require_pyarrow_parquet(context: str):
+        try:
+            import pyarrow.parquet as pq
+        except ImportError:
+            raise ImportError(
+                f"pyarrow is required for {context}. Install it with: pip install pyarrow"
+            ) from None
+        return pq
+
+    @staticmethod
+    def _validate_arrow_batch_size(batch_size: int) -> None:
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than 0")
+
+    def _resolve_arrow_columns(self, columns, include_computed: bool = True) -> list[str]:
+        if columns is None:
+            names = list(self.col_names)
+            if not include_computed:
+                names = [name for name in names if name not in self._computed_cols]
+        else:
+            names = list(columns)
+        if len(set(names)) != len(names):
+            raise ValueError("columns must be unique")
+        for name in names:
+            if name not in self.col_names:
+                raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
+        return names
+
+    @staticmethod
+    def _pa_type_from_spec(pa, spec):
+        if isinstance(spec, VLStringSpec):
+            return pa.string()
+        if isinstance(spec, VLBytesSpec):
+            return pa.large_binary()
+        if isinstance(spec, ListSpec):
+            return pa.list_(CTable._pa_type_from_spec(pa, spec.item_spec))
+        if isinstance(spec, StructSpec):
+            return pa.struct(
+                [pa.field(name, CTable._pa_type_from_spec(pa, child)) for name, child in spec.fields.items()]
+            )
+        if spec.to_metadata_dict().get("kind") == "bool":
+            return pa.bool_()
+        dtype = getattr(spec, "dtype", None)
+        if dtype is None:
+            raise TypeError(f"No Arrow type for blosc2 spec {spec!r}")
+        kind = dtype.kind
+        if kind == "U":
+            return pa.string()
+        if kind == "S":
+            return pa.large_binary()
+        return pa.from_numpy_dtype(dtype)
+
+    def _arrow_schema_for_columns(self, columns=None, *, include_computed: bool = True):
+        pa = self._require_pyarrow("to_arrow()/to_parquet()")
+        names = self._resolve_arrow_columns(columns, include_computed=include_computed)
+        fields = []
+        for name in names:
+            cc = self._schema.columns_by_name.get(name)
+            if cc is not None:
+                pa_type = self._pa_type_from_spec(pa, cc.spec)
+            else:
+                pa_type = pa.from_numpy_dtype(np.asarray(self[name][:0]).dtype)
+            fields.append(pa.field(name, pa_type))
+        return pa.schema(fields)
+
+    def iter_arrow_batches(
+        self,
+        *,
+        columns: list[str] | None = None,
+        batch_size: int = _BATCH_SIZE_DEFAULT,
+        include_computed: bool = True,
+    ):
+        """Yield live rows as bounded-size :class:`pyarrow.RecordBatch` objects."""
+        pa = self._require_pyarrow("iter_arrow_batches()")
+        self._validate_arrow_batch_size(batch_size)
+        self._flush_varlen_columns()
+        names = self._resolve_arrow_columns(columns, include_computed=include_computed)
+
+        for start in range(0, self._n_rows, batch_size):
+            stop = min(start + batch_size, self._n_rows)
+            arrays = []
+            for name in names:
+                col = self[name]
+                if col.is_list:
+                    spec = self._schema.columns_by_name[name].spec
+                    arrays.append(pa.array(col[start:stop], type=self._pa_type_from_spec(pa, spec)))
+                    continue
+                if col.is_varlen_scalar:
+                    spec = self._schema.columns_by_name[name].spec
+                    values = col[start:stop]  # list of str/bytes/None
+                    arrays.append(pa.array(values, type=self._pa_type_from_spec(pa, spec)))
+                    continue
+                arr = np.asarray(col[start:stop])
+                nv = col.null_value
+                null_mask = col._null_mask_for(arr) if nv is not None else None
+                has_nulls = null_mask is not None and bool(null_mask.any())
+                if arr.dtype.kind == "U":
+                    values = arr.tolist()
+                    if has_nulls:
+                        values = [None if null_mask[i] else v for i, v in enumerate(values)]
+                    arrays.append(pa.array(values, type=pa.string()))
+                elif arr.dtype.kind == "S":
+                    values = arr.tolist()
+                    if has_nulls:
+                        values = [None if null_mask[i] else v for i, v in enumerate(values)]
+                    arrays.append(pa.array(values, type=pa.large_binary()))
+                elif (
+                    self._schema.columns_by_name.get(name) is not None
+                    and self._schema.columns_by_name[name].spec.to_metadata_dict().get("kind") == "bool"
+                ):
+                    arrays.append(pa.array(arr == 1, mask=null_mask if has_nulls else None, type=pa.bool_()))
+                else:
+                    arrays.append(pa.array(arr, mask=null_mask if has_nulls else None))
+            yield pa.RecordBatch.from_arrays(arrays, names=names)
+
     def to_arrow(self):
-        """Convert all live rows to a :class:`pyarrow.Table`.
+        """Convert all live rows to a :class:`pyarrow.Table`."""
+        pa = self._require_pyarrow("to_arrow()")
+        batches = list(self.iter_arrow_batches())
+        schema = self._arrow_schema_for_columns()
+        return pa.Table.from_batches(batches, schema=schema)
 
-        Each column is materialized via ``col[:]`` and wrapped
-        in a ``pyarrow.array``.  String columns are emitted as ``pa.string()``
-        (variable-length UTF-8); bytes columns as ``pa.large_binary()``.
+    @staticmethod
+    def _auto_null_sentinel(pa, pa_type, *, null_policy: NullPolicy):
+        return null_policy.sentinel_for_arrow_type(pa, pa_type)
 
-        Raises
-        ------
-        ImportError
-            If ``pyarrow`` is not installed.
-        """
-        try:
-            import pyarrow as pa
-        except ImportError:
-            raise ImportError(
-                "pyarrow is required for to_arrow(). Install it with: pip install pyarrow"
-            ) from None
-
-        arrays = {}
-        for name in self.col_names:
-            col = self[name]
-            arr = col[:]
-            # Only compute null mask when a sentinel is actually configured —
-            # avoids allocating a 1M-element zeros array for every non-nullable column.
-            nv = col.null_value
-            if nv is not None:
-                null_mask = col._null_mask_for(arr)
-                has_nulls = bool(null_mask.any())
-            else:
-                null_mask = None
-                has_nulls = False
-            kind = arr.dtype.kind
-            if kind == "U":
-                values = arr.tolist()
-                if has_nulls:
-                    values = [None if null_mask[i] else v for i, v in enumerate(values)]
-                pa_arr = pa.array(values, type=pa.string())
-            elif kind == "S":
-                values = arr.tolist()
-                if has_nulls:
-                    values = [None if null_mask[i] else v for i, v in enumerate(values)]
-                pa_arr = pa.array(values, type=pa.large_binary())
-            else:
-                pa_arr = pa.array(arr, mask=null_mask if has_nulls else None)
-            arrays[name] = pa_arr
-
-        return pa.table(arrays)
-
-    @classmethod
-    def from_arrow(cls, arrow_table) -> CTable:
-        """Build a :class:`CTable` from a :class:`pyarrow.Table`.
-
-        Schema is inferred from the Arrow field types.  String columns
-        (``pa.string()``, ``pa.large_string()``) are stored with
-        ``max_length`` set to the longest value found in the data.
-
-        Parameters
-        ----------
-        arrow_table:
-            A ``pyarrow.Table`` instance.
-
-        Returns
-        -------
-        CTable
-            A new in-memory CTable containing all rows from *arrow_table*.
-
-        Raises
-        ------
-        ImportError
-            If ``pyarrow`` is not installed.
-        TypeError
-            If an Arrow field type has no corresponding blosc2 spec.
-        """
-        try:
-            import pyarrow as pa
-        except ImportError:
-            raise ImportError(
-                "pyarrow is required for from_arrow(). Install it with: pip install pyarrow"
-            ) from None
-
+    @staticmethod
+    def _arrow_type_to_spec(  # noqa: C901
+        pa,
+        pa_type,
+        arrow_col=None,
+        *,
+        string_max_length=None,
+        null_value=None,
+        nullable=False,
+    ):
         import blosc2.schema as b2s
 
-        def _arrow_type_to_spec(pa_type, arrow_col):
-            """Map a pyarrow DataType to a blosc2 SchemaSpec."""
-            mapping = [
-                (pa.int8(), b2s.int8),
-                (pa.int16(), b2s.int16),
-                (pa.int32(), b2s.int32),
-                (pa.int64(), b2s.int64),
-                (pa.uint8(), b2s.uint8),
-                (pa.uint16(), b2s.uint16),
-                (pa.uint32(), b2s.uint32),
-                (pa.uint64(), b2s.uint64),
-                (pa.float32(), b2s.float32),
-                (pa.float64(), b2s.float64),
-                (pa.bool_(), b2s.bool),
-            ]
-            for arrow_t, spec_cls in mapping:
-                if pa_type == arrow_t:
-                    return spec_cls()
+        mapping = [
+            (pa.int8(), b2s.int8),
+            (pa.int16(), b2s.int16),
+            (pa.int32(), b2s.int32),
+            (pa.int64(), b2s.int64),
+            (pa.uint8(), b2s.uint8),
+            (pa.uint16(), b2s.uint16),
+            (pa.uint32(), b2s.uint32),
+            (pa.uint64(), b2s.uint64),
+            (pa.float32(), b2s.float32),
+            (pa.float64(), b2s.float64),
+            (pa.bool_(), b2s.bool),
+        ]
+        for arrow_t, spec_cls in mapping:
+            if pa_type == arrow_t:
+                if null_value is not None and hasattr(spec_cls(), "null_value"):
+                    return spec_cls(null_value=null_value)
+                if null_value is not None and spec_cls is b2s.bool:
+                    return spec_cls(null_value=null_value)
+                return spec_cls()
 
-            # String types: determine max_length from the data
-            if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
-                values = [v for v in arrow_col.to_pylist() if v is not None]
-                max_len = max((len(v) for v in values), default=1)
-                return b2s.string(max_length=max(max_len, 1))
-
-            raise TypeError(
-                f"No blosc2 spec for Arrow type {pa_type!r}. "
-                "Supported: int8/16/32/64, uint8/16/32/64, float32/64, bool, string."
+        if pa.types.is_list(pa_type) or pa.types.is_large_list(pa_type):
+            if arrow_col is not None:
+                py_values = arrow_col.to_pylist()
+                flat_values = [item for cell in py_values if cell is not None for item in cell]
+                item_arrow_col = pa.array(flat_values, type=pa_type.value_type)
+                nullable = any(v is None for v in py_values)
+            else:
+                item_arrow_col = None
+                nullable = True
+            item_string_max_length = string_max_length
+            if pa_type.value_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+                item_string_max_length = max(string_max_length or 1, 1_000_000)
+            item_spec = CTable._arrow_type_to_spec(
+                pa, pa_type.value_type, item_arrow_col, string_max_length=item_string_max_length
             )
+            return b2s.list(item_spec, nullable=nullable, storage="batch", serializer="msgpack")
 
-        # Build CompiledSchema from Arrow schema
+        if pa.types.is_struct(pa_type):
+            fields = {}
+            for field in pa_type:
+                child_col = None
+                if arrow_col is not None:
+                    child_col = arrow_col.field(field.name)
+                child_string_max_length = string_max_length
+                if field.type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+                    child_string_max_length = max(string_max_length or 1, 1_000_000)
+                fields[field.name] = CTable._arrow_type_to_spec(
+                    pa, field.type, child_col, string_max_length=child_string_max_length
+                )
+            return b2s.struct(fields)
+
+        if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+            if string_max_length is None:
+                # No fixed-width threshold given: store as variable-length scalar string.
+                return b2s.vlstring(nullable=nullable)
+            max_length = max(string_max_length, len(null_value) if null_value is not None else 1, 1)
+            return b2s.string(max_length=max_length, null_value=null_value)
+
+        if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
+            if string_max_length is None:
+                # No fixed-width threshold given: store as variable-length scalar bytes.
+                return b2s.vlbytes(nullable=nullable)
+            max_length = max(string_max_length, len(null_value) if null_value is not None else 1, 1)
+            return b2s.bytes(max_length=max_length, null_value=null_value)
+
+        raise TypeError(
+            f"No blosc2 spec for Arrow type {pa_type!r}. Supported: int8/16/32/64, "
+            "uint8/16/32/64, float32/64, bool, string, binary, and list."
+        )
+
+    @classmethod
+    def _compiled_columns_from_arrow(
+        cls,
+        pa,
+        schema,
+        table_for_inference,
+        string_max_length,
+        *,
+        auto_null_sentinels: bool,
+    ):
+        null_policy = get_null_policy()
+        column_null_values = null_policy.column_null_values
+        schema_names = set(schema.names)
+        unknown_null_values = set(column_null_values) - schema_names
+        if unknown_null_values:
+            names = ", ".join(sorted(unknown_null_values))
+            raise KeyError(f"column_null_values contains unknown columns: {names}")
         columns: list[CompiledColumn] = []
-        for field in arrow_table.schema:
+        for field in schema:
             name = field.name
             _validate_column_name(name)
-            spec = _arrow_type_to_spec(field.type, arrow_table.column(name))
-            col_config = ColumnConfig(cparams=None, dparams=None, chunks=None, blocks=None)
-            columns.append(
-                CompiledColumn(
-                    name=name,
-                    py_type=spec.python_type,
-                    spec=spec,
-                    dtype=spec.dtype,
-                    default=MISSING,
-                    config=col_config,
-                    display_width=compute_display_width(spec),
+            arrow_col = table_for_inference.column(name) if table_for_inference is not None else None
+            field_is_list = pa.types.is_list(field.type) or pa.types.is_large_list(field.type)
+            field_is_struct = pa.types.is_struct(field.type)
+            field_is_varlen_scalar = (
+                not field_is_list
+                and not field_is_struct
+                and string_max_length is None
+                and (
+                    pa.types.is_string(field.type)
+                    or pa.types.is_large_string(field.type)
+                    or pa.types.is_binary(field.type)
+                    or pa.types.is_large_binary(field.type)
                 )
             )
-
-        schema = CompiledSchema(
-            row_cls=None,
-            columns=columns,
-            columns_by_name={col.name: col for col in columns},
-        )
-
-        n = len(arrow_table)
-        capacity = max(n, 1)
-        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
-        mem_storage = InMemoryTableStorage()
-
-        new_valid = mem_storage.create_valid_rows(
-            shape=(capacity,),
-            chunks=default_chunks,
-            blocks=default_blocks,
-        )
-        new_cols: dict[str, blosc2.NDArray] = {}
-        for col in columns:
-            new_cols[col.name] = mem_storage.create_column(
-                col.name,
-                dtype=col.dtype,
-                shape=(capacity,),
-                chunks=default_chunks,
-                blocks=default_blocks,
-                cparams=None,
-                dparams=None,
+            null_value = None
+            has_null_value_override = name in column_null_values
+            if has_null_value_override and (field_is_list or field_is_struct):
+                raise TypeError(f"column_null_values only supports scalar columns; {name!r} is not scalar")
+            if has_null_value_override and field_is_varlen_scalar:
+                raise TypeError(
+                    f"column_null_values is not supported for vlstring/vlbytes column {name!r}; "
+                    "these columns represent nulls as native None."
+                )
+            if has_null_value_override:
+                null_value = column_null_values[name]
+            elif (
+                auto_null_sentinels
+                and field.nullable
+                and not (field_is_list or field_is_struct or field_is_varlen_scalar)
+            ):
+                null_value = cls._auto_null_sentinel(pa, field.type, null_policy=null_policy)
+            if (
+                arrow_col is not None
+                and arrow_col.null_count
+                and not (field_is_list or field_is_struct or field_is_varlen_scalar)
+                and null_value is None
+            ):
+                raise TypeError(
+                    f"Column {name!r} contains Parquet nulls. Provide a CTable schema with a "
+                    "null_value sentinel for this column."
+                )
+            spec = cls._arrow_type_to_spec(
+                pa,
+                field.type,
+                arrow_col,
+                string_max_length=string_max_length,
+                null_value=null_value,
+                nullable=field.nullable,
             )
+            if null_value is not None and not (field_is_list or field_is_struct or field_is_varlen_scalar):
+                cls._validate_null_value_for_spec(name, spec, null_value)
+            columns.append(cls._compiled_column_from_spec(name, spec))
+        return columns
 
+    @classmethod
+    def _compiled_column_from_spec(cls, name: str, spec: SchemaSpec) -> CompiledColumn:
+        col_config = ColumnConfig(cparams=None, dparams=None, chunks=None, blocks=None)
+        return CompiledColumn(
+            name=name,
+            py_type=spec.python_type,
+            spec=spec,
+            dtype=getattr(spec, "dtype", None),
+            default=MISSING,
+            config=col_config,
+            display_width=compute_display_width(spec),
+        )
+
+    @staticmethod
+    def _storage_for_arrow_import(urlpath: str | None, mode: str) -> TableStorage:
+        if urlpath is None:
+            return InMemoryTableStorage()
+        if mode == "w" and os.path.exists(urlpath):
+            if os.path.isdir(urlpath):
+                shutil.rmtree(urlpath)
+            else:
+                os.remove(urlpath)
+        return FileTableStorage(urlpath, mode)
+
+    @classmethod
+    def _create_arrow_import_columns(
+        cls, storage: TableStorage, columns: list[CompiledColumn], capacity: int, cparams, dparams
+    ):
+        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        new_valid = storage.create_valid_rows(
+            shape=(capacity,), chunks=default_chunks, blocks=default_blocks
+        )
+        new_cols: dict[str, blosc2.NDArray | ListArray | _ScalarVarLenArray] = {}
+        for col in columns:
+            if cls._is_list_column(col):
+                new_cols[col.name] = storage.create_list_column(
+                    col.name, spec=col.spec, cparams=cparams, dparams=dparams
+                )
+            elif cls._is_varlen_scalar_column(col):
+                new_cols[col.name] = storage.create_varlen_scalar_column(
+                    col.name, spec=col.spec, cparams=cparams, dparams=dparams
+                )
+            else:
+                chunks, blocks = default_chunks, default_blocks
+                if col.dtype is not None:
+                    chunks, blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
+                new_cols[col.name] = storage.create_column(
+                    col.name,
+                    dtype=col.dtype,
+                    shape=(capacity,),
+                    chunks=chunks,
+                    blocks=blocks,
+                    cparams=cparams,
+                    dparams=dparams,
+                )
+        return new_cols, new_valid
+
+    @classmethod
+    def _new_arrow_import_ctable(
+        cls, compiled, storage, new_cols, new_valid, columns, *, cparams, dparams, validate
+    ):
         obj = cls.__new__(cls)
         obj._row_type = None
-        obj._validate = False
-        obj._table_cparams = None
-        obj._table_dparams = None
-        obj._storage = mem_storage
-        obj._read_only = False
-        obj._schema = schema
+        obj._validate = validate
+        obj._table_cparams = cparams
+        obj._table_dparams = dparams
+        obj._storage = storage
+        obj._read_only = storage.is_read_only()
+        obj._schema = compiled
         obj._cols = new_cols
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in columns}
         obj.col_names = [col.name for col in columns]
-        obj.row = _RowIndexer(obj)
         obj.auto_compact = False
         obj.base = None
-        obj._computed_cols = {}  # from_arrow creates no computed columns
+        obj._computed_cols = {}
         obj._materialized_cols = {}
         obj._expr_index_arrays = {}
         obj._valid_rows = new_valid
         obj._n_rows = 0
         obj._last_pos = 0
-
-        if n > 0:
-            # Write each column directly — one bulk slice assignment per column.
-            # String columns (dtype.kind == 'U') can't go through Arrow's zero-copy
-            # path, so we convert via to_pylist() and let NumPy handle the
-            # fixed-width unicode coercion.  All other types use zero-copy numpy.
-            for col in columns:
-                arrow_col = arrow_table.column(col.name)
-                if col.dtype.kind in "US":
-                    arr = np.array(arrow_col.to_pylist(), dtype=col.dtype)
-                else:
-                    arr = arrow_col.to_numpy(zero_copy_only=False).astype(col.dtype)
-                new_cols[col.name][:n] = arr
-
-            new_valid[:n] = True
-            obj._n_rows = n
-            obj._last_pos = n
-
         return obj
+
+    @classmethod
+    def _write_arrow_batches(cls, obj, batches, columns, new_cols, new_valid) -> None:
+        pos = 0
+        for batch in batches:
+            end = pos + len(batch)
+            while end > len(new_valid):
+                obj._grow()
+                new_valid = obj._valid_rows
+            pos = cls._write_arrow_batch(batch, columns, new_cols, new_valid, pos)
+        for col in columns:
+            if cls._is_list_column(col) or cls._is_varlen_scalar_column(col):
+                new_cols[col.name].flush()
+        obj._n_rows = pos
+        obj._last_pos = pos
+
+    @classmethod
+    def _write_arrow_batch(cls, batch, columns, new_cols, new_valid, pos: int) -> int:
+        m = len(batch)
+        if m == 0:
+            return pos
+        for col in columns:
+            arrow_col = batch.column(batch.schema.get_field_index(col.name))
+            if cls._is_list_column(col):
+                # Trusted Arrow-import fast path: schema has already been inferred,
+                # so avoid Python-level per-item coercion/validation here.
+                new_cols[col.name].extend(arrow_col.to_pylist(), validate=False)
+            elif cls._is_varlen_scalar_column(col):
+                new_cols[col.name].extend(arrow_col.to_pylist())
+            else:
+                new_cols[col.name][pos : pos + m] = cls._arrow_column_to_numpy(arrow_col, col)
+        new_valid[pos : pos + m] = True
+        return pos + m
+
+    @staticmethod
+    def _arrow_column_to_numpy(arrow_col, col: CompiledColumn) -> np.ndarray:
+        nv = getattr(col.spec, "null_value", None)
+        if col.spec.to_metadata_dict().get("kind") == "bool" and col.dtype == np.dtype(np.uint8):
+            return np.array([nv if v is None else int(v) for v in arrow_col.to_pylist()], dtype=np.uint8)
+        if col.dtype.kind in "US":
+            values = arrow_col.to_pylist()
+            if nv is not None:
+                values = [nv if v is None else v for v in values]
+            max_len = col.spec.max_length
+            too_long = [v for v in values if v is not None and len(v) > max_len]
+            if too_long:
+                raise ValueError(f"Column {col.name!r} contains values longer than max_length={max_len}.")
+            return np.array(values, dtype=col.dtype)
+        if arrow_col.null_count:
+            if nv is None:
+                raise TypeError(
+                    f"Column {col.name!r} contains Arrow/Parquet nulls. Provide a CTable schema "
+                    "with a null_value sentinel for this column."
+                )
+            arrow_col = arrow_col.fill_null(nv)
+        return arrow_col.to_numpy(zero_copy_only=False).astype(col.dtype)
+
+    @staticmethod
+    def _arrow_schema_metadata(schema) -> dict[str, Any]:
+        import base64
+
+        try:
+            schema_ipc = schema.serialize().to_pybytes()
+            schema_ipc_base64 = base64.b64encode(schema_ipc).decode("ascii")
+        except Exception:
+            schema_ipc_base64 = None
+        arrow_meta = {"schema_string": schema.to_string()}
+        if schema_ipc_base64 is not None:
+            arrow_meta["schema_ipc_base64"] = schema_ipc_base64
+        return {"arrow": arrow_meta}
+
+    @classmethod
+    def from_arrow(
+        cls,
+        schema,
+        batches,
+        *,
+        urlpath: str | None = None,
+        mode: str = "w",
+        cparams=None,
+        dparams=None,
+        validate: bool = False,
+        capacity_hint: int | None = None,
+        string_max_length: int | None = None,
+        auto_null_sentinels: bool = True,
+        blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
+    ) -> CTable:
+        """Build a :class:`CTable` from an Arrow schema and iterable of record batches.
+
+        When *string_max_length* is ``None`` (the default), scalar Arrow
+        ``string`` / ``large_string`` columns are imported as
+        :func:`~blosc2.vlstring` columns and ``binary`` / ``large_binary``
+        columns are imported as :func:`~blosc2.vlbytes` columns.  Null values
+        are represented as native ``None`` with no sentinel needed.
+
+        When *string_max_length* is set to a positive integer, scalar string
+        and binary columns are imported as fixed-width
+        :func:`~blosc2.string` / :func:`~blosc2.bytes` columns whose dtype is
+        sized to *string_max_length* characters/bytes.
+
+        ``blosc2_batch_size`` controls how many rows are buffered before
+        BatchArray-backed imported columns (list columns and varlen scalar
+        columns) are flushed to their backend.  Set it to ``None`` to keep
+        those columns pending until the final flush.
+        """
+        pa = cls._require_pyarrow("from_arrow()")
+        if blosc2_batch_size is not None and blosc2_batch_size <= 0:
+            raise ValueError("blosc2_batch_size must be a positive integer or None")
+        batches = iter(batches)
+        first_batch = None
+        table_for_inference = None
+        if string_max_length is None:
+            first_batch = next(batches, None)
+            if first_batch is not None:
+                table_for_inference = pa.Table.from_batches([first_batch], schema=schema)
+        columns = cls._compiled_columns_from_arrow(
+            pa,
+            schema,
+            table_for_inference,
+            string_max_length,
+            auto_null_sentinels=auto_null_sentinels,
+        )
+        if blosc2_batch_size is not None:
+            for col in columns:
+                if (
+                    cls._is_list_column(col) and getattr(col.spec, "storage", None) == "batch"
+                ) or cls._is_varlen_scalar_column(col):
+                    col.spec.batch_rows = blosc2_batch_size
+        compiled = CompiledSchema(
+            row_cls=None,
+            columns=columns,
+            columns_by_name={col.name: col for col in columns},
+            metadata=cls._arrow_schema_metadata(schema),
+        )
+        if first_batch is not None:
+            import itertools as _it
+
+            batches = _it.chain([first_batch], batches)
+        capacity = max(capacity_hint or 1, 1)
+        storage = cls._storage_for_arrow_import(urlpath, mode)
+        new_cols, new_valid = cls._create_arrow_import_columns(storage, columns, capacity, cparams, dparams)
+        storage.save_schema(schema_to_dict(compiled))
+        obj = cls._new_arrow_import_ctable(
+            compiled,
+            storage,
+            new_cols,
+            new_valid,
+            columns,
+            cparams=cparams,
+            dparams=dparams,
+            validate=validate,
+        )
+        cls._write_arrow_batches(obj, batches, columns, new_cols, new_valid)
+        return obj
+
+    def to_parquet(
+        self,
+        path,
+        *,
+        columns: list[str] | None = None,
+        batch_size: int = _BATCH_SIZE_DEFAULT,
+        compression: str | None = "zstd",
+        row_group_size: int | None = None,
+        include_computed: bool = True,
+        **kwargs,
+    ) -> None:
+        """Write this table to a Parquet file batch-wise using pyarrow."""
+        pq = self._require_pyarrow_parquet("to_parquet()")
+        pa = self._require_pyarrow("to_parquet()")
+        self._validate_arrow_batch_size(batch_size)
+        schema = self._arrow_schema_for_columns(columns, include_computed=include_computed)
+        with pq.ParquetWriter(path, schema, compression=compression, **kwargs) as writer:
+            for batch in self.iter_arrow_batches(
+                columns=columns, batch_size=batch_size, include_computed=include_computed
+            ):
+                table = pa.Table.from_batches([batch], schema=batch.schema)
+                writer.write_table(table, row_group_size=row_group_size or len(batch))
+
+    @classmethod
+    def from_parquet(
+        cls,
+        path,
+        *,
+        columns: list[str] | None = None,
+        batch_size: int = _BATCH_SIZE_DEFAULT,
+        urlpath: str | None = None,
+        mode: str = "w",
+        cparams=None,
+        dparams=None,
+        validate: bool = False,
+        auto_null_sentinels: bool = True,
+        blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
+        **kwargs,
+    ) -> CTable:
+        """Read a Parquet file into a :class:`CTable` batch-wise using pyarrow."""
+        pq = cls._require_pyarrow_parquet("from_parquet()")
+        pa = cls._require_pyarrow("from_parquet()")
+        cls._validate_arrow_batch_size(batch_size)
+        string_max_length = kwargs.pop("string_max_length", None)
+        pf = pq.ParquetFile(path, **kwargs)
+        arrow_schema = pf.schema_arrow
+        if columns is not None:
+            if len(set(columns)) != len(columns):
+                raise ValueError("columns must be unique")
+            fields = [arrow_schema.field(name) for name in columns]
+            arrow_schema = pa.schema(fields)
+        batches = pf.iter_batches(batch_size=batch_size, columns=columns)
+        return cls.from_arrow(
+            arrow_schema,
+            batches,
+            urlpath=urlpath,
+            mode=mode,
+            cparams=cparams,
+            dparams=dparams,
+            validate=validate,
+            capacity_hint=pf.metadata.num_rows if pf.metadata is not None else None,
+            string_max_length=string_max_length,
+            auto_null_sentinels=auto_null_sentinels,
+            blosc2_batch_size=blosc2_batch_size,
+        )
 
     # ------------------------------------------------------------------
     # CSV interop
@@ -2420,6 +3420,7 @@ class CTable(Generic[RowT]):
         import csv
 
         schema = compile_schema(row_cls)
+        cls._resolve_nullable_specs(schema)
         ncols = len(schema.columns)
 
         # Accumulate values per column as Python lists (one pass through file)
@@ -2468,7 +3469,6 @@ class CTable(Generic[RowT]):
         obj._cols = new_cols
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
         obj.col_names = [col.name for col in schema.columns]
-        obj.row = _RowIndexer(obj)
         obj.auto_compact = False
         obj.base = None
         obj._computed_cols = {}  # from_csv creates no computed columns
@@ -2532,36 +3532,47 @@ class CTable(Generic[RowT]):
         if name in self._computed_cols:
             raise ValueError(f"A computed column named {name!r} already exists.")
 
-        try:
-            default_val = spec.dtype.type(default)
-        except (ValueError, OverflowError) as exc:
-            raise TypeError(f"Cannot coerce default {default!r} to dtype {spec.dtype!r}: {exc}") from exc
-
-        capacity = len(self._valid_rows)
-        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
-        new_col = self._storage.create_column(
-            name,
-            dtype=spec.dtype,
-            shape=(capacity,),
-            chunks=default_chunks,
-            blocks=default_blocks,
-            cparams=cparams,
-            dparams=None,
+        compiled_col = self._compiled_column_from_spec(name, spec)
+        self._resolve_nullable_specs(
+            CompiledSchema(row_cls=None, columns=[compiled_col], columns_by_name={name: compiled_col}),
+            validate_column_null_values=False,
         )
+        spec = compiled_col.spec
 
-        live_pos = np.where(self._valid_rows[:])[0]
-        if len(live_pos) > 0:
-            new_col[live_pos] = default_val
+        if self._is_varlen_scalar_column(compiled_col):
+            # Varlen scalar columns don't use fixed-width NDArray storage.
+            new_col = self._storage.create_varlen_scalar_column(name, spec=spec, cparams=cparams)
+            live_pos = np.where(self._valid_rows[:])[0]
+            for _ in live_pos:
+                new_col.append(default)
+            new_col.flush()
+        elif self._is_list_column(compiled_col):
+            raise TypeError(
+                "add_column() does not support list columns; use the constructor with a full schema."
+            )
+        else:
+            try:
+                default_val = spec.dtype.type(default)
+            except (ValueError, OverflowError) as exc:
+                raise TypeError(f"Cannot coerce default {default!r} to dtype {spec.dtype!r}: {exc}") from exc
 
-        compiled_col = CompiledColumn(
-            name=name,
-            py_type=spec.python_type,
-            spec=spec,
-            dtype=spec.dtype,
-            default=default,
-            config=ColumnConfig(cparams=cparams, dparams=None, chunks=None, blocks=None),
-            display_width=compute_display_width(spec),
-        )
+            capacity = len(self._valid_rows)
+            default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+            new_col = self._storage.create_column(
+                name,
+                dtype=spec.dtype,
+                shape=(capacity,),
+                chunks=default_chunks,
+                blocks=default_blocks,
+                cparams=cparams,
+                dparams=None,
+            )
+            live_pos = np.where(self._valid_rows[:])[0]
+            if len(live_pos) > 0:
+                new_col[live_pos] = default_val
+
+        compiled_col.default = default
+        compiled_col.config = ColumnConfig(cparams=cparams, dparams=None, chunks=None, blocks=None)
         self._cols[name] = new_col
         self.col_names.append(name)
         self._col_widths[name] = max(len(name), compiled_col.display_width)
@@ -2735,12 +3746,12 @@ class CTable(Generic[RowT]):
         """
         return dict(self._computed_cols)  # shallow copy so callers can't mutate
 
-    def _col_dtype(self, name: str) -> np.dtype:
+    def _col_dtype(self, name: str) -> np.dtype | None:
         """Return the dtype for *name*, routing through computed cols."""
         cc = self._computed_cols.get(name)
         if cc is not None:
             return cc["dtype"]
-        return self._cols[name].dtype
+        return getattr(self._cols[name], "dtype", None)
 
     @staticmethod
     def _readable_computed_expr(cc: dict) -> str:
@@ -2758,18 +3769,21 @@ class CTable(Generic[RowT]):
 
         return re.sub(r"\bo(\d+)\b", _sub, cc["expression"])
 
-    def _fetch_col_at_positions(self, name: str, positions: np.ndarray) -> np.ndarray:
+    def _fetch_col_at_positions(self, name: str, positions: np.ndarray):
         """Fetch values at *positions* (physical indices) — used for display."""
         cc = self._computed_cols.get(name)
         if cc is not None:
             if len(positions) == 0:
                 return np.array([], dtype=cc["dtype"])
-            # Evaluate element-by-element for scattered display positions (max ~20).
             return np.array(
                 [np.asarray(cc["lazy"][int(p)]).ravel()[0] for p in positions],
                 dtype=cc["dtype"],
             )
-        return self._cols[name][positions]
+        col = self._cols[name]
+        spec = self._schema.columns_by_name[name].spec
+        if self._is_list_spec(spec) or isinstance(spec, (VLStringSpec, VLBytesSpec)):
+            return col[positions]
+        return col[positions]
 
     def _schema_dict_with_computed(self) -> dict:
         """Return the schema dict extended with computed/materialized metadata."""
@@ -3150,13 +4164,86 @@ class CTable(Generic[RowT]):
             self._storage.save_schema(self._schema_dict_with_computed())
 
     # ------------------------------------------------------------------
-    # Column access
+    # Column / row access
     # ------------------------------------------------------------------
 
-    def __getitem__(self, s: str):
-        if s in self._cols or s in self._computed_cols:
-            return Column(self, s)
-        return None
+    @staticmethod
+    def _all_strings(seq) -> bool:
+        return all(isinstance(v, str) for v in seq)
+
+    @staticmethod
+    def _all_ints(seq) -> bool:
+        return all(isinstance(v, (int, np.integer)) and not isinstance(v, (bool, np.bool_)) for v in seq)
+
+    def _getitem_arraylike(self, key):
+        if len(key) == 0:
+            return self._run_row_logic(key)
+        if getattr(key, "dtype", None) is not None:
+            if key.dtype == np.bool_:
+                return self._run_row_logic(key)
+            if np.issubdtype(key.dtype, np.integer):
+                return self._run_row_logic(key)
+            if key.dtype.kind in {"U", "S"}:
+                return self.select(key.tolist())
+        values = key.tolist() if hasattr(key, "tolist") else list(key)
+        if self._all_strings(values):
+            return self.select(values)
+        return self._run_row_logic(key)
+
+    def _getitem_row_selector(self, key):
+        if isinstance(key, (int, np.integer)) and not isinstance(key, (bool, np.bool_)):
+            return self._materialize_row(int(key))
+        if isinstance(key, slice):
+            return self._run_row_logic(key)
+        if isinstance(key, np.ndarray):
+            return self._getitem_arraylike(key)
+        if isinstance(key, list):
+            if key and self._all_strings(key):
+                return self.select(key)
+            return self._run_row_logic(key)
+        if isinstance(key, Iterable) and not isinstance(key, (str, bytes, tuple)):
+            key = list(key)
+            if key and self._all_strings(key):
+                return self.select(key)
+            return self._run_row_logic(key)
+        raise TypeError(
+            "Row selectors must be an int, slice, integer array/list, or boolean mask; "
+            f"got {type(key).__name__}"
+        )
+
+    def _structured_array_dtype(self) -> np.dtype:
+        fields = []
+        for name in self.col_names:
+            col_info = self._schema.columns_by_name.get(name)
+            if col_info is None:
+                dtype = np.asarray(self[name][:0]).dtype
+            elif self._is_list_column(col_info) or self._is_varlen_scalar_column(col_info):
+                dtype = np.dtype(object)
+            else:
+                dtype = col_info.dtype if col_info.dtype is not None else np.dtype(object)
+            fields.append((name, dtype))
+        return np.dtype(fields)
+
+    def __array__(self, dtype=None, copy=None):
+        arr = np.empty(self.nrows, dtype=self._structured_array_dtype())
+        for name in self.col_names:
+            values = self[name][:]
+            target_dtype = arr.dtype.fields[name][0]
+            if target_dtype == np.dtype(object) and isinstance(values, np.ndarray):
+                values = values.tolist()
+            arr[name] = values
+        if dtype is not None:
+            arr = arr.astype(dtype, copy=True if copy is None else copy)
+        return arr.copy() if copy else arr
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            if key in self._cols or key in self._computed_cols:
+                return Column(self, key)
+            return self.where(key)
+        if isinstance(key, tuple):
+            raise TypeError("Tuple indexing is not supported for CTable in V1")
+        return self._getitem_row_selector(key)
 
     def __getattr__(self, s: str):
         if s in self._cols or s in self._computed_cols:
@@ -3172,19 +4259,36 @@ class CTable(Generic[RowT]):
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
             raise ValueError("Cannot compact a view.")
+        self._flush_varlen_columns()
         real_poss = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
-        start = 0
-        block_size = self._valid_rows.blocks[0]
-        end = min(block_size, self._n_rows)
-        while start < end:
-            for _k, v in self._cols.items():
+        for col in self._schema.columns:
+            name = col.name
+            v = self._cols[name]
+            if self._is_list_column(col):
+                compacted = [v[int(pos)] for pos in real_poss[: self._n_rows]]
+                replacement = ListArray(spec=col.spec)
+                replacement.extend(compacted)
+                replacement.flush()
+                self._cols[name] = replacement
+                continue
+            if self._is_varlen_scalar_column(col):
+                compacted = [v[int(pos)] for pos in real_poss[: self._n_rows]]
+                replacement = _ScalarVarLenArray(col.spec)
+                replacement.extend(compacted)
+                replacement.flush()
+                self._cols[name] = replacement
+                continue
+            start = 0
+            block_size = self._valid_rows.blocks[0]
+            end = min(block_size, self._n_rows)
+            while start < end:
                 v[start:end] = v[real_poss[start:end]]
-            start += block_size
-            end = min(end + block_size, self._n_rows)
+                start += block_size
+                end = min(end + block_size, self._n_rows)
 
         self._valid_rows[: self._n_rows] = True
         self._valid_rows[self._n_rows :] = False
-        self._last_pos = self._n_rows  # next write goes right after live rows
+        self._last_pos = self._n_rows
         self._mark_all_indexes_stale()
 
     def _normalise_sort_keys(
@@ -3205,6 +4309,15 @@ class CTable(Generic[RowT]):
             if name not in self._cols and name not in self._computed_cols:
                 raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
             dtype = self._col_dtype(name)
+            if dtype is None:
+                cc = self._schema.columns_by_name.get(name)
+                if cc is not None and isinstance(cc.spec, (VLStringSpec, VLBytesSpec)):
+                    raise TypeError(
+                        f"Column {name!r} is a varlen scalar column and does not support sort ordering."
+                    )
+                raise TypeError(
+                    f"Column {name!r} is a list column and does not support sort ordering in V1."
+                )
             if np.issubdtype(dtype, np.complexfloating):
                 raise TypeError(
                     f"Column {name!r} has complex dtype {dtype} which does not support ordering."
@@ -3212,27 +4325,26 @@ class CTable(Generic[RowT]):
         return cols, ascending
 
     def _sorted_positions_from_full_index(self, name: str, ascending: bool) -> np.ndarray | None:
-        """Return live physical positions from a matching FULL index, if available."""
-        from blosc2.indexing import ordered_indices
+        """Return live physical positions from a matching FULL index, if available.
 
+        Reads the pre-sorted positions sidecar directly rather than going through
+        the ordered_indices query machinery, which is optimised for selective range
+        queries and is much slower for full-table streaming.
+        """
         root = self._root_table
         catalog = root._storage.load_index_catalog()
         descriptor = None
-        target_arr = None
 
         if name in root._cols:
+            col_info = root._schema.columns_by_name.get(name)
+            if col_info is not None and getattr(col_info.spec, "null_value", None) is not None:
+                return None
             descriptor = catalog.get(name)
-            if (
-                descriptor is not None
-                and descriptor.get("kind") == "full"
-                and not descriptor.get("stale", False)
-            ):
-                target_arr = root._cols[name]
-            else:
+            if descriptor is None or descriptor.get("kind") != "full" or descriptor.get("stale", False):
                 descriptor = None
         elif name in root._computed_cols:
             cc = root._computed_cols[name]
-            for lookup_key, candidate in catalog.items():
+            for _lookup_key, candidate in catalog.items():
                 target = candidate.get("target") or {}
                 if (
                     target.get("source") == "expression"
@@ -3242,14 +4354,32 @@ class CTable(Generic[RowT]):
                     and list(target.get("dependencies", [])) == list(cc["col_deps"])
                 ):
                     descriptor = candidate
-                    target_arr = root._index_target_array(lookup_key, candidate)
                     break
-        if descriptor is None or target_arr is None:
+        if descriptor is None:
             return None
 
-        positions = ordered_indices(target_arr, require_full=True)
-        if positions is None:
-            return None
+        positions_path = descriptor.get("full", {}).get("positions_path")
+
+        # Read pre-sorted positions directly — bypasses the ordered_indices query
+        # machinery which is built for selective range queries and is ~70x slower
+        # for full-table streaming.
+        if positions_path is not None:
+            # Persistent table: positions live in a sidecar .b2nd file.
+            positions_nd = blosc2.open(positions_path, mode="r")
+        else:
+            # In-memory table: positions live in the sidecar handle cache.
+            from blosc2.indexing import _SIDECAR_HANDLE_CACHE, _sidecar_handle_cache_key
+
+            target_arr = root._cols.get(name)
+            if target_arr is None:
+                return None
+            token = descriptor["token"]
+            cache_key = _sidecar_handle_cache_key(target_arr, token, "full", "positions")
+            positions_nd = _SIDECAR_HANDLE_CACHE.get(cache_key)
+            if positions_nd is None:
+                return None
+
+        positions = np.asarray(positions_nd[:], dtype=np.int64)
         valid = root._valid_rows[:]
         positions = np.asarray(positions, dtype=np.int64)
         positions = positions[(positions >= 0) & (positions < len(valid))]
@@ -3343,8 +4473,10 @@ class CTable(Generic[RowT]):
             If a column used as a sort key does not support ordering
             (e.g. complex numbers).
         """
-        if self.base is not None:
-            raise ValueError("Cannot sort a view. Materialise it first with .to_table() or sort the parent.")
+        if self.base is not None and inplace:
+            raise ValueError(
+                "Cannot sort a view inplace (would modify shared column data). Use sort_by(inplace=False) to get a sorted copy."
+            )
         if inplace and self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
 
@@ -3371,8 +4503,15 @@ class CTable(Generic[RowT]):
             sorted_pos = live_pos[order]
 
         if inplace:
-            for _col_name, arr in self._cols.items():
-                arr[:n] = arr[sorted_pos]
+            for col in self._schema.columns:
+                arr = self._cols[col.name]
+                if self._is_list_column(col):
+                    new_arr = ListArray(spec=col.spec)
+                    new_arr.extend((arr[int(pos)] for pos in sorted_pos), validate=False)
+                    new_arr.flush()
+                    self._cols[col.name] = new_arr
+                else:
+                    arr[:n] = arr[sorted_pos]
             self._valid_rows[:n] = True
             self._valid_rows[n:] = False
             self._n_rows = n
@@ -3382,19 +4521,80 @@ class CTable(Generic[RowT]):
         else:
             # Build a new in-memory table with the sorted rows
             result = self._empty_copy()
-            for col_name, arr in self._cols.items():
-                result._cols[col_name][:n] = arr[sorted_pos]
+            for col in self._schema.columns:
+                col_name = col.name
+                arr = self._cols[col_name]
+                if self._is_list_column(col):
+                    result._cols[col_name].extend((arr[int(pos)] for pos in sorted_pos), validate=False)
+                    result._cols[col_name].flush()
+                else:
+                    result._cols[col_name][:n] = arr[sorted_pos]
             result._valid_rows[:n] = True
             result._valid_rows[n:] = False
             result._n_rows = n
             result._last_pos = n
             return result
 
-    def _empty_copy(self) -> CTable:
+    def copy(self, compact: bool = True) -> CTable:
+        """Return a new standalone in-memory copy of this table.
+
+        Parameters
+        ----------
+        compact:
+            If ``True`` (default), only live (non-deleted) rows are copied.
+            The result is a dense table with no tombstones and no parent
+            dependency — ideal for materialising a filtered view.
+            If ``False``, all physical slots are copied including deleted gaps,
+            preserving the tombstone state exactly.
+        """
+        valid_np = self._valid_rows[:]
+        live_pos = np.where(valid_np)[0]
+        n_live = len(live_pos)
+
+        if compact:
+            n = n_live
+        else:
+            # High watermark: number of slots ever written.
+            # List columns are written sequentially with no gaps — their length
+            # is the exact high watermark.  For scalar-only tables fall back to
+            # the last live position + 1 (writes are always sequential so no
+            # deleted slot can exist beyond the last live one).
+            n = 0
+            for col in self._schema.columns:
+                if self._is_list_column(col):
+                    n = len(self._cols[col.name])
+                    break
+            if n == 0:
+                n = int(live_pos[-1]) + 1 if n_live > 0 else 0
+
+        result = self._empty_copy(capacity=n)
+
+        for col in self._schema.columns:
+            col_name = col.name
+            arr = self._cols[col_name]
+            if self._is_list_column(col):
+                src = (arr[int(pos)] for pos in live_pos) if compact else (arr[i] for i in range(n))
+                result._cols[col_name].extend(src, validate=False)
+                result._cols[col_name].flush()
+            else:
+                result._cols[col_name][:n] = arr[live_pos] if compact else arr[:n]
+
+        if compact:
+            result._valid_rows[:n] = True
+            result._n_rows = n
+            result._last_pos = n - 1 if n > 0 else None
+        else:
+            result._valid_rows[:n] = valid_np[:n]
+            result._n_rows = n_live
+            result._last_pos = None  # recomputed lazily on next append
+
+        return result
+
+    def _empty_copy(self, capacity: int | None = None) -> CTable:
         """Return a new empty in-memory CTable with the same schema and capacity."""
         from blosc2 import compute_chunks_blocks
 
-        capacity = max(self._n_rows, 1)
+        capacity = max(capacity if capacity is not None else self._n_rows, 1)
         default_chunks, default_blocks = compute_chunks_blocks((capacity,))
         mem_storage = InMemoryTableStorage()
 
@@ -3406,15 +4606,23 @@ class CTable(Generic[RowT]):
         new_cols = {}
         for col in self._schema.columns:
             col_storage = self._resolve_column_storage(col, default_chunks, default_blocks)
-            new_cols[col.name] = mem_storage.create_column(
-                col.name,
-                dtype=col.dtype,
-                shape=(capacity,),
-                chunks=col_storage["chunks"],
-                blocks=col_storage["blocks"],
-                cparams=col_storage.get("cparams"),
-                dparams=col_storage.get("dparams"),
-            )
+            if self._is_list_column(col):
+                new_cols[col.name] = mem_storage.create_list_column(
+                    col.name,
+                    spec=col.spec,
+                    cparams=col_storage.get("cparams"),
+                    dparams=col_storage.get("dparams"),
+                )
+            else:
+                new_cols[col.name] = mem_storage.create_column(
+                    col.name,
+                    dtype=col.dtype,
+                    shape=(capacity,),
+                    chunks=col_storage["chunks"],
+                    blocks=col_storage["blocks"],
+                    cparams=col_storage.get("cparams"),
+                    dparams=col_storage.get("dparams"),
+                )
 
         obj = CTable.__new__(CTable)
         obj._schema = self._schema
@@ -3441,7 +4649,6 @@ class CTable(Generic[RowT]):
             }
             obj.col_names.append(cc_name)
             obj._col_widths.setdefault(cc_name, max(len(cc_name), 15))
-        obj.row = _RowIndexer(obj)
         obj._n_rows = 0
         obj._last_pos = None
         obj._read_only = False
@@ -3993,6 +5200,13 @@ class CTable(Generic[RowT]):
             )
 
         col_arr = self._cols[col_name]
+        if isinstance(self._schema.columns_by_name[col_name].spec, ListSpec):
+            raise ValueError(f"Cannot create an index on list column {col_name!r} in V1.")
+        if isinstance(self._schema.columns_by_name[col_name].spec, (VLStringSpec, VLBytesSpec)):
+            raise NotImplementedError(
+                f"Cannot create an index on varlen scalar column {col_name!r}: "
+                "indexing for vlstring/vlbytes columns is not supported yet."
+            )
         is_persistent = self._storage.index_anchor_path(col_name) is not None
 
         if is_persistent:
@@ -4216,7 +5430,7 @@ class CTable(Generic[RowT]):
                 seen.add(col_name)
         return indexed
 
-    def _try_index_where(self, expr_result: blosc2.LazyExpr) -> np.ndarray | None:
+    def _try_index_where(self, expr_result: blosc2.LazyExpr) -> np.ndarray | None:  # noqa: C901
         """Attempt to resolve *expr_result* via a column index.
 
         Returns a 1-D int64 array of physical row positions that satisfy the
@@ -4251,12 +5465,29 @@ class CTable(Generic[RowT]):
             return None
 
         primary_col_name, primary_col_arr, _ = indexed_columns[0]
+        nullable_indexed = [
+            name
+            for name, _arr, _descriptor in indexed_columns
+            if getattr(root._schema.columns_by_name[name].spec, "null_value", None) is not None
+        ]
+
+        # Global null post-filtering is not correct for OR expressions.
+        if nullable_indexed and ("|" in expr_result.expression or " or " in expr_result.expression):
+            return None
 
         # Inject every usable table-owned descriptor so plan_query can combine them.
+        # In .b2z read mode all columns share the same urlpath, so _array_key()
+        # returns the same key for every column — causing _SIDECAR_HANDLE_CACHE
+        # collisions across queries.  Clear stale handles before each injection so
+        # the upcoming query always loads the correct sidecar for this column.
+        from blosc2.indexing import _clear_cached_data
+
         for _col_name, col_arr, descriptor in indexed_columns:
             arr_key = _array_key(col_arr)
             if _is_persistent_array(col_arr):
                 store = _PERSISTENT_INDEXES.get(arr_key) or _default_index_store()
+                if store["indexes"].get(descriptor["token"]) is not descriptor:
+                    _clear_cached_data(col_arr, descriptor["token"])
                 store["indexes"][descriptor["token"]] = descriptor
                 _PERSISTENT_INDEXES[arr_key] = store
             else:
@@ -4271,20 +5502,33 @@ class CTable(Generic[RowT]):
         if not plan.usable:
             return None
 
+        def _exclude_null_positions(positions):
+            positions = np.asarray(positions, dtype=np.int64)
+            for name in nullable_indexed:
+                col = root._schema.columns_by_name[name]
+                raw = root._cols[name][positions]
+                nv = getattr(col.spec, "null_value", None)
+                if isinstance(nv, float) and np.isnan(nv):
+                    keep = ~np.isnan(raw)
+                else:
+                    keep = raw != nv
+                positions = positions[keep]
+            return positions
+
         if plan.exact_positions is not None:
-            return np.asarray(plan.exact_positions, dtype=np.int64)
+            return _exclude_null_positions(plan.exact_positions)
 
         if plan.bucket_masks is not None:
             _, positions = evaluate_bucket_query(
                 expression, merged_operands, {}, where_dict, plan, return_positions=True
             )
-            return np.asarray(positions, dtype=np.int64)
+            return _exclude_null_positions(positions)
 
         if plan.candidate_units is not None and plan.segment_len is not None:
             _, positions = evaluate_segment_query(
                 expression, merged_operands, {}, where_dict, plan, return_positions=True
             )
-            return np.asarray(positions, dtype=np.int64)
+            return _exclude_null_positions(positions)
 
         return None
 
@@ -4301,7 +5545,12 @@ class CTable(Generic[RowT]):
                     f"{cc['dtype']} (computed: {self._readable_computed_expr(cc)})"
                 )
             else:
-                schema_summary[name] = _InfoLiteral(self._dtype_info_label(self._cols[name].dtype))
+                col_meta = self._schema.columns_by_name.get(name)
+                schema_summary[name] = _InfoLiteral(
+                    self._dtype_info_label(
+                        getattr(self._cols[name], "dtype", None), col_meta.spec if col_meta else None
+                    )
+                )
 
         index_summary = {}
         for idx in self.indexes:
@@ -4339,8 +5588,16 @@ class CTable(Generic[RowT]):
         return items
 
     @staticmethod
-    def _dtype_info_label(dtype: np.dtype) -> str:
+    def _dtype_info_label(dtype: np.dtype | None, spec: SchemaSpec | None = None) -> str:
         """Return a compact dtype label for info reports."""
+        if isinstance(spec, VLStringSpec):
+            return "vlstring"
+        if isinstance(spec, VLBytesSpec):
+            return "vlbytes"
+        if isinstance(spec, ListSpec):
+            return spec.display_label()
+        if dtype is None:
+            return "None"
         if dtype.kind == "U":
             nchars = dtype.itemsize // 4
             return f"U{nchars} (Unicode, max {nchars} chars)"
@@ -4401,8 +5658,13 @@ class CTable(Generic[RowT]):
         if pos >= len(self._valid_rows):
             self._grow()
 
-        for name, col_array in self._cols.items():
-            col_array[pos] = row[name]
+        for col in self._schema.columns:
+            name = col.name
+            col_array = self._cols[name]
+            if self._is_list_column(col) or self._is_varlen_scalar_column(col):
+                col_array.append(row[name])
+            else:
+                col_array[pos] = row[name]
 
         self._valid_rows[pos] = True
         self._last_pos = pos + 1
@@ -4431,12 +5693,14 @@ class CTable(Generic[RowT]):
         self._last_pos = None  # recalculate on next write
         self._storage.bump_visibility_epoch()
 
-    def extend(self, data: list | CTable | Any, *, validate: bool | None = None) -> None:
+    def extend(self, data: list | CTable | Any, *, validate: bool | None = None) -> None:  # noqa: C901
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
             raise TypeError("Cannot extend view.")
         if len(data) <= 0:
+            if isinstance(data, dict):
+                raise ValueError("No columns provided for extend().")
             return
 
         # Resolve effective validate flag: per-call override takes precedence
@@ -4457,7 +5721,27 @@ class CTable(Generic[RowT]):
                     raw_columns[name] = data._cols[name][: data._n_rows]
                     provided_names.add(name)
         else:
-            if isinstance(data, np.ndarray) and data.dtype.names is not None:
+            if isinstance(data, dict):
+                known_names = [name for name in current_col_names if name in data]
+                if not known_names:
+                    raise ValueError("No known stored columns provided for extend().")
+                column_lengths = {}
+                for name in known_names:
+                    try:
+                        column_lengths[name] = len(data[name])
+                    except TypeError as exc:
+                        raise TypeError(f"Column {name!r} does not have a length.") from exc
+                new_nrows = column_lengths[known_names[0]]
+                mismatched = {name: n for name, n in column_lengths.items() if n != new_nrows}
+                if mismatched:
+                    details = ", ".join(f"{name}={n}" for name, n in mismatched.items())
+                    raise ValueError(
+                        f"All provided columns must have the same length; "
+                        f"expected {new_nrows}, got {details}."
+                    )
+                provided_names = set(known_names)
+                raw_columns = {name: data[name] for name in known_names}
+            elif isinstance(data, np.ndarray) and data.dtype.names is not None:
                 new_nrows = len(data)
                 raw_columns = {name: data[name] for name in data.dtype.names if name in current_col_names}
                 provided_names = set(raw_columns)
@@ -4480,11 +5764,18 @@ class CTable(Generic[RowT]):
 
             validate_column_batch(self._schema, raw_columns)
 
-        processed_cols = []
+        scalar_processed_cols: dict[str, blosc2.NDArray] = {}
+        list_processed_cols: dict[str, list] = {}
+        varlen_scalar_processed_cols: dict[str, list] = {}
         for name in current_col_names:
-            target_dtype = self._cols[name].dtype
-            b2_arr = blosc2.asarray(raw_columns[name], dtype=target_dtype)
-            processed_cols.append(b2_arr)
+            col_meta = self._schema.columns_by_name[name]
+            if self._is_list_column(col_meta):
+                list_processed_cols[name] = list(raw_columns[name])
+            elif self._is_varlen_scalar_column(col_meta):
+                varlen_scalar_processed_cols[name] = list(raw_columns[name])
+            else:
+                target_dtype = self._cols[name].dtype
+                scalar_processed_cols[name] = np.ascontiguousarray(raw_columns[name], dtype=target_dtype)
 
         end_pos = start_pos + new_nrows
 
@@ -4496,8 +5787,14 @@ class CTable(Generic[RowT]):
         while end_pos > len(self._valid_rows):
             self._grow()
 
-        for j, name in enumerate(current_col_names):
-            self._cols[name][start_pos:end_pos] = processed_cols[j][:]
+        for name in current_col_names:
+            col_meta = self._schema.columns_by_name[name]
+            if self._is_list_column(col_meta):
+                self._cols[name].extend(list_processed_cols[name], validate=do_validate)
+            elif self._is_varlen_scalar_column(col_meta):
+                self._cols[name].extend(varlen_scalar_processed_cols[name])
+            else:
+                self._cols[name][start_pos:end_pos] = scalar_processed_cols[name][:]
 
         self._valid_rows[start_pos:end_pos] = True
         self._last_pos = end_pos
@@ -4508,12 +5805,117 @@ class CTable(Generic[RowT]):
     # Filtering
     # ------------------------------------------------------------------
 
-    @profile
-    def where(self, expr_result) -> CTable:
+    def _where_expression_operands(self) -> dict[str, blosc2.NDArray | blosc2.LazyExpr]:
+        operands = {}
+        for name, arr in self._cols.items():
+            col = self._schema.columns_by_name.get(name)
+            if col is not None and not (self._is_list_column(col) or self._is_varlen_scalar_column(col)):
+                operands[name] = arr
+        operands.update({name: cc["lazy"] for name, cc in self._computed_cols.items()})
+        return operands
+
+    def _guard_varlen_scalar_expression(self, expr: str) -> None:
+        for col in self._schema.columns:
+            if self._is_varlen_scalar_column(col) and re.search(
+                rf"(?<!\w){re.escape(col.name)}(?!\w)", expr
+            ):
+                raise NotImplementedError(
+                    f"Column {col.name!r} is a vlstring/vlbytes column; "
+                    "lazy expressions are not supported yet."
+                )
+
+    def where(
+        self,
+        expr_result: str | np.ndarray | blosc2.NDArray | blosc2.LazyExpr | Column,
+        *,
+        columns: list[str] | tuple[str, ...] | None = None,
+    ) -> CTable:
+        """Return a row-filtered view matching a boolean predicate.
+
+        Signature::
+
+            where(expr_result) -> CTable
+
+        The predicate can be supplied as a boolean :class:`blosc2.LazyExpr`,
+        a boolean :class:`blosc2.NDArray`, a boolean NumPy array, a boolean
+        ``Column``, or a string expression evaluated against this table's
+        columns.  String expressions can reference stored and computed columns
+        directly by name.
+
+        The returned object is a :class:`CTable` view sharing the original
+        column data.  The row-selection mask is evaluated immediately and
+        intersected with the table's current live rows; selected column data is
+        not copied.
+
+        Parameters
+        ----------
+        expr_result:
+            Boolean predicate selecting rows.  Strings are converted to a
+            lazy expression with table columns as operands, e.g.
+            ``"value * category >= 150"``.  Column objects can also be used in
+            Python expressions, e.g. ``(t.value * t.category) >= 150``.
+
+        Returns
+        -------
+        CTable
+            A view over the same columns containing only rows where the
+            predicate is true and the source row is live.  When ``columns`` is
+            provided, the returned view is additionally projected to that
+            ordered subset of columns.
+
+        Raises
+        ------
+        TypeError
+            If *expr_result* does not evaluate to a boolean Blosc2/NumPy
+            array or lazy expression.
+
+        Examples
+        --------
+        Filter using a string expression::
+
+            view = t.where("value * category >= 150")
+            slim = t.where("value * category >= 150", columns=["value", "category"])
+
+        Filter using column arithmetic::
+
+            view = t.where((t.value * t.category) >= 150)
+
+        Blosc2 lazy functions can be used in column expressions::
+
+            view = t.where(((t.value + 2) * blosc2.sin(t.category)) >= 10)
+
+        For column names that are not valid Python identifiers, use item
+        access::
+
+            view = t.where((t["unit price"] * t["quantity"]) > 100)
+
+        Notes
+        -----
+        Use bitwise operators (``&``, ``|``, ``~``) or string expressions for
+        element-wise boolean logic.  Python's logical operators ``and``, ``or``
+        and ``not`` cannot be overloaded and therefore do not build lazy column
+        expressions.
+
+        Use::
+
+            t.where((t.x > 0) & (t.y < 10))
+            t.where(~t.returned)
+            t.where("not returned")
+
+        not::
+
+            t.where((t.x > 0) and (t.y < 10))
+            t.where(not t.returned)
+        """
+        if isinstance(expr_result, str):
+            self._guard_varlen_scalar_expression(expr_result)
+            expr_result = blosc2.lazyexpr(expr_result, self._where_expression_operands())
         if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:
             expr_result = blosc2.asarray(expr_result)
         if isinstance(expr_result, Column):
-            expr_result = expr_result._raw_col
+            expr_result = (
+                expr_result._raw_col == 1 if expr_result._is_nullable_bool else expr_result._raw_col
+            )
 
         if not (
             isinstance(expr_result, (blosc2.NDArray, blosc2.LazyExpr))
@@ -4530,7 +5932,8 @@ class CTable(Generic[RowT]):
                 valid_pos = positions[(positions >= 0) & (positions < total)]
                 mask[valid_pos] = True
                 mask &= self._valid_rows[:]
-                return self.view(blosc2.asarray(mask))
+                result = self.view(blosc2.asarray(mask))
+                return result if columns is None else result.select(list(columns))
 
         filter = expr_result.compute() if isinstance(expr_result, blosc2.LazyExpr) else expr_result
 
@@ -4545,7 +5948,8 @@ class CTable(Generic[RowT]):
 
         filter = (filter & self._valid_rows).compute()
 
-        return self.view(filter)
+        result = self.view(filter)
+        return result if columns is None else result.select(list(columns))
 
     def _run_row_logic(self, ind: int | slice | str | Iterable) -> CTable:
         valid_rows_np = self._valid_rows[:]

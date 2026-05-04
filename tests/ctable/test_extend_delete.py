@@ -50,6 +50,40 @@ def assert_data_at_positions(table: CTable, positions: list, expected_ids: list)
 # -------------------------------------------------------------------
 
 
+def test_extend_dict_rejects_mismatched_column_lengths():
+    t = CTable(Row, expected_size=8)
+    with pytest.raises(ValueError, match="same length"):
+        t.extend(
+            {
+                "id": [1, 2],
+                "c_val": [0j],
+                "score": [10.0, 20.0],
+                "active": [True, False],
+            }
+        )
+
+
+def test_extend_dict_rejects_no_known_columns():
+    t = CTable(Row, expected_size=8)
+    with pytest.raises(ValueError, match="No known stored columns"):
+        t.extend({"unknown": [1, 2]})
+
+
+def test_extend_dict_uses_known_column_lengths():
+    t = CTable(Row, expected_size=8)
+    t.extend(
+        {
+            "unknown": [0],
+            "id": [1, 2],
+            "c_val": [0j, 1j],
+            "score": [10.0, 20.0],
+            "active": [True, False],
+        }
+    )
+    assert len(t) == 2
+    assert list(t["id"][:]) == [1, 2]
+
+
 def test_gap_fill_mask_and_positions():
     """extend and append fill from last valid position; mask is updated correctly."""
     # extend after deletions: mask and physical positions
@@ -189,13 +223,13 @@ def test_complex_scenarios():
         Row, new_data=[(1, 1j, 10.0, True), (2, 2j, 20.0, False), (3, 3j, 30.0, True)], expected_size=10
     )
     t3.delete(1)
-    assert t3.row[0].id[0] == 1
-    assert t3.row[1].id[0] == 3
+    assert t3[0].id == 1
+    assert t3[1].id == 3
     t3.extend([(10, 10j, 100.0, True), (11, 11j, 100.0, False)])
-    assert t3.row[0].id[0] == 1
-    assert t3.row[1].id[0] == 3
-    assert t3.row[2].id[0] == 10
-    assert t3.row[3].id[0] == 11
+    assert t3[0].id == 1
+    assert t3[1].id == 3
+    assert t3[2].id == 10
+    assert t3[3].id == 11
 
     # Full workflow
     t4 = CTable(Row, expected_size=20, compact=False)

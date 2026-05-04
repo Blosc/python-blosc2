@@ -22,11 +22,23 @@ from __future__ import annotations
 import copy
 import json
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 import blosc2
+from blosc2.batch_array import BatchArray
+from blosc2.list_array import ListArray
+from blosc2.scalar_array import (
+    _make_persistent_backend,
+    _open_persistent_backend,
+    _ScalarVarLenArray,
+    _validate_role_metadata,
+)
+from blosc2.schunk import process_opened_object
+
+if TYPE_CHECKING:
+    from blosc2.schema import ListSpec
 
 # Directory inside the table root that holds per-column index sidecar files.
 _INDEXES_DIR = "_indexes"
@@ -54,6 +66,32 @@ class TableStorage:
         raise NotImplementedError
 
     def open_column(self, name: str) -> blosc2.NDArray:
+        raise NotImplementedError
+
+    def create_list_column(
+        self,
+        name: str,
+        *,
+        spec: ListSpec,
+        cparams: dict[str, Any] | None,
+        dparams: dict[str, Any] | None,
+    ) -> ListArray:
+        raise NotImplementedError
+
+    def open_list_column(self, name: str) -> ListArray:
+        raise NotImplementedError
+
+    def create_varlen_scalar_column(
+        self,
+        name: str,
+        *,
+        spec,
+        cparams=None,
+        dparams=None,
+    ) -> _ScalarVarLenArray:
+        raise NotImplementedError
+
+    def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
         raise NotImplementedError
 
     def create_valid_rows(
@@ -149,6 +187,23 @@ class InMemoryTableStorage(TableStorage):
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
     def open_column(self, name):
+        raise RuntimeError("In-memory tables have no on-disk representation to open.")
+
+    def create_list_column(self, name, *, spec, cparams, dparams):
+        kwargs = {}
+        if cparams is not None:
+            kwargs["cparams"] = cparams
+        if dparams is not None:
+            kwargs["dparams"] = dparams
+        return ListArray(spec=spec, **kwargs)
+
+    def open_list_column(self, name):
+        raise RuntimeError("In-memory tables have no on-disk representation to open.")
+
+    def create_varlen_scalar_column(self, name, *, spec, cparams=None, dparams=None):
+        return _ScalarVarLenArray(spec)
+
+    def open_varlen_scalar_column(self, name, spec):
         raise RuntimeError("In-memory tables have no on-disk representation to open.")
 
     def create_valid_rows(self, *, shape, chunks, blocks):
@@ -249,6 +304,12 @@ class FileTableStorage(TableStorage):
     def _col_path(self, name: str) -> str:
         return self._key_to_path(self._col_key(name))
 
+    def _list_col_path(self, name: str) -> str:
+        rel_key = self._col_key(name).lstrip("/")
+        # Use working_dir so .b2z stores write into their temp dir (gets zipped on close).
+        # For .b2d, working_dir == self._root, so behaviour is unchanged.
+        return os.path.join(self._open_store().working_dir, rel_key + ".b2b")
+
     def _col_key(self, name: str) -> str:
         return f"/{_COLS_DIR}/{name}"
 
@@ -298,6 +359,47 @@ class FileTableStorage(TableStorage):
 
     def open_column(self, name: str) -> blosc2.NDArray:
         return self._open_store()[self._col_key(name)]
+
+    def create_list_column(self, name, *, spec, cparams, dparams):
+        kwargs: dict[str, Any] = {"urlpath": self._list_col_path(name), "mode": "w", "contiguous": True}
+        if cparams is not None:
+            kwargs["cparams"] = cparams
+        if dparams is not None:
+            kwargs["dparams"] = dparams
+        return ListArray(spec=spec, **kwargs)
+
+    def open_list_column(self, name: str) -> ListArray:
+        store = self._open_store()
+        if store.is_zip_store and self._mode == "r":
+            # In read mode, .b2z is never extracted — read the member at its zip offset directly.
+            rel = f"{_COLS_DIR}/{name}.b2b"
+            if rel not in store.offsets:
+                raise KeyError(f"List column {name!r} not found in {self._root!r}")
+            opened = blosc2.blosc2_ext.open(store.b2z_path, mode="r", offset=store.offsets[rel]["offset"])
+            return process_opened_object(opened)
+        return blosc2.open(self._list_col_path(name), mode=self._mode)
+
+    def create_varlen_scalar_column(self, name, *, spec, cparams=None, dparams=None) -> _ScalarVarLenArray:
+        urlpath = self._list_col_path(name)
+        backend = _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
+        return _ScalarVarLenArray(spec, backend)
+
+    def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
+        store = self._open_store()
+        path = self._list_col_path(name)
+        if store.is_zip_store and self._mode == "r":
+            rel = f"{_COLS_DIR}/{name}.b2b"
+            if rel not in store.offsets:
+                raise KeyError(f"Varlen scalar column {name!r} not found in {self._root!r}")
+            backend = BatchArray(
+                _from_schunk=blosc2.blosc2_ext.open(
+                    store.b2z_path, mode="r", offset=store.offsets[rel]["offset"]
+                )
+            )
+        else:
+            backend = _open_persistent_backend(path, self._mode, spec=spec)
+        _validate_role_metadata(backend, spec)
+        return _ScalarVarLenArray(spec, backend)
 
     def create_valid_rows(self, *, shape, chunks, blocks):
         valid_rows = blosc2.zeros(
@@ -358,15 +460,31 @@ class FileTableStorage(TableStorage):
         return [c["name"] for c in d["columns"]]
 
     def delete_column(self, name: str) -> None:
-        del self._open_store()[self._col_key(name)]
+        key = self._col_key(name)
+        if key in self._open_store():
+            del self._open_store()[key]
+            return
+        list_path = self._list_col_path(name)
+        if os.path.exists(list_path):
+            blosc2.remove_urlpath(list_path)
+            return
+        raise KeyError(name)
 
-    def rename_column(self, old: str, new: str) -> blosc2.NDArray:
+    def rename_column(self, old: str, new: str):
         store = self._open_store()
         old_key = self._col_key(old)
         new_key = self._col_key(new)
-        store[new_key] = store[old_key]
-        del store[old_key]
-        return store[new_key]
+        if old_key in store:
+            store[new_key] = store[old_key]
+            del store[old_key]
+            return store[new_key]
+        old_path = self._list_col_path(old)
+        new_path = self._list_col_path(new)
+        if os.path.exists(old_path):
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+            os.replace(old_path, new_path)
+            return blosc2.open(new_path, mode=self._mode)
+        raise KeyError(old)
 
     def close(self) -> None:
         if self._store is not None:
@@ -383,16 +501,87 @@ class FileTableStorage(TableStorage):
 
     # -- Index catalog and epoch helpers -------------------------------------
 
+    @staticmethod
+    def _walk_descriptor_paths(descriptor: dict):
+        """Yield (obj, key) for every string value that looks like a file path."""
+        _PATH_KEYS = {"path", "values_path", "positions_path", "l1_path", "l2_path"}
+        stack = [descriptor]
+        while stack:
+            obj = stack.pop()
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if k in _PATH_KEYS and isinstance(v, str):
+                        yield obj, k
+                    elif isinstance(v, (dict, list)):
+                        stack.append(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    if isinstance(item, (dict, list)):
+                        stack.append(item)
+
+    @staticmethod
+    def _relativize_descriptor(descriptor: dict, working_dir: str) -> dict:
+        """Replace absolute paths inside *working_dir* with ``_indexes/…`` relative paths."""
+        prefix = working_dir.rstrip("/") + "/"
+        d = copy.deepcopy(descriptor)
+        for obj, key in FileTableStorage._walk_descriptor_paths(d):
+            v = obj[key]
+            if v.startswith(prefix):
+                obj[key] = v[len(prefix) :]
+        return d
+
+    @staticmethod
+    def _absolutize_descriptor(descriptor: dict, working_dir: str) -> dict:
+        """Expand ``_indexes/…`` relative paths back to absolute using *working_dir*."""
+        d = copy.deepcopy(descriptor)
+        for obj, key in FileTableStorage._walk_descriptor_paths(d):
+            v = obj[key]
+            if v.startswith(_INDEXES_DIR + "/") or v.startswith(_INDEXES_DIR + os.sep):
+                obj[key] = os.path.join(working_dir, v)
+        return d
+
+    def _ensure_index_files_extracted(self, store, rel_paths: list[str]) -> None:
+        """Extract *rel_paths* from the zip into the working_dir (read mode only)."""
+        import zipfile
+
+        for rel in rel_paths:
+            dest = os.path.join(store.working_dir, rel)
+            if os.path.exists(dest):
+                continue
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            info = store.offsets.get(rel)
+            if info is None:
+                continue
+            with zipfile.ZipFile(store.b2z_path, "r") as zf, zf.open(rel) as src, open(dest, "wb") as dst:
+                dst.write(src.read())
+
     def load_index_catalog(self) -> dict:
         meta = self._open_meta()
         raw = meta.vlmeta.get("index_catalog")
-        if isinstance(raw, dict):
-            return copy.deepcopy(raw)
-        return {}
+        if not isinstance(raw, dict):
+            return {}
+        catalog = copy.deepcopy(raw)
+        store = self._open_store()
+        working_dir = store.working_dir
+        # Expand relative paths and, for b2z read mode, extract sidecar files.
+        rel_paths_needed = []
+        for col_name, descriptor in catalog.items():
+            catalog[col_name] = self._absolutize_descriptor(descriptor, working_dir)
+            if store.is_zip_store and self._mode == "r":
+                for obj, key in self._walk_descriptor_paths(catalog[col_name]):
+                    v = obj[key]
+                    rel = os.path.relpath(v, working_dir)
+                    if not os.path.exists(v):
+                        rel_paths_needed.append(rel.replace(os.sep, "/"))
+        if rel_paths_needed and store.is_zip_store and self._mode == "r":
+            self._ensure_index_files_extracted(store, rel_paths_needed)
+        return catalog
 
     def save_index_catalog(self, catalog: dict) -> None:
         meta = self._open_meta()
-        meta.vlmeta["index_catalog"] = copy.deepcopy(catalog)
+        working_dir = self._open_store().working_dir
+        relativized = {col: self._relativize_descriptor(desc, working_dir) for col, desc in catalog.items()}
+        meta.vlmeta["index_catalog"] = relativized
 
     def get_epoch_counters(self) -> tuple[int, int]:
         meta = self._open_meta()
@@ -413,4 +602,4 @@ class FileTableStorage(TableStorage):
         return vis_e
 
     def index_anchor_path(self, col_name: str) -> str | None:
-        return os.path.join(self._root, _INDEXES_DIR, col_name, "_anchor")
+        return os.path.join(self._open_store().working_dir, _INDEXES_DIR, col_name, "_anchor")

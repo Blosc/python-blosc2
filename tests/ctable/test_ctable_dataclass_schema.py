@@ -64,23 +64,23 @@ def test_append_tuple():
     t = CTable(Row)
     t.append((1, 50.0, True))
     assert len(t) == 1
-    assert t.row[0].id[0] == 1
-    assert t.row[0].score[0] == 50.0
-    assert t.row[0].active[0]
+    assert t[0].id == 1
+    assert t[0].score == 50.0
+    assert t[0].active
 
 
 def test_append_list():
     t = CTable(Row)
     t.append([2, 75.0, False])
     assert len(t) == 1
-    assert t.row[0].id[0] == 2
+    assert t[0].id == 2
 
 
 def test_append_dict():
     t = CTable(Row)
     t.append({"id": 3, "score": 25.0, "active": True})
     assert len(t) == 1
-    assert t.row[0].id[0] == 3
+    assert t[0].id == 3
 
 
 def test_append_dataclass_instance():
@@ -95,15 +95,15 @@ def test_append_dataclass_instance():
     t2 = CTable(Row2)
     # Simulate appending a dict (dataclass instance path)
     t2.append({"id": 4, "score": 10.0, "active": False})
-    assert t2.row[0].id[0] == 4
+    assert t2[0].id == 4
 
 
 def test_append_defaults_filled():
     """Omitting optional fields fills them from defaults."""
     t = CTable(Row)
     t.append((5,))  # only id; score=0.0 and active=True filled in
-    assert t.row[0].score[0] == 0.0
-    assert t.row[0].active[0]
+    assert t[0].score == 0.0
+    assert t[0].active
 
 
 # -------------------------------------------------------------------
@@ -125,7 +125,7 @@ def test_extend_list_of_dicts():
     data = [(i, float(i * 10), True) for i in range(5)]
     t.extend(data)
     for i in range(5):
-        assert t.row[i].id[0] == i
+        assert t[i].id == i
 
 
 def test_extend_numpy_structured():
@@ -134,8 +134,8 @@ def test_extend_numpy_structured():
     t = CTable(Row, expected_size=5)
     t.extend(arr)
     assert len(t) == 2
-    assert t.row[0].id[0] == 1
-    assert t.row[1].score[0] == 75.0
+    assert t[0].id == 1
+    assert t[1].score == 75.0
 
 
 # -------------------------------------------------------------------

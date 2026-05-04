@@ -63,7 +63,7 @@ def test_append_default_fill():
     # Only id is required; score and active have defaults
     t.append((5,))  # score=0.0, active=True filled by defaults
     assert len(t) == 1
-    assert t.row[0].id[0] == 5
+    assert t[0].id == 5
 
 
 def test_append_validate_false():

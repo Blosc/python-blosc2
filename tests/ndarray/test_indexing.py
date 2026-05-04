@@ -1933,7 +1933,7 @@ def test_value_path_cache_hit_persistent(tmp_path):
     assert len(catalog["entries"]) == 1
 
     # Warm call: serve from cache.
-    _clear_caches()  # only clears hot cache; persistent VLArray remains
+    _clear_caches()  # only clears hot cache; persistent ObjectArray remains
     arr2 = blosc2.open(urlpath, mode="r")
     cond2 = blosc2.lazyexpr("(id >= 10_000) & (id < 12_000)", arr2.fields)
     result2 = arr2[cond2][:]

@@ -97,6 +97,19 @@ def test_reopen_with_ctable_constructor():
     assert list(t2["score"][:]) == [10.0, 20.0, 30.0]
 
 
+def test_close_propagates_varlen_flush_errors(monkeypatch):
+    """User-called close() must not hide pending varlen flush failures."""
+    path = table_path("close_flush_error")
+    t = CTable(Row, urlpath=path, mode="w", expected_size=16)
+
+    def fail_flush():
+        raise RuntimeError("flush failed")
+
+    monkeypatch.setattr(t, "_flush_varlen_columns", fail_flush)
+    with pytest.raises(RuntimeError, match="flush failed"):
+        t.close()
+
+
 def test_reopen_with_open_classmethod():
     """CTable.open() returns a read-only table with correct data."""
     path = table_path("ro")
@@ -148,7 +161,7 @@ def test_append_after_reopen():
     t2 = CTable(Row, urlpath=path, mode="a")
     t2.append((3, 30.0, True))
     assert len(t2) == 3
-    assert t2.row[2].id[0] == 3
+    assert t2[2].id == 3
 
     # Verify it's visible in a third open
     t3 = CTable(Row, urlpath=path, mode="a")
@@ -280,7 +293,7 @@ def test_read_only_allows_reads():
 
     t2 = CTable.open(path, mode="r")
     assert len(t2) == 3
-    assert t2.row[0].id[0] == 1
+    assert t2[0].id == 1
     assert list(t2["score"][:]) == [10.0, 20.0, 30.0]
     assert len(t2.head(2)) == 2
     assert len(t2.tail(1)) == 1

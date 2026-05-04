@@ -19,6 +19,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError, create_model
 
+from blosc2.list_array import coerce_list_cell
+from blosc2.schema import ListSpec
 from blosc2.schema_compiler import CompiledSchema  # noqa: TC001
 
 
@@ -41,8 +43,14 @@ def build_validator_model(schema: CompiledSchema) -> type[BaseModel]:
     field_definitions: dict[str, Any] = {}
     for col in schema.columns:
         pydantic_kwargs = col.spec.to_pydantic_kwargs()
-        is_nullable = getattr(col.spec, "null_value", None) is not None
-        py_type = col.py_type | None if is_nullable else col.py_type
+        is_nullable = getattr(col.spec, "null_value", None) is not None or (
+            isinstance(col.spec, ListSpec) and col.spec.nullable
+        )
+        if isinstance(col.spec, ListSpec):
+            item_type = col.spec.item_spec.python_type
+            py_type = list[item_type] | None if is_nullable else list[item_type]
+        else:
+            py_type = col.py_type | None if is_nullable else col.py_type
 
         if col.default is MISSING:
             default = None if is_nullable else MISSING
@@ -118,7 +126,11 @@ def validate_row(schema: CompiledSchema, row: dict[str, Any]) -> dict[str, Any]:
         name and the violated constraint.
     """
     model_cls = build_validator_model(schema)
-    masked_row, nulled = _mask_nulls(schema, row)
+    normalized = dict(row)
+    for col in schema.columns:
+        if isinstance(col.spec, ListSpec) and col.name in normalized:
+            normalized[col.name] = coerce_list_cell(col.spec, normalized[col.name])
+    masked_row, nulled = _mask_nulls(schema, normalized)
     try:
         instance = model_cls(**masked_row)
     except ValidationError as exc:
@@ -148,7 +160,11 @@ def validate_rows_rowwise(schema: CompiledSchema, rows: list[dict[str, Any]]) ->
     model_cls = build_validator_model(schema)
     result = []
     for i, row in enumerate(rows):
-        masked_row, nulled = _mask_nulls(schema, row)
+        normalized = dict(row)
+        for col in schema.columns:
+            if isinstance(col.spec, ListSpec) and col.name in normalized:
+                normalized[col.name] = coerce_list_cell(col.spec, normalized[col.name])
+        masked_row, nulled = _mask_nulls(schema, normalized)
         try:
             instance = model_cls(**masked_row)
         except ValidationError as exc:

@@ -22,6 +22,7 @@ BLOSC2_FIELD_METADATA_KEY = "blosc2"
 # after our spec classes shadow them.
 _builtin_bool = bool
 _builtin_bytes = bytes
+_builtin_list = list
 
 
 # ---------------------------------------------------------------------------
@@ -73,15 +74,21 @@ class SchemaSpec:
 
 
 class _NumericSpec(SchemaSpec):
-    """Mixin for numeric specs that support ge / gt / le / lt constraints."""
+    """Mixin for numeric specs that support constraints and null sentinels.
+
+    ``nullable=True`` asks CTable to choose a null sentinel from the current
+    null policy when the schema is compiled.  An explicit ``null_value`` takes
+    precedence.
+    """
 
     _kind: str  # set by each concrete subclass
 
-    def __init__(self, *, ge=None, gt=None, le=None, lt=None, null_value=None):
+    def __init__(self, *, ge=None, gt=None, le=None, lt=None, nullable: bool = False, null_value=None):
         self.ge = ge
         self.gt = gt
         self.le = le
         self.lt = lt
+        self.nullable = nullable or null_value is not None
         self.null_value = null_value
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -94,6 +101,8 @@ class _NumericSpec(SchemaSpec):
 
     def to_metadata_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"kind": self._kind, **self.to_pydantic_kwargs()}
+        if self.nullable:
+            d["nullable"] = True
         if self.null_value is not None:
             d["null_value"] = self.null_value
         return d
@@ -221,19 +230,31 @@ class complex128(SchemaSpec):
 
 
 class bool(SchemaSpec):
-    """Boolean column."""
+    """Boolean column.
+
+    Nullable bool columns use uint8 physical storage with values
+    ``0`` (false), ``1`` (true), and ``255`` (null).
+    """
 
     dtype = np.dtype(np.bool_)
     python_type = _builtin_bool
 
-    def __init__(self):
-        pass
+    def __init__(self, *, nullable: bool = False, null_value=None):
+        if null_value is not None and null_value != 255:
+            raise ValueError("Nullable bool null_value must be 255")
+        self.nullable = nullable or null_value is not None
+        self.null_value = null_value
+        self.dtype = np.dtype(np.uint8) if self.nullable else np.dtype(np.bool_)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         return {}
 
     def to_metadata_dict(self) -> dict[str, Any]:
-        return {"kind": "bool"}
+        d: dict[str, Any] = {"kind": "bool"}
+        if self.nullable:
+            d["nullable"] = True
+            d["null_value"] = self.null_value
+        return d
 
 
 # ---------------------------------------------------------------------------
@@ -253,15 +274,23 @@ class string(SchemaSpec):
         Minimum number of characters (validation only, no effect on dtype).
     pattern:
         Regex pattern the value must match (validation only).
+    nullable:
+        If ``True`` and ``null_value`` is not set, choose a null sentinel from
+        the current CTable null policy when the schema is compiled.
+    null_value:
+        Explicit null sentinel.  Takes precedence over ``nullable=True``.
     """
 
     python_type = str
     _DEFAULT_MAX_LENGTH = 32
 
-    def __init__(self, *, min_length=None, max_length=None, pattern=None, null_value=None):
+    def __init__(
+        self, *, min_length=None, max_length=None, pattern=None, nullable: bool = False, null_value=None
+    ):
         self.min_length = min_length
         self.max_length = max_length if max_length is not None else self._DEFAULT_MAX_LENGTH
         self.pattern = pattern
+        self.nullable = nullable or null_value is not None
         self.null_value = null_value
         self.dtype = np.dtype(f"U{self.max_length}")
 
@@ -277,6 +306,8 @@ class string(SchemaSpec):
 
     def to_metadata_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"kind": "string", **self.to_pydantic_kwargs()}
+        if self.nullable:
+            d["nullable"] = True
         if self.null_value is not None:
             d["null_value"] = self.null_value
         return d
@@ -292,14 +323,20 @@ class bytes(SchemaSpec):
         Defaults to 32 if not specified.
     min_length:
         Minimum number of bytes (validation only, no effect on dtype).
+    nullable:
+        If ``True`` and ``null_value`` is not set, choose a null sentinel from
+        the current CTable null policy when the schema is compiled.
+    null_value:
+        Explicit null sentinel.  Takes precedence over ``nullable=True``.
     """
 
     python_type = _builtin_bytes
     _DEFAULT_MAX_LENGTH = 32
 
-    def __init__(self, *, min_length=None, max_length=None, null_value=None):
+    def __init__(self, *, min_length=None, max_length=None, nullable: bool = False, null_value=None):
         self.min_length = min_length
         self.max_length = max_length if max_length is not None else self._DEFAULT_MAX_LENGTH
+        self.nullable = nullable or null_value is not None
         self.null_value = null_value
         self.dtype = np.dtype(f"S{self.max_length}")
 
@@ -313,9 +350,325 @@ class bytes(SchemaSpec):
 
     def to_metadata_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"kind": "bytes", **self.to_pydantic_kwargs()}
+        if self.nullable:
+            d["nullable"] = True
         if self.null_value is not None:
             d["null_value"] = self.null_value
         return d
+
+
+# ---------------------------------------------------------------------------
+# List spec
+# ---------------------------------------------------------------------------
+
+
+class StructSpec(SchemaSpec):
+    """Logical schema descriptor for dict-like structured values."""
+
+    python_type = dict
+    dtype = None
+
+    def __init__(self, fields: dict[str, SchemaSpec]):
+        if not isinstance(fields, dict) or not fields:
+            raise TypeError("StructSpec fields must be a non-empty dict")
+        for name, spec in fields.items():
+            if not isinstance(name, str):
+                raise TypeError("StructSpec field names must be strings")
+            if not isinstance(spec, SchemaSpec):
+                raise TypeError("StructSpec field values must be SchemaSpec instances")
+        self.fields = dict(fields)
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "struct",
+            "fields": [{"name": name, **spec.to_metadata_dict()} for name, spec in self.fields.items()],
+        }
+
+    def display_label(self) -> str:
+        return "struct[" + ", ".join(self.fields) + "]"
+
+    @classmethod
+    def from_metadata_dict(cls, data: dict[str, Any]) -> StructSpec:
+        from blosc2.schema_compiler import spec_from_metadata_dict
+
+        fields = {}
+        for field in data["fields"]:
+            field = dict(field)
+            name = field.pop("name")
+            fields[name] = spec_from_metadata_dict(field)
+        return cls(fields)
+
+
+class ListSpec(SchemaSpec):
+    """Logical schema descriptor for a list-valued column."""
+
+    python_type = _builtin_list
+    dtype = None
+
+    def __init__(
+        self,
+        item_spec: SchemaSpec,
+        *,
+        nullable: bool = False,
+        storage: str = "batch",
+        serializer: str = "msgpack",
+        batch_rows: int | None = None,
+        items_per_block: int | None = None,
+    ):
+        if not isinstance(item_spec, SchemaSpec):
+            raise TypeError("ListSpec item_spec must be a SchemaSpec instance")
+        if isinstance(item_spec, ListSpec):
+            raise TypeError("Nested list item specs are not supported in V1")
+        if storage not in {"batch", "vl"}:
+            raise ValueError("storage must be 'batch' or 'vl'")
+        if serializer not in {"msgpack", "arrow"}:
+            raise ValueError("serializer must be 'msgpack' or 'arrow'")
+        if storage == "vl" and serializer != "msgpack":
+            raise ValueError("storage='vl' only supports serializer='msgpack'")
+        if serializer == "arrow" and storage != "batch":
+            raise ValueError("serializer='arrow' requires storage='batch'")
+        self.item_spec = item_spec
+        self.nullable = nullable
+        self.storage = storage
+        self.serializer = serializer
+        self.batch_rows = batch_rows
+        self.items_per_block = items_per_block
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        d = {
+            "kind": "list",
+            "item": self.item_spec.to_metadata_dict(),
+            "nullable": self.nullable,
+            "storage": self.storage,
+            "serializer": self.serializer,
+        }
+        if self.batch_rows is not None:
+            d["batch_rows"] = self.batch_rows
+        if self.items_per_block is not None:
+            d["items_per_block"] = self.items_per_block
+        return d
+
+    def to_listarray_metadata(self) -> dict[str, Any]:
+        d = {"version": 1, **self.to_metadata_dict()}
+        d["backend"] = d.pop("storage")
+        return d
+
+    def display_label(self) -> str:
+        item_kind = self.item_spec.to_metadata_dict().get("kind", type(self.item_spec).__name__)
+        return f"list[{item_kind}]"
+
+    @classmethod
+    def from_metadata_dict(cls, data: dict[str, Any]) -> ListSpec:
+        from blosc2.schema_compiler import spec_from_metadata_dict
+
+        backend = data.get("backend")
+        return cls(
+            spec_from_metadata_dict(data["item_spec"] if "item_spec" in data else data["item"]),
+            nullable=data.get("nullable", False),
+            storage=backend if backend is not None else data.get("storage", "batch"),
+            serializer=data.get("serializer", "msgpack"),
+            batch_rows=data.get("batch_rows"),
+            items_per_block=data.get("items_per_block"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Variable-length scalar spec classes
+# ---------------------------------------------------------------------------
+
+
+class VLStringSpec(SchemaSpec):
+    """Variable-length scalar string column backed by batched object storage.
+
+    Unlike :class:`string`, this spec does not use a fixed-width NumPy dtype.
+    Each row value is a plain Python ``str`` (or ``None`` when nullable).
+    Physical storage uses batched msgpack serialization via
+    :class:`blosc2.BatchArray` internally.
+
+    Parameters
+    ----------
+    nullable:
+        If ``True``, ``None`` is a valid row value representing a missing entry.
+        Nullability is represented natively — no sentinel value is used.
+    serializer:
+        Serialization backend.  Currently only ``"msgpack"`` is supported.
+    batch_rows:
+        Target number of rows per storage batch.  Defaults to 2048.
+    items_per_block:
+        Optional items-per-block hint passed to the underlying BatchArray.
+    """
+
+    python_type = str
+    dtype = None
+
+    def __init__(
+        self,
+        *,
+        nullable: bool = False,
+        serializer: str = "msgpack",
+        batch_rows: int | None = 2048,
+        items_per_block: int | None = None,
+    ):
+        if serializer != "msgpack":
+            raise ValueError("vlstring currently only supports serializer='msgpack'")
+        if batch_rows is not None and batch_rows <= 0:
+            raise ValueError("batch_rows must be positive or None")
+        if items_per_block is not None and items_per_block <= 0:
+            raise ValueError("items_per_block must be positive or None")
+        self.nullable = nullable
+        self.serializer = serializer
+        self.batch_rows = batch_rows
+        self.items_per_block = items_per_block
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "kind": "vlstring",
+            "nullable": self.nullable,
+            "serializer": self.serializer,
+        }
+        if self.batch_rows is not None:
+            d["batch_rows"] = self.batch_rows
+        if self.items_per_block is not None:
+            d["items_per_block"] = self.items_per_block
+        return d
+
+
+class VLBytesSpec(SchemaSpec):
+    """Variable-length scalar bytes column backed by batched object storage.
+
+    Unlike :class:`bytes`, this spec does not use a fixed-width NumPy dtype.
+    Each row value is a plain Python ``bytes`` (or ``None`` when nullable).
+    Physical storage uses batched msgpack serialization via
+    :class:`blosc2.BatchArray` internally.
+
+    Parameters
+    ----------
+    nullable:
+        If ``True``, ``None`` is a valid row value representing a missing entry.
+        Nullability is represented natively — no sentinel value is used.
+    serializer:
+        Serialization backend.  Currently only ``"msgpack"`` is supported.
+    batch_rows:
+        Target number of rows per storage batch.  Defaults to 2048.
+    items_per_block:
+        Optional items-per-block hint passed to the underlying BatchArray.
+    """
+
+    python_type = _builtin_bytes
+    dtype = None
+
+    def __init__(
+        self,
+        *,
+        nullable: bool = False,
+        serializer: str = "msgpack",
+        batch_rows: int | None = 2048,
+        items_per_block: int | None = None,
+    ):
+        if serializer != "msgpack":
+            raise ValueError("vlbytes currently only supports serializer='msgpack'")
+        if batch_rows is not None and batch_rows <= 0:
+            raise ValueError("batch_rows must be positive or None")
+        if items_per_block is not None and items_per_block <= 0:
+            raise ValueError("items_per_block must be positive or None")
+        self.nullable = nullable
+        self.serializer = serializer
+        self.batch_rows = batch_rows
+        self.items_per_block = items_per_block
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "kind": "vlbytes",
+            "nullable": self.nullable,
+            "serializer": self.serializer,
+        }
+        if self.batch_rows is not None:
+            d["batch_rows"] = self.batch_rows
+        if self.items_per_block is not None:
+            d["items_per_block"] = self.items_per_block
+        return d
+
+
+def vlstring(
+    *,
+    nullable: bool = False,
+    serializer: str = "msgpack",
+    batch_rows: int | None = 2048,
+    items_per_block: int | None = None,
+) -> VLStringSpec:
+    """Build a variable-length scalar string schema descriptor.
+
+    Use this as an explicit opt-in when a CTable column holds long or
+    wildly variable-length strings that would waste space in a fixed-width
+    ``string(max_length=N)`` column.  Must be requested via
+    ``blosc2.field(blosc2.vlstring())`` — it is never inferred automatically
+    from plain ``str`` annotations.
+    """
+    return VLStringSpec(
+        nullable=nullable,
+        serializer=serializer,
+        batch_rows=batch_rows,
+        items_per_block=items_per_block,
+    )
+
+
+def vlbytes(
+    *,
+    nullable: bool = False,
+    serializer: str = "msgpack",
+    batch_rows: int | None = 2048,
+    items_per_block: int | None = None,
+) -> VLBytesSpec:
+    """Build a variable-length scalar bytes schema descriptor.
+
+    Use this as an explicit opt-in when a CTable column holds long or
+    wildly variable-length byte strings.  Must be requested via
+    ``blosc2.field(blosc2.vlbytes())`` — it is never inferred automatically
+    from plain ``bytes`` annotations.
+    """
+    return VLBytesSpec(
+        nullable=nullable,
+        serializer=serializer,
+        batch_rows=batch_rows,
+        items_per_block=items_per_block,
+    )
+
+
+def struct(fields: dict[str, SchemaSpec]) -> StructSpec:
+    """Build a structured schema descriptor for nested CTable values."""
+    return StructSpec(fields)
+
+
+def list(
+    item_spec: SchemaSpec,
+    *,
+    nullable: bool = False,
+    storage: str = "batch",
+    serializer: str = "msgpack",
+    batch_rows: int | None = None,
+    items_per_block: int | None = None,
+) -> ListSpec:
+    """Build a list-valued schema descriptor for CTable and ListArray."""
+    return ListSpec(
+        item_spec,
+        nullable=nullable,
+        storage=storage,
+        serializer=serializer,
+        batch_rows=batch_rows,
+        items_per_block=items_per_block,
+    )
 
 
 # ---------------------------------------------------------------------------

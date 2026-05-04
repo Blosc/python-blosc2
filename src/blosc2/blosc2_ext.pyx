@@ -1963,6 +1963,13 @@ cdef class SChunk:
             raise RuntimeError("Could not update the desired chunk")
         return rc
 
+    def reorder_offsets(self, order):
+        cdef np.ndarray[np.int64_t, ndim=1] offsets_order = np.ascontiguousarray(order, dtype=np.int64)
+        rc = blosc2_schunk_reorder_offsets(self.schunk, <int64_t*> offsets_order.data)
+        if rc < 0:
+            raise RuntimeError("Could not reorder the chunk offsets")
+        return None
+
     def update_data(self, nchunk, data, copy):
         cdef Py_buffer buf
         PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)

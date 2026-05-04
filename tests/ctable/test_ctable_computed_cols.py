@@ -334,7 +334,8 @@ def test_drop_computed_column():
     t.drop_computed_column("total")
     assert "total" not in t.col_names
     assert "total" not in t._computed_cols
-    assert t["total"] is None
+    with pytest.raises(ValueError, match="Unknown symbol: total"):
+        _ = t["total"]
 
 
 def test_drop_computed_column_missing_raises():

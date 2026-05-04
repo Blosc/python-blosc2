@@ -95,6 +95,83 @@ def test_null_value_string():
     assert t["label"].null_value == ""
 
 
+def test_nullable_true_uses_default_null_policy():
+    @dataclass
+    class Row:
+        i: int = blosc2.field(blosc2.int32(nullable=True))
+        u: int = blosc2.field(blosc2.uint32(nullable=True))
+        f: float = blosc2.field(blosc2.float64(nullable=True))
+        flag: bool = blosc2.field(blosc2.bool(nullable=True))
+        s: str = blosc2.field(blosc2.string(max_length=4, nullable=True))
+        b: bytes = blosc2.field(blosc2.bytes(max_length=4, nullable=True))
+
+    t = CTable(Row)
+    assert t["i"].null_value == np.iinfo(np.int32).min
+    assert t["u"].null_value == np.iinfo(np.uint32).max
+    assert math.isnan(t["f"].null_value)
+    assert t["flag"].null_value == 255
+    assert t["s"].null_value == "__BLOSC2_NULL__"
+    assert t["b"].null_value == b"__BLOSC2_NULL__"
+    assert t["s"].dtype.itemsize // 4 >= len("__BLOSC2_NULL__")
+    assert t["b"].dtype.itemsize >= len(b"__BLOSC2_NULL__")
+
+
+def test_nullable_true_uses_null_policy_context_and_column_null_values():
+    @dataclass
+    class Row:
+        i: int = blosc2.field(blosc2.int32(nullable=True))
+        s: str = blosc2.field(blosc2.string(max_length=4, nullable=True))
+
+    policy = blosc2.NullPolicy(
+        signed_int_strategy="max", string_value="<NULL>", column_null_values={"i": -1}
+    )
+    with blosc2.null_policy(policy):
+        t = CTable(Row)
+
+    assert t["i"].null_value == -1
+    assert t["s"].null_value == "<NULL>"
+
+
+def test_explicit_null_value_overrides_nullable_policy():
+    @dataclass
+    class Row:
+        i: int = blosc2.field(blosc2.int32(nullable=True, null_value=-5))
+
+    policy = blosc2.NullPolicy(signed_int_strategy="max")
+    with blosc2.null_policy(policy):
+        t = CTable(Row)
+
+    assert t["i"].null_value == -5
+
+
+def test_add_column_nullable_true_uses_null_policy():
+    t = CTable(IntRow)
+    with blosc2.null_policy(blosc2.NullPolicy(signed_int_strategy="max")):
+        t.add_column("extra", blosc2.int32(nullable=True), 0)
+
+    assert t["extra"].null_value == np.iinfo(np.int32).max
+
+
+def test_nullable_policy_rejects_out_of_range_integer_sentinel():
+    @dataclass
+    class Row:
+        x: int = blosc2.field(blosc2.int8(nullable=True))
+
+    with blosc2.null_policy(blosc2.NullPolicy(column_null_values={"x": 1000})):
+        with pytest.raises(ValueError, match="outside int8 range"):
+            CTable(Row)
+
+
+def test_nullable_policy_rejects_wrong_string_sentinel_type():
+    @dataclass
+    class Row:
+        s: str = blosc2.field(blosc2.string(nullable=True))
+
+    with blosc2.null_policy(blosc2.NullPolicy(column_null_values={"s": b"NA"})):
+        with pytest.raises(TypeError, match="must be str"):
+            CTable(Row)
+
+
 # ===========================================================================
 # is_null / notnull / null_count
 # ===========================================================================

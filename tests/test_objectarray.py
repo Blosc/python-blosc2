@@ -45,8 +45,8 @@ def _make_nested_blosc2_objects():
     schunk = blosc2.SChunk(chunksize=16)
     schunk.append_data(np.arange(4, dtype=np.int32))
 
-    nested_vlarray = blosc2.VLArray()
-    nested_vlarray.extend(["alpha", {"beta": 2}])
+    nested_oarr = blosc2.ObjectArray()
+    nested_oarr.extend(["alpha", {"beta": 2}])
 
     nested_batcharray = blosc2.BatchArray(items_per_block=2)
     nested_batcharray.extend([[1, 2], ["x", {"y": 3}]])
@@ -54,7 +54,7 @@ def _make_nested_blosc2_objects():
     estore = blosc2.EmbedStore()
     estore["/node"] = blosc2.arange(3, dtype=np.int32)
 
-    return ndarray, schunk, nested_vlarray, nested_batcharray, estore
+    return ndarray, schunk, nested_oarr, nested_batcharray, estore
 
 
 def _make_c2array(monkeypatch, path="@public/examples/ds-1d.b2nd", urlbase="https://cat2.cloud/demo/"):
@@ -103,43 +103,43 @@ def _make_persistent_ref(tmp_path):
     [
         (False, None),
         (True, None),
-        (True, "test_vlarray.b2frame"),
-        (False, "test_vlarray_s.b2frame"),
+        (True, "test_objectarray.b2frame"),
+        (False, "test_objectarray_s.b2frame"),
     ],
 )
-def test_vlarray_roundtrip(contiguous, urlpath):
+def test_objectarray_roundtrip(contiguous, urlpath):
     blosc2.remove_urlpath(urlpath)
 
-    vlarray = blosc2.VLArray(storage=_storage(contiguous, urlpath))
-    assert vlarray.meta["vlarray"]["serializer"] == "msgpack"
+    oarr = blosc2.ObjectArray(storage=_storage(contiguous, urlpath))
+    assert oarr.meta["vlarray"]["serializer"] == "msgpack"
 
     for i, value in enumerate(VALUES, start=1):
-        assert vlarray.append(value) == i
+        assert oarr.append(value) == i
 
-    assert len(vlarray) == len(VALUES)
-    assert list(vlarray) == VALUES
-    assert vlarray[-1] == VALUES[-1]
+    assert len(oarr) == len(VALUES)
+    assert list(oarr) == VALUES
+    assert oarr[-1] == VALUES[-1]
 
     expected = list(VALUES)
     expected[1] = {"updated": ("tuple", 7)}
     expected[-1] = "tiny"
-    vlarray[1] = expected[1]
-    vlarray[-1] = expected[-1]
-    assert vlarray.insert(0, "head") == len(expected) + 1
+    oarr[1] = expected[1]
+    oarr[-1] = expected[-1]
+    assert oarr.insert(0, "head") == len(expected) + 1
     expected.insert(0, "head")
-    assert vlarray.insert(-1, {"between": 5}) == len(expected) + 1
+    assert oarr.insert(-1, {"between": 5}) == len(expected) + 1
     expected.insert(-1, {"between": 5})
-    assert vlarray.insert(999, "tail") == len(expected) + 1
+    assert oarr.insert(999, "tail") == len(expected) + 1
     expected.insert(999, "tail")
-    assert vlarray.delete(2) == len(expected) - 1
+    assert oarr.delete(2) == len(expected) - 1
     del expected[2]
-    del vlarray[-2]
+    del oarr[-2]
     del expected[-2]
-    assert list(vlarray) == expected
+    assert list(oarr) == expected
 
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
-        assert isinstance(reopened, blosc2.VLArray)
+        assert isinstance(reopened, blosc2.ObjectArray)
         assert list(reopened) == expected
         with pytest.raises(ValueError):
             reopened.append("nope")
@@ -165,45 +165,45 @@ def test_vlarray_roundtrip(contiguous, urlpath):
 
         if contiguous:
             reopened_mmap = blosc2.open(urlpath, mode="r", mmap_mode="r")
-            assert isinstance(reopened_mmap, blosc2.VLArray)
+            assert isinstance(reopened_mmap, blosc2.ObjectArray)
             assert list(reopened_mmap) == expected
 
     blosc2.remove_urlpath(urlpath)
 
 
-def test_vlarray_from_cframe():
-    vlarray = blosc2.VLArray()
-    vlarray.extend(VALUES)
-    vlarray.insert(1, {"inserted": True})
-    del vlarray[3]
+def test_objectarray_from_cframe():
+    oarr = blosc2.ObjectArray()
+    oarr.extend(VALUES)
+    oarr.insert(1, {"inserted": True})
+    del oarr[3]
     expected = list(VALUES)
     expected.insert(1, {"inserted": True})
     del expected[3]
 
-    restored = blosc2.from_cframe(vlarray.to_cframe())
-    assert isinstance(restored, blosc2.VLArray)
+    restored = blosc2.from_cframe(oarr.to_cframe())
+    assert isinstance(restored, blosc2.ObjectArray)
     assert list(restored) == expected
 
-    restored2 = blosc2.vlarray_from_cframe(vlarray.to_cframe())
-    assert isinstance(restored2, blosc2.VLArray)
+    restored2 = blosc2.objectarray_from_cframe(oarr.to_cframe())
+    assert isinstance(restored2, blosc2.ObjectArray)
     assert list(restored2) == expected
 
 
-def test_vlarray_msgpack_supports_blosc2_objects():
-    ndarray, schunk, nested_vlarray, nested_batcharray, estore = _make_nested_blosc2_objects()
+def test_objectarray_msgpack_supports_blosc2_objects():
+    ndarray, schunk, nested_oarr, nested_batcharray, estore = _make_nested_blosc2_objects()
 
-    vlarray = blosc2.VLArray()
-    vlarray.append(
+    oarr = blosc2.ObjectArray()
+    oarr.append(
         {
             "ndarray": ndarray,
             "schunk": schunk,
-            "vlarray": nested_vlarray,
+            "objectarray": nested_oarr,
             "batcharray": nested_batcharray,
             "estore": estore,
         }
     )
 
-    restored = vlarray[0]
+    restored = oarr[0]
 
     assert isinstance(restored["ndarray"], blosc2.NDArray)
     assert np.array_equal(restored["ndarray"][:], ndarray[:])
@@ -211,8 +211,8 @@ def test_vlarray_msgpack_supports_blosc2_objects():
     assert isinstance(restored["schunk"], blosc2.SChunk)
     assert restored["schunk"].decompress_chunk(0) == schunk.decompress_chunk(0)
 
-    assert isinstance(restored["vlarray"], blosc2.VLArray)
-    assert list(restored["vlarray"]) == list(nested_vlarray)
+    assert isinstance(restored["objectarray"], blosc2.ObjectArray)
+    assert list(restored["objectarray"]) == list(nested_oarr)
 
     assert isinstance(restored["batcharray"], blosc2.BatchArray)
     assert [batch[:] for batch in restored["batcharray"]] == [batch[:] for batch in nested_batcharray]
@@ -222,13 +222,13 @@ def test_vlarray_msgpack_supports_blosc2_objects():
     assert np.array_equal(restored["estore"]["/node"][:], estore["/node"][:])
 
 
-def test_vlarray_msgpack_supports_c2array(monkeypatch):
+def test_objectarray_msgpack_supports_c2array(monkeypatch):
     c2array = _make_c2array(monkeypatch)
 
-    vlarray = blosc2.VLArray()
-    vlarray.append(c2array)
+    oarr = blosc2.ObjectArray()
+    oarr.append(c2array)
 
-    restored = vlarray[0]
+    restored = oarr[0]
 
     assert isinstance(restored, blosc2.C2Array)
     assert restored.path == c2array.path
@@ -236,67 +236,67 @@ def test_vlarray_msgpack_supports_c2array(monkeypatch):
     assert restored.auth_token is None
 
 
-def test_vlarray_msgpack_supports_ref(tmp_path):
+def test_objectarray_msgpack_supports_ref(tmp_path):
     ref, expected = _make_persistent_ref(tmp_path)
 
-    vlarray = blosc2.VLArray()
-    vlarray.append(ref)
+    oarr = blosc2.ObjectArray()
+    oarr.append(ref)
 
-    restored = vlarray[0]
+    restored = oarr[0]
 
     assert isinstance(restored, blosc2.Ref)
     assert restored == ref
     np.testing.assert_array_equal(restored.open()[:], expected)
 
 
-def test_vlarray_msgpack_supports_lazyexpr(tmp_path):
+def test_objectarray_msgpack_supports_lazyexpr(tmp_path):
     expr, expected = _make_persistent_lazyexpr(tmp_path)
 
-    vlarray = blosc2.VLArray()
-    vlarray.append(expr)
+    oarr = blosc2.ObjectArray()
+    oarr.append(expr)
 
-    restored = vlarray[0]
+    restored = oarr[0]
 
     assert isinstance(restored, blosc2.LazyExpr)
     np.testing.assert_array_equal(restored[:], expected)
 
 
-def test_vlarray_msgpack_supports_lazyudf_dslkernel(tmp_path):
+def test_objectarray_msgpack_supports_lazyudf_dslkernel(tmp_path):
     udf, expected = _make_persistent_lazyudf(tmp_path)
 
-    vlarray = blosc2.VLArray()
-    vlarray.append(udf)
-    restored = vlarray[0]
+    oarr = blosc2.ObjectArray()
+    oarr.append(udf)
+    restored = oarr[0]
 
     assert isinstance(restored, blosc2.LazyUDF)
     np.testing.assert_allclose(restored[:], expected)
 
 
-def test_vlarray_msgpack_rejects_lazyexpr_with_in_memory_operands():
+def test_objectarray_msgpack_rejects_lazyexpr_with_in_memory_operands():
     expr = _make_in_memory_lazyexpr()
 
-    vlarray = blosc2.VLArray()
+    oarr = blosc2.ObjectArray()
     with pytest.raises(ValueError, match="stored on disk/network"):
-        vlarray.append(expr)
+        oarr.append(expr)
 
 
-def test_vlarray_msgpack_rejects_plain_python_lazyudf(tmp_path):
+def test_objectarray_msgpack_rejects_plain_python_lazyudf(tmp_path):
     udf = _make_persistent_python_lazyudf(tmp_path)
 
-    vlarray = blosc2.VLArray()
+    oarr = blosc2.ObjectArray()
     with pytest.raises(TypeError, match="DSLKernel"):
-        vlarray.append(udf)
+        oarr.append(udf)
 
 
 @pytest.mark.network
-def test_vlarray_msgpack_roundtrip_c2array_network(cat2_context):
+def test_objectarray_msgpack_roundtrip_c2array_network(cat2_context):
     path = "@public/expr/ds-1-2-linspace-float64-b2-(5,)d.b2nd"
     original = blosc2.C2Array(path)
 
-    vlarray = blosc2.VLArray()
-    vlarray.append(original)
+    oarr = blosc2.ObjectArray()
+    oarr.append(original)
 
-    restored = vlarray[0]
+    restored = oarr[0]
 
     assert isinstance(restored, blosc2.C2Array)
     assert restored.path == original.path
@@ -304,16 +304,16 @@ def test_vlarray_msgpack_roundtrip_c2array_network(cat2_context):
     np.testing.assert_allclose(restored[:], original[:])
 
 
-def test_vlarray_info():
-    vlarray = blosc2.VLArray()
-    vlarray.extend(VALUES)
+def test_objectarray_info():
+    oarr = blosc2.ObjectArray()
+    oarr.extend(VALUES)
 
-    assert vlarray.typesize == 1
-    assert vlarray.contiguous == vlarray.schunk.contiguous
-    assert vlarray.urlpath == vlarray.schunk.urlpath
+    assert oarr.typesize == 1
+    assert oarr.contiguous == oarr.schunk.contiguous
+    assert oarr.urlpath == oarr.schunk.urlpath
 
-    items = dict(vlarray.info_items)
-    assert items["type"] == "VLArray"
+    items = dict(oarr.info_items)
+    assert items["type"] == "ObjectArray"
     assert items["entries"] == len(VALUES)
     assert items["item_nbytes_min"] > 0
     assert items["item_nbytes_max"] >= items["item_nbytes_min"]
@@ -325,57 +325,57 @@ def test_vlarray_info():
     assert "(" in items["nbytes"]
     assert "(" in items["cbytes"]
 
-    text = repr(vlarray.info)
+    text = repr(oarr.info)
     assert "type" in text
-    assert "VLArray" in text
+    assert "ObjectArray" in text
     assert "item_nbytes_avg" in text
 
 
-def test_vlarray_zstd_uses_dict_by_default():
-    vlarray = blosc2.VLArray()
-    assert vlarray.cparams.codec == blosc2.Codec.ZSTD
-    assert vlarray.cparams.use_dict is True
+def test_objectarray_zstd_uses_dict_by_default():
+    oarr = blosc2.ObjectArray()
+    assert oarr.cparams.codec == blosc2.Codec.ZSTD
+    assert oarr.cparams.use_dict is True
 
 
-def test_vlarray_respects_explicit_use_dict_and_non_zstd():
-    vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.LZ4, "clevel": 5})
-    assert vlarray.cparams.codec == blosc2.Codec.LZ4
-    assert vlarray.cparams.use_dict is False
+def test_objectarray_respects_explicit_use_dict_and_non_zstd():
+    oarr = blosc2.ObjectArray(cparams={"codec": blosc2.Codec.LZ4, "clevel": 5})
+    assert oarr.cparams.codec == blosc2.Codec.LZ4
+    assert oarr.cparams.use_dict is False
 
-    vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.LZ4HC, "clevel": 1, "use_dict": True})
-    assert vlarray.cparams.codec == blosc2.Codec.LZ4HC
-    assert vlarray.cparams.use_dict is True
+    oarr = blosc2.ObjectArray(cparams={"codec": blosc2.Codec.LZ4HC, "clevel": 1, "use_dict": True})
+    assert oarr.cparams.codec == blosc2.Codec.LZ4HC
+    assert oarr.cparams.use_dict is True
 
-    vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 0})
-    assert vlarray.cparams.codec == blosc2.Codec.ZSTD
-    assert vlarray.cparams.use_dict is False
+    oarr = blosc2.ObjectArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 0})
+    assert oarr.cparams.codec == blosc2.Codec.ZSTD
+    assert oarr.cparams.use_dict is False
 
-    vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 5, "use_dict": False})
-    assert vlarray.cparams.use_dict is False
+    oarr = blosc2.ObjectArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 5, "use_dict": False})
+    assert oarr.cparams.use_dict is False
 
-    vlarray = blosc2.VLArray(cparams=blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, use_dict=False))
-    assert vlarray.cparams.use_dict is False
+    oarr = blosc2.ObjectArray(cparams=blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, use_dict=False))
+    assert oarr.cparams.use_dict is False
 
 
-def test_vlarray_constructor_kwargs():
-    urlpath = "test_vlarray_kwargs.b2frame"
+def test_objectarray_constructor_kwargs():
+    urlpath = "test_objectarray_kwargs.b2frame"
     blosc2.remove_urlpath(urlpath)
 
-    vlarray = blosc2.VLArray(urlpath=urlpath, mode="w", contiguous=True)
+    oarr = blosc2.ObjectArray(urlpath=urlpath, mode="w", contiguous=True)
     for value in VALUES:
-        vlarray.append(value)
+        oarr.append(value)
 
-    reopened = blosc2.VLArray(urlpath=urlpath, mode="r", contiguous=True, mmap_mode="r")
+    reopened = blosc2.ObjectArray(urlpath=urlpath, mode="r", contiguous=True, mmap_mode="r")
     assert list(reopened) == VALUES
 
     blosc2.remove_urlpath(urlpath)
 
 
-def test_vlarray_size_guard(monkeypatch):
-    vlarray = blosc2.VLArray()
+def test_objectarray_size_guard(monkeypatch):
+    oarr = blosc2.ObjectArray()
     monkeypatch.setattr(blosc2, "MAX_BUFFERSIZE", 4)
     with pytest.raises(ValueError, match="Serialized objects cannot be larger"):
-        vlarray.append("payload")
+        oarr.append("payload")
 
 
 @pytest.mark.parametrize(
@@ -383,26 +383,26 @@ def test_vlarray_size_guard(monkeypatch):
     [
         (False, None),
         (True, None),
-        (True, "test_vlarray_list_ops.b2frame"),
-        (False, "test_vlarray_list_ops_s.b2frame"),
+        (True, "test_objectarray_list_ops.b2frame"),
+        (False, "test_objectarray_list_ops_s.b2frame"),
     ],
 )
-def test_vlarray_list_like_ops(contiguous, urlpath):
+def test_objectarray_list_like_ops(contiguous, urlpath):
     blosc2.remove_urlpath(urlpath)
 
-    vlarray = blosc2.VLArray(storage=_storage(contiguous, urlpath))
-    vlarray.extend([1, 2, 3])
-    assert list(vlarray) == [1, 2, 3]
-    assert vlarray.pop() == 3
-    assert vlarray.pop(0) == 1
-    assert list(vlarray) == [2]
+    oarr = blosc2.ObjectArray(storage=_storage(contiguous, urlpath))
+    oarr.extend([1, 2, 3])
+    assert list(oarr) == [1, 2, 3]
+    assert oarr.pop() == 3
+    assert oarr.pop(0) == 1
+    assert list(oarr) == [2]
 
-    vlarray.clear()
-    assert len(vlarray) == 0
-    assert list(vlarray) == []
+    oarr.clear()
+    assert len(oarr) == 0
+    assert list(oarr) == []
 
-    vlarray.extend(["a", "b"])
-    assert list(vlarray) == ["a", "b"]
+    oarr.extend(["a", "b"])
+    assert list(oarr) == ["a", "b"]
 
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
@@ -416,31 +416,31 @@ def test_vlarray_list_like_ops(contiguous, urlpath):
     [
         (False, None),
         (True, None),
-        (True, "test_vlarray_slices.b2frame"),
-        (False, "test_vlarray_slices_s.b2frame"),
+        (True, "test_objectarray_slices.b2frame"),
+        (False, "test_objectarray_slices_s.b2frame"),
     ],
 )
-def test_vlarray_slices(contiguous, urlpath):
+def test_objectarray_slices(contiguous, urlpath):
     blosc2.remove_urlpath(urlpath)
 
     expected = list(range(8))
-    vlarray = blosc2.VLArray(storage=_storage(contiguous, urlpath))
-    vlarray.extend(expected)
+    oarr = blosc2.ObjectArray(storage=_storage(contiguous, urlpath))
+    oarr.extend(expected)
 
-    assert vlarray[1:6:2] == expected[1:6:2]
-    assert vlarray[::-2] == expected[::-2]
+    assert oarr[1:6:2] == expected[1:6:2]
+    assert oarr[::-2] == expected[::-2]
 
-    vlarray[2:5] = ["a", "b"]
+    oarr[2:5] = ["a", "b"]
     expected[2:5] = ["a", "b"]
-    assert list(vlarray) == expected
+    assert list(oarr) == expected
 
-    vlarray[1:6:2] = [100, 101, 102]
+    oarr[1:6:2] = [100, 101, 102]
     expected[1:6:2] = [100, 101, 102]
-    assert list(vlarray) == expected
+    assert list(oarr) == expected
 
-    del vlarray[::3]
+    del oarr[::3]
     del expected[::3]
-    assert list(vlarray) == expected
+    assert list(oarr) == expected
 
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
@@ -453,25 +453,25 @@ def test_vlarray_slices(contiguous, urlpath):
     blosc2.remove_urlpath(urlpath)
 
 
-def test_vlarray_slice_errors():
-    vlarray = blosc2.VLArray()
-    vlarray.extend([0, 1, 2, 3])
+def test_objectarray_slice_errors():
+    oarr = blosc2.ObjectArray()
+    oarr.extend([0, 1, 2, 3])
 
     with pytest.raises(ValueError, match="extended slice"):
-        vlarray[::2] = [9]
+        oarr[::2] = [9]
     with pytest.raises(TypeError):
-        vlarray[1:2] = 3
+        oarr[1:2] = 3
     with pytest.raises(ValueError):
-        _ = vlarray[::0]
+        _ = oarr[::0]
 
 
-def test_vlarray_copy():
-    urlpath = "test_vlarray_copy.b2frame"
-    copy_path = "test_vlarray_copy_out.b2frame"
+def test_objectarray_copy():
+    urlpath = "test_objectarray_copy.b2frame"
+    copy_path = "test_objectarray_copy_out.b2frame"
     blosc2.remove_urlpath(urlpath)
     blosc2.remove_urlpath(copy_path)
 
-    original = blosc2.VLArray(urlpath=urlpath, mode="w", contiguous=True)
+    original = blosc2.ObjectArray(urlpath=urlpath, mode="w", contiguous=True)
     original.extend(VALUES)
     original.insert(1, {"copy": True})
 
@@ -495,29 +495,29 @@ def test_vlarray_copy():
     blosc2.remove_urlpath(copy_path)
 
 
-def test_vlarray_empty_list_roundtrip():
+def test_objectarray_empty_list_roundtrip():
     values = [[], {"a": []}, [[], ["nested"]], None, ("tuple", []), {"rows": [[], []]}]
-    vlarray = blosc2.VLArray()
-    vlarray.extend(values)
-    assert list(vlarray) == values
+    oarr = blosc2.ObjectArray()
+    oarr.extend(values)
+    assert list(oarr) == values
 
 
-def test_vlarray_empty_tuple_roundtrip():
+def test_objectarray_empty_tuple_roundtrip():
     values = [(), {"a": ()}, [(), ("nested",)], None, ("tuple", ()), {"rows": [[], ()]}]
-    vlarray = blosc2.VLArray()
-    vlarray.extend(values)
-    assert list(vlarray) == values
+    oarr = blosc2.ObjectArray()
+    oarr.extend(values)
+    assert list(oarr) == values
 
 
-def test_vlarray_insert_delete_errors():
-    vlarray = blosc2.VLArray()
-    vlarray.append("value")
+def test_objectarray_insert_delete_errors():
+    oarr = blosc2.ObjectArray()
+    oarr.append("value")
 
     with pytest.raises(TypeError):
-        vlarray.insert("0", "bad")
+        oarr.insert("0", "bad")
     with pytest.raises(IndexError):
-        vlarray.delete(3)
+        oarr.delete(3)
     with pytest.raises(IndexError):
-        blosc2.VLArray().pop()
+        blosc2.ObjectArray().pop()
     with pytest.raises(NotImplementedError):
-        vlarray.pop(slice(0, 1))
+        oarr.pop(slice(0, 1))

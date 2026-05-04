@@ -15,7 +15,8 @@ Main Classes
     C2Array
     Array
     BatchArray
-    VLArray
+    ListArray
+    ObjectArray
     SChunk
     DictStore
     TreeStore
@@ -41,7 +42,8 @@ Main Classes
     tree_store
     embed_store
     batch_array
-    vlarray
+    list_array
+    objectarray
     ndfield
     ref
     proxy
