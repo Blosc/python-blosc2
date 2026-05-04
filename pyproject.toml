@@ -49,6 +49,12 @@ blosc2 = "blosc2"
 homepage = "https://github.com/Blosc/python-blosc2"
 documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
+[project.optional-dependencies]
+parquet = ["pyarrow"]
+
+[project.scripts]
+parquet-to-blosc2 = "blosc2.cli.parquet_to_blosc2:main"
+
 [dependency-groups]
 dev = [
     "dask",

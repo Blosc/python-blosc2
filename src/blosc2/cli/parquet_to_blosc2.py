@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 #######################################################################
 # Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
 # All rights reserved.
@@ -6,22 +5,25 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""Import/export Parquet datasets through a CTable store.
+"""Import/export Parquet datasets through a Blosc2 CTable store.
 
-Default mode imports parquet -> .b2z/.b2d using CTable.from_arrow().
-The output extension selects the storage layout: .b2z is compact/zip-backed,
-.b2d is sparse directory-backed.  Additional modes:
+The installed ``parquet-to-blosc2`` utility supports three modes:
 
-* --export: export an existing .b2z/.b2d -> parquet.
-* --roundtrip: import parquet -> .b2z/.b2d -> parquet and assess differences.
+* default import: parquet -> ``.b2z`` / ``.b2d``
+* ``--export``: existing ``.b2z`` / ``.b2d`` -> parquet
+* ``--roundtrip``: parquet -> ``.b2z`` / ``.b2d`` -> parquet and compare
 
-Scalar string columns are stored as vlstring (variable-length, no length
-limit).  Scalar binary columns are stored as vlbytes.  Nullable string/binary
-columns are represented with native None — no sentinel value is needed.
+The output extension selects the storage layout: ``.b2z`` is compact/zip-backed,
+while ``.b2d`` is sparse directory-backed.
 
-Struct-valued columns are wrapped as list<struct> (one-element lists) so they
-round-trip through the list column machinery.  True list columns pass through
-unchanged.  Unsupported types (nested lists, timestamps, etc.) are skipped.
+Scalar string columns are stored as ``vlstring`` (variable-length, no length
+limit). Scalar binary columns are stored as ``vlbytes``. Nullable string/binary
+columns are represented with native ``None`` — no sentinel value is needed.
+
+Struct-valued columns are wrapped as ``list<struct>`` (one-element lists) so
+that they round-trip through the list-column machinery. True list columns pass
+through unchanged. Unsupported types (nested lists, timestamps, etc.) are
+skipped.
 """
 
 from __future__ import annotations
@@ -35,13 +37,11 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import blosc2
 from blosc2.schema_compiler import schema_to_dict
 
-DEFAULT_INPUT = Path(__file__).with_name("off-1pct.parquet")
-DEFAULT_B2Z = Path(__file__).with_name("off-1pct-gpt.b2z")
-DEFAULT_ROUNDTRIP_PARQUET = Path(__file__).with_name("off-1pct-gpt-roundtrip.parquet")
 DEFAULT_BATCH_SIZE = 2048
 
 
@@ -51,9 +51,21 @@ def require_pyarrow():
         import pyarrow.parquet as pq
     except ImportError as exc:
         raise ImportError(
-            "parquet-to-b2z.py requires pyarrow; install it with: pip install pyarrow"
+            "parquet-to-blosc2 requires pyarrow; install it with: pip install 'blosc2[parquet]'"
         ) from exc
     return pa, pq
+
+
+def _default_import_output(input_path: Path) -> Path:
+    return input_path.with_suffix(".b2z")
+
+
+def _default_export_output(input_path: Path) -> Path:
+    return input_path.with_suffix(".parquet")
+
+
+def _default_roundtrip_output(input_path: Path) -> Path:
+    return input_path.with_name(f"{input_path.stem}-roundtrip.parquet")
 
 
 def _format_bytes(n: int | None) -> str:
@@ -112,14 +124,24 @@ def maybe_memory_report(args, label: str, pa=None) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Import/export Parquet datasets via CTable (.b2z compact or .b2d sparse).",
+        description="Import/export Parquet datasets via Blosc2 CTable (.b2z compact or .b2d sparse).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--export", action="store_true", help="Export input .b2z to output parquet.")
-    mode.add_argument("--roundtrip", action="store_true", help="Run parquet -> .b2z -> parquet and compare.")
-    parser.add_argument("input_path", nargs="?", type=Path, default=DEFAULT_INPUT)
-    parser.add_argument("output_path", nargs="?", type=Path, default=None)
+    mode.add_argument("--export", action="store_true", help="Export input .b2z/.b2d to output parquet.")
+    mode.add_argument(
+        "--roundtrip", action="store_true", help="Run parquet -> .b2z/.b2d -> parquet and compare."
+    )
+    parser.add_argument(
+        "input_path", type=Path, help="Input parquet file or Blosc2 store, depending on mode."
+    )
+    parser.add_argument(
+        "output_path",
+        nargs="?",
+        type=Path,
+        default=None,
+        help="Output path. Defaults depend on the mode and input path.",
+    )
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[c.name for c in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
@@ -170,22 +192,10 @@ def _release_arrow_temporaries(pa) -> None:
 
 
 def classify_columns(pa, schema):
-    """Classify Parquet schema columns into importable categories.
-
-    Returns
-    -------
-    fixed_cols : dict[str, field]
-        Scalar numeric/bool columns and list columns passed through unchanged.
-    struct_wrap_cols : dict[str, pa.DataType]
-        Struct columns wrapped as list<struct> for import.
-    conversions : dict[str, dict]
-        Metadata describing what happened to each column (for round-trip export).
-    nullable_scalars : list[str]
-        Non-string scalar columns that are nullable (need sentinels).
-    """
+    """Classify Parquet schema columns into importable categories."""
     fixed_cols: dict[str, object] = {}
     struct_wrap_cols: dict[str, object] = {}
-    conversions: dict[str, dict] = {}
+    conversions: dict[str, dict[str, Any]] = {}
     nullable_scalars: list[str] = []
 
     for field in schema:
@@ -214,20 +224,12 @@ def classify_columns(pa, schema):
                 conversions[field.name] = {"conversion": "nullable_scalar_sentinel"}
             continue
         if pa.types.is_string(t) or pa.types.is_large_string(t):
-            # Scalar strings → vlstring (variable-length, handles any length, nullable natively)
             fixed_cols[field.name] = field
-            if field.nullable:
-                conversions[field.name] = {"conversion": "vlstring_nullable"}
-            else:
-                conversions[field.name] = {"conversion": "vlstring"}
+            conversions[field.name] = {"conversion": "vlstring_nullable" if field.nullable else "vlstring"}
             continue
         if pa.types.is_binary(t) or pa.types.is_large_binary(t):
-            # Scalar bytes → vlbytes (variable-length, handles any length, nullable natively)
             fixed_cols[field.name] = field
-            if field.nullable:
-                conversions[field.name] = {"conversion": "vlbytes_nullable"}
-            else:
-                conversions[field.name] = {"conversion": "vlbytes"}
+            conversions[field.name] = {"conversion": "vlbytes_nullable" if field.nullable else "vlbytes"}
             continue
         conversions[field.name] = {"conversion": "skipped", "reason": f"unsupported: {t}"}
 
@@ -235,12 +237,7 @@ def classify_columns(pa, schema):
 
 
 def build_import_schema(pa, original_schema, fixed_cols: dict, struct_wrap_cols: dict):
-    """Build the Arrow schema passed to CTable.from_arrow().
-
-    Struct columns become list<struct>; all other importable columns keep their
-    original Arrow type unchanged (vlstring/vlbytes conversion happens inside
-    CTable.from_arrow when string_max_length=None).
-    """
+    """Build the Arrow schema passed to CTable.from_arrow()."""
     fields = []
     for field in original_schema:
         if field.name in struct_wrap_cols:
@@ -372,7 +369,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         raise ValueError("--mem-every must be positive")
     if args.batch_report_every <= 0:
         raise ValueError("--batch-report-every must be positive")
-    if args.output_path is not None and output_path.suffix not in {".b2z", ".b2d"}:
+    if output_path.suffix not in {".b2z", ".b2d"}:
         raise ValueError("output_path must use the .b2z (compact) or .b2d (sparse) extension")
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -406,7 +403,6 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
     t0 = time.perf_counter()
     maybe_memory_report(args, "before CTable import", pa)
 
-    # string_max_length=None → scalar string/binary columns become vlstring/vlbytes automatically
     ct = blosc2.CTable.from_arrow(
         import_schema,
         progress_batches(pa, pf, args, selected_cols, struct_wrap_cols),
@@ -471,10 +467,8 @@ def export_ctable_to_parquet(input_path: Path, output_path: Path, *, batch_size:
         else ct._arrow_schema_for_columns(export_names)
     )
 
-    # Conversions that stored data differently and need unwrapping on export.
-    _SINGLETON_LIST_CONVERSIONS = {
+    singleton_list_conversions = {
         "struct_wrapped_as_singleton_list",
-        # Legacy reasons kept for reading older CTable stores:
         "nullable_scalar_wrapped_as_singleton_list",
         "long_nullable_scalar_wrapped_as_singleton_list",
         "scalar_string_promoted_after_overflow",
@@ -489,15 +483,9 @@ def export_ctable_to_parquet(input_path: Path, output_path: Path, *, batch_size:
                 meta = fields_meta.get(name, {})
                 field = export_schema.field(name)
                 conversion = meta.get("conversion", "")
-                if conversion in _SINGLETON_LIST_CONVERSIONS:
+                if conversion in singleton_list_conversions:
                     arr = unwrap_singleton_list(pa, arr, field.type)
-                elif conversion in {"vlstring", "vlstring_nullable"}:
-                    # vlstring columns export as pa.string() — already correct from iter_arrow_batches.
-                    # Cast to original Arrow type in case it was large_string in the source.
-                    if str(arr.type) != str(field.type):
-                        arr = arr.cast(field.type)
-                elif conversion in {"vlbytes", "vlbytes_nullable"}:
-                    # vlbytes columns export as pa.large_binary() — cast to original if needed.
+                elif conversion in {"vlstring", "vlstring_nullable", "vlbytes", "vlbytes_nullable"}:
                     if str(arr.type) != str(field.type):
                         arr = arr.cast(field.type)
                 elif str(arr.type) != str(field.type):
@@ -561,29 +549,30 @@ def assess_parquet_difference(original_path: Path, roundtrip_path: Path, exporte
     print(f"  Roundtrip size:      {roundtrip_path.stat().st_size / 1e6:.1f} MB")
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     if args.export:
         input_path = args.input_path
-        output_path = args.output_path or input_path.with_suffix(".parquet")
+        output_path = args.output_path or _default_export_output(input_path)
         export_ctable_to_parquet(
             input_path, output_path, batch_size=args.batch_size, overwrite=args.overwrite
         )
-        return
+        return 0
     if args.roundtrip:
         input_path = args.input_path
-        b2z_path = args.output_path or DEFAULT_B2Z
-        roundtrip_path = DEFAULT_ROUNDTRIP_PARQUET
-        selected = import_parquet_to_ctable(args, input_path, b2z_path)
+        b2_path = args.output_path or _default_import_output(input_path)
+        roundtrip_path = _default_roundtrip_output(input_path)
+        selected = import_parquet_to_ctable(args, input_path, b2_path)
         exported = export_ctable_to_parquet(
-            b2z_path, roundtrip_path, batch_size=args.batch_size, overwrite=True
+            b2_path, roundtrip_path, batch_size=args.batch_size, overwrite=True
         )
         assess_parquet_difference(input_path, roundtrip_path, exported or selected)
-        return
+        return 0
 
-    output_path = args.output_path or DEFAULT_B2Z
+    output_path = args.output_path or _default_import_output(args.input_path)
     import_parquet_to_ctable(args, args.input_path, output_path)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
