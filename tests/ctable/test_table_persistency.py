@@ -97,6 +97,19 @@ def test_reopen_with_ctable_constructor():
     assert list(t2["score"][:]) == [10.0, 20.0, 30.0]
 
 
+def test_close_propagates_varlen_flush_errors(monkeypatch):
+    """User-called close() must not hide pending varlen flush failures."""
+    path = table_path("close_flush_error")
+    t = CTable(Row, urlpath=path, mode="w", expected_size=16)
+
+    def fail_flush():
+        raise RuntimeError("flush failed")
+
+    monkeypatch.setattr(t, "_flush_varlen_columns", fail_flush)
+    with pytest.raises(RuntimeError, match="flush failed"):
+        t.close()
+
+
 def test_reopen_with_open_classmethod():
     """CTable.open() returns a read-only table with correct data."""
     path = table_path("ro")

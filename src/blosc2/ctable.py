@@ -1676,9 +1676,14 @@ class CTable(Generic[RowT]):
 
     def close(self) -> None:
         """Close any persistent backing store held by this table."""
-        with contextlib.suppress(Exception):
-            self._flush_varlen_columns()
         storage = getattr(self, "_storage", None)
+        try:
+            self._flush_varlen_columns()
+        except Exception:
+            with contextlib.suppress(Exception):
+                if storage is not None and hasattr(storage, "close"):
+                    storage.close()
+            raise
         if storage is not None and hasattr(storage, "close"):
             storage.close()
 
