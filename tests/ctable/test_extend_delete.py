@@ -50,6 +50,40 @@ def assert_data_at_positions(table: CTable, positions: list, expected_ids: list)
 # -------------------------------------------------------------------
 
 
+def test_extend_dict_rejects_mismatched_column_lengths():
+    t = CTable(Row, expected_size=8)
+    with pytest.raises(ValueError, match="same length"):
+        t.extend(
+            {
+                "id": [1, 2],
+                "c_val": [0j],
+                "score": [10.0, 20.0],
+                "active": [True, False],
+            }
+        )
+
+
+def test_extend_dict_rejects_no_known_columns():
+    t = CTable(Row, expected_size=8)
+    with pytest.raises(ValueError, match="No known stored columns"):
+        t.extend({"unknown": [1, 2]})
+
+
+def test_extend_dict_uses_known_column_lengths():
+    t = CTable(Row, expected_size=8)
+    t.extend(
+        {
+            "unknown": [0],
+            "id": [1, 2],
+            "c_val": [0j, 1j],
+            "score": [10.0, 20.0],
+            "active": [True, False],
+        }
+    )
+    assert len(t) == 2
+    assert list(t["id"][:]) == [1, 2]
+
+
 def test_gap_fill_mask_and_positions():
     """extend and append fill from last valid position; mask is updated correctly."""
     # extend after deletions: mask and physical positions

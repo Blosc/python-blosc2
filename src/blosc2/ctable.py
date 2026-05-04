@@ -5699,6 +5699,8 @@ class CTable(Generic[RowT]):
         if self.base is not None:
             raise TypeError("Cannot extend view.")
         if len(data) <= 0:
+            if isinstance(data, dict):
+                raise ValueError("No columns provided for extend().")
             return
 
         # Resolve effective validate flag: per-call override takes precedence
@@ -5720,9 +5722,25 @@ class CTable(Generic[RowT]):
                     provided_names.add(name)
         else:
             if isinstance(data, dict):
-                provided_names = set(data) & set(current_col_names)
-                new_nrows = len(next(iter(data.values())))
-                raw_columns = {name: data[name] for name in provided_names}
+                known_names = [name for name in current_col_names if name in data]
+                if not known_names:
+                    raise ValueError("No known stored columns provided for extend().")
+                column_lengths = {}
+                for name in known_names:
+                    try:
+                        column_lengths[name] = len(data[name])
+                    except TypeError as exc:
+                        raise TypeError(f"Column {name!r} does not have a length.") from exc
+                new_nrows = column_lengths[known_names[0]]
+                mismatched = {name: n for name, n in column_lengths.items() if n != new_nrows}
+                if mismatched:
+                    details = ", ".join(f"{name}={n}" for name, n in mismatched.items())
+                    raise ValueError(
+                        f"All provided columns must have the same length; "
+                        f"expected {new_nrows}, got {details}."
+                    )
+                provided_names = set(known_names)
+                raw_columns = {name: data[name] for name in known_names}
             elif isinstance(data, np.ndarray) and data.dtype.names is not None:
                 new_nrows = len(data)
                 raw_columns = {name: data[name] for name in data.dtype.names if name in current_col_names}
