@@ -82,3 +82,9 @@ def test_listarray_arrow_roundtrip():
     arr = blosc2.ListArray.from_arrow(values, item_spec=blosc2.string(), nullable=True)
     assert arr[:] == [["a"], None, ["b", "c"]]
     assert arr.to_arrow().to_pylist() == [["a"], None, ["b", "c"]]
+
+
+def test_listarray_extend_validate_false_preserves_none():
+    arr = blosc2.ListArray(item_spec=blosc2.int32(), nullable=True, storage="batch", batch_rows=2)
+    arr.extend([[1], None, [2, 3]], validate=False)
+    assert arr[:] == [[1], None, [2, 3]]

@@ -342,25 +342,25 @@ class TestParquetRoundTrip:
         assert len(t) == 3
         assert t.col_names == ["x", "y"]
 
-    def test_from_arrow_list_batch_rows_default(self):
+    def test_from_arrow_blosc2_batch_size_default(self):
         at = pa.table({"vals": pa.array([[1], [2, 3]], type=pa.list_(pa.int64()))})
         t = CTable.from_arrow(at.schema, at.to_batches())
         assert t._schema.columns_by_name["vals"].spec.batch_rows == 2048
         assert t["vals"][0] == [1]
         assert t["vals"][1] == [2, 3]
 
-    def test_from_arrow_list_batch_rows_override_and_none(self):
+    def test_from_arrow_blosc2_batch_size_override_and_none(self):
         at = pa.table({"vals": pa.array([[1], [2], [3]], type=pa.list_(pa.int64()))})
-        t = CTable.from_arrow(at.schema, at.to_batches(max_chunksize=1), list_batch_rows=2)
+        t = CTable.from_arrow(at.schema, at.to_batches(max_chunksize=1), blosc2_batch_size=2)
         assert t._schema.columns_by_name["vals"].spec.batch_rows == 2
 
-        t2 = CTable.from_arrow(at.schema, at.to_batches(max_chunksize=1), list_batch_rows=None)
+        t2 = CTable.from_arrow(at.schema, at.to_batches(max_chunksize=1), blosc2_batch_size=None)
         assert t2._schema.columns_by_name["vals"].spec.batch_rows is None
 
-    def test_from_arrow_invalid_list_batch_rows_raises(self):
+    def test_from_arrow_invalid_blosc2_batch_size_raises(self):
         at = pa.table({"vals": pa.array([[1]], type=pa.list_(pa.int64()))})
-        with pytest.raises(ValueError, match="list_batch_rows"):
-            CTable.from_arrow(at.schema, at.to_batches(), list_batch_rows=0)
+        with pytest.raises(ValueError, match="blosc2_batch_size"):
+            CTable.from_arrow(at.schema, at.to_batches(), blosc2_batch_size=0)
 
     def test_vlstring_arrow_roundtrip_no_singleton_list(self):
         """Scalar string columns import as vlstring (not list<string>) without singleton wrapping."""

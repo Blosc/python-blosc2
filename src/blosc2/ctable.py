@@ -1549,6 +1549,7 @@ def _fmt_bytes(n: int) -> str:
 
 
 _EXPECTED_SIZE_DEFAULT = 1_048_576
+_BATCH_SIZE_DEFAULT = 2048
 
 # ---------------------------------------------------------------------------
 # Computed-column definition (virtual columns backed by a LazyExpr)
@@ -2804,7 +2805,7 @@ class CTable(Generic[RowT]):
         self,
         *,
         columns: list[str] | None = None,
-        batch_size: int = 65_536,
+        batch_size: int = _BATCH_SIZE_DEFAULT,
         include_computed: bool = True,
     ):
         """Yield live rows as bounded-size :class:`pyarrow.RecordBatch` objects."""
@@ -3123,7 +3124,11 @@ class CTable(Generic[RowT]):
             return pos
         for col in columns:
             arrow_col = batch.column(batch.schema.get_field_index(col.name))
-            if cls._is_list_column(col) or cls._is_varlen_scalar_column(col):
+            if cls._is_list_column(col):
+                # Trusted Arrow-import fast path: schema has already been inferred,
+                # so avoid Python-level per-item coercion/validation here.
+                new_cols[col.name].extend(arrow_col.to_pylist(), validate=False)
+            elif cls._is_varlen_scalar_column(col):
                 new_cols[col.name].extend(arrow_col.to_pylist())
             else:
                 new_cols[col.name][pos : pos + m] = cls._arrow_column_to_numpy(arrow_col, col)
@@ -3181,7 +3186,7 @@ class CTable(Generic[RowT]):
         capacity_hint: int | None = None,
         string_max_length: int | None = None,
         auto_null_sentinels: bool = True,
-        list_batch_rows: int | None = 2048,
+        blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
     ) -> CTable:
         """Build a :class:`CTable` from an Arrow schema and iterable of record batches.
 
@@ -3196,13 +3201,14 @@ class CTable(Generic[RowT]):
         :func:`~blosc2.string` / :func:`~blosc2.bytes` columns whose dtype is
         sized to *string_max_length* characters/bytes.
 
-        ``list_batch_rows`` controls how many rows are buffered before
-        list-valued columns are flushed to their backend.  Set it to ``None``
-        to keep list columns pending until the final flush.
+        ``blosc2_batch_size`` controls how many rows are buffered before
+        BatchArray-backed imported columns (list columns and varlen scalar
+        columns) are flushed to their backend.  Set it to ``None`` to keep
+        those columns pending until the final flush.
         """
         pa = cls._require_pyarrow("from_arrow()")
-        if list_batch_rows is not None and list_batch_rows <= 0:
-            raise ValueError("list_batch_rows must be a positive integer or None")
+        if blosc2_batch_size is not None and blosc2_batch_size <= 0:
+            raise ValueError("blosc2_batch_size must be a positive integer or None")
         batches = iter(batches)
         first_batch = None
         table_for_inference = None
@@ -3217,10 +3223,12 @@ class CTable(Generic[RowT]):
             string_max_length,
             auto_null_sentinels=auto_null_sentinels,
         )
-        if list_batch_rows is not None:
+        if blosc2_batch_size is not None:
             for col in columns:
-                if cls._is_list_column(col) and getattr(col.spec, "storage", None) == "batch":
-                    col.spec.batch_rows = list_batch_rows
+                if (
+                    cls._is_list_column(col) and getattr(col.spec, "storage", None) == "batch"
+                ) or cls._is_varlen_scalar_column(col):
+                    col.spec.batch_rows = blosc2_batch_size
         compiled = CompiledSchema(
             row_cls=None,
             columns=columns,
@@ -3253,7 +3261,7 @@ class CTable(Generic[RowT]):
         path,
         *,
         columns: list[str] | None = None,
-        batch_size: int = 65_536,
+        batch_size: int = _BATCH_SIZE_DEFAULT,
         compression: str | None = "zstd",
         row_group_size: int | None = None,
         include_computed: bool = True,
@@ -3277,14 +3285,14 @@ class CTable(Generic[RowT]):
         path,
         *,
         columns: list[str] | None = None,
-        batch_size: int = 65_536,
+        batch_size: int = _BATCH_SIZE_DEFAULT,
         urlpath: str | None = None,
         mode: str = "w",
         cparams=None,
         dparams=None,
         validate: bool = False,
         auto_null_sentinels: bool = True,
-        list_batch_rows: int | None = 2048,
+        blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
         **kwargs,
     ) -> CTable:
         """Read a Parquet file into a :class:`CTable` batch-wise using pyarrow."""
@@ -3311,7 +3319,7 @@ class CTable(Generic[RowT]):
             capacity_hint=pf.metadata.num_rows if pf.metadata is not None else None,
             string_max_length=string_max_length,
             auto_null_sentinels=auto_null_sentinels,
-            list_batch_rows=list_batch_rows,
+            blosc2_batch_size=blosc2_batch_size,
         )
 
     # ------------------------------------------------------------------

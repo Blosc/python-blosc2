@@ -31,8 +31,11 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import cProfile
 import gc
+import io
 import os
+import pstats
 import shutil
 import sys
 import time
@@ -142,7 +145,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Output path. Defaults depend on the mode and input path.",
     )
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--parquet-batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument(
+        "--batch-size",
+        dest="parquet_batch_size",
+        type=int,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--blosc2-batch-size",
+        type=int,
+        default=DEFAULT_BATCH_SIZE,
+        help="Rows grouped into each persisted BatchArray batch for imported Blosc2 varlen/list columns.",
+    )
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[c.name for c in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
     parser.add_argument(
@@ -161,6 +176,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="Print progress every N batches; the final batch is always reported.",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Run the selected operation under cProfile and print cumulative timing stats.",
     )
     parser.add_argument("--overwrite", action="store_true")
     return parser
@@ -327,7 +347,8 @@ def print_import_plan(
     print(f"  Skipped unsupported: {len(skipped)}")
     for name, entry in skipped.items():
         print(f"    - {name}: {entry['reason']}")
-    print(f"Batch size:            {args.batch_size:,}")
+    print(f"Parquet batch size:    {args.parquet_batch_size:,}")
+    print(f"Blosc2 batch size:     {args.blosc2_batch_size:,}")
     print(f"Codec / level:         {args.codec} / {args.clevel}")
     print()
 
@@ -337,7 +358,7 @@ def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols):
     t0 = time.perf_counter()
     total = pf.metadata.num_rows
     for batch_n, raw_batch in enumerate(
-        pf.iter_batches(batch_size=args.batch_size, columns=selected_cols), start=1
+        pf.iter_batches(batch_size=args.parquet_batch_size, columns=selected_cols), start=1
     ):
         report_batch_mem = args.mem_report and batch_n % args.mem_every == 0
         if report_batch_mem:
@@ -363,8 +384,10 @@ def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols):
 
 
 def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
-    if args.batch_size <= 0:
-        raise ValueError("--batch-size must be positive")
+    if args.parquet_batch_size <= 0:
+        raise ValueError("--parquet-batch-size must be positive")
+    if args.blosc2_batch_size <= 0:
+        raise ValueError("--blosc2-batch-size must be positive")
     if args.mem_every <= 0:
         raise ValueError("--mem-every must be positive")
     if args.batch_report_every <= 0:
@@ -412,6 +435,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         capacity_hint=pf.metadata.num_rows,
         string_max_length=None,
         auto_null_sentinels=True,
+        blosc2_batch_size=args.blosc2_batch_size,
     )
     maybe_memory_report(args, "after CTable import", pa)
     store_original_arrow_metadata(ct, parquet_schema, import_schema, conversions)
@@ -451,7 +475,7 @@ def unwrap_singleton_list(pa, arr, arrow_type):
 def export_ctable_to_parquet(input_path: Path, output_path: Path, *, batch_size: int, overwrite: bool):
     pa, pq = require_pyarrow()
     if batch_size <= 0:
-        raise ValueError("--batch-size must be positive")
+        raise ValueError("--parquet-batch-size must be positive")
     prepare_output(output_path, overwrite)
     ct = blosc2.CTable.open(str(input_path))
     original_schema = original_schema_from_ctable(pa, ct)
@@ -549,13 +573,12 @@ def assess_parquet_difference(original_path: Path, roundtrip_path: Path, exporte
     print(f"  Roundtrip size:      {roundtrip_path.stat().st_size / 1e6:.1f} MB")
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def _run_command(args) -> int:
     if args.export:
         input_path = args.input_path
         output_path = args.output_path or _default_export_output(input_path)
         export_ctable_to_parquet(
-            input_path, output_path, batch_size=args.batch_size, overwrite=args.overwrite
+            input_path, output_path, batch_size=args.parquet_batch_size, overwrite=args.overwrite
         )
         return 0
     if args.roundtrip:
@@ -564,7 +587,7 @@ def main(argv: list[str] | None = None) -> int:
         roundtrip_path = _default_roundtrip_output(input_path)
         selected = import_parquet_to_ctable(args, input_path, b2_path)
         exported = export_ctable_to_parquet(
-            b2_path, roundtrip_path, batch_size=args.batch_size, overwrite=True
+            b2_path, roundtrip_path, batch_size=args.parquet_batch_size, overwrite=True
         )
         assess_parquet_difference(input_path, roundtrip_path, exported or selected)
         return 0
@@ -572,6 +595,42 @@ def main(argv: list[str] | None = None) -> int:
     output_path = args.output_path or _default_import_output(args.input_path)
     import_parquet_to_ctable(args, args.input_path, output_path)
     return 0
+
+
+def _run_profiled(args) -> int:
+    profiler = cProfile.Profile()
+    profiler.enable()
+    try:
+        return _run_command(args)
+    finally:
+        profiler.disable()
+        stream = io.StringIO()
+        stats = pstats.Stats(profiler, stream=stream).sort_stats("cumulative")
+        stats.print_stats(50)
+        print("\n[cProfile] Top cumulative-time functions\n")
+        print(stream.getvalue().rstrip())
+
+
+def _option_present(argv: list[str], option: str) -> bool:
+    return any(arg == option or arg.startswith(option + "=") for arg in argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    args = build_parser().parse_args(argv)
+
+    parquet_specified = _option_present(argv, "--parquet-batch-size") or _option_present(
+        argv, "--batch-size"
+    )
+    blosc2_specified = _option_present(argv, "--blosc2-batch-size")
+    if parquet_specified and not blosc2_specified:
+        args.blosc2_batch_size = args.parquet_batch_size
+    elif blosc2_specified and not parquet_specified:
+        args.parquet_batch_size = args.blosc2_batch_size
+
+    if args.profile:
+        return _run_profiled(args)
+    return _run_command(args)
 
 
 if __name__ == "__main__":

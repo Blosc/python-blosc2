@@ -230,6 +230,32 @@ def test_from_arrow_string_fixed_width_with_max_length():
     assert t["name"][:].tolist() == ["hi", "hello world", "!"]
 
 
+def test_from_arrow_list_struct_nullable_values_roundtrip():
+    nutrient_type = pa.struct(
+        [
+            pa.field("name", pa.string()),
+            pa.field("value", pa.float64()),
+        ]
+    )
+    at = pa.table(
+        {
+            "id": pa.array([1, 2, 3], type=pa.int64()),
+            "nutriments": pa.array(
+                [
+                    [{"name": "fat", "value": 1.5}, {"name": "salt", "value": 0.2}],
+                    None,
+                    [{"name": "energy", "value": 42.0}],
+                ],
+                type=pa.list_(nutrient_type),
+            ),
+        }
+    )
+    t = CTable.from_arrow(at.schema, at.to_batches())
+    assert t[0].nutriments == [{"name": "fat", "value": 1.5}, {"name": "salt", "value": 0.2}]
+    assert t[1].nutriments is None
+    assert t[2].nutriments == [{"name": "energy", "value": 42.0}]
+
+
 def test_from_arrow_unsupported_type_raises():
     at = pa.table({"ts": pa.array([1, 2, 3], type=pa.timestamp("s"))})
     with pytest.raises(TypeError, match="No blosc2 spec"):

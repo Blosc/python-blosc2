@@ -354,7 +354,9 @@ class ListArray:
         if validate:
             cells = [coerce_list_cell(self.spec, v) for v in values]
         else:
-            cells = [v if v is not None else [] for v in values]
+            # Trusted fast path used by Arrow/Parquet import and internal row reordering.
+            # Preserve nullable list cells as native None and skip all per-item coercion.
+            cells = list(values)
         if self.spec.storage == "vl":
             self._backend.extend(iter(cells))
             self._persisted_row_count = len(self._backend)
@@ -662,7 +664,7 @@ class ListArray:
             items_per_block=items_per_block,
             **kwargs,
         )
-        arr.extend(arrow_array.to_pylist())
+        arr.extend(arrow_array.to_pylist(), validate=False)
         return arr
 
     def __enter__(self) -> ListArray:
