@@ -17,7 +17,7 @@ This leaves several surprising or missing behaviors:
 - `t["f1 > f2"]` is not available as shorthand for row filtering
 - `t.row[...]` exists as a separate row API, which becomes redundant once `t[...]` gains proper row semantics
 
-This gives `CTable` a much more natural and powerful access model while preserving efficient columnar behavior.
+This would give `CTable` a much more natural and powerful access model while preserving efficient columnar behavior.
 
 ---
 
