@@ -264,10 +264,14 @@ Persistence
 .. autosummary::
 
     CTable.save
+    CTable.to_b2z
+    CTable.to_b2d
     CTable.to_csv
     CTable.to_arrow
 
 .. automethod:: CTable.save
+.. automethod:: CTable.to_b2z
+.. automethod:: CTable.to_b2d
 .. automethod:: CTable.to_csv
 .. automethod:: CTable.to_arrow
 
