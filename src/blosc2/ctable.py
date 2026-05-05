@@ -2205,6 +2205,44 @@ class CTable(Generic[RowT]):
         obj._load_materialized_cols_from_schema(schema_dict)
         return obj
 
+    def to_b2z(self, urlpath: str, *, overwrite: bool = False, compact: bool = False) -> str:
+        """Write this table to a compact ``.b2z`` container.
+
+        For persistent, non-view ``.b2d`` tables and ``compact=False``, this
+        uses a fast physical-pack path: the backing :class:`TreeStore` directory
+        is zipped with already-compressed leaves stored as-is. This preserves
+        the physical layout, including deleted rows and spare capacity, and does
+        not recompress columns.
+
+        For in-memory tables, views, existing ``.b2z`` tables, or
+        ``compact=True``, this falls back to the logical :meth:`save` path,
+        materializing only visible/live rows into a new ``.b2z`` store.
+        """
+        if not str(urlpath).endswith(".b2z"):
+            raise ValueError("urlpath must have a .b2z extension")
+
+        storage = getattr(self, "_storage", None)
+        can_physical_pack = (
+            not compact
+            and self.base is None
+            and isinstance(storage, FileTableStorage)
+            and str(storage._root).endswith(".b2d")
+        )
+        if can_physical_pack:
+            self._flush_varlen_columns()
+            store = blosc2.TreeStore(storage._root, mode="r")
+            try:
+                return store.to_b2z(filename=urlpath, overwrite=overwrite)
+            finally:
+                store.close()
+
+        if self.base is not None:
+            materialized = self.copy(compact=True)
+            materialized.save(urlpath, overwrite=overwrite)
+        else:
+            self.save(urlpath, overwrite=overwrite)
+        return os.path.abspath(urlpath)
+
     def save(self, urlpath: str, *, overwrite: bool = False) -> None:
         """Copy this (in-memory) table to disk at *urlpath*.
 
@@ -2266,7 +2304,7 @@ class CTable(Generic[RowT]):
                     dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
                 )
                 if n_live > 0:
-                    disk_col.extend(self._cols[name][int(pos)] for pos in live_pos)
+                    disk_col.extend((self._cols[name][int(pos)] for pos in live_pos), validate=False)
                     disk_col.flush()
                 continue
             if self._is_varlen_scalar_column(col):
@@ -2905,7 +2943,7 @@ class CTable(Generic[RowT]):
                 py_values = arrow_col.to_pylist()
                 flat_values = [item for cell in py_values if cell is not None for item in cell]
                 item_arrow_col = pa.array(flat_values, type=pa_type.value_type)
-                nullable = any(v is None for v in py_values)
+                nullable = nullable or any(v is None for v in py_values)
             else:
                 item_arrow_col = None
                 nullable = True

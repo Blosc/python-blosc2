@@ -121,6 +121,33 @@ def test_reopen_with_open_classmethod():
     assert list(t2["id"][:]) == [10, 20]
 
 
+def test_to_b2z_packs_persistent_b2d():
+    path = table_path("to_b2z_src.b2d")
+    dest = table_path("to_b2z_dst.b2z")
+    t = CTable(Row, urlpath=path, mode="w", expected_size=16)
+    t.extend([(10, 50.0, True), (20, 60.0, False)])
+
+    result = t.to_b2z(dest)
+
+    assert os.path.abspath(dest) == result
+    opened = CTable.open(dest, mode="r")
+    assert len(opened) == 2
+    assert list(opened["id"][:]) == [10, 20]
+
+
+def test_to_b2z_materializes_view():
+    dest = table_path("to_b2z_view.b2z")
+    t = CTable(Row, new_data=[(1, 10.0, True), (2, 20.0, False), (3, 30.0, True)])
+    view = t.where(t["id"] > 1)
+
+    result = view.to_b2z(dest)
+
+    assert os.path.abspath(dest) == result
+    opened = CTable.open(dest, mode="r")
+    assert len(opened) == 2
+    assert list(opened["id"][:]) == [2, 3]
+
+
 def test_column_order_preserved_after_reopen():
     """Column order from the schema JSON is respected on reopen."""
     path = table_path("order")
