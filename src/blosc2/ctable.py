@@ -1082,6 +1082,9 @@ class Column:
 
     @property
     def dtype(self):
+        """NumPy dtype of the underlying storage, or ``None`` for
+        variable-length columns (:func:`~blosc2.vlstring`,
+        :func:`~blosc2.vlbytes`, :func:`~blosc2.list`)."""
         return getattr(self._raw_col, "dtype", None)
 
     def iter_chunks(self, size: int = 65536):
@@ -1566,6 +1569,16 @@ _BATCH_SIZE_DEFAULT = 2048
 
 
 class CTable(Generic[RowT]):
+    #: Ordered list of stored column names.  Computed columns are **not**
+    #: included; access those via :attr:`computed_columns`.
+    col_names: list[str]
+
+    #: Parent table when this instance is a row-filter or column-projection
+    #: view (created by :meth:`where`, :meth:`select`, or :meth:`view`).
+    #: ``None`` for top-level tables.  Structural mutations such as
+    #: :meth:`add_column` and :meth:`drop_column` are blocked on views.
+    base: CTable | None
+
     def __init__(
         self,
         row_type: type[RowT],

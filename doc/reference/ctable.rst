@@ -113,12 +113,14 @@ Attributes
     CTable.schema
     CTable.base
 
+.. autoattribute:: CTable.col_names
 .. autoproperty:: CTable.computed_columns
 .. autoproperty:: CTable.nrows
 .. autoproperty:: CTable.ncols
 .. autoproperty:: CTable.cbytes
 .. autoproperty:: CTable.nbytes
 .. autoproperty:: CTable.schema
+.. autoattribute:: CTable.base
 
 
 Inserting data
@@ -191,6 +193,7 @@ When a NumPy structured array is needed, materialize explicitly::
     CTable.tail
     CTable.sample
     CTable.sort_by
+    CTable.iter_sorted
 
 .. automethod:: CTable.where
 .. automethod:: CTable.select
@@ -198,6 +201,7 @@ When a NumPy structured array is needed, materialize explicitly::
 .. automethod:: CTable.tail
 .. automethod:: CTable.sample
 .. automethod:: CTable.sort_by
+.. automethod:: CTable.iter_sorted
 
 
 Aggregates & statistics
@@ -266,10 +270,12 @@ Persistence
     CTable.save
     CTable.to_csv
     CTable.to_arrow
+    CTable.to_parquet
 
 .. automethod:: CTable.save
 .. automethod:: CTable.to_csv
 .. automethod:: CTable.to_arrow
+.. automethod:: CTable.to_parquet
 
 
 Inspection
@@ -461,10 +467,14 @@ Text & binary
 
     string
     bytes
+    vlstring
+    vlbytes
     list
 
 .. autoclass:: string
 .. autoclass:: bytes
+.. autofunction:: vlstring
+.. autofunction:: vlbytes
 .. autofunction:: list
 
 List columns
