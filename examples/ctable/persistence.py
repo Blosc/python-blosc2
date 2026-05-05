@@ -30,8 +30,11 @@ data = [
 ]
 
 tmpdir = tempfile.mkdtemp(prefix="blosc2_ctable_")
-disk_path = f"{tmpdir}/measurements"
-copy_path = f"{tmpdir}/measurements_copy"
+disk_path = f"{tmpdir}/measurements.b2d"
+zip_path = f"{tmpdir}/measurements.b2z"
+unpacked_path = f"{tmpdir}/measurements_unpacked.b2d"
+compact_zip_path = f"{tmpdir}/measurements_compact.b2z"
+copy_path = f"{tmpdir}/measurements_copy.b2d"
 
 try:
     # -- Create directly on disk (mode="w") ---------------------------------
@@ -67,6 +70,31 @@ try:
     mem = blosc2.CTable(Measurement, new_data=data[:100])
     mem.save(copy_path)
     print(f"In-memory table saved to '{copy_path}'")
+
+    # -- .b2d vs .b2z ------------------------------------------------------
+    # .b2d is a directory-backed store: mutable, easy to inspect, and a good
+    # default for local read/write workflows. .b2z is a single zip-backed file:
+    # compact and convenient for moving/sharing, typically opened read-only.
+    #
+    # to_b2z()/to_b2d() use fast physical pack/unpack paths when possible: the
+    # already-compressed leaves are copied as-is, without recompressing columns.
+    rw = blosc2.CTable.open(disk_path, mode="r")
+    rw.to_b2z(zip_path, overwrite=True)
+    rw.close()
+    print(f"Fast-packed .b2d -> .b2z: '{zip_path}'")
+
+    zipped = blosc2.CTable.open(zip_path, mode="r")
+    print(f"Opened .b2z read-only: {len(zipped):,} rows")
+    zipped.to_b2d(unpacked_path, overwrite=True)
+    zipped.close()
+    print(f"Fast-unpacked .b2z -> .b2d: '{unpacked_path}'")
+
+    # For a logical compacted copy (only live/visible rows), use compact=True
+    # or save(). This may rewrite columns and is slower than physical packing.
+    compacted = blosc2.CTable.open(disk_path, mode="r")
+    compacted.to_b2z(compact_zip_path, overwrite=True, compact=True)
+    compacted.close()
+    print(f"Logical compacted copy: '{compact_zip_path}'")
 
     # -- load(): pull a disk table fully into RAM ---------------------------
     ram = blosc2.CTable.load(disk_path)
