@@ -164,7 +164,14 @@ class BatchArray:
     items_per_block : int, optional
         Maximum number of items stored in each internal variable-length block.
         The last block in a batch may contain fewer items than this cap. If not
-        provided, a value is inferred from the first batch.
+        provided, a value is inferred from the first batch using the serialized
+        item sizes and the compression level. For ``clevel`` 1 through 5, the
+        heuristic targets the L1 data-cache size for faster scans and item
+        lookups. For ``clevel`` 6 through 8, it targets the L2 cache size for
+        larger blocks and better compression. At ``clevel`` 9, the whole batch
+        is kept as one block. Smaller blocks generally improve random access
+        and cache behavior, while larger blocks generally improve compression
+        ratio.
     serializer : {"msgpack", "arrow"}, optional
         Serializer used for batch payloads. ``"msgpack"`` is the default and is
         the general-purpose choice for Python items, including nested Blosc2
@@ -588,9 +595,9 @@ class BatchArray:
         clevel = self.cparams.clevel
         if clevel == 9:
             return len(payload_sizes)
-        if 0 < clevel < 5:
+        if 0 < clevel <= 5:
             budget = blosc2.cpu_info.get("l1_data_cache_size")
-        elif 5 <= clevel < 9:
+        elif 5 < clevel < 9:
             budget = blosc2.cpu_info.get("l2_cache_size")
         else:
             return len(payload_sizes)
