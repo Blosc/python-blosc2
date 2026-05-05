@@ -817,6 +817,7 @@ class Column:
         return ColumnViewIndexer(self)
 
     def __setitem__(self, key: int | slice | list | np.ndarray, value):  # noqa: C901
+        """Set one or more live column values; accepts the same index forms as :meth:`__getitem__`."""
         if self._table._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.is_computed:
@@ -871,6 +872,7 @@ class Column:
         self._table._root_table._mark_all_indexes_stale()
 
     def __iter__(self):
+        """Iterate over live column values in insertion order, skipping deleted rows."""
         if self.is_computed:
             yield from self._iter_chunks_computed(size=None)
             return
@@ -914,6 +916,7 @@ class Column:
         return f"Column({self._col_name!r}, dtype={self.dtype}, len={len(self)}, values=[{preview}])"
 
     def __len__(self):
+        """Return the number of live (non-deleted) values in this column."""
         return blosc2.count_nonzero(self._valid_rows)
 
     @property
@@ -2006,6 +2009,7 @@ class CTable(Generic[RowT]):
         return rows
 
     def __str__(self) -> str:
+        """Pandas-style tabular display with column names, dtypes, and a row count footer."""
         nrows = self._n_rows
         ncols = len(self.col_names)
         head_pos, tail_pos, hidden = self._display_positions()
@@ -2038,13 +2042,16 @@ class CTable(Generic[RowT]):
         return "\n".join(lines)
 
     def __repr__(self) -> str:
+        """Short ``CTable<cols>(N rows, X compressed)`` summary string."""
         cols = ", ".join(self.col_names)
         return f"CTable<{cols}>({self._n_rows:,} rows, {_fmt_bytes(self.cbytes)} compressed)"
 
     def __len__(self):
+        """Return the number of live (non-deleted) rows."""
         return self._n_rows
 
     def __iter__(self):
+        """Iterate over live rows in insertion order, yielding namedtuple-like row objects."""
         for i in range(self.nrows):
             yield self._materialize_row(i)
 
@@ -2461,6 +2468,7 @@ class CTable(Generic[RowT]):
         return CTable._make_view(self, new_valid_rows)
 
     def head(self, N: int = 5) -> CTable:
+        """Return a view of the first *N* live rows (default 5)."""
         if N <= 0:
             return self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
         if self._n_rows <= N:
@@ -2481,6 +2489,7 @@ class CTable(Generic[RowT]):
         return self.view(mask_arr)
 
     def tail(self, N: int = 5) -> CTable:
+        """Return a view of the last *N* live rows (default 5)."""
         if N <= 0:
             return self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
         if self._n_rows <= N:
@@ -4266,6 +4275,7 @@ class CTable(Generic[RowT]):
         return arr.copy() if copy else arr
 
     def __getitem__(self, key):
+        """Type-driven indexing: column name, boolean expression, row int/slice, mask, or column list."""
         if isinstance(key, str):
             if key in self._cols or key in self._computed_cols:
                 return Column(self, key)
@@ -4284,6 +4294,7 @@ class CTable(Generic[RowT]):
     # ------------------------------------------------------------------
 
     def compact(self):
+        """Rewrite all columns keeping only live rows, physically reclaiming deleted-row storage."""
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
@@ -5669,6 +5680,7 @@ class CTable(Generic[RowT]):
             self.extend(new_data)
 
     def append(self, data: list | np.void | np.ndarray) -> None:
+        """Append a single row to the table."""
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
@@ -5701,6 +5713,7 @@ class CTable(Generic[RowT]):
         self._mark_all_indexes_stale()
 
     def delete(self, ind: int | slice | str | Iterable) -> None:
+        """Mark one or more rows as deleted (tombstone); physical storage is reclaimed by :meth:`compact`."""
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
@@ -5723,6 +5736,7 @@ class CTable(Generic[RowT]):
         self._storage.bump_visibility_epoch()
 
     def extend(self, data: list | CTable | Any, *, validate: bool | None = None) -> None:  # noqa: C901
+        """Append multiple rows at once from a dict of arrays, a list of rows, or another :class:`CTable`."""
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
