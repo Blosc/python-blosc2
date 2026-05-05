@@ -3199,6 +3199,7 @@ class CTable(Generic[RowT]):
         string_max_length: int | Mapping[str, int] | None = None,
         auto_null_sentinels: bool = True,
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
+        blosc2_items_per_block: int | None = None,
     ) -> CTable:
         """Build a :class:`CTable` from an Arrow schema and iterable of record batches.
 
@@ -3223,6 +3224,8 @@ class CTable(Generic[RowT]):
         pa = cls._require_pyarrow("from_arrow()")
         if blosc2_batch_size is not None and blosc2_batch_size <= 0:
             raise ValueError("blosc2_batch_size must be a positive integer or None")
+        if blosc2_items_per_block is not None and blosc2_items_per_block <= 0:
+            raise ValueError("blosc2_items_per_block must be a positive integer or None")
         batches = iter(batches)
         first_batch = None
         table_for_inference = None
@@ -3237,12 +3240,14 @@ class CTable(Generic[RowT]):
             string_max_length,
             auto_null_sentinels=auto_null_sentinels,
         )
-        if blosc2_batch_size is not None:
-            for col in columns:
-                if (
-                    cls._is_list_column(col) and getattr(col.spec, "storage", None) == "batch"
-                ) or cls._is_varlen_scalar_column(col):
+        for col in columns:
+            if (
+                cls._is_list_column(col) and getattr(col.spec, "storage", None) == "batch"
+            ) or cls._is_varlen_scalar_column(col):
+                if blosc2_batch_size is not None:
                     col.spec.batch_rows = blosc2_batch_size
+                if blosc2_items_per_block is not None:
+                    col.spec.items_per_block = blosc2_items_per_block
         compiled = CompiledSchema(
             row_cls=None,
             columns=columns,
@@ -3307,6 +3312,7 @@ class CTable(Generic[RowT]):
         validate: bool = False,
         auto_null_sentinels: bool = True,
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
+        blosc2_items_per_block: int | None = None,
         **kwargs,
     ) -> CTable:
         """Read a Parquet file into a :class:`CTable` batch-wise using pyarrow."""
@@ -3334,6 +3340,7 @@ class CTable(Generic[RowT]):
             string_max_length=string_max_length,
             auto_null_sentinels=auto_null_sentinels,
             blosc2_batch_size=blosc2_batch_size,
+            blosc2_items_per_block=blosc2_items_per_block,
         )
 
     # ------------------------------------------------------------------

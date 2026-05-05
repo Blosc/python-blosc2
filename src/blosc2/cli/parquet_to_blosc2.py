@@ -182,6 +182,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_BATCH_SIZE,
         help="Rows grouped into each persisted BatchArray batch for imported Blosc2 varlen/list columns.",
     )
+    parser.add_argument(
+        "--blosc2-items-per-block",
+        type=int,
+        default=None,
+        help=(
+            "Items per internal BatchArray block for imported Blosc2 varlen/list columns. "
+            "Defaults to BatchArray's automatic heuristic."
+        ),
+    )
+    parser.add_argument("--use-dict", action="store_true", help="Enable C-Blosc2 dictionary compression.")
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[c.name for c in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
     parser.add_argument(
@@ -503,7 +513,10 @@ def print_import_plan(
         print(f"Fixed bytes maxlen:    {args.fixed_bytes_maxlen:,} bytes")
     print(f"Parquet batch size:    {args.parquet_batch_size:,}")
     print(f"Blosc2 batch size:     {args.blosc2_batch_size:,}")
+    if args.blosc2_items_per_block is not None:
+        print(f"Blosc2 items/block:    {args.blosc2_items_per_block:,}")
     print(f"Codec / level:         {args.codec} / {args.clevel}")
+    print(f"Use dict:              {args.use_dict}")
     print()
 
 
@@ -547,6 +560,8 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         raise ValueError("--parquet-batch-size must be positive")
     if args.blosc2_batch_size <= 0:
         raise ValueError("--blosc2-batch-size must be positive")
+    if args.blosc2_items_per_block is not None and args.blosc2_items_per_block <= 0:
+        raise ValueError("--blosc2-items-per-block must be positive")
     if args.fixed_str_maxlen is not None and args.fixed_str_maxlen <= 0:
         raise ValueError("--fixed-str-maxlen must be positive")
     if args.fixed_bytes_maxlen is not None and args.fixed_bytes_maxlen <= 0:
@@ -602,13 +617,14 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         progress_batches(pa, pf, args, selected_cols, struct_wrap_cols),
         urlpath=str(output_path),
         mode="w",
-        cparams=blosc2.CParams(codec=blosc2.Codec[args.codec], clevel=args.clevel),
+        cparams=blosc2.CParams(codec=blosc2.Codec[args.codec], clevel=args.clevel, use_dict=args.use_dict),
         capacity_hint=(
             pf.metadata.num_rows if args.max_rows is None else min(args.max_rows, pf.metadata.num_rows)
         ),
         string_max_length=fixed_scalar_lengths,
         auto_null_sentinels=True,
         blosc2_batch_size=args.blosc2_batch_size,
+        blosc2_items_per_block=args.blosc2_items_per_block,
     )
     maybe_memory_report(args, "after CTable import", pa)
     store_original_arrow_metadata(ct, parquet_schema, import_schema, conversions)
