@@ -179,6 +179,41 @@ def test_to_b2z_accepts_positional_filename():
     os.remove(b2z_path)
 
 
+def test_to_b2d_from_readonly_b2z(tmp_path):
+    b2z_path = tmp_path / "test_to_b2d_src.b2z"
+    b2d_path = tmp_path / "test_to_b2d_dst.b2d"
+
+    with DictStore(str(b2z_path), mode="w") as dstore:
+        dstore["/nodeA"] = np.arange(5)
+        dstore["/nodeB"] = np.arange(6)
+
+    with DictStore(str(b2z_path), mode="r") as dstore:
+        unpacked = dstore.to_b2d(str(b2d_path))
+        assert unpacked == os.path.abspath(b2d_path)
+
+    with DictStore(str(b2d_path), mode="r") as dstore:
+        assert np.all(dstore["/nodeA"][:] == np.arange(5))
+        assert np.all(dstore["/nodeB"][:] == np.arange(6))
+
+
+def test_to_b2d_overwrite_existing_raises(tmp_path):
+    b2z_path = tmp_path / "test_to_b2d_existing.b2z"
+    b2d_path = tmp_path / "test_to_b2d_existing.b2d"
+
+    with DictStore(str(b2z_path), mode="w") as dstore:
+        dstore["/nodeA"] = np.arange(5)
+    b2d_path.mkdir()
+
+    with DictStore(str(b2z_path), mode="r") as dstore, pytest.raises(FileExistsError):
+        dstore.to_b2d(str(b2d_path))
+
+    with DictStore(str(b2z_path), mode="r") as dstore:
+        dstore.to_b2d(str(b2d_path), overwrite=True)
+
+    with DictStore(str(b2d_path), mode="r") as dstore:
+        assert np.all(dstore["/nodeA"][:] == np.arange(5))
+
+
 def test_to_b2z_from_readonly_b2z_raises():
     b2z_path = "test_to_b2z_readonly_zip.b2z"
     out_path = "test_to_b2z_readonly_zip_out.b2z"

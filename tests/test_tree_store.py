@@ -1057,6 +1057,23 @@ def test_open_context_manager(populated_tree_store):
         assert np.array_equal(tstore["/child0/data"][:], np.array([1, 2, 3]))
 
 
+def test_to_b2d_from_readonly_b2z(tmp_path):
+    b2z_path = tmp_path / "test_tstore_to_b2d.b2z"
+    b2d_path = tmp_path / "test_tstore_to_b2d.b2d"
+
+    with TreeStore(str(b2z_path), mode="w") as tstore:
+        tstore["/group/node"] = np.arange(6)
+        tstore.vlmeta["description"] = "tree metadata"
+
+    with TreeStore(str(b2z_path), mode="r") as tstore:
+        unpacked = tstore.to_b2d(str(b2d_path))
+        assert unpacked == os.path.abspath(b2d_path)
+
+    with TreeStore(str(b2d_path), mode="r") as tstore:
+        assert np.array_equal(tstore["/group/node"][:], np.arange(6))
+        assert tstore.vlmeta["description"] == "tree metadata"
+
+
 def test_extensionless_tree_store_defaults_to_directory(tmp_path):
     path = tmp_path / "test_tstore_extless"
 

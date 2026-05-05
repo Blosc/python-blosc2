@@ -19,7 +19,6 @@ import os
 import pprint
 import re
 import shutil
-import zipfile
 from collections import namedtuple
 from collections.abc import Iterable, Mapping
 from dataclasses import MISSING, dataclass
@@ -2324,20 +2323,11 @@ class CTable(Generic[RowT]):
             and storage.open_mode() == "r"
         )
         if can_physical_unpack:
-            target_path = os.fspath(urlpath)
-            if os.path.exists(target_path):
-                if not overwrite:
-                    raise FileExistsError(
-                        f"'{target_path}' already exists. Use overwrite=True to overwrite."
-                    )
-                if os.path.isdir(target_path):
-                    shutil.rmtree(target_path)
-                else:
-                    os.remove(target_path)
-            os.makedirs(target_path, exist_ok=True)
-            with zipfile.ZipFile(storage._root, "r") as zf:
-                zf.extractall(target_path)
-            return os.path.abspath(target_path)
+            store = blosc2.TreeStore(storage._root, mode="r")
+            try:
+                return store.to_b2d(urlpath, overwrite=overwrite)
+            finally:
+                store.close()
 
         if self.base is not None:
             materialized = self.copy(compact=True)

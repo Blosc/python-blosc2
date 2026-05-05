@@ -86,5 +86,11 @@ Quick example
     .. automethod:: __enter__
     .. automethod:: __exit__
 
+    Persistence
+    -----------
+    Use :meth:`DictStore.to_b2z` to pack a directory-backed store into a
+    ``.b2z`` archive, and :meth:`DictStore.to_b2d` to materialize a store as a
+    ``.b2d`` directory.
+
     Public Members
     --------------

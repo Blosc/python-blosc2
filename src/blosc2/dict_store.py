@@ -632,6 +632,21 @@ class DictStore:
         -------
         filename : str
             The absolute path to the created b2z file.
+
+        Examples
+        --------
+        Pack a directory-backed store into a zip store::
+
+            with blosc2.DictStore("data.b2d", mode="w") as dstore:
+                dstore["/values"] = np.arange(10)
+
+            with blosc2.DictStore("data.b2d", mode="r") as dstore:
+                dstore.to_b2z(filename="data.b2z", overwrite=True)
+
+        ``filename`` can also be passed positionally::
+
+            with blosc2.DictStore("data.b2d", mode="r") as dstore:
+                dstore.to_b2z("copy.b2z", overwrite=True)
         """
         if isinstance(overwrite, str | os.PathLike) and filename is None:
             filename = overwrite
@@ -641,6 +656,7 @@ class DictStore:
             raise ValueError("Cannot call to_b2z() on a .b2z DictStore opened in read mode.")
 
         b2z_path = self.b2z_path if filename is None else filename
+        b2z_path = os.fspath(b2z_path)
         if not b2z_path.endswith(".b2z"):
             raise ValueError("b2z_path must have a .b2z extension")
 
@@ -668,6 +684,68 @@ class DictStore:
                 arcname = os.path.relpath(self.estore_path, self.working_dir)
                 zf.write(self.estore_path, arcname)
         return os.path.abspath(b2z_path)
+
+    def to_b2d(self, dirname=None, *, overwrite: bool = False) -> os.PathLike[Any] | str:
+        """
+        Serialize store contents to a b2d directory.
+
+        Parameters
+        ----------
+        dirname : str, optional
+            If provided, use this directory instead of the default b2d path.
+        overwrite : bool, optional
+            If True, overwrite the existing b2d directory if it exists.
+            Default is False.
+
+        Returns
+        -------
+        dirname : str
+            The absolute path to the created b2d directory.
+
+        Examples
+        --------
+        Unpack a zip-backed store into a directory-backed store::
+
+            with blosc2.DictStore("data.b2z", mode="r") as dstore:
+                dstore.to_b2d("data.b2d", overwrite=True)
+
+            with blosc2.DictStore("data.b2d", mode="r") as dstore:
+                values = dstore["/values"][:]
+
+        Copy an existing directory-backed store to another ``.b2d`` directory::
+
+            with blosc2.DictStore("data.b2d", mode="r") as dstore:
+                dstore.to_b2d("backup.b2d", overwrite=True)
+        """
+        b2d_path = self.localpath if dirname is None and not self.is_zip_store else dirname
+        if b2d_path is None:
+            b2d_path = (
+                self.b2z_path[:-4] + ".b2d" if self.b2z_path.endswith(".b2z") else self.b2z_path + ".b2d"
+            )
+        b2d_path = os.fspath(b2d_path)
+        if not b2d_path.endswith(".b2d"):
+            raise ValueError("b2d_path must have a .b2d extension")
+
+        target_path = os.path.abspath(b2d_path)
+        source_path = os.path.abspath(self.working_dir)
+        if not self.is_zip_store and target_path == source_path:
+            return target_path
+
+        if os.path.exists(target_path):
+            if not overwrite:
+                raise FileExistsError(f"'{target_path}' already exists. Use overwrite=True to overwrite.")
+            if os.path.isdir(target_path):
+                shutil.rmtree(target_path)
+            else:
+                os.remove(target_path)
+
+        if self.is_zip_store and self.mode == "r":
+            os.makedirs(target_path, exist_ok=True)
+            with zipfile.ZipFile(self.b2z_path, "r") as zf:
+                zf.extractall(target_path)
+        else:
+            shutil.copytree(self.working_dir, target_path)
+        return target_path
 
     def _get_zip_offsets(self) -> dict[str, dict[str, int]]:
         """Get offset and length of all files in the zip archive."""
