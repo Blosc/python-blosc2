@@ -36,7 +36,11 @@ def expected_gflops(shape_a: tuple[int, ...], shape_b: tuple[int, ...], elapsed:
     m = shape_a[-2]
     k = shape_a[-1]
     n = shape_b[-1]
-    batch = int(np.prod(np.broadcast_shapes(shape_a[:-2], shape_b[:-2]))) if len(shape_a) > 2 or len(shape_b) > 2 else 1
+    batch = (
+        int(np.prod(np.broadcast_shapes(shape_a[:-2], shape_b[:-2])))
+        if len(shape_a) > 2 or len(shape_b) > 2
+        else 1
+    )
     flops = 2 * batch * m * n * k
     return flops / elapsed / 1e9
 
@@ -199,14 +203,18 @@ def main() -> None:
     parser.add_argument("--blocks-out", default="100,100", help="Comma-separated block shape for output.")
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--repeats", type=int, default=3)
-    parser.add_argument("--modes", nargs="+", default=["chunked", "fast", "auto"], choices=["chunked", "fast", "auto"])
+    parser.add_argument(
+        "--modes", nargs="+", default=["chunked", "fast", "auto"], choices=["chunked", "fast", "auto"]
+    )
     parser.add_argument(
         "--block-backend",
         default="auto",
         choices=["auto", "naive", "accelerate", "cblas"],
         help="Kernel backend for the fast matmul block path.",
     )
-    parser.add_argument("--json", action="store_true", help="Emit full JSON instead of a compact text summary.")
+    parser.add_argument(
+        "--json", action="store_true", help="Emit full JSON instead of a compact text summary."
+    )
     args = parser.parse_args()
 
     shape_a = parse_int_tuple(args.shape_a)
@@ -320,14 +328,21 @@ def main() -> None:
         return
 
     display_order = ["chunked", "fast-naive", "fast", "auto", "numpy"]
-    ordered_results = sorted(results, key=lambda item: display_order.index(item["label"]) if item["label"] in display_order else len(display_order))
+    ordered_results = sorted(
+        results,
+        key=lambda item: (
+            display_order.index(item["label"]) if item["label"] in display_order else len(display_order)
+        ),
+    )
 
     for item in ordered_results:
         gflops_best = "-" if item["gflops_best"] is None else f"{item['gflops_best']:.3f}"
         if item["label"] == "numpy":
             backend_info = f"library={blosc2.get_matmul_library()}"
         else:
-            block_backend = item["selected_block_backend"] if item["selected_block_backend"] is not None else "-"
+            block_backend = (
+                item["selected_block_backend"] if item["selected_block_backend"] is not None else "-"
+            )
             backend_info = f"block_backend={block_backend}"
         print(
             f"{item['label']:>10}: "

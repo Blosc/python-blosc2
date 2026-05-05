@@ -33,20 +33,20 @@ def create_schunk(data=None):
 
 t0 = time()
 schunk = create_schunk(data=np.full(nelem, np.pi, dtype))
-t = (time() - t0) * 1000.
+t = (time() - t0) * 1000.0
 print(f"Time with `data` argument in constructor: {t:19.3f} ms")
 
 schunk = create_schunk()
 t0 = time()
 schunk.fill_special(nelem, blosc2.SpecialValue.UNINIT)
 schunk[:] = np.full(nelem, np.pi, dtype)
-t = (time() - t0) * 1000.
+t = (time() - t0) * 1000.0
 print(f"Time without passing directly the value: {t:20.3f} ms")
 
 schunk = create_schunk()
 t0 = time()
 schunk.fill_special(nelem, blosc2.SpecialValue.VALUE, np.pi)
-t = (time() - t0) * 1000.
+t = (time() - t0) * 1000.0
 print(f"Time passing directly the value to `fill_special`: {t:10.3f} ms")
 
 blosc2.remove_urlpath(urlpath)

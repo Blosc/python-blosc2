@@ -19,9 +19,9 @@ import blosc2
 
 @dataclass
 class Row:
-    id:     int   = blosc2.field(blosc2.int64(ge=0))
-    score:  float = blosc2.field(blosc2.float64(ge=0, le=100))
-    active: bool  = blosc2.field(blosc2.bool(), default=True)
+    id: int = blosc2.field(blosc2.int64(ge=0))
+    score: float = blosc2.field(blosc2.float64(ge=0, le=100))
+    active: bool = blosc2.field(blosc2.bool(), default=True)
 
 
 N = 1_000_000
@@ -34,7 +34,7 @@ ct.extend(data)
 print(f"Row iteration sample-scan benchmark  |  N = {N:,}")
 print()
 print(f"  {'SAMPLE_EVERY':>13}  {'READS':>9}  {'TIME (s)':>10}  {'µs/read':>9}")
-print(f"  {'─'*13}  {'─'*9}  {'─'*10}  {'─'*9}")
+print(f"  {'─' * 13}  {'─' * 9}  {'─' * 10}  {'─' * 9}")
 
 for k in SAMPLE_EVERY:
     n_reads = N // k

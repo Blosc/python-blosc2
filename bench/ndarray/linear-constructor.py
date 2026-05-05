@@ -8,6 +8,7 @@
 # Compare arange constructor times wrt DSL kernels.
 
 from time import time
+
 import numpy as np
 
 import blosc2
@@ -17,15 +18,17 @@ shape = (10_000, 10_000)
 start, stop = 1, 2
 cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ, clevel=1)
 
+
 @blosc2.dsl_kernel
-def kernel_ramp(start, stop, nitems):  # noqa
+def kernel_ramp(start, stop, nitems):
     step = (float(stop) - float(start)) / float(nitems - 1)
     return float(start) + _flat_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
 
 t0 = time()
 npa = np.linspace(start, stop, np.prod(shape), dtype=dtype).reshape(shape)
 print("NumPy arange:", round(time() - t0, 3), "s")
-#print(npa)
+# print(npa)
 
 t0 = time()
 a1 = blosc2.linspace(start, stop, np.prod(shape), dtype=dtype, shape=shape, cparams=cparams)

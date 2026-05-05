@@ -215,7 +215,9 @@ def _condition_expr(lo: object, hi: object, dtype: np.dtype) -> str:
 def benchmark_size(size: int, size_dir: Path, dist: str, query_width: int, id_dtype: np.dtype) -> list[dict]:
     get_data = _source_data_factory(size, dist, id_dtype)
     get_ordered_ids = _ordered_ids_factory(size, id_dtype)
-    base_h5, base_table = _open_or_build_base_table(base_table_path(size_dir, size, dist, id_dtype), get_data)
+    base_h5, base_table = _open_or_build_base_table(
+        base_table_path(size_dir, size, dist, id_dtype), get_data
+    )
     lo, hi = _query_bounds(get_ordered_ids(), query_width)
     condition = _condition_expr(lo, hi, id_dtype)
     base_bytes = size * np.dtype([("id", id_dtype), ("payload", np.float32)]).itemsize
@@ -437,12 +439,15 @@ def _run_benchmark(
                     ("kind", lambda result: result["kind"]),
                     ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
                     ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
-                    ("warm_ms", lambda result: f"{result['warm_ms']:.3f}" if result["warm_ms"] is not None else "-"),
+                    (
+                        "warm_ms",
+                        lambda result: f"{result['warm_ms']:.3f}" if result["warm_ms"] is not None else "-",
+                    ),
                     (
                         "speedup",
-                        lambda result: f"{result['warm_speedup']:.2f}x"
-                        if result["warm_speedup"] is not None
-                        else "-",
+                        lambda result: (
+                            f"{result['warm_speedup']:.2f}x" if result["warm_speedup"] is not None else "-"
+                        ),
                     ),
                     ("logical_bytes", lambda result: f"{result['logical_index_bytes']:,}"),
                     ("disk_bytes", lambda result: f"{result['disk_index_bytes']:,}"),

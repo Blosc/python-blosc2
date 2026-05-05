@@ -9,18 +9,20 @@
 # and different operands (NumPy and NDArray).  Different compression
 # levels and codecs can be selected.
 
-from time import time
-import blosc2
-import numpy as np
 import sys
+from time import time
+
 import dask
 import dask.array as da
+import numba as nb
+import numpy as np
 import zarr
 from numcodecs import Blosc
-import numba as nb
+
+import blosc2
 
 niter = 5
-#dtype = np.dtype("float32")
+# dtype = np.dtype("float32")
 dtype = np.dtype("float64")
 clevel = 1
 numpy = False
@@ -40,9 +42,9 @@ check_result = False
 # sizes_numpy = (1, 5, 10, 20, 30)  # limit numpy float64
 sizes_numpy = (1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70)
 sizes_numpy_jit = (1, 5, 10, 20, 30)  # limit numpy float64
-#sizes_clevel0 = (1, 5, 10, 20, 30)  # limit clevel==0 float64
+# sizes_clevel0 = (1, 5, 10, 20, 30)  # limit clevel==0 float64
 sizes_clevel0 = (1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70)
-#size_list = (1, 5, 10, 20, 30)
+# size_list = (1, 5, 10, 20, 30)
 size_list = (1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70)
 
 codec = "LZ4"  # default codec
@@ -74,21 +76,25 @@ if len(sys.argv) > 3:
 
 # The reductions to compute
 def compute_reduction_numpy(a, b, c):
-    return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+    return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+
 
 @blosc2.jit
 def compute_reduction(a, b, c):
-    return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+    return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+
 
 def compute_reduction_dask(a, b, c):
-    return (((a ** 3 + da.sin(a * 2)) < c) & (b > 0)).sum(axis=1)
+    return (((a**3 + da.sin(a * 2)) < c) & (b > 0)).sum(axis=1)
+
 
 @nb.njit(parallel=True)
 def compute_reduction_numba(a, b, c):
-    return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+    return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+
 
 # Compute for both disk or memory
-#for disk in (True, False):
+# for disk in (True, False):
 for disk in (False,):
     if disk and (numpy or numpy_jit or dask_da or numba_jit):
         continue
@@ -119,23 +125,23 @@ for disk in (False,):
         if numpy and not numpy_jit and n not in sizes_numpy:
             continue
         N = n * 1000
-        print(f"\nN = {n}000, {dtype=}, size={N ** 2 * 2 * dtype.itemsize / 2**30:.3f} GB")
+        print(f"\nN = {n}000, {dtype=}, size={N**2 * 2 * dtype.itemsize / 2**30:.3f} GB")
         chunks = (100, N)
         blocks = (1, N)
-        #chunks, blocks = None, None  # automatic chunk and block sizes
+        # chunks, blocks = None, None  # automatic chunk and block sizes
         # Lossy compression
-        #filters = [blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE]
-        #filters_meta = [8, 0]  # keep 8 bits of precision in mantissa
-        #cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4, filters=filters, filters_meta=filters_meta)
+        # filters = [blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE]
+        # filters_meta = [8, 0]  # keep 8 bits of precision in mantissa
+        # cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4, filters=filters, filters_meta=filters_meta)
 
         # Create some data operands
-        if check_result or dask_da and not numba_jit:
+        if check_result or (dask_da and not numba_jit):
             na = np.linspace(0, 1, N * N, dtype=dtype).reshape(N, N)
             nb = na + 1
             nc = np.linspace(-10, 10, N, dtype=dtype)
             nout = compute_reduction_numpy(na, nb, nc)
         t0 = time()
-        if numpy or numpy_jit and not dask_da:
+        if numpy or (numpy_jit and not dask_da):
             na = np.linspace(0, 1, N * N, dtype=dtype).reshape(N, N)
             nb = na + 1
             nc = np.linspace(-10, 10, N, dtype=dtype)
@@ -145,15 +151,19 @@ for disk in (False,):
             zb = zarr.array(nb, chunks=chunks, compressor=zcompressor, zarr_format=2)
             zc = zarr.array(nc, chunks=chunks[1], compressor=zcompressor, zarr_format=2)
         else:
-            a = blosc2.linspace(0, 1, N * N, dtype=dtype, shape=(N, N), cparams=cparams, urlpath=apath, mode="w")
-            #print("a.chunks, a.blocks, a.schunk.cratio: ", a.chunks, a.blocks, a.schunk.cratio)
+            a = blosc2.linspace(
+                0, 1, N * N, dtype=dtype, shape=(N, N), cparams=cparams, urlpath=apath, mode="w"
+            )
+            # print("a.chunks, a.blocks, a.schunk.cratio: ", a.chunks, a.blocks, a.schunk.cratio)
             print(f"{a.chunks=}, {a.blocks=}, {a.schunk.cratio=:.2f}x")
 
-            b = blosc2.linspace(1, 2, N * N, dtype=dtype, shape=(N, N), cparams=cparams, urlpath=bpath, mode="w")
-            #b = (a + 1).compute(cparams=cparams, chunks=chunks, blocks=blocks)
-            #print(b.chunks, b.blocks, b.schunk.cratio, b.cparams)
+            b = blosc2.linspace(
+                1, 2, N * N, dtype=dtype, shape=(N, N), cparams=cparams, urlpath=bpath, mode="w"
+            )
+            # b = (a + 1).compute(cparams=cparams, chunks=chunks, blocks=blocks)
+            # print(b.chunks, b.blocks, b.schunk.cratio, b.cparams)
             c = blosc2.linspace(-10, 10, N, dtype=dtype, cparams=cparams)  # broadcasting is supported
-            #c = blosc2.linspace(-10, 10, N * N, dtype=dtype, shape=(N, N), cparams=cparams)
+            # c = blosc2.linspace(-10, 10, N * N, dtype=dtype, shape=(N, N), cparams=cparams)
         t1 = time() - t0
         print(f"Time to create data: {t1:.4f}")
         create_times.append(t1)
@@ -188,8 +198,10 @@ for disk in (False,):
                     dexpr = da.map_blocks(compute_reduction_dask, a, b, c)
                     out = dexpr.compute(scheduler=scheduler)
                 else:
-                    dexpr = (((a ** 3 + da.sin(a * 2)) < c) & (b > 0)).sum(axis=1)
-                    zout = zarr.open(shape=(N,), chunks=chunks[1], dtype=dtype, compressor=zcompressor_out, zarr_format=2)
+                    dexpr = (((a**3 + da.sin(a * 2)) < c) & (b > 0)).sum(axis=1)
+                    zout = zarr.open(
+                        shape=(N,), chunks=chunks[1], dtype=dtype, compressor=zcompressor_out, zarr_format=2
+                    )
                     with dask.config.set(scheduler=scheduler, num_workers=blosc2.nthreads):
                         da.to_zarr(dexpr, zout)
                     if check_result and i == 0:
@@ -214,7 +226,7 @@ for disk in (False,):
             t1 = (time() - t0) / niter
             print(f"Time to compute with blosc2_jit and {clevel=}: {t1:.4f}")
         compute_times.append(t1)
-        #del a, b, c
+        # del a, b, c
 
     print("\nCreate times: [", ", ".join([f"{t:.4f}" for t in create_times]), "]")
     print("Compute times: [", ", ".join([f"{t:.4f}" for t in compute_times]), "]")

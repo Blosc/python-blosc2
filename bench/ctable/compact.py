@@ -29,17 +29,16 @@ N = 1_000_000
 print(f"compact() benchmark  |  N = {N:,}\n")
 
 # Build base data once
-np_dtype = np.dtype([
-    ("id",     np.int64),
-    ("c_val",  np.complex128),
-    ("score",  np.float64),
-    ("active", np.bool_),
-])
-DATA = np.array(
+np_dtype = np.dtype(
     [
-        (i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0)
-        for i in range(N)
-    ],
+        ("id", np.int64),
+        ("c_val", np.complex128),
+        ("score", np.float64),
+        ("active", np.bool_),
+    ]
+)
+DATA = np.array(
+    [(i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0) for i in range(N)],
     dtype=np_dtype,
 )
 
@@ -65,7 +64,7 @@ for frac in delete_fractions:
     cbytes_after = sum(col.cbytes for col in ct._cols.values()) + ct._valid_rows.cbytes
 
     print(
-        f"{frac*100:>9.0f}%"
+        f"{frac * 100:>9.0f}%"
         f" {N - n_delete:>10,}"
         f" {t_compact:>12.4f}"
         f" {cbytes_before / 1024**2:>13.2f} MB"

@@ -382,7 +382,9 @@ def main() -> None:
     parser.add_argument("--size", default="10M", help="Number of rows, or 'all'. Default: 10M.")
     parser.add_argument("--outdir", type=Path, required=True, help="Directory for generated Parquet files.")
     parser.add_argument("--dist", choices=(*DISTS, "all"), default="permuted", help="Row distribution.")
-    parser.add_argument("--layout", choices=(*LAYOUTS, "all"), default="all", help="Parquet layout to benchmark.")
+    parser.add_argument(
+        "--layout", choices=(*LAYOUTS, "all"), default="all", help="Parquet layout to benchmark."
+    )
     parser.add_argument("--query-width", type=parse_human_int, default=1, help="Query width. Default: 1.")
     parser.add_argument("--dtype", default="float64", help="Indexed id dtype. Default: float64.")
     parser.add_argument(
@@ -398,7 +400,9 @@ def main() -> None:
         help="Parquet max rows per page. Default: 10k.",
     )
     parser.add_argument("--compression", default=DEFAULT_COMPRESSION, help="Parquet compression codec.")
-    parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS, help="Benchmark repeats. Default: 3.")
+    parser.add_argument(
+        "--repeats", type=int, default=DEFAULT_REPEATS, help="Benchmark repeats. Default: 3."
+    )
     args = parser.parse_args()
 
     id_dtype = np.dtype(args.dtype)

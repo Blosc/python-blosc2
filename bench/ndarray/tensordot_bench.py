@@ -5,21 +5,21 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import numpy as np
-import blosc2
 import time
-import plotly.express as px
-import pandas as pd
+
 import matplotlib.pyplot as plt
+import numpy as np
 
-plt.rcParams.update({'text.usetex':False,'font.serif': ['cm'],'font.size':16})
-plt.rcParams['figure.dpi'] = 300
-plt.rcParams['savefig.dpi'] = 300
-plt.rc('text', usetex=False)
-plt.rc('font',**{'serif':['cm']})
-plt.style.use('seaborn-v0_8-paper')
+import blosc2
 
-filename = f"tensordot_bench"
+plt.rcParams.update({"text.usetex": False, "font.serif": ["cm"], "font.size": 16})
+plt.rcParams["figure.dpi"] = 300
+plt.rcParams["savefig.dpi"] = 300
+plt.rc("text", usetex=False)
+plt.rc("font", **{"serif": ["cm"]})
+plt.style.use("seaborn-v0_8-paper")
+
+filename = "tensordot_bench"
 width = 0.2
 w = -width
 
@@ -35,11 +35,11 @@ mean_times = []
 for N in shapes:
     shape_a = (N,) * 3
     shape_b = (N,) * 3
-    size_gb = (N * N * N * 8) / (2 ** 30)
+    size_gb = (N * N * N * 8) / (2**30)
 
     # Generate matrices
-    matrix_a_blosc2 = blosc2.ones(shape=shape_a, cparams=cparams, chunks=(140,)*3)
-    matrix_b_blosc2 = blosc2.ones(shape=shape_b, cparams=cparams, chunks=(140,)*3)
+    matrix_a_blosc2 = blosc2.ones(shape=shape_a, cparams=cparams, chunks=(140,) * 3)
+    matrix_b_blosc2 = blosc2.ones(shape=shape_b, cparams=cparams, chunks=(140,) * 3)
     matrix_a_np = matrix_a_blosc2[:]
     matrix_b_np = matrix_b_blosc2[:]
     blosc_mean, blosc_max, blosc_min = 0, -np.inf, np.inf
@@ -52,7 +52,7 @@ for N in shapes:
         blosc2_time = time.perf_counter() - t0
 
         # Compute GFLOPS
-        blosc_mean += blosc2_time/3
+        blosc_mean += blosc2_time / 3
         blosc_min = min(blosc_min, blosc2_time)
         blosc_max = max(blosc_max, blosc2_time)
 
@@ -68,53 +68,75 @@ for N in shapes:
         np_max = max(np_max, numpy_time)
 
         print(f"N, axes={N, axis}, Numpy Performance = {numpy_time:.2f} s")
-    sizes+=[size_gb, size_gb]
-    err_minus+=[blosc_mean-blosc_min, np_mean-np_min]
-    err_plus+=[blosc_max-blosc_mean, np_max-np_mean]
-    mean_times+=[blosc_mean, np_mean]
-    np_or_blosc2+=["Blosc2", "NumPy"]
+    sizes += [size_gb, size_gb]
+    err_minus += [blosc_mean - blosc_min, np_mean - np_min]
+    err_plus += [blosc_max - blosc_mean, np_max - np_mean]
+    mean_times += [blosc_mean, np_mean]
+    np_or_blosc2 += ["Blosc2", "NumPy"]
 
 import pickle
-with open("tensordot_bench.pkl", 'wb') as f:
-      pickle.dump(
-           {'Blosc2':{
-    "Matrix Size (GB)": sizes[::2],
-    "Mean Time (s)": mean_times[::2],
-    "Min time": err_minus[::2],
-    "Max time": err_minus[::2],
-    "Lib": np_or_blosc2[::2]
-},
-'NumPy':{
-    "Matrix Size (GB)": sizes[1::2],
-    "Mean Time (s)": mean_times[1::2],
-    "Min time": err_minus[1::2],
-    "Max time": err_minus[1::2],
-    "Lib": np_or_blosc2[1::2]
-}
-}, f)
 
-with open("tensordot_bench.pkl", 'rb') as f:
+with open("tensordot_bench.pkl", "wb") as f:
+    pickle.dump(
+        {
+            "Blosc2": {
+                "Matrix Size (GB)": sizes[::2],
+                "Mean Time (s)": mean_times[::2],
+                "Min time": err_minus[::2],
+                "Max time": err_minus[::2],
+                "Lib": np_or_blosc2[::2],
+            },
+            "NumPy": {
+                "Matrix Size (GB)": sizes[1::2],
+                "Mean Time (s)": mean_times[1::2],
+                "Min time": err_minus[1::2],
+                "Max time": err_minus[1::2],
+                "Lib": np_or_blosc2[1::2],
+            },
+        },
+        f,
+    )
+
+with open("tensordot_bench.pkl", "rb") as f:
     res_dict = pickle.load(f)
 
 # Create barplot for Numpy vs Blosc
-blosc2_dict = res_dict['Blosc2']
-x=np.arange(len(blosc2_dict["Matrix Size (GB)"]))
+blosc2_dict = res_dict["Blosc2"]
+x = np.arange(len(blosc2_dict["Matrix Size (GB)"]))
 err = (blosc2_dict["Max time"], blosc2_dict["Min time"])
-plt.bar(x + w, blosc2_dict["Mean Time (s)"], width, color='r', label='Blosc2', yerr=err, capsize=5, ecolor='k',
-        error_kw=dict(lw=2, capthick=2, ecolor='k'))
+plt.bar(
+    x + w,
+    blosc2_dict["Mean Time (s)"],
+    width,
+    color="r",
+    label="Blosc2",
+    yerr=err,
+    capsize=5,
+    ecolor="k",
+    error_kw=dict(lw=2, capthick=2, ecolor="k"),
+)
 w += width
-numpy_dict = res_dict['NumPy']
+numpy_dict = res_dict["NumPy"]
 err = (numpy_dict["Max time"], numpy_dict["Min time"])
-plt.bar(x + w, numpy_dict["Mean Time (s)"], width, color='b', label='NumPy', yerr=err, capsize=5, ecolor='k',
-        error_kw=dict(lw=2, capthick=2, ecolor='k'))
+plt.bar(
+    x + w,
+    numpy_dict["Mean Time (s)"],
+    width,
+    color="b",
+    label="NumPy",
+    yerr=err,
+    capsize=5,
+    ecolor="k",
+    error_kw=dict(lw=2, capthick=2, ecolor="k"),
+)
 
-plt.xlabel('Array size (GB)')
+plt.xlabel("Array size (GB)")
 plt.legend()
-plt.xticks(x-width, np.round(blosc2_dict["Matrix Size (GB)"], 0))
+plt.xticks(x - width, np.round(blosc2_dict["Matrix Size (GB)"], 0))
 plt.ylabel("Time (s)")
-plt.title(f"Tensordot comparison, Blosc2 vs. Numpy (different axes sums)")
-plt.gca().set_yscale('log')
-plt.savefig(f'{filename}.png', format="png")
+plt.title("Tensordot comparison, Blosc2 vs. Numpy (different axes sums)")
+plt.gca().set_yscale("log")
+plt.savefig(f"{filename}.png", format="png")
 plt.show()
 
 # Benchmark hypot

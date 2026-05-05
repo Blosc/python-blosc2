@@ -24,33 +24,40 @@ import blosc2
 
 @dataclass
 class Row:
-    sensor_id:   int   = blosc2.field(blosc2.int32())
+    sensor_id: int = blosc2.field(blosc2.int32())
     temperature: float = blosc2.field(blosc2.float64())
-    region:      int   = blosc2.field(blosc2.int32())
-    active:      bool  = blosc2.field(blosc2.bool())
+    region: int = blosc2.field(blosc2.int32())
+    active: bool = blosc2.field(blosc2.bool())
 
-np_dtype = np.dtype([
-    ("sensor_id",   np.int32),
-    ("temperature", np.float64),
-    ("region",      np.int32),
-    ("active",      np.bool_),
-])
+
+np_dtype = np.dtype(
+    [
+        ("sensor_id", np.int32),
+        ("temperature", np.float64),
+        ("region", np.int32),
+        ("active", np.bool_),
+    ]
+)
 
 rng = np.random.default_rng(42)
 
 W = 70
+
 
 def sep(title):
     print(f"\n{'─' * W}")
     print(f"  {title}")
     print(f"{'─' * W}")
 
+
 def make_table(n, sensor_ids=None):
     data = np.empty(n, dtype=np_dtype)
-    data["sensor_id"]   = rng.integers(0, n // 10, size=n, dtype=np.int32) if sensor_ids is None else sensor_ids
+    data["sensor_id"] = (
+        rng.integers(0, n // 10, size=n, dtype=np.int32) if sensor_ids is None else sensor_ids
+    )
     data["temperature"] = 15.0 + rng.random(n) * 25
-    data["region"]      = rng.integers(0, 8, size=n, dtype=np.int32)
-    data["active"]      = rng.integers(0, 2, size=n, dtype=np.bool_)
+    data["region"] = rng.integers(0, 8, size=n, dtype=np.int32)
+    data["active"] = rng.integers(0, 2, size=n, dtype=np.bool_)
     ct = blosc2.CTable(Row, expected_size=n)
     ct.extend(data)
     return ct
@@ -60,7 +67,7 @@ def make_table(n, sensor_ids=None):
 
 sep("1. Single-column sort  (sensor_id, random input)")
 print(f"  {'N':>12}  {'TIME (s)':>10}  {'ms/Mrow':>10}")
-print(f"  {'─'*12}  {'─'*10}  {'─'*10}")
+print(f"  {'─' * 12}  {'─' * 10}  {'─' * 10}")
 
 for n in [10_000, 100_000, 500_000, 1_000_000]:
     ct = make_table(n)
@@ -76,7 +83,7 @@ for n in [10_000, 100_000, 500_000, 1_000_000]:
 N = 1_000_000
 sep(f"2. Multi-column sort  (N={N:,})")
 print(f"  {'KEYS':<30}  {'TIME (s)':>10}  {'SPEEDUP vs 1-key':>18}")
-print(f"  {'─'*30}  {'─'*10}  {'─'*18}")
+print(f"  {'─' * 30}  {'─' * 10}  {'─' * 18}")
 
 ct_base = make_table(N)
 results = {}
@@ -100,17 +107,17 @@ for keys in [
 
 sep(f"3. Input order effect  (N={N:,}, sort by sensor_id)")
 print(f"  {'INPUT ORDER':<20}  {'TIME (s)':>10}")
-print(f"  {'─'*20}  {'─'*10}")
+print(f"  {'─' * 20}  {'─' * 10}")
 
 sid_max = N // 10
 
-rand_ids    = rng.integers(0, sid_max, size=N, dtype=np.int32)
-sorted_ids  = np.repeat(np.arange(sid_max, dtype=np.int32), N // sid_max)
+rand_ids = rng.integers(0, sid_max, size=N, dtype=np.int32)
+sorted_ids = np.repeat(np.arange(sid_max, dtype=np.int32), N // sid_max)
 reverse_ids = sorted_ids[::-1].copy()
 
 for label, ids in [
-    ("random",   rand_ids),
-    ("sorted",   sorted_ids),
+    ("random", rand_ids),
+    ("sorted", sorted_ids),
     ("reversed", reverse_ids),
 ]:
     ct = make_table(N, sensor_ids=ids)
@@ -124,7 +131,7 @@ for label, ids in [
 
 sep(f"4. Sort with deletions  (N={N:,}, sort by sensor_id)")
 print(f"  {'DELETED':>10}  {'LIVE ROWS':>10}  {'TIME (s)':>10}")
-print(f"  {'─'*10}  {'─'*10}  {'─'*10}")
+print(f"  {'─' * 10}  {'─' * 10}  {'─' * 10}")
 
 for frac in [0.0, 0.1, 0.25, 0.5]:
     ct = make_table(N)
@@ -135,14 +142,14 @@ for frac in [0.0, 0.1, 0.25, 0.5]:
     t0 = perf_counter()
     ct.sort_by(["sensor_id"], inplace=True)
     elapsed = perf_counter() - t0
-    print(f"  {frac*100:>9.0f}%  {live:>10,}  {elapsed:>10.4f}")
+    print(f"  {frac * 100:>9.0f}%  {live:>10,}  {elapsed:>10.4f}")
 
 
 # ── 5. inplace=True vs inplace=False ─────────────────────────────────────────
 
 sep(f"5. inplace=True vs inplace=False  (N={N:,})")
 print(f"  {'MODE':<20}  {'TIME (s)':>10}  {'NOTE'}")
-print(f"  {'─'*20}  {'─'*10}  {'─'*20}")
+print(f"  {'─' * 20}  {'─' * 10}  {'─' * 20}")
 
 ct = make_table(N)
 t0 = perf_counter()

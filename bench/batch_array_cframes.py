@@ -30,7 +30,6 @@ random element reads: 20
   first sample: barr[43][8145][93832398] -> 3 in 1056.25 us
 """
 
-
 from __future__ import annotations
 
 import argparse
@@ -43,7 +42,6 @@ from bisect import bisect_right
 
 import blosc2
 from blosc2.msgpack_utils import msgpack_packb
-
 
 URLPATH = "bench_batch_array_cframes.b2b"
 DEFAULT_NFRAMES = 1_000
@@ -59,7 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--urlpath", type=str, default=None, help="Path to the BatchArray file.")
     parser.add_argument(
-        "--nframes-per-batch", type=int, default=DEFAULT_NFRAMES, help="Number of CFrames stored in each batch."
+        "--nframes-per-batch",
+        type=int,
+        default=DEFAULT_NFRAMES,
+        help="Number of CFrames stored in each batch.",
     )
     parser.add_argument(
         "--nelements-per-frame",
@@ -67,7 +68,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_NELEMENTS,
         help="Number of array elements stored in each frame.",
     )
-    parser.add_argument("--nbatches", type=int, default=DEFAULT_NBATCHES, help="Number of batches to append.")
+    parser.add_argument(
+        "--nbatches", type=int, default=DEFAULT_NBATCHES, help="Number of batches to append."
+    )
     parser.add_argument(
         "--nframes-per-block",
         type=int,
@@ -76,7 +79,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[codec.name for codec in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
-    parser.add_argument("--seed", type=int, default=None, help="Optional RNG seed for reproducible random reads.")
+    parser.add_argument(
+        "--seed", type=int, default=None, help="Optional RNG seed for reproducible random reads."
+    )
     parser.add_argument(
         "--random-read",
         type=int,
@@ -146,7 +151,9 @@ def print_barr_counts(barr: blosc2.BatchArray) -> None:
     print(f"  total elements: {format_count(total_elements)}")
 
 
-def sample_random_reads(barr: blosc2.BatchArray, nreads: int, rng: random.Random) -> list[tuple[int, int, int, int]]:
+def sample_random_reads(
+    barr: blosc2.BatchArray, nreads: int, rng: random.Random
+) -> list[tuple[int, int, int, int]]:
     batch_lengths = [len(batch) for batch in barr]
     total_frames = sum(batch_lengths)
     if total_frames == 0:
@@ -229,7 +236,9 @@ def print_random_cframe_read_stats(barr: blosc2.BatchArray, nreads: int, rng: ra
     print(f"  min: {min(timings_ns) / 1_000:.2f} us")
     print(f"  max: {max(timings_ns) / 1_000:.2f} us")
     batch_index, frame_index, shape, elapsed_ns = samples[0]
-    print(f"  first sample: barr[{batch_index}][{frame_index}] -> shape={shape} in {elapsed_ns / 1_000:.2f} us")
+    print(
+        f"  first sample: barr[{batch_index}][{frame_index}] -> shape={shape} in {elapsed_ns / 1_000:.2f} us"
+    )
 
 
 def sample_random_element_reads(
@@ -280,7 +289,9 @@ def print_random_element_read_stats(barr: blosc2.BatchArray, nreads: int, rng: r
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    random_read_requested = any(arg == "--random-read" or arg.startswith("--random-read=") for arg in sys.argv[1:])
+    random_read_requested = any(
+        arg == "--random-read" or arg.startswith("--random-read=") for arg in sys.argv[1:]
+    )
 
     if args.nframes_per_batch <= 0:
         parser.error("--nframes-per-batch must be > 0")
@@ -298,7 +309,9 @@ def main() -> None:
         parser.error("--random-read-element must be >= 0")
     if not 0 <= args.clevel <= 9:
         parser.error("--clevel must be between 0 and 9")
-    if (random_read_requested or args.random_read_cframe > 0 or args.random_read_element > 0) and args.urlpath is None:
+    if (
+        random_read_requested or args.random_read_cframe > 0 or args.random_read_element > 0
+    ) and args.urlpath is None:
         parser.error("--random-read, --random-read-cframe and --random-read-element require --urlpath")
 
     codec = blosc2.Codec[args.codec]

@@ -30,10 +30,11 @@ rtol = 1e-6 if dtype == np.float32 else 1e-17
 atol = 1e-6 if dtype == np.float32 else 1e-17
 
 # Expression to compute
-exprs = ("x + 1",
-         "x**2 + y**2 + 2 * x * y + 1",
-         "sin(x)**3 + cos(y)**2 + cos(x) * sin(y) + z",
-         )
+exprs = (
+    "x + 1",
+    "x**2 + y**2 + 2 * x * y + 1",
+    "sin(x)**3 + cos(y)**2 + cos(x) * sin(y) + z",
+)
 
 
 # Create input arrays
@@ -61,11 +62,13 @@ def func_numba(x, y, z, n):
     elif n == 1:
         for i in nb.prange(x.shape[0]):
             for j in nb.prange(x.shape[1]):
-                output[i, j] = x[i, j]**2 + y[i, j]**2 + 2 * x[i, j] * y[i, j] + 1
+                output[i, j] = x[i, j] ** 2 + y[i, j] ** 2 + 2 * x[i, j] * y[i, j] + 1
     elif n == 2:
         for i in nb.prange(x.shape[0]):
             for j in nb.prange(x.shape[1]):
-                output[i, j] = np.sin(x[i, j])**3 + np.cos(y[i, j])**2 + np.cos(x[i, j]) * np.sin(y[i, j]) + z[i, j]
+                output[i, j] = (
+                    np.sin(x[i, j]) ** 3 + np.cos(y[i, j]) ** 2 + np.cos(x[i, j]) * np.sin(y[i, j]) + z[i, j]
+                )
     return output
 
 
@@ -82,13 +85,15 @@ def udf_numba(inputs, output, offset):
         y = inputs[1]
         for i in nb.prange(x.shape[0]):
             for j in nb.prange(x.shape[1]):
-                output[i, j] = x[i, j]**2 + y[i, j]**2 + 2 * x[i, j] * y[i, j] + 1
+                output[i, j] = x[i, j] ** 2 + y[i, j] ** 2 + 2 * x[i, j] * y[i, j] + 1
     elif icount == 3:
         y = inputs[1]
         z = inputs[2]
         for i in nb.prange(x.shape[0]):
             for j in nb.prange(x.shape[1]):
-                output[i, j] = np.sin(x[i, j])**3 + np.cos(y[i, j])**2 + np.cos(x[i, j]) * np.sin(y[i, j]) + z[i, j]
+                output[i, j] = (
+                    np.sin(x[i, j]) ** 3 + np.cos(y[i, j]) ** 2 + np.cos(x[i, j]) * np.sin(y[i, j]) + z[i, j]
+                )
 
 
 for n, expr in enumerate(exprs):
@@ -133,8 +138,7 @@ for n, expr in enumerate(exprs):
     elif n == 2:
         inputs = (x, y, z)
 
-    expr_ = blosc2.lazyudf(udf_numba, inputs, npx.dtype,
-                           chunks=chunks, blocks=blocks, cparams=cparams)
+    expr_ = blosc2.lazyudf(udf_numba, inputs, npx.dtype, chunks=chunks, blocks=blocks, cparams=cparams)
     # getitem but using chunked evaluation
     t0 = time()
     res = expr_.compute()

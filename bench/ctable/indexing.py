@@ -26,37 +26,43 @@ import blosc2
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-N    = 1_000_000
+N = 1_000_000
 REPS = 5
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class Row:
-    sensor_id:   int   = blosc2.field(blosc2.int32())
+    sensor_id: int = blosc2.field(blosc2.int32())
     temperature: float = blosc2.field(blosc2.float64())
-    region:      int   = blosc2.field(blosc2.int32())
+    region: int = blosc2.field(blosc2.int32())
 
-np_dtype = np.dtype([
-    ("sensor_id",   np.int32),
-    ("temperature", np.float64),
-    ("region",      np.int32),
-])
+
+np_dtype = np.dtype(
+    [
+        ("sensor_id", np.int32),
+        ("temperature", np.float64),
+        ("region", np.int32),
+    ]
+)
 
 rng = np.random.default_rng(42)
 
-SID_MAX = N // 10   # 100_000 unique sensor_id values, ~10 rows each
+SID_MAX = N // 10  # 100_000 unique sensor_id values, ~10 rows each
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def make_table(sensor_ids):
     DATA = np.empty(N, dtype=np_dtype)
-    DATA["sensor_id"]   = sensor_ids
+    DATA["sensor_id"] = sensor_ids
     DATA["temperature"] = 15.0 + rng.random(N) * 25
-    DATA["region"]      = rng.integers(0, 8, size=N, dtype=np.int32)
+    DATA["region"] = rng.integers(0, 8, size=N, dtype=np.int32)
     ct = blosc2.CTable(Row, expected_size=N)
     ct.extend(DATA)
     return ct
+
 
 def bench_gt(table, threshold, reps=REPS):
     times = []
@@ -66,6 +72,7 @@ def bench_gt(table, threshold, reps=REPS):
         times.append(perf_counter() - t0)
     return float(np.median(times)), len(result)
 
+
 def bench_eq(table, value, reps=REPS):
     times = []
     for _ in range(reps):
@@ -74,15 +81,15 @@ def bench_eq(table, value, reps=REPS):
         times.append(perf_counter() - t0)
     return float(np.median(times)), len(result)
 
+
 def bench_compound(table, threshold, region, reps=REPS):
     times = []
     for _ in range(reps):
         t0 = perf_counter()
-        result = table.where(
-            (table.sensor_id > threshold) & (table.region == region)
-        )
+        result = table.where((table.sensor_id > threshold) & (table.region == region))
         times.append(perf_counter() - t0)
     return float(np.median(times)), len(result)
+
 
 def drop_all_indexes(ct):
     for col in ("sensor_id", "region"):
@@ -91,8 +98,10 @@ def drop_all_indexes(ct):
         except Exception:
             pass
 
-FRACS  = [0.999, 0.99, 0.95, 0.90, 0.75, 0.50, 0.25]
+
+FRACS = [0.999, 0.99, 0.95, 0.90, 0.75, 0.50, 0.25]
 LABELS = ["0.1%", "1%", "5%", "10%", "25%", "50%", "75%"]
+
 
 def print_range_table(results, title, width=70):
     print("```")
@@ -100,13 +109,14 @@ def print_range_table(results, title, width=70):
     print(f"  {title}")
     print(f"{'─' * width}")
     print(f"  {'SELECTIVITY':<14} {'ROWS':>9}  {'SCAN(ms)':>9}  {'IDX(ms)':>9}  {'SPEEDUP':>8}")
-    print(f"  {'─'*14} {'─'*9}  {'─'*9}  {'─'*9}  {'─'*8}")
+    print(f"  {'─' * 14} {'─' * 9}  {'─' * 9}  {'─' * 9}  {'─' * 8}")
     for label, n, t_scan, t_idx in results:
         speedup = t_scan / t_idx if t_idx > 0 else float("inf")
-        marker  = " ←" if speedup >= 2.0 else ("  (slower)" if speedup < 0.9 else "")
-        print(f"  {label:<14} {n:>9,}  {t_scan*1e3:>9.1f}  {t_idx*1e3:>9.1f}  {speedup:>7.1f}×{marker}")
+        marker = " ←" if speedup >= 2.0 else ("  (slower)" if speedup < 0.9 else "")
+        print(f"  {label:<14} {n:>9,}  {t_scan * 1e3:>9.1f}  {t_idx * 1e3:>9.1f}  {speedup:>7.1f}×{marker}")
     print(f"{'─' * width}")
     print("```")
+
 
 def bench_range_section(ct, kind, label):
     thresholds = [(lbl, int(SID_MAX * f)) for lbl, f in zip(LABELS, FRACS)]
@@ -120,34 +130,36 @@ def bench_range_section(ct, kind, label):
         results.append((lbl, n, t_scan, t_idx))
     print_range_table(results, label)
 
+
 def bench_eq_section(ct, kind):
     EQ_VALS = [0, SID_MAX // 4, SID_MAX // 2, SID_MAX - 1]
     drop_all_indexes(ct)
     scan_eq = {v: bench_eq(ct, v) for v in EQ_VALS}
     ct.create_index("sensor_id", kind=kind)
-    idx_eq  = {v: bench_eq(ct, v) for v in EQ_VALS}
+    idx_eq = {v: bench_eq(ct, v) for v in EQ_VALS}
     print("```")
     print(f"  {'VALUE':<12} {'ROWS':>6}  {'SCAN(ms)':>9}  {'IDX(ms)':>9}  {'SPEEDUP':>8}")
-    print(f"  {'─'*12} {'─'*6}  {'─'*9}  {'─'*9}  {'─'*8}")
+    print(f"  {'─' * 12} {'─' * 6}  {'─' * 9}  {'─' * 9}  {'─' * 8}")
     for v in EQ_VALS:
         t_s, n = scan_eq[v]
         t_i, _ = idx_eq[v]
         spd = t_s / t_i if t_i > 0 else float("inf")
         marker = " ←" if spd >= 2.0 else ""
-        print(f"  =={v:<10,} {n:>6,}  {t_s*1e3:>9.1f}  {t_i*1e3:>9.1f}  {spd:>7.1f}×{marker}")
+        print(f"  =={v:<10,} {n:>6,}  {t_s * 1e3:>9.1f}  {t_i * 1e3:>9.1f}  {spd:>7.1f}×{marker}")
     print("```")
+
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
-rand_ids   = rng.integers(0, SID_MAX, size=N, dtype=np.int32)
+rand_ids = rng.integers(0, SID_MAX, size=N, dtype=np.int32)
 sorted_ids = np.repeat(np.arange(SID_MAX, dtype=np.int32), N // SID_MAX)
 
-ct_rand   = make_table(rand_ids)
+ct_rand = make_table(rand_ids)
 ct_sorted = make_table(sorted_ids)
 
 print(f"# CTable Index Benchmark  |  N={N:,}  REPS={REPS}")
 print(f"\n> Random data: sensor_id uniform random in [0, {SID_MAX:,})")
-print(f"> Sorted data: sensor_id = 0,0,…,1,1,…,2,2,… (clustered, ~10 rows/value)")
+print("> Sorted data: sensor_id = 0,0,…,1,1,…,2,2,… (clustered, ~10 rows/value)")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -220,14 +232,14 @@ CARD_CASES = [
     ("Med  rep  (1k uniq)", 1_000),
     ("Low  rep  (1M uniq)", N),
 ]
-SEL_FRACS  = [0.999, 0.99, 0.95, 0.90]
+SEL_FRACS = [0.999, 0.99, 0.95, 0.90]
 SEL_LABELS = ["0.1%", "1%", "5%", "10%"]
 
 W2 = 72
 print("```")
 print(f"  {'CARDINALITY':<24}", end="")
 for lbl in SEL_LABELS:
-    print(f"  {lbl+' sel':>12}", end="")
+    print(f"  {lbl + ' sel':>12}", end="")
 print()
 print("  " + "─" * (W2 - 2))
 
@@ -261,9 +273,9 @@ print("\n> sensor_id > X  AND  region == Y  |  region in [0,8) → ~12.5% per va
 REGION_TARGET = 3
 COMPOUND_THRESHOLDS = [
     ("0.1%+12.5%", int(SID_MAX * 0.999)),
-    ("1%+12.5%",   int(SID_MAX * 0.99)),
-    ("5%+12.5%",   int(SID_MAX * 0.95)),
-    ("10%+12.5%",  int(SID_MAX * 0.90)),
+    ("1%+12.5%", int(SID_MAX * 0.99)),
+    ("5%+12.5%", int(SID_MAX * 0.95)),
+    ("10%+12.5%", int(SID_MAX * 0.90)),
 ]
 
 drop_all_indexes(ct_sorted)
@@ -280,22 +292,22 @@ W3 = 80
 print("```")
 print(f"{'─' * W3}")
 print(f"  {'QUERY':<14} {'ROWS':>8}  {'NO IDX':>9}  {'IDX:sid':>9}  {'IDX:reg':>9}  {'2 IDX':>9}  {'BEST'}")
-print(f"  {'─'*14} {'─'*8}  {'─'*9}  {'─'*9}  {'─'*9}  {'─'*9}  {'─'*12}")
+print(f"  {'─' * 14} {'─' * 8}  {'─' * 9}  {'─' * 9}  {'─' * 9}  {'─' * 9}  {'─' * 12}")
 for lbl, thr in COMPOUND_THRESHOLDS:
-    n      = no_idx[lbl][1]
+    n = no_idx[lbl][1]
     t_none = no_idx[lbl][0]
-    t_sid  = one_idx_sid[lbl][0]
-    t_reg  = one_idx_reg[lbl][0]
-    t_two  = two_idx[lbl][0]
+    t_sid = one_idx_sid[lbl][0]
+    t_reg = one_idx_reg[lbl][0]
+    t_two = two_idx[lbl][0]
     best_t = min(t_none, t_sid, t_reg, t_two)
-    spd    = t_none / best_t
+    spd = t_none / best_t
     winner = ["none", "sid", "reg", "2idx"][[t_none, t_sid, t_reg, t_two].index(best_t)]
     print(
         f"  {lbl:<14} {n:>8,}"
-        f"  {t_none*1e3:>8.1f}ms"
-        f"  {t_sid*1e3:>8.1f}ms"
-        f"  {t_reg*1e3:>8.1f}ms"
-        f"  {t_two*1e3:>8.1f}ms"
+        f"  {t_none * 1e3:>8.1f}ms"
+        f"  {t_sid * 1e3:>8.1f}ms"
+        f"  {t_reg * 1e3:>8.1f}ms"
+        f"  {t_two * 1e3:>8.1f}ms"
         f"  {winner}({spd:.1f}×)"
     )
 print(f"{'─' * W3}")

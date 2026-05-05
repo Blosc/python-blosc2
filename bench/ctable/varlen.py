@@ -151,7 +151,9 @@ def format_rate(n: int, seconds: float) -> str:
     return f"{n / seconds:,.0f}/s"
 
 
-def run_storage_bench(storage: str, rows, *, batch_size: int, repeats: int, nsamples: int, slice_width: int) -> None:
+def run_storage_bench(
+    storage: str, rows, *, batch_size: int, repeats: int, nsamples: int, slice_width: int
+) -> None:
     row_type = choose_row_type(storage)
     print(f"\n=== storage={storage} ===")
 

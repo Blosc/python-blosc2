@@ -91,7 +91,9 @@ for N in SIZES:
 sep("2. open() — time to reopen a persistent table")
 
 print(f"{'rows':>12}  {'blosc2.open() (s)':>18}  {'CTable.open() (s)':>20}  {'CTable(..., mode=a) (s)':>24}")
-print(f"{'----':>12}  {'----------------':>18}  {'------------------':>20}  {'------------------------':>24}")
+print(
+    f"{'----':>12}  {'----------------':>18}  {'------------------':>20}  {'------------------------':>24}"
+)
 
 for N in SIZES:
     data = [(i, float(i % 100), i % 2 == 0) for i in range(N)]

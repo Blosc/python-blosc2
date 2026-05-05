@@ -22,15 +22,14 @@ import blosc2
 
 @dataclass
 class Row:
-    id:    int   = blosc2.field(blosc2.int64())
-    name:  str   = blosc2.field(blosc2.string(max_length=9), default="")
+    id: int = blosc2.field(blosc2.int64())
+    name: str = blosc2.field(blosc2.string(max_length=9), default="")
     score: float = blosc2.field(blosc2.float64(ge=0), default=0.0)
 
 
-NAMES = ["benchmark", "alpha", "beta", "gamma", "delta",
-         "epsilon", "zeta", "eta", "theta", "iota"]
+NAMES = ["benchmark", "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota"]
 
-N   = 100_000
+N = 100_000
 rng = np.random.default_rng(42)
 
 np_dtype = np.dtype([("id", np.int64), ("name", "<U9"), ("score", np.float64)])
@@ -38,8 +37,8 @@ np_dtype = np.dtype([("id", np.int64), ("name", "<U9"), ("score", np.float64)])
 
 def make_data(n: int) -> np.ndarray:
     arr = np.empty(n, dtype=np_dtype)
-    arr["id"]    = np.arange(n, dtype=np.int64)
-    arr["name"]  = np.array([rng.choice(NAMES) for _ in range(n)], dtype="<U9")
+    arr["id"] = np.arange(n, dtype=np.int64)
+    arr["name"] = np.array([rng.choice(NAMES) for _ in range(n)], dtype="<U9")
     arr["score"] = rng.uniform(0, 100, n)
     return arr
 
@@ -63,14 +62,14 @@ t0 = perf_counter()
 _ = ct.head(10)
 t_print_blosc = perf_counter() - t0
 
-mem_pandas   = df.memory_usage(deep=True).sum() / 1024**2
-mem_blosc_c  = (sum(c.cbytes for c in ct._cols.values()) + ct._valid_rows.cbytes) / 1024**2
+mem_pandas = df.memory_usage(deep=True).sum() / 1024**2
+mem_blosc_c = (sum(c.cbytes for c in ct._cols.values()) + ct._valid_rows.cbytes) / 1024**2
 mem_blosc_uc = (sum(c.nbytes for c in ct._cols.values()) + ct._valid_rows.nbytes) / 1024**2
 
 print(f"CTable vs pandas — ingestion + print  |  N = {N:,}")
 print()
 print(f"  {'METRIC':<30}  {'pandas':>10}  {'CTable':>10}")
-print(f"  {'─'*30}  {'─'*10}  {'─'*10}")
+print(f"  {'─' * 30}  {'─' * 10}  {'─' * 10}")
 print(f"  {'Ingestion time (s)':<30}  {t_pandas:>10.4f}  {t_blosc:>10.4f}")
 print(f"  {'Memory compressed (MB)':<30}  {mem_pandas:>10.2f}  {mem_blosc_c:>10.2f}")
 print(f"  {'Memory uncompressed (MB)':<30}  {mem_pandas:>10.2f}  {mem_blosc_uc:>10.2f}")

@@ -29,17 +29,16 @@ N = 1_000_000
 print(f"where() chained vs combined benchmark  |  N = {N:,}")
 
 # Build CTable once
-np_dtype = np.dtype([
-    ("id",     np.int64),
-    ("c_val",  np.complex128),
-    ("score",  np.float64),
-    ("active", np.bool_),
-])
-DATA = np.array(
+np_dtype = np.dtype(
     [
-        (i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0)
-        for i in range(N)
-    ],
+        ("id", np.int64),
+        ("c_val", np.complex128),
+        ("score", np.float64),
+        ("active", np.bool_),
+    ]
+)
+DATA = np.array(
+    [(i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0) for i in range(N)],
     dtype=np_dtype,
 )
 
@@ -62,9 +61,7 @@ print(f"Chained where() (5 calls):  {t_chained:.6f} s   rows: {len(r5):,}")
 # 2. Single combined where() call
 t0 = time()
 result = ct.where(
-    (ct.id > 250_000) & (ct.id < 750_000) &
-    (ct.active == False) &
-    (ct.score > 25.0) & (ct.score < 75.0)
+    (ct.id > 250_000) & (ct.id < 750_000) & (ct.active == False) & (ct.score > 25.0) & (ct.score < 75.0)
 )
 t_combined = time() - t0
 print(f"Combined where() (1 call):  {t_combined:.6f} s   rows: {len(result):,}")

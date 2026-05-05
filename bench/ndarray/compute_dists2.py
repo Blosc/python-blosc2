@@ -10,14 +10,15 @@
 # constant, arange, linspace, or random
 # The expression can be any valid Numexpr expression.
 
-import blosc2
-from time import time
-import numpy as np
-import numexpr as ne
-import matplotlib.pyplot as plt
-import seaborn as sns
 import sys
+from time import time
 
+import matplotlib.pyplot as plt
+import numexpr as ne
+import numpy as np
+import seaborn as sns
+
+import blosc2
 
 # Bench params
 N = 10_000
@@ -26,9 +27,9 @@ dtype = np.dtype(np.float64)
 persistent = False
 distributions = ["constant", "arange", "linspace", "random"]
 expr = "(a - b)"
-#expr = "sum(a - b)"
-#expr = "cos(a)**2 + sin(b)**2 - 1"
-#expr = "sum(cos(a)**2 + sin(b)**2 - 1)"
+# expr = "sum(a - b)"
+# expr = "cos(a)**2 + sin(b)**2 - 1"
+# expr = "sum(cos(a)**2 + sin(b)**2 - 1)"
 
 # Params for large memory machines
 if len(sys.argv) > 1 and sys.argv[1] == "large":
@@ -61,26 +62,26 @@ for dist in distributions:
     # Evaluate using Blosc2
     for i in sizes:
         shape = (i, i)
-        urlpath = {name: None for name in ("a", "b", "c")}
+        urlpath = dict.fromkeys(("a", "b", "c"))
 
         if dist == "constant":
-            a = blosc2.ones(shape, dtype=dtype, urlpath=urlpath['a'])
-            b = blosc2.full(shape, 2, dtype=dtype, urlpath=urlpath['b'])
+            a = blosc2.ones(shape, dtype=dtype, urlpath=urlpath["a"])
+            b = blosc2.full(shape, 2, dtype=dtype, urlpath=urlpath["b"])
         elif dist == "arange":
-            a = blosc2.arange(0, i * i, dtype=dtype, shape=shape, urlpath=urlpath['a'])
-            b = blosc2.arange(i * i, 2* i * i, dtype=dtype, shape=shape, urlpath=urlpath['b'])
+            a = blosc2.arange(0, i * i, dtype=dtype, shape=shape, urlpath=urlpath["a"])
+            b = blosc2.arange(i * i, 2 * i * i, dtype=dtype, shape=shape, urlpath=urlpath["b"])
         elif dist == "linspace":
-            a = blosc2.linspace(0, 1, dtype=dtype, shape=shape, urlpath=urlpath['a'])
-            b = blosc2.linspace(1, 2, dtype=dtype, shape=shape, urlpath=urlpath['b'])
+            a = blosc2.linspace(0, 1, dtype=dtype, shape=shape, urlpath=urlpath["a"])
+            b = blosc2.linspace(1, 2, dtype=dtype, shape=shape, urlpath=urlpath["b"])
         elif dist == "random":
             _ = np.random.random(shape)
-            a = blosc2.fromiter(np.nditer(_), dtype=dtype, shape=shape, urlpath=urlpath['a'])
+            a = blosc2.fromiter(np.nditer(_), dtype=dtype, shape=shape, urlpath=urlpath["a"])
             # b = a.copy(urlpath=urlpath['b'])  # faster, but output is not random
             _ = np.random.random(shape)
-            b = blosc2.fromiter(np.nditer(_), dtype=dtype, shape=shape, urlpath=urlpath['b'])
+            b = blosc2.fromiter(np.nditer(_), dtype=dtype, shape=shape, urlpath=urlpath["b"])
 
         t0 = time()
-        c = blosc2.lazyexpr(expr).compute(urlpath=urlpath['c'])
+        c = blosc2.lazyexpr(expr).compute(urlpath=urlpath["c"])
         t = time() - t0
         speed = (a.schunk.nbytes + b.schunk.nbytes + c.schunk.nbytes) / 2**30 / t
         print(f"Blosc2 - {dist} - Size {i}x{i}: {speed:.2f} GB/s - cratio: {c.schunk.cratio:.1f}x")
@@ -119,8 +120,8 @@ axes = axes.flatten()
 
 # Plot each distribution in its own subplot
 for i, dist in enumerate(distributions):
-    axes[i].plot(ws_sizes, blosc2_speeds[dist], marker='o', linestyle='-', label="Blosc2")
-    axes[i].plot(ws_sizes, numexpr_speeds[dist], marker='s', linestyle='--', label="Numexpr")
+    axes[i].plot(ws_sizes, blosc2_speeds[dist], marker="o", linestyle="-", label="Blosc2")
+    axes[i].plot(ws_sizes, numexpr_speeds[dist], marker="s", linestyle="--", label="Numexpr")
     axes[i].set_title(f"{dist.capitalize()} Distribution")
     axes[i].set_ylabel("Speed (GB/s)")
     axes[i].grid(True)
@@ -133,5 +134,5 @@ fig.suptitle(f"Blosc2 vs Numexpr Performance Across Different Data Distributions
 plt.tight_layout(rect=[0, 0, 1, 0.96])  # Adjust the rect parameter to make room for the suptitle
 
 # Save the unified plot with subplots
-plt.savefig("blosc2_vs_numexpr_subplots.png", dpi=300, bbox_inches='tight')
+plt.savefig("blosc2_vs_numexpr_subplots.png", dpi=300, bbox_inches="tight")
 plt.show()

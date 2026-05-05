@@ -7,19 +7,20 @@
 
 # Benchmark tensordot
 
-import sys
 from time import time
 
-import numpy as np
-import blosc2
+import b2h5py.auto
 import dask
 import dask.array as da
-import zarr
-from numcodecs import Blosc
 import h5py
 import hdf5plugin
-import b2h5py.auto
-assert(b2h5py.is_fast_slicing_enabled())
+import numpy as np
+import zarr
+from numcodecs import Blosc
+
+import blosc2
+
+assert b2h5py.is_fast_slicing_enabled()
 
 
 # --- Experiment Setup ---
@@ -31,8 +32,8 @@ chunks = (150,) * 3
 chunks_out = (150,) * 2
 dtype = np.float64
 cparams = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=1)
-compressor = Blosc(cname='lz4', clevel=1, shuffle=Blosc.SHUFFLE)
-h5compressor = hdf5plugin.Blosc2(cname='lz4', clevel=1, filters=hdf5plugin.Blosc2.SHUFFLE)
+compressor = Blosc(cname="lz4", clevel=1, shuffle=Blosc.SHUFFLE)
+h5compressor = hdf5plugin.Blosc2(cname="lz4", clevel=1, filters=hdf5plugin.Blosc2.SHUFFLE)
 scheduler = "single-threaded" if blosc2.nthreads == 1 else "threads"
 create = True
 
@@ -46,8 +47,12 @@ if create:
 # --- Blosc2 array creation ---
 if create:
     t0 = time()
-    matrix_a_blosc2 = blosc2.asarray(matrix_numpy, cparams=cparams, chunks=chunks, urlpath="a.b2nd", mode="w")
-    matrix_b_blosc2 = blosc2.asarray(matrix_numpy, cparams=cparams, chunks=chunks, urlpath="b.b2nd", mode="w")
+    matrix_a_blosc2 = blosc2.asarray(
+        matrix_numpy, cparams=cparams, chunks=chunks, urlpath="a.b2nd", mode="w"
+    )
+    matrix_b_blosc2 = blosc2.asarray(
+        matrix_numpy, cparams=cparams, chunks=chunks, urlpath="b.b2nd", mode="w"
+    )
     print(f"N={N}, Array creation = {time() - t0:.2f} s")
 
 # Re-open the arrays
@@ -91,12 +96,14 @@ f.close()
 # --- Zarr array creation ---
 if create:
     t0 = time()
-    matrix_a_zarr = zarr.open_array("a.zarr", mode="w", shape=shape_a, chunks=chunks,
-                                    dtype=dtype, compressor=compressor, zarr_format=2)
+    matrix_a_zarr = zarr.open_array(
+        "a.zarr", mode="w", shape=shape_a, chunks=chunks, dtype=dtype, compressor=compressor, zarr_format=2
+    )
     matrix_a_zarr[:] = matrix_numpy
 
-    matrix_b_zarr = zarr.open_array("b.zarr", mode="w", shape=shape_b, chunks=chunks,
-                                    dtype=dtype, compressor=compressor, zarr_format=2)
+    matrix_b_zarr = zarr.open_array(
+        "b.zarr", mode="w", shape=shape_b, chunks=chunks, dtype=dtype, compressor=compressor, zarr_format=2
+    )
     matrix_b_zarr[:] = matrix_numpy
     print(f"N={N}, Zarr array creation = {time() - t0:.2f} s")
 
@@ -109,8 +116,15 @@ matrix_b_dask = da.from_zarr(matrix_b_zarr)
 print(f"N={N}, Dask + Zarr array opening = {time() - t0:.2f} s")
 
 # --- Tensordot computation with Dask ---
-zout = zarr.open_array("out.zarr", mode="w", shape=shape_out, chunks=chunks_out,
-                       dtype=dtype, compressor=compressor, zarr_format=2)
+zout = zarr.open_array(
+    "out.zarr",
+    mode="w",
+    shape=shape_out,
+    chunks=chunks_out,
+    dtype=dtype,
+    compressor=compressor,
+    zarr_format=2,
+)
 with dask.config.set(scheduler=scheduler, num_workers=blosc2.nthreads):
     for axis in ((0, 1), (1, 2), (2, 0)):
         t0 = time()
@@ -119,9 +133,18 @@ with dask.config.set(scheduler=scheduler, num_workers=blosc2.nthreads):
         print(f"axes={axis}, Dask Performance = {time() - t0:.2f} s")
 
 # --- Tensordot computation with Blosc2
-zout2 = zarr.open_array("out2.zarr", mode="w", shape=shape_out, chunks=chunks_out,
-                        dtype=dtype, compressor=compressor, zarr_format=2)
-b2out = blosc2.empty(shape=shape_out, chunks=chunks_out, dtype=dtype, cparams=cparams, urlpath="out2.b2nd", mode="w")
+zout2 = zarr.open_array(
+    "out2.zarr",
+    mode="w",
+    shape=shape_out,
+    chunks=chunks_out,
+    dtype=dtype,
+    compressor=compressor,
+    zarr_format=2,
+)
+b2out = blosc2.empty(
+    shape=shape_out, chunks=chunks_out, dtype=dtype, cparams=cparams, urlpath="out2.b2nd", mode="w"
+)
 for axis in ((0, 1), (1, 2), (2, 0)):
     t0 = time()
     blosc2.evaluate("tensordot(matrix_a_zarr, matrix_b_zarr, axes=(axis, axis))", out=zout2)

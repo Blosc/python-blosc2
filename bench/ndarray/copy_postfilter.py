@@ -17,7 +17,7 @@ chunkshape = 200_000
 dtype = np.dtype(np.int32)
 
 # Set the compression and decompression parameters
-dparams = {"nthreads" : 1}
+dparams = {"nthreads": 1}
 
 # Create array
 arr = blosc2.empty(shape=(nchunks * chunkshape,), chunks=(chunkshape,), dtype=dtype, dparams=dparams)
@@ -28,8 +28,7 @@ for i in range(nchunks):
     arr[i * chunkshape : (i + 1) * chunkshape] = data
 t = time() - t0
 print(
-    f"time append: {t:.2f}s ({arr.schunk.nbytes / (t * 2**30):.3f} GB/s)"
-    f" / cratio: {arr.schunk.cratio:.2f}x"
+    f"time append: {t:.2f}s ({arr.schunk.nbytes / (t * 2**30):.3f} GB/s) / cratio: {arr.schunk.cratio:.2f}x"
 )
 
 t0 = time()

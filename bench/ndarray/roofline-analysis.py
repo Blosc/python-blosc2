@@ -17,9 +17,10 @@ import shutil
 import sys
 from time import time
 
-import blosc2
 import numexpr as ne
 import numpy as np
+
+import blosc2
 
 dtype = np.float32
 
@@ -83,7 +84,12 @@ def compute_example(
         if is_numpy:
             res = numexpr_to_npy(expr, [a, b, c], np_out_path)
         else:
-            res = np.exp(np.sqrt((np.sin(a) ** 2 + (np.cos(b) + np.arctan(c)) ** 3) * (1 + np.sin(b) ** 2 + np.cos(c) ** 2)))
+            res = np.exp(
+                np.sqrt(
+                    (np.sin(a) ** 2 + (np.cos(b) + np.arctan(c)) ** 3)
+                    * (1 + np.sin(b) ** 2 + np.cos(c) ** 2)
+                )
+            )
 
     # --- Matmul intensities -----------------------------------------------------
     elif intensity.startswith("matmul"):
@@ -96,8 +102,8 @@ def compute_example(
 
         if is_numpy:
             if scale > 1:
-                a = a[n:n + n, n:n + n]
-                b = b[n:n + n, n:n + n]
+                a = a[n : n + n, n : n + n]
+                b = b[n : n + n, n : n + n]
             tmp = np.matmul(a, b)
             if np_out_path is None:
                 res = tmp
@@ -109,7 +115,9 @@ def compute_example(
             if scale > 1:
                 a = a.slice((slice(n, n + n), slice(n, n + n)))
                 b = b.slice((slice(n, n + n), slice(n, n + n)))
-            res = blosc2.matmul(a, b, cparams=cparams, urlpath=res_out_path, mode="w" if not mem_mode else None)
+            res = blosc2.matmul(
+                a, b, cparams=cparams, urlpath=res_out_path, mode="w" if not mem_mode else None
+            )
 
         intensity_val = int((2 * res.shape[0]) / nios)
     else:
@@ -138,8 +146,10 @@ def create_memmap_linspace(path: str, shape: tuple, dtype) -> np.ndarray:
     for start in range(0, shape[0]):
         offset = start * nelem
         n_chunk = nelem
-        chunk = np.linspace(offset / (total_elems - 1), (offset + n_chunk - 1) / (total_elems - 1), n_chunk, dtype=dtype).reshape((1,) + shape[1:])
-        arr[start:start + 1, ...] = chunk
+        chunk = np.linspace(
+            offset / (total_elems - 1), (offset + n_chunk - 1) / (total_elems - 1), n_chunk, dtype=dtype
+        ).reshape((1,) + shape[1:])
+        arr[start : start + 1, ...] = chunk
 
     return arr
 
@@ -178,19 +188,31 @@ def setup_arrays(mem_mode: bool):
         large_a_np = create_memmap_linspace("large_a_array.npy", large_shape, dtype)
         print(f"Large numpy memmap creation = {time() - t0:.2f} s")
 
-        for src, dst in [("a_array.npy", "b_array.npy"), ("a_array.npy", "c_array.npy"),
-                         ("large_a_array.npy", "large_b_array.npy"), ("large_a_array.npy", "large_c_array.npy")]:
+        for src, dst in [
+            ("a_array.npy", "b_array.npy"),
+            ("a_array.npy", "c_array.npy"),
+            ("large_a_array.npy", "large_b_array.npy"),
+            ("large_a_array.npy", "large_c_array.npy"),
+        ]:
             shutil.copy(src, dst)
 
-        lops_np = [a_np, np.lib.format.open_memmap("b_array.npy", mode="r"), np.lib.format.open_memmap("c_array.npy", mode="r")]
-        large_lops_np = [large_a_np, np.lib.format.open_memmap("large_b_array.npy", mode="r"),
-                         np.lib.format.open_memmap("large_c_array.npy", mode="r")]
+        lops_np = [
+            a_np,
+            np.lib.format.open_memmap("b_array.npy", mode="r"),
+            np.lib.format.open_memmap("c_array.npy", mode="r"),
+        ]
+        large_lops_np = [
+            large_a_np,
+            np.lib.format.open_memmap("large_b_array.npy", mode="r"),
+            np.lib.format.open_memmap("large_c_array.npy", mode="r"),
+        ]
 
     return lops_np, large_lops_np, a_np
 
 
 def setup_blosc2_backend(a_np, mem_mode: bool, cparams: blosc2.CParams, suffix: str = ""):
     """Setup blosc2 arrays (compressed or non-compressed)."""
+
     def make_path(name):
         return f"{name}{suffix}.b2nd" if not mem_mode else None
 
@@ -200,36 +222,65 @@ def setup_blosc2_backend(a_np, mem_mode: bool, cparams: blosc2.CParams, suffix: 
         large_b2a = blosc2.linspace(0, 1, large_nelem, dtype=dtype, shape=large_shape, cparams=cparams)
         print(f"Large array creation = {time() - t0:.2f} s")
         lops = [b2a, b2a.copy(cparams=cparams), b2a.copy(cparams=cparams)]
-        large_lops = [large_b2a, blosc2.copy(large_b2a, cparams=cparams), blosc2.copy(large_b2a, cparams=cparams)]
+        large_lops = [
+            large_b2a,
+            blosc2.copy(large_b2a, cparams=cparams),
+            blosc2.copy(large_b2a, cparams=cparams),
+        ]
     else:
         b2a = blosc2.asarray(a_np, cparams=cparams, urlpath=make_path("a_array"), mode="w")
         t0 = time()
-        large_b2a = blosc2.linspace(0, 1, large_nelem, dtype=dtype, shape=large_shape, cparams=cparams,
-                                    urlpath=make_path("large_a_array"), mode="w")
+        large_b2a = blosc2.linspace(
+            0,
+            1,
+            large_nelem,
+            dtype=dtype,
+            shape=large_shape,
+            cparams=cparams,
+            urlpath=make_path("large_a_array"),
+            mode="w",
+        )
         print(f"Large array creation = {time() - t0:.2f} s")
 
-        for src, dst in [(f"a_array{suffix}.b2nd", f"b_array{suffix}.b2nd"), (f"a_array{suffix}.b2nd", f"c_array{suffix}.b2nd"),
-                         (f"large_a_array{suffix}.b2nd", f"large_b_array{suffix}.b2nd"),
-                         (f"large_a_array{suffix}.b2nd", f"large_c_array{suffix}.b2nd")]:
+        for src, dst in [
+            (f"a_array{suffix}.b2nd", f"b_array{suffix}.b2nd"),
+            (f"a_array{suffix}.b2nd", f"c_array{suffix}.b2nd"),
+            (f"large_a_array{suffix}.b2nd", f"large_b_array{suffix}.b2nd"),
+            (f"large_a_array{suffix}.b2nd", f"large_c_array{suffix}.b2nd"),
+        ]:
             shutil.copy(src, dst)
 
-        lops = [b2a, blosc2.open(make_path("b_array"), mode="r"), blosc2.open(make_path("c_array"), mode="r")]
-        large_lops = [large_b2a, blosc2.open(make_path("large_b_array"), mode="r"),
-                      blosc2.open(make_path("large_c_array"), mode="r")]
+        lops = [
+            b2a,
+            blosc2.open(make_path("b_array"), mode="r"),
+            blosc2.open(make_path("c_array"), mode="r"),
+        ]
+        large_lops = [
+            large_b2a,
+            blosc2.open(make_path("large_b_array"), mode="r"),
+            blosc2.open(make_path("large_c_array"), mode="r"),
+        ]
 
     print(f"large_b2a.cratio = {large_b2a.cratio:.2f}, b2a.cratio = {b2a.cratio:.2f}")
     return lops, large_lops
 
 
 def cleanup_disk_files():
-    patterns = ["a_array", "b_array", "c_array", "large_a_array", "large_b_array", "large_c_array", "result_array"]
+    patterns = [
+        "a_array",
+        "b_array",
+        "c_array",
+        "large_a_array",
+        "large_b_array",
+        "large_c_array",
+        "result_array",
+    ]
     for pattern in patterns:
         for ext in [".npy", ".b2nd", "_nc.b2nd"]:
             try:
                 os.unlink(pattern + ext)
             except FileNotFoundError:
                 pass
-
 
 
 def main() -> None:
@@ -247,7 +298,11 @@ def main() -> None:
     backends = [
         ("numpy/numexpr", lops_np, large_lops_np, cparams),
         ("blosc2", *setup_blosc2_backend(a_np, mem_mode, cparams), cparams),
-        ("blosc2-nocomp", *setup_blosc2_backend(a_np, mem_mode, blosc2.CParams(clevel=0), "_nc"), blosc2.CParams(clevel=0)),
+        (
+            "blosc2-nocomp",
+            *setup_blosc2_backend(a_np, mem_mode, blosc2.CParams(clevel=0), "_nc"),
+            blosc2.CParams(clevel=0),
+        ),
     ]
 
     for name, lops, large_lops, cp in backends:

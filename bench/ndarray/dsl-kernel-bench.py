@@ -5,14 +5,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import contextlib
 import argparse
+import contextlib
+import importlib
 import time
 
 import numpy as np
 
 import blosc2
-import importlib
 
 lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
 where = np.where
@@ -303,7 +303,9 @@ def format_row(row):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--transcend", action="store_true", help="Run only the transcendental lazyexpr cases")
+    parser.add_argument(
+        "--transcend", action="store_true", help="Run only the transcendental lazyexpr cases"
+    )
     args = parser.parse_args()
 
     n = 1_000

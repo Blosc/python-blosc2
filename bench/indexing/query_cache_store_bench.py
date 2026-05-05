@@ -66,7 +66,11 @@ def _build_query_bits(arr: blosc2.NDArray, expr: str, coords: np.ndarray) -> tup
 
 
 def _load_or_create_catalog(arr: blosc2.NDArray, state: InsertState | None, strategy: str) -> dict:
-    if strategy in {"cache_catalog", "defer_vlmeta", "all"} and state is not None and state.catalog is not None:
+    if (
+        strategy in {"cache_catalog", "defer_vlmeta", "all"}
+        and state is not None
+        and state.catalog is not None
+    ):
         return state.catalog
 
     catalog = indexing._load_query_cache_catalog(arr)
@@ -79,7 +83,11 @@ def _load_or_create_catalog(arr: blosc2.NDArray, state: InsertState | None, stra
 
 
 def _load_or_create_store(arr: blosc2.NDArray, state: InsertState | None, strategy: str):
-    if strategy in {"cache_catalog", "defer_vlmeta", "all"} and state is not None and state.store is not None:
+    if (
+        strategy in {"cache_catalog", "defer_vlmeta", "all"}
+        and state is not None
+        and state.store is not None
+    ):
         return state.store
 
     store = indexing._open_query_cache_store(arr, create=True)
@@ -184,9 +192,7 @@ def _benchmark_steady(
     return ((end - start) / 1_000_000) / max(1, inserts)
 
 
-def _baseline_step_breakdown(
-    arr: blosc2.NDArray, expr: str, coords: np.ndarray
-) -> dict[str, float | int]:
+def _baseline_step_breakdown(arr: blosc2.NDArray, expr: str, coords: np.ndarray) -> dict[str, float | int]:
     t0 = time.perf_counter_ns()
     descriptor = indexing._normalize_query_descriptor(expr, [indexing.SELF_TARGET_NAME], None)
     digest = indexing._query_cache_digest(descriptor)
@@ -282,9 +288,7 @@ def _print_strategy_table(title: str, rows: list[dict[str, object]]) -> None:
     print(rule)
     for row in rows:
         print(
-            "  ".join(
-                render(row).ljust(width) for (_, render), width in zip(columns, widths, strict=True)
-            )
+            "  ".join(render(row).ljust(width) for (_, render), width in zip(columns, widths, strict=True))
         )
     print()
 
@@ -315,16 +319,16 @@ def _print_breakdown(rows: list[dict[str, object]]) -> None:
     print(rule)
     for row in rows:
         print(
-            "  ".join(
-                render(row).ljust(width) for (_, render), width in zip(columns, widths, strict=True)
-            )
+            "  ".join(render(row).ljust(width) for (_, render), width in zip(columns, widths, strict=True))
         )
     print()
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Microbenchmark persistent query-cache insert strategies.")
-    parser.add_argument("--size", type=int, default=1_000_000, help="Array size for the backing persistent array.")
+    parser.add_argument(
+        "--size", type=int, default=1_000_000, help="Array size for the backing persistent array."
+    )
     parser.add_argument("--chunks", type=int, default=100_000, help="Chunk length for the backing array.")
     parser.add_argument("--blocks", type=int, default=10_000, help="Block length for the backing array.")
     parser.add_argument(
@@ -368,7 +372,9 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="blosc2-query-cache-bench-") as tmpdir:
         root = Path(tmpdir)
-        probe = _make_array(root / "cparams-probe.b2nd", size=args.size, chunks=args.chunks, blocks=args.blocks)
+        probe = _make_array(
+            root / "cparams-probe.b2nd", size=args.size, chunks=args.chunks, blocks=args.blocks
+        )
         _clear_process_caches()
         active_cparams = _active_cache_store_cparams(probe)
         _clear_process_caches()
@@ -414,13 +420,20 @@ def main() -> None:
                         "coords_count": coords_count,
                         "strategy": strategy,
                         "time_ms": steady_times[strategy],
-                        "speedup": steady_baseline / steady_times[strategy] if steady_times[strategy] else 0.0,
+                        "speedup": steady_baseline / steady_times[strategy]
+                        if steady_times[strategy]
+                        else 0.0,
                     }
                 )
 
             baseline_steps = []
             for idx in range(args.breakdown_repeats):
-                arr = _make_array(root / f"breakdown-{coords_count}-{idx}.b2nd", size=args.size, chunks=args.chunks, blocks=args.blocks)
+                arr = _make_array(
+                    root / f"breakdown-{coords_count}-{idx}.b2nd",
+                    size=args.size,
+                    chunks=args.chunks,
+                    blocks=args.blocks,
+                )
                 _clear_process_caches()
                 expr = f"(id >= {idx}) & (id <= {idx})"
                 baseline_steps.append(_baseline_step_breakdown(arr, expr, coords))
@@ -448,9 +461,13 @@ def main() -> None:
         _print_breakdown(breakdown_rows)
 
         profile_coords = _coords_for_count(args.coords_counts[0], args.spacing, args.size)
-        profile_arr = _make_array(root / "profile.b2nd", size=args.size, chunks=args.chunks, blocks=args.blocks)
+        profile_arr = _make_array(
+            root / "profile.b2nd", size=args.size, chunks=args.chunks, blocks=args.blocks
+        )
         _clear_process_caches()
-        print(f"Baseline cProfile for coords_count={args.coords_counts[0]:,} over {args.profile_repeats} inserts")
+        print(
+            f"Baseline cProfile for coords_count={args.coords_counts[0]:,} over {args.profile_repeats} inserts"
+        )
         print(_profile_store(profile_arr, profile_coords, args.profile_repeats, args.profile_top))
 
 

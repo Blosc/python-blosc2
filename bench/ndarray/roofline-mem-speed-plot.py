@@ -10,45 +10,23 @@
 # It plots GFLOPS vs Arithmetic Intensity to visualize how memory bandwidth
 # affects performance across different workload intensities.
 
-mem_4800 = {'low': {'GFLOPS': 4.493354439009314,
-                    'Intensity': 5.5,
-                    'Time': 0.5508134365081787},
-            'matmul0': {'GFLOPS': 258.19222456293943,
-                        'Intensity': 1000,
-                        'Time': 0.008714437484741211},
-            'matmul1': {'GFLOPS': 364.1837565094117,
-                        'Intensity': 5000,
-                        'Time': 0.7722749710083008},
-            'matmul2': {'GFLOPS': 370.6084229401238,
-                        'Intensity': 10000,
-                        'Time': 6.0710978507995605},
-            'medium': {'GFLOPS': 17.71942775308632,
-                       'Intensity': 36.75,
-                       'Time': 0.9332976341247559},
-            'very low': {'GFLOPS': 1.0880454532877077,
-                         'Intensity': 0.5,
-                         'Time': 0.20679283142089844}
-            }
+mem_4800 = {
+    "low": {"GFLOPS": 4.493354439009314, "Intensity": 5.5, "Time": 0.5508134365081787},
+    "matmul0": {"GFLOPS": 258.19222456293943, "Intensity": 1000, "Time": 0.008714437484741211},
+    "matmul1": {"GFLOPS": 364.1837565094117, "Intensity": 5000, "Time": 0.7722749710083008},
+    "matmul2": {"GFLOPS": 370.6084229401238, "Intensity": 10000, "Time": 6.0710978507995605},
+    "medium": {"GFLOPS": 17.71942775308632, "Intensity": 36.75, "Time": 0.9332976341247559},
+    "very low": {"GFLOPS": 1.0880454532877077, "Intensity": 0.5, "Time": 0.20679283142089844},
+}
 
-mem_6000 = {'low': {'GFLOPS': 4.530616712594456,
-                    'Intensity': 5.5,
-                    'Time': 0.5462832450866699},
-            'matmul0': {'GFLOPS': 241.78069276491084,
-                        'Intensity': 1000,
-                        'Time': 0.009305953979492188},
-            'matmul1': {'GFLOPS': 364.46651669646604,
-                        'Intensity': 5000,
-                        'Time': 0.7716758251190186},
-            'matmul2': {'GFLOPS': 371.2794341995866,
-                        'Intensity': 10000,
-                        'Time': 6.0601255893707275},
-            'medium': {'GFLOPS': 17.79626768253134,
-                       'Intensity': 36.75,
-                       'Time': 0.9292678833007812},
-            'very low': {'GFLOPS': 1.4817325114381805,
-                         'Intensity': 0.5,
-                         'Time': 0.15184926986694336}
-            }
+mem_6000 = {
+    "low": {"GFLOPS": 4.530616712594456, "Intensity": 5.5, "Time": 0.5462832450866699},
+    "matmul0": {"GFLOPS": 241.78069276491084, "Intensity": 1000, "Time": 0.009305953979492188},
+    "matmul1": {"GFLOPS": 364.46651669646604, "Intensity": 5000, "Time": 0.7716758251190186},
+    "matmul2": {"GFLOPS": 371.2794341995866, "Intensity": 10000, "Time": 6.0601255893707275},
+    "medium": {"GFLOPS": 17.79626768253134, "Intensity": 36.75, "Time": 0.9292678833007812},
+    "very low": {"GFLOPS": 1.4817325114381805, "Intensity": 0.5, "Time": 0.15184926986694336},
+}
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
@@ -141,9 +119,9 @@ if __name__ == "__main__":
 
         # Avoid overlap between matmul1 and matmul2 by using different vertical offsets
         if workload == "matmul1":
-            safe_ypos *= .8   # push matmul1 a bit higher
+            safe_ypos *= 0.8  # push matmul1 a bit higher
         elif workload == "matmul2":
-            safe_ypos *= 1.2   # keep matmul2 lower
+            safe_ypos *= 1.2  # keep matmul2 lower
 
         ax.annotate(
             workload,

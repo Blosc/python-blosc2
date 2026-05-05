@@ -27,7 +27,7 @@ print(f"Creating NumPy arrays with 10 ** {Nexp:.2f} int64/float64 elements:")
 arrays = (
     (np.arange(N), "the arange linear distribution"),
     (np.linspace(0, 10_000, N), "the linspace linear distribution"),
-    (np.random.randint(0, 10_000, N), "the random distribution"),    # noqa: NPY002
+    (np.random.randint(0, 10_000, N), "the random distribution"),  # noqa: NPY002
 )
 
 in_ = arrays[0][0]

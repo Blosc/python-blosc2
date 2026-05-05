@@ -35,25 +35,21 @@ print(f"CTable creation benchmark with {N:,} rows\n")
 print("Generating base data...")
 
 t0 = time()
-data_list = [
-    [i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0]
-    for i in range(N)
-]
+data_list = [[i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0] for i in range(N)]
 t_gen_list = time() - t0
 print(f"  Python list generated in:         {t_gen_list:.4f} s")
 
 t0 = time()
-np_dtype = np.dtype([
-    ("id",     np.int64),
-    ("c_val",  np.complex128),
-    ("score",  np.float64),
-    ("active", np.bool_),
-])
-data_np = np.array(
+np_dtype = np.dtype(
     [
-        (i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0)
-        for i in range(N)
-    ],
+        ("id", np.int64),
+        ("c_val", np.complex128),
+        ("score", np.float64),
+        ("active", np.bool_),
+    ]
+)
+data_np = np.array(
+    [(i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0) for i in range(N)],
     dtype=np_dtype,
 )
 t_gen_np = time() - t0

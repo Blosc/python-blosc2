@@ -9,6 +9,7 @@
 # This uses the special _flat_idx var.
 
 from time import time
+
 import numpy as np
 
 import blosc2
@@ -17,10 +18,12 @@ dtype = np.int64
 shape = (10_000, 10_000)
 cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ, clevel=1)
 
+
 @blosc2.dsl_kernel
 def kernel_ramp():
-    # return _i0 * _n1 + _i1  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+    # return _i0 * _n1 + _i1  # DSL index/shape symbols resolved by miniexpr
     return _flat_idx  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
 
 print(kernel_ramp.dsl_source)
 a = blosc2.lazyudf(kernel_ramp, (), dtype=dtype, shape=shape)

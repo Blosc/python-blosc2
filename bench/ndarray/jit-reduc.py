@@ -8,16 +8,18 @@
 # Compute expressions for different array sizes, using the jit decorator.
 
 from time import time
-import blosc2
+
 import numpy as np
+
+import blosc2
 
 niter = 5
 # Create some data operands
-N = 10_000   # working size of ~1 GB
+N = 10_000  # working size of ~1 GB
 dtype = "float32"
 chunks = (100, N)
 blocks = (1, N)
-chunks, blocks= None, None   # enforce automatic chunk and block sizes
+chunks, blocks = None, None  # enforce automatic chunk and block sizes
 cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4)
 cparams_out = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4)
 print("Using cparams: ", cparams)
@@ -36,23 +38,29 @@ nc = np.linspace(-10, 10, N, dtype=dtype)  # broadcasting is supported
 # nc = np.linspace(-10, 10, N * N, dtype=dtype).reshape(N, N)
 print("Time to create data: ", time() - t0)
 
+
 def compute_expression_numpy(a, b, c):
-    return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+    return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+
 
 t0 = time()
 nout = compute_expression_numpy(na, nb, nc)
 tref = time() - t0
 print(f"Time to compute with NumPy engine: {tref:.5f}")
 
+
 @blosc2.jit
 def compute_expression_nocompr(a, b, c):
-    return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+    return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+
 
 print("\nUsing NumPy operands...")
 
+
 @blosc2.jit
 def compute_expression_compr(a, b, c, out):
-    return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1, out=out)
+    return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1, out=out)
+
 
 out = blosc2.zeros((N,), dtype=dtype, cparams=cparams_out)
 out = compute_expression_compr(na, nb, nc, out)

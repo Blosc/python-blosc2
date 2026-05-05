@@ -20,9 +20,9 @@ import blosc2
 
 @dataclass
 class Row:
-    id:     int     = blosc2.field(blosc2.int64(ge=0))
-    score:  float   = blosc2.field(blosc2.float64(ge=0, le=100), default=0.0)
-    active: bool    = blosc2.field(blosc2.bool(), default=True)
+    id: int = blosc2.field(blosc2.int64(ge=0))
+    score: float = blosc2.field(blosc2.float64(ge=0, le=100), default=0.0)
+    active: bool = blosc2.field(blosc2.bool(), default=True)
 
 
 SIZES = [10, 100, 1_000, 10_000, 100_000]
@@ -30,7 +30,7 @@ SIZES = [10, 100, 1_000, 10_000, 100_000]
 print(f"append() vs extend()  |  sizes: {SIZES}")
 print()
 print(f"{'N':>10}  {'append×N (s)':>14}  {'extend×N (s)':>14}  {'extend×1 (s)':>14}  {'speedup bulk':>13}")
-print(f"{'─'*10}  {'─'*14}  {'─'*14}  {'─'*14}  {'─'*13}")
+print(f"{'─' * 10}  {'─' * 14}  {'─' * 14}  {'─' * 14}  {'─' * 13}")
 
 for N in SIZES:
     data = [[i, float(i % 100), i % 2 == 0] for i in range(N)]

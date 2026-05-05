@@ -35,13 +35,12 @@ class MmapBenchmarking:
         self.cparams = {"typesize": self.dtype.itemsize, "clevel": 0}
         # For checking with compression, uncomment the next line
         # self.cparams = dict(typesize=self.dtype.itemsize, clevel=5, codec=blosc2.Codec.BLOSCLZ)
-        self.cdata = blosc2.asarray(self.array, chunks=self.chunks, blocks=self.blocks,
-                                    cparams=self.cparams)
+        self.cdata = blosc2.asarray(self.array, chunks=self.chunks, blocks=self.blocks, cparams=self.cparams)
         print(f"shape: {self.cdata.shape}, chunks: {self.cdata.chunks}, blocks: {self.cdata.blocks}")
 
     def __enter__(self):
         blosc2.remove_urlpath(self.urlpath)
-        np.random.seed(42)    # noqa: NPY002
+        np.random.seed(42)  # noqa: NPY002
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -54,9 +53,13 @@ class MmapBenchmarking:
         if self.blosc_mode == "schunk":
             chunksize = array[0].nbytes
             cparams = self.cparams | {"blocksize": np.prod(self.cdata.blocks) * array.itemsize}
-            schunk = blosc2.SChunk(chunksize=chunksize, cparams=cparams,
-                                   mode="w", mmap_mode=self.mmap_mode_write,
-                                   urlpath=urlpath)
+            schunk = blosc2.SChunk(
+                chunksize=chunksize,
+                cparams=cparams,
+                mode="w",
+                mmap_mode=self.mmap_mode_write,
+                urlpath=urlpath,
+            )
 
             t0 = time()
             for c in range(self.n_chunks):
@@ -64,9 +67,15 @@ class MmapBenchmarking:
             t1 = time()
         elif self.blosc_mode == "ndarray":
             t0 = time()
-            blosc2.asarray(array, chunks=self.chunks, blocks=self.blocks,
-                           cparams=self.cparams, mode="w",
-                           mmap_mode=self.mmap_mode_write, urlpath=urlpath)
+            blosc2.asarray(
+                array,
+                chunks=self.chunks,
+                blocks=self.blocks,
+                cparams=self.cparams,
+                mode="w",
+                mmap_mode=self.mmap_mode_write,
+                urlpath=urlpath,
+            )
             t1 = time()
         else:
             raise ValueError(f"Unknown Blosc mode: {self.blosc_mode}")
@@ -81,7 +90,7 @@ class MmapBenchmarking:
 
         chunks_order = np.arange(self.n_chunks)
         if read_order == "random":
-            np.random.shuffle(chunks_order)    # noqa: NPY002
+            np.random.shuffle(chunks_order)  # noqa: NPY002
 
         if self.blosc_mode == "schunk":
             t0 = time()
@@ -108,7 +117,7 @@ if __name__ == "__main__":
         type=str,
         choices=["io_file", "io_mmap", "io_mem"],
         help="Basic I/O type: default file operations (io_file),"
-             " memory-mapped files (io_mmap) or fully in-memory (io_mem).",
+        " memory-mapped files (io_mmap) or fully in-memory (io_mem).",
     )
     parser.add_argument(
         "--blosc-mode",
@@ -130,7 +139,7 @@ if __name__ == "__main__":
     with MmapBenchmarking(io_type=args.io_type, blosc_mode=args.blosc_mode) as bench:
         times_write = []
         for i in range(args.runs):
-            print(f"Run {i+1}/{args.runs}", end="\r")
+            print(f"Run {i + 1}/{args.runs}", end="\r")
             times_write.append(bench.benchmark_writes())
         min_time = min(times_write)
         speed = bench.nbytes / min_time / 2**30
@@ -139,9 +148,11 @@ if __name__ == "__main__":
         for read_order in ["sequential", "random"]:
             times_read = []
             for i in range(args.runs):
-                print(f"Run {i+1}/{args.runs}", end="\r")
+                print(f"Run {i + 1}/{args.runs}", end="\r")
                 times_read.append(bench.benchmark_reads(read_order=read_order))
             min_time = min(times_read)
             speed = bench.nbytes / min_time / 2**30
-            print(f"Time for reading the data with {args.io_type} in {read_order} order: {min_time:.3f} s"
-                  f" ({speed:.3f} GB/s)")
+            print(
+                f"Time for reading the data with {args.io_type} in {read_order} order: {min_time:.3f} s"
+                f" ({speed:.3f} GB/s)"
+            )

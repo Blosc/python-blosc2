@@ -43,10 +43,10 @@ import numpy as np
 
 import blosc2
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def make_iterator(total: int, dtype: np.dtype):
     """Return a fresh generator of *total* values cast to *dtype*."""
@@ -69,19 +69,12 @@ def measure(fn, nreps: int) -> tuple[float, float]:
 def array_info(a: blosc2.NDArray) -> str:
     nb = a.schunk.nbytes
     cb = a.schunk.cbytes
-    return (
-        f"{nb / 2**20:8.1f} MB uncompressed  "
-        f"cratio {nb / cb:4.1f}x  "
-        f"({cb / 2**20:.1f} MB on storage)"
-    )
+    return f"{nb / 2**20:8.1f} MB uncompressed  cratio {nb / cb:4.1f}x  ({cb / 2**20:.1f} MB on storage)"
 
 
 def print_result(label: str, best: float, mean: float, nbytes: int) -> None:
     gb = nbytes / 2**30
-    print(
-        f"  {label:<45s}  best {best:.3f}s ({gb / best:.2f} GB/s)"
-        f"  mean {mean:.3f}s"
-    )
+    print(f"  {label:<45s}  best {best:.3f}s ({gb / best:.2f} GB/s)  mean {mean:.3f}s")
 
 
 def cleanup(urlpath: str | None) -> None:
@@ -96,6 +89,7 @@ def cleanup(urlpath: str | None) -> None:
 # ---------------------------------------------------------------------------
 # Benchmark sections
 # ---------------------------------------------------------------------------
+
 
 def bench_chunk_sizes(dtype: np.dtype, nreps: int, on_disk: bool) -> None:
     """
@@ -116,13 +110,13 @@ def bench_chunk_sizes(dtype: np.dtype, nreps: int, on_disk: bool) -> None:
 
     chunk_configs = [
         # (chunks, blocks, label)
-        ((10, 10),    (5, 5),     "chunks=(10,10)    — many tiny"),
-        ((50, 50),    (25, 25),   "chunks=(50,50)    — medium"),
-        ((100, 100),  (50, 50),   "chunks=(100,100)  — medium-large"),
-        ((200, 200),  (100, 100), "chunks=(200,200)  — large"),
-        ((500, 500),  (250, 250), "chunks=(500,500)  — very large"),
-        ((1000, 100), (500, 50),  "chunks=(1000,100) — full-row strip"),
-        ((1000, 1000),(500, 500), "chunks=shape      — single chunk"),
+        ((10, 10), (5, 5), "chunks=(10,10)    — many tiny"),
+        ((50, 50), (25, 25), "chunks=(50,50)    — medium"),
+        ((100, 100), (50, 50), "chunks=(100,100)  — medium-large"),
+        ((200, 200), (100, 100), "chunks=(200,200)  — large"),
+        ((500, 500), (250, 250), "chunks=(500,500)  — very large"),
+        ((1000, 100), (500, 50), "chunks=(1000,100) — full-row strip"),
+        ((1000, 1000), (500, 500), "chunks=shape      — single chunk"),
     ]
 
     for order_label, c_order in (("c_order=True ", True), ("c_order=False", False)):
@@ -134,10 +128,13 @@ def bench_chunk_sizes(dtype: np.dtype, nreps: int, on_disk: bool) -> None:
                 cleanup(u)
                 blosc2.fromiter(
                     make_iterator(total, dtype),
-                    shape=shape, dtype=dtype,
-                    chunks=c, blocks=b,
+                    shape=shape,
+                    dtype=dtype,
+                    chunks=c,
+                    blocks=b,
                     c_order=co,
-                    urlpath=u, mode="w" if u else None,
+                    urlpath=u,
+                    mode="w" if u else None,
                 )
 
             best, mean = measure(run, nreps)
@@ -160,9 +157,9 @@ def bench_corder(dtype: np.dtype, nreps: int, on_disk: bool) -> None:
 
     cases = [
         # (shape, chunks, blocks, label)
-        ((500, 500),        (50, 50),    (25, 25),   "2-D  (500,500)   chunks=(50,50)"),
-        ((200, 200, 200),   (20, 20, 20),(10, 10, 10),"3-D  (200,200,200) chunks=(20,20,20)"),
-        ((50, 50, 50, 50),  (10, 10, 10, 10),(5,5,5,5),"4-D  (50,50,50,50) chunks=(10,10,10,10)"),
+        ((500, 500), (50, 50), (25, 25), "2-D  (500,500)   chunks=(50,50)"),
+        ((200, 200, 200), (20, 20, 20), (10, 10, 10), "3-D  (200,200,200) chunks=(20,20,20)"),
+        ((50, 50, 50, 50), (10, 10, 10, 10), (5, 5, 5, 5), "4-D  (50,50,50,50) chunks=(10,10,10,10)"),
     ]
 
     for shape, chunks, blocks, label in cases:
@@ -180,10 +177,13 @@ def bench_corder(dtype: np.dtype, nreps: int, on_disk: bool) -> None:
                     cleanup(u)
                     blosc2.fromiter(
                         make_iterator(total, dtype),
-                        shape=s, dtype=dtype,
-                        chunks=c, blocks=b,
+                        shape=s,
+                        dtype=dtype,
+                        chunks=c,
+                        blocks=b,
                         c_order=co,
-                        urlpath=u, mode="w" if u else None,
+                        urlpath=u,
+                        mode="w" if u else None,
                     )
 
                 best, mean = measure(run, nreps)
@@ -218,10 +218,13 @@ def bench_ondisk_vs_memory(dtype: np.dtype, nreps: int) -> None:
                 cleanup(u)
                 a = blosc2.fromiter(
                     make_iterator(total, dtype),
-                    shape=shape, dtype=dtype,
-                    chunks=chunks, blocks=blocks,
+                    shape=shape,
+                    dtype=dtype,
+                    chunks=chunks,
+                    blocks=blocks,
                     c_order=co,
-                    urlpath=u, mode="w" if u else None,
+                    urlpath=u,
+                    mode="w" if u else None,
                 )
                 return a
 
@@ -267,10 +270,13 @@ def bench_large(dtype: np.dtype, nreps: int, on_disk: bool) -> None:
                 cleanup(u)
                 blosc2.fromiter(
                     make_iterator(total, dtype),
-                    shape=s, dtype=dtype,
-                    chunks=c, blocks=b,
+                    shape=s,
+                    dtype=dtype,
+                    chunks=c,
+                    blocks=b,
                     c_order=co,
-                    urlpath=u, mode="w" if u else None,
+                    urlpath=u,
+                    mode="w" if u else None,
                 )
 
             best, mean = measure(run, nreps)
@@ -287,8 +293,9 @@ def bench_large(dtype: np.dtype, nreps: int, on_disk: bool) -> None:
 
         def run_np(s=shape, c=chunks, b=blocks, u=urlpath, arr=src):
             cleanup(u)
-            blosc2.fromiter(arr, shape=s, dtype=dtype, chunks=c, blocks=b,
-                            urlpath=u, mode="w" if u else None)
+            blosc2.fromiter(
+                arr, shape=s, dtype=dtype, chunks=c, blocks=b, urlpath=u, mode="w" if u else None
+            )
 
         best, mean = measure(run_np, nreps)
         cleanup(urlpath)
@@ -299,10 +306,9 @@ def bench_large(dtype: np.dtype, nreps: int, on_disk: bool) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--dtype", default="float64", help="NumPy dtype (default: float64)")
     p.add_argument("--nreps", type=int, default=3, help="Repetitions per measurement (default: 3)")
     p.add_argument(
@@ -311,8 +317,9 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Also run on-disk cases (writes temporary .b2nd files)",
     )
-    p.add_argument("--section", type=int, default=0,
-                   help="Run only section N (1-3 + bonus=4); 0 = all (default: 0)")
+    p.add_argument(
+        "--section", type=int, default=0, help="Run only section N (1-3 + bonus=4); 0 = all (default: 0)"
+    )
     return p.parse_args()
 
 
@@ -328,8 +335,10 @@ def main() -> None:
     sections = {
         1: lambda: bench_chunk_sizes(dtype, nreps, on_disk),
         2: lambda: bench_corder(dtype, nreps, on_disk),
-        3: lambda: bench_ondisk_vs_memory(dtype, nreps) if on_disk else print(
-            "\nSection 3 skipped (use --on-disk to enable)"
+        3: lambda: (
+            bench_ondisk_vs_memory(dtype, nreps)
+            if on_disk
+            else print("\nSection 3 skipped (use --on-disk to enable)")
         ),
         4: lambda: bench_large(dtype, nreps, on_disk),
     }

@@ -47,7 +47,10 @@ WARM_COLUMNS = [
     ("create_ms", lambda result: f"{result['create_ms']:.3f}"),
     ("scan_ms", lambda result: f"{result['warm_scan_ms']:.3f}"),
     ("query_ms", lambda result: f"{result['warm_ms']:.3f}" if result["warm_ms"] is not None else "-"),
-    ("speedup", lambda result: f"{result['warm_speedup']:.2f}x" if result["warm_speedup"] is not None else "-"),
+    (
+        "speedup",
+        lambda result: f"{result['warm_speedup']:.2f}x" if result["warm_speedup"] is not None else "-",
+    ),
     ("db_bytes", lambda result: f"{result['db_bytes']:,}"),
     ("query_rows", lambda result: f"{result['query_rows']:,}"),
 ]
@@ -217,7 +220,9 @@ def duckdb_sql_type(dtype: np.dtype) -> str:
     raise ValueError(f"unsupported duckdb dtype: {dtype}")
 
 
-def duckdb_path(outdir: Path, size: int, dist: str, id_dtype: np.dtype, layout: str, batch_size: int) -> Path:
+def duckdb_path(
+    outdir: Path, size: int, dist: str, id_dtype: np.dtype, layout: str, batch_size: int
+) -> Path:
     return (
         outdir
         / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{DATASET_LAYOUT_VERSION}.layout-{layout}.batch-{batch_size}.duckdb"
@@ -385,7 +390,9 @@ def _condition_sql(lo: object, hi: object, dtype: np.dtype, *, exact_query: bool
     return f"id >= {_literal(lo, dtype)} AND id <= {_literal(hi, dtype)}"
 
 
-def benchmark_scan_once(path: Path, lo, hi, dtype: np.dtype, *, exact_query: bool = False) -> tuple[float, float, float, int]:
+def benchmark_scan_once(
+    path: Path, lo, hi, dtype: np.dtype, *, exact_query: bool = False
+) -> tuple[float, float, float, int]:
     con = duckdb.connect(str(path), read_only=True)
     try:
         condition_sql = _condition_sql(lo, hi, dtype, exact_query=exact_query)
@@ -411,7 +418,9 @@ def benchmark_scan_once(path: Path, lo, hi, dtype: np.dtype, *, exact_query: boo
         con.close()
 
 
-def benchmark_filtered_once(path: Path, lo, hi, dtype: np.dtype, *, exact_query: bool = False) -> tuple[float, int]:
+def benchmark_filtered_once(
+    path: Path, lo, hi, dtype: np.dtype, *, exact_query: bool = False
+) -> tuple[float, int]:
     con = duckdb.connect(str(path), read_only=True)
     try:
         condition_sql = _condition_sql(lo, hi, dtype, exact_query=exact_query)
@@ -475,7 +484,9 @@ def benchmark_layout(
 
     con = duckdb.connect(str(path), read_only=True)
     try:
-        cold_elapsed, filtered_rows = benchmark_filtered_once_con(con, lo, hi, id_dtype, exact_query=exact_query)
+        cold_elapsed, filtered_rows = benchmark_filtered_once_con(
+            con, lo, hi, id_dtype, exact_query=exact_query
+        )
         warm_times = [
             benchmark_filtered_once_con(con, lo, hi, id_dtype, exact_query=exact_query)[0] * 1_000
             for _ in range(repeats)
@@ -565,7 +576,9 @@ def _format_row(cells: list[str], widths: list[int]) -> str:
     return "  ".join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True))
 
 
-def _table_rows(results: list[dict], columns: list[tuple[str, callable]]) -> tuple[list[str], list[list[str]], list[int]]:
+def _table_rows(
+    results: list[dict], columns: list[tuple[str, callable]]
+) -> tuple[list[str], list[list[str]], list[int]]:
     headers = [header for header, _ in columns]
     widths = [len(header) for header in headers]
     rows = [[formatter(result) for _, formatter in columns] for result in results]
@@ -574,7 +587,9 @@ def _table_rows(results: list[dict], columns: list[tuple[str, callable]]) -> tup
     return headers, rows, widths
 
 
-def print_table(results: list[dict], columns: list[tuple[str, callable]], widths: list[int] | None = None) -> None:
+def print_table(
+    results: list[dict], columns: list[tuple[str, callable]], widths: list[int] | None = None
+) -> None:
     headers, rows, computed_widths = _table_rows(results, columns)
     widths = computed_widths if widths is None else widths
     print(_format_row(headers, widths))
@@ -593,7 +608,9 @@ def main() -> None:
     parser.add_argument("--size", default="10M", help="Number of rows, or 'all'. Default: 10M.")
     parser.add_argument("--outdir", type=Path, required=True, help="Directory for generated DuckDB files.")
     parser.add_argument("--dist", choices=(*DISTS, "all"), default="permuted", help="Row distribution.")
-    parser.add_argument("--layout", choices=(*LAYOUTS, "all"), default="all", help="DuckDB layout to benchmark.")
+    parser.add_argument(
+        "--layout", choices=(*LAYOUTS, "all"), default="all", help="DuckDB layout to benchmark."
+    )
     parser.add_argument("--query-width", type=parse_human_int, default=1, help="Query width. Default: 1.")
     parser.add_argument(
         "--query-single-value",
@@ -608,7 +625,9 @@ def main() -> None:
         default=DEFAULT_BATCH_SIZE,
         help="Batch size used while loading the table. Default: 1.25M.",
     )
-    parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS, help="Benchmark repeats. Default: 3.")
+    parser.add_argument(
+        "--repeats", type=int, default=DEFAULT_REPEATS, help="Benchmark repeats. Default: 3."
+    )
     parser.add_argument(
         "--duckdb-threads",
         type=int,

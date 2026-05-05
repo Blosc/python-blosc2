@@ -13,12 +13,13 @@ import blosc2
 
 N = 100_000_000
 
+
 def info(a, t1):
     size = a.schunk.nbytes
     csize = a.schunk.cbytes
     print(
-        f"Time: {t1:.3f} s - size: {size / 2 ** 30:.2f} GB ({size / t1 / 2 ** 30:.2f} GB/s)"
-        f"\tStorage required: {csize / 2 ** 20:.2f} MB (cratio: {size / csize:.1f}x)"
+        f"Time: {t1:.3f} s - size: {size / 2**30:.2f} GB ({size / t1 / 2**30:.2f} GB/s)"
+        f"\tStorage required: {csize / 2**20:.2f} MB (cratio: {size / csize:.1f}x)"
     )
 
 

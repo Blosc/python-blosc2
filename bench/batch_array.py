@@ -18,7 +18,6 @@ import time
 
 import blosc2
 
-
 URLPATH = "bench_batch_array.b2b"
 NBATCHES = 10_000
 OBJECTS_PER_BATCH = 100
@@ -56,7 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[codec.name for codec in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
     parser.add_argument("--serializer", type=str, default="msgpack", choices=["msgpack", "arrow"])
-    parser.add_argument("--use-dict", action="store_true", help="Enable dictionaries for ZSTD/LZ4/LZ4HC codecs.")
+    parser.add_argument(
+        "--use-dict", action="store_true", help="Enable dictionaries for ZSTD/LZ4/LZ4HC codecs."
+    )
     parser.add_argument("--in-mem", action="store_true", help="Keep the BatchArray purely in memory.")
     return parser
 
@@ -95,7 +96,9 @@ def build_array(
     return None
 
 
-def measure_random_reads(barr: blosc2.BatchArray) -> tuple[list[tuple[int, int, int, dict[str, int]]], list[int]]:
+def measure_random_reads(
+    barr: blosc2.BatchArray,
+) -> tuple[list[tuple[int, int, int, dict[str, int]]], list[int]]:
     rng = random.Random(2024)
     samples: list[tuple[int, int, int, dict[str, int]]] = []
     timings_ns: list[int] = []
@@ -121,7 +124,9 @@ def main() -> None:
 
     mode_label = "in-memory" if args.in_mem else "persistent"
     article = "an" if args.in_mem else "a"
-    print(f"Building {article} {mode_label} BatchArray with 1,000,000 RGB dicts and timing 1,000 random scalar reads...")
+    print(
+        f"Building {article} {mode_label} BatchArray with 1,000,000 RGB dicts and timing 1,000 random scalar reads..."
+    )
     print(f"  codec: {codec.name}")
     print(f"  clevel: {args.clevel}")
     print(f"  serializer: {args.serializer}")
@@ -136,7 +141,9 @@ def main() -> None:
         assert barr is not None
         read_array = barr
     else:
-        read_array = blosc2.BatchArray(urlpath=URLPATH, mode="r", contiguous=True, items_per_block=ITEMS_PER_BLOCK)
+        read_array = blosc2.BatchArray(
+            urlpath=URLPATH, mode="r", contiguous=True, items_per_block=ITEMS_PER_BLOCK
+        )
     samples, timings_ns = measure_random_reads(read_array)
     t0 = time.perf_counter()
     checksum = 0

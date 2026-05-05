@@ -321,7 +321,9 @@ def parse_args() -> argparse.Namespace:
         help="Upper bound for the `abs(x) < query_width` predicate. Default: 1000.",
     )
     parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS, help="Warm-query repetitions.")
-    parser.add_argument("--outdir", type=Path, help="Directory where benchmark arrays and sidecars are kept.")
+    parser.add_argument(
+        "--outdir", type=Path, help="Directory where benchmark arrays and sidecars are kept."
+    )
     parser.add_argument("--optlevel", type=int, default=DEFAULT_OPLEVEL, help="Index optlevel. Default: 5.")
     parser.add_argument(
         "--dtype",
@@ -353,7 +355,9 @@ def _format_row(cells: list[str], widths: list[int]) -> str:
     return "  ".join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True))
 
 
-def _table_rows(results: list[dict], columns: list[tuple[str, callable]]) -> tuple[list[str], list[list[str]], list[int]]:
+def _table_rows(
+    results: list[dict], columns: list[tuple[str, callable]]
+) -> tuple[list[str], list[list[str]], list[int]]:
     headers = [header for header, _ in columns]
     widths = [len(header) for header in headers]
     rows = [[formatter(result) for _, formatter in columns] for result in results]
@@ -391,7 +395,9 @@ def run_benchmarks(
     )
     for dist in dists:
         for size in sizes:
-            size_results = benchmark_size(size, size_dir, dist, query_width, optlevel, x_dtype, build, full_query_mode)
+            size_results = benchmark_size(
+                size, size_dir, dist, query_width, optlevel, x_dtype, build, full_query_mode
+            )
             all_results.extend(size_results)
 
     print()
@@ -424,12 +430,15 @@ def run_benchmarks(
                 ("kind", lambda result: result["kind"]),
                 ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
                 ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
-                ("warm_ms", lambda result: f"{result['warm_ms']:.3f}" if result["warm_ms"] is not None else "-"),
+                (
+                    "warm_ms",
+                    lambda result: f"{result['warm_ms']:.3f}" if result["warm_ms"] is not None else "-",
+                ),
                 (
                     "speedup",
-                    lambda result: f"{result['warm_speedup']:.2f}x"
-                    if result["warm_speedup"] is not None
-                    else "-",
+                    lambda result: (
+                        f"{result['warm_speedup']:.2f}x" if result["warm_speedup"] is not None else "-"
+                    ),
                 ),
             ],
         )

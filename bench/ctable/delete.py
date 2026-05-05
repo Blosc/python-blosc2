@@ -29,28 +29,27 @@ N = 1_000_000
 print(f"delete() benchmark  |  N = {N:,}\n")
 
 # Build base data once
-np_dtype = np.dtype([
-    ("id",     np.int64),
-    ("c_val",  np.complex128),
-    ("score",  np.float64),
-    ("active", np.bool_),
-])
-DATA = np.array(
+np_dtype = np.dtype(
     [
-        (i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0)
-        for i in range(N)
-    ],
+        ("id", np.int64),
+        ("c_val", np.complex128),
+        ("score", np.float64),
+        ("active", np.bool_),
+    ]
+)
+DATA = np.array(
+    [(i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0) for i in range(N)],
     dtype=np_dtype,
 )
 
 delete_cases = [
-    ("int",          0),
-    ("slice small",  slice(0, 100)),
-    ("slice large",  slice(0, 100_000)),
-    ("slice full",   slice(0, N)),
-    ("list small",   list(range(100))),
-    ("list large",   list(range(100_000))),
-    ("list full",    list(range(N))),
+    ("int", 0),
+    ("slice small", slice(0, 100)),
+    ("slice large", slice(0, 100_000)),
+    ("slice full", slice(0, N)),
+    ("list small", list(range(100))),
+    ("list large", list(range(100_000))),
+    ("list full", list(range(N))),
 ]
 
 print("=" * 60)

@@ -15,8 +15,9 @@ import statistics
 import tempfile
 import time
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 where = np.where
 sin = np.sin
@@ -79,12 +80,12 @@ def mandelbrot_dsl(cr, ci, max_iter):
     i = 0
     while i < max_iter:
         zr2 = ((zr * zr) - (zi * zi)) + cr
-        zi2 = (((zr * zi) * 2.0) + ci)
+        zi2 = ((zr * zi) * 2.0) + ci
         zr = zr2
         zi = zi2
         i = i + 1
     # Mandelbrot-like iterate z <- z^2 + c (returns final magnitude proxy).
-    return ((zr * zr) + (zi * zi))
+    return (zr * zr) + (zi * zi)
 
 
 def _bench_cold_warm(fn, reps: int, warmup: int) -> tuple[float, float, float]:
@@ -128,15 +129,21 @@ def _fresh_tmpdir(enabled: bool):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Benchmark JIT modes for expressions, reductions and DSL kernels.")
+    parser = argparse.ArgumentParser(
+        description="Benchmark JIT modes for expressions, reductions and DSL kernels."
+    )
     parser.add_argument("--n", type=int, default=100_000, help="Array length.")
     parser.add_argument("--reps", type=int, default=2, help="Measured repetitions per workload/mode.")
     parser.add_argument("--warmup", type=int, default=1, help="Warmup runs per workload/mode.")
     parser.add_argument("--dtype", default="float64", choices=("float32", "float64"), help="Input dtype.")
     parser.add_argument("--clevel", type=int, default=1, help="Compression level for input arrays.")
     parser.add_argument("--heavy-iters", type=int, default=16, help="Iterations for the heavy DSL kernel.")
-    parser.add_argument("--arith-iters", type=int, default=512, help="Iterations for the arithmetic loop DSL kernel.")
-    parser.add_argument("--mandelbrot-iters", type=int, default=50, help="Iterations for Mandelbrot DSL kernel.")
+    parser.add_argument(
+        "--arith-iters", type=int, default=512, help="Iterations for the arithmetic loop DSL kernel."
+    )
+    parser.add_argument(
+        "--mandelbrot-iters", type=int, default=50, help="Iterations for Mandelbrot DSL kernel."
+    )
     parser.add_argument(
         "--compiler",
         default="auto",
@@ -175,7 +182,9 @@ def main():
         "on": ("on", True),
         "off": ("off", False),
     }
-    modes = [mode_map["auto"], mode_map["on"], mode_map["off"]] if args.mode == "all" else [mode_map[args.mode]]
+    modes = (
+        [mode_map["auto"], mode_map["on"], mode_map["off"]] if args.mode == "all" else [mode_map[args.mode]]
+    )
     rows = []
 
     for mode_name, jit in modes:
@@ -193,7 +202,9 @@ def main():
 
         with _fresh_tmpdir(args.fresh_cache):
             cold, med, best = _bench_cold_warm(
-                lambda: blosc2.lazyudf(k_dsl, (a, b), dtype=dtype, jit=jit, jit_backend=jit_backend).compute(),
+                lambda: blosc2.lazyudf(
+                    k_dsl, (a, b), dtype=dtype, jit=jit, jit_backend=jit_backend
+                ).compute(),
                 args.reps,
                 args.warmup,
             )

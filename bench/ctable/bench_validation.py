@@ -23,21 +23,21 @@ import blosc2
 
 @dataclass
 class Row:
-    id:     int   = blosc2.field(blosc2.int64(ge=0))
-    score:  float = blosc2.field(blosc2.float64(ge=0, le=100), default=0.0)
-    active: bool  = blosc2.field(blosc2.bool(), default=True)
+    id: int = blosc2.field(blosc2.int64(ge=0))
+    score: float = blosc2.field(blosc2.float64(ge=0, le=100), default=0.0)
+    active: bool = blosc2.field(blosc2.bool(), default=True)
 
 
 def make_data(n: int):
     rng = np.random.default_rng(42)
-    ids    = np.arange(n, dtype=np.int64)
+    ids = np.arange(n, dtype=np.int64)
     scores = rng.uniform(0, 100, n)
-    flags  = rng.integers(0, 2, n, dtype=np.bool_)
+    flags = rng.integers(0, 2, n, dtype=np.bool_)
     return list(zip(ids.tolist(), scores.tolist(), flags.tolist(), strict=False))
 
 
 SIZES = [100, 1_000, 10_000, 100_000, 1_000_000]
-APPEND_SIZES = [100, 1_000]   # append row-by-row is slow at large N
+APPEND_SIZES = [100, 1_000]  # append row-by-row is slow at large N
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. append() — validate=True vs validate=False
@@ -107,8 +107,8 @@ np_dtype = np.dtype([("id", np.int64), ("score", np.float64), ("active", np.bool
 for n in SIZES:
     rng = np.random.default_rng(42)
     arr = np.empty(n, dtype=np_dtype)
-    arr["id"]     = np.arange(n, dtype=np.int64)
-    arr["score"]  = rng.uniform(0, 100, n)
+    arr["id"] = np.arange(n, dtype=np.int64)
+    arr["score"] = rng.uniform(0, 100, n)
     arr["active"] = rng.integers(0, 2, n, dtype=np.bool_)
 
     t = blosc2.CTable(Row, expected_size=n, validate=True)

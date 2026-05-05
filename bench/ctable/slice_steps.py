@@ -29,17 +29,16 @@ steps = [1, 2, 4, 8, 16, 100, 1000]
 print(f"Column[::step].to_array() benchmark  |  N = {N:,}\n")
 
 # Build CTable once
-np_dtype = np.dtype([
-    ("id",     np.int64),
-    ("c_val",  np.complex128),
-    ("score",  np.float64),
-    ("active", np.bool_),
-])
-DATA = np.array(
+np_dtype = np.dtype(
     [
-        (i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0)
-        for i in range(N)
-    ],
+        ("id", np.int64),
+        ("c_val", np.complex128),
+        ("score", np.float64),
+        ("active", np.bool_),
+    ]
+)
+DATA = np.array(
+    [(i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0) for i in range(N)],
     dtype=np_dtype,
 )
 
@@ -56,6 +55,6 @@ for step in steps:
     t0 = time()
     arr = col[::step]
     t_total = time() - t0
-    print(f"::{ step:<8} {len(arr):>15,} {t_total:>12.6f}")
+    print(f"::{step:<8} {len(arr):>15,} {t_total:>12.6f}")
 
 print("-" * 60)

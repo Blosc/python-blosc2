@@ -63,12 +63,14 @@ def clean(path: str = TABLE_DIR) -> None:
 
 def make_dataframe(n: int) -> pd.DataFrame:
     rng = np.random.default_rng(42)
-    return pd.DataFrame({
-        "id":     np.arange(n, dtype=np.int64),
-        "score":  rng.uniform(0, 100, n).astype(np.float64),
-        "active": rng.integers(0, 2, n, dtype=bool),
-        "label":  [f"r{i % 10000:05d}" for i in range(n)],
-    })
+    return pd.DataFrame(
+        {
+            "id": np.arange(n, dtype=np.int64),
+            "score": rng.uniform(0, 100, n).astype(np.float64),
+            "active": rng.integers(0, 2, n, dtype=bool),
+            "label": [f"r{i % 10000:05d}" for i in range(n)],
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -91,8 +93,8 @@ for N in SIZES:
         at = pa.Table.from_pandas(df, preserve_index=False)
         return CTable.from_arrow(at)
 
-    t_pa  = tmin(bench_to_arrow)
-    t_ct  = tmin(bench_from_arrow) - t_pa   # from_arrow only
+    t_pa = tmin(bench_to_arrow)
+    t_ct = tmin(bench_from_arrow) - t_pa  # from_arrow only
     t_tot = t_pa + t_ct
 
     # Keep one CTable for later steps
@@ -124,7 +126,7 @@ for N in SIZES:
     t.save(path, overwrite=True)
     cbytes = t.cbytes
     nbytes = t.nbytes
-    ratio  = nbytes / cbytes if cbytes > 0 else float("nan")
+    ratio = nbytes / cbytes if cbytes > 0 else float("nan")
 
     def _fmt(n):
         if n < 1024**2:
@@ -171,7 +173,7 @@ for N in SIZES:
         return at.to_pandas()
 
     t_arr = tmin(bench_to_arrow_ct)
-    t_pd  = tmin(bench_to_pandas)
+    t_pd = tmin(bench_to_pandas)
     t_tot = t_arr + t_pd
 
     print(f"{N:>12,}  {t_arr:>18.4f}  {t_pd:>18.4f}  {t_tot:>12.4f}")

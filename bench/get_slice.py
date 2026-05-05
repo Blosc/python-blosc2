@@ -35,7 +35,9 @@ storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath)
 blosc2.remove_urlpath(urlpath)
 
 # Create the empty SChunk
-schunk = blosc2.SChunk(chunksize=chunksize * cparams.typesize, storage=storage, cparams=cparams, dparams=dparams)
+schunk = blosc2.SChunk(
+    chunksize=chunksize * cparams.typesize, storage=storage, cparams=cparams, dparams=dparams
+)
 
 # Append some chunks
 for i in range(nchunks):

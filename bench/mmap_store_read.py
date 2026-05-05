@@ -376,13 +376,7 @@ def print_scenario_header(name: str) -> None:
 def print_compare(a: SummaryMetrics, b: SummaryMetrics) -> None:
     speedup = a.total_median_s / b.total_median_s if b.total_median_s > 0 else math.inf
     print(
-        "    regular median={:.4f}s ({:.1f} MiB/s) | mmap median={:.4f}s ({:.1f} MiB/s) | speedup={:.3f}x".format(
-            a.total_median_s,
-            a.throughput_mib_s,
-            b.total_median_s,
-            b.throughput_mib_s,
-            speedup,
-        )
+        f"    regular median={a.total_median_s:.4f}s ({a.throughput_mib_s:.1f} MiB/s) | mmap median={b.total_median_s:.4f}s ({b.throughput_mib_s:.1f} MiB/s) | speedup={speedup:.3f}x"
     )
 
 
@@ -422,10 +416,19 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--dataset-root", type=Path, default=Path("bench_mmap_store_data"))
-    parser.add_argument("--container", nargs="+", default=["embed", "dict", "tree"], choices=["embed", "dict", "tree"])
+    parser.add_argument(
+        "--container", nargs="+", default=["embed", "dict", "tree"], choices=["embed", "dict", "tree"]
+    )
     parser.add_argument("--storage", nargs="+", default=["b2e", "b2d", "b2z"], choices=["b2e", "b2d", "b2z"])
-    parser.add_argument("--layout", nargs="+", default=["embedded", "external", "mixed"], choices=["embedded", "external", "mixed"])
-    parser.add_argument("--scenario", nargs="+", dest="scenarios", default=list(SCENARIOS), choices=list(SCENARIOS))
+    parser.add_argument(
+        "--layout",
+        nargs="+",
+        default=["embedded", "external", "mixed"],
+        choices=["embedded", "external", "mixed"],
+    )
+    parser.add_argument(
+        "--scenario", nargs="+", dest="scenarios", default=list(SCENARIOS), choices=list(SCENARIOS)
+    )
 
     parser.add_argument("--n-nodes", type=int, default=128)
     parser.add_argument("--node-len", type=int, default=100_000)

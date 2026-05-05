@@ -26,29 +26,28 @@ class Row:
 
 N = 1_000_000
 slices = [
-    ("small  — start",  slice(0, 100)),
+    ("small  — start", slice(0, 100)),
     ("small  — middle", slice(N // 2, N // 2 + 100)),
-    ("small  — end",    slice(N - 100, N)),
-    ("large  — start",  slice(0, 100_000)),
+    ("small  — end", slice(N - 100, N)),
+    ("large  — start", slice(0, 100_000)),
     ("large  — middle", slice(N // 2 - 50_000, N // 2 + 50_000)),
-    ("large  — end",    slice(N - 100_000, N)),
-    ("full   — all",    slice(0, N)),
+    ("large  — end", slice(N - 100_000, N)),
+    ("full   — all", slice(0, N)),
 ]
 
 print(f"Column[slice].to_array() benchmark  |  N = {N:,}\n")
 
 # Build CTable once
-np_dtype = np.dtype([
-    ("id",     np.int64),
-    ("c_val",  np.complex128),
-    ("score",  np.float64),
-    ("active", np.bool_),
-])
-DATA = np.array(
+np_dtype = np.dtype(
     [
-        (i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0)
-        for i in range(N)
-    ],
+        ("id", np.int64),
+        ("c_val", np.complex128),
+        ("score", np.float64),
+        ("active", np.bool_),
+    ]
+)
+DATA = np.array(
+    [(i, complex(i * 0.1, i * 0.01), 10.0 + (i % 100) * 0.4, i % 3 == 0) for i in range(N)],
     dtype=np_dtype,
 )
 
