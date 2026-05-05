@@ -224,6 +224,7 @@ When a NumPy structured array is needed, materialize explicitly::
 .. autosummary::
 
     CTable.where
+    CTable.view
     CTable.select
     CTable.head
     CTable.tail
@@ -232,6 +233,7 @@ When a NumPy structured array is needed, materialize explicitly::
     CTable.iter_sorted
 
 .. automethod:: CTable.where
+.. automethod:: CTable.view
 .. automethod:: CTable.select
 .. automethod:: CTable.head
 

@@ -2448,6 +2448,7 @@ class CTable(Generic[RowT]):
         return obj
 
     def view(self, new_valid_rows):
+        """Return a row-filter view backed by a boolean mask array without copying data."""
         if isinstance(new_valid_rows, np.ndarray) and new_valid_rows.dtype == np.bool_:
             new_valid_rows = blosc2.asarray(new_valid_rows)
         if not (
