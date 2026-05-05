@@ -145,7 +145,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Output path. Defaults depend on the mode and input path.",
     )
-    parser.add_argument("--parquet-batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument(
+        "--parquet-batch-size",
+        type=int,
+        default=None,
+        help="Rows per Parquet read batch. Defaults to the source Parquet average row-group size.",
+    )
     parser.add_argument(
         "--fixed-str-maxlen",
         type=int,
@@ -179,7 +184,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--blosc2-batch-size",
         type=int,
-        default=DEFAULT_BATCH_SIZE,
+        default=None,
         help="Rows grouped into each persisted BatchArray batch for imported Blosc2 varlen/list columns.",
     )
     parser.add_argument(
@@ -826,6 +831,31 @@ def _option_present(argv: list[str], option: str) -> bool:
     return any(arg == option or arg.startswith(option + "=") for arg in argv)
 
 
+def average_parquet_row_group_size(input_path: Path) -> int | None:
+    if input_path.suffix != ".parquet" or not input_path.exists():
+        return None
+    try:
+        _, pq = require_pyarrow()
+        pf = pq.ParquetFile(input_path)
+    except Exception:
+        return None
+    metadata = pf.metadata
+    if metadata is None or metadata.num_row_groups <= 0 or metadata.num_rows <= 0:
+        return None
+    return max(1, round(metadata.num_rows / metadata.num_row_groups))
+
+
+def resolve_default_batch_sizes(args, *, parquet_specified: bool, blosc2_specified: bool) -> None:
+    if parquet_specified and not blosc2_specified:
+        args.blosc2_batch_size = args.parquet_batch_size
+    elif blosc2_specified and not parquet_specified:
+        args.parquet_batch_size = args.blosc2_batch_size
+    elif not parquet_specified and not blosc2_specified:
+        default = average_parquet_row_group_size(args.input_path) or DEFAULT_BATCH_SIZE
+        args.parquet_batch_size = default
+        args.blosc2_batch_size = default
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     args = build_parser().parse_args(argv)
@@ -834,10 +864,7 @@ def main(argv: list[str] | None = None) -> int:
         argv, "--batch-size"
     )
     blosc2_specified = _option_present(argv, "--blosc2-batch-size")
-    if parquet_specified and not blosc2_specified:
-        args.blosc2_batch_size = args.parquet_batch_size
-    elif blosc2_specified and not parquet_specified:
-        args.parquet_batch_size = args.blosc2_batch_size
+    resolve_default_batch_sizes(args, parquet_specified=parquet_specified, blosc2_specified=blosc2_specified)
 
     if args.profile:
         return _run_profiled(args)
