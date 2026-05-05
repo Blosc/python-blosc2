@@ -219,12 +219,7 @@ When a NumPy structured array is needed, materialize explicitly::
 .. automethod:: CTable.view
 .. automethod:: CTable.select
 .. automethod:: CTable.head
-
-   Return a view of the first *N* live rows (default 5).
-
 .. automethod:: CTable.tail
-
-   Return a view of the last *N* live rows (default 5).
 .. automethod:: CTable.sample
 .. automethod:: CTable.sort_by
 .. automethod:: CTable.iter_sorted
