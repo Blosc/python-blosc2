@@ -4034,6 +4034,15 @@ def _component_cbytes(array: blosc2.NDArray, descriptor: dict, component: IndexC
 
 
 class Index(Mapping):
+    """Handle for an index attached to an :class:`blosc2.NDArray`.
+
+    ``Index`` objects are returned by NDArray indexing helpers such as
+    :meth:`blosc2.NDArray.create_index`, :meth:`blosc2.NDArray.index`, and
+    :attr:`blosc2.NDArray.indexes`.  They expose descriptor metadata and
+    convenience methods for dropping, rebuilding, or compacting the underlying
+    index.  Users should not instantiate this class directly.
+    """
+
     def __init__(self, array: blosc2.NDArray, token: str):
         self._array = array
         self._token = token
@@ -4043,34 +4052,42 @@ class Index(Mapping):
 
     @property
     def descriptor(self) -> dict:
+        """Copy of the index descriptor dictionary."""
         return _copy_descriptor_for_token(self._array, self._token)
 
     @property
     def kind(self) -> blosc2.IndexKind:
+        """Kind of index, as an :class:`blosc2.IndexKind`."""
         return blosc2.IndexKind(self._descriptor()["kind"])
 
     @property
     def field(self) -> str | None:
+        """Structured-array field indexed by this handle, if any."""
         return self._descriptor()["field"]
 
     @property
     def name(self) -> str | None:
+        """Optional human-readable name assigned at creation time."""
         return self._descriptor()["name"]
 
     @property
     def target(self) -> dict:
+        """Descriptor of the indexed target."""
         return self.descriptor["target"]
 
     @property
     def persistent(self) -> bool:
+        """True when index sidecars are stored persistently on disk."""
         return bool(self._descriptor()["persistent"])
 
     @property
     def stale(self) -> bool:
+        """True if the index needs rebuilding before it can be reused."""
         return bool(self._descriptor()["stale"])
 
     @property
     def nbytes(self) -> int:
+        """Total uncompressed size in bytes for this index payload."""
         descriptor = self._descriptor()
         return sum(
             _component_nbytes(self._array, descriptor, component)
@@ -4079,6 +4096,7 @@ class Index(Mapping):
 
     @property
     def cbytes(self) -> int:
+        """Total compressed size in bytes for this index payload."""
         descriptor = self._descriptor()
         return sum(
             _component_cbytes(self._array, descriptor, component)
@@ -4087,19 +4105,23 @@ class Index(Mapping):
 
     @property
     def cratio(self) -> float:
+        """Compression ratio for this index payload."""
         cbytes = self.cbytes
         if cbytes == 0:
             return math.inf
         return self.nbytes / cbytes
 
     def drop(self) -> None:
+        """Drop this index and delete its sidecar payloads."""
         drop_index(self._array, field=self.field, name=self.name)
 
     def rebuild(self) -> Index:
+        """Rebuild this index and return this handle."""
         rebuild_index(self._array, field=self.field, name=self.name)
         return self
 
     def compact(self) -> Index:
+        """Compact this index, merging incremental runs, and return this handle."""
         compact_index(self._array, field=self.field, name=self.name)
         return self
 

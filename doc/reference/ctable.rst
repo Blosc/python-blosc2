@@ -240,16 +240,6 @@ snapshot that can be indexed like any other stored column.  New rows inserted
 later via :meth:`CTable.append` or :meth:`CTable.extend` auto-fill omitted
 materialized-column values from the recorded expression metadata.
 
-CTable indexes can also target **direct expressions** over stored columns via
-``create_index(expression=...)``.  This lets queries reuse indexes for derived
-predicates without adding either a computed column or a materialized stored one.
-A matching ``FULL`` direct-expression index can also be reused by ordering paths
-such as :meth:`CTable.sort_by` when sorting by a computed column backed by the
-same expression.  ``OPSI`` indexes are a separate exact-filtering tier with a
-tunable number of iterative ordering cycles; they are not intended to converge
-to a completely sorted ``FULL``/CSI index, so use ``FULL`` when globally sorted
-ordered reuse is required.
-
 .. autosummary::
 
     CTable.delete
@@ -269,6 +259,56 @@ ordered reuse is required.
 .. automethod:: CTable.drop_computed_column
 .. automethod:: CTable.drop_column
 .. automethod:: CTable.rename_column
+
+
+Indexes
+-------
+
+CTable indexes are created with :meth:`CTable.create_index` and returned as
+:class:`blosc2.ctable.CTableIndex` handles.  A ``CTableIndex`` is the table
+counterpart to :class:`blosc2.Index`: it refers to an index stored in the table
+index catalog, and delegates maintenance operations such as ``drop()``,
+``rebuild()``, and ``compact()`` back to the owning table.
+
+Indexes can target stored columns or **direct expressions** over stored columns
+via ``create_index(expression=...)``.  This lets queries reuse indexes for
+derived predicates without adding either a computed column or a materialized
+stored one.  A matching ``FULL`` direct-expression index can also be reused by
+ordering paths such as :meth:`CTable.sort_by` when sorting by a computed column
+backed by the same expression.  ``OPSI`` indexes are a separate exact-filtering
+tier with a tunable number of iterative ordering cycles; they are not intended
+to converge to a completely sorted ``FULL``/CSI index, so use ``FULL`` when
+globally sorted ordered reuse is required.
+
+.. autosummary::
+
+    CTable.create_index
+    CTable.index
+    CTable.indexes
+    CTable.drop_index
+    CTable.rebuild_index
+    CTable.compact_index
+
+.. automethod:: CTable.create_index
+.. automethod:: CTable.index
+.. autoattribute:: CTable.indexes
+.. automethod:: CTable.drop_index
+.. automethod:: CTable.rebuild_index
+.. automethod:: CTable.compact_index
+
+.. autoclass:: blosc2.ctable.CTableIndex
+
+.. autoattribute:: blosc2.ctable.CTableIndex.col_name
+.. autoattribute:: blosc2.ctable.CTableIndex.kind
+.. autoattribute:: blosc2.ctable.CTableIndex.stale
+.. autoattribute:: blosc2.ctable.CTableIndex.name
+.. autoattribute:: blosc2.ctable.CTableIndex.nbytes
+.. autoattribute:: blosc2.ctable.CTableIndex.cbytes
+.. autoattribute:: blosc2.ctable.CTableIndex.cratio
+.. automethod:: blosc2.ctable.CTableIndex.storage_stats
+.. automethod:: blosc2.ctable.CTableIndex.drop
+.. automethod:: blosc2.ctable.CTableIndex.rebuild
+.. automethod:: blosc2.ctable.CTableIndex.compact
 
 
 Persistence
