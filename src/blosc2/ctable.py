@@ -19,6 +19,7 @@ import os
 import pprint
 import re
 import shutil
+import zipfile
 from collections import namedtuple
 from collections.abc import Iterable, Mapping
 from dataclasses import MISSING, dataclass
@@ -2217,6 +2218,23 @@ class CTable(Generic[RowT]):
         For in-memory tables, views, existing ``.b2z`` tables, or
         ``compact=True``, this falls back to the logical :meth:`save` path,
         materializing only visible/live rows into a new ``.b2z`` store.
+
+        Examples
+        --------
+        Fast-pack an existing directory-backed table into a compact zip store::
+
+            table = blosc2.CTable.open("data.b2d", mode="r")
+            table.to_b2z("data.b2z", overwrite=True)
+            table.close()
+
+        Materialize a filtered view into a new compact store::
+
+            view = table.where(table["score"] > 10)
+            view.to_b2z("high-score.b2z", overwrite=True)
+
+        Force a logical compacted copy, even for a persistent ``.b2d`` table::
+
+            table.to_b2z("data-compact.b2z", overwrite=True, compact=True)
         """
         if not str(urlpath).endswith(".b2z"):
             raise ValueError("urlpath must have a .b2z extension")
@@ -2235,6 +2253,71 @@ class CTable(Generic[RowT]):
                 return store.to_b2z(filename=urlpath, overwrite=overwrite)
             finally:
                 store.close()
+
+        if self.base is not None:
+            materialized = self.copy(compact=True)
+            materialized.save(urlpath, overwrite=overwrite)
+        else:
+            self.save(urlpath, overwrite=overwrite)
+        return os.path.abspath(urlpath)
+
+    def to_b2d(self, urlpath: str, *, overwrite: bool = False, compact: bool = False) -> str:
+        """Write this table to a directory-backed ``.b2d`` store.
+
+        For persistent, non-view ``.b2z`` tables opened read-only and
+        ``compact=False``, this uses a fast physical-unpack path: the zip
+        members are extracted as already-compressed leaves. This preserves the
+        physical layout, including deleted rows and spare capacity, and does
+        not recompress columns.
+
+        For in-memory tables, views, writable ``.b2z`` tables, existing
+        ``.b2d`` tables, or ``compact=True``, this falls back to the logical
+        :meth:`save` path, materializing only visible/live rows into a new
+        ``.b2d`` store.
+
+        Examples
+        --------
+        Fast-unpack an existing compact zip store into a directory-backed table::
+
+            table = blosc2.CTable.open("data.b2z", mode="r")
+            table.to_b2d("data.b2d", overwrite=True)
+            table.close()
+
+        Materialize a filtered view into a directory-backed store::
+
+            view = table.where(table["score"] > 10)
+            view.to_b2d("high-score.b2d", overwrite=True)
+
+        Force a logical compacted copy, even for a persistent ``.b2z`` table::
+
+            table.to_b2d("data-compact.b2d", overwrite=True, compact=True)
+        """
+        if not str(urlpath).endswith(".b2d"):
+            raise ValueError("urlpath must have a .b2d extension")
+
+        storage = getattr(self, "_storage", None)
+        can_physical_unpack = (
+            not compact
+            and self.base is None
+            and isinstance(storage, FileTableStorage)
+            and str(storage._root).endswith(".b2z")
+            and storage.open_mode() == "r"
+        )
+        if can_physical_unpack:
+            target_path = os.fspath(urlpath)
+            if os.path.exists(target_path):
+                if not overwrite:
+                    raise FileExistsError(
+                        f"'{target_path}' already exists. Use overwrite=True to overwrite."
+                    )
+                if os.path.isdir(target_path):
+                    shutil.rmtree(target_path)
+                else:
+                    os.remove(target_path)
+            os.makedirs(target_path, exist_ok=True)
+            with zipfile.ZipFile(storage._root, "r") as zf:
+                zf.extractall(target_path)
+            return os.path.abspath(target_path)
 
         if self.base is not None:
             materialized = self.copy(compact=True)
