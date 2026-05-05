@@ -240,11 +240,13 @@ class _CTableIndexProxy:
 
 
 class CTableIndex:
-    """A handle on an index attached to a :class:`CTable` target.
+    """Handle for an index attached to a :class:`CTable` target.
 
-    Returned by :meth:`CTable.index` and items of :attr:`CTable.indexes`.
-    Provides :meth:`drop`, :meth:`rebuild`, and :meth:`compact` convenience
-    methods that delegate back to the owning table.
+    This has the same user-facing role as :class:`blosc2.Index`, but for
+    tables instead of arrays.  It is returned by :meth:`CTable.create_index`,
+    :meth:`CTable.index`, and items of :attr:`CTable.indexes`, and provides
+    the same core convenience operations: :meth:`drop`, :meth:`rebuild`, and
+    :meth:`compact`.  Users should not instantiate this class directly.
     """
 
     def __init__(self, table: CTable, col_name: str, descriptor: dict) -> None:

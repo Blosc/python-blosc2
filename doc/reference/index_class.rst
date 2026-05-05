@@ -11,8 +11,10 @@ Handle for an index attached to a :class:`~blosc2.NDArray`.
 storage usage, or to drop, rebuild, and compact the index.  Users normally do
 not instantiate ``Index`` directly.
 
-For table indexes, see :class:`blosc2.ctable.CTableIndex`, documented in the
-:ref:`CTable` reference.
+For table indexes, :class:`blosc2.ctable.CTableIndex` plays the same
+user-facing role for :class:`~blosc2.CTable` objects.  It is documented in the
+:ref:`CTable` reference because table indexes can target columns and table
+expressions.
 
 .. currentmodule:: blosc2
 

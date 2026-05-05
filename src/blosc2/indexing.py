@@ -4040,7 +4040,9 @@ class Index(Mapping):
     :meth:`blosc2.NDArray.create_index`, :meth:`blosc2.NDArray.index`, and
     :attr:`blosc2.NDArray.indexes`.  They expose descriptor metadata and
     convenience methods for dropping, rebuilding, or compacting the underlying
-    index.  Users should not instantiate this class directly.
+    index.  :class:`blosc2.ctable.CTableIndex` plays the same user-facing role
+    for :class:`blosc2.CTable` indexes.  Users should not instantiate either
+    class directly.
     """
 
     def __init__(self, array: blosc2.NDArray, token: str):

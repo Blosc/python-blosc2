@@ -265,10 +265,12 @@ Indexes
 -------
 
 CTable indexes are created with :meth:`CTable.create_index` and returned as
-:class:`blosc2.ctable.CTableIndex` handles.  A ``CTableIndex`` is the table
-counterpart to :class:`blosc2.Index`: it refers to an index stored in the table
-index catalog, and delegates maintenance operations such as ``drop()``,
-``rebuild()``, and ``compact()`` back to the owning table.
+:class:`blosc2.ctable.CTableIndex` handles.  ``CTableIndex`` has the same
+user-facing role as :class:`blosc2.Index`, but for tables instead of arrays:
+it refers to an index stored in the table index catalog, and delegates
+maintenance operations such as ``drop()``, ``rebuild()``, and ``compact()``
+back to the owning table.  Users normally only receive these handles from the
+CTable API; they do not instantiate them directly.
 
 Indexes can target stored columns or **direct expressions** over stored columns
 via ``create_index(expression=...)``.  This lets queries reuse indexes for
