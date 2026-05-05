@@ -27,8 +27,27 @@ explicitly call :meth:`~blosc2.CTable.to_arrow` or iterate with
         CTable.__str__
 
     .. automethod:: __len__
+
+       Return the number of live (non-deleted) rows.
+
     .. automethod:: __iter__
+
+       Iterate over live rows in insertion order, yielding namedtuple-like
+       row objects with one attribute per column.
+
     .. automethod:: __getitem__
+
+       Type-driven indexing:
+
+       * ``str`` — column name returns a :class:`Column`; any other string
+         is interpreted as a boolean expression and behaves like
+         :meth:`where`.
+       * ``int`` — single row as a namedtuple-like object.
+       * ``slice`` — row-range view.
+       * ``list[int]`` / ``ndarray[int]`` — gathered-row view.
+       * ``ndarray[bool]`` — boolean-mask filtered view.
+       * ``list[str]`` — column-projection view (same as :meth:`select`).
+
     .. automethod:: __repr__
     .. automethod:: __str__
 
@@ -113,12 +132,14 @@ Attributes
     CTable.schema
     CTable.base
 
+.. autoattribute:: CTable.col_names
 .. autoproperty:: CTable.computed_columns
 .. autoproperty:: CTable.nrows
 .. autoproperty:: CTable.ncols
 .. autoproperty:: CTable.cbytes
 .. autoproperty:: CTable.nbytes
 .. autoproperty:: CTable.schema
+.. autoattribute:: CTable.base
 
 
 Inserting data
@@ -186,30 +207,22 @@ When a NumPy structured array is needed, materialize explicitly::
 .. autosummary::
 
     CTable.where
+    CTable.view
     CTable.select
     CTable.head
     CTable.tail
     CTable.sample
     CTable.sort_by
+    CTable.iter_sorted
 
 .. automethod:: CTable.where
+.. automethod:: CTable.view
 .. automethod:: CTable.select
 .. automethod:: CTable.head
 .. automethod:: CTable.tail
 .. automethod:: CTable.sample
 .. automethod:: CTable.sort_by
-
-
-Aggregates & statistics
------------------------
-
-.. autosummary::
-
-    CTable.describe
-    CTable.cov
-
-.. automethod:: CTable.describe
-.. automethod:: CTable.cov
+.. automethod:: CTable.iter_sorted
 
 
 Mutations
@@ -261,33 +274,58 @@ ordered reuse is required.
 Persistence
 -----------
 
+Persist CTables to disk or interchange formats, and restore them later without
+losing schema information. These methods cover native Blosc2 persistence as
+well as import/export paths for CSV, Arrow, and Parquet data.
+
 .. autosummary::
 
+    CTable.load
+    CTable.open
     CTable.save
     CTable.to_b2z
     CTable.to_b2d
     CTable.to_csv
     CTable.to_arrow
+    CTable.to_parquet
+    CTable.from_arrow
+    CTable.from_parquet
+    CTable.from_csv
 
+.. automethod:: CTable.load
+.. automethod:: CTable.open
 .. automethod:: CTable.save
 .. automethod:: CTable.to_b2z
 .. automethod:: CTable.to_b2d
 .. automethod:: CTable.to_csv
 .. automethod:: CTable.to_arrow
+.. automethod:: CTable.to_parquet
+.. automethod:: CTable.from_arrow
+.. automethod:: CTable.from_parquet
+.. automethod:: CTable.from_csv
 
 
-Inspection
-----------
+Inspection & statistics
+-----------------------
+
+Compute common descriptive statistics directly on ``CTable`` data without
+materializing rows first. These methods operate column-wise on the compressed
+representation, making it easy to summarize distributions or measure
+relationships between numeric columns.
 
 .. autosummary::
 
+    CTable.column_schema
     CTable.info
     CTable.schema_dict
-    CTable.column_schema
+    CTable.describe
+    CTable.cov
 
+.. automethod:: CTable.column_schema
 .. automethod:: CTable.info
 .. automethod:: CTable.schema_dict
-.. automethod:: CTable.column_schema
+.. automethod:: CTable.describe
+.. automethod:: CTable.cov
 
 
 ----
@@ -315,9 +353,18 @@ All index operations and aggregates apply the table's tombstone mask
         Column.__setitem__
 
     .. automethod:: __len__
+
+       Return the number of live (non-deleted) values in this column.
+
     .. automethod:: __iter__
+
+       Iterate over live values in insertion order, skipping deleted rows.
+
     .. automethod:: __getitem__
     .. automethod:: __setitem__
+
+       Set one or more live column values.  Accepts the same index forms as
+       :meth:`__getitem__`.
 
 
 Attributes
@@ -465,10 +512,14 @@ Text & binary
 
     string
     bytes
+    vlstring
+    vlbytes
     list
 
 .. autoclass:: string
 .. autoclass:: bytes
+.. autofunction:: vlstring
+.. autofunction:: vlbytes
 .. autofunction:: list
 
 List columns

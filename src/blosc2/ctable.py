@@ -818,6 +818,7 @@ class Column:
         return ColumnViewIndexer(self)
 
     def __setitem__(self, key: int | slice | list | np.ndarray, value):  # noqa: C901
+        """Set one or more live column values; accepts the same index forms as :meth:`__getitem__`."""
         if self._table._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.is_computed:
@@ -872,6 +873,7 @@ class Column:
         self._table._root_table._mark_all_indexes_stale()
 
     def __iter__(self):
+        """Iterate over live column values in insertion order, skipping deleted rows."""
         if self.is_computed:
             yield from self._iter_chunks_computed(size=None)
             return
@@ -915,6 +917,7 @@ class Column:
         return f"Column({self._col_name!r}, dtype={self.dtype}, len={len(self)}, values=[{preview}])"
 
     def __len__(self):
+        """Return the number of live (non-deleted) values in this column."""
         return blosc2.count_nonzero(self._valid_rows)
 
     @property
@@ -1083,6 +1086,9 @@ class Column:
 
     @property
     def dtype(self):
+        """NumPy dtype of the underlying storage, or ``None`` for
+        variable-length columns (:func:`~blosc2.vlstring`,
+        :func:`~blosc2.vlbytes`, :func:`~blosc2.list`)."""
         return getattr(self._raw_col, "dtype", None)
 
     def iter_chunks(self, size: int = 65536):
@@ -1567,6 +1573,16 @@ _BATCH_SIZE_DEFAULT = 2048
 
 
 class CTable(Generic[RowT]):
+    #: Ordered list of stored column names.  Computed columns are **not**
+    #: included; access those via :attr:`computed_columns`.
+    col_names: list[str]
+
+    #: Parent table when this instance is a row-filter or column-projection
+    #: view (created by :meth:`where`, :meth:`select`, or :meth:`view`).
+    #: ``None`` for top-level tables.  Structural mutations such as
+    #: :meth:`add_column` and :meth:`drop_column` are blocked on views.
+    base: CTable | None
+
     def __init__(
         self,
         row_type: type[RowT],
@@ -1994,6 +2010,7 @@ class CTable(Generic[RowT]):
         return rows
 
     def __str__(self) -> str:
+        """Pandas-style tabular display with column names, dtypes, and a row count footer."""
         nrows = self._n_rows
         ncols = len(self.col_names)
         head_pos, tail_pos, hidden = self._display_positions()
@@ -2026,13 +2043,16 @@ class CTable(Generic[RowT]):
         return "\n".join(lines)
 
     def __repr__(self) -> str:
+        """Short ``CTable<cols>(N rows, X compressed)`` summary string."""
         cols = ", ".join(self.col_names)
         return f"CTable<{cols}>({self._n_rows:,} rows, {_fmt_bytes(self.cbytes)} compressed)"
 
     def __len__(self):
+        """Return the number of live (non-deleted) rows."""
         return self._n_rows
 
     def __iter__(self):
+        """Iterate over live rows in insertion order, yielding namedtuple-like row objects."""
         for i in range(self.nrows):
             yield self._materialize_row(i)
 
@@ -2549,6 +2569,7 @@ class CTable(Generic[RowT]):
         return obj
 
     def view(self, new_valid_rows):
+        """Return a row-filter view backed by a boolean mask array without copying data."""
         if isinstance(new_valid_rows, np.ndarray) and new_valid_rows.dtype == np.bool_:
             new_valid_rows = blosc2.asarray(new_valid_rows)
         if not (
@@ -2569,6 +2590,7 @@ class CTable(Generic[RowT]):
         return CTable._make_view(self, new_valid_rows)
 
     def head(self, N: int = 5) -> CTable:
+        """Return a view of the first *N* live rows (default 5)."""
         if N <= 0:
             return self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
         if self._n_rows <= N:
@@ -2589,6 +2611,7 @@ class CTable(Generic[RowT]):
         return self.view(mask_arr)
 
     def tail(self, N: int = 5) -> CTable:
+        """Return a view of the last *N* live rows (default 5)."""
         if N <= 0:
             return self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
         if self._n_rows <= N:
@@ -3436,7 +3459,119 @@ class CTable(Generic[RowT]):
         blosc2_items_per_block: int | None = None,
         **kwargs,
     ) -> CTable:
-        """Read a Parquet file into a :class:`CTable` batch-wise using pyarrow."""
+        """Read a Parquet file into a :class:`CTable`.
+
+        The Parquet file is streamed batch by batch through :mod:`pyarrow` and then
+        converted into a typed :class:`CTable`. By default, the result is created in
+        memory, but you can also persist it on disk via ``urlpath``.
+
+        This method delegates the actual table construction to
+        :meth:`CTable.from_arrow`, so Arrow schema handling, nullable-column support,
+        and Blosc2 write tuning follow the same rules as that method.
+
+        Parameters
+        ----------
+        path : str or path-like
+            Path to the source Parquet file.
+
+        columns : list[str] or None, optional
+            Subset of columns to read from the Parquet file. If provided, only these
+            columns are loaded and their order in the resulting table matches the
+            order in this list. Column names must be unique.
+
+        batch_size : int, optional
+            Number of rows per Arrow batch read from the Parquet file. This controls
+            how much data is pulled from the file at a time before being handed off
+            to the CTable builder. Must be greater than 0.
+
+        urlpath : str or None, optional
+            Destination storage path for the resulting CTable. If ``None`` (the
+            default), the table is created in memory. If provided, the table is backed
+            by persistent on-disk storage.
+
+        mode : str, optional
+            Storage open mode for ``urlpath``. Defaults to ``"w"``. This is passed
+            through to :meth:`CTable.from_arrow`.
+
+        cparams : object, optional
+            Compression parameters for the created Blosc2 containers. Passed through
+            to :meth:`CTable.from_arrow`.
+
+        dparams : object, optional
+            Decompression parameters for the created Blosc2 containers. Passed through
+            to :meth:`CTable.from_arrow`.
+
+        validate : bool, optional
+            Whether to enable extra internal validation while building the table.
+            Defaults to ``False``.
+
+        auto_null_sentinels : bool, optional
+            If ``True`` (default), nullable scalar columns imported from Parquet may
+            automatically receive per-column null sentinel values when needed. Sentinel
+            selection follows the current null-policy rules used by CTable schema
+            handling.
+
+        blosc2_batch_size : int or None, optional
+            Number of items written to Blosc2 containers per internal write batch.
+            Passed through to :meth:`CTable.from_arrow`.
+
+        blosc2_items_per_block : int or None, optional
+            Target number of items per internal Blosc2 block. Passed through to
+            :meth:`CTable.from_arrow`.
+
+        **kwargs
+            Additional keyword arguments forwarded to ``pyarrow.parquet.ParquetFile``.
+            Use these for Parquet-reader-specific options supported by PyArrow.
+
+        Returns
+        -------
+        CTable
+            A new :class:`CTable` populated from the Parquet file. The table contains
+            all selected columns and all rows from the file. If ``urlpath`` is
+            provided, the returned table is disk-backed; otherwise it is in-memory.
+
+        Raises
+        ------
+        ImportError
+            If :mod:`pyarrow` is not installed.
+        ValueError
+            If ``batch_size`` is not greater than 0.
+        ValueError
+            If ``columns`` contains duplicate names.
+        Exception
+            Any exception raised by :mod:`pyarrow` while opening or reading the Parquet
+            file, or by :meth:`CTable.from_arrow` while converting Arrow data into a
+            CTable.
+
+        Examples
+        --------
+        Load an entire Parquet file into an in-memory table:
+
+        >>> import blosc2
+        >>> t = blosc2.CTable.from_parquet("data.parquet")
+
+        Load only a subset of columns:
+
+        >>> t = blosc2.CTable.from_parquet(
+        ...     "data.parquet",
+        ...     columns=["user_id", "amount", "country"],
+        ... )
+
+        Create a disk-backed table while reading in batches:
+
+        >>> t = blosc2.CTable.from_parquet(
+        ...     "data.parquet",
+        ...     batch_size=50_000,
+        ...     urlpath="data.ctable",
+        ... )
+
+        Pass additional options through to PyArrow's Parquet reader:
+
+        >>> t = blosc2.CTable.from_parquet(
+        ...     "data.parquet",
+        ...     memory_map=True,
+        ... )
+        """
         pq = cls._require_pyarrow_parquet("from_parquet()")
         pa = cls._require_pyarrow("from_parquet()")
         cls._validate_arrow_batch_size(batch_size)
@@ -4374,6 +4509,7 @@ class CTable(Generic[RowT]):
         return arr.copy() if copy else arr
 
     def __getitem__(self, key):
+        """Type-driven indexing: column name, boolean expression, row int/slice, mask, or column list."""
         if isinstance(key, str):
             if key in self._cols or key in self._computed_cols:
                 return Column(self, key)
@@ -4392,6 +4528,12 @@ class CTable(Generic[RowT]):
     # ------------------------------------------------------------------
 
     def compact(self):
+        """Physically rewrite every column array keeping only live rows.
+
+        Closes the gaps left by prior :meth:`delete` calls.  All existing
+        indexes are dropped and must be recreated afterwards.  Raises
+        ``ValueError`` if the table is read-only or a view.
+        """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
@@ -5777,6 +5919,14 @@ class CTable(Generic[RowT]):
             self.extend(new_data)
 
     def append(self, data: list | np.void | np.ndarray) -> None:
+        """Append a single row to the table.
+
+        *data* may be a list, tuple, ``numpy.void``, or structured
+        ``numpy.ndarray`` whose fields match the schema column order.
+        Materialized columns whose values are omitted are auto-filled from
+        their recorded expression.  Raises ``ValueError`` if the table is
+        read-only or a view.
+        """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
@@ -5809,6 +5959,14 @@ class CTable(Generic[RowT]):
         self._mark_all_indexes_stale()
 
     def delete(self, ind: int | slice | str | Iterable) -> None:
+        """Mark one or more rows as deleted (tombstone deletion).
+
+        *ind* may be a logical row index (``int``), a slice, or an iterable of
+        logical indices.  Deleted rows are excluded from all subsequent queries
+        and aggregates.  Physical storage is not reclaimed until
+        :meth:`compact` is called.  Raises ``ValueError`` if the table is
+        read-only or a view.
+        """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
@@ -5831,6 +5989,18 @@ class CTable(Generic[RowT]):
         self._storage.bump_visibility_epoch()
 
     def extend(self, data: list | CTable | Any, *, validate: bool | None = None) -> None:  # noqa: C901
+        """Append multiple rows at once.
+
+        *data* may be:
+
+        * a **dict of arrays** ``{"col": array, ...}`` — all arrays must have
+          the same length; missing columns are filled with their default value;
+        * a **list of rows**, each compatible with :meth:`append`;
+        * another **CTable** — columns are matched by name.
+
+        Pass ``validate=False`` to skip per-row Pydantic validation on trusted
+        bulk imports.  Raises ``ValueError`` if the table is read-only or a view.
+        """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
