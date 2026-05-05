@@ -4295,7 +4295,12 @@ class CTable(Generic[RowT]):
     # ------------------------------------------------------------------
 
     def compact(self):
-        """Rewrite all columns keeping only live rows, physically reclaiming deleted-row storage."""
+        """Physically rewrite every column array keeping only live rows.
+
+        Closes the gaps left by prior :meth:`delete` calls.  All existing
+        indexes are dropped and must be recreated afterwards.  Raises
+        ``ValueError`` if the table is read-only or a view.
+        """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
@@ -5681,7 +5686,14 @@ class CTable(Generic[RowT]):
             self.extend(new_data)
 
     def append(self, data: list | np.void | np.ndarray) -> None:
-        """Append a single row to the table."""
+        """Append a single row to the table.
+
+        *data* may be a list, tuple, ``numpy.void``, or structured
+        ``numpy.ndarray`` whose fields match the schema column order.
+        Materialized columns whose values are omitted are auto-filled from
+        their recorded expression.  Raises ``ValueError`` if the table is
+        read-only or a view.
+        """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
@@ -5714,7 +5726,14 @@ class CTable(Generic[RowT]):
         self._mark_all_indexes_stale()
 
     def delete(self, ind: int | slice | str | Iterable) -> None:
-        """Mark one or more rows as deleted (tombstone); physical storage is reclaimed by :meth:`compact`."""
+        """Mark one or more rows as deleted (tombstone deletion).
+
+        *ind* may be a logical row index (``int``), a slice, or an iterable of
+        logical indices.  Deleted rows are excluded from all subsequent queries
+        and aggregates.  Physical storage is not reclaimed until
+        :meth:`compact` is called.  Raises ``ValueError`` if the table is
+        read-only or a view.
+        """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
@@ -5737,7 +5756,18 @@ class CTable(Generic[RowT]):
         self._storage.bump_visibility_epoch()
 
     def extend(self, data: list | CTable | Any, *, validate: bool | None = None) -> None:  # noqa: C901
-        """Append multiple rows at once from a dict of arrays, a list of rows, or another :class:`CTable`."""
+        """Append multiple rows at once.
+
+        *data* may be:
+
+        * a **dict of arrays** ``{"col": array, ...}`` — all arrays must have
+          the same length; missing columns are filled with their default value;
+        * a **list of rows**, each compatible with :meth:`append`;
+        * another **CTable** — columns are matched by name.
+
+        Pass ``validate=False`` to skip per-row Pydantic validation on trusted
+        bulk imports.  Raises ``ValueError`` if the table is read-only or a view.
+        """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:

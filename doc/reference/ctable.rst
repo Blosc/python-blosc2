@@ -151,24 +151,7 @@ Inserting data
     CTable.extend
 
 .. automethod:: CTable.append
-
-   Append a single row to the table.  *data* may be a list, tuple,
-   ``numpy.void``, or structured ``numpy.ndarray`` whose fields match the
-   schema column order.  Materialized columns whose values are omitted are
-   auto-filled from their recorded expression.  Raises ``ValueError`` if the
-   table is read-only or a view.
-
 .. automethod:: CTable.extend
-
-   Append multiple rows at once.  *data* may be:
-
-   * a **dict of arrays** ``{"col": array, ...}`` — all arrays must have the
-     same length; missing columns are filled with their default value;
-   * a **list of rows**, each compatible with :meth:`append`;
-   * another **CTable** — columns are matched by name.
-
-   Pass ``validate=False`` to skip per-row Pydantic validation on trusted
-   bulk imports.  Raises ``ValueError`` if the table is read-only or a view.
 
 
 Querying
@@ -296,19 +279,7 @@ ordered reuse is required.
     CTable.rename_column
 
 .. automethod:: CTable.delete
-
-   Mark one or more rows as deleted (tombstone deletion).  *ind* may be a
-   logical row index (``int``), a slice, or an iterable of logical indices.
-   Deleted rows are excluded from all subsequent queries and aggregates.
-   Physical storage is not reclaimed until :meth:`compact` is called.
-   Raises ``ValueError`` if the table is read-only or a view.
-
 .. automethod:: CTable.compact
-
-   Physically rewrite every column array keeping only live rows, closing the
-   gaps left by prior :meth:`delete` calls.  All existing indexes are dropped
-   and must be recreated afterwards.  Raises ``ValueError`` if the table is
-   read-only or a view.
 .. automethod:: CTable.add_column
 .. automethod:: CTable.add_computed_column
 .. automethod:: CTable.materialize_computed_column
