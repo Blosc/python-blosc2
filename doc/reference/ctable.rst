@@ -27,8 +27,27 @@ explicitly call :meth:`~blosc2.CTable.to_arrow` or iterate with
         CTable.__str__
 
     .. automethod:: __len__
+
+       Return the number of live (non-deleted) rows.
+
     .. automethod:: __iter__
+
+       Iterate over live rows in insertion order, yielding namedtuple-like
+       row objects with one attribute per column.
+
     .. automethod:: __getitem__
+
+       Type-driven indexing:
+
+       * ``str`` — column name returns a :class:`Column`; any other string
+         is interpreted as a boolean expression and behaves like
+         :meth:`where`.
+       * ``int`` — single row as a namedtuple-like object.
+       * ``slice`` — row-range view.
+       * ``list[int]`` / ``ndarray[int]`` — gathered-row view.
+       * ``ndarray[bool]`` — boolean-mask filtered view.
+       * ``list[str]`` — column-projection view (same as :meth:`select`).
+
     .. automethod:: __repr__
     .. automethod:: __str__
 
@@ -132,7 +151,24 @@ Inserting data
     CTable.extend
 
 .. automethod:: CTable.append
+
+   Append a single row to the table.  *data* may be a list, tuple,
+   ``numpy.void``, or structured ``numpy.ndarray`` whose fields match the
+   schema column order.  Materialized columns whose values are omitted are
+   auto-filled from their recorded expression.  Raises ``ValueError`` if the
+   table is read-only or a view.
+
 .. automethod:: CTable.extend
+
+   Append multiple rows at once.  *data* may be:
+
+   * a **dict of arrays** ``{"col": array, ...}`` — all arrays must have the
+     same length; missing columns are filled with their default value;
+   * a **list of rows**, each compatible with :meth:`append`;
+   * another **CTable** — columns are matched by name.
+
+   Pass ``validate=False`` to skip per-row Pydantic validation on trusted
+   bulk imports.  Raises ``ValueError`` if the table is read-only or a view.
 
 
 Querying
@@ -198,7 +234,12 @@ When a NumPy structured array is needed, materialize explicitly::
 .. automethod:: CTable.where
 .. automethod:: CTable.select
 .. automethod:: CTable.head
+
+   Return a view of the first *N* live rows (default 5).
+
 .. automethod:: CTable.tail
+
+   Return a view of the last *N* live rows (default 5).
 .. automethod:: CTable.sample
 .. automethod:: CTable.sort_by
 .. automethod:: CTable.iter_sorted
@@ -253,7 +294,19 @@ ordered reuse is required.
     CTable.rename_column
 
 .. automethod:: CTable.delete
+
+   Mark one or more rows as deleted (tombstone deletion).  *ind* may be a
+   logical row index (``int``), a slice, or an iterable of logical indices.
+   Deleted rows are excluded from all subsequent queries and aggregates.
+   Physical storage is not reclaimed until :meth:`compact` is called.
+   Raises ``ValueError`` if the table is read-only or a view.
+
 .. automethod:: CTable.compact
+
+   Physically rewrite every column array keeping only live rows, closing the
+   gaps left by prior :meth:`delete` calls.  All existing indexes are dropped
+   and must be recreated afterwards.  Raises ``ValueError`` if the table is
+   read-only or a view.
 .. automethod:: CTable.add_column
 .. automethod:: CTable.add_computed_column
 .. automethod:: CTable.materialize_computed_column
@@ -317,9 +370,18 @@ All index operations and aggregates apply the table's tombstone mask
         Column.__setitem__
 
     .. automethod:: __len__
+
+       Return the number of live (non-deleted) values in this column.
+
     .. automethod:: __iter__
+
+       Iterate over live values in insertion order, skipping deleted rows.
+
     .. automethod:: __getitem__
     .. automethod:: __setitem__
+
+       Set one or more live column values.  Accepts the same index forms as
+       :meth:`__getitem__`.
 
 
 Attributes
