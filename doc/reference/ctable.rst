@@ -225,18 +225,6 @@ When a NumPy structured array is needed, materialize explicitly::
 .. automethod:: CTable.iter_sorted
 
 
-Aggregates & statistics
------------------------
-
-.. autosummary::
-
-    CTable.describe
-    CTable.cov
-
-.. automethod:: CTable.describe
-.. automethod:: CTable.cov
-
-
 Mutations
 ---------
 
@@ -286,31 +274,54 @@ ordered reuse is required.
 Persistence
 -----------
 
+Persist CTables to disk or interchange formats, and restore them later without
+losing schema information. These methods cover native Blosc2 persistence as
+well as import/export paths for CSV, Arrow, and Parquet data.
+
 .. autosummary::
 
+    CTable.load
+    CTable.open
     CTable.save
     CTable.to_csv
     CTable.to_arrow
     CTable.to_parquet
+    CTable.from_arrow
+    CTable.from_parquet
+    CTable.from_csv
 
+.. automethod:: CTable.load
+.. automethod:: CTable.open
 .. automethod:: CTable.save
 .. automethod:: CTable.to_csv
 .. automethod:: CTable.to_arrow
 .. automethod:: CTable.to_parquet
+.. automethod:: CTable.from_arrow
+.. automethod:: CTable.from_parquet
+.. automethod:: CTable.from_csv
 
 
-Inspection
-----------
+Inspection & statistics
+-----------------------
+
+Compute common descriptive statistics directly on ``CTable`` data without
+materializing rows first. These methods operate column-wise on the compressed
+representation, making it easy to summarize distributions or measure
+relationships between numeric columns.
 
 .. autosummary::
 
+    CTable.column_schema
     CTable.info
     CTable.schema_dict
-    CTable.column_schema
+    CTable.describe
+    CTable.cov
 
+.. automethod:: CTable.column_schema
 .. automethod:: CTable.info
 .. automethod:: CTable.schema_dict
-.. automethod:: CTable.column_schema
+.. automethod:: CTable.describe
+.. automethod:: CTable.cov
 
 
 ----

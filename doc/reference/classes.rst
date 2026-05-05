@@ -3,12 +3,11 @@ Blosc2 Classes
 
 .. currentmodule:: blosc2
 
+
 Main Classes
 ------------
 .. autosummary::
 
-    CTable
-    Column
     NDArray
     NDField
     LazyArray
@@ -17,39 +16,42 @@ Main Classes
     BatchArray
     ListArray
     ObjectArray
-    SChunk
-    DictStore
-    TreeStore
-    EmbedStore
-    Index
     Ref
     Proxy
     ProxySource
     ProxyNDSource
     SimpleProxy
+    DictStore
+    TreeStore
+    EmbedStore
+    CTable
+    Column
+    Index
+    SChunk
 
 .. toctree::
     :maxdepth: 1
 
-    ctable
     ndarray
-    index_class
+    ndfield
     lazyarray
     c2array
     array
-    schunk
-    dict_store
-    tree_store
-    embed_store
     batch_array
     list_array
     objectarray
-    ndfield
     ref
     proxy
     proxysource
     proxyndsource
     simpleproxy
+    dict_store
+    tree_store
+    embed_store
+    ctable
+    index_class
+    schunk
+
 
 Other Classes
 -------------

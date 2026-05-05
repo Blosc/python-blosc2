@@ -3338,7 +3338,119 @@ class CTable(Generic[RowT]):
         blosc2_items_per_block: int | None = None,
         **kwargs,
     ) -> CTable:
-        """Read a Parquet file into a :class:`CTable` batch-wise using pyarrow."""
+        """Read a Parquet file into a :class:`CTable`.
+
+        The Parquet file is streamed batch by batch through :mod:`pyarrow` and then
+        converted into a typed :class:`CTable`. By default, the result is created in
+        memory, but you can also persist it on disk via ``urlpath``.
+
+        This method delegates the actual table construction to
+        :meth:`CTable.from_arrow`, so Arrow schema handling, nullable-column support,
+        and Blosc2 write tuning follow the same rules as that method.
+
+        Parameters
+        ----------
+        path : str or path-like
+            Path to the source Parquet file.
+
+        columns : list[str] or None, optional
+            Subset of columns to read from the Parquet file. If provided, only these
+            columns are loaded and their order in the resulting table matches the
+            order in this list. Column names must be unique.
+
+        batch_size : int, optional
+            Number of rows per Arrow batch read from the Parquet file. This controls
+            how much data is pulled from the file at a time before being handed off
+            to the CTable builder. Must be greater than 0.
+
+        urlpath : str or None, optional
+            Destination storage path for the resulting CTable. If ``None`` (the
+            default), the table is created in memory. If provided, the table is backed
+            by persistent on-disk storage.
+
+        mode : str, optional
+            Storage open mode for ``urlpath``. Defaults to ``"w"``. This is passed
+            through to :meth:`CTable.from_arrow`.
+
+        cparams : object, optional
+            Compression parameters for the created Blosc2 containers. Passed through
+            to :meth:`CTable.from_arrow`.
+
+        dparams : object, optional
+            Decompression parameters for the created Blosc2 containers. Passed through
+            to :meth:`CTable.from_arrow`.
+
+        validate : bool, optional
+            Whether to enable extra internal validation while building the table.
+            Defaults to ``False``.
+
+        auto_null_sentinels : bool, optional
+            If ``True`` (default), nullable scalar columns imported from Parquet may
+            automatically receive per-column null sentinel values when needed. Sentinel
+            selection follows the current null-policy rules used by CTable schema
+            handling.
+
+        blosc2_batch_size : int or None, optional
+            Number of items written to Blosc2 containers per internal write batch.
+            Passed through to :meth:`CTable.from_arrow`.
+
+        blosc2_items_per_block : int or None, optional
+            Target number of items per internal Blosc2 block. Passed through to
+            :meth:`CTable.from_arrow`.
+
+        **kwargs
+            Additional keyword arguments forwarded to ``pyarrow.parquet.ParquetFile``.
+            Use these for Parquet-reader-specific options supported by PyArrow.
+
+        Returns
+        -------
+        CTable
+            A new :class:`CTable` populated from the Parquet file. The table contains
+            all selected columns and all rows from the file. If ``urlpath`` is
+            provided, the returned table is disk-backed; otherwise it is in-memory.
+
+        Raises
+        ------
+        ImportError
+            If :mod:`pyarrow` is not installed.
+        ValueError
+            If ``batch_size`` is not greater than 0.
+        ValueError
+            If ``columns`` contains duplicate names.
+        Exception
+            Any exception raised by :mod:`pyarrow` while opening or reading the Parquet
+            file, or by :meth:`CTable.from_arrow` while converting Arrow data into a
+            CTable.
+
+        Examples
+        --------
+        Load an entire Parquet file into an in-memory table:
+
+        >>> import blosc2
+        >>> t = blosc2.CTable.from_parquet("data.parquet")
+
+        Load only a subset of columns:
+
+        >>> t = blosc2.CTable.from_parquet(
+        ...     "data.parquet",
+        ...     columns=["user_id", "amount", "country"],
+        ... )
+
+        Create a disk-backed table while reading in batches:
+
+        >>> t = blosc2.CTable.from_parquet(
+        ...     "data.parquet",
+        ...     batch_size=50_000,
+        ...     urlpath="data.ctable",
+        ... )
+
+        Pass additional options through to PyArrow's Parquet reader:
+
+        >>> t = blosc2.CTable.from_parquet(
+        ...     "data.parquet",
+        ...     memory_map=True,
+        ... )
+        """
         pq = cls._require_pyarrow_parquet("from_parquet()")
         pa = cls._require_pyarrow("from_parquet()")
         cls._validate_arrow_batch_size(batch_size)
