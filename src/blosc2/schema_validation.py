@@ -19,8 +19,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError, create_model
 
-from blosc2.list_array import coerce_list_cell
-from blosc2.schema import ListSpec
+from blosc2.list_array import _coerce_struct_item, coerce_list_cell
+from blosc2.schema import ListSpec, StructSpec
 from blosc2.schema_compiler import CompiledSchema  # noqa: TC001
 
 
@@ -43,8 +43,8 @@ def build_validator_model(schema: CompiledSchema) -> type[BaseModel]:
     field_definitions: dict[str, Any] = {}
     for col in schema.columns:
         pydantic_kwargs = col.spec.to_pydantic_kwargs()
-        is_nullable = getattr(col.spec, "null_value", None) is not None or (
-            isinstance(col.spec, ListSpec) and col.spec.nullable
+        is_nullable = getattr(col.spec, "null_value", None) is not None or bool(
+            getattr(col.spec, "nullable", False)
         )
         if isinstance(col.spec, ListSpec):
             item_type = col.spec.item_spec.python_type
@@ -130,6 +130,10 @@ def validate_row(schema: CompiledSchema, row: dict[str, Any]) -> dict[str, Any]:
     for col in schema.columns:
         if isinstance(col.spec, ListSpec) and col.name in normalized:
             normalized[col.name] = coerce_list_cell(col.spec, normalized[col.name])
+        elif (
+            isinstance(col.spec, StructSpec) and col.name in normalized and normalized[col.name] is not None
+        ):
+            normalized[col.name] = _coerce_struct_item(col.spec, normalized[col.name])
     masked_row, nulled = _mask_nulls(schema, normalized)
     try:
         instance = model_cls(**masked_row)
@@ -164,6 +168,12 @@ def validate_rows_rowwise(schema: CompiledSchema, rows: list[dict[str, Any]]) ->
         for col in schema.columns:
             if isinstance(col.spec, ListSpec) and col.name in normalized:
                 normalized[col.name] = coerce_list_cell(col.spec, normalized[col.name])
+            elif (
+                isinstance(col.spec, StructSpec)
+                and col.name in normalized
+                and normalized[col.name] is not None
+            ):
+                normalized[col.name] = _coerce_struct_item(col.spec, normalized[col.name])
         masked_row, nulled = _mask_nulls(schema, normalized)
         try:
             instance = model_cls(**masked_row)

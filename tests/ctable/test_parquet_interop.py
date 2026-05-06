@@ -15,6 +15,7 @@ import pytest
 
 import blosc2
 from blosc2 import CTable
+from blosc2.schema import StructSpec
 
 pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
@@ -229,6 +230,37 @@ class TestParquetRoundTrip:
         assert rt.schema == at.schema
         assert rt["items"].to_pylist() == at["items"].to_pylist()
         assert "arrow" in t._schema.metadata
+
+    def test_roundtrip_top_level_struct_column(self, tmp_path):
+        struct_type = pa.struct([pa.field("a", pa.int32()), pa.field("b", pa.string())])
+        at = pa.table({"props": pa.array([{"a": 1, "b": "x"}, None, {"a": 2, "b": "yy"}], type=struct_type)})
+        path = tmp_path / "struct.parquet"
+        pq.write_table(at, path)
+
+        t = CTable.from_parquet(path)
+        assert t["props"][:] == [{"a": 1, "b": "x"}, None, {"a": 2, "b": "yy"}]
+        assert isinstance(t._schema.columns_by_name["props"].spec, StructSpec)
+
+        out = tmp_path / "struct_out.parquet"
+        t.to_parquet(out)
+        rt = pq.read_table(out)
+        assert rt.schema == at.schema
+        assert rt["props"].to_pylist() == at["props"].to_pylist()
+
+    def test_top_level_struct_column_persistence(self, tmp_path):
+        @dataclass
+        class StructRow:
+            props: dict = blosc2.field(  # noqa: RUF009
+                blosc2.struct({"a": blosc2.int32(), "b": blosc2.vlstring()}, nullable=True)
+            )
+
+        path = tmp_path / "struct_table.b2d"
+        t = CTable(StructRow, urlpath=str(path), mode="w")
+        t.extend([[{"a": 1, "b": "x"}], [None], [{"a": 2, "b": "yy"}]])
+        t.close()
+
+        reopened = CTable.open(str(path), mode="r")
+        assert reopened["props"][:] == [{"a": 1, "b": "x"}, None, {"a": 2, "b": "yy"}]
 
     def test_empty_table_export_import(self, tmp_path):
         t = CTable(Row)

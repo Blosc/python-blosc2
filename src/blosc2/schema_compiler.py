@@ -98,7 +98,7 @@ def compute_display_width(spec: SchemaSpec) -> int:
     """Return a reasonable terminal display width for *spec*'s column."""
     if isinstance(spec, (VLStringSpec, VLBytesSpec)):
         return 40
-    if isinstance(spec, ListSpec):
+    if isinstance(spec, (ListSpec, StructSpec)):
         return max(40, len(spec.display_label()) + 4)
     dtype = spec.dtype
     if dtype is None:
@@ -389,7 +389,7 @@ def spec_from_metadata_dict(data: dict[str, Any]) -> SchemaSpec:
         item_spec = spec_from_metadata_dict(data.pop("item"))
         return ListSpec(item_spec, **data)
     if kind == "struct":
-        return StructSpec.from_metadata_dict({"fields": data.pop("fields")})
+        return StructSpec.from_metadata_dict({"fields": data.pop("fields"), **data})
     spec_cls = _KIND_TO_SPEC.get(kind)
     if spec_cls is None:
         raise ValueError(f"Unknown column kind {kind!r}")

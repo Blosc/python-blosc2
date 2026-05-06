@@ -549,13 +549,34 @@ Text & binary
     bytes
     vlstring
     vlbytes
+    struct
     list
 
 .. autoclass:: string
 .. autoclass:: bytes
 .. autofunction:: vlstring
 .. autofunction:: vlbytes
+.. autofunction:: struct
 .. autofunction:: list
+
+Struct columns
+--------------
+
+Struct columns are declared with :func:`blosc2.struct` and store one dictionary
+(or ``None`` when nullable) per row in batched variable-length storage.  They are
+also used when importing top-level Arrow/Parquet ``struct<...>`` columns::
+
+    from dataclasses import dataclass
+    import blosc2 as b2
+
+    @dataclass
+    class Product:
+        properties: dict = b2.field(
+            b2.struct({"code": b2.int32(), "label": b2.vlstring()}, nullable=True)
+        )
+
+    table.append([{"code": 1, "label": "fresh"}])
+    table.append([None])
 
 List columns
 ------------

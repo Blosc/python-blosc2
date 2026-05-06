@@ -363,12 +363,17 @@ class bytes(SchemaSpec):
 
 
 class StructSpec(SchemaSpec):
-    """Logical schema descriptor for dict-like structured values."""
+    """Logical schema descriptor for dict-like structured values.
+
+    Top-level CTable struct columns are stored as row-wise dictionaries in a
+    batched variable-length backend.  Struct specs can also be used as
+    :func:`list` item specs for Arrow ``list<struct<...>>`` columns.
+    """
 
     python_type = dict
     dtype = None
 
-    def __init__(self, fields: dict[str, SchemaSpec]):
+    def __init__(self, fields: dict[str, SchemaSpec], *, nullable: bool = False):
         if not isinstance(fields, dict) or not fields:
             raise TypeError("StructSpec fields must be a non-empty dict")
         for name, spec in fields.items():
@@ -377,6 +382,7 @@ class StructSpec(SchemaSpec):
             if not isinstance(spec, SchemaSpec):
                 raise TypeError("StructSpec field values must be SchemaSpec instances")
         self.fields = dict(fields)
+        self.nullable = nullable
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         return {}
@@ -385,6 +391,7 @@ class StructSpec(SchemaSpec):
         return {
             "kind": "struct",
             "fields": [{"name": name, **spec.to_metadata_dict()} for name, spec in self.fields.items()],
+            "nullable": self.nullable,
         }
 
     def display_label(self) -> str:
@@ -399,7 +406,7 @@ class StructSpec(SchemaSpec):
             field = dict(field)
             name = field.pop("name")
             fields[name] = spec_from_metadata_dict(field)
-        return cls(fields)
+        return cls(fields, nullable=data.get("nullable", False))
 
 
 class ListSpec(SchemaSpec):
@@ -646,9 +653,13 @@ def vlbytes(
     )
 
 
-def struct(fields: dict[str, SchemaSpec]) -> StructSpec:
-    """Build a structured schema descriptor for nested CTable values."""
-    return StructSpec(fields)
+def struct(fields: dict[str, SchemaSpec], *, nullable: bool = False) -> StructSpec:
+    """Build a structured schema descriptor for dict-like CTable values.
+
+    Top-level struct columns store one dictionary (or ``None`` when nullable)
+    per row.  Struct specs may also be nested as list item specs.
+    """
+    return StructSpec(fields, nullable=nullable)
 
 
 def list(
