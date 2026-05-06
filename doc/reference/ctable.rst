@@ -265,12 +265,11 @@ Indexes
 -------
 
 CTable indexes are created with :meth:`CTable.create_index` and returned as
-:class:`blosc2.ctable.CTableIndex` handles.  ``CTableIndex`` has the same
-user-facing role as :class:`blosc2.Index`, but for tables instead of arrays:
-it refers to an index stored in the table index catalog, and delegates
-maintenance operations such as ``drop()``, ``rebuild()``, and ``compact()``
-back to the owning table.  Users normally only receive these handles from the
-CTable API; they do not instantiate them directly.
+:class:`blosc2.Index` handles.  For tables, ``Index`` refers to an entry stored
+in the table index catalog and delegates maintenance operations such as
+``drop()``, ``rebuild()``, and ``compact()`` back to the owning table.  Users
+normally only receive these handles from the CTable API; they do not instantiate
+them directly.
 
 Indexes can target stored columns or **direct expressions** over stored columns
 via ``create_index(expression=...)``.  This lets queries reuse indexes for
@@ -298,19 +297,7 @@ globally sorted ordered reuse is required.
 .. automethod:: CTable.rebuild_index
 .. automethod:: CTable.compact_index
 
-.. autoclass:: blosc2.ctable.CTableIndex
-
-.. autoattribute:: blosc2.ctable.CTableIndex.col_name
-.. autoattribute:: blosc2.ctable.CTableIndex.kind
-.. autoattribute:: blosc2.ctable.CTableIndex.stale
-.. autoattribute:: blosc2.ctable.CTableIndex.name
-.. autoattribute:: blosc2.ctable.CTableIndex.nbytes
-.. autoattribute:: blosc2.ctable.CTableIndex.cbytes
-.. autoattribute:: blosc2.ctable.CTableIndex.cratio
-.. automethod:: blosc2.ctable.CTableIndex.storage_stats
-.. automethod:: blosc2.ctable.CTableIndex.drop
-.. automethod:: blosc2.ctable.CTableIndex.rebuild
-.. automethod:: blosc2.ctable.CTableIndex.compact
+See :class:`blosc2.Index` for the returned handle attributes and methods.
 
 
 Persistence

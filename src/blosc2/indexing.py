@@ -4038,34 +4038,73 @@ class Index(Mapping):
 
     ``Index`` objects are returned by NDArray indexing helpers such as
     :meth:`blosc2.NDArray.create_index`, :meth:`blosc2.NDArray.index`, and
-    :attr:`blosc2.NDArray.indexes`.  They expose descriptor metadata and
-    convenience methods for dropping, rebuilding, or compacting the underlying
-    index.  :class:`blosc2.ctable.CTableIndex` plays the same user-facing role
-    for :class:`blosc2.CTable` indexes.  Users should not instantiate either
-    class directly.
+    :attr:`blosc2.NDArray.indexes`, and by the equivalent :class:`blosc2.CTable`
+    helpers.  They expose descriptor metadata and convenience methods for
+    dropping, rebuilding, or compacting the underlying index.  Users should not
+    instantiate this class directly.
     """
 
-    def __init__(self, array: blosc2.NDArray, token: str):
+    def __init__(
+        self,
+        array: blosc2.NDArray | None,
+        token: str,
+        *,
+        table=None,
+        descriptor: dict | None = None,
+    ):
         self._array = array
         self._token = token
+        self._table = table
+        self._descriptor_snapshot = _copy_descriptor(descriptor) if descriptor is not None else None
+
+    @classmethod
+    def _from_table(cls, table, lookup_key: str, descriptor: dict) -> Index:
+        """Create an index handle for a CTable catalog entry."""
+        return cls(None, lookup_key, table=table, descriptor=descriptor)
+
+    def _is_table_index(self) -> bool:
+        return self._table is not None
 
     def _descriptor(self) -> dict:
-        return _descriptor_for_token(self._array, self._token)
+        if self._table is None:
+            return _descriptor_for_token(self._array, self._token)
+        _, descriptor = self._table._root_table._resolve_index_catalog_entry(self._token)
+        self._descriptor_snapshot = _copy_descriptor(descriptor)
+        return descriptor
+
+    def _target_array(self) -> blosc2.NDArray:
+        if self._table is None:
+            return self._array
+        return self._table._root_table._index_target_array(self._token, self._descriptor())
 
     @property
     def descriptor(self) -> dict:
         """Copy of the index descriptor dictionary."""
-        return _copy_descriptor_for_token(self._array, self._token)
+        if self._table is None:
+            return _copy_descriptor_for_token(self._array, self._token)
+        return _copy_descriptor(self._descriptor())
 
     @property
-    def kind(self) -> blosc2.IndexKind:
-        """Kind of index, as an :class:`blosc2.IndexKind`."""
-        return blosc2.IndexKind(self._descriptor()["kind"])
+    def kind(self) -> blosc2.IndexKind | str:
+        """Kind of index.
+
+        NDArray indexes return :class:`blosc2.IndexKind`; table indexes keep the
+        catalog kind string used by CTable descriptors.
+        """
+        kind = self._descriptor()["kind"]
+        if self._table is not None:
+            return kind
+        return blosc2.IndexKind(kind)
+
+    @property
+    def col_name(self) -> str | None:
+        """CTable lookup key for this index target, if this is a table index."""
+        return self._token if self._table is not None else None
 
     @property
     def field(self) -> str | None:
         """Structured-array field indexed by this handle, if any."""
-        return self._descriptor()["field"]
+        return self._descriptor().get("field")
 
     @property
     def name(self) -> str | None:
@@ -4091,18 +4130,20 @@ class Index(Mapping):
     def nbytes(self) -> int:
         """Total uncompressed size in bytes for this index payload."""
         descriptor = self._descriptor()
+        array = self._target_array()
         return sum(
-            _component_nbytes(self._array, descriptor, component)
-            for component in iter_index_components(self._array, descriptor)
+            _component_nbytes(array, descriptor, component)
+            for component in iter_index_components(array, descriptor)
         )
 
     @property
     def cbytes(self) -> int:
         """Total compressed size in bytes for this index payload."""
         descriptor = self._descriptor()
+        array = self._target_array()
         return sum(
-            _component_cbytes(self._array, descriptor, component)
-            for component in iter_index_components(self._array, descriptor)
+            _component_cbytes(array, descriptor, component)
+            for component in iter_index_components(array, descriptor)
         )
 
     @property
@@ -4113,37 +4154,111 @@ class Index(Mapping):
             return math.inf
         return self.nbytes / cbytes
 
+    def storage_stats(self) -> tuple[int, int, float] | None:
+        """Return ``(nbytes, cbytes, cratio)`` when sidecars are directly measurable."""
+        try:
+            nbytes = self.nbytes
+            cbytes = self.cbytes
+        except (FileNotFoundError, OSError, RuntimeError, KeyError, ValueError):
+            if self._table is None:
+                return None
+            root = self._table._root_table
+            storage = getattr(root, "_storage", None)
+            if storage.__class__.__name__ != "FileTableStorage":
+                return None
+
+            descriptor = self._descriptor_snapshot or self.descriptor
+            target_arr = root._index_target_array(self._token, descriptor)
+            store = storage._open_store()
+            nbytes = 0
+            cbytes = 0
+            try:
+                for component in iter_index_components(target_arr, descriptor):
+                    if component.path is None:
+                        return None
+                    key = self._component_store_key(component.path)
+                    obj = store[key]
+                    nbytes += int(obj.nbytes)
+                    cbytes += int(obj.cbytes)
+            except (FileNotFoundError, OSError, RuntimeError, KeyError, ValueError):
+                return None
+        cratio = math.inf if cbytes == 0 else nbytes / cbytes
+        return nbytes, cbytes, cratio
+
+    @staticmethod
+    def _component_store_key(path: str) -> str:
+        """Return the logical TreeStore key for an index component path."""
+        normalized = path.replace("\\", "/")
+        marker = "_indexes/"
+        idx = normalized.find(marker)
+        if idx < 0:
+            raise KeyError(f"Cannot resolve index component path {path!r} inside table store.")
+        relpath = normalized[idx:]
+        for suffix in (".b2nd", ".b2f"):
+            if relpath.endswith(suffix):
+                relpath = relpath[: -len(suffix)]
+                break
+        return "/" + relpath.lstrip("/")
+
     def drop(self) -> None:
         """Drop this index and delete its sidecar payloads."""
-        drop_index(self._array, field=self.field, name=self.name)
+        if self._table is None:
+            drop_index(self._array, field=self.field, name=self.name)
+            return
+        target = self._descriptor().get("target") or {}
+        if target.get("source") == "expression":
+            self._table.drop_index(expression=target.get("expression"), name=self.name)
+        else:
+            self._table.drop_index(self._token)
 
     def rebuild(self) -> Index:
-        """Rebuild this index and return this handle."""
-        rebuild_index(self._array, field=self.field, name=self.name)
-        return self
+        """Rebuild this index and return the updated handle."""
+        if self._table is None:
+            rebuild_index(self._array, field=self.field, name=self.name)
+            return self
+        target = self._descriptor().get("target") or {}
+        if target.get("source") == "expression":
+            return self._table.rebuild_index(expression=target.get("expression"), name=self.name)
+        return self._table.rebuild_index(self._token)
 
     def compact(self) -> Index:
-        """Compact this index, merging incremental runs, and return this handle."""
-        compact_index(self._array, field=self.field, name=self.name)
-        return self
+        """Compact this index, merging incremental runs, and return the updated handle."""
+        if self._table is None:
+            compact_index(self._array, field=self.field, name=self.name)
+            return self
+        target = self._descriptor().get("target") or {}
+        if target.get("source") == "expression":
+            return self._table.compact_index(expression=target.get("expression"), name=self.name)
+        return self._table.compact_index(self._token)
 
     def __getitem__(self, key):
+        """Return a descriptor value by key."""
         return self.descriptor[key]
 
     def __iter__(self):
+        """Iterate over descriptor keys."""
         return iter(self.descriptor)
 
     def __len__(self) -> int:
+        """Number of keys in the descriptor mapping."""
         return len(self.descriptor)
 
     def __repr__(self) -> str:
+        """Return a concise representation of this index handle."""
         try:
             descriptor = self._descriptor()
         except KeyError:
             return "Index(<dropped>)"
+        if self._table is not None:
+            target = descriptor.get("target") or {}
+            target_label = self._token if target.get("source") != "expression" else target.get("expression")
+            return (
+                f"Index(kind={descriptor['kind']!r}, col_name={target_label!r}, "
+                f"name={descriptor.get('name')!r}, stale={descriptor.get('stale')!r})"
+            )
         return (
-            f"Index(kind={descriptor['kind']!r}, field={descriptor['field']!r}, "
-            f"name={descriptor['name']!r}, stale={descriptor['stale']!r})"
+            f"Index(kind={descriptor['kind']!r}, field={descriptor.get('field')!r}, "
+            f"name={descriptor.get('name')!r}, stale={descriptor.get('stale')!r})"
         )
 
 

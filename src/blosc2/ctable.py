@@ -172,7 +172,7 @@ def null_policy(policy: NullPolicy):
 
 
 # ---------------------------------------------------------------------------
-# Index proxy and CTableIndex
+# Index proxy
 # ---------------------------------------------------------------------------
 
 
@@ -216,7 +216,7 @@ class _FakeSchunk:
         self.vlmeta = _FakeVlMeta()
 
 
-class _CTableIndexProxy:
+class _CTableBuildProxy:
     """Minimal shim that lets the ``indexing`` module build sidecars for a
     CTable column without touching the column's own ``schunk.vlmeta``.
 
@@ -237,151 +237,6 @@ class _CTableIndexProxy:
 
     def __getitem__(self, key):
         return self._col_array[key]
-
-
-class CTableIndex:
-    """Handle for an index attached to a :class:`CTable` target.
-
-    This has the same user-facing role as :class:`blosc2.Index`, but for
-    tables instead of arrays.  It is returned by :meth:`CTable.create_index`,
-    :meth:`CTable.index`, and items of :attr:`CTable.indexes`, and provides
-    the same core convenience operations: :meth:`drop`, :meth:`rebuild`, and
-    :meth:`compact`.  Users should not instantiate this class directly.
-    """
-
-    def __init__(self, table: CTable, col_name: str, descriptor: dict) -> None:
-        self._table = table
-        self._col_name = col_name
-        self._descriptor = descriptor
-
-    def _target_array(self) -> blosc2.NDArray:
-        return self._table._root_table._index_target_array(self._col_name, self._descriptor)
-
-    @property
-    def col_name(self) -> str:
-        """Lookup key for this index target."""
-        return self._col_name
-
-    @property
-    def kind(self) -> str:
-        """Index kind string (``'bucket'``, ``'partial'``, or ``'full'``)."""
-        return self._descriptor.get("kind", "")
-
-    @property
-    def stale(self) -> bool:
-        """True if the index is stale and needs rebuilding."""
-        return bool(self._descriptor.get("stale", False))
-
-    @property
-    def name(self) -> str | None:
-        """Optional human-readable name assigned at creation time."""
-        return self._descriptor.get("name") or None
-
-    @property
-    def nbytes(self) -> int:
-        """Total uncompressed size in bytes for this index payload."""
-        from blosc2.indexing import _component_nbytes, iter_index_components
-
-        target_arr = self._target_array()
-        descriptor = self._descriptor
-        return sum(
-            _component_nbytes(target_arr, descriptor, component)
-            for component in iter_index_components(target_arr, descriptor)
-        )
-
-    @property
-    def cbytes(self) -> int:
-        """Total compressed size in bytes for this index payload."""
-        from blosc2.indexing import _component_cbytes, iter_index_components
-
-        target_arr = self._target_array()
-        descriptor = self._descriptor
-        return sum(
-            _component_cbytes(target_arr, descriptor, component)
-            for component in iter_index_components(target_arr, descriptor)
-        )
-
-    @property
-    def cratio(self) -> float:
-        """Compression ratio for this index payload."""
-        cbytes = self.cbytes
-        if cbytes == 0:
-            return float("inf")
-        return self.nbytes / cbytes
-
-    def storage_stats(self) -> tuple[int, int, float] | None:
-        """Return ``(nbytes, cbytes, cratio)`` when sidecars are directly measurable."""
-        try:
-            nbytes = self.nbytes
-            cbytes = self.cbytes
-        except (FileNotFoundError, OSError, RuntimeError, KeyError, ValueError):
-            root = self._table._root_table
-            if not isinstance(root._storage, FileTableStorage):
-                return None
-
-            from blosc2.indexing import iter_index_components
-
-            descriptor = self._descriptor
-            target_arr = self._target_array()
-            store = root._storage._open_store()
-            nbytes = 0
-            cbytes = 0
-            try:
-                for component in iter_index_components(target_arr, descriptor):
-                    if component.path is None:
-                        return None
-                    key = self._component_store_key(component.path)
-                    obj = store[key]
-                    nbytes += int(obj.nbytes)
-                    cbytes += int(obj.cbytes)
-            except (FileNotFoundError, OSError, RuntimeError, KeyError, ValueError):
-                return None
-        cratio = float("inf") if cbytes == 0 else nbytes / cbytes
-        return nbytes, cbytes, cratio
-
-    @staticmethod
-    def _component_store_key(path: str) -> str:
-        """Return the logical TreeStore key for an index component path."""
-        normalized = path.replace("\\", "/")
-        marker = "_indexes/"
-        idx = normalized.find(marker)
-        if idx < 0:
-            raise KeyError(f"Cannot resolve index component path {path!r} inside table store.")
-        relpath = normalized[idx:]
-        for suffix in (".b2nd", ".b2f"):
-            if relpath.endswith(suffix):
-                relpath = relpath[: -len(suffix)]
-                break
-        return "/" + relpath.lstrip("/")
-
-    def drop(self) -> None:
-        """Drop this index from the owning table."""
-        target = self._descriptor.get("target") or {}
-        if target.get("source") == "expression":
-            self._table.drop_index(expression=target.get("expression"), name=self.name)
-        else:
-            self._table.drop_index(self._col_name)
-
-    def rebuild(self) -> CTableIndex:
-        """Rebuild this index and return the updated handle."""
-        target = self._descriptor.get("target") or {}
-        if target.get("source") == "expression":
-            return self._table.rebuild_index(expression=target.get("expression"), name=self.name)
-        return self._table.rebuild_index(self._col_name)
-
-    def compact(self) -> CTableIndex:
-        """Compact this index (merge incremental runs) and return the updated handle."""
-        target = self._descriptor.get("target") or {}
-        if target.get("source") == "expression":
-            return self._table.compact_index(expression=target.get("expression"), name=self.name)
-        return self._table.compact_index(self._col_name)
-
-    def __repr__(self) -> str:
-        stale_str = " (stale)" if self.stale else ""
-        name_str = f" name={self.name!r}" if self.name else ""
-        target = self._descriptor.get("target") or {}
-        target_label = self._col_name if target.get("source") != "expression" else target.get("expression")
-        return f"<CTableIndex col={target_label!r} kind={self.kind!r}{name_str}{stale_str}>"
 
 
 class _CTableInfoReporter(InfoReporter):
@@ -5264,7 +5119,7 @@ class CTable(Generic[RowT]):
 
         anchor = self._storage.index_anchor_path(col_name)
         os.makedirs(os.path.dirname(anchor), exist_ok=True)
-        proxy = _CTableIndexProxy(col_arr, anchor)
+        proxy = _CTableBuildProxy(col_arr, anchor)
         proxy_key = _array_key(proxy)
         _PERSISTENT_INDEXES.pop(proxy_key, None)  # clear any stale cache entry
 
@@ -5381,7 +5236,7 @@ class CTable(Generic[RowT]):
         build: str = "auto",
         tmpdir: str | None = None,
         **kwargs,
-    ) -> CTableIndex:
+    ) -> blosc2.Index:
         """Build and register an index for a stored column or table expression."""
         if self.base is not None:
             raise ValueError("Cannot create an index on a view.")
@@ -5453,7 +5308,7 @@ class CTable(Generic[RowT]):
             descriptor["built_value_epoch"] = value_epoch
             catalog[token] = descriptor
             self._storage.save_index_catalog(catalog)
-            return CTableIndex(self, token, descriptor)
+            return blosc2.Index._from_table(self, token, descriptor)
 
         if col_name is None:
             raise TypeError("must specify col_name/field or expression")
@@ -5515,7 +5370,7 @@ class CTable(Generic[RowT]):
         catalog = self._storage.load_index_catalog()
         catalog[col_name] = descriptor
         self._storage.save_index_catalog(catalog)
-        return CTableIndex(self, col_name, descriptor)
+        return blosc2.Index._from_table(self, col_name, descriptor)
 
     def drop_index(
         self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
@@ -5535,7 +5390,7 @@ class CTable(Generic[RowT]):
 
     def rebuild_index(
         self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
-    ) -> CTableIndex:
+    ) -> blosc2.Index:
         """Drop and recreate an index with the same parameters."""
         if self.base is not None:
             raise ValueError("Cannot rebuild an index on a view.")
@@ -5551,7 +5406,7 @@ class CTable(Generic[RowT]):
 
     def compact_index(
         self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
-    ) -> CTableIndex:
+    ) -> blosc2.Index:
         """Compact an index, merging any incremental append runs."""
         if self.base is not None:
             raise ValueError("Cannot compact an index on a view.")
@@ -5574,7 +5429,7 @@ class CTable(Generic[RowT]):
 
         if _is_persistent_array(col_arr):
             anchor = self._storage.index_anchor_path(lookup_key)
-            proxy = _CTableIndexProxy(col_arr, anchor)
+            proxy = _CTableBuildProxy(col_arr, anchor)
             proxy_key = _array_key(proxy)
             store = _default_index_store()
             store["indexes"][descriptor["token"]] = descriptor
@@ -5588,7 +5443,7 @@ class CTable(Generic[RowT]):
             updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
             catalog[lookup_key] = updated_desc
             self._storage.save_index_catalog(catalog)
-            return CTableIndex(self, lookup_key, updated_desc)
+            return blosc2.Index._from_table(self, lookup_key, updated_desc)
         else:
             _ix_compact_index(col_arr)
             store = _IN_MEMORY_INDEXES.get(id(col_arr))
@@ -5598,23 +5453,23 @@ class CTable(Generic[RowT]):
                 updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
                 catalog[lookup_key] = updated_desc
                 self._storage.save_index_catalog(catalog)
-                return CTableIndex(self, lookup_key, updated_desc)
-            return CTableIndex(self, lookup_key, descriptor)
+                return blosc2.Index._from_table(self, lookup_key, updated_desc)
+            return blosc2.Index._from_table(self, lookup_key, descriptor)
 
     def index(
         self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
-    ) -> CTableIndex:
+    ) -> blosc2.Index:
         """Return the index handle for a stored-column or expression target."""
         lookup_key, descriptor = self._resolve_index_catalog_entry(
             col_name, expression=expression, name=name
         )
-        return CTableIndex(self, lookup_key, descriptor)
+        return blosc2.Index._from_table(self, lookup_key, descriptor)
 
     @property
-    def indexes(self) -> list[CTableIndex]:
-        """Return a list of :class:`CTableIndex` handles for all active indexes."""
+    def indexes(self) -> list[blosc2.Index]:
+        """Return a list of :class:`blosc2.Index` handles for all active indexes."""
         catalog = self._root_table._storage.load_index_catalog()
-        return [CTableIndex(self, col_name, desc) for col_name, desc in catalog.items()]
+        return [blosc2.Index._from_table(self, col_name, desc) for col_name, desc in catalog.items()]
 
     def _rewrite_expression_query_for_index(
         self, expression: str, operands: dict, target: dict

@@ -51,7 +51,9 @@ try:
     idx_active = pt.create_index("active")
     print("Indexes created:", pt.indexes)
     print("sensor_id stale?", idx_sensor.stale)
+    print("sensor_id storage stats (nbytes, cbytes, cratio):", idx_sensor.storage_stats())
     print("active stale?", idx_active.stale)
+    print("active storage stats (nbytes, cbytes, cratio):", idx_active.storage_stats())
 
     # Queries can combine indexed and non-indexed predicates.
     recent_active = pt.where((pt.sensor_id >= 180) & pt.active & (pt.region == "north"))
@@ -77,6 +79,7 @@ try:
     packed = blosc2.open(str(bundle_path), mode="r")
     print("Reopened object type:", type(packed).__name__)
     print("Indexes after reopen from .b2z:", packed.indexes)
+    print("sensor_id storage stats after reopen:", packed.index("sensor_id").storage_stats())
 
     # Query directly against the .b2z bundle; no unpack step is needed.
     warm_active = packed.where(packed.active & (packed.status == "warm") & (packed.sensor_id > 100))
