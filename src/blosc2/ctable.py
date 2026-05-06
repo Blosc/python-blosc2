@@ -3735,16 +3735,16 @@ class CTable(Generic[RowT]):
         spec:
             A schema descriptor such as ``b2.int64(ge=0)`` or a field
             descriptor such as ``b2.field(b2.int64(ge=0), default=0)``.
-            A default is required when the table already has live rows, so
-            those rows can be backfilled.
+            When the table already has live rows, use ``blosc2.field(...)``
+            with a default declared so those rows can be backfilled.
 
         Raises
         ------
         ValueError
             If the table is read-only, is a view, the column already exists,
-            or a non-empty table is given a column without a default value.
+            or a non-empty table is given a column with no default declared.
         TypeError
-            If *default* cannot be coerced to *spec*'s dtype.
+            If a declared default cannot be coerced to *spec*'s dtype.
         """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
@@ -4110,6 +4110,28 @@ class CTable(Generic[RowT]):
             values = blosc2.lazyexpr(meta["expression"], operands)[:]
             row[name] = np.asarray(values, dtype=meta["dtype"])[0]
         return row
+
+    def _validate_no_default_columns_present(self, row: dict[str, Any]) -> None:
+        """Raise a clear error when a row omits a column with no default declared."""
+        for col in self._schema.columns:
+            if col.name in row:
+                continue
+            is_nullable = getattr(col.spec, "null_value", None) is not None or bool(
+                getattr(col.spec, "nullable", False)
+            )
+            if col.default is MISSING and not is_nullable:
+                raise ValueError(f"Column {col.name!r} has no default declared; a value must be provided.")
+
+    def _fill_default_batch_columns(self, raw_columns: dict[str, Any], row_count: int) -> dict[str, Any]:
+        """Fill omitted batch columns from defaults, or raise if no default is declared."""
+        raw_columns = dict(raw_columns)
+        for col in self._schema.columns:
+            if col.name in raw_columns:
+                continue
+            if col.default is MISSING:
+                raise ValueError(f"Column {col.name!r} has no default declared; values must be provided.")
+            raw_columns[col.name] = [col.default] * row_count
+        return raw_columns
 
     def _autofill_materialized_batch_columns(
         self, raw_columns: dict[str, Any], row_count: int, *, provided_names: set[str]
@@ -5974,6 +5996,7 @@ class CTable(Generic[RowT]):
         # Normalize → validate → coerce
         row = self._normalize_row_input(data)
         row = self._autofill_materialized_row_values(row)
+        self._validate_no_default_columns_present(row)
         if self._validate:
             from blosc2.schema_validation import validate_row
 
@@ -6033,7 +6056,8 @@ class CTable(Generic[RowT]):
         *data* may be:
 
         * a **dict of arrays** ``{"col": array, ...}`` — all arrays must have
-          the same length; missing columns are filled with their default value;
+          the same length; omitted columns are filled from their declared default;
+          columns with no default declared must be provided;
         * a **list of rows**, each compatible with :meth:`append`;
         * another **CTable** — columns are matched by name.
 
@@ -6103,6 +6127,7 @@ class CTable(Generic[RowT]):
         raw_columns = self._autofill_materialized_batch_columns(
             raw_columns, new_nrows, provided_names=provided_names
         )
+        raw_columns = self._fill_default_batch_columns(raw_columns, new_nrows)
 
         # Validate constraints column-by-column before writing
         if do_validate:

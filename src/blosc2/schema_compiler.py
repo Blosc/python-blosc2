@@ -149,7 +149,7 @@ class CompiledColumn:
     py_type: Any
     spec: SchemaSpec
     dtype: np.dtype | None
-    default: Any  # MISSING means required (no default)
+    default: Any  # MISSING means no default declared
     config: ColumnConfig
     display_width: int = 20  # terminal column width for __str__ / info()
 
@@ -360,9 +360,9 @@ def _json_to_bytes(value: dict[str, Any]) -> bytes:
 
 
 def _default_to_json(value: Any) -> Any:
-    """Convert a field default to a JSON-compatible value."""
+    """Convert a declared field default to a JSON-compatible value."""
     if value is MISSING:
-        return None
+        raise ValueError("Cannot serialize MISSING as a declared default.")
     if isinstance(value, complex):
         return {"__complex__": True, "real": value.real, "imag": value.imag}
     if isinstance(value, bytes):
@@ -372,8 +372,6 @@ def _default_to_json(value: Any) -> Any:
 
 def _default_from_json(value: Any) -> Any:
     """Reverse of :func:`_default_to_json`."""
-    if value is None:
-        return MISSING
     if isinstance(value, dict) and value.get("__complex__"):
         return complex(value["real"], value["imag"])
     if isinstance(value, dict) and value.get("__bytes__"):
@@ -411,7 +409,7 @@ def schema_to_dict(schema: CompiledSchema) -> dict[str, Any]:
             "version": 1,
             "row_cls": "Row",
             "columns": [
-                {"name": "id", "kind": "int64", "ge": 0, "default": null},
+                {"name": "id", "kind": "int64", "ge": 0},
                 {"name": "score", "kind": "float64", "ge": 0, "le": 100, "default": 0.0},
                 {"name": "active", "kind": "bool", "default": true},
             ]
@@ -423,7 +421,8 @@ def schema_to_dict(schema: CompiledSchema) -> dict[str, Any]:
         entry.update(col.spec.to_metadata_dict())  # adds "kind" + constraints
         if isinstance(entry.get("null_value"), bytes):
             entry["null_value"] = _bytes_to_json(entry["null_value"])
-        entry["default"] = _default_to_json(col.default)
+        if col.default is not MISSING:
+            entry["default"] = _default_to_json(col.default)
         if col.config.cparams is not None:
             entry["cparams"] = col.config.cparams
         if col.config.dparams is not None:
@@ -465,7 +464,7 @@ def schema_from_dict(data: dict[str, Any]) -> CompiledSchema:
         entry = dict(entry)  # don't mutate caller's data
         name = entry.pop("name")
         kind = entry.pop("kind")
-        default = _default_from_json(entry.pop("default", None))
+        default = _default_from_json(entry.pop("default")) if "default" in entry else MISSING
         cparams = entry.pop("cparams", None)
         dparams = entry.pop("dparams", None)
         chunks = tuple(entry.pop("chunks")) if "chunks" in entry else None

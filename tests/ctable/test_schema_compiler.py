@@ -46,6 +46,12 @@ class WithComplex:
     c_val: complex = blosc2.field(blosc2.complex128(), default=0j)
 
 
+@dataclass
+class WithNoneDefault:
+    id: int = blosc2.field(blosc2.int64())
+    note: str = blosc2.field(blosc2.vlstring(nullable=True), default=None)
+
+
 # -------------------------------------------------------------------
 # compile_schema — explicit b2.field()
 # -------------------------------------------------------------------
@@ -84,7 +90,7 @@ def test_compile_column_specs():
 
 def test_compile_defaults():
     s = compile_schema(Simple)
-    assert s.columns_by_name["id"].default is MISSING  # required
+    assert s.columns_by_name["id"].default is MISSING  # no default declared
     assert s.columns_by_name["score"].default == 0.0
     assert s.columns_by_name["active"].default is True
 
@@ -193,7 +199,7 @@ def test_schema_to_dict_column_fields():
     id_col = next(c for c in d["columns"] if c["name"] == "id")
     assert id_col["kind"] == "int64"
     assert id_col["ge"] == 0
-    assert id_col["default"] is None  # MISSING → None
+    assert "default" not in id_col  # no default declared omits the key
 
 
 def test_schema_to_dict_default_values():
@@ -211,6 +217,20 @@ def test_schema_to_dict_complex_default():
     assert c_col["default"]["__complex__"] is True
     assert c_col["default"]["real"] == 0.0
     assert c_col["default"]["imag"] == 0.0
+
+
+def test_schema_to_dict_none_default():
+    d = schema_to_dict(compile_schema(WithNoneDefault))
+    id_col = next(c for c in d["columns"] if c["name"] == "id")
+    note_col = next(c for c in d["columns"] if c["name"] == "note")
+    assert "default" not in id_col
+    assert note_col["default"] is None
+
+
+def test_schema_roundtrip_none_default():
+    restored = schema_from_dict(schema_to_dict(compile_schema(WithNoneDefault)))
+    assert restored.columns_by_name["id"].default is MISSING
+    assert restored.columns_by_name["note"].default is None
 
 
 def test_schema_roundtrip():

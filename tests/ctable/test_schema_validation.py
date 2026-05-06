@@ -60,10 +60,16 @@ def test_append_boundary_values():
 def test_append_default_fill():
     """Fields with defaults can be omitted from a tuple — Pydantic fills them in."""
     t = CTable(Row, expected_size=5)
-    # Only id is required; score and active have defaults
+    # Only id has no default declared; score and active have defaults
     t.append((5,))  # score=0.0, active=True filled by defaults
     assert len(t) == 1
     assert t[0].id == 5
+
+
+def test_append_omitted_no_default_column_raises_clear_error():
+    t = CTable(Row, expected_size=5)
+    with pytest.raises(ValueError, match="no default declared"):
+        t.append(())
 
 
 def test_append_validate_false():
@@ -101,6 +107,19 @@ def test_extend_le_violation():
     data = [(i, float(i), True) for i in range(5)] + [(5, 101.0, False)]
     with pytest.raises(ValueError, match="le=100"):
         t.extend(data)
+
+
+def test_extend_omitted_columns_with_defaults_are_filled():
+    t = CTable(Row, expected_size=10)
+    t.extend({"id": [1, 2]})
+    assert list(t["score"][:]) == [0.0, 0.0]
+    assert list(t["active"][:]) == [True, True]
+
+
+def test_extend_omitted_no_default_column_raises_clear_error():
+    t = CTable(Row, expected_size=10)
+    with pytest.raises(ValueError, match="no default declared"):
+        t.extend({"score": [1.0, 2.0]})
 
 
 def test_extend_validate_false():
