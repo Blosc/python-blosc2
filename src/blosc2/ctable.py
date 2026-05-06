@@ -3691,10 +3691,10 @@ class CTable(Generic[RowT]):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _column_spec_default_and_cparams(
+    def _column_spec_default_and_config(
         spec_or_field: SchemaSpec | dataclasses.Field,
-    ) -> tuple[SchemaSpec, Any, dict | None]:
-        """Extract the schema spec, default and cparams for ``add_column()``."""
+    ) -> tuple[SchemaSpec, Any, ColumnConfig]:
+        """Extract the schema spec, default and storage config for ``add_column()``."""
         if isinstance(spec_or_field, dataclasses.Field):
             meta = get_blosc2_field_metadata(spec_or_field)
             if meta is None:
@@ -3706,22 +3706,25 @@ class CTable(Generic[RowT]):
                 default = spec_or_field.default_factory()
             else:
                 default = MISSING
-            cparams = meta.get("cparams")
+            config = ColumnConfig(
+                cparams=meta.get("cparams"),
+                dparams=meta.get("dparams"),
+                chunks=meta.get("chunks"),
+                blocks=meta.get("blocks"),
+            )
         else:
             spec = spec_or_field
             default = MISSING
-            cparams = None
+            config = ColumnConfig(cparams=None, dparams=None, chunks=None, blocks=None)
 
         if not isinstance(spec, SchemaSpec):
             raise TypeError(f"add_column() requires a SchemaSpec, got {type(spec)!r}.")
-        return spec, default, cparams
+        return spec, default, config
 
     def add_column(
         self,
         name: str,
         spec: SchemaSpec | dataclasses.Field,
-        *,
-        cparams: dict | None = None,
     ) -> None:
         """Add a new column filled from the default declared in *spec*.
 
@@ -3734,10 +3737,6 @@ class CTable(Generic[RowT]):
             descriptor such as ``b2.field(b2.int64(ge=0), default=0)``.
             A default is required when the table already has live rows, so
             those rows can be backfilled.
-        cparams:
-            Optional compression parameters for this column's NDArray.  When
-            *spec* is a :func:`blosc2.field` descriptor, its compression
-            parameters are used unless this argument is provided.
 
         Raises
         ------
@@ -3757,9 +3756,7 @@ class CTable(Generic[RowT]):
         if name in self._computed_cols:
             raise ValueError(f"A computed column named {name!r} already exists.")
 
-        spec, default, field_cparams = self._column_spec_default_and_cparams(spec)
-        if cparams is None:
-            cparams = field_cparams
+        spec, default, column_config = self._column_spec_default_and_config(spec)
 
         live_pos = np.where(self._valid_rows[:])[0]
         if default is MISSING and len(live_pos) > 0:
@@ -3769,6 +3766,7 @@ class CTable(Generic[RowT]):
             )
 
         compiled_col = self._compiled_column_from_spec(name, spec)
+        compiled_col.config = column_config
         self._resolve_nullable_specs(
             CompiledSchema(row_cls=None, columns=[compiled_col], columns_by_name={name: compiled_col}),
             validate_column_null_values=False,
@@ -3777,7 +3775,13 @@ class CTable(Generic[RowT]):
 
         if self._is_varlen_scalar_column(compiled_col):
             # Varlen scalar columns don't use fixed-width NDArray storage.
-            new_col = self._storage.create_varlen_scalar_column(name, spec=spec, cparams=cparams)
+            col_storage = self._resolve_column_storage(compiled_col, None, None)
+            new_col = self._storage.create_varlen_scalar_column(
+                name,
+                spec=spec,
+                cparams=col_storage.get("cparams"),
+                dparams=col_storage.get("dparams"),
+            )
             for _ in live_pos:
                 new_col.append(default)
             new_col.flush()
@@ -3798,20 +3802,20 @@ class CTable(Generic[RowT]):
 
             capacity = len(self._valid_rows)
             default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+            col_storage = self._resolve_column_storage(compiled_col, default_chunks, default_blocks)
             new_col = self._storage.create_column(
                 name,
                 dtype=spec.dtype,
                 shape=(capacity,),
-                chunks=default_chunks,
-                blocks=default_blocks,
-                cparams=cparams,
-                dparams=None,
+                chunks=col_storage["chunks"],
+                blocks=col_storage["blocks"],
+                cparams=col_storage.get("cparams"),
+                dparams=col_storage.get("dparams"),
             )
             if len(live_pos) > 0:
                 new_col[live_pos] = default_val
 
         compiled_col.default = default
-        compiled_col.config = ColumnConfig(cparams=cparams, dparams=None, chunks=None, blocks=None)
         self._cols[name] = new_col
         self.col_names.append(name)
         self._col_widths[name] = max(len(name), compiled_col.display_width)

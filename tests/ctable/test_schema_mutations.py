@@ -240,6 +240,12 @@ def test_add_column_schema_updated():
     assert "weight" in t.schema.columns_by_name
 
 
+def test_add_column_uses_field_storage_config():
+    t = CTable(Row, new_data=DATA10)
+    t.add_column("weight", blosc2.field(blosc2.float64(), default=0.0, cparams={"clevel": 9}))
+    assert t.column_schema("weight").config.cparams == {"clevel": 9}
+
+
 def test_add_column_persists_on_disk():
     path = table_path("add_col")
     t = CTable(Row, urlpath=path, mode="w", new_data=DATA10)
