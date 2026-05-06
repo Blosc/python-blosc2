@@ -148,6 +148,18 @@ def test_to_b2z_materializes_view():
     assert list(opened["id"][:]) == [2, 3]
 
 
+def test_copy_to_b2z_uses_urlpath_extension():
+    dest = table_path("copy_dst.b2z")
+    t = CTable(Row, new_data=[(10, 50.0, True), (20, 60.0, False)])
+
+    copied = t.copy(urlpath=dest)
+
+    assert isinstance(copied, CTable)
+    assert os.path.exists(dest)
+    assert len(copied) == 2
+    assert list(copied["id"][:]) == [10, 20]
+
+
 def test_to_b2d_unpacks_persistent_b2z():
     src_b2d = table_path("to_b2d_src.b2d")
     src_b2z = table_path("to_b2d_src.b2z")
@@ -177,6 +189,25 @@ def test_to_b2d_materializes_view():
     opened = CTable.open(dest, mode="r")
     assert len(opened) == 2
     assert list(opened["id"][:]) == [2, 3]
+
+
+def test_copy_to_b2d_uses_urlpath_extension():
+    dest = table_path("copy_dst.b2d")
+    t = CTable(Row, new_data=[(10, 50.0, True), (20, 60.0, False)])
+
+    copied = t.copy(urlpath=dest)
+
+    assert isinstance(copied, CTable)
+    assert os.path.isdir(dest)
+    assert len(copied) == 2
+    assert list(copied["id"][:]) == [10, 20]
+
+
+def test_copy_rejects_unknown_urlpath_extension():
+    t = CTable(Row, new_data=[(10, 50.0, True)])
+
+    with pytest.raises(ValueError, match=r"\.b2z or \.b2d"):
+        t.copy(urlpath=table_path("copy_dst.b2nd"))
 
 
 def test_column_order_preserved_after_reopen():

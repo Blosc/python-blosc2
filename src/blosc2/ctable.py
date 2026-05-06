@@ -4775,8 +4775,14 @@ class CTable(Generic[RowT]):
             result._last_pos = n
             return result
 
-    def copy(self, compact: bool = True) -> CTable:
-        """Return a new standalone in-memory copy of this table.
+    def copy(
+        self,
+        compact: bool = True,
+        *,
+        urlpath: str | os.PathLike[str] | None = None,
+        overwrite: bool = False,
+    ) -> CTable:
+        """Return a new standalone copy of this table.
 
         Parameters
         ----------
@@ -4785,8 +4791,26 @@ class CTable(Generic[RowT]):
             The result is a dense table with no tombstones and no parent
             dependency — ideal for materialising a filtered view.
             If ``False``, all physical slots are copied including deleted gaps,
-            preserving the tombstone state exactly.
+            preserving the tombstone state exactly for in-memory copies.
+        urlpath:
+            Destination path for a persistent copy.  The extension selects the
+            on-disk format: ``.b2z`` for a compact zip-backed store or ``.b2d``
+            for a directory-backed store.  If ``None`` (default), return an
+            in-memory copy.
+        overwrite:
+            If ``True``, replace an existing persistent destination.
         """
+        if urlpath is not None:
+            urlpath = os.fspath(urlpath)
+            ext = os.path.splitext(urlpath)[1]
+            if ext == ".b2z":
+                self.to_b2z(urlpath, overwrite=overwrite, compact=compact)
+            elif ext == ".b2d":
+                self.to_b2d(urlpath, overwrite=overwrite, compact=compact)
+            else:
+                raise ValueError("urlpath must have a .b2z or .b2d extension")
+            return CTable.open(urlpath, mode="r")
+
         valid_np = self._valid_rows[:]
         live_pos = np.where(valid_np)[0]
         n_live = len(live_pos)
