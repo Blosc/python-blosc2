@@ -147,7 +147,7 @@ def test_explicit_null_value_overrides_nullable_policy():
 def test_add_column_nullable_true_uses_null_policy():
     t = CTable(IntRow)
     with blosc2.null_policy(blosc2.NullPolicy(signed_int_strategy="max")):
-        t.add_column("extra", blosc2.int32(nullable=True), 0)
+        t.add_column("extra", blosc2.field(blosc2.int32(nullable=True), default=0))
 
     assert t["extra"].null_value == np.iinfo(np.int32).max
 

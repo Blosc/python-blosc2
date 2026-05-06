@@ -203,19 +203,32 @@ def test_assign_respects_deleted_rows():
 
 def test_add_column_appears_in_col_names():
     t = CTable(Row, new_data=DATA10)
-    t.add_column("weight", blosc2.float64(), 0.0)
+    t.add_column("weight", blosc2.field(blosc2.float64(), default=0.0))
     assert "weight" in t.col_names
 
 
 def test_add_column_fills_default_for_existing_rows():
     t = CTable(Row, new_data=DATA10)
-    t.add_column("weight", blosc2.float64(), 5.5)
+    t.add_column("weight", blosc2.field(blosc2.float64(), default=5.5))
     np.testing.assert_array_equal(t["weight"][:], np.full(10, 5.5))
+
+
+def test_add_column_without_default_allowed_for_empty_table():
+    t = CTable(Row)
+    t.add_column("weight", blosc2.float64())
+    t.append((1, 2.0, True, 3.0))
+    assert t["weight"][0] == pytest.approx(3.0)
+
+
+def test_add_column_without_default_on_non_empty_table_raises():
+    t = CTable(Row, new_data=DATA10)
+    with pytest.raises(ValueError, match="requires a default"):
+        t.add_column("weight", blosc2.float64())
 
 
 def test_add_column_new_rows_can_use_it():
     t = CTable(Row, new_data=DATA10)
-    t.add_column("weight", blosc2.float64(), 0.0)
+    t.add_column("weight", blosc2.field(blosc2.float64(), default=0.0))
     # After adding, extend doesn't know about weight — add manually
     t["weight"].assign(np.ones(10) * 2.0)
     assert t["weight"].mean() == pytest.approx(2.0)
@@ -223,14 +236,14 @@ def test_add_column_new_rows_can_use_it():
 
 def test_add_column_schema_updated():
     t = CTable(Row, new_data=DATA10)
-    t.add_column("weight", blosc2.float64(), 0.0)
+    t.add_column("weight", blosc2.field(blosc2.float64(), default=0.0))
     assert "weight" in t.schema.columns_by_name
 
 
 def test_add_column_persists_on_disk():
     path = table_path("add_col")
     t = CTable(Row, urlpath=path, mode="w", new_data=DATA10)
-    t.add_column("weight", blosc2.float64(), 7.0)
+    t.add_column("weight", blosc2.field(blosc2.float64(), default=7.0))
     t.close()
     t2 = CTable.open(path)
     assert "weight" in t2.col_names
@@ -241,25 +254,25 @@ def test_add_column_view_raises():
     t = CTable(Row, new_data=DATA10)
     view = t.where(t["id"] > 4)
     with pytest.raises(ValueError, match="view"):
-        view.add_column("weight", blosc2.float64(), 0.0)
+        view.add_column("weight", blosc2.field(blosc2.float64(), default=0.0))
 
 
 def test_add_column_duplicate_raises():
     t = CTable(Row, new_data=DATA10)
     with pytest.raises(ValueError, match="already exists"):
-        t.add_column("score", blosc2.float64(), 0.0)
+        t.add_column("score", blosc2.field(blosc2.float64(), default=0.0))
 
 
 def test_add_column_bad_default_raises():
     t = CTable(Row, new_data=DATA10)
     with pytest.raises(TypeError):
-        t.add_column("flag", blosc2.int8(), "not_a_number")
+        t.add_column("flag", blosc2.field(blosc2.int8(), default="not_a_number"))
 
 
 def test_add_column_skips_deleted_rows():
     t = CTable(Row, new_data=DATA10)
     t.delete([0, 1])  # 8 live rows
-    t.add_column("weight", blosc2.float64(), 3.0)
+    t.add_column("weight", blosc2.field(blosc2.float64(), default=3.0))
     vals = t["weight"][:]
     assert len(vals) == 8
     assert all(v == 3.0 for v in vals)

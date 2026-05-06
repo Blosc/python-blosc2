@@ -539,7 +539,7 @@ class SimpleRow:
 
 def test_ctable_add_vlstring_column():
     ct = blosc2.CTable(SimpleRow, new_data=[(i,) for i in range(5)])
-    ct.add_column("label", blosc2.vlstring(), default="unknown")
+    ct.add_column("label", blosc2.field(blosc2.vlstring(), default="unknown"))
     assert "label" in ct.col_names
     assert ct.label[0] == "unknown"
     assert ct.label[4] == "unknown"

@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import contextvars
+import copy
 import dataclasses
 import itertools
 import os
@@ -68,6 +69,7 @@ from blosc2.schema_compiler import (
     _validate_column_name,
     compile_schema,
     compute_display_width,
+    get_blosc2_field_metadata,
     schema_from_dict,
     schema_to_dict,
 )
@@ -3688,32 +3690,60 @@ class CTable(Generic[RowT]):
     # Schema mutations: add / drop / rename columns
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _column_spec_default_and_cparams(
+        spec_or_field: SchemaSpec | dataclasses.Field,
+    ) -> tuple[SchemaSpec, Any, dict | None]:
+        """Extract the schema spec, default and cparams for ``add_column()``."""
+        if isinstance(spec_or_field, dataclasses.Field):
+            meta = get_blosc2_field_metadata(spec_or_field)
+            if meta is None:
+                raise TypeError("add_column() field descriptors must be created with blosc2.field().")
+            spec = copy.deepcopy(meta["spec"])
+            if spec_or_field.default is not MISSING:
+                default = spec_or_field.default
+            elif spec_or_field.default_factory is not MISSING:  # type: ignore[misc]
+                default = spec_or_field.default_factory()
+            else:
+                default = MISSING
+            cparams = meta.get("cparams")
+        else:
+            spec = spec_or_field
+            default = MISSING
+            cparams = None
+
+        if not isinstance(spec, SchemaSpec):
+            raise TypeError(f"add_column() requires a SchemaSpec, got {type(spec)!r}.")
+        return spec, default, cparams
+
     def add_column(
         self,
         name: str,
-        spec: SchemaSpec,
-        default,
+        spec: SchemaSpec | dataclasses.Field,
         *,
         cparams: dict | None = None,
     ) -> None:
-        """Add a new column filled with *default* for every existing live row.
+        """Add a new column filled from the default declared in *spec*.
 
         Parameters
         ----------
         name:
             Column name.  Must follow the same naming rules as schema fields.
         spec:
-            A schema descriptor such as ``b2.int64(ge=0)`` or ``b2.string()``.
-        default:
-            Value written to every existing live row.  Must be coercible to
-            *spec*'s dtype.
+            A schema descriptor such as ``b2.int64(ge=0)`` or a field
+            descriptor such as ``b2.field(b2.int64(ge=0), default=0)``.
+            A default is required when the table already has live rows, so
+            those rows can be backfilled.
         cparams:
-            Optional compression parameters for this column's NDArray.
+            Optional compression parameters for this column's NDArray.  When
+            *spec* is a :func:`blosc2.field` descriptor, its compression
+            parameters are used unless this argument is provided.
 
         Raises
         ------
         ValueError
-            If the table is read-only, is a view, or the column already exists.
+            If the table is read-only, is a view, the column already exists,
+            or a non-empty table is given a column without a default value.
         TypeError
             If *default* cannot be coerced to *spec*'s dtype.
         """
@@ -3727,6 +3757,17 @@ class CTable(Generic[RowT]):
         if name in self._computed_cols:
             raise ValueError(f"A computed column named {name!r} already exists.")
 
+        spec, default, field_cparams = self._column_spec_default_and_cparams(spec)
+        if cparams is None:
+            cparams = field_cparams
+
+        live_pos = np.where(self._valid_rows[:])[0]
+        if default is MISSING and len(live_pos) > 0:
+            raise ValueError(
+                "add_column() requires a default declared as blosc2.field(..., default=...) "
+                "when the table has live rows."
+            )
+
         compiled_col = self._compiled_column_from_spec(name, spec)
         self._resolve_nullable_specs(
             CompiledSchema(row_cls=None, columns=[compiled_col], columns_by_name={name: compiled_col}),
@@ -3737,7 +3778,6 @@ class CTable(Generic[RowT]):
         if self._is_varlen_scalar_column(compiled_col):
             # Varlen scalar columns don't use fixed-width NDArray storage.
             new_col = self._storage.create_varlen_scalar_column(name, spec=spec, cparams=cparams)
-            live_pos = np.where(self._valid_rows[:])[0]
             for _ in live_pos:
                 new_col.append(default)
             new_col.flush()
@@ -3746,10 +3786,15 @@ class CTable(Generic[RowT]):
                 "add_column() does not support list columns; use the constructor with a full schema."
             )
         else:
-            try:
-                default_val = spec.dtype.type(default)
-            except (ValueError, OverflowError) as exc:
-                raise TypeError(f"Cannot coerce default {default!r} to dtype {spec.dtype!r}: {exc}") from exc
+            if default is not MISSING:
+                try:
+                    default_val = spec.dtype.type(default)
+                except (ValueError, OverflowError) as exc:
+                    raise TypeError(
+                        f"Cannot coerce default {default!r} to dtype {spec.dtype!r}: {exc}"
+                    ) from exc
+            else:
+                default_val = None
 
             capacity = len(self._valid_rows)
             default_chunks, default_blocks = compute_chunks_blocks((capacity,))
@@ -3762,7 +3807,6 @@ class CTable(Generic[RowT]):
                 cparams=cparams,
                 dparams=None,
             )
-            live_pos = np.where(self._valid_rows[:])[0]
             if len(live_pos) > 0:
                 new_col[live_pos] = default_val
 

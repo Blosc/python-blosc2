@@ -376,7 +376,7 @@ def test_add_stored_collision_with_computed():
     t = _make_invoice_table()
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
     with pytest.raises(ValueError, match="already exists"):
-        t.add_column("total", blosc2.float64(), default=0.0)
+        t.add_column("total", blosc2.field(blosc2.float64(), default=0.0))
 
 
 # ---------------------------------------------------------------------------

@@ -53,7 +53,7 @@ print("Sorted in-place by name:")
 print(t)
 
 # -- add_column(): new column filled with a default -------------------------
-t.add_column("bonus", blosc2.float64(ge=0), default=0.0)
+t.add_column("bonus", blosc2.field(blosc2.float64(ge=0), default=0.0))
 print("After add_column('bonus'):")
 print(t)
 
