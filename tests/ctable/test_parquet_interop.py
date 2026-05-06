@@ -15,7 +15,7 @@ import pytest
 
 import blosc2
 from blosc2 import CTable
-from blosc2.schema import StructSpec
+from blosc2.schema import ObjectSpec, StructSpec
 
 pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
@@ -261,6 +261,28 @@ class TestParquetRoundTrip:
 
         reopened = CTable.open(str(path), mode="r")
         assert reopened["props"][:] == [{"a": 1, "b": "x"}, None, {"a": 2, "b": "yy"}]
+
+    def test_from_arrow_object_fallback_for_unsupported_type(self):
+        map_type = pa.map_(pa.string(), pa.int32())
+        batch = pa.record_batch(
+            [pa.array([[("a", 1)], None, [("b", 2), ("c", 3)]], type=map_type)], names=["attrs"]
+        )
+
+        with pytest.raises(TypeError, match="object_fallback=True"):
+            CTable.from_arrow(batch.schema, [batch])
+
+        t = CTable.from_arrow(batch.schema, [batch], object_fallback=True)
+        assert isinstance(t._schema.columns_by_name["attrs"].spec, ObjectSpec)
+        assert t["attrs"][:] == [[("a", 1)], None, [("b", 2), ("c", 3)]]
+
+    def test_from_parquet_does_not_use_object_fallback(self, tmp_path):
+        map_type = pa.map_(pa.string(), pa.int32())
+        at = pa.table({"attrs": pa.array([[("a", 1)]], type=map_type)})
+        path = tmp_path / "map.parquet"
+        pq.write_table(at, path)
+
+        with pytest.raises(TypeError, match="object_fallback=True"):
+            CTable.from_parquet(path)
 
     def test_empty_table_export_import(self, tmp_path):
         t = CTable(Row)

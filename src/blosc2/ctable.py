@@ -36,6 +36,7 @@ from blosc2.list_array import ListArray, coerce_list_cell
 from blosc2.scalar_array import _ScalarVarLenArray
 from blosc2.schema import (
     ListSpec,
+    ObjectSpec,
     SchemaSpec,
     StructSpec,
     VLBytesSpec,
@@ -535,7 +536,7 @@ class Column:
     def is_varlen_scalar(self) -> bool:
         """True if this column holds variable-length scalar strings or bytes."""
         col = self._table._schema.columns_by_name.get(self._col_name)
-        return col is not None and isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec))
+        return col is not None and isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec))
 
     @property
     def _valid_rows(self):
@@ -1581,7 +1582,7 @@ class CTable(Generic[RowT]):
 
     @staticmethod
     def _is_varlen_scalar_column(col: CompiledColumn) -> bool:
-        return isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec))
+        return isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec))
 
     @staticmethod
     def _is_list_spec(spec: SchemaSpec) -> bool:
@@ -1644,7 +1645,7 @@ class CTable(Generic[RowT]):
         for col in schema.columns:
             spec = col.spec
             if (
-                isinstance(spec, (ListSpec, VLStringSpec, VLBytesSpec, StructSpec))
+                isinstance(spec, (ListSpec, VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec))
                 or getattr(spec, "null_value", None) is not None
             ):
                 continue
@@ -2772,6 +2773,10 @@ class CTable(Generic[RowT]):
             return pa.struct(
                 [pa.field(name, CTable._pa_type_from_spec(pa, child)) for name, child in spec.fields.items()]
             )
+        if isinstance(spec, ObjectSpec):
+            raise TypeError(
+                "ObjectSpec columns do not have a fixed Arrow type; materialize values explicitly"
+            )
         if spec.to_metadata_dict().get("kind") == "bool":
             return pa.bool_()
         dtype = getattr(spec, "dtype", None)
@@ -2859,6 +2864,33 @@ class CTable(Generic[RowT]):
         return null_policy.sentinel_for_arrow_type(pa, pa_type)
 
     @staticmethod
+    def _arrow_type_needs_object_fallback(pa, pa_type) -> bool:
+        """True when *pa_type* has no typed CTable mapping."""
+        if pa_type in (
+            pa.int8(),
+            pa.int16(),
+            pa.int32(),
+            pa.int64(),
+            pa.uint8(),
+            pa.uint16(),
+            pa.uint32(),
+            pa.uint64(),
+            pa.float32(),
+            pa.float64(),
+            pa.bool_(),
+            pa.string(),
+            pa.large_string(),
+            pa.utf8(),
+            pa.large_utf8(),
+        ):
+            return False
+        if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
+            return False
+        return not (
+            pa.types.is_list(pa_type) or pa.types.is_large_list(pa_type) or pa.types.is_struct(pa_type)
+        )
+
+    @staticmethod
     def _arrow_type_to_spec(  # noqa: C901
         pa,
         pa_type,
@@ -2867,6 +2899,7 @@ class CTable(Generic[RowT]):
         string_max_length=None,
         null_value=None,
         nullable=False,
+        object_fallback: bool = False,
     ):
         import blosc2.schema as b2s
 
@@ -2904,7 +2937,11 @@ class CTable(Generic[RowT]):
             if pa_type.value_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
                 item_string_max_length = max(string_max_length or 1, 1_000_000)
             item_spec = CTable._arrow_type_to_spec(
-                pa, pa_type.value_type, item_arrow_col, string_max_length=item_string_max_length
+                pa,
+                pa_type.value_type,
+                item_arrow_col,
+                string_max_length=item_string_max_length,
+                object_fallback=object_fallback,
             )
             return b2s.list(item_spec, nullable=nullable, storage="batch", serializer="msgpack")
 
@@ -2926,6 +2963,7 @@ class CTable(Generic[RowT]):
                     child_col,
                     string_max_length=child_string_max_length,
                     nullable=field.nullable,
+                    object_fallback=object_fallback,
                 )
             return b2s.struct(fields, nullable=nullable)
 
@@ -2943,9 +2981,14 @@ class CTable(Generic[RowT]):
             max_length = max(string_max_length, len(null_value) if null_value is not None else 1, 1)
             return b2s.bytes(max_length=max_length, null_value=null_value)
 
+        if object_fallback:
+            return b2s.object(nullable=nullable)
+
         raise TypeError(
             f"No blosc2 spec for Arrow type {pa_type!r}. Supported: int8/16/32/64, "
-            "uint8/16/32/64, float32/64, bool, string, binary, list, and struct."
+            "uint8/16/32/64, float32/64, bool, string, binary, list, and struct. "
+            "Pass object_fallback=True to CTable.from_arrow() to import unsupported Arrow types "
+            "as schema-less object columns."
         )
 
     @staticmethod
@@ -2963,6 +3006,7 @@ class CTable(Generic[RowT]):
         string_max_length,
         *,
         auto_null_sentinels: bool,
+        object_fallback: bool = False,
     ):
         null_policy = get_null_policy()
         column_null_values = null_policy.column_null_values
@@ -2990,9 +3034,13 @@ class CTable(Generic[RowT]):
                     or pa.types.is_large_binary(field.type)
                 )
             )
+            field_needs_object_fallback = cls._arrow_type_needs_object_fallback(pa, field.type)
+            if field_needs_object_fallback and not object_fallback:
+                cls._arrow_type_to_spec(pa, field.type, arrow_col, object_fallback=False)
+            field_is_object_fallback = object_fallback and field_needs_object_fallback
             null_value = None
             has_null_value_override = name in column_null_values
-            if has_null_value_override and (field_is_list or field_is_struct):
+            if has_null_value_override and (field_is_list or field_is_struct or field_is_object_fallback):
                 raise TypeError(f"column_null_values only supports scalar columns; {name!r} is not scalar")
             if has_null_value_override and field_is_varlen_scalar:
                 raise TypeError(
@@ -3004,13 +3052,17 @@ class CTable(Generic[RowT]):
             elif (
                 auto_null_sentinels
                 and field.nullable
-                and not (field_is_list or field_is_struct or field_is_varlen_scalar)
+                and not (
+                    field_is_list or field_is_struct or field_is_varlen_scalar or field_is_object_fallback
+                )
             ):
                 null_value = cls._auto_null_sentinel(pa, field.type, null_policy=null_policy)
             if (
                 arrow_col is not None
                 and arrow_col.null_count
-                and not (field_is_list or field_is_struct or field_is_varlen_scalar)
+                and not (
+                    field_is_list or field_is_struct or field_is_varlen_scalar or field_is_object_fallback
+                )
                 and null_value is None
             ):
                 raise TypeError(
@@ -3024,8 +3076,11 @@ class CTable(Generic[RowT]):
                 string_max_length=column_string_max_length,
                 null_value=null_value,
                 nullable=field.nullable,
+                object_fallback=object_fallback,
             )
-            if null_value is not None and not (field_is_list or field_is_struct or field_is_varlen_scalar):
+            if null_value is not None and not (
+                field_is_list or field_is_struct or field_is_varlen_scalar or field_is_object_fallback
+            ):
                 cls._validate_null_value_for_spec(name, spec, null_value)
             columns.append(cls._compiled_column_from_spec(name, spec))
         return columns
@@ -3198,6 +3253,7 @@ class CTable(Generic[RowT]):
         auto_null_sentinels: bool = True,
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
         blosc2_items_per_block: int | None = None,
+        object_fallback: bool = False,
     ) -> CTable:
         """Build a :class:`CTable` from an Arrow schema and iterable of record batches.
 
@@ -3219,9 +3275,13 @@ class CTable(Generic[RowT]):
 
         ``blosc2_batch_size`` controls how many rows are buffered before
         BatchArray-backed imported columns (list columns and variable-length
-        scalar columns such as ``vlstring``, ``vlbytes``, and ``struct``) are
-        flushed to their backend.  Set it to ``None`` to keep those columns
-        pending until the final flush.
+        scalar columns such as ``vlstring``, ``vlbytes``, ``struct``, and
+        schema-less ``object`` columns) are flushed to their backend.  Set it to
+        ``None`` to keep those columns pending until the final flush.
+
+        Unsupported Arrow types raise by default.  Pass ``object_fallback=True``
+        to import such columns as schema-less :func:`~blosc2.object` columns.
+        This fallback is intentionally not used by :meth:`from_parquet`.
         """
         pa = cls._require_pyarrow("from_arrow()")
         if blosc2_batch_size is not None and blosc2_batch_size <= 0:
@@ -3241,6 +3301,7 @@ class CTable(Generic[RowT]):
             table_for_inference,
             string_max_length,
             auto_null_sentinels=auto_null_sentinels,
+            object_fallback=object_fallback,
         )
         for col in columns:
             if (
@@ -3327,7 +3388,9 @@ class CTable(Generic[RowT]):
         :meth:`CTable.from_arrow`, so Arrow schema handling, nullable-column support,
         and Blosc2 write tuning follow the same rules as that method.  Top-level
         Arrow ``struct<...>`` columns are imported as :func:`~blosc2.struct`
-        columns backed by batched variable-length storage.
+        columns backed by batched variable-length storage.  Unsupported Parquet
+        types are not silently imported as schema-less :func:`~blosc2.object`
+        columns; they raise so callers can decide how to handle them explicitly.
 
         Parameters
         ----------
@@ -3913,7 +3976,7 @@ class CTable(Generic[RowT]):
             )
         col = self._cols[name]
         spec = self._schema.columns_by_name[name].spec
-        if self._is_list_spec(spec) or isinstance(spec, (VLStringSpec, VLBytesSpec, StructSpec)):
+        if self._is_list_spec(spec) or isinstance(spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)):
             return col[positions]
         return col[positions]
 
@@ -4486,7 +4549,9 @@ class CTable(Generic[RowT]):
             dtype = self._col_dtype(name)
             if dtype is None:
                 cc = self._schema.columns_by_name.get(name)
-                if cc is not None and isinstance(cc.spec, (VLStringSpec, VLBytesSpec, StructSpec)):
+                if cc is not None and isinstance(
+                    cc.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)
+                ):
                     raise TypeError(
                         f"Column {name!r} is a varlen scalar column and does not support sort ordering."
                     )
@@ -5377,10 +5442,12 @@ class CTable(Generic[RowT]):
         col_arr = self._cols[col_name]
         if isinstance(self._schema.columns_by_name[col_name].spec, ListSpec):
             raise ValueError(f"Cannot create an index on list column {col_name!r} in V1.")
-        if isinstance(self._schema.columns_by_name[col_name].spec, (VLStringSpec, VLBytesSpec, StructSpec)):
+        if isinstance(
+            self._schema.columns_by_name[col_name].spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)
+        ):
             raise NotImplementedError(
                 f"Cannot create an index on variable-length scalar column {col_name!r}: "
-                "indexing for vlstring/vlbytes/struct columns is not supported yet."
+                "indexing for vlstring/vlbytes/struct/object columns is not supported yet."
             )
         is_persistent = self._storage.index_anchor_path(col_name) is not None
 
@@ -5771,6 +5838,8 @@ class CTable(Generic[RowT]):
             return "vlbytes"
         if isinstance(spec, StructSpec):
             return spec.display_label()
+        if isinstance(spec, ObjectSpec):
+            return spec.display_label()
         if isinstance(spec, ListSpec):
             return spec.display_label()
         if dtype is None:
@@ -6025,7 +6094,7 @@ class CTable(Generic[RowT]):
                 rf"(?<!\w){re.escape(col.name)}(?!\w)", expr
             ):
                 raise NotImplementedError(
-                    f"Column {col.name!r} is a variable-length scalar column (vlstring/vlbytes/struct); "
+                    f"Column {col.name!r} is a variable-length scalar column (vlstring/vlbytes/struct/object); "
                     "lazy expressions are not supported yet."
                 )
 

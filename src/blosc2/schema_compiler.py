@@ -22,6 +22,7 @@ import numpy as np  # noqa: TC002
 from blosc2.schema import (
     BLOSC2_FIELD_METADATA_KEY,
     ListSpec,
+    ObjectSpec,
     SchemaSpec,
     StructSpec,
     VLBytesSpec,
@@ -71,6 +72,7 @@ _KIND_TO_SPEC: dict[str, type[SchemaSpec]] = {
     "bytes": b2_bytes,
     "vlstring": VLStringSpec,
     "vlbytes": VLBytesSpec,
+    "object": ObjectSpec,
 }
 
 # ---------------------------------------------------------------------------
@@ -96,7 +98,7 @@ _DTYPE_DISPLAY_WIDTH: dict[str, int] = {
 
 def compute_display_width(spec: SchemaSpec) -> int:
     """Return a reasonable terminal display width for *spec*'s column."""
-    if isinstance(spec, (VLStringSpec, VLBytesSpec)):
+    if isinstance(spec, (VLStringSpec, VLBytesSpec, ObjectSpec)):
         return 40
     if isinstance(spec, (ListSpec, StructSpec)):
         return max(40, len(spec.display_label()) + 4)

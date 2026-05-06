@@ -19,8 +19,8 @@ from typing import Any
 
 import numpy as np
 
-from blosc2.list_array import coerce_list_cell
-from blosc2.schema import ListSpec
+from blosc2.list_array import _coerce_struct_item, coerce_list_cell
+from blosc2.schema import ListSpec, ObjectSpec, StructSpec
 from blosc2.schema_compiler import CompiledColumn, CompiledSchema  # noqa: TC001
 
 
@@ -61,7 +61,7 @@ def _null_mask_for_spec(arr: np.ndarray, spec) -> np.ndarray | None:
     return arr == null_value
 
 
-def validate_column_values(col: CompiledColumn, values: Any) -> None:
+def validate_column_values(col: CompiledColumn, values: Any) -> None:  # noqa: C901
     """Check all constraint attributes of *col*'s spec against *values*.
 
     Parameters
@@ -80,6 +80,13 @@ def validate_column_values(col: CompiledColumn, values: Any) -> None:
     if isinstance(spec, ListSpec):
         for value in values:
             coerce_list_cell(spec, value)
+        return
+    if isinstance(spec, StructSpec):
+        for value in values:
+            if value is not None:
+                _coerce_struct_item(spec, value)
+        return
+    if isinstance(spec, ObjectSpec):
         return
 
     arr = np.asarray(values)

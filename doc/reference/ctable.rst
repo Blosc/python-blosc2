@@ -550,6 +550,7 @@ Text & binary
     vlstring
     vlbytes
     struct
+    object
     list
 
 .. autoclass:: string
@@ -557,7 +558,35 @@ Text & binary
 .. autofunction:: vlstring
 .. autofunction:: vlbytes
 .. autofunction:: struct
+.. autofunction:: object
 .. autofunction:: list
+
+Object columns
+--------------
+
+Schema-less object columns are declared with :func:`blosc2.object` and store one
+msgpack-serializable Python object (or ``None`` when nullable) per row in
+batched variable-length storage. Prefer typed specs such as :func:`blosc2.struct`
+or :func:`blosc2.list` when the payload has a stable schema; use object columns
+for heterogeneous per-row payloads::
+
+    from dataclasses import dataclass
+    import blosc2 as b2
+
+    @dataclass
+    class Event:
+        id: int = b2.field(b2.int64())
+        payload: object = b2.field(b2.object(nullable=True))
+
+    table.append([1, {"kind": "click", "xy": [10, 20]}])
+    table.append([2, ("custom", {"nested": True})])
+    table.append([3, None])
+
+Object columns have no fixed Arrow type, so :meth:`CTable.to_arrow` and
+:meth:`CTable.to_parquet` raise for them unless users first convert the payloads
+to a typed representation.  They are not used as an implicit fallback during
+Parquet import; unsupported Arrow/Parquet types still raise unless explicitly
+imported through :meth:`CTable.from_arrow` with ``object_fallback=True``.
 
 Struct columns
 --------------

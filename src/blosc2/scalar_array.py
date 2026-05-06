@@ -9,7 +9,7 @@
 """Internal variable-length scalar column adapter over BatchArray.
 
 This module is *not* part of the public API.  It provides row-wise scalar
-semantics (one str, bytes, or struct dict value per row) backed by batched
+semantics (one str, bytes, struct dict, or schema-less object value per row) backed by batched
 msgpack storage via :class:`blosc2.BatchArray`.
 
 Physical layout: each chunk in the backing BatchArray stores a list of
@@ -40,8 +40,10 @@ def _role_metadata_for_spec(spec) -> dict[str, Any]:
         py_type = "str"
     elif spec.python_type is bytes:
         py_type = "bytes"
-    else:
+    elif spec.python_type is dict:
         py_type = "struct"
+    else:
+        py_type = "object"
     return {
         "version": 1,
         "py_type": py_type,
@@ -72,8 +74,10 @@ def _validate_role_metadata(backend: BatchArray, spec) -> None:
         expected_py_type = "str"
     elif spec.python_type is bytes:
         expected_py_type = "bytes"
-    else:
+    elif spec.python_type is dict:
         expected_py_type = "struct"
+    else:
+        expected_py_type = "object"
     if role.get("py_type") != expected_py_type:
         raise ValueError(
             f"Varlen scalar backend type mismatch: expected {expected_py_type!r}, "
@@ -129,22 +133,24 @@ class _ScalarVarLenArray:
     ----------
     spec:
         A :class:`~blosc2.schema.VLStringSpec`,
-        :class:`~blosc2.schema.VLBytesSpec`, or
-        :class:`~blosc2.schema.StructSpec` describing this column.
+        :class:`~blosc2.schema.VLBytesSpec`,
+        :class:`~blosc2.schema.StructSpec`, or
+        :class:`~blosc2.schema.ObjectSpec` describing this column.
     backend:
         Pre-constructed :class:`~blosc2.BatchArray`.  If ``None``, a fresh
         in-memory backend is created from *spec*.
     """
 
     def __init__(self, spec, backend: BatchArray | None = None) -> None:
-        from blosc2.schema import StructSpec, VLBytesSpec, VLStringSpec
+        from blosc2.schema import ObjectSpec, StructSpec, VLBytesSpec, VLStringSpec
 
-        if not isinstance(spec, (VLStringSpec, VLBytesSpec, StructSpec)):
+        if not isinstance(spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)):
             raise TypeError(
-                f"_ScalarVarLenArray requires a VLStringSpec, VLBytesSpec, or StructSpec, got {type(spec)!r}"
+                "_ScalarVarLenArray requires a VLStringSpec, VLBytesSpec, StructSpec, or "
+                f"ObjectSpec, got {type(spec)!r}"
             )
         self._spec = spec
-        self._py_type: type = spec.python_type  # str, bytes, or dict
+        self._py_type: type = spec.python_type  # str, bytes, dict, or object
         self._nullable: bool = getattr(spec, "nullable", False)
         self._batch_rows: int = int(getattr(spec, "batch_rows", 2048) or 2048)
 
@@ -210,9 +216,11 @@ class _ScalarVarLenArray:
             if isinstance(value, (bytes, bytearray, memoryview)):
                 return bytes(value)
             raise TypeError(f"Expected bytes for vlbytes column, got {type(value).__name__!r}.")
-        from blosc2.list_array import _coerce_struct_item
+        if self._py_type is dict:
+            from blosc2.list_array import _coerce_struct_item
 
-        return _coerce_struct_item(self._spec, value)
+            return _coerce_struct_item(self._spec, value)
+        return value
 
     def _flush_full_batches(self) -> None:
         """Flush as many full batches as possible from _pending."""

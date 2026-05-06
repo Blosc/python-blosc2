@@ -23,6 +23,7 @@ BLOSC2_FIELD_METADATA_KEY = "blosc2"
 _builtin_bool = bool
 _builtin_bytes = bytes
 _builtin_list = list
+_builtin_object = object
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +550,56 @@ class VLStringSpec(SchemaSpec):
         return d
 
 
+class ObjectSpec(SchemaSpec):
+    """Schema-less Python object column backed by batched msgpack storage.
+
+    Each row value can be any msgpack-serializable Python object, or ``None``
+    when *nullable* is true.  Use this for heterogeneous per-row payloads when
+    a typed :func:`struct`, :func:`list`, :func:`vlstring`, or :func:`vlbytes`
+    schema would not describe the data.
+    """
+
+    python_type = _builtin_object
+    dtype = None
+
+    def __init__(
+        self,
+        *,
+        nullable: bool = False,
+        serializer: str = "msgpack",
+        batch_rows: int | None = 2048,
+        items_per_block: int | None = None,
+    ):
+        if serializer != "msgpack":
+            raise ValueError("object currently only supports serializer='msgpack'")
+        if batch_rows is not None and batch_rows <= 0:
+            raise ValueError("batch_rows must be positive or None")
+        if items_per_block is not None and items_per_block <= 0:
+            raise ValueError("items_per_block must be positive or None")
+        self.nullable = nullable
+        self.serializer = serializer
+        self.batch_rows = batch_rows
+        self.items_per_block = items_per_block
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "kind": "object",
+            "nullable": self.nullable,
+            "serializer": self.serializer,
+        }
+        if self.batch_rows is not None:
+            d["batch_rows"] = self.batch_rows
+        if self.items_per_block is not None:
+            d["items_per_block"] = self.items_per_block
+        return d
+
+    def display_label(self) -> str:
+        return "object"
+
+
 class VLBytesSpec(SchemaSpec):
     """Variable-length scalar bytes column backed by batched object storage.
 
@@ -624,6 +675,28 @@ def vlstring(
     from plain ``str`` annotations.
     """
     return VLStringSpec(
+        nullable=nullable,
+        serializer=serializer,
+        batch_rows=batch_rows,
+        items_per_block=items_per_block,
+    )
+
+
+def object(
+    *,
+    nullable: bool = False,
+    serializer: str = "msgpack",
+    batch_rows: int | None = 2048,
+    items_per_block: int | None = None,
+) -> ObjectSpec:
+    """Build a schema-less Python object column descriptor for CTable.
+
+    Values are stored via batched msgpack serialization.  Prefer typed specs
+    such as :func:`struct`, :func:`list`, :func:`vlstring`, or :func:`vlbytes`
+    when the data has a stable schema; use ``object`` for heterogeneous per-row
+    payloads.
+    """
+    return ObjectSpec(
         nullable=nullable,
         serializer=serializer,
         batch_rows=batch_rows,
