@@ -4356,10 +4356,46 @@ class CTable(Generic[RowT]):
         return arr.copy() if copy else arr
 
     def __getitem__(self, key):
-        """Type-driven indexing: column name, boolean expression, row int/slice, mask, or column list."""
+        """Type-driven indexing for columns, rows, projections, and filters.
+
+        Supported keys are:
+
+        - ``str``: return a :class:`Column` when it matches a stored or computed
+          column name; otherwise evaluate it as a boolean expression via
+          :meth:`where`.
+        - boolean :class:`blosc2.LazyExpr` or :class:`blosc2.NDArray`: return the
+          same filtered view as :meth:`where`, e.g. ``t[t.temperature_f > 70]``.
+        - ``int``: return one live row as a namedtuple-like object.
+        - ``slice``: return a row-range view.
+        - integer array/list: return a gathered-row view.
+        - boolean NumPy array/list: return a boolean-mask filtered view.
+        - string list: return a column-projection view, equivalent to
+          :meth:`select`.
+
+        Examples
+        --------
+        Access columns and rows::
+
+            temps = t["temperature"]
+            first = t[0]
+            view = t[10:20]
+
+        Filter rows with a string expression, a stored-column expression, or a
+        computed-column expression::
+
+            warm = t["temperature > 20"]
+            warm_active = t[(t.temperature > 20) & t.active]
+            hot_fahrenheit = t[t.temperature_f > 70]
+
+        Project columns::
+
+            slim = t[["sensor_id", "temperature_f"]]
+        """
         if isinstance(key, str):
             if key in self._cols or key in self._computed_cols:
                 return Column(self, key)
+            return self.where(key)
+        if isinstance(key, (blosc2.NDArray, blosc2.LazyExpr)) and getattr(key, "dtype", None) == np.bool_:
             return self.where(key)
         if isinstance(key, tuple):
             raise TypeError("Tuple indexing is not supported for CTable in V1")

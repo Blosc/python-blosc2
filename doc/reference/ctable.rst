@@ -42,6 +42,9 @@ explicitly call :meth:`~blosc2.CTable.to_arrow` or iterate with
        * ``str`` — column name returns a :class:`Column`; any other string
          is interpreted as a boolean expression and behaves like
          :meth:`where`.
+       * boolean :class:`~blosc2.LazyExpr` / :class:`~blosc2.NDArray` —
+         filtered row view, same as :meth:`where`, e.g.
+         ``t[t.temperature_f > 70]``.
        * ``int`` — single row as a namedtuple-like object.
        * ``slice`` — row-range view.
        * ``list[int]`` / ``ndarray[int]`` — gathered-row view.
@@ -190,11 +193,14 @@ CTable indexing is type-driven::
     t[3:8]                      # row view
     t[[1, 4, 7]]                # gathered-row view
     t[mask]                     # filtered row view
+    t[t.amount > 100]           # LazyExpr filtered row view, like where()
     t[["region", "amount"]]   # projected column view
 
 String keys first try exact column-name lookup.  If the string is not a
 column name, it is interpreted as a boolean expression and behaves like
-:meth:`CTable.where`.
+:meth:`CTable.where`.  Boolean :class:`~blosc2.LazyExpr` and boolean
+:class:`~blosc2.NDArray` keys also behave like :meth:`CTable.where`, so computed
+column predicates such as ``t[t.temperature_f > 70]`` are supported.
 
 For explicit filtered projection, use::
 

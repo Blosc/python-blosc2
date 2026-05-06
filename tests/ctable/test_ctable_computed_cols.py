@@ -163,6 +163,16 @@ def test_computed_column_where_via_col():
     assert len(view) == 3  # 9, 16, 25
 
 
+def test_getitem_boolean_lazyexpr_matches_where_for_computed_column():
+    t = _make_invoice_table(5)
+    t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+    expr = t.total >= 9
+    view_getitem = t[expr]
+    view_where = t.where(expr)
+    assert len(view_getitem) == len(view_where) == 3
+    np.testing.assert_array_equal(view_getitem["price"][:], view_where["price"][:])
+
+
 # ---------------------------------------------------------------------------
 # 6. Expression composability
 # ---------------------------------------------------------------------------
