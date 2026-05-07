@@ -1,7 +1,36 @@
-Announcing Python-Blosc2 4.0.0
+Announcing Python-Blosc2 4.2.0
 ===============================
 
-This is patch release which updates the ``miniexpr`` version to fix a bug for ubuntu ARM64 failure.
+We are happy to announce Python-Blosc2 4.2.0.  This is a large feature
+release, with the new compressed columnar table container, ``CTable``, as the
+main development.
+
+``CTable`` brings typed, compressed, column-oriented tables to Python-Blosc2.
+It supports persistent ``.b2d`` and ``.b2z`` storage, schema-driven columns,
+nullable data, variable-length strings/bytes and object columns, computed
+columns, table views, mutations, sorting, filtering and persistent indexes.  It
+also includes Arrow, Parquet and CSV interoperability, plus a new
+``parquet-to-blosc2`` command-line utility.
+
+For a deeper introduction to CTable and its motivation, see our recent blog
+post:
+
+https://blosc.org/posts/ctable-blosc2-columnar-table/
+
+Other highlights in 4.2.0 include:
+
+- A new indexing subsystem for NDArrays and CTables, including persistent
+  sidecar indexes, expression indexes, sorted iteration and query caching.
+- New structured serialization facilities for persisted ``C2Array``,
+  ``LazyExpr`` and DSL ``LazyUDF`` objects, plus ``blosc2.Ref`` and
+  ``blosc2.load()``.
+- New schema helpers such as ``blosc2.struct()`` and ``blosc2.object()``.
+- Object/ListArray improvements for variable-length and general object data.
+- Faster and lower-memory ``fromiter()`` construction, improved ``BatchArray``
+  defaults and continued linalg/matmul optimizations.
+- Many documentation, tutorial, example and benchmark additions.
+- Numerous fixes for Windows mmap/file-locking behavior, Python 3.14 GC/thread
+  interactions, ``.b2z`` persistence, indexed queries and NumPy compatibility.
 
 You can think of Python-Blosc2 4.x as an extension of NumPy/numexpr that:
 
@@ -13,6 +42,7 @@ You can think of Python-Blosc2 4.x as an extension of NumPy/numexpr that:
 - Integrates with Numba and Cython via UDFs (User Defined Functions).
 - Adheres to modern array API standard conventions (https://data-apis.org/array-api/).
 - Can perform linear algebra operations (like ``blosc2.tensordot()``).
+- Can store and query compressed columnar tables via ``blosc2.CTable``.
 
 Install it with::
 
@@ -23,52 +53,15 @@ For more info, you can have a look at the release notes in:
 
 https://github.com/Blosc/python-blosc2/releases
 
-Code example::
+Small CTable example::
 
-    from time import time
     import blosc2
-    import numpy as np
 
-    # Create some data operands
-    N = 20_000
-    a = blosc2.linspace(0, 1, N * N, dtype="float32", shape=(N, N))
-    b = blosc2.linspace(1, 2, N * N, shape=(N, N))
-    c = blosc2.linspace(-10, 10, N)  # broadcasting is supported
+    table = blosc2.CTable.from_parquet("measurements.parquet", urlpath="measurements.b2z")
+    table.create_index("station_id")
 
-    # Expression
-    t0 = time()
-    expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
-    print(f"Time to create expression: {time()-t0:.5f}")
-
-    # Evaluate while reducing (yep, reductions are in) along axis 1
-    t0 = time()
-    out = blosc2.sum(expr, axis=1)
-    t1 = time() - t0
-    print(f"Time to compute with Blosc2: {t1:.5f}")
-
-    # Evaluate using NumPy
-    na, nb, nc = a[:], b[:], c[:]
-    t0 = time()
-    nout = np.sum(((na**3 + np.sin(nc * 2)) < nb) & (nc > 0), axis=1)
-    t2 = time() - t0
-    print(f"Time to compute with NumPy: {t2:.5f}")
-    print(f"Speedup: {t2/t1:.2f}x")
-
-    assert np.all(out == nout)
-    print("All results are equal!")
-
-
-This will output something like (using an Intel i9-13900K CPU here)::
-
-    Time to create expression: 0.00033
-    Time to compute with Blosc2: 0.46387
-    Time to compute with NumPy: 2.57469
-    Speedup: 5.55x
-    All results are equal!
-
-See a more in-depth example, explaining why Python-Blosc2 is so fast, at:
-
-https://www.blosc.org/python-blosc2/getting_started/overview.html#operating-with-ndarrays
+    hot = table.where("temperature > 30")
+    print(hot.head())
 
 Sources repository
 ------------------

@@ -1,5 +1,71 @@
 # Release notes
 
+## Changes from 4.1.2 to 4.2.0
+
+### CTable: columnar compressed tables
+
+- Introduced `blosc2.CTable`, a new columnar table container for compressed, typed columns.  CTables support dataclass- and schema-based construction, row iteration, column access, table views, `head()` / `tail()` / `sample()`, sorting, selection and compact `where` expressions.
+- Added persistent CTables backed by `TreeStore`, with support for `blosc2.open()`, `CTable.open()`, `CTable.load()`, `CTable.save()`, `CTable.to_b2d()` and `CTable.to_b2z()`.  CTable views can be saved too, and `.b2z`/`.b2d` path handling has been tightened.
+- Added mutation operations for CTables, including `append()`, `extend()`, `delete()`, `compact()`, `add_column()`, `drop_column()`, `rename_column()` and related schema validation.
+- Added computed columns, including virtual computed columns backed by lazy expressions, materialized computed columns and automatic filling of materialized computed columns during inserts.
+- Added CTable indexing support, including persistent indexes, direct expression indexes, ordered index reuse, boolean `LazyExpr`/`NDArray` masks in `CTable.__getitem__`, `iter_sorted()` and indexing support for `.b2z` tables.
+- Added nullable schema support and null policies for CTable scalar columns, preserving nullable scalar Parquet round-trips.
+- Added variable-length CTable column support via `ListArray` / `ObjectArray`, including `vlstring` and `vlbytes` schema specs, fixed-length string/bytes import support and list/struct Arrow/Parquet round-trips.
+- Added Arrow, Parquet and CSV interoperability for CTables, including batch-wise Arrow/Parquet import/export, Arrow schema metadata preservation, `CTable.from_arrow_batches()` improvements and a new `parquet-to-blosc2` CLI utility.
+- Added CTable documentation, tutorials, examples and benchmarks covering schema definition, persistence, querying, indexing, mutations, nullable columns, computed columns and variable-length columns.
+
+### Indexing and ordering
+
+- Added a new indexing subsystem for NDArrays and CTables, including full, partial/bucket, light/medium and OPSI-style index kinds, out-of-core index builders and sidecar storage.
+- Added `blosc2.Index` as the unified public index handle, plus APIs such as `create_index()`, `compact_index()`, `iter_sorted()`, `will_use_index()` and related query explanation support.
+- Added materialized expression indexes for NDArrays and direct expression indexes for CTables.
+- Added persistent query-result caching for indexed lookups, with FIFO pruning and cache accounting.
+- Added `blosc2.argsort()` and refactored indexing APIs around explicit index enums and sorting helpers.
+- Improved indexed query performance with Cython accelerators, threaded chunk batching, zero-copy/cached mmap reads, chunk-aware and reduced-order layouts and faster scattered row gathering.
+- Reduced memory usage during index creation and lookup by avoiding full sidecar materialization, replacing memmap staging with Blosc2 scratch arrays and adding `tmpdir` support for full out-of-core indexes.
+
+### Persistence, stores and serialization
+
+- Added structured Blosc2 serialization based on b2object carriers, including persisted `C2Array`, `LazyExpr` and DSL `LazyUDF` objects.
+- Added `blosc2.Ref` for serializing external references, plus examples for b2object bundles and persisted expressions/UDFs.
+- Added `blosc2.load()` as a convenience loader.
+- Added `vlmeta` support to `LazyArray` objects.
+- Improved store handling by preserving lazy b2object carriers in `DictStore`, allowing reopened proxies to refill caches after read-only opens, relaxing `DictStore`/`TreeStore` suffix requirements and adding `DictStore.to_b2d()`.
+- Accelerated `blosc2.open()` by trying standard opens first and warning on implicit append mode.
+
+### Arrays, computation and containers
+
+- Added `ObjectArray` for fully general object data and renamed the earlier `VLArray` work accordingly; added `ListArray` docstrings and Arrow integration improvements.
+- Added schema helpers including numeric specs, `blosc2.struct()` and `blosc2.object()` for nested/fully general column declarations.
+- Improved `fromiter()` with direct chunked construction and substantially lower peak memory use.
+- Improved `asarray()` behavior for NDArray inputs when copy-inducing keyword arguments are supplied.
+- Added `SChunk.reorder_offsets()`.
+- Improved `BatchArray` defaults and documentation; the default compression level is now tuned for faster lookup/scan behavior.
+- Continued matmul/linalg optimization work and shared-thread-pool integration.
+
+### CLI, docs and examples
+
+- Added the `parquet-to-blosc2` command with options such as `--max-rows`, `--parquet-batch-size`, `--blosc2-items-per-block` and `--use-dict`.
+- Added new CTable, ObjectArray, BatchArray, containers, indexing and serialization tutorials and examples.
+- Reorganized and expanded the API reference for CTable, Column, schema specs, Index, save/load helpers and miscellaneous APIs.
+- Updated benchmark suites for CTables, indexing, Parquet import/export, BatchArray and NDArray construction/indexing.
+
+### Fixes and compatibility
+
+- Updated bundled C-Blosc2 to v3.0.2 and require C-Blosc2 >= 3.0.0 when building against a system library.
+- Updated bundled C-Blosc2 and miniexpr sources multiple times.
+- Restored compatibility with NumPy < 2.
+- Fixed Windows and mmap/file-locking issues in index creation, rebuilds and temporary file cleanup.
+- Fixed full-index query failures for large CTable columns and full out-of-core merge failures on systems with small `/tmp`.
+- Fixed stale sidecar/cache reuse and targeted cache invalidation when persistent sidecars are replaced.
+- Fixed `.b2z` double-open corruption caused by GC-triggered repacking and made temporary `.b2z` unpacking default to the source file directory.
+- Fixed a regression when reopening persisted proxies in read-only mode.
+- Fixed GC-induced thread hangs on macOS with Python 3.14 and hardened async chunk reading/cache cleanup paths.
+- Fixed lazy-chunk source-size handling in decode/getitem callers.
+- Fixed nullable validation, dictionary extend validation, CTable close propagation, print alignment and NumPy mask support.
+- Fixed `arange()` regressions and several pre-existing `set_slice` error-handling issues.
+- Clamped indexing/thread defaults for wasm32.
+
 ## Changes from 4.1.1 to 4.1.2
 
 - A new fast path for src/blosc2/linalg.py that uses the matmul prefilter machinery in src/blosc2/blosc2_ext.pyx.

@@ -15,10 +15,8 @@ Preliminaries
 * Make sure that the c-blosc2 repository is updated to the latest version (or a specific
   version that will be documented in the ``RELEASE_NOTES.md``). In ``CMakeLists.txt`` edit::
 
-    FetchContent_Declare(blosc2
-        GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG b179abf1132dfa5a263b2ebceb6ef7a3c2890c64
-    )
+    set(BLOSC2_MIN_VERSION 3.0.0)
+    set(BLOSC2_BUNDLED_VERSION v3.0.2)
 
   to point to the desired commit/tag in the c-blosc2 repo. Note that ``conda-forge`` only selects the latest release, so it may be necessary to do a formal release of ``c-blosc2`` to ensure that the package is correctly generated in ```conda-forge``.
 
