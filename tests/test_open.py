@@ -113,6 +113,29 @@ def test_open_fake():
         _ = blosc2.open("none.b2nd", mode="r")
 
 
+def test_load_ndarray_returns_in_memory_copy(tmp_path):
+    urlpath = tmp_path / "array.b2nd"
+    arr = blosc2.asarray(np.arange(12).reshape(3, 4), urlpath=urlpath, mode="w")
+
+    loaded = blosc2.load(urlpath)
+
+    assert isinstance(loaded, blosc2.NDArray)
+    assert loaded.urlpath is None
+    assert np.array_equal(loaded[:], arr[:])
+
+
+def test_load_schunk_returns_in_memory_copy(tmp_path):
+    urlpath = tmp_path / "schunk.b2frame"
+    data = np.arange(20, dtype=np.int32)
+    blosc2.SChunk(data=data, urlpath=urlpath, mode="w", cparams={"typesize": data.dtype.itemsize})
+
+    loaded = blosc2.load(urlpath)
+
+    assert isinstance(loaded, blosc2.SChunk)
+    assert loaded.urlpath is None
+    assert loaded[:] == data.tobytes()
+
+
 @pytest.mark.parametrize("offset", [0, 42])
 @pytest.mark.parametrize("urlpath", ["schunk.b2frame"])
 @pytest.mark.parametrize(("mode", "mmap_mode"), [("r", None), (None, "r")])

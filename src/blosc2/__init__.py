@@ -591,7 +591,7 @@ from .lazyexpr import (
 from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit, as_simpleproxy
 from .indexing import Index
 
-from .schunk import SChunk, open
+from .schunk import SChunk, load, open
 from . import linalg
 from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose, diagonal, outer
 from .utils import linalg_funcs as linalg_funcs_list
@@ -946,6 +946,7 @@ __all__ = [  # noqa : RUF022
     "less",
     "less_equal",
     "linspace",
+    "load",
     "load_array",
     "load_tensor",
     "log",

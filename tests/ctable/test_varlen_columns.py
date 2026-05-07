@@ -62,6 +62,11 @@ def test_ctable_varlen_persistence_save_load_open(tmp_path):
 
     loaded = blosc2.CTable.load(str(path))
     assert loaded.tags[:] == [["x", "y"], [], None, ["z"]]
+
+    loaded_top_level = blosc2.load(str(path))
+    assert isinstance(loaded_top_level, blosc2.CTable)
+    assert loaded_top_level.tags[:] == [["x", "y"], [], None, ["z"]]
+
     loaded.tags[1] = ["changed"]
     assert loaded.tags[1] == ["changed"]
 

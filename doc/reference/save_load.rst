@@ -6,6 +6,7 @@ Save and load
 .. autosummary::
     save
     open
+    load
     save_array
     load_array
     save_tensor
@@ -14,6 +15,7 @@ Save and load
 
 .. autofunction:: save
 .. autofunction:: open
+.. autofunction:: load
 .. autofunction:: save_array
 .. autofunction:: load_array
 .. autofunction:: save_tensor

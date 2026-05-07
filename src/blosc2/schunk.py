@@ -1937,3 +1937,73 @@ def open(
     res = blosc2_ext.open(special_path, mode, offset, **kwargs)
 
     return process_opened_object(res)
+
+
+def load(
+    urlpath: str | pathlib.Path,
+    offset: int = 0,
+    **kwargs: dict,
+):
+    """Load a persistent Blosc2 object into memory.
+
+    This is the in-memory counterpart to :func:`open`.  It opens *urlpath* in
+    read-only mode and returns a standalone object that is not backed by the
+    original file.  For :class:`CTable`, this dispatches to
+    :meth:`CTable.load`; for array-like containers it returns an in-memory copy.
+
+    Parameters
+    ----------
+    urlpath: str | pathlib.Path
+        Path to the persistent Blosc2 object.
+    offset: int, optional
+        Offset in the file where the object is located.  This is mainly useful
+        for SChunk/NDArray objects embedded in a larger file.
+    kwargs: dict, optional
+        Additional read-time keyword arguments passed to :func:`open`, such as
+        ``dparams``.
+
+    Returns
+    -------
+    out
+        A standalone in-memory Blosc2 object.
+
+    Raises
+    ------
+    TypeError
+        If the opened object cannot be loaded as a standalone in-memory object.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> arr = blosc2.asarray(np.arange(10), urlpath="example.b2nd", mode="w")
+    >>> loaded = blosc2.load("example.b2nd")
+    >>> loaded.urlpath is None
+    True
+    >>> np.array_equal(loaded[:], arr[:])
+    True
+    >>> blosc2.remove_urlpath("example.b2nd")
+    """
+    opened = open(urlpath, mode="r", offset=offset, **kwargs)
+
+    if isinstance(opened, blosc2.CTable):
+        storage = getattr(opened, "_storage", None)
+        root = getattr(storage, "_root", urlpath)
+        close = getattr(opened, "close", None)
+        if close is not None:
+            close()
+        return blosc2.CTable.load(str(root))
+
+    if isinstance(opened, blosc2.NDArray):
+        return opened.copy()
+
+    if isinstance(opened, blosc2.SChunk):
+        return blosc2.schunk_from_cframe(opened.to_cframe())
+
+    if isinstance(opened, blosc2.ListArray | blosc2.BatchArray | blosc2.ObjectArray):
+        return opened.copy()
+
+    if isinstance(opened, blosc2.C2Array):
+        return blosc2.asarray(opened[:])
+
+    raise TypeError(f"Cannot load object of type {type(opened).__name__!r} into memory")

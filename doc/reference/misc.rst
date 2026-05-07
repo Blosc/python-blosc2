@@ -168,6 +168,7 @@ public objects into the appropriate reference section.
         ProxyNDSource,
         save,
         open,
+        load,
         save_array,
         load_array,
         save_tensor,
