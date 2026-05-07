@@ -191,6 +191,8 @@ class Meta(Mapping):
 
 
 class SChunk(blosc2_ext.SChunk):
+    """Compressed super-chunk storing a sequence of compressed chunks."""
+
     def __init__(  # noqa: C901
         self,
         chunksize: int | None = None,

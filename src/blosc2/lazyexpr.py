@@ -368,6 +368,8 @@ class LazyArrayVLMeta(MutableMapping):
 
 
 class LazyArray(ABC, blosc2.Operand):
+    """Base class for lazy array expressions that compute data on demand."""
+
     def _get_user_vlmeta(self) -> dict[str, Any]:
         if not hasattr(self, "_vlmeta_user"):
             self._vlmeta_user = {}

@@ -510,6 +510,8 @@ def _make_namedtuple_row_type(col_names: tuple[str, ...]):
 
 
 class Column:
+    """Column view for a :class:`CTable`, with vectorized operations and reductions."""
+
     _REPR_PREVIEW_ITEMS = 8
 
     def __init__(self, table: CTable, col_name: str, mask=None):
@@ -1432,6 +1434,8 @@ _BATCH_SIZE_DEFAULT = 2048
 
 
 class CTable(Generic[RowT]):
+    """Columnar compressed table with typed columns and row-oriented access."""
+
     #: Ordered list of stored column names.  Computed columns are **not**
     #: included; access those via :attr:`computed_columns`.
     col_names: list[str]

@@ -3746,6 +3746,8 @@ class NDOuterIterator:
 
 
 class NDArray(blosc2_ext.NDArray, Operand):
+    """Compressed, chunked N-dimensional array with NumPy-like indexing."""
+
     def __init__(self, **kwargs):
         self._schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
         self._keep_last_read = False
@@ -6813,6 +6815,8 @@ def iter_sorted(
 # Class for dealing with fields in an NDArray
 # This will allow to access fields by name in the dtype of the NDArray
 class NDField(Operand):
+    """View of one field from an :class:`NDArray` with a structured dtype."""
+
     def __init__(self, ndarr: NDArray, field: str):
         """
         Create a new NDField.

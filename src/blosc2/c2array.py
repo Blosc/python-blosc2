@@ -182,6 +182,8 @@ def slice_to_string(slice_):
 
 
 class C2Array(blosc2.Operand):
+    """Remote compressed NDArray accessed from a Caterva2 server."""
+
     def __init__(self, path: str, /, urlbase: str | None = None, auth_token: str | None = None):
         """Create an instance of a remote NDArray.
 

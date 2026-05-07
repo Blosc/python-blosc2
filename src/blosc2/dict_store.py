@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 class DictStore:
     """
-    Directory-based storage for compressed data using Blosc2.
+    Dictionary-like storage for compressed Blosc2 objects.
 
     Manages arrays in a directory or zip-file backed format.
 
