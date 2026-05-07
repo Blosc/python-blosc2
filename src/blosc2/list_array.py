@@ -203,6 +203,12 @@ class ListArray:
         _from_schunk=None,
         **kwargs: Any,
     ) -> None:
+        """Create a list-valued container.
+
+        Parameters may be supplied either as a complete ``spec`` or as an
+        ``item_spec`` plus list/storage options. Storage-related keyword
+        arguments are passed to :class:`blosc2.Storage`.
+        """
         if _from_schunk is not None:
             if spec is not None or item_spec is not None or kwargs:
                 raise ValueError("Cannot pass schema/storage arguments together with _from_schunk")
@@ -341,6 +347,7 @@ class ListArray:
             self._invalidate_batch_caches()
 
     def append(self, value: Any) -> int:
+        """Append one list cell and return the new number of rows."""
         cell = coerce_list_cell(self.spec, value)
         if self.spec.storage == "vl":
             self._backend.append(cell)
@@ -351,6 +358,11 @@ class ListArray:
         return len(self)
 
     def extend(self, values: Iterable[Any], *, validate: bool = True) -> None:
+        """Append multiple list cells.
+
+        Set ``validate=False`` only for trusted values that already match this
+        array's schema.
+        """
         if validate:
             cells = [coerce_list_cell(self.spec, v) for v in values]
         else:
@@ -369,6 +381,7 @@ class ListArray:
         self._flush_full_batches()
 
     def flush(self) -> None:
+        """Persist any pending rows when using the batch backend."""
         if self.spec.storage != "batch":
             return
         if self._pending_cells:
@@ -379,6 +392,7 @@ class ListArray:
             self._invalidate_batch_caches()
 
     def close(self) -> None:
+        """Flush pending rows and close the logical container."""
         self.flush()
 
     def _get_many_monotonic(self, indices: list[int]) -> list[Any]:
@@ -455,6 +469,7 @@ class ListArray:
         return self._get_many_grouped(indices)
 
     def __getitem__(self, index: int | slice | list[int] | tuple[int, ...] | np.ndarray) -> Any:
+        """Return one cell or a list of cells selected by index, slice, or mask."""
         if isinstance(index, slice):
             indices = list(range(*index.indices(len(self))))
             return self._get_many(indices)
@@ -477,6 +492,7 @@ class ListArray:
         return self._get_batch_values(batch_index)[inner_index]
 
     def __setitem__(self, index: int, value: Any) -> None:
+        """Replace one list cell."""
         cell = coerce_list_cell(self.spec, value)
         index = self._normalize_index(index)
         if self.spec.storage == "vl":
@@ -493,14 +509,17 @@ class ListArray:
         self._cached_batch_values = batch
 
     def __len__(self) -> int:
+        """Return the number of rows."""
         if self.spec.storage == "vl":
             return len(self._backend)
         return self._persisted_row_count + len(self._pending_cells)
 
     def __iter__(self) -> Iterator[Any]:
+        """Iterate over list cells."""
         yield from self[:]
 
     def copy(self, **kwargs: Any) -> ListArray:
+        """Return a copy, optionally with different storage arguments."""
         out = ListArray(spec=self.spec, **kwargs)
         out.extend(self)
         if self.spec.storage == "batch":
@@ -509,56 +528,69 @@ class ListArray:
 
     @property
     def schunk(self):
+        """Underlying :class:`blosc2.SChunk` used by the backend."""
         return self._backend.schunk
 
     @property
     def meta(self):
+        """Fixed-length metadata mapping for the underlying container."""
         return self._backend.meta
 
     @property
     def vlmeta(self):
+        """Variable-length metadata mapping for the underlying container."""
         return self._backend.vlmeta
 
     @property
     def cparams(self):
+        """Compression parameters of the underlying container."""
         return self._backend.cparams
 
     @property
     def dparams(self):
+        """Decompression parameters of the underlying container."""
         return self._backend.dparams
 
     @property
     def urlpath(self) -> str | None:
+        """Path of the persistent backing store, or ``None`` for memory-only arrays."""
         return self._backend.urlpath
 
     @property
     def contiguous(self) -> bool:
+        """Whether the backing store is contiguous on disk."""
         return self._backend.contiguous
 
     @property
     def batch_rows(self) -> int | None:
+        """Target number of rows per persisted batch, if configured."""
         if self.spec.batch_rows is not None:
             return self.spec.batch_rows
         return None
 
     @property
     def nbytes(self) -> int:
+        """Uncompressed byte size reported by the backend."""
         return self._backend.nbytes
 
     @property
     def cbytes(self) -> int:
+        """Compressed byte size reported by the backend."""
         return self._backend.cbytes
 
     @property
     def cratio(self) -> float:
+        """Compression ratio reported by the backend."""
         return self._backend.cratio
 
     @property
     def info(self) -> InfoReporter:
+        """Human-readable information reporter for this array."""
         return InfoReporter(self)
 
     @property
     def info_items(self) -> list:
+        """Items used by :attr:`info` to render this array's summary."""
         return [
             ("type", "ListArray"),
             ("logical_type", self.spec.display_label()),
@@ -572,6 +604,7 @@ class ListArray:
         ]
 
     def to_cframe(self) -> bytes:
+        """Serialize the underlying container to a contiguous C-frame."""
         self.flush()
         return self._backend.to_cframe()
 
@@ -603,6 +636,7 @@ class ListArray:
         return mapping.get(kind)
 
     def to_arrow(self):
+        """Return the data as a PyArrow list array."""
         pa = _require_pyarrow()
         self.flush()
         item_type = self._arrow_item_type()
@@ -623,6 +657,7 @@ class ListArray:
         items_per_block: int | None = None,
         **kwargs: Any,
     ) -> ListArray:
+        """Build a ListArray from a PyArrow list or chunked list array."""
         pa = _require_pyarrow()
         if isinstance(arrow_array, pa.ChunkedArray):
             arrow_array = arrow_array.combine_chunks()
@@ -668,11 +703,14 @@ class ListArray:
         return arr
 
     def __enter__(self) -> ListArray:
+        """Enter a context manager and return this array."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Exit a context manager, flushing pending rows."""
         self.close()
         return False
 
     def __repr__(self) -> str:
+        """Return a compact representation of this ListArray."""
         return f"ListArray(type={self.spec.display_label()}, len={len(self)}, urlpath={self.urlpath!r})"
