@@ -572,14 +572,18 @@ def test_save_overwrite_replaces_table():
     assert t3["id"][0] == 99
 
 
-def test_save_view_raises():
-    """save() on a view raises ValueError."""
+def test_save_view_materializes_visible_rows():
+    """save() is a persistence wrapper around copy(), so views are materialized."""
     t = blosc2.CTable(Row, expected_size=8)
     t.extend([(i, float(i), True) for i in range(4)])
     view = t.where(t["id"] > 1)
 
-    with pytest.raises(ValueError, match="view"):
-        view.save(table_path("view_save"))
+    path = table_path("view_save")
+    view.save(path)
+
+    opened = CTable.open(path)
+    assert len(opened) == 2
+    assert list(opened["id"][:]) == [2, 3]
 
 
 def test_load_returns_in_memory_table():

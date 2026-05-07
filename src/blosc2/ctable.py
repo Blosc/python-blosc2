@@ -2195,7 +2195,10 @@ class CTable(Generic[RowT]):
         return os.path.abspath(urlpath)
 
     def save(self, urlpath: str, *, overwrite: bool = False) -> None:
-        """Copy this (in-memory) table to disk at *urlpath*.
+        """Persist this table to disk at *urlpath*.
+
+        This writes a standalone copy and returns ``None``; use :meth:`copy`
+        directly when the copied :class:`CTable` object is needed.
 
         Only live rows are written — the on-disk table is always compacted.
         A ``.b2z`` suffix selects the compact zip-backed format; any other
@@ -2213,11 +2216,13 @@ class CTable(Generic[RowT]):
         Raises
         ------
         ValueError
-            If *urlpath* already exists and ``overwrite=False``, or if called
-            on a view.
+            If *urlpath* already exists and ``overwrite=False``.
         """
         if self.base is not None:
-            raise ValueError("Cannot save a view — save the parent table instead.")
+            materialized = self.copy(compact=True)
+            materialized.save(urlpath, overwrite=overwrite)
+            return
+
         file_storage = FileTableStorage(urlpath, "w")
         target_path = file_storage._root
         if os.path.exists(target_path):
