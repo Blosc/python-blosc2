@@ -2141,7 +2141,7 @@ class CTable(Generic[RowT]):
         return os.path.abspath(urlpath)
 
     def to_b2d(self, urlpath: str, *, overwrite: bool = False, compact: bool = False) -> str:
-        """Write this table to a directory-backed ``.b2d`` store.
+        """Write this table to a directory-backed store.
 
         For persistent, non-view ``.b2z`` tables opened read-only and
         ``compact=False``, this uses a fast physical-unpack path: the zip
@@ -2150,9 +2150,9 @@ class CTable(Generic[RowT]):
         not recompress columns.
 
         For in-memory tables, views, writable ``.b2z`` tables, existing
-        ``.b2d`` tables, or ``compact=True``, this falls back to the logical
-        :meth:`save` path, materializing only visible/live rows into a new
-        ``.b2d`` store.
+        directory-backed tables, destinations not ending in ``.b2d``, or
+        ``compact=True``, this falls back to the logical :meth:`save` path,
+        materializing only visible/live rows into a new directory-backed store.
 
         Examples
         --------
@@ -2171,9 +2171,7 @@ class CTable(Generic[RowT]):
 
             table.to_b2d("data-compact.b2d", overwrite=True, compact=True)
         """
-        if not str(urlpath).endswith(".b2d"):
-            raise ValueError("urlpath must have a .b2d extension")
-
+        urlpath = os.fspath(urlpath)
         storage = getattr(self, "_storage", None)
         can_physical_unpack = (
             not compact
@@ -2200,11 +2198,14 @@ class CTable(Generic[RowT]):
         """Copy this (in-memory) table to disk at *urlpath*.
 
         Only live rows are written — the on-disk table is always compacted.
+        A ``.b2z`` suffix selects the compact zip-backed format; any other
+        suffix (including ``.b2d``) creates a directory-backed store.
 
         Parameters
         ----------
         urlpath:
-            Destination directory path.
+            Destination path.  Use a ``.b2z`` suffix for a compact zip-backed
+            store; any other suffix creates a directory-backed store.
         overwrite:
             If ``False`` (default), raise :exc:`ValueError` when *urlpath*
             already exists.  Set to ``True`` to replace an existing table.
@@ -4863,22 +4864,19 @@ class CTable(Generic[RowT]):
             If ``False``, all physical slots are copied including deleted gaps,
             preserving the tombstone state exactly for in-memory copies.
         urlpath:
-            Destination path for a persistent copy.  The extension selects the
-            on-disk format: ``.b2z`` for a compact zip-backed store or ``.b2d``
-            for a directory-backed store.  If ``None`` (default), return an
-            in-memory copy.
+            Destination path for a persistent copy.  The ``.b2z`` extension
+            selects a compact zip-backed store; any other path uses a
+            directory-backed store.  If ``None`` (default), return an in-memory
+            copy.
         overwrite:
             If ``True``, replace an existing persistent destination.
         """
         if urlpath is not None:
             urlpath = os.fspath(urlpath)
-            ext = os.path.splitext(urlpath)[1]
-            if ext == ".b2z":
+            if urlpath.endswith(".b2z"):
                 self.to_b2z(urlpath, overwrite=overwrite, compact=compact)
-            elif ext == ".b2d":
-                self.to_b2d(urlpath, overwrite=overwrite, compact=compact)
             else:
-                raise ValueError("urlpath must have a .b2z or .b2d extension")
+                self.to_b2d(urlpath, overwrite=overwrite, compact=compact)
             return CTable.open(urlpath, mode="r")
 
         valid_np = self._valid_rows[:]

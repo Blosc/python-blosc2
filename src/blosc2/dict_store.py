@@ -723,8 +723,6 @@ class DictStore:
                 self.b2z_path[:-4] + ".b2d" if self.b2z_path.endswith(".b2z") else self.b2z_path + ".b2d"
             )
         b2d_path = os.fspath(b2d_path)
-        if not b2d_path.endswith(".b2d"):
-            raise ValueError("b2d_path must have a .b2d extension")
 
         target_path = os.path.abspath(b2d_path)
         source_path = os.path.abspath(self.working_dir)

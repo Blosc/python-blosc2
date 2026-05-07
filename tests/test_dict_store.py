@@ -214,6 +214,21 @@ def test_to_b2d_overwrite_existing_raises(tmp_path):
         assert np.all(dstore["/nodeA"][:] == np.arange(5))
 
 
+def test_to_b2d_accepts_non_b2z_urlpath_extension(tmp_path):
+    b2z_path = tmp_path / "test_to_b2d_src.b2z"
+    b2d_path = tmp_path / "test_to_b2d_dst.b2nd"
+
+    with DictStore(str(b2z_path), mode="w") as dstore:
+        dstore["/nodeA"] = np.arange(5)
+
+    with DictStore(str(b2z_path), mode="r") as dstore:
+        unpacked = dstore.to_b2d(str(b2d_path))
+        assert unpacked == os.path.abspath(b2d_path)
+
+    with DictStore(str(b2d_path), mode="r") as dstore:
+        assert np.all(dstore["/nodeA"][:] == np.arange(5))
+
+
 def test_to_b2z_from_readonly_b2z_raises():
     b2z_path = "test_to_b2z_readonly_zip.b2z"
     out_path = "test_to_b2z_readonly_zip_out.b2z"
