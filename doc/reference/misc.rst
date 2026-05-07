@@ -3,9 +3,41 @@ Miscellaneous
 
 This page documents the miscellaneous members of the ``blosc2`` module that do not fit into other categories.
 
+.. currentmodule:: blosc2
+
+.. autodata:: cpu_info
+
+.. autoclass:: finfo
+
+.. autoclass:: iinfo
+
+.. autofunction:: get_matmul_library
+
+
+Unclassified module members
+---------------------------
+
+The list below is intentionally generated from ``blosc2`` module members that
+are not excluded above.  It acts as a reminder to classify newly documented
+public objects into the appropriate reference section.
+
 .. automodule:: blosc2
     :members:
-    :exclude-members: LazyArray,
+    :exclude-members: DEFAULT_COMPLEX,
+        DEFAULT_FLOAT,
+        DEFAULT_INDEX,
+        DEFAULT_INT,
+        DSLKernel,
+        Operand,
+        ProxyNDField,
+        array_from_ffi_ptr,
+        as_simpleproxy,
+        cpu_info,
+        finfo,
+        get_cpu_info,
+        get_matmul_library,
+        iinfo,
+        LazyArray,
         LazyExpr,
         LazyUDF,
         Batch,
