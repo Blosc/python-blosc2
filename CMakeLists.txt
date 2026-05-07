@@ -14,6 +14,9 @@ endif()
 
 project(python-blosc2)
 
+set(BLOSC2_MIN_VERSION 3.0.0)
+set(BLOSC2_BUNDLED_VERSION v3.0.2)
+
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
 endif()
@@ -118,7 +121,7 @@ endif()
 if(USE_SYSTEM_BLOSC2)
     set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(Blosc2 REQUIRED IMPORTED_TARGET blosc2)
+    pkg_check_modules(Blosc2 REQUIRED IMPORTED_TARGET blosc2>=${BLOSC2_MIN_VERSION})
     target_link_libraries(blosc2_ext PRIVATE PkgConfig::Blosc2)
 else()
     set(STATIC_LIB ON CACHE BOOL "Build a static version of the blosc library.")
@@ -137,7 +140,7 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG 51439748201cdc49c2ce2ec8a8b4fac2b810300f
+        GIT_TAG ${BLOSC2_BUNDLED_VERSION}
         # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../c-blosc2
     )
     FetchContent_MakeAvailable(blosc2)
