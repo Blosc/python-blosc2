@@ -2088,11 +2088,13 @@ class CTable(Generic[RowT]):
     def to_b2z(self, urlpath: str, *, overwrite: bool = False, compact: bool = False) -> str:
         """Write this table to a compact ``.b2z`` container.
 
-        For persistent, non-view ``.b2d`` tables and ``compact=False``, this
-        uses a fast physical-pack path: the backing :class:`TreeStore` directory
-        is zipped with already-compressed leaves stored as-is. This preserves
-        the physical layout, including deleted rows and spare capacity, and does
-        not recompress columns.
+        ``.b2z`` is the compact zip-backed CTable format.  For persistent,
+        non-view directory-backed tables and ``compact=False``, this uses a
+        fast physical-pack path: the backing :class:`TreeStore` directory is
+        zipped with already-compressed leaves stored as-is. This preserves the
+        physical layout, including deleted rows and spare capacity, and does
+        not recompress columns.  A ``.b2d`` suffix is recommended for
+        directory-backed stores, but not required.
 
         For in-memory tables, views, existing ``.b2z`` tables, or
         ``compact=True``, this falls back to the logical :meth:`save` path,
@@ -2123,7 +2125,7 @@ class CTable(Generic[RowT]):
             not compact
             and self.base is None
             and isinstance(storage, FileTableStorage)
-            and str(storage._root).endswith(".b2d")
+            and not str(storage._root).endswith(".b2z")
         )
         if can_physical_pack:
             self._flush_varlen_columns()
@@ -2143,16 +2145,18 @@ class CTable(Generic[RowT]):
     def to_b2d(self, urlpath: str, *, overwrite: bool = False, compact: bool = False) -> str:
         """Write this table to a directory-backed store.
 
-        For persistent, non-view ``.b2z`` tables opened read-only and
+        Directory-backed CTable stores may use any path that does not end in
+        ``.b2z``; using a ``.b2d`` suffix is recommended for clarity.  For
+        persistent, non-view ``.b2z`` tables opened read-only and
         ``compact=False``, this uses a fast physical-unpack path: the zip
         members are extracted as already-compressed leaves. This preserves the
         physical layout, including deleted rows and spare capacity, and does
         not recompress columns.
 
         For in-memory tables, views, writable ``.b2z`` tables, existing
-        directory-backed tables, destinations not ending in ``.b2d``, or
-        ``compact=True``, this falls back to the logical :meth:`save` path,
-        materializing only visible/live rows into a new directory-backed store.
+        directory-backed tables, or ``compact=True``, this falls back to the
+        logical :meth:`save` path, materializing only visible/live rows into a
+        new directory-backed store.
 
         Examples
         --------
@@ -2202,13 +2206,15 @@ class CTable(Generic[RowT]):
 
         Only live rows are written — the on-disk table is always compacted.
         A ``.b2z`` suffix selects the compact zip-backed format; any other
-        suffix (including ``.b2d``) creates a directory-backed store.
+        suffix creates a directory-backed store.  Use a ``.b2d`` suffix for
+        directory-backed stores when possible so the format is clear.
 
         Parameters
         ----------
         urlpath:
             Destination path.  Use a ``.b2z`` suffix for a compact zip-backed
-            store; any other suffix creates a directory-backed store.
+            store; any other suffix creates a directory-backed store.  A
+            ``.b2d`` suffix is recommended for directory-backed stores.
         overwrite:
             If ``False`` (default), raise :exc:`ValueError` when *urlpath*
             already exists.  Set to ``True`` to replace an existing table.
@@ -4871,8 +4877,9 @@ class CTable(Generic[RowT]):
         urlpath:
             Destination path for a persistent copy.  The ``.b2z`` extension
             selects a compact zip-backed store; any other path uses a
-            directory-backed store.  If ``None`` (default), return an in-memory
-            copy.
+            directory-backed store.  A ``.b2d`` suffix is recommended for
+            directory-backed stores.  If ``None`` (default), return an
+            in-memory copy.
         overwrite:
             If ``True``, replace an existing persistent destination.
         """

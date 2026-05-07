@@ -135,6 +135,20 @@ def test_to_b2z_packs_persistent_b2d():
     assert list(opened["id"][:]) == [10, 20]
 
 
+def test_to_b2z_packs_non_b2z_directory_store():
+    path = table_path("to_b2z_src.b2nd")
+    dest = table_path("to_b2z_from_b2nd.b2z")
+    t = CTable(Row, urlpath=path, mode="w", expected_size=16)
+    t.extend([(10, 50.0, True), (20, 60.0, False)])
+
+    result = t.to_b2z(dest)
+
+    assert os.path.abspath(dest) == result
+    opened = CTable.open(dest, mode="r")
+    assert len(opened) == 2
+    assert list(opened["id"][:]) == [10, 20]
+
+
 def test_to_b2z_materializes_view():
     dest = table_path("to_b2z_view.b2z")
     t = CTable(Row, new_data=[(1, 10.0, True), (2, 20.0, False), (3, 30.0, True)])

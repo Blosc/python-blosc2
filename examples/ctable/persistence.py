@@ -38,7 +38,9 @@ copy_path = f"{tmpdir}/measurements_copy.b2d"
 
 try:
     # -- Create directly on disk (mode="w") ---------------------------------
-    # Extensionless paths default to a directory-backed TreeStore.
+    # Paths ending in .b2z create compact zip-backed stores; all other paths
+    # create directory-backed stores.  A .b2d suffix is recommended for
+    # directory-backed CTable stores.
     t = blosc2.CTable(Measurement, new_data=data, urlpath=disk_path, mode="w")
     print(f"Created on disk: {len(t):,} rows at '{disk_path}'")
     t.info()
@@ -72,8 +74,8 @@ try:
     print(f"In-memory table saved to '{copy_path}'")
 
     # -- .b2d vs .b2z ------------------------------------------------------
-    # .b2d is a directory-backed store: mutable, easy to inspect, and a good
-    # default for local read/write workflows. .b2z is a single zip-backed file:
+    # .b2d is the recommended suffix for a directory-backed store: mutable,
+    # easy to inspect, and a good default for local read/write workflows. .b2z is a single zip-backed file:
     # compact and convenient for moving/sharing, typically opened read-only.
     #
     # to_b2z()/to_b2d() use fast physical pack/unpack paths when possible: the

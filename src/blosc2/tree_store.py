@@ -97,10 +97,11 @@ class TreeStore(DictStore):
     Parameters
     ----------
     localpath : str
-        Local path for the directory (`.b2d`) or file (`.b2z`); other extensions
-        are not supported. If a directory is specified, it will be treated as
-        a Blosc2 directory format (B2DIR). If a file is specified, it
-        will be treated as a Blosc2 zip format (B2ZIP).
+        Local path for the directory-backed store or compact zip-backed file.
+        A ``.b2z`` suffix selects the zip-backed format. Existing directories,
+        and new paths not ending in ``.b2z``, use Blosc2 directory format
+        (B2DIR); a ``.b2d`` suffix is recommended for these directory-backed
+        stores. Existing files are treated as Blosc2 zip format (B2ZIP).
     mode : str, optional
         File mode ('r', 'w', 'a'). Default is 'a'.
     tmpdir : str or None, optional

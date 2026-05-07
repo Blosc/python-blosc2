@@ -46,11 +46,11 @@ class DictStore:
     Parameters
     ----------
     localpath : str
-        Local path for the directory or zip file. Paths ending in ``.b2d`` and
-        ``.b2z`` remain the recommended conventions. If the path already exists,
-        directories are treated as Blosc2 directory format (B2DIR) and files as
-        Blosc2 zip format (B2ZIP). For new extensionless paths, directory-backed
-        storage is used by default.
+        Local path for the directory or zip file. A ``.b2z`` suffix selects the
+        compact zip-backed format. Existing directories, and new paths not
+        ending in ``.b2z``, use Blosc2 directory format (B2DIR); a ``.b2d``
+        suffix is recommended for these directory-backed stores. Existing files
+        are treated as Blosc2 zip format (B2ZIP).
     mode : str, optional
         File mode ('r', 'w', 'a'). Default is 'a'.
     mmap_mode : str or None, optional
@@ -202,7 +202,7 @@ class DictStore:
                 dparams=dparams,
             )
             self._update_map_tree_from_offsets()
-        else:  # .b2d
+        else:  # directory-backed store
             if not os.path.isdir(self.localpath):
                 raise FileNotFoundError(f"Directory {self.localpath} does not exist for reading.")
             schunk = blosc2.blosc2_ext.open(
@@ -618,7 +618,7 @@ class DictStore:
 
     def to_b2z(self, overwrite=False, filename=None) -> os.PathLike[Any] | str:
         """
-        Serialize zip store contents to the b2z file.
+        Serialize store contents to a compact ``.b2z`` file.
 
         Parameters
         ----------
@@ -635,7 +635,8 @@ class DictStore:
 
         Examples
         --------
-        Pack a directory-backed store into a zip store::
+        Pack a directory-backed store into a zip store.  A ``.b2d`` suffix is
+        recommended for directory-backed stores, but not required::
 
             with blosc2.DictStore("data.b2d", mode="w") as dstore:
                 dstore["/values"] = np.arange(10)
@@ -687,12 +688,14 @@ class DictStore:
 
     def to_b2d(self, dirname=None, *, overwrite: bool = False) -> os.PathLike[Any] | str:
         """
-        Serialize store contents to a b2d directory.
+        Serialize store contents to a directory-backed store.
 
         Parameters
         ----------
         dirname : str, optional
-            If provided, use this directory instead of the default b2d path.
+            If provided, use this directory instead of the default directory
+            path.  A ``.b2d`` suffix is recommended for clarity, but not
+            required.
         overwrite : bool, optional
             If True, overwrite the existing b2d directory if it exists.
             Default is False.
@@ -700,7 +703,7 @@ class DictStore:
         Returns
         -------
         dirname : str
-            The absolute path to the created b2d directory.
+            The absolute path to the created directory-backed store.
 
         Examples
         --------
@@ -712,7 +715,8 @@ class DictStore:
             with blosc2.DictStore("data.b2d", mode="r") as dstore:
                 values = dstore["/values"][:]
 
-        Copy an existing directory-backed store to another ``.b2d`` directory::
+        Copy an existing directory-backed store to another directory.  A
+        ``.b2d`` suffix is recommended for directory-backed stores::
 
             with blosc2.DictStore("data.b2d", mode="r") as dstore:
                 dstore.to_b2d("backup.b2d", overwrite=True)
