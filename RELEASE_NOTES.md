@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.2.0 to 4.2.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.1.2 to 4.2.0
 
 ### CTable: columnar compressed tables

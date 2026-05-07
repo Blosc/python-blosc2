@@ -42,7 +42,7 @@ Preliminaries
 
 * Check that the metainfo for the package is correct::
 
-    pipx run build --sdist
+    uv build --sdist --no-build-isolation
     twine check --strict dist/*
 
 
@@ -101,7 +101,6 @@ Checking packaging
 
     pip install --group test
     pip install blosc2 -U
-    python -c "import blosc2; blosc2.print_versions()"
     pytest
 
 * Do an actual release in GitHub by visiting:
