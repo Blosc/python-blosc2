@@ -261,7 +261,10 @@ class TreeStore(DictStore):
 
         registered = self._object_roots()
         # Fast path: when registry is non-empty, avoid costly full-store probing.
-        roots = registered if registered else self._probed_object_roots()
+        if registered:
+            roots = registered
+        else:
+            roots = self._probed_object_roots()
         self._known_object_roots_cache = set(roots)
         return set(roots)
 
