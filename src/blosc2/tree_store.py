@@ -262,7 +262,7 @@ class TreeStore(DictStore):
         registered = self._object_roots()
         # Fast path: when registry exists, avoid costly full-store probing.
         roots = registered if registered else self._probed_object_roots()
-        self._known_object_roots_cache = roots
+        self._known_object_roots_cache = set(roots)
         return set(roots)
 
     def _effective_object_roots(self) -> set:
@@ -276,7 +276,7 @@ class TreeStore(DictStore):
 
         all_roots = self._known_object_roots()
         if not self.subtree_path:
-            self._effective_object_roots_cache = (current_subtree_path, all_roots)
+            self._effective_object_roots_cache = (current_subtree_path, set(all_roots))
             return set(all_roots)
         result = set()
         for full_key in all_roots:
