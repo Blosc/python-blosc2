@@ -190,6 +190,8 @@ class TreeStore(DictStore):
 
             self.subtree_path = ""  # Empty string means full tree
             self._inline_handles: list = []  # inline object handles opened from this store
+            self._known_object_roots_cache: set[str] | None = None
+            self._effective_object_roots_cache: tuple[str, set[str]] | None = None
 
     # ------------------------------------------------------------------
     # Object registry helpers
@@ -203,12 +205,18 @@ class TreeStore(DictStore):
         except Exception:
             return {}
 
+    def _invalidate_object_roots_cache(self) -> None:
+        """Invalidate cached object-root views."""
+        self._known_object_roots_cache = None
+        self._effective_object_roots_cache = None
+
     def _register_object(self, full_key: str, *, kind: str, version: int, layout: str) -> None:
         """Register *full_key* as an object root in the persistent registry."""
         try:
             reg = self._objects_registry()
             reg[full_key] = {"kind": kind, "version": version, "layout": layout}
             self._estore._store.vlmeta["_object_registry"] = reg
+            self._invalidate_object_roots_cache()
         except Exception:
             pass  # best-effort
 
@@ -218,6 +226,7 @@ class TreeStore(DictStore):
             reg = self._objects_registry()
             reg.pop(full_key, None)
             self._estore._store.vlmeta["_object_registry"] = reg
+            self._invalidate_object_roots_cache()
         except Exception:
             pass
 
@@ -247,23 +256,40 @@ class TreeStore(DictStore):
 
     def _known_object_roots(self) -> set:
         """Return registered plus physically probed object-root full keys."""
-        return self._object_roots() | self._probed_object_roots()
+        if self._known_object_roots_cache is not None:
+            return set(self._known_object_roots_cache)
+
+        registered = self._object_roots()
+        # Fast path: when registry exists, avoid costly full-store probing.
+        roots = registered if registered else self._probed_object_roots()
+        self._known_object_roots_cache = roots
+        return set(roots)
 
     def _effective_object_roots(self) -> set:
         """Object root keys relative to the current view (subtree or root)."""
+        current_subtree_path = self.subtree_path or ""
+        if (
+            self._effective_object_roots_cache is not None
+            and self._effective_object_roots_cache[0] == current_subtree_path
+        ):
+            return set(self._effective_object_roots_cache[1])
+
         all_roots = self._known_object_roots()
         if not self.subtree_path:
-            return all_roots
+            self._effective_object_roots_cache = (current_subtree_path, all_roots)
+            return set(all_roots)
         result = set()
         for full_key in all_roots:
             relative = self._translate_key_from_full(full_key)
             if relative is not None:
                 result.add(relative)
-        return result
+        self._effective_object_roots_cache = (current_subtree_path, result)
+        return set(result)
 
-    def _is_object_internal_key(self, key: str) -> bool:
+    def _is_object_internal_key(self, key: str, object_roots: set[str] | None = None) -> bool:
         """Return ``True`` when *key* (subtree-relative) is inside an object root."""
-        return any(key != root and key.startswith(root + "/") for root in self._effective_object_roots())
+        roots = self._effective_object_roots() if object_roots is None else object_roots
+        return any(key != root and key.startswith(root + "/") for root in roots)
 
     def _probe_object_info(self, full_key: str) -> dict | None:
         """Probe the physical store for a CTable manifest at *full_key*/_meta.
@@ -647,7 +673,8 @@ class TreeStore(DictStore):
             key = self._validate_key(key)
             if self._is_vlmeta_key(key):
                 return False
-            if self._is_object_internal_key(key):
+            object_roots = self._effective_object_roots()
+            if self._is_object_internal_key(key, object_roots):
                 return False
             full_key = self._translate_key_to_full(key)
             return (
@@ -692,11 +719,10 @@ class TreeStore(DictStore):
         all_keys = {key for key in all_keys if not self._is_vlmeta_key(key)}
 
         # Filter out object-internal keys
-        all_keys = {key for key in all_keys if not self._is_object_internal_key(key)}
+        object_roots = self._effective_object_roots()
+        all_keys = {key for key in all_keys if not self._is_object_internal_key(key, object_roots)}
 
         # Add object roots (they are not stored as DictStore keys themselves)
-        object_roots = self._effective_object_roots()
-
         # Build structural paths from both data leaves and object root keys
         all_with_roots = all_keys | object_roots
         structural_keys = set()
