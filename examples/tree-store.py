@@ -5,7 +5,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Example usage of TreeStore with hierarchical navigation and vlmeta
+# Example usage of TreeStore with hierarchical navigation, vlmeta, and CTables
+
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -66,3 +68,46 @@ with blosc2.open("example_tree.b2z", mode="a") as tstore2:
     rsub = tstore2["/child0"]
     print("/child0/new_leaf via subtree:", rsub["/new_leaf"][:])
     print(f"TreeStore file at: {tstore2.localpath}")
+
+# ---------------------------------------------------------------------------
+# Mixing NDArrays and CTables in the same TreeStore
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Reading:
+    sensor_id: int = 0
+    value: float = 0.0
+
+
+with blosc2.TreeStore("example_tree.b2z", mode="a") as ts:
+    # Create a small CTable in memory and store it inline
+    t = blosc2.CTable(Reading)
+    for i in range(5):
+        t.append(Reading(sensor_id=i, value=float(i) * 1.1))
+
+    # Assignment syntax is identical to NDArray
+    ts["/readings"] = t
+    print("Keys after adding CTable:", sorted(ts.keys()))
+
+    # Object internals are hidden from normal traversal
+    print("/readings/_meta in ts:", "/readings/_meta" in ts)  # False
+
+with blosc2.open("example_tree.b2z", mode="r") as ts:
+    # CTable is returned transparently; no special open call needed
+    readings = ts["/readings"]
+    print(f"CTable type: {type(readings).__name__}, rows: {len(readings)}")
+    print("sensor_id column:", list(readings["sensor_id"][:]))
+    print("value column    :", list(readings["value"][:]))
+
+# Append a row to an inline CTable via append mode
+with blosc2.TreeStore("example_tree.b2z", mode="a") as ts:
+    readings = ts["/readings"]
+    readings.append(Reading(sensor_id=99, value=-1.0))
+    readings.close()  # explicit close before outer store repacks
+    print("After append, rows:", len(ts["/readings"]))
+
+# Delete the CTable object root (removes all internal leaves)
+with blosc2.TreeStore("example_tree.b2z", mode="a") as ts:
+    del ts["/readings"]
+    print("After deleting /readings:", sorted(ts.keys()))

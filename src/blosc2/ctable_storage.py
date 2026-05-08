@@ -504,13 +504,12 @@ class FileTableStorage(TableStorage):
     @staticmethod
     def _walk_descriptor_paths(descriptor: dict):
         """Yield (obj, key) for every string value that looks like a file path."""
-        _PATH_KEYS = {"path", "values_path", "positions_path", "l1_path", "l2_path"}
         stack = [descriptor]
         while stack:
             obj = stack.pop()
             if isinstance(obj, dict):
                 for k, v in obj.items():
-                    if k in _PATH_KEYS and isinstance(v, str):
+                    if (k == "path" or k.endswith("_path")) and isinstance(v, str):
                         yield obj, k
                     elif isinstance(v, (dict, list)):
                         stack.append(v)
@@ -521,22 +520,22 @@ class FileTableStorage(TableStorage):
 
     @staticmethod
     def _relativize_descriptor(descriptor: dict, working_dir: str) -> dict:
-        """Replace absolute paths inside *working_dir* with ``_indexes/…`` relative paths."""
-        prefix = working_dir.rstrip("/") + "/"
+        """Replace absolute paths inside *working_dir* with working-dir relative paths."""
+        prefix = working_dir.rstrip(os.sep) + os.sep
         d = copy.deepcopy(descriptor)
         for obj, key in FileTableStorage._walk_descriptor_paths(d):
             v = obj[key]
-            if v.startswith(prefix):
-                obj[key] = v[len(prefix) :]
+            if os.path.isabs(v) and v.startswith(prefix):
+                obj[key] = v[len(prefix) :].replace(os.sep, "/")
         return d
 
     @staticmethod
     def _absolutize_descriptor(descriptor: dict, working_dir: str) -> dict:
-        """Expand ``_indexes/…`` relative paths back to absolute using *working_dir*."""
+        """Expand working-dir relative paths back to absolute paths."""
         d = copy.deepcopy(descriptor)
         for obj, key in FileTableStorage._walk_descriptor_paths(d):
             v = obj[key]
-            if v.startswith(_INDEXES_DIR + "/") or v.startswith(_INDEXES_DIR + os.sep):
+            if not os.path.isabs(v):
                 obj[key] = os.path.join(working_dir, v)
         return d
 
@@ -603,3 +602,381 @@ class FileTableStorage(TableStorage):
 
     def index_anchor_path(self, col_name: str) -> str | None:
         return os.path.join(self._open_store().working_dir, _INDEXES_DIR, col_name, "_anchor")
+
+
+# ---------------------------------------------------------------------------
+# TreeStore-backed backend (inline subtree layout)
+# ---------------------------------------------------------------------------
+
+
+class TreeStoreTableStorage(TableStorage):
+    """TableStorage backend that stores a CTable inline inside an outer TreeStore.
+
+    All CTable components are written as normal external leaves under *root_key*
+    inside *store*'s working directory.  This avoids nested ZIP files and allows
+    the entire bundle to be packed as a flat ``.b2z`` archive.
+
+    Parameters
+    ----------
+    store:
+        The outer :class:`blosc2.TreeStore` (or its subtree view) that will
+        hold the CTable internals.
+    root_key:
+        Full absolute key where the CTable lives, e.g. ``"/table"``.
+    mode:
+        Open mode (``'r'``, ``'a'``, or ``'w'``).  Should match ``store.mode``.
+    owns_store:
+        If ``True``, ``close()`` / ``discard()`` will also close / discard
+        *store*.  Use ``False`` (default) when *store* is owned by the caller.
+    """
+
+    def __init__(
+        self,
+        store: blosc2.TreeStore,
+        root_key: str,
+        mode: str,
+        owns_store: bool = False,
+    ) -> None:
+        self._store = store
+        self._root_key = root_key.rstrip("/")
+        self._mode = mode
+        self._owns_store = owns_store
+        self._meta: blosc2.SChunk | None = None
+
+    # ------------------------------------------------------------------
+    # Key / path helpers
+    # ------------------------------------------------------------------
+
+    def _table_key(self, logical_key: str) -> str:
+        """Translate a CTable-internal logical key to an outer-store absolute key.
+
+        For example, if *root_key* is ``"/table"`` and *logical_key* is
+        ``"/_meta"``, the result is ``"/table/_meta"``.
+        """
+        return self._root_key + logical_key
+
+    def _working_dir(self) -> str:
+        return self._store.working_dir
+
+    def _dest_path(self, logical_key: str, ext: str) -> str:
+        """Absolute filesystem path for the external leaf file."""
+        rel = self._table_key(logical_key).lstrip("/")
+        return os.path.join(self._working_dir(), rel + ext)
+
+    def _write_leaf(self, logical_key: str, value: Any, ext: str) -> None:
+        """Write *value* as a raw cframe file and register it in the outer
+        store's map_tree so DictStore can find it again on open."""
+        dest_path = self._dest_path(logical_key, ext)
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        if isinstance(value, blosc2.SChunk) or hasattr(value, "to_cframe"):
+            with open(dest_path, "wb") as f:
+                f.write(value.to_cframe())
+        else:
+            value.save(urlpath=dest_path, mode="w")
+        rel_path = os.path.relpath(dest_path, self._working_dir()).replace(os.sep, "/")
+        full_key = self._table_key(logical_key)
+        self._store.map_tree[full_key] = rel_path
+        self._store._modified = True
+
+    def _open_leaf(self, logical_key: str) -> Any:
+        """Open a leaf via the outer store's map_tree / estore logic."""
+        from blosc2.dict_store import DictStore
+
+        full_key = self._table_key(logical_key)
+        return DictStore.__getitem__(self._store, full_key)
+
+    def _list_col_path(self, name: str) -> str:
+        """Filesystem path for a list-style column (``.b2b``)."""
+        return self._dest_path(f"/_cols/{name}", ".b2b")
+
+    # ------------------------------------------------------------------
+    # TableStorage interface — lifecycle
+    # ------------------------------------------------------------------
+
+    def table_exists(self) -> bool:
+        full_key = self._table_key("/_meta")
+        return full_key in self._store.map_tree or full_key in self._store._estore
+
+    def is_read_only(self) -> bool:
+        return self._mode == "r"
+
+    def open_mode(self) -> str | None:
+        return self._mode
+
+    def close(self) -> None:
+        if self._owns_store and self._store is not None:
+            self._store.close()
+            self._store = None
+        self._meta = None
+
+    def discard(self) -> None:
+        if self._owns_store and self._store is not None:
+            self._store.discard()
+            self._store = None
+        self._meta = None
+
+    # ------------------------------------------------------------------
+    # TableStorage interface — columns and valid_rows
+    # ------------------------------------------------------------------
+
+    def create_column(
+        self,
+        name: str,
+        *,
+        dtype: np.dtype,
+        shape: tuple[int, ...],
+        chunks: tuple[int, ...],
+        blocks: tuple[int, ...],
+        cparams: dict[str, Any] | None,
+        dparams: dict[str, Any] | None,
+    ) -> blosc2.NDArray:
+        kwargs: dict[str, Any] = {"chunks": chunks, "blocks": blocks}
+        if cparams is not None:
+            kwargs["cparams"] = cparams
+        if dparams is not None:
+            kwargs["dparams"] = dparams
+        dest_path = self._dest_path(f"/_cols/{name}", ".b2nd")
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        col = blosc2.zeros(shape, dtype=dtype, urlpath=dest_path, mode="w", **kwargs)
+        rel_path = os.path.relpath(dest_path, self._working_dir()).replace(os.sep, "/")
+        self._store.map_tree[self._table_key(f"/_cols/{name}")] = rel_path
+        self._store._modified = True
+        return col
+
+    def open_column(self, name: str) -> blosc2.NDArray:
+        return self._open_leaf(f"/_cols/{name}")
+
+    def create_list_column(
+        self,
+        name: str,
+        *,
+        spec: ListSpec,
+        cparams: dict[str, Any] | None,
+        dparams: dict[str, Any] | None,
+    ) -> ListArray:
+        kwargs: dict[str, Any] = {
+            "urlpath": self._list_col_path(name),
+            "mode": "w",
+            "contiguous": True,
+        }
+        if cparams is not None:
+            kwargs["cparams"] = cparams
+        if dparams is not None:
+            kwargs["dparams"] = dparams
+        os.makedirs(os.path.dirname(self._list_col_path(name)), exist_ok=True)
+        return ListArray(spec=spec, **kwargs)
+
+    def open_list_column(self, name: str) -> ListArray:
+        if self._store.is_zip_store and self._mode == "r":
+            rel = self._table_key(f"/_cols/{name}").lstrip("/") + ".b2b"
+            if rel not in self._store.offsets:
+                raise KeyError(f"List column {name!r} not found in {self._store.localpath!r}")
+            opened = blosc2.blosc2_ext.open(
+                self._store.b2z_path,
+                mode="r",
+                offset=self._store.offsets[rel]["offset"],
+            )
+            return process_opened_object(opened)
+        return blosc2.open(self._list_col_path(name), mode=self._mode)
+
+    def create_varlen_scalar_column(
+        self,
+        name: str,
+        *,
+        spec,
+        cparams=None,
+        dparams=None,
+    ) -> _ScalarVarLenArray:
+        urlpath = self._list_col_path(name)
+        os.makedirs(os.path.dirname(urlpath), exist_ok=True)
+        return _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
+
+    def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
+        if self._store.is_zip_store and self._mode == "r":
+            rel = self._table_key(f"/_cols/{name}").lstrip("/") + ".b2b"
+            if rel not in self._store.offsets:
+                raise KeyError(f"Varlen scalar column {name!r} not found in {self._store.localpath!r}")
+            backend = BatchArray(
+                _from_schunk=blosc2.blosc2_ext.open(
+                    self._store.b2z_path,
+                    mode="r",
+                    offset=self._store.offsets[rel]["offset"],
+                )
+            )
+        else:
+            backend = _open_persistent_backend(self._list_col_path(name), self._mode, spec=spec)
+        _validate_role_metadata(backend, spec)
+        return _ScalarVarLenArray(spec, backend)
+
+    def create_valid_rows(
+        self,
+        *,
+        shape: tuple[int, ...],
+        chunks: tuple[int, ...],
+        blocks: tuple[int, ...],
+    ) -> blosc2.NDArray:
+        dest_path = self._dest_path("/_valid_rows", ".b2nd")
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        valid_rows = blosc2.zeros(
+            shape,
+            dtype=np.bool_,
+            chunks=chunks,
+            blocks=blocks,
+            urlpath=dest_path,
+            mode="w",
+        )
+        rel_path = os.path.relpath(dest_path, self._working_dir()).replace(os.sep, "/")
+        self._store.map_tree[self._table_key("/_valid_rows")] = rel_path
+        self._store._modified = True
+        return valid_rows
+
+    def open_valid_rows(self) -> blosc2.NDArray:
+        return self._open_leaf("/_valid_rows")
+
+    # ------------------------------------------------------------------
+    # TableStorage interface — schema and manifest
+    # ------------------------------------------------------------------
+
+    def save_schema(self, schema_dict: dict[str, Any]) -> None:
+        meta = blosc2.SChunk()
+        meta.vlmeta["kind"] = "ctable"
+        meta.vlmeta["version"] = 1
+        meta.vlmeta["schema"] = json.dumps(schema_dict)
+        self._write_leaf("/_meta", meta, ".b2f")
+        opened = self._open_leaf("/_meta")
+        if not isinstance(opened, blosc2.SChunk):
+            raise ValueError("CTable manifest '/_meta' must materialise as an SChunk.")
+        self._meta = opened
+
+    def _open_meta(self) -> blosc2.SChunk:
+        if self._meta is None:
+            try:
+                opened = self._open_leaf("/_meta")
+            except KeyError as exc:
+                raise FileNotFoundError(f"No CTable manifest found at {self._root_key!r}") from exc
+            if not isinstance(opened, blosc2.SChunk):
+                raise ValueError(f"CTable manifest at {self._root_key!r} must be an SChunk.")
+            self._meta = opened
+        return self._meta
+
+    def load_schema(self) -> dict[str, Any]:
+        raw = self._open_meta().vlmeta["schema"]
+        if isinstance(raw, bytes):
+            raw = raw.decode()
+        return json.loads(raw)
+
+    def check_kind(self) -> None:
+        kind = self._open_meta().vlmeta["kind"]
+        if isinstance(kind, bytes):
+            kind = kind.decode()
+        if kind != "ctable":
+            raise ValueError(f"Object at {self._root_key!r} is not a CTable (kind={kind!r})")
+
+    def column_names_from_schema(self) -> list[str]:
+        return [c["name"] for c in self.load_schema()["columns"]]
+
+    def delete_column(self, name: str) -> None:
+        full_key = self._table_key(f"/_cols/{name}")
+        if full_key in self._store.map_tree:
+            filepath = self._store.map_tree.pop(full_key)
+            full_path = os.path.join(self._working_dir(), filepath)
+            if os.path.exists(full_path):
+                os.remove(full_path)
+            return
+        list_path = self._list_col_path(name)
+        if os.path.exists(list_path):
+            blosc2.remove_urlpath(list_path)
+            return
+        raise KeyError(name)
+
+    def rename_column(self, old: str, new: str) -> blosc2.NDArray:
+        old_key = self._table_key(f"/_cols/{old}")
+        new_key = self._table_key(f"/_cols/{new}")
+        if old_key in self._store.map_tree:
+            new_dest = self._dest_path(f"/_cols/{new}", ".b2nd")
+            old_dest = os.path.join(self._working_dir(), self._store.map_tree[old_key])
+            os.makedirs(os.path.dirname(new_dest), exist_ok=True)
+            os.replace(old_dest, new_dest)
+            del self._store.map_tree[old_key]
+            self._store.map_tree[new_key] = os.path.relpath(new_dest, self._working_dir()).replace(
+                os.sep, "/"
+            )
+            self._store._modified = True
+            return blosc2.open(new_dest, mode=self._mode)
+        old_path = self._list_col_path(old)
+        new_path = self._list_col_path(new)
+        if os.path.exists(old_path):
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+            os.replace(old_path, new_path)
+            return blosc2.open(new_path, mode=self._mode)
+        raise KeyError(old)
+
+    # ------------------------------------------------------------------
+    # TableStorage interface — index catalog and epoch counters
+    # ------------------------------------------------------------------
+
+    def load_index_catalog(self) -> dict:
+        meta = self._open_meta()
+        raw = meta.vlmeta.get("index_catalog")
+        if not isinstance(raw, dict):
+            return {}
+        catalog = copy.deepcopy(raw)
+        working_dir = self._working_dir()
+        store = self._store
+        rel_paths_needed = []
+        for col_name, descriptor in catalog.items():
+            catalog[col_name] = FileTableStorage._absolutize_descriptor(descriptor, working_dir)
+            if store.is_zip_store and self._mode == "r":
+                for obj, key in FileTableStorage._walk_descriptor_paths(catalog[col_name]):
+                    v = obj[key]
+                    if not os.path.exists(v):
+                        rel_paths_needed.append(os.path.relpath(v, working_dir).replace(os.sep, "/"))
+        if rel_paths_needed:
+            self._ensure_index_files_extracted(rel_paths_needed)
+        return catalog
+
+    def _ensure_index_files_extracted(self, rel_paths: list[str]) -> None:
+        import zipfile
+
+        store = self._store
+        for rel in rel_paths:
+            dest = os.path.join(self._working_dir(), rel)
+            if os.path.exists(dest):
+                continue
+            info = store.offsets.get(rel)
+            if info is None:
+                continue
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with zipfile.ZipFile(store.b2z_path, "r") as zf:
+                with zf.open(rel) as src, open(dest, "wb") as dst:
+                    dst.write(src.read())
+
+    def save_index_catalog(self, catalog: dict) -> None:
+        meta = self._open_meta()
+        working_dir = self._working_dir()
+        relativized = {
+            col: FileTableStorage._relativize_descriptor(desc, working_dir) for col, desc in catalog.items()
+        }
+        meta.vlmeta["index_catalog"] = relativized
+
+    def get_epoch_counters(self) -> tuple[int, int]:
+        meta = self._open_meta()
+        ve = int(meta.vlmeta.get("value_epoch", 0) or 0)
+        vis_e = int(meta.vlmeta.get("visibility_epoch", 0) or 0)
+        return ve, vis_e
+
+    def bump_value_epoch(self) -> int:
+        meta = self._open_meta()
+        ve = int(meta.vlmeta.get("value_epoch", 0) or 0) + 1
+        meta.vlmeta["value_epoch"] = ve
+        return ve
+
+    def bump_visibility_epoch(self) -> int:
+        meta = self._open_meta()
+        vis_e = int(meta.vlmeta.get("visibility_epoch", 0) or 0) + 1
+        meta.vlmeta["visibility_epoch"] = vis_e
+        return vis_e
+
+    def index_anchor_path(self, col_name: str) -> str | None:
+        table_rel = self._root_key.lstrip("/")
+        return os.path.join(self._working_dir(), table_rel, _INDEXES_DIR, col_name, "_anchor")

@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import dataclasses
 import os
 import shutil
 import zipfile
@@ -1110,3 +1111,388 @@ def test_mmap_mode_validation(tmp_path):
 
     with pytest.raises(ValueError, match="mmap_mode='r' requires mode='r'"):
         TreeStore(str(path), mode="a", mmap_mode="r")
+
+
+# ===========================================================================
+# CTable inline object support tests
+# ===========================================================================
+
+
+@dataclasses.dataclass
+class _Row:
+    x: int = 0
+    y: float = 0.0
+
+
+@dataclasses.dataclass
+class _RowStr:
+    name: str = ""
+    score: float = 0.0
+
+
+def _make_ctable(n=5):
+    t = blosc2.CTable(_Row)
+    for i in range(n):
+        t.append(_Row(x=i, y=i * 1.5))
+    return t
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_basic_write_read(tmp_path, storage_type):
+    """Basic write/read of NDArray + CTable in one TreeStore."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = _make_ctable()
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/arr"] = np.arange(10)
+        ts["/table"] = t
+
+    with blosc2.open(path, mode="r") as ts:
+        assert isinstance(ts["/arr"], blosc2.NDArray)
+        assert isinstance(ts["/table"], blosc2.CTable)
+        table2 = ts["/table"]
+        assert len(table2) == 5
+        np.testing.assert_array_equal(list(table2["x"][:]), list(range(5)))
+        np.testing.assert_array_almost_equal(list(table2["y"][:]), [i * 1.5 for i in range(5)])
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_traversal_hides_internals(tmp_path, storage_type):
+    """Object internals are hidden from keys(), walk(), __contains__."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = _make_ctable()
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/arr"] = np.arange(3)
+        ts["/table"] = t
+
+    with blosc2.open(path, mode="r") as ts:
+        k = sorted(ts.keys())
+        assert "/arr" in k
+        assert "/table" in k
+        # Internals must NOT appear
+        assert not any(x.startswith("/table/_") for x in k)
+        # __contains__
+        assert "/table" in ts
+        assert "/table/_meta" not in ts
+        assert "/table/_valid_rows" not in ts
+        assert "/table/_cols" not in ts
+        # walk
+        walked = list(ts.walk("/"))
+        all_nodes = [n for _, _, nodes in walked for n in nodes]
+        all_dirs = [d for _, dirs, _ in walked for d in dirs]
+        assert "table" in all_nodes
+        assert not any(name.startswith("_") for name in all_dirs)
+        assert not any(name.startswith("_") for name in all_nodes)
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_get_subtree_raises(tmp_path, storage_type):
+    """get_subtree() on an object root must raise ValueError."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = _make_ctable()
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = t
+        with pytest.raises(ValueError, match="object root"):
+            ts.get_subtree("/table")
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_write_to_internal_raises(tmp_path, storage_type):
+    """Writing directly to object internals must raise ValueError."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = _make_ctable()
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = t
+        with pytest.raises(ValueError, match="internal component"):
+            ts["/table/_cols/x"] = np.ones(3)
+        with pytest.raises(ValueError, match="internal component"):
+            ts["/table/_meta"] = np.ones(2)
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_replace_raises(tmp_path, storage_type):
+    """Replacing an existing object root without deleting first must raise."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = _make_ctable()
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = t
+        with pytest.raises(ValueError, match="already exists as an object root"):
+            ts["/table"] = t
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_structural_conflict(tmp_path, storage_type):
+    """Cannot assign CTable where structural children exist, and vice-versa."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = _make_ctable()
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        # Structural children → CTable assignment blocked
+        ts["/grp/leaf"] = np.ones(2)
+        with pytest.raises(ValueError):
+            ts["/grp"] = t
+
+    path2 = str(tmp_path / f"bundle2.{storage_type}")
+    with blosc2.TreeStore(path2, mode="w") as ts:
+        ts["/table"] = t
+        # CTable root exists → adding child blocked
+        with pytest.raises(ValueError, match="internal component"):
+            ts["/table/foo"] = np.ones(2)
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_deletion(tmp_path, storage_type):
+    """Deleting an object root removes all its physical leaves."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = _make_ctable()
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/arr"] = np.arange(5)
+        ts["/table"] = t
+        del ts["/table"]
+        assert "/table" not in ts
+        assert "/arr" in ts
+
+    # Stays gone after reopen
+    with blosc2.open(path, mode="r") as ts:
+        assert "/table" not in ts
+        assert "/arr" in ts
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_delete_and_reassign(tmp_path, storage_type):
+    """After deletion a CTable can be re-assigned at the same key."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = _make_ctable()
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = t
+        del ts["/table"]
+        ts["/table"] = _make_ctable(n=3)
+
+    with blosc2.open(path, mode="r") as ts:
+        assert "/table" in ts
+        t2 = ts["/table"]
+        assert len(t2) == 3
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_delete_internal_raises(tmp_path, storage_type):
+    """Direct deletion of object internals must raise."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = _make_ctable()
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = t
+        with pytest.raises(ValueError, match="internal component"):
+            del ts["/table/_meta"]
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_append_mode(tmp_path, storage_type):
+    """Inline CTable can be opened and extended in append mode."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = _make_ctable(n=3)
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = t
+
+    with blosc2.TreeStore(path, mode="a") as ts:
+        table = ts["/table"]
+        table.append(_Row(x=99, y=-1.0))
+        table.close()
+
+    with blosc2.open(path, mode="r") as ts:
+        t2 = ts["/table"]
+        assert len(t2) == 4
+        assert list(t2["x"][:])[-1] == 99
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_coexists_with_nested_ndarray(tmp_path, storage_type):
+    """CTables and nested NDArrays can coexist in the same bundle."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = _make_ctable()
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/group/arr"] = np.arange(6)
+        ts["/group/sub/val"] = np.ones(2)
+        ts["/table"] = t
+        ts["/scalar"] = np.array([42])
+
+    with blosc2.open(path, mode="r") as ts:
+        k = sorted(ts.keys())
+        assert "/group" in k
+        assert "/group/arr" in k
+        assert "/group/sub" in k
+        assert "/group/sub/val" in k
+        assert "/table" in k
+        assert "/scalar" in k
+        assert isinstance(ts["/table"], blosc2.CTable)
+
+
+def test_ctable_b2d_to_b2z_roundtrip(tmp_path):
+    """b2d bundle with CTable can be packed to b2z and read back."""
+    b2d = str(tmp_path / "bundle.b2d")
+    b2z = str(tmp_path / "bundle.b2z")
+    t = _make_ctable()
+
+    with blosc2.TreeStore(b2d, mode="w") as ts:
+        ts["/arr"] = np.arange(4)
+        ts["/table"] = t
+
+    with blosc2.TreeStore(b2d, mode="r") as ts:
+        ts.to_b2z(filename=b2z)
+
+    with blosc2.open(b2z, mode="r") as ts:
+        assert "/table" in ts
+        t2 = ts["/table"]
+        assert len(t2) == 5
+        np.testing.assert_array_equal(list(t2["x"][:]), list(range(5)))
+
+
+def test_ctable_b2z_to_b2d_roundtrip(tmp_path):
+    """b2z bundle with CTable can be unpacked to b2d and read back."""
+    b2z = str(tmp_path / "bundle.b2z")
+    b2d = str(tmp_path / "bundle_out.b2d")
+    t = _make_ctable()
+
+    with blosc2.TreeStore(b2z, mode="w") as ts:
+        ts["/arr"] = np.arange(4)
+        ts["/table"] = t
+
+    with blosc2.TreeStore(b2z, mode="r") as ts:
+        ts.to_b2d(b2d)
+
+    with blosc2.open(b2d, mode="r") as ts:
+        assert "/table" in ts
+        t2 = ts["/table"]
+        assert len(t2) == 5
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_with_string_column(tmp_path, storage_type):
+    """CTable with a string column round-trips correctly through TreeStore."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = blosc2.CTable(_RowStr)
+    t.append(_RowStr(name="alice", score=9.5))
+    t.append(_RowStr(name="bob", score=8.0))
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/tbl"] = t
+
+    with blosc2.open(path, mode="r") as ts:
+        t2 = ts["/tbl"]
+        assert len(t2) == 2
+        names = [str(n) for n in t2["name"][:]]
+        assert "alice" in names
+        assert "bob" in names
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_persistent_source_roundtrip(tmp_path, storage_type):
+    """A persistent CTable can also be stored into a TreeStore bundle."""
+    src_path = str(tmp_path / "standalone.b2d")
+    bundle_path = str(tmp_path / f"bundle.{storage_type}")
+
+    t = blosc2.CTable(_Row, urlpath=src_path, mode="w")
+    for i in range(4):
+        t.append(_Row(x=i * 10, y=float(i)))
+    t.close()
+
+    t_disk = blosc2.CTable.open(src_path, mode="r")
+    with blosc2.TreeStore(bundle_path, mode="w") as ts:
+        ts["/arr"] = np.zeros(3)
+        ts["/table"] = t_disk
+    t_disk.close()
+
+    with blosc2.open(bundle_path, mode="r") as ts:
+        t2 = ts["/table"]
+        assert len(t2) == 4
+        np.testing.assert_array_equal(list(t2["x"][:]), [0, 10, 20, 30])
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_context_manager_auto_close(tmp_path, storage_type):
+    """Outer TreeStore auto-closes inline CTable handles on __exit__."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    t = _make_ctable(n=2)
+
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = t
+
+    with blosc2.TreeStore(path, mode="a") as ts:
+        table = ts["/table"]
+        table.append(_Row(x=100, y=0.0))
+        # Don't close table explicitly; outer __exit__ should handle it
+
+    with blosc2.open(path, mode="r") as ts:
+        t2 = ts["/table"]
+        assert len(t2) == 3
+        assert list(t2["x"][:])[-1] == 100
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_values_collapses_object_roots(tmp_path, storage_type):
+    """values() yields the CTable object, not its internal leaves."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = _make_ctable(n=2)
+        values = list(ts.values())
+
+    assert len(values) == 1
+    assert isinstance(values[0], blosc2.CTable)
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_delete_parent_subtree_removes_nested_object(tmp_path, storage_type):
+    """Deleting a normal subtree also deletes nested object roots and physical leaves."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/grp/table"] = _make_ctable(n=2)
+        del ts["/grp"]
+        assert sorted(ts.keys()) == []
+
+    with blosc2.open(path, mode="r") as ts:
+        assert sorted(ts.keys()) == []
+        assert "/grp/table" not in ts
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_inline_index_roundtrip(tmp_path, storage_type):
+    """Index catalogs and sidecars work for inline CTable objects."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = _make_ctable(n=100)
+
+    with blosc2.TreeStore(path, mode="a") as ts:
+        table = ts["/table"]
+        table.create_index("x")
+        np.testing.assert_array_equal(list(table.where(table["x"] > 95)["x"][:]), [96, 97, 98, 99])
+
+    with blosc2.open(path, mode="r") as ts:
+        table = ts["/table"]
+        assert len(table.indexes) == 1
+        np.testing.assert_array_equal(list(table.where(table["x"] > 95)["x"][:]), [96, 97, 98, 99])
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_registry_missing_fallback_hides_and_protects_internals(tmp_path, storage_type):
+    """Physical CTable manifests are enough to detect object roots if registry is missing."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = _make_ctable(n=2)
+
+    with blosc2.TreeStore(path, mode="a") as ts:
+        del ts._estore._store.vlmeta["_object_registry"]
+
+    with blosc2.open(path, mode="r") as ts:
+        assert sorted(ts.keys()) == ["/table"]
+        assert isinstance(ts["/table"], blosc2.CTable)
+        assert "/table/_meta" not in ts
+        with pytest.raises(ValueError, match="object root"):
+            ts.get_subtree("/table")

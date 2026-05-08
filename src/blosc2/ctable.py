@@ -31,7 +31,7 @@ import numpy as np
 
 import blosc2
 from blosc2 import compute_chunks_blocks
-from blosc2.ctable_storage import FileTableStorage, InMemoryTableStorage, TableStorage
+from blosc2.ctable_storage import FileTableStorage, InMemoryTableStorage, TableStorage, TreeStoreTableStorage
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.list_array import ListArray, coerce_list_cell
 from blosc2.scalar_array import _ScalarVarLenArray
@@ -2050,44 +2050,7 @@ class CTable(Generic[RowT]):
         storage = FileTableStorage(urlpath, mode)
         if not storage.table_exists():
             raise FileNotFoundError(f"No CTable found at {urlpath!r}")
-        storage.check_kind()
-        schema_dict = storage.load_schema()
-        schema = schema_from_dict(schema_dict)
-        col_names = [c["name"] for c in schema_dict["columns"]]
-
-        obj = cls.__new__(cls)
-        obj._row_type = None
-        obj._validate = True
-        obj._table_cparams = None
-        obj._table_dparams = None
-        obj._storage = storage
-        obj._read_only = storage.is_read_only()
-        obj._schema = schema
-        obj._cols = {}
-        obj._col_widths = {}
-        obj.col_names = col_names
-        obj.auto_compact = False
-        obj.base = None
-
-        obj._valid_rows = storage.open_valid_rows()
-        for name in col_names:
-            cc = schema.columns_by_name[name]
-            if obj._is_list_column(cc):
-                obj._cols[name] = storage.open_list_column(name)
-            elif obj._is_varlen_scalar_column(cc):
-                obj._cols[name] = storage.open_varlen_scalar_column(name, cc.spec)
-            else:
-                obj._cols[name] = storage.open_column(name)
-            obj._col_widths[name] = max(len(name), cc.display_width)
-
-        obj._n_rows = int(blosc2.count_nonzero(obj._valid_rows))
-        obj._last_pos = None  # resolve lazily on first write
-        obj._computed_cols = {}
-        obj._materialized_cols = {}
-        obj._expr_index_arrays = {}
-        obj._load_computed_cols_from_schema(schema_dict)
-        obj._load_materialized_cols_from_schema(schema_dict)
-        return obj
+        return cls._open_from_storage(storage)
 
     def to_b2z(self, urlpath: str, *, overwrite: bool = False, compact: bool = False) -> str:
         """Write this table to a compact ``.b2z`` container.
@@ -2202,6 +2165,72 @@ class CTable(Generic[RowT]):
             self.save(urlpath, overwrite=overwrite)
         return os.path.abspath(urlpath)
 
+    def _save_to_storage(self, storage: TableStorage) -> None:
+        """Write all live rows and columns into *storage*.
+
+        The caller is responsible for calling ``storage.close()`` when done.
+        This method does **not** close *storage*.
+        """
+        self._flush_varlen_columns()
+
+        # Collect live physical positions
+        valid_np = self._valid_rows[:]
+        live_pos = np.where(valid_np)[0]
+        n_live = len(live_pos)
+        capacity = max(n_live, 1)
+
+        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+
+        # --- valid_rows (all True, compacted) ---
+        disk_valid = storage.create_valid_rows(
+            shape=(capacity,),
+            chunks=default_chunks,
+            blocks=default_blocks,
+        )
+        if n_live > 0:
+            disk_valid[:n_live] = True
+
+        # --- columns ---
+        for col in self._schema.columns:
+            name = col.name
+            if self._is_list_column(col):
+                disk_col = storage.create_list_column(
+                    name,
+                    spec=col.spec,
+                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
+                    dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
+                )
+                if n_live > 0:
+                    disk_col.extend((self._cols[name][int(pos)] for pos in live_pos), validate=False)
+                    disk_col.flush()
+                continue
+            if self._is_varlen_scalar_column(col):
+                disk_col = storage.create_varlen_scalar_column(
+                    name,
+                    spec=col.spec,
+                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
+                    dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
+                )
+                if n_live > 0:
+                    disk_col.extend(self._cols[name][int(pos)] for pos in live_pos)
+                    disk_col.flush()
+                continue
+            dtype_chunks, dtype_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
+            col_storage = self._resolve_column_storage(col, dtype_chunks, dtype_blocks)
+            disk_col = storage.create_column(
+                name,
+                dtype=col.dtype,
+                shape=(capacity,),
+                chunks=col_storage["chunks"],
+                blocks=col_storage["blocks"],
+                cparams=col_storage.get("cparams"),
+                dparams=col_storage.get("dparams"),
+            )
+            if n_live > 0:
+                disk_col[:n_live] = self._cols[name][live_pos]
+
+        storage.save_schema(self._schema_dict_with_computed())
+
     def save(self, urlpath: str, *, overwrite: bool = False) -> None:
         """Persist this table to disk at *urlpath*.
 
@@ -2243,66 +2272,82 @@ class CTable(Generic[RowT]):
             else:
                 os.remove(target_path)
 
-        self._flush_varlen_columns()
-
-        # Collect live physical positions
-        valid_np = self._valid_rows[:]
-        live_pos = np.where(valid_np)[0]
-        n_live = len(live_pos)
-        capacity = max(n_live, 1)
-
-        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
-
-        # --- valid_rows (all True, compacted) ---
-        disk_valid = file_storage.create_valid_rows(
-            shape=(capacity,),
-            chunks=default_chunks,
-            blocks=default_blocks,
-        )
-        if n_live > 0:
-            disk_valid[:n_live] = True
-
-        # --- columns ---
-        for col in self._schema.columns:
-            name = col.name
-            if self._is_list_column(col):
-                disk_col = file_storage.create_list_column(
-                    name,
-                    spec=col.spec,
-                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
-                    dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
-                )
-                if n_live > 0:
-                    disk_col.extend((self._cols[name][int(pos)] for pos in live_pos), validate=False)
-                    disk_col.flush()
-                continue
-            if self._is_varlen_scalar_column(col):
-                disk_col = file_storage.create_varlen_scalar_column(
-                    name,
-                    spec=col.spec,
-                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
-                    dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
-                )
-                if n_live > 0:
-                    disk_col.extend(self._cols[name][int(pos)] for pos in live_pos)
-                    disk_col.flush()
-                continue
-            dtype_chunks, dtype_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
-            col_storage = self._resolve_column_storage(col, dtype_chunks, dtype_blocks)
-            disk_col = file_storage.create_column(
-                name,
-                dtype=col.dtype,
-                shape=(capacity,),
-                chunks=col_storage["chunks"],
-                blocks=col_storage["blocks"],
-                cparams=col_storage.get("cparams"),
-                dparams=col_storage.get("dparams"),
-            )
-            if n_live > 0:
-                disk_col[:n_live] = self._cols[name][live_pos]
-
-        file_storage.save_schema(self._schema_dict_with_computed())
+        self._save_to_storage(file_storage)
         file_storage.close()
+
+    @classmethod
+    def _open_from_storage(cls, storage: TableStorage) -> CTable:
+        """Construct a :class:`CTable` from an already-configured *storage* backend.
+
+        The caller must have already verified that the storage target exists.
+        This is the common open path shared by :meth:`open` and
+        :meth:`_open_from_treestore`.
+        """
+        storage.check_kind()
+        schema_dict = storage.load_schema()
+        schema = schema_from_dict(schema_dict)
+        col_names = [c["name"] for c in schema_dict["columns"]]
+
+        obj = cls.__new__(cls)
+        obj._row_type = None
+        obj._validate = True
+        obj._table_cparams = None
+        obj._table_dparams = None
+        obj._storage = storage
+        obj._read_only = storage.is_read_only()
+        obj._schema = schema
+        obj._cols = {}
+        obj._col_widths = {}
+        obj.col_names = col_names
+        obj.auto_compact = False
+        obj.base = None
+
+        obj._valid_rows = storage.open_valid_rows()
+        for name in col_names:
+            cc = schema.columns_by_name[name]
+            if obj._is_list_column(cc):
+                obj._cols[name] = storage.open_list_column(name)
+            elif obj._is_varlen_scalar_column(cc):
+                obj._cols[name] = storage.open_varlen_scalar_column(name, cc.spec)
+            else:
+                obj._cols[name] = storage.open_column(name)
+            obj._col_widths[name] = max(len(name), cc.display_width)
+
+        obj._n_rows = int(blosc2.count_nonzero(obj._valid_rows))
+        obj._last_pos = None
+        obj._computed_cols = {}
+        obj._materialized_cols = {}
+        obj._expr_index_arrays = {}
+        obj._load_computed_cols_from_schema(schema_dict)
+        obj._load_materialized_cols_from_schema(schema_dict)
+        return obj
+
+    def _save_to_treestore(self, store: blosc2.TreeStore, full_key: str) -> None:
+        """Save this CTable inline into *store* under *full_key*.
+
+        *full_key* must be the absolute (fully-translated) key within the
+        backing DictStore (not a subtree-relative key).
+        Internal use only — called by :class:`blosc2.TreeStore`.
+        """
+        if self.base is not None:
+            materialized = self.copy(compact=True)
+            materialized._save_to_treestore(store, full_key)
+            return
+        storage = TreeStoreTableStorage(store, full_key, mode="a", owns_store=False)
+        self._save_to_storage(storage)
+        # storage is non-owning; outer store handles persistence
+
+    @classmethod
+    def _open_from_treestore(cls, store: blosc2.TreeStore, full_key: str) -> CTable:
+        """Open an inline CTable from *store* at *full_key*.
+
+        *full_key* must be the absolute key within the backing DictStore.
+        Internal use only — called by :class:`blosc2.TreeStore`.
+        """
+        storage = TreeStoreTableStorage(store, full_key, mode=store.mode, owns_store=False)
+        if not storage.table_exists():
+            raise FileNotFoundError(f"No inline CTable found at key {full_key!r} in {store.localpath!r}")
+        return cls._open_from_storage(storage)
 
     @classmethod
     def load(cls, urlpath: str) -> CTable:

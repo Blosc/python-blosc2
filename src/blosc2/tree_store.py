@@ -128,9 +128,10 @@ class TreeStore(DictStore):
 
     Examples
     --------
+    Store plain arrays in a hierarchy:
+
     >>> tstore = TreeStore(localpath="my_tstore.b2z", mode="w")
-    >>> # Create a hierarchy. Data is stored in leaf nodes.
-    >>> # Structural nodes like /child0 and /child0/child1 are created automatically.
+    >>> # Data lives in leaf nodes; structural nodes are created automatically.
     >>> tstore["/child0/leaf1"] = np.array([1, 2, 3])
     >>> tstore["/child0/child1/leaf2"] = np.array([4, 5, 6])
     >>> tstore["/child0/child2"] = np.array([7, 8, 9])
@@ -145,6 +146,27 @@ class TreeStore(DictStore):
     >>> subtree = tstore.get_subtree("/child0")
     >>> sorted(list(subtree.keys()))
     ['/child1/leaf2', '/child2', '/leaf1']
+
+    Mix NDArrays and CTables in the same bundle:
+
+    >>> import dataclasses
+    >>> @dataclasses.dataclass
+    ... class Row:
+    ...     x: int = 0
+    ...     y: float = 0.0
+    >>> table = blosc2.CTable(Row)
+    >>> _ = table.append(Row(x=1, y=1.5))
+    >>> _ = table.append(Row(x=2, y=3.0))
+    >>> with blosc2.TreeStore("bundle.b2z", mode="w") as ts:
+    ...     ts["/data/array"] = blosc2.arange(5)
+    ...     ts["/data/table"] = table
+    >>> with blosc2.open("bundle.b2z", mode="r") as ts:
+    ...     print(sorted(ts.keys()))
+    ...     arr = ts["/data/array"]
+    ...     tbl = ts["/data/table"]
+    ...     print(type(tbl).__name__, len(tbl))
+    ['/data', '/data/array', '/data/table']
+    CTable 2
 
     """
 
@@ -167,6 +189,133 @@ class TreeStore(DictStore):
             super().__init__(*args, **kwargs, _storage_meta={"b2tree": {"version": 1}})
 
             self.subtree_path = ""  # Empty string means full tree
+            self._inline_handles: list = []  # inline object handles opened from this store
+            self._known_object_roots_cache: set[str] | None = None
+            self._effective_object_roots_cache: tuple[str, set[str]] | None = None
+
+    # ------------------------------------------------------------------
+    # Object registry helpers
+    # ------------------------------------------------------------------
+
+    def _objects_registry(self) -> dict:
+        """Return the object registry dict stored in the embed-store SChunk vlmeta."""
+        try:
+            reg = self._estore._store.vlmeta.get("_object_registry")
+            return dict(reg) if reg else {}
+        except Exception:
+            return {}
+
+    def _invalidate_object_roots_cache(self) -> None:
+        """Invalidate cached object-root views."""
+        self._known_object_roots_cache = None
+        self._effective_object_roots_cache = None
+
+    def _register_object(self, full_key: str, *, kind: str, version: int, layout: str) -> None:
+        """Register *full_key* as an object root in the persistent registry."""
+        try:
+            reg = self._objects_registry()
+            reg[full_key] = {"kind": kind, "version": version, "layout": layout}
+            self._estore._store.vlmeta["_object_registry"] = reg
+            self._invalidate_object_roots_cache()
+        except Exception:
+            pass  # best-effort
+
+    def _unregister_object(self, full_key: str) -> None:
+        """Remove *full_key* from the object registry."""
+        try:
+            reg = self._objects_registry()
+            reg.pop(full_key, None)
+            self._estore._store.vlmeta["_object_registry"] = reg
+            self._invalidate_object_roots_cache()
+        except Exception:
+            pass
+
+    def _object_info(self, full_key: str) -> dict | None:
+        """Return registry metadata for *full_key*, or ``None`` if not registered."""
+        return self._objects_registry().get(full_key)
+
+    def _object_roots(self) -> set:
+        """Return all registered object-root full keys."""
+        return set(self._objects_registry().keys())
+
+    def _probed_object_roots(self) -> set:
+        """Return object roots discovered from physical CTable manifests."""
+        roots = set()
+        candidates = set(self.map_tree.keys()) | set(self._estore.keys())
+        for key in candidates:
+            if not key.endswith("/_meta"):
+                continue
+            root = key[: -len("/_meta")]
+            if not root:
+                # A manifest at /_meta marks the TreeStore itself as a CTable
+                # backing store; it is not an inline object root to collapse.
+                continue
+            if self._probe_object_info(root) is not None:
+                roots.add(root)
+        return roots
+
+    def _known_object_roots(self) -> set:
+        """Return registered plus physically probed object-root full keys."""
+        if self._known_object_roots_cache is not None:
+            return set(self._known_object_roots_cache)
+
+        registered = self._object_roots()
+        # Fast path: when registry is non-empty, avoid costly full-store probing.
+        if registered:
+            roots = registered
+        else:
+            roots = self._probed_object_roots()
+        self._known_object_roots_cache = set(roots)
+        return set(roots)
+
+    def _effective_object_roots(self) -> set:
+        """Object root keys relative to the current view (subtree or root)."""
+        current_subtree_path = self.subtree_path or ""
+        if (
+            self._effective_object_roots_cache is not None
+            and self._effective_object_roots_cache[0] == current_subtree_path
+        ):
+            return set(self._effective_object_roots_cache[1])
+
+        all_roots = self._known_object_roots()
+        if not self.subtree_path:
+            self._effective_object_roots_cache = (current_subtree_path, set(all_roots))
+            return set(all_roots)
+        result = set()
+        for full_key in all_roots:
+            relative = self._translate_key_from_full(full_key)
+            if relative is not None:
+                result.add(relative)
+        self._effective_object_roots_cache = (current_subtree_path, result)
+        return set(result)
+
+    def _is_object_internal_key(self, key: str, object_roots: set[str] | None = None) -> bool:
+        """Return ``True`` when *key* (subtree-relative) is inside an object root."""
+        roots = self._effective_object_roots() if object_roots is None else object_roots
+        return any(key != root and key.startswith(root + "/") for root in roots)
+
+    def _probe_object_info(self, full_key: str) -> dict | None:
+        """Probe the physical store for a CTable manifest at *full_key*/_meta.
+
+        Used as a fallback for stores written before the registry was introduced.
+        """
+        meta_full_key = full_key + "/_meta"
+        if meta_full_key not in self.map_tree and meta_full_key not in self._estore:
+            return None
+        try:
+            from blosc2.dict_store import DictStore
+
+            meta_obj = DictStore.__getitem__(self, meta_full_key)
+            if not isinstance(meta_obj, blosc2.SChunk):
+                return None
+            kind = meta_obj.vlmeta.get("kind")
+            if isinstance(kind, bytes):
+                kind = kind.decode()
+            if kind == "ctable":
+                return {"kind": "ctable", "version": 1, "layout": "inline-tree-subtree"}
+        except Exception:
+            pass
+        return None
 
     def _is_vlmeta_key(self, key: str) -> bool:
         """Check if a key is a vlmeta key that should be hidden from regular access."""
@@ -233,7 +382,7 @@ class TreeStore(DictStore):
         return key
 
     def __setitem__(
-        self, key: str, value: blosc2.Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray
+        self, key: str, value: blosc2.Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray | blosc2.CTable
     ) -> None:
         """Add a node with hierarchical key validation.
 
@@ -241,7 +390,7 @@ class TreeStore(DictStore):
         ----------
         key : str
             Hierarchical node key.
-        value : np.ndarray or blosc2.NDArray or blosc2.C2Array or blosc2.SChunk
+        value : np.ndarray or blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or blosc2.CTable
             to store.
 
         Raises
@@ -250,8 +399,47 @@ class TreeStore(DictStore):
             If key doesn't follow hierarchical structure rules, if trying to
             assign to a structural path that already has children, or if trying
             to add a child to a path that already contains data.
+
+        Examples
+        --------
+        Store an NDArray and a CTable together:
+
+        >>> import dataclasses
+        >>> @dataclasses.dataclass
+        ... class Row:
+        ...     x: int = 0
+        >>> t = blosc2.CTable(Row)
+        >>> _ = t.append(Row(x=10))
+        >>> with blosc2.TreeStore("store.b2z", mode="w") as ts:
+        ...     ts["/arr"] = blosc2.zeros(5, dtype="i4")
+        ...     ts["/table"] = t   # CTable stored inline
+
+        Replacing an existing object root requires an explicit delete first::
+
+            del ts["/table"]
+            ts["/table"] = new_table
         """
         key = self._validate_key(key)
+
+        # --- CTable: store as inline subtree object ---
+        if isinstance(value, blosc2.CTable):
+            self._set_ctable_object(key, value)
+            return
+
+        # Block writes to object internals
+        if self._is_object_internal_key(key):
+            raise ValueError(
+                f"Cannot write to '{key}': it is an internal component of an object root. "
+                f"Use the object's own API to modify it."
+            )
+
+        # Block overwriting an existing object root with a plain value
+        full_key = self._translate_key_to_full(key)
+        if (self._object_info(full_key) or self._probe_object_info(full_key)) is not None:
+            raise ValueError(
+                f"'{key}' is an object root (e.g. CTable). "
+                f"Delete it first with `del ts['{key}']` before assigning a new value."
+            )
 
         # Check if this key already has children (is a structural subtree)
         children = self.get_children(key)
@@ -261,7 +449,6 @@ class TreeStore(DictStore):
             )
 
         # Check if we're trying to add a child to a path that already has data
-        # Extract parent path from the key
         if key != "/":
             parent_path = "/".join(key.split("/")[:-1])
             if not parent_path:  # Handle case where parent is root
@@ -273,35 +460,67 @@ class TreeStore(DictStore):
                     f"Cannot add child '{key}' to path '{parent_path}' that already contains data"
                 )
 
-        full_key = self._translate_key_to_full(key)
         super().__setitem__(full_key, value)
+
+    def _set_ctable_object(self, key: str, value: blosc2.CTable) -> None:
+        """Materialise a CTable inline into this store at *key*."""
+        if self.mode == "r":
+            raise ValueError("TreeStore is in read-only mode")
+
+        full_key = self._translate_key_to_full(key)
+
+        # Raise if already exists as object root (no silent replace)
+        if (self._object_info(full_key) or self._probe_object_info(full_key)) is not None:
+            raise ValueError(
+                f"'{key}' already exists as an object root. Delete it first with `del ts['{key}']`."
+            )
+
+        # Raise if already exists as data leaf
+        if super().__contains__(full_key):
+            raise ValueError(f"'{key}' already exists as a data leaf. Delete it first.")
+
+        # Raise if key is inside an existing object root
+        if self._is_object_internal_key(key):
+            raise ValueError(f"Cannot assign to '{key}': it is inside an existing object root.")
+
+        # Raise if key already has structural children
+        children = self.get_children(key)
+        if children:
+            raise ValueError(
+                f"Cannot assign CTable to '{key}': structural children already exist: {children}."
+            )
+
+        value._save_to_treestore(self, full_key)
+        self._register_object(full_key, kind="ctable", version=1, layout="inline-tree-subtree")
+        self._modified = True
 
     def __getitem__(
         self, key: str
-    ) -> NDArray | C2Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray | TreeStore:
-        """Retrieve a node or subtree view.
+    ) -> NDArray | C2Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray | blosc2.CTable | TreeStore:
+        """Retrieve a node, object, or subtree view.
 
-        If the key points to a subtree (intermediate path with children),
-        returns a TreeStore view of that subtree. If the key points to
-        a final node (leaf), returns the stored array or schunk.
+        If the key is a registered object root (e.g. CTable) returns that object.
+        If the key is a structural intermediate path returns a subtree view.
+        If the key is a leaf returns the stored array/schunk.
 
-        Parameters
-        ----------
-        key : str
-            Hierarchical node key.
-
-        Returns
-        -------
-        out : blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or blosc2.ObjectArray or blosc2.BatchArray or TreeStore
-            The stored array/chunk if key is a leaf node, or a TreeStore subtree view
-            if key is an intermediate path with children.
-
-        Raises
-        ------
-        KeyError
-            If key is not found.
-        ValueError
-            If key doesn't follow hierarchical structure rules.
+        Examples
+        --------
+        >>> import dataclasses
+        >>> @dataclasses.dataclass
+        ... class Row:
+        ...     x: int = 0
+        >>> t = blosc2.CTable(Row)
+        >>> _ = t.append(Row(x=42))
+        >>> with blosc2.TreeStore("store.b2z", mode="w") as ts:
+        ...     ts["/arr"] = blosc2.zeros(3, dtype="i4")
+        ...     ts["/group/val"] = blosc2.ones(2, dtype="f4")
+        ...     ts["/table"] = t
+        >>> with blosc2.open("store.b2z", mode="r") as ts:
+        ...     arr = ts["/arr"]            # NDArray leaf
+        ...     sub = ts["/group"]           # TreeStore subtree view
+        ...     tbl = ts["/table"]           # CTable object
+        ...     print(type(arr).__name__, type(sub).__name__, type(tbl).__name__)
+        NDArray TreeStore CTable
         """
         key = self._validate_key(key)
         if self._is_vlmeta_key(key):
@@ -309,96 +528,187 @@ class TreeStore(DictStore):
 
         full_key = self._translate_key_to_full(key)
 
-        # Check if this key has children (is a subtree)
-        children = self.get_children(key)
+        # --- Object root dispatch (registry first, then probe fallback) ---
+        info = self._object_info(full_key)
+        if info is None:
+            info = self._probe_object_info(full_key)
+        if info is not None and info["kind"] == "ctable":
+            ctable = blosc2.CTable._open_from_treestore(self, full_key)
+            self._inline_handles.append(ctable)
+            return ctable
 
         # Check if the key exists as an actual data node
         key_exists_as_data = super().__contains__(full_key)
 
+        # Check if this key has children (is a structural subtree)
+        children = self.get_children(key)
+
         if children:
-            # If it has children, return a subtree view
             return self.get_subtree(key)
         elif key_exists_as_data:
-            # If no children but exists as data, it's a leaf node - get the actual data
             return super().__getitem__(full_key)
         else:
-            # Key doesn't exist at all
             raise KeyError(f"Key '{key}' not found")
 
     def __delitem__(self, key: str) -> None:
-        """Remove a node or subtree.
+        """Remove a node, object root, or subtree.
 
-        If the key points to a subtree (intermediate path with children),
-        removes all nodes in that subtree recursively. If the key points to a final
-        node (leaf), removes only that node.
+        If *key* is a registered object root, all its physical leaves and the
+        registry entry are removed.  If *key* has children, all descendants are
+        removed recursively.  Object internals cannot be deleted directly.
 
-        Parameters
-        ----------
-        key : str
-            Hierarchical node key.
-
-        Raises
-        ------
-        KeyError
-            If key is not found.
-        ValueError
-            If key doesn't follow hierarchical structure rules.
+        Examples
+        --------
+        >>> import dataclasses
+        >>> @dataclasses.dataclass
+        ... class Row:
+        ...     x: int = 0
+        >>> t = blosc2.CTable(Row)
+        >>> _ = t.append(Row(x=1))
+        >>> with blosc2.TreeStore("store.b2z", mode="w") as ts:
+        ...     ts["/arr"] = blosc2.zeros(3, dtype="i4")
+        ...     ts["/table"] = t
+        ...     del ts["/table"]          # removes all CTable leaves + registry entry
+        ...     print("/table" in ts)
+        False
         """
         key = self._validate_key(key)
 
         if self._is_vlmeta_key(key):
             raise KeyError(f"Key '{key}' not found; vlmeta keys are not directly accessible.")
 
-        # Check if the key exists (either as data or as a structural node with descendants)
         full_key = self._translate_key_to_full(key)
+
+        # --- Object root deletion ---
+        if (self._object_info(full_key) or self._probe_object_info(full_key)) is not None:
+            self._delete_object_subtree(full_key)
+            return
+
+        # Block direct deletion of object internals
+        if self._is_object_internal_key(key):
+            raise ValueError(
+                f"Cannot delete '{key}': it is an internal component of an object root. "
+                f"Delete the object root itself."
+            )
+
+        # Regular node / subtree deletion
         key_exists_as_data = super().__contains__(full_key)
         descendants = self.get_descendants(key)
+        prefix = full_key + "/" if full_key != "/" else "/"
+        object_roots_to_delete = sorted(
+            [root for root in self._known_object_roots() if root.startswith(prefix)],
+            key=len,
+            reverse=True,
+        )
 
-        if not key_exists_as_data and not descendants:
+        if not key_exists_as_data and not descendants and not object_roots_to_delete:
             raise KeyError(f"Key '{key}' not found")
 
-        # Collect all keys to delete (leaf nodes only, since structural nodes don't exist as data)
         keys_to_delete = []
-
-        # If the key itself has data, include it
         if key_exists_as_data:
             keys_to_delete.append(key)
-
-        # Add all descendant leaf nodes (only those that actually exist as data)
         for descendant in descendants:
-            full_descendant_key = self._translate_key_to_full(descendant)
-            if super().__contains__(full_descendant_key):
+            full_desc = self._translate_key_to_full(descendant)
+            if super().__contains__(full_desc):
                 keys_to_delete.append(descendant)
 
-        # Delete all data keys in the subtree
+        for object_root in object_roots_to_delete:
+            self._delete_object_subtree(object_root)
+
         for k in keys_to_delete:
-            full_key_to_delete = self._translate_key_to_full(k)
-            super().__delitem__(full_key_to_delete)
+            full_desc = self._translate_key_to_full(k)
+            if super().__contains__(full_desc):
+                super().__delitem__(full_desc)
+
+        # Remove stale registry entries for any nested objects that were deleted as plain descendants.
+        for root in list(self._object_roots()):
+            if root.startswith(prefix):
+                self._unregister_object(root)
+
+    def _delete_object_subtree(self, full_key: str) -> None:
+        """Delete all physical leaves under *full_key* and unregister it."""
+        prefix = full_key + "/"
+        # Remove from map_tree
+        for k in list(self.map_tree.keys()):
+            if k == full_key or k.startswith(prefix):
+                filepath = self.map_tree.pop(k)
+                full_path = os.path.join(self.working_dir, filepath)
+                if os.path.exists(full_path) and not os.path.isdir(full_path):
+                    os.remove(full_path)
+        # Remove any embedded entries
+        for k in list(self._estore.keys()):
+            if k == full_key or k.startswith(prefix):
+                import contextlib
+
+                with contextlib.suppress(KeyError):
+                    del self._estore[k]
+        # Remove leftover directory (e.g. _indexes)
+        table_dir = os.path.join(self.working_dir, full_key.lstrip("/"))
+        if os.path.isdir(table_dir):
+            import shutil
+
+            shutil.rmtree(table_dir, ignore_errors=True)
+        self._unregister_object(full_key)
+        self._modified = True
 
     def __contains__(self, key: str) -> bool:
-        """Check if a key exists.
+        """Check if a key exists (includes object roots, excludes object internals).
 
-        Parameters
-        ----------
-        key : str
-            Hierarchical node key.
-
-        Returns
-        -------
-        exists : bool
-            True if key exists, False otherwise.
+        Examples
+        --------
+        >>> import dataclasses
+        >>> @dataclasses.dataclass
+        ... class Row:
+        ...     x: int = 0
+        >>> t = blosc2.CTable(Row)
+        >>> _ = t.append(Row(x=7))
+        >>> with blosc2.TreeStore("store.b2z", mode="w") as ts:
+        ...     ts["/arr"] = blosc2.zeros(2, dtype="i4")
+        ...     ts["/table"] = t
+        ...     print("/table" in ts)       # object root: True
+        ...     print("/table/_meta" in ts) # internal key: False
+        ...     print("/arr" in ts)         # normal leaf: True
+        True
+        False
+        True
         """
         try:
             key = self._validate_key(key)
             if self._is_vlmeta_key(key):
                 return False
+            object_roots = self._effective_object_roots()
+            if self._is_object_internal_key(key, object_roots):
+                return False
             full_key = self._translate_key_to_full(key)
-            return super().__contains__(full_key)
+            return (
+                super().__contains__(full_key)
+                or self._object_info(full_key) is not None
+                or self._probe_object_info(full_key) is not None
+            )
         except ValueError:
             return False
 
     def keys(self):
-        """Return all keys in the current subtree view."""
+        """Return all keys in the current subtree view.
+
+        Object root keys (e.g. CTable) are included as single entries.
+        Object-internal keys are hidden from normal traversal.
+
+        Examples
+        --------
+        >>> import dataclasses
+        >>> @dataclasses.dataclass
+        ... class Row:
+        ...     x: int = 0
+        >>> t = blosc2.CTable(Row)
+        >>> _ = t.append(Row(x=1))
+        >>> with blosc2.TreeStore("store.b2z", mode="w") as ts:
+        ...     ts["/arr"] = blosc2.zeros(3, dtype="i4")
+        ...     ts["/group/val"] = blosc2.ones(2, dtype="f4")
+        ...     ts["/table"] = t
+        ...     print(sorted(ts.keys()))
+        ['/arr', '/group', '/group/val', '/table']
+        """
         if not self.subtree_path:
             all_keys = set(super().keys())
         else:
@@ -411,18 +721,23 @@ class TreeStore(DictStore):
         # Filter out vlmeta keys
         all_keys = {key for key in all_keys if not self._is_vlmeta_key(key)}
 
-        # Also include structural paths (intermediate nodes that have children but no data)
+        # Filter out object-internal keys
+        object_roots = self._effective_object_roots()
+        all_keys = {key for key in all_keys if not self._is_object_internal_key(key, object_roots)}
+
+        # Add object roots (they are not stored as DictStore keys themselves)
+        # Build structural paths from both data leaves and object root keys
+        all_with_roots = all_keys | object_roots
         structural_keys = set()
-        for key in all_keys:
-            # For each leaf key, add all its parent paths
+        for key in all_with_roots:
             parts = key.split("/")[1:]  # Remove empty first element from split
             current_path = ""
             for part in parts[:-1]:  # Exclude the leaf itself
                 current_path = current_path + "/" + part if current_path else "/" + part
-                if current_path and current_path != "/" and current_path not in all_keys:
+                if current_path and current_path != "/" and current_path not in all_with_roots:
                     structural_keys.add(current_path)
 
-        return all_keys | structural_keys
+        return all_keys | structural_keys | object_roots
 
     def __iter__(self) -> Iterator[str]:
         """Iterate over keys, excluding vlmeta keys."""
@@ -432,6 +747,15 @@ class TreeStore(DictStore):
         """Return key-value pairs in the current subtree view."""
         for key in self.keys():
             yield key, self[key]
+
+    def values(
+        self,
+    ) -> Iterator[
+        NDArray | C2Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray | blosc2.CTable | TreeStore
+    ]:
+        """Return values in the current subtree view, with object roots collapsed."""
+        for key in self.keys():
+            yield self[key]
 
     def get_children(self, path: str) -> list[str]:
         """Get direct children of a given path.
@@ -562,14 +886,18 @@ class TreeStore(DictStore):
             name for name in leaf_nodes if isinstance(name, str) and "/" not in name and name != ""
         ]
 
-        # 2) Ensure leaf nodes correspond to actual data nodes in the underlying store
+        # 2) Ensure leaf nodes correspond to actual data nodes or object roots
         valid_leaf_nodes: list[str] = []
         for name in leaf_nodes:
             # Compose subtree-relative child path
             child_rel_path = path + "/" + name if path != "/" else "/" + name
-            # Translate to full key in the backing store and verify it's a data node
+            # Translate to full key in the backing store and verify it's a data node or object root
             full_key = self._translate_key_to_full(child_rel_path)
-            if super().__contains__(full_key):
+            if (
+                super().__contains__(full_key)
+                or self._object_info(full_key) is not None
+                or self._probe_object_info(full_key) is not None
+            ):
                 valid_leaf_nodes.append(name)
         leaf_nodes = valid_leaf_nodes
 
@@ -617,6 +945,13 @@ class TreeStore(DictStore):
         """
         path = self._validate_key(path)
         full_path = self._translate_key_to_full(path)
+
+        # Object roots cannot be navigated as subtrees
+        if (self._object_info(full_path) or self._probe_object_info(full_path)) is not None:
+            raise ValueError(
+                f"'{path}' is an object root (e.g. CTable), not a TreeStore subtree. "
+                f"Use ts['{path}'] to access the object."
+            )
 
         # Create a new TreeStore instance that shares the same underlying storage
         # but with a different subtree_path
@@ -687,6 +1022,41 @@ class TreeStore(DictStore):
                 with contextlib.suppress(KeyError):
                     del self._estore[vlmeta_key]
                 self._estore[vlmeta_key] = self._vlmeta
+
+    # ------------------------------------------------------------------
+    # Lifecycle overrides (inline handle management)
+    # ------------------------------------------------------------------
+
+    def close(self) -> None:
+        """Flush inline object handles then delegate to DictStore.close()."""
+        if self._closed:
+            return
+        # Close any inline object handles (CTable etc.) before packing.
+        for handle in list(getattr(self, "_inline_handles", [])):
+            try:
+                storage = getattr(handle, "_storage", None)
+                if storage is not None:
+                    handle.close()
+            except Exception:
+                pass
+        if hasattr(self, "_inline_handles"):
+            self._inline_handles.clear()
+        super().close()
+
+    def discard(self) -> None:
+        """Discard without repacking; also discard inline handle storage."""
+        if self._closed:
+            return
+        for handle in list(getattr(self, "_inline_handles", [])):
+            try:
+                storage = getattr(handle, "_storage", None)
+                if storage is not None and hasattr(storage, "discard"):
+                    storage.discard()
+            except Exception:
+                pass
+        if hasattr(self, "_inline_handles"):
+            self._inline_handles.clear()
+        super().discard()
 
 
 if __name__ == "__main__":
