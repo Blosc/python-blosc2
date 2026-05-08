@@ -72,6 +72,12 @@ set(MINIEXPR_BUILD_SHARED OFF CACHE BOOL "Build miniexpr shared library" FORCE)
 set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
 set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
 set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
+# Keep miniexpr's bundled libtcc and related files inside the blosc2 package.
+# Without this, miniexpr's install rules use the default CMAKE_INSTALL_LIBDIR
+# ("lib"), which scikit-build places at site-packages/lib.
+set(CMAKE_INSTALL_INCLUDEDIR ${SKBUILD_PLATLIB_DIR}/blosc2/include)
+set(CMAKE_INSTALL_LIBDIR ${SKBUILD_PLATLIB_DIR}/blosc2/lib)
+set(CMAKE_INSTALL_DATADIR ${SKBUILD_PLATLIB_DIR}/blosc2/share)
 
 if(EMSCRIPTEN)
   set(MINIEXPR_ENABLE_TCC_JIT ON CACHE BOOL "Enable TCC JIT in Emscripten builds" FORCE)
@@ -131,8 +137,6 @@ else()
     set(BUILD_BENCHMARKS OFF CACHE BOOL "Build C-Blosc2 benchmarks")
     set(BUILD_FUZZERS OFF CACHE BOOL "Build C-Blosc2 fuzzers")
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-    set(CMAKE_INSTALL_INCLUDEDIR ${SKBUILD_PLATLIB_DIR}/blosc2/include) # directory for include files
-    set(CMAKE_INSTALL_LIBDIR ${SKBUILD_PLATLIB_DIR}/blosc2/lib) # directory for libblosc2 and pkgconfig
     set(Blosc2_INSTALL_CMAKEDIR ${CMAKE_INSTALL_LIBDIR}/cmake/blosc2) # directory for cmake files
     set(CMAKE_INSTALL_BINDIR ${SKBUILD_PLATLIB_DIR}/blosc2/lib) # directory for libblosc2.dll on windows
     # we will put the binaries of the C-Blosc2 library into the wheels according to PEP
@@ -177,33 +181,3 @@ install(
   FILES "${miniexpr_SOURCE_DIR}/src/me_jit_glue.js"
   DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
 )
-
-# Install bundled libtcc next to the Python package (separate LGPL artifact).
-if(MINIEXPR_ENABLE_TCC_JIT)
-  if(APPLE)
-    install(
-      FILES "${miniexpr_BINARY_DIR}/libtcc.dylib"
-      DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2/lib
-      OPTIONAL
-    )
-  elseif(WIN32)
-    install(
-      FILES
-        "${miniexpr_BINARY_DIR}/tcc.dll"
-        "${miniexpr_BINARY_DIR}/Debug/tcc.dll"
-        "${miniexpr_BINARY_DIR}/Release/tcc.dll"
-        "${miniexpr_BINARY_DIR}/RelWithDebInfo/tcc.dll"
-        "${miniexpr_BINARY_DIR}/MinSizeRel/tcc.dll"
-      DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2/lib
-      OPTIONAL
-    )
-  else()
-    install(
-      FILES
-        "${miniexpr_BINARY_DIR}/libtcc.so"
-        "${miniexpr_BINARY_DIR}/libtcc.so.1"
-      DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2/lib
-      OPTIONAL
-    )
-  endif()
-endif()
