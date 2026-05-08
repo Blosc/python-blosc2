@@ -382,7 +382,7 @@ class TreeStore(DictStore):
         return key
 
     def __setitem__(
-        self, key: str, value: blosc2.Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray
+        self, key: str, value: blosc2.Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray | blosc2.CTable
     ) -> None:
         """Add a node with hierarchical key validation.
 
