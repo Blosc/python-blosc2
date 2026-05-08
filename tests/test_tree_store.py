@@ -1180,8 +1180,10 @@ def test_ctable_traversal_hides_internals(tmp_path, storage_type):
         # walk
         walked = list(ts.walk("/"))
         all_nodes = [n for _, _, nodes in walked for n in nodes]
+        all_dirs = [d for _, dirs, _ in walked for d in dirs]
         assert "table" in all_nodes
-        assert not any(n.startswith("_") for root, _, _ in walked for n in _)
+        assert not any(name.startswith("_") for name in all_dirs)
+        assert not any(name.startswith("_") for name in all_nodes)
 
 
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
