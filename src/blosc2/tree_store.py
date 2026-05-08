@@ -128,9 +128,10 @@ class TreeStore(DictStore):
 
     Examples
     --------
+    Store plain arrays in a hierarchy:
+
     >>> tstore = TreeStore(localpath="my_tstore.b2z", mode="w")
-    >>> # Create a hierarchy. Data is stored in leaf nodes.
-    >>> # Structural nodes like /child0 and /child0/child1 are created automatically.
+    >>> # Data lives in leaf nodes; structural nodes are created automatically.
     >>> tstore["/child0/leaf1"] = np.array([1, 2, 3])
     >>> tstore["/child0/child1/leaf2"] = np.array([4, 5, 6])
     >>> tstore["/child0/child2"] = np.array([7, 8, 9])
@@ -145,6 +146,27 @@ class TreeStore(DictStore):
     >>> subtree = tstore.get_subtree("/child0")
     >>> sorted(list(subtree.keys()))
     ['/child1/leaf2', '/child2', '/leaf1']
+
+    Mix NDArrays and CTables in the same bundle:
+
+    >>> import dataclasses
+    >>> @dataclasses.dataclass
+    ... class Row:
+    ...     x: int = 0
+    ...     y: float = 0.0
+    >>> table = blosc2.CTable(Row)
+    >>> _ = table.append(Row(x=1, y=1.5))
+    >>> _ = table.append(Row(x=2, y=3.0))
+    >>> with blosc2.TreeStore("bundle.b2z", mode="w") as ts:
+    ...     ts["/data/array"] = blosc2.arange(5)
+    ...     ts["/data/table"] = table
+    >>> with blosc2.open("bundle.b2z", mode="r") as ts:
+    ...     print(sorted(ts.keys()))
+    ...     arr = ts["/data/array"]
+    ...     tbl = ts["/data/table"]
+    ...     print(type(tbl).__name__, len(tbl))
+    ['/data', '/data/array', '/data/table']
+    CTable 2
 
     """
 
@@ -328,6 +350,25 @@ class TreeStore(DictStore):
             If key doesn't follow hierarchical structure rules, if trying to
             assign to a structural path that already has children, or if trying
             to add a child to a path that already contains data.
+
+        Examples
+        --------
+        Store an NDArray and a CTable together:
+
+        >>> import dataclasses
+        >>> @dataclasses.dataclass
+        ... class Row:
+        ...     x: int = 0
+        >>> t = blosc2.CTable(Row)
+        >>> _ = t.append(Row(x=10))
+        >>> with blosc2.TreeStore("store.b2z", mode="w") as ts:
+        ...     ts["/arr"] = blosc2.zeros(5, dtype="i4")
+        ...     ts["/table"] = t   # CTable stored inline
+
+        Replacing an existing object root requires an explicit delete first::
+
+            del ts["/table"]
+            ts["/table"] = new_table
         """
         key = self._validate_key(key)
 
@@ -412,6 +453,25 @@ class TreeStore(DictStore):
         If the key is a registered object root (e.g. CTable) returns that object.
         If the key is a structural intermediate path returns a subtree view.
         If the key is a leaf returns the stored array/schunk.
+
+        Examples
+        --------
+        >>> import dataclasses
+        >>> @dataclasses.dataclass
+        ... class Row:
+        ...     x: int = 0
+        >>> t = blosc2.CTable(Row)
+        >>> _ = t.append(Row(x=42))
+        >>> with blosc2.TreeStore("store.b2z", mode="w") as ts:
+        ...     ts["/arr"] = blosc2.zeros(3, dtype="i4")
+        ...     ts["/group/val"] = blosc2.ones(2, dtype="f4")
+        ...     ts["/table"] = t
+        >>> with blosc2.open("store.b2z", mode="r") as ts:
+        ...     arr = ts["/arr"]            # NDArray leaf
+        ...     sub = ts["/group"]           # TreeStore subtree view
+        ...     tbl = ts["/table"]           # CTable object
+        ...     print(type(arr).__name__, type(sub).__name__, type(tbl).__name__)
+        NDArray TreeStore CTable
         """
         key = self._validate_key(key)
         if self._is_vlmeta_key(key):
@@ -447,6 +507,21 @@ class TreeStore(DictStore):
         If *key* is a registered object root, all its physical leaves and the
         registry entry are removed.  If *key* has children, all descendants are
         removed recursively.  Object internals cannot be deleted directly.
+
+        Examples
+        --------
+        >>> import dataclasses
+        >>> @dataclasses.dataclass
+        ... class Row:
+        ...     x: int = 0
+        >>> t = blosc2.CTable(Row)
+        >>> _ = t.append(Row(x=1))
+        >>> with blosc2.TreeStore("store.b2z", mode="w") as ts:
+        ...     ts["/arr"] = blosc2.zeros(3, dtype="i4")
+        ...     ts["/table"] = t
+        ...     del ts["/table"]          # removes all CTable leaves + registry entry
+        ...     print("/table" in ts)
+        False
         """
         key = self._validate_key(key)
 
@@ -512,7 +587,26 @@ class TreeStore(DictStore):
         self._modified = True
 
     def __contains__(self, key: str) -> bool:
-        """Check if a key exists (includes object roots)."""
+        """Check if a key exists (includes object roots, excludes object internals).
+
+        Examples
+        --------
+        >>> import dataclasses
+        >>> @dataclasses.dataclass
+        ... class Row:
+        ...     x: int = 0
+        >>> t = blosc2.CTable(Row)
+        >>> _ = t.append(Row(x=7))
+        >>> with blosc2.TreeStore("store.b2z", mode="w") as ts:
+        ...     ts["/arr"] = blosc2.zeros(2, dtype="i4")
+        ...     ts["/table"] = t
+        ...     print("/table" in ts)       # object root: True
+        ...     print("/table/_meta" in ts) # internal key: False
+        ...     print("/arr" in ts)         # normal leaf: True
+        True
+        False
+        True
+        """
         try:
             key = self._validate_key(key)
             if self._is_vlmeta_key(key):
@@ -529,6 +623,21 @@ class TreeStore(DictStore):
 
         Object root keys (e.g. CTable) are included as single entries.
         Object-internal keys are hidden from normal traversal.
+
+        Examples
+        --------
+        >>> import dataclasses
+        >>> @dataclasses.dataclass
+        ... class Row:
+        ...     x: int = 0
+        >>> t = blosc2.CTable(Row)
+        >>> _ = t.append(Row(x=1))
+        >>> with blosc2.TreeStore("store.b2z", mode="w") as ts:
+        ...     ts["/arr"] = blosc2.zeros(3, dtype="i4")
+        ...     ts["/group/val"] = blosc2.ones(2, dtype="f4")
+        ...     ts["/table"] = t
+        ...     print(sorted(ts.keys()))
+        ['/arr', '/group', '/group/val', '/table']
         """
         if not self.subtree_path:
             all_keys = set(super().keys())
