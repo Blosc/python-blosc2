@@ -1432,3 +1432,65 @@ def test_ctable_context_manager_auto_close(tmp_path, storage_type):
         t2 = ts["/table"]
         assert len(t2) == 3
         assert list(t2["x"][:])[-1] == 100
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_values_collapses_object_roots(tmp_path, storage_type):
+    """values() yields the CTable object, not its internal leaves."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = _make_ctable(n=2)
+        values = list(ts.values())
+
+    assert len(values) == 1
+    assert isinstance(values[0], blosc2.CTable)
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_delete_parent_subtree_removes_nested_object(tmp_path, storage_type):
+    """Deleting a normal subtree also deletes nested object roots and physical leaves."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/grp/table"] = _make_ctable(n=2)
+        del ts["/grp"]
+        assert sorted(ts.keys()) == []
+
+    with blosc2.open(path, mode="r") as ts:
+        assert sorted(ts.keys()) == []
+        assert "/grp/table" not in ts
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_inline_index_roundtrip(tmp_path, storage_type):
+    """Index catalogs and sidecars work for inline CTable objects."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = _make_ctable(n=100)
+
+    with blosc2.TreeStore(path, mode="a") as ts:
+        table = ts["/table"]
+        table.create_index("x")
+        np.testing.assert_array_equal(list(table.where(table["x"] > 95)["x"][:]), [96, 97, 98, 99])
+
+    with blosc2.open(path, mode="r") as ts:
+        table = ts["/table"]
+        assert len(table.indexes) == 1
+        np.testing.assert_array_equal(list(table.where(table["x"] > 95)["x"][:]), [96, 97, 98, 99])
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_ctable_registry_missing_fallback_hides_and_protects_internals(tmp_path, storage_type):
+    """Physical CTable manifests are enough to detect object roots if registry is missing."""
+    path = str(tmp_path / f"bundle.{storage_type}")
+    with blosc2.TreeStore(path, mode="w") as ts:
+        ts["/table"] = _make_ctable(n=2)
+
+    with blosc2.TreeStore(path, mode="a") as ts:
+        del ts._estore._store.vlmeta["_object_registry"]
+
+    with blosc2.open(path, mode="r") as ts:
+        assert sorted(ts.keys()) == ["/table"]
+        assert isinstance(ts["/table"], blosc2.CTable)
+        assert "/table/_meta" not in ts
+        with pytest.raises(ValueError, match="object root"):
+            ts.get_subtree("/table")

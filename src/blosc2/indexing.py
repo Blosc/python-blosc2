@@ -5889,7 +5889,12 @@ def _bucket_batch_result_dtype(where_x) -> np.dtype:
 
 def _bucket_worker_source(where_x):
     if _supports_block_reads(where_x) and getattr(where_x, "urlpath", None) is not None:
-        return blosc2.open(str(where_x.urlpath), mode="r", mmap_mode=_INDEX_MMAP_MODE)
+        urlpath = str(where_x.urlpath)
+        # Arrays opened from a b2z TreeStore/CTable are offset-backed leaves whose
+        # urlpath points at the outer bundle, not at a standalone .b2nd file.
+        # Reopening that path would materialize the whole TreeStore/CTable.
+        if not urlpath.endswith(".b2z"):
+            return blosc2.open(urlpath, mode="r", mmap_mode=_INDEX_MMAP_MODE)
     return where_x
 
 

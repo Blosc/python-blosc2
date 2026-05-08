@@ -504,13 +504,12 @@ class FileTableStorage(TableStorage):
     @staticmethod
     def _walk_descriptor_paths(descriptor: dict):
         """Yield (obj, key) for every string value that looks like a file path."""
-        _PATH_KEYS = {"path", "values_path", "positions_path", "l1_path", "l2_path"}
         stack = [descriptor]
         while stack:
             obj = stack.pop()
             if isinstance(obj, dict):
                 for k, v in obj.items():
-                    if k in _PATH_KEYS and isinstance(v, str):
+                    if (k == "path" or k.endswith("_path")) and isinstance(v, str):
                         yield obj, k
                     elif isinstance(v, (dict, list)):
                         stack.append(v)
@@ -521,22 +520,22 @@ class FileTableStorage(TableStorage):
 
     @staticmethod
     def _relativize_descriptor(descriptor: dict, working_dir: str) -> dict:
-        """Replace absolute paths inside *working_dir* with ``_indexes/…`` relative paths."""
-        prefix = working_dir.rstrip("/") + "/"
+        """Replace absolute paths inside *working_dir* with working-dir relative paths."""
+        prefix = working_dir.rstrip(os.sep) + os.sep
         d = copy.deepcopy(descriptor)
         for obj, key in FileTableStorage._walk_descriptor_paths(d):
             v = obj[key]
-            if v.startswith(prefix):
-                obj[key] = v[len(prefix) :]
+            if os.path.isabs(v) and v.startswith(prefix):
+                obj[key] = v[len(prefix) :].replace(os.sep, "/")
         return d
 
     @staticmethod
     def _absolutize_descriptor(descriptor: dict, working_dir: str) -> dict:
-        """Expand ``_indexes/…`` relative paths back to absolute using *working_dir*."""
+        """Expand working-dir relative paths back to absolute paths."""
         d = copy.deepcopy(descriptor)
         for obj, key in FileTableStorage._walk_descriptor_paths(d):
             v = obj[key]
-            if v.startswith(_INDEXES_DIR + "/") or v.startswith(_INDEXES_DIR + os.sep):
+            if not os.path.isabs(v):
                 obj[key] = os.path.join(working_dir, v)
         return d
 

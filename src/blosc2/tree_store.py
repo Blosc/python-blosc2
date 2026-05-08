@@ -229,9 +229,29 @@ class TreeStore(DictStore):
         """Return all registered object-root full keys."""
         return set(self._objects_registry().keys())
 
+    def _probed_object_roots(self) -> set:
+        """Return object roots discovered from physical CTable manifests."""
+        roots = set()
+        candidates = set(self.map_tree.keys()) | set(self._estore.keys())
+        for key in candidates:
+            if not key.endswith("/_meta"):
+                continue
+            root = key[: -len("/_meta")]
+            if not root:
+                # A manifest at /_meta marks the TreeStore itself as a CTable
+                # backing store; it is not an inline object root to collapse.
+                continue
+            if self._probe_object_info(root) is not None:
+                roots.add(root)
+        return roots
+
+    def _known_object_roots(self) -> set:
+        """Return registered plus physically probed object-root full keys."""
+        return self._object_roots() | self._probed_object_roots()
+
     def _effective_object_roots(self) -> set:
         """Object root keys relative to the current view (subtree or root)."""
-        all_roots = self._object_roots()
+        all_roots = self._known_object_roots()
         if not self.subtree_path:
             return all_roots
         result = set()
@@ -386,7 +406,7 @@ class TreeStore(DictStore):
 
         # Block overwriting an existing object root with a plain value
         full_key = self._translate_key_to_full(key)
-        if self._object_info(full_key) is not None:
+        if (self._object_info(full_key) or self._probe_object_info(full_key)) is not None:
             raise ValueError(
                 f"'{key}' is an object root (e.g. CTable). "
                 f"Delete it first with `del ts['{key}']` before assigning a new value."
@@ -421,7 +441,7 @@ class TreeStore(DictStore):
         full_key = self._translate_key_to_full(key)
 
         # Raise if already exists as object root (no silent replace)
-        if self._object_info(full_key) is not None:
+        if (self._object_info(full_key) or self._probe_object_info(full_key)) is not None:
             raise ValueError(
                 f"'{key}' already exists as an object root. Delete it first with `del ts['{key}']`."
             )
@@ -531,7 +551,7 @@ class TreeStore(DictStore):
         full_key = self._translate_key_to_full(key)
 
         # --- Object root deletion ---
-        if self._object_info(full_key) is not None:
+        if (self._object_info(full_key) or self._probe_object_info(full_key)) is not None:
             self._delete_object_subtree(full_key)
             return
 
@@ -545,8 +565,14 @@ class TreeStore(DictStore):
         # Regular node / subtree deletion
         key_exists_as_data = super().__contains__(full_key)
         descendants = self.get_descendants(key)
+        prefix = full_key + "/" if full_key != "/" else "/"
+        object_roots_to_delete = sorted(
+            [root for root in self._known_object_roots() if root.startswith(prefix)],
+            key=len,
+            reverse=True,
+        )
 
-        if not key_exists_as_data and not descendants:
+        if not key_exists_as_data and not descendants and not object_roots_to_delete:
             raise KeyError(f"Key '{key}' not found")
 
         keys_to_delete = []
@@ -557,8 +583,18 @@ class TreeStore(DictStore):
             if super().__contains__(full_desc):
                 keys_to_delete.append(descendant)
 
+        for object_root in object_roots_to_delete:
+            self._delete_object_subtree(object_root)
+
         for k in keys_to_delete:
-            super().__delitem__(self._translate_key_to_full(k))
+            full_desc = self._translate_key_to_full(k)
+            if super().__contains__(full_desc):
+                super().__delitem__(full_desc)
+
+        # Remove stale registry entries for any nested objects that were deleted as plain descendants.
+        for root in list(self._object_roots()):
+            if root.startswith(prefix):
+                self._unregister_object(root)
 
     def _delete_object_subtree(self, full_key: str) -> None:
         """Delete all physical leaves under *full_key* and unregister it."""
@@ -614,7 +650,11 @@ class TreeStore(DictStore):
             if self._is_object_internal_key(key):
                 return False
             full_key = self._translate_key_to_full(key)
-            return super().__contains__(full_key) or self._object_info(full_key) is not None
+            return (
+                super().__contains__(full_key)
+                or self._object_info(full_key) is not None
+                or self._probe_object_info(full_key) is not None
+            )
         except ValueError:
             return False
 
@@ -678,6 +718,15 @@ class TreeStore(DictStore):
         """Return key-value pairs in the current subtree view."""
         for key in self.keys():
             yield key, self[key]
+
+    def values(
+        self,
+    ) -> Iterator[
+        NDArray | C2Array | SChunk | blosc2.ObjectArray | blosc2.BatchArray | blosc2.CTable | TreeStore
+    ]:
+        """Return values in the current subtree view, with object roots collapsed."""
+        for key in self.keys():
+            yield self[key]
 
     def get_children(self, path: str) -> list[str]:
         """Get direct children of a given path.
@@ -815,7 +864,11 @@ class TreeStore(DictStore):
             child_rel_path = path + "/" + name if path != "/" else "/" + name
             # Translate to full key in the backing store and verify it's a data node or object root
             full_key = self._translate_key_to_full(child_rel_path)
-            if super().__contains__(full_key) or self._object_info(full_key) is not None:
+            if (
+                super().__contains__(full_key)
+                or self._object_info(full_key) is not None
+                or self._probe_object_info(full_key) is not None
+            ):
                 valid_leaf_nodes.append(name)
         leaf_nodes = valid_leaf_nodes
 
@@ -865,7 +918,7 @@ class TreeStore(DictStore):
         full_path = self._translate_key_to_full(path)
 
         # Object roots cannot be navigated as subtrees
-        if self._object_info(full_path) is not None:
+        if (self._object_info(full_path) or self._probe_object_info(full_path)) is not None:
             raise ValueError(
                 f"'{path}' is an object root (e.g. CTable), not a TreeStore subtree. "
                 f"Use ts['{path}'] to access the object."
