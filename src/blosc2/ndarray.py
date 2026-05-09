@@ -593,6 +593,8 @@ def sum(
     >>> print("Sum along axis 0 (columns):", sum_axis_0)
     Sum along axis 0 (columns): [5 7 9]
     """
+    if where is None:
+        return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
     return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, where=where, **kwargs)
 
 
@@ -702,6 +704,8 @@ def mean(
     >>> print("Mean of all elements:", overall_mean)
     Mean of all elements: 3.5
     """
+    if where is None:
+        return ndarr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
     return ndarr.mean(axis=axis, dtype=dtype, keepdims=keepdims, where=where, **kwargs)
 
 
@@ -767,6 +771,8 @@ def std(
     >>> print("Standard deviation along axis 0:", std_axis0)
     Standard deviation along axis 0: [1.5 1.5 1.5]
     """
+    if where is None:
+        return ndarr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
     return ndarr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, where=where, **kwargs)
 
 
@@ -810,6 +816,8 @@ def var(
     >>> print("Variance along axis 0:", var_axis0)
     Variance along axis 0: [2.25 2.25 2.25]
     """
+    if where is None:
+        return ndarr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
     return ndarr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, where=where, **kwargs)
 
 
@@ -851,6 +859,8 @@ def prod(
     >>> print("Product along axis 1:", prod_axis1)
     Product along axis 1: [7986 2160]
     """
+    if where is None:
+        return ndarr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
     return ndarr.prod(axis=axis, dtype=dtype, keepdims=keepdims, where=where, **kwargs)
 
 
@@ -905,6 +915,8 @@ def min(
     >>> print("Minimum along axis 0 with keepdims=True:", min_keepdims)
     Minimum along axis 0 with keepdims=True:  [1]
     """
+    if where is None:
+        return ndarr.min(axis=axis, keepdims=keepdims, **kwargs)
     return ndarr.min(axis=axis, keepdims=keepdims, where=where, **kwargs)
 
 
@@ -949,6 +961,8 @@ def max(
     >>> print("Maximum of the flattened array:", max_flattened)
     Maximum of the flattened array: 81
     """
+    if where is None:
+        return ndarr.max(axis=axis, keepdims=keepdims, **kwargs)
     return ndarr.max(axis=axis, keepdims=keepdims, where=where, **kwargs)
 
 
