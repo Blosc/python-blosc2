@@ -374,10 +374,14 @@ def test_sum_skips_deleted_rows():
     assert t["id"].sum() == sum(range(1, 20))
 
 
-def test_sum_empty_raises():
+def test_sum_empty_returns_zero():
     t = CTable(Row)
-    with pytest.raises(ValueError, match="empty"):
-        t["id"].sum()
+    assert t["id"].sum() == 0
+
+
+def test_sum_empty_filtered_view_returns_zero():
+    t = CTable(Row, new_data=DATA20)
+    assert t[t.id < 0]["id"].sum() == 0
 
 
 def test_sum_wrong_type_raises():
@@ -466,6 +470,11 @@ def test_mean_empty_raises():
         t["id"].mean()
 
 
+def test_mean_empty_filtered_view_is_nan():
+    t = CTable(Row, new_data=DATA20)
+    assert np.isnan(t[t.id < 0]["id"].mean())
+
+
 # -------------------------------------------------------------------
 # Aggregates: std
 # -------------------------------------------------------------------
@@ -497,6 +506,11 @@ def test_std_empty_raises():
     t = CTable(Row)
     with pytest.raises(ValueError, match="empty"):
         t["id"].std()
+
+
+def test_std_empty_filtered_view_is_nan():
+    t = CTable(Row, new_data=DATA20)
+    assert np.isnan(t[t.id < 0]["id"].std())
 
 
 # -------------------------------------------------------------------

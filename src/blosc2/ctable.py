@@ -1317,6 +1317,8 @@ class Column:
     def sum(self, dtype=None, *, where=None):
         """Sum of all live, non-null values.
 
+        Returns zero for an empty column or filtered view.
+
         Supported dtypes: bool, int, uint, float, complex.
         Bool values are counted as 0 / 1.
         Null sentinel values are skipped.
@@ -1351,8 +1353,6 @@ class Column:
         """
         self._require_kind("biufc", "sum")
         where = self._normalize_sum_where(where)
-        if where is None:
-            self._require_nonempty("sum")
         # Use a wide accumulator to reduce overflow risk
         acc_dtype = np.dtype(dtype).type if dtype is not None else None
         if acc_dtype is None:
@@ -1478,7 +1478,9 @@ class Column:
         """
         self._require_kind("biuf", "mean")
         where = self._normalize_sum_where(where)
-        if where is None:
+        if where is None and len(self) == 0:
+            if self._table.base is not None:
+                return float("nan")
             self._require_nonempty("mean")
         fast = self._lazy_aggregate_fastpath("mean", where=where)
         if fast is not NotImplemented:
@@ -1512,7 +1514,9 @@ class Column:
         """
         self._require_kind("biuf", "std")
         where = self._normalize_sum_where(where)
-        if where is None:
+        if where is None and len(self) == 0:
+            if self._table.base is not None:
+                return float("nan")
             self._require_nonempty("std")
         fast = self._lazy_aggregate_fastpath("std", where=where, ddof=ddof)
         if fast is not NotImplemented:
