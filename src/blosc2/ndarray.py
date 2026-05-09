@@ -538,6 +538,7 @@ def sum(
     axis: int | tuple[int] | None = None,
     dtype: np.dtype | str = None,
     keepdims: bool = False,
+    where: blosc2.Array | np.ndarray | None = None,
     **kwargs: Any,
 ) -> blosc2.Array | int | float | complex | bool:
     """
@@ -559,6 +560,8 @@ def sum(
         If set to True, the reduced axes are left in the result
         as dimensions with size one. With this option, the result will broadcast
         correctly against the input array.
+    where: array_like of bool, optional
+        Elements to include in the reduction. False entries are ignored.
     fp_accuracy: :class:`blosc2.FPAccuracy`, optional
         Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
         Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
@@ -590,7 +593,7 @@ def sum(
     >>> print("Sum along axis 0 (columns):", sum_axis_0)
     Sum along axis 0 (columns): [5 7 9]
     """
-    return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+    return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, where=where, **kwargs)
 
 
 def cumulative_sum(
@@ -670,6 +673,7 @@ def mean(
     axis: int | tuple[int] | None = None,
     dtype: np.dtype | str = None,
     keepdims: bool = False,
+    where: blosc2.Array | np.ndarray | None = None,
     **kwargs: Any,
 ) -> blosc2.Array | int | float | complex | bool:
     """
@@ -698,7 +702,7 @@ def mean(
     >>> print("Mean of all elements:", overall_mean)
     Mean of all elements: 3.5
     """
-    return ndarr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+    return ndarr.mean(axis=axis, dtype=dtype, keepdims=keepdims, where=where, **kwargs)
 
 
 def std(
@@ -707,6 +711,7 @@ def std(
     dtype: np.dtype | str = None,
     ddof: int = 0,
     keepdims: bool = False,
+    where: blosc2.Array | np.ndarray | None = None,
     **kwargs: Any,
 ) -> blosc2.Array | int | float | bool:
     """
@@ -729,6 +734,8 @@ def std(
         If set to True, the reduced axes are left in the result as
         dimensions with size one. This ensures that the result will broadcast correctly
         against the input array.
+    where: array_like of bool, optional
+        Elements to include in the reduction. False entries are ignored.
     fp_accuracy: :class:`blosc2.FPAccuracy`, optional
         Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
         Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
@@ -760,7 +767,7 @@ def std(
     >>> print("Standard deviation along axis 0:", std_axis0)
     Standard deviation along axis 0: [1.5 1.5 1.5]
     """
-    return ndarr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
+    return ndarr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, where=where, **kwargs)
 
 
 def var(
@@ -769,6 +776,7 @@ def var(
     dtype: np.dtype | str = None,
     ddof: int = 0,
     keepdims: bool = False,
+    where: blosc2.Array | np.ndarray | None = None,
     **kwargs: Any,
 ) -> blosc2.Array | int | float | bool:
     """
@@ -802,7 +810,7 @@ def var(
     >>> print("Variance along axis 0:", var_axis0)
     Variance along axis 0: [2.25 2.25 2.25]
     """
-    return ndarr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
+    return ndarr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, where=where, **kwargs)
 
 
 def prod(
@@ -810,6 +818,7 @@ def prod(
     axis: int | tuple[int] | None = None,
     dtype: np.dtype | str = None,
     keepdims: bool = False,
+    where: blosc2.Array | np.ndarray | None = None,
     **kwargs: Any,
 ) -> blosc2.Array | int | float | complex | bool:
     """
@@ -842,13 +851,14 @@ def prod(
     >>> print("Product along axis 1:", prod_axis1)
     Product along axis 1: [7986 2160]
     """
-    return ndarr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+    return ndarr.prod(axis=axis, dtype=dtype, keepdims=keepdims, where=where, **kwargs)
 
 
 def min(
     ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
+    where: blosc2.Array | np.ndarray | None = None,
     **kwargs: Any,
 ) -> blosc2.Array | int | float | complex | bool:
     """
@@ -864,6 +874,8 @@ def min(
         If set to True, the axes which are reduced are left in the result as
         dimensions with size one. With this option, the result will broadcast correctly
         against the input array.
+    where: array_like of bool, optional
+        Elements to include in the reduction. False entries are ignored.
     fp_accuracy: :class:`blosc2.FPAccuracy`, optional
         Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
         Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
@@ -893,13 +905,14 @@ def min(
     >>> print("Minimum along axis 0 with keepdims=True:", min_keepdims)
     Minimum along axis 0 with keepdims=True:  [1]
     """
-    return ndarr.min(axis=axis, keepdims=keepdims, **kwargs)
+    return ndarr.min(axis=axis, keepdims=keepdims, where=where, **kwargs)
 
 
 def max(
     ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
+    where: blosc2.Array | np.ndarray | None = None,
     **kwargs: Any,
 ) -> blosc2.Array | int | float | complex | bool:
     """
@@ -936,7 +949,7 @@ def max(
     >>> print("Maximum of the flattened array:", max_flattened)
     Maximum of the flattened array: 81
     """
-    return ndarr.max(axis=axis, keepdims=keepdims, **kwargs)
+    return ndarr.max(axis=axis, keepdims=keepdims, where=where, **kwargs)
 
 
 def any(

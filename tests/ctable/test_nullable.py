@@ -235,6 +235,18 @@ def test_sum_skips_null():
     assert t["score"].sum() == 30
 
 
+def test_sum_where_pushdown_skips_int_null():
+    t = CTable(IntRow, new_data=[(1, 10), (2, -1), (3, 20), (4, -1), (5, 30)])
+    assert t["score"].sum(where=t.id < 5) == 30
+    assert t[t.id < 5]["score"].sum() == 30
+
+
+def test_sum_where_pushdown_skips_nan_null():
+    t = CTable(FloatRow, new_data=[("a", 1.5), ("b", float("nan")), ("c", 2.5)])
+    assert t["value"].sum(where=t.value < 2.0) == pytest.approx(1.5)
+    assert t[t.value < 2.0]["value"].sum() == pytest.approx(1.5)
+
+
 def test_mean_skips_null():
     t = CTable(IntRow, new_data=[(1, 10), (2, -1), (3, 30), (4, -1)])
     assert t["score"].mean() == pytest.approx(20.0)

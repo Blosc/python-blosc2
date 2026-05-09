@@ -40,6 +40,14 @@ high_value = t.where(t.amount > 200)
 print(f"Sales > $200: {len(high_value)} rows")
 print(high_value)
 
+# -- filtered aggregate pushdown -------------------------------------------
+# For aggregate queries, pass the predicate directly with where= so Blosc2 can
+# avoid materializing the filtered table view.
+non_returned_revenue = t.amount.sum(where=~t.returned)
+north_revenue = t.amount.sum(where=(t.region == "North") & ~t.returned)
+print(f"Revenue for non-returned sales: ${non_returned_revenue:.2f}")
+print(f"Revenue for non-returned North sales: ${north_revenue:.2f}")
+
 not_returned = t["not returned"]
 print(f"Not returned: {len(not_returned)} rows")
 

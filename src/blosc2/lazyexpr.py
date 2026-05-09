@@ -3394,14 +3394,54 @@ class LazyExpr(LazyArray):
         new_expr._dtype = dtype
         return new_expr
 
+    @staticmethod
+    def _normalize_where(where):
+        if where is None:
+            return None
+        raw_col = getattr(where, "_raw_col", None)
+        if raw_col is not None:
+            where = raw_col
+        if isinstance(where, np.ndarray) and where.dtype == np.bool_:
+            where = blosc2.asarray(where)
+        if not (
+            isinstance(where, (blosc2.NDArray, blosc2.LazyExpr))
+            and getattr(where, "dtype", None) == np.bool_
+        ):
+            raise TypeError(f"Expected boolean blosc2.NDArray or LazyExpr, got {type(where).__name__}")
+        return where
+
+    def _where_selected(self, where):
+        where = self._normalize_where(where)
+        return self if where is None else where.where(self)
+
+    def _where_identity_expr(self, where, identity):
+        where = self._normalize_where(where)
+        return self if where is None else where.where(self, identity)
+
+    def _reduction_identity(self, op):
+        dtype = np.dtype(self.dtype)
+        if dtype.kind == "b":
+            return op == "min"
+        if dtype.kind in "iu":
+            info = np.iinfo(dtype)
+            return info.max if op == "min" else info.min
+        if dtype.kind == "f":
+            return np.inf if op == "min" else -np.inf
+        raise TypeError(f"where= for {op} is not supported for dtype {dtype!r}")
+
     def sum(
         self,
         axis=None,
         dtype=None,
         keepdims=False,
+        where=None,
         fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
         **kwargs,
     ):
+        if where is not None:
+            return self._where_identity_expr(where, 0).sum(
+                axis=axis, dtype=dtype, keepdims=keepdims, fp_accuracy=fp_accuracy, **kwargs
+            )
         reduce_args = {
             "op": ReduceOp.SUM,
             "op_str": "sum",
@@ -3416,9 +3456,14 @@ class LazyExpr(LazyArray):
         axis=None,
         dtype=None,
         keepdims=False,
+        where=None,
         fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
         **kwargs,
     ):
+        if where is not None:
+            return self._where_identity_expr(where, 1).prod(
+                axis=axis, dtype=dtype, keepdims=keepdims, fp_accuracy=fp_accuracy, **kwargs
+            )
         reduce_args = {
             "op": ReduceOp.PROD,
             "op_str": "prod",
@@ -3453,19 +3498,26 @@ class LazyExpr(LazyArray):
         axis=None,
         dtype=None,
         keepdims=False,
+        where=None,
         fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
         **kwargs,
     ):
+        where = self._normalize_where(where)
+        expr = self if where is None else where.where(self, 0)
         item = kwargs.pop("item", ())
-        total_sum = self.sum(
+        total_sum = expr.sum(
             axis=axis,
             dtype=dtype,
             keepdims=keepdims,
             item=item,
             fp_accuracy=fp_accuracy,
         )
-        num_elements = self.get_num_elements(axis, item)
-        if num_elements == 0:
+        num_elements = (
+            self.get_num_elements(axis, item)
+            if where is None
+            else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(axis=axis, dtype=np.int64)
+        )
+        if np.isscalar(num_elements) and num_elements == 0:
             raise ValueError("mean of an empty array is not defined")
         out = total_sum / num_elements
         out2 = kwargs.pop("out", None)
@@ -3482,21 +3534,31 @@ class LazyExpr(LazyArray):
         dtype=None,
         keepdims=False,
         ddof=0,
+        where=None,
         fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
         **kwargs,
     ):
+        where = self._normalize_where(where)
         item = kwargs.pop("item", ())
         if item == ():  # fast path
-            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, fp_accuracy=fp_accuracy)
+            mean_value = self.mean(
+                axis=axis, dtype=dtype, keepdims=True, where=where, fp_accuracy=fp_accuracy
+            )
             expr = (self - mean_value) ** 2
         else:
-            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item, fp_accuracy=fp_accuracy)
+            mean_value = self.mean(
+                axis=axis, dtype=dtype, keepdims=True, where=where, item=item, fp_accuracy=fp_accuracy
+            )
             # TODO: Not optimal because we load the whole slice in memory. Would have to write
             #  a bespoke std function that executed within slice_eval to avoid this probably.
             expr = (self.slice(item) - mean_value) ** 2
-        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, fp_accuracy=fp_accuracy)
+        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, where=where, fp_accuracy=fp_accuracy)
         if ddof != 0:
-            num_elements = self.get_num_elements(axis, item)
+            num_elements = (
+                self.get_num_elements(axis, item)
+                if where is None
+                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(axis=axis, dtype=np.int64)
+            )
             out = np.sqrt(out * num_elements / (num_elements - ddof))
         else:
             out = np.sqrt(out)
@@ -3514,21 +3576,31 @@ class LazyExpr(LazyArray):
         dtype=None,
         keepdims=False,
         ddof=0,
+        where=None,
         fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
         **kwargs,
     ):
+        where = self._normalize_where(where)
         item = kwargs.pop("item", ())
         if item == ():  # fast path
-            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, fp_accuracy=fp_accuracy)
+            mean_value = self.mean(
+                axis=axis, dtype=dtype, keepdims=True, where=where, fp_accuracy=fp_accuracy
+            )
             expr = (self - mean_value) ** 2
         else:
-            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item, fp_accuracy=fp_accuracy)
+            mean_value = self.mean(
+                axis=axis, dtype=dtype, keepdims=True, where=where, item=item, fp_accuracy=fp_accuracy
+            )
             # TODO: Not optimal because we load the whole slice in memory. Would have to write
             #  a bespoke var function that executed within slice_eval to avoid this probably.
             expr = (self.slice(item) - mean_value) ** 2
-        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, fp_accuracy=fp_accuracy)
+        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, where=where, fp_accuracy=fp_accuracy)
         if ddof != 0:
-            num_elements = self.get_num_elements(axis, item)
+            num_elements = (
+                self.get_num_elements(axis, item)
+                if where is None
+                else where.where(blosc2.ones(self.shape, dtype=np.int64), 0).sum(axis=axis, dtype=np.int64)
+            )
             out = out * num_elements / (num_elements - ddof)
         out2 = kwargs.pop("out", None)
         if out2 is not None:
@@ -3542,9 +3614,15 @@ class LazyExpr(LazyArray):
         self,
         axis=None,
         keepdims=False,
+        where=None,
         fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
         **kwargs,
     ):
+        if where is not None:
+            identity = self._reduction_identity("min")
+            return self._where_identity_expr(where, identity).min(
+                axis=axis, keepdims=keepdims, fp_accuracy=fp_accuracy, **kwargs
+            )
         reduce_args = {
             "op": ReduceOp.MIN,
             "op_str": "min",
@@ -3557,9 +3635,15 @@ class LazyExpr(LazyArray):
         self,
         axis=None,
         keepdims=False,
+        where=None,
         fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
         **kwargs,
     ):
+        if where is not None:
+            identity = self._reduction_identity("max")
+            return self._where_identity_expr(where, identity).max(
+                axis=axis, keepdims=keepdims, fp_accuracy=fp_accuracy, **kwargs
+            )
         reduce_args = {
             "op": ReduceOp.MAX,
             "op_str": "max",

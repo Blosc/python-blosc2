@@ -875,3 +875,19 @@ def test_reduce_string():
     sum = d[()]
     npsum = npa[1, 1] + np.sum(npc) + np.std(npa)
     np.testing.assert_allclose(sum, npsum, rtol=1e-6, atol=1e-6)
+
+
+def test_reductions_where_ndarray_and_lazyexpr():
+    na = np.arange(1, 7, dtype=np.float64).reshape(2, 3)
+    a = blosc2.asarray(na)
+    mask = a > 2
+    nmask = na > 2
+
+    np.testing.assert_allclose(a.sum(axis=0, where=mask), np.sum(na, axis=0, where=nmask))
+    np.testing.assert_allclose((a * 2).sum(axis=0, where=mask), np.sum(na * 2, axis=0, where=nmask))
+    np.testing.assert_allclose(a.prod(axis=0, where=mask), np.prod(na, axis=0, where=nmask))
+    np.testing.assert_allclose(a.mean(axis=0, where=mask), np.mean(na, axis=0, where=nmask))
+    np.testing.assert_allclose(a.var(axis=0, where=mask), np.var(na, axis=0, where=nmask))
+    np.testing.assert_allclose(a.std(axis=0, where=mask), np.std(na, axis=0, where=nmask))
+    np.testing.assert_allclose(a.min(axis=0, where=mask), np.min(na, axis=0, where=nmask, initial=np.inf))
+    np.testing.assert_allclose(a.max(axis=0, where=mask), np.max(na, axis=0, where=nmask, initial=-np.inf))

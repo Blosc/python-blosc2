@@ -52,6 +52,15 @@ print(f"temperature  std   : {temp.std():.2f}")
 print(f"temperature  min   : {temp.min():.2f}")
 print(f"temperature  max   : {temp.max():.2f}")
 
+# -- filtered aggregate pushdown -------------------------------------------
+# Use where= on aggregates to avoid materializing an intermediate filtered view.
+# Null sentinels are still skipped automatically.
+hot_sensor_3 = temp.sum(where=(t.sensor_id == 3) & (t.temperature > 25.0))
+hot_humidity = t["humidity"].mean(where=t.temperature > 25.0)
+print("\nFiltered aggregate pushdown:")
+print(f"sum temperature for sensor_id == 3 and temperature > 25 : {hot_sensor_3:.2f}")
+print(f"mean humidity when temperature > 25                   : {hot_humidity:.2f}")
+
 print(f"\nalert  any : {t['alert'].any()}")
 print(f"alert  all : {t['alert'].all()}")
 

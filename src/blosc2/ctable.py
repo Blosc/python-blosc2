@@ -549,6 +549,12 @@ class Column:
 
         return (self._table._valid_rows & self._mask).compute()
 
+    def _lazy_valid_rows(self):
+        """Return this column's visible-row mask without forcing lazy evaluation."""
+        if self._mask is None:
+            return self._table._valid_rows
+        return self._table._valid_rows & self._mask
+
     def __getitem__(self, key: int | slice | list | np.ndarray):
         """Return values for the given logical index.
 
@@ -1241,7 +1247,74 @@ class Column:
     # Aggregates
     # ------------------------------------------------------------------
 
-    def sum(self, dtype=None):
+    def _normalize_sum_where(self, where):
+        """Normalize an optional ``sum(where=...)`` predicate to a boolean array/expression."""
+        if where is None:
+            return None
+        if isinstance(where, str):
+            self._table._guard_varlen_scalar_expression(where)
+            where = blosc2.lazyexpr(where, self._table._where_expression_operands())
+        if isinstance(where, np.ndarray) and where.dtype == np.bool_:
+            where = blosc2.asarray(where)
+        if isinstance(where, Column):
+            where = where._raw_col == 1 if where._is_nullable_bool else where._raw_col
+        if not (
+            isinstance(where, (blosc2.NDArray, blosc2.LazyExpr))
+            and getattr(where, "dtype", None) == np.bool_
+        ):
+            raise TypeError(f"Expected boolean blosc2.NDArray or LazyExpr, got {type(where).__name__}")
+        return where
+
+    def _lazy_nonnull_mask(self, where=None):
+        """Build a lazy visible-row mask, optionally intersected with non-null values."""
+        raw = self._raw_col
+        if not isinstance(raw, (blosc2.NDArray, blosc2.LazyExpr)):
+            return NotImplemented
+        mask = self._lazy_valid_rows()
+        if where is not None:
+            mask = mask & where
+        nv = self.null_value
+        if nv is not None:
+            if isinstance(nv, (float, np.floating)) and np.isnan(nv):
+                nonnull = ~blosc2.isnan(raw)
+            else:
+                nonnull = raw != nv
+            mask = mask & nonnull
+        return mask
+
+    def _sum_lazy_fastpath(self, acc_dtype, where=None):
+        """Try to compute ``sum`` as a pushed-down lazy masked reduction."""
+        if self.is_list or self.is_varlen_scalar or self.dtype is None or self.dtype.kind not in "biufc":
+            return NotImplemented
+
+        raw = self._raw_col
+        if not isinstance(raw, (blosc2.NDArray, blosc2.LazyExpr)):
+            return NotImplemented
+
+        # A lazy masked reduction scans the full physical column.  For very
+        # selective filtered views, the existing iterator can skip all-zero mask
+        # chunks and is usually faster.  Explicit sum(where=...) is already a
+        # direct pushed-down aggregate, so do not apply the density guard there.
+        total_rows = len(self._table._valid_rows)
+        if (
+            where is None
+            and self._table.base is not None
+            and total_rows
+            and self._table._n_rows / total_rows < 0.25
+        ):
+            return NotImplemented
+
+        mask = self._lazy_nonnull_mask(where=where)
+        if mask is NotImplemented:
+            return NotImplemented
+
+        zero = acc_dtype(0)
+        try:
+            return blosc2.where(mask, raw, zero).sum(dtype=acc_dtype)
+        except Exception:
+            return NotImplemented
+
+    def sum(self, dtype=None, *, where=None):
         """Sum of all live, non-null values.
 
         Supported dtypes: bool, int, uint, float, complex.
@@ -1254,9 +1327,32 @@ class Column:
             Optional accumulator dtype.  When omitted, float columns use
             ``np.float64``, complex columns use ``np.complex128``, and integer
             / bool columns use ``np.int64``.
+        where:
+            Optional boolean predicate. Only rows where the predicate is true,
+            the table row is live, and this column is non-null are included.
+            This enables direct filtered aggregate pushdown, avoiding creation
+            of an intermediate filtered table view.
+
+        Examples
+        --------
+        Sum values matching a predicate without materializing a filtered view::
+
+            total = t["amount"].sum(where=t.category == 3)
+
+        Combine several column predicates::
+
+            total = t.col2.sum(where=(t.col1 < 300) & (t.col2 < 400))
+
+        Nullable sentinel values are skipped automatically::
+
+            # Equivalent to summing only live rows where predicate is true and
+            # t.col2 is not its configured null sentinel.
+            total = t.col2.sum(where=t.col1 < 300)
         """
         self._require_kind("biufc", "sum")
-        self._require_nonempty("sum")
+        where = self._normalize_sum_where(where)
+        if where is None:
+            self._require_nonempty("sum")
         # Use a wide accumulator to reduce overflow risk
         acc_dtype = np.dtype(dtype).type if dtype is not None else None
         if acc_dtype is None:
@@ -1271,23 +1367,68 @@ class Column:
                     else None
                 )
             )
-        result = acc_dtype(0)
-        for chunk in self._nonnull_chunks():
-            result += chunk.sum(dtype=acc_dtype)
+
+        result = self._sum_lazy_fastpath(acc_dtype, where=where)
+        if result is NotImplemented:
+            if where is not None:
+                return self._table.where(where)[self._col_name].sum(dtype=dtype)
+            result = acc_dtype(0)
+            for chunk in self._nonnull_chunks():
+                result += chunk.sum(dtype=acc_dtype)
+
         # Return in the column's natural dtype when it fits, else keep the requested/wide dtype
         if dtype is None and self.dtype.kind in "biu":
             return int(result)
         return result
 
-    def min(self):
+    def _lazy_aggregate_fastpath(self, op: str, *, where=None, dtype=None, ddof: int = 0):
+        if self.is_list or self.is_varlen_scalar or self.dtype is None or self.dtype.kind not in "biuf":
+            return NotImplemented
+        raw = self._raw_col
+        if not isinstance(raw, (blosc2.NDArray, blosc2.LazyExpr)):
+            return NotImplemented
+        mask = self._lazy_nonnull_mask(where=where)
+        if mask is NotImplemented:
+            return NotImplemented
+        try:
+            count = None
+            if op in {"min", "max"}:
+                count = int(mask.where(blosc2.ones(raw.shape, dtype=np.int64), 0).sum(dtype=np.int64))
+                if count == 0:
+                    raise ValueError(f"{op}() called on a column where all values are null.")
+            if op == "mean":
+                return float(raw.mean(where=mask, dtype=dtype or np.float64))
+            if op == "std":
+                return float(raw.std(where=mask, dtype=dtype or np.float64, ddof=ddof))
+            if op == "min":
+                return raw.min(where=mask)
+            if op == "max":
+                return raw.max(where=mask)
+        except ValueError:
+            if op in {"mean", "std"}:
+                return float("nan")
+            raise
+        except Exception:
+            return NotImplemented
+        return NotImplemented
+
+    def min(self, *, where=None):
         """Minimum live, non-null value.
 
         Supported dtypes: bool, int, uint, float, string, bytes.
         Strings are compared lexicographically.
-        Null sentinel values are skipped.
+        Null sentinel values are skipped. When *where* is provided, only rows
+        matching the boolean predicate are included.
         """
         self._require_kind("biufUS", "min")
-        self._require_nonempty("min")
+        where = self._normalize_sum_where(where)
+        if where is None:
+            self._require_nonempty("min")
+        fast = self._lazy_aggregate_fastpath("min", where=where)
+        if fast is not NotImplemented:
+            return fast
+        if where is not None:
+            return self._table.where(where)[self._col_name].min()
         result = None
         is_str = self.dtype.kind in "US"
         for chunk in self._nonnull_chunks():
@@ -1300,15 +1441,23 @@ class Column:
             raise ValueError("min() called on a column where all values are null.")
         return result
 
-    def max(self):
+    def max(self, *, where=None):
         """Maximum live, non-null value.
 
         Supported dtypes: bool, int, uint, float, string, bytes.
         Strings are compared lexicographically.
-        Null sentinel values are skipped.
+        Null sentinel values are skipped. When *where* is provided, only rows
+        matching the boolean predicate are included.
         """
         self._require_kind("biufUS", "max")
-        self._require_nonempty("max")
+        where = self._normalize_sum_where(where)
+        if where is None:
+            self._require_nonempty("max")
+        fast = self._lazy_aggregate_fastpath("max", where=where)
+        if fast is not NotImplemented:
+            return fast
+        if where is not None:
+            return self._table.where(where)[self._col_name].max()
         result = None
         is_str = self.dtype.kind in "US"
         for chunk in self._nonnull_chunks():
@@ -1319,15 +1468,23 @@ class Column:
             raise ValueError("max() called on a column where all values are null.")
         return result
 
-    def mean(self) -> float:
+    def mean(self, *, where=None) -> float:
         """Arithmetic mean of all live, non-null values.
 
         Supported dtypes: bool, int, uint, float.
-        Null sentinel values are skipped.
+        Null sentinel values are skipped. When *where* is provided, only rows
+        matching the boolean predicate are included.
         Always returns a Python float.
         """
         self._require_kind("biuf", "mean")
-        self._require_nonempty("mean")
+        where = self._normalize_sum_where(where)
+        if where is None:
+            self._require_nonempty("mean")
+        fast = self._lazy_aggregate_fastpath("mean", where=where)
+        if fast is not NotImplemented:
+            return fast
+        if where is not None:
+            return self._table.where(where)[self._col_name].mean()
         total = np.float64(0)
         count = 0
         for chunk in self._nonnull_chunks():
@@ -1337,7 +1494,7 @@ class Column:
             return float("nan")
         return float(total / count)
 
-    def std(self, ddof: int = 0) -> float:
+    def std(self, ddof: int = 0, *, where=None) -> float:
         """Standard deviation of all live, non-null values (single-pass, Welford's algorithm).
 
         Parameters
@@ -1345,13 +1502,23 @@ class Column:
         ddof:
             Delta degrees of freedom.  ``0`` (default) gives the population
             std; ``1`` gives the sample std (divides by N-1).
+        where:
+            Optional boolean predicate. Only rows where the predicate is true,
+            the table row is live, and this column is non-null are included.
 
         Supported dtypes: bool, int, uint, float.
         Null sentinel values are skipped.
         Always returns a Python float.
         """
         self._require_kind("biuf", "std")
-        self._require_nonempty("std")
+        where = self._normalize_sum_where(where)
+        if where is None:
+            self._require_nonempty("std")
+        fast = self._lazy_aggregate_fastpath("std", where=where, ddof=ddof)
+        if fast is not NotImplemented:
+            return fast
+        if where is not None:
+            return self._table.where(where)[self._col_name].std(ddof=ddof)
 
         # Chan's parallel update — combines per-chunk (n, mean, M2) tuples.
         # This is numerically stable and requires only a single pass.
