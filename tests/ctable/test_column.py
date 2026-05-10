@@ -384,6 +384,19 @@ def test_sum_empty_filtered_view_returns_zero():
     assert t[t.id < 0]["id"].sum() == 0
 
 
+def test_sum_where_skips_valid_rows_mask_when_all_rows_visible():
+    t = CTable(Row, new_data=DATA20, expected_size=len(DATA20))
+    mask = t["id"]._lazy_nonnull_mask(where=t["score"] < 100)
+    assert mask.expression == "(o0 < 100)"
+    assert len(mask.operands) == 1
+    assert t["id"].sum(where=t["score"] < 100) == sum(range(10))
+
+
+def test_sum_where_accepts_jit_backend():
+    t = CTable(Row, new_data=DATA20, expected_size=len(DATA20))
+    assert t["id"].sum(where=t["score"] < 100, jit_backend="cc") == sum(range(10))
+
+
 def test_sum_wrong_type_raises():
     t = CTable(StrRow, new_data=[("hello",)])
     with pytest.raises(TypeError):

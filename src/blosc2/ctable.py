@@ -1266,23 +1266,31 @@ class Column:
         return where
 
     def _lazy_nonnull_mask(self, where=None):
-        """Build a lazy visible-row mask, optionally intersected with non-null values."""
+        """Build a lazy visible-row mask, optionally intersected with non-null values.
+
+        When all physical rows are visible, avoid injecting ``_valid_rows`` into
+        the expression.  This keeps aggregate predicates aligned with the data
+        columns, which lets the miniexpr reduction fast path run for common
+        no-deletes/no-filtered-view cases.
+        """
         raw = self._raw_col
         if not isinstance(raw, (blosc2.NDArray, blosc2.LazyExpr)):
             return NotImplemented
-        mask = self._lazy_valid_rows()
+
+        all_rows_visible = self._mask is None and self._table._n_rows == len(self._table._valid_rows)
+        mask = None if all_rows_visible else self._lazy_valid_rows()
         if where is not None:
-            mask = mask & where
+            mask = where if mask is None else mask & where
         nv = self.null_value
         if nv is not None:
             if isinstance(nv, (float, np.floating)) and np.isnan(nv):
                 nonnull = ~blosc2.isnan(raw)
             else:
                 nonnull = raw != nv
-            mask = mask & nonnull
+            mask = nonnull if mask is None else mask & nonnull
         return mask
 
-    def _sum_lazy_fastpath(self, acc_dtype, where=None):
+    def _sum_lazy_fastpath(self, acc_dtype, where=None, *, jit=None, jit_backend=None):
         """Try to compute ``sum`` as a pushed-down lazy masked reduction."""
         if self.is_list or self.is_varlen_scalar or self.dtype is None or self.dtype.kind not in "biufc":
             return NotImplemented
@@ -1308,13 +1316,21 @@ class Column:
         if mask is NotImplemented:
             return NotImplemented
 
-        zero = acc_dtype(0)
         try:
-            return blosc2.where(mask, raw, zero).sum(dtype=acc_dtype)
+            if mask is None:
+                return raw.sum(dtype=acc_dtype, jit=jit, jit_backend=jit_backend)
+            force_miniexpr = jit is True or jit_backend is not None
+            if force_miniexpr and isinstance(raw, blosc2.NDArray):
+                zero = blosc2.zeros(
+                    raw.shape, dtype=np.dtype(acc_dtype), chunks=raw.chunks, blocks=raw.blocks
+                )
+            else:
+                zero = acc_dtype(0)
+            return blosc2.where(mask, raw, zero).sum(dtype=acc_dtype, jit=jit, jit_backend=jit_backend)
         except Exception:
             return NotImplemented
 
-    def sum(self, dtype=None, *, where=None):
+    def sum(self, dtype=None, *, where=None, jit=None, jit_backend=None):
         """Sum of all live, non-null values.
 
         Returns zero for an empty column or filtered view.
@@ -1334,6 +1350,10 @@ class Column:
             the table row is live, and this column is non-null are included.
             This enables direct filtered aggregate pushdown, avoiding creation
             of an intermediate filtered table view.
+        jit:
+            Optional miniexpr JIT policy passed to the lazy reduction engine.
+        jit_backend:
+            Optional miniexpr JIT backend. Use ``"tcc"`` or ``"cc"``.
 
         Examples
         --------
@@ -1368,10 +1388,12 @@ class Column:
                 )
             )
 
-        result = self._sum_lazy_fastpath(acc_dtype, where=where)
+        result = self._sum_lazy_fastpath(acc_dtype, where=where, jit=jit, jit_backend=jit_backend)
         if result is NotImplemented:
             if where is not None:
-                return self._table.where(where)[self._col_name].sum(dtype=dtype)
+                return self._table.where(where)[self._col_name].sum(
+                    dtype=dtype, jit=jit, jit_backend=jit_backend
+                )
             result = acc_dtype(0)
             for chunk in self._nonnull_chunks():
                 result += chunk.sum(dtype=acc_dtype)
@@ -1392,18 +1414,26 @@ class Column:
             return NotImplemented
         try:
             count = None
-            if op in {"min", "max"}:
+            if op in {"min", "max"} and mask is not None:
                 count = int(mask.where(blosc2.ones(raw.shape, dtype=np.int64), 0).sum(dtype=np.int64))
                 if count == 0:
                     raise ValueError(f"{op}() called on a column where all values are null.")
             if op == "mean":
-                return float(raw.mean(where=mask, dtype=dtype or np.float64))
+                return float(
+                    raw.mean(dtype=dtype or np.float64)
+                    if mask is None
+                    else raw.mean(where=mask, dtype=dtype or np.float64)
+                )
             if op == "std":
-                return float(raw.std(where=mask, dtype=dtype or np.float64, ddof=ddof))
+                return float(
+                    raw.std(dtype=dtype or np.float64, ddof=ddof)
+                    if mask is None
+                    else raw.std(where=mask, dtype=dtype or np.float64, ddof=ddof)
+                )
             if op == "min":
-                return raw.min(where=mask)
+                return raw.min() if mask is None else raw.min(where=mask)
             if op == "max":
-                return raw.max(where=mask)
+                return raw.max() if mask is None else raw.max(where=mask)
         except ValueError:
             if op in {"mean", "std"}:
                 return float("nan")
