@@ -465,8 +465,9 @@ def schema_to_dict(schema: CompiledSchema) -> dict[str, Any]:
             entry["blocks"] = list(col.config.blocks)
         cols.append(entry)
 
+    schema_version = 2 if schema.metadata.get("nested") is not None else 1
     result = {
-        "version": 1,
+        "version": schema_version,
         "row_cls": schema.row_cls.__name__ if schema.row_cls is not None else None,
         "columns": cols,
     }
@@ -488,7 +489,7 @@ def schema_from_dict(data: dict[str, Any]) -> CompiledSchema:
         If *data* uses an unknown schema version or an unknown column kind.
     """
     version = data.get("version", 1)
-    if version != 1:
+    if version not in (1, 2):
         raise ValueError(f"Unsupported schema version {version!r}")
 
     columns: list[CompiledColumn] = []

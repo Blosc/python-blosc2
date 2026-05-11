@@ -3284,17 +3284,30 @@ class CTable(Generic[RowT]):
             return pa.large_binary()
         return pa.from_numpy_dtype(dtype)
 
+    def _export_arrow_names(self, names: list[str]) -> list[str]:
+        nested = self._schema.metadata.get("nested") if self._schema.metadata else None
+        if not isinstance(nested, dict):
+            return names
+        root_meta = nested.get("root")
+        if not isinstance(root_meta, dict):
+            return names
+        physical = root_meta.get("physical")
+        if not isinstance(physical, str) or not physical:
+            return names
+        return ["" if n == physical else n for n in names]
+
     def _arrow_schema_for_columns(self, columns=None, *, include_computed: bool = True):
         pa = self._require_pyarrow("to_arrow()/to_parquet()")
         names = self._resolve_arrow_columns(columns, include_computed=include_computed)
+        arrow_names = self._export_arrow_names(names)
         fields = []
-        for name in names:
+        for name, arrow_name in zip(names, arrow_names, strict=True):
             cc = self._schema.columns_by_name.get(name)
             if cc is not None:
                 pa_type = self._pa_type_from_spec(pa, cc.spec)
             else:
                 pa_type = pa.from_numpy_dtype(np.asarray(self[name][:0]).dtype)
-            fields.append(pa.field(name, pa_type))
+            fields.append(pa.field(arrow_name, pa_type))
         return pa.schema(fields)
 
     def iter_arrow_batches(
@@ -3309,6 +3322,7 @@ class CTable(Generic[RowT]):
         self._validate_arrow_batch_size(batch_size)
         self._flush_varlen_columns()
         names = self._resolve_arrow_columns(columns, include_computed=include_computed)
+        arrow_names = self._export_arrow_names(names)
 
         for start in range(0, self._n_rows, batch_size):
             stop = min(start + batch_size, self._n_rows)
@@ -3385,7 +3399,7 @@ class CTable(Generic[RowT]):
                     )
                 else:
                     arrays.append(pa.array(arr, mask=null_mask if has_nulls else None))
-            yield pa.RecordBatch.from_arrays(arrays, names=names)
+            yield pa.RecordBatch.from_arrays(arrays, names=arrow_names)
 
     def to_arrow(self):
         """Convert all live rows to a :class:`pyarrow.Table`."""
@@ -3884,6 +3898,25 @@ class CTable(Generic[RowT]):
             arrow_meta["schema_ipc_base64"] = schema_ipc_base64
         return {"arrow": arrow_meta}
 
+    @staticmethod
+    def _nested_metadata_from_column_names(
+        column_names: list[str], *, empty_root_physical: str | None = None
+    ) -> dict:
+        logical_to_physical = {}
+        physical_to_storage = {}
+        for name in column_names:
+            logical_to_physical[name] = name
+            physical_to_storage[name] = f"_cols/{name.replace('.', '/')}"
+        nested = {
+            "version": 1,
+            "logical_root": "",
+            "logical_to_physical": logical_to_physical,
+            "physical_to_storage": physical_to_storage,
+        }
+        if empty_root_physical:
+            nested["root"] = {"logical": "", "physical": empty_root_physical}
+        return nested
+
     @classmethod
     def from_arrow(
         cls,
@@ -3964,11 +3997,21 @@ class CTable(Generic[RowT]):
                     col.spec.batch_rows = blosc2_batch_size
                 if blosc2_items_per_block is not None:
                     col.spec.items_per_block = blosc2_items_per_block
+        metadata = cls._arrow_schema_metadata(schema)
+        empty_root_physical = None
+        schema_meta = getattr(schema, "metadata", None) or {}
+        root_key = b"blosc2_empty_root_physical"
+        if root_key in schema_meta:
+            raw = schema_meta[root_key]
+            empty_root_physical = raw.decode() if isinstance(raw, bytes) else str(raw)
+        metadata["nested"] = cls._nested_metadata_from_column_names(
+            [col.name for col in columns], empty_root_physical=empty_root_physical
+        )
         compiled = CompiledSchema(
             row_cls=None,
             columns=columns,
             columns_by_name={col.name: col for col in columns},
-            metadata=cls._arrow_schema_metadata(schema),
+            metadata=metadata,
         )
         if first_batch is not None:
             import itertools as _it
@@ -4180,10 +4223,19 @@ class CTable(Generic[RowT]):
                         return candidate
                     i += 1
 
-            renamed = [_fresh_root_name() if n == "" else n for n in arrow_schema.names]
+            original_names = list(arrow_schema.names)
+            renamed = [_fresh_root_name() if n == "" else n for n in original_names]
             arrow_schema = pa.schema(
                 [arrow_schema.field(i).with_name(renamed[i]) for i in range(len(renamed))]
             )
+            # Preserve canonical unnamed-root intent in schema metadata.
+            try:
+                first_root = next(renamed[i] for i, old in enumerate(original_names) if old == "")
+            except StopIteration:
+                first_root = renamed[0] if renamed else "root"
+            current_meta = dict(arrow_schema.metadata or {})
+            current_meta[b"blosc2_empty_root_physical"] = first_root.encode()
+            arrow_schema = arrow_schema.with_metadata(current_meta)
 
             def _renamed_batches(batch_iter, names):
                 for b in batch_iter:
