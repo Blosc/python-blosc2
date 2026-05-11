@@ -3021,6 +3021,10 @@ class CTable(Generic[RowT]):
         """
         if not cols:
             raise ValueError("select() requires at least one column name.")
+        expanded_cols = []
+        for name in cols:
+            expanded_cols.extend(self._expand_logical_column_selector(name))
+        cols = expanded_cols
         for name in cols:
             if name not in self._cols and name not in self._computed_cols:
                 raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
@@ -3244,7 +3248,9 @@ class CTable(Generic[RowT]):
             if not include_computed:
                 names = [name for name in names if name not in self._computed_cols]
         else:
-            names = list(columns)
+            names = []
+            for name in columns:
+                names.extend(self._expand_logical_column_selector(name))
         if len(set(names)) != len(names):
             raise ValueError("columns must be unique")
         for name in names:
@@ -3914,6 +3920,7 @@ class CTable(Generic[RowT]):
             "physical_to_storage": physical_to_storage,
         }
         if empty_root_physical:
+            logical_to_physical[""] = empty_root_physical
             nested["root"] = {"logical": "", "physical": empty_root_physical}
         return nested
 
@@ -5244,6 +5251,34 @@ class CTable(Generic[RowT]):
             arr = arr.astype(dtype, copy=True if copy is None else copy)
         return arr.copy() if copy else arr
 
+    def _logical_to_physical_name(self, name: str) -> str:
+        """Resolve a user/logical column path to a stored physical column name."""
+        if name in self._cols or name in self._computed_cols:
+            return name
+        nested = self._schema.metadata.get("nested") if self._schema.metadata else None
+        if isinstance(nested, dict):
+            mapping = nested.get("logical_to_physical")
+            if isinstance(mapping, dict):
+                physical = mapping.get(name)
+                if isinstance(physical, str) and (physical in self._cols or physical in self._computed_cols):
+                    return physical
+        return name
+
+    def _expand_logical_column_selector(self, name: str) -> list[str]:
+        """Resolve one logical selector to one or more physical column names.
+
+        If *name* points to a scalar leaf, returns ``[leaf]``. If it points to
+        a struct-like prefix (e.g. ``"trip"``), expands to descendant leaves.
+        """
+        physical = self._logical_to_physical_name(name)
+        if physical in self._cols or physical in self._computed_cols:
+            return [physical]
+        prefix = f"{physical}."
+        expanded = [col for col in self.col_names if col.startswith(prefix)]
+        if expanded:
+            return expanded
+        return [physical]
+
     def __getitem__(self, key):
         """Type-driven indexing for columns, rows, projections, and filters.
 
@@ -5281,8 +5316,9 @@ class CTable(Generic[RowT]):
             slim = t[["sensor_id", "temperature_f"]]
         """
         if isinstance(key, str):
-            if key in self._cols or key in self._computed_cols:
-                return Column(self, key)
+            physical = self._logical_to_physical_name(key)
+            if physical in self._cols or physical in self._computed_cols:
+                return Column(self, physical)
             return self.where(key)
         if isinstance(key, (blosc2.NDArray, blosc2.LazyExpr)) and getattr(key, "dtype", None) == np.bool_:
             return self.where(key)
@@ -5298,8 +5334,9 @@ class CTable(Generic[RowT]):
         return None
 
     def __getattr__(self, s: str):
-        if s in self._cols or s in self._computed_cols:
-            return Column(self, s)
+        physical = self._logical_to_physical_name(s)
+        if physical in self._cols or physical in self._computed_cols:
+            return Column(self, physical)
         ns = self._nested_namespace(s)
         if ns is not None:
             return ns
@@ -6253,6 +6290,8 @@ class CTable(Generic[RowT]):
         if operands is not None and expression is None:
             raise ValueError("operands can only be provided together with expression")
         col_name = field if field is not None else col_name
+        if col_name is not None:
+            col_name = self._logical_to_physical_name(col_name)
 
         from blosc2.indexing import (
             _IN_MEMORY_INDEXES,
