@@ -157,6 +157,37 @@ def test_from_arrow_bool_values():
     np.testing.assert_array_equal(t2["active"][:], t["active"][:])
 
 
+def test_from_arrow_column_cparams(tmp_path):
+    at = pa.table(
+        {
+            "x": pa.array([1.1, 2.2, 3.3], type=pa.float64()),
+            "y": pa.array([1, 2, 3], type=pa.int64()),
+        }
+    )
+    urlpath = tmp_path / "trunc.b2d"
+    t = CTable.from_arrow(
+        at.schema,
+        at.to_batches(),
+        urlpath=str(urlpath),
+        column_cparams={
+            "x": {
+                "codec": blosc2.Codec.ZSTD.value,
+                "clevel": 5,
+                "filters": [blosc2.Filter.TRUNC_PREC.value, blosc2.Filter.SHUFFLE.value],
+                "filters_meta": [32, 0],
+            }
+        },
+    )
+
+    assert t._cols["x"].cparams.filters[:2] == [blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE]
+    assert t._cols["x"].cparams.filters_meta[:2] == [32, 0]
+    assert t._cols["y"].cparams.filters[-1] == blosc2.Filter.SHUFFLE
+    t.close()
+
+    reopened = CTable.open(str(urlpath), mode="r")
+    assert reopened._cols["x"].cparams.filters[:2] == [blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE]
+
+
 def test_from_arrow_string_values():
     # Without string_max_length, scalar strings become vlstring columns.
     # Accessing [:] on a vlstring column returns a Python list, not an ndarray.

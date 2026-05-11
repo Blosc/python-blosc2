@@ -198,6 +198,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--use-dict", action="store_true", help="Enable C-Blosc2 dictionary compression.")
+    parser.add_argument(
+        "--float-trunc-prec",
+        action="append",
+        default=[],
+        metavar="BITS|COLUMN=BITS",
+        help=(
+            "Apply the Blosc2 TRUNC_PREC filter to imported float32/float64 columns. "
+            "Pass an integer to affect all float columns, or COLUMN=integer for a single column. "
+            "May be repeated; column-specific entries override the global value."
+        ),
+    )
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[c.name for c in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
     parser.add_argument(
@@ -367,6 +378,77 @@ def nullable_sentinel_adjusted_length(pa, field, max_length: int, null_policy) -
     return max(max_length, len(null_value)) if null_value is not None else max_length
 
 
+def parse_float_trunc_prec_options(args) -> tuple[int | None, dict[str, int]]:
+    """Parse --float-trunc-prec entries into (global_bits, per_column_bits)."""
+    global_bits = None
+    per_column: dict[str, int] = {}
+    for raw in args.float_trunc_prec:
+        if "=" in raw:
+            name, value = raw.split("=", 1)
+            name = name.strip()
+            if not name:
+                raise ValueError("--float-trunc-prec column name cannot be empty")
+            try:
+                bits = int(value)
+            except ValueError as exc:
+                raise ValueError(f"Invalid --float-trunc-prec value for column {name!r}: {value!r}") from exc
+            if bits < 1 or bits > 64:
+                raise ValueError("--float-trunc-prec bits must be in the range 1..64")
+            per_column[name] = bits
+        else:
+            try:
+                bits = int(raw)
+            except ValueError as exc:
+                raise ValueError(f"Invalid --float-trunc-prec value: {raw!r}") from exc
+            if bits < 1 or bits > 64:
+                raise ValueError("--float-trunc-prec bits must be in the range 1..64")
+            global_bits = bits
+    args.float_trunc_prec_global = global_bits
+    args.float_trunc_prec_columns = per_column
+    return global_bits, per_column
+
+
+def build_float_trunc_column_cparams(pa, schema, args) -> dict[str, dict[str, Any]]:
+    """Return per-column cparams for float columns selected by --float-trunc-prec."""
+    global_bits = getattr(args, "float_trunc_prec_global", None)
+    per_column = getattr(args, "float_trunc_prec_columns", {})
+    if global_bits is None and not per_column:
+        return {}
+
+    fields_by_name = {field.name: field for field in schema}
+    unknown = set(per_column) - set(fields_by_name)
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise KeyError(f"--float-trunc-prec references unknown imported columns: {names}")
+
+    result: dict[str, dict[str, Any]] = {}
+    for field in schema:
+        if not pa.types.is_floating(field.type):
+            if field.name in per_column:
+                raise TypeError(
+                    f"--float-trunc-prec can only be used with float columns; {field.name!r} is {field.type}"
+                )
+            continue
+        bits = per_column.get(field.name, global_bits)
+        if bits is None:
+            continue
+        max_bits = 23 if field.type.bit_width == 32 else 52
+        if bits > max_bits:
+            raise ValueError(
+                f"--float-trunc-prec for column {field.name!r} is {bits}, "
+                f"but float{field.type.bit_width} columns support at most {max_bits}"
+            )
+        result[field.name] = {
+            "codec": blosc2.Codec[args.codec].value,
+            "clevel": args.clevel,
+            "use_dict": args.use_dict,
+            "typesize": field.type.bit_width // 8,
+            "filters": [blosc2.Filter.TRUNC_PREC.value, blosc2.Filter.SHUFFLE.value],
+            "filters_meta": [bits, 0],
+        }
+    return result
+
+
 def fixed_string_and_bytes_lengths_from_scan(pa, schema, args, max_lengths: dict[str, int]):
     from blosc2.ctable import get_null_policy
 
@@ -531,6 +613,13 @@ def print_import_plan(
         print(f"Blosc2 items/block:    {args.blosc2_items_per_block:,}")
     print(f"Codec / level:         {args.codec} / {args.clevel}")
     print(f"Use dict:              {args.use_dict}")
+    trunc_global = getattr(args, "float_trunc_prec_global", None)
+    trunc_columns = getattr(args, "float_trunc_prec_columns", {})
+    if trunc_global is not None:
+        print(f"Float trunc precision: {trunc_global} bits (all float columns)")
+    if trunc_columns:
+        formatted = ", ".join(f"{name}={bits}" for name, bits in sorted(trunc_columns.items()))
+        print(f"Float trunc columns:   {formatted}")
     print()
 
 
@@ -580,6 +669,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         raise ValueError("--fixed-str-maxlen must be positive")
     if args.fixed_bytes_maxlen is not None and args.fixed_bytes_maxlen <= 0:
         raise ValueError("--fixed-bytes-maxlen must be positive")
+    parse_float_trunc_prec_options(args)
     if args.max_rows is not None and args.max_rows < 0:
         raise ValueError("--max-rows must be non-negative")
     if args.mem_every <= 0:
@@ -609,6 +699,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
     selected_cols = [f.name for f in parquet_schema if f.name in fixed_cols or f.name in struct_wrap_cols]
     import_schema = build_import_schema(pa, parquet_schema, fixed_cols, struct_wrap_cols)
     fixed_scalar_lengths = {**fixed_string_lengths, **fixed_bytes_lengths} or None
+    float_trunc_column_cparams = build_float_trunc_column_cparams(pa, import_schema, args)
     maybe_memory_report(args, "after import schema build", pa)
 
     print_import_plan(
@@ -639,6 +730,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         auto_null_sentinels=True,
         blosc2_batch_size=args.blosc2_batch_size,
         blosc2_items_per_block=args.blosc2_items_per_block,
+        column_cparams=float_trunc_column_cparams or None,
     )
     maybe_memory_report(args, "after CTable import", pa)
     store_original_arrow_metadata(ct, parquet_schema, import_schema, conversions)

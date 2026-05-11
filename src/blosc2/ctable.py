@@ -3430,6 +3430,24 @@ class CTable(Generic[RowT]):
             display_width=compute_display_width(spec),
         )
 
+    @classmethod
+    def _apply_arrow_column_cparams(
+        cls, columns: list[CompiledColumn], column_cparams: Mapping[str, dict[str, Any]] | None
+    ) -> None:
+        if column_cparams is None:
+            return
+        unknown = set(column_cparams) - {col.name for col in columns}
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise KeyError(f"column_cparams contains unknown columns: {names}")
+        for col in columns:
+            if col.name in column_cparams:
+                if cls._is_list_column(col) or cls._is_varlen_scalar_column(col):
+                    raise TypeError(
+                        f"column_cparams only supports fixed-width columns; {col.name!r} is not fixed-width"
+                    )
+                col.config.cparams = dict(column_cparams[col.name])
+
     @staticmethod
     def _storage_for_arrow_import(urlpath: str | None, mode: str) -> TableStorage:
         if urlpath is None:
@@ -3469,8 +3487,8 @@ class CTable(Generic[RowT]):
                     shape=(capacity,),
                     chunks=chunks,
                     blocks=blocks,
-                    cparams=cparams,
-                    dparams=dparams,
+                    cparams=col.config.cparams if col.config.cparams is not None else cparams,
+                    dparams=col.config.dparams if col.config.dparams is not None else dparams,
                 )
         return new_cols, new_valid
 
@@ -3595,6 +3613,7 @@ class CTable(Generic[RowT]):
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
         blosc2_items_per_block: int | None = None,
         object_fallback: bool = False,
+        column_cparams: Mapping[str, dict[str, Any]] | None = None,
     ) -> CTable:
         """Build a :class:`CTable` from an Arrow schema and iterable of record batches.
 
@@ -3623,6 +3642,10 @@ class CTable(Generic[RowT]):
         Unsupported Arrow types raise by default.  Pass ``object_fallback=True``
         to import such columns as schema-less :func:`~blosc2.object` columns.
         This fallback is intentionally not used by :meth:`from_parquet`.
+
+        ``column_cparams`` optionally maps column names to per-column compression
+        parameters. These override the table-level ``cparams`` for fixed-width
+        columns imported from Arrow.
         """
         pa = cls._require_pyarrow("from_arrow()")
         if blosc2_batch_size is not None and blosc2_batch_size <= 0:
@@ -3644,6 +3667,7 @@ class CTable(Generic[RowT]):
             auto_null_sentinels=auto_null_sentinels,
             object_fallback=object_fallback,
         )
+        cls._apply_arrow_column_cparams(columns, column_cparams)
         for col in columns:
             if (
                 cls._is_list_column(col) and getattr(col.spec, "storage", None) == "batch"
