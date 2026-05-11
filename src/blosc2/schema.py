@@ -230,6 +230,41 @@ class complex128(SchemaSpec):
         return {"kind": "complex128"}
 
 
+class timestamp(SchemaSpec):
+    """Timestamp column stored as signed 64-bit epoch offsets.
+
+    The physical storage dtype is ``int64``.  ``unit`` follows Arrow/NumPy
+    datetime units: ``"s"``, ``"ms"``, ``"us"`` or ``"ns"``.  ``timezone``
+    is metadata preserved for Arrow/Parquet roundtrips.
+    """
+
+    dtype = np.dtype(np.int64)
+    python_type = _builtin_object
+
+    def __init__(
+        self, *, unit: str = "us", timezone: str | None = None, nullable: bool = False, null_value=None
+    ):
+        if unit not in {"s", "ms", "us", "ns"}:
+            raise ValueError("timestamp unit must be one of: 's', 'ms', 'us', 'ns'")
+        self.unit = unit
+        self.timezone = timezone
+        self.nullable = nullable or null_value is not None
+        self.null_value = null_value
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"kind": "timestamp", "unit": self.unit}
+        if self.timezone is not None:
+            d["timezone"] = self.timezone
+        if self.nullable:
+            d["nullable"] = True
+        if self.null_value is not None:
+            d["null_value"] = self.null_value
+        return d
+
+
 class bool(SchemaSpec):
     """Boolean column.
 

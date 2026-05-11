@@ -68,6 +68,7 @@ public objects into the appropriate reference section.
         object,
         string,
         struct,
+        timestamp,
         uint8,
         uint16,
         uint32,

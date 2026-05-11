@@ -644,8 +644,8 @@ class TestErrors:
             CTable.from_parquet(path)
 
     def test_unsupported_arrow_type(self, tmp_path):
-        at = pa.table({"ts": pa.array([1, 2, 3], type=pa.timestamp("s"))})
-        path = tmp_path / "ts.parquet"
+        at = pa.table({"duration": pa.array([1, 2, 3], type=pa.duration("s"))})
+        path = tmp_path / "duration.parquet"
         pq.write_table(at, path)
         with pytest.raises(TypeError, match="No blosc2 spec"):
             CTable.from_parquet(path)

@@ -73,6 +73,7 @@ Schema Specs and Helpers
     uint64
     float32
     float64
+    timestamp
     complex64
     complex128
     bool

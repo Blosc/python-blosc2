@@ -179,6 +179,29 @@ def test_from_arrow_empty_table():
     assert t.col_names == ["id", "val"]
 
 
+def test_from_arrow_timestamp_roundtrip_and_query():
+    arr = pa.array(
+        [np.datetime64("2025-01-01T00:00:00", "us"), None, np.datetime64("2025-01-02T00:00:00", "us")],
+        type=pa.timestamp("us"),
+    )
+    at = pa.Table.from_arrays([arr], names=["ts"])
+
+    t = CTable.from_arrow(at.schema, at.to_batches())
+
+    assert isinstance(t._schema.columns_by_name["ts"].spec, blosc2.schema.timestamp)
+    assert t.ts[0] == np.datetime64("2025-01-01T00:00:00", "us")
+    np.testing.assert_array_equal(
+        t.ts[:],
+        np.array(["2025-01-01T00:00:00", "NaT", "2025-01-02T00:00:00"], dtype="datetime64[us]"),
+    )
+    assert len(t[t.ts >= np.datetime64("2025-01-02", "us")]) == 1
+
+    out = t.to_arrow()
+    assert out.schema.field("ts").type == pa.timestamp("us")
+    assert out.column("ts").null_count == 1
+    assert out.column("ts").to_pylist()[0] == arr.to_pylist()[0]
+
+
 def test_from_arrow_roundtrip():
     """to_arrow then from_arrow preserves all values."""
     t = CTable(Row, new_data=DATA10)
@@ -257,7 +280,7 @@ def test_from_arrow_list_struct_nullable_values_roundtrip():
 
 
 def test_from_arrow_unsupported_type_raises():
-    at = pa.table({"ts": pa.array([1, 2, 3], type=pa.timestamp("s"))})
+    at = pa.table({"duration": pa.array([1, 2, 3], type=pa.duration("s"))})
     with pytest.raises(TypeError, match="No blosc2 spec"):
         CTable.from_arrow(at.schema, at.to_batches())
 

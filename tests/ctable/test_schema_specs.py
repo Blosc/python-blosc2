@@ -22,6 +22,7 @@ from blosc2.schema import (
     int32,
     int64,
     string,
+    timestamp,
     uint8,
     uint16,
     uint32,
@@ -68,6 +69,11 @@ def test_complex_dtypes():
     assert complex128().dtype == np.dtype(np.complex128)
 
 
+def test_timestamp_dtype():
+    assert timestamp().dtype == np.dtype(np.int64)
+    assert timestamp(unit="ns").unit == "ns"
+
+
 def test_string_dtype():
     assert string(max_length=16).dtype == np.dtype("U16")
     assert string(max_length=32).dtype == np.dtype("U32")
@@ -92,6 +98,7 @@ def test_python_types():
     for cls in [complex64, complex128]:
         assert cls().python_type is complex
     assert b2_bool().python_type is bool
+    assert timestamp().python_type is object
     assert string().python_type is str
     assert b2_bytes().python_type is bytes
 

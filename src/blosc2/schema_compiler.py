@@ -13,11 +13,12 @@ from __future__ import annotations
 import base64
 import copy
 import dataclasses
+import datetime
 import typing
 from dataclasses import MISSING
 from typing import Any
 
-import numpy as np  # noqa: TC002
+import numpy as np
 
 from blosc2.schema import (
     BLOSC2_FIELD_METADATA_KEY,
@@ -36,6 +37,7 @@ from blosc2.schema import (
     int32,
     int64,
     string,
+    timestamp,
     uint8,
     uint16,
     uint32,
@@ -73,6 +75,7 @@ _KIND_TO_SPEC: dict[str, type[SchemaSpec]] = {
     "vlstring": VLStringSpec,
     "vlbytes": VLBytesSpec,
     "object": ObjectSpec,
+    "timestamp": timestamp,
 }
 
 # ---------------------------------------------------------------------------
@@ -93,6 +96,7 @@ _DTYPE_DISPLAY_WIDTH: dict[str, int] = {
     "bool": 6,
     "complex64": 20,
     "complex128": 25,
+    "timestamp": 26,
 }
 
 
@@ -102,6 +106,8 @@ def compute_display_width(spec: SchemaSpec) -> int:
         return 40
     if isinstance(spec, (ListSpec, StructSpec)):
         return max(40, len(spec.display_label()) + 4)
+    if isinstance(spec, timestamp):
+        return _DTYPE_DISPLAY_WIDTH["timestamp"]
     dtype = spec.dtype
     if dtype is None:
         return 20
@@ -219,6 +225,14 @@ def validate_annotation_matches_spec(name: str, annotation: Any, spec: SchemaSpe
             )
         return
 
+    if isinstance(spec, timestamp):
+        if annotation in (object, np.datetime64, datetime.datetime, str, int):
+            return
+        raise TypeError(
+            f"Column {name!r}: annotation {annotation!r} is incompatible with "
+            "timestamp spec (expected object, np.datetime64, datetime.datetime, str, or int)."
+        )
+
     # VLStringSpec and VLBytesSpec are only reachable via blosc2.field(blosc2.vlstring()/vlbytes()),
     # so annotation must match python_type (str or bytes respectively).
     expected = spec.python_type
@@ -330,7 +344,7 @@ def compile_schema(row_cls: type[Any]) -> CompiledSchema:
         columns.append(
             CompiledColumn(
                 name=name,
-                py_type=annotation,
+                py_type=object if isinstance(spec, timestamp) else annotation,
                 spec=spec,
                 dtype=getattr(spec, "dtype", None),
                 default=default,

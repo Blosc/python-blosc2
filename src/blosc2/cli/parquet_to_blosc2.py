@@ -22,7 +22,8 @@ columns are represented with native ``None`` — no sentinel value is needed.
 
 Struct-valued columns are wrapped as ``list<struct>`` (one-element lists) so
 that they round-trip through the list-column machinery. True list columns pass
-through unchanged. Unsupported types (nested lists, timestamps, etc.) are
+through unchanged. Timestamp columns are imported as semantic CTable
+``timestamp`` columns. Unsupported types (nested lists, durations, etc.) are
 skipped.
 """
 
@@ -250,7 +251,7 @@ def _release_arrow_temporaries(pa) -> None:
         pa.default_memory_pool().release_unused()
 
 
-def classify_columns(
+def classify_columns(  # noqa: C901
     pa,
     schema,
     fixed_string_lengths: dict[str, int] | None = None,
@@ -288,6 +289,14 @@ def classify_columns(
             if field.nullable:
                 nullable_scalars.append(field.name)
                 conversions[field.name] = {"conversion": "nullable_scalar_sentinel"}
+            continue
+        if pa.types.is_timestamp(t):
+            fixed_cols[field.name] = field
+            if field.nullable:
+                nullable_scalars.append(field.name)
+                conversions[field.name] = {"conversion": "timestamp_nullable"}
+            else:
+                conversions[field.name] = {"conversion": "timestamp"}
             continue
         if pa.types.is_string(t) or pa.types.is_large_string(t):
             fixed_cols[field.name] = field

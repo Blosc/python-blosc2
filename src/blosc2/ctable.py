@@ -51,6 +51,7 @@ from blosc2.schema import (
     int32,
     int64,
     string,
+    timestamp,
     uint8,
     uint16,
     uint32,
@@ -120,6 +121,7 @@ class NullPolicy:
     bool_value: int = 255
     signed_int_strategy: Literal["min", "max"] = "min"
     unsigned_int_strategy: Literal["min", "max"] = "max"
+    timestamp_value: int = int(np.iinfo(np.int64).min)
     column_null_values: Mapping[str, Any] = dataclass_field(default_factory=dict)
 
     def sentinel_for_arrow_type(self, pa, pa_type):
@@ -152,6 +154,8 @@ class NullPolicy:
             return self.string_value
         if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
             return self.bytes_value
+        if pa.types.is_timestamp(pa_type):
+            return self.timestamp_value
         return None
 
 
@@ -576,7 +580,7 @@ class Column:
             if not (0 <= key < n_rows):
                 raise IndexError(f"index {key} is out of bounds for column with size {n_rows}")
             pos_true = _find_physical_index(self._valid_rows, key)
-            return self._raw_col[int(pos_true)]
+            return self._maybe_decode_timestamp_values(self._raw_col[int(pos_true)])
 
         elif isinstance(key, slice):
             valid = self._valid_rows
@@ -591,7 +595,7 @@ class Column:
                 return chunk[selected_pos - lo]
             if self.is_list or self.is_varlen_scalar:
                 return self._raw_col[selected_pos]
-            return np.asarray(self._raw_col[selected_pos])
+            return self._maybe_decode_timestamp_values(np.asarray(self._raw_col[selected_pos]))
 
         elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
             n_live = len(self)
@@ -606,7 +610,7 @@ class Column:
                 return raw_np[phys_indices]
             if self.is_list or self.is_varlen_scalar:
                 return self._raw_col[phys_indices]
-            return self._raw_col[phys_indices]
+            return self._maybe_decode_timestamp_values(self._raw_col[phys_indices])
 
         elif isinstance(key, (list, tuple, np.ndarray)):
             real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
@@ -616,7 +620,7 @@ class Column:
                 return raw_np[phys_indices]
             if self.is_list or self.is_varlen_scalar:
                 return self._raw_col[phys_indices]
-            return self._raw_col[phys_indices]
+            return self._maybe_decode_timestamp_values(self._raw_col[phys_indices])
 
         raise TypeError(f"Invalid index type: {type(key)}")
 
@@ -825,6 +829,34 @@ class Column:
             and getattr(col.spec, "null_value", None) is not None
         )
 
+    @property
+    def _timestamp_spec(self):
+        col = self._table._schema.columns_by_name.get(self._col_name)
+        return col.spec if col is not None and isinstance(col.spec, timestamp) else None
+
+    def _maybe_decode_timestamp_values(self, values):
+        spec = self._timestamp_spec
+        if spec is None:
+            return values
+        if np.isscalar(values):
+            return np.datetime64(int(values), spec.unit)
+        return np.asarray(values).astype(f"datetime64[{spec.unit}]")
+
+    def _coerce_timestamp_operand(self, other):
+        spec = self._timestamp_spec
+        other = self._unwrap_operand(other)
+        if spec is None:
+            return other
+        if isinstance(other, np.datetime64):
+            return other.astype(f"datetime64[{spec.unit}]").astype(np.int64)
+        if isinstance(other, str):
+            return np.datetime64(other).astype(f"datetime64[{spec.unit}]").astype(np.int64)
+        if hasattr(other, "isoformat"):
+            return np.datetime64(other).astype(f"datetime64[{spec.unit}]").astype(np.int64)
+        if isinstance(other, np.ndarray) and np.issubdtype(other.dtype, np.datetime64):
+            return other.astype(f"datetime64[{spec.unit}]").astype(np.int64)
+        return other
+
     def __neg__(self):
         self._ensure_queryable()
         return -self._raw_col
@@ -925,31 +957,31 @@ class Column:
 
     def __lt__(self, other):
         self._ensure_queryable()
-        return self._raw_col < self._unwrap_operand(other)
+        return self._raw_col < self._coerce_timestamp_operand(other)
 
     def __le__(self, other):
         self._ensure_queryable()
-        return self._raw_col <= self._unwrap_operand(other)
+        return self._raw_col <= self._coerce_timestamp_operand(other)
 
     def __eq__(self, other):
         self._ensure_queryable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._raw_col == int(other)
-        return self._raw_col == self._unwrap_operand(other)
+        return self._raw_col == self._coerce_timestamp_operand(other)
 
     def __ne__(self, other):
         self._ensure_queryable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._raw_col == int(not other)
-        return self._raw_col != self._unwrap_operand(other)
+        return self._raw_col != self._coerce_timestamp_operand(other)
 
     def __gt__(self, other):
         self._ensure_queryable()
-        return self._raw_col > self._unwrap_operand(other)
+        return self._raw_col > self._coerce_timestamp_operand(other)
 
     def __ge__(self, other):
         self._ensure_queryable()
-        return self._raw_col >= self._unwrap_operand(other)
+        return self._raw_col >= self._coerce_timestamp_operand(other)
 
     @property
     def dtype(self):
@@ -1811,11 +1843,13 @@ class CTable(Generic[RowT]):
             return policy.string_value
         if isinstance(spec, b2_bytes):
             return policy.bytes_value
+        if isinstance(spec, timestamp):
+            return policy.timestamp_value
         return None
 
     @staticmethod
     def _validate_null_value_for_spec(name: str, spec: SchemaSpec, null_value) -> None:
-        if isinstance(spec, (int8, int16, int32, int64, uint8, uint16, uint32, uint64)):
+        if isinstance(spec, (int8, int16, int32, int64, uint8, uint16, uint32, uint64, timestamp)):
             if isinstance(null_value, (bool, np.bool_)) or not isinstance(null_value, (int, np.integer)):
                 raise TypeError(f"Null sentinel for column {name!r} must be an integer")
             info = np.iinfo(spec.dtype)
@@ -1975,6 +2009,15 @@ class CTable(Generic[RowT]):
             elif self._is_varlen_scalar_column(col):
                 # Coercion is handled inside _ScalarVarLenArray.append.
                 result[col.name] = val
+            elif isinstance(col.spec, timestamp):
+                if val is None:
+                    result[col.name] = col.spec.null_value
+                elif isinstance(val, (np.datetime64, str)) or hasattr(val, "isoformat"):
+                    result[col.name] = (
+                        np.datetime64(val).astype(f"datetime64[{col.spec.unit}]").astype(np.int64).item()
+                    )
+                else:
+                    result[col.name] = np.array(val, dtype=col.dtype).item()
             else:
                 result[col.name] = np.array(val, dtype=col.dtype).item()
         return result
@@ -2139,7 +2182,11 @@ class CTable(Generic[RowT]):
         cc = self._computed_cols.get(col_name)
         if cc is not None:
             return self._normalize_scalar_value(np.asarray(cc["lazy"][pos]).ravel()[0])
-        return self._normalize_scalar_value(self._cols[col_name][pos])
+        value = self._normalize_scalar_value(self._cols[col_name][pos])
+        spec = self._schema.columns_by_name[col_name].spec
+        if isinstance(spec, timestamp):
+            return np.datetime64(int(value), spec.unit)
+        return value
 
     def _materialize_row(self, index: int):
         n_rows = self.nrows
@@ -3033,6 +3080,8 @@ class CTable(Generic[RowT]):
             return pa.large_binary()
         if isinstance(spec, ListSpec):
             return pa.list_(CTable._pa_type_from_spec(pa, spec.item_spec))
+        if isinstance(spec, timestamp):
+            return pa.timestamp(spec.unit, tz=spec.timezone)
         if isinstance(spec, StructSpec):
             return pa.struct(
                 [pa.field(name, CTable._pa_type_from_spec(pa, child)) for name, child in spec.fields.items()]
@@ -3112,6 +3161,18 @@ class CTable(Generic[RowT]):
                     and self._schema.columns_by_name[name].spec.to_metadata_dict().get("kind") == "bool"
                 ):
                     arrays.append(pa.array(arr == 1, mask=null_mask if has_nulls else None, type=pa.bool_()))
+                elif self._schema.columns_by_name.get(name) is not None and isinstance(
+                    self._schema.columns_by_name[name].spec, timestamp
+                ):
+                    spec = self._schema.columns_by_name[name].spec
+                    values = arr.astype(f"datetime64[{spec.unit}]")
+                    arrays.append(
+                        pa.array(
+                            values,
+                            mask=null_mask if has_nulls else None,
+                            type=pa.timestamp(spec.unit, tz=spec.timezone),
+                        )
+                    )
                 else:
                     arrays.append(pa.array(arr, mask=null_mask if has_nulls else None))
             yield pa.RecordBatch.from_arrays(arrays, names=names)
@@ -3150,6 +3211,8 @@ class CTable(Generic[RowT]):
             return False
         if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
             return False
+        if pa.types.is_timestamp(pa_type):
+            return False
         return not (
             pa.types.is_list(pa_type) or pa.types.is_large_list(pa_type) or pa.types.is_struct(pa_type)
         )
@@ -3180,6 +3243,11 @@ class CTable(Generic[RowT]):
             (pa.float64(), b2s.float64),
             (pa.bool_(), b2s.bool),
         ]
+        if pa.types.is_timestamp(pa_type):
+            return b2s.timestamp(
+                unit=pa_type.unit, timezone=pa_type.tz, nullable=nullable, null_value=null_value
+            )
+
         for arrow_t, spec_cls in mapping:
             if pa_type == arrow_t:
                 if null_value is not None and hasattr(spec_cls(), "null_value"):
@@ -3469,6 +3537,15 @@ class CTable(Generic[RowT]):
         nv = getattr(col.spec, "null_value", None)
         if col.spec.to_metadata_dict().get("kind") == "bool" and col.dtype == np.dtype(np.uint8):
             return np.array([nv if v is None else int(v) for v in arrow_col.to_pylist()], dtype=np.uint8)
+        if isinstance(col.spec, timestamp):
+            arr = (
+                arrow_col.to_numpy(zero_copy_only=False)
+                .astype(f"datetime64[{col.spec.unit}]")
+                .astype(np.int64)
+            )
+            if arrow_col.null_count and nv is not None and int(nv) != int(np.iinfo(np.int64).min):
+                arr[arr == np.iinfo(np.int64).min] = int(nv)
+            return arr.astype(col.dtype, copy=False)
         if col.dtype.kind in "US":
             values = arrow_col.to_pylist()
             if nv is not None:
@@ -4288,7 +4365,10 @@ class CTable(Generic[RowT]):
         spec = self._schema.columns_by_name[name].spec
         if self._is_list_spec(spec) or isinstance(spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)):
             return col[positions]
-        return col[positions]
+        values = col[positions]
+        if isinstance(spec, timestamp):
+            return np.asarray(values).astype(f"datetime64[{spec.unit}]")
+        return values
 
     def _schema_dict_with_computed(self) -> dict:
         """Return the schema dict extended with computed/materialized metadata."""
@@ -6196,6 +6276,12 @@ class CTable(Generic[RowT]):
             return spec.display_label()
         if isinstance(spec, ListSpec):
             return spec.display_label()
+        if isinstance(spec, timestamp):
+            return (
+                f"timestamp[{spec.unit}]"
+                if spec.timezone is None
+                else f"timestamp[{spec.unit}, {spec.timezone}]"
+            )
         if dtype is None:
             return "None"
         if dtype.kind == "U":
@@ -6406,7 +6492,27 @@ class CTable(Generic[RowT]):
                 varlen_scalar_processed_cols[name] = list(raw_columns[name])
             else:
                 target_dtype = self._cols[name].dtype
-                scalar_processed_cols[name] = np.ascontiguousarray(raw_columns[name], dtype=target_dtype)
+                if isinstance(col_meta.spec, timestamp):
+                    values = np.asarray(raw_columns[name])
+                    if np.issubdtype(values.dtype, np.datetime64):
+                        values = values.astype(f"datetime64[{col_meta.spec.unit}]").astype(np.int64)
+                    elif values.dtype.kind in "OUS":
+                        values = np.array(
+                            [
+                                col_meta.spec.null_value
+                                if v is None
+                                else np.datetime64(v)
+                                .astype(f"datetime64[{col_meta.spec.unit}]")
+                                .astype(np.int64)
+                                if isinstance(v, (np.datetime64, str)) or hasattr(v, "isoformat")
+                                else v
+                                for v in values
+                            ],
+                            dtype=target_dtype,
+                        )
+                    scalar_processed_cols[name] = np.ascontiguousarray(values, dtype=target_dtype)
+                else:
+                    scalar_processed_cols[name] = np.ascontiguousarray(raw_columns[name], dtype=target_dtype)
 
         end_pos = start_pos + new_nrows
 

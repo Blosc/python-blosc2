@@ -508,6 +508,7 @@ Numeric
     uint64
     float32
     float64
+    timestamp
 
 .. autoclass:: int8
 .. autoclass:: int16
@@ -519,6 +520,7 @@ Numeric
 .. autoclass:: uint64
 .. autoclass:: float32
 .. autoclass:: float64
+.. autoclass:: timestamp
 
 Complex
 -------
@@ -560,6 +562,31 @@ Text & binary
 .. autofunction:: struct
 .. autofunction:: object
 .. autofunction:: list
+
+Object columns
+--------------
+
+Timestamp columns
+-----------------
+
+Timestamp columns are declared with :class:`blosc2.timestamp` and store signed
+64-bit epoch offsets with timestamp metadata.  Column reads return
+``numpy.datetime64`` values, comparisons accept ``numpy.datetime64`` values,
+ISO-like strings, or Python ``datetime`` objects, and Arrow/Parquet import/export
+roundtrips timestamp units and time zones::
+
+    from dataclasses import dataclass
+    import numpy as np
+    import blosc2 as b2
+
+    @dataclass
+    class Event:
+        when: np.datetime64 = b2.field(b2.timestamp(unit="us", nullable=True))
+        value: int = b2.field(b2.int64())
+
+    table = b2.CTable(Event)
+    table.append(["2025-01-01T12:00:00", 42])
+    recent = table[table.when >= np.datetime64("2025-01-01", "us")]
 
 Object columns
 --------------
