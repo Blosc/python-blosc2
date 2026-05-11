@@ -1764,6 +1764,31 @@ _BATCH_SIZE_DEFAULT = 2048
 # We use a plain dict so that nothing extra needs to be imported.
 
 
+class _NestedColumnNamespace:
+    """Attribute proxy for dotted nested column paths.
+
+    Allows `t.trip.begin.lon` when the physical leaf column is named
+    `"trip.begin.lon"`.
+    """
+
+    def __init__(self, table: CTable, prefix: str):
+        self._table = table
+        self._prefix = prefix
+
+    def __getattr__(self, name: str):
+        path = f"{self._prefix}.{name}"
+        if path in self._table._cols or path in self._table._computed_cols:
+            return Column(self._table, path)
+        base = f"{path}."
+        for col_name in self._table.col_names:
+            if col_name.startswith(base):
+                return _NestedColumnNamespace(self._table, path)
+        raise AttributeError(path)
+
+    def __repr__(self) -> str:
+        return f"<NestedColumnNamespace {self._prefix!r}>"
+
+
 class CTable(Generic[RowT]):
     """Columnar compressed table with typed columns and row-oriented access."""
 
@@ -5182,9 +5207,19 @@ class CTable(Generic[RowT]):
             raise TypeError("Tuple indexing is not supported for CTable in V1")
         return self._getitem_row_selector(key)
 
+    def _nested_namespace(self, prefix: str):
+        base = f"{prefix}."
+        for name in self.col_names:
+            if name.startswith(base):
+                return _NestedColumnNamespace(self, prefix)
+        return None
+
     def __getattr__(self, s: str):
         if s in self._cols or s in self._computed_cols:
             return Column(self, s)
+        ns = self._nested_namespace(s)
+        if ns is not None:
+            return ns
         return super().__getattribute__(s)
 
     # ------------------------------------------------------------------
@@ -6910,6 +6945,32 @@ class CTable(Generic[RowT]):
         operands.update({name: cc["lazy"] for name, cc in self._computed_cols.items()})
         return operands
 
+    def _rewrite_nested_expression(
+        self, expr: str, operands: dict[str, blosc2.NDArray | blosc2.LazyExpr]
+    ) -> tuple[str, dict[str, blosc2.NDArray | blosc2.LazyExpr]]:
+        """Rewrite dotted nested names in *expr* to safe identifiers.
+
+        `blosc2.lazyexpr` does not accept dotted identifiers, but nested leaf
+        columns are naturally addressed as dotted paths (e.g. ``trip.begin.lon``).
+        This maps them to temporary aliases and returns rewritten expression and
+        operand mapping.
+        """
+        dotted = [name for name in operands if "." in name]
+        if not dotted:
+            return expr, operands
+
+        rewritten = expr
+        new_operands = dict(operands)
+        # Longest names first so trip.begin.lon is rewritten before trip.begin.
+        for i, name in enumerate(sorted(dotted, key=len, reverse=True)):
+            alias = f"__nf{i}"
+            pattern = rf"(?<![\w.]){re.escape(name)}(?![\w.])"
+            replaced = re.sub(pattern, alias, rewritten)
+            if replaced != rewritten:
+                rewritten = replaced
+                new_operands[alias] = new_operands.pop(name)
+        return rewritten, new_operands
+
     def _guard_varlen_scalar_expression(self, expr: str) -> None:
         for col in self._schema.columns:
             if self._is_varlen_scalar_column(col) and re.search(
@@ -7005,7 +7066,9 @@ class CTable(Generic[RowT]):
         """
         if isinstance(expr_result, str):
             self._guard_varlen_scalar_expression(expr_result)
-            expr_result = blosc2.lazyexpr(expr_result, self._where_expression_operands())
+            operands = self._where_expression_operands()
+            expr_result, operands = self._rewrite_nested_expression(expr_result, operands)
+            expr_result = blosc2.lazyexpr(expr_result, operands)
         if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:
             expr_result = blosc2.asarray(expr_result)
         if isinstance(expr_result, Column):
