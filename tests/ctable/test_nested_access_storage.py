@@ -1,9 +1,17 @@
 from dataclasses import dataclass
 
-import pyarrow as pa
-import pyarrow.parquet as pq
+import pytest
 
 import blosc2
+
+try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+except ImportError:  # pragma: no cover - optional dependency
+    pa = None
+    pq = None
+
+pytestmark = pytest.mark.skipif(pa is None, reason="pyarrow is required for nested Arrow/Parquet tests")
 
 
 @dataclass

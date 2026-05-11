@@ -1,8 +1,14 @@
-import pyarrow as pa
 import pytest
 
 import blosc2
 from blosc2.schema_compiler import schema_from_dict, schema_to_dict
+
+try:
+    import pyarrow as pa
+except ImportError:  # pragma: no cover - optional dependency
+    pa = None
+
+pytestmark = pytest.mark.skipif(pa is None, reason="pyarrow is required for nested Arrow/Parquet tests")
 
 
 def _table_with_empty_root_alias():
