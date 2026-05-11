@@ -209,6 +209,16 @@ def build_parser() -> argparse.ArgumentParser:
             "May be repeated; column-specific entries override the global value."
         ),
     )
+    parser.add_argument(
+        "--timestamp-unit",
+        choices=["s", "ms", "us", "ns", "auto"],
+        default=None,
+        help=(
+            "Import timestamp columns using this unit. Explicit units use Arrow's safe cast and fail "
+            "if conversion would lose precision. 'auto' pre-scans timestamp columns and chooses the "
+            "coarsest lossless unit per column."
+        ),
+    )
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[c.name for c in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
     parser.add_argument(
@@ -336,14 +346,27 @@ def classify_columns(  # noqa: C901
     return fixed_cols, struct_wrap_cols, conversions, nullable_scalars
 
 
-def build_import_schema(pa, original_schema, fixed_cols: dict, struct_wrap_cols: dict):
+def build_import_schema(
+    pa,
+    original_schema,
+    fixed_cols: dict,
+    struct_wrap_cols: dict,
+    timestamp_units: dict[str, str] | None = None,
+):
     """Build the Arrow schema passed to CTable.from_arrow()."""
+    timestamp_units = timestamp_units or {}
     fields = []
     for field in original_schema:
         if field.name in struct_wrap_cols:
             fields.append(pa.field(field.name, struct_wrap_cols[field.name], nullable=True))
         elif field.name in fixed_cols:
-            fields.append(field)
+            unit = timestamp_units.get(field.name)
+            if unit is not None:
+                fields.append(
+                    pa.field(field.name, pa.timestamp(unit, tz=field.type.tz), nullable=field.nullable)
+                )
+            else:
+                fields.append(field)
     return pa.schema(fields)
 
 
@@ -475,6 +498,83 @@ def fixed_string_and_bytes_lengths_from_scan(pa, schema, args, max_lengths: dict
     return fixed_string_lengths, fixed_bytes_lengths
 
 
+_TIMESTAMP_UNIT_NS = {"s": 1_000_000_000, "ms": 1_000_000, "us": 1_000, "ns": 1}
+_TIMESTAMP_UNITS_COARSE_TO_FINE = ("s", "ms", "us", "ns")
+
+
+def timestamp_columns(pa, schema) -> list[str]:
+    return [field.name for field in schema if pa.types.is_timestamp(field.type)]
+
+
+def initial_timestamp_divisibility(units: dict[str, str]) -> dict[str, dict[str, bool]]:
+    return {
+        name: {
+            unit: True
+            for unit in _TIMESTAMP_UNITS_COARSE_TO_FINE
+            if _TIMESTAMP_UNIT_NS[unit] >= _TIMESTAMP_UNIT_NS[source_unit]
+        }
+        for name, source_unit in units.items()
+    }
+
+
+def update_timestamp_divisibility(
+    batch, units: dict[str, str], divisible: dict[str, dict[str, bool]]
+) -> None:
+    for name, source_unit in units.items():
+        arr = batch.column(batch.schema.get_field_index(name)).drop_null()
+        if len(arr) == 0:
+            continue
+        values = arr.to_numpy(zero_copy_only=False).astype(f"datetime64[{source_unit}]").astype("int64")
+        for unit in list(divisible[name]):
+            if unit == source_unit:
+                continue
+            factor = _TIMESTAMP_UNIT_NS[unit] // _TIMESTAMP_UNIT_NS[source_unit]
+            if factor > 1 and not bool((values % factor == 0).all()):
+                divisible[name][unit] = False
+
+
+def choose_timestamp_units(units: dict[str, str], divisible: dict[str, dict[str, bool]]) -> dict[str, str]:
+    result = {}
+    for name, source_unit in units.items():
+        result[name] = source_unit
+        for unit in _TIMESTAMP_UNITS_COARSE_TO_FINE:
+            if unit in divisible[name] and divisible[name][unit]:
+                result[name] = unit
+                break
+    return result
+
+
+def infer_timestamp_units(pa, pf, args, schema) -> dict[str, str]:
+    """Return target timestamp units for import according to --timestamp-unit."""
+    columns = timestamp_columns(pa, schema)
+    if args.timestamp_unit is None or not columns:
+        return {}
+    if args.timestamp_unit != "auto":
+        return dict.fromkeys(columns, args.timestamp_unit)
+
+    print("Pre-scanning timestamp units...")
+    fields_by_name = {field.name: field for field in schema}
+    units = {name: fields_by_name[name].type.unit for name in columns}
+    divisible = initial_timestamp_divisibility(units)
+    rows_done = 0
+    total = pf.metadata.num_rows if args.max_rows is None else min(args.max_rows, pf.metadata.num_rows)
+    for batch in pf.iter_batches(batch_size=args.parquet_batch_size, columns=columns):
+        remaining = total - rows_done
+        if remaining <= 0:
+            break
+        if len(batch) > remaining:
+            batch = batch.slice(0, remaining)
+        update_timestamp_divisibility(batch, units, divisible)
+        rows_done += len(batch)
+
+    result = choose_timestamp_units(units, divisible)
+    changed = {name: unit for name, unit in result.items() if unit != units[name]}
+    print(f"  timestamp columns: {len(columns):,}; unit changes: {len(changed):,}")
+    for name, unit in sorted(changed.items()):
+        print(f"    - {name}: {units[name]} -> {unit}")
+    return result
+
+
 def scan_string_and_bytes_lengths(pa, pf, args, schema) -> tuple[dict[str, int], dict[str, int]]:
     if args.fixed_str_maxlen is None and args.fixed_bytes_maxlen is None:
         return {}, {}
@@ -513,11 +613,20 @@ def scan_string_and_bytes_lengths(pa, pf, args, schema) -> tuple[dict[str, int],
     return fixed_string_lengths, fixed_bytes_lengths
 
 
-def transform_batch(pa, batch, selected_cols: list[str], struct_wrap_cols: dict):
-    """Wrap struct-valued cells as singleton lists; pass everything else through."""
-    if not struct_wrap_cols:
+def transform_batch(
+    pa, batch, selected_cols: list[str], struct_wrap_cols: dict, timestamp_units: dict[str, str]
+):
+    """Apply import-time Arrow conversions; pass everything else through."""
+    if not struct_wrap_cols and not timestamp_units:
         return batch
     arrays = list(batch.columns)
+    for name, unit in timestamp_units.items():
+        idx = batch.schema.get_field_index(name)
+        if idx < 0:
+            continue
+        field = batch.schema.field(idx)
+        target_type = pa.timestamp(unit, tz=field.type.tz)
+        arrays[idx] = batch.column(idx).cast(target_type, safe=True)
     for name, target_type in struct_wrap_cols.items():
         try:
             idx = batch.schema.get_field_index(name)
@@ -620,10 +729,12 @@ def print_import_plan(
     if trunc_columns:
         formatted = ", ".join(f"{name}={bits}" for name, bits in sorted(trunc_columns.items()))
         print(f"Float trunc columns:   {formatted}")
+    if args.timestamp_unit is not None:
+        print(f"Timestamp unit:        {args.timestamp_unit}")
     print()
 
 
-def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols):
+def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_units):
     rows_done = 0
     t0 = time.perf_counter()
     total = pf.metadata.num_rows if args.max_rows is None else min(args.max_rows, pf.metadata.num_rows)
@@ -638,7 +749,7 @@ def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols):
         report_batch_mem = args.mem_report and batch_n % args.mem_every == 0
         if report_batch_mem:
             memory_report(f"batch {batch_n} after parquet read", pa)
-        batch = transform_batch(pa, raw_batch, selected_cols, struct_wrap_cols)
+        batch = transform_batch(pa, raw_batch, selected_cols, struct_wrap_cols, timestamp_units)
         if report_batch_mem:
             memory_report(f"batch {batch_n} after transform", pa)
         rows_done += len(batch)
@@ -691,13 +802,16 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
     fixed_string_lengths, fixed_bytes_lengths = scan_string_and_bytes_lengths(pa, pf, args, parquet_schema)
     maybe_memory_report(args, "after string/binary length scan", pa)
 
+    timestamp_units = infer_timestamp_units(pa, pf, args, parquet_schema)
+    maybe_memory_report(args, "after timestamp unit scan", pa)
+
     fixed_cols, struct_wrap_cols, conversions, nullable_scalars = classify_columns(
         pa, parquet_schema, fixed_string_lengths, fixed_bytes_lengths
     )
     maybe_memory_report(args, "after column classification", pa)
 
     selected_cols = [f.name for f in parquet_schema if f.name in fixed_cols or f.name in struct_wrap_cols]
-    import_schema = build_import_schema(pa, parquet_schema, fixed_cols, struct_wrap_cols)
+    import_schema = build_import_schema(pa, parquet_schema, fixed_cols, struct_wrap_cols, timestamp_units)
     fixed_scalar_lengths = {**fixed_string_lengths, **fixed_bytes_lengths} or None
     float_trunc_column_cparams = build_float_trunc_column_cparams(pa, import_schema, args)
     maybe_memory_report(args, "after import schema build", pa)
@@ -719,7 +833,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
 
     ct = blosc2.CTable.from_arrow(
         import_schema,
-        progress_batches(pa, pf, args, selected_cols, struct_wrap_cols),
+        progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_units),
         urlpath=str(output_path),
         mode="w",
         cparams=blosc2.CParams(codec=blosc2.Codec[args.codec], clevel=args.clevel, use_dict=args.use_dict),

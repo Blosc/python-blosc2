@@ -672,5 +672,29 @@ class TestErrors:
             CTable.from_parquet(path, string_max_length=10)
 
 
+def test_parquet_cli_timestamp_unit_auto(tmp_path):
+    from blosc2.cli.parquet_to_blosc2 import main
+
+    values = np.array(
+        ["2025-01-01T00:00:00", "2025-01-01T00:00:01", "2025-01-01T00:00:02"],
+        dtype="datetime64[us]",
+    )
+    path = tmp_path / "timestamps.parquet"
+    out = tmp_path / "timestamps.b2d"
+    pq.write_table(pa.table({"ts": pa.array(values, type=pa.timestamp("us"))}), path)
+
+    assert main(["--timestamp-unit", "auto", str(path), str(out)]) == 0
+
+    table = CTable.open(str(out), mode="r")
+    assert table._schema.columns_by_name["ts"].spec.unit == "s"
+    np.testing.assert_array_equal(
+        table["ts"][:],
+        np.array(
+            ["2025-01-01T00:00:00", "2025-01-01T00:00:01", "2025-01-01T00:00:02"], dtype="datetime64[s]"
+        ),
+    )
+    assert table._cols["ts"][:].tolist() == [1735689600, 1735689601, 1735689602]
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
