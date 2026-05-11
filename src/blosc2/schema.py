@@ -761,6 +761,114 @@ def vlbytes(
     )
 
 
+# ---------------------------------------------------------------------------
+# Dictionary spec
+# ---------------------------------------------------------------------------
+
+
+class DictionarySpec(SchemaSpec):
+    """Dictionary-encoded string column stored as int32 codes with a global string dictionary.
+
+    Each row value is a plain Python ``str`` (or ``None`` when nullable).
+    Internally the column stores compact integer codes (``int32``) in an NDArray,
+    with a separate append-only variable-length string array holding the unique
+    category values.  This matches Arrow dictionary encoding semantics.
+
+    Parameters
+    ----------
+    index_type:
+        Must be :class:`int32`.  The physical dtype for category codes.
+    value_type:
+        Must be :class:`VLStringSpec`.  The type of dictionary values.
+    ordered:
+        If ``True``, the dictionary has semantic ordering.  Ordered comparisons
+        (``<``, ``>``) are not implemented in v1 but the flag is stored and
+        exported to Arrow.
+    nullable:
+        If ``True`` (default), null row slots are allowed.  Nulls are represented
+        internally by the reserved code ``null_code`` (default ``-1``).
+    null_code:
+        The reserved code value for null slots.  Default is ``-1``.
+    """
+
+    python_type = str
+    dtype = None  # physical codes are int32, but logical type is str
+
+    def __init__(
+        self,
+        *,
+        index_type=None,
+        value_type=None,
+        ordered: _builtin_bool = False,
+        nullable: _builtin_bool = True,
+        null_code: int = -1,
+    ):
+        from blosc2.schema import int32 as _int32
+
+        if index_type is not None and not isinstance(index_type, _int32):
+            raise TypeError(
+                f"DictionarySpec index_type must be blosc2.int32() in v1; got {type(index_type).__name__!r}"
+            )
+        if value_type is not None and not isinstance(value_type, VLStringSpec):
+            raise TypeError(
+                "DictionarySpec value_type must be blosc2.vlstring() in v1; "
+                f"got {type(value_type).__name__!r}"
+            )
+        self.index_type = index_type if index_type is not None else _int32()
+        self.value_type = value_type if value_type is not None else VLStringSpec()
+        self.ordered = _builtin_bool(ordered)
+        self.nullable = _builtin_bool(nullable)
+        self.null_code = int(null_code)
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "dictionary",
+            "index_type": self.index_type.to_metadata_dict(),
+            "value_type": self.value_type.to_metadata_dict(),
+            "ordered": self.ordered,
+            "nullable": self.nullable,
+            "null_code": self.null_code,
+        }
+
+
+def dictionary(
+    *,
+    index_type=None,
+    value_type=None,
+    ordered: bool = False,
+    nullable: bool = True,
+) -> DictionarySpec:
+    """Build a dictionary-encoded string column descriptor.
+
+    Dictionary columns store repeated string values as compact ``int32`` codes
+    with a separate global dictionary of unique string values.  This matches
+    Arrow dictionary encoding and is ideal for low-cardinality string columns
+    such as categories or enumerated values.
+
+    Parameters
+    ----------
+    index_type:
+        The physical type for category codes.  Must be ``blosc2.int32()`` in v1.
+        Defaults to ``blosc2.int32()`` when not specified.
+    value_type:
+        The type of dictionary values.  Must be ``blosc2.vlstring()`` in v1.
+        Defaults to ``blosc2.vlstring()`` when not specified.
+    ordered:
+        If ``True``, dictionary order is semantically meaningful.
+    nullable:
+        If ``True`` (default), null row values are allowed (stored as code ``-1``).
+    """
+    return DictionarySpec(
+        index_type=index_type,
+        value_type=value_type,
+        ordered=ordered,
+        nullable=nullable,
+    )
+
+
 def struct(fields: dict[str, SchemaSpec], *, nullable: bool = False) -> StructSpec:
     """Build a structured schema descriptor for dict-like CTable values.
 

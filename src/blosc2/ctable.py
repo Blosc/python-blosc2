@@ -25,7 +25,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import MISSING, dataclass
 from dataclasses import field as dataclass_field
 from textwrap import TextWrapper
-from typing import Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 import numpy as np
 
@@ -35,7 +35,11 @@ from blosc2.ctable_storage import FileTableStorage, InMemoryTableStorage, TableS
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.list_array import ListArray, coerce_list_cell
 from blosc2.scalar_array import _ScalarVarLenArray
+
+if TYPE_CHECKING:
+    from blosc2.dictionary_column import DictionaryColumn
 from blosc2.schema import (
+    DictionarySpec,
     ListSpec,
     ObjectSpec,
     SchemaSpec,
@@ -547,6 +551,12 @@ class Column:
         return col is not None and isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec))
 
     @property
+    def is_dictionary(self) -> bool:
+        """True if this column is a dictionary-encoded string column."""
+        col = self._table._schema.columns_by_name.get(self._col_name)
+        return col is not None and isinstance(col.spec, DictionarySpec)
+
+    @property
     def _valid_rows(self):
         if self._mask is None:
             return self._table._valid_rows
@@ -580,6 +590,8 @@ class Column:
             if not (0 <= key < n_rows):
                 raise IndexError(f"index {key} is out of bounds for column with size {n_rows}")
             pos_true = _find_physical_index(self._valid_rows, key)
+            if self.is_dictionary:
+                return self._raw_col[int(pos_true)]
             return self._maybe_decode_timestamp_values(self._raw_col[int(pos_true)])
 
         elif isinstance(key, slice):
@@ -587,13 +599,17 @@ class Column:
             real_pos = blosc2.where(valid, _arange(len(valid))).compute()
             start, stop, step = key.indices(len(real_pos))
             if start >= stop:
-                return [] if (self.is_list or self.is_varlen_scalar) else np.array([], dtype=self.dtype)
+                return (
+                    []
+                    if (self.is_list or self.is_varlen_scalar or self.is_dictionary)
+                    else np.array([], dtype=self.dtype)
+                )
             selected_pos = real_pos[start:stop:step]  # physical row positions
             if self.is_computed:
                 lo, hi = int(selected_pos.min()), int(selected_pos.max())
                 chunk = np.asarray(self._raw_col[lo : hi + 1])
                 return chunk[selected_pos - lo]
-            if self.is_list or self.is_varlen_scalar:
+            if self.is_list or self.is_varlen_scalar or self.is_dictionary:
                 return self._raw_col[selected_pos]
             return self._maybe_decode_timestamp_values(np.asarray(self._raw_col[selected_pos]))
 
@@ -608,7 +624,7 @@ class Column:
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
                 return raw_np[phys_indices]
-            if self.is_list or self.is_varlen_scalar:
+            if self.is_list or self.is_varlen_scalar or self.is_dictionary:
                 return self._raw_col[phys_indices]
             return self._maybe_decode_timestamp_values(self._raw_col[phys_indices])
 
@@ -618,7 +634,7 @@ class Column:
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
                 return raw_np[phys_indices]
-            if self.is_list or self.is_varlen_scalar:
+            if self.is_list or self.is_varlen_scalar or self.is_dictionary:
                 return self._raw_col[phys_indices]
             return self._maybe_decode_timestamp_values(self._raw_col[phys_indices])
 
@@ -812,6 +828,11 @@ class Column:
                 f"Column {self._col_name!r} is a vlstring/vlbytes column; "
                 "lazy expressions and vectorized comparisons are not supported yet."
             )
+        if self.is_dictionary:
+            raise NotImplementedError(
+                f"Column {self._col_name!r} is a dictionary column; "
+                "use == and isin() for dictionary column comparisons."
+            )
 
     @staticmethod
     def _unwrap_operand(other):
@@ -964,16 +985,88 @@ class Column:
         return self._raw_col <= self._coerce_timestamp_operand(other)
 
     def __eq__(self, other):
+        if self.is_dictionary:
+            return self._dictionary_eq(other)
         self._ensure_queryable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._raw_col == int(other)
         return self._raw_col == self._coerce_timestamp_operand(other)
 
     def __ne__(self, other):
+        if self.is_dictionary:
+            result = self._dictionary_eq(other)
+            if isinstance(result, np.ndarray):
+                return ~result
+            return ~np.asarray(result, dtype=bool)
         self._ensure_queryable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._raw_col == int(not other)
         return self._raw_col != self._coerce_timestamp_operand(other)
+
+    def _dictionary_eq(self, other) -> np.ndarray:
+        """Return a boolean array True where the live dictionary value == *other*."""
+        dc = self._raw_col  # DictionaryColumn
+        spec = self._table._schema.columns_by_name[self._col_name].spec
+        valid = self._valid_rows
+        live_pos = np.where(valid[:])[0]
+        if len(live_pos) == 0:
+            return np.zeros(0, dtype=bool)
+        if other is None:
+            target_code = spec.null_code
+        elif isinstance(other, str):
+            try:
+                target_code = dc.value_to_code(other)
+            except KeyError:
+                return np.zeros(len(live_pos), dtype=bool)
+        else:
+            raise TypeError(
+                f"Dictionary column {self._col_name!r} can only be compared with str or None, "
+                f"got {type(other).__name__!r}."
+            )
+        live_codes = np.asarray(dc.codes[live_pos], dtype=np.int32)
+        return live_codes == np.int32(target_code)
+
+    def isin(self, values) -> np.ndarray:
+        """Return a boolean array True where the live value is in *values*.
+
+        For dictionary columns this performs efficient integer-code membership
+        testing (no decoding of all values).  Values absent from the
+        dictionary are treated as not-present.
+
+        For non-dictionary columns this decodes all live values and tests
+        membership in a set.
+        """
+        if self.is_dictionary:
+            return self._dictionary_isin(values)
+        live_values = self[:]
+        test_set = set(values)
+        if isinstance(live_values, np.ndarray):
+            return np.array([v in test_set for v in live_values.tolist()], dtype=bool)
+        return np.array([v in test_set for v in live_values], dtype=bool)
+
+    def _dictionary_isin(self, values) -> np.ndarray:
+        """Return a boolean array for in-membership tests against a dictionary column."""
+        dc = self._raw_col  # DictionaryColumn
+        spec = self._table._schema.columns_by_name[self._col_name].spec
+        valid = self._valid_rows
+        live_pos = np.where(valid[:])[0]
+        if len(live_pos) == 0:
+            return np.zeros(0, dtype=bool)
+        # Map requested values to codes, ignoring absent values.
+        target_codes: set[int] = set()
+        for v in values:
+            if v is None:
+                target_codes.add(spec.null_code)
+            elif isinstance(v, str):
+                with contextlib.suppress(KeyError):
+                    target_codes.add(dc.value_to_code(v))
+        if not target_codes:
+            return np.zeros(len(live_pos), dtype=bool)
+        live_codes = np.asarray(dc.codes[live_pos], dtype=np.int32)
+        mask = np.zeros(len(live_codes), dtype=bool)
+        for code in target_codes:
+            mask |= live_codes == np.int32(code)
+        return mask
 
     def __gt__(self, other):
         self._ensure_queryable()
@@ -1179,8 +1272,11 @@ class Column:
 
         For varlen scalar columns (vlstring/vlbytes) nullability is represented
         as native ``None`` values, so this returns True wherever the value is
-        ``None``.
+        ``None``.  For dictionary columns, returns True where the code equals
+        the null_code (``-1`` by default).
         """
+        if self.is_dictionary:
+            return self._dictionary_eq(None)
         if self.is_varlen_scalar:
             return np.array([v is None for v in self], dtype=np.bool_)
         return self._null_mask_for(self[:])
@@ -1195,6 +1291,8 @@ class Column:
         Returns ``0`` in O(1) if no ``null_value`` is configured for this column
         and the column is not a varlen scalar column.
         """
+        if self.is_dictionary:
+            return int(self.is_null().sum())
         if self.is_varlen_scalar:
             return sum(1 for v in self if v is None)
         if self.null_value is None:
@@ -1824,6 +1922,10 @@ class CTable(Generic[RowT]):
         return isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec))
 
     @staticmethod
+    def _is_dictionary_column(col: CompiledColumn) -> bool:
+        return isinstance(col.spec, DictionarySpec)
+
+    @staticmethod
     def _is_list_spec(spec: SchemaSpec) -> bool:
         return isinstance(spec, ListSpec)
 
@@ -1886,7 +1988,10 @@ class CTable(Generic[RowT]):
         for col in schema.columns:
             spec = col.spec
             if (
-                isinstance(spec, (ListSpec, VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec))
+                isinstance(
+                    spec,
+                    (ListSpec, VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, DictionarySpec),
+                )
                 or getattr(spec, "null_value", None) is not None
             ):
                 continue
@@ -1912,7 +2017,11 @@ class CTable(Generic[RowT]):
 
     def _flush_varlen_columns(self) -> None:
         for col in self._schema.columns:
-            if self._is_list_column(col) or self._is_varlen_scalar_column(col):
+            if (
+                self._is_list_column(col)
+                or self._is_varlen_scalar_column(col)
+                or self._is_dictionary_column(col)
+            ):
                 self._cols[col.name].flush()
 
     def _init_columns(
@@ -1933,6 +2042,14 @@ class CTable(Generic[RowT]):
                 continue
             if self._is_varlen_scalar_column(col):
                 self._cols[col.name] = storage.create_varlen_scalar_column(
+                    col.name,
+                    spec=col.spec,
+                    cparams=col_storage.get("cparams"),
+                    dparams=col_storage.get("dparams"),
+                )
+                continue
+            if self._is_dictionary_column(col):
+                self._cols[col.name] = storage.create_dictionary_column(
                     col.name,
                     spec=col.spec,
                     cparams=col_storage.get("cparams"),
@@ -2009,6 +2126,9 @@ class CTable(Generic[RowT]):
             elif self._is_varlen_scalar_column(col):
                 # Coercion is handled inside _ScalarVarLenArray.append.
                 result[col.name] = val
+            elif self._is_dictionary_column(col):
+                # Pass str/None through; DictionaryColumn.__setitem__ encodes.
+                result[col.name] = val
             elif isinstance(col.spec, timestamp):
                 if val is None:
                     result[col.name] = col.spec.null_value
@@ -2066,6 +2186,9 @@ class CTable(Generic[RowT]):
         for name, col_arr in self._cols.items():
             cc = self._schema.columns_by_name[name]
             if self._is_list_column(cc) or self._is_varlen_scalar_column(cc):
+                continue
+            if self._is_dictionary_column(cc):
+                col_arr.resize((c * 2,))
                 continue
             col_arr.resize((c * 2,))
         self._valid_rows.resize((c * 2,))
@@ -2463,6 +2586,23 @@ class CTable(Generic[RowT]):
                     disk_col.extend(self._cols[name][int(pos)] for pos in live_pos)
                     disk_col.flush()
                 continue
+            if self._is_dictionary_column(col):
+                src_dc = self._cols[name]
+                disk_dc = storage.create_dictionary_column(
+                    name,
+                    spec=col.spec,
+                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
+                    dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
+                )
+                # Copy dictionary values first
+                for v in src_dc.dictionary:
+                    disk_dc.encode(v)
+                disk_dc.flush()
+                # Copy live codes
+                if n_live > 0:
+                    raw_codes = np.asarray(src_dc.codes[live_pos], dtype=np.int32)
+                    disk_dc.codes[:n_live] = raw_codes
+                continue
             dtype_chunks, dtype_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
             col_storage = self._resolve_column_storage(col, dtype_chunks, dtype_blocks)
             disk_col = storage.create_column(
@@ -2557,6 +2697,8 @@ class CTable(Generic[RowT]):
                 obj._cols[name] = storage.open_list_column(name)
             elif obj._is_varlen_scalar_column(cc):
                 obj._cols[name] = storage.open_varlen_scalar_column(name, cc.spec)
+            elif obj._is_dictionary_column(cc):
+                obj._cols[name] = storage.open_dictionary_column(name, cc.spec)
             else:
                 obj._cols[name] = storage.open_column(name)
             obj._col_widths[name] = max(len(name), cc.display_width)
@@ -2632,6 +2774,8 @@ class CTable(Generic[RowT]):
                 disk_cols[col.name] = file_storage.open_list_column(col.name)
             elif cls._is_varlen_scalar_column(col):
                 disk_cols[col.name] = file_storage.open_varlen_scalar_column(col.name, col.spec)
+            elif cls._is_dictionary_column(col):
+                disk_cols[col.name] = file_storage.open_dictionary_column(col.name, col.spec)
             else:
                 disk_cols[col.name] = file_storage.open_column(col.name)
         phys_size = len(disk_valid)
@@ -2662,6 +2806,17 @@ class CTable(Generic[RowT]):
                 mem_col = mem_storage.create_varlen_scalar_column(name, spec=col.spec)
                 mem_col.extend(iter(disk_cols[name]))
                 mem_col.flush()
+                mem_cols[name] = mem_col
+                continue
+            if cls._is_dictionary_column(col):
+                mem_col = mem_storage.create_dictionary_column(name, spec=col.spec)
+                disk_dc = disk_cols[name]
+                # Copy dictionary values
+                for v in disk_dc.dictionary:
+                    mem_col.encode(v)
+                # Copy codes
+                if phys_size > 0:
+                    mem_col.codes[:phys_size] = disk_dc.codes[:phys_size]
                 mem_cols[name] = mem_col
                 continue
             col_chunks, col_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
@@ -3074,6 +3229,8 @@ class CTable(Generic[RowT]):
 
     @staticmethod
     def _pa_type_from_spec(pa, spec):
+        if isinstance(spec, DictionarySpec):
+            return pa.dictionary(pa.int32(), pa.string(), ordered=spec.ordered)
         if isinstance(spec, VLStringSpec):
             return pa.string()
         if isinstance(spec, VLBytesSpec):
@@ -3142,6 +3299,34 @@ class CTable(Generic[RowT]):
                     values = col[start:stop]  # list of str/bytes/None
                     arrays.append(pa.array(values, type=self._pa_type_from_spec(pa, spec)))
                     continue
+                if col.is_dictionary:
+                    dc = self._cols[name]  # DictionaryColumn
+                    spec = self._schema.columns_by_name[name].spec
+                    # Get physical positions for live rows in [start, stop)
+                    valid = self._valid_rows
+                    real_pos = blosc2.where(valid, _arange(len(valid))).compute()
+                    batch_real_pos = real_pos[start:stop]
+                    if len(batch_real_pos) == 0:
+                        pa_dict = pa.array(dc.dictionary, type=pa.string())
+                        pa_indices = pa.array([], type=pa.int32())
+                        arrays.append(
+                            pa.DictionaryArray.from_arrays(pa_indices, pa_dict, ordered=spec.ordered)
+                        )
+                    else:
+                        raw_codes = np.asarray(dc.codes[batch_real_pos], dtype=np.int32)
+                        null_mask = raw_codes == np.int32(spec.null_code)
+                        safe_codes = raw_codes.copy()
+                        safe_codes[null_mask] = 0
+                        pa_dict = pa.array(dc.dictionary, type=pa.string())
+                        pa_indices = pa.array(
+                            safe_codes,
+                            type=pa.int32(),
+                            mask=null_mask if null_mask.any() else None,
+                        )
+                        arrays.append(
+                            pa.DictionaryArray.from_arrays(pa_indices, pa_dict, ordered=spec.ordered)
+                        )
+                    continue
                 arr = np.asarray(col[start:stop])
                 nv = col.null_value
                 null_mask = col._null_mask_for(arr) if nv is not None else None
@@ -3191,6 +3376,9 @@ class CTable(Generic[RowT]):
     @staticmethod
     def _arrow_type_needs_object_fallback(pa, pa_type) -> bool:
         """True when *pa_type* has no typed CTable mapping."""
+        if pa.types.is_dictionary(pa_type):
+            vt = pa_type.value_type
+            return vt not in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8())
         if pa_type in (
             pa.int8(),
             pa.int16(),
@@ -3229,6 +3417,47 @@ class CTable(Generic[RowT]):
         object_fallback: bool = False,
     ):
         import blosc2.schema as b2s
+
+        # Handle Arrow dictionary types (dict-encoded strings)
+        if pa.types.is_dictionary(pa_type):
+            vt = pa_type.value_type
+            if vt in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+                index_type = pa_type.index_type
+                # Accept signed and unsigned integer index types; validate fit in int32.
+                if not (pa.types.is_integer(index_type) or pa.types.is_unsigned_integer(index_type)):
+                    raise TypeError(
+                        f"Dictionary column has unsupported index type {index_type!r}; "
+                        "expected an integer type."
+                    )
+                if arrow_col is not None:
+                    # Validate all indices fit in signed int32.
+                    if pa.types.is_unsigned_integer(index_type):
+                        max_idx = arrow_col.combine_chunks().indices.to_pandas().max(skipna=True)
+                        if max_idx is not None and max_idx > np.iinfo(np.int32).max:
+                            raise ValueError(
+                                f"Arrow dictionary column has unsigned indices exceeding int32.max "
+                                f"(max={max_idx})."
+                            )
+                    combined = (
+                        arrow_col.combine_chunks() if hasattr(arrow_col, "combine_chunks") else arrow_col
+                    )
+                    n_cats = len(combined.dictionary)
+                    if n_cats > np.iinfo(np.int32).max:
+                        raise OverflowError(
+                            f"Arrow dictionary has {n_cats} categories, exceeding int32 capacity."
+                        )
+                return b2s.dictionary(
+                    index_type=b2s.int32(),
+                    value_type=b2s.vlstring(),
+                    ordered=bool(pa_type.ordered),
+                    nullable=nullable,
+                )
+            if object_fallback:
+                return b2s.object(nullable=nullable)
+            raise TypeError(
+                f"No blosc2 spec for Arrow dictionary type {pa_type!r} with "
+                f"value type {pa_type.value_type!r}. Only string dictionary values are supported in v1."
+            )
 
         mapping = [
             (pa.int8(), b2s.int8),
@@ -3354,10 +3583,12 @@ class CTable(Generic[RowT]):
             arrow_col = table_for_inference.column(name) if table_for_inference is not None else None
             field_is_list = pa.types.is_list(field.type) or pa.types.is_large_list(field.type)
             field_is_struct = pa.types.is_struct(field.type)
+            field_is_dictionary = pa.types.is_dictionary(field.type)
             column_string_max_length = cls._string_max_length_for_column(string_max_length, name)
             field_is_varlen_scalar = (
                 not field_is_list
                 and not field_is_struct
+                and not field_is_dictionary
                 and column_string_max_length is None
                 and (
                     pa.types.is_string(field.type)
@@ -3372,7 +3603,9 @@ class CTable(Generic[RowT]):
             field_is_object_fallback = object_fallback and field_needs_object_fallback
             null_value = None
             has_null_value_override = name in column_null_values
-            if has_null_value_override and (field_is_list or field_is_struct or field_is_object_fallback):
+            if has_null_value_override and (
+                field_is_list or field_is_struct or field_is_dictionary or field_is_object_fallback
+            ):
                 raise TypeError(f"column_null_values only supports scalar columns; {name!r} is not scalar")
             if has_null_value_override and field_is_varlen_scalar:
                 raise TypeError(
@@ -3385,7 +3618,11 @@ class CTable(Generic[RowT]):
                 auto_null_sentinels
                 and field.nullable
                 and not (
-                    field_is_list or field_is_struct or field_is_varlen_scalar or field_is_object_fallback
+                    field_is_list
+                    or field_is_struct
+                    or field_is_dictionary
+                    or field_is_varlen_scalar
+                    or field_is_object_fallback
                 )
             ):
                 null_value = cls._auto_null_sentinel(pa, field.type, null_policy=null_policy)
@@ -3393,7 +3630,11 @@ class CTable(Generic[RowT]):
                 arrow_col is not None
                 and arrow_col.null_count
                 and not (
-                    field_is_list or field_is_struct or field_is_varlen_scalar or field_is_object_fallback
+                    field_is_list
+                    or field_is_struct
+                    or field_is_dictionary
+                    or field_is_varlen_scalar
+                    or field_is_object_fallback
                 )
                 and null_value is None
             ):
@@ -3411,7 +3652,11 @@ class CTable(Generic[RowT]):
                 object_fallback=object_fallback,
             )
             if null_value is not None and not (
-                field_is_list or field_is_struct or field_is_varlen_scalar or field_is_object_fallback
+                field_is_list
+                or field_is_struct
+                or field_is_dictionary
+                or field_is_varlen_scalar
+                or field_is_object_fallback
             ):
                 cls._validate_null_value_for_spec(name, spec, null_value)
             columns.append(cls._compiled_column_from_spec(name, spec))
@@ -3467,7 +3712,7 @@ class CTable(Generic[RowT]):
         new_valid = storage.create_valid_rows(
             shape=(capacity,), chunks=default_chunks, blocks=default_blocks
         )
-        new_cols: dict[str, blosc2.NDArray | ListArray | _ScalarVarLenArray] = {}
+        new_cols: dict[str, blosc2.NDArray | ListArray | _ScalarVarLenArray | DictionaryColumn] = {}
         for col in columns:
             if cls._is_list_column(col):
                 new_cols[col.name] = storage.create_list_column(
@@ -3475,6 +3720,10 @@ class CTable(Generic[RowT]):
                 )
             elif cls._is_varlen_scalar_column(col):
                 new_cols[col.name] = storage.create_varlen_scalar_column(
+                    col.name, spec=col.spec, cparams=cparams, dparams=dparams
+                )
+            elif cls._is_dictionary_column(col):
+                new_cols[col.name] = storage.create_dictionary_column(
                     col.name, spec=col.spec, cparams=cparams, dparams=dparams
                 )
             else:
@@ -3527,7 +3776,11 @@ class CTable(Generic[RowT]):
                 new_valid = obj._valid_rows
             pos = cls._write_arrow_batch(batch, columns, new_cols, new_valid, pos)
         for col in columns:
-            if cls._is_list_column(col) or cls._is_varlen_scalar_column(col):
+            if (
+                cls._is_list_column(col)
+                or cls._is_varlen_scalar_column(col)
+                or cls._is_dictionary_column(col)
+            ):
                 new_cols[col.name].flush()
         obj._n_rows = pos
         obj._last_pos = pos
@@ -3540,11 +3793,21 @@ class CTable(Generic[RowT]):
         for col in columns:
             arrow_col = batch.column(batch.schema.get_field_index(col.name))
             if cls._is_list_column(col):
-                # Trusted Arrow-import fast path: schema has already been inferred,
-                # so avoid Python-level per-item coercion/validation here.
-                new_cols[col.name].extend(arrow_col.to_pylist(), validate=False)
+                # Use validation/coercion for list columns so nested timestamp values
+                # (emitted by Arrow as datetime.datetime in to_pylist()) are normalized
+                # to storage-compatible scalar values before msgpack serialization.
+                new_cols[col.name].extend(arrow_col.to_pylist(), validate=True)
             elif cls._is_varlen_scalar_column(col):
                 new_cols[col.name].extend(arrow_col.to_pylist())
+            elif cls._is_dictionary_column(col):
+                import pyarrow as _pa
+
+                if _pa.types.is_dictionary(arrow_col.type):
+                    # Arrow dictionary array: use unification algorithm.
+                    new_cols[col.name].extend_from_arrow(_pa, arrow_col, pos, m, ordered=col.spec.ordered)
+                else:
+                    # Plain string array: encode values into the dictionary.
+                    new_cols[col.name][pos : pos + m] = arrow_col.to_pylist()
             else:
                 new_cols[col.name][pos : pos + m] = cls._arrow_column_to_numpy(arrow_col, col)
         new_valid[pos : pos + m] = True
@@ -4387,7 +4650,9 @@ class CTable(Generic[RowT]):
             )
         col = self._cols[name]
         spec = self._schema.columns_by_name[name].spec
-        if self._is_list_spec(spec) or isinstance(spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)):
+        if self._is_list_spec(spec) or isinstance(
+            spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, DictionarySpec)
+        ):
             return col[positions]
         values = col[positions]
         if isinstance(spec, timestamp):
@@ -4848,7 +5113,11 @@ class CTable(Generic[RowT]):
             col_info = self._schema.columns_by_name.get(name)
             if col_info is None:
                 dtype = np.asarray(self[name][:0]).dtype
-            elif self._is_list_column(col_info) or self._is_varlen_scalar_column(col_info):
+            elif (
+                self._is_list_column(col_info)
+                or self._is_varlen_scalar_column(col_info)
+                or self._is_dictionary_column(col_info)
+            ):
                 dtype = np.dtype(object)
             else:
                 dtype = col_info.dtype if col_info.dtype is not None else np.dtype(object)
@@ -4951,6 +5220,11 @@ class CTable(Generic[RowT]):
                 replacement.extend(compacted)
                 replacement.flush()
                 self._cols[name] = replacement
+                continue
+            if self._is_dictionary_column(col):
+                # Keep dictionary values intact; just compact the codes.
+                live_codes = np.asarray(v.codes[real_poss[: self._n_rows]], dtype=np.int32)
+                v.codes[: self._n_rows] = live_codes
                 continue
             start = 0
             block_size = self._valid_rows.blocks[0]
@@ -5087,7 +5361,13 @@ class CTable(Generic[RowT]):
                 # Materialise computed column values at live positions
                 raw = np.asarray(cc["lazy"][:])[live_pos]
             else:
-                raw = self._cols[name][live_pos]
+                col_info = self._schema.columns_by_name.get(name)
+                if col_info is not None and self._is_dictionary_column(col_info):
+                    # Sort dictionary columns by decoded string values.
+                    decoded = self._cols[name][live_pos]
+                    raw = np.array(decoded, dtype=object)
+                else:
+                    raw = self._cols[name][live_pos]
             col_info = self._schema.columns_by_name.get(name)
             nv = getattr(col_info.spec, "null_value", None) if col_info else None
 
@@ -5179,37 +5459,52 @@ class CTable(Generic[RowT]):
             sorted_pos = live_pos[order]
 
         if inplace:
-            for col in self._schema.columns:
-                arr = self._cols[col.name]
-                if self._is_list_column(col):
-                    new_arr = ListArray(spec=col.spec)
-                    new_arr.extend((arr[int(pos)] for pos in sorted_pos), validate=False)
-                    new_arr.flush()
-                    self._cols[col.name] = new_arr
-                else:
-                    arr[:n] = arr[sorted_pos]
-            self._valid_rows[:n] = True
-            self._valid_rows[n:] = False
-            self._n_rows = n
-            self._last_pos = n
-            self._mark_all_indexes_stale()
+            self._sort_by_inplace(sorted_pos, n)
             return self
-        else:
-            # Build a new in-memory table with the sorted rows
-            result = self._empty_copy()
-            for col in self._schema.columns:
-                col_name = col.name
-                arr = self._cols[col_name]
-                if self._is_list_column(col):
-                    result._cols[col_name].extend((arr[int(pos)] for pos in sorted_pos), validate=False)
-                    result._cols[col_name].flush()
-                else:
-                    result._cols[col_name][:n] = arr[sorted_pos]
-            result._valid_rows[:n] = True
-            result._valid_rows[n:] = False
-            result._n_rows = n
-            result._last_pos = n
-            return result
+
+        return self._sorted_copy_from_positions(sorted_pos, n)
+
+    def _sort_by_inplace(self, sorted_pos: np.ndarray, n: int) -> None:
+        for col in self._schema.columns:
+            arr = self._cols[col.name]
+            if self._is_list_column(col):
+                new_arr = ListArray(spec=col.spec)
+                new_arr.extend((arr[int(pos)] for pos in sorted_pos), validate=False)
+                new_arr.flush()
+                self._cols[col.name] = new_arr
+            elif self._is_dictionary_column(col):
+                sorted_codes = np.asarray(arr.codes[sorted_pos], dtype=np.int32)
+                arr.codes[:n] = sorted_codes
+            else:
+                arr[:n] = arr[sorted_pos]
+        self._valid_rows[:n] = True
+        self._valid_rows[n:] = False
+        self._n_rows = n
+        self._last_pos = n
+        self._mark_all_indexes_stale()
+
+    def _sorted_copy_from_positions(self, sorted_pos: np.ndarray, n: int) -> CTable:
+        # Build a new in-memory table with the sorted rows
+        result = self._empty_copy()
+        for col in self._schema.columns:
+            col_name = col.name
+            arr = self._cols[col_name]
+            if self._is_list_column(col):
+                result._cols[col_name].extend((arr[int(pos)] for pos in sorted_pos), validate=False)
+                result._cols[col_name].flush()
+            elif self._is_dictionary_column(col):
+                # Copy dictionary values, then sorted codes.
+                for v in arr.dictionary:
+                    result._cols[col_name].encode(v)
+                sorted_codes = np.asarray(arr.codes[sorted_pos], dtype=np.int32)
+                result._cols[col_name].codes[:n] = sorted_codes
+            else:
+                result._cols[col_name][:n] = arr[sorted_pos]
+        result._valid_rows[:n] = True
+        result._valid_rows[n:] = False
+        result._n_rows = n
+        result._last_pos = n
+        return result
 
     def copy(
         self,
@@ -5274,6 +5569,13 @@ class CTable(Generic[RowT]):
                 src = (arr[int(pos)] for pos in live_pos) if compact else (arr[i] for i in range(n))
                 result._cols[col_name].extend(src, validate=False)
                 result._cols[col_name].flush()
+            elif self._is_dictionary_column(col):
+                # Copy dictionary values, then copy (live) codes.
+                for v in arr.dictionary:
+                    result._cols[col_name].encode(v)
+                pos_slice = live_pos if compact else np.arange(n, dtype=np.int64)
+                raw_codes = np.asarray(arr.codes[pos_slice], dtype=np.int32)
+                result._cols[col_name].codes[:n] = raw_codes
             else:
                 result._cols[col_name][:n] = arr[live_pos] if compact else arr[:n]
 
@@ -5306,6 +5608,20 @@ class CTable(Generic[RowT]):
             col_storage = self._resolve_column_storage(col, default_chunks, default_blocks)
             if self._is_list_column(col):
                 new_cols[col.name] = mem_storage.create_list_column(
+                    col.name,
+                    spec=col.spec,
+                    cparams=col_storage.get("cparams"),
+                    dparams=col_storage.get("dparams"),
+                )
+            elif self._is_varlen_scalar_column(col):
+                new_cols[col.name] = mem_storage.create_varlen_scalar_column(
+                    col.name,
+                    spec=col.spec,
+                    cparams=col_storage.get("cparams"),
+                    dparams=col_storage.get("dparams"),
+                )
+            elif self._is_dictionary_column(col):
+                new_cols[col.name] = mem_storage.create_dictionary_column(
                     col.name,
                     spec=col.spec,
                     cparams=col_storage.get("cparams"),
@@ -5907,6 +6223,10 @@ class CTable(Generic[RowT]):
                 f"Cannot create an index on variable-length scalar column {col_name!r}: "
                 "indexing for vlstring/vlbytes/struct/object columns is not supported yet."
             )
+        # Dictionary columns: index the underlying int32 codes array.
+        is_dictionary = isinstance(self._schema.columns_by_name[col_name].spec, DictionarySpec)
+        if is_dictionary:
+            col_arr = col_arr.codes  # index the int32 codes NDArray
         is_persistent = self._storage.index_anchor_path(col_name) is not None
 
         if is_persistent:
@@ -6290,6 +6610,9 @@ class CTable(Generic[RowT]):
     @staticmethod
     def _dtype_info_label(dtype: np.dtype | None, spec: SchemaSpec | None = None) -> str:
         """Return a compact dtype label for info reports."""
+        if isinstance(spec, DictionarySpec):
+            ordered_tag = ", ordered" if spec.ordered else ""
+            return f"dictionary[str{ordered_tag}]"
         if isinstance(spec, VLStringSpec):
             return "vlstring"
         if isinstance(spec, VLBytesSpec):
@@ -6382,6 +6705,8 @@ class CTable(Generic[RowT]):
             col_array = self._cols[name]
             if self._is_list_column(col) or self._is_varlen_scalar_column(col):
                 col_array.append(row[name])
+            elif self._is_dictionary_column(col):
+                col_array[pos] = row[name]  # DictionaryColumn encodes on __setitem__
             else:
                 col_array[pos] = row[name]
 
@@ -6508,12 +6833,15 @@ class CTable(Generic[RowT]):
         scalar_processed_cols: dict[str, blosc2.NDArray] = {}
         list_processed_cols: dict[str, list] = {}
         varlen_scalar_processed_cols: dict[str, list] = {}
+        dict_processed_cols: dict[str, list] = {}
         for name in current_col_names:
             col_meta = self._schema.columns_by_name[name]
             if self._is_list_column(col_meta):
                 list_processed_cols[name] = list(raw_columns[name])
             elif self._is_varlen_scalar_column(col_meta):
                 varlen_scalar_processed_cols[name] = list(raw_columns[name])
+            elif self._is_dictionary_column(col_meta):
+                dict_processed_cols[name] = list(raw_columns[name])
             else:
                 target_dtype = self._cols[name].dtype
                 if isinstance(col_meta.spec, timestamp):
@@ -6554,6 +6882,9 @@ class CTable(Generic[RowT]):
                 self._cols[name].extend(list_processed_cols[name], validate=do_validate)
             elif self._is_varlen_scalar_column(col_meta):
                 self._cols[name].extend(varlen_scalar_processed_cols[name])
+            elif self._is_dictionary_column(col_meta):
+                # DictionaryColumn.__setitem__ with a slice encodes all values.
+                self._cols[name][start_pos:end_pos] = dict_processed_cols[name]
             else:
                 self._cols[name][start_pos:end_pos] = scalar_processed_cols[name][:]
 
@@ -6570,7 +6901,11 @@ class CTable(Generic[RowT]):
         operands = {}
         for name, arr in self._cols.items():
             col = self._schema.columns_by_name.get(name)
-            if col is not None and not (self._is_list_column(col) or self._is_varlen_scalar_column(col)):
+            if col is not None and not (
+                self._is_list_column(col)
+                or self._is_varlen_scalar_column(col)
+                or self._is_dictionary_column(col)
+            ):
                 operands[name] = arr
         operands.update({name: cc["lazy"] for name, cc in self._computed_cols.items()})
         return operands

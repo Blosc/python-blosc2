@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 import blosc2
-from blosc2.schema_compiler import schema_to_dict
+from blosc2.schema_compiler import _validate_column_name, schema_to_dict
 
 DEFAULT_BATCH_SIZE = 2048
 
@@ -244,6 +244,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the selected operation under cProfile and print cumulative timing stats.",
     )
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--decode-dictionaries",
+        action="store_true",
+        help=(
+            "Decode Arrow dictionary-encoded columns to plain vlstring instead of preserving "
+            "the dictionary encoding.  By default, supported dictionary columns "
+            "(string values with integer indices) are imported as Blosc2 dictionary columns."
+        ),
+    )
     return parser
 
 
@@ -272,11 +281,39 @@ def _release_arrow_temporaries(pa) -> None:
         pa.default_memory_pool().release_unused()
 
 
+def ctable_column_name_map(schema) -> dict[str, str]:
+    """Return a mapping from Arrow field names to CTable-safe column names.
+
+    Remaps invalid names (empty strings, names starting with '_', names
+    containing '/') to safe substitutes like ``column_0``.
+    """
+    used: set[str] = set()
+    result: dict[str, str] = {}
+    for i, field in enumerate(schema):
+        original = field.name
+        try:
+            _validate_column_name(original)
+            candidate = original
+        except ValueError:
+            candidate = f"column_{i}"
+        if candidate in used:
+            base = candidate
+            suffix = 1
+            while f"{base}_{suffix}" in used:
+                suffix += 1
+            candidate = f"{base}_{suffix}"
+        used.add(candidate)
+        result[original] = candidate
+    return result
+
+
 def classify_columns(  # noqa: C901
     pa,
     schema,
     fixed_string_lengths: dict[str, int] | None = None,
     fixed_bytes_lengths: dict[str, int] | None = None,
+    *,
+    decode_dictionaries: bool = False,
 ):
     """Classify Parquet schema columns into importable categories."""
     fixed_cols: dict[str, object] = {}
@@ -298,6 +335,30 @@ def classify_columns(  # noqa: C901
                 conversions[field.name] = {"conversion": "skipped", "reason": f"nested list: {t}"}
             else:
                 fixed_cols[field.name] = field
+            continue
+        if pa.types.is_dictionary(t):
+            vt = t.value_type
+            if vt in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+                if decode_dictionaries:
+                    # Decode to plain vlstring.
+                    fixed_cols[field.name] = pa.field(
+                        field.name, pa.string(), nullable=field.nullable, metadata=field.metadata
+                    )
+                    conversions[field.name] = {
+                        "conversion": "dictionary_decoded_to_vlstring",
+                        "ordered": bool(t.ordered),
+                    }
+                else:
+                    fixed_cols[field.name] = field
+                    conversions[field.name] = {
+                        "conversion": "dictionary_preserved",
+                        "ordered": bool(t.ordered),
+                    }
+            else:
+                conversions[field.name] = {
+                    "conversion": "skipped",
+                    "reason": f"unsupported dictionary value type: {vt}",
+                }
             continue
         if pa.types.is_boolean(t):
             fixed_cols[field.name] = field
@@ -352,21 +413,41 @@ def build_import_schema(
     fixed_cols: dict,
     struct_wrap_cols: dict,
     timestamp_units: dict[str, str] | None = None,
+    column_name_map: dict[str, str] | None = None,
 ):
     """Build the Arrow schema passed to CTable.from_arrow()."""
     timestamp_units = timestamp_units or {}
+    column_name_map = column_name_map or {}
     fields = []
     for field in original_schema:
+        ctable_name = column_name_map.get(field.name, field.name)
         if field.name in struct_wrap_cols:
-            fields.append(pa.field(field.name, struct_wrap_cols[field.name], nullable=True))
+            fields.append(pa.field(ctable_name, struct_wrap_cols[field.name], nullable=True))
         elif field.name in fixed_cols:
             unit = timestamp_units.get(field.name)
             if unit is not None:
                 fields.append(
-                    pa.field(field.name, pa.timestamp(unit, tz=field.type.tz), nullable=field.nullable)
+                    pa.field(ctable_name, pa.timestamp(unit, tz=field.type.tz), nullable=field.nullable)
                 )
             else:
-                fields.append(field)
+                # Use the field from fixed_cols in case it was remapped (e.g. dict→string)
+                fc = fixed_cols[field.name]
+                if hasattr(fc, "type") and fc.type != field.type:
+                    # fc has the remapped type; use ctable_name for the field name
+                    fields.append(
+                        pa.field(
+                            ctable_name,
+                            fc.type,
+                            nullable=fc.nullable,
+                            metadata=fc.metadata if fc.metadata else None,
+                        )
+                    )
+                elif ctable_name != field.name:
+                    fields.append(
+                        pa.field(ctable_name, field.type, nullable=field.nullable, metadata=field.metadata)
+                    )
+                else:
+                    fields.append(field)
     return pa.schema(fields)
 
 
@@ -614,11 +695,14 @@ def scan_string_and_bytes_lengths(pa, pf, args, schema) -> tuple[dict[str, int],
 
 
 def transform_batch(
-    pa, batch, selected_cols: list[str], struct_wrap_cols: dict, timestamp_units: dict[str, str]
+    pa,
+    batch,
+    selected_cols: list[str],
+    struct_wrap_cols: dict,
+    timestamp_units: dict[str, str],
+    import_schema=None,
 ):
     """Apply import-time Arrow conversions; pass everything else through."""
-    if not struct_wrap_cols and not timestamp_units:
-        return batch
     arrays = list(batch.columns)
     for name, unit in timestamp_units.items():
         idx = batch.schema.get_field_index(name)
@@ -636,18 +720,34 @@ def transform_batch(
             continue
         arr = batch.column(idx)
         arrays[idx] = pa.array([[v] if v is not None else None for v in arr.to_pylist()], type=target_type)
+    if import_schema is not None:
+        # Cast / rename arrays to match import_schema (e.g. dict→string, renamed columns).
+        for i, field in enumerate(import_schema):
+            if not arrays[i].type.equals(field.type):
+                arrays[i] = arrays[i].cast(field.type, safe=True)
+        return pa.record_batch(arrays, schema=import_schema)
+    if not struct_wrap_cols and not timestamp_units:
+        return batch
     return pa.record_batch(arrays, names=selected_cols)
 
 
-def store_original_arrow_metadata(ct, original_schema, imported_schema, conversions: dict) -> None:
+def store_original_arrow_metadata(
+    ct, original_schema, imported_schema, conversions: dict, column_name_map: dict | None = None
+) -> None:
+    column_name_map = column_name_map or {}
     fields_meta = {}
     for field in original_schema:
         entry = conversions.get(field.name)
         if entry is None:
             continue
         entry = dict(entry)
+        ctable_name = column_name_map.get(field.name, field.name)
+        if ctable_name != field.name:
+            entry["ctable_name"] = ctable_name
         entry["original_arrow_type"] = str(field.type)
-        if field.name in imported_schema.names:
+        if ctable_name in imported_schema.names:
+            entry["ctable_arrow_type"] = str(imported_schema.field(ctable_name).type)
+        elif field.name in imported_schema.names:
             entry["ctable_arrow_type"] = str(imported_schema.field(field.name).type)
         fields_meta[field.name] = entry
     ct._schema.metadata = {
@@ -692,6 +792,10 @@ def print_import_plan(
     fixed_bytes_cols = [
         n for n, e in conversions.items() if e.get("conversion") in {"fixed_bytes", "fixed_bytes_nullable"}
     ]
+    dict_cols = [n for n, e in conversions.items() if e.get("conversion") == "dictionary_preserved"]
+    dict_decoded_cols = [
+        n for n, e in conversions.items() if e.get("conversion") == "dictionary_decoded_to_vlstring"
+    ]
     wrapped_structs = list(struct_wrap_cols)
     skipped = {n: e for n, e in conversions.items() if e.get("conversion") == "skipped"}
     print(f"Input:                 {input_path} ({input_path.stat().st_size / 1e6:.1f} MB)")
@@ -702,11 +806,17 @@ def print_import_plan(
         print(f"Rows to import:        {min(args.max_rows, pf.metadata.num_rows):,}")
     print(f"Parquet columns:       {len(parquet_schema)}")
     print(f"Imported columns:      {len(fixed_cols) + len(struct_wrap_cols)}")
-    print(f"  Fixed-width:         {len(fixed_cols) - len(vlstring_cols) - len(vlbytes_cols)}")
+    n_fixed_non_string = (
+        len(fixed_cols) - len(vlstring_cols) - len(vlbytes_cols) - len(dict_cols) - len(dict_decoded_cols)
+    )
+    print(f"  Fixed-width:         {n_fixed_non_string}")
     print(f"  Fixed strings:       {len(fixed_string_cols)}")
     print(f"  Fixed bytes:         {len(fixed_bytes_cols)}")
     print(f"  vlstring:            {len(vlstring_cols)}")
     print(f"  vlbytes:             {len(vlbytes_cols)}")
+    print(f"  Dictionary:          {len(dict_cols)}")
+    if dict_decoded_cols:
+        print(f"  Dict→vlstring:       {len(dict_decoded_cols)}")
     print(f"  Struct→list:         {len(wrapped_structs)}")
     print(f"  Nullable scalars:    {len(nullable_scalars)}")
     print(f"  Skipped unsupported: {len(skipped)}")
@@ -734,7 +844,7 @@ def print_import_plan(
     print()
 
 
-def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_units):
+def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_units, import_schema=None):
     rows_done = 0
     t0 = time.perf_counter()
     total = pf.metadata.num_rows if args.max_rows is None else min(args.max_rows, pf.metadata.num_rows)
@@ -749,7 +859,9 @@ def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_un
         report_batch_mem = args.mem_report and batch_n % args.mem_every == 0
         if report_batch_mem:
             memory_report(f"batch {batch_n} after parquet read", pa)
-        batch = transform_batch(pa, raw_batch, selected_cols, struct_wrap_cols, timestamp_units)
+        batch = transform_batch(
+            pa, raw_batch, selected_cols, struct_wrap_cols, timestamp_units, import_schema
+        )
         if report_batch_mem:
             memory_report(f"batch {batch_n} after transform", pa)
         rows_done += len(batch)
@@ -806,13 +918,23 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
     maybe_memory_report(args, "after timestamp unit scan", pa)
 
     fixed_cols, struct_wrap_cols, conversions, nullable_scalars = classify_columns(
-        pa, parquet_schema, fixed_string_lengths, fixed_bytes_lengths
+        pa,
+        parquet_schema,
+        fixed_string_lengths,
+        fixed_bytes_lengths,
+        decode_dictionaries=getattr(args, "decode_dictionaries", False),
     )
     maybe_memory_report(args, "after column classification", pa)
 
     selected_cols = [f.name for f in parquet_schema if f.name in fixed_cols or f.name in struct_wrap_cols]
-    import_schema = build_import_schema(pa, parquet_schema, fixed_cols, struct_wrap_cols, timestamp_units)
-    fixed_scalar_lengths = {**fixed_string_lengths, **fixed_bytes_lengths} or None
+    column_name_map = ctable_column_name_map(parquet_schema)
+    import_schema = build_import_schema(
+        pa, parquet_schema, fixed_cols, struct_wrap_cols, timestamp_units, column_name_map
+    )
+    fixed_scalar_lengths = {
+        column_name_map.get(name, name): length
+        for name, length in {**fixed_string_lengths, **fixed_bytes_lengths}.items()
+    } or None
     float_trunc_column_cparams = build_float_trunc_column_cparams(pa, import_schema, args)
     maybe_memory_report(args, "after import schema build", pa)
 
@@ -833,7 +955,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
 
     ct = blosc2.CTable.from_arrow(
         import_schema,
-        progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_units),
+        progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_units, import_schema),
         urlpath=str(output_path),
         mode="w",
         cparams=blosc2.CParams(codec=blosc2.Codec[args.codec], clevel=args.clevel, use_dict=args.use_dict),
@@ -847,7 +969,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         column_cparams=float_trunc_column_cparams or None,
     )
     maybe_memory_report(args, "after CTable import", pa)
-    store_original_arrow_metadata(ct, parquet_schema, import_schema, conversions)
+    store_original_arrow_metadata(ct, parquet_schema, import_schema, conversions, column_name_map)
     maybe_memory_report(args, "after metadata save", pa)
     elapsed = time.perf_counter() - t0
     rows = len(ct)
@@ -920,6 +1042,22 @@ def export_ctable_to_parquet(input_path: Path, output_path: Path, *, batch_size:
                     arr = unwrap_singleton_list(pa, arr, field.type)
                 elif conversion in {"vlstring", "vlstring_nullable", "vlbytes", "vlbytes_nullable"}:
                     if str(arr.type) != str(field.type):
+                        arr = arr.cast(field.type)
+                elif conversion in {"dictionary_preserved"}:
+                    # CTable emits dictionary<int32, string>; restore original type if needed.
+                    if str(arr.type) != str(field.type):
+                        arr = arr.cast(field.type, safe=True)
+                elif conversion in {"dictionary_decoded_to_vlstring"}:
+                    # Was decoded to vlstring on import; restore as dictionary type on export.
+                    if pa.types.is_dictionary(field.type):
+                        encoded = pa.DictionaryArray.from_arrays(
+                            *pa.array(arr.to_pylist())
+                            .dictionary_encode()
+                            .unify_dictionaries([pa.array(arr.to_pylist()).dictionary_encode()]),
+                            ordered=field.type.ordered,
+                        )
+                        arr = encoded.cast(field.type)
+                    elif str(arr.type) != str(field.type):
                         arr = arr.cast(field.type)
                 elif str(arr.type) != str(field.type):
                     arr = pa.array(arr.to_pylist(), type=field.type)

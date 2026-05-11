@@ -20,7 +20,7 @@ import blosc2
 from blosc2.batch_array import BatchArray
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.objectarray import ObjectArray
-from blosc2.schema import ListSpec, SchemaSpec, StructSpec
+from blosc2.schema import DictionarySpec, ListSpec, SchemaSpec, StructSpec, timestamp
 from blosc2.schema import list as list_spec_builder
 
 _SUPPORTED_SERIALIZERS = {"msgpack", "arrow"}
@@ -132,6 +132,14 @@ def _coerce_scalar_item(spec: SchemaSpec, value: Any) -> Any:  # noqa: C901
 
     if isinstance(spec, StructSpec):
         return _coerce_struct_item(spec, value)
+    if isinstance(spec, ListSpec):
+        return coerce_list_cell(spec, value)
+    if isinstance(spec, DictionarySpec):
+        if value is None:
+            raise ValueError("ListArray does not support nullable items inside a list in V1")
+        if not isinstance(value, str):
+            value = str(value)
+        return value
 
     if getattr(spec, "python_type", None) is str:
         if not isinstance(value, str):
@@ -146,7 +154,12 @@ def _coerce_scalar_item(spec: SchemaSpec, value: Any) -> Any:  # noqa: C901
         dtype = getattr(spec, "dtype", None)
         if dtype is None:
             raise TypeError(f"Unsupported list item spec {type(spec).__name__!r}")
-        value = np.array(value, dtype=dtype).item()
+        if isinstance(spec, timestamp) and (
+            isinstance(value, (np.datetime64, str)) or hasattr(value, "isoformat")
+        ):
+            value = np.datetime64(value).astype(f"datetime64[{spec.unit}]").astype(np.int64).item()
+        else:
+            value = np.array(value, dtype=dtype).item()
 
     ge = getattr(spec, "ge", None)
     if ge is not None and value < ge:

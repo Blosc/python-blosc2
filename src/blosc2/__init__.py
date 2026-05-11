@@ -736,10 +736,12 @@ from .ndarray import (
     where,
 )
 from .schema import (
+    DictionarySpec,
     bool,
     bytes,
     complex64,
     complex128,
+    dictionary,
     field,
     float32,
     float64,
@@ -785,6 +787,8 @@ __all__ = [  # noqa : RUF022
     "bytes",
     "complex64",
     "complex128",
+    "dictionary",
+    "DictionarySpec",
     "field",
     "float32",
     "float64",

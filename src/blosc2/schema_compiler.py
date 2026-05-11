@@ -22,6 +22,7 @@ import numpy as np
 
 from blosc2.schema import (
     BLOSC2_FIELD_METADATA_KEY,
+    DictionarySpec,
     ListSpec,
     ObjectSpec,
     SchemaSpec,
@@ -76,6 +77,8 @@ _KIND_TO_SPEC: dict[str, type[SchemaSpec]] = {
     "vlbytes": VLBytesSpec,
     "object": ObjectSpec,
     "timestamp": timestamp,
+    # dictionary
+    "dictionary": DictionarySpec,
 }
 
 # ---------------------------------------------------------------------------
@@ -102,6 +105,8 @@ _DTYPE_DISPLAY_WIDTH: dict[str, int] = {
 
 def compute_display_width(spec: SchemaSpec) -> int:
     """Return a reasonable terminal display width for *spec*'s column."""
+    if isinstance(spec, DictionarySpec):
+        return 32
     if isinstance(spec, (VLStringSpec, VLBytesSpec, ObjectSpec)):
         return 40
     if isinstance(spec, (ListSpec, StructSpec)):
@@ -211,7 +216,8 @@ def validate_annotation_matches_spec(name: str, annotation: Any, spec: SchemaSpe
         origin = typing.get_origin(annotation)
         if origin not in (list, list):
             raise TypeError(
-                f"Column {name!r}: annotation {annotation!r} is incompatible with list spec; expected list[T]."
+                f"Column {name!r}: annotation {annotation!r} is incompatible with list spec; "
+                "expected list[T]."
             )
         args = typing.get_args(annotation)
         if len(args) != 1:
@@ -222,6 +228,14 @@ def validate_annotation_matches_spec(name: str, annotation: Any, spec: SchemaSpe
             raise TypeError(
                 f"Column {name!r}: list item annotation {item_annotation!r} is incompatible with "
                 f"item spec {type(spec.item_spec).__name__!r} (expected {expected.__name__!r})."
+            )
+        return
+
+    if isinstance(spec, DictionarySpec):
+        if annotation is not str:
+            raise TypeError(
+                f"Column {name!r}: annotation {annotation!r} is incompatible with "
+                f"DictionarySpec (expected str)."
             )
         return
 
@@ -404,6 +418,10 @@ def spec_from_metadata_dict(data: dict[str, Any]) -> SchemaSpec:
         return ListSpec(item_spec, **data)
     if kind == "struct":
         return StructSpec.from_metadata_dict({"fields": data.pop("fields"), **data})
+    if kind == "dictionary":
+        index_type = spec_from_metadata_dict(data.pop("index_type"))
+        value_type = spec_from_metadata_dict(data.pop("value_type"))
+        return DictionarySpec(index_type=index_type, value_type=value_type, **data)
     spec_cls = _KIND_TO_SPEC.get(kind)
     if spec_cls is None:
         raise ValueError(f"Unknown column kind {kind!r}")

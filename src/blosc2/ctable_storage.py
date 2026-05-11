@@ -28,6 +28,7 @@ import numpy as np
 
 import blosc2
 from blosc2.batch_array import BatchArray
+from blosc2.dictionary_column import DictionaryColumn
 from blosc2.list_array import ListArray
 from blosc2.scalar_array import (
     _make_persistent_backend,
@@ -92,6 +93,19 @@ class TableStorage:
         raise NotImplementedError
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
+        raise NotImplementedError
+
+    def create_dictionary_column(
+        self,
+        name: str,
+        *,
+        spec,
+        cparams: dict[str, Any] | None = None,
+        dparams: dict[str, Any] | None = None,
+    ) -> DictionaryColumn:
+        raise NotImplementedError
+
+    def open_dictionary_column(self, name: str, spec) -> DictionaryColumn:
         raise NotImplementedError
 
     def create_valid_rows(
@@ -206,6 +220,17 @@ class InMemoryTableStorage(TableStorage):
     def open_varlen_scalar_column(self, name, spec):
         raise RuntimeError("In-memory tables have no on-disk representation to open.")
 
+    def create_dictionary_column(self, name, *, spec, cparams=None, dparams=None):
+        from blosc2.schema import VLStringSpec
+
+        chunks, blocks = (4096,), (256,)
+        codes = blosc2.zeros((4096,), dtype=np.int32, chunks=chunks, blocks=blocks)
+        dict_store = _ScalarVarLenArray(VLStringSpec(nullable=False))
+        return DictionaryColumn(spec, codes, dict_store)
+
+    def open_dictionary_column(self, name, spec):
+        raise RuntimeError("In-memory tables have no on-disk representation to open.")
+
     def create_valid_rows(self, *, shape, chunks, blocks):
         return blosc2.zeros(shape, dtype=np.bool_, chunks=chunks, blocks=blocks)
 
@@ -310,6 +335,11 @@ class FileTableStorage(TableStorage):
         # For .b2d, working_dir == self._root, so behaviour is unchanged.
         return os.path.join(self._open_store().working_dir, rel_key + ".b2b")
 
+    def _dict_col_path(self, name: str) -> str:
+        """Path for the dictionary values store of a dictionary column."""
+        rel_key = self._col_key(name).lstrip("/")
+        return os.path.join(self._open_store().working_dir, rel_key + "_dict.b2b")
+
     def _col_key(self, name: str) -> str:
         return f"/{_COLS_DIR}/{name}"
 
@@ -366,6 +396,7 @@ class FileTableStorage(TableStorage):
             kwargs["cparams"] = cparams
         if dparams is not None:
             kwargs["dparams"] = dparams
+        os.makedirs(os.path.dirname(self._list_col_path(name)), exist_ok=True)
         return ListArray(spec=spec, **kwargs)
 
     def open_list_column(self, name: str) -> ListArray:
@@ -400,6 +431,47 @@ class FileTableStorage(TableStorage):
             backend = _open_persistent_backend(path, self._mode, spec=spec)
         _validate_role_metadata(backend, spec)
         return _ScalarVarLenArray(spec, backend)
+
+    def create_dictionary_column(self, name, *, spec, cparams=None, dparams=None) -> DictionaryColumn:
+        from blosc2.schema import VLStringSpec
+
+        # Codes: stored as a regular NDArray under _cols/name
+        codes = self.create_column(
+            name,
+            dtype=np.int32,
+            shape=(4096,),
+            chunks=(4096,),
+            blocks=(256,),
+            cparams=cparams,
+            dparams=dparams,
+        )
+        # Dictionary values: stored as a varlen scalar (vlstring) at name_dict.b2b
+        dict_spec = VLStringSpec(nullable=False)
+        dict_path = self._dict_col_path(name)
+        dict_backend = _make_persistent_backend(dict_spec, dict_path, "w")
+        dict_store = _ScalarVarLenArray(dict_spec, dict_backend)
+        return DictionaryColumn(spec, codes, dict_store)
+
+    def open_dictionary_column(self, name: str, spec) -> DictionaryColumn:
+        from blosc2.schema import VLStringSpec
+
+        codes = self.open_column(name)
+        dict_spec = VLStringSpec(nullable=False)
+        store = self._open_store()
+        dict_path = self._dict_col_path(name)
+        if store.is_zip_store and self._mode == "r":
+            rel = f"{_COLS_DIR}/{name}_dict.b2b"
+            if rel not in store.offsets:
+                raise KeyError(f"Dictionary column dict store {name!r} not found in {self._root!r}")
+            dict_backend = BatchArray(
+                _from_schunk=blosc2.blosc2_ext.open(
+                    store.b2z_path, mode="r", offset=store.offsets[rel]["offset"]
+                )
+            )
+        else:
+            dict_backend = _open_persistent_backend(dict_path, self._mode, spec=dict_spec)
+        dict_store = _ScalarVarLenArray(dict_spec, dict_backend)
+        return DictionaryColumn(spec, codes, dict_store)
 
     def create_valid_rows(self, *, shape, chunks, blocks):
         valid_rows = blosc2.zeros(
@@ -807,6 +879,59 @@ class TreeStoreTableStorage(TableStorage):
             backend = _open_persistent_backend(self._list_col_path(name), self._mode, spec=spec)
         _validate_role_metadata(backend, spec)
         return _ScalarVarLenArray(spec, backend)
+
+    def _dict_col_path(self, name: str) -> str:
+        """Path for the dictionary values store of a dictionary column."""
+        return self._dest_path(f"/_cols/{name}", "_dict.b2b")
+
+    def create_dictionary_column(
+        self,
+        name: str,
+        *,
+        spec,
+        cparams=None,
+        dparams=None,
+    ) -> DictionaryColumn:
+        from blosc2.schema import VLStringSpec
+
+        codes = self.create_column(
+            name,
+            dtype=np.int32,
+            shape=(4096,),
+            chunks=(4096,),
+            blocks=(256,),
+            cparams=cparams,
+            dparams=dparams,
+        )
+        dict_spec = VLStringSpec(nullable=False)
+        dict_path = self._dict_col_path(name)
+        os.makedirs(os.path.dirname(dict_path), exist_ok=True)
+        dict_backend = _make_persistent_backend(dict_spec, dict_path, "w")
+        dict_store = _ScalarVarLenArray(dict_spec, dict_backend)
+        return DictionaryColumn(spec, codes, dict_store)
+
+    def open_dictionary_column(self, name: str, spec) -> DictionaryColumn:
+        from blosc2.schema import VLStringSpec
+
+        codes = self.open_column(name)
+        dict_spec = VLStringSpec(nullable=False)
+        if self._store.is_zip_store and self._mode == "r":
+            rel = self._table_key(f"/_cols/{name}").lstrip("/") + "_dict.b2b"
+            if rel not in self._store.offsets:
+                raise KeyError(
+                    f"Dictionary column dict store {name!r} not found in {self._store.localpath!r}"
+                )
+            dict_backend = BatchArray(
+                _from_schunk=blosc2.blosc2_ext.open(
+                    self._store.b2z_path,
+                    mode="r",
+                    offset=self._store.offsets[rel]["offset"],
+                )
+            )
+        else:
+            dict_backend = _open_persistent_backend(self._dict_col_path(name), self._mode, spec=dict_spec)
+        dict_store = _ScalarVarLenArray(dict_spec, dict_backend)
+        return DictionaryColumn(spec, codes, dict_store)
 
     def create_valid_rows(
         self,
