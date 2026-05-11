@@ -1764,6 +1764,64 @@ _BATCH_SIZE_DEFAULT = 2048
 # We use a plain dict so that nothing extra needs to be imported.
 
 
+class _StructPathColumn:
+    """Virtual read-only column representing a struct prefix path.
+
+    Values are reconstructed per row from descendant dotted leaf columns.
+    """
+
+    def __init__(self, table: CTable, prefix: str, leaves: list[str]):
+        self._table = table
+        self._prefix = prefix
+        self._leaves = list(leaves)
+
+    def _leaf_is_null_at_logical(self, leaf: str, idx: int) -> bool:
+        col = self._table[leaf]
+        v = col[idx]
+        nv = col.null_value
+        if nv is None:
+            return v is None
+        try:
+            return bool(col._null_mask_for(np.asarray([v]))[0])
+        except Exception:
+            return v is None
+
+    def _row_value_at_logical(self, idx: int):
+        # If every descendant leaf is null at this row, represent the struct as None.
+        if self._leaves and all(self._leaf_is_null_at_logical(leaf, idx) for leaf in self._leaves):
+            return None
+        row = self._table[idx]
+        value = row
+        for part in self._prefix.split("."):
+            if isinstance(value, Mapping):
+                value = value.get(part)
+            else:
+                value = getattr(value, part)
+        return value
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._row_value_at_logical(key)
+        if isinstance(key, slice):
+            start, stop, step = key.indices(self._table.nrows)
+            return [self._row_value_at_logical(i) for i in range(start, stop, step)]
+        if isinstance(key, (list, np.ndarray)):
+            if len(key) == 0:
+                return []
+            if isinstance(key, np.ndarray) and key.dtype == np.bool_:
+                idxs = np.where(key)[0]
+            elif isinstance(key[0], (bool, np.bool_)):
+                idxs = [i for i, v in enumerate(key) if v]
+            else:
+                idxs = [int(i) for i in key]
+            return [self._row_value_at_logical(i) for i in idxs]
+        raise TypeError(f"Invalid index type: {type(key)}")
+
+    def __iter__(self):
+        for i in range(self._table.nrows):
+            yield self._row_value_at_logical(i)
+
+
 class _NestedColumnNamespace:
     """Attribute proxy for dotted nested column paths.
 
@@ -2318,6 +2376,17 @@ class CTable(Generic[RowT]):
             self._row_namedtuple_type_cache_cols = visible
         return self._row_namedtuple_type_cache
 
+    def _row_namedtuple_type_for_fields(self, fields: tuple[str, ...]):
+        cache = getattr(self, "_row_namedtuple_type_cache_by_fields", None)
+        if cache is None:
+            cache = {}
+            self._row_namedtuple_type_cache_by_fields = cache
+        row_type = cache.get(fields)
+        if row_type is None:
+            row_type = _make_namedtuple_row_type(fields)
+            cache[fields] = row_type
+        return row_type
+
     @staticmethod
     def _normalize_scalar_value(value):
         if isinstance(value, np.generic):
@@ -2343,8 +2412,32 @@ class CTable(Generic[RowT]):
         if not (0 <= index < n_rows):
             raise IndexError(f"row index {index} is out of bounds for table with {n_rows} rows")
         pos = _find_physical_index(self._valid_rows, index)
-        row_type = self._row_namedtuple_type()
-        return row_type(*(self._physical_row_value(name, int(pos)) for name in self.col_names))
+
+        nested_meta = self._schema.metadata.get("nested") if self._schema.metadata else None
+        reconstruct = isinstance(nested_meta, dict) and bool(nested_meta.get("reconstruct_rows", False))
+        if not reconstruct:
+            row_type = self._row_namedtuple_type()
+            return row_type(*(self._physical_row_value(name, int(pos)) for name in self.col_names))
+
+        row_dict: dict[str, Any] = {}
+        for name in self.col_names:
+            value = self._physical_row_value(name, int(pos))
+            if "." not in name:
+                row_dict[name] = value
+                continue
+            parts = name.split(".")
+            node = row_dict
+            for part in parts[:-1]:
+                child = node.get(part)
+                if not isinstance(child, dict):
+                    child = {}
+                    node[part] = child
+                node = child
+            node[parts[-1]] = value
+
+        fields = tuple(row_dict.keys())
+        row_type = self._row_namedtuple_type_for_fields(fields)
+        return row_type(*(row_dict[f] for f in fields))
 
     def iter_sorted(
         self,
@@ -3247,6 +3340,23 @@ class CTable(Generic[RowT]):
             names = list(self.col_names)
             if not include_computed:
                 names = [name for name in names if name not in self._computed_cols]
+
+            # If top-level struct aliases are present in schema metadata (virtual
+            # entries not physically stored), prefer exporting them instead of
+            # their descendant dotted leaves.
+            virtual_structs = [
+                n
+                for n, cc in self._schema.columns_by_name.items()
+                if n not in self.col_names and isinstance(cc.spec, StructSpec)
+            ]
+            for alias in sorted(virtual_structs, key=len, reverse=True):
+                prefix = f"{alias}."
+                children = [n for n in names if n.startswith(prefix)]
+                if not children:
+                    continue
+                first = min(names.index(c) for c in children)
+                names = [n for n in names if not n.startswith(prefix)]
+                names.insert(first, alias)
         else:
             names = []
             for name in columns:
@@ -3254,7 +3364,7 @@ class CTable(Generic[RowT]):
         if len(set(names)) != len(names):
             raise ValueError("columns must be unique")
         for name in names:
-            if name not in self.col_names:
+            if name not in self.col_names and name not in self._schema.columns_by_name:
                 raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
         return names
 
@@ -3334,6 +3444,11 @@ class CTable(Generic[RowT]):
             stop = min(start + batch_size, self._n_rows)
             arrays = []
             for name in names:
+                cc = self._schema.columns_by_name.get(name)
+                if name not in self.col_names and cc is not None and isinstance(cc.spec, StructSpec):
+                    values = self[name][start:stop]
+                    arrays.append(pa.array(values, type=self._pa_type_from_spec(pa, cc.spec)))
+                    continue
                 col = self[name]
                 if col.is_list:
                     spec = self._schema.columns_by_name[name].spec
@@ -3924,8 +4039,59 @@ class CTable(Generic[RowT]):
             nested["root"] = {"logical": "", "physical": empty_root_physical}
         return nested
 
+    @staticmethod
+    def _flatten_arrow_struct_schema(pa, schema):
+        """Flatten top-level struct fields into dotted leaf fields recursively."""
+
+        out_fields = []
+
+        def _walk(field, prefix: str | None = None, parent_nullable: bool = False):
+            name = field.name if prefix is None else f"{prefix}.{field.name}"
+            nullable = bool(parent_nullable or field.nullable)
+            if pa.types.is_struct(field.type):
+                for child in field.type:
+                    _walk(pa.field(child.name, child.type, nullable=child.nullable), name, nullable)
+            else:
+                out_fields.append(pa.field(name, field.type, nullable=nullable))
+
+        for f in schema:
+            _walk(f)
+        return pa.schema(out_fields, metadata=schema.metadata)
+
+    @staticmethod
+    def _flatten_arrow_struct_batch(pa, batch, flat_schema):
+        arrays = []
+
+        def _extract(array, arr_type, parts):
+            if not parts:
+                return array
+            head = parts[0]
+            if pa.types.is_struct(arr_type):
+                return _extract(array.field(head), arr_type[head].type, parts[1:])
+            raise KeyError("Invalid flattened path")
+
+        for field in flat_schema:
+            parts = field.name.split(".")
+            col = batch.column(batch.schema.get_field_index(parts[0]))
+            arr = _extract(col, col.type, parts[1:])
+            arrays.append(arr)
+        return pa.RecordBatch.from_arrays(arrays, schema=flat_schema)
+
     @classmethod
-    def from_arrow(
+    def _flatten_arrow_struct_input(cls, pa, schema, batches):
+        """Return flattened (schema, batches, flattened) for struct-containing Arrow inputs."""
+        if not any(pa.types.is_struct(f.type) for f in schema):
+            return schema, batches, False
+        flat_schema = cls._flatten_arrow_struct_schema(pa, schema)
+
+        def _gen():
+            for b in batches:
+                yield cls._flatten_arrow_struct_batch(pa, b, flat_schema)
+
+        return flat_schema, _gen(), True
+
+    @classmethod
+    def from_arrow(  # noqa: C901
         cls,
         schema,
         batches,
@@ -3983,10 +4149,31 @@ class CTable(Generic[RowT]):
         batches = iter(batches)
         first_batch = None
         table_for_inference = None
+        original_top_level_struct_specs: dict[str, SchemaSpec] = {}
+        for f in schema:
+            if pa.types.is_struct(f.type):
+                original_top_level_struct_specs[f.name] = cls._arrow_type_to_spec(
+                    pa, f.type, nullable=f.nullable, object_fallback=object_fallback
+                )
         if string_max_length is None or isinstance(string_max_length, Mapping):
             first_batch = next(batches, None)
-            if first_batch is not None:
-                table_for_inference = pa.Table.from_batches([first_batch], schema=schema)
+
+        # Flatten top-level Arrow structs into dotted leaf columns so CTable can
+        # persist nested scalar leaves as physical columns.
+        flattened_structs = False
+        if first_batch is not None:
+            import itertools as _it
+
+            schema, flat_batches, flattened_structs = cls._flatten_arrow_struct_input(
+                pa, schema, _it.chain([first_batch], batches)
+            )
+            batches = iter(flat_batches)
+            first_batch = next(batches, None)
+        else:
+            schema, batches, flattened_structs = cls._flatten_arrow_struct_input(pa, schema, batches)
+
+        if first_batch is not None:
+            table_for_inference = pa.Table.from_batches([first_batch], schema=schema)
         columns = cls._compiled_columns_from_arrow(
             pa,
             schema,
@@ -4014,10 +4201,26 @@ class CTable(Generic[RowT]):
         metadata["nested"] = cls._nested_metadata_from_column_names(
             [col.name for col in columns], empty_root_physical=empty_root_physical
         )
+        if flattened_structs:
+            metadata["nested"]["reconstruct_rows"] = True
+        compiled_columns_by_name = {col.name: col for col in columns}
+        for name, spec in original_top_level_struct_specs.items():
+            if name in compiled_columns_by_name:
+                continue
+            compiled_columns_by_name[name] = CompiledColumn(
+                name=name,
+                py_type=spec.python_type,
+                spec=spec,
+                dtype=getattr(spec, "dtype", None),
+                default=MISSING,
+                config=ColumnConfig(cparams=None, dparams=None, chunks=None, blocks=None),
+                display_width=compute_display_width(spec),
+            )
+
         compiled = CompiledSchema(
             row_cls=None,
             columns=columns,
-            columns_by_name={col.name: col for col in columns},
+            columns_by_name=compiled_columns_by_name,
             metadata=metadata,
         )
         if first_batch is not None:
@@ -5319,6 +5522,9 @@ class CTable(Generic[RowT]):
             physical = self._logical_to_physical_name(key)
             if physical in self._cols or physical in self._computed_cols:
                 return Column(self, physical)
+            expanded = self._expand_logical_column_selector(key)
+            if len(expanded) > 1:
+                return _StructPathColumn(self, physical, expanded)
             return self.where(key)
         if isinstance(key, (blosc2.NDArray, blosc2.LazyExpr)) and getattr(key, "dtype", None) == np.bool_:
             return self.where(key)
@@ -5402,6 +5608,16 @@ class CTable(Generic[RowT]):
         """Validate and normalise sort key arguments; return (cols, ascending)."""
         if isinstance(cols, str):
             cols = [cols]
+
+        resolved_cols: list[str] = []
+        for name in cols:
+            expanded = self._expand_logical_column_selector(name)
+            if len(expanded) != 1:
+                raise ValueError(
+                    f"Sort key {name!r} resolves to multiple columns {expanded!r}; please choose a leaf column."
+                )
+            resolved_cols.append(expanded[0])
+        cols = resolved_cols
         if isinstance(ascending, bool):
             ascending = [ascending] * len(cols)
         if len(cols) != len(ascending):
@@ -6101,6 +6317,7 @@ class CTable(Generic[RowT]):
         if col_name is not None and expression is not None:
             raise ValueError("col_name and expression are mutually exclusive")
         if col_name is not None:
+            col_name = self._logical_to_physical_name(col_name)
             if col_name not in catalog:
                 raise KeyError(f"No index found for column {col_name!r}.")
             return col_name, catalog[col_name]

@@ -1,4 +1,5 @@
 import pyarrow as pa
+import pytest
 
 import blosc2
 from blosc2.schema_compiler import schema_from_dict, schema_to_dict
@@ -38,3 +39,48 @@ def test_empty_root_logical_alias_getitem_select_and_index():
 
     ix = t.create_index(col_name="")
     assert ix is not None
+
+    # index management should accept logical alias too
+    t.rebuild_index(col_name="")
+    t.drop_index(col_name="")
+
+
+def test_sort_by_nested_prefix_requires_leaf_column():
+    schema = pa.schema([pa.field("trip.begin.lon", pa.float64()), pa.field("trip.begin.lat", pa.float64())])
+    batch = pa.record_batch([pa.array([2.0, 1.0]), pa.array([20.0, 10.0])], schema=schema)
+    t = blosc2.CTable.from_arrow(schema, [batch])
+
+    with pytest.raises(ValueError):
+        t.sort_by("trip")
+
+    s = t.sort_by("trip.begin.lon")
+    assert s["trip.begin.lon"][0] == 1.0
+
+
+def test_nested_ops_compat_matrix_smoke():
+    n = 20_000
+    lon = pa.array([float(i % 1000) for i in range(n)], type=pa.float64())
+    lat = pa.array([float((i * 2) % 1000) for i in range(n)], type=pa.float64())
+    fare = pa.array([float(i % 50) for i in range(n)], type=pa.float64())
+    schema = pa.schema(
+        [
+            pa.field("trip.begin.lon", pa.float64()),
+            pa.field("trip.begin.lat", pa.float64()),
+            pa.field("payment.fare", pa.float64()),
+        ]
+    )
+    batch = pa.record_batch([lon, lat, fare], schema=schema)
+
+    t = blosc2.CTable.from_arrow(schema, [batch])
+
+    view = t.where("payment.fare > 25")
+    assert 0 < view.nrows < n
+
+    t.create_index(col_name="payment.fare")
+    t.rebuild_index(col_name="payment.fare")
+
+    sorted_t = t.sort_by("trip.begin.lon")
+    assert sorted_t["trip.begin.lon"][0] <= sorted_t["trip.begin.lon"][1]
+
+    proj = t.select(["trip"])
+    assert proj.col_names == ["trip.begin.lon", "trip.begin.lat"]
