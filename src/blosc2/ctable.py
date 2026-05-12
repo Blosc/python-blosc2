@@ -3128,12 +3128,18 @@ class CTable(Generic[RowT]):
         Parameters
         ----------
         cols:
-            Ordered list of column names to keep.
+            Ordered list of column names to keep.  For tables with **nested
+            (dotted) column names**, a struct-prefix name automatically expands
+            to all descendant leaves::
+
+                t.select(["trip.begin"])   # expands to trip.begin.lon, trip.begin.lat
+                t.select(["trip"])          # expands to all trip.* leaves
 
         Raises
         ------
         KeyError
-            If any name in *cols* is not a column of this table.
+            If any name in *cols* is not a column of this table (and does not
+            match any struct prefix).
         ValueError
             If *cols* is empty.
         """
@@ -4136,14 +4142,30 @@ class CTable(Generic[RowT]):
     ) -> CTable:
         """Build a :class:`CTable` from an Arrow schema and iterable of record batches.
 
+        **Nested struct flattening**: top-level Arrow ``struct<…>`` fields are
+        automatically and recursively flattened into dotted leaf columns.  For
+        example, a field ``trip: struct<begin: struct<lon: float64, lat: float64>>``
+        becomes two CTable columns ``trip.begin.lon`` and ``trip.begin.lat``.
+        Each leaf is stored as an independent compressed :class:`~blosc2.NDArray`.
+        Row reads via ``t[i]`` reconstruct the original nested dict shape.  Use
+        ``t["trip.begin.lon"]`` or ``t.trip.begin.lon`` to access a leaf::
+
+            import pyarrow as pa, blosc2
+            trip_type = pa.struct([("begin", pa.struct([("lon", pa.float64())]))])
+            schema = pa.schema([pa.field("trip", trip_type)])
+            t = blosc2.CTable.from_arrow(schema, batches)
+            t.col_names          # ['trip.begin.lon']
+            t["trip.begin.lon"].mean()
+            t.trip.begin.lon.max()
+
         When *string_max_length* is ``None`` (the default), scalar Arrow
         ``string`` / ``large_string`` columns are imported as
         :func:`~blosc2.vlstring` columns and ``binary`` / ``large_binary``
-        columns are imported as :func:`~blosc2.vlbytes` columns.  Arrow
-        ``struct`` columns are imported as :func:`~blosc2.struct` columns backed
-        by batched variable-length storage.  Null values for these variable-
-        length scalar columns are represented as native ``None`` with no
-        sentinel needed.
+        columns are imported as :func:`~blosc2.vlbytes` columns.  Non-struct
+        ``struct`` columns (not containing only scalar leaves) are imported as
+        :func:`~blosc2.struct` columns backed by batched variable-length
+        storage.  Null values for these variable-length scalar columns are
+        represented as native ``None`` with no sentinel needed.
 
         When *string_max_length* is set to a positive integer, scalar string
         and binary columns are imported as fixed-width
@@ -4317,11 +4339,24 @@ class CTable(Generic[RowT]):
 
         This method delegates the actual table construction to
         :meth:`CTable.from_arrow`, so Arrow schema handling, nullable-column support,
-        and Blosc2 write tuning follow the same rules as that method.  Top-level
-        Arrow ``struct<...>`` columns are imported as :func:`~blosc2.struct`
-        columns backed by batched variable-length storage.  Unsupported Parquet
-        types are not silently imported as schema-less :func:`~blosc2.object`
-        columns; they raise so callers can decide how to handle them explicitly.
+        and Blosc2 write tuning follow the same rules as that method.
+
+        **Nested struct flattening**: top-level Parquet ``struct<…>`` fields are
+        automatically and recursively flattened into dotted leaf columns — the same
+        as in :meth:`from_arrow`.  For example, a Parquet file that contains a column
+        ``trip: struct<begin: struct<lon: double, lat: double>>`` produces two CTable
+        columns ``trip.begin.lon`` and ``trip.begin.lat``.  Row reads reconstruct the
+        original nested dict shape; individual leaves are accessed via dotted names or
+        attribute-chain proxies::
+
+            t = blosc2.CTable.from_parquet("trips.parquet")
+            t.col_names               # e.g. ['trip.begin.lon', 'trip.begin.lat', ...]
+            t["trip.begin.lon"].mean()
+            t.trip.begin.lon.max()
+
+        Unsupported Parquet types are not silently imported as schema-less
+        :func:`~blosc2.object` columns; they raise so callers can decide how to
+        handle them explicitly.
 
         Parameters
         ----------
@@ -4855,6 +4890,16 @@ class CTable(Generic[RowT]):
         """Rename a column.
 
         On disk tables the corresponding persisted column leaf is renamed.
+
+        Renaming a flat column to a dotted name (e.g. ``"trip.begin.lon"``)
+        promotes it to a nested leaf column: it will be stored under the
+        hierarchical path ``/_cols/trip/begin/lon`` on disk and can be
+        accessed via ``t["trip.begin.lon"]`` or the attribute-chain proxy
+        ``t.trip.begin.lon``.  This is the primary way to define nested
+        columns when importing from non-Arrow sources::
+
+            t.rename_column("trip_begin_lon", "trip.begin.lon")
+            t["trip.begin.lon"].mean()   # works as a regular Column
 
         Raises
         ------
@@ -5514,7 +5559,10 @@ class CTable(Generic[RowT]):
 
         - ``str``: return a :class:`Column` when it matches a stored or computed
           column name; otherwise evaluate it as a boolean expression via
-          :meth:`where`.
+          :meth:`where`.  Dotted names (e.g. ``"trip.begin.lon"``) select
+          nested leaf columns directly; a struct-prefix name
+          (e.g. ``"trip.begin"``) that matches multiple descendant leaves returns
+          a :class:`_StructPathColumn` view.
         - boolean :class:`blosc2.LazyExpr` or :class:`blosc2.NDArray`: return the
           same filtered view as :meth:`where`, e.g. ``t[t.temperature_f > 70]``.
         - ``int``: return one live row as a namedtuple-like object.
@@ -5542,6 +5590,11 @@ class CTable(Generic[RowT]):
         Project columns::
 
             slim = t[["sensor_id", "temperature_f"]]
+
+        Access a nested leaf column with a dotted name or an attribute chain::
+
+            lons = t["trip.begin.lon"]   # Column for the nested leaf
+            lons = t.trip.begin.lon      # equivalent attribute-chain form
         """
         if isinstance(key, str):
             physical = self._logical_to_physical_name(key)
@@ -5805,7 +5858,12 @@ class CTable(Generic[RowT]):
         cols:
             Column name or list of column names to sort by.  When multiple
             columns are given, the first is the primary key, the second is
-            the tiebreaker, and so on.
+            the tiebreaker, and so on.  For tables with **nested (dotted)
+            column names**, pass the dotted leaf name directly::
+
+                t.sort_by("trip.begin.lon")
+                t.sort_by(["trip.begin.lon", "payment.fare"], ascending=[True, False])
+
         ascending:
             Sort direction.  A single bool applies to all keys; a list must
             have the same length as *cols*.
@@ -6522,7 +6580,14 @@ class CTable(Generic[RowT]):
         tmpdir: str | None = None,
         **kwargs,
     ) -> blosc2.Index:
-        """Build and register an index for a stored column or table expression."""
+        """Build and register an index for a stored column or table expression.
+
+        For tables with **nested (dotted) column names**, pass the dotted leaf
+        name directly::
+
+            t.create_index("trip.begin.lon")
+            t.where("trip.begin.lon > -87.7").nrows   # index is used automatically
+        """
         if self.base is not None:
             raise ValueError("Cannot create an index on a view.")
         if col_name is not None and field is not None:
@@ -7079,6 +7144,19 @@ class CTable(Generic[RowT]):
         Materialized columns whose values are omitted are auto-filled from
         their recorded expression.  Raises ``ValueError`` if the table is
         read-only or a view.
+
+        For tables with **nested (dotted) column names** the row dict may be
+        supplied either as a flat mapping of dotted keys or as a nested dict
+        that mirrors the original struct shape — both are accepted and
+        automatically flattened to the physical dotted leaf names::
+
+            # flat dotted keys
+            t.append({"trip.begin.lon": -87.6, "trip.begin.lat": 41.8,
+                      "payment.fare": 12.5})
+
+            # original nested dict (auto-flattened)
+            t.append({"trip": {"begin": {"lon": -87.6, "lat": 41.8}},
+                      "payment": {"fare": 12.5}})
         """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
@@ -7157,6 +7235,22 @@ class CTable(Generic[RowT]):
 
         Pass ``validate=False`` to skip per-row Pydantic validation on trusted
         bulk imports.  Raises ``ValueError`` if the table is read-only or a view.
+
+        For tables with **nested (dotted) column names** both the dict-of-arrays
+        and list-of-dicts forms accept the original nested dict shape and
+        auto-flatten it to physical dotted leaf names::
+
+            # nested dict of arrays
+            t.extend({
+                "trip": {"begin": {"lon": lons, "lat": lats}},
+                "payment": {"fare": fares},
+            })
+
+            # list of nested dicts
+            t.extend([
+                {"trip": {"begin": {"lon": -87.6, "lat": 41.8}}, "payment": {"fare": 12.5}},
+                {"trip": {"begin": {"lon": -87.5, "lat": 41.7}}, "payment": {"fare": 8.0}},
+            ])
         """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
@@ -7431,6 +7525,12 @@ class CTable(Generic[RowT]):
         access::
 
             view = t.where((t["unit price"] * t["quantity"]) > 100)
+
+        For tables with **nested (dotted) column names**, dotted leaf names and
+        attribute-chain proxies work in both string and expression forms::
+
+            view = t.where("trip.begin.lon > -87.7 and payment.fare > 10")
+            view = t.where(t.trip.begin.lon > -87.7)
 
         Notes
         -----

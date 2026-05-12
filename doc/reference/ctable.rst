@@ -615,12 +615,120 @@ to a typed representation.  They are not used as an implicit fallback during
 Parquet import; unsupported Arrow/Parquet types still raise unless explicitly
 imported through :meth:`CTable.from_arrow` with ``object_fallback=True``.
 
+Nested fields
+-------------
+
+CTable supports first-class **nested struct schemas** by physically flattening
+struct leaves into independent compressed columns.  This keeps analytics fast
+(each leaf is an ordinary :class:`~blosc2.NDArray`), while preserving the
+logical nested row shape on read.
+
+**Automatic flattening from Arrow / Parquet**
+
+When :meth:`CTable.from_arrow` or :meth:`CTable.from_parquet` encounters a
+top-level ``struct<…>`` field, it recursively flattens every scalar leaf into a
+dotted column name and stores each leaf as its own physical column::
+
+    import pyarrow as pa
+    import blosc2
+
+    trip_type = pa.struct([
+        ("begin", pa.struct([("lon", pa.float64()), ("lat", pa.float64())])),
+        ("end",   pa.struct([("lon", pa.float64()), ("lat", pa.float64())])),
+    ])
+    schema = pa.schema([pa.field("trip", trip_type),
+                        pa.field("fare", pa.float64())])
+    batch = pa.record_batch(
+        [pa.array([{"begin": {"lon": -87.6, "lat": 41.8},
+                    "end":   {"lon": -87.7, "lat": 41.9}}],
+                  type=trip_type),
+         pa.array([12.5])],
+        schema=schema,
+    )
+
+    t = blosc2.CTable.from_arrow(schema, [batch])
+    # t.col_names → ['trip.begin.lon', 'trip.begin.lat',
+    #                 'trip.end.lon',   'trip.end.lat', 'fare']
+
+**Column access**
+
+Nested leaves are accessed with their dotted logical name or via chained
+attribute proxies::
+
+    t["trip.begin.lon"].mean()      # Column object (fast path)
+    t.trip.begin.lon.max()          # attribute proxy, same column
+
+**Filtering and expressions**
+
+Dotted names work everywhere a flat column name would::
+
+    t.where("trip.begin.lon > -87.7 and fare > 10")
+    t.where(t.trip.begin.lon > -87.7)
+
+**Select / projection**
+
+A struct prefix expands to all descendant leaves::
+
+    t.select(["trip.begin"])        # → columns trip.begin.lon, trip.begin.lat
+    t.select(["trip"])              # → all four trip.* leaves
+
+**Indexes and aggregates**
+
+Scalar leaf columns support all the same operations as flat columns::
+
+    t.create_index(col_name="trip.begin.lon")
+    t.where("trip.begin.lon > -87.7").nrows   # uses the index
+
+**Row reconstruction**
+
+Single-row access reconstructs the original nested dict shape::
+
+    row = t[0]
+    row.trip       # → {"begin": {"lon": ..., "lat": ...}, "end": {...}}
+    row.fare       # → 12.5
+
+**Inserting nested rows**
+
+:meth:`CTable.append` and :meth:`CTable.extend` accept either the flat dotted
+form or the original nested dict / list-of-dicts shape::
+
+    # flat dotted keys
+    t.append({"trip.begin.lon": -87.6, "trip.begin.lat": 41.8,
+              "trip.end.lon": -87.7,   "trip.end.lat": 41.9, "fare": 12.5})
+
+    # original nested dict (auto-flattened)
+    t.append({"trip": {"begin": {"lon": -87.6, "lat": 41.8},
+                        "end":   {"lon": -87.7, "lat": 41.9}},
+              "fare": 12.5})
+
+    # extend with a list of nested dicts
+    t.extend([
+        {"trip": {"begin": {"lon": -87.6, "lat": 41.8},
+                  "end":   {"lon": -87.7, "lat": 41.9}}, "fare": 12.5},
+        {"trip": {"begin": {"lon": -87.5, "lat": 41.7},
+                  "end":   {"lon": -87.8, "lat": 41.6}}, "fare": 8.0},
+    ])
+
+**Physical storage layout**
+
+Leaf columns are stored under a hierarchical path in the backing container:
+``/_cols/trip/begin/lon``, ``/_cols/trip/begin/lat``, etc.  Intermediate nodes
+are namespaces only; no data is stored at non-leaf levels.
+
+**Arrow / Parquet round-trip**
+
+:meth:`CTable.to_parquet` and :meth:`CTable.to_arrow` reconstruct the original
+nested Arrow schema from the stored metadata, so round-trips are lossless::
+
+    t.to_parquet("out.parquet")    # Arrow schema has top-level "trip" struct
+
 Struct columns
 --------------
 
 Struct columns are declared with :func:`blosc2.struct` and store one dictionary
 (or ``None`` when nullable) per row in batched variable-length storage.  They are
-also used when importing top-level Arrow/Parquet ``struct<...>`` columns::
+also used when importing top-level Arrow/Parquet ``struct<...>`` columns when
+**not** using the nested-leaf flattening path described above::
 
     from dataclasses import dataclass
     import blosc2 as b2
