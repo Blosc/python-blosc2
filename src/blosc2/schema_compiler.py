@@ -273,15 +273,15 @@ def _validate_column_name(name: str) -> None:
 
     * must be a non-empty string
     * must not start with ``_``  (reserved for internal table layout)
-    * must not contain ``/``     (used as path separator in persistent layout)
     * must not be one of the reserved internal names
+
+    Literal ``/`` characters are allowed in logical names; persistent CTable
+    storage percent-encodes path segments before writing under ``_cols``.
     """
     if not name:
         raise ValueError("Column name cannot be empty.")
     if name.startswith("_"):
         raise ValueError(f"Column name cannot start with '_' (reserved for internal use): {name!r}")
-    if "/" in name:
-        raise ValueError(f"Column name cannot contain '/': {name!r}")
     if name in _RESERVED_COLUMN_NAMES:
         raise ValueError(f"Column name {name!r} is reserved for internal CTable use.")
 

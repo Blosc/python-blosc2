@@ -31,7 +31,15 @@ import numpy as np
 
 import blosc2
 from blosc2 import compute_chunks_blocks
-from blosc2.ctable_storage import FileTableStorage, InMemoryTableStorage, TableStorage, TreeStoreTableStorage
+from blosc2.ctable_storage import (
+    FileTableStorage,
+    InMemoryTableStorage,
+    TableStorage,
+    TreeStoreTableStorage,
+    _column_name_to_relpath,
+    join_field_path,
+    split_field_path,
+)
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.list_array import ListArray, coerce_list_cell
 from blosc2.scalar_array import _ScalarVarLenArray
@@ -1790,14 +1798,22 @@ class _StructPathColumn:
         # If every descendant leaf is null at this row, represent the struct as None.
         if self._leaves and all(self._leaf_is_null_at_logical(leaf, idx) for leaf in self._leaves):
             return None
-        row = self._table[idx]
-        value = row
-        for part in self._prefix.split("."):
-            if isinstance(value, Mapping):
-                value = value.get(part)
-            else:
-                value = getattr(value, part)
-        return value
+        prefix_parts = split_field_path(self._prefix)
+        result: dict[str, Any] = {}
+        for leaf in self._leaves:
+            parts = split_field_path(leaf)
+            rel_parts = parts[len(prefix_parts) :]
+            if not rel_parts:
+                continue
+            node = result
+            for part in rel_parts[:-1]:
+                child = node.get(part)
+                if not isinstance(child, dict):
+                    child = {}
+                    node[part] = child
+                node = child
+            node[rel_parts[-1]] = self._table._normalize_scalar_value(self._table[leaf][idx])
+        return result
 
     def __getitem__(self, key):
         if isinstance(key, int):
@@ -1834,12 +1850,13 @@ class _NestedColumnNamespace:
         self._prefix = prefix
 
     def __getattr__(self, name: str):
-        path = f"{self._prefix}.{name}"
+        path = join_field_path((*split_field_path(self._prefix), name))
         if path in self._table._cols or path in self._table._computed_cols:
             return Column(self._table, path)
-        base = f"{path}."
+        path_parts = split_field_path(path)
         for col_name in self._table.col_names:
-            if col_name.startswith(base):
+            parts = split_field_path(col_name)
+            if parts[: len(path_parts)] == path_parts and len(parts) > len(path_parts):
                 return _NestedColumnNamespace(self._table, path)
         raise AttributeError(path)
 
@@ -2191,7 +2208,7 @@ class CTable(Generic[RowT]):
         """
         result = {}
         for k, v in d.items():
-            full_key = f"{prefix}.{k}" if prefix else k
+            full_key = join_field_path((*split_field_path(prefix), k)) if prefix else join_field_path((k,))
             if isinstance(v, dict):
                 result.update(CTable._flatten_nested_dict(v, full_key))
             else:
@@ -2447,10 +2464,10 @@ class CTable(Generic[RowT]):
         row_dict: dict[str, Any] = {}
         for name in self.col_names:
             value = self._physical_row_value(name, int(pos))
-            if "." not in name:
+            parts = split_field_path(name)
+            if len(parts) <= 1:
                 row_dict[name] = value
                 continue
-            parts = name.split(".")
             node = row_dict
             for part in parts[:-1]:
                 child = node.get(part)
@@ -3381,12 +3398,18 @@ class CTable(Generic[RowT]):
                 if n not in self.col_names and isinstance(cc.spec, StructSpec)
             ]
             for alias in sorted(virtual_structs, key=len, reverse=True):
-                prefix = f"{alias}."
-                children = [n for n in names if n.startswith(prefix)]
+                alias_parts = split_field_path(alias)
+                children = [
+                    n
+                    for n in names
+                    if split_field_path(n)[: len(alias_parts)] == alias_parts
+                    and len(split_field_path(n)) > len(alias_parts)
+                ]
                 if not children:
                     continue
                 first = min(names.index(c) for c in children)
-                names = [n for n in names if not n.startswith(prefix)]
+                child_set = set(children)
+                names = [n for n in names if n not in child_set]
                 names.insert(first, alias)
         else:
             names = []
@@ -3433,15 +3456,20 @@ class CTable(Generic[RowT]):
 
     def _export_arrow_names(self, names: list[str]) -> list[str]:
         nested = self._schema.metadata.get("nested") if self._schema.metadata else None
-        if not isinstance(nested, dict):
-            return names
-        root_meta = nested.get("root")
-        if not isinstance(root_meta, dict):
-            return names
-        physical = root_meta.get("physical")
-        if not isinstance(physical, str) or not physical:
-            return names
-        return ["" if n == physical else n for n in names]
+        exported = list(names)
+        if isinstance(nested, dict):
+            root_meta = nested.get("root")
+            if isinstance(root_meta, dict):
+                physical = root_meta.get("physical")
+                if isinstance(physical, str) and physical:
+                    exported = ["" if n == physical else n for n in exported]
+        for i, n in enumerate(names):
+            cc = self._schema.columns_by_name.get(n)
+            if n not in self.col_names and cc is not None and isinstance(cc.spec, StructSpec):
+                parts = split_field_path(n)
+                if len(parts) == 1:
+                    exported[i] = parts[0]
+        return exported
 
     def _arrow_schema_for_columns(self, columns=None, *, include_computed: bool = True):
         pa = self._require_pyarrow("to_arrow()/to_parquet()")
@@ -4058,7 +4086,7 @@ class CTable(Generic[RowT]):
         physical_to_storage = {}
         for name in column_names:
             logical_to_physical[name] = name
-            physical_to_storage[name] = f"_cols/{name.replace('.', '/')}"
+            physical_to_storage[name] = f"_cols/{_column_name_to_relpath(name)}"
         nested = {
             "version": 1,
             "logical_root": "",
@@ -4076,12 +4104,13 @@ class CTable(Generic[RowT]):
 
         out_fields = []
 
-        def _walk(field, prefix: str | None = None, parent_nullable: bool = False):
-            name = field.name if prefix is None else f"{prefix}.{field.name}"
+        def _walk(field, prefix: tuple[str, ...] = (), parent_nullable: bool = False):
+            parts = (*prefix, field.name)
+            name = join_field_path(parts)
             nullable = bool(parent_nullable or field.nullable)
             if pa.types.is_struct(field.type):
                 for child in field.type:
-                    _walk(pa.field(child.name, child.type, nullable=child.nullable), name, nullable)
+                    _walk(pa.field(child.name, child.type, nullable=child.nullable), parts, nullable)
             else:
                 out_fields.append(pa.field(name, field.type, nullable=nullable))
 
@@ -4102,7 +4131,7 @@ class CTable(Generic[RowT]):
             raise KeyError("Invalid flattened path")
 
         for field in flat_schema:
-            parts = field.name.split(".")
+            parts = split_field_path(field.name)
             col = batch.column(batch.schema.get_field_index(parts[0]))
             arr = _extract(col, col.type, parts[1:])
             arrays.append(arr)
@@ -4199,7 +4228,7 @@ class CTable(Generic[RowT]):
         original_top_level_struct_specs: dict[str, SchemaSpec] = {}
         for f in schema:
             if pa.types.is_struct(f.type):
-                original_top_level_struct_specs[f.name] = cls._arrow_type_to_spec(
+                original_top_level_struct_specs[join_field_path((f.name,))] = cls._arrow_type_to_spec(
                     pa, f.type, nullable=f.nullable, object_fallback=object_fallback
                 )
         if string_max_length is None or isinstance(string_max_length, Mapping):
@@ -5546,8 +5575,10 @@ class CTable(Generic[RowT]):
         physical = self._logical_to_physical_name(name)
         if physical in self._cols or physical in self._computed_cols:
             return [physical]
-        prefix = f"{physical}."
-        expanded = [col for col in self.col_names if col.startswith(prefix)]
+        prefix_parts = split_field_path(physical)
+        expanded = [
+            col for col in self.col_names if split_field_path(col)[: len(prefix_parts)] == prefix_parts
+        ]
         if expanded:
             return expanded
         return [physical]
@@ -5601,7 +5632,8 @@ class CTable(Generic[RowT]):
             if physical in self._cols or physical in self._computed_cols:
                 return Column(self, physical)
             expanded = self._expand_logical_column_selector(key)
-            if len(expanded) > 1:
+            cc = self._schema.columns_by_name.get(physical)
+            if len(expanded) > 1 or (expanded and cc is not None and isinstance(cc.spec, StructSpec)):
                 return _StructPathColumn(self, physical, expanded)
             return self.where(key)
         if isinstance(key, (blosc2.NDArray, blosc2.LazyExpr)) and getattr(key, "dtype", None) == np.bool_:
@@ -5611,9 +5643,10 @@ class CTable(Generic[RowT]):
         return self._getitem_row_selector(key)
 
     def _nested_namespace(self, prefix: str):
-        base = f"{prefix}."
+        prefix_parts = split_field_path(prefix)
         for name in self.col_names:
-            if name.startswith(base):
+            parts = split_field_path(name)
+            if parts[: len(prefix_parts)] == prefix_parts and len(parts) > len(prefix_parts):
                 return _NestedColumnNamespace(self, prefix)
         return None
 

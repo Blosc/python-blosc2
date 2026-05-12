@@ -293,12 +293,61 @@ _VALID_ROWS_KEY = "/_valid_rows"
 _COLS_DIR = "_cols"
 
 
+def split_field_path(path: str) -> tuple[str, ...]:
+    """Split a dotted logical field path into segments.
+
+    A backslash escapes separator characters, so ``"a\\.b.c"`` means the
+    two-segment path ``("a.b", "c")``.  The empty string is the canonical root.
+    """
+    if path == "":
+        return ()
+    parts: list[str] = []
+    buf: list[str] = []
+    escaped = False
+    for ch in path:
+        if escaped:
+            buf.append(ch)
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == ".":
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if escaped:
+        buf.append("\\")
+    parts.append("".join(buf))
+    return tuple(parts)
+
+
+def join_field_path(parts: tuple[str, ...] | list[str]) -> str:
+    """Join logical path segments using dot syntax with backslash escaping."""
+    escaped_parts = []
+    for part in parts:
+        buf: list[str] = []
+        for ch in part:
+            if ch in {"\\", ".", "/"}:
+                buf.append("\\")
+            buf.append(ch)
+        escaped_parts.append("".join(buf))
+    return ".".join(escaped_parts)
+
+
+def _encode_storage_segment(segment: str) -> str:
+    """Percent-encode characters that are structural in logical/storage paths."""
+    return segment.replace("%", "%25").replace("/", "%2F").replace(".", "%2E").replace("\\", "%5C")
+
+
 def _column_name_to_relpath(name: str) -> str:
     """Map a logical column name to a hierarchical path under ``_cols``.
 
-    Dotted names are interpreted as nested paths (``a.b.c`` -> ``a/b/c``).
+    Unescaped dots are interpreted as nested path separators
+    (``a.b.c`` -> ``a/b/c``). Literal dots/slashes/backslashes in field names
+    can be represented with :func:`join_field_path` and are percent-encoded in
+    the physical storage path.
     """
-    return name.replace(".", "/")
+    return "/".join(_encode_storage_segment(part) for part in split_field_path(name))
 
 
 class FileTableStorage(TableStorage):

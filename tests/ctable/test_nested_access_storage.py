@@ -96,6 +96,43 @@ def test_from_arrow_flattens_struct_columns_to_dotted_leaves():
     assert row0.trip["begin"]["lat"] == 2.2
 
 
+def test_nested_field_name_escaping_for_literal_dot_and_slash(tmp_path):
+    trip_type = pa.struct([pa.field("begin/point", pa.struct([pa.field("lon.deg", pa.float64())]))])
+    schema = pa.schema([pa.field("trip.info", trip_type)])
+    batch = pa.record_batch(
+        [
+            pa.array(
+                [
+                    {"begin/point": {"lon.deg": 1.0}},
+                    {"begin/point": {"lon.deg": 2.0}},
+                ],
+                type=trip_type,
+            )
+        ],
+        schema=schema,
+    )
+
+    path = tmp_path / "escaped.b2d"
+    t = blosc2.CTable.from_arrow(schema, [batch], urlpath=str(path))
+
+    leaf_name = r"trip\.info.begin\/point.lon\.deg"
+    assert t.col_names == [leaf_name]
+    assert t[leaf_name][1] == 2.0
+    assert t[r"trip\.info"][0] == {"begin/point": {"lon.deg": 1.0}}
+    assert t.where(r"trip\.info.begin\/point.lon\.deg > 1.5").nrows == 1
+
+    leaf_path = path / "_cols" / "trip%2Einfo" / "begin%2Fpoint" / "lon%2Edeg.b2nd"
+    assert leaf_path.exists()
+
+    opened = blosc2.CTable.open(str(path))
+    assert opened.col_names == [leaf_name]
+    assert opened[leaf_name][1] == 2.0
+
+    out = t.to_arrow()
+    assert out.schema.names == ["trip.info"]
+    assert out.column("trip.info").to_pylist()[1]["begin/point"]["lon.deg"] == 2.0
+
+
 def test_nested_struct_parquet_roundtrip(tmp_path):
     trip_type = pa.struct([("begin", pa.struct([("lon", pa.float64()), ("lat", pa.float64())]))])
     schema = pa.schema([pa.field("trip", trip_type)])

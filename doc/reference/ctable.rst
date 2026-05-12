@@ -658,6 +658,15 @@ attribute proxies::
     t["trip.begin.lon"].mean()      # Column object (fast path)
     t.trip.begin.lon.max()          # attribute proxy, same column
 
+A literal ``.``, ``/``, or ``\\`` inside an Arrow field name is escaped with a
+backslash in the logical column name.  For example, path segments
+``("trip.info", "begin/point", "lon.deg")`` become::
+
+    t[r"trip\.info.begin\/point.lon\.deg"]
+
+Such leaves are stored with percent-encoded path segments under ``_cols``; the
+example above is stored at ``_cols/trip%2Einfo/begin%2Fpoint/lon%2Edeg``.
+
 **Filtering and expressions**
 
 Dotted names work everywhere a flat column name would::
