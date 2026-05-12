@@ -2178,22 +2178,47 @@ class CTable(Generic[RowT]):
             result["dparams"] = dparams
         return result
 
+    @staticmethod
+    def _flatten_nested_dict(d: dict, prefix: str = "") -> dict:
+        """Recursively flatten a nested dict into a dotted-key flat dict.
+
+        Works for both single-row dicts ``{field: value}`` and column-batch
+        dicts ``{field: array}``.  Leaves non-dict values unchanged.
+
+        Example::
+
+            {"trip": {"begin": {"lon": 1.0}}} -> {"trip.begin.lon": 1.0}
+        """
+        result = {}
+        for k, v in d.items():
+            full_key = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, dict):
+                result.update(CTable._flatten_nested_dict(v, full_key))
+            else:
+                result[full_key] = v
+        return result
+
     def _normalize_row_input(self, data: Any) -> dict[str, Any]:
         """Normalize a row input to a ``{col_name: value}`` dict.
 
         Accepted shapes:
         - list / tuple  → positional, zipped with stored column names (computed columns skipped)
-        - dict          → used as-is
-        - dataclass     → ``dataclasses.asdict``
+        - dict          → used as-is (nested dicts are flattened to dotted keys)
+        - dataclass     → ``dataclasses.asdict`` (nested fields flattened)
         - np.void / structured scalar → field-name access
         """
         stored = self._append_input_col_names
         if isinstance(data, dict):
+            if any(isinstance(v, dict) for v in data.values()):
+                return self._flatten_nested_dict(data)
             return data
         if isinstance(data, (list, tuple)):
             return dict(zip(stored, data, strict=False))
         if dataclasses.is_dataclass(data) and not isinstance(data, type):
-            return dataclasses.asdict(data)
+            d = dataclasses.asdict(data)
+            if any(isinstance(v, dict) for v in d.values()):
+                return self._flatten_nested_dict(d)
+            return d
         if isinstance(data, (np.void, np.record)):
             return {name: data[name] for name in stored}
         # Fallback: try positional indexing
@@ -7161,6 +7186,8 @@ class CTable(Generic[RowT]):
                     provided_names.add(name)
         else:
             if isinstance(data, dict):
+                if any(isinstance(v, dict) for v in data.values()):
+                    data = self._flatten_nested_dict(data)
                 known_names = [name for name in current_col_names if name in data]
                 if not known_names:
                     raise ValueError("No known stored columns provided for extend().")
@@ -7184,6 +7211,26 @@ class CTable(Generic[RowT]):
                 new_nrows = len(data)
                 raw_columns = {name: data[name] for name in data.dtype.names if name in current_col_names}
                 provided_names = set(raw_columns)
+            elif data and isinstance(data[0], dict):
+                # List of dicts: flatten any nested dicts and pivot to column arrays.
+                flat_rows = [
+                    self._flatten_nested_dict(row) if any(isinstance(v, dict) for v in row.values()) else row
+                    for row in data
+                ]
+                new_nrows = len(flat_rows)
+                col_set = set(input_col_names)
+                raw_columns = {
+                    name: [row[name] for row in flat_rows]
+                    for name in input_col_names
+                    if name in flat_rows[0]
+                }
+                provided_names = set(raw_columns)
+                # Fill any remaining columns from the rows (may include extra keys)
+                for row in flat_rows:
+                    for key in row:
+                        if key in col_set and key not in raw_columns:
+                            raw_columns[key] = [r.get(key) for r in flat_rows]
+                            provided_names.add(key)
             else:
                 new_nrows = len(data)
                 batch_columns = list(zip(*data, strict=False))
