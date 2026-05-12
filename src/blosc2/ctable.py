@@ -3985,15 +3985,29 @@ class CTable(Generic[RowT]):
         obj._last_pos = 0
         return obj
 
+    @staticmethod
+    def _spec_contains_timestamp(spec: SchemaSpec) -> bool:
+        """Return True if *spec* or any nested child spec is a timestamp."""
+        if isinstance(spec, timestamp):
+            return True
+        if isinstance(spec, ListSpec):
+            return CTable._spec_contains_timestamp(spec.item_spec)
+        if isinstance(spec, StructSpec):
+            return any(CTable._spec_contains_timestamp(child) for child in spec.fields.values())
+        return False
+
     @classmethod
     def _write_arrow_batches(cls, obj, batches, columns, new_cols, new_valid) -> None:
         pos = 0
+        list_validate = {
+            col.name: cls._spec_contains_timestamp(col.spec) for col in columns if cls._is_list_column(col)
+        }
         for batch in batches:
             end = pos + len(batch)
             while end > len(new_valid):
                 obj._grow()
                 new_valid = obj._valid_rows
-            pos = cls._write_arrow_batch(batch, columns, new_cols, new_valid, pos)
+            pos = cls._write_arrow_batch(batch, columns, new_cols, new_valid, pos, list_validate)
         for col in columns:
             if (
                 cls._is_list_column(col)
@@ -4005,17 +4019,17 @@ class CTable(Generic[RowT]):
         obj._last_pos = pos
 
     @classmethod
-    def _write_arrow_batch(cls, batch, columns, new_cols, new_valid, pos: int) -> int:
+    def _write_arrow_batch(cls, batch, columns, new_cols, new_valid, pos: int, list_validate) -> int:
         m = len(batch)
         if m == 0:
             return pos
         for col in columns:
             arrow_col = batch.column(batch.schema.get_field_index(col.name))
             if cls._is_list_column(col):
-                # Use validation/coercion for list columns so nested timestamp values
-                # (emitted by Arrow as datetime.datetime in to_pylist()) are normalized
-                # to storage-compatible scalar values before msgpack serialization.
-                new_cols[col.name].extend(arrow_col.to_pylist(), validate=True)
+                # Trusted Arrow-import fast path: schema has already been inferred,
+                # so avoid Python-level per-item coercion unless nested timestamps
+                # need normalization from Arrow's Python datetime values.
+                new_cols[col.name].extend(arrow_col.to_pylist(), validate=list_validate[col.name])
             elif cls._is_varlen_scalar_column(col):
                 new_cols[col.name].extend(arrow_col.to_pylist())
             elif cls._is_dictionary_column(col):
