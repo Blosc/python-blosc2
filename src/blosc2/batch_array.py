@@ -625,9 +625,12 @@ class BatchArray:
         return payload
 
     def _serialize_arrow_block(self, items) -> bytes:
-        pa, _ = self._require_pyarrow()
+        pa, pa_ipc = self._require_pyarrow()
         batch = pa.record_batch([items], schema=self._get_arrow_schema())
-        payload = batch.serialize().to_pybytes()
+        sink = pa.BufferOutputStream()
+        with pa_ipc.new_stream(sink, batch.schema) as writer:
+            writer.write_batch(batch)
+        payload = sink.getvalue().to_pybytes()
         _check_serialized_size(payload)
         return payload
 
@@ -641,7 +644,14 @@ class BatchArray:
 
     def _deserialize_arrow_block(self, payload: bytes) -> list[Any]:
         pa, pa_ipc = self._require_pyarrow()
-        batch = pa_ipc.read_record_batch(pa.BufferReader(payload), self._get_arrow_schema())
+        try:
+            reader = pa_ipc.open_stream(pa.BufferReader(payload))
+            batch = reader.read_next_batch()
+        except (pa.ArrowInvalid, OSError):
+            # Backward compatibility for older arrow-serializer blocks written
+            # as bare serialized RecordBatch payloads.  Those cannot represent
+            # dictionary batches reliably, so new blocks use IPC streams.
+            batch = pa_ipc.read_record_batch(pa.BufferReader(payload), self._get_arrow_schema())
         return batch.column(0).to_pylist()
 
     def _deserialize_block(self, payload: bytes) -> list[Any]:

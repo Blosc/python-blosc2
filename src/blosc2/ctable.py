@@ -3706,10 +3706,9 @@ class CTable(Generic[RowT]):
 
         if pa.types.is_list(pa_type) or pa.types.is_large_list(pa_type):
             if arrow_col is not None:
-                py_values = arrow_col.to_pylist()
-                flat_values = [item for cell in py_values if cell is not None for item in cell]
-                item_arrow_col = pa.array(flat_values, type=pa_type.value_type)
-                nullable = nullable or any(v is None for v in py_values)
+                combined = arrow_col.combine_chunks() if hasattr(arrow_col, "combine_chunks") else arrow_col
+                item_arrow_col = combined.values
+                nullable = nullable or combined.null_count > 0
             else:
                 item_arrow_col = None
                 nullable = True
@@ -3986,28 +3985,76 @@ class CTable(Generic[RowT]):
         return obj
 
     @staticmethod
-    def _spec_contains_timestamp(spec: SchemaSpec) -> bool:
-        """Return True if *spec* or any nested child spec is a timestamp."""
+    def _timestamp_normalizer_for_spec(spec: SchemaSpec):  # noqa: C901
+        """Build a trusted Arrow-import normalizer for timestamp leaves.
+
+        Arrow already validates list/struct values during import, so list columns
+        normally skip Python-level coercion.  The exception is nested timestamps:
+        ``to_pylist()`` yields ``datetime``/``numpy.datetime64`` objects, while
+        msgpack-backed ListArray storage expects integer epoch offsets.  Return a
+        small normalizer that descends only into branches containing timestamps,
+        or ``None`` when no normalization is needed.
+        """
         if isinstance(spec, timestamp):
-            return True
+
+            def normalize_timestamp(value, unit=spec.unit):
+                if value is None:
+                    return None
+                if isinstance(value, (int, np.integer)):
+                    return int(value)
+                return np.datetime64(value).astype(f"datetime64[{unit}]").astype(np.int64).item()
+
+            return normalize_timestamp
+
         if isinstance(spec, ListSpec):
-            return CTable._spec_contains_timestamp(spec.item_spec)
+            item_normalizer = CTable._timestamp_normalizer_for_spec(spec.item_spec)
+            if item_normalizer is None:
+                return None
+
+            def normalize_list(value, item_normalizer=item_normalizer):
+                if value is None:
+                    return None
+                for i, item in enumerate(value):
+                    value[i] = item_normalizer(item)
+                return value
+
+            return normalize_list
+
         if isinstance(spec, StructSpec):
-            return any(CTable._spec_contains_timestamp(child) for child in spec.fields.values())
-        return False
+            field_normalizers = {
+                name: normalizer
+                for name, child in spec.fields.items()
+                if (normalizer := CTable._timestamp_normalizer_for_spec(child)) is not None
+            }
+            if not field_normalizers:
+                return None
+
+            def normalize_struct(value, field_normalizers=field_normalizers):
+                if value is None:
+                    return None
+                for name, normalizer in field_normalizers.items():
+                    if name in value:
+                        value[name] = normalizer(value[name])
+                return value
+
+            return normalize_struct
+
+        return None
 
     @classmethod
     def _write_arrow_batches(cls, obj, batches, columns, new_cols, new_valid) -> None:
         pos = 0
-        list_validate = {
-            col.name: cls._spec_contains_timestamp(col.spec) for col in columns if cls._is_list_column(col)
+        list_normalizers = {
+            col.name: cls._timestamp_normalizer_for_spec(col.spec)
+            for col in columns
+            if cls._is_list_column(col)
         }
         for batch in batches:
             end = pos + len(batch)
             while end > len(new_valid):
                 obj._grow()
                 new_valid = obj._valid_rows
-            pos = cls._write_arrow_batch(batch, columns, new_cols, new_valid, pos, list_validate)
+            pos = cls._write_arrow_batch(batch, columns, new_cols, new_valid, pos, list_normalizers)
         for col in columns:
             if (
                 cls._is_list_column(col)
@@ -4019,17 +4066,24 @@ class CTable(Generic[RowT]):
         obj._last_pos = pos
 
     @classmethod
-    def _write_arrow_batch(cls, batch, columns, new_cols, new_valid, pos: int, list_validate) -> int:
+    def _write_arrow_batch(cls, batch, columns, new_cols, new_valid, pos: int, list_normalizers) -> int:
         m = len(batch)
         if m == 0:
             return pos
         for col in columns:
             arrow_col = batch.column(batch.schema.get_field_index(col.name))
             if cls._is_list_column(col):
+                if getattr(col.spec, "serializer", None) == "arrow":
+                    new_cols[col.name].extend_arrow(arrow_col)
+                    continue
                 # Trusted Arrow-import fast path: schema has already been inferred,
-                # so avoid Python-level per-item coercion unless nested timestamps
-                # need normalization from Arrow's Python datetime values.
-                new_cols[col.name].extend(arrow_col.to_pylist(), validate=list_validate[col.name])
+                # so avoid Python-level per-item coercion.  If nested timestamps
+                # are present, normalize only those leaves before storing.
+                values = arrow_col.to_pylist()
+                normalizer = list_normalizers[col.name]
+                if normalizer is not None:
+                    values = [normalizer(value) for value in values]
+                new_cols[col.name].extend(values, validate=False)
             elif cls._is_varlen_scalar_column(col):
                 new_cols[col.name].extend(arrow_col.to_pylist())
             elif cls._is_dictionary_column(col):
@@ -4180,6 +4234,7 @@ class CTable(Generic[RowT]):
         auto_null_sentinels: bool = True,
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
         blosc2_items_per_block: int | None = None,
+        list_serializer: Literal["msgpack", "arrow"] = "msgpack",
         object_fallback: bool = False,
         column_cparams: Mapping[str, dict[str, Any]] | None = None,
     ) -> CTable:
@@ -4223,6 +4278,10 @@ class CTable(Generic[RowT]):
         schema-less ``object`` columns) are flushed to their backend.  Set it to
         ``None`` to keep those columns pending until the final flush.
 
+        ``list_serializer`` selects the backend serializer for imported list
+        columns. ``"msgpack"`` is the default; ``"arrow"`` stores Arrow list
+        batches directly and can be much faster for deeply nested list columns.
+
         Unsupported Arrow types raise by default.  Pass ``object_fallback=True``
         to import such columns as schema-less :func:`~blosc2.object` columns.
         This fallback is intentionally not used by :meth:`from_parquet`.
@@ -4236,6 +4295,8 @@ class CTable(Generic[RowT]):
             raise ValueError("blosc2_batch_size must be a positive integer or None")
         if blosc2_items_per_block is not None and blosc2_items_per_block <= 0:
             raise ValueError("blosc2_items_per_block must be a positive integer or None")
+        if list_serializer not in {"msgpack", "arrow"}:
+            raise ValueError("list_serializer must be 'msgpack' or 'arrow'")
         batches = iter(batches)
         first_batch = None
         table_for_inference = None
@@ -4274,9 +4335,14 @@ class CTable(Generic[RowT]):
         )
         cls._apply_arrow_column_cparams(columns, column_cparams)
         for col in columns:
-            if (
-                cls._is_list_column(col) and getattr(col.spec, "storage", None) == "batch"
-            ) or cls._is_varlen_scalar_column(col):
+            if cls._is_list_column(col):
+                if getattr(col.spec, "storage", None) == "batch":
+                    col.spec.serializer = list_serializer
+                    if blosc2_batch_size is not None:
+                        col.spec.batch_rows = blosc2_batch_size
+                    if blosc2_items_per_block is not None:
+                        col.spec.items_per_block = blosc2_items_per_block
+            elif cls._is_varlen_scalar_column(col):
                 if blosc2_batch_size is not None:
                     col.spec.batch_rows = blosc2_batch_size
                 if blosc2_items_per_block is not None:
@@ -4372,6 +4438,7 @@ class CTable(Generic[RowT]):
         auto_null_sentinels: bool = True,
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
         blosc2_items_per_block: int | None = None,
+        list_serializer: Literal["msgpack", "arrow"] = "msgpack",
         **kwargs,
     ) -> CTable:
         """Read a Parquet file into a :class:`CTable`.
@@ -4449,7 +4516,20 @@ class CTable(Generic[RowT]):
 
         blosc2_items_per_block : int or None, optional
             Target number of items per internal Blosc2 block. Passed through to
-            :meth:`CTable.from_arrow`.
+            :meth:`CTable.from_arrow`.  In general, larger number of items
+            favors compression ratios but make random access slower.
+
+        list_serializer : {"msgpack", "arrow"}, optional
+            Serializer used for imported list columns. The default, ``"msgpack"``,
+            keeps list-column stores independent of PyArrow and often produces
+            smaller files, especially for many small/simple lists. ``"arrow"``
+            stores Arrow list batches directly; this can make imports of deeply
+            nested or ``list<struct<...>>`` columns much faster and may preserve
+            Arrow-native nested layouts more directly. The tradeoffs are that list
+            column access later requires PyArrow, output can be larger due to Arrow
+            IPC/schema/dictionary metadata and buffer layout.
+            Use ``"arrow"`` when import speed for complex nested lists matters more
+            than minimizing file size and avoiding a PyArrow dependency at read time.
 
         **kwargs
             Additional keyword arguments forwarded to ``pyarrow.parquet.ParquetFile``.
@@ -4569,6 +4649,7 @@ class CTable(Generic[RowT]):
             auto_null_sentinels=auto_null_sentinels,
             blosc2_batch_size=blosc2_batch_size,
             blosc2_items_per_block=blosc2_items_per_block,
+            list_serializer=list_serializer,
         )
 
     # ------------------------------------------------------------------

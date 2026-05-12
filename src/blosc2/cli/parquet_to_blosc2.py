@@ -197,6 +197,15 @@ def build_parser() -> argparse.ArgumentParser:
             "Defaults to BatchArray's automatic heuristic."
         ),
     )
+    parser.add_argument(
+        "--list-serializer",
+        choices=["msgpack", "arrow"],
+        default="msgpack",
+        help=(
+            "Serializer for imported list columns. 'msgpack' preserves the current default; "
+            "'arrow' stores Arrow list batches directly and can be faster for deeply nested lists."
+        ),
+    )
     parser.add_argument("--use-dict", action="store_true", help="Enable C-Blosc2 dictionary compression.")
     parser.add_argument(
         "--float-trunc-prec",
@@ -830,6 +839,7 @@ def print_import_plan(
     print(f"Blosc2 batch size:     {args.blosc2_batch_size:,}")
     if args.blosc2_items_per_block is not None:
         print(f"Blosc2 items/block:    {args.blosc2_items_per_block:,}")
+    print(f"List serializer:       {args.list_serializer}")
     print(f"Codec / level:         {args.codec} / {args.clevel}")
     print(f"Use dict:              {args.use_dict}")
     trunc_global = getattr(args, "float_trunc_prec_global", None)
@@ -966,6 +976,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         auto_null_sentinels=True,
         blosc2_batch_size=args.blosc2_batch_size,
         blosc2_items_per_block=args.blosc2_items_per_block,
+        list_serializer=args.list_serializer,
         column_cparams=float_trunc_column_cparams or None,
     )
     maybe_memory_report(args, "after CTable import", pa)

@@ -7,6 +7,7 @@
 
 """Tests for CTable.to_arrow() and CTable.from_arrow()."""
 
+import datetime
 from dataclasses import dataclass
 
 import numpy as np
@@ -308,6 +309,34 @@ def test_from_arrow_list_struct_nullable_values_roundtrip():
     assert t[0].nutriments == [{"name": "fat", "value": 1.5}, {"name": "salt", "value": 0.2}]
     assert t[1].nutriments is None
     assert t[2].nutriments == [{"name": "energy", "value": 42.0}]
+
+
+def test_from_arrow_list_struct_timestamp_roundtrip():
+    event_type = pa.struct(
+        [
+            pa.field("when", pa.timestamp("ms")),
+            pa.field("value", pa.float64()),
+        ]
+    )
+    at = pa.table(
+        {
+            "events": pa.array(
+                [
+                    [{"when": datetime.datetime(2020, 1, 1), "value": 1.5}],
+                    None,
+                ],
+                type=pa.list_(event_type),
+            )
+        }
+    )
+
+    t = CTable.from_arrow(at.schema, at.to_batches())
+    assert t[0].events == [{"when": 1577836800000, "value": 1.5}]
+    assert t[1].events is None
+
+    out = t.to_arrow()
+    assert out.schema.field("events").type == pa.list_(event_type)
+    assert out.column("events").to_pylist()[0][0]["when"].isoformat() == "2020-01-01T00:00:00"
 
 
 def test_from_arrow_unsupported_type_raises():

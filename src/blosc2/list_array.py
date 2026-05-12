@@ -393,6 +393,28 @@ class ListArray:
         self._pending_cells.extend(cells)
         self._flush_full_batches()
 
+    def extend_arrow(self, arrow_array) -> None:
+        """Append a PyArrow list array without materializing Python cells.
+
+        This requires batch storage with ``serializer='arrow'`` and is intended
+        for trusted Arrow/Parquet import paths.
+        """
+        pa = _require_pyarrow()
+        if isinstance(arrow_array, pa.ChunkedArray):
+            chunks = arrow_array.chunks
+        else:
+            chunks = [arrow_array]
+        if self.spec.storage != "batch" or self.spec.serializer != "arrow":
+            values = arrow_array.to_pylist() if hasattr(arrow_array, "to_pylist") else list(arrow_array)
+            self.extend(values, validate=False)
+            return
+        for chunk in chunks:
+            if len(chunk) == 0:
+                continue
+            self._backend.append(chunk)
+            self._persisted_row_count += len(chunk)
+            self._invalidate_batch_caches()
+
     def flush(self) -> None:
         """Persist any pending rows when using the batch backend."""
         if self.spec.storage != "batch":
