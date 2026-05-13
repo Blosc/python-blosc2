@@ -343,22 +343,37 @@ class DictStore:
         self._update_map_tree()
 
     def _update_map_tree(self):
-        # Build map_tree from supported external leaves in working dir.
+        """Build map_tree from supported external leaves in working dir.
+
+        Trust canonical external leaf suffixes on the fast path.  Fall back to
+        metadata probing for legacy or manually renamed leaves with unusual
+        suffixes, preserving discovery warnings and compatibility.
+        """
+        external_exts = {".b2nd", ".b2f", ".b2b"}
         for root, _, files in os.walk(self.working_dir):
             for file in files:
                 filepath = os.path.join(root, file)
                 if os.path.abspath(filepath) == os.path.abspath(self.estore_path):
                     continue
                 rel_path = os.path.relpath(filepath, self.working_dir).replace(os.sep, "/")
-                if self._probe_external_leaf_path(rel_path):
+                if os.path.splitext(rel_path)[1] in external_exts or self._probe_external_leaf_path(
+                    rel_path
+                ):
                     self.map_tree[self._logical_key_from_relpath(rel_path)] = rel_path
 
     def _update_map_tree_from_offsets(self):
-        """Build map_tree from supported external leaves in a zip store."""
+        """Build map_tree from supported external leaves in a zip store.
+
+        Zip-backed stores written by DictStore/TreeStore use canonical external
+        leaf suffixes.  Trusting those suffixes avoids opening every member just
+        to classify it, which is especially important for compact CTable stores
+        with many columns.
+        """
+        external_exts = {".b2nd", ".b2f", ".b2b"}
         for filepath in self.offsets:
             if filepath == "embed.b2e":
                 continue
-            if self._probe_external_leaf_offset(filepath):
+            if os.path.splitext(filepath)[1] in external_exts or self._probe_external_leaf_offset(filepath):
                 self.map_tree[self._logical_key_from_relpath(filepath)] = filepath
 
     def _annotate_external_value(
