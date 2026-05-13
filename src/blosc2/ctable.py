@@ -1415,7 +1415,10 @@ class Column:
         if not isinstance(raw, (blosc2.NDArray, blosc2.LazyExpr)):
             return NotImplemented
 
-        all_rows_visible = self._mask is None and self._table._n_rows == len(self._table._valid_rows)
+        table_n_rows = self._table._known_n_rows()
+        all_rows_visible = (
+            self._mask is None and table_n_rows is not None and table_n_rows == len(self._table._valid_rows)
+        )
         mask = None if all_rows_visible else self._lazy_valid_rows()
         if where is not None:
             mask = where if mask is None else mask & where
@@ -1446,7 +1449,7 @@ class Column:
             where is None
             and self._table.base is not None
             and total_rows
-            and self._table._n_rows / total_rows < 0.25
+            and self._table.nrows / total_rows < 0.25
         ):
             return NotImplemented
 
@@ -1877,6 +1880,23 @@ class CTable(Generic[RowT]):
     #: :meth:`add_column` and :meth:`drop_column` are blocked on views.
     base: CTable | None
 
+    @property
+    def _n_rows(self) -> int:
+        """Number of live rows, computed lazily for reopened tables."""
+        n_rows = getattr(self, "_n_rows_cached", None)
+        if n_rows is None:
+            n_rows = int(blosc2.count_nonzero(self._valid_rows))
+            self._n_rows_cached = n_rows
+        return n_rows
+
+    @_n_rows.setter
+    def _n_rows(self, value: int | None) -> None:
+        self._n_rows_cached = value
+
+    def _known_n_rows(self) -> int | None:
+        """Return cached live-row count without triggering a scan."""
+        return getattr(self, "_n_rows_cached", None)
+
     def __init__(
         self,
         row_type: type[RowT],
@@ -1950,7 +1970,7 @@ class CTable(Generic[RowT]):
                     col = storage.open_column(name)
                 self._cols[name] = col
                 self._col_widths[name] = max(len(name), cc.display_width)
-            self._n_rows = int(blosc2.count_nonzero(self._valid_rows))
+            self._n_rows = None
             self._last_pos = None  # resolve lazily on first write
             # ---- Restore computed/materialized column metadata (if any) ----
             self._computed_cols = {}
@@ -2863,7 +2883,7 @@ class CTable(Generic[RowT]):
                 obj._cols[name] = storage.open_column(name)
             obj._col_widths[name] = max(len(name), cc.display_width)
 
-        obj._n_rows = int(blosc2.count_nonzero(obj._valid_rows))
+        obj._n_rows = None
         obj._last_pos = None
         obj._computed_cols = {}
         obj._materialized_cols = {}
@@ -7512,9 +7532,10 @@ class CTable(Generic[RowT]):
             else:
                 col_array[pos] = row[name]
 
+        n_rows = self.nrows
         self._valid_rows[pos] = True
         self._last_pos = pos + 1
-        self._n_rows += 1
+        self._n_rows = n_rows + 1
         self._mark_all_indexes_stale()
 
     def delete(self, ind: int | slice | str | Iterable) -> None:
@@ -7540,10 +7561,11 @@ class CTable(Generic[RowT]):
 
         false_pos = true_pos[ind]
         n_deleted = len(np.unique(false_pos))
+        n_rows = self.nrows
 
         valid_rows_np[false_pos] = False
         self._valid_rows[:] = valid_rows_np  # write back in-place; no new array created
-        self._n_rows -= n_deleted
+        self._n_rows = n_rows - n_deleted
         self._last_pos = None  # recalculate on next write
         self._storage.bump_visibility_epoch()
 
@@ -7728,9 +7750,10 @@ class CTable(Generic[RowT]):
             else:
                 self._cols[name][start_pos:end_pos] = scalar_processed_cols[name][:]
 
+        n_rows = self.nrows
         self._valid_rows[start_pos:end_pos] = True
         self._last_pos = end_pos
-        self._n_rows += new_nrows
+        self._n_rows = n_rows + new_nrows
         self._mark_all_indexes_stale()
 
     # ------------------------------------------------------------------
