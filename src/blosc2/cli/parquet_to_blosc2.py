@@ -47,7 +47,7 @@ import blosc2
 from blosc2.schema_compiler import _validate_column_name, schema_to_dict
 
 DEFAULT_BATCH_SIZE = 2048
-MAX_ELEMENT_WRITE_BATCH = 1_000_000  # cap on flattened elements yielded per write
+MAX_ELEMENT_WRITE_BATCH = 5_000_000  # cap on flattened elements yielded per write
 
 
 def require_pyarrow():
@@ -1046,6 +1046,7 @@ def import_unnamed_root_separate_cols(
     # here does not affect the import iterator created later.
     # ------------------------------------------------------------------
     capacity_hint = None
+    estimated_batch_rows = None
     if total_parquet_rows is not None and total_parquet_rows > 0:
         try:
             sample = next(
@@ -1056,12 +1057,34 @@ def import_unnamed_root_separate_cols(
                 n_outer_sampled = len(sample)
                 n_elems_sampled = len(sample.column(0).flatten())
                 avg_per_outer_row = n_elems_sampled / n_outer_sampled
+                estimated_batch_rows = max(1, round(args.parquet_batch_size * avg_per_outer_row))
                 estimate = round(total_parquet_rows * avg_per_outer_row)
                 if args.max_rows is not None:
                     estimate = min(estimate, args.max_rows)
                 capacity_hint = max(1, estimate)
         except Exception:
             pass  # sampling failure is non-fatal; from_arrow falls back to _EXPECTED_SIZE_DEFAULT
+
+    if args.blosc2_batch_size is None:
+        if args.list_serializer == "arrow":
+            # Arrow list storage appends incoming Arrow chunks directly, without
+            # materializing Python nested-list objects.  Use the natural flattened
+            # Parquet-batch scale (about 1M rows for Chicago taxi), capped only for
+            # pathological batches, so the displayed BatchArray size matches the
+            # actual write granularity better than the absolute cap would.
+            args.blosc2_batch_size = min(
+                MAX_ELEMENT_WRITE_BATCH,
+                estimated_batch_rows if estimated_batch_rows is not None else MAX_ELEMENT_WRITE_BATCH,
+            )
+        else:
+            # Msgpack list storage materializes nested Arrow list data as Python objects
+            # before serializing.  Keep its internal BatchArray batch_rows at Blosc2's
+            # cache-tuned block granularity instead of the larger Arrow write scale.
+            if capacity_hint is not None:
+                _, blocks = blosc2.compute_chunks_blocks((capacity_hint,))
+                args.blosc2_batch_size = max(1, blocks[0])
+            else:
+                args.blosc2_batch_size = DEFAULT_BATCH_SIZE
 
     print(f"Input:                 {input_path} ({input_path.stat().st_size / 1e6:.1f} MB)")
     print(f"Output:                {output_path}")
@@ -1079,6 +1102,8 @@ def import_unnamed_root_separate_cols(
         print(f"Max CTable rows:       {args.max_rows:,} (list elements)")
     print(f"Parquet batch size:    {args.parquet_batch_size:,} outer rows")
     print(f"Write cap:             {MAX_ELEMENT_WRITE_BATCH:,} elements/write (max)")
+    blosc2_batch_auto = " (auto)" if getattr(args, "blosc2_batch_size_auto", False) else ""
+    print(f"Blosc2 batch size:     {args.blosc2_batch_size:,} BatchArray rows{blosc2_batch_auto}")
     if args.blosc2_items_per_block is not None:
         print(f"Blosc2 items/block:    {args.blosc2_items_per_block:,}")
     print(f"List serializer:       {args.list_serializer}")
@@ -1485,7 +1510,11 @@ def resolve_default_batch_sizes(args, *, parquet_specified: bool, blosc2_specifi
         if not parquet_specified:
             args.parquet_batch_size = average_parquet_row_group_size(args.input_path) or DEFAULT_BATCH_SIZE
         if not blosc2_specified:
-            args.blosc2_batch_size = None  # derive from estimated CTable row count in import
+            # Defer separate-nested defaults until import, where we have a sampled
+            # estimate of flattened CTable rows per Parquet batch.  Arrow uses that
+            # natural per-Parquet-batch scale; msgpack uses a smaller blocks-based
+            # scale because it materializes nested Python objects before serializing.
+            args.blosc2_batch_size = None
         return
 
     if parquet_specified and not blosc2_specified:
@@ -1506,6 +1535,7 @@ def main(argv: list[str] | None = None) -> int:
         argv, "--batch-size"
     )
     blosc2_specified = _option_present(argv, "--blosc2-batch-size")
+    args.blosc2_batch_size_auto = not blosc2_specified
     resolve_default_batch_sizes(args, parquet_specified=parquet_specified, blosc2_specified=blosc2_specified)
 
     if args.profile:
