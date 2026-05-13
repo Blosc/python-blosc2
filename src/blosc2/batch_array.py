@@ -593,11 +593,17 @@ class BatchArray:
         if not payload_sizes:
             raise ValueError("BatchArray entries cannot be empty")
         clevel = self.cparams.clevel
+        # For serialized batch payloads, especially Arrow IPC, L1-sized blocks are often
+        # too small for codecs like Zstd to exploit cross-row redundancy.  Use larger
+        # cache-budget tiers as clevel increases, while avoiding full L2 blocks at the
+        # default clevel to keep random access reasonably granular.
         if clevel == 9:
             return len(payload_sizes)
-        if 0 < clevel <= 5:
+        if 0 < clevel <= 3:
             budget = blosc2.cpu_info.get("l1_data_cache_size")
-        elif 5 < clevel < 9:
+        elif 3 < clevel <= 6:
+            budget = blosc2.cpu_info.get("l2_cache_size") // 2
+        elif 6 < clevel < 9:
             budget = blosc2.cpu_info.get("l2_cache_size")
         else:
             return len(payload_sizes)
@@ -913,6 +919,7 @@ class BatchArray:
         return [
             ("type", f"{self.__class__.__name__}"),
             ("serializer", self.serializer),
+            ("items_per_block", self.items_per_block),
             ("nbatches", nbatches_value),
             ("nblocks", nblocks_value),
             ("nitems", sum(batch_sizes)),

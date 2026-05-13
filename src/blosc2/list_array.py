@@ -604,6 +604,13 @@ class ListArray:
         return None
 
     @property
+    def items_per_block(self) -> int | None:
+        """Maximum number of list cells per internal compressed block."""
+        if self.spec.storage != "batch":
+            return None
+        return self._backend.items_per_block
+
+    @property
     def nbytes(self) -> int:
         """Uncompressed byte size reported by the backend."""
         return self._backend.nbytes
@@ -632,6 +639,8 @@ class ListArray:
             ("backend", self.spec.storage),
             ("serializer", self.spec.serializer),
             ("rows", len(self)),
+            ("batch_rows", self.batch_rows),
+            ("items_per_block", self.items_per_block),
             ("pending_rows", len(self._pending_cells) if self.spec.storage == "batch" else 0),
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),

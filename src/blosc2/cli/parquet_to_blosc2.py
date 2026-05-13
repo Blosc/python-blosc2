@@ -47,6 +47,7 @@ import blosc2
 from blosc2.schema_compiler import _validate_column_name, schema_to_dict
 
 DEFAULT_BATCH_SIZE = 2048
+DEFAULT_SEPARATE_NESTED_BLOSC2_BATCH_SIZE = 100_000
 
 
 def require_pyarrow():
@@ -174,7 +175,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-rows",
         type=int,
         default=None,
-        help="Maximum number of rows to import from the source parquet file; imports all rows by default.",
+        help=(
+            "Maximum number of CTable rows to import.  "
+            "In normal mode this equals the number of Parquet rows read.  "
+            "With --separate-nested-cols the unit is list elements "
+            "(i.e. the number of rows in the resulting CTable), "
+            "not outer Parquet rows."
+        ),
     )
     parser.add_argument(
         "--batch-size",
@@ -260,6 +267,19 @@ def build_parser() -> argparse.ArgumentParser:
             "Decode Arrow dictionary-encoded columns to plain vlstring instead of preserving "
             "the dictionary encoding.  By default, supported dictionary columns "
             "(string values with integer indices) are imported as Blosc2 dictionary columns."
+        ),
+    )
+    parser.add_argument(
+        "--separate-nested-cols",
+        action="store_true",
+        dest="separate_nested_cols",
+        help=(
+            "When the Parquet file has a single unnamed top-level "
+            "list<struct<\u2026>> field (the Awkward Array / Chicago-taxi layout), "
+            "flatten the outer list so that each element becomes a CTable row "
+            "and the struct leaves become separate physical columns "
+            "(e.g. trip.begin.lon, payment.fare).  "
+            "Without this flag the unnamed field is imported as a plain list column."
         ),
     )
     return parser
@@ -812,7 +832,7 @@ def print_import_plan(
     print(f"CTable store:          {ctable_store_kind(output_path)}")
     print(f"Rows:                  {pf.metadata.num_rows:,}")
     if args.max_rows is not None:
-        print(f"Rows to import:        {min(args.max_rows, pf.metadata.num_rows):,}")
+        print(f"Rows to import:        {min(args.max_rows, pf.metadata.num_rows):,} (Parquet rows)")
     print(f"Parquet columns:       {len(parquet_schema)}")
     print(f"Imported columns:      {len(fixed_cols) + len(struct_wrap_cols)}")
     n_fixed_non_string = (
@@ -891,6 +911,219 @@ def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_un
             memory_report(f"batch {batch_n} after ctable write", pa)
 
 
+def _flatten_root_batches_with_progress(
+    pa,
+    pf,
+    inner_schema,
+    args,
+):
+    """Yield flattened :class:`pyarrow.RecordBatch` objects from an unnamed-root Parquet file.
+
+    Reads Parquet batches, flattens the outer ``list<struct<...>>`` column via
+    ``ListArray.flatten()``, and honours ``args.max_rows`` as an element-level
+    row limit.  Progress is printed per Parquet batch according to
+    ``args.batch_report_every``.
+
+    Each flattened Parquet batch is further split into write sub-batches of
+    ``args.blosc2_batch_size`` elements before being yielded, so that the
+    RecordBatches passed to CTable are bounded in memory even when a single
+    Parquet batch contains thousands of list elements (e.g. Awkward-style
+    files where every outer row is a large list).
+    """
+    rows_done = 0
+    max_rows = args.max_rows
+    t0 = time.perf_counter()
+    # total_str is the CTable-row (element) limit for the progress display.
+    total_str = f"{max_rows:,} CTable rows" if max_rows is not None else "?"
+    b2_size = args.blosc2_batch_size  # element-level write-batch size
+
+    for parquet_batch_n, raw_batch in enumerate(
+        pf.iter_batches(batch_size=args.parquet_batch_size), start=1
+    ):
+        if max_rows is not None and rows_done >= max_rows:
+            break
+
+        report_batch_mem = args.mem_report and parquet_batch_n % args.mem_every == 0
+        if report_batch_mem:
+            memory_report(f"batch {parquet_batch_n} after parquet read", pa)
+
+        list_array = raw_batch.column(0)
+        struct_values = list_array.flatten()  # skips null outer-list rows
+
+        if len(struct_values) == 0:
+            continue
+
+        if max_rows is not None:
+            remaining = max_rows - rows_done
+            if len(struct_values) > remaining:
+                struct_values = struct_values.slice(0, remaining)
+
+        # Sub-slice into write batches of b2_size elements so that each
+        # RecordBatch handed to CTable is bounded in memory even when one
+        # Parquet row group expands to hundreds of thousands of list elements.
+        n_elems = len(struct_values)
+
+        # Report the Parquet batch separately from the actual CTable writes.
+        # The write lines below are printed after each write has happened; this
+        # line only says how many CTable rows were produced by flattening this
+        # Parquet batch and how many CTable write batches will follow.
+        elapsed = time.perf_counter() - t0
+        rate = rows_done / elapsed if elapsed > 0 and rows_done > 0 else 0.0
+        report_progress = parquet_batch_n % args.batch_report_every == 0 or (
+            max_rows is not None and rows_done + n_elems >= max_rows
+        )
+        n_writes = (n_elems + b2_size - 1) // b2_size
+        if report_progress:
+            print(
+                f"  parquet batch {parquet_batch_n:4d}: "
+                f"{n_elems:>12,} CTable rows -> {n_writes:,} write(s)  "
+                f"done {rows_done:>12,}/{total_str}  "
+                f"{elapsed:7.1f}s  {rate / 1e3:7.1f}k rows/s",
+                flush=True,
+            )
+
+        for write_n, offset in enumerate(range(0, n_elems, b2_size), start=1):
+            chunk = struct_values.slice(offset, min(b2_size, n_elems - offset))
+            sub_batch = pa.RecordBatch.from_struct_array(chunk)
+            n_write_rows = len(sub_batch)
+            rows_done += n_write_rows
+            yield sub_batch
+            print(
+                f"    write {write_n:3d}/{n_writes:<3d}: "
+                f"{n_write_rows:>12,} CTable rows  "
+                f"done {rows_done:>12,}/{total_str}",
+                flush=True,
+            )
+
+        if report_batch_mem:
+            memory_report(f"batch {parquet_batch_n} after flatten+write", pa)
+
+        if max_rows is not None and rows_done >= max_rows:
+            break
+
+
+def import_unnamed_root_separate_cols(
+    args,
+    input_path: Path,
+    output_path: Path,
+    pa,
+    pf,
+    parquet_schema,
+) -> list[str]:
+    """Import an unnamed-root ``list<struct<...>>`` Parquet file with nested column separation.
+
+    Each element of the unnamed root list becomes a CTable row.  Struct leaves
+    are stored as separate physical columns with dotted logical paths such as
+    ``trip.begin.lon`` and ``payment.fare``.
+
+    Returns the list of imported CTable column names.
+    """
+    from blosc2.schema_compiler import schema_to_dict
+
+    inner_schema = blosc2.CTable._inner_schema_for_unnamed_root(pa, parquet_schema)
+    total_parquet_rows = pf.metadata.num_rows if pf.metadata is not None else None
+
+    # ------------------------------------------------------------------
+    # Estimate total element count by sampling the first Parquet batch.
+    # This is used as capacity_hint so that compute_chunks_blocks() picks
+    # chunk/block sizes proportional to the actual data volume rather than
+    # defaulting to (1, 1) when the element count is unknown.
+    # pf.iter_batches() creates a fresh iterator each call, so sampling
+    # here does not affect the import iterator created later.
+    # ------------------------------------------------------------------
+    capacity_hint = None
+    if total_parquet_rows is not None and total_parquet_rows > 0:
+        try:
+            sample = next(
+                pf.iter_batches(batch_size=min(args.parquet_batch_size, total_parquet_rows)),
+                None,
+            )
+            if sample is not None and len(sample) > 0:
+                n_outer_sampled = len(sample)
+                n_elems_sampled = len(sample.column(0).flatten())
+                avg_per_outer_row = n_elems_sampled / n_outer_sampled
+                estimate = round(total_parquet_rows * avg_per_outer_row)
+                if args.max_rows is not None:
+                    estimate = min(estimate, args.max_rows)
+                capacity_hint = max(1, estimate)
+        except Exception:
+            pass  # sampling failure is non-fatal; from_arrow falls back to _EXPECTED_SIZE_DEFAULT
+
+    print(f"Input:                 {input_path} ({input_path.stat().st_size / 1e6:.1f} MB)")
+    print(f"Output:                {output_path}")
+    print(f"CTable store:          {ctable_store_kind(output_path)}")
+    print("Mode:                  separate nested columns (unnamed-root list<struct<...>>)")
+    if total_parquet_rows is not None:
+        print(f"Parquet rows:          {total_parquet_rows:,}")
+    if capacity_hint is not None:
+        print(f"Est. CTable rows:      ~{capacity_hint:,}")
+    n_inner = len(inner_schema)
+    print(f"Inner struct fields:   {n_inner}")
+    for f in inner_schema:
+        print(f"  {f.name}: {f.type}")
+    if args.max_rows is not None:
+        print(f"Max CTable rows:       {args.max_rows:,} (list elements)")
+    print(f"Parquet batch size:    {args.parquet_batch_size:,} outer rows")
+    print(f"Element sub-batch:     {args.blosc2_batch_size:,} elements")
+    if args.blosc2_items_per_block is not None:
+        print(f"Blosc2 items/block:    {args.blosc2_items_per_block:,}")
+    print(f"List serializer:       {args.list_serializer}")
+    print(f"Codec / level:         {args.codec} / {args.clevel}")
+    print(f"Use dict:              {args.use_dict}")
+    print()
+
+    cparams = blosc2.CParams(codec=blosc2.Codec[args.codec], clevel=args.clevel, use_dict=args.use_dict)
+    t0 = time.perf_counter()
+    maybe_memory_report(args, "before CTable import", pa)
+
+    ct = blosc2.CTable.from_arrow(
+        inner_schema,
+        _flatten_root_batches_with_progress(pa, pf, inner_schema, args),
+        urlpath=str(output_path),
+        mode="w",
+        cparams=cparams,
+        capacity_hint=capacity_hint,
+        auto_null_sentinels=True,
+        blosc2_batch_size=args.blosc2_batch_size,
+        blosc2_items_per_block=args.blosc2_items_per_block,
+        list_serializer=args.list_serializer,
+    )
+
+    maybe_memory_report(args, "after CTable import", pa)
+
+    # Store the original_root provenance metadata so that reopened CTables know
+    # they came from an unnamed-root list<struct<...>> file.
+    nested_meta = ct._schema.metadata.get("nested", {})
+    nested_meta["original_root"] = {
+        "kind": "unnamed_list_struct",
+        "field_name": "",
+        "preserve_grouping": False,
+    }
+    ct._schema.metadata["nested"] = nested_meta
+    ct._storage.save_schema(schema_to_dict(ct._schema))
+
+    maybe_memory_report(args, "after metadata save", pa)
+
+    elapsed = time.perf_counter() - t0
+    rows = len(ct)
+    cols = len(ct.col_names)
+    col_names = list(ct.col_names)
+    ct.close()
+
+    maybe_memory_report(args, "after CTable close", pa)
+
+    output_size = (
+        output_path.stat().st_size
+        if output_path.is_file()
+        else sum(f.stat().st_size for f in output_path.rglob("*") if f.is_file())
+    )
+    print(f"Done in {elapsed:.2f}s")
+    print(f"Element rows imported: {rows:,}")
+    print(f"Columns imported:      {cols}")
+    print(f"Output size:           {output_size / 1e6:.1f} MB")
+    return col_names
+
+
 def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
     if args.parquet_batch_size <= 0:
         raise ValueError("--parquet-batch-size must be positive")
@@ -920,6 +1153,14 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
     pf = pq.ParquetFile(input_path)
     maybe_memory_report(args, "after ParquetFile open", pa)
     parquet_schema = pf.schema_arrow
+
+    # ------------------------------------------------------------------
+    # Early dispatch: --separate-nested-cols for unnamed-root datasets
+    # ------------------------------------------------------------------
+    if getattr(args, "separate_nested_cols", False) and blosc2.CTable._detect_unnamed_root_list_struct(
+        pa, parquet_schema
+    ):
+        return import_unnamed_root_separate_cols(args, input_path, output_path, pa, pf, parquet_schema)
 
     fixed_string_lengths, fixed_bytes_lengths = scan_string_and_bytes_lengths(pa, pf, args, parquet_schema)
     maybe_memory_report(args, "after string/binary length scan", pa)
@@ -1210,6 +1451,17 @@ def average_parquet_row_group_size(input_path: Path) -> int | None:
 
 
 def resolve_default_batch_sizes(args, *, parquet_specified: bool, blosc2_specified: bool) -> None:
+    if getattr(args, "separate_nested_cols", False):
+        # In separate-nested mode the two batch-size options use different units:
+        # Parquet batches are outer rows, while Blosc2 batches are flattened
+        # CTable rows.  Keep them independent so a large write batch does not
+        # accidentally imply a huge Parquet read batch (and vice versa).
+        if not parquet_specified:
+            args.parquet_batch_size = average_parquet_row_group_size(args.input_path) or DEFAULT_BATCH_SIZE
+        if not blosc2_specified:
+            args.blosc2_batch_size = DEFAULT_SEPARATE_NESTED_BLOSC2_BATCH_SIZE
+        return
+
     if parquet_specified and not blosc2_specified:
         args.blosc2_batch_size = args.parquet_batch_size
     elif blosc2_specified and not parquet_specified:

@@ -4166,6 +4166,72 @@ class CTable(Generic[RowT]):
             nested["root"] = {"logical": "", "physical": empty_root_physical}
         return nested
 
+    # ------------------------------------------------------------------
+    # Unnamed-root list<struct<...>> detection and flattening helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_unnamed_root_list_struct(pa, schema) -> bool:
+        """Return True iff *schema* qualifies for unnamed-root list<struct<...>> flattening.
+
+        Conditions (all must hold):
+        * exactly one top-level field;
+        * field name is ``""`` (the canonical unnamed Arrow root);
+        * field type is ``list<struct<...>>`` or ``large_list<struct<...>>``.
+        """
+        if len(schema) != 1:
+            return False
+        field = schema[0]
+        if field.name != "":
+            return False
+        t = field.type
+        if not (pa.types.is_list(t) or pa.types.is_large_list(t)):
+            return False
+        return pa.types.is_struct(t.value_type)
+
+    @staticmethod
+    def _inner_schema_for_unnamed_root(pa, schema):
+        """Extract the inner struct schema from a single unnamed root list<struct<...>> schema.
+
+        Returns a new Arrow schema whose top-level fields are the struct fields
+        of the list value type.  The nullable flag of the original unnamed field
+        is not propagated — individual struct child nullability applies.
+        """
+        field = schema[0]  # the unnamed "" field
+        struct_type = field.type.value_type  # struct type inside the list
+        return pa.schema(list(struct_type))
+
+    @staticmethod
+    def _flatten_root_list_struct_batches(pa, inner_schema, batches):
+        """Yield flattened :class:`pyarrow.RecordBatch` objects from an unnamed root stream.
+
+        For each incoming batch (which has a single list<struct<...>> column),
+        flatten the outer list using ``ListArray.flatten()`` — which skips null
+        outer list rows — and convert the resulting struct array into a
+        :class:`~pyarrow.RecordBatch` whose columns correspond to the struct fields.
+
+        Parameters
+        ----------
+        pa:
+            The ``pyarrow`` module.
+        inner_schema:
+            Arrow schema for the inner struct (output of
+            :meth:`_inner_schema_for_unnamed_root`).
+        batches:
+            Iterable of incoming :class:`~pyarrow.RecordBatch` objects from the
+            unnamed-root Parquet file.
+        """
+        for batch in batches:
+            list_array = batch.column(0)
+            # flatten() skips null outer list rows and concatenates element values
+            struct_values = list_array.flatten()
+            if len(struct_values) == 0:
+                # Emit an empty record batch that still carries the inner schema
+                empty_arrays = [pa.array([], type=f.type) for f in inner_schema]
+                yield pa.record_batch(empty_arrays, schema=inner_schema)
+                continue
+            yield pa.RecordBatch.from_struct_array(struct_values)
+
     @staticmethod
     def _flatten_arrow_struct_schema(pa, schema):
         """Flatten top-level struct fields into dotted leaf fields recursively."""
@@ -4237,6 +4303,7 @@ class CTable(Generic[RowT]):
         list_serializer: Literal["msgpack", "arrow"] = "msgpack",
         object_fallback: bool = False,
         column_cparams: Mapping[str, dict[str, Any]] | None = None,
+        separate_nested_cols: bool = False,
     ) -> CTable:
         """Build a :class:`CTable` from an Arrow schema and iterable of record batches.
 
@@ -4297,6 +4364,27 @@ class CTable(Generic[RowT]):
             raise ValueError("blosc2_items_per_block must be a positive integer or None")
         if list_serializer not in {"msgpack", "arrow"}:
             raise ValueError("list_serializer must be 'msgpack' or 'arrow'")
+
+        # ------------------------------------------------------------------
+        # Unnamed-root list<struct<...>> flattening (opt-in)
+        # ------------------------------------------------------------------
+        # When the source schema is a single unnamed "" field of type
+        # list<struct<...>>, the outer list is a physical Parquet/Awkward
+        # chunking artifact, not a semantic column.  Flatten it so that each
+        # element becomes a CTable row.  The struct fields become ordinary
+        # top-level columns and are further flattened by the struct-leaf
+        # machinery below.
+        original_root_metadata: dict | None = None
+        if separate_nested_cols and cls._detect_unnamed_root_list_struct(pa, schema):
+            inner_schema = cls._inner_schema_for_unnamed_root(pa, schema)
+            batches = cls._flatten_root_list_struct_batches(pa, inner_schema, batches)
+            schema = inner_schema
+            original_root_metadata = {
+                "kind": "unnamed_list_struct",
+                "field_name": "",
+                "preserve_grouping": False,
+            }
+
         batches = iter(batches)
         first_batch = None
         table_for_inference = None
@@ -4359,6 +4447,8 @@ class CTable(Generic[RowT]):
         )
         if flattened_structs:
             metadata["nested"]["reconstruct_rows"] = True
+        if original_root_metadata is not None:
+            metadata["nested"]["original_root"] = original_root_metadata
         compiled_columns_by_name = {col.name: col for col in columns}
         for name, spec in original_top_level_struct_specs.items():
             if name in compiled_columns_by_name:
@@ -4383,7 +4473,17 @@ class CTable(Generic[RowT]):
             import itertools as _it
 
             batches = _it.chain([first_batch], batches)
-        capacity = max(capacity_hint or 1, 1)
+        # Use capacity_hint to size initial NDArray chunks/blocks correctly.
+        # When capacity_hint is None and we are in the unnamed-root flatten path,
+        # fall back to _EXPECTED_SIZE_DEFAULT (1 M) so that compute_chunks_blocks
+        # produces a reasonable block size instead of (1,) which causes catastrophic
+        # storage fragmentation.  For non-unnamed-root imports capacity_hint is
+        # always supplied by from_parquet (pf.metadata.num_rows), so the fallback
+        # only matters for direct from_arrow() calls without a hint.
+        if capacity_hint is None and original_root_metadata is not None:
+            capacity = _EXPECTED_SIZE_DEFAULT
+        else:
+            capacity = max(capacity_hint or 1, 1)
         storage = cls._storage_for_arrow_import(urlpath, mode)
         new_cols, new_valid = cls._create_arrow_import_columns(storage, columns, capacity, cparams, dparams)
         storage.save_schema(schema_to_dict(compiled))
@@ -4439,6 +4539,7 @@ class CTable(Generic[RowT]):
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
         blosc2_items_per_block: int | None = None,
         list_serializer: Literal["msgpack", "arrow"] = "msgpack",
+        separate_nested_cols: bool = False,
         **kwargs,
     ) -> CTable:
         """Read a Parquet file into a :class:`CTable`.
@@ -4598,9 +4699,15 @@ class CTable(Generic[RowT]):
         batches = pf.iter_batches(batch_size=batch_size, columns=columns)
 
         # Parquet files generated by Awkward-style pipelines may contain an
-        # unnamed top-level field (""). CTable requires non-empty column names,
-        # so normalize them on import.
-        if any(name == "" for name in arrow_schema.names):
+        # unnamed top-level field (""). When separate_nested_cols=True and the
+        # schema qualifies as an unnamed-root list<struct<...>>, skip the
+        # rename-to-root logic and pass the original schema directly to
+        # from_arrow, which will perform the element-level flattening.
+        # Otherwise, normalize empty column names to non-empty names as before.
+        _is_unnamed_root_flatten = separate_nested_cols and cls._detect_unnamed_root_list_struct(
+            pa, arrow_schema
+        )
+        if not _is_unnamed_root_flatten and any(name == "" for name in arrow_schema.names):
             used = {n for n in arrow_schema.names if n}
 
             def _fresh_root_name() -> str:
@@ -4636,6 +4743,15 @@ class CTable(Generic[RowT]):
 
             batches = _renamed_batches(batches, renamed)
 
+        # When flattening a root list<struct<...>>, the actual element count is not
+        # known ahead of time.  Pass capacity_hint=None so that from_arrow falls back
+        # to _EXPECTED_SIZE_DEFAULT (1 M), which gives compute_chunks_blocks() a
+        # reasonable block size instead of the catastrophic (1, 1) produced by
+        # capacity=1.  The CLI path computes a better estimate by sampling.
+        _capacity_hint = (
+            None if _is_unnamed_root_flatten else (pf.metadata.num_rows if pf.metadata is not None else None)
+        )
+
         return cls.from_arrow(
             arrow_schema,
             batches,
@@ -4644,12 +4760,13 @@ class CTable(Generic[RowT]):
             cparams=cparams,
             dparams=dparams,
             validate=validate,
-            capacity_hint=pf.metadata.num_rows if pf.metadata is not None else None,
+            capacity_hint=_capacity_hint,
             string_max_length=string_max_length,
             auto_null_sentinels=auto_null_sentinels,
             blosc2_batch_size=blosc2_batch_size,
             blosc2_items_per_block=blosc2_items_per_block,
             list_serializer=list_serializer,
+            separate_nested_cols=separate_nested_cols,
         )
 
     # ------------------------------------------------------------------
