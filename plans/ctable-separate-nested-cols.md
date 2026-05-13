@@ -287,17 +287,26 @@ Use `ObjectArray` only as fallback when:
 
 ## Import behavior
 
-### Phase A: opt-in import
+### Phase A: default import with opt-out
 
-Add an opt-in flag first:
+The feature started as opt-in, but is now enabled by default for
+`CTable.from_parquet()` and `parquet-to-blosc2` when the Parquet schema qualifies
+as a single unnamed root `list<struct<...>>`:
 
 ```text
-CTable.from_arrow(..., separate_nested_cols=True)
-CTable.from_parquet(..., separate_nested_cols=True)
-parquet-to-blosc2 ... --separate-nested-cols
+CTable.from_parquet(...)
+parquet-to-blosc2 input.parquet output.b2d
 ```
 
-Default remains current behavior until the layout and API are proven.
+Opt out when closer fidelity to the original Parquet row/schema shape is desired:
+
+```text
+CTable.from_parquet(..., separate_nested_cols=False)
+parquet-to-blosc2 ... --no-separate-nested-cols
+```
+
+`CTable.from_arrow(..., separate_nested_cols=True)` remains available for direct
+Arrow inputs.
 
 ### Phase B: eligibility for root flattening
 
@@ -471,8 +480,8 @@ For named repeated fields, element-level indexes should be deferred until
 
 ### Phase 1 — unnamed-root record stream import
 
-- [x] Implement opt-in `separate_nested_cols=True` for single unnamed top-level
-  `list<struct<...>>`.
+- [x] Implement `separate_nested_cols=True` support for single unnamed top-level
+  `list<struct<...>>`; make it the default for `CTable.from_parquet()` and the CLI.
 - [x] Import element struct leaves as normal nested CTable columns.
 - [x] Keep nested list fields inside the element struct as typed `ListArray` columns.
 - [x] Avoid `to_pylist()` for scalar leaves; fixed-width leaves use the Arrow → NumPy path.
@@ -596,7 +605,7 @@ Open follow-ups:
 1. Use the name `separate_nested_cols` for this behavior/API surface. It better
    describes the general physical goal: nested fields become separate physical
    CTable columns where possible.
-2. For qualifying schemas, unnamed-root list flattening should be automatic:
+2. For qualifying schemas, unnamed-root list flattening is automatic by default:
    - exactly one top-level field;
    - field name is the canonical unnamed root `""`;
    - field type is `list<struct<...>>` or `large_list<struct<...>>`.
@@ -605,7 +614,9 @@ Open follow-ups:
    artifact rather than a meaningful user column. Separating the element struct
    leaves produces a more natural CTable, improves analytics, and should usually
    improve compression for scalar leaves because each leaf is compressed with its
-   own dtype/codec path.
+   own dtype/codec path. Users can opt out with `separate_nested_cols=False` or
+   `--no-separate-nested-cols` when closer fidelity to the original Parquet schema
+   is desired.
 3. Store provenance metadata by default, but do not store original root offsets
    by default. Add an explicit future option if exact original grouping becomes
    important, e.g. `preserve_root_offsets=True`.
@@ -633,5 +644,8 @@ ct.where("payment.fare > 20")
 ct["trip.begin.lon"].mean()
 ```
 
-Do not make this default until storage format, row semantics, and export behavior
-are validated on real datasets.
+This is now the default for `CTable.from_parquet()` and `parquet-to-blosc2` for
+qualifying unnamed-root `list<struct<...>>` Parquet files. Pass
+`separate_nested_cols=False` in the library API, or `--no-separate-nested-cols`
+in the CLI, when preserving the original Parquet row/schema shape is more
+important than the separated column layout.

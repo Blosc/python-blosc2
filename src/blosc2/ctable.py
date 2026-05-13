@@ -4550,7 +4550,7 @@ class CTable(Generic[RowT]):
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
         blosc2_items_per_block: int | None = None,
         list_serializer: Literal["msgpack", "arrow"] = "msgpack",
-        separate_nested_cols: bool = False,
+        separate_nested_cols: bool = True,
         max_rows: int | None = None,
         **kwargs,
     ) -> CTable:
@@ -4643,6 +4643,15 @@ class CTable(Generic[RowT]):
             IPC/schema/dictionary metadata and buffer layout.
             Use ``"arrow"`` when import speed for complex nested lists matters more
             than minimizing file size and avoiding a PyArrow dependency at read time.
+
+        separate_nested_cols : bool, optional
+            Whether to separate qualifying nested columns during import. Defaults to
+            ``True``. In particular, a single unnamed top-level
+            ``list<struct<...>>`` field is treated as a root record stream: each list
+            element becomes a CTable row and struct leaves become ordinary nested
+            CTable columns. Use ``separate_nested_cols=False`` when closer fidelity to
+            the original Parquet row/schema shape is more important than the separated
+            column layout.
 
         max_rows : int or None, optional
             Maximum number of rows to import. For ordinary Parquet files this limits

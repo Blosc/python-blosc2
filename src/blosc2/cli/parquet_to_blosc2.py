@@ -178,7 +178,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Maximum number of CTable rows to import.  "
             "In normal mode this equals the number of Parquet rows read.  "
-            "With --separate-nested-cols the unit is list elements "
+            "With separate nested columns enabled for an unnamed-root list<struct<...>> "
+            "file, the unit is list elements "
             "(i.e. the number of rows in the resulting CTable), "
             "not outer Parquet rows."
         ),
@@ -271,15 +272,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--separate-nested-cols",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         dest="separate_nested_cols",
         help=(
             "When the Parquet file has a single unnamed top-level "
             "list<struct<\u2026>> field (the Awkward Array / Chicago-taxi layout), "
             "flatten the outer list so that each element becomes a CTable row "
             "and the struct leaves become separate physical columns "
-            "(e.g. trip.begin.lon, payment.fare).  "
-            "Without this flag the unnamed field is imported as a plain list column."
+            "(e.g. trip.begin.lon, payment.fare). Enabled by default; use "
+            "--no-separate-nested-cols to preserve the unnamed field as a plain "
+            "list column when closer Parquet schema fidelity is desired."
         ),
     )
     return parser
@@ -1450,8 +1453,19 @@ def average_parquet_row_group_size(input_path: Path) -> int | None:
     return max(1, round(metadata.num_rows / metadata.num_row_groups))
 
 
+def is_unnamed_root_parquet_input(input_path: Path) -> bool:
+    if input_path.suffix != ".parquet" or not input_path.exists():
+        return False
+    try:
+        pa, pq = require_pyarrow()
+        pf = pq.ParquetFile(input_path)
+        return blosc2.CTable._detect_unnamed_root_list_struct(pa, pf.schema_arrow)
+    except Exception:
+        return False
+
+
 def resolve_default_batch_sizes(args, *, parquet_specified: bool, blosc2_specified: bool) -> None:
-    if getattr(args, "separate_nested_cols", False):
+    if getattr(args, "separate_nested_cols", False) and is_unnamed_root_parquet_input(args.input_path):
         # In separate-nested mode the two batch-size options use different units:
         # Parquet batches are outer rows, while Blosc2 batches are flattened
         # CTable rows.  Keep them independent so a large write batch does not
