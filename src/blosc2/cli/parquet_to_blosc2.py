@@ -210,10 +210,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--list-serializer",
         choices=["msgpack", "arrow"],
-        default="msgpack",
+        default="arrow",
         help=(
-            "Serializer for imported list columns. 'msgpack' preserves the current default; "
-            "'arrow' stores Arrow list batches directly and can be faster for deeply nested lists."
+            "Serializer for imported list columns. 'arrow' is the default and stores Arrow list "
+            "batches directly, which is much faster for deeply nested lists but requires PyArrow "
+            "when reading those columns later. Use 'msgpack' to avoid that read-time dependency."
         ),
     )
     parser.add_argument("--use-dict", action="store_true", help="Enable C-Blosc2 dictionary compression.")

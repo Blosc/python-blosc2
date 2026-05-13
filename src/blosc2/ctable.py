@@ -4549,7 +4549,7 @@ class CTable(Generic[RowT]):
         auto_null_sentinels: bool = True,
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
         blosc2_items_per_block: int | None = None,
-        list_serializer: Literal["msgpack", "arrow"] = "msgpack",
+        list_serializer: Literal["msgpack", "arrow"] = "arrow",
         separate_nested_cols: bool = True,
         max_rows: int | None = None,
         **kwargs,
@@ -4633,16 +4633,13 @@ class CTable(Generic[RowT]):
             favors compression ratios but make random access slower.
 
         list_serializer : {"msgpack", "arrow"}, optional
-            Serializer used for imported list columns. The default, ``"msgpack"``,
-            keeps list-column stores independent of PyArrow and often produces
-            smaller files, especially for many small/simple lists. ``"arrow"``
-            stores Arrow list batches directly; this can make imports of deeply
-            nested or ``list<struct<...>>`` columns much faster and may preserve
-            Arrow-native nested layouts more directly. The tradeoffs are that list
-            column access later requires PyArrow, output can be larger due to Arrow
-            IPC/schema/dictionary metadata and buffer layout.
-            Use ``"arrow"`` when import speed for complex nested lists matters more
-            than minimizing file size and avoiding a PyArrow dependency at read time.
+            Serializer used for imported list columns. The default, ``"arrow"``,
+            stores Arrow list batches directly and is much faster for deeply nested
+            or ``list<struct<...>>`` columns. The tradeoff is that accessing those
+            list columns later requires PyArrow. Use ``"msgpack"`` to keep
+            list-column stores independent of PyArrow at read time; it can be
+            smaller for simple lists but is much slower and more memory-intensive
+            for deeply nested data.
 
         separate_nested_cols : bool, optional
             Whether to separate qualifying nested columns during import. Defaults to
