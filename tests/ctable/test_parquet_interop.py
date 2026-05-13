@@ -740,6 +740,60 @@ def test_parquet_cli_nested_progress_skips_write_lines(tmp_path, capsys):
     assert "    write" not in captured.out
 
 
+def test_parquet_cli_separate_nested_flattens_top_level_structs(tmp_path, capsys):
+    from blosc2.cli.parquet_to_blosc2 import main
+
+    trip_type = pa.struct(
+        [
+            pa.field("sec", pa.float32()),
+            pa.field("begin", pa.struct([pa.field("lon", pa.float64()), pa.field("lat", pa.float64())])),
+        ]
+    )
+    path = tmp_path / "struct.parquet"
+    out = tmp_path / "struct.b2d"
+    table = pa.table(
+        {
+            "trip": pa.array(
+                [
+                    {"sec": 10.0, "begin": {"lon": -87.6, "lat": 41.8}},
+                    {"sec": 20.0, "begin": {"lon": -87.7, "lat": 41.9}},
+                ],
+                type=trip_type,
+            ),
+            "fare": pa.array([15.0, 25.0], type=pa.float32()),
+        }
+    )
+    pq.write_table(table, path)
+
+    assert main([str(path), str(out)]) == 0
+    captured = capsys.readouterr()
+    assert "Struct→columns:      1" in captured.out
+
+    ct = CTable.open(str(out), mode="r")
+    assert ct.col_names == ["trip.sec", "trip.begin.lon", "trip.begin.lat", "fare"]
+    np.testing.assert_allclose(ct["trip.begin.lon"][:], [-87.6, -87.7])
+    ct.close()
+
+
+def test_parquet_cli_no_separate_nested_preserves_top_level_struct_as_list(tmp_path):
+    from blosc2.cli.parquet_to_blosc2 import main
+
+    trip_type = pa.struct([pa.field("sec", pa.float32())])
+    path = tmp_path / "struct.parquet"
+    out = tmp_path / "struct.b2d"
+    pq.write_table(
+        pa.table({"trip": pa.array([{"sec": 10.0}, {"sec": 20.0}], type=trip_type)}),
+        path,
+    )
+
+    assert main(["--no-separate-nested-cols", str(path), str(out)]) == 0
+
+    ct = CTable.open(str(out), mode="r")
+    assert ct.col_names == ["trip"]
+    assert ct["trip"][:] == [[{"sec": 10.0}], [{"sec": 20.0}]]
+    ct.close()
+
+
 def test_parquet_cli_timestamp_unit_auto(tmp_path):
     from blosc2.cli.parquet_to_blosc2 import main
 

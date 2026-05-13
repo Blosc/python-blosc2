@@ -281,13 +281,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         dest="separate_nested_cols",
         help=(
-            "When the Parquet file has a single unnamed top-level "
-            "list<struct<\u2026>> field (the Awkward Array / Chicago-taxi layout), "
-            "flatten the outer list so that each element becomes a CTable row "
-            "and the struct leaves become separate physical columns "
-            "(e.g. trip.begin.lon, payment.fare). Enabled by default; use "
-            "--no-separate-nested-cols to preserve the unnamed field as a plain "
-            "list column when closer Parquet schema fidelity is desired."
+            "Import nested columns as separate CTable columns where possible. "
+            "Top-level struct fields are flattened recursively into dotted leaf columns "
+            "(e.g. trip.begin.lon).  For a single unnamed top-level list<struct<…>> "
+            "field (the Awkward Array / Chicago-taxi layout), flatten the outer list "
+            "so that each element becomes a CTable row. Enabled by default; use "
+            "--no-separate-nested-cols when closer Parquet schema fidelity is desired."
         ),
     )
     return parser
@@ -351,6 +350,7 @@ def classify_columns(  # noqa: C901
     fixed_bytes_lengths: dict[str, int] | None = None,
     *,
     decode_dictionaries: bool = False,
+    separate_nested_cols: bool = True,
 ):
     """Classify Parquet schema columns into importable categories."""
     fixed_cols: dict[str, object] = {}
@@ -363,8 +363,14 @@ def classify_columns(  # noqa: C901
     for field in schema:
         t = field.type
         if pa.types.is_struct(t):
-            struct_wrap_cols[field.name] = pa.list_(t)
-            conversions[field.name] = {"conversion": "struct_wrapped_as_singleton_list"}
+            if separate_nested_cols:
+                # Let CTable.from_arrow() apply its normal struct flattening so
+                # top-level structs become dotted leaf columns.
+                fixed_cols[field.name] = field
+                conversions[field.name] = {"conversion": "struct_flattened_to_columns"}
+            else:
+                struct_wrap_cols[field.name] = pa.list_(t)
+                conversions[field.name] = {"conversion": "struct_wrapped_as_singleton_list"}
             continue
         if pa.types.is_list(t) or pa.types.is_large_list(t):
             value_type = t.value_type
@@ -833,6 +839,9 @@ def print_import_plan(
     dict_decoded_cols = [
         n for n, e in conversions.items() if e.get("conversion") == "dictionary_decoded_to_vlstring"
     ]
+    flattened_structs = [
+        n for n, e in conversions.items() if e.get("conversion") == "struct_flattened_to_columns"
+    ]
     wrapped_structs = list(struct_wrap_cols)
     skipped = {n: e for n, e in conversions.items() if e.get("conversion") == "skipped"}
     print(f"Input:                 {input_path} ({input_path.stat().st_size / 1e6:.1f} MB)")
@@ -854,6 +863,7 @@ def print_import_plan(
     print(f"  Dictionary:          {len(dict_cols)}")
     if dict_decoded_cols:
         print(f"  Dict→vlstring:       {len(dict_decoded_cols)}")
+    print(f"  Struct→columns:      {len(flattened_structs)}")
     print(f"  Struct→list:         {len(wrapped_structs)}")
     print(f"  Nullable scalars:    {len(nullable_scalars)}")
     print(f"  Skipped unsupported: {len(skipped)}")
@@ -1176,6 +1186,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         fixed_string_lengths,
         fixed_bytes_lengths,
         decode_dictionaries=getattr(args, "decode_dictionaries", False),
+        separate_nested_cols=getattr(args, "separate_nested_cols", True),
     )
     maybe_memory_report(args, "after column classification", pa)
 
