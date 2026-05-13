@@ -71,7 +71,8 @@ Parquet file is an unnamed top-level `list<struct<...>>` record stream.
 5. Keep named `list<struct<...>>` fields as typed `ListArray` columns by default.
 6. Store enough provenance metadata to explain that an unnamed root list was
    flattened, without requiring exact original Parquet row grouping roundtrip.
-7. Keep implementation opt-in first, until behavior is validated on real data.
+7. Make separated nested-column import the default for Parquet inputs that qualify,
+   with explicit opt-out for schema-fidelity workflows.
 
 ## Non-goals for first implementation
 
@@ -291,7 +292,10 @@ Use `ObjectArray` only as fallback when:
 
 The feature started as opt-in, but is now enabled by default for
 `CTable.from_parquet()` and `parquet-to-blosc2` when the Parquet schema qualifies
-as a single unnamed root `list<struct<...>>`:
+as a single unnamed root `list<struct<...>>`.  The same `separate_nested_cols`
+default also lets ordinary top-level Arrow/Parquet `struct<...>` fields follow
+`CTable.from_arrow()` semantics and flatten recursively into dotted leaf columns
+without changing row cardinality:
 
 ```text
 CTable.from_parquet(...)
@@ -306,7 +310,8 @@ parquet-to-blosc2 ... --no-separate-nested-cols
 ```
 
 `CTable.from_arrow(..., separate_nested_cols=True)` remains available for direct
-Arrow inputs.
+Arrow inputs.  Named list fields, including named `list<struct<...>>`, remain
+typed `ListArray` columns by default.
 
 ### Phase B: eligibility for root flattening
 
@@ -492,14 +497,19 @@ For named repeated fields, element-level indexes should be deferred until
 
 Acceptance tests:
 
-- [ ] Simple unnamed `list<struct<scalar leaves>>` imports to `ct["leaf"]` columns.
-- [x] Chicago taxi sample imports without `column_0` via `parquet-to-blosc2 ... --separate-nested-cols`.
+- [x] Simple unnamed `list<struct<scalar leaves>>` imports to dotted CTable columns.
+- [x] Chicago taxi-style sample imports without `column_0` via `CTable.from_parquet()`
+  and `parquet-to-blosc2`.
 - [x] `CTable.from_parquet(..., max_rows=N)` limits ordinary rows and flattened
   unnamed-root element rows.
-- [ ] `ct.where("payment.fare > 20")` works directly.
-- [ ] `ct["trip.begin.lon"].mean()` works directly.
-- [ ] Reopen persistent `.b2d` / `.b2z`.
-- [ ] `to_arrow()` emits a clean logical nested table.
+- [x] `ct.where("payment.fare > 20")` works directly.
+- [x] `ct["trip.begin.lon"].mean()` works directly.
+- [x] Reopen persistent `.b2d` / `.b2z`.
+- [x] `to_arrow()` emits a clean logical nested table.
+- [x] CLI `--no-separate-nested-cols` preserves ordinary top-level structs as
+  singleton-list columns for closer schema fidelity.
+- [x] CLI default `--separate-nested-cols` flattens ordinary top-level structs into
+  dotted columns consistently with `CTable.from_arrow()`.
 
 ### Phase 2 — nested list children inside root elements
 
@@ -509,6 +519,13 @@ Acceptance tests:
   columns.
 - [x] Add fast Arrow import path for Arrow-serialized list columns via
   `ListArray.extend_arrow()`, avoiding Python object materialization.
+- [x] Make Arrow the default list serializer for Parquet imports in both
+  `CTable.from_parquet()` and `parquet-to-blosc2`; msgpack remains available for
+  read-time PyArrow independence.
+- [x] Add serializer-aware batching defaults for the CLI: Arrow uses the sampled
+  flattened Parquet-batch scale, while msgpack uses
+  `compute_chunks_blocks(estimated_nrows).blocks[0]` to avoid giant Python object
+  payloads.
 - [x] Expose `items_per_block` in `BatchArray.info` and `ListArray.info` so the
   internal block-size heuristic is visible when tuning compression/random access.
 - [x] Retune `BatchArray._guess_blocksize()` cache-budget tiers so default
@@ -548,7 +565,7 @@ parquet-to-blosc2 chicago-taxi.parquet chicago-taxi.b2d \
   --overwrite --separate-nested-cols --max-rows 200_000
 ```
 
-showed that the default msgpack list serializer spends most of its time in the
+showed that the old msgpack list serializer spends most of its time in the
 list-column conversion path:
 
 - `CTable._write_arrow_batch()` dominated the import path.
@@ -558,12 +575,13 @@ list-column conversion path:
   `_arrow_column_to_numpy()`, so the main Python-object materialization issue was
   the nested `ListArray` column, not all columns.
 
-Using Arrow serialization for nested list columns avoids this conversion:
+Using Arrow serialization for nested list columns avoids this conversion.  This
+is now the default for Parquet imports; pass `--list-serializer msgpack` only when
+read-time PyArrow independence is more important than import speed:
 
 ```bash
 parquet-to-blosc2 chicago-taxi.parquet chicago-taxi.b2d \
-  --overwrite --separate-nested-cols --max-rows 200_000 \
-  --list-serializer arrow
+  --overwrite --separate-nested-cols --max-rows 200_000
 ```
 
 Observed result on the 200k-row sample:
@@ -595,8 +613,8 @@ Open follow-ups:
 - Add tests around the new `.info` fields and block-size heuristic.
 - Benchmark random lookup latency versus compression ratio for different
   `items_per_block` values on Arrow list-struct payloads.
-- Consider whether `--list-serializer arrow` should become the recommended or
-  default path for Chicago taxi-style nested list columns.
+- Document the read-time PyArrow requirement for Arrow-serialized list columns in
+  user-facing Parquet import docs.
 
 ---
 
@@ -628,10 +646,10 @@ Open follow-ups:
 
 ---
 
-## Recommended first milestone
+## Current status and remaining work
 
-Implement **opt-in unnamed-root record stream flattening** for one top-level
-`list<struct<...>>` column, enough to support:
+The first milestone is implemented: unnamed-root record stream flattening for one
+top-level `list<struct<...>>` column supports:
 
 ```python
 ct = blosc2.CTable.from_parquet(
@@ -649,3 +667,27 @@ qualifying unnamed-root `list<struct<...>>` Parquet files. Pass
 `separate_nested_cols=False` in the library API, or `--no-separate-nested-cols`
 in the CLI, when preserving the original Parquet row/schema shape is more
 important than the separated column layout.
+
+Implemented beyond the original first milestone:
+
+- ordinary top-level structs flatten into dotted columns by default in the CLI;
+- `parquet-to-blosc2 --progress` is opt-in and reports ETA for unnamed-root
+  imports;
+- unnamed-root CLI imports write one flattened Parquet batch at a time, capped by
+  `MAX_ELEMENT_WRITE_BATCH`;
+- CLI summary output distinguishes unnamed-root row flattening from general
+  nested-column separation and reports serializer-aware batching choices;
+- Arrow is the default list serializer for Parquet imports, with msgpack still
+  available explicitly;
+- Arrow/msgpack use different default BatchArray sizes to match their memory
+  behavior.
+
+Remaining work:
+
+- exact reconstruction of original unnamed-root Parquet list grouping, if needed;
+- `ct.explode()` and parent/element mapping for named repeated fields;
+- recursive flattening of nested repeated fields such as `trip.path.londiff`;
+- user-facing documentation for Arrow-serialized list-column read-time PyArrow
+  requirements;
+- tests and benchmarks for `.info` block-size fields, `items_per_block` tuning,
+  compression ratio, and random lookup latency.
