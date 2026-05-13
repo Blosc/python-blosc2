@@ -47,7 +47,7 @@ import blosc2
 from blosc2.schema_compiler import _validate_column_name, schema_to_dict
 
 DEFAULT_BATCH_SIZE = 2048
-DEFAULT_SEPARATE_NESTED_BLOSC2_BATCH_SIZE = 100_000
+MAX_ELEMENT_WRITE_BATCH = 1_000_000  # cap on flattened elements yielded per write
 
 
 def require_pyarrow():
@@ -194,7 +194,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--blosc2-batch-size",
         type=int,
         default=None,
-        help="Rows grouped into each persisted BatchArray batch for imported Blosc2 varlen/list columns.",
+        help="Internal batch_rows for BatchArray/varlen columns in the imported CTable. "
+        "Defaults to the blocks value from blosc2.compute_chunks_blocks() based on "
+        "the estimated CTable row count.",
     )
     parser.add_argument(
         "--blosc2-items-per-block",
@@ -934,6 +936,7 @@ def _flatten_root_batches_with_progress(
     pf,
     inner_schema,
     args,
+    capacity_hint=None,
 ):
     """Yield flattened :class:`pyarrow.RecordBatch` objects from an unnamed-root Parquet file.
 
@@ -942,18 +945,18 @@ def _flatten_root_batches_with_progress(
     row limit.  When ``args.progress`` is enabled, progress is printed per
     Parquet batch according to ``args.batch_report_every``.
 
-    Each flattened Parquet batch is further split into write sub-batches of
-    ``args.blosc2_batch_size`` elements before being yielded, so that the
-    RecordBatches passed to CTable are bounded in memory even when a single
-    Parquet batch contains thousands of list elements (e.g. Awkward-style
-    files where every outer row is a large list).
+    Each flattened Parquet batch is yielded as a single write to CTable so that
+    the per-write Python/Arrow overhead is amortised over as many rows as
+    possible.  Batches exceeding ``MAX_ELEMENT_WRITE_BATCH`` are split into
+    cap-sized chunks to bound memory usage.
     """
     rows_done = 0
     max_rows = args.max_rows
     t0 = time.perf_counter()
     # total_str is the CTable-row (element) limit for the progress display.
     total_str = f"{max_rows:,} CTable rows" if max_rows is not None else "?"
-    b2_size = args.blosc2_batch_size  # element-level write-batch size
+    # Use capacity_hint as the estimated total for ETA when max_rows is not set.
+    estimated_total = max_rows if max_rows is not None else capacity_hint
 
     for parquet_batch_n, raw_batch in enumerate(
         pf.iter_batches(batch_size=args.parquet_batch_size), start=1
@@ -976,35 +979,34 @@ def _flatten_root_batches_with_progress(
             if len(struct_values) > remaining:
                 struct_values = struct_values.slice(0, remaining)
 
-        # Sub-slice into write batches of b2_size elements so that each
-        # RecordBatch handed to CTable is bounded in memory even when one
-        # Parquet row group expands to hundreds of thousands of list elements.
+        # Yield the whole flattened batch as one write; split only when it
+        # exceeds MAX_ELEMENT_WRITE_BATCH to bound peak memory.
         n_elems = len(struct_values)
 
-        # Report the Parquet batch separately from the actual CTable writes.
-        # The write lines below are printed after each write has happened; this
-        # line only says how many CTable rows were produced by flattening this
-        # Parquet batch and how many CTable write batches will follow.
         elapsed = time.perf_counter() - t0
         rate = rows_done / elapsed if elapsed > 0 and rows_done > 0 else 0.0
+        eta_str = (
+            f"  ETA {(estimated_total - rows_done) / rate:6.0f}s"
+            if rate > 0 and estimated_total is not None
+            else ""
+        )
         report_progress = parquet_batch_n % args.batch_report_every == 0 or (
             max_rows is not None and rows_done + n_elems >= max_rows
         )
-        n_writes = (n_elems + b2_size - 1) // b2_size
+        n_writes = (n_elems + MAX_ELEMENT_WRITE_BATCH - 1) // MAX_ELEMENT_WRITE_BATCH
         if args.progress and report_progress:
             print(
                 f"  parquet batch {parquet_batch_n:4d}: "
                 f"{n_elems:>12,} CTable rows -> {n_writes:,} write(s)  "
                 f"done {rows_done:>12,}/{total_str}  "
-                f"{elapsed:7.1f}s  {rate / 1e3:7.1f}k rows/s",
+                f"{elapsed:7.1f}s  {rate / 1e3:7.1f}k rows/s{eta_str}",
                 flush=True,
             )
 
-        for offset in range(0, n_elems, b2_size):
-            chunk = struct_values.slice(offset, min(b2_size, n_elems - offset))
+        for offset in range(0, n_elems, MAX_ELEMENT_WRITE_BATCH):
+            chunk = struct_values.slice(offset, min(MAX_ELEMENT_WRITE_BATCH, n_elems - offset))
             sub_batch = pa.RecordBatch.from_struct_array(chunk)
-            n_write_rows = len(sub_batch)
-            rows_done += n_write_rows
+            rows_done += len(sub_batch)
             yield sub_batch
 
         if report_batch_mem:
@@ -1076,7 +1078,7 @@ def import_unnamed_root_separate_cols(
     if args.max_rows is not None:
         print(f"Max CTable rows:       {args.max_rows:,} (list elements)")
     print(f"Parquet batch size:    {args.parquet_batch_size:,} outer rows")
-    print(f"Element sub-batch:     {args.blosc2_batch_size:,} elements")
+    print(f"Write cap:             {MAX_ELEMENT_WRITE_BATCH:,} elements/write (max)")
     if args.blosc2_items_per_block is not None:
         print(f"Blosc2 items/block:    {args.blosc2_items_per_block:,}")
     print(f"List serializer:       {args.list_serializer}")
@@ -1090,7 +1092,7 @@ def import_unnamed_root_separate_cols(
 
     ct = blosc2.CTable.from_arrow(
         inner_schema,
-        _flatten_root_batches_with_progress(pa, pf, inner_schema, args),
+        _flatten_root_batches_with_progress(pa, pf, inner_schema, args, capacity_hint=capacity_hint),
         urlpath=str(output_path),
         mode="w",
         cparams=cparams,
@@ -1139,7 +1141,7 @@ def import_unnamed_root_separate_cols(
 def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
     if args.parquet_batch_size <= 0:
         raise ValueError("--parquet-batch-size must be positive")
-    if args.blosc2_batch_size <= 0:
+    if args.blosc2_batch_size is not None and args.blosc2_batch_size <= 0:
         raise ValueError("--blosc2-batch-size must be positive")
     if args.blosc2_items_per_block is not None and args.blosc2_items_per_block <= 0:
         raise ValueError("--blosc2-items-per-block must be positive")
@@ -1483,7 +1485,7 @@ def resolve_default_batch_sizes(args, *, parquet_specified: bool, blosc2_specifi
         if not parquet_specified:
             args.parquet_batch_size = average_parquet_row_group_size(args.input_path) or DEFAULT_BATCH_SIZE
         if not blosc2_specified:
-            args.blosc2_batch_size = DEFAULT_SEPARATE_NESTED_BLOSC2_BATCH_SIZE
+            args.blosc2_batch_size = None  # derive from estimated CTable row count in import
         return
 
     if parquet_specified and not blosc2_specified:
