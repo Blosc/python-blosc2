@@ -1867,6 +1867,79 @@ class _NestedColumnNamespace:
         return f"<NestedColumnNamespace {self._prefix!r}>"
 
 
+class _LazyColumnDict(dict):
+    """Dict-like column cache that opens persistent columns on first use.
+
+    Persistent CTables can be wide, and opening every stored column eagerly is
+    expensive for workloads that touch only a small subset of columns, e.g.
+    ``blosc2.open(path).trip.km.sum()`` on a nested table.  Keep the public and
+    internal ``_cols`` access pattern mostly unchanged while deferring each
+    ``storage.open_*_column()`` call until that column is actually requested.
+
+    Methods that logically need all materialized columns, such as ``items()``
+    and ``values()``, force-load the cache for compatibility with normal
+    ``dict`` usage.  Name-oriented operations, such as ``keys()``, iteration,
+    ``len()``, and ``in``, operate from the schema column list without opening
+    the column payloads.
+    """
+
+    def __init__(self, table: CTable, storage: TableStorage, col_names: list[str]):
+        super().__init__()
+        self._table = table
+        self._storage = storage
+        self._col_names = list(col_names)
+        self._available = set(col_names)
+
+    def _load(self, name: str):
+        if name not in self._available:
+            raise KeyError(name)
+        if not dict.__contains__(self, name):
+            dict.__setitem__(self, name, self._table._open_column_from_storage(self._storage, name))
+        return dict.__getitem__(self, name)
+
+    def _load_all(self) -> None:
+        for name in self._col_names:
+            self._load(name)
+
+    def __getitem__(self, name: str):
+        return self._load(name)
+
+    def get(self, name: str, default=None):
+        return self._load(name) if name in self._available else default
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._available
+
+    def __iter__(self):
+        return iter(self._col_names)
+
+    def __len__(self) -> int:
+        return len(self._col_names)
+
+    def keys(self):
+        return dict.fromkeys(self._col_names).keys()
+
+    def items(self):
+        self._load_all()
+        return dict.items(self)
+
+    def values(self):
+        self._load_all()
+        return dict.values(self)
+
+    def __setitem__(self, name: str, value) -> None:
+        if name not in self._available:
+            self._available.add(name)
+            self._col_names.append(name)
+        dict.__setitem__(self, name, value)
+
+    def __delitem__(self, name: str) -> None:
+        self._available.remove(name)
+        self._col_names.remove(name)
+        if dict.__contains__(self, name):
+            dict.__delitem__(self, name)
+
+
 class CTable(Generic[RowT]):
     """Columnar compressed table with typed columns and row-oriented access."""
 
@@ -1960,15 +2033,9 @@ class CTable(Generic[RowT]):
             )
             self.col_names = [c["name"] for c in schema_dict["columns"]]
             self._valid_rows = storage.open_valid_rows()
+            self._cols = _LazyColumnDict(self, storage, self.col_names)
             for name in self.col_names:
                 cc = self._schema.columns_by_name[name]
-                if self._is_list_column(cc):
-                    col = storage.open_list_column(name)
-                elif self._is_varlen_scalar_column(cc):
-                    col = storage.open_varlen_scalar_column(name, cc.spec)
-                else:
-                    col = storage.open_column(name)
-                self._cols[name] = col
                 self._col_widths[name] = max(len(name), cc.display_width)
             self._n_rows = None
             self._last_pos = None  # resolve lazily on first write
@@ -2287,6 +2354,17 @@ class CTable(Generic[RowT]):
                 result[col.name] = np.array(val, dtype=col.dtype).item()
         return result
 
+    def _open_column_from_storage(self, storage: TableStorage, name: str):
+        """Open one stored column from *storage*."""
+        cc = self._schema.columns_by_name[name]
+        if self._is_list_column(cc):
+            return storage.open_list_column(name)
+        if self._is_varlen_scalar_column(cc):
+            return storage.open_varlen_scalar_column(name, cc.spec)
+        if self._is_dictionary_column(cc):
+            return storage.open_dictionary_column(name, cc.spec)
+        return storage.open_column(name)
+
     def _resolve_last_pos(self) -> int:
         """Return the physical index of the next write slot.
 
@@ -2577,6 +2655,12 @@ class CTable(Generic[RowT]):
     # ------------------------------------------------------------------
     # Open existing table (classmethod)
     # ------------------------------------------------------------------
+
+    @classmethod
+    def _open_from_existing_filestore(cls, urlpath: str, *, mode: str, store: blosc2.TreeStore) -> CTable:
+        """Open a root CTable reusing an already-opened TreeStore."""
+        storage = FileTableStorage(urlpath, mode, store=store)
+        return cls._open_from_storage(storage)
 
     @classmethod
     def open(cls, urlpath: str, *, mode: str = "r") -> CTable:
@@ -2871,16 +2955,9 @@ class CTable(Generic[RowT]):
         obj.base = None
 
         obj._valid_rows = storage.open_valid_rows()
+        obj._cols = _LazyColumnDict(obj, storage, col_names)
         for name in col_names:
             cc = schema.columns_by_name[name]
-            if obj._is_list_column(cc):
-                obj._cols[name] = storage.open_list_column(name)
-            elif obj._is_varlen_scalar_column(cc):
-                obj._cols[name] = storage.open_varlen_scalar_column(name, cc.spec)
-            elif obj._is_dictionary_column(cc):
-                obj._cols[name] = storage.open_dictionary_column(name, cc.spec)
-            else:
-                obj._cols[name] = storage.open_column(name)
             obj._col_widths[name] = max(len(name), cc.display_width)
 
         obj._n_rows = None

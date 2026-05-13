@@ -363,13 +363,13 @@ class FileTableStorage(TableStorage):
         ``'r'`` — open existing read-only.
     """
 
-    def __init__(self, urlpath: str, mode: str) -> None:
+    def __init__(self, urlpath: str, mode: str, store: blosc2.TreeStore | None = None) -> None:
         if mode not in ("r", "a", "w"):
             raise ValueError(f"mode must be 'r', 'a', or 'w'; got {mode!r}")
         self._root = urlpath
         self._mode = mode
         self._meta: blosc2.SChunk | None = None
-        self._store: blosc2.TreeStore | None = None
+        self._store: blosc2.TreeStore | None = store
 
     # ------------------------------------------------------------------
     # Key helpers
