@@ -662,6 +662,29 @@ class TestErrors:
         with pytest.raises(ValueError, match="batch_size"):
             CTable.from_parquet(path, batch_size=0)
 
+    def test_invalid_max_rows_from_parquet(self, tmp_path):
+        t = CTable(Row, new_data=DATA10)
+        path = tmp_path / "x.parquet"
+        t.to_parquet(path)
+        with pytest.raises(ValueError, match="max_rows"):
+            CTable.from_parquet(path, max_rows=-1)
+
+    def test_max_rows_from_parquet_limits_rows(self, tmp_path):
+        t = CTable(Row, new_data=DATA10)
+        path = tmp_path / "x.parquet"
+        t.to_parquet(path)
+        out = CTable.from_parquet(path, batch_size=4, max_rows=6)
+        assert len(out) == 6
+        np.testing.assert_array_equal(out["id"][:], np.arange(6))
+
+    def test_max_rows_zero_from_parquet_imports_empty_table(self, tmp_path):
+        t = CTable(Row, new_data=DATA10)
+        path = tmp_path / "x.parquet"
+        t.to_parquet(path)
+        out = CTable.from_parquet(path, max_rows=0)
+        assert len(out) == 0
+        assert out.col_names == ["id", "score", "active", "label"]
+
     def test_string_truncation_error(self, tmp_path):
         """Importing longer strings than max_length raises ValueError."""
         at = pa.table({"name": pa.array(["a" * 300, "b"], type=pa.string())})

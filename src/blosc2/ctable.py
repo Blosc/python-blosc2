@@ -4202,7 +4202,7 @@ class CTable(Generic[RowT]):
         return pa.schema(list(struct_type))
 
     @staticmethod
-    def _flatten_root_list_struct_batches(pa, inner_schema, batches):
+    def _flatten_root_list_struct_batches(pa, inner_schema, batches, max_rows: int | None = None):
         """Yield flattened :class:`pyarrow.RecordBatch` objects from an unnamed root stream.
 
         For each incoming batch (which has a single list<struct<...>> column),
@@ -4220,16 +4220,27 @@ class CTable(Generic[RowT]):
         batches:
             Iterable of incoming :class:`~pyarrow.RecordBatch` objects from the
             unnamed-root Parquet file.
+        max_rows:
+            Optional maximum number of flattened element rows to yield.
         """
+        rows_seen = 0
         for batch in batches:
+            if max_rows is not None and rows_seen >= max_rows:
+                break
             list_array = batch.column(0)
             # flatten() skips null outer list rows and concatenates element values
             struct_values = list_array.flatten()
-            if len(struct_values) == 0:
+            if max_rows is not None:
+                remaining = max_rows - rows_seen
+                if len(struct_values) > remaining:
+                    struct_values = struct_values.slice(0, remaining)
+            n_values = len(struct_values)
+            if n_values == 0:
                 # Emit an empty record batch that still carries the inner schema
                 empty_arrays = [pa.array([], type=f.type) for f in inner_schema]
                 yield pa.record_batch(empty_arrays, schema=inner_schema)
                 continue
+            rows_seen += n_values
             yield pa.RecordBatch.from_struct_array(struct_values)
 
     @staticmethod
@@ -4524,7 +4535,7 @@ class CTable(Generic[RowT]):
                 writer.write_table(table, row_group_size=row_group_size or len(batch))
 
     @classmethod
-    def from_parquet(
+    def from_parquet(  # noqa: C901
         cls,
         path,
         *,
@@ -4540,6 +4551,7 @@ class CTable(Generic[RowT]):
         blosc2_items_per_block: int | None = None,
         list_serializer: Literal["msgpack", "arrow"] = "msgpack",
         separate_nested_cols: bool = False,
+        max_rows: int | None = None,
         **kwargs,
     ) -> CTable:
         """Read a Parquet file into a :class:`CTable`.
@@ -4632,6 +4644,11 @@ class CTable(Generic[RowT]):
             Use ``"arrow"`` when import speed for complex nested lists matters more
             than minimizing file size and avoiding a PyArrow dependency at read time.
 
+        max_rows : int or None, optional
+            Maximum number of rows to import. For ordinary Parquet files this limits
+            Parquet/CTable rows. For unnamed-root ``list<struct<...>>`` files imported
+            with ``separate_nested_cols=True``, this limits flattened element rows.
+
         **kwargs
             Additional keyword arguments forwarded to ``pyarrow.parquet.ParquetFile``.
             Use these for Parquet-reader-specific options supported by PyArrow.
@@ -4649,6 +4666,8 @@ class CTable(Generic[RowT]):
             If :mod:`pyarrow` is not installed.
         ValueError
             If ``batch_size`` is not greater than 0.
+        ValueError
+            If ``max_rows`` is negative.
         ValueError
             If ``columns`` contains duplicate names.
         Exception
@@ -4688,6 +4707,8 @@ class CTable(Generic[RowT]):
         pq = cls._require_pyarrow_parquet("from_parquet()")
         pa = cls._require_pyarrow("from_parquet()")
         cls._validate_arrow_batch_size(batch_size)
+        if max_rows is not None and max_rows < 0:
+            raise ValueError("max_rows must be non-negative")
         string_max_length = kwargs.pop("string_max_length", None)
         pf = pq.ParquetFile(path, **kwargs)
         arrow_schema = pf.schema_arrow
@@ -4743,14 +4764,67 @@ class CTable(Generic[RowT]):
 
             batches = _renamed_batches(batches, renamed)
 
+        def _limited_batches(batch_iter, limit: int):
+            rows_seen = 0
+            for batch in batch_iter:
+                if rows_seen >= limit:
+                    break
+                remaining = limit - rows_seen
+                if len(batch) > remaining:
+                    batch = batch.slice(0, remaining)
+                rows_seen += len(batch)
+                yield batch
+
+        # For unnamed-root flattening, max_rows applies to flattened element rows,
+        # not to the outer Parquet rows.  Pre-flatten here when a limit is requested
+        # so the limit can be enforced precisely before handing batches to from_arrow.
+        if _is_unnamed_root_flatten and max_rows is not None:
+            inner_schema = cls._inner_schema_for_unnamed_root(pa, arrow_schema)
+            limited_flat_batches = cls._flatten_root_list_struct_batches(
+                pa, inner_schema, batches, max_rows=max_rows
+            )
+            ct = cls.from_arrow(
+                inner_schema,
+                limited_flat_batches,
+                urlpath=urlpath,
+                mode=mode,
+                cparams=cparams,
+                dparams=dparams,
+                validate=validate,
+                capacity_hint=max_rows,
+                string_max_length=string_max_length,
+                auto_null_sentinels=auto_null_sentinels,
+                blosc2_batch_size=blosc2_batch_size,
+                blosc2_items_per_block=blosc2_items_per_block,
+                list_serializer=list_serializer,
+                separate_nested_cols=False,
+            )
+            nested_meta = ct._schema.metadata.get("nested", {})
+            nested_meta["original_root"] = {
+                "kind": "unnamed_list_struct",
+                "field_name": "",
+                "preserve_grouping": False,
+            }
+            ct._schema.metadata["nested"] = nested_meta
+            ct._storage.save_schema(schema_to_dict(ct._schema))
+            return ct
+
+        if max_rows is not None:
+            batches = _limited_batches(batches, max_rows)
+
         # When flattening a root list<struct<...>>, the actual element count is not
         # known ahead of time.  Pass capacity_hint=None so that from_arrow falls back
         # to _EXPECTED_SIZE_DEFAULT (1 M), which gives compute_chunks_blocks() a
         # reasonable block size instead of the catastrophic (1, 1) produced by
         # capacity=1.  The CLI path computes a better estimate by sampling.
-        _capacity_hint = (
-            None if _is_unnamed_root_flatten else (pf.metadata.num_rows if pf.metadata is not None else None)
-        )
+        if _is_unnamed_root_flatten:
+            _capacity_hint = None
+        elif pf.metadata is not None:
+            _capacity_hint = (
+                pf.metadata.num_rows if max_rows is None else min(max_rows, pf.metadata.num_rows)
+            )
+        else:
+            _capacity_hint = max_rows
 
         return cls.from_arrow(
             arrow_schema,

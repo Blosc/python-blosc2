@@ -478,11 +478,15 @@ For named repeated fields, element-level indexes should be deferred until
 - [x] Avoid `to_pylist()` for scalar leaves; fixed-width leaves use the Arrow → NumPy path.
 - [x] Set `ct.nrows` to the total element count.
 - [x] Store `original_root` provenance metadata.
+- [x] Add `CTable.from_parquet(max_rows=...)`; for unnamed-root imports the limit
+  applies to flattened element rows.
 
 Acceptance tests:
 
 - [ ] Simple unnamed `list<struct<scalar leaves>>` imports to `ct["leaf"]` columns.
 - [x] Chicago taxi sample imports without `column_0` via `parquet-to-blosc2 ... --separate-nested-cols`.
+- [x] `CTable.from_parquet(..., max_rows=N)` limits ordinary rows and flattened
+  unnamed-root element rows.
 - [ ] `ct.where("payment.fare > 20")` works directly.
 - [ ] `ct["trip.begin.lon"].mean()` works directly.
 - [ ] Reopen persistent `.b2d` / `.b2z`.
