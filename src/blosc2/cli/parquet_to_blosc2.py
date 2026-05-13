@@ -1090,7 +1090,8 @@ def import_unnamed_root_separate_cols(
     print(f"Input:                 {input_path} ({input_path.stat().st_size / 1e6:.1f} MB)")
     print(f"Output:                {output_path}")
     print(f"CTable store:          {ctable_store_kind(output_path)}")
-    print("Mode:                  separate nested columns (unnamed-root list<struct<...>>)")
+    print("Mode:                  unnamed-root list<struct> flattening")
+    print("Nested columns:        separated into dotted CTable columns")
     if total_parquet_rows is not None:
         print(f"Parquet rows:          {total_parquet_rows:,}")
     if capacity_hint is not None:
@@ -1102,9 +1103,12 @@ def import_unnamed_root_separate_cols(
     if args.max_rows is not None:
         print(f"Max CTable rows:       {args.max_rows:,} (list elements)")
     print(f"Parquet batch size:    {args.parquet_batch_size:,} outer rows")
-    print(f"Write cap:             {MAX_ELEMENT_WRITE_BATCH:,} elements/write (max)")
-    blosc2_batch_auto = " (auto)" if getattr(args, "blosc2_batch_size_auto", False) else ""
-    print(f"Blosc2 batch size:     {args.blosc2_batch_size:,} BatchArray rows{blosc2_batch_auto}")
+    blosc2_batch_note = (
+        f"auto, max: {MAX_ELEMENT_WRITE_BATCH:,}"
+        if getattr(args, "blosc2_batch_size_auto", False)
+        else f"max: {MAX_ELEMENT_WRITE_BATCH:,}"
+    )
+    print(f"Blosc2 batch size:     {args.blosc2_batch_size:,} BatchArray rows ({blosc2_batch_note})")
     if args.blosc2_items_per_block is not None:
         print(f"Blosc2 items/block:    {args.blosc2_items_per_block:,}")
     print(f"List serializer:       {args.list_serializer}")
