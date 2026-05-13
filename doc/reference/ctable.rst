@@ -75,6 +75,19 @@ Construction
 .. automethod:: CTable.from_csv
 
 
+Parquet interoperability
+------------------------
+
+Parquet import/export is intended as logical data interchange between Parquet
+and Blosc2 CTable, not as exact preservation of Parquet's physical layout. For
+example, Parquet files whose top-level schema is an unnamed ``list<struct<...>>``
+may be imported as a regular CTable whose rows are the list elements and whose
+nested scalar fields are exposed as ordinary dotted columns. Exporting such a
+table writes a valid logical Parquet table, but does not attempt to reconstruct
+the original unnamed root-list grouping, row groups, encoding choices, or file
+metadata exactly.
+
+
 Null policy
 -----------
 

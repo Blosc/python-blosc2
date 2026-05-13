@@ -375,7 +375,9 @@ No `column_0` and no required `explode()` for this case.
 ## Arrow/Parquet export behavior
 
 Exact reproduction of the original unnamed `list<struct<...>>` Parquet row
-layout is not a phase-1 requirement.
+layout is not a goal by default. Blosc2 and Parquet have different storage
+models; import/export should preserve the logical data decently rather than
+promise byte- or schema-shape-exact Parquet roundtrips.
 
 Default export may write the clean logical table:
 
@@ -387,15 +389,9 @@ company: ...
 
 rather than wrapping rows back into an unnamed top-level `list<struct<...>>`.
 
-Future options could include:
-
-```python
-ct.to_parquet(..., root_list_group_size=...)
-ct.to_parquet(..., preserve_original_root_grouping=True)
-```
-
-If `preserve_original_root_grouping=True` is requested, original offsets/validity
-must have been stored at import time.
+A future compatibility option could preserve and re-emit the original root-list
+row grouping, but only if a concrete user need appears. If added, original
+offsets/validity would need to be stored at import time.
 
 ---
 
@@ -613,8 +609,8 @@ Open follow-ups:
 - Add tests around the new `.info` fields and block-size heuristic.
 - Benchmark random lookup latency versus compression ratio for different
   `items_per_block` values on Arrow list-struct payloads.
-- Document the read-time PyArrow requirement for Arrow-serialized list columns in
-  user-facing Parquet import docs.
+- Keep the read-time PyArrow requirement for Arrow-serialized list columns documented
+  in the `CTable.from_parquet()` docstring and CLI `--list-serializer` help.
 
 ---
 
@@ -636,8 +632,8 @@ Open follow-ups:
    `--no-separate-nested-cols` when closer fidelity to the original Parquet schema
    is desired.
 3. Store provenance metadata by default, but do not store original root offsets
-   by default. Add an explicit future option if exact original grouping becomes
-   important, e.g. `preserve_root_offsets=True`.
+   by default. Exact original Parquet root grouping is considered a low-priority
+   compatibility feature, not part of the normal CTable/Parquet interchange contract.
 4. `to_parquet()` should emit a clean logical nested table by default, e.g.
    `trip: struct<...>`, `payment: struct<...>`, `company: ...`, not a re-wrapped
    unnamed `list<struct>` with arbitrary grouping.
@@ -684,10 +680,7 @@ Implemented beyond the original first milestone:
 
 Remaining work:
 
-- exact reconstruction of original unnamed-root Parquet list grouping, if needed;
 - `ct.explode()` and parent/element mapping for named repeated fields;
 - recursive flattening of nested repeated fields such as `trip.path.londiff`;
-- user-facing documentation for Arrow-serialized list-column read-time PyArrow
-  requirements;
 - tests and benchmarks for `.info` block-size fields, `items_per_block` tuning,
   compression ratio, and random lookup latency.
