@@ -696,6 +696,50 @@ class TestErrors:
             CTable.from_parquet(path, string_max_length=10)
 
 
+def test_parquet_cli_progress_is_opt_in(tmp_path, capsys):
+    from blosc2.cli.parquet_to_blosc2 import main
+
+    path = tmp_path / "progress.parquet"
+    out = tmp_path / "progress.b2d"
+    pq.write_table(pa.table({"x": pa.array([1, 2, 3], type=pa.int64())}), path)
+
+    assert main(["--parquet-batch-size", "1", str(path), str(out)]) == 0
+    captured = capsys.readouterr()
+    assert "  batch" not in captured.out
+
+    out_progress = tmp_path / "progress_enabled.b2d"
+    assert main(["--progress", "--parquet-batch-size", "1", str(path), str(out_progress)]) == 0
+    captured = capsys.readouterr()
+    assert "  batch" in captured.out
+
+
+def test_parquet_cli_nested_progress_skips_write_lines(tmp_path, capsys):
+    from blosc2.cli.parquet_to_blosc2 import main
+
+    buf, _ = _make_taxi_parquet_buf(n_outer_rows=3)
+    path = tmp_path / "taxi.parquet"
+    out = tmp_path / "taxi.b2d"
+    path.write_bytes(buf.getvalue())
+
+    assert (
+        main(
+            [
+                "--progress",
+                "--parquet-batch-size",
+                "1",
+                "--blosc2-batch-size",
+                "1",
+                str(path),
+                str(out),
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert "  parquet batch" in captured.out
+    assert "    write" not in captured.out
+
+
 def test_parquet_cli_timestamp_unit_auto(tmp_path):
     from blosc2.cli.parquet_to_blosc2 import main
 

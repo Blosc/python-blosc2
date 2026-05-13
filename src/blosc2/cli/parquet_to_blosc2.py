@@ -253,7 +253,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--batch-report-every",
         type=int,
         default=1,
-        help="Print progress every N batches; the final batch is always reported.",
+        help="With --progress, print progress every N batches; the final batch is always reported.",
+    )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print import progress lines. By default, only the import summary is shown.",
     )
     parser.add_argument(
         "--profile",
@@ -901,7 +906,7 @@ def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_un
         elapsed = time.perf_counter() - t0
         rate = rows_done / elapsed if elapsed > 0 else 0.0
         eta = (total - rows_done) / rate if rate > 0 else 0.0
-        if batch_n % args.batch_report_every == 0 or rows_done >= total:
+        if args.progress and (batch_n % args.batch_report_every == 0 or rows_done >= total):
             print(
                 f"  batch {batch_n:4d}  {rows_done:>12,}/{total:,}  "
                 f"{elapsed:7.1f}s  {rate / 1e3:7.1f}k rows/s  ETA {eta:6.0f}s",
@@ -924,8 +929,8 @@ def _flatten_root_batches_with_progress(
 
     Reads Parquet batches, flattens the outer ``list<struct<...>>`` column via
     ``ListArray.flatten()``, and honours ``args.max_rows`` as an element-level
-    row limit.  Progress is printed per Parquet batch according to
-    ``args.batch_report_every``.
+    row limit.  When ``args.progress`` is enabled, progress is printed per
+    Parquet batch according to ``args.batch_report_every``.
 
     Each flattened Parquet batch is further split into write sub-batches of
     ``args.blosc2_batch_size`` elements before being yielded, so that the
@@ -976,7 +981,7 @@ def _flatten_root_batches_with_progress(
             max_rows is not None and rows_done + n_elems >= max_rows
         )
         n_writes = (n_elems + b2_size - 1) // b2_size
-        if report_progress:
+        if args.progress and report_progress:
             print(
                 f"  parquet batch {parquet_batch_n:4d}: "
                 f"{n_elems:>12,} CTable rows -> {n_writes:,} write(s)  "
@@ -985,18 +990,12 @@ def _flatten_root_batches_with_progress(
                 flush=True,
             )
 
-        for write_n, offset in enumerate(range(0, n_elems, b2_size), start=1):
+        for offset in range(0, n_elems, b2_size):
             chunk = struct_values.slice(offset, min(b2_size, n_elems - offset))
             sub_batch = pa.RecordBatch.from_struct_array(chunk)
             n_write_rows = len(sub_batch)
             rows_done += n_write_rows
             yield sub_batch
-            print(
-                f"    write {write_n:3d}/{n_writes:<3d}: "
-                f"{n_write_rows:>12,} CTable rows  "
-                f"done {rows_done:>12,}/{total_str}",
-                flush=True,
-            )
 
         if report_batch_mem:
             memory_report(f"batch {parquet_batch_n} after flatten+write", pa)
