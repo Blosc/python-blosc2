@@ -6430,7 +6430,8 @@ class CTable(Generic[RowT]):
         valid_rows_np[false_pos] = False
         self._valid_rows[:] = valid_rows_np  # write back in-place; no new array created
         self._n_rows -= n_deleted
-        self._last_pos = None  # recalculate on next write
+        if self._last_pos is None or np.any(false_pos == self._last_pos - 1):
+            self._last_pos = None  # last live row deleted; recalculate on next write
         self._storage.bump_visibility_epoch()
 
     def extend(self, data: list | CTable | Any, *, validate: bool | None = None) -> None:  # noqa: C901
