@@ -5539,9 +5539,10 @@ class CTable(Generic[RowT]):
             )
         col = self._cols[name]
         spec = self._schema.columns_by_name[name].spec
-        if self._is_list_spec(spec) or isinstance(
-            spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, DictionarySpec)
-        ):
+        if self._is_list_spec(spec):
+            label = self._dtype_info_label(getattr(col, "dtype", None), spec)
+            return [f"<{label}>" for _ in range(len(positions))]
+        if isinstance(spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, DictionarySpec)):
             return col[positions]
         values = col[positions]
         if isinstance(spec, timestamp):
