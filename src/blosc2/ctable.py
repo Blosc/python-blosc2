@@ -261,6 +261,9 @@ class _CTableBuildProxy:
 class _CTableInfoReporter(InfoReporter):
     """Info reporter that also preserves the historic ``t.info()`` call style."""
 
+    def __len__(self) -> int:
+        return len(self.obj.info_items)
+
     def __repr__(self) -> str:
         items = self.obj.info_items
         max_key_len = max(len(k) for k, _ in items)
@@ -821,6 +824,76 @@ class Column:
         return (len(self),)
 
     @property
+    def info(self) -> _CTableInfoReporter:
+        """Get information about this column.
+
+        The report includes both logical/live-row details and, when available,
+        the physical storage details used internally by lazy predicates.
+
+        Examples
+        --------
+        >>> print(t["score"].info)
+        >>> t["score"].info()
+        """
+        return _CTableInfoReporter(self)
+
+    @property
+    def info_items(self) -> list[tuple[str, object]]:
+        """Structured summary items used by :attr:`info`."""
+        raw = self._raw_col
+        table = self._table
+        col_meta = table._schema.columns_by_name.get(self._col_name)
+        spec = col_meta.spec if col_meta is not None else None
+        physical_len = len(raw) if hasattr(raw, "__len__") else None
+        items: list[tuple[str, object]] = [
+            ("type", self.__class__.__name__),
+            ("name", self._col_name),
+            ("logical_length", len(self)),
+            ("physical_length", physical_len),
+            ("dtype", table._dtype_info_label(self.dtype, spec)),
+            ("computed", self.is_computed),
+            ("nullable", self.null_value is not None or getattr(spec, "nullable", False)),
+        ]
+
+        if self.is_list:
+            items.append(("storage", "list"))
+        elif self.is_varlen_scalar:
+            items.append(("storage", "variable-length scalar"))
+        elif self.is_dictionary:
+            items.append(("storage", "dictionary"))
+            items.append(("dictionary_size", len(raw.dictionary)))
+        else:
+            items.append(("storage", "ndarray" if isinstance(raw, blosc2.NDArray) else type(raw).__name__))
+
+        chunks = getattr(raw, "chunks", None)
+        blocks = getattr(raw, "blocks", None)
+        if chunks is not None:
+            items.append(("chunks", chunks))
+        if blocks is not None:
+            items.append(("blocks", blocks))
+
+        nbytes = getattr(raw, "nbytes", None)
+        cbytes = getattr(raw, "cbytes", None)
+        cratio = getattr(raw, "cratio", None)
+        if nbytes is not None:
+            items.append(("nbytes", format_nbytes_info(nbytes)))
+        if cbytes is not None:
+            items.append(("cbytes", format_nbytes_info(cbytes)))
+        if cratio is not None:
+            items.append(("cratio", f"{cratio:.2f}"))
+
+        urlpath = getattr(raw, "urlpath", None)
+        if urlpath is not None:
+            items.append(("urlpath", urlpath))
+        cparams = getattr(raw, "cparams", None)
+        dparams = getattr(raw, "dparams", None)
+        if cparams is not None:
+            items.append(("cparams", cparams))
+        if dparams is not None:
+            items.append(("dparams", dparams))
+        return items
+
+    @property
     def ndim(self) -> int:
         """Number of logical dimensions."""
         return 1
@@ -1011,28 +1084,36 @@ class Column:
             return self._raw_col == int(not other)
         return self._raw_col != self._coerce_timestamp_operand(other)
 
-    def _dictionary_eq(self, other) -> np.ndarray:
-        """Return a boolean array True where the live dictionary value == *other*."""
+    def _dictionary_eq(self, other):
+        """Return a physical-slot boolean predicate for dictionary equality.
+
+        Regular fixed-width columns build predicates against their raw physical
+        arrays, whose length is the table slot capacity.  Dictionary predicates
+        need to use the same coordinate system so they can be combined with
+        regular predicates before aggregate/view code intersects them with
+        ``_valid_rows``.
+        """
         dc = self._raw_col  # DictionaryColumn
         spec = self._table._schema.columns_by_name[self._col_name].spec
-        valid = self._valid_rows
-        live_pos = np.where(valid[:])[0]
-        if len(live_pos) == 0:
-            return np.zeros(0, dtype=bool)
         if other is None:
             target_code = spec.null_code
         elif isinstance(other, str):
             try:
                 target_code = dc.value_to_code(other)
             except KeyError:
-                return np.zeros(len(live_pos), dtype=bool)
+                return blosc2.zeros(len(self._table._valid_rows), dtype=np.bool_)
         else:
             raise TypeError(
                 f"Dictionary column {self._col_name!r} can only be compared with str or None, "
                 f"got {type(other).__name__!r}."
             )
-        live_codes = np.asarray(dc.codes[live_pos], dtype=np.int32)
-        return live_codes == np.int32(target_code)
+        pred = dc.codes == np.int32(target_code)
+        valid = self._lazy_valid_rows()
+        if len(dc.codes) != len(self._table._valid_rows):
+            physical = blosc2.zeros(len(self._table._valid_rows), dtype=np.bool_)
+            physical[: len(dc.codes)] = pred
+            pred = physical
+        return pred & valid
 
     def isin(self, values) -> np.ndarray:
         """Return a boolean array True where the live value is in *values*.

@@ -104,6 +104,13 @@ DATA_TUPLES = [
 ]
 
 
+def _logical_mask_values(ct, mask):
+    """Materialize a physical predicate as logical/live-row values."""
+    arr = mask.compute() if isinstance(mask, blosc2.LazyExpr) else mask
+    arr = arr[:] if isinstance(arr, blosc2.NDArray) else arr
+    return arr[ct._valid_rows[:]].tolist()
+
+
 class TestCTableBehavior:
     def test_append_and_read(self):
         ct = CTable(TripRow)
@@ -162,20 +169,25 @@ class TestCTableBehavior:
         ct = CTable(TripRow)
         ct.extend(DATA_TUPLES)
         mask = ct["vendor"] == "Uber"
-        assert mask.tolist() == [True, False, True, False]
+        assert _logical_mask_values(ct, mask) == [True, False, True, False]
 
     def test_equality_absent_value_returns_false(self):
         ct = CTable(TripRow)
         ct.extend(DATA_TUPLES)
         mask = ct["vendor"] == "Waymo"
-        assert mask.tolist() == [False, False, False, False]
+        assert _logical_mask_values(ct, mask) == [False, False, False, False]
 
     def test_equality_none(self):
         ct = CTable(TripRow)
         ct.extend(DATA_TUPLES)
         ct.append({"vendor": None, "fare": 0.0})
         mask = ct["vendor"] == None  # noqa: E711
-        assert mask.tolist() == [False, False, False, False, True]
+        assert _logical_mask_values(ct, mask) == [False, False, False, False, True]
+
+    def test_dictionary_predicate_combines_with_regular_predicate_in_aggregate(self):
+        ct = CTable(TripRow)
+        ct.extend(DATA_TUPLES)
+        assert ct["fare"].sum(where=(ct["fare"] > 6) & (ct["vendor"] == "Uber")) == pytest.approx(25.5)
 
     def test_isin(self):
         ct = CTable(TripRow)
@@ -193,7 +205,7 @@ class TestCTableBehavior:
         ct = CTable(TripRow)
         ct.extend(DATA_TUPLES)
         ct.append({"vendor": None, "fare": 0.0})
-        assert ct["vendor"].is_null().tolist() == [False, False, False, False, True]
+        assert _logical_mask_values(ct, ct["vendor"].is_null()) == [False, False, False, False, True]
 
     def test_null_count(self):
         ct = CTable(TripRow)
@@ -384,7 +396,7 @@ class TestIndex:
         ct = CTable(TripRow)
         ct.extend(DATA_TUPLES)
         mask = ct["vendor"] == "Uber"
-        assert mask.tolist() == [True, False, True, False]
+        assert _logical_mask_values(ct, mask) == [True, False, True, False]
 
     def test_isin_uses_codes(self):
         ct = CTable(TripRow)
