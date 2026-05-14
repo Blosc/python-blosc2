@@ -4925,14 +4925,21 @@ class CTable(Generic[RowT]):
     def compact(self):
         """Physically rewrite every column array keeping only live rows.
 
-        Closes the gaps left by prior :meth:`delete` calls.  All existing
-        indexes are dropped and must be recreated afterwards.  Raises
-        ``ValueError`` if the table is read-only or a view.
+        Closes the gaps left by prior :meth:`delete` calls by shuffling live
+        data to the front of each column array.  The underlying NDArray
+        allocations are **not resized** — each column retains its original
+        capacity.  To actually reclaim memory, use :meth:`copy` with
+        ``compact=True`` instead, which allocates fresh arrays sized to the
+        live row count.  All existing indexes are dropped and must be
+        recreated afterwards.  Raises ``ValueError`` if the table is
+        read-only or a view.
         """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
             raise ValueError("Cannot compact a view.")
+        if self._last_pos is not None and self._last_pos == self._n_rows:
+            return
         self._flush_varlen_columns()
         real_poss = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
         for col in self._schema.columns:
@@ -5220,12 +5227,18 @@ class CTable(Generic[RowT]):
     ) -> CTable:
         """Return a new standalone copy of this table.
 
+        This is the only operation that truly reclaims memory: when
+        ``compact=True`` the new table allocates fresh arrays sized exactly
+        to the live row count, discarding all deleted-row gaps and unused
+        capacity.
+
         Parameters
         ----------
         compact:
             If ``True`` (default), only live (non-deleted) rows are copied.
             The result is a dense table with no tombstones and no parent
-            dependency — ideal for materialising a filtered view.
+            dependency — ideal for materialising a filtered view or freeing
+            memory after heavy deletions.
             If ``False``, all physical slots are copied including deleted gaps,
             preserving the tombstone state exactly for in-memory copies.
         urlpath:
