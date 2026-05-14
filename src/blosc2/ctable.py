@@ -800,18 +800,26 @@ class Column:
             yield from data_chunk[mask_chunk]
 
     def __repr__(self) -> str:
-        preview_items = []
-        for value in itertools.islice(self, self._REPR_PREVIEW_ITEMS + 1):
-            if isinstance(value, np.generic):
-                value = value.item()
-            preview_items.append(repr(value))
-
-        truncated = len(preview_items) > self._REPR_PREVIEW_ITEMS
+        preview_values = list(itertools.islice(self, self._REPR_PREVIEW_ITEMS + 1))
+        truncated = len(preview_values) > self._REPR_PREVIEW_ITEMS
         if truncated:
-            preview_items = preview_items[: self._REPR_PREVIEW_ITEMS]
-            preview_items.append("...")
+            preview_values = preview_values[: self._REPR_PREVIEW_ITEMS]
 
-        preview = ", ".join(preview_items)
+        if self.dtype is not None and self.dtype.kind in "biufc" and preview_values:
+            arr = np.asarray(preview_values, dtype=self.dtype)
+            preview = np.array2string(arr, separator=", ", max_line_width=10_000)[1:-1]
+            if truncated:
+                preview = f"{preview}, ..." if preview else "..."
+        else:
+            preview_items = []
+            for value in preview_values:
+                if isinstance(value, np.generic):
+                    value = value.item()
+                preview_items.append(repr(value))
+            if truncated:
+                preview_items.append("...")
+            preview = ", ".join(preview_items)
+
         return f"Column({self._col_name!r}, dtype={self.dtype}, len={len(self)}, values=[{preview}])"
 
     def __len__(self):

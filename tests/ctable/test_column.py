@@ -56,6 +56,20 @@ def test_column_metadata():
     assert tabla.score._mask is None
 
 
+def test_column_float32_repr_uses_numpy_formatting():
+    """Column repr uses compact NumPy-style formatting for float32 previews."""
+
+    @dataclass
+    class Float32Row:
+        value: float = blosc2.field(blosc2.float32())
+
+    tabla = CTable(Float32Row, new_data=[(222.22,), (210.8,)])
+    text = repr(tabla.value)
+
+    assert "222.22" in text
+    assert "222.22000122070312" not in text
+
+
 def test_column_info():
     """Column.info reports logical and physical storage details."""
     tabla = CTable(Row, new_data=DATA20)
