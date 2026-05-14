@@ -314,6 +314,7 @@ def test_unary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
     _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
 
 
+@pytest.mark.heavy
 @pytest.mark.parametrize(("np_func", "blosc_func"), UNARY_FUNC_PAIRS)
 @pytest.mark.parametrize("dtype", STR_DTYPES)
 @pytest.mark.parametrize("shape", [(10,), (20, 20)])
@@ -338,6 +339,7 @@ def test_binary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
     _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
 
 
+@pytest.mark.heavy
 @pytest.mark.parametrize(("np_func", "blosc_func"), BINARY_FUNC_PAIRS)
 @pytest.mark.parametrize("dtype", STR_DTYPES)
 @pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS)
