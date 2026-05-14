@@ -1391,7 +1391,9 @@ class Column:
             return None
         if isinstance(where, str):
             self._table._guard_varlen_scalar_expression(where)
-            where = blosc2.lazyexpr(where, self._table._where_expression_operands())
+            operands = self._table._where_expression_operands()
+            where, operands = self._table._rewrite_nested_expression(where, operands)
+            where = blosc2.lazyexpr(where, operands)
         if isinstance(where, np.ndarray) and where.dtype == np.bool_:
             where = blosc2.asarray(where)
         if isinstance(where, Column):
