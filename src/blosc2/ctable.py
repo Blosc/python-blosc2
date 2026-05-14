@@ -15,7 +15,6 @@ import contextlib
 import contextvars
 import copy
 import dataclasses
-import itertools
 import os
 import pprint
 import re
@@ -606,8 +605,7 @@ class Column:
             return self._maybe_decode_timestamp_values(self._raw_col[int(pos_true)])
 
         elif isinstance(key, slice):
-            valid = self._valid_rows
-            real_pos = blosc2.where(valid, _arange(len(valid))).compute()
+            real_pos = np.where(self._valid_rows[:])[0]
             start, stop, step = key.indices(len(real_pos))
             if start >= stop:
                 return (
@@ -640,7 +638,7 @@ class Column:
             return self._maybe_decode_timestamp_values(self._raw_col[phys_indices])
 
         elif isinstance(key, (list, tuple, np.ndarray)):
-            real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
+            real_pos = np.where(self._valid_rows[:])[0]
             phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
@@ -800,7 +798,20 @@ class Column:
             yield from data_chunk[mask_chunk]
 
     def __repr__(self) -> str:
-        preview_values = list(itertools.islice(self, self._REPR_PREVIEW_ITEMS + 1))
+        preview_len = self._REPR_PREVIEW_ITEMS + 1
+        if self.is_list:
+            label = self._table._dtype_info_label(
+                self.dtype, self._table._schema.columns_by_name[self._col_name].spec
+            )
+            preview_values = [f"<{label}>"] * min(len(self), preview_len)
+        else:
+            preview_pos = np.where(self._valid_rows[:])[0][:preview_len]
+            if self.is_dictionary or self.is_varlen_scalar:
+                preview_values = self._raw_col[preview_pos]
+            elif len(preview_pos) == 0:
+                preview_values = []
+            else:
+                preview_values = self._maybe_decode_timestamp_values(self._raw_col[preview_pos]).tolist()
         truncated = len(preview_values) > self._REPR_PREVIEW_ITEMS
         if truncated:
             preview_values = preview_values[: self._REPR_PREVIEW_ITEMS]
@@ -5547,10 +5558,9 @@ class CTable(Generic[RowT]):
             )
         col = self._cols[name]
         spec = self._schema.columns_by_name[name].spec
-        if self._is_list_spec(spec):
-            label = self._dtype_info_label(getattr(col, "dtype", None), spec)
-            return [f"<{label}>" for _ in range(len(positions))]
-        if isinstance(spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, DictionarySpec)):
+        if self._is_list_spec(spec) or isinstance(
+            spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, DictionarySpec)
+        ):
             return col[positions]
         values = col[positions]
         if isinstance(spec, timestamp):

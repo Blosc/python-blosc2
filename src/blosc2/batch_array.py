@@ -74,6 +74,13 @@ class Batch(Sequence[Any]):
         self._cached_block = block
         return block
 
+    def _get_block_item(self, block_index: int, item_index: int) -> Any:
+        if self._cached_block_index == block_index and self._cached_block is not None:
+            return self._cached_block[item_index]
+        return self._parent._deserialize_block_item(
+            self._parent.schunk.get_vlblock(self._nbatch, block_index), item_index
+        )
+
     def __getitem__(self, index: int | slice) -> Any | list[Any]:
         if isinstance(index, slice):
             items = self._decode_items()
@@ -87,9 +94,8 @@ class Batch(Sequence[Any]):
             block_index, item_index = divmod(index, items_per_block)
             if block_index >= self._nblocks:
                 raise IndexError("Batch index out of range")
-            block = self._get_block(block_index)
             try:
-                return block[item_index]
+                return self._get_block_item(block_index, item_index)
             except IndexError as exc:
                 raise IndexError("Batch index out of range") from exc
         items = self._decode_items()
@@ -664,6 +670,20 @@ class BatchArray:
         if self._serializer == "arrow":
             return self._deserialize_arrow_block(payload)
         return self._deserialize_msgpack_block(payload)
+
+    def _deserialize_arrow_block_item(self, payload: bytes, item_index: int) -> Any:
+        pa, pa_ipc = self._require_pyarrow()
+        try:
+            reader = pa_ipc.open_stream(pa.BufferReader(payload))
+            batch = reader.read_next_batch()
+        except (pa.ArrowInvalid, OSError):
+            batch = pa_ipc.read_record_batch(pa.BufferReader(payload), self._get_arrow_schema())
+        return batch.column(0)[item_index].as_py()
+
+    def _deserialize_block_item(self, payload: bytes, item_index: int) -> Any:
+        if self._serializer == "arrow":
+            return self._deserialize_arrow_block_item(payload, item_index)
+        return self._deserialize_msgpack_block(payload)[item_index]
 
     def _vl_cparams_kwargs(self) -> dict[str, Any]:
         return asdict(self.schunk.cparams)

@@ -490,6 +490,11 @@ class ListArray:
     def _get_many(self, indices: list[int]) -> list[Any]:
         if self.spec.storage == "vl":
             return [self._backend[index] for index in indices]
+        # For small selections from block-addressable batches, scalar access is
+        # much cheaper than materializing the full containing batch.  This is
+        # common for filtered column previews and small logical slices.
+        if getattr(self._backend, "items_per_block", None) is not None and len(indices) <= 1024:
+            return [self[index] for index in indices]
         if len(indices) <= 1:
             return self._get_many_grouped(indices)
         monotonic = True
@@ -524,7 +529,7 @@ class ListArray:
         if index >= self._persisted_row_count:
             return self._pending_cells[index - self._persisted_row_count]
         batch_index, inner_index = self._locate_persisted_row(index)
-        return self._get_batch_values(batch_index)[inner_index]
+        return self._backend[batch_index][inner_index]
 
     def __setitem__(self, index: int, value: Any) -> None:
         """Replace one list cell."""
