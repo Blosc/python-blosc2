@@ -2531,10 +2531,14 @@ class CTable(Generic[RowT]):
             return all_pos, np.array([], dtype=all_pos.dtype), 0
         return all_pos[:head_tail], all_pos[-head_tail:], hidden
 
-    def _display_widths(self) -> dict[str, int]:
+    def _display_widths(self, col_names: list[str] | None = None) -> dict[str, int]:
         widths: dict[str, int] = {}
-        single_col = len(self.col_names) == 1
-        for name in self.col_names:
+        col_names = self.col_names if col_names is None else col_names
+        single_col = len(col_names) == 1
+        for name in col_names:
+            if name == "...":
+                widths[name] = 3
+                continue
             spec = self._schema.columns_by_name.get(name)
             dtype_label = self._dtype_info_label(self._col_dtype(name), spec.spec if spec else None)
             widths[name] = max(self._col_widths[name], len(dtype_label))
@@ -2542,25 +2546,80 @@ class CTable(Generic[RowT]):
                 widths[name] = max(widths[name], 80)
         return widths
 
+    def _display_columns(self) -> tuple[list[str], int]:
+        """Return terminal-width-friendly display columns and hidden count."""
+        col_names = list(self.col_names)
+        widths = self._display_widths(col_names)
+        widths["..."] = 3
+        total_width = sum(widths[n] + 2 for n in col_names) + 2 * max(0, len(col_names) - 1)
+        term_width = shutil.get_terminal_size((120, 20)).columns
+        if total_width <= term_width or len(col_names) <= 2:
+            return col_names, 0
+
+        selected: list[str] = []
+        left = 0
+        right = len(col_names) - 1
+        used = 0
+
+        def extra_width(name: str, n_existing: int) -> int:
+            return widths[name] + 2 + (2 if n_existing else 0)
+
+        # Account for an ellipsis column between left and right blocks.
+        used += widths["..."] + 2
+        while left <= right:
+            left_name = col_names[left]
+            need = extra_width(left_name, len(selected) + 1)
+            if used + need > term_width:
+                break
+            selected.append(left_name)
+            used += need
+            left += 1
+            if left > right:
+                break
+
+            right_name = col_names[right]
+            need = extra_width(right_name, len(selected) + 1)
+            if used + need > term_width:
+                break
+            selected.append(right_name)
+            used += need
+            right -= 1
+
+        left_cols = [n for n in col_names if n in selected and col_names.index(n) < left]
+        right_cols = [n for n in col_names if n in selected and col_names.index(n) > right]
+        display_cols = left_cols + ["..."] + right_cols
+        hidden = len(col_names) - len(left_cols) - len(right_cols)
+        return display_cols, hidden
+
     @staticmethod
     def _format_cell(value, width: int) -> str:
-        s = str(value)
+        if isinstance(value, np.datetime64):
+            s = str(value).replace("T", " ")
+            if s.endswith(".000"):
+                s = s[:-4]
+        else:
+            s = str(value)
         if len(s) > width:
             s = s[: width - 1] + "…"
         return f" {s:<{width}} "
 
-    def _format_display_row(self, values: dict, widths: dict[str, int]) -> str:
-        return "  ".join(self._format_cell(values[n], widths[n]) for n in self.col_names)
+    def _format_display_row(self, values: dict, widths: dict[str, int], col_names: list[str]) -> str:
+        return "  ".join(self._format_cell(values[n], widths[n]) for n in col_names)
 
-    def _rows_to_dicts(self, positions) -> list[dict]:
+    def _rows_to_dicts(self, positions, col_names: list[str] | None = None) -> list[dict]:
         if len(positions) == 0:
             return []
-        col_data = {n: self._fetch_col_at_positions(n, positions) for n in self.col_names}
+        col_names = self.col_names if col_names is None else col_names
+        real_cols = [n for n in col_names if n != "..."]
+        col_data = {n: self._fetch_col_at_positions(n, positions) for n in real_cols}
         rows = []
         for i in range(len(positions)):
             row = {}
-            for n in self.col_names:
-                row[n] = self._normalize_scalar_value(col_data[n][i])
+            for n in col_names:
+                # Keep NumPy scalar types for display so their compact string
+                # formatting is preserved (notably float32, e.g. 224.97
+                # instead of Python float's 224.97000122070312).
+                row[n] = "..." if n == "..." else col_data[n][i]
             rows.append(row)
         return rows
 
@@ -2569,31 +2628,44 @@ class CTable(Generic[RowT]):
         nrows = self._n_rows
         ncols = len(self.col_names)
         head_pos, tail_pos, hidden = self._display_positions()
-        widths = self._display_widths()
-        sep = "  ".join("─" * (w + 2) for w in widths.values())
+        display_cols, hidden_cols = self._display_columns()
+        widths = self._display_widths(display_cols)
+        sep = "  ".join("─" * (widths[n] + 2) for n in display_cols)
+
+        dtype_row = {}
+        for n in display_cols:
+            if n == "...":
+                dtype_row[n] = "..."
+            else:
+                dtype_row[n] = self._dtype_info_label(
+                    self._col_dtype(n),
+                    self._schema.columns_by_name[n].spec if n in self._schema.columns_by_name else None,
+                )
 
         lines = [
-            self._format_display_row({n: n for n in self.col_names}, widths),
-            self._format_display_row(
-                {
-                    n: self._dtype_info_label(
-                        self._col_dtype(n),
-                        self._schema.columns_by_name[n].spec if n in self._schema.columns_by_name else None,
-                    )
-                    for n in self.col_names
-                },
-                widths,
-            ),
+            self._format_display_row({n: n for n in display_cols}, widths, display_cols),
+            self._format_display_row(dtype_row, widths, display_cols),
             sep,
         ]
-        lines.extend(self._format_display_row(row, widths) for row in self._rows_to_dicts(head_pos))
+        lines.extend(
+            self._format_display_row(row, widths, display_cols)
+            for row in self._rows_to_dicts(head_pos, display_cols)
+        )
         if hidden > 0:
-            lines.append(self._format_display_row(dict.fromkeys(self.col_names, "..."), widths))
-        lines.extend(self._format_display_row(row, widths) for row in self._rows_to_dicts(tail_pos))
+            lines.append(self._format_display_row(dict.fromkeys(display_cols, "..."), widths, display_cols))
+        lines.extend(
+            self._format_display_row(row, widths, display_cols)
+            for row in self._rows_to_dicts(tail_pos, display_cols)
+        )
         lines.append(sep)
         footer = f"{nrows:,} rows × {ncols} columns"
+        notes = []
         if hidden > 0:
-            footer += f"  ({hidden:,} rows hidden)"
+            notes.append(f"{hidden:,} rows hidden")
+        if hidden_cols > 0:
+            notes.append(f"{hidden_cols:,} columns hidden")
+        if notes:
+            footer += f"  ({', '.join(notes)})"
         lines.append(footer)
         return "\n".join(lines)
 
