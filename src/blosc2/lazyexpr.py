@@ -42,6 +42,8 @@ import ndindex
 import numpy as np
 
 import blosc2
+from blosc2 import compute_chunks_blocks
+from blosc2.info import InfoReporter
 
 from .b2objects import (
     encode_b2object_payload,
@@ -51,13 +53,6 @@ from .b2objects import (
     write_b2object_user_vlmeta,
 )
 from .dsl_kernel import DSLKernel, DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
-
-if blosc2._HAS_NUMBA:
-    import numba
-
-from blosc2 import compute_chunks_blocks
-from blosc2.info import InfoReporter
-
 from .proxy import convert_dtype
 from .utils import (
     check_smaller_shape,
@@ -73,6 +68,7 @@ from .utils import (
     linalg_funcs,
     npcumprod,
     npcumsum,
+    populate_safe_numpy_globals,
     process_key,
     reducers,
     safe_numpy_globals,
@@ -105,6 +101,7 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
     }
     if blosc2.IS_WASM:
         global safe_numpy_globals
+        populate_safe_numpy_globals(expression)
         if "out" in kwargs:
             out = kwargs.pop("out")
             out[:] = eval(expression, safe_numpy_globals, local_dict)
@@ -221,17 +218,7 @@ dtype_symbols = {
 blosc2_funcs = constructors + linalg_funcs + elementwise_funcs + reducers
 # functions that have to be evaluated before chunkwise lazyexpr machinery
 eager_funcs = linalg_funcs + reducers + ["slice"] + ["." + attr for attr in linalg_attrs]
-# Gather all callable functions in numpy
-numpy_funcs = {
-    name
-    for name, member in inspect.getmembers(np, callable)
-    if not name.startswith("_") and not isinstance(member, np.ufunc)
-}
-numpy_ufuncs = {name for name, member in inspect.getmembers(np, lambda x: isinstance(x, np.ufunc))}
-# Add these functions to the list of available functions
-# (will be evaluated via the array interface)
-additional_funcs = sorted((numpy_funcs | numpy_ufuncs) - set(blosc2_funcs))
-functions = blosc2_funcs + additional_funcs
+functions = blosc2_funcs
 _constructor_call_patterns = {name: re.compile(rf"\b{re.escape(name)}\s*\(") for name in constructors}
 
 
@@ -264,20 +251,33 @@ funcs_2args = (
 def get_expr_globals(expression):
     """Build a dictionary of functions needed for evaluating the expression."""
     _globals = {"np": np, "blosc2": blosc2}
-    # Only check for functions that actually appear in the expression
-    # This avoids many unnecessary string searches
+    # Only check for functions that actually appear in the expression.
     for func in functions:
         if func in expression:
-            # Try blosc2 first
             if hasattr(blosc2, func):
                 _globals[func] = getattr(blosc2, func)
-            # Fall back to numpy
             else:
                 try:
                     _globals[func] = safe_numpy_globals[func]
-                # Function not found in either module
                 except KeyError as e:
                     raise AttributeError(f"Function {func} not found in blosc2 or numpy") from e
+
+    # Lazily support bare numpy calls not covered by the Blosc2 function list.
+    populate_safe_numpy_globals(expression)
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError:
+        return _globals
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        func = node.func.id
+        if func in _globals:
+            continue
+        if hasattr(blosc2, func):
+            _globals[func] = getattr(blosc2, func)
+        elif func in safe_numpy_globals:
+            _globals[func] = safe_numpy_globals[func]
 
     return _globals
 
@@ -4755,6 +4755,8 @@ def _reconstruct_lazyudf(expr, lazyarray, operands_dict, array):
         "blosc2": blosc2,
     }
     if blosc2._HAS_NUMBA:
+        import numba
+
         SAFE_GLOBALS["numba"] = numba
 
     # Register the source so inspect can find it

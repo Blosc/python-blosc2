@@ -18,13 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-_HAS_NUMBA = False
-try:
-    import numba
-
-    _HAS_NUMBA = True
-except ImportError:
-    pass
+_HAS_NUMBA = importlib.util.find_spec("numba") is not None
 # Do the platform check once at module level
 IS_WASM = platform.machine() == "wasm32"
 # IS_WASM = True  # for testing (comment this line out for production)

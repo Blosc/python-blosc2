@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 import numpy as np
-import requests
 
 import blosc2
 from blosc2.b2objects import encode_b2object_payload, make_b2object_carrier, write_b2object_payload
@@ -29,6 +28,12 @@ _subscriber_data = {
 
 TIMEOUT = 15
 """Default timeout for HTTP requests."""
+
+
+def _requests():
+    import requests
+
+    return requests
 
 
 @contextmanager
@@ -109,7 +114,7 @@ def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
     if auth_token:
         headers = headers.copy() if headers else {}
         headers["Cookie"] = auth_token
-    response = requests.get(url, params=params, headers=headers, timeout=timeout)
+    response = _requests().get(url, params=params, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response
 
@@ -117,7 +122,7 @@ def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
 def _xpost(url, json=None, auth_token=None, timeout=TIMEOUT):
     auth_token = auth_token or _subscriber_data["auth_token"]
     headers = {"Cookie": auth_token} if auth_token else None
-    response = requests.post(url, json=json, headers=headers, timeout=timeout)
+    response = _requests().post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
@@ -132,7 +137,7 @@ def _sub_url(urlbase, path):
 def login(username, password, urlbase):
     url = _sub_url(urlbase, "auth/jwt/login")
     creds = {"username": username, "password": password}
-    resp = requests.post(url, data=creds, timeout=TIMEOUT)
+    resp = _requests().post(url, data=creds, timeout=TIMEOUT)
     resp.raise_for_status()
     return "=".join(list(resp.cookies.items())[0])
 
@@ -234,7 +239,7 @@ class C2Array(blosc2.Operand):
         # Try to 'open' the remote path
         try:
             self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
-        except requests.HTTPError as err:
+        except _requests().HTTPError as err:
             raise FileNotFoundError(f"Remote path not found: {path}.\nError was: {err}") from err
         cparams = self.meta["schunk"]["cparams"]
         # Remove "filters, meta" from cparams; this is an artifact from the server

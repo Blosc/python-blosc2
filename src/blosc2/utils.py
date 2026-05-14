@@ -7,6 +7,7 @@
 
 import ast
 import builtins
+import contextlib
 import inspect
 import math
 import sys
@@ -86,41 +87,6 @@ def format_expr_scalar(value):
     if isinstance(value, str | bytes):
         return repr(value)
     return value
-
-
-global safe_numpy_globals
-# Use numpy eval when running in WebAssembly
-safe_numpy_globals = {"np": np}
-# Add all first-level numpy functions
-safe_numpy_globals.update(
-    {name: getattr(np, name) for name in dir(np) if callable(getattr(np, name)) and not name.startswith("_")}
-)
-
-if not NUMPY_GE_2_0:  # handle non-array-api compliance
-    safe_numpy_globals["acos"] = np.arccos
-    safe_numpy_globals["acosh"] = np.arccosh
-    safe_numpy_globals["asin"] = np.arcsin
-    safe_numpy_globals["asinh"] = np.arcsinh
-    safe_numpy_globals["atan"] = np.arctan
-    safe_numpy_globals["atanh"] = np.arctanh
-    safe_numpy_globals["atan2"] = np.arctan2
-    safe_numpy_globals["permute_dims"] = np.transpose
-    safe_numpy_globals["pow"] = np.power
-    safe_numpy_globals["bitwise_left_shift"] = np.left_shift
-    safe_numpy_globals["bitwise_right_shift"] = np.right_shift
-    safe_numpy_globals["bitwise_invert"] = np.bitwise_not
-    safe_numpy_globals["concat"] = np.concatenate
-    safe_numpy_globals["matrix_transpose"] = np.transpose
-    safe_numpy_globals["vecdot"] = npvecdot
-    safe_numpy_globals["cumulative_sum"] = npcumsum
-    safe_numpy_globals["cumulative_prod"] = npcumprod
-
-# handle different naming conventions between numpy and blosc2
-safe_numpy_globals["contains"] = _string_contains
-safe_numpy_globals["startswith"] = _string_startswith
-safe_numpy_globals["endswith"] = _string_endswith
-safe_numpy_globals["upper"] = _string_upper
-safe_numpy_globals["lower"] = _string_lower
 
 
 elementwise_funcs = [
@@ -265,6 +231,66 @@ constructors = [
 
 # Note that, as reshape is accepted as a method too, it should always come last in the list
 constructors += ["reshape"]
+
+
+_NUMPY_ALIASES = {
+    "acos": np.arccos,
+    "acosh": np.arccosh,
+    "asin": np.arcsin,
+    "asinh": np.arcsinh,
+    "atan": np.arctan,
+    "atanh": np.arctanh,
+    "atan2": np.arctan2,
+    "concat": getattr(np, "concat", np.concatenate),
+    "contains": _string_contains,
+    "cumulative_prod": npcumprod,
+    "cumulative_sum": npcumsum,
+    "endswith": _string_endswith,
+    "lower": _string_lower,
+    "matrix_transpose": getattr(np, "matrix_transpose", np.transpose),
+    "permute_dims": nptranspose,
+    "pow": np.power,
+    "startswith": _string_startswith,
+    "upper": _string_upper,
+    "vecdot": npvecdot,
+}
+if not NUMPY_GE_2_0:  # handle non-array-api compliance
+    _NUMPY_ALIASES.update(
+        {
+            "bitwise_invert": np.bitwise_not,
+            "bitwise_left_shift": np.left_shift,
+            "bitwise_right_shift": np.right_shift,
+        }
+    )
+
+# Use numpy eval when running in WebAssembly.  Keep this intentionally small:
+# scanning every callable in numpy triggers lazy imports such as numpy.f2py and
+# numpy.testing during ``import blosc2``.
+safe_numpy_globals = {"np": np, **_NUMPY_ALIASES}
+for _name in set(elementwise_funcs + linalg_funcs + reducers + constructors):
+    if _name not in safe_numpy_globals and not _name.startswith("_"):
+        with contextlib.suppress(AttributeError):
+            _value = getattr(np, _name)
+            if callable(_value):
+                safe_numpy_globals[_name] = _value
+
+
+def populate_safe_numpy_globals(expression: str) -> None:
+    """Add bare numpy call names used by *expression* to safe_numpy_globals."""
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError:
+        return
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        name = node.func.id
+        if name in safe_numpy_globals or name.startswith("_"):
+            continue
+        with contextlib.suppress(AttributeError):
+            value = getattr(np, name)
+            if callable(value):
+                safe_numpy_globals[name] = value
 
 
 # --- Shape utilities ---

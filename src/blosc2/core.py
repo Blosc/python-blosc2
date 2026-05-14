@@ -24,7 +24,6 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
-import requests
 
 import blosc2
 from blosc2 import blosc2_ext
@@ -1138,6 +1137,8 @@ def print_versions():
         import numexpr
 
         print(f"numexpr version: {numexpr.__version__}")
+    import requests
+
     print(f"requests version: {requests.__version__}")
     print(f"Python version: {sys.version}")
     (sysname, _nodename, release, version, machine, processor) = platform.uname()
