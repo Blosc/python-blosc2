@@ -63,6 +63,7 @@ def test_sort_by_nested_prefix_requires_leaf_column():
     assert s["trip.begin.lon"][0] == 1.0
 
 
+@pytest.mark.heavy
 def test_nested_ops_compat_matrix_smoke():
     n = 20_000
     lon = pa.array([float(i % 1000) for i in range(n)], type=pa.float64())

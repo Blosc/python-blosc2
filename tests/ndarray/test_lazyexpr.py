@@ -27,6 +27,37 @@ except ImportError:
 NITEMS_SMALL = 100
 NITEMS = 1000
 
+_UNARY_FUNCTIONS = [
+    "sin",
+    "cos",
+    "sqrt",
+    "tan",
+    "arctan",
+    "exp",
+    "log",
+    "conj",
+    "real",
+    "imag",
+    pytest.param("sinh", marks=pytest.mark.heavy),
+    pytest.param("cosh", marks=pytest.mark.heavy),
+    pytest.param("tanh", marks=pytest.mark.heavy),
+    pytest.param("arcsin", marks=pytest.mark.heavy),
+    pytest.param("arccos", marks=pytest.mark.heavy),
+    pytest.param("arcsinh", marks=pytest.mark.heavy),
+    pytest.param("arccosh", marks=pytest.mark.heavy),
+    pytest.param("arctanh", marks=pytest.mark.heavy),
+    pytest.param("expm1", marks=pytest.mark.heavy),
+    pytest.param("log10", marks=pytest.mark.heavy),
+    pytest.param("log1p", marks=pytest.mark.heavy),
+]
+
+_LAZYEXPR_OPERAND_MIXES = [
+    ("NDArray", "numpy"),
+    ("NDArray", "NDArray"),
+    pytest.param(("numpy", "NDArray"), marks=pytest.mark.heavy),
+    pytest.param(("numpy", "numpy"), marks=pytest.mark.heavy),
+]
+
 
 @pytest.fixture(params=[np.float32, np.float64])
 def dtype_fixture(request):
@@ -357,32 +388,7 @@ def test_comparison_operators(dtype_fixture, compare_expressions, comparison_ope
 
 # Skip this test for blosc2.IS_WASM
 @pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
-@pytest.mark.parametrize(
-    "function",
-    [
-        "sin",
-        "cos",
-        "tan",
-        "sqrt",
-        "sinh",
-        "cosh",
-        "tanh",
-        "arcsin",
-        "arccos",
-        "arctan",
-        "arcsinh",
-        "arccosh",
-        "arctanh",
-        "exp",
-        "expm1",
-        "log",
-        "log10",
-        "log1p",
-        "conj",
-        "real",
-        "imag",
-    ],
-)
+@pytest.mark.parametrize("function", _UNARY_FUNCTIONS)
 def test_functions(function, dtype_fixture, shape_fixture):
     nelems = np.prod(shape_fixture)
     cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
@@ -436,10 +442,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
     np.testing.assert_allclose(expr[()], res_numexpr, rtol=1e-5)
 
 
-@pytest.mark.parametrize(
-    "urlpath",
-    ["arr.b2nd", None],
-)
+@pytest.mark.parametrize("urlpath", [None, pytest.param("arr.b2nd", marks=pytest.mark.heavy)])
 @pytest.mark.parametrize(
     "function",
     ["arctan2", "**"],
@@ -784,15 +787,15 @@ def test_save_unsafe():
     [
         "sin",
         "sqrt",
-        "cosh",
         "arctan",
-        "arcsinh",
         "exp",
-        "expm1",
         "log",
         "conj",
         "real",
         "imag",
+        pytest.param("cosh", marks=pytest.mark.heavy),
+        pytest.param("arcsinh", marks=pytest.mark.heavy),
+        pytest.param("expm1", marks=pytest.mark.heavy),
     ],
 )
 def test_save_functions(function, dtype_fixture, shape_fixture):
@@ -911,10 +914,19 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize(
-    "constructor", ["arange", "linspace", "fromiter", "reshape", "zeros", "ones", "full"]
+    "constructor",
+    [
+        "arange",
+        "linspace",
+        "reshape",
+        "zeros",
+        "ones",
+        pytest.param("fromiter", marks=pytest.mark.heavy),
+        pytest.param("full", marks=pytest.mark.heavy),
+    ],
 )
-@pytest.mark.parametrize("shape", [(10,), (10, 10), (10, 10, 10)])
-@pytest.mark.parametrize("dtype", ["int32", "float64", "i2"])
+@pytest.mark.parametrize("shape", [(10,), (10, 10), pytest.param((10, 10, 10), marks=pytest.mark.heavy)])
+@pytest.mark.parametrize("dtype", ["int32", "float64", pytest.param("i2", marks=pytest.mark.heavy)])
 @pytest.mark.parametrize("disk", [True, False])
 def test_save_constructor(disk, shape, dtype, constructor):
     lshape = math.prod(shape)
@@ -1129,15 +1141,7 @@ def test_broadcasting_str(broadcast_fixture):
     np.testing.assert_allclose(res, nres)
 
 
-@pytest.mark.parametrize(
-    "operand_mix",
-    [
-        ("NDArray", "numpy"),
-        ("NDArray", "NDArray"),
-        ("numpy", "NDArray"),
-        ("numpy", "numpy"),
-    ],
-)
+@pytest.mark.parametrize("operand_mix", _LAZYEXPR_OPERAND_MIXES)
 @pytest.mark.parametrize("operand_guess", [True, False])
 def test_lazyexpr(array_fixture, operand_mix, operand_guess):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
@@ -1179,15 +1183,7 @@ def test_lazyexpr(array_fixture, operand_mix, operand_guess):
     np.testing.assert_allclose(res, nres[0:10:2])
 
 
-@pytest.mark.parametrize(
-    "operand_mix",
-    [
-        ("NDArray", "numpy"),
-        ("NDArray", "NDArray"),
-        ("numpy", "NDArray"),
-        ("numpy", "numpy"),
-    ],
-)
+@pytest.mark.parametrize("operand_mix", _LAZYEXPR_OPERAND_MIXES)
 @pytest.mark.parametrize(
     "out_param",
     ["NDArray", "numpy"],
@@ -1405,38 +1401,35 @@ def test_get_expr_operands(expression, expected_operands):
     "scalar",
     [
         "np.int8(0)",
-        "np.uint8(0)",
-        "np.int16(0)",
-        "np.uint16(0)",
-        "np.int32(0)",
-        "np.uint32(0)",
-        "np.int64(0)",
         "np.float32(0)",
         "np.float64(0)",
         "np.complex64(0)",
-        "np.complex128(0)",
+        pytest.param("np.uint8(0)", marks=pytest.mark.heavy),
+        pytest.param("np.int16(0)", marks=pytest.mark.heavy),
+        pytest.param("np.uint16(0)", marks=pytest.mark.heavy),
+        pytest.param("np.int32(0)", marks=pytest.mark.heavy),
+        pytest.param("np.uint32(0)", marks=pytest.mark.heavy),
+        pytest.param("np.int64(0)", marks=pytest.mark.heavy),
+        pytest.param("np.complex128(0)", marks=pytest.mark.heavy),
     ],
 )
 @pytest.mark.parametrize(
     ("dtype1", "dtype2"),
     [
         (np.int8, np.int8),
-        (np.int8, np.int16),
-        (np.int8, np.int32),
-        (np.int8, np.int64),
         (np.int8, np.float32),
-        (np.int8, np.float64),
-        (np.uint16, np.uint16),
         (np.uint16, np.uint32),
-        # (np.uint16, np.uint64), # numexpr does not support uint64
-        (np.uint16, np.float32),
-        # (np.uint16, np.float64),
-        # (np.int32, np.int32),
-        (np.int32, np.int64),
-        (np.float32, np.float32),
         (np.float32, np.float64),
-        (np.complex64, np.complex64),
         (np.complex64, np.complex128),
+        pytest.param(np.int8, np.int16, marks=pytest.mark.heavy),
+        pytest.param(np.int8, np.int32, marks=pytest.mark.heavy),
+        pytest.param(np.int8, np.int64, marks=pytest.mark.heavy),
+        pytest.param(np.int8, np.float64, marks=pytest.mark.heavy),
+        pytest.param(np.uint16, np.uint16, marks=pytest.mark.heavy),
+        pytest.param(np.uint16, np.float32, marks=pytest.mark.heavy),
+        pytest.param(np.int32, np.int64, marks=pytest.mark.heavy),
+        pytest.param(np.float32, np.float32, marks=pytest.mark.heavy),
+        pytest.param(np.complex64, np.complex64, marks=pytest.mark.heavy),
     ],
 )
 def test_dtype_infer(dtype1, dtype2, scalar):
