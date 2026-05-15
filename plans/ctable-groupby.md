@@ -381,7 +381,7 @@ Potential future optimization:
 
 ### Additional API conveniences
 
-Potential future user conveniences:
+Implemented group-by convenience methods:
 
 ```python
 t.group_by("city").sum("sales")
@@ -389,6 +389,9 @@ t.group_by("city").mean("sales")
 t.group_by("city").min("sales")
 t.group_by("city").max("sales")
 ```
+
+These are equivalent to `agg({column: op})` and complement the already-existing
+`size()` and `count(column)` group-by methods.
 
 Do not add top-level `CTable.size()` / `CTable.count()` until their semantics are
 clearly justified outside group-by.

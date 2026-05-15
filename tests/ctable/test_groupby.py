@@ -358,3 +358,20 @@ def test_groupby_cython_dictionary_integer_key_hash():
     out = t.group_by(["key0", "key1"], sort=True).agg({"value": "sum"})
 
     assert rows(out) == [("a", 1, 2.0), ("b", 2, 4.0)]
+
+
+def test_groupby_convenience_numeric_methods():
+    t = CTable(SalesRow, new_data=DATA)
+
+    assert rows(t.group_by("city", sort=True).sum("qty")) == rows(
+        t.group_by("city", sort=True).agg({"qty": "sum"})
+    )
+    assert rows(t.group_by("city", sort=True).mean("qty")) == rows(
+        t.group_by("city", sort=True).agg({"qty": "mean"})
+    )
+    assert rows(t.group_by("city", sort=True).min("qty")) == rows(
+        t.group_by("city", sort=True).agg({"qty": "min"})
+    )
+    assert rows(t.group_by("city", sort=True).max("qty")) == rows(
+        t.group_by("city", sort=True).agg({"qty": "max"})
+    )

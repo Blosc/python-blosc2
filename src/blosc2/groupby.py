@@ -110,6 +110,34 @@ class CTableGroupBy:
         col = self.table._logical_to_physical_name(column)
         return self._execute([_AggSpec(col, "count", f"{col}_count")])
 
+    def sum(self, column: str):
+        """Return sums of *column* per group.
+
+        This is equivalent to ``group_by(...).agg({column: "sum"})``.
+        """
+        return self.agg({column: "sum"})
+
+    def mean(self, column: str):
+        """Return means of *column* per group.
+
+        This is equivalent to ``group_by(...).agg({column: "mean"})``.
+        """
+        return self.agg({column: "mean"})
+
+    def min(self, column: str):
+        """Return minimum values of *column* per group.
+
+        This is equivalent to ``group_by(...).agg({column: "min"})``.
+        """
+        return self.agg({column: "min"})
+
+    def max(self, column: str):
+        """Return maximum values of *column* per group.
+
+        This is equivalent to ``group_by(...).agg({column: "max"})``.
+        """
+        return self.agg({column: "max"})
+
     def agg(self, aggregations: Mapping[str, str | Sequence[str]]):
         """Aggregate value columns per group.
 
