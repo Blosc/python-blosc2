@@ -252,10 +252,10 @@ class CTableGroupBy:
         if value_dtype != np.dtype(np.float64) or getattr(value_info.spec, "null_value", None) is not None:
             return None
         try:
-            from blosc2 import indexing_ext
+            from blosc2 import groupby_ext
         except ImportError:
             return None
-        kernel = getattr(indexing_ext, "groupby_dense_i32_f64_sum_checked", None)
+        kernel = getattr(groupby_ext, "groupby_dense_i32_f64_sum_checked", None)
         if kernel is None:
             return None
 
@@ -322,7 +322,7 @@ class CTableGroupBy:
         # grouping, which can materialize a NaN group.
         skip_key_nan = self.dropna
         try:
-            from blosc2 import indexing_ext
+            from blosc2 import groupby_ext
         except ImportError:
             return None
         kernel_name = (
@@ -330,7 +330,7 @@ class CTableGroupBy:
             if key_dtype == np.dtype(np.float32)
             else "groupby_dense_f64_integral_key_f64_sum_checked"
         )
-        kernel = getattr(indexing_ext, kernel_name, None)
+        kernel = getattr(groupby_ext, kernel_name, None)
         if kernel is None:
             return None
 

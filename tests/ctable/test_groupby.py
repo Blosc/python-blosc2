@@ -144,6 +144,82 @@ def test_groupby_empty_table_returns_empty_result():
     assert out.col_names == ["city", "size"]
 
 
+@dataclass
+class Int32FloatRow:
+    key: int = blosc2.field(blosc2.int32())
+    value: float = blosc2.field(blosc2.float64())
+
+
+@dataclass
+class Float64KeyRow:
+    key: float = blosc2.field(blosc2.float64())
+    value: float = blosc2.field(blosc2.float64())
+
+
+@dataclass
+class Float32KeyRow:
+    key: float = blosc2.field(blosc2.float32())
+    value: float = blosc2.field(blosc2.float64())
+
+
+@dataclass
+class DictFloatRow:
+    key: str = blosc2.field(blosc2.dictionary())
+    value: float = blosc2.field(blosc2.float64())
+
+
+@pytest.mark.parametrize(
+    ("row_type", "data", "expected"),
+    [
+        (
+            Int32FloatRow,
+            [(0, 1.5), (2, 10.0), (1, 2.5), (2, 3.0), (0, 4.0)],
+            [(0, 5.5), (1, 2.5), (2, 13.0)],
+        ),
+        (
+            Float64KeyRow,
+            [(0.0, 1.5), (2.0, 10.0), (1.0, 2.5), (2.0, 3.0), (0.0, 4.0)],
+            [(0.0, 5.5), (1.0, 2.5), (2.0, 13.0)],
+        ),
+        (
+            Float32KeyRow,
+            [(0.0, 1.5), (2.0, 10.0), (1.0, 2.5), (2.0, 3.0), (0.0, 4.0)],
+            [(0.0, 5.5), (1.0, 2.5), (2.0, 13.0)],
+        ),
+        (
+            DictFloatRow,
+            [("a", 1.5), ("c", 10.0), ("b", 2.5), ("c", 3.0), ("a", 4.0)],
+            [("a", 5.5), ("c", 13.0), ("b", 2.5)],
+        ),
+    ],
+)
+def test_groupby_fast_path_sum_variants(row_type, data, expected):
+    t = CTable(row_type, new_data=data)
+
+    out = t.group_by("key").agg({"value": "sum"})
+
+    assert rows(out) == expected
+
+
+def test_groupby_float_integral_fast_path_falls_back_for_non_integral_keys():
+    t = CTable(Float64KeyRow, new_data=[(0.5, 1.0), (1.5, 2.0), (0.5, 3.0)])
+
+    out = t.group_by("key").agg({"value": "sum"})
+
+    assert rows(out) == [(0.5, 4.0), (1.5, 2.0)]
+
+
+def test_groupby_float_integral_fast_path_falls_back_for_nan_group_when_kept():
+    t = CTable(Float64KeyRow, new_data=[(0.0, 1.0), (np.nan, 2.0), (0.0, 3.0)])
+
+    out = t.group_by("key", dropna=False).agg({"value": "sum"})
+
+    got = rows(out)
+    assert got[0] == (0.0, 4.0)
+    assert np.isnan(got[1][0])
+    assert got[1][1] == 2.0
+
+
 def test_groupby_rejects_bad_engine():
     t = CTable(SalesRow, new_data=DATA)
 
