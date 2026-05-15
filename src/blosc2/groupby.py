@@ -175,6 +175,10 @@ class CTableGroupBy:
 
     def _execute(self, specs: list[_AggSpec]):
         self._validate_output_names(specs)
+        fast = self._try_execute_dense_single_int_key(specs)
+        if fast is not None:
+            return fast
+
         acc: dict[Any, dict[str, _AggState]] = {}
         key_values: dict[Any, tuple[Any, ...]] = {}
 
@@ -212,6 +216,163 @@ class CTableGroupBy:
             self._merge_partials(acc, key_values, normalized_keys, display_keys, partials, specs)
 
         rows = self._final_rows(acc, key_values, specs)
+        return self._build_result(rows, specs)
+
+    def _try_execute_dense_single_int_key(self, specs: list[_AggSpec]):  # noqa: C901
+        """Fast path for one dense integer/dictionary-code key.
+
+        This avoids per-chunk ``np.unique`` and Python dictionary merging.  It is
+        intentionally conservative: keys must be non-negative and the observed
+        key range must stay reasonably compact.
+        """
+        if len(self.keys) != 1:
+            return None
+        key_name = self.keys[0]
+        key_info = self.table._schema.columns_by_name[key_name]
+        key_is_dict = self.table._is_dictionary_column(key_info)
+        key_dtype = np.dtype(np.int32) if key_is_dict else getattr(key_info.spec, "dtype", None)
+        if key_dtype is None or key_dtype.kind not in "biu":
+            return None
+        if any(spec.op in {"min", "max"} and spec.input_col is not None for spec in specs):
+            for spec in specs:
+                if spec.op in {"min", "max"} and spec.input_col is not None:
+                    dtype = getattr(self.table._schema.columns_by_name[spec.input_col].spec, "dtype", None)
+                    if dtype is None or np.dtype(dtype).kind not in "biufmM":
+                        return None
+
+        compact_limit = 10_000_000
+        present = np.zeros(0, dtype=bool)
+        states: dict[str, Any] = {}
+        for spec in specs:
+            if spec.op in {"size", "count"}:
+                states[spec.output_col] = np.zeros(0, dtype=np.int64)
+            elif spec.op == "sum":
+                out_dtype = np.int64
+                if spec.input_col is not None:
+                    dtype = np.dtype(self.table._schema.columns_by_name[spec.input_col].spec.dtype)
+                    out_dtype = np.float64 if dtype.kind == "f" else np.int64
+                states[spec.output_col] = np.zeros(0, dtype=out_dtype)
+            elif spec.op == "mean":
+                states[spec.output_col] = (np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64))
+            elif spec.op in {"min", "max"}:
+                assert spec.input_col is not None
+                dtype = np.dtype(self.table._schema.columns_by_name[spec.input_col].spec.dtype)
+                identity = _max_identity(dtype) if spec.op == "min" else _min_identity(dtype)
+                states[spec.output_col] = (np.full(0, identity, dtype=dtype), np.zeros(0, dtype=bool))
+
+        def ensure_size(size: int) -> bool:
+            nonlocal present, states
+            if size > compact_limit:
+                return False
+            if size <= len(present):
+                return True
+            old = len(present)
+            present = np.pad(present, (0, size - old), constant_values=False)
+            for spec in specs:
+                state = states[spec.output_col]
+                if spec.op in {"size", "count", "sum"}:
+                    states[spec.output_col] = np.pad(state, (0, size - old), constant_values=0)
+                elif spec.op == "mean":
+                    sums, counts = state
+                    states[spec.output_col] = (
+                        np.pad(sums, (0, size - old), constant_values=0),
+                        np.pad(counts, (0, size - old), constant_values=0),
+                    )
+                elif spec.op in {"min", "max"}:
+                    values, has = state
+                    dtype = values.dtype
+                    identity = _max_identity(dtype) if spec.op == "min" else _min_identity(dtype)
+                    states[spec.output_col] = (
+                        np.pad(values, (0, size - old), constant_values=identity),
+                        np.pad(has, (0, size - old), constant_values=False),
+                    )
+            return True
+
+        phys_len = len(self.table._valid_rows)
+        chunk_size = self._chunk_size()
+        value_cols = sorted({s.input_col for s in specs if s.input_col is not None})
+        for start in range(0, phys_len, chunk_size):
+            stop = min(start + chunk_size, phys_len)
+            valid = np.asarray(self.table._valid_rows[start:stop], dtype=bool)
+            if not np.any(valid):
+                continue
+            raw_keys = self._read_key_chunk(key_name, start, stop)
+            live_mask = valid.copy()
+            if self.dropna:
+                live_mask &= ~self._null_mask(key_name, raw_keys, is_key=True)
+            if not np.any(live_mask):
+                continue
+            keys = np.asarray(raw_keys[live_mask])
+            if keys.dtype.kind == "b":
+                keys = keys.astype(np.int8, copy=False)
+            if len(keys) == 0:
+                continue
+            min_key = int(np.min(keys))
+            if min_key < 0:
+                return None
+            max_key = int(np.max(keys))
+            if not ensure_size(max_key + 1):
+                return None
+            present[keys] = True
+            value_chunks = {
+                name: np.asarray(self.table._cols[name][start:stop])[live_mask] for name in value_cols
+            }
+
+            for spec in specs:
+                if spec.op == "size":
+                    states[spec.output_col] += np.bincount(keys, minlength=len(present)).astype(np.int64)
+                    continue
+                assert spec.input_col is not None
+                values = value_chunks[spec.input_col]
+                non_null = ~self._null_mask(spec.input_col, values, is_key=False)
+                if spec.op == "count":
+                    states[spec.output_col] += np.bincount(
+                        keys, weights=non_null.astype(np.int64), minlength=len(present)
+                    ).astype(np.int64)
+                elif spec.op == "sum":
+                    state = states[spec.output_col]
+                    if values.dtype.kind in "biu":
+                        np.add.at(state, keys[non_null], values[non_null].astype(np.int64, copy=False))
+                    else:
+                        state += np.bincount(
+                            keys, weights=np.where(non_null, values, 0), minlength=len(present)
+                        ).astype(state.dtype, copy=False)
+                elif spec.op == "mean":
+                    sums, counts = states[spec.output_col]
+                    sums += np.bincount(keys, weights=np.where(non_null, values, 0), minlength=len(present))
+                    counts += np.bincount(
+                        keys, weights=non_null.astype(np.int64), minlength=len(present)
+                    ).astype(np.int64)
+                elif spec.op in {"min", "max"}:
+                    values_state, has_state = states[spec.output_col]
+                    if spec.op == "min":
+                        np.minimum.at(values_state, keys[non_null], values[non_null])
+                    else:
+                        np.maximum.at(values_state, keys[non_null], values[non_null])
+                    has_state[keys[non_null]] = True
+
+        group_codes = np.nonzero(present)[0]
+        rows = []
+        for code in group_codes:
+            key_value = self.table._cols[key_name].decode(int(code)) if key_is_dict else _python_scalar(code)
+            row = {key_name: key_value}
+            for spec in specs:
+                state = states[spec.output_col]
+                if spec.op == "mean":
+                    sums, counts = state
+                    row[spec.output_col] = (
+                        math.nan if counts[code] == 0 else float(sums[code]) / int(counts[code])
+                    )
+                elif spec.op in {"min", "max"}:
+                    values_state, has_state = state
+                    row[spec.output_col] = (
+                        _python_scalar(values_state[code])
+                        if has_state[code]
+                        else _null_output_value(self._result_spec_for_agg(spec))
+                    )
+                else:
+                    row[spec.output_col] = _python_scalar(state[code])
+            rows.append(row)
         return self._build_result(rows, specs)
 
     def _chunk_size(self) -> int:
