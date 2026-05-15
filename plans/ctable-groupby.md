@@ -226,17 +226,25 @@ Remaining possible extensions in this area:
 
 ### Arbitrary float-key hash table
 
-Current float Cython fast paths handle integral float32/float64 keys only.  A
-true float-key hash table would support arbitrary float keys without sorting or
-`np.unique`.
+Implemented a conservative Cython open-addressing hash path for single
+`float32`/`float64` keys with float value aggregations.  It supports `size`,
+`count`, `sum`, `mean`, `min`, and `max` for supported single-value-column
+queries and falls back otherwise.
 
-Required semantic decisions/handling:
+Implemented semantics:
 
 - `dropna=True`: skip NaN keys;
-- `dropna=False`: all NaN keys should form one group;
-- `+0.0` and `-0.0` should likely be the same group;
-- infinities are valid groups;
-- nullable float sentinels must be normalized consistently.
+- `dropna=False`: all NaN keys form one group;
+- `+0.0` and `-0.0` are normalized into the same group;
+- infinities are valid groups through regular float bit hashing;
+- NaN-null float values are skipped for value aggregations.
+
+Remaining possible extensions:
+
+- support non-float value columns in the hash path without normalizing through
+  float64;
+- fuse multiple value columns directly in one hash-table pass;
+- add explicit memory/cardinality safeguards for very high-cardinality floats.
 
 ### Multi-key Cython hash path
 

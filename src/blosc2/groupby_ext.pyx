@@ -12,6 +12,8 @@ import numpy as np
 cimport numpy as np
 
 from libc.stdint cimport int8_t, uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t, uint64_t
+from libc.stdlib cimport malloc, free
+from libc.string cimport memcpy
 
 
 # ----------------------------------------------------------------------
@@ -717,3 +719,222 @@ def groupby_dense_int_i64_max_checked(
                     maxs[key] = value
                 has_value[key] = 1
     return ret
+
+
+# ----------------------------------------------------------------------
+# Arbitrary float-key hash kernels
+# ----------------------------------------------------------------------
+
+cdef inline uint64_t _f64_bits(double value) noexcept:
+    cdef uint64_t bits
+    memcpy(&bits, &value, sizeof(double))
+    return bits
+
+
+cdef inline uint64_t _mix_u64(uint64_t x) noexcept:
+    x ^= x >> 30
+    x *= <uint64_t>0xbf58476d1ce4e5b9
+    x ^= x >> 27
+    x *= <uint64_t>0x94d049bb133111eb
+    x ^= x >> 31
+    return x
+
+
+def groupby_hash_f64_f64(
+    double[:] keys,
+    double[:] values,
+    np.npy_bool[:] valid,
+    np.npy_bool[:] values_valid,
+    bint has_values,
+    bint dropna=True,
+):
+    """Hash arbitrary float64 keys and accumulate float64 group states.
+
+    Returns ``(keys, row_counts, value_counts, sums, mins, maxs, has_value)``.
+    NaN keys are skipped when ``dropna`` is true; otherwise all NaN bit-patterns
+    are normalized into one NaN group.  ``+0.0`` and ``-0.0`` are normalized into
+    the same zero group.
+    """
+    if keys.shape[0] != valid.shape[0]:
+        raise ValueError("keys and valid must have the same length")
+    if has_values and (values.shape[0] != keys.shape[0] or values_valid.shape[0] != keys.shape[0]):
+        raise ValueError("values, values_valid and keys must have the same length")
+
+    cdef Py_ssize_t n = keys.shape[0]
+    cdef Py_ssize_t cap = 1024
+    cdef Py_ssize_t used_count = 0
+    cdef Py_ssize_t i, pos, old_pos, out_pos
+    cdef uint64_t mask = <uint64_t>cap - 1
+    cdef uint64_t bits, h, old_bits
+    cdef double key, value
+    cdef double nan_value = float("nan")
+    cdef uint64_t nan_bits = <uint64_t>0x7ff8000000000000
+    cdef bint value_ok
+
+    cdef uint64_t* table_bits = <uint64_t*>malloc(cap * sizeof(uint64_t))
+    cdef np.npy_bool* table_used = <np.npy_bool*>malloc(cap * sizeof(np.npy_bool))
+    cdef double* table_keys = <double*>malloc(cap * sizeof(double))
+    cdef int64_t* row_counts = <int64_t*>malloc(cap * sizeof(int64_t))
+    cdef int64_t* value_counts = <int64_t*>malloc(cap * sizeof(int64_t))
+    cdef double* sums = <double*>malloc(cap * sizeof(double))
+    cdef double* mins = <double*>malloc(cap * sizeof(double))
+    cdef double* maxs = <double*>malloc(cap * sizeof(double))
+    cdef np.npy_bool* has_value = <np.npy_bool*>malloc(cap * sizeof(np.npy_bool))
+
+    cdef uint64_t* new_bits
+    cdef np.npy_bool* new_used
+    cdef double* new_keys
+    cdef int64_t* new_row_counts
+    cdef int64_t* new_value_counts
+    cdef double* new_sums
+    cdef double* new_mins
+    cdef double* new_maxs
+    cdef np.npy_bool* new_has_value
+    cdef Py_ssize_t old_cap
+    cdef uint64_t new_mask
+
+    if (
+        table_bits == NULL
+        or table_used == NULL
+        or table_keys == NULL
+        or row_counts == NULL
+        or value_counts == NULL
+        or sums == NULL
+        or mins == NULL
+        or maxs == NULL
+        or has_value == NULL
+    ):
+        free(table_bits); free(table_used); free(table_keys); free(row_counts); free(value_counts)
+        free(sums); free(mins); free(maxs); free(has_value)
+        raise MemoryError()
+
+    for i in range(cap):
+        table_used[i] = 0
+
+    try:
+        for i in range(n):
+            if not valid[i]:
+                continue
+            key = keys[i]
+            if key != key:
+                if dropna:
+                    continue
+                bits = nan_bits
+                key = nan_value
+            elif key == 0.0:
+                key = 0.0
+                bits = 0
+            else:
+                bits = _f64_bits(key)
+
+            if (used_count + 1) * 2 >= cap:
+                old_cap = cap
+                cap *= 2
+                mask = <uint64_t>cap - 1
+                new_bits = <uint64_t*>malloc(cap * sizeof(uint64_t))
+                new_used = <np.npy_bool*>malloc(cap * sizeof(np.npy_bool))
+                new_keys = <double*>malloc(cap * sizeof(double))
+                new_row_counts = <int64_t*>malloc(cap * sizeof(int64_t))
+                new_value_counts = <int64_t*>malloc(cap * sizeof(int64_t))
+                new_sums = <double*>malloc(cap * sizeof(double))
+                new_mins = <double*>malloc(cap * sizeof(double))
+                new_maxs = <double*>malloc(cap * sizeof(double))
+                new_has_value = <np.npy_bool*>malloc(cap * sizeof(np.npy_bool))
+                if (
+                    new_bits == NULL
+                    or new_used == NULL
+                    or new_keys == NULL
+                    or new_row_counts == NULL
+                    or new_value_counts == NULL
+                    or new_sums == NULL
+                    or new_mins == NULL
+                    or new_maxs == NULL
+                    or new_has_value == NULL
+                ):
+                    free(new_bits); free(new_used); free(new_keys); free(new_row_counts); free(new_value_counts)
+                    free(new_sums); free(new_mins); free(new_maxs); free(new_has_value)
+                    raise MemoryError()
+                for pos in range(cap):
+                    new_used[pos] = 0
+                for old_pos in range(old_cap):
+                    if not table_used[old_pos]:
+                        continue
+                    old_bits = table_bits[old_pos]
+                    h = _mix_u64(old_bits)
+                    pos = <Py_ssize_t>(h & mask)
+                    while new_used[pos]:
+                        pos = <Py_ssize_t>((pos + 1) & mask)
+                    new_used[pos] = 1
+                    new_bits[pos] = old_bits
+                    new_keys[pos] = table_keys[old_pos]
+                    new_row_counts[pos] = row_counts[old_pos]
+                    new_value_counts[pos] = value_counts[old_pos]
+                    new_sums[pos] = sums[old_pos]
+                    new_mins[pos] = mins[old_pos]
+                    new_maxs[pos] = maxs[old_pos]
+                    new_has_value[pos] = has_value[old_pos]
+                free(table_bits); free(table_used); free(table_keys); free(row_counts); free(value_counts)
+                free(sums); free(mins); free(maxs); free(has_value)
+                table_bits = new_bits
+                table_used = new_used
+                table_keys = new_keys
+                row_counts = new_row_counts
+                value_counts = new_value_counts
+                sums = new_sums
+                mins = new_mins
+                maxs = new_maxs
+                has_value = new_has_value
+
+            h = _mix_u64(bits)
+            pos = <Py_ssize_t>(h & mask)
+            while table_used[pos] and table_bits[pos] != bits:
+                pos = <Py_ssize_t>((pos + 1) & mask)
+            if not table_used[pos]:
+                table_used[pos] = 1
+                table_bits[pos] = bits
+                table_keys[pos] = key
+                row_counts[pos] = 0
+                value_counts[pos] = 0
+                sums[pos] = 0.0
+                mins[pos] = 0.0
+                maxs[pos] = 0.0
+                has_value[pos] = 0
+                used_count += 1
+
+            row_counts[pos] += 1
+            if has_values:
+                value_ok = values_valid[i]
+                if value_ok:
+                    value = values[i]
+                    value_counts[pos] += 1
+                    sums[pos] += value
+                    if not has_value[pos] or value < mins[pos]:
+                        mins[pos] = value
+                    if not has_value[pos] or value > maxs[pos]:
+                        maxs[pos] = value
+                    has_value[pos] = 1
+
+        out_keys = np.empty(used_count, dtype=np.float64)
+        out_row_counts = np.empty(used_count, dtype=np.int64)
+        out_value_counts = np.empty(used_count, dtype=np.int64)
+        out_sums = np.empty(used_count, dtype=np.float64)
+        out_mins = np.empty(used_count, dtype=np.float64)
+        out_maxs = np.empty(used_count, dtype=np.float64)
+        out_has_value = np.empty(used_count, dtype=bool)
+
+        out_pos = 0
+        for pos in range(cap):
+            if not table_used[pos]:
+                continue
+            out_keys[out_pos] = table_keys[pos]
+            out_row_counts[out_pos] = row_counts[pos]
+            out_value_counts[out_pos] = value_counts[pos]
+            out_sums[out_pos] = sums[pos]
+            out_mins[out_pos] = mins[pos]
+            out_maxs[out_pos] = maxs[pos]
+            out_has_value[out_pos] = has_value[pos]
+            out_pos += 1
+        return out_keys, out_row_counts, out_value_counts, out_sums, out_mins, out_maxs, out_has_value
+    finally:
+        free(table_bits); free(table_used); free(table_keys); free(row_counts); free(value_counts)
+        free(sums); free(mins); free(maxs); free(has_value)

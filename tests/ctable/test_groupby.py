@@ -291,3 +291,31 @@ def test_groupby_cython_integer_key_nullable_float_aggs():
     assert np.isnan(got[1][4])
     assert np.isnan(got[1][5])
     assert got[2] == (2, 1, 10.0, 10.0, 10.0, 10.0)
+
+
+def test_groupby_cython_arbitrary_float_key_aggs():
+    t = CTable(
+        Float64KeyRow,
+        new_data=[(0.5, 1.0), (1.25, 10.0), (0.5, 3.0), (-2.5, 4.0), (1.25, 2.0)],
+    )
+
+    out = t.group_by("key").agg({"value": ["count", "sum", "mean", "min", "max"]})
+
+    assert rows(out) == [
+        (-2.5, 1, 4.0, 4.0, 4.0, 4.0),
+        (0.5, 2, 4.0, 2.0, 1.0, 3.0),
+        (1.25, 2, 12.0, 6.0, 2.0, 10.0),
+    ]
+
+
+def test_groupby_cython_arbitrary_float_key_nan_and_signed_zero():
+    t = CTable(Float64KeyRow, new_data=[(-0.0, 1.0), (0.0, 2.0), (np.nan, 3.0), (np.nan, 4.0)])
+
+    dropped = t.group_by("key").agg({"value": "sum"})
+    kept = t.group_by("key", dropna=False).agg({"value": "sum"})
+
+    assert rows(dropped) == [(0.0, 3.0)]
+    got = rows(kept)
+    assert got[0] == (0.0, 3.0)
+    assert np.isnan(got[1][0])
+    assert got[1][1] == 7.0

@@ -184,6 +184,9 @@ class CTableGroupBy:
         fast = self._try_execute_cython_float_integral_key_f64_sum(specs)
         if fast is not None:
             return fast
+        fast = self._try_execute_cython_float_hash(specs)
+        if fast is not None:
+            return fast
         fast = self._try_execute_dense_single_int_key(specs)
         if fast is not None:
             return fast
@@ -594,6 +597,135 @@ class CTableGroupBy:
         for code in np.nonzero(present)[0]:
             key_value = self.table._cols[key_name].decode(int(code)) if key_is_dict else int(code)
             rows.append({key_name: key_value, spec.output_col: float(sums[code])})
+        return self._build_result(rows, specs)
+
+    def _try_execute_cython_float_hash(self, specs: list[_AggSpec]):  # noqa: C901
+        """Cython hash path for one arbitrary float key.
+
+        This covers float32/float64 keys that are not suitable for dense
+        integral-key indexing.  It currently supports float value columns for
+        value reductions and falls back for unsupported mixed/multi-column cases.
+        """
+        if len(self.keys) != 1:
+            return None
+        key_name = self.keys[0]
+        key_info = self.table._schema.columns_by_name[key_name]
+        if self.table._is_dictionary_column(key_info):
+            return None
+        key_dtype = getattr(key_info.spec, "dtype", None)
+        if key_dtype not in {np.dtype(np.float32), np.dtype(np.float64)}:
+            return None
+
+        value_cols = {s.input_col for s in specs if s.input_col is not None}
+        if len(value_cols) > 1:
+            return None
+        value_col = next(iter(value_cols), None)
+        value_dtype = None
+        nullable_nan_value = False
+        if value_col is not None:
+            value_info = self.table._schema.columns_by_name[value_col]
+            value_dtype = getattr(value_info.spec, "dtype", None)
+            # Count can operate on any fixed-width value column via values_valid,
+            # but other reductions in this hash kernel normalize values to f64.
+            if any(s.op in {"sum", "mean", "min", "max"} for s in specs):
+                if value_dtype is None or np.dtype(value_dtype).kind != "f":
+                    return None
+                null_value = getattr(value_info.spec, "null_value", None)
+                nullable_nan_value = isinstance(null_value, float) and math.isnan(null_value)
+                if null_value is not None and not nullable_nan_value:
+                    return None
+
+        try:
+            from blosc2 import groupby_ext
+        except ImportError:
+            return None
+        kernel = getattr(groupby_ext, "groupby_hash_f64_f64", None)
+        if kernel is None:
+            return None
+
+        acc: dict[Any, dict[str, _AggState]] = {}
+        key_values: dict[Any, tuple[Any, ...]] = {}
+        phys_len = len(self.table._valid_rows)
+        chunk_size = self._chunk_size()
+
+        for start in range(0, phys_len, chunk_size):
+            stop = min(start + chunk_size, phys_len)
+            valid = np.asarray(self.table._valid_rows[start:stop], dtype=bool)
+            if not np.any(valid):
+                continue
+            keys = np.ascontiguousarray(np.asarray(self.table._cols[key_name][start:stop], dtype=np.float64))
+            if value_col is None:
+                values = np.empty(len(keys), dtype=np.float64)
+                values_valid = np.zeros(len(keys), dtype=bool)
+                has_values = False
+            else:
+                raw_values = np.asarray(self.table._cols[value_col][start:stop])
+                if any(s.op in {"sum", "mean", "min", "max"} for s in specs):
+                    values = np.ascontiguousarray(raw_values.astype(np.float64, copy=False))
+                else:
+                    values = np.empty(len(keys), dtype=np.float64)
+                values_valid = np.ascontiguousarray(~self._null_mask(value_col, raw_values, is_key=False))
+                has_values = True
+
+            (
+                chunk_keys,
+                row_counts,
+                value_counts,
+                sums,
+                mins,
+                maxs,
+                has_value,
+            ) = kernel(keys, values, np.ascontiguousarray(valid), values_valid, has_values, self.dropna)
+
+            for i, key in enumerate(chunk_keys):
+                key_scalar = np.asarray(key, dtype=key_dtype).item()
+                norm_key = _normalize_key_part(float(key_scalar))
+                states = acc.setdefault(norm_key, {})
+                key_values.setdefault(norm_key, (key_scalar,))
+                for spec in specs:
+                    state = states.setdefault(spec.output_col, _AggState(spec.op))
+                    if spec.op == "size":
+                        state.value = (0 if state.value is None else state.value) + int(row_counts[i])
+                    elif spec.op == "count":
+                        state.value = (0 if state.value is None else state.value) + int(value_counts[i])
+                    elif spec.op == "sum" or spec.op == "mean":
+                        if has_value[i]:
+                            state.value = (0.0 if state.value is None else state.value) + float(sums[i])
+                            state.count += int(value_counts[i])
+                    elif spec.op == "min":
+                        if has_value[i]:
+                            value = float(mins[i])
+                            if state.count == 0 or value < state.value:
+                                state.value = value
+                            state.count += 1
+                    elif spec.op == "max" and has_value[i]:
+                        value = float(maxs[i])
+                        if state.count == 0 or value > state.value:
+                            state.value = value
+                        state.count += 1
+
+        # Hash-table iteration order is intentionally not exposed.  Emit float
+        # hash groups in key order for deterministic results and compatibility
+        # with the previous NumPy fallback behavior for these cases.
+        ordered_keys = list(acc)
+        ordered_keys.sort(
+            key=lambda k: tuple(
+                (1, "") if isinstance(v, float) and math.isnan(v) else (0, v) for v in key_values[k]
+            )
+        )
+        rows = []
+        for norm_key in ordered_keys:
+            row = dict(zip(self.keys, key_values[norm_key], strict=True))
+            states = acc[norm_key]
+            for spec in specs:
+                state = states[spec.output_col]
+                if spec.op == "mean":
+                    row[spec.output_col] = math.nan if state.count == 0 else state.value / state.count
+                elif spec.op in {"sum", "min", "max"} and state.count == 0:
+                    row[spec.output_col] = _null_output_value(self._result_spec_for_agg(spec))
+                else:
+                    row[spec.output_col] = 0 if state.value is None else state.value
+            rows.append(row)
         return self._build_result(rows, specs)
 
     def _try_execute_cython_float_integral_key_f64_sum(self, specs: list[_AggSpec]):  # noqa: C901

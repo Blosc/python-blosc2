@@ -5,6 +5,7 @@ Examples
 --------
 python bench/ctable/groupby.py --rows 10_000_000 --groups 1_000 --op sum
 python bench/ctable/groupby.py --rows 10_000_000 --groups 1_000 --key-dtype float64 --op sum
+# float key dtypes generate non-integral repeated labels to exercise the float hash path
 python bench/ctable/groupby.py --rows 1_000_000 --groups 100 --dictionary --pandas
 """
 
@@ -67,7 +68,11 @@ def make_data(nrows: int, ngroups: int, dictionary: bool, key_dtype: str, seed: 
     if dictionary:
         keys = np.asarray([f"k{code}" for code in key_codes], dtype=object)
     elif key_dtype in {"float32", "float64"}:
-        keys = key_codes.astype(np.dtype(key_dtype))
+        # Use non-integral, repeated float labels by default so float-key
+        # benchmarks exercise the arbitrary-float hash path instead of the
+        # dense integral-float fast path.
+        labels = key_codes.astype(np.float64) + 0.25
+        keys = labels.astype(np.dtype(key_dtype))
     else:
         keys = key_codes.astype(np.dtype(key_dtype), copy=False)
     return keys, values
@@ -94,7 +99,7 @@ def main() -> None:
             "float64",
         ],
         default="int32",
-        help="Physical dtype for non-dictionary keys. Float keys are generated from group codes cast to float.",
+        help="Physical dtype for non-dictionary keys. Float keys are generated as non-integral repeated labels.",
     )
     parser.add_argument("--op", choices=["size", "count", "sum", "mean", "min", "max"], default="sum")
     parser.add_argument("--sort", action="store_true")
