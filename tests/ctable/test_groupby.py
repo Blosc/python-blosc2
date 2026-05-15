@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-from dataclasses import dataclass
+from dataclasses import dataclass, make_dataclass
 
 import numpy as np
 import pytest
@@ -225,3 +225,69 @@ def test_groupby_rejects_bad_engine():
 
     with pytest.raises(ValueError):
         t.group_by("city", engine="cython")
+
+
+@pytest.mark.parametrize(
+    ("schema_factory", "values"),
+    [
+        (blosc2.int8, [0, 2, 1, 2, 0]),
+        (blosc2.uint8, [0, 2, 1, 2, 0]),
+        (blosc2.int16, [0, 2, 1, 2, 0]),
+        (blosc2.uint16, [0, 2, 1, 2, 0]),
+        (blosc2.int32, [0, 2, 1, 2, 0]),
+        (blosc2.uint32, [0, 2, 1, 2, 0]),
+        (blosc2.int64, [0, 2, 1, 2, 0]),
+        (blosc2.uint64, [0, 2, 1, 2, 0]),
+    ],
+)
+def test_groupby_cython_fused_integer_key_dtypes(schema_factory, values):
+    row_type = make_dataclass(
+        f"FusedKey{schema_factory.__name__}Row",
+        [
+            ("key", int, blosc2.field(schema_factory())),
+            ("value", int, blosc2.field(blosc2.int32())),
+        ],
+    )
+    t = CTable(row_type, new_data=list(zip(values, [1, 10, 2, 3, 4], strict=True)))
+
+    out = t.group_by("key", sort=True).agg({"value": "sum"})
+
+    assert rows(out) == [(0, 5), (1, 2), (2, 13)]
+
+
+def test_groupby_cython_integer_key_more_integer_aggs():
+    row_type = make_dataclass(
+        "IntKeyMoreIntegerAggsRow",
+        [
+            ("key", int, blosc2.field(blosc2.int16())),
+            ("value", int, blosc2.field(blosc2.int32())),
+        ],
+    )
+    t = CTable(row_type, new_data=[(0, 5), (1, 10), (0, -2), (1, 20), (2, 7)])
+
+    out = t.group_by("key", sort=True).agg({"*": "size", "value": ["count", "sum", "mean", "min", "max"]})
+
+    assert rows(out) == [(0, 2, 2, 3, 1.5, -2, 5), (1, 2, 2, 30, 15.0, 10, 20), (2, 1, 1, 7, 7.0, 7, 7)]
+
+
+def test_groupby_cython_integer_key_nullable_float_aggs():
+    row_type = make_dataclass(
+        "IntKeyNullableFloatAggsRow",
+        [
+            ("key", int, blosc2.field(blosc2.uint16())),
+            ("value", float, blosc2.field(blosc2.float64(nullable=True))),
+        ],
+    )
+    t = CTable(row_type, new_data=[(0, 1.5), (1, np.nan), (0, 2.5), (1, np.nan), (2, 10.0)])
+
+    out = t.group_by("key", sort=True).agg({"value": ["count", "sum", "mean", "min", "max"]})
+
+    got = rows(out)
+    assert got[0] == (0, 2, 4.0, 2.0, 1.5, 2.5)
+    assert got[1][0] == 1
+    assert got[1][1] == 0
+    assert np.isnan(got[1][2])
+    assert np.isnan(got[1][3])
+    assert np.isnan(got[1][4])
+    assert np.isnan(got[1][5])
+    assert got[2] == (2, 1, 10.0, 10.0, 10.0, 10.0)

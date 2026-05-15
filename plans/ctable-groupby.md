@@ -121,6 +121,19 @@ Rationale:
 - Group-by kernels are analytics/query execution code, not indexing internals.
 - A dedicated extension keeps separation of concerns cleaner as optimized paths grow.
 
+### Phase 4: fused integer-key kernels and more Cython aggregations
+
+Implemented:
+
+- fused dense integer-key Cython kernels covering `int8`, `uint8`,
+  `int16`, `uint16`, `int32`, `uint32`, `int64`, and `uint64` keys;
+- dense integer/dictionary-code Cython path for `size`, `count`, `sum`,
+  `mean`, `min`, and `max`;
+- float64 value kernels with NaN-null skipping where applicable;
+- int64 value kernels for integer/bool `sum`, `min`, and `max`;
+- shared key-presence tracking so groups with all-null values are still
+  emitted correctly for `count` and nullable float aggregations.
+
 ### Documentation
 
 Implemented user-facing documentation in:
@@ -190,29 +203,26 @@ unsupported data or semantics are encountered.
 
 ### Integer-key Cython coverage
 
-Current Cython integer coverage is focused on `int32` keys.  Future work should
-replace this with fused-type or equivalent kernels covering:
-
-- `int8`, `uint8`;
-- `int16`, `uint16`;
-- `int32`, `uint32`;
-- `int64`, `uint64` with compact-range checks.
-
-For dense group-by, the key range matters more than the dtype.  Smaller integer
-types are naturally compact and should be low-risk fast paths.
+Completed for dense compact single-key group-by with fused kernels covering
+`int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, and `uint64`.
+The dense path still falls back for negative non-null keys and non-compact key
+ranges.
 
 ### More Cython aggregations
 
-Current Cython kernels primarily accelerate single-key `float64 sum`.
-Future kernels should cover:
+Completed for dense compact integer/dictionary-code single keys:
 
 - `size`;
 - `count`;
+- `sum`;
 - `mean` via sum/count;
 - `min`;
-- `max`;
-- multiple aggregations in a single fused pass;
-- multiple value columns.
+- `max`.
+
+Remaining possible extensions in this area:
+
+- fuse multiple aggregations/value columns into one Cython pass;
+- broaden value-type coverage beyond float64/int64 normalized kernels.
 
 ### Arbitrary float-key hash table
 

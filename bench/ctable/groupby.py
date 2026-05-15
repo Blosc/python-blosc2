@@ -32,18 +32,12 @@ def build_row_type(dictionary: bool, key_dtype: str):
             key: str = blosc2.field(blosc2.dictionary())
             value: float = blosc2.field(blosc2.float64())
 
-    elif key_dtype == "int32":
+    elif key_dtype in {"int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64"}:
+        key_spec = getattr(blosc2, key_dtype)()
 
         @dataclasses.dataclass
         class Row:
-            key: int = blosc2.field(blosc2.int32())
-            value: float = blosc2.field(blosc2.float64())
-
-    elif key_dtype == "int64":
-
-        @dataclasses.dataclass
-        class Row:
-            key: int = blosc2.field(blosc2.int64())
+            key: int = blosc2.field(key_spec)
             value: float = blosc2.field(blosc2.float64())
 
     elif key_dtype == "float32":
@@ -87,7 +81,18 @@ def main() -> None:
     parser.add_argument("--dictionary", action="store_true", help="Use a dictionary-encoded string key")
     parser.add_argument(
         "--key-dtype",
-        choices=["int32", "int64", "float32", "float64"],
+        choices=[
+            "int8",
+            "uint8",
+            "int16",
+            "uint16",
+            "int32",
+            "uint32",
+            "int64",
+            "uint64",
+            "float32",
+            "float64",
+        ],
         default="int32",
         help="Physical dtype for non-dictionary keys. Float keys are generated from group codes cast to float.",
     )

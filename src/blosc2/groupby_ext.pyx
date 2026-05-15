@@ -11,7 +11,7 @@
 import numpy as np
 cimport numpy as np
 
-from libc.stdint cimport int32_t, int64_t
+from libc.stdint cimport int8_t, uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t, uint64_t
 
 
 # ----------------------------------------------------------------------
@@ -344,4 +344,376 @@ def groupby_dense_f32_integral_key_f64_sum_checked(
                         continue
                     sums_view[key_i] += value
                     present_view[key_i] = 1
+    return ret
+
+
+# ----------------------------------------------------------------------
+# Fused integer-key dense kernels
+# ----------------------------------------------------------------------
+
+ctypedef fused dense_int_key_t:
+    int8_t
+    uint8_t
+    int16_t
+    uint16_t
+    int32_t
+    uint32_t
+    int64_t
+    uint64_t
+
+
+cdef inline int _dense_int_key_scan(
+    dense_int_key_t[:] keys_view,
+    np.npy_bool[:] valid_view,
+    Py_ssize_t n,
+    Py_ssize_t nstates,
+    bint skip_key_null,
+    int64_t key_null,
+    int* ret,
+) noexcept nogil:
+    cdef Py_ssize_t i
+    cdef int64_t key
+    cdef int64_t max_key = -1
+    ret[0] = 0
+    for i in range(n):
+        if not valid_view[i]:
+            continue
+        key = <int64_t>keys_view[i]
+        if skip_key_null and key == key_null:
+            continue
+        if key < 0:
+            ret[0] = -1
+            return 0
+        if key > max_key:
+            max_key = key
+    if max_key < 0:
+        ret[0] = 0
+    elif max_key >= nstates:
+        if max_key > 2147483646:
+            ret[0] = -1
+        else:
+            ret[0] = <int>max_key + 1
+    return 0
+
+
+def groupby_dense_int_size_checked(
+    dense_int_key_t[:] keys,
+    np.npy_bool[:] valid,
+    int64_t[:] counts,
+    np.npy_bool[:] keys_present,
+    bint skip_key_null=False,
+    int64_t key_null=0,
+):
+    """Checked dense integer-key ``size`` kernel for all integer key widths."""
+    if keys.shape[0] != valid.shape[0]:
+        raise ValueError("keys and valid must have the same length")
+    if counts.shape[0] != keys_present.shape[0]:
+        raise ValueError("counts and keys_present must have the same length")
+    cdef Py_ssize_t n = keys.shape[0]
+    cdef Py_ssize_t nstates = counts.shape[0]
+    cdef Py_ssize_t i
+    cdef int64_t key
+    cdef int ret
+    with nogil:
+        _dense_int_key_scan(keys, valid, n, nstates, skip_key_null, key_null, &ret)
+        if ret == 0:
+            for i in range(n):
+                if not valid[i]:
+                    continue
+                key = <int64_t>keys[i]
+                if skip_key_null and key == key_null:
+                    continue
+                counts[key] += 1
+                keys_present[key] = 1
+    return ret
+
+
+def groupby_dense_int_count_checked(
+    dense_int_key_t[:] keys,
+    np.npy_bool[:] valid,
+    np.npy_bool[:] values_valid,
+    int64_t[:] counts,
+    np.npy_bool[:] keys_present,
+    bint skip_key_null=False,
+    int64_t key_null=0,
+):
+    """Checked dense integer-key non-null count kernel."""
+    if keys.shape[0] != valid.shape[0] or keys.shape[0] != values_valid.shape[0]:
+        raise ValueError("keys, valid and values_valid must have the same length")
+    if counts.shape[0] != keys_present.shape[0]:
+        raise ValueError("counts and keys_present must have the same length")
+    cdef Py_ssize_t n = keys.shape[0]
+    cdef Py_ssize_t nstates = counts.shape[0]
+    cdef Py_ssize_t i
+    cdef int64_t key
+    cdef int ret
+    with nogil:
+        _dense_int_key_scan(keys, valid, n, nstates, skip_key_null, key_null, &ret)
+        if ret == 0:
+            for i in range(n):
+                if not valid[i]:
+                    continue
+                key = <int64_t>keys[i]
+                if skip_key_null and key == key_null:
+                    continue
+                keys_present[key] = 1
+                if values_valid[i]:
+                    counts[key] += 1
+    return ret
+
+
+def groupby_dense_int_f64_sum_checked(
+    dense_int_key_t[:] keys,
+    double[:] values,
+    np.npy_bool[:] valid,
+    double[:] sums,
+    np.npy_bool[:] value_present,
+    np.npy_bool[:] keys_present,
+    bint skip_key_null=False,
+    int64_t key_null=0,
+    bint skip_value_nan=False,
+):
+    """Checked dense integer-key float64 sum kernel."""
+    if keys.shape[0] != values.shape[0] or keys.shape[0] != valid.shape[0]:
+        raise ValueError("keys, values and valid must have the same length")
+    if sums.shape[0] != value_present.shape[0] or sums.shape[0] != keys_present.shape[0]:
+        raise ValueError("state arrays must have the same length")
+    cdef Py_ssize_t n = keys.shape[0]
+    cdef Py_ssize_t nstates = sums.shape[0]
+    cdef Py_ssize_t i
+    cdef int64_t key
+    cdef double value
+    cdef int ret
+    with nogil:
+        _dense_int_key_scan(keys, valid, n, nstates, skip_key_null, key_null, &ret)
+        if ret == 0:
+            for i in range(n):
+                if not valid[i]:
+                    continue
+                key = <int64_t>keys[i]
+                if skip_key_null and key == key_null:
+                    continue
+                keys_present[key] = 1
+                value = values[i]
+                if skip_value_nan and value != value:
+                    continue
+                sums[key] += value
+                value_present[key] = 1
+    return ret
+
+
+def groupby_dense_int_i64_sum_checked(
+    dense_int_key_t[:] keys,
+    int64_t[:] values,
+    np.npy_bool[:] valid,
+    int64_t[:] sums,
+    np.npy_bool[:] value_present,
+    np.npy_bool[:] keys_present,
+    bint skip_key_null=False,
+    int64_t key_null=0,
+):
+    """Checked dense integer-key int64 sum kernel."""
+    if keys.shape[0] != values.shape[0] or keys.shape[0] != valid.shape[0]:
+        raise ValueError("keys, values and valid must have the same length")
+    if sums.shape[0] != value_present.shape[0] or sums.shape[0] != keys_present.shape[0]:
+        raise ValueError("state arrays must have the same length")
+    cdef Py_ssize_t n = keys.shape[0]
+    cdef Py_ssize_t nstates = sums.shape[0]
+    cdef Py_ssize_t i
+    cdef int64_t key
+    cdef int ret
+    with nogil:
+        _dense_int_key_scan(keys, valid, n, nstates, skip_key_null, key_null, &ret)
+        if ret == 0:
+            for i in range(n):
+                if not valid[i]:
+                    continue
+                key = <int64_t>keys[i]
+                if skip_key_null and key == key_null:
+                    continue
+                keys_present[key] = 1
+                sums[key] += values[i]
+                value_present[key] = 1
+    return ret
+
+
+def groupby_dense_int_f64_mean_checked(
+    dense_int_key_t[:] keys,
+    double[:] values,
+    np.npy_bool[:] valid,
+    double[:] sums,
+    int64_t[:] counts,
+    np.npy_bool[:] keys_present,
+    bint skip_key_null=False,
+    int64_t key_null=0,
+    bint skip_value_nan=False,
+):
+    """Checked dense integer-key float64 mean state kernel."""
+    if keys.shape[0] != values.shape[0] or keys.shape[0] != valid.shape[0]:
+        raise ValueError("keys, values and valid must have the same length")
+    if sums.shape[0] != counts.shape[0] or sums.shape[0] != keys_present.shape[0]:
+        raise ValueError("state arrays must have the same length")
+    cdef Py_ssize_t n = keys.shape[0]
+    cdef Py_ssize_t nstates = sums.shape[0]
+    cdef Py_ssize_t i
+    cdef int64_t key
+    cdef double value
+    cdef int ret
+    with nogil:
+        _dense_int_key_scan(keys, valid, n, nstates, skip_key_null, key_null, &ret)
+        if ret == 0:
+            for i in range(n):
+                if not valid[i]:
+                    continue
+                key = <int64_t>keys[i]
+                if skip_key_null and key == key_null:
+                    continue
+                keys_present[key] = 1
+                value = values[i]
+                if skip_value_nan and value != value:
+                    continue
+                sums[key] += value
+                counts[key] += 1
+    return ret
+
+
+def groupby_dense_int_f64_min_checked(
+    dense_int_key_t[:] keys,
+    double[:] values,
+    np.npy_bool[:] valid,
+    double[:] mins,
+    np.npy_bool[:] has_value,
+    np.npy_bool[:] keys_present,
+    bint skip_key_null=False,
+    int64_t key_null=0,
+    bint skip_value_nan=False,
+):
+    """Checked dense integer-key float64 min kernel."""
+    cdef Py_ssize_t n = keys.shape[0]
+    cdef Py_ssize_t nstates = mins.shape[0]
+    cdef Py_ssize_t i
+    cdef int64_t key
+    cdef double value
+    cdef int ret
+    with nogil:
+        _dense_int_key_scan(keys, valid, n, nstates, skip_key_null, key_null, &ret)
+        if ret == 0:
+            for i in range(n):
+                if not valid[i]:
+                    continue
+                key = <int64_t>keys[i]
+                if skip_key_null and key == key_null:
+                    continue
+                keys_present[key] = 1
+                value = values[i]
+                if skip_value_nan and value != value:
+                    continue
+                if not has_value[key] or value < mins[key]:
+                    mins[key] = value
+                has_value[key] = 1
+    return ret
+
+
+def groupby_dense_int_f64_max_checked(
+    dense_int_key_t[:] keys,
+    double[:] values,
+    np.npy_bool[:] valid,
+    double[:] maxs,
+    np.npy_bool[:] has_value,
+    np.npy_bool[:] keys_present,
+    bint skip_key_null=False,
+    int64_t key_null=0,
+    bint skip_value_nan=False,
+):
+    """Checked dense integer-key float64 max kernel."""
+    cdef Py_ssize_t n = keys.shape[0]
+    cdef Py_ssize_t nstates = maxs.shape[0]
+    cdef Py_ssize_t i
+    cdef int64_t key
+    cdef double value
+    cdef int ret
+    with nogil:
+        _dense_int_key_scan(keys, valid, n, nstates, skip_key_null, key_null, &ret)
+        if ret == 0:
+            for i in range(n):
+                if not valid[i]:
+                    continue
+                key = <int64_t>keys[i]
+                if skip_key_null and key == key_null:
+                    continue
+                keys_present[key] = 1
+                value = values[i]
+                if skip_value_nan and value != value:
+                    continue
+                if not has_value[key] or value > maxs[key]:
+                    maxs[key] = value
+                has_value[key] = 1
+    return ret
+
+
+def groupby_dense_int_i64_min_checked(
+    dense_int_key_t[:] keys,
+    int64_t[:] values,
+    np.npy_bool[:] valid,
+    int64_t[:] mins,
+    np.npy_bool[:] has_value,
+    np.npy_bool[:] keys_present,
+    bint skip_key_null=False,
+    int64_t key_null=0,
+):
+    """Checked dense integer-key int64 min kernel."""
+    cdef Py_ssize_t n = keys.shape[0]
+    cdef Py_ssize_t nstates = mins.shape[0]
+    cdef Py_ssize_t i
+    cdef int64_t key
+    cdef int64_t value
+    cdef int ret
+    with nogil:
+        _dense_int_key_scan(keys, valid, n, nstates, skip_key_null, key_null, &ret)
+        if ret == 0:
+            for i in range(n):
+                if not valid[i]:
+                    continue
+                key = <int64_t>keys[i]
+                if skip_key_null and key == key_null:
+                    continue
+                keys_present[key] = 1
+                value = values[i]
+                if not has_value[key] or value < mins[key]:
+                    mins[key] = value
+                has_value[key] = 1
+    return ret
+
+
+def groupby_dense_int_i64_max_checked(
+    dense_int_key_t[:] keys,
+    int64_t[:] values,
+    np.npy_bool[:] valid,
+    int64_t[:] maxs,
+    np.npy_bool[:] has_value,
+    np.npy_bool[:] keys_present,
+    bint skip_key_null=False,
+    int64_t key_null=0,
+):
+    """Checked dense integer-key int64 max kernel."""
+    cdef Py_ssize_t n = keys.shape[0]
+    cdef Py_ssize_t nstates = maxs.shape[0]
+    cdef Py_ssize_t i
+    cdef int64_t key
+    cdef int64_t value
+    cdef int ret
+    with nogil:
+        _dense_int_key_scan(keys, valid, n, nstates, skip_key_null, key_null, &ret)
+        if ret == 0:
+            for i in range(n):
+                if not valid[i]:
+                    continue
+                key = <int64_t>keys[i]
+                if skip_key_null and key == key_null:
+                    continue
+                keys_present[key] = 1
+                value = values[i]
+                if not has_value[key] or value > maxs[key]:
+                    maxs[key] = value
+                has_value[key] = 1
     return ret

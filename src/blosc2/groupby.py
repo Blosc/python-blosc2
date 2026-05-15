@@ -175,6 +175,9 @@ class CTableGroupBy:
 
     def _execute(self, specs: list[_AggSpec]):
         self._validate_output_names(specs)
+        fast = self._try_execute_cython_dense_int_key(specs)
+        if fast is not None:
+            return fast
         fast = self._try_execute_cython_i32_f64_sum(specs)
         if fast is not None:
             return fast
@@ -222,6 +225,300 @@ class CTableGroupBy:
             self._merge_partials(acc, key_values, normalized_keys, display_keys, partials, specs)
 
         rows = self._final_rows(acc, key_values, specs)
+        return self._build_result(rows, specs)
+
+    def _try_execute_cython_dense_int_key(self, specs: list[_AggSpec]):  # noqa: C901
+        """Cython fast path for one compact integer/dictionary key and dense aggregations."""
+        if len(self.keys) != 1:
+            return None
+        key_name = self.keys[0]
+        key_info = self.table._schema.columns_by_name[key_name]
+        key_is_dict = self.table._is_dictionary_column(key_info)
+        if key_is_dict:
+            key_arr = self.table._cols[key_name].codes
+            key_dtype = np.dtype(np.int32)
+            skip_key_null = self.dropna
+            key_null = int(key_info.spec.null_code)
+        else:
+            key_arr = self.table._cols[key_name]
+            key_dtype = getattr(key_info.spec, "dtype", None)
+            if key_dtype is None:
+                return None
+            key_dtype = np.dtype(key_dtype)
+            if key_dtype.kind not in "biu":
+                return None
+            key_null_value = getattr(key_info.spec, "null_value", None)
+            skip_key_null = self.dropna and key_null_value is not None
+            key_null = 0 if key_null_value is None else int(key_null_value)
+
+        try:
+            from blosc2 import groupby_ext
+        except ImportError:
+            return None
+
+        descriptors = []
+        for spec in specs:
+            desc: dict[str, Any] = {"spec": spec, "op": spec.op}
+            if spec.op == "size":
+                kernel = getattr(groupby_ext, "groupby_dense_int_size_checked", None)
+                if kernel is None:
+                    return None
+                desc.update({"kernel": kernel, "state_kind": "counts"})
+                descriptors.append(desc)
+                continue
+
+            if spec.input_col is None:
+                return None
+            value_info = self.table._schema.columns_by_name[spec.input_col]
+            value_dtype = getattr(value_info.spec, "dtype", None)
+            if value_dtype is None:
+                return None
+            value_dtype = np.dtype(value_dtype)
+            null_value = getattr(value_info.spec, "null_value", None)
+
+            if spec.op == "count":
+                kernel = getattr(groupby_ext, "groupby_dense_int_count_checked", None)
+                if kernel is None:
+                    return None
+                desc.update({"kernel": kernel, "state_kind": "counts", "value_dtype": value_dtype})
+            elif spec.op in {"sum", "mean", "min", "max"}:
+                if value_dtype.kind == "f":
+                    skip_nan = isinstance(null_value, float) and math.isnan(null_value)
+                    if null_value is not None and not skip_nan:
+                        return None
+                    suffix = "sum" if spec.op == "sum" else spec.op
+                    kernel = getattr(groupby_ext, f"groupby_dense_int_f64_{suffix}_checked", None)
+                    if kernel is None:
+                        return None
+                    desc.update(
+                        {
+                            "kernel": kernel,
+                            "value_dtype": np.float64,
+                            "value_kind": "f64",
+                            "skip_nan": skip_nan,
+                        }
+                    )
+                elif value_dtype.kind in "biu":
+                    if null_value is not None:
+                        return None
+                    if spec.op == "mean":
+                        kernel = getattr(groupby_ext, "groupby_dense_int_f64_mean_checked", None)
+                        if kernel is None:
+                            return None
+                        desc.update(
+                            {
+                                "kernel": kernel,
+                                "value_dtype": np.float64,
+                                "value_kind": "f64",
+                                "skip_nan": False,
+                            }
+                        )
+                    else:
+                        kernel = getattr(groupby_ext, f"groupby_dense_int_i64_{spec.op}_checked", None)
+                        if kernel is None:
+                            return None
+                        desc.update(
+                            {
+                                "kernel": kernel,
+                                "value_dtype": np.int64,
+                                "value_kind": "i64",
+                                "skip_nan": False,
+                            }
+                        )
+                else:
+                    return None
+                if spec.op in {"sum", "min", "max"}:
+                    desc["state_kind"] = "value_present" if spec.op == "sum" else "extreme"
+                elif spec.op == "mean":
+                    desc["state_kind"] = "mean"
+            else:
+                return None
+            descriptors.append(desc)
+
+        compact_limit = 10_000_000
+        keys_present = np.zeros(0, dtype=bool)
+        states: dict[str, Any] = {}
+        for desc in descriptors:
+            spec = desc["spec"]
+            if desc["state_kind"] == "counts":
+                states[spec.output_col] = np.zeros(0, dtype=np.int64)
+            elif desc["state_kind"] == "mean":
+                states[spec.output_col] = (np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64))
+            elif desc["state_kind"] == "value_present" or desc["state_kind"] == "extreme":
+                dtype = np.float64 if desc["value_kind"] == "f64" else np.int64
+                states[spec.output_col] = (np.zeros(0, dtype=dtype), np.zeros(0, dtype=bool))
+
+        def ensure_size(size: int) -> bool:
+            nonlocal keys_present, states
+            if size > compact_limit:
+                return False
+            if size <= len(keys_present):
+                return True
+            old = len(keys_present)
+            keys_present = np.pad(keys_present, (0, size - old), constant_values=False)
+            for desc in descriptors:
+                spec = desc["spec"]
+                state = states[spec.output_col]
+                if desc["state_kind"] == "counts":
+                    states[spec.output_col] = np.pad(state, (0, size - old), constant_values=0)
+                else:
+                    first, second = state
+                    states[spec.output_col] = (
+                        np.pad(first, (0, size - old), constant_values=0),
+                        np.pad(
+                            second, (0, size - old), constant_values=False if second.dtype == np.bool_ else 0
+                        ),
+                    )
+            return True
+
+        def call_checked(kernel, *args) -> bool:
+            return int(kernel(*args)) == 0
+
+        phys_len = len(self.table._valid_rows)
+        chunk_size = self._chunk_size()
+        for start in range(0, phys_len, chunk_size):
+            stop = min(start + chunk_size, phys_len)
+            valid = np.asarray(self.table._valid_rows[start:stop], dtype=bool)
+            if not np.any(valid):
+                continue
+            keys = np.asarray(key_arr[start:stop], dtype=np.int8 if key_dtype.kind == "b" else key_dtype)
+            keys = np.ascontiguousarray(keys)
+            valid = np.ascontiguousarray(valid)
+            live = valid.copy()
+            if skip_key_null:
+                live &= keys != key_null
+            if not np.any(live):
+                continue
+            live_keys = keys[live]
+            if np.min(live_keys) < 0:
+                return None
+            max_key = int(np.max(live_keys))
+            if not ensure_size(max_key + 1):
+                return None
+
+            for desc in descriptors:
+                spec = desc["spec"]
+                state = states[spec.output_col]
+                if spec.op == "size":
+                    if not call_checked(
+                        desc["kernel"], keys, valid, state, keys_present, skip_key_null, key_null
+                    ):
+                        return None
+                elif spec.op == "count":
+                    values = np.asarray(self.table._cols[spec.input_col][start:stop])
+                    values_valid = np.ascontiguousarray(
+                        ~self._null_mask(spec.input_col, values, is_key=False)
+                    )
+                    if not call_checked(
+                        desc["kernel"],
+                        keys,
+                        valid,
+                        values_valid,
+                        state,
+                        keys_present,
+                        skip_key_null,
+                        key_null,
+                    ):
+                        return None
+                elif spec.op == "sum":
+                    values = np.asarray(
+                        self.table._cols[spec.input_col][start:stop], dtype=desc["value_dtype"]
+                    )
+                    values = np.ascontiguousarray(values)
+                    sums, value_present = state
+                    args = (
+                        keys,
+                        values,
+                        valid,
+                        sums,
+                        value_present,
+                        keys_present,
+                        skip_key_null,
+                        key_null,
+                    )
+                    if desc["value_kind"] == "f64":
+                        args = (*args, desc["skip_nan"])
+                    if not call_checked(desc["kernel"], *args):
+                        return None
+                elif spec.op == "mean":
+                    values = np.asarray(
+                        self.table._cols[spec.input_col][start:stop], dtype=desc["value_dtype"]
+                    )
+                    values = np.ascontiguousarray(values)
+                    sums, counts = state
+                    if not call_checked(
+                        desc["kernel"],
+                        keys,
+                        values,
+                        valid,
+                        sums,
+                        counts,
+                        keys_present,
+                        skip_key_null,
+                        key_null,
+                        desc["skip_nan"],
+                    ):
+                        return None
+                elif spec.op in {"min", "max"}:
+                    values = np.asarray(
+                        self.table._cols[spec.input_col][start:stop], dtype=desc["value_dtype"]
+                    )
+                    values = np.ascontiguousarray(values)
+                    extremes, has_value = state
+                    args = (
+                        keys,
+                        values,
+                        valid,
+                        extremes,
+                        has_value,
+                        keys_present,
+                        skip_key_null,
+                        key_null,
+                    )
+                    if desc["value_kind"] == "f64":
+                        args = (*args, desc["skip_nan"])
+                    if not call_checked(desc["kernel"], *args):
+                        return None
+
+        group_codes = np.nonzero(keys_present)[0]
+        if self.sort and key_is_dict:
+            group_codes = np.array(
+                sorted(
+                    group_codes,
+                    key=lambda code: _sortable_key_part(self.table._cols[key_name].decode(int(code))),
+                ),
+                dtype=group_codes.dtype,
+            )
+
+        rows = []
+        for code in group_codes:
+            key_value = self.table._cols[key_name].decode(int(code)) if key_is_dict else _python_scalar(code)
+            row = {key_name: key_value}
+            for desc in descriptors:
+                spec = desc["spec"]
+                state = states[spec.output_col]
+                if spec.op in {"size", "count"}:
+                    row[spec.output_col] = int(state[code])
+                elif spec.op == "sum":
+                    sums, value_present = state
+                    row[spec.output_col] = (
+                        _python_scalar(sums[code])
+                        if value_present[code]
+                        else _null_output_value(self._result_spec_for_agg(spec))
+                    )
+                elif spec.op == "mean":
+                    sums, counts = state
+                    row[spec.output_col] = (
+                        math.nan if counts[code] == 0 else float(sums[code]) / int(counts[code])
+                    )
+                elif spec.op in {"min", "max"}:
+                    extremes, has_value = state
+                    row[spec.output_col] = (
+                        _python_scalar(extremes[code])
+                        if has_value[code]
+                        else _null_output_value(self._result_spec_for_agg(spec))
+                    )
+            rows.append(row)
         return self._build_result(rows, specs)
 
     def _try_execute_cython_i32_f64_sum(self, specs: list[_AggSpec]):  # noqa: C901
