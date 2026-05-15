@@ -20,7 +20,7 @@ import pprint
 import re
 import shutil
 from collections import namedtuple
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass
 from dataclasses import field as dataclass_field
 from textwrap import TextWrapper
@@ -2338,12 +2338,15 @@ class CTable(Generic[RowT]):
                 )
                 continue
             if self._is_dictionary_column(col):
-                self._cols[col.name] = storage.create_dictionary_column(
+                dict_col = storage.create_dictionary_column(
                     col.name,
                     spec=col.spec,
                     cparams=col_storage.get("cparams"),
                     dparams=col_storage.get("dparams"),
                 )
+                if len(dict_col.codes) < expected_size:
+                    dict_col.resize((expected_size,))
+                self._cols[col.name] = dict_col
                 continue
             # Recompute chunks/blocks using the actual dtype so that wide
             # string columns (e.g. U183642) don't produce multi-GB chunks.
@@ -3481,6 +3484,47 @@ class CTable(Generic[RowT]):
         )
         obj._col_widths = {name: self._col_widths[name] for name in cols if name in self._col_widths}
         return obj
+
+    def group_by(
+        self,
+        keys: str | Sequence[str],
+        *,
+        sort: bool = False,
+        dropna: bool = True,
+        engine: str = "auto",
+        chunk_size: int | None = None,
+    ):
+        """Return a deferred group-by object for this table.
+
+        Parameters
+        ----------
+        keys:
+            Column name or sequence of column names to group by.
+        sort:
+            If ``True``, sort the result by the group keys.  The default
+            ``False`` preserves the hash aggregation order and is usually
+            faster.
+        dropna:
+            If ``True`` (default), rows with null/NaN group keys are skipped.
+            If ``False``, null/NaN keys form their own group.
+        engine:
+            Execution engine.  Phase 1 accepts ``"auto"`` and uses the NumPy
+            chunked implementation.
+        chunk_size:
+            Optional number of physical rows processed per chunk.
+
+        Returns
+        -------
+        CTableGroupBy
+            A lightweight deferred operation builder.  Call methods such as
+            ``.size()``, ``.count(column)`` or ``.agg({...})`` to materialize a
+            grouped result as a new :class:`CTable`.
+        """
+        if engine != "auto":
+            raise ValueError("Only engine='auto' is supported for group_by() in Phase 1")
+        from blosc2.groupby import CTableGroupBy
+
+        return CTableGroupBy(self, keys, sort=sort, dropna=dropna, engine=engine, chunk_size=chunk_size)
 
     def describe(self) -> None:
         """Print a per-column statistical summary.

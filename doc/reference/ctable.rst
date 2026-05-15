@@ -233,6 +233,7 @@ When a NumPy structured array is needed, materialize explicitly::
     CTable.sample
     CTable.sort_by
     CTable.iter_sorted
+    CTable.group_by
 
 .. automethod:: CTable.where
 .. automethod:: CTable.view
@@ -242,6 +243,25 @@ When a NumPy structured array is needed, materialize explicitly::
 .. automethod:: CTable.sample
 .. automethod:: CTable.sort_by
 .. automethod:: CTable.iter_sorted
+.. automethod:: CTable.group_by
+
+
+Group-by reductions
+-------------------
+
+:meth:`CTable.group_by` returns a lightweight deferred group-by object.  It is
+not a table view; methods such as :meth:`~blosc2.CTableGroupBy.size`,
+:meth:`~blosc2.CTableGroupBy.count`, and
+:meth:`~blosc2.CTableGroupBy.agg` materialize a new :class:`CTable` with
+one row per group::
+
+    by_city = t.group_by("city", sort=True)
+    counts = by_city.size()                  # row count per city / COUNT(*)
+    non_null = by_city.count("sales")        # non-null sales count / COUNT(sales)
+    totals = by_city.agg({"sales": "sum"})
+
+.. autoclass:: CTableGroupBy
+    :members: size, count, agg
 
 
 Mutations
