@@ -1,12 +1,12 @@
 # CTable `group_by` implementation plan — status
 
 This document started as the implementation plan for `CTable.group_by()`.  The
-initial plan has now been executed through Phase 3.  The remaining sections
-record what was completed and what is future work.
+core API and several optimized execution paths are now implemented.  The first
+section records completed work; the final section lists remaining future work.
 
 ## Completed
 
-### Public API
+### Public `CTable.group_by()` API
 
 Implemented:
 
@@ -30,13 +30,27 @@ Implemented API decisions:
 - `dropna=True` is the default; `dropna=False` keeps null/NaN key groups.
 - No top-level `CTable.size()` or `CTable.count()` was added.
 
-### Phase 1: Python/NumPy implementation
+### Convenience group-by methods
+
+Implemented group-by convenience methods:
+
+```python
+t.group_by("city").sum("sales")
+t.group_by("city").mean("sales")
+t.group_by("city").min("sales")
+t.group_by("city").max("sales")
+```
+
+These are equivalent to `agg({column: op})` and complement `size()` and
+`count(column)`.
+
+### Generic Python/NumPy implementation
 
 Implemented files:
 
 ```text
 src/blosc2/ctable.py      # CTable.group_by()
-src/blosc2/groupby.py     # CTableGroupBy and NumPy fallback engine
+src/blosc2/groupby.py     # CTableGroupBy, NumPy fallback, public group_reduce()
 ```
 
 Implemented functionality:
@@ -51,9 +65,9 @@ Implemented functionality:
 - Supports empty inputs.
 - Falls back to the generic NumPy path for unsupported optimized cases.
 
-### Phase 1 benchmark harness
+### Benchmark harness
 
-Implemented:
+Implemented/extended:
 
 ```text
 bench/ctable/groupby.py
@@ -63,46 +77,20 @@ The benchmark can vary:
 
 - row count;
 - group cardinality;
-- key dtype via `--key-dtype int32|int64|float32|float64`;
+- key dtype via `--key-dtype` including integer, unsigned integer, and float dtypes;
 - dictionary keys via `--dictionary`;
 - operation via `--op size|count|sum|mean|min|max`;
 - sorted output;
 - chunk size;
+- multi-key mode via `--multi-key` and `--groups2`;
 - optional persistent `urlpath`;
 - optional pandas comparison.
 
-### Phase 2: optimized paths
+Float key benchmarks now generate non-integral repeated labels by default so
+`float32`/`float64` runs exercise the arbitrary-float hash path instead of the
+integral-float dense path.
 
-Implemented dense NumPy and Cython fast paths for the main benchmark-driven
-cases.
-
-Optimized cases currently include:
-
-- compact non-negative integer/dictionary-code single keys in Python/NumPy dense mode;
-- `int32 key + float64 sum` in Cython;
-- dictionary-code key + `float64 sum` in Cython;
-- integral `float64 key + float64 sum` in Cython;
-- integral `float32 key + float64 sum` in Cython.
-
-These paths avoid the original per-chunk `np.unique(..., return_inverse=True)`
-and Python dictionary merge overhead for compact single-key sum workloads.
-
-Representative benchmark improvements observed during implementation:
-
-```text
-50M rows, 5k int32 groups, float64 sum:
-  generic/early path: ~0.47 s
-  Cython dense path:  ~0.20–0.22 s
-
-50M rows, 5k float64 integral groups, float64 sum:
-  generic path:       ~5.51 s
-  Cython dense path:  ~0.27–0.29 s
-
-50M rows, 5k float32 integral groups, float64 sum:
-  Cython dense path:  ~0.24–0.25 s
-```
-
-### Phase 3: separate Cython extension
+### Dedicated Cython extension
 
 Implemented:
 
@@ -121,96 +109,16 @@ Rationale:
 - Group-by kernels are analytics/query execution code, not indexing internals.
 - A dedicated extension keeps separation of concerns cleaner as optimized paths grow.
 
-### Phase 4: fused integer-key kernels and more Cython aggregations
+### Dense integer-key Cython coverage
 
-Implemented:
+Implemented fused dense integer-key Cython kernels covering:
 
-- fused dense integer-key Cython kernels covering `int8`, `uint8`,
-  `int16`, `uint16`, `int32`, `uint32`, `int64`, and `uint64` keys;
-- dense integer/dictionary-code Cython path for `size`, `count`, `sum`,
-  `mean`, `min`, and `max`;
-- float64 value kernels with NaN-null skipping where applicable;
-- int64 value kernels for integer/bool `sum`, `min`, and `max`;
-- shared key-presence tracking so groups with all-null values are still
-  emitted correctly for `count` and nullable float aggregations.
+- `int8`, `uint8`;
+- `int16`, `uint16`;
+- `int32`, `uint32`;
+- `int64`, `uint64`.
 
-### Documentation
-
-Implemented user-facing documentation in:
-
-```text
-doc/reference/ctable.rst
-```
-
-Documented:
-
-- `CTable.group_by()`;
-- returned `CTableGroupBy` object;
-- `size()`, `count()`, `agg()`;
-- examples for row counts, non-null counts, and sums.
-
-### Tests
-
-Implemented/extended:
-
-```text
-tests/ctable/test_groupby.py
-```
-
-Coverage includes:
-
-- `size()` row counts;
-- `count(column)` non-null counts;
-- `agg()` with `sum`, `mean`, `min`, `max`, `count`;
-- `agg({"*": "size"})`;
-- multi-key group-by;
-- dictionary string keys;
-- views and deleted rows;
-- empty tables;
-- `dropna=True` / `dropna=False` behavior;
-- bad engine rejection;
-- optimized int32/dictionary/float32/float64 sum variants;
-- fallback for non-integral float keys;
-- fallback for NaN float-key group when `dropna=False`.
-
-Validation during implementation:
-
-```text
-pytest tests/ctable/test_groupby.py -q
-pytest tests/ctable -q
-```
-
-The full CTable suite passed after Phase 3.
-
-## Current design summary
-
-The implementation now has three execution layers:
-
-1. Generic chunked NumPy path:
-   - supports the broadest set of Phase-1 semantics;
-   - uses per-chunk local grouping and merges partials globally.
-2. Dense NumPy single-key path:
-   - for compact non-negative integer/dictionary-code keys;
-   - uses dense accumulator arrays where possible.
-3. Cython single-key sum kernels:
-   - for the most important compact/integral key + `float64 sum` cases;
-   - lives in `groupby_ext.pyx`.
-
-All optimized paths are conservative and fall back to the generic engine when
-unsupported data or semantics are encountered.
-
-## Deferred / future work
-
-### Integer-key Cython coverage
-
-Completed for dense compact single-key group-by with fused kernels covering
-`int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, and `uint64`.
-The dense path still falls back for negative non-null keys and non-compact key
-ranges.
-
-### More Cython aggregations
-
-Completed for dense compact integer/dictionary-code single keys:
+Implemented dense integer/dictionary-code Cython path for:
 
 - `size`;
 - `count`;
@@ -219,17 +127,42 @@ Completed for dense compact integer/dictionary-code single keys:
 - `min`;
 - `max`.
 
-Remaining possible extensions in this area:
+Additional details:
 
-- fuse multiple aggregations/value columns into one Cython pass;
-- broaden value-type coverage beyond float64/int64 normalized kernels.
+- Uses compact dense accumulator arrays.
+- Falls back for negative non-null keys and non-compact key ranges.
+- Supports float64 value kernels with NaN-null skipping where applicable.
+- Supports int64-normalized integer/bool value kernels for `sum`, `min`, and `max`.
+- Tracks key presence separately so groups with all-null values are emitted correctly.
 
-### Arbitrary float-key hash table
+Representative benchmark improvements observed during earlier optimization:
+
+```text
+50M rows, 5k int32 groups, float64 sum:
+  generic/early path: ~0.47 s
+  Cython dense path:  ~0.20–0.22 s
+
+50M rows, 5k float64 integral groups, float64 sum:
+  generic path:       ~5.51 s
+  Cython dense path:  ~0.27–0.29 s
+
+50M rows, 5k float32 integral groups, float64 sum:
+  Cython dense path:  ~0.24–0.25 s
+```
+
+### Arbitrary float-key hash path
 
 Implemented a conservative Cython open-addressing hash path for single
-`float32`/`float64` keys with float value aggregations.  It supports `size`,
-`count`, `sum`, `mean`, `min`, and `max` for supported single-value-column
-queries and falls back otherwise.
+`float32`/`float64` keys with float value aggregations.
+
+Implemented operations:
+
+- `size`;
+- `count`;
+- `sum`;
+- `mean`;
+- `min`;
+- `max`.
 
 Implemented semantics:
 
@@ -239,36 +172,157 @@ Implemented semantics:
 - infinities are valid groups through regular float bit hashing;
 - NaN-null float values are skipped for value aggregations.
 
-Remaining possible extensions:
-
-- support non-float value columns in the hash path without normalizing through
-  float64;
-- fuse multiple value columns directly in one hash-table pass;
-- add explicit memory/cardinality safeguards for very high-cardinality floats.
-
-### Multi-key Cython hash path
+### Two-key Cython hash path
 
 Implemented a conservative Cython hash path for two-key group-by when both keys
-are integer or dictionary-code-backed columns.  The path normalizes keys to
-`int64`, hashes `(key0, key1)` directly, and supports `size`, `count`, `sum`,
-`mean`, `min`, and `max` for supported float value reductions.  This avoids
-structured-array packing and per-chunk `np.unique` for common two-key
-categorical/integer workloads.
+are integer or dictionary-code-backed columns.
 
-Remaining possible extensions:
+Implemented behavior:
+
+- normalizes keys to `int64`;
+- hashes `(key0, key1)` directly;
+- supports `size`, `count`, `sum`, `mean`, `min`, and `max` for supported float
+  value reductions;
+- avoids structured-array packing and per-chunk `np.unique` for common two-key
+  categorical/integer workloads;
+- falls back for unsupported cases.
+
+Benchmarks showed this is functionally useful but still leaves room for future
+optimization because partial states are merged in Python and the generic hash
+kernel maintains more state than a specialized one-operation kernel needs.
+
+### Public `blosc2.group_reduce()`
+
+Implemented a conservative public array API for single-key grouped reductions
+without requiring a `CTable`.
+
+Implemented API:
+
+```python
+groups, result = blosc2.group_reduce(
+    keys, values=None, op="size", sort=False, dropna=True
+)
+```
+
+Implemented operations:
+
+- `size`;
+- `count`;
+- `sum`;
+- `mean`;
+- `min`;
+- `max`.
+
+Implemented semantics:
+
+- returns plain NumPy arrays `(groups, result)`;
+- `size` counts rows and does not require values;
+- `count` counts non-NaN values;
+- `dropna=True` skips NaN float keys;
+- `dropna=False` keeps one normalized NaN group;
+- `+0.0` and `-0.0` are normalized by the float hash path;
+- optimized dense integer and arbitrary-float hash paths are used
+  opportunistically, with a NumPy/Python fallback.
+
+### Documentation
+
+Implemented/updated user-facing documentation in:
+
+```text
+doc/reference/ctable.rst
+doc/reference/reduction_functions.rst
+```
+
+Documented:
+
+- `CTable.group_by()`;
+- returned `CTableGroupBy` object;
+- `size()`, `count()`, `sum()`, `mean()`, `min()`, `max()`, `agg()`;
+- examples for row counts, non-null counts, and grouped reductions;
+- public `blosc2.group_reduce()`.
+
+### Tests
+
+Implemented/extended:
+
+```text
+tests/ctable/test_groupby.py
+tests/test_group_reduce.py
+```
+
+Coverage includes:
+
+- `size()` row counts;
+- `count(column)` non-null counts;
+- `agg()` with `sum`, `mean`, `min`, `max`, `count`;
+- convenience `sum`, `mean`, `min`, `max` methods;
+- `agg({"*": "size"})`;
+- multi-key group-by;
+- dictionary string keys;
+- views and deleted rows;
+- empty tables;
+- `dropna=True` / `dropna=False` behavior;
+- bad engine rejection;
+- optimized integer/dictionary/float variants;
+- arbitrary float-key hash behavior;
+- public `group_reduce()` behavior and input validation.
+
+## Current design summary
+
+The implementation now has these execution layers:
+
+1. Generic chunked NumPy path:
+   - broadest semantics;
+   - per-chunk local grouping and global merge.
+2. Dense NumPy single-key path:
+   - compact non-negative integer/dictionary-code keys;
+   - dense accumulator arrays.
+3. Cython dense integer-key path:
+   - fused integer key dtypes;
+   - `size`, `count`, `sum`, `mean`, `min`, `max`.
+4. Cython integral-float dense path:
+   - integral `float32`/`float64` keys for selected dense cases.
+5. Cython arbitrary-float hash path:
+   - non-integral `float32`/`float64` keys;
+   - normalized NaN and signed-zero semantics.
+6. Cython two-key hash path:
+   - two integer/dictionary-code-backed keys;
+   - float value reductions.
+7. Public array-level `blosc2.group_reduce()`:
+   - uses optimized kernels opportunistically without requiring a `CTable`.
+
+All optimized paths are conservative and fall back to the generic engine when
+unsupported data or semantics are encountered.
+
+## Future work
+
+### Fuse multiple aggregations/value columns in Cython
+
+Current optimized paths often run separate kernels or maintain generic state.
+Future work could:
+
+- fuse multiple aggregations in a single pass;
+- support multiple value columns directly;
+- specialize kernels by requested operation so, for example, a `sum` workload
+  does not maintain min/max state;
+- broaden value-type coverage beyond float64/int64 normalized kernels.
+
+### Extend multi-key optimized paths
+
+Current Cython multi-key support is intentionally narrow.
+Future work could:
 
 - support more than two key columns;
-- support float/string fixed-width key components directly;
-- support non-float value columns without normalizing value reductions through
-  float64;
-- fuse/merge multi-key states across chunks fully in Cython rather than via the
-  existing Python accumulator merge.
+- support float key components directly;
+- support fixed-width string/bytes key components directly;
+- support non-float value columns without normalizing reductions through float64;
+- merge multi-key states fully in Cython instead of via Python accumulators;
+- add a dense two-integer-key path for compact Cartesian key domains.
 
-### FULL-index sorted group-by path
+### Revisit FULL-index sorted group-by only with a better design
 
-A FULL index on a single grouping key can provide sorted positions.  A prototype
-Python/NumPy sorted-scan path was implemented and then reverted after
-benchmarking because it was not competitive with the existing dense/hash paths.
+A Python/NumPy FULL-index sorted-scan prototype was implemented and reverted
+after benchmarking because it was not competitive with existing dense/hash paths.
 
 Prototype behavior:
 
@@ -303,8 +357,8 @@ Why the prototype was slow:
 
 - value aggregations required many scattered gathers from the original value
   column, one gathered position set per key run;
-- scattered value access is much less cache/compression friendly than the
-  existing sequential dense/hash scans;
+- scattered value access is much less cache/compression friendly than existing
+  sequential dense/hash scans;
 - the implementation still had Python-level run processing and result merging;
 - FULL index build cost is substantial unless the index already exists and can
   be reused many times;
@@ -312,54 +366,13 @@ Why the prototype was slow:
 
 Recommendation:
 
-- keep this deferred for now;
+- keep this deferred;
 - do not reintroduce a Python-level FULL-index value-aggregation path;
 - revisit only with a block-aware/Cython reducer that batches sorted positions
   by physical chunks/blocks, or as part of a broader high-cardinality/sparse-key
   strategy;
-- if revisited, benchmark primarily against high-cardinality non-compact keys
-  and already-existing FULL indexes, not compact dense-key workloads.
-
-### Public `blosc2.group_reduce()`
-
-Implemented a conservative public `blosc2.group_reduce()` array API for
-single-key grouped reductions without requiring a `CTable`.
-
-Implemented API:
-
-```python
-groups, result = blosc2.group_reduce(
-    keys, values=None, op="size", sort=False, dropna=True
-)
-```
-
-Implemented operations:
-
-- `size`;
-- `count`;
-- `sum`;
-- `mean`;
-- `min`;
-- `max`.
-
-Implemented semantics:
-
-- returns plain NumPy arrays `(groups, result)`;
-- `size` counts rows and does not require values;
-- `count` counts non-NaN values;
-- `dropna=True` skips NaN float keys;
-- `dropna=False` keeps one normalized NaN group;
-- `+0.0` and `-0.0` are normalized by the float hash path;
-- optimized dense integer and arbitrary-float hash paths are used
-  opportunistically, with a NumPy/Python fallback.
-
-Remaining possible extensions:
-
-- multi-key public API;
-- multiple aggregations in one call;
-- multiple value columns;
-- NDArray/chunked execution without eager NumPy conversion;
-- optional CTable/persistent output.
+- benchmark primarily against high-cardinality non-compact keys and
+  already-existing FULL indexes, not compact dense-key workloads.
 
 ### High-cardinality and memory strategy
 
@@ -368,7 +381,7 @@ Future safeguards/features:
 - estimate cardinality from early chunks;
 - expose/keep an internal memory limit;
 - fall back to sort-based grouping when cardinality is too high;
-- use FULL indexes when available;
+- possibly use FULL indexes when available and demonstrably beneficial;
 - eventually implement partitioned hash group-by with spill-to-disk.
 
 ### Parallel execution
@@ -379,36 +392,22 @@ Potential future optimization:
 - merge accumulators at chunk or partition boundaries;
 - coordinate with Blosc2 decompression threading to avoid oversubscription.
 
-### Additional API conveniences
+### Extend public `blosc2.group_reduce()`
 
-Implemented group-by convenience methods:
+Remaining possible extensions:
 
-```python
-t.group_by("city").sum("sales")
-t.group_by("city").mean("sales")
-t.group_by("city").min("sales")
-t.group_by("city").max("sales")
-```
-
-These are equivalent to `agg({column: op})` and complement the already-existing
-`size()` and `count(column)` group-by methods.
-
-Do not add top-level `CTable.size()` / `CTable.count()` until their semantics are
-clearly justified outside group-by.
+- multi-key public API;
+- multiple aggregations in one call;
+- multiple value columns;
+- NDArray/chunked execution without eager NumPy conversion;
+- optional CTable/persistent output.
 
 ### Persistent output
 
-The current result is an in-memory `CTable`.  Future work may add an `out=` or
-`urlpath=` option for persistent grouped output.
+The current `CTable.group_by()` result is an in-memory `CTable`.  Future work may
+add an `out=` or `urlpath=` option for persistent grouped output.
 
-## Related untracked files reviewed
+### Top-level CTable count/size semantics
 
-During cleanup, these untracked files were reviewed and found non-duplicative:
-
-```text
-tests/ctable/test_nested_append.py
-bench/ctable/bench_nested_filter_index.py
-```
-
-They cover direct nested append/extend correctness and nested flat-vs-dotted
-performance comparisons, respectively, and are worth keeping/adding separately.
+Do not add top-level `CTable.size()` / `CTable.count()` until their semantics are
+clearly justified outside group-by.
