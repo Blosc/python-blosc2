@@ -93,52 +93,53 @@ class CTableGroupBy:
             if table._is_list_column(col_info) or table._is_varlen_scalar_column(col_info):
                 raise TypeError(f"Cannot group by variable-length/list column {name!r} in Phase 1")
 
-    def size(self):
+    def size(self, *, urlpath: str | None = None):
         """Return row counts per group as a new :class:`CTable`.
 
         This is equivalent to SQL ``COUNT(*)``: it counts rows in each group and
-        is independent of null values in non-key columns.
+        is independent of null values in non-key columns.  If *urlpath* is
+        provided, the result is written as a persistent CTable at that path.
         """
-        return self._execute([_AggSpec(None, "size", "size")])
+        return self._execute([_AggSpec(None, "size", "size")], urlpath=urlpath)
 
-    def count(self, column: str):
+    def count(self, column: str, *, urlpath: str | None = None):
         """Return non-null value counts for *column* per group.
 
         This is equivalent to SQL ``COUNT(column)`` and to
         ``group_by(...).agg({column: "count"})``.
         """
         col = self.table._logical_to_physical_name(column)
-        return self._execute([_AggSpec(col, "count", f"{col}_count")])
+        return self._execute([_AggSpec(col, "count", f"{col}_count")], urlpath=urlpath)
 
-    def sum(self, column: str):
+    def sum(self, column: str, *, urlpath: str | None = None):
         """Return sums of *column* per group.
 
         This is equivalent to ``group_by(...).agg({column: "sum"})``.
         """
-        return self.agg({column: "sum"})
+        return self.agg({column: "sum"}, urlpath=urlpath)
 
-    def mean(self, column: str):
+    def mean(self, column: str, *, urlpath: str | None = None):
         """Return means of *column* per group.
 
         This is equivalent to ``group_by(...).agg({column: "mean"})``.
         """
-        return self.agg({column: "mean"})
+        return self.agg({column: "mean"}, urlpath=urlpath)
 
-    def min(self, column: str):
+    def min(self, column: str, *, urlpath: str | None = None):
         """Return minimum values of *column* per group.
 
         This is equivalent to ``group_by(...).agg({column: "min"})``.
         """
-        return self.agg({column: "min"})
+        return self.agg({column: "min"}, urlpath=urlpath)
 
-    def max(self, column: str):
+    def max(self, column: str, *, urlpath: str | None = None):
         """Return maximum values of *column* per group.
 
         This is equivalent to ``group_by(...).agg({column: "max"})``.
         """
-        return self.agg({column: "max"})
+        return self.agg({column: "max"}, urlpath=urlpath)
 
-    def agg(self, aggregations: Mapping[str, str | Sequence[str]]):
+    def agg(self, aggregations: Mapping[str, str | Sequence[str]], *, urlpath: str | None = None):
         """Aggregate value columns per group.
 
         Parameters
@@ -150,7 +151,7 @@ class CTableGroupBy:
             ``{"*": "size"``}.
         """
         specs = self._normalize_aggs(aggregations)
-        return self._execute(specs)
+        return self._execute(specs, urlpath=urlpath)
 
     def _normalize_aggs(self, aggregations: Mapping[str, str | Sequence[str]]) -> list[_AggSpec]:
         if not isinstance(aggregations, Mapping) or not aggregations:
@@ -201,8 +202,16 @@ class CTableGroupBy:
         if self.table._is_dictionary_column(col_info):
             raise TypeError(f"Cannot aggregate dictionary column {name!r} in Phase 1")
 
-    def _execute(self, specs: list[_AggSpec]):
+    def _execute(self, specs: list[_AggSpec], *, urlpath: str | None = None):
         self._validate_output_names(specs)
+        old_result_urlpath = getattr(self, "_result_urlpath", None)
+        self._result_urlpath = urlpath
+        try:
+            return self._execute_with_result_target(specs)
+        finally:
+            self._result_urlpath = old_result_urlpath
+
+    def _execute_with_result_target(self, specs: list[_AggSpec]):
         fast = self._try_execute_cython_dense_int_key(specs)
         if fast is not None:
             return fast
@@ -1327,7 +1336,9 @@ class CTableGroupBy:
             fields.append((name, _python_type_for_spec(schema_specs[name]), b2_field(schema_specs[name])))
         row_type = dataclasses.make_dataclass("CTableGroupByRow", fields)
         data = {name: [row[name] for row in rows] for name in columns}
-        return CTable(row_type, new_data=data, expected_size=max(len(rows), 1), validate=False)
+        urlpath = getattr(self, "_result_urlpath", None)
+        kwargs = {"urlpath": str(urlpath), "mode": "w"} if urlpath is not None else {}
+        return CTable(row_type, new_data=data, expected_size=max(len(rows), 1), validate=False, **kwargs)
 
     def _validate_output_names(self, specs: list[_AggSpec]) -> None:
         names = self.keys + [s.output_col for s in specs]

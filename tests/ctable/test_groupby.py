@@ -375,3 +375,26 @@ def test_groupby_convenience_numeric_methods():
     assert rows(t.group_by("city", sort=True).max("qty")) == rows(
         t.group_by("city", sort=True).agg({"qty": "max"})
     )
+
+
+def test_groupby_persistent_output_urlpath(tmp_path):
+    t = CTable(SalesRow, new_data=DATA)
+    path = tmp_path / "grouped.b2d"
+
+    out = t.group_by("city", sort=True).agg({"qty": "sum"}, urlpath=path)
+    out.close()
+
+    reopened = CTable.open(str(path), mode="r")
+    assert reopened.col_names == ["city", "qty_sum"]
+    assert rows(reopened) == [("Berlin", 6), ("Paris", 7), ("Rome", 8)]
+
+
+def test_groupby_persistent_output_urlpath_on_convenience_method(tmp_path):
+    t = CTable(SalesRow, new_data=DATA)
+    path = tmp_path / "grouped_mean.b2d"
+
+    out = t.group_by("city", sort=True).mean("qty", urlpath=path)
+    out.close()
+
+    reopened = CTable.open(str(path), mode="r")
+    assert rows(reopened) == [("Berlin", 6.0), ("Paris", 7 / 3), ("Rome", 4.0)]

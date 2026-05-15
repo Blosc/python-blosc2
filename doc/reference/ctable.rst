@@ -263,6 +263,11 @@ one row per group::
     mins = by_city.min("sales")
     maxs = by_city.max("sales")
 
+Grouped results are in-memory by default.  Pass ``urlpath=`` to a terminal
+method to write the result as a persistent :class:`CTable`::
+
+    totals = by_city.sum("sales", urlpath="sales_by_city.b2d")
+
 .. autoclass:: CTableGroupBy
     :members: size, count, sum, mean, min, max, agg
 

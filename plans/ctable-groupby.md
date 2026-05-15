@@ -21,7 +21,9 @@ Implemented API decisions:
 
 - `CTable.group_by(...)` returns a lightweight `CTableGroupBy` facade.
 - `CTableGroupBy` is a deferred operation builder, not a `CTable` view.
-- Terminal methods materialize a new in-memory `CTable`.
+- Terminal methods materialize a new `CTable`.
+- Results are in-memory by default and persistent when terminal methods receive
+  `urlpath=`.
 - Aggregate result columns are suffixed as `<input>_<agg>`.
 - `GroupBy.size()` means row count per group / SQL `COUNT(*)`.
 - `GroupBy.count(column)` means non-null count / SQL `COUNT(column)`.
@@ -43,6 +45,22 @@ t.group_by("city").max("sales")
 
 These are equivalent to `agg({column: op})` and complement `size()` and
 `count(column)`.
+
+### Persistent grouped output
+
+Implemented `urlpath=` on group-by terminal methods for persistent grouped
+output:
+
+```python
+t.group_by("city").size(urlpath="counts.b2d")
+t.group_by("city").count("sales", urlpath="sales_count.b2d")
+t.group_by("city").sum("sales", urlpath="sales_sum.b2d")
+t.group_by("city").agg({"sales": "mean"}, urlpath="sales_mean.b2d")
+```
+
+The result remains an in-memory `CTable` when `urlpath` is omitted.  When
+`urlpath` is supplied, the grouped result is written with `mode="w"` semantics
+and returned as the newly created persistent `CTable`.
 
 ### Generic Python/NumPy implementation
 
@@ -238,6 +256,7 @@ Documented:
 - `CTable.group_by()`;
 - returned `CTableGroupBy` object;
 - `size()`, `count()`, `sum()`, `mean()`, `min()`, `max()`, `agg()`;
+- persistent grouped output via `urlpath=`;
 - examples for row counts, non-null counts, and grouped reductions;
 - public `blosc2.group_reduce()`.
 
@@ -265,7 +284,8 @@ Coverage includes:
 - bad engine rejection;
 - optimized integer/dictionary/float variants;
 - arbitrary float-key hash behavior;
-- public `group_reduce()` behavior and input validation.
+- public `group_reduce()` behavior and input validation;
+- persistent grouped output via `urlpath=`.
 
 ## Current design summary
 
@@ -402,10 +422,10 @@ Remaining possible extensions:
 - NDArray/chunked execution without eager NumPy conversion;
 - optional CTable/persistent output.
 
-### Persistent output
+### Output storage controls
 
-The current `CTable.group_by()` result is an in-memory `CTable`.  Future work may
-add an `out=` or `urlpath=` option for persistent grouped output.
+Future extensions may add a more general `out=` parameter or expose additional
+storage/cparams controls for grouped output.
 
 ### Top-level CTable count/size semantics
 
