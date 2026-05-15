@@ -266,18 +266,59 @@ Remaining possible extensions:
 
 ### FULL-index sorted group-by path
 
-A FULL index on a single grouping key can provide sorted positions.  A future
-sorted-scan group-by path could:
+A FULL index on a single grouping key can provide sorted positions.  A prototype
+Python/NumPy sorted-scan path was implemented and then reverted after
+benchmarking because it was not competitive with the existing dense/hash paths.
+
+Prototype behavior:
 
 ```text
-read sorted positions from FULL index
+read sorted values/positions from FULL sidecars
 scan contiguous key runs
+respect _valid_rows
 reduce each run
 emit sorted groups naturally
 ```
 
-This would be especially useful for high-cardinality single-key group-by and
-for users requesting `sort=True`.
+Observed benchmark results on 50M rows / 5k compact groups:
+
+```text
+float64 key, sum, sort=True, FULL index:
+  index build: ~6.2 s
+  group_by:    ~104 s
+
+int64 key, sum, sort=True, FULL index:
+  index build: ~5.5 s
+  group_by:    ~102 s
+
+int64 key, size, sort=True, FULL index:
+  index build: ~5.5 s
+  group_by:    ~0.45 s
+
+int64 key, size, sort=False, no FULL index:
+  group_by:    ~0.14 s
+```
+
+Why the prototype was slow:
+
+- value aggregations required many scattered gathers from the original value
+  column, one gathered position set per key run;
+- scattered value access is much less cache/compression friendly than the
+  existing sequential dense/hash scans;
+- the implementation still had Python-level run processing and result merging;
+- FULL index build cost is substantial unless the index already exists and can
+  be reused many times;
+- compact integer-key workloads are already ideal for dense accumulator arrays.
+
+Recommendation:
+
+- keep this deferred for now;
+- do not reintroduce a Python-level FULL-index value-aggregation path;
+- revisit only with a block-aware/Cython reducer that batches sorted positions
+  by physical chunks/blocks, or as part of a broader high-cardinality/sparse-key
+  strategy;
+- if revisited, benchmark primarily against high-cardinality non-compact keys
+  and already-existing FULL indexes, not compact dense-key workloads.
 
 ### Public `blosc2.group_reduce()`
 
