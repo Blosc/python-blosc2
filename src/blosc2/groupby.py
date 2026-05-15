@@ -178,6 +178,9 @@ class CTableGroupBy:
         fast = self._try_execute_cython_i32_f64_sum(specs)
         if fast is not None:
             return fast
+        fast = self._try_execute_cython_float_integral_key_f64_sum(specs)
+        if fast is not None:
+            return fast
         fast = self._try_execute_dense_single_int_key(specs)
         if fast is not None:
             return fast
@@ -294,6 +297,80 @@ class CTableGroupBy:
         for code in np.nonzero(present)[0]:
             key_value = self.table._cols[key_name].decode(int(code)) if key_is_dict else int(code)
             rows.append({key_name: key_value, spec.output_col: float(sums[code])})
+        return self._build_result(rows, specs)
+
+    def _try_execute_cython_float_integral_key_f64_sum(self, specs: list[_AggSpec]):  # noqa: C901
+        """Cython fast path for integral float32/float64 keys and one non-null float64 sum."""
+        if len(self.keys) != 1 or len(specs) != 1 or specs[0].op != "sum" or self.sort:
+            return None
+        spec = specs[0]
+        if spec.input_col is None:
+            return None
+        key_name = self.keys[0]
+        key_info = self.table._schema.columns_by_name[key_name]
+        value_info = self.table._schema.columns_by_name[spec.input_col]
+        key_dtype = getattr(key_info.spec, "dtype", None)
+        value_dtype = getattr(value_info.spec, "dtype", None)
+        if key_dtype not in {np.dtype(np.float32), np.dtype(np.float64)} or value_dtype != np.dtype(
+            np.float64
+        ):
+            return None
+        if getattr(value_info.spec, "null_value", None) is not None:
+            return None
+        # The fast path can skip NaNs.  If dropna=False and NaNs are present,
+        # the Cython kernel reports unsupported and we fall back to generic
+        # grouping, which can materialize a NaN group.
+        skip_key_nan = self.dropna
+        try:
+            from blosc2 import indexing_ext
+        except ImportError:
+            return None
+        kernel_name = (
+            "groupby_dense_f32_integral_key_f64_sum_checked"
+            if key_dtype == np.dtype(np.float32)
+            else "groupby_dense_f64_integral_key_f64_sum_checked"
+        )
+        kernel = getattr(indexing_ext, kernel_name, None)
+        if kernel is None:
+            return None
+
+        compact_limit = 10_000_000
+        sums = np.zeros(0, dtype=np.float64)
+        present = np.zeros(0, dtype=bool)
+
+        def ensure_size(size: int) -> bool:
+            nonlocal sums, present
+            if size > compact_limit:
+                return False
+            if size <= len(sums):
+                return True
+            old = len(sums)
+            sums = np.pad(sums, (0, size - old), constant_values=0)
+            present = np.pad(present, (0, size - old), constant_values=False)
+            return True
+
+        phys_len = len(self.table._valid_rows)
+        chunk_size = self._chunk_size()
+        for start in range(0, phys_len, chunk_size):
+            stop = min(start + chunk_size, phys_len)
+            valid = np.asarray(self.table._valid_rows[start:stop], dtype=bool)
+            if not np.any(valid):
+                continue
+            keys = np.asarray(self.table._cols[key_name][start:stop], dtype=key_dtype)
+            values = np.asarray(self.table._cols[spec.input_col][start:stop], dtype=np.float64)
+            status = int(kernel(keys, values, valid, sums, present, skip_key_nan, False))
+            if status == -1:
+                return None
+            if status > 0:
+                if not ensure_size(status):
+                    return None
+                status = int(kernel(keys, values, valid, sums, present, skip_key_nan, False))
+                if status != 0:
+                    return None
+
+        rows = [
+            {key_name: float(code), spec.output_col: float(sums[code])} for code in np.nonzero(present)[0]
+        ]
         return self._build_result(rows, specs)
 
     def _try_execute_dense_single_int_key(self, specs: list[_AggSpec]):  # noqa: C901

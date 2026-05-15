@@ -4,6 +4,7 @@
 Examples
 --------
 python bench/ctable/groupby.py --rows 10_000_000 --groups 1_000 --op sum
+python bench/ctable/groupby.py --rows 10_000_000 --groups 1_000 --key-dtype float64 --op sum
 python bench/ctable/groupby.py --rows 1_000_000 --groups 100 --dictionary --pandas
 """
 
@@ -23,7 +24,7 @@ def parse_int(text: str) -> int:
     return int(text.replace("_", ""))
 
 
-def build_row_type(dictionary: bool):
+def build_row_type(dictionary: bool, key_dtype: str):
     if dictionary:
 
         @dataclasses.dataclass
@@ -31,24 +32,50 @@ def build_row_type(dictionary: bool):
             key: str = blosc2.field(blosc2.dictionary())
             value: float = blosc2.field(blosc2.float64())
 
-    else:
+    elif key_dtype == "int32":
 
         @dataclasses.dataclass
         class Row:
             key: int = blosc2.field(blosc2.int32())
             value: float = blosc2.field(blosc2.float64())
 
+    elif key_dtype == "int64":
+
+        @dataclasses.dataclass
+        class Row:
+            key: int = blosc2.field(blosc2.int64())
+            value: float = blosc2.field(blosc2.float64())
+
+    elif key_dtype == "float32":
+
+        @dataclasses.dataclass
+        class Row:
+            key: float = blosc2.field(blosc2.float32())
+            value: float = blosc2.field(blosc2.float64())
+
+    elif key_dtype == "float64":
+
+        @dataclasses.dataclass
+        class Row:
+            key: float = blosc2.field(blosc2.float64())
+            value: float = blosc2.field(blosc2.float64())
+
+    else:  # pragma: no cover - argparse choices prevent this
+        raise ValueError(f"unsupported key dtype {key_dtype!r}")
+
     return Row
 
 
-def make_data(nrows: int, ngroups: int, dictionary: bool, seed: int):
+def make_data(nrows: int, ngroups: int, dictionary: bool, key_dtype: str, seed: int):
     rng = np.random.default_rng(seed)
     key_codes = rng.integers(0, ngroups, size=nrows, dtype=np.int32)
     values = rng.random(nrows, dtype=np.float64)
     if dictionary:
         keys = np.asarray([f"k{code}" for code in key_codes], dtype=object)
+    elif key_dtype in {"float32", "float64"}:
+        keys = key_codes.astype(np.dtype(key_dtype))
     else:
-        keys = key_codes
+        keys = key_codes.astype(np.dtype(key_dtype), copy=False)
     return keys, values
 
 
@@ -58,6 +85,12 @@ def main() -> None:
     parser.add_argument("--groups", type=parse_int, default=1_000)
     parser.add_argument("--chunk-size", type=parse_int, default=None)
     parser.add_argument("--dictionary", action="store_true", help="Use a dictionary-encoded string key")
+    parser.add_argument(
+        "--key-dtype",
+        choices=["int32", "int64", "float32", "float64"],
+        default="int32",
+        help="Physical dtype for non-dictionary keys. Float keys are generated from group codes cast to float.",
+    )
     parser.add_argument("--op", choices=["size", "count", "sum", "mean", "min", "max"], default="sum")
     parser.add_argument("--sort", action="store_true")
     parser.add_argument("--pandas", action="store_true", help="Also run a pandas comparison if available")
@@ -67,11 +100,12 @@ def main() -> None:
 
     print(
         f"rows={args.rows:,} groups={args.groups:,} dictionary={args.dictionary} "
-        f"op={args.op} sort={args.sort} chunk_size={args.chunk_size} urlpath={args.urlpath}"
+        f"key_dtype={args.key_dtype} op={args.op} sort={args.sort} "
+        f"chunk_size={args.chunk_size} urlpath={args.urlpath}"
     )
 
-    keys, values = make_data(args.rows, args.groups, args.dictionary, args.seed)
-    Row = build_row_type(args.dictionary)
+    keys, values = make_data(args.rows, args.groups, args.dictionary, args.key_dtype, args.seed)
+    Row = build_row_type(args.dictionary, args.key_dtype)
 
     kwargs = {}
     if args.urlpath is not None:
