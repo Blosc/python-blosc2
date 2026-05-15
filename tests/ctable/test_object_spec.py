@@ -42,6 +42,7 @@ def test_object_column_persistence(tmp_path):
 
 
 def test_object_column_to_arrow_raises():
+    pytest.importorskip("pyarrow")
     t = CTable(ObjectRow)
     t.append([1, {"x": 1}])
     with pytest.raises(TypeError, match="ObjectSpec columns"):
