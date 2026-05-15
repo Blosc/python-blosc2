@@ -22,6 +22,7 @@ import numpy as np
 
 from blosc2.schema import (
     BLOSC2_FIELD_METADATA_KEY,
+    DictionarySpec,
     ListSpec,
     ObjectSpec,
     SchemaSpec,
@@ -76,6 +77,8 @@ _KIND_TO_SPEC: dict[str, type[SchemaSpec]] = {
     "vlbytes": VLBytesSpec,
     "object": ObjectSpec,
     "timestamp": timestamp,
+    # dictionary
+    "dictionary": DictionarySpec,
 }
 
 # ---------------------------------------------------------------------------
@@ -102,6 +105,8 @@ _DTYPE_DISPLAY_WIDTH: dict[str, int] = {
 
 def compute_display_width(spec: SchemaSpec) -> int:
     """Return a reasonable terminal display width for *spec*'s column."""
+    if isinstance(spec, DictionarySpec):
+        return 32
     if isinstance(spec, (VLStringSpec, VLBytesSpec, ObjectSpec)):
         return 40
     if isinstance(spec, (ListSpec, StructSpec)):
@@ -211,7 +216,8 @@ def validate_annotation_matches_spec(name: str, annotation: Any, spec: SchemaSpe
         origin = typing.get_origin(annotation)
         if origin not in (list, list):
             raise TypeError(
-                f"Column {name!r}: annotation {annotation!r} is incompatible with list spec; expected list[T]."
+                f"Column {name!r}: annotation {annotation!r} is incompatible with list spec; "
+                "expected list[T]."
             )
         args = typing.get_args(annotation)
         if len(args) != 1:
@@ -222,6 +228,14 @@ def validate_annotation_matches_spec(name: str, annotation: Any, spec: SchemaSpe
             raise TypeError(
                 f"Column {name!r}: list item annotation {item_annotation!r} is incompatible with "
                 f"item spec {type(spec.item_spec).__name__!r} (expected {expected.__name__!r})."
+            )
+        return
+
+    if isinstance(spec, DictionarySpec):
+        if annotation is not str:
+            raise TypeError(
+                f"Column {name!r}: annotation {annotation!r} is incompatible with "
+                f"DictionarySpec (expected str)."
             )
         return
 
@@ -259,15 +273,15 @@ def _validate_column_name(name: str) -> None:
 
     * must be a non-empty string
     * must not start with ``_``  (reserved for internal table layout)
-    * must not contain ``/``     (used as path separator in persistent layout)
     * must not be one of the reserved internal names
+
+    Literal ``/`` characters are allowed in logical names; persistent CTable
+    storage percent-encodes path segments before writing under ``_cols``.
     """
     if not name:
         raise ValueError("Column name cannot be empty.")
     if name.startswith("_"):
         raise ValueError(f"Column name cannot start with '_' (reserved for internal use): {name!r}")
-    if "/" in name:
-        raise ValueError(f"Column name cannot contain '/': {name!r}")
     if name in _RESERVED_COLUMN_NAMES:
         raise ValueError(f"Column name {name!r} is reserved for internal CTable use.")
 
@@ -404,6 +418,10 @@ def spec_from_metadata_dict(data: dict[str, Any]) -> SchemaSpec:
         return ListSpec(item_spec, **data)
     if kind == "struct":
         return StructSpec.from_metadata_dict({"fields": data.pop("fields"), **data})
+    if kind == "dictionary":
+        index_type = spec_from_metadata_dict(data.pop("index_type"))
+        value_type = spec_from_metadata_dict(data.pop("value_type"))
+        return DictionarySpec(index_type=index_type, value_type=value_type, **data)
     spec_cls = _KIND_TO_SPEC.get(kind)
     if spec_cls is None:
         raise ValueError(f"Unknown column kind {kind!r}")
@@ -447,8 +465,9 @@ def schema_to_dict(schema: CompiledSchema) -> dict[str, Any]:
             entry["blocks"] = list(col.config.blocks)
         cols.append(entry)
 
+    schema_version = 2 if schema.metadata.get("nested") is not None else 1
     result = {
-        "version": 1,
+        "version": schema_version,
         "row_cls": schema.row_cls.__name__ if schema.row_cls is not None else None,
         "columns": cols,
     }
@@ -470,7 +489,7 @@ def schema_from_dict(data: dict[str, Any]) -> CompiledSchema:
         If *data* uses an unknown schema version or an unknown column kind.
     """
     version = data.get("version", 1)
-    if version != 1:
+    if version not in (1, 2):
         raise ValueError(f"Unsupported schema version {version!r}")
 
     columns: list[CompiledColumn] = []

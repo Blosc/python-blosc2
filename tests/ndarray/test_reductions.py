@@ -16,6 +16,52 @@ from blosc2.lazyexpr import ne_evaluate, npcumprod, npcumsum
 NITEMS_SMALL = 1000
 NITEMS = 10_000
 
+_FAST_REDUCTION_OPS = [
+    "sum",
+    "prod",
+    "min",
+    "max",
+    "any",
+    "mean",
+    "argmax",
+    "cumulative_sum",
+    pytest.param("all", marks=pytest.mark.heavy),
+    pytest.param("std", marks=pytest.mark.heavy),
+    pytest.param("var", marks=pytest.mark.heavy),
+    pytest.param("argmin", marks=pytest.mark.heavy),
+    pytest.param("cumulative_prod", marks=pytest.mark.heavy),
+]
+
+_SAVE_REDUCTION_OPS = [
+    "sum",
+    "prod",
+    "min",
+    "mean",
+    "argmax",
+    "cumulative_sum",
+    pytest.param("max", marks=pytest.mark.heavy),
+    pytest.param("any", marks=pytest.mark.heavy),
+    pytest.param("all", marks=pytest.mark.heavy),
+    pytest.param("std", marks=pytest.mark.heavy),
+    pytest.param("var", marks=pytest.mark.heavy),
+    pytest.param("argmin", marks=pytest.mark.heavy),
+    pytest.param("cumulative_prod", marks=pytest.mark.heavy),
+]
+
+_MINIEXPR_REDUCTION_OPS = [
+    "sum",
+    "prod",
+    "min",
+    "mean",
+    "argmax",
+    pytest.param("max", marks=pytest.mark.heavy),
+    pytest.param("any", marks=pytest.mark.heavy),
+    pytest.param("all", marks=pytest.mark.heavy),
+    pytest.param("std", marks=pytest.mark.heavy),
+    pytest.param("var", marks=pytest.mark.heavy),
+    pytest.param("argmin", marks=pytest.mark.heavy),
+]
+
 
 @pytest.fixture(params=[np.float32, np.float64])
 def dtype_fixture(request):
@@ -189,7 +235,19 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwar
 # TODO: "prod" is not supported here because it overflows with current values
 @pytest.mark.parametrize(
     "reduce_op",
-    ["cumulative_sum", "sum", "min", "max", "mean", "std", "var", "any", "all", "argmax", "argmin"],
+    [
+        "cumulative_sum",
+        "sum",
+        "min",
+        "mean",
+        "argmax",
+        pytest.param("max", marks=pytest.mark.heavy),
+        pytest.param("std", marks=pytest.mark.heavy),
+        pytest.param("var", marks=pytest.mark.heavy),
+        pytest.param("any", marks=pytest.mark.heavy),
+        pytest.param("all", marks=pytest.mark.heavy),
+        pytest.param("argmin", marks=pytest.mark.heavy),
+    ],
 )
 @pytest.mark.parametrize("axis", [None, 0, 1])
 def test_reduce_expr_arr(array_fixture, axis, reduce_op):
@@ -223,23 +281,7 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
 
 
 # Test broadcasting
-@pytest.mark.parametrize(
-    "reduce_op",
-    [
-        "sum",
-        "mean",
-        "std",
-        "var",
-        "min",
-        "max",
-        "any",
-        "all",
-        "argmax",
-        "argmin",
-        "cumulative_sum",
-        "cumulative_prod",
-    ],
-)
+@pytest.mark.parametrize("reduce_op", _FAST_REDUCTION_OPS)
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize(
@@ -247,7 +289,7 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     [
         ((5, 5, 5), (5, 5), (5,)),
         ((10, 10, 10), (10, 10), (10,)),
-        ((100, 100, 100), (100, 100), (100,)),
+        pytest.param(((100, 100, 100), (100, 100), (100,)), marks=pytest.mark.heavy),
     ],
 )
 def test_broadcast_params(axis, keepdims, reduce_op, shapes):
@@ -393,32 +435,15 @@ def test_reduce_slice(reduce_op):
     [
         ((10, 50, 70), (10, 25, 50)),
         ((20, 50, 100), (10, 50, 100)),
-        ((10, 50, 100), (6, 25, 75)),
-        ((15, 30, 75), (7, 20, 50)),
-        ((1, 50, 100), (1, 50, 60)),
+        pytest.param((10, 50, 100), (6, 25, 75), marks=pytest.mark.heavy),
+        pytest.param((15, 30, 75), (7, 20, 50), marks=pytest.mark.heavy),
+        pytest.param((1, 50, 100), (1, 50, 60), marks=pytest.mark.heavy),
     ],
 )
 @pytest.mark.parametrize("disk", [True, False])
-@pytest.mark.parametrize("fill_value", [1, 0, 0.32])
-@pytest.mark.parametrize(
-    "reduce_op",
-    [
-        "sum",
-        "prod",
-        "min",
-        "max",
-        "any",
-        "all",
-        "mean",
-        "std",
-        "var",
-        "argmax",
-        "argmin",
-        "cumulative_sum",
-        "cumulative_prod",
-    ],
-)
-@pytest.mark.parametrize("axis", [None, 0, 1])
+@pytest.mark.parametrize("fill_value", [1, 0, pytest.param(0.32, marks=pytest.mark.heavy)])
+@pytest.mark.parametrize("reduce_op", _FAST_REDUCTION_OPS)
+@pytest.mark.parametrize("axis", [None, 0, pytest.param(1, marks=pytest.mark.heavy)])
 def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
     urlpath = "a1.b2nd" if disk else None
@@ -455,15 +480,13 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     ("chunks", "blocks"),
     [
         ((2, 5, 10), (1, 5, 10)),
-        ((1, 3, 7), (1, 3, 5)),
-        ((5, 6, 10), (3, 3, 7)),
+        pytest.param((1, 3, 7), (1, 3, 5), marks=pytest.mark.heavy),
+        pytest.param((5, 6, 10), (3, 3, 7), marks=pytest.mark.heavy),
     ],
 )
 @pytest.mark.parametrize("disk", [True, False])
-@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
-@pytest.mark.parametrize(
-    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
-)
+@pytest.mark.parametrize("fill_value", [0, 1, pytest.param(0.32, marks=pytest.mark.heavy)])
+@pytest.mark.parametrize("reduce_op", _MINIEXPR_REDUCTION_OPS)
 def test_miniexpr_slice(chunks, blocks, disk, fill_value, reduce_op):
     shape = (10, 10, 12)
     axis = None
@@ -486,26 +509,11 @@ def test_miniexpr_slice(chunks, blocks, disk, fill_value, reduce_op):
 
 
 @pytest.mark.parametrize("disk", [True, False])
-@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize(
-    "reduce_op",
-    [
-        "sum",
-        "prod",
-        "min",
-        "max",
-        "any",
-        "all",
-        "mean",
-        "std",
-        "var",
-        "argmax",
-        "argmin",
-        "cumulative_sum",
-        "cumulative_prod",
-    ],
+    "fill_value", [1, pytest.param(0, marks=pytest.mark.heavy), pytest.param(0.32, marks=pytest.mark.heavy)]
 )
-@pytest.mark.parametrize("axis", [0, (0, 1), None])
+@pytest.mark.parametrize("reduce_op", _SAVE_REDUCTION_OPS)
+@pytest.mark.parametrize("axis", [0, None, pytest.param((0, 1), marks=pytest.mark.heavy)])
 def test_save_version1(disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
     if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
@@ -547,26 +555,11 @@ def test_save_version1(disk, fill_value, reduce_op, axis):
 
 
 @pytest.mark.parametrize("disk", [True, False])
-@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize(
-    "reduce_op",
-    [
-        "sum",
-        "prod",
-        "min",
-        "max",
-        "any",
-        "all",
-        "mean",
-        "std",
-        "var",
-        "argmax",
-        "argmin",
-        "cumulative_sum",
-        "cumulative_prod",
-    ],
+    "fill_value", [1, pytest.param(0, marks=pytest.mark.heavy), pytest.param(0.32, marks=pytest.mark.heavy)]
 )
-@pytest.mark.parametrize("axis", [0, (0, 1), None])
+@pytest.mark.parametrize("reduce_op", _SAVE_REDUCTION_OPS)
+@pytest.mark.parametrize("axis", [0, None, pytest.param((0, 1), marks=pytest.mark.heavy)])
 def test_save_version2(disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
     if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
@@ -607,26 +600,11 @@ def test_save_version2(disk, fill_value, reduce_op, axis):
 
 
 @pytest.mark.parametrize("disk", [True, False])
-@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize(
-    "reduce_op",
-    [
-        "sum",
-        "prod",
-        "min",
-        "max",
-        "any",
-        "all",
-        "mean",
-        "std",
-        "var",
-        "argmax",
-        "argmin",
-        "cumulative_sum",
-        "cumulative_prod",
-    ],
+    "fill_value", [1, pytest.param(0, marks=pytest.mark.heavy), pytest.param(0.32, marks=pytest.mark.heavy)]
 )
-@pytest.mark.parametrize("axis", [0, (0, 1), None])
+@pytest.mark.parametrize("reduce_op", _SAVE_REDUCTION_OPS)
+@pytest.mark.parametrize("axis", [0, None, pytest.param((0, 1), marks=pytest.mark.heavy)])
 def test_save_version3(disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
     if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
@@ -667,26 +645,11 @@ def test_save_version3(disk, fill_value, reduce_op, axis):
 
 
 @pytest.mark.parametrize("disk", [True, False])
-@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize(
-    "reduce_op",
-    [
-        "sum",
-        "prod",
-        "min",
-        "max",
-        "any",
-        "all",
-        "mean",
-        "std",
-        "var",
-        "argmax",
-        "argmin",
-        "cumulative_sum",
-        "cumulative_prod",
-    ],
+    "fill_value", [1, pytest.param(0, marks=pytest.mark.heavy), pytest.param(0.32, marks=pytest.mark.heavy)]
 )
-@pytest.mark.parametrize("axis", [0, (0, 1), None])
+@pytest.mark.parametrize("reduce_op", _SAVE_REDUCTION_OPS)
+@pytest.mark.parametrize("axis", [0, None, pytest.param((0, 1), marks=pytest.mark.heavy)])
 def test_save_version4(disk, fill_value, reduce_op, axis):
     if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
         axis = 1 if isinstance(axis, tuple) else axis

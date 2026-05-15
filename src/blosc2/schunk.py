@@ -1742,12 +1742,9 @@ def _open_treestore_root_object(store, urlpath, mode):
     if manifest["kind"] == "ctable":
         if mode not in {"r", "a"}:
             return store
-        # Discard the probe store without repacking — it was only opened
-        # to peek at the manifest.  A full close() would trigger to_b2z()
-        # even though nothing was modified, and CTable.open() below will
-        # create its own store anyway.
-        store.discard()
-        return blosc2.CTable.open(urlpath, mode=mode)
+        # Reuse the TreeStore that was opened to inspect the root manifest.
+        # This avoids a second TreeStore open when dispatching root CTables.
+        return blosc2.CTable._open_from_existing_filestore(urlpath, mode=mode, store=store)
 
     return store
 

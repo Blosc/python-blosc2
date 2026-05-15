@@ -380,17 +380,24 @@ def test_batcharray_respects_explicit_use_dict_and_non_zstd():
     assert barray.cparams.use_dict is False
 
 
-def test_batcharray_guess_items_per_block_uses_l1_for_clevel_5(monkeypatch):
+def test_batcharray_guess_items_per_block_uses_l1_for_low_clevel(monkeypatch):
     monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
     monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 1000)
-    barray = blosc2.BatchArray(cparams={"clevel": 5})
+    barray = blosc2.BatchArray(cparams={"clevel": 3})
     assert barray._guess_blocksize([30, 30, 30, 30]) == 3
 
 
-def test_batcharray_guess_items_per_block_uses_l2_for_mid_clevel(monkeypatch):
+def test_batcharray_guess_items_per_block_uses_half_l2_for_default_clevel(monkeypatch):
     monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
     monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 150)
-    barray = blosc2.BatchArray(cparams={"clevel": 6})
+    barray = blosc2.BatchArray(cparams={"clevel": 5})
+    assert barray._guess_blocksize([60, 60, 60, 60]) == 1
+
+
+def test_batcharray_guess_items_per_block_uses_l2_for_high_clevel(monkeypatch):
+    monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
+    monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 150)
+    barray = blosc2.BatchArray(cparams={"clevel": 7})
     assert barray._guess_blocksize([60, 60, 60, 60]) == 2
 
 

@@ -20,7 +20,7 @@ import blosc2
 from blosc2.batch_array import BatchArray
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.objectarray import ObjectArray
-from blosc2.schema import ListSpec, SchemaSpec, StructSpec
+from blosc2.schema import DictionarySpec, ListSpec, SchemaSpec, StructSpec, timestamp
 from blosc2.schema import list as list_spec_builder
 
 _SUPPORTED_SERIALIZERS = {"msgpack", "arrow"}
@@ -132,6 +132,14 @@ def _coerce_scalar_item(spec: SchemaSpec, value: Any) -> Any:  # noqa: C901
 
     if isinstance(spec, StructSpec):
         return _coerce_struct_item(spec, value)
+    if isinstance(spec, ListSpec):
+        return coerce_list_cell(spec, value)
+    if isinstance(spec, DictionarySpec):
+        if value is None:
+            raise ValueError("ListArray does not support nullable items inside a list in V1")
+        if not isinstance(value, str):
+            value = str(value)
+        return value
 
     if getattr(spec, "python_type", None) is str:
         if not isinstance(value, str):
@@ -146,7 +154,12 @@ def _coerce_scalar_item(spec: SchemaSpec, value: Any) -> Any:  # noqa: C901
         dtype = getattr(spec, "dtype", None)
         if dtype is None:
             raise TypeError(f"Unsupported list item spec {type(spec).__name__!r}")
-        value = np.array(value, dtype=dtype).item()
+        if isinstance(spec, timestamp) and (
+            isinstance(value, (np.datetime64, str)) or hasattr(value, "isoformat")
+        ):
+            value = np.datetime64(value).astype(f"datetime64[{spec.unit}]").astype(np.int64).item()
+        else:
+            value = np.array(value, dtype=dtype).item()
 
     ge = getattr(spec, "ge", None)
     if ge is not None and value < ge:
@@ -380,6 +393,28 @@ class ListArray:
         self._pending_cells.extend(cells)
         self._flush_full_batches()
 
+    def extend_arrow(self, arrow_array) -> None:
+        """Append a PyArrow list array without materializing Python cells.
+
+        This requires batch storage with ``serializer='arrow'`` and is intended
+        for trusted Arrow/Parquet import paths.
+        """
+        pa = _require_pyarrow()
+        if isinstance(arrow_array, pa.ChunkedArray):
+            chunks = arrow_array.chunks
+        else:
+            chunks = [arrow_array]
+        if self.spec.storage != "batch" or self.spec.serializer != "arrow":
+            values = arrow_array.to_pylist() if hasattr(arrow_array, "to_pylist") else list(arrow_array)
+            self.extend(values, validate=False)
+            return
+        for chunk in chunks:
+            if len(chunk) == 0:
+                continue
+            self._backend.append(chunk)
+            self._persisted_row_count += len(chunk)
+            self._invalidate_batch_caches()
+
     def flush(self) -> None:
         """Persist any pending rows when using the batch backend."""
         if self.spec.storage != "batch":
@@ -455,6 +490,11 @@ class ListArray:
     def _get_many(self, indices: list[int]) -> list[Any]:
         if self.spec.storage == "vl":
             return [self._backend[index] for index in indices]
+        # For small selections from block-addressable batches, scalar access is
+        # much cheaper than materializing the full containing batch.  This is
+        # common for filtered column previews and small logical slices.
+        if getattr(self._backend, "items_per_block", None) is not None and len(indices) <= 1024:
+            return [self[index] for index in indices]
         if len(indices) <= 1:
             return self._get_many_grouped(indices)
         monotonic = True
@@ -489,7 +529,7 @@ class ListArray:
         if index >= self._persisted_row_count:
             return self._pending_cells[index - self._persisted_row_count]
         batch_index, inner_index = self._locate_persisted_row(index)
-        return self._get_batch_values(batch_index)[inner_index]
+        return self._backend[batch_index][inner_index]
 
     def __setitem__(self, index: int, value: Any) -> None:
         """Replace one list cell."""
@@ -569,6 +609,13 @@ class ListArray:
         return None
 
     @property
+    def items_per_block(self) -> int | None:
+        """Maximum number of list cells per internal compressed block."""
+        if self.spec.storage != "batch":
+            return None
+        return self._backend.items_per_block
+
+    @property
     def nbytes(self) -> int:
         """Uncompressed byte size reported by the backend."""
         return self._backend.nbytes
@@ -597,6 +644,8 @@ class ListArray:
             ("backend", self.spec.storage),
             ("serializer", self.spec.serializer),
             ("rows", len(self)),
+            ("batch_rows", self.batch_rows),
+            ("items_per_block", self.items_per_block),
             ("pending_rows", len(self._pending_cells) if self.spec.storage == "batch" else 0),
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),

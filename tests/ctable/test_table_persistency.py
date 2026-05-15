@@ -459,15 +459,10 @@ def test_column_name_cannot_start_with_underscore():
         CTable(Bad)
 
 
-def test_column_name_cannot_contain_slash():
-    @dataclass
-    class Bad:
-        pass
-
+def test_column_name_can_contain_slash():
     from blosc2.schema_compiler import _validate_column_name
 
-    with pytest.raises(ValueError, match="/"):
-        _validate_column_name("a/b")
+    _validate_column_name("a/b")
 
 
 def test_column_name_cannot_be_empty():

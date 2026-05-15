@@ -38,6 +38,16 @@ def test_ctable_varlen_append_extend_and_reads():
     assert t.tags[2] == ["r", "s"]
 
 
+def test_list_column_display():
+    t = blosc2.CTable(Product, new_data=DATA)
+    text = str(t)
+    col_text = repr(t.tags)
+
+    assert "['x', 'y']" in text
+    assert "<list[string]>" in col_text
+    assert "['x', 'y']" not in col_text
+
+
 def test_ctable_varlen_where_select_head_tail_and_compact():
     t = blosc2.CTable(Product, new_data=DATA)
     view = t.where(t.qty >= 2)

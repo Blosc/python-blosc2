@@ -28,6 +28,7 @@ import numpy as np
 
 import blosc2
 from blosc2.batch_array import BatchArray
+from blosc2.dictionary_column import DictionaryColumn
 from blosc2.list_array import ListArray
 from blosc2.scalar_array import (
     _make_persistent_backend,
@@ -92,6 +93,19 @@ class TableStorage:
         raise NotImplementedError
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
+        raise NotImplementedError
+
+    def create_dictionary_column(
+        self,
+        name: str,
+        *,
+        spec,
+        cparams: dict[str, Any] | None = None,
+        dparams: dict[str, Any] | None = None,
+    ) -> DictionaryColumn:
+        raise NotImplementedError
+
+    def open_dictionary_column(self, name: str, spec) -> DictionaryColumn:
         raise NotImplementedError
 
     def create_valid_rows(
@@ -206,6 +220,17 @@ class InMemoryTableStorage(TableStorage):
     def open_varlen_scalar_column(self, name, spec):
         raise RuntimeError("In-memory tables have no on-disk representation to open.")
 
+    def create_dictionary_column(self, name, *, spec, cparams=None, dparams=None):
+        from blosc2.schema import VLStringSpec
+
+        chunks, blocks = (4096,), (256,)
+        codes = blosc2.zeros((4096,), dtype=np.int32, chunks=chunks, blocks=blocks)
+        dict_store = _ScalarVarLenArray(VLStringSpec(nullable=False))
+        return DictionaryColumn(spec, codes, dict_store)
+
+    def open_dictionary_column(self, name, spec):
+        raise RuntimeError("In-memory tables have no on-disk representation to open.")
+
     def create_valid_rows(self, *, shape, chunks, blocks):
         return blosc2.zeros(shape, dtype=np.bool_, chunks=chunks, blocks=blocks)
 
@@ -268,6 +293,63 @@ _VALID_ROWS_KEY = "/_valid_rows"
 _COLS_DIR = "_cols"
 
 
+def split_field_path(path: str) -> tuple[str, ...]:
+    """Split a dotted logical field path into segments.
+
+    A backslash escapes separator characters, so ``"a\\.b.c"`` means the
+    two-segment path ``("a.b", "c")``.  The empty string is the canonical root.
+    """
+    if path == "":
+        return ()
+    parts: list[str] = []
+    buf: list[str] = []
+    escaped = False
+    for ch in path:
+        if escaped:
+            buf.append(ch)
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == ".":
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if escaped:
+        buf.append("\\")
+    parts.append("".join(buf))
+    return tuple(parts)
+
+
+def join_field_path(parts: tuple[str, ...] | list[str]) -> str:
+    """Join logical path segments using dot syntax with backslash escaping."""
+    escaped_parts = []
+    for part in parts:
+        buf: list[str] = []
+        for ch in part:
+            if ch in {"\\", ".", "/"}:
+                buf.append("\\")
+            buf.append(ch)
+        escaped_parts.append("".join(buf))
+    return ".".join(escaped_parts)
+
+
+def _encode_storage_segment(segment: str) -> str:
+    """Percent-encode characters that are structural in logical/storage paths."""
+    return segment.replace("%", "%25").replace("/", "%2F").replace(".", "%2E").replace("\\", "%5C")
+
+
+def _column_name_to_relpath(name: str) -> str:
+    """Map a logical column name to a hierarchical path under ``_cols``.
+
+    Unescaped dots are interpreted as nested path separators
+    (``a.b.c`` -> ``a/b/c``). Literal dots/slashes/backslashes in field names
+    can be represented with :func:`join_field_path` and are percent-encoded in
+    the physical storage path.
+    """
+    return "/".join(_encode_storage_segment(part) for part in split_field_path(name))
+
+
 class FileTableStorage(TableStorage):
     """Arrays stored as TreeStore leaves inside *urlpath*.
 
@@ -281,13 +363,13 @@ class FileTableStorage(TableStorage):
         ``'r'`` — open existing read-only.
     """
 
-    def __init__(self, urlpath: str, mode: str) -> None:
+    def __init__(self, urlpath: str, mode: str, store: blosc2.TreeStore | None = None) -> None:
         if mode not in ("r", "a", "w"):
             raise ValueError(f"mode must be 'r', 'a', or 'w'; got {mode!r}")
         self._root = urlpath
         self._mode = mode
         self._meta: blosc2.SChunk | None = None
-        self._store: blosc2.TreeStore | None = None
+        self._store: blosc2.TreeStore | None = store
 
     # ------------------------------------------------------------------
     # Key helpers
@@ -310,8 +392,13 @@ class FileTableStorage(TableStorage):
         # For .b2d, working_dir == self._root, so behaviour is unchanged.
         return os.path.join(self._open_store().working_dir, rel_key + ".b2b")
 
+    def _dict_col_path(self, name: str) -> str:
+        """Path for the dictionary values store of a dictionary column."""
+        rel_key = self._col_key(name).lstrip("/")
+        return os.path.join(self._open_store().working_dir, rel_key + "_dict.b2b")
+
     def _col_key(self, name: str) -> str:
-        return f"/{_COLS_DIR}/{name}"
+        return f"/{_COLS_DIR}/{_column_name_to_relpath(name)}"
 
     def _key_to_path(self, key: str) -> str:
         rel_key = key.lstrip("/")
@@ -366,13 +453,14 @@ class FileTableStorage(TableStorage):
             kwargs["cparams"] = cparams
         if dparams is not None:
             kwargs["dparams"] = dparams
+        os.makedirs(os.path.dirname(self._list_col_path(name)), exist_ok=True)
         return ListArray(spec=spec, **kwargs)
 
     def open_list_column(self, name: str) -> ListArray:
         store = self._open_store()
         if store.is_zip_store and self._mode == "r":
             # In read mode, .b2z is never extracted — read the member at its zip offset directly.
-            rel = f"{_COLS_DIR}/{name}.b2b"
+            rel = self._col_key(name).lstrip("/") + ".b2b"
             if rel not in store.offsets:
                 raise KeyError(f"List column {name!r} not found in {self._root!r}")
             opened = blosc2.blosc2_ext.open(store.b2z_path, mode="r", offset=store.offsets[rel]["offset"])
@@ -388,7 +476,7 @@ class FileTableStorage(TableStorage):
         store = self._open_store()
         path = self._list_col_path(name)
         if store.is_zip_store and self._mode == "r":
-            rel = f"{_COLS_DIR}/{name}.b2b"
+            rel = self._col_key(name).lstrip("/") + ".b2b"
             if rel not in store.offsets:
                 raise KeyError(f"Varlen scalar column {name!r} not found in {self._root!r}")
             backend = BatchArray(
@@ -400,6 +488,47 @@ class FileTableStorage(TableStorage):
             backend = _open_persistent_backend(path, self._mode, spec=spec)
         _validate_role_metadata(backend, spec)
         return _ScalarVarLenArray(spec, backend)
+
+    def create_dictionary_column(self, name, *, spec, cparams=None, dparams=None) -> DictionaryColumn:
+        from blosc2.schema import VLStringSpec
+
+        # Codes: stored as a regular NDArray under _cols/name
+        codes = self.create_column(
+            name,
+            dtype=np.int32,
+            shape=(4096,),
+            chunks=(4096,),
+            blocks=(256,),
+            cparams=cparams,
+            dparams=dparams,
+        )
+        # Dictionary values: stored as a varlen scalar (vlstring) at name_dict.b2b
+        dict_spec = VLStringSpec(nullable=False)
+        dict_path = self._dict_col_path(name)
+        dict_backend = _make_persistent_backend(dict_spec, dict_path, "w")
+        dict_store = _ScalarVarLenArray(dict_spec, dict_backend)
+        return DictionaryColumn(spec, codes, dict_store)
+
+    def open_dictionary_column(self, name: str, spec) -> DictionaryColumn:
+        from blosc2.schema import VLStringSpec
+
+        codes = self.open_column(name)
+        dict_spec = VLStringSpec(nullable=False)
+        store = self._open_store()
+        dict_path = self._dict_col_path(name)
+        if store.is_zip_store and self._mode == "r":
+            rel = self._col_key(name).lstrip("/") + "_dict.b2b"
+            if rel not in store.offsets:
+                raise KeyError(f"Dictionary column dict store {name!r} not found in {self._root!r}")
+            dict_backend = BatchArray(
+                _from_schunk=blosc2.blosc2_ext.open(
+                    store.b2z_path, mode="r", offset=store.offsets[rel]["offset"]
+                )
+            )
+        else:
+            dict_backend = _open_persistent_backend(dict_path, self._mode, spec=dict_spec)
+        dict_store = _ScalarVarLenArray(dict_spec, dict_backend)
+        return DictionaryColumn(spec, codes, dict_store)
 
     def create_valid_rows(self, *, shape, chunks, blocks):
         valid_rows = blosc2.zeros(
@@ -685,9 +814,12 @@ class TreeStoreTableStorage(TableStorage):
         full_key = self._table_key(logical_key)
         return DictStore.__getitem__(self._store, full_key)
 
+    def _col_logical_key(self, name: str) -> str:
+        return f"/{_COLS_DIR}/{_column_name_to_relpath(name)}"
+
     def _list_col_path(self, name: str) -> str:
         """Filesystem path for a list-style column (``.b2b``)."""
-        return self._dest_path(f"/_cols/{name}", ".b2b")
+        return self._dest_path(self._col_logical_key(name), ".b2b")
 
     # ------------------------------------------------------------------
     # TableStorage interface — lifecycle
@@ -735,16 +867,16 @@ class TreeStoreTableStorage(TableStorage):
             kwargs["cparams"] = cparams
         if dparams is not None:
             kwargs["dparams"] = dparams
-        dest_path = self._dest_path(f"/_cols/{name}", ".b2nd")
+        dest_path = self._dest_path(self._col_logical_key(name), ".b2nd")
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         col = blosc2.zeros(shape, dtype=dtype, urlpath=dest_path, mode="w", **kwargs)
         rel_path = os.path.relpath(dest_path, self._working_dir()).replace(os.sep, "/")
-        self._store.map_tree[self._table_key(f"/_cols/{name}")] = rel_path
+        self._store.map_tree[self._table_key(self._col_logical_key(name))] = rel_path
         self._store._modified = True
         return col
 
     def open_column(self, name: str) -> blosc2.NDArray:
-        return self._open_leaf(f"/_cols/{name}")
+        return self._open_leaf(self._col_logical_key(name))
 
     def create_list_column(
         self,
@@ -768,7 +900,7 @@ class TreeStoreTableStorage(TableStorage):
 
     def open_list_column(self, name: str) -> ListArray:
         if self._store.is_zip_store and self._mode == "r":
-            rel = self._table_key(f"/_cols/{name}").lstrip("/") + ".b2b"
+            rel = self._table_key(self._col_logical_key(name)).lstrip("/") + ".b2b"
             if rel not in self._store.offsets:
                 raise KeyError(f"List column {name!r} not found in {self._store.localpath!r}")
             opened = blosc2.blosc2_ext.open(
@@ -793,7 +925,7 @@ class TreeStoreTableStorage(TableStorage):
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
         if self._store.is_zip_store and self._mode == "r":
-            rel = self._table_key(f"/_cols/{name}").lstrip("/") + ".b2b"
+            rel = self._table_key(self._col_logical_key(name)).lstrip("/") + ".b2b"
             if rel not in self._store.offsets:
                 raise KeyError(f"Varlen scalar column {name!r} not found in {self._store.localpath!r}")
             backend = BatchArray(
@@ -807,6 +939,59 @@ class TreeStoreTableStorage(TableStorage):
             backend = _open_persistent_backend(self._list_col_path(name), self._mode, spec=spec)
         _validate_role_metadata(backend, spec)
         return _ScalarVarLenArray(spec, backend)
+
+    def _dict_col_path(self, name: str) -> str:
+        """Path for the dictionary values store of a dictionary column."""
+        return self._dest_path(self._col_logical_key(name), "_dict.b2b")
+
+    def create_dictionary_column(
+        self,
+        name: str,
+        *,
+        spec,
+        cparams=None,
+        dparams=None,
+    ) -> DictionaryColumn:
+        from blosc2.schema import VLStringSpec
+
+        codes = self.create_column(
+            name,
+            dtype=np.int32,
+            shape=(4096,),
+            chunks=(4096,),
+            blocks=(256,),
+            cparams=cparams,
+            dparams=dparams,
+        )
+        dict_spec = VLStringSpec(nullable=False)
+        dict_path = self._dict_col_path(name)
+        os.makedirs(os.path.dirname(dict_path), exist_ok=True)
+        dict_backend = _make_persistent_backend(dict_spec, dict_path, "w")
+        dict_store = _ScalarVarLenArray(dict_spec, dict_backend)
+        return DictionaryColumn(spec, codes, dict_store)
+
+    def open_dictionary_column(self, name: str, spec) -> DictionaryColumn:
+        from blosc2.schema import VLStringSpec
+
+        codes = self.open_column(name)
+        dict_spec = VLStringSpec(nullable=False)
+        if self._store.is_zip_store and self._mode == "r":
+            rel = self._table_key(self._col_logical_key(name)).lstrip("/") + "_dict.b2b"
+            if rel not in self._store.offsets:
+                raise KeyError(
+                    f"Dictionary column dict store {name!r} not found in {self._store.localpath!r}"
+                )
+            dict_backend = BatchArray(
+                _from_schunk=blosc2.blosc2_ext.open(
+                    self._store.b2z_path,
+                    mode="r",
+                    offset=self._store.offsets[rel]["offset"],
+                )
+            )
+        else:
+            dict_backend = _open_persistent_backend(self._dict_col_path(name), self._mode, spec=dict_spec)
+        dict_store = _ScalarVarLenArray(dict_spec, dict_backend)
+        return DictionaryColumn(spec, codes, dict_store)
 
     def create_valid_rows(
         self,
@@ -876,7 +1061,7 @@ class TreeStoreTableStorage(TableStorage):
         return [c["name"] for c in self.load_schema()["columns"]]
 
     def delete_column(self, name: str) -> None:
-        full_key = self._table_key(f"/_cols/{name}")
+        full_key = self._table_key(self._col_logical_key(name))
         if full_key in self._store.map_tree:
             filepath = self._store.map_tree.pop(full_key)
             full_path = os.path.join(self._working_dir(), filepath)
@@ -890,10 +1075,10 @@ class TreeStoreTableStorage(TableStorage):
         raise KeyError(name)
 
     def rename_column(self, old: str, new: str) -> blosc2.NDArray:
-        old_key = self._table_key(f"/_cols/{old}")
-        new_key = self._table_key(f"/_cols/{new}")
+        old_key = self._table_key(self._col_logical_key(old))
+        new_key = self._table_key(self._col_logical_key(new))
         if old_key in self._store.map_tree:
-            new_dest = self._dest_path(f"/_cols/{new}", ".b2nd")
+            new_dest = self._dest_path(self._col_logical_key(new), ".b2nd")
             old_dest = os.path.join(self._working_dir(), self._store.map_tree[old_key])
             os.makedirs(os.path.dirname(new_dest), exist_ok=True)
             os.replace(old_dest, new_dest)

@@ -8,6 +8,7 @@
 """Tests for CTable.to_parquet(), from_parquet(), iter_arrow_batches(),
 and from_arrow()."""
 
+import io
 from dataclasses import dataclass
 
 import numpy as np
@@ -662,6 +663,29 @@ class TestErrors:
         with pytest.raises(ValueError, match="batch_size"):
             CTable.from_parquet(path, batch_size=0)
 
+    def test_invalid_max_rows_from_parquet(self, tmp_path):
+        t = CTable(Row, new_data=DATA10)
+        path = tmp_path / "x.parquet"
+        t.to_parquet(path)
+        with pytest.raises(ValueError, match="max_rows"):
+            CTable.from_parquet(path, max_rows=-1)
+
+    def test_max_rows_from_parquet_limits_rows(self, tmp_path):
+        t = CTable(Row, new_data=DATA10)
+        path = tmp_path / "x.parquet"
+        t.to_parquet(path)
+        out = CTable.from_parquet(path, batch_size=4, max_rows=6)
+        assert len(out) == 6
+        np.testing.assert_array_equal(out["id"][:], np.arange(6))
+
+    def test_max_rows_zero_from_parquet_imports_empty_table(self, tmp_path):
+        t = CTable(Row, new_data=DATA10)
+        path = tmp_path / "x.parquet"
+        t.to_parquet(path)
+        out = CTable.from_parquet(path, max_rows=0)
+        assert len(out) == 0
+        assert out.col_names == ["id", "score", "active", "label"]
+
     def test_string_truncation_error(self, tmp_path):
         """Importing longer strings than max_length raises ValueError."""
         at = pa.table({"name": pa.array(["a" * 300, "b"], type=pa.string())})
@@ -670,6 +694,104 @@ class TestErrors:
         # Explicit small max_length should raise on import
         with pytest.raises(ValueError, match="max_length"):
             CTable.from_parquet(path, string_max_length=10)
+
+
+def test_parquet_cli_progress_is_opt_in(tmp_path, capsys):
+    from blosc2.cli.parquet_to_blosc2 import main
+
+    path = tmp_path / "progress.parquet"
+    out = tmp_path / "progress.b2d"
+    pq.write_table(pa.table({"x": pa.array([1, 2, 3], type=pa.int64())}), path)
+
+    assert main(["--parquet-batch-size", "1", str(path), str(out)]) == 0
+    captured = capsys.readouterr()
+    assert "  batch" not in captured.out
+
+    out_progress = tmp_path / "progress_enabled.b2d"
+    assert main(["--progress", "--parquet-batch-size", "1", str(path), str(out_progress)]) == 0
+    captured = capsys.readouterr()
+    assert "  batch" in captured.out
+
+
+def test_parquet_cli_nested_progress_skips_write_lines(tmp_path, capsys):
+    from blosc2.cli.parquet_to_blosc2 import main
+
+    buf, _ = _make_taxi_parquet_buf(n_outer_rows=3)
+    path = tmp_path / "taxi.parquet"
+    out = tmp_path / "taxi.b2d"
+    path.write_bytes(buf.getvalue())
+
+    assert (
+        main(
+            [
+                "--progress",
+                "--parquet-batch-size",
+                "1",
+                "--blosc2-batch-size",
+                "1",
+                str(path),
+                str(out),
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert "  parquet batch" in captured.out
+    assert "    write" not in captured.out
+
+
+def test_parquet_cli_separate_nested_flattens_top_level_structs(tmp_path, capsys):
+    from blosc2.cli.parquet_to_blosc2 import main
+
+    trip_type = pa.struct(
+        [
+            pa.field("sec", pa.float32()),
+            pa.field("begin", pa.struct([pa.field("lon", pa.float64()), pa.field("lat", pa.float64())])),
+        ]
+    )
+    path = tmp_path / "struct.parquet"
+    out = tmp_path / "struct.b2d"
+    table = pa.table(
+        {
+            "trip": pa.array(
+                [
+                    {"sec": 10.0, "begin": {"lon": -87.6, "lat": 41.8}},
+                    {"sec": 20.0, "begin": {"lon": -87.7, "lat": 41.9}},
+                ],
+                type=trip_type,
+            ),
+            "fare": pa.array([15.0, 25.0], type=pa.float32()),
+        }
+    )
+    pq.write_table(table, path)
+
+    assert main([str(path), str(out)]) == 0
+    captured = capsys.readouterr()
+    assert "Struct→columns:      1" in captured.out
+
+    ct = CTable.open(str(out), mode="r")
+    assert ct.col_names == ["trip.sec", "trip.begin.lon", "trip.begin.lat", "fare"]
+    np.testing.assert_allclose(ct["trip.begin.lon"][:], [-87.6, -87.7])
+    ct.close()
+
+
+def test_parquet_cli_no_separate_nested_preserves_top_level_struct_as_list(tmp_path):
+    from blosc2.cli.parquet_to_blosc2 import main
+
+    trip_type = pa.struct([pa.field("sec", pa.float32())])
+    path = tmp_path / "struct.parquet"
+    out = tmp_path / "struct.b2d"
+    pq.write_table(
+        pa.table({"trip": pa.array([{"sec": 10.0}, {"sec": 20.0}], type=trip_type)}),
+        path,
+    )
+
+    assert main(["--no-separate-nested-cols", str(path), str(out)]) == 0
+
+    ct = CTable.open(str(out), mode="r")
+    assert ct.col_names == ["trip"]
+    assert ct["trip"][:] == [[{"sec": 10.0}], [{"sec": 20.0}]]
+    ct.close()
 
 
 def test_parquet_cli_timestamp_unit_auto(tmp_path):
@@ -694,6 +816,496 @@ def test_parquet_cli_timestamp_unit_auto(tmp_path):
         ),
     )
     assert table._cols["ts"][:].tolist() == [1735689600, 1735689601, 1735689602]
+
+
+# ---------------------------------------------------------------------------
+# separate_nested_cols / unnamed-root list<struct<...>> import
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Shared schema / data helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_taxi_schema():
+    """Return a simplified taxi-like Arrow schema (inner struct fields)."""
+    trip_type = pa.struct(
+        [
+            pa.field("sec", pa.float32()),
+            pa.field(
+                "begin",
+                pa.struct([pa.field("lon", pa.float64()), pa.field("lat", pa.float64())]),
+            ),
+        ]
+    )
+    payment_type = pa.struct(
+        [
+            pa.field("fare", pa.float64()),
+            pa.field("tips", pa.float64()),
+        ]
+    )
+    return pa.struct(
+        [
+            pa.field("trip", trip_type),
+            pa.field("payment", payment_type),
+            pa.field("company", pa.string()),
+        ]
+    )
+
+
+def _make_taxi_parquet_buf(n_outer_rows=2):
+    """Create an in-memory Parquet buffer with an unnamed root list<struct<...>>.
+
+    *n_outer_rows* controls how many Parquet rows (outer lists) to create.
+    Each outer list contains 1–3 trip records.
+    """
+    root_struct = _make_taxi_schema()
+    root_list = pa.list_(root_struct)
+
+    all_rows = [
+        [
+            {
+                "trip": {"sec": 10.0, "begin": {"lon": -87.6, "lat": 41.8}},
+                "payment": {"fare": 15.0, "tips": 2.0},
+                "company": "Taxi Corp",
+            },
+            {
+                "trip": {"sec": 20.0, "begin": {"lon": -87.7, "lat": 41.9}},
+                "payment": {"fare": 25.0, "tips": 3.0},
+                "company": "Blue Cab",
+            },
+        ],
+        [
+            {
+                "trip": {"sec": 5.0, "begin": {"lon": -87.5, "lat": 41.7}},
+                "payment": {"fare": 10.0, "tips": 1.0},
+                "company": "Taxi Corp",
+            },
+        ],
+        [
+            {
+                "trip": {"sec": 30.0, "begin": {"lon": -87.3, "lat": 41.6}},
+                "payment": {"fare": 5.0, "tips": 0.5},
+                "company": "City Cab",
+            },
+            {
+                "trip": {"sec": 15.0, "begin": {"lon": -87.4, "lat": 41.5}},
+                "payment": {"fare": 12.0, "tips": 1.5},
+                "company": "Blue Cab",
+            },
+            {
+                "trip": {"sec": 8.0, "begin": {"lon": -87.2, "lat": 41.4}},
+                "payment": {"fare": 9.0, "tips": 0.0},
+                "company": "Taxi Corp",
+            },
+        ],
+    ]
+    rows = all_rows[:n_outer_rows]
+    arr = pa.array(rows, type=root_list)
+    buf = io.BytesIO()
+    pq.write_table(pa.table({"": arr}), buf)
+    buf.seek(0)
+    return buf, rows
+
+
+def _count_elements(rows):
+    """Count the total number of list elements across outer rows."""
+    return sum(len(r) for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# Detection helper tests
+# ---------------------------------------------------------------------------
+
+
+class TestDetectUnnamedRootListStruct:
+    def test_detects_single_unnamed_list_struct(self):
+        root_struct = _make_taxi_schema()
+        schema = pa.schema([pa.field("", pa.list_(root_struct))])
+        assert CTable._detect_unnamed_root_list_struct(pa, schema) is True
+
+    def test_detects_large_list_variant(self):
+        root_struct = _make_taxi_schema()
+        schema = pa.schema([pa.field("", pa.large_list(root_struct))])
+        assert CTable._detect_unnamed_root_list_struct(pa, schema) is True
+
+    def test_rejects_named_field(self):
+        root_struct = _make_taxi_schema()
+        schema = pa.schema([pa.field("events", pa.list_(root_struct))])
+        assert CTable._detect_unnamed_root_list_struct(pa, schema) is False
+
+    def test_rejects_multiple_fields(self):
+        root_struct = _make_taxi_schema()
+        schema = pa.schema([pa.field("", pa.list_(root_struct)), pa.field("id", pa.int64())])
+        assert CTable._detect_unnamed_root_list_struct(pa, schema) is False
+
+    def test_rejects_non_list_unnamed_field(self):
+        root_struct = _make_taxi_schema()
+        schema = pa.schema([pa.field("", root_struct)])
+        assert CTable._detect_unnamed_root_list_struct(pa, schema) is False
+
+    def test_rejects_list_of_scalar(self):
+        schema = pa.schema([pa.field("", pa.list_(pa.int64()))])
+        assert CTable._detect_unnamed_root_list_struct(pa, schema) is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 acceptance tests
+# ---------------------------------------------------------------------------
+
+
+class TestUnnamedRootImport:
+    """Acceptance tests for Phase 1: unnamed-root list<struct<...>> import."""
+
+    def _make_ct(self, n_outer_rows=2, **kwargs):
+        buf, rows = _make_taxi_parquet_buf(n_outer_rows)
+        ct = CTable.from_parquet(buf, separate_nested_cols=True, **kwargs)
+        return ct, rows
+
+    # ------------------------------------------------------------------
+    # Row count
+    # ------------------------------------------------------------------
+
+    def test_nrows_equals_element_count_2_outer(self):
+        ct, rows = self._make_ct(n_outer_rows=2)
+        assert len(ct) == _count_elements(rows)  # 3
+
+    def test_from_parquet_separates_nested_cols_by_default(self):
+        buf, rows = _make_taxi_parquet_buf(n_outer_rows=2)
+        ct = CTable.from_parquet(buf)
+        assert len(ct) == _count_elements(rows)
+        assert "column_0" not in ct.col_names
+        assert "trip.begin.lon" in ct.col_names
+
+    def test_nrows_equals_element_count_3_outer(self):
+        ct, rows = self._make_ct(n_outer_rows=3)
+        assert len(ct) == _count_elements(rows)  # 6
+
+    def test_max_rows_limits_flattened_element_rows(self):
+        ct, rows = self._make_ct(n_outer_rows=3, max_rows=4, batch_size=1)
+        expected = [r["payment"]["fare"] for outer in rows for r in outer][:4]
+        assert len(ct) == 4
+        np.testing.assert_allclose(ct["payment.fare"][:].tolist(), expected)
+        assert ct._schema.metadata["nested"]["original_root"]["kind"] == "unnamed_list_struct"
+
+    def test_max_rows_zero_imports_empty_flattened_table(self):
+        ct, _ = self._make_ct(n_outer_rows=3, max_rows=0)
+        assert len(ct) == 0
+        assert "column_0" not in ct.col_names
+        assert "trip.begin.lon" in ct.col_names
+        assert ct._schema.metadata["nested"]["original_root"]["kind"] == "unnamed_list_struct"
+
+    # ------------------------------------------------------------------
+    # Column names — no column_0, no unnamed root in col_names
+    # ------------------------------------------------------------------
+
+    def test_col_names_no_column_0(self):
+        ct, _ = self._make_ct()
+        assert "column_0" not in ct.col_names
+        assert "" not in ct.col_names
+
+    def test_col_names_contains_leaf_paths(self):
+        ct, _ = self._make_ct()
+        expected = {
+            "trip.sec",
+            "trip.begin.lon",
+            "trip.begin.lat",
+            "payment.fare",
+            "payment.tips",
+            "company",
+        }
+        assert set(ct.col_names) == expected
+
+    # ------------------------------------------------------------------
+    # Column access and analytics
+    # ------------------------------------------------------------------
+
+    def test_payment_fare_mean(self):
+        ct, rows = self._make_ct(n_outer_rows=2)
+        fares = [r["payment"]["fare"] for outer in rows for r in outer]
+        expected = np.mean(fares)
+        np.testing.assert_allclose(ct["payment.fare"].mean(), expected)
+
+    def test_trip_begin_lon_mean(self):
+        ct, rows = self._make_ct(n_outer_rows=2)
+        lons = [r["trip"]["begin"]["lon"] for outer in rows for r in outer]
+        expected = np.mean(lons)
+        np.testing.assert_allclose(ct["trip.begin.lon"].mean(), expected)
+
+    def test_payment_fare_values(self):
+        ct, rows = self._make_ct(n_outer_rows=2)
+        expected = [r["payment"]["fare"] for outer in rows for r in outer]
+        np.testing.assert_allclose(ct["payment.fare"][:].tolist(), expected)
+
+    def test_company_column_values(self):
+        ct, rows = self._make_ct(n_outer_rows=2)
+        expected = [r["company"] for outer in rows for r in outer]
+        assert list(ct["company"][:]) == expected
+
+    # ------------------------------------------------------------------
+    # where() filtering
+    # ------------------------------------------------------------------
+
+    def test_where_payment_fare_gt_12(self):
+        ct, rows = self._make_ct(n_outer_rows=2)
+        all_fares = [r["payment"]["fare"] for outer in rows for r in outer]
+        expected_count = sum(1 for f in all_fares if f > 12)
+        result = ct.where("payment.fare > 12")
+        assert len(result) == expected_count
+
+    def test_where_payment_fare_gt_20(self):
+        ct, rows = self._make_ct(n_outer_rows=2)
+        all_fares = [r["payment"]["fare"] for outer in rows for r in outer]
+        expected_count = sum(1 for f in all_fares if f > 20)
+        result = ct.where("payment.fare > 20")
+        assert len(result) == expected_count
+
+    # ------------------------------------------------------------------
+    # Provenance metadata
+    # ------------------------------------------------------------------
+
+    def test_original_root_metadata_present(self):
+        ct, _ = self._make_ct()
+        nested = ct._schema.metadata.get("nested", {})
+        assert "original_root" in nested
+
+    def test_original_root_metadata_kind(self):
+        ct, _ = self._make_ct()
+        orig = ct._schema.metadata["nested"]["original_root"]
+        assert orig["kind"] == "unnamed_list_struct"
+
+    def test_original_root_metadata_field_name(self):
+        ct, _ = self._make_ct()
+        orig = ct._schema.metadata["nested"]["original_root"]
+        assert orig["field_name"] == ""
+
+    def test_original_root_metadata_preserve_grouping_false(self):
+        ct, _ = self._make_ct()
+        orig = ct._schema.metadata["nested"]["original_root"]
+        assert orig["preserve_grouping"] is False
+
+    # ------------------------------------------------------------------
+    # Persistence: .b2d reopen
+    # ------------------------------------------------------------------
+
+    def test_b2d_reopen_nrows(self, tmp_path):
+        buf, rows = _make_taxi_parquet_buf(n_outer_rows=2)
+        ct = CTable.from_parquet(buf, separate_nested_cols=True, urlpath=str(tmp_path / "taxi.b2d"))
+        ct.close()
+        ct2 = CTable.open(str(tmp_path / "taxi.b2d"), mode="r")
+        assert len(ct2) == _count_elements(rows)
+        ct2.close()
+
+    def test_b2d_reopen_col_names(self, tmp_path):
+        buf, _ = _make_taxi_parquet_buf(n_outer_rows=2)
+        ct = CTable.from_parquet(buf, separate_nested_cols=True, urlpath=str(tmp_path / "taxi.b2d"))
+        col_names = ct.col_names
+        ct.close()
+        ct2 = CTable.open(str(tmp_path / "taxi.b2d"), mode="r")
+        assert ct2.col_names == col_names
+        ct2.close()
+
+    def test_b2d_reopen_values(self, tmp_path):
+        buf, rows = _make_taxi_parquet_buf(n_outer_rows=2)
+        ct = CTable.from_parquet(buf, separate_nested_cols=True, urlpath=str(tmp_path / "taxi.b2d"))
+        expected_fares = [r["payment"]["fare"] for outer in rows for r in outer]
+        ct.close()
+        ct2 = CTable.open(str(tmp_path / "taxi.b2d"), mode="r")
+        np.testing.assert_allclose(ct2["payment.fare"][:].tolist(), expected_fares)
+        ct2.close()
+
+    def test_b2d_reopen_original_root_metadata(self, tmp_path):
+        buf, _ = _make_taxi_parquet_buf()
+        ct = CTable.from_parquet(buf, separate_nested_cols=True, urlpath=str(tmp_path / "taxi.b2d"))
+        ct.close()
+        ct2 = CTable.open(str(tmp_path / "taxi.b2d"), mode="r")
+        orig = ct2._schema.metadata["nested"]["original_root"]
+        assert orig["kind"] == "unnamed_list_struct"
+        ct2.close()
+
+    def test_b2z_reopen(self, tmp_path):
+        buf, rows = _make_taxi_parquet_buf(n_outer_rows=2)
+        ct = CTable.from_parquet(buf, separate_nested_cols=True, urlpath=str(tmp_path / "taxi.b2z"))
+        ct.close()
+        ct2 = CTable.open(str(tmp_path / "taxi.b2z"), mode="r")
+        assert len(ct2) == _count_elements(rows)
+        assert "trip.begin.lon" in ct2.col_names
+        ct2.close()
+
+    # ------------------------------------------------------------------
+    # to_arrow() emits clean logical nested table
+    # ------------------------------------------------------------------
+
+    def test_to_arrow_no_unnamed_column(self):
+        ct, _ = self._make_ct()
+        arrow_table = ct.to_arrow()
+        assert "" not in arrow_table.schema.names
+        assert "column_0" not in arrow_table.schema.names
+
+    def test_to_arrow_has_trip_and_payment_top_level(self):
+        ct, _ = self._make_ct()
+        arrow_table = ct.to_arrow()
+        names = arrow_table.schema.names
+        assert "trip" in names
+        assert "payment" in names
+        assert "company" in names
+
+    def test_to_arrow_trip_is_struct(self):
+        ct, _ = self._make_ct()
+        arrow_table = ct.to_arrow()
+        assert pa.types.is_struct(arrow_table.schema.field("trip").type)
+
+    def test_to_arrow_payment_fare_values(self):
+        ct, rows = self._make_ct(n_outer_rows=2)
+        arrow_table = ct.to_arrow()
+        expected = [r["payment"]["fare"] for outer in rows for r in outer]
+        payment_col = arrow_table.column("payment")
+        actual = [row.as_py()["fare"] for row in payment_col]
+        np.testing.assert_allclose(actual, expected)
+
+    # ------------------------------------------------------------------
+    # from_arrow with separate_nested_cols=True
+    # ------------------------------------------------------------------
+
+    def test_from_arrow_separate_nested_cols(self):
+        """from_arrow accepts separate_nested_cols=True directly."""
+        root_struct = _make_taxi_schema()
+        root_list = pa.list_(root_struct)
+        data = [
+            [
+                {
+                    "trip": {"sec": 10.0, "begin": {"lon": -87.6, "lat": 41.8}},
+                    "payment": {"fare": 15.0, "tips": 2.0},
+                    "company": "Taxi",
+                },
+                {
+                    "trip": {"sec": 5.0, "begin": {"lon": -87.5, "lat": 41.7}},
+                    "payment": {"fare": 10.0, "tips": 1.0},
+                    "company": "Taxi",
+                },
+            ]
+        ]
+        arr = pa.array(data, type=root_list)
+        schema = pa.schema([pa.field("", root_list)])
+        batch = pa.record_batch([arr], schema=schema)
+        ct = CTable.from_arrow(schema, [batch], separate_nested_cols=True)
+        assert len(ct) == 2
+        assert "trip.begin.lon" in ct.col_names
+        assert "payment.fare" in ct.col_names
+        np.testing.assert_allclose(ct["payment.fare"][:].tolist(), [15.0, 10.0])
+
+    # ------------------------------------------------------------------
+    # Behaviour when separate_nested_cols=False (existing behaviour)
+    # ------------------------------------------------------------------
+
+    def test_false_flag_gives_renamed_root_column(self):
+        """Without separate_nested_cols, the old renaming behaviour applies."""
+        buf, _ = _make_taxi_parquet_buf(n_outer_rows=2)
+        ct = CTable.from_parquet(buf, separate_nested_cols=False)
+        # The unnamed "" field should be renamed to "root"
+        assert "root" in ct.col_names
+
+    def test_false_flag_nrows_equals_parquet_rows(self):
+        """Without separate_nested_cols, nrows is the number of Parquet outer rows."""
+        buf, rows = _make_taxi_parquet_buf(n_outer_rows=2)
+        ct = CTable.from_parquet(buf, separate_nested_cols=False)
+        # 2 Parquet rows, not 3 elements
+        assert len(ct) == len(rows)
+
+    # ------------------------------------------------------------------
+    # Edge cases
+    # ------------------------------------------------------------------
+
+    def test_empty_outer_list(self):
+        """Importing a Parquet file where all outer lists are empty gives 0 rows."""
+        root_struct = _make_taxi_schema()
+        root_list = pa.list_(root_struct)
+        arr = pa.array([[], []], type=root_list)
+        buf = io.BytesIO()
+        pq.write_table(pa.table({"": arr}), buf)
+        buf.seek(0)
+        ct = CTable.from_parquet(buf, separate_nested_cols=True)
+        assert len(ct) == 0
+        assert set(ct.col_names) == {
+            "trip.sec",
+            "trip.begin.lon",
+            "trip.begin.lat",
+            "payment.fare",
+            "payment.tips",
+            "company",
+        }
+
+    def test_single_element(self):
+        """A single-element list imports as one CTable row."""
+        root_struct = _make_taxi_schema()
+        root_list = pa.list_(root_struct)
+        arr = pa.array(
+            [
+                [
+                    {
+                        "trip": {"sec": 7.0, "begin": {"lon": -87.0, "lat": 41.0}},
+                        "payment": {"fare": 8.0, "tips": 0.5},
+                        "company": "X",
+                    }
+                ]
+            ],
+            type=root_list,
+        )
+        buf = io.BytesIO()
+        pq.write_table(pa.table({"": arr}), buf)
+        buf.seek(0)
+        ct = CTable.from_parquet(buf, separate_nested_cols=True)
+        assert len(ct) == 1
+        assert ct["payment.fare"][0] == 8.0
+
+    def test_non_qualifying_schema_ignored_with_flag(self):
+        """separate_nested_cols=True is silently ignored for a normal (non-qualifying) schema."""
+        at = pa.table({"x": pa.array([1, 2, 3], type=pa.int64()), "y": pa.array([4.0, 5.0, 6.0])})
+        buf = io.BytesIO()
+        pq.write_table(at, buf)
+        buf.seek(0)
+        ct = CTable.from_parquet(buf, separate_nested_cols=True)
+        assert len(ct) == 3
+        assert ct.col_names == ["x", "y"]
+
+    def test_multiple_batches(self):
+        """separate_nested_cols works when Parquet is read in small batches."""
+        buf, rows = _make_taxi_parquet_buf(n_outer_rows=3)
+        ct = CTable.from_parquet(buf, separate_nested_cols=True, batch_size=1)
+        assert len(ct) == _count_elements(rows)
+        fares = [r["payment"]["fare"] for outer in rows for r in outer]
+        np.testing.assert_allclose(ct["payment.fare"][:].tolist(), fares)
+
+    def test_nested_list_inside_element_ignored_at_phase1(self):
+        """A nested list inside the element struct is imported as a ListArray column (phase 1)."""
+        path_type = pa.struct([pa.field("londiff", pa.float32()), pa.field("latdiff", pa.float32())])
+        trip_with_path = pa.struct(
+            [
+                pa.field("sec", pa.float32()),
+                pa.field("path", pa.list_(path_type)),
+            ]
+        )
+        root_struct = pa.struct([pa.field("trip", trip_with_path), pa.field("fare", pa.float64())])
+        root_list = pa.list_(root_struct)
+        data = [
+            [
+                {"trip": {"sec": 10.0, "path": [{"londiff": 0.1, "latdiff": 0.2}]}, "fare": 15.0},
+                {"trip": {"sec": 5.0, "path": []}, "fare": 8.0},
+            ]
+        ]
+        arr = pa.array(data, type=root_list)
+        buf = io.BytesIO()
+        pq.write_table(pa.table({"": arr}), buf)
+        buf.seek(0)
+        ct = CTable.from_parquet(buf, separate_nested_cols=True)
+        assert len(ct) == 2
+        assert "fare" in ct.col_names
+        assert ct["fare"][:].tolist() == [15.0, 8.0]
+        # trip.path should be a ListArray column with one list per element row
+        assert "trip.path" in ct.col_names
+        assert ct["trip.path"].is_list
+        assert ct["trip.path"][0] == [{"londiff": pytest.approx(0.1), "latdiff": pytest.approx(0.2)}]
+        assert ct["trip.path"][1] == []
 
 
 if __name__ == "__main__":

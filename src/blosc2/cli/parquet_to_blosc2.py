@@ -44,9 +44,10 @@ from pathlib import Path
 from typing import Any
 
 import blosc2
-from blosc2.schema_compiler import schema_to_dict
+from blosc2.schema_compiler import _validate_column_name, schema_to_dict
 
 DEFAULT_BATCH_SIZE = 2048
+MAX_ELEMENT_WRITE_BATCH = 5_000_000  # cap on flattened elements yielded per write
 
 
 def require_pyarrow():
@@ -174,7 +175,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-rows",
         type=int,
         default=None,
-        help="Maximum number of rows to import from the source parquet file; imports all rows by default.",
+        help=(
+            "Maximum number of CTable rows to import.  "
+            "In normal mode this equals the number of Parquet rows read.  "
+            "With separate nested columns enabled for an unnamed-root list<struct<...>> "
+            "file, the unit is list elements "
+            "(i.e. the number of rows in the resulting CTable), "
+            "not outer Parquet rows."
+        ),
     )
     parser.add_argument(
         "--batch-size",
@@ -186,7 +194,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--blosc2-batch-size",
         type=int,
         default=None,
-        help="Rows grouped into each persisted BatchArray batch for imported Blosc2 varlen/list columns.",
+        help="Internal batch_rows for BatchArray/varlen columns in the imported CTable. "
+        "Defaults to the blocks value from blosc2.compute_chunks_blocks() based on "
+        "the estimated CTable row count.",
     )
     parser.add_argument(
         "--blosc2-items-per-block",
@@ -195,6 +205,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Items per internal BatchArray block for imported Blosc2 varlen/list columns. "
             "Defaults to BatchArray's automatic heuristic."
+        ),
+    )
+    parser.add_argument(
+        "--list-serializer",
+        choices=["msgpack", "arrow"],
+        default="arrow",
+        help=(
+            "Serializer for imported list columns. 'arrow' is the default and stores Arrow list "
+            "batches directly, which is much faster for deeply nested lists but requires PyArrow "
+            "when reading those columns later. Use 'msgpack' to avoid that read-time dependency."
         ),
     )
     parser.add_argument("--use-dict", action="store_true", help="Enable C-Blosc2 dictionary compression.")
@@ -236,7 +256,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--batch-report-every",
         type=int,
         default=1,
-        help="Print progress every N batches; the final batch is always reported.",
+        help="With --progress, print progress every N batches; the final batch is always reported.",
+    )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print import progress lines. By default, only the import summary is shown.",
     )
     parser.add_argument(
         "--profile",
@@ -244,6 +269,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the selected operation under cProfile and print cumulative timing stats.",
     )
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--decode-dictionaries",
+        action="store_true",
+        help=(
+            "Decode Arrow dictionary-encoded columns to plain vlstring instead of preserving "
+            "the dictionary encoding.  By default, supported dictionary columns "
+            "(string values with integer indices) are imported as Blosc2 dictionary columns."
+        ),
+    )
+    parser.add_argument(
+        "--separate-nested-cols",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        dest="separate_nested_cols",
+        help=(
+            "Import nested columns as separate CTable columns where possible. "
+            "Top-level struct fields are flattened recursively into dotted leaf columns "
+            "(e.g. trip.begin.lon).  For a single unnamed top-level list<struct<…>> "
+            "field (the Awkward Array / Chicago-taxi layout), flatten the outer list "
+            "so that each element becomes a CTable row. Enabled by default; use "
+            "--no-separate-nested-cols when closer Parquet schema fidelity is desired."
+        ),
+    )
     return parser
 
 
@@ -272,11 +320,40 @@ def _release_arrow_temporaries(pa) -> None:
         pa.default_memory_pool().release_unused()
 
 
+def ctable_column_name_map(schema) -> dict[str, str]:
+    """Return a mapping from Arrow field names to CTable-safe column names.
+
+    Remaps invalid names (empty strings, names starting with '_', names
+    containing '/') to safe substitutes like ``column_0``.
+    """
+    used: set[str] = set()
+    result: dict[str, str] = {}
+    for i, field in enumerate(schema):
+        original = field.name
+        try:
+            _validate_column_name(original)
+            candidate = original
+        except ValueError:
+            candidate = f"column_{i}"
+        if candidate in used:
+            base = candidate
+            suffix = 1
+            while f"{base}_{suffix}" in used:
+                suffix += 1
+            candidate = f"{base}_{suffix}"
+        used.add(candidate)
+        result[original] = candidate
+    return result
+
+
 def classify_columns(  # noqa: C901
     pa,
     schema,
     fixed_string_lengths: dict[str, int] | None = None,
     fixed_bytes_lengths: dict[str, int] | None = None,
+    *,
+    decode_dictionaries: bool = False,
+    separate_nested_cols: bool = True,
 ):
     """Classify Parquet schema columns into importable categories."""
     fixed_cols: dict[str, object] = {}
@@ -289,8 +366,14 @@ def classify_columns(  # noqa: C901
     for field in schema:
         t = field.type
         if pa.types.is_struct(t):
-            struct_wrap_cols[field.name] = pa.list_(t)
-            conversions[field.name] = {"conversion": "struct_wrapped_as_singleton_list"}
+            if separate_nested_cols:
+                # Let CTable.from_arrow() apply its normal struct flattening so
+                # top-level structs become dotted leaf columns.
+                fixed_cols[field.name] = field
+                conversions[field.name] = {"conversion": "struct_flattened_to_columns"}
+            else:
+                struct_wrap_cols[field.name] = pa.list_(t)
+                conversions[field.name] = {"conversion": "struct_wrapped_as_singleton_list"}
             continue
         if pa.types.is_list(t) or pa.types.is_large_list(t):
             value_type = t.value_type
@@ -298,6 +381,30 @@ def classify_columns(  # noqa: C901
                 conversions[field.name] = {"conversion": "skipped", "reason": f"nested list: {t}"}
             else:
                 fixed_cols[field.name] = field
+            continue
+        if pa.types.is_dictionary(t):
+            vt = t.value_type
+            if vt in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+                if decode_dictionaries:
+                    # Decode to plain vlstring.
+                    fixed_cols[field.name] = pa.field(
+                        field.name, pa.string(), nullable=field.nullable, metadata=field.metadata
+                    )
+                    conversions[field.name] = {
+                        "conversion": "dictionary_decoded_to_vlstring",
+                        "ordered": bool(t.ordered),
+                    }
+                else:
+                    fixed_cols[field.name] = field
+                    conversions[field.name] = {
+                        "conversion": "dictionary_preserved",
+                        "ordered": bool(t.ordered),
+                    }
+            else:
+                conversions[field.name] = {
+                    "conversion": "skipped",
+                    "reason": f"unsupported dictionary value type: {vt}",
+                }
             continue
         if pa.types.is_boolean(t):
             fixed_cols[field.name] = field
@@ -352,21 +459,41 @@ def build_import_schema(
     fixed_cols: dict,
     struct_wrap_cols: dict,
     timestamp_units: dict[str, str] | None = None,
+    column_name_map: dict[str, str] | None = None,
 ):
     """Build the Arrow schema passed to CTable.from_arrow()."""
     timestamp_units = timestamp_units or {}
+    column_name_map = column_name_map or {}
     fields = []
     for field in original_schema:
+        ctable_name = column_name_map.get(field.name, field.name)
         if field.name in struct_wrap_cols:
-            fields.append(pa.field(field.name, struct_wrap_cols[field.name], nullable=True))
+            fields.append(pa.field(ctable_name, struct_wrap_cols[field.name], nullable=True))
         elif field.name in fixed_cols:
             unit = timestamp_units.get(field.name)
             if unit is not None:
                 fields.append(
-                    pa.field(field.name, pa.timestamp(unit, tz=field.type.tz), nullable=field.nullable)
+                    pa.field(ctable_name, pa.timestamp(unit, tz=field.type.tz), nullable=field.nullable)
                 )
             else:
-                fields.append(field)
+                # Use the field from fixed_cols in case it was remapped (e.g. dict→string)
+                fc = fixed_cols[field.name]
+                if hasattr(fc, "type") and fc.type != field.type:
+                    # fc has the remapped type; use ctable_name for the field name
+                    fields.append(
+                        pa.field(
+                            ctable_name,
+                            fc.type,
+                            nullable=fc.nullable,
+                            metadata=fc.metadata if fc.metadata else None,
+                        )
+                    )
+                elif ctable_name != field.name:
+                    fields.append(
+                        pa.field(ctable_name, field.type, nullable=field.nullable, metadata=field.metadata)
+                    )
+                else:
+                    fields.append(field)
     return pa.schema(fields)
 
 
@@ -614,11 +741,14 @@ def scan_string_and_bytes_lengths(pa, pf, args, schema) -> tuple[dict[str, int],
 
 
 def transform_batch(
-    pa, batch, selected_cols: list[str], struct_wrap_cols: dict, timestamp_units: dict[str, str]
+    pa,
+    batch,
+    selected_cols: list[str],
+    struct_wrap_cols: dict,
+    timestamp_units: dict[str, str],
+    import_schema=None,
 ):
     """Apply import-time Arrow conversions; pass everything else through."""
-    if not struct_wrap_cols and not timestamp_units:
-        return batch
     arrays = list(batch.columns)
     for name, unit in timestamp_units.items():
         idx = batch.schema.get_field_index(name)
@@ -636,18 +766,34 @@ def transform_batch(
             continue
         arr = batch.column(idx)
         arrays[idx] = pa.array([[v] if v is not None else None for v in arr.to_pylist()], type=target_type)
+    if import_schema is not None:
+        # Cast / rename arrays to match import_schema (e.g. dict→string, renamed columns).
+        for i, field in enumerate(import_schema):
+            if not arrays[i].type.equals(field.type):
+                arrays[i] = arrays[i].cast(field.type, safe=True)
+        return pa.record_batch(arrays, schema=import_schema)
+    if not struct_wrap_cols and not timestamp_units:
+        return batch
     return pa.record_batch(arrays, names=selected_cols)
 
 
-def store_original_arrow_metadata(ct, original_schema, imported_schema, conversions: dict) -> None:
+def store_original_arrow_metadata(
+    ct, original_schema, imported_schema, conversions: dict, column_name_map: dict | None = None
+) -> None:
+    column_name_map = column_name_map or {}
     fields_meta = {}
     for field in original_schema:
         entry = conversions.get(field.name)
         if entry is None:
             continue
         entry = dict(entry)
+        ctable_name = column_name_map.get(field.name, field.name)
+        if ctable_name != field.name:
+            entry["ctable_name"] = ctable_name
         entry["original_arrow_type"] = str(field.type)
-        if field.name in imported_schema.names:
+        if ctable_name in imported_schema.names:
+            entry["ctable_arrow_type"] = str(imported_schema.field(ctable_name).type)
+        elif field.name in imported_schema.names:
             entry["ctable_arrow_type"] = str(imported_schema.field(field.name).type)
         fields_meta[field.name] = entry
     ct._schema.metadata = {
@@ -692,6 +838,13 @@ def print_import_plan(
     fixed_bytes_cols = [
         n for n, e in conversions.items() if e.get("conversion") in {"fixed_bytes", "fixed_bytes_nullable"}
     ]
+    dict_cols = [n for n, e in conversions.items() if e.get("conversion") == "dictionary_preserved"]
+    dict_decoded_cols = [
+        n for n, e in conversions.items() if e.get("conversion") == "dictionary_decoded_to_vlstring"
+    ]
+    flattened_structs = [
+        n for n, e in conversions.items() if e.get("conversion") == "struct_flattened_to_columns"
+    ]
     wrapped_structs = list(struct_wrap_cols)
     skipped = {n: e for n, e in conversions.items() if e.get("conversion") == "skipped"}
     print(f"Input:                 {input_path} ({input_path.stat().st_size / 1e6:.1f} MB)")
@@ -699,14 +852,21 @@ def print_import_plan(
     print(f"CTable store:          {ctable_store_kind(output_path)}")
     print(f"Rows:                  {pf.metadata.num_rows:,}")
     if args.max_rows is not None:
-        print(f"Rows to import:        {min(args.max_rows, pf.metadata.num_rows):,}")
+        print(f"Rows to import:        {min(args.max_rows, pf.metadata.num_rows):,} (Parquet rows)")
     print(f"Parquet columns:       {len(parquet_schema)}")
     print(f"Imported columns:      {len(fixed_cols) + len(struct_wrap_cols)}")
-    print(f"  Fixed-width:         {len(fixed_cols) - len(vlstring_cols) - len(vlbytes_cols)}")
+    n_fixed_non_string = (
+        len(fixed_cols) - len(vlstring_cols) - len(vlbytes_cols) - len(dict_cols) - len(dict_decoded_cols)
+    )
+    print(f"  Fixed-width:         {n_fixed_non_string}")
     print(f"  Fixed strings:       {len(fixed_string_cols)}")
     print(f"  Fixed bytes:         {len(fixed_bytes_cols)}")
     print(f"  vlstring:            {len(vlstring_cols)}")
     print(f"  vlbytes:             {len(vlbytes_cols)}")
+    print(f"  Dictionary:          {len(dict_cols)}")
+    if dict_decoded_cols:
+        print(f"  Dict→vlstring:       {len(dict_decoded_cols)}")
+    print(f"  Struct→columns:      {len(flattened_structs)}")
     print(f"  Struct→list:         {len(wrapped_structs)}")
     print(f"  Nullable scalars:    {len(nullable_scalars)}")
     print(f"  Skipped unsupported: {len(skipped)}")
@@ -720,6 +880,7 @@ def print_import_plan(
     print(f"Blosc2 batch size:     {args.blosc2_batch_size:,}")
     if args.blosc2_items_per_block is not None:
         print(f"Blosc2 items/block:    {args.blosc2_items_per_block:,}")
+    print(f"List serializer:       {args.list_serializer}")
     print(f"Codec / level:         {args.codec} / {args.clevel}")
     print(f"Use dict:              {args.use_dict}")
     trunc_global = getattr(args, "float_trunc_prec_global", None)
@@ -734,7 +895,7 @@ def print_import_plan(
     print()
 
 
-def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_units):
+def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_units, import_schema=None):
     rows_done = 0
     t0 = time.perf_counter()
     total = pf.metadata.num_rows if args.max_rows is None else min(args.max_rows, pf.metadata.num_rows)
@@ -749,14 +910,16 @@ def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_un
         report_batch_mem = args.mem_report and batch_n % args.mem_every == 0
         if report_batch_mem:
             memory_report(f"batch {batch_n} after parquet read", pa)
-        batch = transform_batch(pa, raw_batch, selected_cols, struct_wrap_cols, timestamp_units)
+        batch = transform_batch(
+            pa, raw_batch, selected_cols, struct_wrap_cols, timestamp_units, import_schema
+        )
         if report_batch_mem:
             memory_report(f"batch {batch_n} after transform", pa)
         rows_done += len(batch)
         elapsed = time.perf_counter() - t0
         rate = rows_done / elapsed if elapsed > 0 else 0.0
         eta = (total - rows_done) / rate if rate > 0 else 0.0
-        if batch_n % args.batch_report_every == 0 or rows_done >= total:
+        if args.progress and (batch_n % args.batch_report_every == 0 or rows_done >= total):
             print(
                 f"  batch {batch_n:4d}  {rows_done:>12,}/{total:,}  "
                 f"{elapsed:7.1f}s  {rate / 1e3:7.1f}k rows/s  ETA {eta:6.0f}s",
@@ -769,10 +932,246 @@ def progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_un
             memory_report(f"batch {batch_n} after ctable write", pa)
 
 
+def _flatten_root_batches_with_progress(
+    pa,
+    pf,
+    inner_schema,
+    args,
+    capacity_hint=None,
+):
+    """Yield flattened :class:`pyarrow.RecordBatch` objects from an unnamed-root Parquet file.
+
+    Reads Parquet batches, flattens the outer ``list<struct<...>>`` column via
+    ``ListArray.flatten()``, and honours ``args.max_rows`` as an element-level
+    row limit.  When ``args.progress`` is enabled, progress is printed per
+    Parquet batch according to ``args.batch_report_every``.
+
+    Each flattened Parquet batch is yielded as a single write to CTable so that
+    the per-write Python/Arrow overhead is amortised over as many rows as
+    possible.  Batches exceeding ``MAX_ELEMENT_WRITE_BATCH`` are split into
+    cap-sized chunks to bound memory usage.
+    """
+    rows_done = 0
+    max_rows = args.max_rows
+    t0 = time.perf_counter()
+    # total_str is the CTable-row (element) limit for the progress display.
+    total_str = f"{max_rows:,} CTable rows" if max_rows is not None else "?"
+    # Use capacity_hint as the estimated total for ETA when max_rows is not set.
+    estimated_total = max_rows if max_rows is not None else capacity_hint
+
+    for parquet_batch_n, raw_batch in enumerate(
+        pf.iter_batches(batch_size=args.parquet_batch_size), start=1
+    ):
+        if max_rows is not None and rows_done >= max_rows:
+            break
+
+        report_batch_mem = args.mem_report and parquet_batch_n % args.mem_every == 0
+        if report_batch_mem:
+            memory_report(f"batch {parquet_batch_n} after parquet read", pa)
+
+        list_array = raw_batch.column(0)
+        struct_values = list_array.flatten()  # skips null outer-list rows
+
+        if len(struct_values) == 0:
+            continue
+
+        if max_rows is not None:
+            remaining = max_rows - rows_done
+            if len(struct_values) > remaining:
+                struct_values = struct_values.slice(0, remaining)
+
+        # Yield the whole flattened batch as one write; split only when it
+        # exceeds MAX_ELEMENT_WRITE_BATCH to bound peak memory.
+        n_elems = len(struct_values)
+
+        elapsed = time.perf_counter() - t0
+        rate = rows_done / elapsed if elapsed > 0 and rows_done > 0 else 0.0
+        eta_str = (
+            f"  ETA {(estimated_total - rows_done) / rate:6.0f}s"
+            if rate > 0 and estimated_total is not None
+            else ""
+        )
+        report_progress = parquet_batch_n % args.batch_report_every == 0 or (
+            max_rows is not None and rows_done + n_elems >= max_rows
+        )
+        n_writes = (n_elems + MAX_ELEMENT_WRITE_BATCH - 1) // MAX_ELEMENT_WRITE_BATCH
+        if args.progress and report_progress:
+            print(
+                f"  parquet batch {parquet_batch_n:4d}: "
+                f"{n_elems:>12,} CTable rows -> {n_writes:,} write(s)  "
+                f"done {rows_done:>12,}/{total_str}  "
+                f"{elapsed:7.1f}s  {rate / 1e3:7.1f}k rows/s{eta_str}",
+                flush=True,
+            )
+
+        for offset in range(0, n_elems, MAX_ELEMENT_WRITE_BATCH):
+            chunk = struct_values.slice(offset, min(MAX_ELEMENT_WRITE_BATCH, n_elems - offset))
+            sub_batch = pa.RecordBatch.from_struct_array(chunk)
+            rows_done += len(sub_batch)
+            yield sub_batch
+
+        if report_batch_mem:
+            memory_report(f"batch {parquet_batch_n} after flatten+write", pa)
+
+        if max_rows is not None and rows_done >= max_rows:
+            break
+
+
+def import_unnamed_root_separate_cols(
+    args,
+    input_path: Path,
+    output_path: Path,
+    pa,
+    pf,
+    parquet_schema,
+) -> list[str]:
+    """Import an unnamed-root ``list<struct<...>>`` Parquet file with nested column separation.
+
+    Each element of the unnamed root list becomes a CTable row.  Struct leaves
+    are stored as separate physical columns with dotted logical paths such as
+    ``trip.begin.lon`` and ``payment.fare``.
+
+    Returns the list of imported CTable column names.
+    """
+    from blosc2.schema_compiler import schema_to_dict
+
+    inner_schema = blosc2.CTable._inner_schema_for_unnamed_root(pa, parquet_schema)
+    total_parquet_rows = pf.metadata.num_rows if pf.metadata is not None else None
+
+    # ------------------------------------------------------------------
+    # Estimate total element count by sampling the first Parquet batch.
+    # This is used as capacity_hint so that compute_chunks_blocks() picks
+    # chunk/block sizes proportional to the actual data volume rather than
+    # defaulting to (1, 1) when the element count is unknown.
+    # pf.iter_batches() creates a fresh iterator each call, so sampling
+    # here does not affect the import iterator created later.
+    # ------------------------------------------------------------------
+    capacity_hint = None
+    estimated_batch_rows = None
+    if total_parquet_rows is not None and total_parquet_rows > 0:
+        try:
+            sample = next(
+                pf.iter_batches(batch_size=min(args.parquet_batch_size, total_parquet_rows)),
+                None,
+            )
+            if sample is not None and len(sample) > 0:
+                n_outer_sampled = len(sample)
+                n_elems_sampled = len(sample.column(0).flatten())
+                avg_per_outer_row = n_elems_sampled / n_outer_sampled
+                estimated_batch_rows = max(1, round(args.parquet_batch_size * avg_per_outer_row))
+                estimate = round(total_parquet_rows * avg_per_outer_row)
+                if args.max_rows is not None:
+                    estimate = min(estimate, args.max_rows)
+                capacity_hint = max(1, estimate)
+        except Exception:
+            pass  # sampling failure is non-fatal; from_arrow falls back to _EXPECTED_SIZE_DEFAULT
+
+    if args.blosc2_batch_size is None:
+        if args.list_serializer == "arrow":
+            # Arrow list storage appends incoming Arrow chunks directly, without
+            # materializing Python nested-list objects.  Use the natural flattened
+            # Parquet-batch scale (about 1M rows for Chicago taxi), capped only for
+            # pathological batches, so the displayed BatchArray size matches the
+            # actual write granularity better than the absolute cap would.
+            args.blosc2_batch_size = min(
+                MAX_ELEMENT_WRITE_BATCH,
+                estimated_batch_rows if estimated_batch_rows is not None else MAX_ELEMENT_WRITE_BATCH,
+            )
+        else:
+            # Msgpack list storage materializes nested Arrow list data as Python objects
+            # before serializing.  Keep its internal BatchArray batch_rows at Blosc2's
+            # cache-tuned block granularity instead of the larger Arrow write scale.
+            if capacity_hint is not None:
+                _, blocks = blosc2.compute_chunks_blocks((capacity_hint,))
+                args.blosc2_batch_size = max(1, blocks[0])
+            else:
+                args.blosc2_batch_size = DEFAULT_BATCH_SIZE
+
+    print(f"Input:                 {input_path} ({input_path.stat().st_size / 1e6:.1f} MB)")
+    print(f"Output:                {output_path}")
+    print(f"CTable store:          {ctable_store_kind(output_path)}")
+    print("Mode:                  unnamed-root list<struct> flattening")
+    print("Nested columns:        separated into dotted CTable columns")
+    if total_parquet_rows is not None:
+        print(f"Parquet rows:          {total_parquet_rows:,}")
+    if capacity_hint is not None:
+        print(f"Est. CTable rows:      ~{capacity_hint:,}")
+    n_inner = len(inner_schema)
+    print(f"Inner struct fields:   {n_inner}")
+    for f in inner_schema:
+        print(f"  {f.name}: {f.type}")
+    if args.max_rows is not None:
+        print(f"Max CTable rows:       {args.max_rows:,} (list elements)")
+    print(f"Parquet batch size:    {args.parquet_batch_size:,} outer rows")
+    blosc2_batch_note = (
+        f"auto, max: {MAX_ELEMENT_WRITE_BATCH:,}"
+        if getattr(args, "blosc2_batch_size_auto", False)
+        else f"max: {MAX_ELEMENT_WRITE_BATCH:,}"
+    )
+    print(f"Blosc2 batch size:     {args.blosc2_batch_size:,} BatchArray rows ({blosc2_batch_note})")
+    if args.blosc2_items_per_block is not None:
+        print(f"Blosc2 items/block:    {args.blosc2_items_per_block:,}")
+    print(f"List serializer:       {args.list_serializer}")
+    print(f"Codec / level:         {args.codec} / {args.clevel}")
+    print(f"Use dict:              {args.use_dict}")
+    print()
+
+    cparams = blosc2.CParams(codec=blosc2.Codec[args.codec], clevel=args.clevel, use_dict=args.use_dict)
+    t0 = time.perf_counter()
+    maybe_memory_report(args, "before CTable import", pa)
+
+    ct = blosc2.CTable.from_arrow(
+        inner_schema,
+        _flatten_root_batches_with_progress(pa, pf, inner_schema, args, capacity_hint=capacity_hint),
+        urlpath=str(output_path),
+        mode="w",
+        cparams=cparams,
+        capacity_hint=capacity_hint,
+        auto_null_sentinels=True,
+        blosc2_batch_size=args.blosc2_batch_size,
+        blosc2_items_per_block=args.blosc2_items_per_block,
+        list_serializer=args.list_serializer,
+    )
+
+    maybe_memory_report(args, "after CTable import", pa)
+
+    # Store the original_root provenance metadata so that reopened CTables know
+    # they came from an unnamed-root list<struct<...>> file.
+    nested_meta = ct._schema.metadata.get("nested", {})
+    nested_meta["original_root"] = {
+        "kind": "unnamed_list_struct",
+        "field_name": "",
+        "preserve_grouping": False,
+    }
+    ct._schema.metadata["nested"] = nested_meta
+    ct._storage.save_schema(schema_to_dict(ct._schema))
+
+    maybe_memory_report(args, "after metadata save", pa)
+
+    elapsed = time.perf_counter() - t0
+    rows = len(ct)
+    cols = len(ct.col_names)
+    col_names = list(ct.col_names)
+    ct.close()
+
+    maybe_memory_report(args, "after CTable close", pa)
+
+    output_size = (
+        output_path.stat().st_size
+        if output_path.is_file()
+        else sum(f.stat().st_size for f in output_path.rglob("*") if f.is_file())
+    )
+    print(f"Done in {elapsed:.2f}s")
+    print(f"Element rows imported: {rows:,}")
+    print(f"Columns imported:      {cols}")
+    print(f"Output size:           {output_size / 1e6:.1f} MB")
+    return col_names
+
+
 def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
     if args.parquet_batch_size <= 0:
         raise ValueError("--parquet-batch-size must be positive")
-    if args.blosc2_batch_size <= 0:
+    if args.blosc2_batch_size is not None and args.blosc2_batch_size <= 0:
         raise ValueError("--blosc2-batch-size must be positive")
     if args.blosc2_items_per_block is not None and args.blosc2_items_per_block <= 0:
         raise ValueError("--blosc2-items-per-block must be positive")
@@ -799,6 +1198,14 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
     maybe_memory_report(args, "after ParquetFile open", pa)
     parquet_schema = pf.schema_arrow
 
+    # ------------------------------------------------------------------
+    # Early dispatch: --separate-nested-cols for unnamed-root datasets
+    # ------------------------------------------------------------------
+    if getattr(args, "separate_nested_cols", False) and blosc2.CTable._detect_unnamed_root_list_struct(
+        pa, parquet_schema
+    ):
+        return import_unnamed_root_separate_cols(args, input_path, output_path, pa, pf, parquet_schema)
+
     fixed_string_lengths, fixed_bytes_lengths = scan_string_and_bytes_lengths(pa, pf, args, parquet_schema)
     maybe_memory_report(args, "after string/binary length scan", pa)
 
@@ -806,13 +1213,24 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
     maybe_memory_report(args, "after timestamp unit scan", pa)
 
     fixed_cols, struct_wrap_cols, conversions, nullable_scalars = classify_columns(
-        pa, parquet_schema, fixed_string_lengths, fixed_bytes_lengths
+        pa,
+        parquet_schema,
+        fixed_string_lengths,
+        fixed_bytes_lengths,
+        decode_dictionaries=getattr(args, "decode_dictionaries", False),
+        separate_nested_cols=getattr(args, "separate_nested_cols", True),
     )
     maybe_memory_report(args, "after column classification", pa)
 
     selected_cols = [f.name for f in parquet_schema if f.name in fixed_cols or f.name in struct_wrap_cols]
-    import_schema = build_import_schema(pa, parquet_schema, fixed_cols, struct_wrap_cols, timestamp_units)
-    fixed_scalar_lengths = {**fixed_string_lengths, **fixed_bytes_lengths} or None
+    column_name_map = ctable_column_name_map(parquet_schema)
+    import_schema = build_import_schema(
+        pa, parquet_schema, fixed_cols, struct_wrap_cols, timestamp_units, column_name_map
+    )
+    fixed_scalar_lengths = {
+        column_name_map.get(name, name): length
+        for name, length in {**fixed_string_lengths, **fixed_bytes_lengths}.items()
+    } or None
     float_trunc_column_cparams = build_float_trunc_column_cparams(pa, import_schema, args)
     maybe_memory_report(args, "after import schema build", pa)
 
@@ -833,7 +1251,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
 
     ct = blosc2.CTable.from_arrow(
         import_schema,
-        progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_units),
+        progress_batches(pa, pf, args, selected_cols, struct_wrap_cols, timestamp_units, import_schema),
         urlpath=str(output_path),
         mode="w",
         cparams=blosc2.CParams(codec=blosc2.Codec[args.codec], clevel=args.clevel, use_dict=args.use_dict),
@@ -844,10 +1262,11 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         auto_null_sentinels=True,
         blosc2_batch_size=args.blosc2_batch_size,
         blosc2_items_per_block=args.blosc2_items_per_block,
+        list_serializer=args.list_serializer,
         column_cparams=float_trunc_column_cparams or None,
     )
     maybe_memory_report(args, "after CTable import", pa)
-    store_original_arrow_metadata(ct, parquet_schema, import_schema, conversions)
+    store_original_arrow_metadata(ct, parquet_schema, import_schema, conversions, column_name_map)
     maybe_memory_report(args, "after metadata save", pa)
     elapsed = time.perf_counter() - t0
     rows = len(ct)
@@ -920,6 +1339,22 @@ def export_ctable_to_parquet(input_path: Path, output_path: Path, *, batch_size:
                     arr = unwrap_singleton_list(pa, arr, field.type)
                 elif conversion in {"vlstring", "vlstring_nullable", "vlbytes", "vlbytes_nullable"}:
                     if str(arr.type) != str(field.type):
+                        arr = arr.cast(field.type)
+                elif conversion in {"dictionary_preserved"}:
+                    # CTable emits dictionary<int32, string>; restore original type if needed.
+                    if str(arr.type) != str(field.type):
+                        arr = arr.cast(field.type, safe=True)
+                elif conversion in {"dictionary_decoded_to_vlstring"}:
+                    # Was decoded to vlstring on import; restore as dictionary type on export.
+                    if pa.types.is_dictionary(field.type):
+                        encoded = pa.DictionaryArray.from_arrays(
+                            *pa.array(arr.to_pylist())
+                            .dictionary_encode()
+                            .unify_dictionaries([pa.array(arr.to_pylist()).dictionary_encode()]),
+                            ordered=field.type.ordered,
+                        )
+                        arr = encoded.cast(field.type)
+                    elif str(arr.type) != str(field.type):
                         arr = arr.cast(field.type)
                 elif str(arr.type) != str(field.type):
                     arr = pa.array(arr.to_pylist(), type=field.type)
@@ -1060,7 +1495,33 @@ def average_parquet_row_group_size(input_path: Path) -> int | None:
     return max(1, round(metadata.num_rows / metadata.num_row_groups))
 
 
+def is_unnamed_root_parquet_input(input_path: Path) -> bool:
+    if input_path.suffix != ".parquet" or not input_path.exists():
+        return False
+    try:
+        pa, pq = require_pyarrow()
+        pf = pq.ParquetFile(input_path)
+        return blosc2.CTable._detect_unnamed_root_list_struct(pa, pf.schema_arrow)
+    except Exception:
+        return False
+
+
 def resolve_default_batch_sizes(args, *, parquet_specified: bool, blosc2_specified: bool) -> None:
+    if getattr(args, "separate_nested_cols", False) and is_unnamed_root_parquet_input(args.input_path):
+        # In separate-nested mode the two batch-size options use different units:
+        # Parquet batches are outer rows, while Blosc2 batches are flattened
+        # CTable rows.  Keep them independent so a large write batch does not
+        # accidentally imply a huge Parquet read batch (and vice versa).
+        if not parquet_specified:
+            args.parquet_batch_size = average_parquet_row_group_size(args.input_path) or DEFAULT_BATCH_SIZE
+        if not blosc2_specified:
+            # Defer separate-nested defaults until import, where we have a sampled
+            # estimate of flattened CTable rows per Parquet batch.  Arrow uses that
+            # natural per-Parquet-batch scale; msgpack uses a smaller blocks-based
+            # scale because it materializes nested Python objects before serializing.
+            args.blosc2_batch_size = None
+        return
+
     if parquet_specified and not blosc2_specified:
         args.blosc2_batch_size = args.parquet_batch_size
     elif blosc2_specified and not parquet_specified:
@@ -1079,6 +1540,7 @@ def main(argv: list[str] | None = None) -> int:
         argv, "--batch-size"
     )
     blosc2_specified = _option_present(argv, "--blosc2-batch-size")
+    args.blosc2_batch_size_auto = not blosc2_specified
     resolve_default_batch_sizes(args, parquet_specified=parquet_specified, blosc2_specified=blosc2_specified)
 
     if args.profile:

@@ -26,6 +26,12 @@ class StrRow:
     label: str = blosc2.field(blosc2.string(max_length=16))
 
 
+@dataclass
+class DictRow:
+    vendor: str = blosc2.field(blosc2.dictionary())
+    fare: float = blosc2.field(blosc2.float64())
+
+
 DATA20 = [(i, float(i * 10), True) for i in range(20)]
 
 
@@ -48,6 +54,49 @@ def test_column_metadata():
     # mask is None by default
     assert tabla.id._mask is None
     assert tabla.score._mask is None
+
+
+def test_column_float32_repr_uses_numpy_formatting():
+    """Column/table repr uses compact NumPy-style formatting for float32 previews."""
+
+    @dataclass
+    class Float32Row:
+        value: float = blosc2.field(blosc2.float32())
+
+    tabla = CTable(Float32Row, new_data=[(222.22,), (210.8,)])
+    col_text = repr(tabla.value)
+    table_text = str(tabla)
+
+    assert "222.22" in col_text
+    assert "222.22000122070312" not in col_text
+    assert "222.22" in table_text
+    assert "222.22000122070312" not in table_text
+
+
+def test_column_info():
+    """Column.info reports logical and physical storage details."""
+    tabla = CTable(Row, new_data=DATA20)
+    info = tabla.score.info
+    text = repr(info)
+
+    assert len(info) == len(tabla.score.info_items)
+    assert ("type", "Column") in tabla.score.info_items
+    assert ("name", "score") in tabla.score.info_items
+    assert "logical_length" in text
+    assert "physical_length" in text
+    assert "logical_shape" not in text
+    assert "table_physical_length" not in text
+    assert "storage" in text
+
+
+def test_dictionary_column_info():
+    """Dictionary Column.info reports dictionary-specific details without code-shape duplication."""
+    tabla = CTable(DictRow, new_data=[("Uber", 10.5), ("Lyft", 7.2), ("Uber", 15.0)])
+    text = repr(tabla.vendor.info)
+
+    assert "dictionary_size" in text
+    assert "dictionary[str]" in text
+    assert "codes_shape" not in text
 
 
 def test_column_getitem_no_holes():

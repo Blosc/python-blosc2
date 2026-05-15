@@ -49,6 +49,8 @@ class Batch(Sequence[Any]):
         self._items: list[Any] | None = None
         self._cached_block_index: int | None = None
         self._cached_block: list[Any] | None = None
+        self._cached_block_column_index: int | None = None
+        self._cached_block_column = None
         self._nbytes, self._cbytes, self._nblocks = blosc2.get_cbuffer_sizes(lazybatch)
 
     def _normalize_index(self, index: int) -> int:
@@ -74,6 +76,17 @@ class Batch(Sequence[Any]):
         self._cached_block = block
         return block
 
+    def _get_block_item(self, block_index: int, item_index: int) -> Any:
+        if self._cached_block_index == block_index and self._cached_block is not None:
+            return self._cached_block[item_index]
+        if self._parent._serializer != "arrow":
+            return self._get_block(block_index)[item_index]
+        if self._cached_block_column_index != block_index or self._cached_block_column is None:
+            payload = self._parent.schunk.get_vlblock(self._nbatch, block_index)
+            self._cached_block_column = self._parent._deserialize_arrow_block_column(payload)
+            self._cached_block_column_index = block_index
+        return self._cached_block_column[item_index].as_py()
+
     def __getitem__(self, index: int | slice) -> Any | list[Any]:
         if isinstance(index, slice):
             items = self._decode_items()
@@ -87,9 +100,8 @@ class Batch(Sequence[Any]):
             block_index, item_index = divmod(index, items_per_block)
             if block_index >= self._nblocks:
                 raise IndexError("Batch index out of range")
-            block = self._get_block(block_index)
             try:
-                return block[item_index]
+                return self._get_block_item(block_index, item_index)
             except IndexError as exc:
                 raise IndexError("Batch index out of range") from exc
         items = self._decode_items()
@@ -593,11 +605,17 @@ class BatchArray:
         if not payload_sizes:
             raise ValueError("BatchArray entries cannot be empty")
         clevel = self.cparams.clevel
+        # For serialized batch payloads, especially Arrow IPC, L1-sized blocks are often
+        # too small for codecs like Zstd to exploit cross-row redundancy.  Use larger
+        # cache-budget tiers as clevel increases, while avoiding full L2 blocks at the
+        # default clevel to keep random access reasonably granular.
         if clevel == 9:
             return len(payload_sizes)
-        if 0 < clevel <= 5:
+        if 0 < clevel <= 3:
             budget = blosc2.cpu_info.get("l1_data_cache_size")
-        elif 5 < clevel < 9:
+        elif 3 < clevel <= 6:
+            budget = blosc2.cpu_info.get("l2_cache_size") // 2
+        elif 6 < clevel < 9:
             budget = blosc2.cpu_info.get("l2_cache_size")
         else:
             return len(payload_sizes)
@@ -625,9 +643,12 @@ class BatchArray:
         return payload
 
     def _serialize_arrow_block(self, items) -> bytes:
-        pa, _ = self._require_pyarrow()
+        pa, pa_ipc = self._require_pyarrow()
         batch = pa.record_batch([items], schema=self._get_arrow_schema())
-        payload = batch.serialize().to_pybytes()
+        sink = pa.BufferOutputStream()
+        with pa_ipc.new_stream(sink, batch.schema) as writer:
+            writer.write_batch(batch)
+        payload = sink.getvalue().to_pybytes()
         _check_serialized_size(payload)
         return payload
 
@@ -639,15 +660,33 @@ class BatchArray:
     def _deserialize_msgpack_block(self, payload: bytes) -> list[Any]:
         return msgpack_unpackb(payload)
 
-    def _deserialize_arrow_block(self, payload: bytes) -> list[Any]:
+    def _deserialize_arrow_block_column(self, payload: bytes):
         pa, pa_ipc = self._require_pyarrow()
-        batch = pa_ipc.read_record_batch(pa.BufferReader(payload), self._get_arrow_schema())
-        return batch.column(0).to_pylist()
+        try:
+            reader = pa_ipc.open_stream(pa.BufferReader(payload))
+            batch = reader.read_next_batch()
+        except (pa.ArrowInvalid, OSError):
+            # Backward compatibility for older arrow-serializer blocks written
+            # as bare serialized RecordBatch payloads.  Those cannot represent
+            # dictionary batches reliably, so new blocks use IPC streams.
+            batch = pa_ipc.read_record_batch(pa.BufferReader(payload), self._get_arrow_schema())
+        return batch.column(0)
+
+    def _deserialize_arrow_block(self, payload: bytes) -> list[Any]:
+        return self._deserialize_arrow_block_column(payload).to_pylist()
 
     def _deserialize_block(self, payload: bytes) -> list[Any]:
         if self._serializer == "arrow":
             return self._deserialize_arrow_block(payload)
         return self._deserialize_msgpack_block(payload)
+
+    def _deserialize_arrow_block_item(self, payload: bytes, item_index: int) -> Any:
+        return self._deserialize_arrow_block_column(payload)[item_index].as_py()
+
+    def _deserialize_block_item(self, payload: bytes, item_index: int) -> Any:
+        if self._serializer == "arrow":
+            return self._deserialize_arrow_block_item(payload, item_index)
+        return self._deserialize_msgpack_block(payload)[item_index]
 
     def _vl_cparams_kwargs(self) -> dict[str, Any]:
         return asdict(self.schunk.cparams)
@@ -903,6 +942,7 @@ class BatchArray:
         return [
             ("type", f"{self.__class__.__name__}"),
             ("serializer", self.serializer),
+            ("items_per_block", self.items_per_block),
             ("nbatches", nbatches_value),
             ("nblocks", nblocks_value),
             ("nitems", sum(batch_sizes)),

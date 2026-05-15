@@ -306,6 +306,7 @@ def test_catalog_survives_reopen(tmpdir):
     assert not idxs[0].stale
 
 
+@pytest.mark.heavy
 def test_where_with_index_matches_scan_persistent(tmpdir):
     path = str(tmpdir / "table.b2d")
     t = _make_table(200, persistent_path=path)
@@ -320,6 +321,7 @@ def test_where_with_index_matches_scan_persistent(tmpdir):
     assert ids_idx == ids_scan
 
 
+@pytest.mark.heavy
 def test_persistent_index_drop_releases_sidecars_without_gc(tmpdir):
     import gc
 
