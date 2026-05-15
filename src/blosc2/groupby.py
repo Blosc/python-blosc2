@@ -175,6 +175,9 @@ class CTableGroupBy:
 
     def _execute(self, specs: list[_AggSpec]):
         self._validate_output_names(specs)
+        fast = self._try_execute_cython_i32_f64_sum(specs)
+        if fast is not None:
+            return fast
         fast = self._try_execute_dense_single_int_key(specs)
         if fast is not None:
             return fast
@@ -216,6 +219,81 @@ class CTableGroupBy:
             self._merge_partials(acc, key_values, normalized_keys, display_keys, partials, specs)
 
         rows = self._final_rows(acc, key_values, specs)
+        return self._build_result(rows, specs)
+
+    def _try_execute_cython_i32_f64_sum(self, specs: list[_AggSpec]):  # noqa: C901
+        """Cython fast path for one int32 key and one non-null float64 sum."""
+        if len(self.keys) != 1 or len(specs) != 1 or specs[0].op != "sum" or self.sort:
+            return None
+        spec = specs[0]
+        if spec.input_col is None:
+            return None
+        key_name = self.keys[0]
+        key_info = self.table._schema.columns_by_name[key_name]
+        value_info = self.table._schema.columns_by_name[spec.input_col]
+        if self.table._is_dictionary_column(key_info):
+            key_arr = self.table._cols[key_name].codes
+            key_is_dict = True
+            key_null = int(key_info.spec.null_code)
+            skip_key_null = self.dropna
+        else:
+            key_arr = self.table._cols[key_name]
+            key_is_dict = False
+            key_dtype = getattr(key_info.spec, "dtype", None)
+            if key_dtype != np.dtype(np.int32):
+                return None
+            key_null_value = getattr(key_info.spec, "null_value", None)
+            skip_key_null = self.dropna and key_null_value is not None
+            key_null = 0 if key_null_value is None else int(key_null_value)
+        value_dtype = getattr(value_info.spec, "dtype", None)
+        if value_dtype != np.dtype(np.float64) or getattr(value_info.spec, "null_value", None) is not None:
+            return None
+        try:
+            from blosc2 import indexing_ext
+        except ImportError:
+            return None
+        kernel = getattr(indexing_ext, "groupby_dense_i32_f64_sum_checked", None)
+        if kernel is None:
+            return None
+
+        compact_limit = 10_000_000
+        sums = np.zeros(0, dtype=np.float64)
+        present = np.zeros(0, dtype=bool)
+
+        def ensure_size(size: int) -> bool:
+            nonlocal sums, present
+            if size > compact_limit:
+                return False
+            if size <= len(sums):
+                return True
+            old = len(sums)
+            sums = np.pad(sums, (0, size - old), constant_values=0)
+            present = np.pad(present, (0, size - old), constant_values=False)
+            return True
+
+        phys_len = len(self.table._valid_rows)
+        chunk_size = self._chunk_size()
+        for start in range(0, phys_len, chunk_size):
+            stop = min(start + chunk_size, phys_len)
+            valid = np.asarray(self.table._valid_rows[start:stop], dtype=bool)
+            if not np.any(valid):
+                continue
+            keys = np.asarray(key_arr[start:stop], dtype=np.int32)
+            values = np.asarray(self.table._cols[spec.input_col][start:stop], dtype=np.float64)
+            status = int(kernel(keys, values, valid, sums, present, skip_key_null, key_null, False))
+            if status == -1:
+                return None
+            if status > 0:
+                if not ensure_size(status):
+                    return None
+                status = int(kernel(keys, values, valid, sums, present, skip_key_null, key_null, False))
+                if status != 0:
+                    return None
+
+        rows = []
+        for code in np.nonzero(present)[0]:
+            key_value = self.table._cols[key_name].decode(int(code)) if key_is_dict else int(code)
+            rows.append({key_name: key_value, spec.output_col: float(sums[code])})
         return self._build_result(rows, specs)
 
     def _try_execute_dense_single_int_key(self, specs: list[_AggSpec]):  # noqa: C901

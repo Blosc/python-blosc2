@@ -2495,3 +2495,153 @@ def keysort_keys_indices(np.ndarray keys, np.ndarray indices):
         return None
     _keysort_ndarray(keys, indices)
     return None
+
+
+# ----------------------------------------------------------------------
+# Group-reduce kernels
+# ----------------------------------------------------------------------
+
+def groupby_dense_i32_f64_sum(
+    np.ndarray keys,
+    np.ndarray values,
+    np.ndarray valid,
+    np.ndarray sums,
+    np.ndarray present,
+    bint skip_key_null=False,
+    int32_t key_null=0,
+    bint skip_value_nan=False,
+):
+    """Accumulate ``sum(values)`` by dense int32 keys.
+
+    This is a low-level CTable group-by helper.  *keys*, *values*, and *valid*
+    are same-length 1-D chunk arrays.  *sums* and *present* are dense group
+    state arrays indexed directly by key value.  Keys must be non-negative and
+    already fit in the state arrays.
+    """
+    if keys.ndim != 1 or values.ndim != 1 or valid.ndim != 1:
+        raise ValueError("keys, values and valid must be 1-D arrays")
+    if keys.shape[0] != values.shape[0] or keys.shape[0] != valid.shape[0]:
+        raise ValueError("keys, values and valid must have the same length")
+    if sums.ndim != 1 or present.ndim != 1:
+        raise ValueError("sums and present must be 1-D arrays")
+    if keys.dtype != np.dtype(np.int32):
+        raise TypeError("keys must have dtype int32")
+    if values.dtype != np.dtype(np.float64):
+        raise TypeError("values must have dtype float64")
+    if valid.dtype != np.dtype(np.bool_):
+        raise TypeError("valid must have dtype bool")
+    if sums.dtype != np.dtype(np.float64):
+        raise TypeError("sums must have dtype float64")
+    if present.dtype != np.dtype(np.bool_):
+        raise TypeError("present must have dtype bool")
+
+    cdef int32_t[:] keys_view = keys
+    cdef double[:] values_view = values
+    cdef np.npy_bool[:] valid_view = valid
+    cdef double[:] sums_view = sums
+    cdef np.npy_bool[:] present_view = present
+    cdef Py_ssize_t n = keys.shape[0]
+    cdef Py_ssize_t nstates = sums.shape[0]
+    cdef Py_ssize_t i
+    cdef int32_t key
+    cdef double value
+
+    if present.shape[0] != sums.shape[0]:
+        raise ValueError("present and sums must have the same length")
+
+    with nogil:
+        for i in range(n):
+            if not valid_view[i]:
+                continue
+            key = keys_view[i]
+            if skip_key_null and key == key_null:
+                continue
+            if key < 0 or key >= nstates:
+                continue
+            value = values_view[i]
+            if skip_value_nan and value != value:
+                continue
+            sums_view[key] += value
+            present_view[key] = 1
+    return None
+
+
+
+def groupby_dense_i32_f64_sum_checked(
+    np.ndarray keys,
+    np.ndarray values,
+    np.ndarray valid,
+    np.ndarray sums,
+    np.ndarray present,
+    bint skip_key_null=False,
+    int32_t key_null=0,
+    bint skip_value_nan=False,
+):
+    """Checked dense int32/float64 sum kernel.
+
+    Returns ``0`` on success, ``-1`` if a negative non-null key is found, or
+    ``max_key + 1`` when the dense state arrays need to be grown.  The state is
+    not mutated unless the function returns ``0``.
+    """
+    if keys.ndim != 1 or values.ndim != 1 or valid.ndim != 1:
+        raise ValueError("keys, values and valid must be 1-D arrays")
+    if keys.shape[0] != values.shape[0] or keys.shape[0] != valid.shape[0]:
+        raise ValueError("keys, values and valid must have the same length")
+    if sums.ndim != 1 or present.ndim != 1:
+        raise ValueError("sums and present must be 1-D arrays")
+    if keys.dtype != np.dtype(np.int32):
+        raise TypeError("keys must have dtype int32")
+    if values.dtype != np.dtype(np.float64):
+        raise TypeError("values must have dtype float64")
+    if valid.dtype != np.dtype(np.bool_):
+        raise TypeError("valid must have dtype bool")
+    if sums.dtype != np.dtype(np.float64):
+        raise TypeError("sums must have dtype float64")
+    if present.dtype != np.dtype(np.bool_):
+        raise TypeError("present must have dtype bool")
+    if present.shape[0] != sums.shape[0]:
+        raise ValueError("present and sums must have the same length")
+
+    cdef int32_t[:] keys_view = keys
+    cdef double[:] values_view = values
+    cdef np.npy_bool[:] valid_view = valid
+    cdef double[:] sums_view = sums
+    cdef np.npy_bool[:] present_view = present
+    cdef Py_ssize_t n = keys.shape[0]
+    cdef Py_ssize_t nstates = sums.shape[0]
+    cdef Py_ssize_t i
+    cdef int32_t key
+    cdef int32_t max_key = -1
+    cdef int ret = 0
+    cdef double value
+
+    with nogil:
+        for i in range(n):
+            if not valid_view[i]:
+                continue
+            key = keys_view[i]
+            if skip_key_null and key == key_null:
+                continue
+            if key < 0:
+                ret = -1
+                break
+            if key > max_key:
+                max_key = key
+        if ret == 0:
+            if max_key < 0:
+                ret = 0
+            elif max_key >= nstates:
+                ret = <int>max_key + 1
+            else:
+                for i in range(n):
+                    if not valid_view[i]:
+                        continue
+                    key = keys_view[i]
+                    if skip_key_null and key == key_null:
+                        continue
+                    value = values_view[i]
+                    if skip_value_nan and value != value:
+                        continue
+                    sums_view[key] += value
+                    present_view[key] = 1
+    return ret
