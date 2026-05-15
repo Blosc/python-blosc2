@@ -322,13 +322,44 @@ Recommendation:
 
 ### Public `blosc2.group_reduce()`
 
-Keep lower-level group-reduce machinery internal for now.  Consider exposing a
-public `blosc2.group_reduce()` only after:
+Implemented a conservative public `blosc2.group_reduce()` array API for
+single-key grouped reductions without requiring a `CTable`.
 
-- aggregation semantics are stable;
-- null/NaN behavior is fully documented;
-- output representation is clear;
-- benchmarks show usefulness outside `CTable.group_by()`.
+Implemented API:
+
+```python
+groups, result = blosc2.group_reduce(
+    keys, values=None, op="size", sort=False, dropna=True
+)
+```
+
+Implemented operations:
+
+- `size`;
+- `count`;
+- `sum`;
+- `mean`;
+- `min`;
+- `max`.
+
+Implemented semantics:
+
+- returns plain NumPy arrays `(groups, result)`;
+- `size` counts rows and does not require values;
+- `count` counts non-NaN values;
+- `dropna=True` skips NaN float keys;
+- `dropna=False` keeps one normalized NaN group;
+- `+0.0` and `-0.0` are normalized by the float hash path;
+- optimized dense integer and arbitrary-float hash paths are used
+  opportunistically, with a NumPy/Python fallback.
+
+Remaining possible extensions:
+
+- multi-key public API;
+- multiple aggregations in one call;
+- multiple value columns;
+- NDArray/chunked execution without eager NumPy conversion;
+- optional CTable/persistent output.
 
 ### High-cardinality and memory strategy
 

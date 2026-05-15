@@ -1427,3 +1427,300 @@ def _null_output_value(spec: SchemaSpec):
     if dtype is not None and dtype.kind == "S":
         return b""
     return None
+
+
+# ----------------------------------------------------------------------
+# Public array-oriented grouped reductions
+# ----------------------------------------------------------------------
+
+
+def group_reduce(keys, values=None, op: AggName = "size", *, sort: bool = False, dropna: bool = True):
+    """Group *keys* and reduce *values* with *op*.
+
+    This is a lower-level, NumPy-style grouped reduction primitive.  It exposes
+    Blosc2's optimized group-reduce kernels for plain array-like inputs without
+    requiring a :class:`blosc2.CTable`.
+
+    Parameters
+    ----------
+    keys : array-like
+        One-dimensional grouping keys.
+    values : array-like, optional
+        One-dimensional values to reduce.  Required for ``"count"``, ``"sum"``,
+        ``"mean"``, ``"min"`` and ``"max"``.  Ignored for ``"size"``.
+    op : {"size", "count", "sum", "mean", "min", "max"}, default: "size"
+        Reduction operation.  ``"size"`` counts rows per group, while
+        ``"count"`` counts non-NaN values per group.
+    sort : bool, default: False
+        If true, sort output groups by key.  With ``sort=False`` output order is
+        implementation dependent.
+    dropna : bool, default: True
+        If true, skip NaN float keys.  If false, all NaN keys form one group.
+
+    Returns
+    -------
+    groups, result : numpy.ndarray, numpy.ndarray
+        Group keys and reduced values.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> keys = np.array([1, 2, 1, 2, 1])
+    >>> values = np.array([10., 20., 30., 40., 50.])
+    >>> groups, sums = blosc2.group_reduce(keys, values, op="sum", sort=True)
+    >>> groups
+    array([1, 2])
+    >>> sums
+    array([90., 60.])
+    """
+    if op not in {"size", "count", "sum", "mean", "min", "max"}:
+        raise ValueError(f"unsupported group_reduce operation {op!r}")
+
+    keys_arr = np.asarray(keys)
+    if keys_arr.ndim != 1:
+        raise ValueError("keys must be a 1-D array")
+
+    if op == "size":
+        values_arr = None
+    else:
+        if values is None:
+            raise ValueError(f"values are required for group_reduce op {op!r}")
+        values_arr = np.asarray(values)
+        if values_arr.ndim != 1:
+            raise ValueError("values must be a 1-D array")
+        if len(values_arr) != len(keys_arr):
+            raise ValueError("keys and values must have the same length")
+
+    if len(keys_arr) == 0:
+        return keys_arr.copy(), np.empty(0, dtype=_result_dtype(values_arr, op))
+
+    fast = _try_dense_integer(keys_arr, values_arr, op, sort=sort)
+    if fast is not None:
+        return fast
+
+    fast = _try_float_hash(keys_arr, values_arr, op, sort=sort, dropna=dropna)
+    if fast is not None:
+        return fast
+
+    return _group_reduce_numpy(keys_arr, values_arr, op, sort=sort, dropna=dropna)
+
+
+def _try_dense_integer(keys: np.ndarray, values: np.ndarray | None, op: str, *, sort: bool):  # noqa: C901
+    key_dtype = np.dtype(keys.dtype)
+    if key_dtype.kind == "b":
+        keys = keys.astype(np.int8, copy=False)
+    elif key_dtype.kind not in "iu":
+        return None
+    keys = np.ascontiguousarray(keys)
+    if len(keys) == 0:
+        return None
+    if np.min(keys) < 0:
+        return None
+    max_key = int(np.max(keys))
+    if max_key + 1 > 10_000_000:
+        return None
+
+    try:
+        from blosc2 import groupby_ext
+    except ImportError:
+        return None
+
+    valid = np.ones(len(keys), dtype=bool)
+    keys_present = np.zeros(max_key + 1, dtype=bool)
+
+    if op == "size":
+        counts = np.zeros(max_key + 1, dtype=np.int64)
+        groupby_ext.groupby_dense_int_size_checked(keys, valid, counts, keys_present, False, 0)
+        groups = np.nonzero(keys_present)[0].astype(key_dtype if key_dtype.kind != "b" else np.bool_)
+        result = counts[np.nonzero(keys_present)[0]]
+        return _maybe_sort(groups, result, sort)
+
+    assert values is not None
+    value_dtype = np.dtype(values.dtype)
+    if op == "count":
+        counts = np.zeros(max_key + 1, dtype=np.int64)
+        values_valid = _values_valid(values)
+        groupby_ext.groupby_dense_int_count_checked(
+            keys, valid, np.ascontiguousarray(values_valid), counts, keys_present, False, 0
+        )
+        codes = np.nonzero(keys_present)[0]
+        return _maybe_sort(
+            codes.astype(key_dtype if key_dtype.kind != "b" else np.bool_), counts[codes], sort
+        )
+
+    if op == "mean" or value_dtype.kind == "f":
+        vals = np.ascontiguousarray(values.astype(np.float64, copy=False))
+        skip_nan = value_dtype.kind == "f"
+        if op == "sum":
+            sums = np.zeros(max_key + 1, dtype=np.float64)
+            present = np.zeros(max_key + 1, dtype=bool)
+            groupby_ext.groupby_dense_int_f64_sum_checked(
+                keys, vals, valid, sums, present, keys_present, False, 0, skip_nan
+            )
+            codes = np.nonzero(keys_present)[0]
+            result = sums[codes]
+            result[~present[codes]] = np.nan
+        elif op == "mean":
+            sums = np.zeros(max_key + 1, dtype=np.float64)
+            counts = np.zeros(max_key + 1, dtype=np.int64)
+            groupby_ext.groupby_dense_int_f64_mean_checked(
+                keys, vals, valid, sums, counts, keys_present, False, 0, skip_nan
+            )
+            codes = np.nonzero(keys_present)[0]
+            result = np.full(len(codes), np.nan, dtype=np.float64)
+            ok = counts[codes] > 0
+            result[ok] = sums[codes][ok] / counts[codes][ok]
+        elif op in {"min", "max"}:
+            state = np.zeros(max_key + 1, dtype=np.float64)
+            has_value = np.zeros(max_key + 1, dtype=bool)
+            kernel = getattr(groupby_ext, f"groupby_dense_int_f64_{op}_checked")
+            kernel(keys, vals, valid, state, has_value, keys_present, False, 0, skip_nan)
+            codes = np.nonzero(keys_present)[0]
+            result = state[codes]
+            result[~has_value[codes]] = np.nan
+        else:  # pragma: no cover
+            return None
+        return _maybe_sort(codes.astype(key_dtype if key_dtype.kind != "b" else np.bool_), result, sort)
+
+    if value_dtype.kind not in "biu":
+        return None
+    vals_i64 = np.ascontiguousarray(values.astype(np.int64, copy=False))
+    state = np.zeros(max_key + 1, dtype=np.int64)
+    present = np.zeros(max_key + 1, dtype=bool)
+    kernel = getattr(groupby_ext, f"groupby_dense_int_i64_{op}_checked", None)
+    if kernel is None:
+        return None
+    kernel(keys, vals_i64, valid, state, present, keys_present, False, 0)
+    codes = np.nonzero(keys_present)[0]
+    return _maybe_sort(codes.astype(key_dtype if key_dtype.kind != "b" else np.bool_), state[codes], sort)
+
+
+def _try_float_hash(keys: np.ndarray, values: np.ndarray | None, op: str, *, sort: bool, dropna: bool):
+    key_dtype = np.dtype(keys.dtype)
+    if key_dtype.kind != "f":
+        return None
+    if values is not None and np.dtype(values.dtype).kind != "f" and op != "count":
+        return None
+    try:
+        from blosc2 import groupby_ext
+    except ImportError:
+        return None
+
+    keys_f64 = np.ascontiguousarray(keys.astype(np.float64, copy=False))
+    valid = np.ones(len(keys_f64), dtype=bool)
+    if values is None:
+        values_f64 = np.empty(len(keys_f64), dtype=np.float64)
+        values_valid = np.zeros(len(keys_f64), dtype=bool)
+        has_values = False
+    else:
+        values_f64 = np.ascontiguousarray(np.asarray(values, dtype=np.float64))
+        values_valid = np.ascontiguousarray(_values_valid(values))
+        has_values = True
+
+    groups, row_counts, value_counts, sums, mins, maxs, has_value = groupby_ext.groupby_hash_f64_f64(
+        keys_f64, values_f64, valid, values_valid, has_values, dropna
+    )
+    groups = groups.astype(key_dtype, copy=False)
+    if op == "size":
+        result = row_counts
+    elif op == "count":
+        result = value_counts
+    elif op == "sum":
+        result = sums.copy()
+        result[~has_value] = np.nan
+    elif op == "mean":
+        result = np.full(len(groups), np.nan, dtype=np.float64)
+        ok = value_counts > 0
+        result[ok] = sums[ok] / value_counts[ok]
+    elif op == "min":
+        result = mins.copy()
+        result[~has_value] = np.nan
+    elif op == "max":
+        result = maxs.copy()
+        result[~has_value] = np.nan
+    else:  # pragma: no cover
+        return None
+    return _maybe_sort(groups, result, sort)
+
+
+def _group_reduce_numpy(  # noqa: C901
+    keys: np.ndarray, values: np.ndarray | None, op: str, *, sort: bool, dropna: bool
+):
+    acc: dict[object, list] = {}
+    display: dict[object, object] = {}
+    for i, key in enumerate(keys):
+        key_item = _python_scalar(key)
+        if isinstance(key_item, float) and math.isnan(key_item):
+            if dropna:
+                continue
+            norm_key = _NAN_KEY
+        else:
+            norm_key = key_item
+        display.setdefault(norm_key, key_item)
+        state = acc.setdefault(norm_key, [0, 0, 0.0, None, None])
+        state[0] += 1
+        if values is None:
+            continue
+        value = _python_scalar(values[i])
+        if isinstance(value, float) and math.isnan(value):
+            continue
+        state[1] += 1
+        if op in {"sum", "mean"}:
+            state[2] += value
+        elif op == "min" and (state[3] is None or value < state[3]):
+            state[3] = value
+        elif op == "max" and (state[4] is None or value > state[4]):
+            state[4] = value
+
+    order = list(acc)
+    if sort:
+        order.sort(key=lambda k: (1, "") if k is _NAN_KEY else (0, display[k]))
+    groups = np.asarray([display[k] for k in order], dtype=keys.dtype)
+    result = []
+    for k in order:
+        rows, count, total, min_value, max_value = acc[k]
+        if op == "size":
+            result.append(rows)
+        elif op == "count":
+            result.append(count)
+        elif op == "sum":
+            result.append(total if count else _null_value_for(values))
+        elif op == "mean":
+            result.append(math.nan if count == 0 else total / count)
+        elif op == "min":
+            result.append(min_value if count else _null_value_for(values))
+        elif op == "max":
+            result.append(max_value if count else _null_value_for(values))
+    return groups, np.asarray(result, dtype=_result_dtype(values, op))
+
+
+def _maybe_sort(groups: np.ndarray, result: np.ndarray, sort: bool):
+    if sort and len(groups):
+        order = np.argsort(groups, kind="stable")
+        return groups[order], result[order]
+    return groups, result
+
+
+def _values_valid(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values)
+    if values.dtype.kind == "f":
+        return ~np.isnan(values)
+    return np.ones(len(values), dtype=bool)
+
+
+def _result_dtype(values: np.ndarray | None, op: str):
+    if op in {"size", "count"}:
+        return np.int64
+    if op == "mean" or values is None:
+        return np.float64
+    dtype = np.dtype(values.dtype)
+    if op == "sum" and dtype.kind in "biu":
+        return np.int64
+    return dtype
+
+
+def _null_value_for(values: np.ndarray | None):
+    if values is not None and np.dtype(values.dtype).kind in "iu":
+        return 0
+    return math.nan
