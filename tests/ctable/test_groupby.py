@@ -319,3 +319,42 @@ def test_groupby_cython_arbitrary_float_key_nan_and_signed_zero():
     assert got[0] == (0.0, 3.0)
     assert np.isnan(got[1][0])
     assert got[1][1] == 7.0
+
+
+@dataclass
+class TwoIntKeyFloatRow:
+    key0: int = blosc2.field(blosc2.int16())
+    key1: int = blosc2.field(blosc2.uint16())
+    value: float = blosc2.field(blosc2.float64(nullable=True), default=0.0)
+
+
+def test_groupby_cython_two_integer_key_hash_aggs():
+    t = CTable(
+        TwoIntKeyFloatRow,
+        new_data=[(0, 1, 1.0), (0, 1, 3.0), (0, 2, 10.0), (1, 1, np.nan), (1, 1, 5.0)],
+    )
+
+    out = t.group_by(["key0", "key1"], sort=True).agg(
+        {"*": "size", "value": ["count", "sum", "mean", "min", "max"]}
+    )
+
+    assert rows(out) == [
+        (0, 1, 2, 2, 4.0, 2.0, 1.0, 3.0),
+        (0, 2, 1, 1, 10.0, 10.0, 10.0, 10.0),
+        (1, 1, 2, 1, 5.0, 5.0, 5.0, 5.0),
+    ]
+
+
+@dataclass
+class DictIntKeyFloatRow:
+    key0: str = blosc2.field(blosc2.dictionary())
+    key1: int = blosc2.field(blosc2.int32())
+    value: float = blosc2.field(blosc2.float64())
+
+
+def test_groupby_cython_dictionary_integer_key_hash():
+    t = CTable(DictIntKeyFloatRow, new_data=[("b", 2, 1.0), ("a", 1, 2.0), ("b", 2, 3.0)])
+
+    out = t.group_by(["key0", "key1"], sort=True).agg({"value": "sum"})
+
+    assert rows(out) == [("a", 1, 2.0), ("b", 2, 4.0)]

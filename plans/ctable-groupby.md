@@ -248,9 +248,21 @@ Remaining possible extensions:
 
 ### Multi-key Cython hash path
 
-The generic NumPy path supports multi-key grouping via structured arrays.  Future
-Cython work could hash directly across multiple key arrays, avoiding structured
-key packing, sort-based unique, inverse arrays, and Python merge overhead.
+Implemented a conservative Cython hash path for two-key group-by when both keys
+are integer or dictionary-code-backed columns.  The path normalizes keys to
+`int64`, hashes `(key0, key1)` directly, and supports `size`, `count`, `sum`,
+`mean`, `min`, and `max` for supported float value reductions.  This avoids
+structured-array packing and per-chunk `np.unique` for common two-key
+categorical/integer workloads.
+
+Remaining possible extensions:
+
+- support more than two key columns;
+- support float/string fixed-width key components directly;
+- support non-float value columns without normalizing value reductions through
+  float64;
+- fuse/merge multi-key states across chunks fully in Cython rather than via the
+  existing Python accumulator merge.
 
 ### FULL-index sorted group-by path
 

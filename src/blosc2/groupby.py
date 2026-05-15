@@ -178,6 +178,9 @@ class CTableGroupBy:
         fast = self._try_execute_cython_dense_int_key(specs)
         if fast is not None:
             return fast
+        fast = self._try_execute_cython_two_int_key_hash(specs)
+        if fast is not None:
+            return fast
         fast = self._try_execute_cython_i32_f64_sum(specs)
         if fast is not None:
             return fast
@@ -226,6 +229,139 @@ class CTableGroupBy:
             display_keys = self._display_keys(unique_keys)
             normalized_keys = self._normalized_keys(display_keys)
             self._merge_partials(acc, key_values, normalized_keys, display_keys, partials, specs)
+
+        rows = self._final_rows(acc, key_values, specs)
+        return self._build_result(rows, specs)
+
+    def _try_execute_cython_two_int_key_hash(self, specs: list[_AggSpec]):  # noqa: C901
+        """Cython hash path for two integer/dictionary-code keys."""
+        if len(self.keys) != 2:
+            return None
+
+        key_arrays = []
+        key_is_dict = []
+        key_nulls = []
+        skip_key_nulls = []
+        for key_name in self.keys:
+            key_info = self.table._schema.columns_by_name[key_name]
+            if self.table._is_dictionary_column(key_info):
+                key_arrays.append(self.table._cols[key_name].codes)
+                key_is_dict.append(True)
+                key_nulls.append(int(key_info.spec.null_code))
+                skip_key_nulls.append(self.dropna)
+                continue
+            key_dtype = getattr(key_info.spec, "dtype", None)
+            if key_dtype is None or np.dtype(key_dtype).kind not in "biu":
+                return None
+            null_value = getattr(key_info.spec, "null_value", None)
+            if null_value is not None and not self.dropna:
+                return None
+            key_arrays.append(self.table._cols[key_name])
+            key_is_dict.append(False)
+            key_nulls.append(0 if null_value is None else int(null_value))
+            skip_key_nulls.append(self.dropna and null_value is not None)
+
+        value_cols = {s.input_col for s in specs if s.input_col is not None}
+        if len(value_cols) > 1:
+            return None
+        value_col = next(iter(value_cols), None)
+        if value_col is not None and any(s.op in {"sum", "mean", "min", "max"} for s in specs):
+            value_info = self.table._schema.columns_by_name[value_col]
+            value_dtype = getattr(value_info.spec, "dtype", None)
+            if value_dtype is None or np.dtype(value_dtype).kind != "f":
+                return None
+            null_value = getattr(value_info.spec, "null_value", None)
+            if null_value is not None and not (isinstance(null_value, float) and math.isnan(null_value)):
+                return None
+
+        try:
+            from blosc2 import groupby_ext
+        except ImportError:
+            return None
+        kernel = getattr(groupby_ext, "groupby_hash_i64x2_f64", None)
+        if kernel is None:
+            return None
+
+        acc: dict[Any, dict[str, _AggState]] = {}
+        key_values: dict[Any, tuple[Any, ...]] = {}
+        phys_len = len(self.table._valid_rows)
+        chunk_size = self._chunk_size()
+
+        for start in range(0, phys_len, chunk_size):
+            stop = min(start + chunk_size, phys_len)
+            valid = np.asarray(self.table._valid_rows[start:stop], dtype=bool)
+            if not np.any(valid):
+                continue
+            key_chunks = [np.asarray(arr[start:stop], dtype=np.int64) for arr in key_arrays]
+            live = valid.copy()
+            for key_chunk, skip_null, null_value in zip(key_chunks, skip_key_nulls, key_nulls, strict=True):
+                if skip_null:
+                    live &= key_chunk != null_value
+            if not np.any(live):
+                continue
+
+            if value_col is None:
+                values = np.empty(len(valid), dtype=np.float64)
+                values_valid = np.zeros(len(valid), dtype=bool)
+                has_values = False
+            else:
+                raw_values = np.asarray(self.table._cols[value_col][start:stop])
+                values = np.ascontiguousarray(raw_values.astype(np.float64, copy=False))
+                values_valid = np.ascontiguousarray(~self._null_mask(value_col, raw_values, is_key=False))
+                has_values = True
+
+            (
+                out_k0,
+                out_k1,
+                row_counts,
+                value_counts,
+                sums,
+                mins,
+                maxs,
+                has_value,
+            ) = kernel(
+                np.ascontiguousarray(key_chunks[0]),
+                np.ascontiguousarray(key_chunks[1]),
+                values,
+                np.ascontiguousarray(live),
+                values_valid,
+                has_values,
+            )
+
+            for i, (code0, code1) in enumerate(zip(out_k0, out_k1, strict=True)):
+                display = []
+                norm_parts = []
+                for key_pos, code in enumerate((int(code0), int(code1))):
+                    if key_is_dict[key_pos]:
+                        value = self.table._cols[self.keys[key_pos]].decode(code)
+                    else:
+                        value = code
+                    display.append(value)
+                    norm_parts.append(_normalize_key_part(value))
+                norm_key = tuple(norm_parts)
+                states = acc.setdefault(norm_key, {})
+                key_values.setdefault(norm_key, tuple(display))
+                for spec in specs:
+                    state = states.setdefault(spec.output_col, _AggState(spec.op))
+                    if spec.op == "size":
+                        state.value = (0 if state.value is None else state.value) + int(row_counts[i])
+                    elif spec.op == "count":
+                        state.value = (0 if state.value is None else state.value) + int(value_counts[i])
+                    elif spec.op in {"sum", "mean"}:
+                        if has_value[i]:
+                            state.value = (0.0 if state.value is None else state.value) + float(sums[i])
+                            state.count += int(value_counts[i])
+                    elif spec.op == "min":
+                        if has_value[i]:
+                            value = float(mins[i])
+                            if state.count == 0 or value < state.value:
+                                state.value = value
+                            state.count += 1
+                    elif spec.op == "max" and has_value[i]:
+                        value = float(maxs[i])
+                        if state.count == 0 or value > state.value:
+                            state.value = value
+                        state.count += 1
 
         rows = self._final_rows(acc, key_values, specs)
         return self._build_result(rows, specs)
