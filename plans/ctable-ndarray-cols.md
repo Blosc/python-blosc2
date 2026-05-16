@@ -126,105 +126,109 @@ Suggested message:
 
 ```text
 Cannot compare ndarray column 'embedding' directly; the result would not be a
-1-D row mask. Use an element projection like t.embedding[:, 0] > 0.5 or a
-row-wise reduction like t.embedding.row_max() > 0.5.
+1-D row mask. Use an element projection like t.embedding[:, 0] > 0.5 or an
+axis-aware reduction like t.embedding.max(axis=1) > 0.5.
 ```
 
 ---
 
 ## 5. Practical user-facing analysis helpers
 
-This is an extra practical addition beyond the existing plans: provide explicit
-row-wise reduction methods on ndarray columns.  These make it easy to
-analyze fixed-shape columns without leaving `CTable` ergonomics.
+Treat an ndarray column as a logical array with shape `(nrows, *item_shape)`.
+Column reductions should follow NumPy / Blosc2 NDArray axis semantics over that
+logical shape.
 
-### 5.1 Row-wise reductions
+### 5.1 Axis-aware reductions
 
-Add methods that reduce only the inner item axes and return one value per row:
-
-```python
-t.embedding.row_sum()
-t.embedding.row_mean()
-t.embedding.row_min()
-t.embedding.row_max()
-t.embedding.row_std()
-t.embedding.row_var()
-t.embedding.row_any()
-t.embedding.row_all()
-t.embedding.row_norm(ord=2)
-```
-
-For `item_shape=(768,)`, each returns shape `(nrows,)`.
-For `item_shape=(H, W, C)`, each reduces axes `(1, 2, 3)` by default.
-
-Optional `axis=` can reduce selected inner axes:
+For scalar columns, existing behavior remains unchanged:
 
 ```python
-t.image.row_mean(axis=(1, 2))  # mean over H,W, keep channel dimension
+t.price.shape  # (nrows,)
+t.price.sum()  # scalar reduction over rows
 ```
 
-Naming these `row_*` avoids ambiguity with existing scalar-column `.sum()` /
-`.max()` methods, which currently mean “reduce the whole column to a scalar”.
+For ndarray columns:
 
-### 5.2 Materialize row-wise reductions as generated columns
+```python
+t.embedding.shape  # (nrows, dim)
+t.embedding.sum()  # scalar full reduction, same as axis=None
+t.embedding.sum(axis=None)  # scalar full reduction
+t.embedding.sum(axis=0)  # reduce rows -> shape (dim,)
+t.embedding.sum(axis=1)  # reduce embedding coords -> shape (nrows,)
+t.embedding.norm(axis=1)  # row-wise norm -> shape (nrows,)
+```
+
+For image-like columns:
+
+```python
+t.image.shape  # (nrows, H, W, C)
+t.image.mean()  # scalar full reduction
+t.image.mean(axis=0)  # mean image over rows -> shape (H, W, C)
+t.image.mean(axis=(1, 2))  # per-row per-channel mean -> shape (nrows, C)
+t.image.sum(axis=(1, 2, 3))  # per-row total -> shape (nrows,)
+```
+
+This avoids special `row_*` methods and minimizes surprise: the table row is
+always the leading axis (`axis=0`), exactly as if the column were an NDArray of
+shape `(nrows, *item_shape)`.
+
+`CTable.where()` still requires a 1-D row mask.  For example,
+`t.embedding.norm(axis=1) > 5` is valid, whereas
+`t.image.mean(axis=(1, 2)) > 0.5` returns shape `(nrows, C)` and should be
+rejected unless further reduced to `(nrows,)`.
+
+### 5.2 Materialize reductions as generated columns
 
 Use `CTable.add_generated_column()` as the canonical API for storing generated
 scalar/vector columns.  This is consistent with the existing
 `add_computed_column()` name while making the storage/maintenance semantics
 explicit.
 
-The first use case is ndarray row-wise reductions:
+The first use case is ndarray reductions that produce one value per row:
 
 ```python
 t.add_generated_column(
     "embedding_norm",
-    source_columns=["embedding"],
-    transform={"kind": "ndarray_row_reduction", "op": "norm", "ord": 2},
+    transform=blosc2.transform.norm("embedding", axis=1, ord=2),
     dtype=blosc2.float64(),
     create_index=True,
 )
 
 t.add_generated_column(
     "embedding_max",
-    source_columns=["embedding"],
-    transform={"kind": "ndarray_row_reduction", "op": "max"},
+    transform=blosc2.transform.max("embedding", axis=1),
     dtype=blosc2.float32(),
 )
 
 t.add_generated_column(
     "embedding_0",
-    source_columns=["embedding"],
-    transform={"kind": "ndarray_element", "key": 0},
+    transform=blosc2.transform["embedding", 0],
     dtype=blosc2.float32(),
 )
 ```
 
 The concept is general: a **generated column** is a real stored column
 maintained from one or more source columns.  `add_generated_column()` should
-support two explicit generation modes:
+accept a `blosc2.Transform` object built by the `blosc2.transform` singleton
+namespace/factory.
 
-- `expr=` for scalar expressions, mirroring `add_computed_column()`
-- `transform=` for structured transforms such as ndarray row-wise reductions
-
-Exactly one of `expr` or `transform` should be provided.  Do not overload
-`transform=` to also accept expression strings; keeping `expr=` separate makes
-validation and documentation clearer.
-
-Scalar generated-column example:
+Scalar expression transform example:
 
 ```python
 t.add_generated_column(
-    "total", expr="price * qty", dtype=blosc2.float64(), create_index=True
+    "total",
+    transform=blosc2.transform("price * qty"),
+    dtype=blosc2.float64(),
+    create_index=True,
 )
 ```
 
-Structured transform examples:
+Other transform examples:
 
 ```python
 t.add_generated_column(
     "price_with_tax",
-    source_columns=["price"],
-    transform={"kind": "scalar_unary", "op": "mul", "value": 1.21},
+    transform=blosc2.transform("price * 1.21"),
     dtype=blosc2.float64(),
 )
 ```
@@ -239,8 +243,7 @@ Example:
 ```python
 t.add_generated_column(
     "embedding_norm",
-    source_columns=["embedding"],
-    transform={"kind": "ndarray_row_reduction", "op": "norm", "ord": 2},
+    transform=blosc2.transform.norm("embedding", axis=1, ord=2),
     dtype=blosc2.float64(),
     create_index=True,
 )
@@ -252,7 +255,7 @@ view = t.where(t.embedding_norm > 5.0)  # can use the index
 Equivalent manual workflow today would be:
 
 ```python
-values = t.embedding.row_norm()[:]
+values = t.embedding.norm(axis=1)[:]
 t.add_column("embedding_norm", blosc2.field(blosc2.float64(), default=0.0))
 t.embedding_norm[:] = values
 t.create_index("embedding_norm")
@@ -265,9 +268,7 @@ def add_generated_column(
     self,
     name: str,
     *,
-    expr=None,
-    source_columns: list[str] | None = None,
-    transform: dict | None = None,
+    transform: blosc2.Transform,
     dtype=None,
     create_index: bool = False,
 ) -> None: ...
@@ -275,11 +276,34 @@ def add_generated_column(
 
 Validation rules:
 
-- exactly one of `expr` or `transform` is required
-- `expr` accepts the same expression forms as `add_computed_column()` where practical
-- `source_columns` may be inferred for expression strings / LazyExpr callables when possible
-- `source_columns` is required for structured `transform=` descriptors
+- `transform` must be a `blosc2.Transform` instance
+- string expressions are represented as `blosc2.transform("price * qty")`
+- ndarray projections are represented as `blosc2.transform["embedding", 0]`
+- reductions follow logical `(nrows, *item_shape)` axis semantics, e.g. `blosc2.transform.norm("embedding", axis=1)`
+- source columns are taken from `transform.source_columns`
 - generated columns are always stored and maintained; virtual columns remain the job of `add_computed_column()`
+
+`blosc2.transform` API sketch:
+
+```python
+blosc2.transform("price * qty")  # expression transform
+blosc2.transform.norm("embedding", axis=1, ord=2)
+blosc2.transform.max("embedding", axis=1)
+blosc2.transform.mean("image", axis=(1, 2))  # shape (nrows, C)
+blosc2.transform["embedding", 0]  # per-row item projection
+blosc2.transform["image", :, :, 0]  # per-row item projection with slices
+```
+
+It is a callable singleton namespace/factory.  All constructors return a
+`blosc2.Transform` object with at least:
+
+```python
+transform.kind
+transform.source_columns
+transform.to_metadata()
+transform.evaluate_existing(table)
+transform.evaluate_batch(raw_columns)
+```
 
 The helper should:
 
@@ -305,7 +329,7 @@ Suggested metadata shape:
         "kind": "ndarray_row_reduction",
         "op": "norm",
         "ord": 2,
-        "axis": None,
+        "axis": 1,
     },
     "index": {
         "create": True,
@@ -314,7 +338,7 @@ Suggested metadata shape:
 }
 ```
 
-Expression-generated columns use `expr` metadata instead of `transform`:
+Expression-generated columns use expression transform metadata:
 
 ```python
 {
@@ -325,7 +349,10 @@ Expression-generated columns use `expr` metadata instead of `transform`:
     "maintain_on_append": True,
     "stale_on_source_update": True,
     "dtype": "float64",
-    "expr": "price * qty",
+    "transform": {
+        "kind": "expression",
+        "expression": "price * qty",
+    },
 }
 ```
 
@@ -334,8 +361,7 @@ Expected maintenance behavior:
 ```python
 t.add_generated_column(
     "embedding_norm",
-    source_columns=["embedding"],
-    transform={"kind": "ndarray_row_reduction", "op": "norm", "ord": 2},
+    transform=blosc2.transform.norm("embedding", axis=1, ord=2),
     dtype=blosc2.float64(),
     create_index=True,
 )
@@ -378,7 +404,7 @@ ndarray column 'embedding'
   dtype      : float32
   storage    : NDArray shape=(1048576, 768), chunks=(..., ...), blocks=(..., ...)
   cbytes     : ...
-  row stats  : min(row_norm)=..., mean(row_norm)=..., max(row_norm)=...
+  row stats  : min(norm(axis=1))=..., mean(norm(axis=1))=..., max(norm(axis=1))=...
 ```
 
 Keep this opt-in so normal table display stays compact.
@@ -491,7 +517,7 @@ as structured subarrays.
 - sort/groupby/index guard messages
 - display of small and large item shapes
 - `Column.ndim`, `size`, `item_shape`
-- row-wise reduction helpers
+- axis-aware ndarray column reductions
 - `add_generated_column()` with optional indexing
 - generated-column auto-fill on `append()` / `extend()`
 - generated-column staleness / refresh behavior after source-column mutation
