@@ -732,6 +732,7 @@ from .ndarray import (
 )
 from .schema import (
     DictionarySpec,
+    NDArraySpec,
     bool,
     bytes,
     complex64,
@@ -745,6 +746,7 @@ from .schema import (
     int32,
     int64,
     list,
+    ndarray,
     object,
     string,
     struct,
@@ -785,6 +787,8 @@ __all__ = [  # noqa : RUF022
     "dictionary",
     "DictionarySpec",
     "field",
+    "ndarray",
+    "NDArraySpec",
     "float32",
     "float64",
     "int8",

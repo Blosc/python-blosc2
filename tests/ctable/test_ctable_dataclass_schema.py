@@ -138,6 +138,43 @@ def test_extend_numpy_structured():
     assert t[1].score == 75.0
 
 
+def test_fixed_shape_ndarray_column_roundtrip(tmp_path):
+    @dataclass
+    class ArrayRow:
+        id: int
+        matrix: np.ndarray = blosc2.field(blosc2.ndarray((2, 3), dtype=np.float32))  # noqa: RUF009
+
+    data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    t = CTable(ArrayRow, expected_size=1)
+    t.append((0, data[0]))
+    t.extend({"id": [1], "matrix": data[1:2]})
+
+    assert t._cols["matrix"].shape == (2, 2, 3)
+    assert t.matrix.shape == (2, 2, 3)
+    assert np.array_equal(t[0].matrix, data[0])
+    assert np.array_equal(t.matrix[:], data)
+
+    arr = np.asarray(t)
+    assert arr.dtype["matrix"].shape == (2, 3)
+    assert np.array_equal(arr["matrix"], data)
+
+    path = tmp_path / "array-col.b2d"
+    t.save(path)
+    reopened = CTable.open(path)
+    assert reopened._cols["matrix"].shape == (2, 2, 3)
+    assert np.array_equal(reopened.matrix[:], data)
+
+
+def test_fixed_shape_ndarray_column_rejects_wrong_shape():
+    @dataclass
+    class ArrayRow:
+        matrix: np.ndarray = blosc2.field(blosc2.ndarray((2, 3), dtype=np.float64))  # noqa: RUF009
+
+    t = CTable(ArrayRow)
+    with pytest.raises(ValueError, match="expected item shape"):
+        t.append((np.arange(5),))
+
+
 # -------------------------------------------------------------------
 # extend — per-call validate override
 # -------------------------------------------------------------------

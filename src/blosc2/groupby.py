@@ -1008,7 +1008,7 @@ class CTableGroupBy:
                 if spec.input_col is not None:
                     dtype = np.dtype(self.table._schema.columns_by_name[spec.input_col].spec.dtype)
                     out_dtype = np.float64 if dtype.kind == "f" else np.int64
-                states[spec.output_col] = np.zeros(0, dtype=out_dtype)
+                states[spec.output_col] = (np.zeros(0, dtype=out_dtype), np.zeros(0, dtype=np.int64))
             elif spec.op == "mean":
                 states[spec.output_col] = (np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64))
             elif spec.op in {"min", "max"}:
@@ -1027,9 +1027,9 @@ class CTableGroupBy:
             present = np.pad(present, (0, size - old), constant_values=False)
             for spec in specs:
                 state = states[spec.output_col]
-                if spec.op in {"size", "count", "sum"}:
+                if spec.op in {"size", "count"}:
                     states[spec.output_col] = np.pad(state, (0, size - old), constant_values=0)
-                elif spec.op == "mean":
+                elif spec.op in {"sum", "mean"}:
                     sums, counts = state
                     states[spec.output_col] = (
                         np.pad(sums, (0, size - old), constant_values=0),
@@ -1087,13 +1087,16 @@ class CTableGroupBy:
                         keys, weights=non_null.astype(np.int64), minlength=len(present)
                     ).astype(np.int64)
                 elif spec.op == "sum":
-                    state = states[spec.output_col]
+                    sums, counts = states[spec.output_col]
                     if values.dtype.kind in "biu":
-                        np.add.at(state, keys[non_null], values[non_null].astype(np.int64, copy=False))
+                        np.add.at(sums, keys[non_null], values[non_null].astype(np.int64, copy=False))
                     else:
-                        state += np.bincount(
+                        sums += np.bincount(
                             keys, weights=np.where(non_null, values, 0), minlength=len(present)
-                        ).astype(state.dtype, copy=False)
+                        ).astype(sums.dtype, copy=False)
+                    counts += np.bincount(
+                        keys, weights=non_null.astype(np.int64), minlength=len(present)
+                    ).astype(np.int64)
                 elif spec.op == "mean":
                     sums, counts = states[spec.output_col]
                     sums += np.bincount(keys, weights=np.where(non_null, values, 0), minlength=len(present))
@@ -1119,6 +1122,13 @@ class CTableGroupBy:
                     sums, counts = state
                     row[spec.output_col] = (
                         math.nan if counts[code] == 0 else float(sums[code]) / int(counts[code])
+                    )
+                elif spec.op == "sum":
+                    sums, counts = state
+                    row[spec.output_col] = (
+                        _python_scalar(sums[code])
+                        if counts[code] > 0
+                        else _null_output_value(self._result_spec_for_agg(spec))
                     )
                 elif spec.op in {"min", "max"}:
                     values_state, has_state = state

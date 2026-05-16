@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 from blosc2.schema import (
     DictionarySpec,
     ListSpec,
+    NDArraySpec,
     ObjectSpec,
     SchemaSpec,
     StructSpec,
@@ -567,6 +568,12 @@ class Column:
         return col is not None and isinstance(col.spec, DictionarySpec)
 
     @property
+    def is_ndarray(self) -> bool:
+        """True if this column stores fixed-shape N-D array values per row."""
+        col = self._table._schema.columns_by_name.get(self._col_name)
+        return col is not None and isinstance(col.spec, NDArraySpec)
+
+    @property
     def _valid_rows(self):
         if self._mask is None:
             return self._table._valid_rows
@@ -608,11 +615,12 @@ class Column:
             real_pos = np.where(self._valid_rows[:])[0]
             start, stop, step = key.indices(len(real_pos))
             if start >= stop:
-                return (
-                    []
-                    if (self.is_list or self.is_varlen_scalar or self.is_dictionary)
-                    else np.array([], dtype=self.dtype)
-                )
+                if self.is_list or self.is_varlen_scalar or self.is_dictionary:
+                    return []
+                if self.is_ndarray:
+                    spec = self._table._schema.columns_by_name[self._col_name].spec
+                    return np.empty((0, *spec.item_shape), dtype=self.dtype)
+                return np.array([], dtype=self.dtype)
             selected_pos = real_pos[start:stop:step]  # physical row positions
             if self.is_computed:
                 lo, hi = int(selected_pos.min()), int(selected_pos.max())
@@ -838,8 +846,11 @@ class Column:
         return blosc2.count_nonzero(self._valid_rows)
 
     @property
-    def shape(self) -> tuple[int]:
+    def shape(self) -> tuple[int, ...]:
         """Logical shape of the live column values."""
+        if self.is_ndarray:
+            spec = self._table._schema.columns_by_name[self._col_name].spec
+            return (len(self), *spec.item_shape)
         return (len(self),)
 
     @property
@@ -2215,6 +2226,20 @@ class CTable(Generic[RowT]):
         return isinstance(col.spec, DictionarySpec)
 
     @staticmethod
+    def _is_ndarray_column(col: CompiledColumn) -> bool:
+        return isinstance(col.spec, NDArraySpec)
+
+    @staticmethod
+    def _column_physical_shape(col: CompiledColumn, capacity: int) -> tuple[int, ...]:
+        if CTable._is_ndarray_column(col):
+            return (capacity, *col.spec.item_shape)
+        return (capacity,)
+
+    @staticmethod
+    def _column_chunks_blocks(col: CompiledColumn, shape: tuple[int, ...]):
+        return compute_chunks_blocks(shape, dtype=col.dtype)
+
+    @staticmethod
     def _is_list_spec(spec: SchemaSpec) -> bool:
         return isinstance(spec, ListSpec)
 
@@ -2352,12 +2377,13 @@ class CTable(Generic[RowT]):
             # string columns (e.g. U183642) don't produce multi-GB chunks.
             chunks = col_storage["chunks"]
             blocks = col_storage["blocks"]
+            shape = self._column_physical_shape(col, expected_size)
             if col.config.chunks is None and col.config.blocks is None:
-                chunks, blocks = compute_chunks_blocks((expected_size,), dtype=col.dtype)
+                chunks, blocks = self._column_chunks_blocks(col, shape)
             self._cols[col.name] = storage.create_column(
                 col.name,
                 dtype=col.dtype,
-                shape=(expected_size,),
+                shape=shape,
                 chunks=chunks,
                 blocks=blocks,
                 cparams=col_storage.get("cparams"),
@@ -2446,6 +2472,13 @@ class CTable(Generic[RowT]):
             elif self._is_dictionary_column(col):
                 # Pass str/None through; DictionaryColumn.__setitem__ encodes.
                 result[col.name] = val
+            elif self._is_ndarray_column(col):
+                arr = np.asarray(val, dtype=col.dtype)
+                if arr.shape != col.spec.item_shape:
+                    raise ValueError(
+                        f"Column {col.name!r}: expected item shape {col.spec.item_shape}, got {arr.shape}"
+                    )
+                result[col.name] = np.ascontiguousarray(arr)
             elif isinstance(col.spec, timestamp):
                 if val is None:
                     result[col.name] = col.spec.null_value
@@ -2518,7 +2551,7 @@ class CTable(Generic[RowT]):
             if self._is_dictionary_column(cc):
                 col_arr.resize((c * 2,))
                 continue
-            col_arr.resize((c * 2,))
+            col_arr.resize(self._column_physical_shape(cc, c * 2))
         self._valid_rows.resize((c * 2,))
 
     # ------------------------------------------------------------------
@@ -3044,12 +3077,13 @@ class CTable(Generic[RowT]):
                     raw_codes = np.asarray(src_dc.codes[live_pos], dtype=np.int32)
                     disk_dc.codes[:n_live] = raw_codes
                 continue
-            dtype_chunks, dtype_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
+            shape = self._column_physical_shape(col, capacity)
+            dtype_chunks, dtype_blocks = self._column_chunks_blocks(col, shape)
             col_storage = self._resolve_column_storage(col, dtype_chunks, dtype_blocks)
             disk_col = storage.create_column(
                 name,
                 dtype=col.dtype,
-                shape=(capacity,),
+                shape=shape,
                 chunks=col_storage["chunks"],
                 blocks=col_storage["blocks"],
                 cparams=col_storage.get("cparams"),
@@ -3253,11 +3287,12 @@ class CTable(Generic[RowT]):
                     mem_col.codes[:phys_size] = disk_dc.codes[:phys_size]
                 mem_cols[name] = mem_col
                 continue
-            col_chunks, col_blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
+            shape = cls._column_physical_shape(col, capacity)
+            col_chunks, col_blocks = cls._column_chunks_blocks(col, shape)
             mem_col = mem_storage.create_column(
                 name,
                 dtype=col.dtype,
-                shape=(capacity,),
+                shape=shape,
                 chunks=col_chunks,
                 blocks=col_blocks,
                 cparams=None,
@@ -4260,13 +4295,14 @@ class CTable(Generic[RowT]):
                     col.name, spec=col.spec, cparams=cparams, dparams=dparams
                 )
             else:
+                shape = cls._column_physical_shape(col, capacity)
                 chunks, blocks = default_chunks, default_blocks
                 if col.dtype is not None:
-                    chunks, blocks = compute_chunks_blocks((capacity,), dtype=col.dtype)
+                    chunks, blocks = cls._column_chunks_blocks(col, shape)
                 new_cols[col.name] = storage.create_column(
                     col.name,
                     dtype=col.dtype,
-                    shape=(capacity,),
+                    shape=shape,
                     chunks=chunks,
                     blocks=blocks,
                     cparams=col.config.cparams if col.config.cparams is not None else cparams,
@@ -5285,12 +5321,14 @@ class CTable(Generic[RowT]):
         )
         new_cols: dict[str, blosc2.NDArray] = {}
         for col in schema.columns:
+            shape = cls._column_physical_shape(col, capacity)
+            chunks, blocks = cls._column_chunks_blocks(col, shape)
             new_cols[col.name] = mem_storage.create_column(
                 col.name,
                 dtype=col.dtype,
-                shape=(capacity,),
-                chunks=default_chunks,
-                blocks=default_blocks,
+                shape=shape,
+                chunks=chunks,
+                blocks=blocks,
                 cparams=None,
                 dparams=None,
             )
@@ -5361,7 +5399,7 @@ class CTable(Generic[RowT]):
             raise TypeError(f"add_column() requires a SchemaSpec, got {type(spec)!r}.")
         return spec, default, config
 
-    def add_column(
+    def add_column(  # noqa: C901
         self,
         name: str,
         spec: SchemaSpec | dataclasses.Field,
@@ -5432,7 +5470,14 @@ class CTable(Generic[RowT]):
         else:
             if default is not MISSING:
                 try:
-                    default_val = spec.dtype.type(default)
+                    if self._is_ndarray_column(compiled_col):
+                        default_val = np.asarray(default, dtype=spec.dtype)
+                        if default_val.shape != spec.item_shape:
+                            raise ValueError(
+                                f"expected item shape {spec.item_shape}, got {default_val.shape}"
+                            )
+                    else:
+                        default_val = spec.dtype.type(default)
                 except (ValueError, OverflowError) as exc:
                     raise TypeError(
                         f"Cannot coerce default {default!r} to dtype {spec.dtype!r}: {exc}"
@@ -5441,19 +5486,23 @@ class CTable(Generic[RowT]):
                 default_val = None
 
             capacity = len(self._valid_rows)
-            default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+            shape = self._column_physical_shape(compiled_col, capacity)
+            default_chunks, default_blocks = self._column_chunks_blocks(compiled_col, shape)
             col_storage = self._resolve_column_storage(compiled_col, default_chunks, default_blocks)
             new_col = self._storage.create_column(
                 name,
                 dtype=spec.dtype,
-                shape=(capacity,),
+                shape=shape,
                 chunks=col_storage["chunks"],
                 blocks=col_storage["blocks"],
                 cparams=col_storage.get("cparams"),
                 dparams=col_storage.get("dparams"),
             )
             if len(live_pos) > 0:
-                new_col[live_pos] = default_val
+                if self._is_ndarray_column(compiled_col):
+                    new_col[live_pos] = np.broadcast_to(default_val, (len(live_pos), *spec.item_shape))
+                else:
+                    new_col[live_pos] = default_val
 
         compiled_col.default = default
         self._cols[name] = new_col
@@ -6143,6 +6192,9 @@ class CTable(Generic[RowT]):
                 or self._is_dictionary_column(col_info)
             ):
                 dtype = np.dtype(object)
+            elif self._is_ndarray_column(col_info):
+                fields.append((name, col_info.dtype, col_info.spec.item_shape))
+                continue
             else:
                 dtype = col_info.dtype if col_info.dtype is not None else np.dtype(object)
             fields.append((name, dtype))
@@ -6735,12 +6787,17 @@ class CTable(Generic[RowT]):
                     dparams=col_storage.get("dparams"),
                 )
             else:
+                shape = self._column_physical_shape(col, capacity)
+                chunks = col_storage["chunks"]
+                blocks = col_storage["blocks"]
+                if col.config.chunks is None and col.config.blocks is None:
+                    chunks, blocks = self._column_chunks_blocks(col, shape)
                 new_cols[col.name] = mem_storage.create_column(
                     col.name,
                     dtype=col.dtype,
-                    shape=(capacity,),
-                    chunks=col_storage["chunks"],
-                    blocks=col_storage["blocks"],
+                    shape=shape,
+                    chunks=chunks,
+                    blocks=blocks,
                     cparams=col_storage.get("cparams"),
                     dparams=col_storage.get("dparams"),
                 )
@@ -7740,6 +7797,8 @@ class CTable(Generic[RowT]):
             return spec.display_label()
         if isinstance(spec, ListSpec):
             return spec.display_label()
+        if isinstance(spec, NDArraySpec):
+            return spec.display_label()
         if isinstance(spec, timestamp):
             return (
                 f"timestamp[{spec.unit}]"
@@ -8034,6 +8093,16 @@ class CTable(Generic[RowT]):
                             dtype=target_dtype,
                         )
                     scalar_processed_cols[name] = np.ascontiguousarray(values, dtype=target_dtype)
+                elif self._is_ndarray_column(col_meta):
+                    values = np.ascontiguousarray(raw_columns[name], dtype=target_dtype)
+                    if values.ndim == len(col_meta.spec.item_shape):
+                        values = values.reshape((1, *values.shape))
+                    if values.shape != (new_nrows, *col_meta.spec.item_shape):
+                        raise ValueError(
+                            f"Column {name!r}: expected batch shape "
+                            f"{(new_nrows, *col_meta.spec.item_shape)}, got {values.shape}"
+                        )
+                    scalar_processed_cols[name] = values
                 else:
                     scalar_processed_cols[name] = np.ascontiguousarray(raw_columns[name], dtype=target_dtype)
 

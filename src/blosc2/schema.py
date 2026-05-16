@@ -694,6 +694,56 @@ class VLBytesSpec(SchemaSpec):
         return d
 
 
+# ---------------------------------------------------------------------------
+# Fixed-shape N-D array spec
+# ---------------------------------------------------------------------------
+
+
+class NDArraySpec(SchemaSpec):
+    """Fixed-shape N-D array column for CTable.
+
+    Each row stores a NumPy-compatible array with shape ``item_shape`` and
+    element dtype ``dtype``.  Physically, CTable stores the column as a Blosc2
+    NDArray with shape ``(nrows, *item_shape)``.
+    """
+
+    python_type = _builtin_object
+
+    def __init__(self, item_shape, dtype=np.float64):
+        if isinstance(item_shape, int):
+            item_shape = (item_shape,)
+        item_shape = tuple(int(s) for s in item_shape)
+        if not item_shape:
+            raise ValueError("NDArraySpec item_shape must have at least one dimension.")
+        if any(s <= 0 for s in item_shape):
+            raise ValueError("All NDArraySpec item_shape dimensions must be positive.")
+        self.item_shape = item_shape
+        self.dtype = np.dtype(dtype)
+        self.itemsize = self.dtype.itemsize
+        self.kind = self.dtype.kind
+        self.type = self.dtype.type
+        self.str = self.dtype.str
+        self.name = self.dtype.name
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "ndarray",
+            "item_shape": _builtin_list(self.item_shape),
+            "dtype_str": self.dtype.str,
+        }
+
+    def display_label(self) -> str:
+        return f"ndarray{_builtin_list(self.item_shape)}[{self.dtype}]"
+
+
+def ndarray(item_shape, dtype=np.float64) -> NDArraySpec:
+    """Build a fixed-shape N-D array descriptor for CTable columns."""
+    return NDArraySpec(item_shape=item_shape, dtype=dtype)
+
+
 def vlstring(
     *,
     nullable: bool = False,
