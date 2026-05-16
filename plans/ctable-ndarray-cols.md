@@ -55,7 +55,7 @@ Suggested alternatives in error messages:
 
 ```text
 Cannot sort by ndarray column 'embedding' with per-row shape (768,).
-Materialize a scalar feature first, e.g. embedding_norm or embedding_max.
+Materialize a scalar generated column first, e.g. embedding_norm or embedding_max.
 ```
 
 ---
@@ -127,7 +127,7 @@ Suggested message:
 ```text
 Cannot compare ndarray column 'embedding' directly; the result would not be a
 1-D row mask. Use an element projection like t.embedding[:, 0] > 0.5 or a
-row-wise feature like t.embedding.row_max() > 0.5.
+row-wise reduction like t.embedding.row_max() > 0.5.
 ```
 
 ---
@@ -135,7 +135,7 @@ row-wise feature like t.embedding.row_max() > 0.5.
 ## 5. Practical user-facing analysis helpers
 
 This is an extra practical addition beyond the existing plans: provide explicit
-row-wise feature extraction methods on ndarray columns.  These make it easy to
+row-wise reduction methods on ndarray columns.  These make it easy to
 analyze fixed-shape columns without leaving `CTable` ergonomics.
 
 ### 5.1 Row-wise reductions
@@ -166,14 +166,87 @@ t.image.row_mean(axis=(1, 2))  # mean over H,W, keep channel dimension
 Naming these `row_*` avoids ambiguity with existing scalar-column `.sum()` /
 `.max()` methods, which currently mean “reduce the whole column to a scalar”.
 
-### 5.2 Materialize features as scalar columns
+### 5.2 Materialize row-wise reductions as generated columns
 
-Add a convenience method for storing derived scalar/vector features:
+Use `CTable.add_generated_column()` as the canonical API for storing generated
+scalar/vector columns.  This is consistent with the existing
+`add_computed_column()` name while making the storage/maintenance semantics
+explicit.
+
+The first use case is ndarray row-wise reductions:
 
 ```python
-t.embedding.add_feature("embedding_norm", op="norm")
-t.embedding.add_feature("embedding_max", op="max")
-t.embedding.add_feature("embedding_0", element=0)
+t.add_generated_column(
+    "embedding_norm",
+    source_columns=["embedding"],
+    transform={"kind": "ndarray_row_reduction", "op": "norm", "ord": 2},
+    dtype=blosc2.float64(),
+    create_index=True,
+)
+
+t.add_generated_column(
+    "embedding_max",
+    source_columns=["embedding"],
+    transform={"kind": "ndarray_row_reduction", "op": "max"},
+    dtype=blosc2.float32(),
+)
+
+t.add_generated_column(
+    "embedding_0",
+    source_columns=["embedding"],
+    transform={"kind": "ndarray_element", "key": 0},
+    dtype=blosc2.float32(),
+)
+```
+
+The concept is general: a **generated column** is a real stored column
+maintained from one or more source columns.  `add_generated_column()` should
+support two explicit generation modes:
+
+- `expr=` for scalar expressions, mirroring `add_computed_column()`
+- `transform=` for structured transforms such as ndarray row-wise reductions
+
+Exactly one of `expr` or `transform` should be provided.  Do not overload
+`transform=` to also accept expression strings; keeping `expr=` separate makes
+validation and documentation clearer.
+
+Scalar generated-column example:
+
+```python
+t.add_generated_column(
+    "total", expr="price * qty", dtype=blosc2.float64(), create_index=True
+)
+```
+
+Structured transform examples:
+
+```python
+t.add_generated_column(
+    "price_with_tax",
+    source_columns=["price"],
+    transform={"kind": "scalar_unary", "op": "mul", "value": 1.21},
+    dtype=blosc2.float64(),
+)
+```
+
+A generated column differs from a virtual computed column: it is declared from
+source columns and maintained by the table. In this plan, generated columns are
+stored on disk/in memory.  This makes them cheap to query repeatedly and
+directly indexable, at the cost of storage and maintenance.
+
+Example:
+
+```python
+t.add_generated_column(
+    "embedding_norm",
+    source_columns=["embedding"],
+    transform={"kind": "ndarray_row_reduction", "op": "norm", "ord": 2},
+    dtype=blosc2.float64(),
+    create_index=True,
+)
+
+print(t.embedding_norm[:])  # materialized norms, one per row
+view = t.where(t.embedding_norm > 5.0)  # can use the index
 ```
 
 Equivalent manual workflow today would be:
@@ -182,20 +255,111 @@ Equivalent manual workflow today would be:
 values = t.embedding.row_norm()[:]
 t.add_column("embedding_norm", blosc2.field(blosc2.float64(), default=0.0))
 t.embedding_norm[:] = values
+t.create_index("embedding_norm")
 ```
 
-The helper can:
-
-- choose output dtype
-- validate output shape is 1-D for scalar feature columns
-- optionally create an index immediately:
+Suggested signature:
 
 ```python
-t.embedding.add_feature("embedding_norm", op="norm", create_index=True)
+def add_generated_column(
+    self,
+    name: str,
+    *,
+    expr=None,
+    source_columns: list[str] | None = None,
+    transform: dict | None = None,
+    dtype=None,
+    create_index: bool = False,
+) -> None: ...
 ```
 
+Validation rules:
+
+- exactly one of `expr` or `transform` is required
+- `expr` accepts the same expression forms as `add_computed_column()` where practical
+- `source_columns` may be inferred for expression strings / LazyExpr callables when possible
+- `source_columns` is required for structured `transform=` descriptors
+- generated columns are always stored and maintained; virtual columns remain the job of `add_computed_column()`
+
+The helper should:
+
+- choose or validate output dtype
+- validate output shape is 1-D for scalar generated columns
+- write existing rows immediately
+- register generated-column metadata so `append()` / `extend()` can auto-fill new rows
+- mark a created index as stale, or rebuild/update it, when new rows arrive
+- optionally create an index immediately
+
+Suggested metadata shape:
+
+```python
+{
+    "kind": "generated_column",
+    "output": "embedding_norm",
+    "source_columns": ["embedding"],
+    "materialized": True,
+    "maintain_on_append": True,
+    "stale_on_source_update": True,
+    "dtype": "float64",
+    "transform": {
+        "kind": "ndarray_row_reduction",
+        "op": "norm",
+        "ord": 2,
+        "axis": None,
+    },
+    "index": {
+        "create": True,
+        "stale_policy": "mark_stale",
+    },
+}
+```
+
+Expression-generated columns use `expr` metadata instead of `transform`:
+
+```python
+{
+    "kind": "generated_column",
+    "output": "total",
+    "source_columns": ["price", "qty"],
+    "materialized": True,
+    "maintain_on_append": True,
+    "stale_on_source_update": True,
+    "dtype": "float64",
+    "expr": "price * qty",
+}
+```
+
+Expected maintenance behavior:
+
+```python
+t.add_generated_column(
+    "embedding_norm",
+    source_columns=["embedding"],
+    transform={"kind": "ndarray_row_reduction", "op": "norm", "ord": 2},
+    dtype=blosc2.float64(),
+    create_index=True,
+)
+t.append((new_id, new_embedding))
+
+# embedding_norm is automatically appended for the new row too
+assert t.embedding_norm[-1] == np.linalg.norm(new_embedding)
+```
+
+Source-column mutation needs an explicit policy.  For v1, the simplest safe
+policy is to mark dependent generated columns stale when source values are
+assigned through `t.embedding[...] = ...`, and provide refresh methods:
+
+```python
+t.refresh_generated_column("embedding_norm")
+t.refresh_generated_columns(source="embedding")
+```
+
+A later optimization can update only the affected generated rows during
+`Column.__setitem__`, but correctness should come first.
+
 This is practical for workflows like similarity screening, image metadata,
-embeddings, and sensor windows.
+embeddings, sensor windows, and scalar business metrics that benefit from
+materialization and indexing.
 
 ### 5.3 Quick summary method
 
@@ -327,8 +491,10 @@ as structured subarrays.
 - sort/groupby/index guard messages
 - display of small and large item shapes
 - `Column.ndim`, `size`, `item_shape`
-- row-wise feature helpers
-- add-feature helper and optional indexing
+- row-wise reduction helpers
+- `add_generated_column()` with optional indexing
+- generated-column auto-fill on `append()` / `extend()`
+- generated-column staleness / refresh behavior after source-column mutation
 - Arrow/Parquet roundtrip for `(n,)` and `(m, n)` shapes
 - nullable ndarray columns once implemented
 
