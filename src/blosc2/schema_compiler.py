@@ -436,7 +436,9 @@ def spec_from_metadata_dict(data: dict[str, Any]) -> SchemaSpec:
         value_type = spec_from_metadata_dict(data.pop("value_type"))
         return DictionarySpec(index_type=index_type, value_type=value_type, **data)
     if kind == "ndarray":
-        return NDArraySpec(item_shape=tuple(data.pop("item_shape")), dtype=np.dtype(data.pop("dtype_str")))
+        return NDArraySpec(
+            item_shape=tuple(data.pop("item_shape")), dtype=np.dtype(data.pop("dtype_str")), **data
+        )
     spec_cls = _KIND_TO_SPEC.get(kind)
     if spec_cls is None:
         raise ValueError(f"Unknown column kind {kind!r}")

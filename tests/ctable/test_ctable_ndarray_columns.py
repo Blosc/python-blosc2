@@ -121,3 +121,74 @@ def test_stale_generated_column_raises_and_read_stale_escape_hatch():
     t.refresh_generated_columns(source="embedding")
     np.testing.assert_allclose(t.embedding_sum[:], t.embedding[:].sum(axis=1))
     np.testing.assert_allclose(t.score[:], t.embedding_sum[:] + np.sin(t.id[:]))
+
+
+@dataclass
+class NullableNDArrayRow:
+    id: int = blosc2.field(blosc2.int32())
+    embedding: object = blosc2.field(blosc2.ndarray((3,), dtype=blosc2.float32(), nullable=True))
+    codes: object = blosc2.field(blosc2.ndarray((2,), dtype=blosc2.int16(), nullable=True))
+
+
+def test_nullable_ndarray_columns_append_extend_assign_and_reduce():
+    t = blosc2.CTable(NullableNDArrayRow)
+
+    t.append((1, np.array([1, 2, 3], dtype=np.float32), [4, 5]))
+    t.append((2, None, None))
+    t.extend(
+        {
+            "id": [3, 4],
+            "embedding": [np.array([4, 5, 6], dtype=np.float32), None],
+            "codes": [[6, 7], None],
+        }
+    )
+
+    assert t.embedding.null_count() == 2
+    np.testing.assert_array_equal(t.embedding.is_null(), np.array([False, True, False, True]))
+    assert np.isnan(t.embedding[1]).all()
+    np.testing.assert_array_equal(t.codes[1], np.full((2,), np.iinfo(np.int16).min, dtype=np.int16))
+    np.testing.assert_array_equal(t.codes.is_null(), np.array([False, True, False, True]))
+
+    np.testing.assert_allclose(t.embedding.sum(axis=0), np.array([5, 7, 9], dtype=np.float32))
+
+    t.embedding[0] = None
+    assert t.embedding.null_count() == 3
+
+
+@pytest.mark.parametrize("null_value", [-999, np.int16(123)])
+def test_nullable_ndarray_explicit_null_value(null_value):
+    spec = blosc2.ndarray((2,), dtype=blosc2.int16(), null_value=null_value)
+
+    @dataclass
+    class RowWithExplicitNull:
+        x: object = blosc2.field(spec)
+
+    t = blosc2.CTable(RowWithExplicitNull, new_data=[(None,), ([1, 2],)])
+    np.testing.assert_array_equal(t.x[0], np.full((2,), null_value, dtype=np.int16))
+    np.testing.assert_array_equal(t.x.is_null(), np.array([True, False]))
+
+
+def test_nullable_bool_ndarray_uses_uint8_sentinel():
+    @dataclass
+    class BoolRows:
+        flags: object = blosc2.field(blosc2.ndarray((2,), dtype=np.bool_, nullable=True))
+
+    t = blosc2.CTable(BoolRows, new_data=[(None,), ([True, False],)])
+    assert t.flags.dtype == np.dtype(np.uint8)
+    np.testing.assert_array_equal(t.flags[0], np.full((2,), 255, dtype=np.uint8))
+    np.testing.assert_array_equal(t.flags.is_null(), np.array([True, False]))
+
+
+def test_nullable_ndarray_arrow_roundtrip():
+    pytest.importorskip("pyarrow")
+    t = blosc2.CTable(NullableNDArrayRow)
+    t.extend({"id": [1, 2], "embedding": [None, [1, 2, 3]], "codes": [[1, 2], None]})
+
+    arrow = t.to_arrow()
+    assert arrow.column("embedding").null_count == 1
+
+    rt = blosc2.CTable.from_arrow(arrow.schema, arrow.to_batches())
+    assert rt.embedding.null_count() == 1
+    assert rt.codes.null_count() == 1
+    np.testing.assert_array_equal(rt.embedding.is_null(), t.embedding.is_null())
+    np.testing.assert_array_equal(rt.codes.is_null(), t.codes.is_null())

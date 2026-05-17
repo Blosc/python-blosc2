@@ -12,6 +12,42 @@ This plan assumes the current core implementation exists:
 The remaining work below focuses on making ndarray columns safer, more queryable,
 and easier to analyze from inside a `CTable`.
 
+## Implementation status — updated after current session
+
+Implemented in the current working tree:
+
+- Safety guards for string `where()`, direct ndarray-column comparisons, sorting,
+  grouping, indexing, `describe()`, and `cov()`.
+- Column metadata API: `item_shape`, `item_ndim`, `item_size`, logical `shape`,
+  `ndim`, and `size`.
+- Tuple inner-axis slicing on ndarray columns.
+- Axis-aware ndarray reductions: `sum`, `mean`, `min`, `max`, `std`, and `norm`.
+- Compact ndarray display in table display and `Column.__repr__`.
+- `Column.summary()` for ndarray columns.
+- `CTable.add_generated_column(..., values=...)` with:
+  - expression strings, `LazyExpr`, and callables for scalar stored columns,
+  - `RowTransformer` for row-wise ndarray projections/reductions,
+  - scalar and fixed-shape ndarray generated outputs,
+  - optional immediate indexing for scalar generated outputs,
+  - append/extend auto-fill,
+  - transitive staleness marking after source-column mutation,
+  - refresh APIs: `refresh_generated_column()` and `refresh_generated_columns()`,
+  - stale-read protection by default and explicit `Column.read_stale()` escape hatch.
+- `add_computed_column()` rejects `RowTransformer` and documents expression/callable forms.
+- Arrow/Parquet interop for ndarray columns via Arrow `FixedSizeList` plus
+  `blosc2:ndarray_shape` field metadata.
+- Sphinx/API documentation updates for `CTable.__getitem__`, `CTable.__getattr__`,
+  `add_computed_column()`, and `add_generated_column()`.
+- Compatibility fix for `blosc2.ndarray.NDArray` while keeping `blosc2.ndarray(...)`
+  as the CTable ndarray schema constructor.
+- Group-reduce optional-kernel fallback fixes when extension kernels are unavailable.
+
+Still not implemented / later additions:
+
+- CSV/DataFrame ndarray-specific import/export behavior.
+- Lazy virtual row-transformer lowering for computed columns.
+- Incremental partial-row generated-column refresh during `Column.__setitem__`.
+
 ---
 
 ## 1. Immediate safety guards
@@ -21,6 +57,10 @@ existing scalar-oriented table operations may accidentally receive 2-D/3-D array
 and produce confusing errors.
 
 ### 1.1 String `where()` expressions
+
+**Status: implemented.** String expressions reject fixed-shape ndarray columns
+with a clear scalar-only message, and ndarray columns are omitted from string
+expression operands.
 
 Skip ndarray columns in string-expression operands, or reject them with a clear
 message.
@@ -44,6 +84,10 @@ Files likely involved:
 
 ### 1.2 Sorting, grouping, indexing
 
+**Status: implemented.** `sort_by()`, `group_by()`, `create_index()`, and
+scalar-only helpers reject ndarray columns with messages pointing users toward
+scalar generated columns.
+
 Reject ndarray columns in operations requiring scalar comparable values:
 
 - `sort_by("embedding")`
@@ -61,6 +105,9 @@ Materialize a scalar generated column first, e.g. embedding_norm or embedding_ma
 ---
 
 ## 2. Column metadata API
+
+**Status: implemented.** `Column.item_shape`, `item_ndim`, `item_size`, logical
+`shape`, `ndim`, and `size` are available for scalar and ndarray columns.
 
 Add small, cheap introspection helpers to `Column`.
 
@@ -86,6 +133,9 @@ columns.
 ---
 
 ## 3. Element projection / inner-axis slicing
+
+**Status: implemented.** Tuple indexing materializes NumPy arrays and keeps
+boolean row masks tied to live logical rows.
 
 Support tuple indexing on ndarray columns, where the first selector addresses
 rows and remaining selectors address the per-row item axes.
@@ -113,6 +163,9 @@ Important behavior:
 
 ## 4. Direct comparison guard
 
+**Status: implemented.** Direct comparisons on full ndarray columns raise with
+guidance to use element projections or row-wise reductions.
+
 Block ambiguous comparisons on full ndarray columns:
 
 ```python
@@ -139,6 +192,10 @@ Column reductions should follow NumPy / Blosc2 NDArray axis semantics over that
 logical shape.
 
 ### 5.1 Axis-aware reductions
+
+**Status: implemented.** ndarray columns support NumPy-like `axis` semantics for
+`sum`, `mean`, `min`, `max`, `std`, and `norm` over logical shape
+`(nrows, *item_shape)`.
 
 For scalar columns, existing behavior remains unchanged:
 
@@ -178,6 +235,12 @@ shape `(nrows, *item_shape)`.
 rejected unless further reduced to `(nrows,)`.
 
 ### 5.2 Materialize reductions as generated columns
+
+**Status: implemented.** The public keyword is `values=` (not `transformer=`).
+Generated columns are stored, maintained on append/extend, can be scalar or
+fixed-shape ndarray outputs, and stale generated columns raise on normal access.
+Use `Column.read_stale()` only when explicitly inspecting the last stored stale
+values.
 
 Use `CTable.add_generated_column()` as the canonical API for storing generated
 scalar/vector columns.  This is consistent with the existing
@@ -306,11 +369,14 @@ a lazy lowering path; otherwise it should raise a clear error recommending
 
 Validation rules for generated columns:
 
-- string / LazyExpr / callable transformers follow the same dependency rules as computed columns
+- string / LazyExpr / callable `values=` definitions follow the same dependency rules as computed columns
 - `RowTransformer` is accepted only by `add_generated_column()`
 - source columns are taken from the normalized transformer metadata
 - generated columns are always stored and maintained; virtual columns remain the job of `add_computed_column()`
-- generated columns intended for indexing must produce a 1-D result with length `nrows`
+- generated columns intended for indexing must produce a 1-D scalar result with length `nrows`
+- expression generated columns may depend on generated columns because generated columns are stored
+- source-column mutation marks dependent generated columns stale transitively
+- stale generated columns raise on normal access/use; use `read_stale()` to inspect old materialized values explicitly
 
 `RowTransformer` API sketch:
 
@@ -399,23 +465,28 @@ t.append((new_id, new_embedding))
 assert t.embedding_norm[-1] == np.linalg.norm(new_embedding)
 ```
 
-Source-column mutation needs an explicit policy.  For v1, the simplest safe
-policy is to mark dependent generated columns stale when source values are
-assigned through `t.embedding[...] = ...`, and provide refresh methods:
+Source-column mutation policy is implemented for v1: dependent generated
+columns are marked stale transitively when source values are assigned through
+`t.embedding[...] = ...`, and refresh methods are provided:
 
 ```python
 t.refresh_generated_column("embedding_norm")
 t.refresh_generated_columns(source="embedding")
 ```
 
-A later optimization can update only the affected generated rows during
-`Column.__setitem__`, but correctness should come first.
+Normal access to a stale generated column raises and points to the refresh APIs
+and to the explicit `Column.read_stale()` escape hatch.  A later optimization can
+update only the affected generated rows during `Column.__setitem__`, but
+correctness should come first.
 
 This is practical for workflows like similarity screening, image metadata,
 embeddings, sensor windows, and scalar business metrics that benefit from
 materialization and indexing.
 
 ### 5.3 Quick summary method
+
+**Status: implemented.** `Column.summary()` prints and returns a compact ndarray
+column summary.
 
 Add:
 
@@ -441,6 +512,10 @@ Keep this opt-in so normal table display stays compact.
 
 ## 6. Display improvements
 
+**Status: implemented.** Small 1-D items are displayed inline; larger and
+multi-dimensional values are summarized as `ndarray(shape=..., dtype=...)`.
+`Column.__repr__` uses the same compact representation.
+
 Normal table display should not dump whole per-row arrays for wide shapes.
 
 Suggested formatting:
@@ -455,10 +530,12 @@ Suggested formatting:
 
 ## 7. Nullable ndarray columns
 
-Later addition.  Current implementation should either reject nullable ndarray
-specs or document that they are unsupported.
+**Status: implemented.** Nullable ndarray specs use broadcast sentinels: a row is
+null when every scalar element in the fixed-shape item equals the column's null
+sentinel (or is NaN for floating dtypes). Append/extend/assignment accept
+``None`` for nullable ndarray columns, and Arrow FixedSizeList nulls round-trip.
 
-A robust design would use broadcast sentinels:
+The implementation uses broadcast sentinels:
 
 - float: all-NaN item means null
 - signed int: all min or all max, following null policy
@@ -484,6 +561,10 @@ This requires changes in:
 ---
 
 ## 8. Arrow / Parquet interop
+
+**Status: implemented.** ndarray columns export to Arrow `FixedSizeList` with
+flattened row values and `blosc2:ndarray_shape` metadata, and import back to
+`NDArraySpec`. Parquet inherits this through Arrow.
 
 Map ndarray columns to Arrow `FixedSizeList`.
 
@@ -540,29 +621,40 @@ as structured subarrays.
 
 ## 11. Tests to add next
 
-- tuple inner slicing
-- direct comparison guard
-- sort/groupby/index guard messages
-- display of small and large item shapes
-- `Column.ndim`, `size`, `item_shape`
-- axis-aware ndarray column reductions
-- `add_generated_column()` with optional indexing
-- generated-column auto-fill on `append()` / `extend()`
-- generated-column staleness / refresh behavior after source-column mutation
-- Arrow/Parquet roundtrip for `(n,)` and `(m, n)` shapes
-- nullable ndarray columns once implemented
+Implemented in `tests/ctable/test_ctable_ndarray_columns.py` and related CTable
+suites:
+
+- [x] tuple inner slicing
+- [x] direct comparison guard
+- [x] sort/groupby/index guard messages
+- [x] display of small and large item shapes
+- [x] `Column.ndim`, `size`, `item_shape`
+- [x] axis-aware ndarray column reductions
+- [x] `add_generated_column()` with optional indexing
+- [x] generated-column auto-fill on `append()` / `extend()`
+- [x] generated-column staleness / refresh behavior after source-column mutation
+- [x] stale generated column access raises, with `Column.read_stale()` escape hatch
+- [x] transitive generated-column stale marking / refresh
+- [x] Arrow roundtrip for `(n,)` and `(m, n)` shapes
+- [x] nullable ndarray columns once implemented
+- [ ] CSV/DataFrame ndarray-specific behavior once implemented
 
 ---
 
 ## Suggested next phase
 
-A good next small PR would be:
+The originally suggested small PR is complete:
 
-1. safety guards for scalar-only operations
-2. `Column.item_shape`, `ndim`, `size`
-3. tuple inner slicing
-4. direct comparison guard
-5. tests for the above
+1. [x] safety guards for scalar-only operations
+2. [x] `Column.item_shape`, `ndim`, `size`
+3. [x] tuple inner slicing
+4. [x] direct comparison guard
+5. [x] tests for the above
 
-This would make the existing core implementation much safer and substantially
-more ergonomic without taking on nullable columns or Arrow interop yet.
+Suggested next work:
+
+1. CSV/DataFrame ndarray-specific import/export behavior.
+2. Optional incremental generated-column refresh for only affected rows during
+   `Column.__setitem__`.
+3. Optional lazy lowering for row-transformers so selected row-wise ndarray
+   projections/reductions can become virtual computed columns later.

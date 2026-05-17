@@ -89,6 +89,14 @@ def validate_column_values(col: CompiledColumn, values: Any) -> None:  # noqa: C
     if isinstance(spec, ObjectSpec):
         return
     if isinstance(spec, NDArraySpec):
+        if getattr(spec, "null_value", None) is not None and not (
+            isinstance(values, np.ndarray) and values.dtype != object
+        ):
+            from blosc2.ctable import CTable
+
+            for value in values:
+                CTable._coerce_ndarray_value(col.name, spec, value)
+            return
         arr = np.asarray(values, dtype=spec.dtype)
         if arr.ndim == len(spec.item_shape):
             # A bare row value reached batch validation; accept it only when it

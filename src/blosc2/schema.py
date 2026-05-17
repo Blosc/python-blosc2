@@ -709,7 +709,7 @@ class NDArraySpec(SchemaSpec):
 
     python_type = _builtin_object
 
-    def __init__(self, item_shape, dtype=np.float64):
+    def __init__(self, item_shape, dtype=np.float64, *, nullable: bool = False, null_value=None):
         if isinstance(item_shape, int):
             item_shape = (item_shape,)
         item_shape = tuple(int(s) for s in item_shape)
@@ -719,6 +719,9 @@ class NDArraySpec(SchemaSpec):
             raise ValueError("All NDArraySpec item_shape dimensions must be positive.")
         self.item_shape = item_shape
         self.dtype = np.dtype(dtype)
+        self.nullable = nullable or null_value is not None
+        if null_value is not None:
+            self.null_value = null_value
         self.itemsize = self.dtype.itemsize
         self.kind = self.dtype.kind
         self.type = self.dtype.type
@@ -729,19 +732,24 @@ class NDArraySpec(SchemaSpec):
         return {}
 
     def to_metadata_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "kind": "ndarray",
             "item_shape": _builtin_list(self.item_shape),
             "dtype_str": self.dtype.str,
         }
+        if self.nullable:
+            d["nullable"] = True
+        if hasattr(self, "null_value"):
+            d["null_value"] = self.null_value
+        return d
 
     def display_label(self) -> str:
         return f"ndarray{_builtin_list(self.item_shape)}[{self.dtype}]"
 
 
-def ndarray(item_shape, dtype=np.float64) -> NDArraySpec:
+def ndarray(item_shape, dtype=np.float64, *, nullable: bool = False, null_value=None) -> NDArraySpec:
     """Build a fixed-shape N-D array descriptor for CTable columns."""
-    return NDArraySpec(item_shape=item_shape, dtype=dtype)
+    return NDArraySpec(item_shape=item_shape, dtype=dtype, nullable=nullable, null_value=null_value)
 
 
 def vlstring(

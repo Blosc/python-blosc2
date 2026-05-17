@@ -14,13 +14,15 @@ schema layer never import from Pydantic directly.
 
 from __future__ import annotations
 
+import math
 from dataclasses import MISSING
 from typing import Any
 
+import numpy as np
 from pydantic import BaseModel, Field, ValidationError, create_model
 
 from blosc2.list_array import _coerce_struct_item, coerce_list_cell
-from blosc2.schema import ListSpec, StructSpec
+from blosc2.schema import ListSpec, NDArraySpec, StructSpec
 from blosc2.schema_compiler import CompiledSchema  # noqa: TC001
 
 
@@ -98,7 +100,17 @@ def _mask_nulls(schema: CompiledSchema, row: dict[str, Any]) -> tuple[dict[str, 
         if nv is None:
             continue
         val = row.get(col.name)
-        if _is_null_value(val, nv):
+        if isinstance(col.spec, NDArraySpec):
+            try:
+                arr = np.asarray(val, dtype=col.spec.dtype)
+                is_null = arr.shape == col.spec.item_shape and bool(
+                    np.isnan(arr).all() if isinstance(nv, float) and math.isnan(nv) else (arr == nv).all()
+                )
+            except Exception:
+                is_null = val is None
+        else:
+            is_null = _is_null_value(val, nv)
+        if is_null:
             nulled[col.name] = val
             masked[col.name] = None
     return masked, nulled

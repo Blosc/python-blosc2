@@ -957,6 +957,9 @@ class Column:
             if not (0 <= key < n_rows):
                 raise IndexError(f"index {key} is out of bounds for column with size {n_rows}")
             pos_true = _find_physical_index(self._valid_rows, key)
+            if self.is_ndarray:
+                spec = self._table._schema.columns_by_name[self._col_name].spec
+                value = CTable._coerce_ndarray_value(self._col_name, spec, value)
             self._raw_col[int(pos_true)] = value
 
         elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
@@ -973,7 +976,10 @@ class Column:
                 for pos, cell in zip(phys_indices, value, strict=True):
                     self._raw_col[int(pos)] = cell
             else:
-                if isinstance(value, (list, tuple)):
+                if self.is_ndarray:
+                    spec = self._table._schema.columns_by_name[self._col_name].spec
+                    value = CTable._coerce_ndarray_batch(self._col_name, spec, value, len(phys_indices))
+                elif isinstance(value, (list, tuple)):
                     value = np.array(value, dtype=self._raw_col.dtype)
                 self._raw_col[phys_indices] = value
 
@@ -991,7 +997,10 @@ class Column:
                 for pos, cell in zip(phys_indices, value, strict=True):
                     self._raw_col[int(pos)] = cell
             else:
-                if isinstance(value, (list, tuple)):
+                if self.is_ndarray:
+                    spec = self._table._schema.columns_by_name[self._col_name].spec
+                    value = CTable._coerce_ndarray_batch(self._col_name, spec, value, len(phys_indices))
+                elif isinstance(value, (list, tuple)):
                     value = np.array(value, dtype=self._raw_col.dtype)
                 self._raw_col[phys_indices] = value
 
@@ -1700,6 +1709,16 @@ class Column:
         nv = self.null_value
         if nv is None:
             return np.zeros(len(arr), dtype=np.bool_)
+        arr = np.asarray(arr)
+        if self.is_ndarray:
+            if arr.ndim <= self.item_ndim:
+                arr = arr.reshape((1, *arr.shape))
+            if isinstance(nv, float) and np.isnan(nv):
+                elem_mask = np.isnan(arr)
+            else:
+                elem_mask = arr == nv
+            inner_axes = tuple(range(1, elem_mask.ndim))
+            return elem_mask.all(axis=inner_axes) if inner_axes else elem_mask.astype(np.bool_)
         if isinstance(nv, float) and np.isnan(nv):
             return np.isnan(arr)
         return arr == nv
@@ -1905,6 +1924,9 @@ class Column:
 
     def _ndarray_values_for_reduction(self, where=None) -> np.ndarray:
         arr = np.asarray(self[:])
+        null_mask = self._null_mask_for(arr) if self.null_value is not None else None
+        if null_mask is not None and null_mask.any():
+            arr = arr[~null_mask]
         if where is None:
             return arr
         where = self._normalize_sum_where(where)
@@ -1917,9 +1939,14 @@ class Column:
                 raise ValueError(
                     f"Column reduction where= mask length {len(mask)} does not match live rows {len(self)}."
                 )
+            if null_mask is not None and len(null_mask) == len(mask):
+                mask = mask[~null_mask]
             return arr[mask]
         live_pos = np.where(self._valid_rows[:])[0]
-        return arr[mask[live_pos]]
+        row_mask = mask[live_pos]
+        if null_mask is not None and len(null_mask) == len(row_mask):
+            row_mask = row_mask[~null_mask]
+        return arr[row_mask]
 
     def _ndarray_reduce(self, op: str, *, axis=None, dtype=None, where=None, ddof: int = 0):
         arr = self._ndarray_values_for_reduction(where=where)
@@ -2624,6 +2651,46 @@ class CTable(Generic[RowT]):
         return (capacity,)
 
     @staticmethod
+    def _ndarray_null_item(spec: NDArraySpec) -> np.ndarray:
+        null_value = getattr(spec, "null_value", None)
+        if null_value is None:
+            raise TypeError("NDArraySpec is not nullable")
+        return np.full(spec.item_shape, null_value, dtype=spec.dtype)
+
+    @staticmethod
+    def _coerce_ndarray_value(name: str, spec: NDArraySpec, val) -> np.ndarray:
+        if val is None:
+            if getattr(spec, "null_value", None) is None:
+                raise TypeError(f"Column {name!r} is not nullable; received None.")
+            return CTable._ndarray_null_item(spec)
+        arr = np.asarray(val, dtype=spec.dtype)
+        if arr.shape != spec.item_shape:
+            raise ValueError(f"Column {name!r}: expected item shape {spec.item_shape}, got {arr.shape}")
+        return np.ascontiguousarray(arr)
+
+    @staticmethod
+    def _coerce_ndarray_batch(name: str, spec: NDArraySpec, values, nrows: int) -> np.ndarray:
+        if values is None:
+            null_item = CTable._coerce_ndarray_value(name, spec, None)
+            return np.broadcast_to(null_item, (nrows, *spec.item_shape)).copy()
+        if isinstance(values, np.ndarray) and values.dtype != object:
+            arr = np.ascontiguousarray(values, dtype=spec.dtype)
+            if arr.ndim == len(spec.item_shape):
+                arr = arr.reshape((1, *arr.shape))
+            if arr.shape != (nrows, *spec.item_shape):
+                raise ValueError(
+                    f"Column {name!r}: expected batch shape {(nrows, *spec.item_shape)}, got {arr.shape}"
+                )
+            return arr
+        rows = [CTable._coerce_ndarray_value(name, spec, value) for value in values]
+        arr = np.ascontiguousarray(rows, dtype=spec.dtype)
+        if arr.shape != (nrows, *spec.item_shape):
+            raise ValueError(
+                f"Column {name!r}: expected batch shape {(nrows, *spec.item_shape)}, got {arr.shape}"
+            )
+        return arr
+
+    @staticmethod
     def _column_chunks_blocks(col: CompiledColumn, shape: tuple[int, ...]):
         return compute_chunks_blocks(shape, dtype=col.dtype)
 
@@ -2633,6 +2700,19 @@ class CTable(Generic[RowT]):
 
     @staticmethod
     def _policy_null_value_for_spec(spec: SchemaSpec, policy: NullPolicy):
+        if isinstance(spec, NDArraySpec):
+            dtype = spec.dtype
+            if dtype == np.dtype(np.bool_):
+                return policy.bool_value
+            if dtype.kind == "i":
+                info = np.iinfo(dtype)
+                return info.min if policy.signed_int_strategy == "min" else info.max
+            if dtype.kind == "u":
+                info = np.iinfo(dtype)
+                return info.min if policy.unsigned_int_strategy == "min" else info.max
+            if dtype.kind == "f":
+                return policy.float_value
+            return None
         if isinstance(spec, (int8, int16, int32, int64)):
             info = np.iinfo(spec.dtype)
             return info.min if policy.signed_int_strategy == "min" else info.max
@@ -2652,7 +2732,30 @@ class CTable(Generic[RowT]):
         return None
 
     @staticmethod
-    def _validate_null_value_for_spec(name: str, spec: SchemaSpec, null_value) -> None:
+    def _validate_null_value_for_spec(name: str, spec: SchemaSpec, null_value) -> None:  # noqa: C901
+        if isinstance(spec, NDArraySpec):
+            dtype = spec.dtype
+            if dtype == np.dtype(np.bool_):
+                if null_value != 255:
+                    raise ValueError(f"Null sentinel for nullable bool ndarray column {name!r} must be 255")
+                return
+            if dtype.kind in "iu":
+                if isinstance(null_value, (bool, np.bool_)) or not isinstance(null_value, (int, np.integer)):
+                    raise TypeError(f"Null sentinel for ndarray column {name!r} must be an integer")
+                info = np.iinfo(dtype)
+                if not info.min <= int(null_value) <= info.max:
+                    raise ValueError(
+                        f"Null sentinel for ndarray column {name!r}={null_value!r} is outside {dtype} range"
+                    )
+                return
+            if dtype.kind == "f":
+                if not isinstance(null_value, (int, float, np.integer, np.floating)):
+                    raise TypeError(f"Null sentinel for ndarray column {name!r} must be numeric")
+                return
+            raise TypeError(
+                f"Nullable ndarray column {name!r} has unsupported dtype {dtype!r}; "
+                "use bool, integer, unsigned integer, or floating dtype."
+            )
         if isinstance(spec, (int8, int16, int32, int64, uint8, uint16, uint32, uint64, timestamp)):
             if isinstance(null_value, (bool, np.bool_)) or not isinstance(null_value, (int, np.integer)):
                 raise TypeError(f"Null sentinel for column {name!r} must be an integer")
@@ -2689,6 +2792,18 @@ class CTable(Generic[RowT]):
             raise KeyError(f"column_null_values contains unknown columns: {names}")
         for col in schema.columns:
             spec = col.spec
+            if isinstance(spec, NDArraySpec) and getattr(spec, "null_value", None) is not None:
+                cls._validate_null_value_for_spec(col.name, spec, spec.null_value)
+                if spec.dtype == np.dtype(np.bool_):
+                    spec.dtype = np.dtype(np.uint8)
+                    spec.itemsize = spec.dtype.itemsize
+                    spec.kind = spec.dtype.kind
+                    spec.type = spec.dtype.type
+                    spec.str = spec.dtype.str
+                    spec.name = spec.dtype.name
+                col.dtype = getattr(spec, "dtype", None)
+                col.display_width = compute_display_width(spec)
+                continue
             if (
                 isinstance(
                     spec,
@@ -2714,6 +2829,13 @@ class CTable(Generic[RowT]):
                 spec.dtype = np.dtype(f"S{spec.max_length}")
             elif isinstance(spec, b2_bool):
                 spec.dtype = np.dtype(np.uint8)
+            elif isinstance(spec, NDArraySpec) and spec.dtype == np.dtype(np.bool_):
+                spec.dtype = np.dtype(np.uint8)
+                spec.itemsize = spec.dtype.itemsize
+                spec.kind = spec.dtype.kind
+                spec.type = spec.dtype.type
+                spec.str = spec.dtype.str
+                spec.name = spec.dtype.name
             col.dtype = getattr(spec, "dtype", None)
             col.display_width = compute_display_width(spec)
 
@@ -2861,12 +2983,7 @@ class CTable(Generic[RowT]):
                 # Pass str/None through; DictionaryColumn.__setitem__ encodes.
                 result[col.name] = val
             elif self._is_ndarray_column(col):
-                arr = np.asarray(val, dtype=col.dtype)
-                if arr.shape != col.spec.item_shape:
-                    raise ValueError(
-                        f"Column {col.name!r}: expected item shape {col.spec.item_shape}, got {arr.shape}"
-                    )
-                result[col.name] = np.ascontiguousarray(arr)
+                result[col.name] = self._coerce_ndarray_value(col.name, col.spec, val)
             elif isinstance(col.spec, timestamp):
                 if val is None:
                     result[col.name] = col.spec.null_value
@@ -4308,8 +4425,12 @@ class CTable(Generic[RowT]):
                     continue
                 if col.is_ndarray:
                     spec = self._schema.columns_by_name[name].spec
-                    arr = np.asarray(col[start:stop]).reshape((stop - start, -1))
-                    arrays.append(pa.array(arr.tolist(), type=self._pa_type_from_spec(pa, spec)))
+                    values = np.asarray(col[start:stop])
+                    null_mask = col._null_mask_for(values) if col.null_value is not None else None
+                    flat_values = values.reshape((stop - start, -1)).tolist()
+                    if null_mask is not None and null_mask.any():
+                        flat_values = [None if null_mask[i] else v for i, v in enumerate(flat_values)]
+                    arrays.append(pa.array(flat_values, type=self._pa_type_from_spec(pa, spec)))
                     continue
                 arr = np.asarray(col[start:stop])
                 nv = col.null_value
@@ -4429,7 +4550,7 @@ class CTable(Generic[RowT]):
                     f"Arrow fixed-size-list metadata shape {shape} has size {int(np.prod(shape))}, "
                     f"but the Arrow list size is {pa_type.list_size}."
                 )
-            return b2s.ndarray(shape, dtype=value_dtype)
+            return b2s.ndarray(shape, dtype=value_dtype, nullable=nullable, null_value=null_value)
 
         if pa.types.is_dictionary(pa_type):
             vt = pa_type.value_type
@@ -4618,13 +4739,11 @@ class CTable(Generic[RowT]):
             null_value = None
             has_null_value_override = name in column_null_values
             if has_null_value_override and (
-                field_is_list
-                or field_is_ndarray
-                or field_is_struct
-                or field_is_dictionary
-                or field_is_object_fallback
+                field_is_list or field_is_struct or field_is_dictionary or field_is_object_fallback
             ):
-                raise TypeError(f"column_null_values only supports scalar columns; {name!r} is not scalar")
+                raise TypeError(
+                    f"column_null_values only supports scalar columns and ndarray columns; {name!r} is not scalar"
+                )
             if has_null_value_override and field_is_varlen_scalar:
                 raise TypeError(
                     f"column_null_values is not supported for vlstring/vlbytes column {name!r}; "
@@ -4637,20 +4756,19 @@ class CTable(Generic[RowT]):
                 and field.nullable
                 and not (
                     field_is_list
-                    or field_is_ndarray
                     or field_is_struct
                     or field_is_dictionary
                     or field_is_varlen_scalar
                     or field_is_object_fallback
                 )
             ):
-                null_value = cls._auto_null_sentinel(pa, field.type, null_policy=null_policy)
+                arrow_type_for_null = field.type.value_type if field_is_ndarray else field.type
+                null_value = cls._auto_null_sentinel(pa, arrow_type_for_null, null_policy=null_policy)
             if (
                 arrow_col is not None
                 and arrow_col.null_count
                 and not (
                     field_is_list
-                    or field_is_ndarray
                     or field_is_struct
                     or field_is_dictionary
                     or field_is_varlen_scalar
@@ -4674,7 +4792,6 @@ class CTable(Generic[RowT]):
             )
             if null_value is not None and not (
                 field_is_list
-                or field_is_ndarray
                 or field_is_struct
                 or field_is_dictionary
                 or field_is_varlen_scalar
@@ -4912,9 +5029,7 @@ class CTable(Generic[RowT]):
             return np.array([nv if v is None else int(v) for v in arrow_col.to_pylist()], dtype=np.uint8)
         if isinstance(col.spec, NDArraySpec):
             values = arrow_col.to_pylist()
-            if any(v is None for v in values):
-                raise TypeError(f"Nullable ndarray Arrow column {col.name!r} is not supported yet.")
-            arr = np.asarray(values, dtype=col.dtype)
+            arr = CTable._coerce_ndarray_batch(col.name, col.spec, values, len(values))
             return arr.reshape((len(values), *col.spec.item_shape))
         if isinstance(col.spec, timestamp):
             arr = (
@@ -5931,11 +6046,7 @@ class CTable(Generic[RowT]):
             if default is not MISSING:
                 try:
                     if self._is_ndarray_column(compiled_col):
-                        default_val = np.asarray(default, dtype=spec.dtype)
-                        if default_val.shape != spec.item_shape:
-                            raise ValueError(
-                                f"expected item shape {spec.item_shape}, got {default_val.shape}"
-                            )
+                        default_val = self._coerce_ndarray_value(name, spec, default)
                     else:
                         default_val = spec.dtype.type(default)
                 except (ValueError, OverflowError) as exc:
@@ -9020,15 +9131,9 @@ class CTable(Generic[RowT]):
                         )
                     scalar_processed_cols[name] = np.ascontiguousarray(values, dtype=target_dtype)
                 elif self._is_ndarray_column(col_meta):
-                    values = np.ascontiguousarray(raw_columns[name], dtype=target_dtype)
-                    if values.ndim == len(col_meta.spec.item_shape):
-                        values = values.reshape((1, *values.shape))
-                    if values.shape != (new_nrows, *col_meta.spec.item_shape):
-                        raise ValueError(
-                            f"Column {name!r}: expected batch shape "
-                            f"{(new_nrows, *col_meta.spec.item_shape)}, got {values.shape}"
-                        )
-                    scalar_processed_cols[name] = values
+                    scalar_processed_cols[name] = self._coerce_ndarray_batch(
+                        name, col_meta.spec, raw_columns[name], new_nrows
+                    )
                 else:
                     scalar_processed_cols[name] = np.ascontiguousarray(raw_columns[name], dtype=target_dtype)
 
