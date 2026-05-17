@@ -15,6 +15,7 @@ import contextlib
 import contextvars
 import copy
 import dataclasses
+import json
 import os
 import pprint
 import re
@@ -528,6 +529,187 @@ def _make_namedtuple_row_type(col_names: tuple[str, ...]):
 # ---------------------------------------------------------------------------
 
 
+class RowTransformer:
+    """Row-wise transformer for fixed-shape ndarray columns.
+
+    A row transformer sees one table row at a time.  For a source column with
+    physical shape ``(nrows, *item_shape)``, axes passed to reductions are axes
+    within ``item_shape`` (so they are shifted by one for batch evaluation).
+    """
+
+    def __init__(
+        self,
+        source: str,
+        *,
+        selection=(),
+        op: str | None = None,
+        axis=None,
+        ord=None,
+    ) -> None:
+        self.source = source
+        self.selection = tuple(selection)
+        self.op = op
+        self.axis = axis
+        self.ord = ord
+        self.kind = "row_transformer"
+        self.source_columns = [source]
+
+    def __getitem__(self, key):
+        if not isinstance(key, tuple):
+            key = (key,)
+        return RowTransformer(
+            self.source,
+            selection=(*self.selection, *key),
+            op=self.op,
+            axis=self.axis,
+            ord=self.ord,
+        )
+
+    def _with_op(self, op: str, *, axis=None, ord=None):
+        return RowTransformer(self.source, selection=self.selection, op=op, axis=axis, ord=ord)
+
+    def sum(self, *, axis=None):
+        return self._with_op("sum", axis=axis)
+
+    def mean(self, *, axis=None):
+        return self._with_op("mean", axis=axis)
+
+    def min(self, *, axis=None):
+        return self._with_op("min", axis=axis)
+
+    def max(self, *, axis=None):
+        return self._with_op("max", axis=axis)
+
+    def norm(self, *, axis=None, ord=None):
+        return self._with_op("norm", axis=axis, ord=ord)
+
+    @staticmethod
+    def _serialize_selector(selector):
+        if isinstance(selector, slice):
+            return {"kind": "slice", "start": selector.start, "stop": selector.stop, "step": selector.step}
+        if selector is Ellipsis:
+            return {"kind": "ellipsis"}
+        if selector is None:
+            return {"kind": "newaxis"}
+        if isinstance(selector, (int, np.integer)):
+            return {"kind": "int", "value": int(selector)}
+        raise TypeError(f"Unsupported row-transformer selector {selector!r}")
+
+    @staticmethod
+    def _deserialize_selector(data):
+        kind = data["kind"]
+        if kind == "slice":
+            return slice(data.get("start"), data.get("stop"), data.get("step"))
+        if kind == "ellipsis":
+            return Ellipsis
+        if kind == "newaxis":
+            return None
+        if kind == "int":
+            return int(data["value"])
+        raise ValueError(f"Unsupported row-transformer selector kind {kind!r}")
+
+    @staticmethod
+    def _serialize_axis(axis):
+        if isinstance(axis, tuple):
+            return list(axis)
+        return axis
+
+    @staticmethod
+    def _deserialize_axis(axis):
+        if isinstance(axis, list):
+            return tuple(axis)
+        return axis
+
+    def to_metadata(self) -> dict:
+        meta = {
+            "kind": "row_transformer",
+            "source": self.source,
+            "selection": [self._serialize_selector(s) for s in self.selection],
+        }
+        if self.op is not None:
+            meta["op"] = self.op
+            meta["axis"] = self._serialize_axis(self.axis)
+            if self.ord is not None:
+                meta["ord"] = self.ord
+        return meta
+
+    @classmethod
+    def from_metadata(cls, meta: dict):
+        return cls(
+            meta["source"],
+            selection=tuple(cls._deserialize_selector(s) for s in meta.get("selection", ())),
+            op=meta.get("op"),
+            axis=cls._deserialize_axis(meta.get("axis")),
+            ord=meta.get("ord"),
+        )
+
+    def _row_axis_to_batch_axis(self, ndim: int, *, none_means_all_item: bool = False):
+        axis = self.axis
+        item_ndim = max(0, ndim - 1)
+        if axis is None:
+            return tuple(range(1, ndim)) if none_means_all_item and item_ndim else None
+
+        def one(ax):
+            ax = int(ax)
+            if ax < 0:
+                ax += item_ndim
+            if not 0 <= ax < item_ndim:
+                raise ValueError(f"axis {ax} is out of bounds for row item with {item_ndim} dimensions")
+            return ax + 1
+
+        if isinstance(axis, tuple):
+            return tuple(one(ax) for ax in axis)
+        return one(axis)
+
+    def _apply_selection(self, arr: np.ndarray) -> np.ndarray:
+        if not self.selection:
+            return arr
+        return arr[(slice(None), *self.selection)]
+
+    def evaluate_batch(self, raw_columns: Mapping[str, Any]) -> np.ndarray:
+        arr = np.asarray(raw_columns[self.source])
+        if arr.ndim == 0:
+            arr = arr.reshape((1,))
+        arr = self._apply_selection(arr)
+        if self.op is None:
+            return np.asarray(arr)
+        axis = self._row_axis_to_batch_axis(arr.ndim, none_means_all_item=True)
+        if self.op == "sum":
+            return np.asarray(np.sum(arr, axis=axis))
+        if self.op == "mean":
+            return np.asarray(np.mean(arr, axis=axis))
+        if self.op == "min":
+            return np.asarray(np.min(arr, axis=axis))
+        if self.op == "max":
+            return np.asarray(np.max(arr, axis=axis))
+        if self.op == "norm":
+            if self.axis is None:
+                return np.asarray(np.linalg.norm(arr.reshape((arr.shape[0], -1)), ord=self.ord, axis=1))
+            return np.asarray(np.linalg.norm(arr, ord=self.ord, axis=axis))
+        raise ValueError(f"Unsupported row-transformer op {self.op!r}")
+
+    def evaluate_row(self, row: Mapping[str, Any]):
+        arr = np.asarray(row[self.source])
+        if self.selection:
+            arr = arr[self.selection]
+        if self.op is None:
+            return arr
+        if self.op == "sum":
+            return np.sum(arr, axis=self.axis)
+        if self.op == "mean":
+            return np.mean(arr, axis=self.axis)
+        if self.op == "min":
+            return np.min(arr, axis=self.axis)
+        if self.op == "max":
+            return np.max(arr, axis=self.axis)
+        if self.op == "norm":
+            return np.linalg.norm(arr, ord=self.ord, axis=self.axis)
+        raise ValueError(f"Unsupported row-transformer op {self.op!r}")
+
+    def evaluate_existing(self, table: CTable) -> np.ndarray:
+        return self.evaluate_batch({self.source: table[self.source][:]})
+
+
 class Column:
     """Column view for a :class:`CTable`, with vectorized operations and reductions."""
 
@@ -600,6 +782,17 @@ class Column:
 
     def _values_from_key(self, key):  # noqa: C901
         """Materialise values for a logical index key."""
+        if isinstance(key, tuple) and self.is_ndarray:
+            if len(key) == 0:
+                raise IndexError("empty tuple index is not valid for Column")
+            row_key, inner_key = key[0], key[1:]
+            values = self._values_from_key(row_key)
+            if not inner_key:
+                return values
+            if isinstance(row_key, (int, np.integer)) and not isinstance(row_key, (bool, np.bool_)):
+                return values[inner_key]
+            return values[(slice(None), *inner_key)]
+
         if isinstance(key, int):
             n_rows = len(self)
             if key < 0:
@@ -774,7 +967,9 @@ class Column:
 
         else:
             raise TypeError(f"Invalid index type: {type(key)}")
-        self._table._root_table._mark_all_indexes_stale()
+        root = self._table._root_table
+        root._mark_generated_columns_stale(self._col_name)
+        root._mark_all_indexes_stale()
 
     def __iter__(self):
         """Iterate over live column values in insertion order, skipping deleted rows."""
@@ -805,6 +1000,13 @@ class Column:
             data_chunk = self._raw_col[chunk_start : chunk_start + actual_size]
             yield from data_chunk[mask_chunk]
 
+    @staticmethod
+    def _format_array_value(value) -> str:
+        arr = np.asarray(value)
+        if arr.ndim == 1 and arr.size <= 6:
+            return np.array2string(arr, separator=", ", max_line_width=10_000)
+        return f"ndarray(shape={arr.shape}, dtype={arr.dtype})"
+
     def __repr__(self) -> str:
         preview_len = self._REPR_PREVIEW_ITEMS + 1
         if self.is_list:
@@ -824,7 +1026,12 @@ class Column:
         if truncated:
             preview_values = preview_values[: self._REPR_PREVIEW_ITEMS]
 
-        if self.dtype is not None and self.dtype.kind in "biufc" and preview_values:
+        if self.is_ndarray and preview_values:
+            preview_items = [self._format_array_value(value) for value in preview_values]
+            if truncated:
+                preview_items.append("...")
+            preview = ", ".join(preview_items)
+        elif self.dtype is not None and self.dtype.kind in "biufc" and preview_values:
             arr = np.asarray(preview_values, dtype=self.dtype)
             preview = np.array2string(arr, separator=", ", max_line_width=10_000)[1:-1]
             if truncated:
@@ -852,6 +1059,42 @@ class Column:
             spec = self._table._schema.columns_by_name[self._col_name].spec
             return (len(self), *spec.item_shape)
         return (len(self),)
+
+    def summary(self) -> str:
+        """Return and print a compact summary for this column.
+
+        For fixed-shape ndarray columns this includes logical shape, storage, and
+        row-norm statistics when numeric.  Scalar columns fall back to ``info``.
+        """
+        if not self.is_ndarray:
+            text = str(self.info)
+            print(text)
+            return text
+        raw = self._raw_col
+        rows = len(self)
+        capacity = raw.shape[0] if hasattr(raw, "shape") else len(self._table._valid_rows)
+        lines = [
+            f"ndarray column {self._col_name!r}",
+            f"  rows       : {rows:,} live / {capacity:,} capacity",
+            f"  item_shape : {self.item_shape}",
+            f"  dtype      : {self.dtype}",
+            f"  storage    : NDArray shape={getattr(raw, 'shape', None)}, chunks={getattr(raw, 'chunks', None)}, blocks={getattr(raw, 'blocks', None)}",
+        ]
+        cbytes = getattr(raw, "cbytes", None)
+        if cbytes is not None:
+            lines.append(f"  cbytes     : {format_nbytes_info(cbytes)}")
+        if rows and self.dtype is not None and self.dtype.kind in "biufc":
+            flat = np.asarray(self[:]).reshape(rows, -1)
+            norms = np.linalg.norm(flat, axis=1)
+            lines.append(
+                "  row stats  : "
+                f"min(norm(axis=1))={norms.min():.6g}, "
+                f"mean(norm(axis=1))={norms.mean():.6g}, "
+                f"max(norm(axis=1))={norms.max():.6g}"
+            )
+        text = "\n".join(lines)
+        print(text)
+        return text
 
     @property
     def info(self) -> _CTableInfoReporter:
@@ -924,14 +1167,38 @@ class Column:
         return items
 
     @property
+    def item_shape(self) -> tuple[int, ...]:
+        """Per-row item shape; ``()`` for scalar columns."""
+        if self.is_ndarray:
+            return tuple(self._table._schema.columns_by_name[self._col_name].spec.item_shape)
+        return ()
+
+    @property
+    def item_ndim(self) -> int:
+        """Number of per-row item dimensions."""
+        return len(self.item_shape)
+
+    @property
+    def item_size(self) -> int:
+        """Number of scalar values stored in each row item."""
+        return int(np.prod(self.item_shape, dtype=np.int64)) if self.item_shape else 1
+
+    @property
     def ndim(self) -> int:
         """Number of logical dimensions."""
-        return 1
+        return 1 + self.item_ndim
 
     @property
     def size(self) -> int:
-        """Number of live values in the column."""
-        return len(self)
+        """Number of live scalar values in the logical column array."""
+        return len(self) * self.item_size
+
+    @property
+    def row_transformer(self) -> RowTransformer:
+        """Build row-wise projections/reductions for generated columns."""
+        if not self.is_ndarray:
+            raise TypeError(f"Column {self._col_name!r} is not a fixed-shape ndarray column.")
+        return RowTransformer(self._col_name)
 
     def _ensure_queryable(self) -> None:
         if self.is_varlen_scalar:
@@ -944,6 +1211,18 @@ class Column:
                 f"Column {self._col_name!r} is a dictionary column; "
                 "use == and isin() for dictionary column comparisons."
             )
+
+    def _raise_ndarray_compare(self) -> None:
+        raise TypeError(
+            f"Cannot compare ndarray column {self._col_name!r} directly; the result would not be a "
+            "1-D row mask. Use an element projection like t.embedding[:, 0] > 0.5 or an "
+            "axis-aware reduction like t.embedding.max(axis=1) > 0.5."
+        )
+
+    def _ensure_comparable(self) -> None:
+        self._ensure_queryable()
+        if self.is_ndarray:
+            self._raise_ndarray_compare()
 
     @staticmethod
     def _unwrap_operand(other):
@@ -976,6 +1255,8 @@ class Column:
 
     def _coerce_timestamp_operand(self, other):
         spec = self._timestamp_spec
+        if isinstance(other, Column) and other.is_ndarray:
+            other._raise_ndarray_compare()
         other = self._unwrap_operand(other)
         if spec is None:
             return other
@@ -1088,17 +1369,17 @@ class Column:
         return ~self._raw_col
 
     def __lt__(self, other):
-        self._ensure_queryable()
+        self._ensure_comparable()
         return self._raw_col < self._coerce_timestamp_operand(other)
 
     def __le__(self, other):
-        self._ensure_queryable()
+        self._ensure_comparable()
         return self._raw_col <= self._coerce_timestamp_operand(other)
 
     def __eq__(self, other):
         if self.is_dictionary:
             return self._dictionary_eq(other)
-        self._ensure_queryable()
+        self._ensure_comparable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._raw_col == int(other)
         return self._raw_col == self._coerce_timestamp_operand(other)
@@ -1109,7 +1390,7 @@ class Column:
             if isinstance(result, np.ndarray):
                 return ~result
             return ~np.asarray(result, dtype=bool)
-        self._ensure_queryable()
+        self._ensure_comparable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._raw_col == int(not other)
         return self._raw_col != self._coerce_timestamp_operand(other)
@@ -1188,11 +1469,11 @@ class Column:
         return mask
 
     def __gt__(self, other):
-        self._ensure_queryable()
+        self._ensure_comparable()
         return self._raw_col > self._coerce_timestamp_operand(other)
 
     def __ge__(self, other):
-        self._ensure_queryable()
+        self._ensure_comparable()
         return self._raw_col >= self._coerce_timestamp_operand(other)
 
     @property
@@ -1347,7 +1628,9 @@ class Column:
             live_pos = np.where(self._valid_rows[:])[0]
             for pos, cell in zip(live_pos, values, strict=True):
                 self._raw_col[int(pos)] = cell
-            self._table._root_table._mark_all_indexes_stale()
+            root = self._table._root_table
+            root._mark_generated_columns_stale(self._col_name)
+            root._mark_all_indexes_stale()
             return
         n_live = len(self)
         arr = np.asarray(data)
@@ -1359,7 +1642,9 @@ class Column:
             raise TypeError(f"Cannot coerce data to column dtype {self.dtype!r}: {exc}") from exc
         live_pos = np.where(self._valid_rows[:])[0]
         self._raw_col[live_pos] = arr
-        self._table._root_table._mark_all_indexes_stale()
+        root = self._table._root_table
+        root._mark_generated_columns_stale(self._col_name)
+        root._mark_all_indexes_stale()
 
     # ------------------------------------------------------------------
     # Null sentinel support
@@ -1584,7 +1869,39 @@ class Column:
         except Exception:
             return NotImplemented
 
-    def sum(self, dtype=None, *, where=None, jit=None, jit_backend=None):
+    def _ndarray_values_for_reduction(self, where=None) -> np.ndarray:
+        arr = np.asarray(self[:])
+        if where is None:
+            return arr
+        where = self._normalize_sum_where(where)
+        mask = where.compute() if isinstance(where, blosc2.LazyExpr) else where[:]
+        mask = np.asarray(mask, dtype=bool)
+        if mask.ndim != 1:
+            raise ValueError("Column reduction where= must be a 1-D row mask.")
+        if len(mask) != len(self._table._valid_rows):
+            if len(mask) != len(self):
+                raise ValueError(
+                    f"Column reduction where= mask length {len(mask)} does not match live rows {len(self)}."
+                )
+            return arr[mask]
+        live_pos = np.where(self._valid_rows[:])[0]
+        return arr[mask[live_pos]]
+
+    def _ndarray_reduce(self, op: str, *, axis=None, dtype=None, where=None, ddof: int = 0):
+        arr = self._ndarray_values_for_reduction(where=where)
+        if op == "sum":
+            return np.sum(arr, axis=axis, dtype=dtype)
+        if op == "mean":
+            return np.mean(arr, axis=axis, dtype=dtype)
+        if op == "min":
+            return np.min(arr, axis=axis)
+        if op == "max":
+            return np.max(arr, axis=axis)
+        if op == "std":
+            return np.std(arr, axis=axis, ddof=ddof, dtype=dtype)
+        raise ValueError(f"Unsupported ndarray reduction {op!r}")
+
+    def sum(self, dtype=None, axis=None, *, where=None, jit=None, jit_backend=None):
         """Sum of all live, non-null values.
 
         Returns zero for an empty column or filtered view.
@@ -1625,6 +1942,11 @@ class Column:
             # t.col2 is not its configured null sentinel.
             total = t.col2.sum(where=t.col1 < 300)
         """
+        if self.is_ndarray:
+            self._require_kind("biufc", "sum")
+            return self._ndarray_reduce("sum", axis=axis, dtype=dtype, where=where)
+        if axis not in (None, 0):
+            return np.sum(self[:], axis=axis, dtype=dtype)
         self._require_kind("biufc", "sum")
         where = self._normalize_sum_where(where)
         # Use a wide accumulator to reduce overflow risk
@@ -1696,7 +2018,7 @@ class Column:
             return NotImplemented
         return NotImplemented
 
-    def min(self, *, where=None):
+    def min(self, axis=None, *, where=None):
         """Minimum live, non-null value.
 
         Supported dtypes: bool, int, uint, float, string, bytes.
@@ -1704,6 +2026,11 @@ class Column:
         Null sentinel values are skipped. When *where* is provided, only rows
         matching the boolean predicate are included.
         """
+        if self.is_ndarray:
+            self._require_kind("biuf", "min")
+            return self._ndarray_reduce("min", axis=axis, where=where)
+        if axis not in (None, 0):
+            return np.min(self[:], axis=axis)
         self._require_kind("biufUS", "min")
         where = self._normalize_sum_where(where)
         if where is None:
@@ -1725,7 +2052,7 @@ class Column:
             raise ValueError("min() called on a column where all values are null.")
         return result
 
-    def max(self, *, where=None):
+    def max(self, axis=None, *, where=None):
         """Maximum live, non-null value.
 
         Supported dtypes: bool, int, uint, float, string, bytes.
@@ -1733,6 +2060,11 @@ class Column:
         Null sentinel values are skipped. When *where* is provided, only rows
         matching the boolean predicate are included.
         """
+        if self.is_ndarray:
+            self._require_kind("biuf", "max")
+            return self._ndarray_reduce("max", axis=axis, where=where)
+        if axis not in (None, 0):
+            return np.max(self[:], axis=axis)
         self._require_kind("biufUS", "max")
         where = self._normalize_sum_where(where)
         if where is None:
@@ -1752,7 +2084,7 @@ class Column:
             raise ValueError("max() called on a column where all values are null.")
         return result
 
-    def mean(self, *, where=None) -> float:
+    def mean(self, axis=None, *, where=None):
         """Arithmetic mean of all live, non-null values.
 
         Supported dtypes: bool, int, uint, float.
@@ -1760,6 +2092,11 @@ class Column:
         matching the boolean predicate are included.
         Always returns a Python float.
         """
+        if self.is_ndarray:
+            self._require_kind("biuf", "mean")
+            return self._ndarray_reduce("mean", axis=axis, where=where)
+        if axis not in (None, 0):
+            return np.mean(self[:], axis=axis)
         self._require_kind("biuf", "mean")
         where = self._normalize_sum_where(where)
         if where is None and len(self) == 0:
@@ -1780,7 +2117,7 @@ class Column:
             return float("nan")
         return float(total / count)
 
-    def std(self, ddof: int = 0, *, where=None) -> float:
+    def std(self, ddof: int = 0, axis=None, *, where=None):
         """Standard deviation of all live, non-null values (single-pass, Welford's algorithm).
 
         Parameters
@@ -1796,6 +2133,11 @@ class Column:
         Null sentinel values are skipped.
         Always returns a Python float.
         """
+        if self.is_ndarray:
+            self._require_kind("biuf", "std")
+            return self._ndarray_reduce("std", axis=axis, where=where, ddof=ddof)
+        if axis not in (None, 0):
+            return np.std(self[:], axis=axis, ddof=ddof)
         self._require_kind("biuf", "std")
         where = self._normalize_sum_where(where)
         if where is None and len(self) == 0:
@@ -1833,6 +2175,18 @@ class Column:
         if divisor <= 0:
             return float("nan")
         return float(np.sqrt(M2_total / divisor))
+
+    def norm(self, ord=None, axis=None, *, where=None):
+        """Vector/matrix norm of a fixed-shape ndarray column.
+
+        The column is treated as a logical array of shape ``(nrows, *item_shape)``.
+        For example, ``axis=1`` computes one norm per row for a 1-D item shape.
+        """
+        if not self.is_ndarray:
+            raise TypeError(f"Column.norm() is only supported for ndarray columns, got {self._col_name!r}.")
+        self._require_kind("biuf", "norm")
+        arr = self._ndarray_values_for_reduction(where=where)
+        return np.linalg.norm(arr, ord=ord, axis=axis)
 
     def any(self) -> bool:
         """Return True if at least one live, non-null value is True.
@@ -2633,6 +2987,11 @@ class CTable(Generic[RowT]):
             s = str(value).replace("T", " ")
             if s.endswith(".000"):
                 s = s[:-4]
+        elif isinstance(value, np.ndarray):
+            if value.ndim == 1 and value.size <= 6:
+                s = np.array2string(value, separator=", ", max_line_width=10_000)
+            else:
+                s = f"ndarray(shape={value.shape}, dtype={value.dtype})"
         else:
             s = str(value)
         if len(s) > width:
@@ -3588,7 +3947,13 @@ class CTable(Generic[RowT]):
             nc = col.null_count()
             n_nonnull = n - nc
 
-            if isinstance(spec.spec, ListSpec) if spec is not None else False:
+            if isinstance(spec.spec, NDArraySpec) if spec is not None else False:
+                lines.append(f"    count      : {n:,}")
+                lines.append(f"    item_shape : {spec.spec.item_shape}")
+                lines.append(
+                    "    (scalar stats not available for ndarray columns; use column reductions with axis=)"
+                )
+            elif isinstance(spec.spec, ListSpec) if spec is not None else False:
                 lines.append(f"    count : {n:,}")
                 lines.append("    (stats not available for list columns)")
             elif dtype.kind in "biufc" and dtype.kind != "c":
@@ -3662,6 +4027,12 @@ class CTable(Generic[RowT]):
             If the table has fewer than 2 live rows (covariance undefined).
         """
         for name in self.col_names:
+            col_info = self._schema.columns_by_name.get(name)
+            if col_info is not None and self._is_ndarray_column(col_info):
+                raise TypeError(
+                    f"Column {name!r} is a fixed-shape ndarray column and is not supported by cov(). "
+                    "Materialize scalar generated columns first."
+                )
             dtype = self._col_dtype(name)
             if dtype is None or not (
                 np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.floating) or dtype == np.bool_
@@ -3782,6 +4153,8 @@ class CTable(Generic[RowT]):
             return pa.large_binary()
         if isinstance(spec, ListSpec):
             return pa.list_(CTable._pa_type_from_spec(pa, spec.item_spec))
+        if isinstance(spec, NDArraySpec):
+            return pa.list_(pa.from_numpy_dtype(spec.dtype), list_size=int(np.prod(spec.item_shape)))
         if isinstance(spec, timestamp):
             return pa.timestamp(spec.unit, tz=spec.timezone)
         if isinstance(spec, StructSpec):
@@ -3828,14 +4201,17 @@ class CTable(Generic[RowT]):
         fields = []
         for name, arrow_name in zip(names, arrow_names, strict=True):
             cc = self._schema.columns_by_name.get(name)
+            metadata = None
             if cc is not None:
                 pa_type = self._pa_type_from_spec(pa, cc.spec)
+                if isinstance(cc.spec, NDArraySpec):
+                    metadata = {b"blosc2:ndarray_shape": json.dumps(list(cc.spec.item_shape)).encode()}
             else:
                 pa_type = pa.from_numpy_dtype(np.asarray(self[name][:0]).dtype)
-            fields.append(pa.field(arrow_name, pa_type))
+            fields.append(pa.field(arrow_name, pa_type, metadata=metadata))
         return pa.schema(fields)
 
-    def iter_arrow_batches(
+    def iter_arrow_batches(  # noqa: C901
         self,
         *,
         columns: list[str] | None = None,
@@ -3895,6 +4271,11 @@ class CTable(Generic[RowT]):
                         arrays.append(
                             pa.DictionaryArray.from_arrays(pa_indices, pa_dict, ordered=spec.ordered)
                         )
+                    continue
+                if col.is_ndarray:
+                    spec = self._schema.columns_by_name[name].spec
+                    arr = np.asarray(col[start:stop]).reshape((stop - start, -1))
+                    arrays.append(pa.array(arr.tolist(), type=self._pa_type_from_spec(pa, spec)))
                     continue
                 arr = np.asarray(col[start:stop])
                 nv = col.null_value
@@ -3971,7 +4352,10 @@ class CTable(Generic[RowT]):
         if pa.types.is_timestamp(pa_type):
             return False
         return not (
-            pa.types.is_list(pa_type) or pa.types.is_large_list(pa_type) or pa.types.is_struct(pa_type)
+            pa.types.is_list(pa_type)
+            or pa.types.is_large_list(pa_type)
+            or pa.types.is_fixed_size_list(pa_type)
+            or pa.types.is_struct(pa_type)
         )
 
     @staticmethod
@@ -3980,6 +4364,7 @@ class CTable(Generic[RowT]):
         pa_type,
         arrow_col=None,
         *,
+        field_metadata=None,
         string_max_length=None,
         null_value=None,
         nullable=False,
@@ -3988,6 +4373,30 @@ class CTable(Generic[RowT]):
         import blosc2.schema as b2s
 
         # Handle Arrow dictionary types (dict-encoded strings)
+        if pa.types.is_fixed_size_list(pa_type):
+            shape = None
+            if field_metadata:
+                encoded = field_metadata.get(b"blosc2:ndarray_shape") or field_metadata.get(
+                    "blosc2:ndarray_shape"
+                )
+                if encoded is not None:
+                    if isinstance(encoded, bytes):
+                        encoded = encoded.decode()
+                    shape = tuple(int(x) for x in json.loads(encoded))
+            if shape is None:
+                shape = (int(pa_type.list_size),)
+            value_type = pa_type.value_type
+            value_spec = CTable._arrow_type_to_spec(pa, value_type, object_fallback=object_fallback)
+            value_dtype = getattr(value_spec, "dtype", None)
+            if value_dtype is None:
+                raise TypeError(f"FixedSizeList values must have a fixed NumPy dtype, got {value_type!r}")
+            if int(np.prod(shape)) != int(pa_type.list_size):
+                raise ValueError(
+                    f"Arrow fixed-size-list metadata shape {shape} has size {int(np.prod(shape))}, "
+                    f"but the Arrow list size is {pa_type.list_size}."
+                )
+            return b2s.ndarray(shape, dtype=value_dtype)
+
         if pa.types.is_dictionary(pa_type):
             vt = pa_type.value_type
             if vt in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
@@ -4149,7 +4558,10 @@ class CTable(Generic[RowT]):
             name = field.name
             _validate_column_name(name)
             arrow_col = table_for_inference.column(name) if table_for_inference is not None else None
-            field_is_list = pa.types.is_list(field.type) or pa.types.is_large_list(field.type)
+            field_is_ndarray = pa.types.is_fixed_size_list(field.type)
+            field_is_list = (
+                pa.types.is_list(field.type) or pa.types.is_large_list(field.type)
+            ) and not field_is_ndarray
             field_is_struct = pa.types.is_struct(field.type)
             field_is_dictionary = pa.types.is_dictionary(field.type)
             column_string_max_length = cls._string_max_length_for_column(string_max_length, name)
@@ -4172,7 +4584,11 @@ class CTable(Generic[RowT]):
             null_value = None
             has_null_value_override = name in column_null_values
             if has_null_value_override and (
-                field_is_list or field_is_struct or field_is_dictionary or field_is_object_fallback
+                field_is_list
+                or field_is_ndarray
+                or field_is_struct
+                or field_is_dictionary
+                or field_is_object_fallback
             ):
                 raise TypeError(f"column_null_values only supports scalar columns; {name!r} is not scalar")
             if has_null_value_override and field_is_varlen_scalar:
@@ -4187,6 +4603,7 @@ class CTable(Generic[RowT]):
                 and field.nullable
                 and not (
                     field_is_list
+                    or field_is_ndarray
                     or field_is_struct
                     or field_is_dictionary
                     or field_is_varlen_scalar
@@ -4199,6 +4616,7 @@ class CTable(Generic[RowT]):
                 and arrow_col.null_count
                 and not (
                     field_is_list
+                    or field_is_ndarray
                     or field_is_struct
                     or field_is_dictionary
                     or field_is_varlen_scalar
@@ -4214,6 +4632,7 @@ class CTable(Generic[RowT]):
                 pa,
                 field.type,
                 arrow_col,
+                field_metadata=field.metadata,
                 string_max_length=column_string_max_length,
                 null_value=null_value,
                 nullable=field.nullable,
@@ -4221,6 +4640,7 @@ class CTable(Generic[RowT]):
             )
             if null_value is not None and not (
                 field_is_list
+                or field_is_ndarray
                 or field_is_struct
                 or field_is_dictionary
                 or field_is_varlen_scalar
@@ -4456,6 +4876,12 @@ class CTable(Generic[RowT]):
         nv = getattr(col.spec, "null_value", None)
         if col.spec.to_metadata_dict().get("kind") == "bool" and col.dtype == np.dtype(np.uint8):
             return np.array([nv if v is None else int(v) for v in arrow_col.to_pylist()], dtype=np.uint8)
+        if isinstance(col.spec, NDArraySpec):
+            values = arrow_col.to_pylist()
+            if any(v is None for v in values):
+                raise TypeError(f"Nullable ndarray Arrow column {col.name!r} is not supported yet.")
+            arr = np.asarray(values, dtype=col.dtype)
+            return arr.reshape((len(values), *col.spec.item_shape))
         if isinstance(col.spec, timestamp):
             arr = (
                 arrow_col.to_numpy(zero_copy_only=False)
@@ -5540,11 +5966,16 @@ class CTable(Generic[RowT]):
             raise ValueError("Cannot drop the last column.")
         # Guard: refuse if any computed column depends on this column
         dependents = [cc_name for cc_name, cc in self._computed_cols.items() if name in cc["col_deps"]]
+        dependents.extend(
+            mat_name
+            for mat_name, meta in self._materialized_cols.items()
+            if name in meta.get("col_deps", ())
+        )
         if dependents:
             raise ValueError(
-                f"Cannot drop column {name!r}: it is used by computed column(s) "
+                f"Cannot drop column {name!r}: it is used by computed/generated column(s) "
                 + ", ".join(repr(d) for d in dependents)
-                + ". Drop those computed columns first."
+                + ". Drop those columns first."
             )
 
         catalog = self._storage.load_index_catalog()
@@ -5746,16 +6177,21 @@ class CTable(Generic[RowT]):
                 for name, cc in self._computed_cols.items()
             ]
         if self._materialized_cols:
-            d["materialized_columns"] = [
-                {
+            materialized = []
+            for name, meta in self._materialized_cols.items():
+                entry = {
                     "name": name,
-                    "computed_column": meta["computed_column"],
-                    "expression": meta["expression"],
+                    "computed_column": meta.get("computed_column"),
+                    "expression": meta.get("expression"),
                     "col_deps": meta["col_deps"],
                     "dtype": str(meta["dtype"]),
+                    "transformer_kind": meta.get("transformer_kind", "expression"),
+                    "stale": bool(meta.get("stale", False)),
                 }
-                for name, meta in self._materialized_cols.items()
-            ]
+                if "transformer" in meta:
+                    entry["transformer"] = meta["transformer"]
+                materialized.append(entry)
+            d["materialized_columns"] = materialized
         return d
 
     def _load_computed_cols_from_schema(self, schema_dict: dict) -> None:
@@ -5783,12 +6219,17 @@ class CTable(Generic[RowT]):
     def _load_materialized_cols_from_schema(self, schema_dict: dict) -> None:
         """Reconstruct ``_materialized_cols`` from persisted metadata."""
         for meta in schema_dict.get("materialized_columns", []):
-            self._materialized_cols[meta["name"]] = {
-                "computed_column": meta["computed_column"],
-                "expression": meta["expression"],
+            loaded = {
+                "computed_column": meta.get("computed_column"),
+                "expression": meta.get("expression"),
                 "col_deps": list(meta["col_deps"]),
                 "dtype": np.dtype(meta["dtype"]),
+                "transformer_kind": meta.get("transformer_kind", "expression"),
+                "stale": bool(meta.get("stale", False)),
             }
+            if "transformer" in meta:
+                loaded["transformer"] = dict(meta["transformer"])
+            self._materialized_cols[meta["name"]] = loaded
 
     def _require_computed_column(self, name: str) -> dict:
         """Return metadata for computed column *name* or raise ``KeyError``."""
@@ -5810,9 +6251,13 @@ class CTable(Generic[RowT]):
                 raise ValueError(
                     f"Cannot auto-fill materialized column {name!r}: missing dependency columns {missing!r}."
                 )
-            operands = {f"o{i}": np.asarray([row[dep]]) for i, dep in enumerate(meta["col_deps"])}
-            values = blosc2.lazyexpr(meta["expression"], operands)[:]
-            row[name] = np.asarray(values, dtype=meta["dtype"])[0]
+            if meta.get("transformer_kind") == "row_transformer":
+                transformer = RowTransformer.from_metadata(meta["transformer"])
+                row[name] = np.asarray(transformer.evaluate_row(row), dtype=meta["dtype"])
+            else:
+                operands = {f"o{i}": np.asarray([row[dep]]) for i, dep in enumerate(meta["col_deps"])}
+                values = blosc2.lazyexpr(meta["expression"], operands)[:]
+                row[name] = np.asarray(values, dtype=meta["dtype"])[0]
         return row
 
     def _validate_no_default_columns_present(self, row: dict[str, Any]) -> None:
@@ -5850,11 +6295,15 @@ class CTable(Generic[RowT]):
                 raise ValueError(
                     f"Cannot auto-fill materialized column {name!r}: missing dependency columns {missing!r}."
                 )
-            operands = {
-                f"o{i}": blosc2.asarray(raw_columns[dep], dtype=self._cols[dep].dtype)
-                for i, dep in enumerate(meta["col_deps"])
-            }
-            values = blosc2.lazyexpr(meta["expression"], operands)[:]
+            if meta.get("transformer_kind") == "row_transformer":
+                transformer = RowTransformer.from_metadata(meta["transformer"])
+                values = transformer.evaluate_batch(raw_columns)
+            else:
+                operands = {
+                    f"o{i}": blosc2.asarray(raw_columns[dep], dtype=self._cols[dep].dtype)
+                    for i, dep in enumerate(meta["col_deps"])
+                }
+                values = blosc2.lazyexpr(meta["expression"], operands)[:]
             values = np.asarray(values, dtype=meta["dtype"])
             if len(values) != row_count:
                 raise ValueError(
@@ -5862,6 +6311,20 @@ class CTable(Generic[RowT]):
                 )
             raw_columns[name] = values
         return raw_columns
+
+    @staticmethod
+    def _coerce_generated_spec(dtype_or_spec, sample: np.ndarray | None = None) -> SchemaSpec:
+        """Resolve a generated-column dtype/spec, inferring ndarray shape when needed."""
+        if isinstance(dtype_or_spec, SchemaSpec):
+            return dtype_or_spec
+        if dtype_or_spec is None:
+            if sample is None:
+                raise TypeError("dtype is required when a generated column has no rows to infer from.")
+            arr = np.asarray(sample)
+            if arr.ndim <= 1:
+                return CTable._schema_spec_from_dtype(arr.dtype)
+            return NDArraySpec(item_shape=arr.shape[1:], dtype=arr.dtype)
+        return CTable._schema_spec_from_dtype(np.dtype(dtype_or_spec))
 
     @staticmethod
     def _schema_spec_from_dtype(dtype: np.dtype) -> SchemaSpec:
@@ -5880,26 +6343,23 @@ class CTable(Generic[RowT]):
     def _create_empty_stored_column(
         self,
         name: str,
-        dtype: np.dtype,
+        dtype: np.dtype | None,
         *,
+        spec: SchemaSpec | None = None,
         cparams: dict | None = None,
     ) -> None:
         """Create an empty stored column aligned with the table's physical row space."""
-        spec = self._schema_spec_from_dtype(dtype)
-        default = np.array(0, dtype=dtype).item() if dtype.kind not in {"U", "S"} else dtype.type()
+        if spec is None:
+            if dtype is None:
+                raise TypeError("dtype or spec is required")
+            spec = self._schema_spec_from_dtype(dtype)
+        dtype = np.dtype(spec.dtype)
+        if isinstance(spec, NDArraySpec):
+            default = np.zeros(spec.item_shape, dtype=dtype)
+        else:
+            default = np.array(0, dtype=dtype).item() if dtype.kind not in {"U", "S"} else dtype.type()
 
         capacity = len(self._valid_rows)
-        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
-        new_col = self._storage.create_column(
-            name,
-            dtype=dtype,
-            shape=(capacity,),
-            chunks=default_chunks,
-            blocks=default_blocks,
-            cparams=cparams,
-            dparams=None,
-        )
-
         compiled_col = CompiledColumn(
             name=name,
             py_type=spec.python_type,
@@ -5908,6 +6368,17 @@ class CTable(Generic[RowT]):
             default=default,
             config=ColumnConfig(cparams=cparams, dparams=None, chunks=None, blocks=None),
             display_width=compute_display_width(spec),
+        )
+        shape = self._column_physical_shape(compiled_col, capacity)
+        default_chunks, default_blocks = self._column_chunks_blocks(compiled_col, shape)
+        new_col = self._storage.create_column(
+            name,
+            dtype=dtype,
+            shape=shape,
+            chunks=default_chunks,
+            blocks=default_blocks,
+            cparams=cparams,
+            dparams=None,
         )
         self._cols[name] = new_col
         self.col_names.append(name)
@@ -6018,6 +6489,193 @@ class CTable(Generic[RowT]):
                 self.drop_column(target_name)
             raise
 
+    def _normalize_expression_transformer(self, expr) -> tuple[blosc2.LazyExpr, list[str]]:
+        if isinstance(expr, RowTransformer):
+            raise TypeError(
+                "RowTransformer instances cannot be used for computed columns; use add_generated_column()."
+            )
+        if isinstance(expr, blosc2.LazyExpr):
+            lazy = expr
+        elif callable(expr):
+            lazy = expr(self._cols)
+        elif isinstance(expr, str):
+            self._guard_scalar_expression(expr)
+            operands = self._where_expression_operands()
+            expr, operands = self._rewrite_nested_expression(expr, operands)
+            lazy = blosc2.lazyexpr(expr, operands)
+        else:
+            raise TypeError(
+                f"expr must be a callable or an expression string (or LazyExpr), got {type(expr).__name__!r}."
+            )
+        if not isinstance(lazy, blosc2.LazyExpr):
+            raise TypeError(f"expr must return a blosc2.LazyExpr, got {type(lazy).__name__!r}.")
+
+        owned_ids = {id(arr): cname for cname, arr in self._cols.items()}
+        col_deps = []
+        for key in sorted(lazy.operands.keys()):
+            arr = lazy.operands[key]
+            cname = owned_ids.get(id(arr))
+            if cname is None:
+                raise ValueError(
+                    f"Operand {key!r} in the expression does not reference a stored column of this table."
+                )
+            col_info = self._schema.columns_by_name.get(cname)
+            if col_info is not None and self._is_ndarray_column(col_info):
+                raise TypeError(
+                    f"Column {cname!r} is a fixed-shape ndarray column. Expression transformers only "
+                    "support scalar columns; use a RowTransformer for ndarray row reductions/projections."
+                )
+            col_deps.append(cname)
+        return lazy, col_deps
+
+    def _evaluate_expression_materialized_batch(
+        self, meta: dict, raw_columns: Mapping[str, Any]
+    ) -> np.ndarray:
+        operands = {
+            f"o{i}": blosc2.asarray(raw_columns[dep], dtype=self._cols[dep].dtype)
+            for i, dep in enumerate(meta["col_deps"])
+        }
+        values = blosc2.lazyexpr(meta["expression"], operands)[:]
+        return np.asarray(values, dtype=meta["dtype"])
+
+    def _mark_generated_columns_stale(self, source: str) -> None:
+        changed = False
+        for meta in self._materialized_cols.values():
+            if source in meta.get("col_deps", ()):
+                meta["stale"] = True
+                changed = True
+        if changed and isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(self._schema_dict_with_computed())
+
+    def refresh_generated_column(self, name: str) -> None:
+        """Recompute a stored generated/materialized column from its source columns."""
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
+        if name not in self._materialized_cols:
+            raise KeyError(f"{name!r} is not a generated/materialized column.")
+        meta = self._materialized_cols[name]
+        live_pos = np.where(self._valid_rows[:])[0]
+        if meta.get("transformer_kind") == "row_transformer":
+            transformer = RowTransformer.from_metadata(meta["transformer"])
+            values = np.asarray(transformer.evaluate_existing(self), dtype=meta["dtype"])
+        else:
+            raw_columns = {dep: self[dep][:] for dep in meta["col_deps"]}
+            values = self._evaluate_expression_materialized_batch(meta, raw_columns)
+        if len(values) != len(live_pos):
+            raise ValueError(
+                f"Generated column {name!r} produced {len(values)} values, expected {len(live_pos)}."
+            )
+        self._cols[name][live_pos] = values
+        meta["stale"] = False
+        self._mark_all_indexes_stale()
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(self._schema_dict_with_computed())
+
+    def refresh_generated_columns(self, *, source: str | None = None) -> None:
+        """Refresh all generated columns, optionally only those depending on *source*."""
+        for name, meta in list(self._materialized_cols.items()):
+            if source is None or source in meta.get("col_deps", ()):
+                self.refresh_generated_column(name)
+
+    def add_generated_column(  # noqa: C901
+        self,
+        name: str,
+        *,
+        values,
+        dtype=None,
+        create_index: bool = False,
+    ) -> None:
+        """Add a stored generated column maintained on append/extend.
+
+        ``values`` may be an expression string, a :class:`blosc2.LazyExpr`, a
+        callable returning a lazy expression, or a :class:`RowTransformer`.
+        """
+        if self.base is not None:
+            raise ValueError("Cannot add a generated column to a view.")
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
+        _validate_column_name(name)
+        if name in self._cols:
+            raise ValueError(f"A stored column named {name!r} already exists.")
+        if name in self._computed_cols:
+            raise ValueError(f"A computed column named {name!r} already exists.")
+
+        live_pos = np.where(self._valid_rows[:])[0]
+        if isinstance(values, RowTransformer):
+            transformer = values
+            for dep in transformer.source_columns:
+                if dep not in self._cols:
+                    raise KeyError(f"No source column named {dep!r}.")
+                col_info = self._schema.columns_by_name[dep]
+                if not self._is_ndarray_column(col_info):
+                    raise TypeError(f"RowTransformer source {dep!r} is not an ndarray column.")
+            generated_values = (
+                transformer.evaluate_existing(self)
+                if len(live_pos)
+                else transformer.evaluate_batch(
+                    {
+                        transformer.source: np.zeros(
+                            (1, *self._schema.columns_by_name[transformer.source].spec.item_shape),
+                            dtype=self._cols[transformer.source].dtype,
+                        )
+                    }
+                )[:0]
+            )
+            spec = self._coerce_generated_spec(dtype, generated_values)
+            metadata = {
+                "computed_column": None,
+                "expression": None,
+                "col_deps": list(transformer.source_columns),
+                "dtype": np.dtype(spec.dtype),
+                "transformer_kind": "row_transformer",
+                "transformer": transformer.to_metadata(),
+                "stale": False,
+            }
+        else:
+            lazy, col_deps = self._normalize_expression_transformer(values)
+            generated_values = np.asarray(lazy[:])
+            if generated_values.ndim != 1:
+                raise TypeError("Expression generated columns must produce a 1-D scalar result.")
+            generated_values = (
+                generated_values[live_pos]
+                if len(generated_values) == len(self._valid_rows)
+                else generated_values
+            )
+            spec = self._coerce_generated_spec(dtype, generated_values)
+            metadata = {
+                "computed_column": None,
+                "expression": lazy.expression,
+                "col_deps": col_deps,
+                "dtype": np.dtype(spec.dtype),
+                "transformer_kind": "expression",
+                "stale": False,
+            }
+        if create_index and isinstance(spec, NDArraySpec):
+            raise ValueError("Generated columns intended for indexing must be 1-D scalar columns.")
+        generated_values = np.asarray(generated_values, dtype=spec.dtype)
+        if len(generated_values) != len(live_pos):
+            raise ValueError(
+                f"Generated column {name!r} produced {len(generated_values)} values, expected {len(live_pos)}."
+            )
+        if isinstance(spec, NDArraySpec) and generated_values.shape != (len(live_pos), *spec.item_shape):
+            raise ValueError(
+                f"Generated column {name!r} expected shape {(len(live_pos), *spec.item_shape)}, got {generated_values.shape}."
+            )
+
+        self._create_empty_stored_column(name, np.dtype(spec.dtype), spec=spec)
+        self._materialized_cols[name] = metadata
+        try:
+            if len(live_pos):
+                self._cols[name][live_pos] = generated_values
+            if create_index:
+                self.create_index(name)
+        except Exception:
+            with contextlib.suppress(Exception):
+                self.drop_column(name)
+            raise
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(self._schema_dict_with_computed())
+
     def add_computed_column(
         self,
         name: str,
@@ -6064,31 +6722,7 @@ class CTable(Generic[RowT]):
         if name in self._computed_cols:
             raise ValueError(f"A computed column named {name!r} already exists.")
 
-        # Build the LazyExpr
-        if callable(expr):
-            lazy = expr(self._cols)
-        elif isinstance(expr, str):
-            lazy = blosc2.lazyexpr(expr, self._cols)
-        else:
-            raise TypeError(f"expr must be a callable or an expression string, got {type(expr).__name__!r}.")
-        if not isinstance(lazy, blosc2.LazyExpr):
-            raise TypeError(f"expr must return a blosc2.LazyExpr, got {type(lazy).__name__!r}.")
-
-        # Verify all operands are stored columns of *this* table and record their names
-        owned_ids = {id(arr): cname for cname, arr in self._cols.items()}
-        sorted_keys = sorted(lazy.operands.keys())  # ["o0", "o1", ...]
-        col_deps = []
-        for key in sorted_keys:
-            arr = lazy.operands[key]
-            cname = owned_ids.get(id(arr))
-            if cname is None:
-                raise ValueError(
-                    f"Operand {key!r} in the expression does not reference a stored "
-                    f"column of this table.  Only stored columns may be used as "
-                    f"dependencies (for v1 computed columns cannot depend on each other)."
-                )
-            col_deps.append(cname)
-
+        lazy, col_deps = self._normalize_expression_transformer(expr)
         result_dtype = np.dtype(dtype) if dtype is not None else lazy.dtype
 
         self._computed_cols[name] = {
@@ -6404,6 +7038,12 @@ class CTable(Generic[RowT]):
         for name in cols:
             if name not in self._cols and name not in self._computed_cols:
                 raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
+            col_info = self._schema.columns_by_name.get(name)
+            if col_info is not None and self._is_ndarray_column(col_info):
+                raise TypeError(
+                    f"Cannot sort by ndarray column {name!r} with per-row shape {col_info.spec.item_shape}. "
+                    "Materialize a scalar generated column first, e.g. embedding_norm or embedding_max."
+                )
             dtype = self._col_dtype(name)
             if dtype is None:
                 cc = self._schema.columns_by_name.get(name)
@@ -7388,6 +8028,12 @@ class CTable(Generic[RowT]):
             )
 
         col_arr = self._cols[col_name]
+        if isinstance(self._schema.columns_by_name[col_name].spec, NDArraySpec):
+            spec = self._schema.columns_by_name[col_name].spec
+            raise ValueError(
+                f"Cannot create an index on ndarray column {col_name!r} with per-row shape {spec.item_shape}. "
+                "Materialize a scalar generated column first, e.g. embedding_norm or embedding_max."
+            )
         if isinstance(self._schema.columns_by_name[col_name].spec, ListSpec):
             raise ValueError(f"Cannot create an index on list column {col_name!r} in V1.")
         if isinstance(
@@ -8146,6 +8792,7 @@ class CTable(Generic[RowT]):
                 self._is_list_column(col)
                 or self._is_varlen_scalar_column(col)
                 or self._is_dictionary_column(col)
+                or self._is_ndarray_column(col)
             ):
                 operands[name] = arr
         operands.update({name: cc["lazy"] for name, cc in self._computed_cols.items()})
@@ -8177,15 +8824,25 @@ class CTable(Generic[RowT]):
                 new_operands[alias] = new_operands.pop(name)
         return rewritten, new_operands
 
-    def _guard_varlen_scalar_expression(self, expr: str) -> None:
+    @staticmethod
+    def _expression_references_name(expr: str, name: str) -> bool:
+        return re.search(rf"(?<![\w.]){re.escape(name)}(?![\w.])", expr) is not None
+
+    def _guard_scalar_expression(self, expr: str) -> None:
         for col in self._schema.columns:
-            if self._is_varlen_scalar_column(col) and re.search(
-                rf"(?<!\w){re.escape(col.name)}(?!\w)", expr
-            ):
+            if self._is_ndarray_column(col) and self._expression_references_name(expr, col.name):
+                raise TypeError(
+                    f"Column {col.name!r} is a fixed-shape ndarray column. String expressions only "
+                    "support scalar columns. Use an element projection or a row-wise reduction first."
+                )
+            if self._is_varlen_scalar_column(col) and self._expression_references_name(expr, col.name):
                 raise NotImplementedError(
                     f"Column {col.name!r} is a variable-length scalar column (vlstring/vlbytes/struct/object); "
                     "lazy expressions are not supported yet."
                 )
+
+    def _guard_varlen_scalar_expression(self, expr: str) -> None:
+        self._guard_scalar_expression(expr)
 
     def where(
         self,
@@ -8307,10 +8964,20 @@ class CTable(Generic[RowT]):
                 return result if columns is None else result.select(list(columns))
 
         filter = expr_result.compute() if isinstance(expr_result, blosc2.LazyExpr) else expr_result
+        if getattr(filter, "ndim", 1) != 1:
+            raise ValueError(
+                "CTable.where() requires a 1-D row mask. Reduce ndarray-column predicates to one "
+                "boolean per row before filtering."
+            )
 
         target_len = len(self._valid_rows)
 
-        if len(filter) > target_len:
+        if len(filter) == self.nrows and len(filter) != target_len:
+            physical = blosc2.zeros(target_len, dtype=np.bool_)
+            live_pos = np.where(self._valid_rows[:])[0]
+            physical[live_pos] = filter[:]
+            filter = physical
+        elif len(filter) > target_len:
             filter = filter[:target_len]
         elif len(filter) < target_len:
             padding = blosc2.zeros(target_len, dtype=np.bool_)

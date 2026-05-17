@@ -627,7 +627,15 @@ Disable the overloaded equal operator.
 # Delayed imports for avoiding overwriting of python builtins.
 # Note: bool, bytes, string shadow builtins in the blosc2 namespace by design —
 # they are schema spec constructors (b2.bool(), b2.bytes(), etc.).
-from .ctable import DEFAULT_NULL_POLICY, Column, CTable, NullPolicy, get_null_policy, null_policy
+from .ctable import (
+    DEFAULT_NULL_POLICY,
+    Column,
+    CTable,
+    NullPolicy,
+    RowTransformer,
+    get_null_policy,
+    null_policy,
+)
 from .groupby import CTableGroupBy, group_reduce
 from .ndarray import (
     abs,
@@ -759,6 +767,12 @@ from .schema import (
     vlstring,
 )
 
+# ``blosc2.ndarray`` is the fixed-shape CTable schema constructor.  Historically
+# some callers also accessed ``blosc2.ndarray.NDArray`` after importing the
+# package, so keep that compatibility attribute on the constructor function.
+ndarray.NDArray = NDArray
+ndarray.NDField = NDField
+
 __all__ = [  # noqa : RUF022
     # Constants
     "EXTENDED_HEADER_LENGTH",
@@ -812,6 +826,7 @@ __all__ = [  # noqa : RUF022
     "C2Array",
     "CParams",
     "CTableGroupBy",
+    "RowTransformer",
     "Batch",
     "BatchArray",
     # Enums

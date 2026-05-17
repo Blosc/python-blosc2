@@ -184,137 +184,164 @@ scalar/vector columns.  This is consistent with the existing
 `add_computed_column()` name while making the storage/maintenance semantics
 explicit.
 
-The first use case is ndarray reductions that produce one value per row:
+Generated columns are real stored columns declared from source columns and
+maintained by the table.  They differ from virtual computed columns, which are
+not stored and are evaluated lazily.  Generated columns are cheap to query
+repeatedly and directly indexable, at the cost of storage and maintenance.
+
+#### Row-oriented ndarray transformers
+
+For ndarray columns, use a column-bound `row_transformer`.  It transforms each
+row value independently and sees only the per-row `item_shape`, not the table's
+leading `nrows` dimension.  Thus, for an embedding with item shape `(dim,)`,
+`axis=0` means the embedding-coordinate axis.
 
 ```python
 t.add_generated_column(
     "embedding_norm",
-    transform=blosc2.transform.norm("embedding", axis=1, ord=2),
+    values=t["embedding"].row_transformer.norm(axis=0, ord=2),
     dtype=blosc2.float64(),
     create_index=True,
 )
 
 t.add_generated_column(
     "embedding_max",
-    transform=blosc2.transform.max("embedding", axis=1),
+    values=t["embedding"].row_transformer.max(axis=0),
     dtype=blosc2.float32(),
 )
 
 t.add_generated_column(
     "embedding_0",
-    transform=blosc2.transform["embedding", 0],
+    values=t["embedding"].row_transformer[0],
     dtype=blosc2.float32(),
 )
 ```
 
-The concept is general: a **generated column** is a real stored column
-maintained from one or more source columns.  `add_generated_column()` should
-accept a `blosc2.Transform` object built by the `blosc2.transform` singleton
-namespace/factory.
+For image-like rows with item shape `(H, W, C)`:
 
-Scalar expression transform example:
+```python
+t.add_generated_column(
+    "image_mean_rgb",
+    values=t["image"].row_transformer.mean(axis=(0, 1)),
+    dtype=blosc2.ndarray((3,), dtype=blosc2.float32()),
+)
+
+t.add_generated_column(
+    "red_channel_mean",
+    values=t["image"].row_transformer[:, :, 0].mean(axis=(0, 1)),
+    dtype=blosc2.float32(),
+)
+```
+
+#### Expression transformers
+
+For scalar expressions, keep the same ergonomic forms as computed columns:
 
 ```python
 t.add_generated_column(
     "total",
-    transform=blosc2.transform("price * qty"),
+    values="price * qty",
     dtype=blosc2.float64(),
     create_index=True,
 )
-```
 
-Other transform examples:
+t.add_generated_column(
+    "big_tip",
+    values=(t.payment.tips > 100),
+    dtype=blosc2.bool(),
+    create_index=True,
+)
 
-```python
 t.add_generated_column(
     "price_with_tax",
-    transform=blosc2.transform("price * 1.21"),
+    values=lambda cols: cols["price"] * 1.21,
     dtype=blosc2.float64(),
 )
 ```
 
-A generated column differs from a virtual computed column: it is declared from
-source columns and maintained by the table. In this plan, generated columns are
-stored on disk/in memory.  This makes them cheap to query repeatedly and
-directly indexable, at the cost of storage and maintenance.
-
-Example:
+Equivalent manual workflow for the embedding norm today would be:
 
 ```python
-t.add_generated_column(
-    "embedding_norm",
-    transform=blosc2.transform.norm("embedding", axis=1, ord=2),
-    dtype=blosc2.float64(),
-    create_index=True,
-)
-
-print(t.embedding_norm[:])  # materialized norms, one per row
-view = t.where(t.embedding_norm > 5.0)  # can use the index
-```
-
-Equivalent manual workflow today would be:
-
-```python
-values = t.embedding.norm(axis=1)[:]
+values = np.linalg.norm(t.embedding[:], axis=1)
 t.add_column("embedding_norm", blosc2.field(blosc2.float64(), default=0.0))
 t.embedding_norm[:] = values
 t.create_index("embedding_norm")
 ```
 
-Suggested signature:
+Suggested signatures:
 
 ```python
 def add_generated_column(
     self,
     name: str,
     *,
-    transform: blosc2.Transform,
+    values: (
+        str
+        | blosc2.LazyExpr
+        | Callable[[dict[str, blosc2.NDArray]], blosc2.LazyExpr]
+        | RowTransformer
+    ),
     dtype=None,
     create_index: bool = False,
 ) -> None: ...
+
+
+def add_computed_column(
+    self,
+    name: str,
+    expr: (
+        str | blosc2.LazyExpr | Callable[[dict[str, blosc2.NDArray]], blosc2.LazyExpr]
+    ),
+    *,
+    dtype=None,
+) -> None: ...
 ```
 
-Validation rules:
+`add_computed_column()` should not accept `RowTransformer` in v1.  A
+`RowTransformer` often represents row-wise ndarray reductions/projections that
+cannot yet be represented as a virtual LazyExpr.  If such support is added later,
+`add_computed_column()` can accept only `RowTransformer` instances that implement
+a lazy lowering path; otherwise it should raise a clear error recommending
+`add_generated_column()`.
 
-- `transform` must be a `blosc2.Transform` instance
-- string expressions are represented as `blosc2.transform("price * qty")`
-- ndarray projections are represented as `blosc2.transform["embedding", 0]`
-- reductions follow logical `(nrows, *item_shape)` axis semantics, e.g. `blosc2.transform.norm("embedding", axis=1)`
-- source columns are taken from `transform.source_columns`
+Validation rules for generated columns:
+
+- string / LazyExpr / callable transformers follow the same dependency rules as computed columns
+- `RowTransformer` is accepted only by `add_generated_column()`
+- source columns are taken from the normalized transformer metadata
 - generated columns are always stored and maintained; virtual columns remain the job of `add_computed_column()`
+- generated columns intended for indexing must produce a 1-D result with length `nrows`
 
-`blosc2.transform` API sketch:
+`RowTransformer` API sketch:
 
 ```python
-blosc2.transform("price * qty")  # expression transform
-blosc2.transform.norm("embedding", axis=1, ord=2)
-blosc2.transform.max("embedding", axis=1)
-blosc2.transform.mean("image", axis=(1, 2))  # shape (nrows, C)
-blosc2.transform["embedding", 0]  # per-row item projection
-blosc2.transform["image", :, :, 0]  # per-row item projection with slices
+t["embedding"].row_transformer.norm(axis=0, ord=2)
+t["embedding"].row_transformer.max(axis=0)
+t["image"].row_transformer.mean(axis=(0, 1))
+t["embedding"].row_transformer[0]
+t["image"].row_transformer[:, :, 0]
 ```
 
-It is a callable singleton namespace/factory.  All constructors return a
-`blosc2.Transform` object with at least:
+A `RowTransformer` object should expose at least:
 
 ```python
-transform.kind
-transform.source_columns
-transform.to_metadata()
-transform.evaluate_existing(table)
-transform.evaluate_batch(raw_columns)
+transformer.kind
+transformer.source_columns
+transformer.to_metadata()
+transformer.evaluate_existing(table)
+transformer.evaluate_batch(raw_columns)
 ```
 
 The helper should:
 
 - choose or validate output dtype
-- validate output shape is 1-D for scalar generated columns
+- validate output shape is compatible with the requested generated column spec
 - write existing rows immediately
 - register generated-column metadata so `append()` / `extend()` can auto-fill new rows
 - mark a created index as stale, or rebuild/update it, when new rows arrive
 - optionally create an index immediately
 
-Suggested metadata shape:
+Suggested row-transformer metadata shape:
 
 ```python
 {
@@ -325,11 +352,12 @@ Suggested metadata shape:
     "maintain_on_append": True,
     "stale_on_source_update": True,
     "dtype": "float64",
-    "transform": {
-        "kind": "ndarray_row_reduction",
+    "transformer": {
+        "kind": "row_reduction",
+        "source": "embedding",
         "op": "norm",
         "ord": 2,
-        "axis": 1,
+        "axis": 0,
     },
     "index": {
         "create": True,
@@ -338,7 +366,7 @@ Suggested metadata shape:
 }
 ```
 
-Expression-generated columns use expression transform metadata:
+Expression-generated columns use expression transformer metadata:
 
 ```python
 {
@@ -349,7 +377,7 @@ Expression-generated columns use expression transform metadata:
     "maintain_on_append": True,
     "stale_on_source_update": True,
     "dtype": "float64",
-    "transform": {
+    "transformer": {
         "kind": "expression",
         "expression": "price * qty",
     },
@@ -361,7 +389,7 @@ Expected maintenance behavior:
 ```python
 t.add_generated_column(
     "embedding_norm",
-    transform=blosc2.transform.norm("embedding", axis=1, ord=2),
+    values=t["embedding"].row_transformer.norm(axis=0, ord=2),
     dtype=blosc2.float64(),
     create_index=True,
 )

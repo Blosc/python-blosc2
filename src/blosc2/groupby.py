@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
-from blosc2.schema import DictionarySpec, SchemaSpec, float64, int64
+from blosc2.schema import DictionarySpec, NDArraySpec, SchemaSpec, float64, int64
 from blosc2.schema import bool as b2_bool
 from blosc2.schema import field as b2_field
 
@@ -90,6 +90,11 @@ class CTableGroupBy:
             if name not in table._cols:
                 raise KeyError(f"No column named {name!r}. Available: {table.col_names}")
             col_info = table._schema.columns_by_name[name]
+            if isinstance(col_info.spec, NDArraySpec):
+                raise TypeError(
+                    f"Cannot group by ndarray column {name!r} with per-row shape {col_info.spec.item_shape}. "
+                    "Materialize a scalar generated column first, e.g. embedding_norm or embedding_max."
+                )
             if table._is_list_column(col_info) or table._is_varlen_scalar_column(col_info):
                 raise TypeError(f"Cannot group by variable-length/list column {name!r} in Phase 1")
 
@@ -199,6 +204,11 @@ class CTableGroupBy:
         col_info = self.table._schema.columns_by_name[name]
         if self.table._is_list_column(col_info) or self.table._is_varlen_scalar_column(col_info):
             raise TypeError(f"Cannot aggregate variable-length/list column {name!r} in Phase 1")
+        if isinstance(col_info.spec, NDArraySpec):
+            raise TypeError(
+                f"Cannot aggregate ndarray column {name!r} with per-row shape {col_info.spec.item_shape}. "
+                "Materialize a scalar generated column first."
+            )
         if self.table._is_dictionary_column(col_info):
             raise TypeError(f"Cannot aggregate dictionary column {name!r} in Phase 1")
 
@@ -1579,8 +1589,11 @@ def _try_dense_integer(keys: np.ndarray, values: np.ndarray | None, op: str, *, 
     keys_present = np.zeros(max_key + 1, dtype=bool)
 
     if op == "size":
+        kernel = getattr(groupby_ext, "groupby_dense_int_size_checked", None)
+        if kernel is None:
+            return None
         counts = np.zeros(max_key + 1, dtype=np.int64)
-        groupby_ext.groupby_dense_int_size_checked(keys, valid, counts, keys_present, False, 0)
+        kernel(keys, valid, counts, keys_present, False, 0)
         groups = np.nonzero(keys_present)[0].astype(key_dtype if key_dtype.kind != "b" else np.bool_)
         result = counts[np.nonzero(keys_present)[0]]
         return _maybe_sort(groups, result, sort)
@@ -1588,11 +1601,12 @@ def _try_dense_integer(keys: np.ndarray, values: np.ndarray | None, op: str, *, 
     assert values is not None
     value_dtype = np.dtype(values.dtype)
     if op == "count":
+        kernel = getattr(groupby_ext, "groupby_dense_int_count_checked", None)
+        if kernel is None:
+            return None
         counts = np.zeros(max_key + 1, dtype=np.int64)
         values_valid = _values_valid(values)
-        groupby_ext.groupby_dense_int_count_checked(
-            keys, valid, np.ascontiguousarray(values_valid), counts, keys_present, False, 0
-        )
+        kernel(keys, valid, np.ascontiguousarray(values_valid), counts, keys_present, False, 0)
         codes = np.nonzero(keys_present)[0]
         return _maybe_sort(
             codes.astype(key_dtype if key_dtype.kind != "b" else np.bool_), counts[codes], sort
@@ -1602,20 +1616,22 @@ def _try_dense_integer(keys: np.ndarray, values: np.ndarray | None, op: str, *, 
         vals = np.ascontiguousarray(values.astype(np.float64, copy=False))
         skip_nan = value_dtype.kind == "f"
         if op == "sum":
+            kernel = getattr(groupby_ext, "groupby_dense_int_f64_sum_checked", None)
+            if kernel is None:
+                return None
             sums = np.zeros(max_key + 1, dtype=np.float64)
             present = np.zeros(max_key + 1, dtype=bool)
-            groupby_ext.groupby_dense_int_f64_sum_checked(
-                keys, vals, valid, sums, present, keys_present, False, 0, skip_nan
-            )
+            kernel(keys, vals, valid, sums, present, keys_present, False, 0, skip_nan)
             codes = np.nonzero(keys_present)[0]
             result = sums[codes]
             result[~present[codes]] = np.nan
         elif op == "mean":
+            kernel = getattr(groupby_ext, "groupby_dense_int_f64_mean_checked", None)
+            if kernel is None:
+                return None
             sums = np.zeros(max_key + 1, dtype=np.float64)
             counts = np.zeros(max_key + 1, dtype=np.int64)
-            groupby_ext.groupby_dense_int_f64_mean_checked(
-                keys, vals, valid, sums, counts, keys_present, False, 0, skip_nan
-            )
+            kernel(keys, vals, valid, sums, counts, keys_present, False, 0, skip_nan)
             codes = np.nonzero(keys_present)[0]
             result = np.full(len(codes), np.nan, dtype=np.float64)
             ok = counts[codes] > 0
@@ -1623,7 +1639,9 @@ def _try_dense_integer(keys: np.ndarray, values: np.ndarray | None, op: str, *, 
         elif op in {"min", "max"}:
             state = np.zeros(max_key + 1, dtype=np.float64)
             has_value = np.zeros(max_key + 1, dtype=bool)
-            kernel = getattr(groupby_ext, f"groupby_dense_int_f64_{op}_checked")
+            kernel = getattr(groupby_ext, f"groupby_dense_int_f64_{op}_checked", None)
+            if kernel is None:
+                return None
             kernel(keys, vals, valid, state, has_value, keys_present, False, 0, skip_nan)
             codes = np.nonzero(keys_present)[0]
             result = state[codes]
@@ -1667,7 +1685,10 @@ def _try_float_hash(keys: np.ndarray, values: np.ndarray | None, op: str, *, sor
         values_valid = np.ascontiguousarray(_values_valid(values))
         has_values = True
 
-    groups, row_counts, value_counts, sums, mins, maxs, has_value = groupby_ext.groupby_hash_f64_f64(
+    kernel = getattr(groupby_ext, "groupby_hash_f64_f64", None)
+    if kernel is None:
+        return None
+    groups, row_counts, value_counts, sums, mins, maxs, has_value = kernel(
         keys_f64, values_f64, valid, values_valid, has_values, dropna
     )
     groups = groups.astype(key_dtype, copy=False)
