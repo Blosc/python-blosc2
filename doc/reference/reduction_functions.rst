@@ -14,7 +14,6 @@ Reduction operations can be used with any of :ref:`NDArray <NDArray>`, :ref:`C2A
     argmax
     argmin
     count_nonzero
-    group_reduce
     cumulative_prod
     cumulative_sum
     max
@@ -32,7 +31,6 @@ Reduction operations can be used with any of :ref:`NDArray <NDArray>`, :ref:`C2A
 .. autofunction:: blosc2.argmax
 .. autofunction:: blosc2.argmin
 .. autofunction:: blosc2.count_nonzero
-.. autofunction:: blosc2.group_reduce
 .. autofunction:: blosc2.cumulative_prod
 .. autofunction:: blosc2.cumulative_sum
 .. autofunction:: blosc2.max

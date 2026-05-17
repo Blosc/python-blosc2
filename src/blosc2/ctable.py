@@ -7083,7 +7083,10 @@ class CTable(Generic[RowT]):
           :meth:`where`.  Dotted names (e.g. ``"trip.begin.lon"``) select
           nested leaf columns directly; a struct-prefix name
           (e.g. ``"trip.begin"``) that matches multiple descendant leaves returns
-          a :class:`_StructPathColumn` view.
+          a :class:`_StructPathColumn` view.  This item-access form is the
+          canonical way to access columns and works for every column name,
+          including names that are not valid Python identifiers or that collide
+          with existing :class:`CTable` attributes or methods.
         - boolean :class:`blosc2.LazyExpr` or :class:`blosc2.NDArray`: return the
           same filtered view as :meth:`where`, e.g. ``t[t.temperature_f > 70]``.
         - ``int``: return one live row as a namedtuple-like object.
@@ -7116,6 +7119,14 @@ class CTable(Generic[RowT]):
 
             lons = t["trip.begin.lon"]   # Column for the nested leaf
             lons = t.trip.begin.lon      # equivalent attribute-chain form
+
+        Attribute access is only a convenience fallback.  If a column name is
+        not a valid identifier, or if it conflicts with an existing table
+        attribute or method such as ``nrows``, ``where`` or ``sort_by``, use item
+        access instead::
+
+            col = t["where"]             # column named "where"
+            method = t.where             # CTable.where method
         """
         if isinstance(key, str):
             physical = self._logical_to_physical_name(key)
@@ -7141,6 +7152,14 @@ class CTable(Generic[RowT]):
         return None
 
     def __getattr__(self, s: str):
+        """Convenience fallback for attribute-style column access.
+
+        This is called only after normal Python attribute lookup fails.  Thus
+        ``t.name`` can return a column only for non-conflicting identifier-like
+        column names.  For columns whose names conflict with existing CTable
+        attributes/methods, or are not valid identifiers, use the canonical item
+        access form ``t["name"]``.
+        """
         physical = self._logical_to_physical_name(s)
         if physical in self._cols or physical in self._computed_cols:
             return Column(self, physical)
