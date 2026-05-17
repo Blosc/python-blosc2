@@ -5783,8 +5783,8 @@ class CTable(Generic[RowT]):
         """Write all live rows to a CSV file.
 
         Uses Python's stdlib ``csv`` module — no extra dependency required.
-        Each column is materialised once via ``col[:]``; rows
-        are then written one at a time.
+        Fixed-shape ndarray column cells are serialised as JSON arrays for
+        readability and shape safety (e.g. ``"[1.0, 2.0, 3.0]"``).
 
         Parameters
         ----------
@@ -5797,7 +5797,22 @@ class CTable(Generic[RowT]):
         """
         import csv
 
-        arrays = [self[name][:] for name in self.col_names]
+        n = len(self)
+        arrays: list = []
+        for name in self.col_names:
+            col = self[name]
+            if col.is_ndarray:
+                arr = col[:]
+                null_mask = col._null_mask_for(arr)
+                json_strings: list[str] = []
+                for i in range(n):
+                    if null_mask[i]:
+                        json_strings.append("")
+                    else:
+                        json_strings.append(json.dumps(arr[i].tolist()))
+                arrays.append(json_strings)
+            else:
+                arrays.append(col[:])
 
         with open(path, "w", newline="") as f:
             writer = csv.writer(f, delimiter=sep)
@@ -5805,6 +5820,29 @@ class CTable(Generic[RowT]):
                 writer.writerow(self.col_names)
             for row in zip(*arrays, strict=True):
                 writer.writerow(row)
+
+    @staticmethod
+    def _csv_ndarray_col_to_array(raw: list[str], col) -> np.ndarray:
+        """Convert a list of JSON-array CSV strings to a stacked ndarray for an ndarray column."""
+        spec = col.spec
+        null_value = getattr(spec, "null_value", None)
+        item_shape = spec.item_shape
+        dtype = spec.dtype
+
+        rows = []
+        for val in raw:
+            stripped = val.strip()
+            if stripped == "" and null_value is not None:
+                rows.append(np.full(item_shape, null_value, dtype=dtype))
+            else:
+                arr = np.array(json.loads(stripped), dtype=dtype)
+                if arr.shape != item_shape:
+                    raise ValueError(
+                        f"Column {col.name!r}: expected item shape {item_shape}, got {arr.shape}"
+                    )
+                rows.append(arr)
+
+        return np.ascontiguousarray(rows, dtype=dtype)
 
     @staticmethod
     def _csv_col_to_array(raw: list[str], col, nv) -> np.ndarray:
@@ -5930,9 +5968,164 @@ class CTable(Generic[RowT]):
 
         if n > 0:
             for i, col in enumerate(schema.columns):
-                nv = getattr(col.spec, "null_value", None)
-                arr = cls._csv_col_to_array(col_data[i], col, nv)
+                if isinstance(col.spec, NDArraySpec):
+                    arr = cls._csv_ndarray_col_to_array(col_data[i], col)
+                else:
+                    nv = getattr(col.spec, "null_value", None)
+                    arr = cls._csv_col_to_array(col_data[i], col, nv)
                 new_cols[col.name][:n] = arr
+            new_valid[:n] = True
+            obj._n_rows = n
+            obj._last_pos = n
+
+        return obj
+
+    # ------------------------------------------------------------------
+    # Pandas / DataFrame interop
+    # ------------------------------------------------------------------
+
+    def to_pandas(self):
+        """Convert to a `pandas <https://pandas.pydata.org>`_ DataFrame.
+
+        Scalar columns become regular DataFrame columns.  Fixed-shape ndarray
+        columns become ``object``-dtype columns whose cells hold NumPy arrays
+        of per-row shape *item_shape*.
+
+        Returns
+        -------
+        pandas.DataFrame
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> from dataclasses import dataclass
+        >>> import numpy as np
+        >>> @dataclass
+        ... class Row:
+        ...     id: int = blosc2.field(blosc2.int64())
+        ...     embedding: object = blosc2.field(blosc2.ndarray((3,), dtype=blosc2.float32()))
+        >>> t = blosc2.CTable(Row, new_data=[
+        ...     (1, np.array([1, 2, 3], dtype=np.float32)),
+        ...     (2, np.array([4, 5, 6], dtype=np.float32)),
+        ... ])
+        >>> df = t.to_pandas()
+        >>> df["id"].tolist()
+        [1, 2]
+        >>> df["embedding"].dtype
+        dtype('O')
+        >>> np.testing.assert_array_equal(df["embedding"][0], np.array([1, 2, 3], dtype=np.float32))
+        """
+        import pandas as pd
+
+        data = {}
+        n = len(self)
+        for name in self.col_names:
+            col = self[name]
+            if col.is_ndarray:
+                data[name] = [col[i] for i in range(n)]
+            else:
+                data[name] = col[:]
+
+        return pd.DataFrame(data)
+
+    @classmethod
+    def from_pandas(cls, df, row_cls) -> CTable:
+        """Build a :class:`CTable` from a pandas DataFrame.
+
+        Schema comes from *row_cls* (a dataclass) — CTable is always typed.
+        Object-dtype DataFrame columns are **not** automatically inferred as
+        ndarray columns; the *row_cls* must explicitly declare
+        :func:`blosc2.ndarray` fields.
+
+        Parameters
+        ----------
+        df:
+            Source pandas DataFrame.
+        row_cls:
+            A dataclass whose fields define the column names and types.
+
+        Returns
+        -------
+        CTable
+            A new CTable containing all DataFrame rows.
+
+        Raises
+        ------
+        TypeError
+            If *row_cls* is not a dataclass.
+        ValueError
+            If DataFrame columns do not match the *row_cls* schema.
+        """
+        schema = compile_schema(row_cls)
+        cls._resolve_nullable_specs(schema)
+
+        # Validate column names
+        schema_names = [col.name for col in schema.columns]
+        missing = [name for name in schema_names if name not in df.columns]
+        if missing:
+            raise ValueError(f"DataFrame missing columns declared in row_cls: {missing}")
+        extra = [name for name in df.columns if name not in schema_names]
+        if extra:
+            raise ValueError(f"DataFrame has extra columns not in row_cls: {extra}")
+
+        n = len(df)
+        capacity = max(n, 1)
+        default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        mem_storage = InMemoryTableStorage()
+
+        new_valid = mem_storage.create_valid_rows(
+            shape=(capacity,),
+            chunks=default_chunks,
+            blocks=default_blocks,
+        )
+        new_cols: dict[str, blosc2.NDArray] = {}
+        for col in schema.columns:
+            shape = cls._column_physical_shape(col, capacity)
+            chunks, blocks = cls._column_chunks_blocks(col, shape)
+            new_cols[col.name] = mem_storage.create_column(
+                col.name,
+                dtype=col.dtype,
+                shape=shape,
+                chunks=chunks,
+                blocks=blocks,
+                cparams=None,
+                dparams=None,
+            )
+
+        obj = cls.__new__(cls)
+        obj._row_type = row_cls
+        obj._validate = True
+        obj._table_cparams = None
+        obj._table_dparams = None
+        obj._storage = mem_storage
+        obj._read_only = False
+        obj._schema = schema
+        obj._cols = new_cols
+        obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
+        obj.col_names = [col.name for col in schema.columns]
+        obj.auto_compact = False
+        obj.base = None
+        obj._computed_cols = {}
+        obj._materialized_cols = {}
+        obj._expr_index_arrays = {}
+        obj._valid_rows = new_valid
+        obj._n_rows = 0
+        obj._last_pos = 0
+
+        if n > 0:
+            for col in schema.columns:
+                series = df[col.name]
+                if isinstance(col.spec, NDArraySpec):
+                    vals = series.values
+                    if vals.dtype != object:
+                        raise ValueError(
+                            f"Column {col.name!r}: expected object dtype in DataFrame "
+                            f"for ndarray column, got {vals.dtype}"
+                        )
+                    batch = cls._coerce_ndarray_batch(col.name, col.spec, vals, n)
+                    new_cols[col.name][:n] = batch
+                else:
+                    new_cols[col.name][:n] = series.to_numpy(dtype=col.dtype)
             new_valid[:n] = True
             obj._n_rows = n
             obj._last_pos = n

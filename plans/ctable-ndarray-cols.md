@@ -637,7 +637,7 @@ suites:
 - [x] transitive generated-column stale marking / refresh
 - [x] Arrow roundtrip for `(n,)` and `(m, n)` shapes
 - [x] nullable ndarray columns once implemented
-- [ ] CSV/DataFrame ndarray-specific behavior once implemented
+- [x] CSV/DataFrame ndarray-specific behavior once implemented
 
 ---
 
