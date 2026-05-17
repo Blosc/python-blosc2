@@ -733,6 +733,34 @@ class Column:
         return self._col_name in self._table._computed_cols
 
     @property
+    def is_generated(self) -> bool:
+        """True if this column is a stored generated/materialized column."""
+        return self._col_name in self._table._root_table._materialized_cols
+
+    @property
+    def is_stale(self) -> bool:
+        """True if this generated column needs to be refreshed before use."""
+        meta = self._table._root_table._materialized_cols.get(self._col_name)
+        return bool(meta and meta.get("stale", False))
+
+    def _ensure_not_stale(self) -> None:
+        if self.is_stale:
+            raise ValueError(
+                f"Generated column {self._col_name!r} is stale because one or more source columns were "
+                f"modified. Call refresh_generated_column({self._col_name!r}) before reading it, or use "
+                f"t[{self._col_name!r}].read_stale() to explicitly read the last stored stale values."
+            )
+
+    def read_stale(self, key=slice(None)):
+        """Read stored values even when this generated column is marked stale.
+
+        This is an explicit escape hatch for inspecting the last materialized
+        values.  Normal reads raise for stale generated columns so outdated
+        values are not used accidentally.
+        """
+        return self._values_from_key(key, check_stale=False)
+
+    @property
     def is_list(self) -> bool:
         col = self._table._schema.columns_by_name.get(self._col_name)
         return col is not None and isinstance(col.spec, ListSpec)
@@ -780,13 +808,15 @@ class Column:
         """
         return self._values_from_key(key)
 
-    def _values_from_key(self, key):  # noqa: C901
+    def _values_from_key(self, key, *, check_stale: bool = True):  # noqa: C901
         """Materialise values for a logical index key."""
+        if check_stale:
+            self._ensure_not_stale()
         if isinstance(key, tuple) and self.is_ndarray:
             if len(key) == 0:
                 raise IndexError("empty tuple index is not valid for Column")
             row_key, inner_key = key[0], key[1:]
-            values = self._values_from_key(row_key)
+            values = self._values_from_key(row_key, check_stale=False)
             if not inner_key:
                 return values
             if isinstance(row_key, (int, np.integer)) and not isinstance(row_key, (bool, np.bool_)):
@@ -973,6 +1003,7 @@ class Column:
 
     def __iter__(self):
         """Iterate over live column values in insertion order, skipping deleted rows."""
+        self._ensure_not_stale()
         if self.is_computed:
             yield from self._iter_chunks_computed(size=None)
             return
@@ -1201,6 +1232,7 @@ class Column:
         return RowTransformer(self._col_name)
 
     def _ensure_queryable(self) -> None:
+        self._ensure_not_stale()
         if self.is_varlen_scalar:
             raise NotImplementedError(
                 f"Column {self._col_name!r} is a vlstring/vlbytes column; "
@@ -1504,6 +1536,7 @@ class Column:
         >>> for chunk in t["score"].iter_chunks(size=100_000):
         ...     process(chunk)
         """
+        self._ensure_not_stale()
         if self.is_computed:
             yield from self._iter_chunks_computed(size=size)
             return
@@ -1762,6 +1795,7 @@ class Column:
 
     def _require_kind(self, kinds: str, op: str) -> None:
         """Raise TypeError if this column's dtype is not in *kinds*."""
+        self._ensure_not_stale()
         if self.dtype.kind not in kinds:
             _kind_names = {
                 "b": "bool",
@@ -6119,6 +6153,15 @@ class CTable(Generic[RowT]):
         """
         return dict(self._computed_cols)  # shallow copy so callers can't mutate
 
+    def _ensure_generated_column_not_stale(self, name: str) -> None:
+        meta = self._root_table._materialized_cols.get(name)
+        if meta is not None and meta.get("stale", False):
+            raise ValueError(
+                f"Generated column {name!r} is stale because one or more source columns were modified. "
+                f"Call refresh_generated_column({name!r}) before using it, or use t[{name!r}].read_stale() "
+                "to explicitly read the last stored stale values."
+            )
+
     def _col_dtype(self, name: str) -> np.dtype | None:
         """Return the dtype for *name*, routing through computed cols."""
         cc = self._computed_cols.get(name)
@@ -6152,6 +6195,7 @@ class CTable(Generic[RowT]):
                 [np.asarray(cc["lazy"][int(p)]).ravel()[0] for p in positions],
                 dtype=cc["dtype"],
             )
+        self._ensure_generated_column_not_stale(name)
         col = self._cols[name]
         spec = self._schema.columns_by_name[name].spec
         if self._is_list_spec(spec) or isinstance(
@@ -6519,6 +6563,7 @@ class CTable(Generic[RowT]):
                 raise ValueError(
                     f"Operand {key!r} in the expression does not reference a stored column of this table."
                 )
+            self._ensure_generated_column_not_stale(cname)
             col_info = self._schema.columns_by_name.get(cname)
             if col_info is not None and self._is_ndarray_column(col_info):
                 raise TypeError(
@@ -6538,10 +6583,26 @@ class CTable(Generic[RowT]):
         values = blosc2.lazyexpr(meta["expression"], operands)[:]
         return np.asarray(values, dtype=meta["dtype"])
 
+    def _generated_dependency_closure(self, source: str) -> set[str]:
+        """Return generated columns transitively depending on *source*."""
+        affected: set[str] = set()
+        queue = [source]
+        while queue:
+            current = queue.pop(0)
+            for name, meta in self._materialized_cols.items():
+                if name in affected:
+                    continue
+                if current in meta.get("col_deps", ()):
+                    affected.add(name)
+                    queue.append(name)
+        return affected
+
     def _mark_generated_columns_stale(self, source: str) -> None:
+        affected = self._generated_dependency_closure(source)
         changed = False
-        for meta in self._materialized_cols.values():
-            if source in meta.get("col_deps", ()):
+        for name in affected:
+            meta = self._materialized_cols[name]
+            if not meta.get("stale", False):
                 meta["stale"] = True
                 changed = True
         if changed and isinstance(self._storage, FileTableStorage):
@@ -6573,8 +6634,9 @@ class CTable(Generic[RowT]):
 
     def refresh_generated_columns(self, *, source: str | None = None) -> None:
         """Refresh all generated columns, optionally only those depending on *source*."""
-        for name, meta in list(self._materialized_cols.items()):
-            if source is None or source in meta.get("col_deps", ()):
+        affected = None if source is None else self._generated_dependency_closure(source)
+        for name in list(self._materialized_cols):
+            if affected is None or name in affected:
                 self.refresh_generated_column(name)
 
     def add_generated_column(  # noqa: C901
@@ -7254,6 +7316,7 @@ class CTable(Generic[RowT]):
         for name in cols:
             if name not in self._cols and name not in self._computed_cols:
                 raise KeyError(f"No column named {name!r}. Available: {self.col_names}")
+            self._ensure_generated_column_not_stale(name)
             col_info = self._schema.columns_by_name.get(name)
             if col_info is not None and self._is_ndarray_column(col_info):
                 raise TypeError(
@@ -8237,6 +8300,7 @@ class CTable(Generic[RowT]):
             )
         if col_name not in self._cols:
             raise KeyError(f"No column named {col_name!r}. Available: {self.col_names}")
+        self._ensure_generated_column_not_stale(col_name)
         if col_name in catalog:
             raise ValueError(
                 f"Index already exists for column {col_name!r}. "
@@ -9045,6 +9109,13 @@ class CTable(Generic[RowT]):
         return re.search(rf"(?<![\w.]){re.escape(name)}(?![\w.])", expr) is not None
 
     def _guard_scalar_expression(self, expr: str) -> None:
+        for name, meta in self._root_table._materialized_cols.items():
+            if meta.get("stale", False) and self._expression_references_name(expr, name):
+                raise ValueError(
+                    f"Generated column {name!r} is stale because one or more source columns were modified. "
+                    f"Call refresh_generated_column({name!r}) before using it in expressions, or use "
+                    f"t[{name!r}].read_stale() to explicitly read the last stored stale values."
+                )
         for col in self._schema.columns:
             if self._is_ndarray_column(col) and self._expression_references_name(expr, col.name):
                 raise TypeError(

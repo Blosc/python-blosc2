@@ -89,6 +89,7 @@ class CTableGroupBy:
                 raise NotImplementedError("group_by() over computed columns is not supported yet")
             if name not in table._cols:
                 raise KeyError(f"No column named {name!r}. Available: {table.col_names}")
+            table._ensure_generated_column_not_stale(name)
             col_info = table._schema.columns_by_name[name]
             if isinstance(col_info.spec, NDArraySpec):
                 raise TypeError(
@@ -201,6 +202,7 @@ class CTableGroupBy:
             raise NotImplementedError("group_by() aggregations over computed columns are not supported yet")
         if name not in self.table._cols:
             raise KeyError(f"No column named {name!r}. Available: {self.table.col_names}")
+        self.table._ensure_generated_column_not_stale(name)
         col_info = self.table._schema.columns_by_name[name]
         if self.table._is_list_column(col_info) or self.table._is_varlen_scalar_column(col_info):
             raise TypeError(f"Cannot aggregate variable-length/list column {name!r} in Phase 1")
