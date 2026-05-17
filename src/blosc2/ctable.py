@@ -21,7 +21,7 @@ import pprint
 import re
 import shutil
 from collections import namedtuple
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass
 from dataclasses import field as dataclass_field
 from textwrap import TextWrapper
@@ -6581,14 +6581,132 @@ class CTable(Generic[RowT]):
         self,
         name: str,
         *,
-        values,
+        values: str | blosc2.LazyExpr | Callable[[dict[str, Any]], blosc2.LazyExpr] | RowTransformer,
         dtype=None,
         create_index: bool = False,
     ) -> None:
-        """Add a stored generated column maintained on append/extend.
+        """Add a stored generated column maintained by the table.
 
-        ``values`` may be an expression string, a :class:`blosc2.LazyExpr`, a
-        callable returning a lazy expression, or a :class:`RowTransformer`.
+        A generated column is physical storage, not a virtual expression.  The
+        initial values are computed for all current live rows, and later
+        ``append()`` / ``extend()`` calls automatically compute values for newly
+        inserted rows when source columns are provided.  If a source column is
+        modified in-place, dependent generated columns are marked stale; call
+        :meth:`refresh_generated_column` or :meth:`refresh_generated_columns` to
+        recompute them.
+
+        Supported signatures are::
+
+            add_generated_column(name, *, values="price * qty", dtype=..., create_index=False)
+            add_generated_column(name, *, values=lazy_expr, dtype=..., create_index=False)
+            add_generated_column(name, *, values=lambda cols: cols["price"] * 1.21, dtype=...)
+            add_generated_column(name, *, values=t.embedding.row_transformer.norm(axis=0), dtype=...)
+            add_generated_column(name, *, values=t.image.row_transformer.mean(axis=(0, 1)),
+                                 dtype=blosc2.ndarray((3,), dtype=...))
+
+        Parameters
+        ----------
+        name:
+            Name of the generated column to create.  It must be a valid column
+            name and must not collide with an existing stored or computed
+            column.
+        values:
+            Definition used to compute the generated values.  Accepted forms:
+
+            * ``str``: scalar expression over stored scalar columns, e.g.
+              ``"price * qty"``.  The expression must produce one scalar value
+              per row.
+            * :class:`blosc2.LazyExpr`: scalar lazy expression over stored
+              columns of this table.  It must produce a 1-D scalar stream.
+            * callable: called as ``values(self._cols)`` and must return a
+              :class:`blosc2.LazyExpr` over stored columns of this table.
+            * :class:`RowTransformer`: row-wise projection/reduction bound to a
+              fixed-shape ndarray column, e.g.
+              ``t.embedding.row_transformer.norm(axis=0)`` or
+              ``t.image.row_transformer.mean(axis=(0, 1))``.  Row transformers
+              may produce either one scalar per row or one fixed-shape ndarray
+              item per row.
+
+            Expression forms currently cannot depend on computed columns and
+            cannot directly consume fixed-shape ndarray columns; use a
+            row-transformer for ndarray row projections/reductions.
+        dtype:
+            Output schema or dtype.  Scalar outputs may pass a NumPy dtype or a
+            Blosc2 scalar spec such as ``blosc2.float64()``.  Fixed-shape
+            ndarray outputs must pass an ndarray spec such as
+            ``blosc2.ndarray((3,), dtype=blosc2.float32())`` unless the table has
+            existing rows from which the output shape can be inferred.  When
+            omitted, dtype and fixed-shape output shape are inferred from the
+            current generated values; this is not possible for an empty table.
+        create_index:
+            If ``True``, create an index on the generated column immediately.
+            Only scalar generated columns can be indexed; fixed-shape ndarray
+            generated columns raise :class:`ValueError` when indexing is
+            requested.
+
+        Examples
+        --------
+        Create and index a scalar generated column from a string expression::
+
+            t.add_generated_column(
+                "total",
+                values="price * qty",
+                dtype=blosc2.float64(),
+                create_index=True,
+            )
+
+        Use a callable when normal Python composition is more convenient::
+
+            t.add_generated_column(
+                "price_with_tax",
+                values=lambda cols: cols["price"] * 1.21,
+                dtype=blosc2.float64(),
+            )
+
+        Generate a scalar from each fixed-shape ndarray row.  For row
+        transformers, axes refer to the per-row item shape, so ``axis=0`` is the
+        embedding-coordinate axis for ``item_shape=(dim,)``::
+
+            t.add_generated_column(
+                "embedding_norm",
+                values=t.embedding.row_transformer.norm(axis=0, ord=2),
+                dtype=blosc2.float64(),
+                create_index=True,
+            )
+
+        Generate a fixed-shape ndarray value per row.  Here an image column has
+        ``item_shape=(height, width, 3)`` and the generated column stores one RGB
+        vector per row::
+
+            t.add_generated_column(
+                "image_mean_rgb",
+                values=t.image.row_transformer.mean(axis=(0, 1)),
+                dtype=blosc2.ndarray((3,), dtype=blosc2.float32()),
+            )
+
+        Generated columns are maintained on append/extend::
+
+            t.append((new_id, new_embedding, new_image))
+            assert t.embedding_norm[-1] == np.linalg.norm(new_embedding)
+
+        If source values are changed in place, refresh dependent generated
+        columns before relying on them::
+
+            t.embedding[0] = new_embedding
+            t.refresh_generated_column("embedding_norm")
+
+        Raises
+        ------
+        ValueError
+            If called on a view or read-only table, if *name* already exists,
+            if generated output length/shape is incompatible with the table, or
+            if ``create_index=True`` is requested for an ndarray generated
+            column.
+        TypeError
+            If *values* has an unsupported form, references unsupported source
+            columns, or cannot be coerced to *dtype*.
+        KeyError
+            If a :class:`RowTransformer` references a missing source column.
         """
         if self.base is not None:
             raise ValueError("Cannot add a generated column to a view.")
@@ -6679,38 +6797,117 @@ class CTable(Generic[RowT]):
     def add_computed_column(
         self,
         name: str,
-        expr,
+        expr: str | blosc2.LazyExpr | Callable[[dict[str, Any]], blosc2.LazyExpr],
         *,
         dtype: np.dtype | None = None,
     ) -> None:
-        """Add a read-only virtual column whose values are computed from other columns.
+        """Add a read-only virtual column computed from stored columns.
 
-        The column stores no data — it is evaluated on-the-fly when read.
-        It participates in display, filtering, sorting, export (to_arrow / to_csv),
-        and aggregates, but cannot be written to, indexed, or included in
-        ``append`` / ``extend`` inputs.
+        A computed column has no physical storage.  It is backed by a
+        :class:`blosc2.LazyExpr` and is evaluated when values are read, filtered,
+        displayed, exported, or aggregated.  Because it is virtual, it is
+        read-only, cannot be indexed directly, and is not supplied in
+        ``append()`` / ``extend()`` inputs.  To store and optionally index a
+        computed result, use :meth:`add_generated_column` or materialize an
+        existing computed column with :meth:`materialize_computed_column`.
+
+        Supported signatures are::
+
+            add_computed_column(name, "price * qty", dtype=None)
+            add_computed_column(name, lazy_expr, dtype=None)
+            add_computed_column(name, lambda cols: cols["price"] * cols["qty"], dtype=None)
 
         Parameters
         ----------
         name:
-            Column name.  Must not collide with any existing stored or computed
-            column and must satisfy the usual naming rules.
+            Name of the virtual computed column.  It must be a valid column name
+            and must not collide with an existing stored or computed column.
         expr:
-            Either a **callable** ``(cols: dict[str, NDArray]) -> LazyExpr``
-            or an **expression string** (e.g. ``"price * qty"``) where column
-            names are referenced directly and resolved from stored columns.
+            Definition of the virtual column.  Accepted forms:
+
+            * ``str``: scalar expression over stored scalar columns, e.g.
+              ``"price * qty"``.
+            * :class:`blosc2.LazyExpr`: lazy expression over stored columns of
+              this table.
+            * callable: called as ``expr(self._cols)`` and must return a
+              :class:`blosc2.LazyExpr` over stored columns of this table.
+
+            Expressions must depend only on stored columns of this table;
+            computed columns cannot depend on other computed columns in this
+            version.  Fixed-shape ndarray columns are not accepted in computed
+            column expressions yet.  For row-wise ndarray projections or
+            reductions, use :meth:`add_generated_column` with
+            ``values=t.ndarray_col.row_transformer...``.
         dtype:
-            Override the inferred result dtype.  When omitted the dtype is
-            taken from the :class:`blosc2.LazyExpr`.
+            Optional dtype override for the computed values.  When omitted, the
+            dtype is inferred from the resulting :class:`blosc2.LazyExpr`.
+            This changes the dtype reported by the CTable column wrapper; it
+            does not create physical storage.
+
+        Examples
+        --------
+        Add a computed column from a string expression and use it like a normal
+        read-only column::
+
+            t.add_computed_column("total", "price * qty")
+            assert t.total[:].shape == (t.nrows,)
+
+        Add a computed column from a callable.  The callable receives the table's
+        stored column mapping::
+
+            t.add_computed_column(
+                "price_with_tax",
+                lambda cols: cols["price"] * 1.21,
+                dtype=np.float64,
+            )
+
+        Callable expressions can use normal Python logic while still returning a
+        lazy expression::
+
+            def total_expr(cols):
+                base = cols["price"] * cols["qty"]
+                return base * 1.21 if include_tax else base
+
+            t.add_computed_column("total", total_expr)
+
+        They are also convenient for reusable, parameterized helpers::
+
+            def ratio(num, den):
+                return lambda cols: cols[num] / cols[den]
+
+            t.add_computed_column("margin", ratio("profit", "revenue"))
+
+        Computed columns participate in filters and aggregates::
+
+            expensive = t.where(t.total > 100)
+            total_revenue = t.total.sum()
+
+        Computed columns are virtual and read-only.  Materialize one when a
+        stored snapshot or an indexable column is needed::
+
+            t.materialize_computed_column("total", new_name="total_stored")
+            t.create_index("total_stored")
+
+        For maintained stored results, prefer generated columns::
+
+            t.add_generated_column(
+                "total_stored",
+                values="price * qty",
+                dtype=blosc2.float64(),
+                create_index=True,
+            )
 
         Raises
         ------
         ValueError
-            If called on a view, the table is read-only, *name* already
-            exists, or an operand is not a stored column of this table.
+            If called on a view or read-only table, if *name* already exists,
+            or if an expression operand does not reference a stored column of
+            this table.
         TypeError
-            If *expr* is not a callable or string, or does not return a
-            :class:`blosc2.LazyExpr`.
+            If *expr* has an unsupported form, does not produce a
+            :class:`blosc2.LazyExpr`, references unsupported source columns, or
+            if a :class:`RowTransformer` is passed.  Row transformers are only
+            accepted by :meth:`add_generated_column`.
         """
         if self.base is not None:
             raise ValueError("Cannot add a computed column to a view.")
