@@ -4524,10 +4524,20 @@ class CTable(Generic[RowT]):
                     spec = self._schema.columns_by_name[name].spec
                     values = np.asarray(col[start:stop])
                     null_mask = col._null_mask_for(values) if col.null_value is not None else None
-                    flat_values = values.reshape((stop - start, -1)).tolist()
-                    if null_mask is not None and null_mask.any():
-                        flat_values = [None if null_mask[i] else v for i, v in enumerate(flat_values)]
-                    arrays.append(pa.array(flat_values, type=self._pa_type_from_spec(pa, spec)))
+                    pa_type = self._pa_type_from_spec(pa, spec)
+                    flat_values = np.ascontiguousarray(values.reshape(-1))
+                    pa_values = pa.array(flat_values, type=pa_type.value_type)
+                    arrays.append(
+                        pa.FixedSizeListArray.from_arrays(
+                            pa_values,
+                            type=pa_type,
+                            mask=(
+                                pa.array(null_mask, type=pa.bool_())
+                                if null_mask is not None and null_mask.any()
+                                else None
+                            ),
+                        )
+                    )
                     continue
                 arr = np.asarray(col[start:stop])
                 nv = col.null_value
