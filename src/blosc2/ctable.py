@@ -9191,7 +9191,7 @@ class CTable(Generic[RowT]):
             return "None"
         if dtype.kind == "U":
             nchars = dtype.itemsize // 4
-            return f"U{nchars} (Unicode, max {nchars} chars)"
+            return f"U{nchars} (Unicode)"
         if dtype.kind == "S":
             return f"S{dtype.itemsize}"
         return str(dtype)

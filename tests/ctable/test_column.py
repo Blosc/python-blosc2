@@ -803,7 +803,7 @@ def test_info_shows_open_mode_for_persistent_table(tmp_path):
 def test_info_schema_expands_unicode_dtype_labels():
     t = CTable(StrRow, new_data=[("alpha",), ("beta",)])
     info = repr(t.info)
-    assert "U16 (Unicode, max 16 chars)" in info
+    assert "U16 (Unicode)" in info
 
 
 def test_info_valid_rows_mask_only_reports_cbytes():
