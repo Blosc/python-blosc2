@@ -628,6 +628,7 @@ Disable the overloaded equal operator.
 # Note: bool, bytes, string shadow builtins in the blosc2 namespace by design —
 # they are schema spec constructors (b2.bool(), b2.bytes(), etc.).
 from .ctable import DEFAULT_NULL_POLICY, Column, CTable, NullPolicy, get_null_policy, null_policy
+from .groupby import CTableGroupBy, group_reduce
 from .ndarray import (
     abs,
     acos,
@@ -801,9 +802,12 @@ __all__ = [  # noqa : RUF022
     "uint64",
     "vlbytes",
     "vlstring",
+    # Grouped reductions
+    "group_reduce",
     # Classes
     "C2Array",
     "CParams",
+    "CTableGroupBy",
     "Batch",
     "BatchArray",
     # Enums

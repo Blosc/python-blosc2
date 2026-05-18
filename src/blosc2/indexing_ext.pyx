@@ -2495,3 +2495,6 @@ def keysort_keys_indices(np.ndarray keys, np.ndarray indices):
         return None
     _keysort_ndarray(keys, indices)
     return None
+
+
+# ----------------------------------------------------------------------
