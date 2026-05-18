@@ -1498,9 +1498,10 @@ def _null_output_value(spec: SchemaSpec):
 def group_reduce(keys, values=None, op: AggName = "size", *, sort: bool = False, dropna: bool = True):
     """Group *keys* and reduce *values* with *op*.
 
-    This is a lower-level, NumPy-style grouped reduction primitive.  It exposes
-    Blosc2's optimized group-reduce kernels for plain array-like inputs without
-    requiring a :class:`blosc2.CTable`.
+    This is a lower-level, array-oriented grouped reduction primitive.  It exposes
+    Blosc2's optimized group-reduce kernels for one-dimensional array-like inputs,
+    including NumPy arrays and :class:`blosc2.NDArray`, without requiring a
+    :class:`blosc2.CTable`.
 
     Parameters
     ----------
