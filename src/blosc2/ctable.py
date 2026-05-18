@@ -20,7 +20,7 @@ import os
 import pprint
 import re
 import shutil
-from collections import namedtuple
+from collections import deque, namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass
 from dataclasses import field as dataclass_field
@@ -6996,9 +6996,9 @@ class CTable(Generic[RowT]):
     def _generated_dependency_closure(self, source: str) -> set[str]:
         """Return generated columns transitively depending on *source*."""
         affected: set[str] = set()
-        queue = [source]
+        queue = deque([source])
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
             for name, meta in self._materialized_cols.items():
                 if name in affected:
                     continue
