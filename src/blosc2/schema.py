@@ -26,6 +26,13 @@ _builtin_list = list
 _builtin_object = object
 
 
+def _normalize_scalar_value(value):
+    """Convert NumPy scalar sentinels to plain Python scalars."""
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Base spec class
 # ---------------------------------------------------------------------------
@@ -90,7 +97,7 @@ class _NumericSpec(SchemaSpec):
         self.le = le
         self.lt = lt
         self.nullable = nullable or null_value is not None
-        self.null_value = null_value
+        self.null_value = _normalize_scalar_value(null_value)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         # null_value is not a Pydantic constraint — exclude it from Pydantic kwargs.
@@ -249,7 +256,7 @@ class timestamp(SchemaSpec):
         self.unit = unit
         self.timezone = timezone
         self.nullable = nullable or null_value is not None
-        self.null_value = null_value
+        self.null_value = _normalize_scalar_value(null_value)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         return {}
@@ -279,7 +286,7 @@ class bool(SchemaSpec):
         if null_value is not None and null_value != 255:
             raise ValueError("Nullable bool null_value must be 255")
         self.nullable = nullable or null_value is not None
-        self.null_value = null_value
+        self.null_value = _normalize_scalar_value(null_value)
         self.dtype = np.dtype(np.uint8) if self.nullable else np.dtype(np.bool_)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -327,7 +334,7 @@ class string(SchemaSpec):
         self.max_length = max_length if max_length is not None else self._DEFAULT_MAX_LENGTH
         self.pattern = pattern
         self.nullable = nullable or null_value is not None
-        self.null_value = null_value
+        self.null_value = _normalize_scalar_value(null_value)
         self.dtype = np.dtype(f"U{self.max_length}")
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -373,7 +380,7 @@ class bytes(SchemaSpec):
         self.min_length = min_length
         self.max_length = max_length if max_length is not None else self._DEFAULT_MAX_LENGTH
         self.nullable = nullable or null_value is not None
-        self.null_value = null_value
+        self.null_value = _normalize_scalar_value(null_value)
         self.dtype = np.dtype(f"S{self.max_length}")
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -692,6 +699,64 @@ class VLBytesSpec(SchemaSpec):
         if self.items_per_block is not None:
             d["items_per_block"] = self.items_per_block
         return d
+
+
+# ---------------------------------------------------------------------------
+# Fixed-shape N-D array spec
+# ---------------------------------------------------------------------------
+
+
+class NDArraySpec(SchemaSpec):
+    """Fixed-shape N-D array column for CTable.
+
+    Each row stores a NumPy-compatible array with shape ``item_shape`` and
+    element dtype ``dtype``.  Physically, CTable stores the column as a Blosc2
+    NDArray with shape ``(nrows, *item_shape)``.
+    """
+
+    python_type = _builtin_object
+
+    def __init__(self, item_shape, dtype=np.float64, *, nullable: bool = False, null_value=None):
+        if isinstance(item_shape, int):
+            item_shape = (item_shape,)
+        item_shape = tuple(int(s) for s in item_shape)
+        if not item_shape:
+            raise ValueError("NDArraySpec item_shape must have at least one dimension.")
+        if any(s <= 0 for s in item_shape):
+            raise ValueError("All NDArraySpec item_shape dimensions must be positive.")
+        self.item_shape = item_shape
+        self.dtype = np.dtype(dtype)
+        self.nullable = nullable or null_value is not None
+        if null_value is not None:
+            self.null_value = _normalize_scalar_value(null_value)
+        self.itemsize = self.dtype.itemsize
+        self.kind = self.dtype.kind
+        self.type = self.dtype.type
+        self.str = self.dtype.str
+        self.name = self.dtype.name
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        d = {
+            "kind": "ndarray",
+            "item_shape": _builtin_list(self.item_shape),
+            "dtype_str": self.dtype.str,
+        }
+        if self.nullable:
+            d["nullable"] = True
+        if hasattr(self, "null_value"):
+            d["null_value"] = self.null_value
+        return d
+
+    def display_label(self) -> str:
+        return f"ndarray{_builtin_list(self.item_shape)}[{self.dtype}]"
+
+
+def ndarray(item_shape, dtype=np.float64, *, nullable: bool = False, null_value=None) -> NDArraySpec:
+    """Build a fixed-shape N-D array descriptor for CTable columns."""
+    return NDArraySpec(item_shape=item_shape, dtype=dtype, nullable=nullable, null_value=null_value)
 
 
 def vlstring(

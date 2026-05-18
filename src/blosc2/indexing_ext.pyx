@@ -834,6 +834,10 @@ def intra_chunk_merge_sorted_slices(
 ):
     cdef np.dtype dtype = left_values.dtype
     cdef np.dtype pos_dtype = np.dtype(position_dtype)
+    if left_values.ndim != 1 or right_values.ndim != 1 or left_positions.ndim != 1 or right_positions.ndim != 1:
+        raise ValueError("values and positions must be 1-D arrays")
+    if left_values.shape[0] != left_positions.shape[0] or right_values.shape[0] != right_positions.shape[0]:
+        raise ValueError("values and positions must have matching lengths")
     if dtype != right_values.dtype:
         raise TypeError("left_values and right_values must have the same dtype")
     if dtype == np.dtype(np.float32):
@@ -1701,6 +1705,8 @@ cdef inline tuple _search_boundary_bounds_uint64_impl(
 
 def index_search_bounds(np.ndarray values, object lower, bint lower_inclusive, object upper, bint upper_inclusive):
     cdef np.dtype dtype = values.dtype
+    if values.ndim != 1:
+        raise ValueError("values must be a 1-D array")
     if dtype == np.dtype(np.float32):
         return _search_bounds_float32_impl(values, lower, lower_inclusive, upper, upper_inclusive)
     if dtype == np.dtype(np.float64):
@@ -1733,6 +1739,10 @@ def index_search_boundary_bounds(
     bint upper_inclusive,
 ):
     cdef np.dtype dtype = starts.dtype
+    if starts.ndim != 1 or ends.ndim != 1:
+        raise ValueError("starts and ends must be 1-D arrays")
+    if starts.shape[0] != ends.shape[0]:
+        raise ValueError("starts and ends must have the same length")
     if dtype != ends.dtype:
         raise TypeError("starts and ends must have the same dtype")
     if dtype == np.dtype(np.float32):
@@ -2290,6 +2300,20 @@ def index_collect_reduced_chunk_nav_positions(
     bint upper_inclusive,
 ):
     cdef np.dtype dtype = span_values.dtype
+    cdef Py_ssize_t idx
+    cdef int64_t chunk_id
+    if span_values.ndim != 1 or local_positions.ndim != 1:
+        raise ValueError("span_values and local_positions must be 1-D arrays")
+    if chunk_len <= 0:
+        raise ValueError("chunk_len must be positive")
+    if nav_segment_len <= 0:
+        raise ValueError("nav_segment_len must be positive")
+    if nsegments_per_chunk <= 0:
+        raise ValueError("nsegments_per_chunk must be positive")
+    for idx in range(candidate_chunk_ids.shape[0]):
+        chunk_id = candidate_chunk_ids[idx]
+        if chunk_id < 0 or chunk_id + 1 >= offsets.shape[0]:
+            raise ValueError("candidate_chunk_ids contains an out-of-bounds chunk id")
     if dtype == np.dtype(np.float32):
         return _collect_chunk_positions_float32(
             offsets, candidate_chunk_ids, values_sidecar, positions_sidecar, l2_sidecar, l2_row,

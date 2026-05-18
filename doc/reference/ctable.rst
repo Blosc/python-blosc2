@@ -12,9 +12,10 @@ explicitly call :meth:`~blosc2.CTable.to_arrow` or iterate with
 
 .. currentmodule:: blosc2
 
-.. autoclass:: CTable
+.. autoclass:: blosc2.CTable
     :members:
     :member-order: groupwise
+    :special-members: __getitem__, __getattr__
 
     .. rubric:: Special methods
 
@@ -23,6 +24,7 @@ explicitly call :meth:`~blosc2.CTable.to_arrow` or iterate with
         CTable.__len__
         CTable.__iter__
         CTable.__getitem__
+        CTable.__getattr__
         CTable.__repr__
         CTable.__str__
 
@@ -35,21 +37,22 @@ explicitly call :meth:`~blosc2.CTable.to_arrow` or iterate with
        Iterate over live rows in insertion order, yielding namedtuple-like
        row objects with one attribute per column.
 
-    .. automethod:: __getitem__
+    ``__getitem__`` supports type-driven indexing:
 
-       Type-driven indexing:
+    * ``str`` — column name returns a :class:`Column`; any other string
+      is interpreted as a boolean expression and behaves like :meth:`where`.
+    * boolean :class:`~blosc2.LazyExpr` / :class:`~blosc2.NDArray` —
+      filtered row view, same as :meth:`where`, e.g.
+      ``t[t.temperature_f > 70]``.
+    * ``int`` — single row as a namedtuple-like object.
+    * ``slice`` — row-range view.
+    * ``list[int]`` / ``ndarray[int]`` — gathered-row view.
+    * ``ndarray[bool]`` — boolean-mask filtered view.
+    * ``list[str]`` — column-projection view (same as :meth:`select`).
 
-       * ``str`` — column name returns a :class:`Column`; any other string
-         is interpreted as a boolean expression and behaves like
-         :meth:`where`.
-       * boolean :class:`~blosc2.LazyExpr` / :class:`~blosc2.NDArray` —
-         filtered row view, same as :meth:`where`, e.g.
-         ``t[t.temperature_f > 70]``.
-       * ``int`` — single row as a namedtuple-like object.
-       * ``slice`` — row-range view.
-       * ``list[int]`` / ``ndarray[int]`` — gathered-row view.
-       * ``ndarray[bool]`` — boolean-mask filtered view.
-       * ``list[str]`` — column-projection view (same as :meth:`select`).
+    ``__getattr__`` provides convenience attribute-style column access only
+    after normal Python attribute lookup fails; use ``t["name"]`` for columns
+    that conflict with table attributes or methods.
 
     .. automethod:: __repr__
     .. automethod:: __str__

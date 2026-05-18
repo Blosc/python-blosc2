@@ -186,6 +186,21 @@ Reduction operations can be used with any of :ref:`NDArray <NDArray>`, :ref:`C2A
 """
     )
     genbody(f, sorted(reducers))
+    f.write(
+        """
+Grouped reductions
+~~~~~~~~~~~~~~~~~~
+
+The :func:`blosc2.group_reduce` function is a lower-level, array-oriented primitive that groups one-dimensional keys and applies eager reductions to the associated values.
+
+.. autosummary::
+
+    group_reduce
+
+
+.. autofunction:: blosc2.group_reduce
+"""
+    )
 
 hidden = "_ignore_multiple_size"
 

@@ -138,6 +138,43 @@ def test_extend_numpy_structured():
     assert t[1].score == 75.0
 
 
+def test_fixed_shape_ndarray_column_roundtrip(tmp_path):
+    @dataclass
+    class ArrayRow:
+        id: int
+        matrix: np.ndarray = blosc2.field(blosc2.ndarray((2, 3), dtype=np.float32))  # noqa: RUF009
+
+    data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    t = CTable(ArrayRow, expected_size=1)
+    t.append((0, data[0]))
+    t.extend({"id": [1], "matrix": data[1:2]})
+
+    assert t._cols["matrix"].shape == (2, 2, 3)
+    assert t.matrix.shape == (2, 2, 3)
+    assert np.array_equal(t[0].matrix, data[0])
+    assert np.array_equal(t.matrix[:], data)
+
+    arr = np.asarray(t)
+    assert arr.dtype["matrix"].shape == (2, 3)
+    assert np.array_equal(arr["matrix"], data)
+
+    path = tmp_path / "array-col.b2d"
+    t.save(path)
+    reopened = CTable.open(path)
+    assert reopened._cols["matrix"].shape == (2, 2, 3)
+    assert np.array_equal(reopened.matrix[:], data)
+
+
+def test_fixed_shape_ndarray_column_rejects_wrong_shape():
+    @dataclass
+    class ArrayRow:
+        matrix: np.ndarray = blosc2.field(blosc2.ndarray((2, 3), dtype=np.float64))  # noqa: RUF009
+
+    t = CTable(ArrayRow)
+    with pytest.raises(ValueError, match="expected item shape"):
+        t.append((np.arange(5),))
+
+
 # -------------------------------------------------------------------
 # extend — per-call validate override
 # -------------------------------------------------------------------
@@ -281,6 +318,67 @@ def test_new_spec_constraints_enforced():
         t2.extend([(101,)])  # violates le=100
     with pytest.raises(ValueError):
         t2.extend([(-1,)])  # violates ge=0
+
+
+# -------------------------------------------------------------------
+# Nested column namespaces
+# -------------------------------------------------------------------
+
+
+def test_nested_column_namespace_info():
+    @dataclass
+    class NestedRow:
+        trip_begin_lon: float
+        trip_begin_lat: float
+        payment_fare: float
+
+    t = CTable(NestedRow)
+    t.append((1.0, 2.0, 10.0))
+    t.append((3.0, 4.0, 20.0))
+    t.rename_column("trip_begin_lon", "trip.begin.lon")
+    t.rename_column("trip_begin_lat", "trip.begin.lat")
+    t.rename_column("payment_fare", "payment.fare")
+
+    info = t.trip.info
+
+    assert len(info) == len(t.trip.info_items)
+    items = dict(t.trip.info_items)
+    assert list(items) == ["type", "storage", "nrows", "nbytes", "cbytes", "cratio", "schema"]
+    assert items["nrows"] == 2
+    assert t.trip.col_names == ["begin.lon", "begin.lat"]
+
+    text = repr(info)
+    assert "NestedColumnNamespace" in text
+    assert "storage" in text
+    assert "schema" in text
+    assert "begin.lon" in text
+    assert "payment.fare" not in text
+
+
+def test_nested_column_namespace_nested_info():
+    @dataclass
+    class NestedRow:
+        trip_begin_lon: float
+        trip_begin_lat: float
+        payment_fare: float
+
+    t = CTable(NestedRow)
+    t.append((1.0, 2.0, 10.0))
+    t.rename_column("trip_begin_lon", "trip.begin.lon")
+    t.rename_column("trip_begin_lat", "trip.begin.lat")
+    t.rename_column("payment_fare", "payment.fare")
+
+    assert list(dict(t.trip.begin.info_items)) == [
+        "type",
+        "storage",
+        "nrows",
+        "nbytes",
+        "cbytes",
+        "cratio",
+        "schema",
+    ]
+    assert t.trip.begin.col_names == ["lon", "lat"]
+    assert "lon" in repr(t.trip.begin.info)
 
 
 if __name__ == "__main__":

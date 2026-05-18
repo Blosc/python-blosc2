@@ -591,6 +591,10 @@ def groupby_dense_int_f64_min_checked(
     bint skip_value_nan=False,
 ):
     """Checked dense integer-key float64 min kernel."""
+    if keys.shape[0] != values.shape[0] or keys.shape[0] != valid.shape[0]:
+        raise ValueError("keys, values and valid must have the same length")
+    if mins.shape[0] != has_value.shape[0] or mins.shape[0] != keys_present.shape[0]:
+        raise ValueError("state arrays must have the same length")
     cdef Py_ssize_t n = keys.shape[0]
     cdef Py_ssize_t nstates = mins.shape[0]
     cdef Py_ssize_t i
@@ -628,6 +632,10 @@ def groupby_dense_int_f64_max_checked(
     bint skip_value_nan=False,
 ):
     """Checked dense integer-key float64 max kernel."""
+    if keys.shape[0] != values.shape[0] or keys.shape[0] != valid.shape[0]:
+        raise ValueError("keys, values and valid must have the same length")
+    if maxs.shape[0] != has_value.shape[0] or maxs.shape[0] != keys_present.shape[0]:
+        raise ValueError("state arrays must have the same length")
     cdef Py_ssize_t n = keys.shape[0]
     cdef Py_ssize_t nstates = maxs.shape[0]
     cdef Py_ssize_t i
@@ -664,6 +672,10 @@ def groupby_dense_int_i64_min_checked(
     int64_t key_null=0,
 ):
     """Checked dense integer-key int64 min kernel."""
+    if keys.shape[0] != values.shape[0] or keys.shape[0] != valid.shape[0]:
+        raise ValueError("keys, values and valid must have the same length")
+    if mins.shape[0] != has_value.shape[0] or mins.shape[0] != keys_present.shape[0]:
+        raise ValueError("state arrays must have the same length")
     cdef Py_ssize_t n = keys.shape[0]
     cdef Py_ssize_t nstates = mins.shape[0]
     cdef Py_ssize_t i
@@ -698,6 +710,10 @@ def groupby_dense_int_i64_max_checked(
     int64_t key_null=0,
 ):
     """Checked dense integer-key int64 max kernel."""
+    if keys.shape[0] != values.shape[0] or keys.shape[0] != valid.shape[0]:
+        raise ValueError("keys, values and valid must have the same length")
+    if maxs.shape[0] != has_value.shape[0] or maxs.shape[0] != keys_present.shape[0]:
+        raise ValueError("state arrays must have the same length")
     cdef Py_ssize_t n = keys.shape[0]
     cdef Py_ssize_t nstates = maxs.shape[0]
     cdef Py_ssize_t i

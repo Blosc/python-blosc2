@@ -24,6 +24,7 @@ from blosc2.schema import (
     BLOSC2_FIELD_METADATA_KEY,
     DictionarySpec,
     ListSpec,
+    NDArraySpec,
     ObjectSpec,
     SchemaSpec,
     StructSpec,
@@ -79,6 +80,8 @@ _KIND_TO_SPEC: dict[str, type[SchemaSpec]] = {
     "timestamp": timestamp,
     # dictionary
     "dictionary": DictionarySpec,
+    # fixed-shape N-D arrays
+    "ndarray": NDArraySpec,
 }
 
 # ---------------------------------------------------------------------------
@@ -109,6 +112,8 @@ def compute_display_width(spec: SchemaSpec) -> int:
         return 32
     if isinstance(spec, (VLStringSpec, VLBytesSpec, ObjectSpec)):
         return 40
+    if isinstance(spec, NDArraySpec):
+        return max(20, len(spec.display_label()) + 4)
     if isinstance(spec, (ListSpec, StructSpec)):
         return max(40, len(spec.display_label()) + 4)
     if isinstance(spec, timestamp):
@@ -212,6 +217,14 @@ def infer_spec_from_annotation(annotation: Any) -> SchemaSpec:
 
 def validate_annotation_matches_spec(name: str, annotation: Any, spec: SchemaSpec) -> None:
     """Raise :exc:`TypeError` if *annotation* is incompatible with *spec*."""
+    if isinstance(spec, NDArraySpec):
+        if annotation not in (np.ndarray, object):
+            raise TypeError(
+                f"Column {name!r}: annotation {annotation!r} is incompatible with "
+                "NDArraySpec (expected np.ndarray or object)."
+            )
+        return
+
     if isinstance(spec, ListSpec):
         origin = typing.get_origin(annotation)
         if origin not in (list, list):
@@ -358,7 +371,7 @@ def compile_schema(row_cls: type[Any]) -> CompiledSchema:
         columns.append(
             CompiledColumn(
                 name=name,
-                py_type=object if isinstance(spec, timestamp) else annotation,
+                py_type=object if isinstance(spec, (timestamp, NDArraySpec)) else annotation,
                 spec=spec,
                 dtype=getattr(spec, "dtype", None),
                 default=default,
@@ -422,6 +435,10 @@ def spec_from_metadata_dict(data: dict[str, Any]) -> SchemaSpec:
         index_type = spec_from_metadata_dict(data.pop("index_type"))
         value_type = spec_from_metadata_dict(data.pop("value_type"))
         return DictionarySpec(index_type=index_type, value_type=value_type, **data)
+    if kind == "ndarray":
+        return NDArraySpec(
+            item_shape=tuple(data.pop("item_shape")), dtype=np.dtype(data.pop("dtype_str")), **data
+        )
     spec_cls = _KIND_TO_SPEC.get(kind)
     if spec_cls is None:
         raise ValueError(f"Unknown column kind {kind!r}")

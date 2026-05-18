@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 
 from blosc2.list_array import _coerce_struct_item, coerce_list_cell
-from blosc2.schema import ListSpec, ObjectSpec, StructSpec
+from blosc2.schema import ListSpec, NDArraySpec, ObjectSpec, StructSpec
 from blosc2.schema_compiler import CompiledColumn, CompiledSchema  # noqa: TC001
 
 
@@ -87,6 +87,29 @@ def validate_column_values(col: CompiledColumn, values: Any) -> None:  # noqa: C
                 _coerce_struct_item(spec, value)
         return
     if isinstance(spec, ObjectSpec):
+        return
+    if isinstance(spec, NDArraySpec):
+        if getattr(spec, "null_value", None) is not None and not (
+            isinstance(values, np.ndarray) and values.dtype != object
+        ):
+            from blosc2.ctable import CTable
+
+            for value in values:
+                CTable._coerce_ndarray_value(col.name, spec, value)
+            return
+        arr = np.asarray(values, dtype=spec.dtype)
+        if arr.ndim == len(spec.item_shape):
+            # A bare row value reached batch validation; accept it only when it
+            # has the declared per-row shape.
+            if arr.shape != spec.item_shape:
+                raise ValueError(
+                    f"Column '{col.name}': expected item shape {spec.item_shape}, got {arr.shape}"
+                )
+            return
+        if arr.shape[1:] != spec.item_shape:
+            raise ValueError(
+                f"Column '{col.name}': expected item shape {spec.item_shape}, got {arr.shape[1:]}"
+            )
         return
 
     arr = np.asarray(values)
