@@ -320,6 +320,67 @@ def test_new_spec_constraints_enforced():
         t2.extend([(-1,)])  # violates ge=0
 
 
+# -------------------------------------------------------------------
+# Nested column namespaces
+# -------------------------------------------------------------------
+
+
+def test_nested_column_namespace_info():
+    @dataclass
+    class NestedRow:
+        trip_begin_lon: float
+        trip_begin_lat: float
+        payment_fare: float
+
+    t = CTable(NestedRow)
+    t.append((1.0, 2.0, 10.0))
+    t.append((3.0, 4.0, 20.0))
+    t.rename_column("trip_begin_lon", "trip.begin.lon")
+    t.rename_column("trip_begin_lat", "trip.begin.lat")
+    t.rename_column("payment_fare", "payment.fare")
+
+    info = t.trip.info
+
+    assert len(info) == len(t.trip.info_items)
+    items = dict(t.trip.info_items)
+    assert list(items) == ["type", "storage", "nrows", "nbytes", "cbytes", "cratio", "schema"]
+    assert items["nrows"] == 2
+    assert t.trip.col_names == ["begin.lon", "begin.lat"]
+
+    text = repr(info)
+    assert "NestedColumnNamespace" in text
+    assert "storage" in text
+    assert "schema" in text
+    assert "begin.lon" in text
+    assert "payment.fare" not in text
+
+
+def test_nested_column_namespace_nested_info():
+    @dataclass
+    class NestedRow:
+        trip_begin_lon: float
+        trip_begin_lat: float
+        payment_fare: float
+
+    t = CTable(NestedRow)
+    t.append((1.0, 2.0, 10.0))
+    t.rename_column("trip_begin_lon", "trip.begin.lon")
+    t.rename_column("trip_begin_lat", "trip.begin.lat")
+    t.rename_column("payment_fare", "payment.fare")
+
+    assert list(dict(t.trip.begin.info_items)) == [
+        "type",
+        "storage",
+        "nrows",
+        "nbytes",
+        "cbytes",
+        "cratio",
+        "schema",
+    ]
+    assert t.trip.begin.col_names == ["lon", "lat"]
+    assert "lon" in repr(t.trip.begin.info)
+
+
 if __name__ == "__main__":
     import pytest
 

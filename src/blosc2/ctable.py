@@ -2380,6 +2380,101 @@ class _NestedColumnNamespace:
         self._table = table
         self._prefix = prefix
 
+    def _descendant_col_names(self) -> list[str]:
+        prefix_parts = split_field_path(self._prefix)
+        return [
+            name
+            for name in self._table.col_names
+            if (parts := split_field_path(name))[: len(prefix_parts)] == prefix_parts
+            and len(parts) > len(prefix_parts)
+        ]
+
+    def _relative_col_name(self, name: str) -> str:
+        prefix_parts = split_field_path(self._prefix)
+        return join_field_path(split_field_path(name)[len(prefix_parts) :])
+
+    @property
+    def col_names(self) -> list[str]:
+        """Descendant leaf column names relative to this nested prefix."""
+        return [self._relative_col_name(name) for name in self._descendant_col_names()]
+
+    @property
+    def nrows(self) -> int:
+        """Number of logical rows in this nested namespace."""
+        return self._table.nrows
+
+    @property
+    def ncols(self) -> int:
+        """Number of descendant leaf columns in this nested namespace."""
+        return len(self._descendant_col_names())
+
+    @property
+    def nbytes(self) -> int:
+        """Uncompressed size in bytes for stored descendant columns."""
+        return sum(
+            getattr(self._table._cols[name], "nbytes", 0)
+            for name in self._descendant_col_names()
+            if name in self._table._cols
+        )
+
+    @property
+    def cbytes(self) -> int:
+        """Compressed size in bytes for stored descendant columns."""
+        return sum(
+            getattr(self._table._cols[name], "cbytes", 0)
+            for name in self._descendant_col_names()
+            if name in self._table._cols
+        )
+
+    @property
+    def cratio(self) -> float:
+        """Compression ratio for stored descendant columns."""
+        if self.cbytes == 0:
+            return float("inf")
+        return self.nbytes / self.cbytes
+
+    @property
+    def info_items(self) -> list[tuple[str, object]]:
+        """Structured summary items used by :attr:`info`."""
+        table = self._table
+        storage_type = "persistent" if isinstance(table._storage, FileTableStorage) else "in-memory"
+        schema_summary = {}
+        for name in self._descendant_col_names():
+            rel_name = self._relative_col_name(name)
+            if name in table._computed_cols:
+                cc = table._computed_cols[name]
+                schema_summary[rel_name] = _InfoLiteral(
+                    f"{cc['dtype']} (computed: {table._readable_computed_expr(cc)})"
+                )
+            else:
+                col_meta = table._schema.columns_by_name.get(name)
+                schema_summary[rel_name] = _InfoLiteral(
+                    table._dtype_info_label(
+                        getattr(table._cols[name], "dtype", None), col_meta.spec if col_meta else None
+                    )
+                )
+
+        return [
+            ("type", self.__class__.__name__),
+            ("storage", storage_type),
+            ("nrows", self.nrows),
+            ("nbytes", format_nbytes_info(self.nbytes)),
+            ("cbytes", format_nbytes_info(self.cbytes)),
+            ("cratio", f"{self.cratio:.1f}x"),
+            ("schema", schema_summary),
+        ]
+
+    @property
+    def info(self) -> _CTableInfoReporter:
+        """Get information about this nested column namespace.
+
+        Examples
+        --------
+        >>> print(t.trip.info)
+        >>> t.trip.info()
+        """
+        return _CTableInfoReporter(self)
+
     def __getattr__(self, name: str):
         path = join_field_path((*split_field_path(self._prefix), name))
         if path in self._table._cols or path in self._table._computed_cols:
