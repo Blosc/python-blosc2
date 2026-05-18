@@ -1747,7 +1747,7 @@ def _group_reduce_numpy(  # noqa: C901
 
     order = list(acc)
     if sort:
-        order.sort(key=lambda k: (1, "") if k is _NAN_KEY else (0, display[k]))
+        order.sort(key=lambda k: _sortable_key_part(display[k]))
     groups = np.asarray([display[k] for k in order], dtype=keys.dtype)
     result = []
     for k in order:

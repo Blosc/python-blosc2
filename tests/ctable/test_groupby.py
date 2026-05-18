@@ -220,6 +220,22 @@ def test_groupby_float_integral_fast_path_falls_back_for_nan_group_when_kept():
     assert got[1][1] == 2.0
 
 
+def test_group_reduce_object_keys_sort_with_none():
+    groups, sizes = blosc2.group_reduce(
+        np.array([None, "b", "a", "b"], dtype=object), sort=True, dropna=False
+    )
+
+    assert groups.tolist() == [None, "a", "b"]
+    assert sizes.tolist() == [1, 1, 2]
+
+
+def test_group_reduce_object_numeric_keys_sort_with_none():
+    groups, sizes = blosc2.group_reduce(np.array([None, 2, 1, 2], dtype=object), sort=True, dropna=False)
+
+    assert groups.tolist() == [None, 1, 2]
+    assert sizes.tolist() == [1, 1, 2]
+
+
 def test_groupby_rejects_bad_engine():
     t = CTable(SalesRow, new_data=DATA)
 
