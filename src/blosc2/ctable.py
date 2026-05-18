@@ -1715,13 +1715,13 @@ class Column:
         if self.is_ndarray:
             if arr.ndim <= self.item_ndim:
                 arr = arr.reshape((1, *arr.shape))
-            if isinstance(nv, float) and np.isnan(nv):
+            if isinstance(nv, (float, np.floating)) and np.isnan(nv):
                 elem_mask = np.isnan(arr)
             else:
                 elem_mask = arr == nv
             inner_axes = tuple(range(1, elem_mask.ndim))
             return elem_mask.all(axis=inner_axes) if inner_axes else elem_mask.astype(np.bool_)
-        if isinstance(nv, float) and np.isnan(nv):
+        if isinstance(nv, (float, np.floating)) and np.isnan(nv):
             return np.isnan(arr)
         return arr == nv
 

@@ -179,6 +179,17 @@ def test_nullable_bool_ndarray_uses_uint8_sentinel():
     np.testing.assert_array_equal(t.flags.is_null(), np.array([True, False]))
 
 
+def test_nullable_ndarray_numpy_nan_null_value():
+    @dataclass
+    class FloatRows:
+        x: object = blosc2.field(blosc2.ndarray((2,), dtype=np.float32, null_value=np.float32(np.nan)))
+
+    t = blosc2.CTable(FloatRows, new_data=[(None,), ([1.0, 2.0],)])
+
+    np.testing.assert_array_equal(t.x.is_null(), np.array([True, False]))
+    assert t.x.null_count() == 1
+
+
 def test_nullable_ndarray_arrow_roundtrip():
     pytest.importorskip("pyarrow")
     t = blosc2.CTable(NullableNDArrayRow)
