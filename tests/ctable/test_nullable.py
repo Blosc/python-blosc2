@@ -78,6 +78,17 @@ def test_null_value_property_set():
     assert t["score"].null_value == -1
 
 
+def test_numpy_nan_null_value_skips_scalar_validation_constraints():
+    @dataclass
+    class NumpyNaNFloatRow:
+        value: float = blosc2.field(blosc2.float32(ge=0, null_value=np.float32(np.nan)))
+
+    t = CTable(NumpyNaNFloatRow)
+    t.append((np.float32(np.nan),))
+
+    assert t.value.null_count() == 1
+
+
 def test_null_value_property_not_set():
     t = CTable(IntRow, new_data=[(1, 10)])
     assert t["id"].null_value is None

@@ -76,8 +76,8 @@ def _is_null_value(val, null_value) -> bool:
     if null_value is None:
         return False
     try:
-        if isinstance(null_value, float) and math.isnan(null_value):
-            return isinstance(val, float) and math.isnan(val)
+        if isinstance(null_value, (float, np.floating)) and math.isnan(null_value):
+            return isinstance(val, (float, np.floating)) and math.isnan(val)
     except TypeError:
         pass
     return val == null_value
@@ -104,7 +104,9 @@ def _mask_nulls(schema: CompiledSchema, row: dict[str, Any]) -> tuple[dict[str, 
             try:
                 arr = np.asarray(val, dtype=col.spec.dtype)
                 is_null = arr.shape == col.spec.item_shape and bool(
-                    np.isnan(arr).all() if isinstance(nv, float) and math.isnan(nv) else (arr == nv).all()
+                    np.isnan(arr).all()
+                    if isinstance(nv, (float, np.floating)) and math.isnan(nv)
+                    else (arr == nv).all()
                 )
             except Exception:
                 is_null = val is None

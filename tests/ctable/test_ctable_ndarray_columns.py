@@ -190,6 +190,21 @@ def test_nullable_ndarray_numpy_nan_null_value():
     assert t.x.null_count() == 1
 
 
+def test_mask_nulls_ndarray_numpy_nan_null_value():
+    from blosc2.schema_compiler import compile_schema
+    from blosc2.schema_validation import _mask_nulls
+
+    @dataclass
+    class FloatRows:
+        x: object = blosc2.field(blosc2.ndarray((2,), dtype=np.float32, null_value=np.float32(np.nan)))
+
+    row = {"x": np.full((2,), np.nan, dtype=np.float32)}
+    masked, nulled = _mask_nulls(compile_schema(FloatRows), row)
+
+    assert masked["x"] is None
+    np.testing.assert_array_equal(nulled["x"], row["x"])
+
+
 def test_nullable_ndarray_arrow_roundtrip():
     pytest.importorskip("pyarrow")
     t = blosc2.CTable(NullableNDArrayRow)
