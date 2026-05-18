@@ -1748,7 +1748,7 @@ def _group_reduce_numpy(  # noqa: C901
 
     order = list(acc)
     if sort:
-        order.sort(key=lambda k: _sortable_key_part(display[k]))
+        order.sort(key=lambda k: _group_reduce_sort_key(display[k]))
     groups = np.asarray([display[k] for k in order], dtype=keys.dtype)
     result = []
     for k in order:
@@ -1766,6 +1766,15 @@ def _group_reduce_numpy(  # noqa: C901
         elif op == "max":
             result.append(max_value if count else _null_value_for(values))
     return groups, np.asarray(result, dtype=_result_dtype(values, op))
+
+
+def _group_reduce_sort_key(value: Any) -> tuple[int, Any]:
+    """Sort group_reduce keys with None first and NaN groups last."""
+    if value is None:
+        return (0, "")
+    if isinstance(value, float) and math.isnan(value):
+        return (2, "")
+    return (1, value)
 
 
 def _maybe_sort(groups: np.ndarray, result: np.ndarray, sort: bool):

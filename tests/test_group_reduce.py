@@ -54,6 +54,16 @@ def test_group_reduce_arbitrary_float_keys_and_nan_key_group():
     assert sums[2] == 7.0
 
 
+def test_group_reduce_object_keys_sort_none_first_nan_last():
+    keys = np.array([np.nan, None, "b", "a", np.nan, None], dtype=object)
+
+    groups, sizes = blosc2.group_reduce(keys, op="size", sort=True, dropna=False)
+
+    assert groups[:3].tolist() == [None, "a", "b"]
+    assert np.isnan(groups[3])
+    np.testing.assert_array_equal(sizes, np.array([2, 1, 1, 2]))
+
+
 def test_group_reduce_dropna_default_skips_nan_keys():
     keys = np.array([1.0, np.nan, 1.0])
     values = np.array([2.0, 10.0, 3.0])
