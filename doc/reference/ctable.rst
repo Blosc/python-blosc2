@@ -508,6 +508,8 @@ Null sentinel values are automatically excluded from all aggregates.
     Column.sum
     Column.min
     Column.max
+    Column.argmin
+    Column.argmax
     Column.mean
     Column.std
     Column.any
@@ -516,6 +518,8 @@ Null sentinel values are automatically excluded from all aggregates.
 .. automethod:: Column.sum
 .. automethod:: Column.min
 .. automethod:: Column.max
+.. automethod:: Column.argmin
+.. automethod:: Column.argmax
 .. automethod:: Column.mean
 .. automethod:: Column.std
 .. automethod:: Column.any

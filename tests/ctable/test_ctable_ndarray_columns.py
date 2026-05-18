@@ -62,6 +62,10 @@ def test_ndarray_column_axis_reductions_and_where_projection():
     np.testing.assert_array_equal(t.embedding.sum(axis=0), np.array([5, 7, 9], dtype=np.float32))
     np.testing.assert_array_equal(t.embedding.sum(axis=1), np.array([6, 15], dtype=np.float32))
     np.testing.assert_allclose(t.embedding.norm(axis=1), np.linalg.norm(t.embedding[:], axis=1))
+    np.testing.assert_array_equal(t.embedding.argmax(axis=1), np.array([2, 2]))
+    np.testing.assert_array_equal(t.embedding.argmin(axis=1), np.array([0, 0]))
+    assert t.embedding.argmax() == 5
+    assert t.embedding.argmin() == 0
 
     filtered = t.where(t.embedding[:, 0] > 1)
     np.testing.assert_array_equal(filtered.id[:], np.array([2], dtype=np.int32))
@@ -85,6 +89,13 @@ def test_generated_column_row_transformer_append_refresh_and_vector_output():
     assert t._materialized_cols["embedding_norm"]["stale"] is True
     t.refresh_generated_column("embedding_norm")
     np.testing.assert_allclose(t.embedding_norm[:], np.linalg.norm(t.embedding[:], axis=1))
+
+    t.add_generated_column(
+        "embedding_argmax",
+        values=t.embedding.row_transformer.argmax(),
+        dtype=blosc2.int64(),
+    )
+    np.testing.assert_array_equal(t.embedding_argmax[:], np.argmax(t.embedding[:], axis=1))
 
     t.add_generated_column(
         "image_mean_rgb",

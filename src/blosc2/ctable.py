@@ -580,6 +580,12 @@ class RowTransformer:
     def max(self, *, axis=None):
         return self._with_op("max", axis=axis)
 
+    def argmin(self, *, axis=None):
+        return self._with_op("argmin", axis=axis)
+
+    def argmax(self, *, axis=None):
+        return self._with_op("argmax", axis=axis)
+
     def norm(self, *, axis=None, ord=None):
         return self._with_op("norm", axis=axis, ord=ord)
 
@@ -682,6 +688,14 @@ class RowTransformer:
             return np.asarray(np.min(arr, axis=axis))
         if self.op == "max":
             return np.asarray(np.max(arr, axis=axis))
+        if self.op == "argmin":
+            if self.axis is None:
+                return np.asarray(np.argmin(arr.reshape((arr.shape[0], -1)), axis=1), dtype=np.int64)
+            return np.asarray(np.argmin(arr, axis=axis), dtype=np.int64)
+        if self.op == "argmax":
+            if self.axis is None:
+                return np.asarray(np.argmax(arr.reshape((arr.shape[0], -1)), axis=1), dtype=np.int64)
+            return np.asarray(np.argmax(arr, axis=axis), dtype=np.int64)
         if self.op == "norm":
             if self.axis is None:
                 return np.asarray(np.linalg.norm(arr.reshape((arr.shape[0], -1)), ord=self.ord, axis=1))
@@ -702,6 +716,10 @@ class RowTransformer:
             return np.min(arr, axis=self.axis)
         if self.op == "max":
             return np.max(arr, axis=self.axis)
+        if self.op == "argmin":
+            return np.asarray(np.argmin(arr, axis=self.axis), dtype=np.int64)
+        if self.op == "argmax":
+            return np.asarray(np.argmax(arr, axis=self.axis), dtype=np.int64)
         if self.op == "norm":
             return np.linalg.norm(arr, ord=self.ord, axis=self.axis)
         raise ValueError(f"Unsupported row-transformer op {self.op!r}")
@@ -1960,6 +1978,10 @@ class Column:
             return np.min(arr, axis=axis)
         if op == "max":
             return np.max(arr, axis=axis)
+        if op == "argmin":
+            return np.argmin(arr, axis=axis)
+        if op == "argmax":
+            return np.argmax(arr, axis=axis)
         if op == "std":
             return np.std(arr, axis=axis, ddof=ddof, dtype=dtype)
         raise ValueError(f"Unsupported ndarray reduction {op!r}")
@@ -2146,6 +2168,60 @@ class Column:
         if result is None:
             raise ValueError("max() called on a column where all values are null.")
         return result
+
+    def argmin(self, axis=None, *, where=None):
+        """Index of the minimum live, non-null value.
+
+        For fixed-shape ndarray columns, this follows NumPy axis semantics on
+        the logical array of shape ``(nrows, *item_shape)``.  For scalar
+        columns, the result is the logical row position within this column (or
+        filtered view).
+        """
+        if self.is_ndarray:
+            self._require_kind("biuf", "argmin")
+            return self._ndarray_reduce("argmin", axis=axis, where=where)
+        if axis not in (None, 0):
+            return np.argmin(self[:], axis=axis)
+        self._require_kind("biuf", "argmin")
+        if where is not None:
+            return self._table.where(self._normalize_sum_where(where))[self._col_name].argmin()
+        arr = np.asarray(self[:])
+        if arr.size == 0:
+            raise ValueError("argmin() called on an empty column.")
+        mask = (
+            self._null_mask_for(arr) if self.null_value is not None else np.zeros(len(arr), dtype=np.bool_)
+        )
+        if mask.all():
+            raise ValueError("argmin() called on a column where all values are null.")
+        positions = np.where(~mask)[0]
+        return int(positions[np.argmin(arr[positions])])
+
+    def argmax(self, axis=None, *, where=None):
+        """Index of the maximum live, non-null value.
+
+        For fixed-shape ndarray columns, this follows NumPy axis semantics on
+        the logical array of shape ``(nrows, *item_shape)``.  For scalar
+        columns, the result is the logical row position within this column (or
+        filtered view).
+        """
+        if self.is_ndarray:
+            self._require_kind("biuf", "argmax")
+            return self._ndarray_reduce("argmax", axis=axis, where=where)
+        if axis not in (None, 0):
+            return np.argmax(self[:], axis=axis)
+        self._require_kind("biuf", "argmax")
+        if where is not None:
+            return self._table.where(self._normalize_sum_where(where))[self._col_name].argmax()
+        arr = np.asarray(self[:])
+        if arr.size == 0:
+            raise ValueError("argmax() called on an empty column.")
+        mask = (
+            self._null_mask_for(arr) if self.null_value is not None else np.zeros(len(arr), dtype=np.bool_)
+        )
+        if mask.all():
+            raise ValueError("argmax() called on a column where all values are null.")
+        positions = np.where(~mask)[0]
+        return int(positions[np.argmax(arr[positions])])
 
     def mean(self, axis=None, *, where=None):
         """Arithmetic mean of all live, non-null values.

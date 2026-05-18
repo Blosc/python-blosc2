@@ -511,6 +511,24 @@ def test_max_complex_raises():
 
 
 # -------------------------------------------------------------------
+# Aggregates: argmin / argmax
+# -------------------------------------------------------------------
+
+
+def test_argmin_argmax_scalar_columns():
+    t = CTable(Row, new_data=DATA20)
+    assert t["id"].argmin() == 0
+    assert t["id"].argmax() == 19
+
+
+def test_argmin_argmax_skip_deleted_rows():
+    t = CTable(Row, new_data=DATA20)
+    t.delete([0, 19])
+    assert t["id"].argmin() == 0  # logical position of id=1 in the filtered live view
+    assert t["id"].argmax() == 17  # logical position of id=18 in the filtered live view
+
+
+# -------------------------------------------------------------------
 # Aggregates: mean
 # -------------------------------------------------------------------
 
