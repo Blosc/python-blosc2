@@ -5939,15 +5939,20 @@ class CTable(Generic[RowT]):
         rows = []
         for val in raw:
             stripped = val.strip()
-            if stripped == "" and null_value is not None:
-                rows.append(np.full(item_shape, null_value, dtype=dtype))
-            else:
+            if stripped == "":
+                if null_value is not None:
+                    rows.append(np.full(item_shape, null_value, dtype=dtype))
+                    continue
+                raise ValueError(f"Column {col.name!r}: non-nullable column got empty cell")
+
+            try:
                 arr = np.array(json.loads(stripped), dtype=dtype)
-                if arr.shape != item_shape:
-                    raise ValueError(
-                        f"Column {col.name!r}: expected item shape {item_shape}, got {arr.shape}"
-                    )
-                rows.append(arr)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Column {col.name!r}: invalid JSON array cell {val!r}") from exc
+
+            if arr.shape != item_shape:
+                raise ValueError(f"Column {col.name!r}: expected item shape {item_shape}, got {arr.shape}")
+            rows.append(arr)
 
         return np.ascontiguousarray(rows, dtype=dtype)
 

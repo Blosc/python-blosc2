@@ -343,6 +343,22 @@ def test_from_csv_ndarray_wrong_shape_raises(tmp_csv):
         CTable.from_csv(tmp_csv, NdarrayRow)
 
 
+def test_from_csv_nonnullable_ndarray_empty_cell_raises(tmp_csv):
+    with open(tmp_csv, "w") as f:
+        f.write("id,embedding\n")
+        f.write("1,\n")
+    with pytest.raises(ValueError, match="non-nullable column got empty cell"):
+        CTable.from_csv(tmp_csv, NdarrayRow)
+
+
+def test_from_csv_ndarray_invalid_json_raises(tmp_csv):
+    with open(tmp_csv, "w") as f:
+        f.write("id,embedding\n")
+        f.write('1,"not-json"\n')
+    with pytest.raises(ValueError, match="invalid JSON array cell"):
+        CTable.from_csv(tmp_csv, NdarrayRow)
+
+
 # ===========================================================================
 # to_pandas / from_pandas with fixed-shape ndarray columns
 # ===========================================================================
