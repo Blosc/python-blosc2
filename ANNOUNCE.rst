@@ -1,36 +1,63 @@
-Announcing Python-Blosc2 4.2.0
+Announcing Python-Blosc2 4.3.0
 ===============================
 
-We are happy to announce Python-Blosc2 4.2.0.  This is a large feature
-release, with the new compressed columnar table container, ``CTable``, as the
-main development.
+We are happy to announce Python-Blosc2 4.3.0.  This release deepens the
+``CTable`` container with three major additions: **N-dimensional columns**,
+**group-by aggregation**, and **dictionary/categorical column types**.
 
-``CTable`` brings typed, compressed, column-oriented tables to Python-Blosc2.
-It supports persistent ``.b2d`` and ``.b2z`` storage, schema-driven columns,
-nullable data, variable-length strings/bytes and object columns, computed
-columns, table views, mutations, sorting, filtering and persistent indexes.  It
-also includes Arrow, Parquet and CSV interoperability, plus a new
-``parquet-to-blosc2`` command-line utility.
+N-dimensional columns let each cell in a CTable hold a full compressed
+multidimensional array — ideal for embedding vectors, image patches,
+time-series windows or any per-row tensor payload.  ndarray columns support
+CSV/DataFrame round-trips, nullable semantics, and are automatically detected
+when importing from pandas.
 
-For a deeper introduction to CTable and its motivation, see our recent blog
-post:
+Group-by brings SQL-style ``GROUP BY`` directly to CTables::
 
-https://blosc.org/posts/ctable-blosc2-columnar-table/
+    by_city = t.group_by("city", sort=True)
+    by_city.agg({"sales": ["sum", "mean"], "qty": "sum"})
 
-Other highlights in 4.2.0 include:
+Multi-key groupings, filtered aggregates (``where=`` pushdown), and persistent
+output (``urlpath=``) are all supported.  Behind the scenes, Cython-accelerated
+kernels deliver dramatic speedups — ~25× for float keys, ~8× for integer keys —
+backed by dense-indexing and general-purpose hash-table paths.
 
-- A new indexing subsystem for NDArrays and CTables, including persistent
-  sidecar indexes, expression indexes, sorted iteration and query caching.
-- New structured serialization facilities for persisted ``C2Array``,
-  ``LazyExpr`` and DSL ``LazyUDF`` objects, plus ``blosc2.Ref`` and
-  ``blosc2.load()``.
-- New schema helpers such as ``blosc2.struct()`` and ``blosc2.object()``.
-- Object/ListArray improvements for variable-length and general object data.
-- Faster and lower-memory ``fromiter()`` construction, improved ``BatchArray``
-  defaults and continued linalg/matmul optimizations.
-- Many documentation, tutorial, example and benchmark additions.
-- Numerous fixes for Windows mmap/file-locking behavior, Python 3.14 GC/thread
-  interactions, ``.b2z`` persistence, indexed queries and NumPy compatibility.
+Also, ``DictionarySpec`` introduces dictionary-encoded (categorical) columns
+that store compact integer codes mapped to a shared string dictionary, giving
+both compact storage and accelerated equality/membership queries.  Dictionary
+columns work transparently in ``where`` clauses and nested dotted-name
+expressions.
+
+Other highlights in 4.3.0 include:
+
+- **Nested columns and field-name escaping**: Columns from Arrow/Parquet struct
+  hierarchies are flattened into physical leaf columns under hierarchical
+  ``_cols`` storage paths, with logical dotted-name access preserved.
+  Round-trip fidelity is maintained for nested schemas, and literal ``.`` / ``/``
+  in field names are automatically escaped.
+
+- **Parquet import improvements**: Arrow serializer is now the default;
+  nested columns are always separated; new ``--progress``/``--max-rows``/
+  ``--timestamp-unit``/``--float-trunc-prec`` options for
+  ``parquet-to-blosc2`` CLI; and a ``list_serializer`` parameter for fine-tuning
+  list-type column storage.
+
+- **Inline CTable support in TreeStore**: CTables can now be stored as items
+  inside a ``TreeStore``, enabling hierarchical containers that mix arrays
+  and tables.
+
+- **Performance wins**: ``CTable.open()`` is faster thanks to lazy ``nrows``
+  and deferred column metainfo loading.  Scalar and small-slice access paths
+  have been overhauled.  ``import blosc2`` is leaner via late-import
+  optimizations for heavy optional dependencies.
+
+- **New tutorials and examples**: Group-by, nested fields, dictionary columns,
+  TreeStore–CTable integration, and dedicated benchmarks for group-by,
+  nested-filter, and Parquet round-trips.
+
+- **Fixes**: Null/NaN sentinel normalization, empty aggregate results,
+  generated-column safety, miniexpr bundling, and more.
+
+- **Updated C-Blosc2** to version 3.0.3 (latest).
 
 You can think of Python-Blosc2 4.x as an extension of NumPy/numexpr that:
 
@@ -53,15 +80,29 @@ For more info, you can have a look at the release notes in:
 
 https://github.com/Blosc/python-blosc2/releases
 
-Small CTable example::
+Small CTable group-by example::
 
     import blosc2
+    from dataclasses import dataclass
 
-    table = blosc2.CTable.from_parquet("measurements.parquet", urlpath="measurements.b2z")
-    table.create_index("station_id")
+    @dataclass
+    class Order:
+        city: str = blosc2.field(blosc2.string(max_length=16))
+        product: str = blosc2.field(blosc2.string(max_length=16))
+        qty: int = blosc2.field(blosc2.int32())
+        price: float = blosc2.field(blosc2.float64(nullable=True), default=0.0)
 
-    hot = table.where("temperature > 30")
-    print(hot.head())
+    # Create a table with 200 random orders
+    t = blosc2.CTable(Order, new_data=orders)
+
+    # Group by city: total and average price per city in one call
+    print(t.group_by("city", sort=True).agg({"price": ["sum", "mean"], "qty": "sum"}))
+
+    # Multi-key: city + product breakdown
+    print(t.group_by(["city", "product"], sort=True).agg({"qty": "sum", "price": "mean"}))
+
+    # Filtered: only Widget orders, grouped by city
+    print(t.where(t.product == "Widget").group_by("city", sort=True).agg({"qty": "sum"}))
 
 Sources repository
 ------------------

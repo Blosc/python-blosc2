@@ -1,8 +1,155 @@
 # Release notes
 
-## Changes from 4.2.0 to 4.2.1
+## Changes from 4.2.0 to 4.3.0
 
-XXX version-specific blurb XXX
+### CTable: N-dimensional (ndarray) columns
+
+- **Multidimensional columns**: CTable columns can now hold NDArray-backed cells, allowing
+  each row of a column to contain a full n-dimensional compressed array.  This enables
+  use cases such as embedding vectors, image patches, time-series windows, or any other
+  multidimensional per-row payload.
+- **CSV and DataFrame import/export**: Multidimensional column data can be imported and
+  exported via CSV and pandas DataFrames, with automatic detection of array-valued cells.
+- **Nullable ndarray columns**: Multidimensional columns fully support the nullable
+  semantics (`null_count`, sentinel handling, `null_policy`) already available for scalar
+  columns.
+- **`from_pandas()` improvements**: `CTable.from_pandas()` now creates the correct
+  specialized backing storage for `DictionarySpec`, `ListSpec`, `VLStringSpec`,
+  `VLBytesSpec`, and other variable-length scalar specifications.
+- **Improved schema coverage**: New CTable timestamp schema type and extended
+  `Column.info` output with `shape`, `chunks`, and `blocks` descriptors.
+- **Arg reductions**: Added `argmin()` and `argmax()` for scalar and ndarray
+  CTable columns, plus row-transformer support for generated columns such as
+  per-row peak-hour or dominant-embedding-dimension features.
+
+### CTable: Group-by and filtered aggregation
+
+- **`CTable.group_by()`**: The primary group-by interface.  Call
+  ``t.group_by("city", sort=True).agg({"qty": "mean"})`` to produce a new
+  :class:`CTable` with aggregated results.  Single-key and multi-key groupings are
+  supported, along with convenience methods such as ``.size()``, ``.count()``,
+  ``.sum()``, ``.mean()``, ``.min()`` and ``.max()``:
+
+  .. code-block:: python
+
+      by_city = t.group_by("city", sort=True)
+      by_city.size()  # COUNT(*)
+      by_city.sum("sales")  # SUM(sales) per city
+      by_city.agg({"sales": ["sum", "mean"]})  # SUM(sales), AVG(sales) per city
+
+- **Performance accelerators**: Dedicated Cython fast paths deliver significant speedups:
+  ~25× for float32/64 group-by keys, ~8× for integer and dictionary-code keys, and a
+  general-purpose hash table for arbitrary float keys.
+- **Filtered aggregate pushdown**: The `where=` parameter is now accepted in aggregation
+  methods, pushing the filter into the compute engine so that only matching rows are
+  read and reduced.
+- **Persistent grouped output**: Group-by results can be saved directly to persistent
+  storage via the `urlpath=` parameter.
+- **`blosc2.group_reduce()`**: New public function that performs group-by reduction over
+  NDArray instances and CTable columns, with Cython-accelerated backends for common
+  key/reduction combinations.
+
+### CTable: Dictionary / categorical columns
+
+- **`DictionarySpec` column type**: Introduced a new dictionary-encoded (categorical)
+  column type that stores string or integer codes mapped to a shared dictionary, providing
+  compact storage and accelerated equality and membership queries.
+- **Dictionary types in `where` clauses**: Dictionary columns can be queried with the same
+  `where=` expression syntax as other column types, including nested dotted-name access.
+- **Improved display**: `CTable` printing now adapts to the terminal width, and dictionary
+  values are shown in their decoded form.  `Column.info` has been extended with type
+  details, shape, chunks, and blocks.
+
+### CTable: Nested columns and field-name escaping
+
+- **Dotted nested column access**: Columns whose names contain literal `.`
+  (e.g., `"root.nested"`) are now fully addressable via the dotted accessor syntax in
+  `where` expressions, `__getitem__`, and the public API.
+- **Hierarchical `_cols` storage paths**: The internal column storage layout now preserves
+  a hierarchical structure that mirrors the logical nesting, improving introspection
+  and interop.
+- **Nested-field pipeline**: A new flattened-storage pipeline with logical mapping
+  preserves nested schema structure (field names, types, and hierarchy) through
+  Arrow and Parquet import/export.  For unnamed top-level `list<struct<...>>` Parquet
+  files, the logical schema round-trips faithfully, though the original physical row
+  grouping is intentionally not preserved.
+- **Field-name escaping**: Special characters (`.` and `/`) in column names are
+  automatically escaped during schema construction and metadata round-trips.
+
+### Parquet import/export improvements
+
+- **Arrow serializer by default**: `CTable.from_parquet()` now defaults to the Arrow
+  serializer, providing better schema fidelity and nested-type support.
+- **Progress reporting**: A `--progress` flag and an ETA estimator have been added to
+  the `parquet-to-blosc2` CLI for long-running imports.
+- **`--max-rows` parameter**: `CTable.from_parquet()` and the CLI now accept `max_rows`
+  to limit the number of imported rows.
+- **`--timestamp-unit`**: New CLI option to control timestamp unit conversion on import.
+- **`--float-trunc-prec`**: New CLI option to truncate floating-point precision on import.
+- **Separated nested columns enabled by default**: The `separate_nested_cols` flag is now
+  `True` by default for both the Python API and the CLI, ensuring nested Arrow structs
+  are always expanded into flat columns.
+- **`list_serializer` parameter**: New option to control how list-type columns are
+  serialized, with sensible defaults for different list layouts.
+- **Validation optimizations**: Arrow datetime values are validated only during import,
+  reducing runtime overhead on subsequent operations.
+
+### TreeStore: Inline CTable support
+
+- **CTables inside TreeStore**: `CTable` objects can now be stored inline as items
+  inside a `TreeStore`, enabling hierarchical storage that mixes arrays and tables in a
+  single persistent container.
+- **Cache hardening**: TreeStore cache assignments now use defensive copies and cache
+  effective object roots to avoid aliasing and stale-cache errors.
+- **Examples and tutorials**: New tutorials and docstring examples demonstrate how to
+  store, retrieve, and query CTables within a TreeStore.
+
+### Performance and usability enhancements
+
+- **Faster open and import**: `blosc2.open()` and store constructors now assume valid
+  file extensions and defer column metainfo loading, making `CTable.open()` and
+  package import noticeably faster.
+- **`CTable.nrows` is now lazy**: The row count is computed on demand rather than eagerly,
+  speeding up open and schema-inspection workflows.
+- **Accelerated scalar and small-slice access**: The batch/list path for reading scalar
+  values or small column slices has been overhauled, eliminating internal placeholder
+  materialization and yielding lower latency.
+- **Late-import optimizations**: Heavy optional dependencies are imported lazily at the
+  blosc2 package level, reducing the baseline `import blosc2` overhead.
+- **`iter_arrow_batches()` optimization**: Avoids full Python object materialization of
+  batches during iteration, reducing memory pressure.
+- **`NDArray`-to-list conversion**: Small optimization when converting NDArray objects
+  to Python lists.
+- **`_last_pos` invalidation skipped**: Mid-table deletes no longer eagerly invalidate
+  cached positional state, improving delete latency.
+
+### Documentation, examples and benchmarks
+
+- **API reference expanded**: `blosc2.group_reduce()` has been added to the Sphinx
+  reference, along with updated CTable, Column, and TreeStore pages.
+- **New tutorials and examples**: Added sections on CTable–TreeStore integration,
+  nested fields, dictionary columns, aggregates, grouping and querying with `where=`.
+- **New benchmarks**: Graph benchmarks for CTable insert time, column count, memory usage,
+  and `where=` queries, plus dedicated group-by, nested-filter, and Parquet round-trip
+  benchmarks.
+
+### Fixes and compatibility
+
+- **Null and NaN handling**: NumPy scalar null sentinels are now normalized to plain Python
+  scalars, and floating-point NaN sentinels are treated consistently with Python
+  `float('nan')`.
+- **Empty aggregate results**: Filtered aggregations that produce no rows now handle the
+  empty result gracefully.
+- **Generated column safety**: Accessing a stalled (unfillable) generated column now raises
+  a clear exception instead of producing undefined results.
+- **Miniexpr bundling**: Miniexpr’s bundled `libtcc` and related runtime files are now
+  kept inside the `blosc2` package, avoiding conflicts with other TCC installations.
+- **Test improvements**: Torch-dependent tests are marked as `heavy`, PyArrow-optional
+  tests are skipped when the library is absent, and parametrization matrices have been
+  trimmed to reduce CI time.
+- **Missing Cython validation**: Added validation guards for several Cython extension
+  functions that previously lacked explicit error checking.
+- **C-Blosc2 update**: Bundled C-Blosc2 has been updated to the latest version (3.0.3).
 
 ## Changes from 4.1.2 to 4.2.0
 
