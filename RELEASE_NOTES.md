@@ -150,6 +150,8 @@
 - **Missing Cython validation**: Added validation guards for several Cython extension
   functions that previously lacked explicit error checking.
 - **C-Blosc2 update**: Bundled C-Blosc2 has been updated to the latest version (3.0.3).
+- **``blosc2.open()`` default mode changed from 'a' to 'r'**: Removed the FutureWarning that
+  was added to prepare for this transition.
 
 ## Changes from 4.1.2 to 4.2.0
 

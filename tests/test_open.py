@@ -173,32 +173,28 @@ def test_open_offset(offset, urlpath, mode, mmap_mode):
     blosc2.remove_urlpath(urlpath)
 
 
-def test_open_no_mode_warns(tmp_path):
-    """FutureWarning is emitted when mode is omitted."""
+def test_open_defaults_to_readonly(tmp_path):
+    """open() defaults to read-only mode when mode is omitted."""
     urlpath = str(tmp_path / "test.b2nd")
     blosc2.asarray(np.arange(10), urlpath=urlpath, mode="w")
-    with pytest.warns(FutureWarning, match="mode='a'"):
-        _ = blosc2.open(urlpath)
+    # Opening without explicit mode should work (read-only by default)
+    obj = blosc2.open(urlpath)
+    assert obj.schunk.mode == "r"
 
 
 def test_open_explicit_mode_no_warn(tmp_path):
-    """No FutureWarning is emitted when mode is explicitly given."""
-    import warnings
-
+    """No warnings are emitted when mode is explicitly given."""
     urlpath = str(tmp_path / "test.b2nd")
     blosc2.asarray(np.arange(10), urlpath=urlpath, mode="w")
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", FutureWarning)
-        _ = blosc2.open(urlpath, mode="r")
-        _ = blosc2.open(urlpath, mode="a")
+    _ = blosc2.open(urlpath, mode="r")
+    _ = blosc2.open(urlpath, mode="a")
 
 
-def test_open_mmap_without_mode_warns(tmp_path):
-    """FutureWarning is emitted when mode is omitted, even with mmap_mode."""
+def test_open_mmap_defaults_to_readonly(tmp_path):
+    """When mode is omitted, mmap_mode open also defaults to read-only."""
     if blosc2.IS_WASM:
         pytest.skip("mmap_mode is not supported reliably on wasm32")
 
     urlpath = str(tmp_path / "test.b2nd")
     blosc2.asarray(np.arange(10), urlpath=urlpath, mode="w")
-    with pytest.warns(FutureWarning, match="mode='a'"):
-        _ = blosc2.open(urlpath, mmap_mode="r")
+    obj = blosc2.open(urlpath, mmap_mode="r")
