@@ -6115,11 +6115,10 @@ class CTable(Generic[RowT]):
         import pandas as pd
 
         data = {}
-        n = len(self)
         for name in self.col_names:
             col = self[name]
             if col.is_ndarray:
-                data[name] = [col[i] for i in range(n)]
+                data[name] = list(col)
             else:
                 data[name] = col[:]
 
