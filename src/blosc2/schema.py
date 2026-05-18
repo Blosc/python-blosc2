@@ -26,6 +26,13 @@ _builtin_list = list
 _builtin_object = object
 
 
+def _normalize_scalar_value(value):
+    """Convert NumPy scalar sentinels to plain Python scalars."""
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Base spec class
 # ---------------------------------------------------------------------------
@@ -90,7 +97,7 @@ class _NumericSpec(SchemaSpec):
         self.le = le
         self.lt = lt
         self.nullable = nullable or null_value is not None
-        self.null_value = null_value
+        self.null_value = _normalize_scalar_value(null_value)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         # null_value is not a Pydantic constraint — exclude it from Pydantic kwargs.
@@ -249,7 +256,7 @@ class timestamp(SchemaSpec):
         self.unit = unit
         self.timezone = timezone
         self.nullable = nullable or null_value is not None
-        self.null_value = null_value
+        self.null_value = _normalize_scalar_value(null_value)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         return {}
@@ -279,7 +286,7 @@ class bool(SchemaSpec):
         if null_value is not None and null_value != 255:
             raise ValueError("Nullable bool null_value must be 255")
         self.nullable = nullable or null_value is not None
-        self.null_value = null_value
+        self.null_value = _normalize_scalar_value(null_value)
         self.dtype = np.dtype(np.uint8) if self.nullable else np.dtype(np.bool_)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -327,7 +334,7 @@ class string(SchemaSpec):
         self.max_length = max_length if max_length is not None else self._DEFAULT_MAX_LENGTH
         self.pattern = pattern
         self.nullable = nullable or null_value is not None
-        self.null_value = null_value
+        self.null_value = _normalize_scalar_value(null_value)
         self.dtype = np.dtype(f"U{self.max_length}")
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -373,7 +380,7 @@ class bytes(SchemaSpec):
         self.min_length = min_length
         self.max_length = max_length if max_length is not None else self._DEFAULT_MAX_LENGTH
         self.nullable = nullable or null_value is not None
-        self.null_value = null_value
+        self.null_value = _normalize_scalar_value(null_value)
         self.dtype = np.dtype(f"S{self.max_length}")
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -721,7 +728,7 @@ class NDArraySpec(SchemaSpec):
         self.dtype = np.dtype(dtype)
         self.nullable = nullable or null_value is not None
         if null_value is not None:
-            self.null_value = null_value
+            self.null_value = _normalize_scalar_value(null_value)
         self.itemsize = self.dtype.itemsize
         self.kind = self.dtype.kind
         self.type = self.dtype.type

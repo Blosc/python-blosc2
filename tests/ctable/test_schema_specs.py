@@ -7,6 +7,8 @@
 
 """Tests for schema spec objects (blosc2.schema)."""
 
+import json
+
 import numpy as np
 import pytest
 
@@ -196,6 +198,15 @@ def test_string_metadata_dict():
 
 def test_complex128_metadata_dict():
     assert complex128().to_metadata_dict() == {"kind": "complex128"}
+
+
+def test_ndarray_metadata_dict_normalizes_numpy_scalar_null_value():
+    spec = blosc2.ndarray((2,), dtype=np.int16, null_value=np.int16(123))
+    d = spec.to_metadata_dict()
+
+    assert d["null_value"] == 123
+    assert isinstance(d["null_value"], int)
+    json.dumps(d)
 
 
 # -------------------------------------------------------------------
