@@ -6135,7 +6135,7 @@ class CTable(Generic[RowT]):
         return pd.DataFrame(data)
 
     @classmethod
-    def from_pandas(cls, df, row_cls) -> CTable:
+    def from_pandas(cls, df, row_cls) -> CTable:  # noqa: C901
         """Build a :class:`CTable` from a pandas DataFrame.
 
         Schema comes from *row_cls* (a dataclass) — CTable is always typed.
@@ -6184,8 +6184,35 @@ class CTable(Generic[RowT]):
             chunks=default_chunks,
             blocks=default_blocks,
         )
-        new_cols: dict[str, blosc2.NDArray] = {}
+        new_cols: dict[str, Any] = {}
         for col in schema.columns:
+            if cls._is_list_column(col):
+                new_cols[col.name] = mem_storage.create_list_column(
+                    col.name,
+                    spec=col.spec,
+                    cparams=None,
+                    dparams=None,
+                )
+                continue
+            if cls._is_varlen_scalar_column(col):
+                new_cols[col.name] = mem_storage.create_varlen_scalar_column(
+                    col.name,
+                    spec=col.spec,
+                    cparams=None,
+                    dparams=None,
+                )
+                continue
+            if cls._is_dictionary_column(col):
+                dict_col = mem_storage.create_dictionary_column(
+                    col.name,
+                    spec=col.spec,
+                    cparams=None,
+                    dparams=None,
+                )
+                if len(dict_col.codes) < capacity:
+                    dict_col.resize((capacity,))
+                new_cols[col.name] = dict_col
+                continue
             shape = cls._column_physical_shape(col, capacity)
             chunks, blocks = cls._column_chunks_blocks(col, shape)
             new_cols[col.name] = mem_storage.create_column(
@@ -6219,22 +6246,36 @@ class CTable(Generic[RowT]):
         obj._last_pos = 0
 
         if n > 0:
+
+            def normalize_pandas_missing(value):
+                if value is None:
+                    return None
+                if isinstance(value, float) and np.isnan(value):
+                    return None
+                # pandas.NA cannot be compared/coerced reliably; detect it by type name
+                # without importing pandas here.
+                if type(value).__name__ == "NAType":
+                    return None
+                return value
+
+            raw_columns = {}
             for col in schema.columns:
                 series = df[col.name]
-                if isinstance(col.spec, NDArraySpec):
-                    vals = series.values
-                    if vals.dtype != object:
-                        raise ValueError(
-                            f"Column {col.name!r}: expected object dtype in DataFrame "
-                            f"for ndarray column, got {vals.dtype}"
-                        )
-                    batch = cls._coerce_ndarray_batch(col.name, col.spec, vals, n)
-                    new_cols[col.name][:n] = batch
+                if isinstance(col.spec, NDArraySpec) and series.values.dtype != object:
+                    raise ValueError(
+                        f"Column {col.name!r}: expected object dtype in DataFrame "
+                        f"for ndarray column, got {series.values.dtype}"
+                    )
+                if (
+                    cls._is_list_column(col)
+                    or cls._is_varlen_scalar_column(col)
+                    or cls._is_dictionary_column(col)
+                    or isinstance(col.spec, NDArraySpec)
+                ):
+                    raw_columns[col.name] = [normalize_pandas_missing(value) for value in series.tolist()]
                 else:
-                    new_cols[col.name][:n] = series.to_numpy(dtype=col.dtype)
-            new_valid[:n] = True
-            obj._n_rows = n
-            obj._last_pos = n
+                    raw_columns[col.name] = series.to_numpy(dtype=col.dtype)
+            obj.extend(raw_columns, validate=True)
 
         return obj
 

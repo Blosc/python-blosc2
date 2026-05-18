@@ -445,6 +445,33 @@ def test_from_pandas_all_scalars_roundtrip():
 
 
 @dataclass
+class PandasSpecialRow:
+    vendor: str = blosc2.field(blosc2.dictionary())
+    note: str = blosc2.field(blosc2.vlstring(nullable=True))
+    tags: list[str] = blosc2.field(blosc2.list(blosc2.string(max_length=16), nullable=True))  # noqa: RUF009
+
+
+def test_from_pandas_special_columns_roundtrip():
+    """from_pandas creates the specialized backing storage required by non-ndarray columns."""
+    pytest.importorskip("pandas")
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "vendor": ["Uber", "Lyft", "Uber"],
+            "note": ["fast", None, "ok"],
+            "tags": [["airport", "night"], None, []],
+        }
+    )
+
+    t = CTable.from_pandas(df, PandasSpecialRow)
+
+    assert t["vendor"][:] == ["Uber", "Lyft", "Uber"]
+    assert t["note"][:] == ["fast", None, "ok"]
+    assert t["tags"][:] == [["airport", "night"], None, []]
+
+
+@dataclass
 class NdarrayMixedRow:
     id: int = blosc2.field(blosc2.int64())
     image: object = blosc2.field(blosc2.ndarray((2, 2, 3), dtype=blosc2.float32()))
