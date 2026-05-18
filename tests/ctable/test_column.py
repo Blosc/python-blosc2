@@ -74,16 +74,21 @@ def test_column_float32_repr_uses_numpy_formatting():
 
 
 def test_column_info():
-    """Column.info reports logical and physical storage details."""
+    """Column.info reports logical shape plus physical storage details."""
     tabla = CTable(Row, new_data=DATA20)
     info = tabla.score.info
     text = repr(info)
+    items = dict(tabla.score.info_items)
 
     assert len(info) == len(tabla.score.info_items)
     assert ("type", "Column") in tabla.score.info_items
     assert ("name", "score") in tabla.score.info_items
-    assert "logical_length" in text
-    assert "physical_length" in text
+    assert items["nrows"] == 20
+    assert items["shape"] == (20,)
+    assert "chunks" in items
+    assert "blocks" in items
+    assert "logical_length" not in text
+    assert "physical_length" not in text
     assert "logical_shape" not in text
     assert "table_physical_length" not in text
     assert "storage" in text

@@ -1157,16 +1157,25 @@ class Column:
         table = self._table
         col_meta = table._schema.columns_by_name.get(self._col_name)
         spec = col_meta.spec if col_meta is not None else None
-        physical_len = len(raw) if hasattr(raw, "__len__") else None
+        chunks = getattr(raw, "chunks", None)
+        blocks = getattr(raw, "blocks", None)
         items: list[tuple[str, object]] = [
             ("type", self.__class__.__name__),
             ("name", self._col_name),
-            ("logical_length", len(self)),
-            ("physical_length", physical_len),
-            ("dtype", table._dtype_info_label(self.dtype, spec)),
-            ("computed", self.is_computed),
-            ("nullable", self.null_value is not None or getattr(spec, "nullable", False)),
+            ("nrows", len(self)),
+            ("shape", self.shape),
         ]
+        if chunks is not None:
+            items.append(("chunks", chunks))
+        if blocks is not None:
+            items.append(("blocks", blocks))
+        items.extend(
+            [
+                ("dtype", table._dtype_info_label(self.dtype, spec)),
+                ("computed", self.is_computed),
+                ("nullable", self.null_value is not None or getattr(spec, "nullable", False)),
+            ]
+        )
 
         if self.is_list:
             items.append(("storage", "list"))
@@ -1177,13 +1186,6 @@ class Column:
             items.append(("dictionary_size", len(raw.dictionary)))
         else:
             items.append(("storage", "ndarray" if isinstance(raw, blosc2.NDArray) else type(raw).__name__))
-
-        chunks = getattr(raw, "chunks", None)
-        blocks = getattr(raw, "blocks", None)
-        if chunks is not None:
-            items.append(("chunks", chunks))
-        if blocks is not None:
-            items.append(("blocks", blocks))
 
         nbytes = getattr(raw, "nbytes", None)
         cbytes = getattr(raw, "cbytes", None)
