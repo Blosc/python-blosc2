@@ -734,6 +734,26 @@ def test_intra_chunk_merge_sorted_slices_matches_lexsort_merge():
     np.testing.assert_array_equal(merged_positions, all_positions[order])
 
 
+def test_intra_chunk_merge_sorted_slices_validates_lengths():
+    indexing_ext = __import__("blosc2.indexing_ext", fromlist=["intra_chunk_merge_sorted_slices"])
+    values = np.array([1.0, 2.0], dtype=np.float64)
+    positions = np.array([0, 1], dtype=np.uint16)
+
+    with pytest.raises(ValueError, match="values and positions must have matching lengths"):
+        indexing_ext.intra_chunk_merge_sorted_slices(
+            values, positions[:1], values, positions, np.dtype(np.uint16)
+        )
+
+
+def test_index_search_boundary_bounds_validates_lengths():
+    indexing_ext = __import__("blosc2.indexing_ext", fromlist=["index_search_boundary_bounds"])
+    starts = np.array([1, 3], dtype=np.int64)
+    ends = np.array([2], dtype=np.int64)
+
+    with pytest.raises(ValueError, match="starts and ends must have the same length"):
+        indexing_ext.index_search_boundary_bounds(starts, ends, None, True, None, True)
+
+
 def test_mutation_marks_index_stale_and_rebuild_restores_it():
     data = np.arange(50_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(5_000,), blocks=(1_000,))

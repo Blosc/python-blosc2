@@ -236,6 +236,41 @@ def test_group_reduce_object_numeric_keys_sort_with_none():
     assert sizes.tolist() == [1, 1, 2]
 
 
+@pytest.mark.parametrize(
+    ("kernel_name", "value_dtype"),
+    [
+        ("groupby_dense_int_f64_min_checked", np.float64),
+        ("groupby_dense_int_f64_max_checked", np.float64),
+        ("groupby_dense_int_i64_min_checked", np.int64),
+        ("groupby_dense_int_i64_max_checked", np.int64),
+    ],
+)
+@pytest.mark.parametrize("bad_arg", ["values", "valid", "state"])
+def test_groupby_ext_min_max_checked_validate_shapes(kernel_name, value_dtype, bad_arg):
+    groupby_ext = pytest.importorskip("blosc2.groupby_ext")
+    kernel = getattr(groupby_ext, kernel_name)
+
+    keys = np.array([0, 1], dtype=np.int64)
+    values = np.array([10, 20], dtype=value_dtype)
+    valid = np.array([True, True], dtype=np.bool_)
+    state = np.zeros(2, dtype=value_dtype)
+    has_value = np.zeros(2, dtype=np.bool_)
+    keys_present = np.zeros(2, dtype=np.bool_)
+
+    if bad_arg == "values":
+        values = values[:1]
+        match = "keys, values and valid must have the same length"
+    elif bad_arg == "valid":
+        valid = valid[:1]
+        match = "keys, values and valid must have the same length"
+    else:
+        has_value = has_value[:1]
+        match = "state arrays must have the same length"
+
+    with pytest.raises(ValueError, match=match):
+        kernel(keys, values, valid, state, has_value, keys_present)
+
+
 def test_groupby_rejects_bad_engine():
     t = CTable(SalesRow, new_data=DATA)
 
