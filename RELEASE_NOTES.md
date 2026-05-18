@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.3.0 to 4.3.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.2.0 to 4.3.0
 
 ### CTable: N-dimensional (ndarray) columns
