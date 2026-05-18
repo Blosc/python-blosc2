@@ -11,6 +11,14 @@ time-series windows or any per-row tensor payload.  ndarray columns support
 CSV/DataFrame round-trips, nullable semantics, and are automatically detected
 when importing from pandas.
 
+N-dimensional columns inherit the full power of Blosc2 ``NDArray`` objects.
+They are not opaque blobs, but first-class arrays that support slicing,
+indexing, and full Blosc2 operations, including multi-threaded and
+SIMD-accelerated expression evaluation. This gives ``CTable`` a strong bridge
+between tabular and array workflows in a single container.
+
+See example at: https://github.com/Blosc/python-blosc2/blob/main/examples/ctable/ndim-cols.py
+
 Group-by brings SQL-style ``GROUP BY`` directly to CTables::
 
     by_city = t.group_by("city", sort=True)
