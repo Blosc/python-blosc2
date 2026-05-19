@@ -37,6 +37,7 @@ Constructors
 .. autosummary::
 
     arange
+    array
     asarray
     copy
     empty
@@ -60,6 +61,7 @@ Constructors
 
 
 .. autofunction:: blosc2.arange
+.. autofunction:: blosc2.array
 .. autofunction:: blosc2.asarray
 .. autofunction:: blosc2.copy
 .. autofunction:: blosc2.empty

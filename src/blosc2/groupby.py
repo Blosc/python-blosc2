@@ -1624,8 +1624,8 @@ def group_reduce(keys, values=None, op: AggName = "size", *, sort: bool = False,
     Examples
     --------
     >>> import blosc2
-    >>> keys = blosc2.asarray([1, 2, 1, 2, 1])
-    >>> values = blosc2.asarray([10., 20., 30., 40., 50.])
+    >>> keys = blosc2.array([1, 2, 1, 2, 1])
+    >>> values = blosc2.array([10., 20., 30., 40., 50.])
     >>> groups, sums = blosc2.group_reduce(keys, values, op="sum", sort=True)
     >>> groups
     array([1, 2])

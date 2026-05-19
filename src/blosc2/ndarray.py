@@ -6549,6 +6549,45 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     return ndarr
 
 
+def array(array: Sequence | blosc2.Array, copy: bool | None = True, **kwargs: Any) -> NDArray:
+    """Create an :class:`NDArray` from an array-like object.
+
+    This is the NumPy-like constructor counterpart to :func:`asarray`.  It uses
+    the same keyword arguments as :func:`asarray`, but defaults to ``copy=True``
+    so an :class:`NDArray` input is copied unless explicitly requested
+    otherwise.
+
+    Parameters
+    ----------
+    array: array_like
+        Input data.
+    copy: bool | None, optional
+        Whether to copy the input.  Defaults to ``True``.  If ``False``, raise a
+        :class:`ValueError` when a copy is required.  If ``None``, use
+        :func:`asarray` semantics.
+    kwargs: dict, optional
+        Keyword arguments supported by :func:`asarray`.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        A new :ref:`NDArray`, unless ``copy`` is ``False`` or ``None`` and the
+        input can be returned without copying.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> a = blosc2.array([1, 2, 3])
+    >>> a[:]
+    array([1, 2, 3])
+    >>> blosc2.array(a) is a
+    False
+    >>> blosc2.array(a, copy=False) is a
+    True
+    """
+    return asarray(array, copy=copy, **kwargs)
+
+
 def astype(
     array: Sequence | blosc2.Array,
     dtype,

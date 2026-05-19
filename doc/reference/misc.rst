@@ -30,6 +30,7 @@ public objects into the appropriate reference section.
         DSLKernel,
         Operand,
         ProxyNDField,
+        array,
         array_from_ffi_ptr,
         as_simpleproxy,
         cpu_info,
