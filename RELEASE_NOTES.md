@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.3.1 to 4.3.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.3.0 to 4.3.1
 
 This is a maintenance release focused on CTable nested-column ergonomics,
