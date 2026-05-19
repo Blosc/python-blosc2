@@ -83,6 +83,30 @@ def test_groupby_multi_key_size():
     assert rows(out) == [("Berlin", 2, 1), ("Paris", 1, 2), ("Paris", 2, 1), ("Rome", 1, 2)]
 
 
+def test_groupby_nested_column_name_result():
+    t = CTable(SalesRow, new_data=DATA)
+    t.rename_column("category", "trip.sec")
+    t.rename_column("sales", "payment.tips")
+
+    view = t.where((t["payment.tips"] > 10) & (t["trip.sec"] > 1))
+    out = view.group_by("trip.sec", sort=True).size()
+    out_from_column = view.group_by(t.trip.sec, sort=True).size()
+
+    assert out.col_names == ["trip.sec", "size"]
+    assert rows(out) == [(2, 1)]
+    assert rows(out_from_column) == rows(out)
+    assert out["trip.sec"][:].tolist() == [2]
+
+    count = t.group_by(t.trip.sec, sort=True).count(t.payment.tips)
+    assert count.col_names == ["trip.sec", "payment.tips_count"]
+    assert rows(count) == [(1, 3), (2, 1)]
+
+    agg = t.group_by(t.trip.sec, sort=True).agg({"payment.tips": "sum"})
+
+    assert agg.col_names == ["trip.sec", "payment.tips_sum"]
+    assert rows(agg) == [(1, 70.0), (2, 30.0)]
+
+
 def test_groupby_respects_views_and_deleted_rows():
     t = CTable(SalesRow, new_data=DATA)
     t.delete(0)

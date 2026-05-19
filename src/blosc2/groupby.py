@@ -17,7 +17,6 @@ from __future__ import annotations
 import copy
 import dataclasses
 import math
-import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -26,6 +25,7 @@ import numpy as np
 from blosc2.schema import DictionarySpec, NDArraySpec, SchemaSpec, float64, int64
 from blosc2.schema import bool as b2_bool
 from blosc2.schema import field as b2_field
+from blosc2.schema_compiler import _validate_column_name
 
 if TYPE_CHECKING:  # pragma: no cover
     from blosc2.ctable import CTable
@@ -33,7 +33,6 @@ if TYPE_CHECKING:  # pragma: no cover
 
 AggName = Literal["size", "count", "sum", "mean", "min", "max"]
 
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*$")
 _NAN_KEY = ("__blosc2_groupby_nan__",)
 
 
@@ -49,6 +48,17 @@ class _AggState:
     op: AggName
     value: Any = None
     count: int = 0
+
+
+def _is_column_like(value: Any) -> bool:
+    return isinstance(getattr(value, "_col_name", None), str)
+
+
+def _column_name(value: Any) -> str:
+    name = getattr(value, "_col_name", value)
+    if not isinstance(name, str):
+        raise TypeError(f"Expected a column name or Column object, got {type(value)!r}")
+    return name
 
 
 class CTableGroupBy:
@@ -70,10 +80,10 @@ class CTableGroupBy:
         engine: str = "auto",
         chunk_size: int | None = None,
     ) -> None:
-        if isinstance(keys, str):
-            keys = [keys]
+        if isinstance(keys, str) or _is_column_like(keys):
+            keys = [_column_name(keys)]
         else:
-            keys = list(keys)
+            keys = [_column_name(k) for k in keys]
         if not keys:
             raise ValueError("group_by() requires at least one key column")
 
@@ -114,7 +124,7 @@ class CTableGroupBy:
         This is equivalent to SQL ``COUNT(column)`` and to
         ``group_by(...).agg({column: "count"})``.
         """
-        col = self.table._logical_to_physical_name(column)
+        col = self.table._logical_to_physical_name(_column_name(column))
         return self._execute([_AggSpec(col, "count", f"{col}_count")], urlpath=urlpath)
 
     def sum(self, column: str, *, urlpath: str | None = None):
@@ -178,7 +188,7 @@ class CTableGroupBy:
                     specs.append(_AggSpec(None, "size", "size"))
                 continue
 
-            physical = self.table._logical_to_physical_name(col_name)
+            physical = self.table._logical_to_physical_name(_column_name(col_name))
             self._validate_value_column(physical)
             for op in op_list:
                 if op not in {"count", "sum", "mean", "min", "max"}:
@@ -1353,23 +1363,45 @@ class CTableGroupBy:
         for spec in specs:
             schema_specs[spec.output_col] = self._result_spec_for_agg(spec)
 
+        # CTable construction is schema-from-dataclass based, and dataclass field
+        # names must be Python identifiers.  Build with temporary identifier
+        # aliases, then rename the result columns back to their requested logical
+        # names.  This keeps nested names such as ``trip.sec`` in the resulting
+        # table while reusing the normal CTable initialization path.
+        alias_by_name = self._result_aliases(columns)
         fields = []
         for name in columns:
-            fields.append((name, _python_type_for_spec(schema_specs[name]), b2_field(schema_specs[name])))
+            alias = alias_by_name[name]
+            fields.append((alias, _python_type_for_spec(schema_specs[name]), b2_field(schema_specs[name])))
         row_type = dataclasses.make_dataclass("CTableGroupByRow", fields)
-        data = {name: [row[name] for row in rows] for name in columns}
+        data = {alias_by_name[name]: [row[name] for row in rows] for name in columns}
         urlpath = getattr(self, "_result_urlpath", None)
         kwargs = {"urlpath": str(urlpath), "mode": "w"} if urlpath is not None else {}
-        return CTable(row_type, new_data=data, expected_size=max(len(rows), 1), validate=False, **kwargs)
+        out = CTable(row_type, new_data=data, expected_size=max(len(rows), 1), validate=False, **kwargs)
+        for name in columns:
+            alias = alias_by_name[name]
+            if alias != name:
+                out.rename_column(alias, name)
+        return out
+
+    def _result_aliases(self, names: Sequence[str]) -> dict[str, str]:
+        final_names = set(names)
+        aliases: dict[str, str] = {}
+        used: set[str] = set()
+        for i, name in enumerate(names):
+            alias = f"groupby_result_col_{i}"
+            suffix = 0
+            while alias in final_names or alias in used:
+                suffix += 1
+                alias = f"groupby_result_col_{i}_{suffix}"
+            aliases[name] = alias
+            used.add(alias)
+        return aliases
 
     def _validate_output_names(self, specs: list[_AggSpec]) -> None:
         names = self.keys + [s.output_col for s in specs]
-        bad = [name for name in names if not _IDENTIFIER_RE.match(name)]
-        if bad:
-            raise NotImplementedError(
-                "Phase-1 group_by() result columns must be valid Python identifiers; "
-                f"unsupported names: {bad!r}"
-            )
+        for name in names:
+            _validate_column_name(name)
         if len(names) != len(set(names)):
             raise ValueError("Group-by result column names would not be unique")
 
