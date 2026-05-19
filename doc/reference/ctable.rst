@@ -274,6 +274,9 @@ method to write the result as a persistent :class:`CTable`::
 
     totals = by_city.sum("sales", urlpath="sales_by_city.b2d")
 
+For array-oriented grouped reductions without a :class:`CTable`, see
+:func:`blosc2.group_reduce`.
+
 .. autoclass:: CTableGroupBy
     :members: size, count, sum, mean, min, max, argmin, argmax, agg
 
@@ -456,9 +459,11 @@ Attributes
 
     Column.dtype
     Column.null_value
+    Column.row_transformer
 
 .. autoproperty:: Column.dtype
 .. autoproperty:: Column.null_value
+.. autoproperty:: Column.row_transformer
 
 
 Data access
@@ -473,6 +478,30 @@ Data access
 .. autoproperty:: Column.view
 .. automethod:: Column.iter_chunks
 .. automethod:: Column.assign
+
+
+Row transformers
+----------------
+
+``Column.row_transformer`` builds row-wise projections and reductions for
+fixed-shape ndarray columns.  Use these transformers with
+:meth:`CTable.add_generated_column` when the generated value should be computed
+from each row's ndarray payload rather than from scalar columns::
+
+    t.add_generated_column(
+        "embedding_norm",
+        values=t.embedding.row_transformer.norm(axis=0),
+        dtype=blosc2.float64(),
+    )
+    t.add_generated_column(
+        "image_mean_rgb",
+        values=t.image.row_transformer.mean(axis=(0, 1)),
+        dtype=blosc2.ndarray((3,), dtype=blosc2.float32()),
+    )
+
+.. autoclass:: RowTransformer
+    :members: sum, mean, min, max, argmin, argmax, norm
+    :special-members: __getitem__
 
 
 Nullable helpers
@@ -602,20 +631,28 @@ Text & binary
     bytes
     vlstring
     vlbytes
-    struct
-    object
-    list
 
 .. autoclass:: string
 .. autoclass:: bytes
 .. autofunction:: vlstring
 .. autofunction:: vlbytes
-.. autofunction:: struct
-.. autofunction:: object
-.. autofunction:: list
 
-Object columns
---------------
+Array, encoded, and compound specs
+----------------------------------
+
+.. autosummary::
+
+    ndarray
+    dictionary
+    struct
+    list
+    object
+
+.. autofunction:: ndarray
+.. autofunction:: dictionary
+.. autofunction:: struct
+.. autofunction:: list
+.. autofunction:: object
 
 Timestamp columns
 -----------------
