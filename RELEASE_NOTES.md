@@ -2,7 +2,36 @@
 
 ## Changes from 4.3.0 to 4.3.1
 
-XXX version-specific blurb XXX
+This is a maintenance release focused on CTable nested-column ergonomics,
+grouped reductions, and API/documentation polish.
+
+### CTable nested columns and grouped reductions
+
+- **Nested column names in `group_by()` results**: grouped output columns can now
+  preserve dotted/nested names such as `trip.sec` instead of requiring valid
+  Python identifiers.
+- **Column-object selectors**: `CTable.group_by()` and `CTable.sort_by()` now
+  accept `Column` objects as well as string names, enabling idioms such as
+  `t.group_by(t.trip.sec)` and `t.sort_by(t.trip.sec)`.
+- **Grouped arg reductions**: `CTableGroupBy` now supports `argmin()` and
+  `argmax()`, plus `agg({"col": "argmin"})` / `agg({"col": "argmax"})`.
+  Results are logical row positions in the grouped table or view; groups with no
+  non-null values return `-1`.
+
+### NDArray constructor ergonomics
+
+- **`blosc2.array()`**: added a NumPy-like constructor for NDArrays.  It mirrors
+  `blosc2.asarray()` but defaults to `copy=True`, so passing an existing
+  `NDArray` creates a copy unless `copy=False` or `copy=None` is requested.
+
+### Documentation
+
+- Expanded the CTable reference with `RowTransformer`, `Column.row_transformer`,
+  and `CTableGroupBy.argmin` / `argmax` documentation.
+- Added `blosc2.ndarray()`, `blosc2.dictionary()`, and related public schema
+  factory functions to the Schema Specs reference.
+- Moved `blosc2.group_reduce()` into the Reduction Functions reference and
+  updated its example to use Blosc2 NDArrays.
 
 ## Changes from 4.2.0 to 4.3.0
 
