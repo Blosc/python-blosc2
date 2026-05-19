@@ -141,9 +141,9 @@ def kernel_fallback_for_else(x, y):
     acc = x
     for i in range(2):
         acc = acc + i
+        break
     else:
-        acc = acc + y
-    return acc
+        return acc + y
 
 
 @blosc2.dsl_kernel
