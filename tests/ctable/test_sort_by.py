@@ -57,6 +57,32 @@ def test_sort_single_col_ascending():
     np.testing.assert_array_equal(s["id"][:], [0, 1, 2, 3, 4])
 
 
+def test_sort_accepts_column_selector():
+    t = CTable(Row, new_data=DATA)
+
+    s = t.sort_by(t.id)
+
+    np.testing.assert_array_equal(s["id"][:], [0, 1, 2, 3, 4])
+
+
+def test_sort_accepts_nested_column_selector_from_view():
+    t = CTable(Row, new_data=DATA)
+    t.rename_column("id", "trip.sec")
+
+    view = t.where(t["trip.sec"] > 0)
+    s = view.sort_by(t.trip.sec)
+
+    np.testing.assert_array_equal(s["trip.sec"][:], [1, 2, 3, 4])
+
+
+def test_sort_accepts_column_selectors_in_multi_key_list():
+    t = CTable(Row, new_data=DATA)
+
+    s = t.sort_by([t.score, t.id], ascending=[True, False])
+
+    np.testing.assert_array_equal(s["id"][:][:2], [2, 1])
+
+
 def test_sort_single_col_descending():
     t = CTable(Row, new_data=DATA)
     s = t.sort_by("score", ascending=False)

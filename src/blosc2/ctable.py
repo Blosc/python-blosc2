@@ -7821,14 +7821,24 @@ class CTable(Generic[RowT]):
         self._last_pos = self._n_rows
         self._mark_all_indexes_stale()
 
+    @staticmethod
+    def _column_selector_name(value: Any) -> str:
+        """Return the column name represented by a string or Column-like selector."""
+        name = getattr(value, "_col_name", value)
+        if not isinstance(name, str):
+            raise TypeError(f"Expected a column name or Column object, got {type(value)!r}")
+        return name
+
     def _normalise_sort_keys(
         self,
         cols: str | list[str],
         ascending: bool | list[bool],
     ) -> tuple[list[str], list[bool]]:
         """Validate and normalise sort key arguments; return (cols, ascending)."""
-        if isinstance(cols, str):
-            cols = [cols]
+        if isinstance(cols, str) or isinstance(getattr(cols, "_col_name", None), str):
+            cols = [self._column_selector_name(cols)]
+        else:
+            cols = [self._column_selector_name(col) for col in cols]
 
         resolved_cols: list[str] = []
         for name in cols:
