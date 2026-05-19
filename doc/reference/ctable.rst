@@ -254,8 +254,9 @@ Group-by reductions
 
 :meth:`CTable.group_by` returns a lightweight deferred group-by object.  It is
 not a table view; methods such as :meth:`~blosc2.CTableGroupBy.size`,
-:meth:`~blosc2.CTableGroupBy.count`, :meth:`~blosc2.CTableGroupBy.sum`, and
-:meth:`~blosc2.CTableGroupBy.agg` materialize a new :class:`CTable` with
+:meth:`~blosc2.CTableGroupBy.count`, :meth:`~blosc2.CTableGroupBy.sum`,
+:meth:`~blosc2.CTableGroupBy.argmax`, and :meth:`~blosc2.CTableGroupBy.agg`
+materialize a new :class:`CTable` with
 one row per group::
 
     by_city = t.group_by("city", sort=True)
@@ -265,6 +266,8 @@ one row per group::
     means = by_city.mean("sales")
     mins = by_city.min("sales")
     maxs = by_city.max("sales")
+    min_rows = by_city.argmin("sales")       # logical row position of min sales
+    max_rows = by_city.argmax("sales")       # logical row position of max sales
 
 Grouped results are in-memory by default.  Pass ``urlpath=`` to a terminal
 method to write the result as a persistent :class:`CTable`::
@@ -272,7 +275,7 @@ method to write the result as a persistent :class:`CTable`::
     totals = by_city.sum("sales", urlpath="sales_by_city.b2d")
 
 .. autoclass:: CTableGroupBy
-    :members: size, count, sum, mean, min, max, agg
+    :members: size, count, sum, mean, min, max, argmin, argmax, agg
 
 
 Mutations

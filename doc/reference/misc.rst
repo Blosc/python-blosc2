@@ -302,3 +302,4 @@ public objects into the appropriate reference section.
         are_partitions_behaved,
         cumulative_sum,
         cumulative_prod,
+        CTableGroupBy,
