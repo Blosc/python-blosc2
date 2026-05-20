@@ -275,6 +275,15 @@ class TestArrowInterop:
         ct = CTable.from_arrow(at.schema, at.to_batches())
         assert ct["vendor"][:] == ["Uber", "Lyft", "Uber", None]
 
+    def test_import_dict_resizes_codes_to_arrow_capacity(self):
+        values = ["Taxi"] * 4096 + ["Flash"] * 10
+        at = pa.table({"vendor": pa.array(values, type=pa.dictionary(pa.int32(), pa.string()))})
+
+        ct = CTable.from_arrow(at.schema, at.to_batches(), capacity_hint=len(values))
+
+        assert len(ct._cols["vendor"].codes) >= len(values)
+        assert ct["vendor"][-10:] == ["Flash"] * 10
+
     def test_import_dict_int8(self):
         at = self._make_arrow_table(index_type=pa.int8())
         ct = CTable.from_arrow(at.schema, at.to_batches())

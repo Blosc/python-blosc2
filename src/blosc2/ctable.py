@@ -5045,9 +5045,12 @@ class CTable(Generic[RowT]):
                     col.name, spec=col.spec, cparams=cparams, dparams=dparams
                 )
             elif cls._is_dictionary_column(col):
-                new_cols[col.name] = storage.create_dictionary_column(
+                dict_col = storage.create_dictionary_column(
                     col.name, spec=col.spec, cparams=cparams, dparams=dparams
                 )
+                if len(dict_col.codes) < capacity:
+                    dict_col.resize((capacity,))
+                new_cols[col.name] = dict_col
             else:
                 shape = cls._column_physical_shape(col, capacity)
                 chunks, blocks = default_chunks, default_blocks
