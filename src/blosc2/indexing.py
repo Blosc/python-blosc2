@@ -179,6 +179,9 @@ class IndexPlan:
     candidate_nav_segments: int = 0
     candidate_base_spans: int = 0
     lookup_path: str | None = None
+    # Cross-column refinement: exact positions from one indexed column that
+    # still need refinement against other predicates (different columns).
+    partial_exact_positions: np.ndarray | None = None
 
 
 @dataclass(slots=True)
@@ -5357,8 +5360,12 @@ def _plan_exact_conjunction(node: ast.AST, operands: dict) -> list[ExactPredicat
             return None
         left = _plan_exact_conjunction(node.left, operands)
         right = _plan_exact_conjunction(node.right, operands)
-        if left is None or right is None:
+        if left is None and right is None:
             return None
+        if left is None:
+            return right
+        if right is None:
+            return left
         return left + right
     return None
 
@@ -6475,34 +6482,93 @@ def _multi_exact_positions(plans: list[ExactPredicatePlan]) -> tuple[blosc2.NDAr
     return base, result
 
 
+def _plan_cross_column_exact(plans: list[ExactPredicatePlan]) -> IndexPlan | None:
+    """Try cross-column refinement when plans span different base NDArrays.
+
+    When a conjunction has predicates on different columns (e.g. ``tips > 100
+    AND km > 0 AND sec > 0``) and one of those columns has a FULL/PARTIAL
+    index that can return compact exact positions, use those positions as a
+    pre-filter.  The remaining comparison predicates are evaluated only on
+    the candidate positions, skipping a full table scan.
+
+    Returns an ``IndexPlan`` with ``partial_exact_positions`` and
+    ``refine_plans`` when a compact candidate set is found, or ``None``.
+    """
+    threshold = _cross_column_threshold(plans)
+    for plan in plans:
+        positions = _exact_positions_from_plan(plan)
+        if positions is None:
+            continue
+        positions = np.asarray(positions, dtype=np.int64)
+        if len(positions) == 0 or len(positions) > threshold:
+            continue
+        # Compact exact positions found for this column's index.
+        # The caller (``_try_index_where``) will evaluate the full
+        # expression on these positions to refine against other
+        # predicates.
+        descriptor = _copy_descriptor(plan.descriptor)
+        return IndexPlan(
+            True,
+            "cross-column exact refinement",
+            descriptor=descriptor,
+            base=plan.base,
+            target=plan.descriptor.get("target"),
+            field=plan.field,
+            level=plan.descriptor["kind"],
+            total_units=int(plan.base.shape[0]),
+            selected_units=len(positions),
+            partial_exact_positions=positions,
+        )
+    return None
+
+
+def _cross_column_threshold(plans: list[ExactPredicatePlan]) -> int:
+    """Return the maximum number of exact positions worth refining against.
+
+    If the candidate set is too large the refinement cost (reading extra
+    columns at every candidate position) outweighs the benefit over a
+    full scan.  Cap at the smallest column size to stay conservative.
+    """
+    if not plans:
+        return 100_000
+    min_nrows = min(int(p.base.shape[0]) for p in plans)
+    return min(100_000, max(1, min_nrows // 10))
+
+
 def _plan_multi_exact_query(plans: list[ExactPredicatePlan]) -> IndexPlan | None:
     multi_exact = _multi_exact_positions(plans)
-    if multi_exact is None:
-        return None
-    base, exact_positions = multi_exact
-    if len(exact_positions) >= int(base.shape[0]):
-        return None
-    descriptor = _copy_descriptor(plans[0].descriptor)
-    lookup_path = None
-    if descriptor["kind"] == "partial":
-        lookup_path = (
-            "chunk-nav-ooc"
-            if _chunk_nav_supports_selective_ooc_lookup(base, descriptor, "partial")
-            else "chunk-nav"
+    if multi_exact is not None:
+        base, exact_positions = multi_exact
+        if len(exact_positions) >= int(base.shape[0]):
+            return None
+        descriptor = _copy_descriptor(plans[0].descriptor)
+        lookup_path = None
+        if descriptor["kind"] == "partial":
+            lookup_path = (
+                "chunk-nav-ooc"
+                if _chunk_nav_supports_selective_ooc_lookup(base, descriptor, "partial")
+                else "chunk-nav"
+            )
+        return IndexPlan(
+            True,
+            "multi-field positional indexes selected",
+            descriptor=descriptor,
+            base=base,
+            target=plans[0].descriptor.get("target"),
+            field=None,
+            level="partial",
+            total_units=int(base.shape[0]),
+            selected_units=len(exact_positions),
+            exact_positions=exact_positions,
+            lookup_path=lookup_path,
         )
-    return IndexPlan(
-        True,
-        "multi-field positional indexes selected",
-        descriptor=descriptor,
-        base=base,
-        target=plans[0].descriptor.get("target"),
-        field=None,
-        level="partial",
-        total_units=int(base.shape[0]),
-        selected_units=len(exact_positions),
-        exact_positions=exact_positions,
-        lookup_path=lookup_path,
-    )
+    # Cross-column fallback: try each plan's index individually.  If one
+    # column's index produces compact exact positions we can use them as a
+    # pre-filter and refine the remaining predicates cheaply.
+    cross_col = _plan_cross_column_exact(plans)
+    if cross_col is not None:
+        return cross_col
+    return None
 
 
 def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
@@ -6597,6 +6663,14 @@ def plan_query(expression: str, operands: dict, where: dict | None, *, use_index
         multi_exact_plan = _plan_multi_exact_query(exact_terms)
         if multi_exact_plan is not None:
             return multi_exact_plan
+    # Try cross-column refinement: even with a single exact plan (from one
+    # indexed column) there may be other operands without indexes that need
+    # refinement.  For example ``tips > 100 AND km > 0 AND sec > 0`` where
+    # only ``tips`` has a FULL index.
+    if exact_terms is not None and len(exact_terms) == 1:
+        cross_col = _plan_cross_column_exact(exact_terms)
+        if cross_col is not None:
+            return cross_col
 
     exact_plan = _plan_exact_node(tree.body, operands)
     if exact_plan is not None:

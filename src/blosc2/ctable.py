@@ -9184,6 +9184,45 @@ class CTable(Generic[RowT]):
         return None
 
     @staticmethod
+    def _evaluate_refine_predicate(col_values, refine_plan) -> np.ndarray:
+        """Evaluate a single comparison predicated on *col_values*.
+
+        ``refine_plan`` is an :class:`~blosc2.indexing.ExactPredicatePlan`
+        that carries ``lower`` / ``upper`` bounds and their inclusiveness.
+        Returns a boolean mask of the same length as *col_values*.
+        """
+        mask = np.ones(len(col_values), dtype=bool)
+        if refine_plan.lower is not None:
+            if refine_plan.lower_inclusive:
+                mask &= col_values >= refine_plan.lower
+            else:
+                mask &= col_values > refine_plan.lower
+        if refine_plan.upper is not None:
+            if refine_plan.upper_inclusive:
+                mask &= col_values <= refine_plan.upper
+            else:
+                mask &= col_values < refine_plan.upper
+        return mask
+
+    @staticmethod
+    def _evaluate_expression_at(expr_result, candidates):
+        """Evaluate *expr_result* on the operand rows at *candidates*.
+
+        Returns a boolean ``numpy.ndarray`` the same length as *candidates*,
+        or ``None`` if evaluation fails.
+        """
+        try:
+            operands = {}
+            for var_name, arr in expr_result.operands.items():
+                sliced = arr[candidates]
+                if hasattr(sliced, "__array__"):
+                    sliced = np.asarray(sliced)
+                operands[var_name] = sliced
+            return blosc2.evaluate(expr_result.expression, operands)
+        except Exception:
+            return None
+
+    @staticmethod
     def _find_indexed_columns(root_cols, catalog, operands):
         """Return live indexed columns referenced by *operands* in expression order."""
         indexed = []
@@ -9289,6 +9328,18 @@ class CTable(Generic[RowT]):
 
         if plan.exact_positions is not None:
             return _exclude_null_positions(plan.exact_positions)
+
+        if plan.partial_exact_positions is not None:
+            # Cross-column refinement: the FULL index on one column gave us
+            # compact exact positions, but the expression has additional
+            # predicates on other columns.  Read every operand column at the
+            # candidate positions and evaluate the full expression on them.
+            candidates = np.asarray(plan.partial_exact_positions, dtype=np.int64)
+            restricted = self._evaluate_expression_at(expr_result, candidates)
+            if restricted is not None and restricted.dtype == np.bool_:
+                refined = candidates[np.asarray(restricted, dtype=bool)]
+                return _exclude_null_positions(refined)
+            # Fall through to full scan if refinement fails
 
         if plan.bucket_masks is not None:
             _, positions = evaluate_bucket_query(
