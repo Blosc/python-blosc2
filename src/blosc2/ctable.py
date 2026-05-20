@@ -4138,7 +4138,9 @@ class CTable(Generic[RowT]):
         obj.auto_compact = parent.auto_compact
         obj.base = parent
         obj._valid_rows = new_valid_rows
-        obj._n_rows = int(blosc2.count_nonzero(new_valid_rows))
+        # Keep row counts lazy for views.  Many pipelines (e.g. where(...).sort_by(...))
+        # immediately scan the mask for positions, so counting here would duplicate work.
+        obj._n_rows = None
         obj._last_pos = None
         return obj
 
@@ -4278,7 +4280,7 @@ class CTable(Generic[RowT]):
         obj._storage = None
         obj._read_only = self._read_only
         obj._valid_rows = self._valid_rows
-        obj._n_rows = self._n_rows
+        obj._n_rows = self._known_n_rows()
         obj._last_pos = self._last_pos
         obj.auto_compact = self.auto_compact
         obj.base = self
