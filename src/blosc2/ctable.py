@@ -8494,7 +8494,7 @@ class CTable(Generic[RowT]):
         if not isinstance(token, str) or not token:
             raise ValueError(f"Malformed index metadata for column {col_name!r}: missing token.")
         kind = descriptor.get("kind")
-        if kind not in {"summary", "bucket", "partial", "full"}:
+        if kind not in {"summary", "bucket", "partial", "full", "opsi"}:
             raise ValueError(f"Malformed index metadata for column {col_name!r}: invalid kind {kind!r}.")
         if kind == "bucket" and not isinstance(descriptor.get("bucket"), dict):
             raise ValueError(f"Malformed index metadata for column {col_name!r}: missing bucket payload.")
@@ -8868,6 +8868,38 @@ class CTable(Generic[RowT]):
 
             t.create_index("trip.begin.lon")
             t.where("trip.begin.lon > -87.7").nrows   # index is used automatically
+
+        .. rubric:: Choosing an index kind
+
+        ``BUCKET`` (the default) is the cheapest to build and store.
+        It accelerates single‑column ``where`` queries and ``sort_by``
+        reuse with approximate ordering derived from value
+        quantization.  Sufficient for most workloads.
+
+        ``FULL`` builds a globally sorted index that returns exact
+        row positions for any range predicate.  It enables the
+        **cross‑column refinement** planner path: when a multi‑column
+        conjunction such as ``(tips > 100) & (km > 0) & (sec > 0)``
+        indexes only the most selective column, the planner obtains
+        compact exact positions from ``FULL`` and evaluates the
+        remaining predicates on just those rows.  ``FULL`` is also
+        ideal for ``sort_by`` reuse because it carries a complete
+        sort order.
+
+        ``PARTIAL`` builds a chunk‑local sorted payload with segment
+        navigation.  It is cheaper to build than ``FULL`` (roughly
+        half the raw storage) while still providing exact positions
+        for cross‑column refinement.  Its exact positions are most
+        compact for equality or narrow range queries; wide ranges
+        may scan proportionally more candidate segments.
+
+        ``OPSI`` is a specialised tier for approximate ordering;
+        prefer ``FULL`` when a globally sorted ordered index is
+        needed to accelerate ``sort_by``.
+
+        ``SUMMARY`` stores only per‑segment min/max and is the
+        lightest kind; it may still skip chunks for broad range
+        queries but cannot accelerate ``sort_by``.
         """
         if self.base is not None:
             raise ValueError("Cannot create an index on a view.")
@@ -9348,6 +9380,11 @@ class CTable(Generic[RowT]):
             return _exclude_null_positions(positions)
 
         if plan.candidate_units is not None and plan.segment_len is not None:
+            # When segment summaries prune few units (≥ 80 % of all segments
+            # are candidates), the per‑segment evaluation overhead outweighs the
+            # benefit over a plain scan.  Fall back to the scan path.
+            if plan.total_units > 0 and plan.selected_units / plan.total_units > 0.8:
+                return None
             _, positions = evaluate_segment_query(
                 expression, merged_operands, {}, where_dict, plan, return_positions=True
             )

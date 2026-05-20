@@ -364,6 +364,31 @@ tier with a tunable number of iterative ordering cycles; they are not intended
 to converge to a completely sorted ``FULL``/CSI index, so use ``FULL`` when
 globally sorted ordered reuse is required.
 
+Choosing an index kind
+    ``BUCKET`` is the default — cheapest to build and store, good for
+    single‑column ``where`` and ``sort_by`` reuse.  ``SUMMARY`` stores only
+    per‑segment min/max and is the lightest kind.
+
+    ``FULL`` builds a globally sorted index; it enables **cross‑column
+    refinement** for multi‑column conjunctions and carries a complete sort
+    order for ``sort_by``.  ``PARTIAL`` is cheaper (roughly half the raw
+    storage of ``FULL``) while still providing exact positions for
+    cross‑column refinement — best for equality or narrow range queries.
+
+    ``OPSI`` is a specialised tier for approximate ordering with iterative
+    cycles; it can produce exact positions for cross‑column refinement but
+    is not intended to converge to a globally sorted order — prefer
+    ``FULL`` when ``sort_by`` acceleration is required.
+
+    For highly selective multi‑column conjunctions, prefer ``FULL``,
+    ``PARTIAL``, or ``OPSI`` on the most selective column so the planner
+    can refine the other predicates on the compact exact positions instead
+    of scanning the whole table.
+
+    When a segment‑level index (``SUMMARY``, ``BUCKET``) would prune fewer
+    than 20 % of candidate segments, the planner skips the index and falls
+    back to a full scan to avoid per‑segment evaluation overhead.
+
 .. autosummary::
 
     CTable.create_index

@@ -6663,20 +6663,21 @@ def plan_query(expression: str, operands: dict, where: dict | None, *, use_index
         multi_exact_plan = _plan_multi_exact_query(exact_terms)
         if multi_exact_plan is not None:
             return multi_exact_plan
-    # Try cross-column refinement: even with a single exact plan (from one
-    # indexed column) there may be other operands without indexes that need
-    # refinement.  For example ``tips > 100 AND km > 0 AND sec > 0`` where
-    # only ``tips`` has a FULL index.
-    if exact_terms is not None and len(exact_terms) == 1:
-        cross_col = _plan_cross_column_exact(exact_terms)
-        if cross_col is not None:
-            return cross_col
 
     exact_plan = _plan_exact_node(tree.body, operands)
     if exact_plan is not None:
         exact_query_plan = _plan_single_exact_query(exact_plan)
         if exact_query_plan.usable:
             return exact_query_plan
+
+    # Cross-column refinement: the full expression tree has no single-plan
+    # exact equivalent (different columns, only some indexed), but a
+    # partial conjunction may give us compact exact positions from one
+    # indexed column that we can refine against the other predicates.
+    if exact_terms is not None and len(exact_terms) == 1:
+        cross_col = _plan_cross_column_exact(exact_terms)
+        if cross_col is not None:
+            return cross_col
 
     segment_plan = _plan_segment_node(tree.body, operands)
     if segment_plan is None:
