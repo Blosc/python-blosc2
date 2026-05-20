@@ -8178,6 +8178,19 @@ class CTable(Generic[RowT]):
             if sorted_pos is not None and len(sorted_pos) != n:
                 sorted_pos = None
 
+        small_materialize_limit = 4096
+        if (
+            sorted_pos is None
+            and not inplace
+            and self.base is not None
+            and n <= small_materialize_limit
+            and not any(
+                self._is_list_column(col) or self._is_varlen_scalar_column(col)
+                for col in self._schema.columns
+            )
+        ):
+            return self._sorted_small_copy_from_live_positions(cols, ascending, live_pos, n)
+
         if sorted_pos is None:
             order = np.lexsort(self._build_lex_keys(cols, ascending, live_pos, n))
             sorted_pos = live_pos[order]
@@ -8187,6 +8200,61 @@ class CTable(Generic[RowT]):
             return self
 
         return self._sorted_copy_from_positions(sorted_pos, n)
+
+    def _sorted_small_copy_from_live_positions(
+        self, cols: list[str], ascending: list[bool], live_pos: np.ndarray, n: int
+    ) -> CTable:
+        """Materialise and sort a small filtered view, avoiding a second gather of sort keys."""
+        gathered = {}
+        for col in self._schema.columns:
+            arr = self._cols[col.name]
+            if self._is_dictionary_column(col):
+                gathered[col.name] = np.asarray(arr.codes[live_pos], dtype=np.int32)
+            else:
+                gathered[col.name] = arr[live_pos]
+
+        lex_keys = []
+        for name, asc in zip(reversed(cols), reversed(ascending), strict=True):
+            col_info = self._schema.columns_by_name.get(name)
+            if col_info is not None and self._is_dictionary_column(col_info):
+                raw = np.array(self._cols[name][live_pos], dtype=object)
+            else:
+                raw = gathered[name]
+
+            if not asc:
+                if raw.dtype.kind in "USO":
+                    rank = np.argsort(np.argsort(raw, kind="stable"), kind="stable")
+                    lex_keys.append((n - 1 - rank).astype(np.intp))
+                elif np.issubdtype(raw.dtype, np.unsignedinteger):
+                    lex_keys.append(-raw.astype(np.int64))
+                else:
+                    lex_keys.append(-raw)
+            else:
+                lex_keys.append(raw)
+
+            nv = getattr(col_info.spec, "null_value", None) if col_info else None
+            if nv is not None:
+                if isinstance(nv, float) and np.isnan(nv):
+                    null_ind = np.isnan(raw).astype(np.intp)
+                else:
+                    null_ind = (raw == nv).astype(np.intp)
+                lex_keys.append(null_ind)
+
+        order = np.lexsort(lex_keys)
+        result = self._empty_copy(capacity=n)
+        for col in self._schema.columns:
+            col_name = col.name
+            if self._is_dictionary_column(col):
+                for v in self._cols[col_name].dictionary:
+                    result._cols[col_name].encode(v)
+                result._cols[col_name].codes[:n] = gathered[col_name][order]
+            else:
+                result._cols[col_name][:n] = gathered[col_name][order]
+        result._valid_rows[:n] = True
+        result._valid_rows[n:] = False
+        result._n_rows = n
+        result._last_pos = n
+        return result
 
     def _sort_by_inplace(self, sorted_pos: np.ndarray, n: int) -> None:
         for col in self._schema.columns:
