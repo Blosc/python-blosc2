@@ -386,7 +386,7 @@ Choosing an index kind
     of scanning the whole table.
 
     When a segment‑level index (``SUMMARY``, ``BUCKET``) would prune fewer
-    than 20 % of candidate segments, the planner skips the index and falls
+    than 50 % of candidate segments, the planner skips the index and falls
     back to a full scan to avoid per‑segment evaluation overhead.
 
 .. autosummary::

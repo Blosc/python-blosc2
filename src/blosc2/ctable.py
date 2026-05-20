@@ -9374,16 +9374,21 @@ class CTable(Generic[RowT]):
             # Fall through to full scan if refinement fails
 
         if plan.bucket_masks is not None:
+            # When bucket pruning covers all units (100 % of chunks are
+            # candidates), the per‑chunk evaluation overhead outweighs the
+            # benefit over a plain scan.  Fall back to the scan path.
+            if plan.total_units > 0 and plan.selected_units >= plan.total_units:
+                return None
             _, positions = evaluate_bucket_query(
                 expression, merged_operands, {}, where_dict, plan, return_positions=True
             )
             return _exclude_null_positions(positions)
 
         if plan.candidate_units is not None and plan.segment_len is not None:
-            # When segment summaries prune few units (≥ 80 % of all segments
-            # are candidates), the per‑segment evaluation overhead outweighs the
-            # benefit over a plain scan.  Fall back to the scan path.
-            if plan.total_units > 0 and plan.selected_units / plan.total_units > 0.8:
+            # When segment summaries prune fewer than half the candidate
+            # units, the per‑segment evaluation overhead outweighs a plain
+            # scan.  Fall back to the scan path.
+            if plan.total_units > 0 and plan.selected_units / plan.total_units > 0.5:
                 return None
             _, positions = evaluate_segment_query(
                 expression, merged_operands, {}, where_dict, plan, return_positions=True
