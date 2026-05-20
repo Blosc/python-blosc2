@@ -9329,16 +9329,24 @@ class CTable(Generic[RowT]):
 
     @staticmethod
     def _find_indexed_columns(root_cols, catalog, operands):
-        """Return live indexed columns referenced by *operands* in expression order."""
+        """Return live indexed columns referenced by *operands* in expression order.
+
+        Avoid iterating over ``root_cols.items()`` here: for lazy persistent tables
+        that would open every column just to find the indexed operands.
+        """
         indexed = []
         seen = set()
+        indexed_arrays = {}
+        for col_name, descriptor in catalog.items():
+            if col_name in root_cols:
+                indexed_arrays[col_name] = (root_cols[col_name], descriptor)
+
         for operand in operands.values():
             if not isinstance(operand, blosc2.NDArray):
                 continue
-            for col_name, col_arr in root_cols.items():
-                if col_arr is not operand or col_name in seen or col_name not in catalog:
+            for col_name, (col_arr, descriptor) in indexed_arrays.items():
+                if col_name in seen or col_arr is not operand:
                     continue
-                descriptor = catalog[col_name]
                 CTable._validate_index_descriptor(col_name, descriptor)
                 if descriptor.get("stale", False):
                     continue
@@ -9436,10 +9444,18 @@ class CTable(Generic[RowT]):
 
         if plan.partial_exact_positions is not None:
             # Cross-column refinement: the FULL index on one column gave us
-            # compact exact positions, but the expression has additional
-            # predicates on other columns.  Read every operand column at the
-            # candidate positions and evaluate the full expression on them.
+            # exact positions, but the expression has additional predicates on
+            # other columns.  Refinement reads every operand column at those
+            # candidate positions using sparse/fancy indexing.  For compressed
+            # columns this can touch many chunks and be slower than the regular
+            # sequential miniexpr scan, which is very fast for simple predicates.
+            # Keep this intentionally conservative until sparse gathers become
+            # cheaper or the planner has a richer cost model.
+            max_sparse_refine_candidates = 1024
             candidates = np.asarray(plan.partial_exact_positions, dtype=np.int64)
+            if len(candidates) > max_sparse_refine_candidates:
+                return None
+            candidates = _exclude_null_positions(candidates)
             restricted = self._evaluate_expression_at(expr_result, candidates)
             if restricted is not None and restricted.dtype == np.bool_:
                 refined = candidates[np.asarray(restricted, dtype=bool)]
