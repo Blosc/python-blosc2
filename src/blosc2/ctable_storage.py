@@ -649,13 +649,15 @@ class FileTableStorage(TableStorage):
 
     @staticmethod
     def _relativize_descriptor(descriptor: dict, working_dir: str) -> dict:
-        """Replace absolute paths inside *working_dir* with working-dir relative paths."""
-        prefix = working_dir.rstrip(os.sep) + os.sep
+        """Replace paths inside *working_dir* with working-dir relative paths."""
+        abs_working_dir = os.path.abspath(working_dir)
+        prefix = abs_working_dir.rstrip(os.sep) + os.sep
         d = copy.deepcopy(descriptor)
         for obj, key in FileTableStorage._walk_descriptor_paths(d):
             v = obj[key]
-            if os.path.isabs(v) and v.startswith(prefix):
-                obj[key] = v[len(prefix) :].replace(os.sep, "/")
+            abs_v = v if os.path.isabs(v) else os.path.abspath(v)
+            if abs_v.startswith(prefix):
+                obj[key] = abs_v[len(prefix) :].replace(os.sep, "/")
         return d
 
     @staticmethod
@@ -665,7 +667,7 @@ class FileTableStorage(TableStorage):
         for obj, key in FileTableStorage._walk_descriptor_paths(d):
             v = obj[key]
             if not os.path.isabs(v):
-                obj[key] = os.path.join(working_dir, v)
+                obj[key] = os.path.abspath(v) if os.path.exists(v) else os.path.join(working_dir, v)
         return d
 
     def _ensure_index_files_extracted(self, store, rel_paths: list[str]) -> None:

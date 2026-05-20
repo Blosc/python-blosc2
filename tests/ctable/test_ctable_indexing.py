@@ -321,6 +321,18 @@ def test_where_with_index_matches_scan_persistent(tmpdir):
     assert ids_idx == ids_scan
 
 
+def test_relative_b2d_ctable_index_sidecars_survive_reopen(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    t = _make_table(200, persistent_path="table.b2d")
+    t.create_index("id", kind=blosc2.IndexKind.BUCKET)
+    t.close()
+
+    reopened = blosc2.open("table.b2d", mode="r")
+    result = reopened.where(reopened["id"] > 150)
+
+    assert sorted(int(v) for v in result["id"][:]) == list(range(151, 200))
+
+
 @pytest.mark.heavy
 def test_persistent_index_drop_releases_sidecars_without_gc(tmpdir):
     import gc

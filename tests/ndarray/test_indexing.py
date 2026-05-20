@@ -395,6 +395,27 @@ def test_bucket_lossy_float_values_match_scan():
     np.testing.assert_array_equal(indexed, data[(data["x"] >= -12.5) & (data["x"] < 17.25)])
 
 
+@pytest.mark.parametrize("persistent", [False, True])
+def test_bucket_float_nan_boundaries_match_scan(tmp_path, persistent):
+    values = np.zeros(2_000, dtype=np.float32)
+    values[[100, 550, 1_200]] = [150.0, 210.0, 175.0]
+    values[[120, 530, 900, 1_800]] = np.nan
+
+    kwargs = {"chunks": (500,), "blocks": (100,)}
+    if persistent:
+        kwargs["urlpath"] = str(tmp_path / "bucket_nan.b2nd")
+    arr = blosc2.asarray(values, **kwargs)
+    arr.create_index(kind=blosc2.IndexKind.BUCKET)
+
+    expr = (arr > 100).where(arr)
+    assert expr.will_use_index() is True
+
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    np.testing.assert_array_equal(indexed, scanned)
+    np.testing.assert_array_equal(indexed, values[values > 100])
+
+
 def test_summary_threaded_downstream_order_matches_scan(monkeypatch):
     dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
     data = np.zeros(240_000, dtype=dtype)

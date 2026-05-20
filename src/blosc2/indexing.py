@@ -1097,6 +1097,16 @@ def _fill_summaries_from_2d(
     summaries_arr["flags"][offset : offset + n] = flags
 
 
+def _sorted_segment_boundary(segment: np.ndarray, dtype: np.dtype):
+    if dtype.kind == "f":
+        valid = ~np.isnan(segment)
+        if not np.any(valid):
+            nan = np.asarray(np.nan, dtype=dtype)[()]
+            return nan, nan
+        segment = segment[valid]
+    return segment[0], segment[-1]
+
+
 def _compute_sorted_boundaries(values: np.ndarray, dtype: np.dtype, segment_len: int) -> np.ndarray:
     nsegments = math.ceil(values.shape[0] / segment_len)
     boundaries = np.empty(nsegments, dtype=_boundary_dtype(dtype))
@@ -1105,7 +1115,7 @@ def _compute_sorted_boundaries(values: np.ndarray, dtype: np.dtype, segment_len:
         start = idx * segment_len
         stop = min(start + segment_len, values.shape[0])
         segment = values[start:stop]
-        boundaries[idx] = (segment[0], segment[-1])
+        boundaries[idx] = _sorted_segment_boundary(segment, dtype)
     return boundaries
 
 
@@ -1753,14 +1763,16 @@ def _build_chunk_sorted_payload(
         sorted_values[cursor:next_cursor] = chunk_sorted
         positions[cursor:next_cursor] = chunk_positions
         offsets[chunk_id + 1] = next_cursor
-        l1[chunk_id] = (chunk_sorted[0], chunk_sorted[-1])
+        l1[chunk_id] = _sorted_segment_boundary(chunk_sorted, np.dtype(values.dtype))
 
         row_start = chunk_id * nsegments_per_chunk
         segment_count = _segment_row_count(chunk_size, nav_segment_len)
         for segment_id in range(segment_count):
             seg_start = cursor + segment_id * nav_segment_len
             seg_stop = min(seg_start + nav_segment_len, next_cursor)
-            l2[row_start + segment_id] = (sorted_values[seg_start], sorted_values[seg_stop - 1])
+            l2[row_start + segment_id] = _sorted_segment_boundary(
+                sorted_values[seg_start:seg_stop], np.dtype(values.dtype)
+            )
         for segment_id in range(segment_count, nsegments_per_chunk):
             l2[row_start + segment_id] = l2[row_start + segment_count - 1]
         cursor = next_cursor
@@ -1810,13 +1822,15 @@ def _build_chunk_sorted_payload_direct(
         aux[cursor:next_cursor] = chunk_aux
         offsets[chunk_id + 1] = next_cursor
         if chunk_size > 0:
-            l1[chunk_id] = (chunk_payload[0], chunk_payload[-1])
+            l1[chunk_id] = _sorted_segment_boundary(chunk_payload, payload_dtype)
             row_start = chunk_id * nsegments_per_chunk
             segment_count = _segment_row_count(chunk_size, nav_segment_len)
             for segment_id in range(segment_count):
                 seg_start = segment_id * nav_segment_len
                 seg_stop = min(seg_start + nav_segment_len, chunk_size)
-                l2[row_start + segment_id] = (chunk_payload[seg_start], chunk_payload[seg_stop - 1])
+                l2[row_start + segment_id] = _sorted_segment_boundary(
+                    chunk_payload[seg_start:seg_stop], payload_dtype
+                )
             for segment_id in range(segment_count, nsegments_per_chunk):
                 l2[row_start + segment_id] = l2[row_start + segment_count - 1]
         cursor = next_cursor
@@ -1945,13 +1959,15 @@ def _build_partial_chunk_payloads_intra_chunk(
         positions[cursor:next_cursor] = local_positions
         offsets[chunk_id + 1] = next_cursor
         if chunk_size > 0:
-            l1[chunk_id] = (chunk_sorted[0], chunk_sorted[-1])
+            l1[chunk_id] = _sorted_segment_boundary(chunk_sorted, dtype)
             row_start = chunk_id * nsegments_per_chunk
             segment_count = _segment_row_count(chunk_size, nav_segment_len)
             for segment_id in range(segment_count):
                 seg_start = segment_id * nav_segment_len
                 seg_stop = min(seg_start + nav_segment_len, chunk_size)
-                l2[row_start + segment_id] = (chunk_sorted[seg_start], chunk_sorted[seg_stop - 1])
+                l2[row_start + segment_id] = _sorted_segment_boundary(
+                    chunk_sorted[seg_start:seg_stop], dtype
+                )
             for segment_id in range(segment_count, nsegments_per_chunk):
                 l2[row_start + segment_id] = l2[row_start + segment_count - 1]
         cursor = next_cursor
@@ -2176,13 +2192,15 @@ def _build_partial_descriptor_ooc(
                     positions_handle[cursor:next_cursor] = local_positions
                 offsets[chunk_id + 1] = next_cursor
                 if chunk_size > 0:
-                    l1[chunk_id] = (chunk_sorted[0], chunk_sorted[-1])
+                    l1[chunk_id] = _sorted_segment_boundary(chunk_sorted, dtype)
                     row_start = chunk_id * nsegments_per_chunk
                     segment_count = _segment_row_count(chunk_size, nav_segment_len)
                     for segment_id in range(segment_count):
                         seg_start = segment_id * nav_segment_len
                         seg_stop = min(seg_start + nav_segment_len, chunk_size)
-                        l2[row_start + segment_id] = (chunk_sorted[seg_start], chunk_sorted[seg_stop - 1])
+                        l2[row_start + segment_id] = _sorted_segment_boundary(
+                            chunk_sorted[seg_start:seg_stop], dtype
+                        )
                     for segment_id in range(segment_count, nsegments_per_chunk):
                         l2[row_start + segment_id] = l2[row_start + segment_count - 1]
                 cursor = next_cursor
@@ -2401,13 +2419,15 @@ def _build_bucket_chunk_payloads(
         )
         offsets[chunk_id + 1] = next_cursor
         if chunk_size > 0:
-            l1[chunk_id] = (stored_chunk_sorted[0], stored_chunk_sorted[-1])
+            l1[chunk_id] = _sorted_segment_boundary(stored_chunk_sorted, dtype)
             row_start = chunk_id * nsegments_per_chunk
             segment_count = _segment_row_count(chunk_size, nav_segment_len)
             for segment_id in range(segment_count):
                 seg_start = segment_id * nav_segment_len
                 seg_stop = min(seg_start + nav_segment_len, chunk_size)
-                l2[row_start + segment_id] = (chunk_sorted[seg_start], chunk_sorted[seg_stop - 1])
+                l2[row_start + segment_id] = _sorted_segment_boundary(
+                    chunk_sorted[seg_start:seg_stop], dtype
+                )
             for segment_id in range(segment_count, nsegments_per_chunk):
                 l2[row_start + segment_id] = l2[row_start + segment_count - 1]
         cursor = next_cursor
@@ -2456,13 +2476,15 @@ def _build_bucket_chunk_payloads_intra_chunk(
         )
         offsets[chunk_id + 1] = next_cursor
         if chunk_size > 0:
-            l1[chunk_id] = (stored_chunk_sorted[0], stored_chunk_sorted[-1])
+            l1[chunk_id] = _sorted_segment_boundary(stored_chunk_sorted, dtype)
             row_start = chunk_id * nsegments_per_chunk
             segment_count = _segment_row_count(chunk_size, nav_segment_len)
             for segment_id in range(segment_count):
                 seg_start = segment_id * nav_segment_len
                 seg_stop = min(seg_start + nav_segment_len, chunk_size)
-                l2[row_start + segment_id] = (chunk_sorted[seg_start], chunk_sorted[seg_stop - 1])
+                l2[row_start + segment_id] = _sorted_segment_boundary(
+                    chunk_sorted[seg_start:seg_stop], dtype
+                )
             for segment_id in range(segment_count, nsegments_per_chunk):
                 l2[row_start + segment_id] = l2[row_start + segment_count - 1]
         cursor = next_cursor
@@ -2591,13 +2613,15 @@ def _build_bucket_descriptor_ooc(
                     )
                 offsets[chunk_id + 1] = next_cursor
                 if chunk_size > 0:
-                    l1[chunk_id] = (stored_chunk_sorted[0], stored_chunk_sorted[-1])
+                    l1[chunk_id] = _sorted_segment_boundary(stored_chunk_sorted, dtype)
                     row_start = chunk_id * nsegments_per_chunk
                     segment_count = _segment_row_count(chunk_size, nav_segment_len)
                     for segment_id in range(segment_count):
                         seg_start = segment_id * nav_segment_len
                         seg_stop = min(seg_start + nav_segment_len, chunk_size)
-                        l2[row_start + segment_id] = (chunk_sorted[seg_start], chunk_sorted[seg_stop - 1])
+                        l2[row_start + segment_id] = _sorted_segment_boundary(
+                            chunk_sorted[seg_start:seg_stop], dtype
+                        )
                     for segment_id in range(segment_count, nsegments_per_chunk):
                         l2[row_start + segment_id] = l2[row_start + segment_count - 1]
                 cursor = next_cursor
