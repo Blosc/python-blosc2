@@ -9989,28 +9989,38 @@ class CTable(Generic[RowT]):
                 result = self.view(blosc2.asarray(mask))
                 return result if columns is None else result.select(list(columns))
 
+        target_len = len(self._valid_rows)
+        known_n_rows = self._known_n_rows()
+        all_rows_valid = known_n_rows == target_len
+        filter_intersected = False
+
         filter = expr_result.compute() if isinstance(expr_result, blosc2.LazyExpr) else expr_result
+
         if getattr(filter, "ndim", 1) != 1:
             raise ValueError(
                 "CTable.where() requires a 1-D row mask. Reduce ndarray-column predicates to one "
                 "boolean per row before filtering."
             )
 
-        target_len = len(self._valid_rows)
+        filter_len = len(filter)
+        if filter_len != target_len:
+            if filter_len == self.nrows:
+                physical = blosc2.zeros(target_len, dtype=np.bool_)
+                live_pos = np.where(self._valid_rows[:])[0]
+                physical[live_pos] = filter[:]
+                filter = physical
+                filter_intersected = True
+            elif filter_len > target_len:
+                filter = filter[:target_len]
+                filter_intersected = False
+            else:
+                padding = blosc2.zeros(target_len, dtype=np.bool_)
+                padding[:filter_len] = filter[:]
+                filter = padding
+                filter_intersected = False
 
-        if len(filter) == self.nrows and len(filter) != target_len:
-            physical = blosc2.zeros(target_len, dtype=np.bool_)
-            live_pos = np.where(self._valid_rows[:])[0]
-            physical[live_pos] = filter[:]
-            filter = physical
-        elif len(filter) > target_len:
-            filter = filter[:target_len]
-        elif len(filter) < target_len:
-            padding = blosc2.zeros(target_len, dtype=np.bool_)
-            padding[: len(filter)] = filter[:]
-            filter = padding
-
-        filter = (filter & self._valid_rows).compute()
+        if not filter_intersected and not all_rows_valid:
+            filter = (filter & self._valid_rows).compute()
 
         result = self.view(filter)
         return result if columns is None else result.select(list(columns))
