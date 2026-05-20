@@ -174,11 +174,32 @@ class NullPolicy:
 
 DEFAULT_NULL_POLICY = NullPolicy()
 _NULL_POLICY = contextvars.ContextVar("blosc2_null_policy", default=DEFAULT_NULL_POLICY)
+_CTABLE_PRINT_OPTIONS: dict[str, Any] = {"display_index": False}
 
 
 def get_null_policy() -> NullPolicy:
     """Return the current default null policy."""
     return _NULL_POLICY.get()
+
+
+def set_printoptions(*, display_index: bool | None = None) -> None:
+    """Set global display options for :class:`CTable` string representations.
+
+    Parameters
+    ----------
+    display_index:
+        Whether ``str(ctable)`` should include a pandas-like logical row index
+        column.  ``None`` leaves the current setting unchanged.
+    """
+    if display_index is not None:
+        if not isinstance(display_index, bool):
+            raise TypeError("display_index must be a bool or None")
+        _CTABLE_PRINT_OPTIONS["display_index"] = display_index
+
+
+def get_printoptions() -> dict[str, Any]:
+    """Return a copy of the global :class:`CTable` display options."""
+    return dict(_CTABLE_PRINT_OPTIONS)
 
 
 @contextlib.contextmanager
@@ -3260,12 +3281,16 @@ class CTable(Generic[RowT]):
                 widths[name] = max(widths[name], 80)
         return widths
 
-    def _display_columns(self) -> tuple[list[str], int]:
+    def _display_columns(
+        self, *, display_index: bool = False, index_width: int = 0
+    ) -> tuple[list[str], int]:
         """Return terminal-width-friendly display columns and hidden count."""
         col_names = list(self.col_names)
         widths = self._display_widths(col_names)
         widths["..."] = 3
         total_width = sum(widths[n] + 2 for n in col_names) + 2 * max(0, len(col_names) - 1)
+        if display_index:
+            total_width += index_width + 2 + 2
         term_width = shutil.get_terminal_size((120, 20)).columns
         if total_width <= term_width or len(col_names) <= 2:
             return col_names, 0
@@ -3273,7 +3298,7 @@ class CTable(Generic[RowT]):
         selected: list[str] = []
         left = 0
         right = len(col_names) - 1
-        used = 0
+        used = index_width + 2 + 2 if display_index else 0
 
         def extra_width(name: str, n_existing: int) -> int:
             return widths[name] + 2 + (2 if n_existing else 0)
@@ -3322,8 +3347,36 @@ class CTable(Generic[RowT]):
             s = s[: width - 1] + "…"
         return f" {s:<{width}} "
 
+    @staticmethod
+    def _format_index_cell(value, width: int) -> str:
+        s = "" if value is None else str(value)
+        if len(s) > width:
+            s = s[: width - 1] + "…"
+        return f" {s:>{width}} "
+
+    @staticmethod
+    def _display_index_width(nrows: int, hidden: int, index_name: str) -> int:
+        width = max(len(index_name), len(str(max(nrows - 1, 0))))
+        if hidden > 0:
+            width = max(width, 3)
+        return width
+
     def _format_display_row(self, values: dict, widths: dict[str, int], col_names: list[str]) -> str:
         return "  ".join(self._format_cell(values[n], widths[n]) for n in col_names)
+
+    def _format_display_row_with_index(
+        self,
+        values: dict,
+        widths: dict[str, int],
+        col_names: list[str],
+        index_value,
+        index_width: int,
+    ) -> str:
+        return (
+            self._format_index_cell(index_value, index_width)
+            + "  "
+            + self._format_display_row(values, widths, col_names)
+        )
 
     def _rows_to_dicts(self, positions, col_names: list[str] | None = None) -> list[dict]:
         if len(positions) == 0:
@@ -3342,14 +3395,37 @@ class CTable(Generic[RowT]):
             rows.append(row)
         return rows
 
-    def __str__(self) -> str:
-        """Pandas-style tabular display with column names, dtypes, and a row count footer."""
+    def to_string(self, *, display_index: bool | None = None, index_name: str = "") -> str:
+        """Return a tabular string representation of the table.
+
+        Parameters
+        ----------
+        display_index:
+            Whether to include a pandas-like logical row index column.  If
+            ``None`` (default), use the global value configured with
+            :func:`blosc2.set_printoptions`.
+        index_name:
+            Optional label for the displayed index column.
+        """
+        if display_index is None:
+            display_index = _CTABLE_PRINT_OPTIONS["display_index"]
+        if not isinstance(display_index, bool):
+            raise TypeError("display_index must be a bool or None")
+        if not isinstance(index_name, str):
+            raise TypeError("index_name must be a str")
+
         nrows = self._n_rows
         ncols = len(self.col_names)
         head_pos, tail_pos, hidden = self._display_positions()
-        display_cols, hidden_cols = self._display_columns()
+        index_width = self._display_index_width(nrows, hidden, index_name) if display_index else 0
+        display_cols, hidden_cols = self._display_columns(
+            display_index=display_index, index_width=index_width
+        )
         widths = self._display_widths(display_cols)
-        sep = "  ".join("─" * (widths[n] + 2) for n in display_cols)
+        sep_parts = ["─" * (widths[n] + 2) for n in display_cols]
+        if display_index:
+            sep_parts.insert(0, "─" * (index_width + 2))
+        sep = "  ".join(sep_parts)
 
         dtype_row = {}
         for n in display_cols:
@@ -3361,21 +3437,48 @@ class CTable(Generic[RowT]):
                     self._schema.columns_by_name[n].spec if n in self._schema.columns_by_name else None,
                 )
 
-        lines = [
-            self._format_display_row({n: n for n in display_cols}, widths, display_cols),
-            self._format_display_row(dtype_row, widths, display_cols),
-            sep,
-        ]
-        lines.extend(
-            self._format_display_row(row, widths, display_cols)
-            for row in self._rows_to_dicts(head_pos, display_cols)
-        )
-        if hidden > 0:
-            lines.append(self._format_display_row(dict.fromkeys(display_cols, "..."), widths, display_cols))
-        lines.extend(
-            self._format_display_row(row, widths, display_cols)
-            for row in self._rows_to_dicts(tail_pos, display_cols)
-        )
+        header_row = {n: n for n in display_cols}
+        if display_index:
+            lines = [
+                self._format_display_row_with_index(
+                    header_row, widths, display_cols, index_name, index_width
+                ),
+                self._format_display_row_with_index(dtype_row, widths, display_cols, None, index_width),
+                sep,
+            ]
+            lines.extend(
+                self._format_display_row_with_index(row, widths, display_cols, i, index_width)
+                for i, row in enumerate(self._rows_to_dicts(head_pos, display_cols))
+            )
+            if hidden > 0:
+                lines.append(
+                    self._format_display_row_with_index(
+                        dict.fromkeys(display_cols, "..."), widths, display_cols, "...", index_width
+                    )
+                )
+            tail_start = nrows - len(tail_pos)
+            lines.extend(
+                self._format_display_row_with_index(row, widths, display_cols, tail_start + i, index_width)
+                for i, row in enumerate(self._rows_to_dicts(tail_pos, display_cols))
+            )
+        else:
+            lines = [
+                self._format_display_row(header_row, widths, display_cols),
+                self._format_display_row(dtype_row, widths, display_cols),
+                sep,
+            ]
+            lines.extend(
+                self._format_display_row(row, widths, display_cols)
+                for row in self._rows_to_dicts(head_pos, display_cols)
+            )
+            if hidden > 0:
+                lines.append(
+                    self._format_display_row(dict.fromkeys(display_cols, "..."), widths, display_cols)
+                )
+            lines.extend(
+                self._format_display_row(row, widths, display_cols)
+                for row in self._rows_to_dicts(tail_pos, display_cols)
+            )
         lines.append(sep)
         footer = f"{nrows:,} rows × {ncols} columns"
         notes = []
@@ -3387,6 +3490,10 @@ class CTable(Generic[RowT]):
             footer += f"  ({', '.join(notes)})"
         lines.append(footer)
         return "\n".join(lines)
+
+    def __str__(self) -> str:
+        """Pandas-style tabular display with column names, dtypes, and a row count footer."""
+        return self.to_string()
 
     def __repr__(self) -> str:
         """Short ``CTable<cols>(N rows, X compressed)`` summary string."""

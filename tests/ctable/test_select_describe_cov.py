@@ -121,6 +121,27 @@ def test_select_single_column():
     assert len(v) == 10
 
 
+def test_to_string_display_index():
+    t = CTable(Row, new_data=DATA10).select(["id", "score"])
+
+    text = t.to_string(display_index=True, index_name="row")
+    lines = text.splitlines()
+
+    assert "row" in lines[0]
+    assert lines[3].lstrip().startswith("0")
+    assert lines[-3].lstrip().startswith("9")
+
+
+def test_global_printoptions_display_index():
+    t = CTable(Row, new_data=DATA10).select(["id"])
+    old_display_index = blosc2.get_printoptions()["display_index"]
+    try:
+        blosc2.set_printoptions(display_index=True)
+        assert str(t).splitlines()[3].lstrip().startswith("0")
+    finally:
+        blosc2.set_printoptions(display_index=old_display_index)
+
+
 # ===========================================================================
 # describe()
 # ===========================================================================

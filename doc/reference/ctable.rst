@@ -58,6 +58,33 @@ explicitly call :meth:`~blosc2.CTable.to_arrow` or iterate with
     .. automethod:: __str__
 
 
+Display
+-------
+
+``CTable`` objects have a compact tabular string representation.  Use
+:meth:`CTable.to_string` for one-off formatting choices, or
+:func:`set_printoptions` to configure the default display used by ``str(table)``
+and ``print(table)``::
+
+    print(table.to_string(display_index=True))
+
+    blosc2.set_printoptions(display_index=True)
+    print(table)
+
+The displayed index is a logical, pandas-like row number in the rendered table;
+it is not the physical storage position.
+
+.. autosummary::
+
+    CTable.to_string
+    set_printoptions
+    get_printoptions
+
+.. automethod:: CTable.to_string
+.. autofunction:: set_printoptions
+.. autofunction:: get_printoptions
+
+
 Construction
 ------------
 

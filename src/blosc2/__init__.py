@@ -635,7 +635,9 @@ from .ctable import (
     NullPolicy,
     RowTransformer,
     get_null_policy,
+    get_printoptions,
     null_policy,
+    set_printoptions,
 )
 from .groupby import CTableGroupBy, group_reduce
 from .ndarray import (
@@ -1064,5 +1066,7 @@ __all__ = [  # noqa : RUF022
     "zeros",
     "zeros_like",
     "get_null_policy",
+    "get_printoptions",
     "null_policy",
+    "set_printoptions",
 ]
