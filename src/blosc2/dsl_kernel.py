@@ -27,6 +27,9 @@ class DSLSyntaxError(ValueError):
 
 def _normalize_miniexpr_scalar(value):
     # NumPy scalar-like values expose .item(); plain Python scalars do not.
+    # Do not call .item() on non-scalar arrays; for Blosc2 arrays this can be expensive.
+    if hasattr(value, "shape") and value.shape != ():
+        raise TypeError("Unsupported scalar type for miniexpr specialization")
     if hasattr(value, "item") and callable(value.item):
         with contextlib.suppress(Exception):
             value = value.item()
@@ -235,7 +238,9 @@ def specialize_miniexpr_inputs(expr_string: str, operands: dict):
         if hasattr(value, "shape") and value.shape == ():
             scalar_replacements[name] = _normalize_miniexpr_scalar(value[()])
             continue
-        if isinstance(value, int | float | bool | str) or (hasattr(value, "item") and callable(value.item)):
+        if isinstance(value, int | float | bool | str) or (
+            not hasattr(value, "shape") and hasattr(value, "item") and callable(value.item)
+        ):
             try:
                 scalar_replacements[name] = _normalize_miniexpr_scalar(value)
                 continue
