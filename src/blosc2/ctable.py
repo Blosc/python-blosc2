@@ -175,6 +175,7 @@ class NullPolicy:
 DEFAULT_NULL_POLICY = NullPolicy()
 _NULL_POLICY = contextvars.ContextVar("blosc2_null_policy", default=DEFAULT_NULL_POLICY)
 _CTABLE_PRINT_OPTIONS: dict[str, Any] = {"display_index": False}
+_SMALL_SORT_MATERIALIZE_LIMIT = 4096
 
 
 def get_null_policy() -> NullPolicy:
@@ -8178,12 +8179,14 @@ class CTable(Generic[RowT]):
             if sorted_pos is not None and len(sorted_pos) != n:
                 sorted_pos = None
 
-        small_materialize_limit = 4096
+        # For small filtered views, materialise selected columns once and sort those
+        # small arrays in memory.  This avoids gathering the sort keys and then
+        # gathering the result columns again from the large backing arrays.
         if (
             sorted_pos is None
             and not inplace
             and self.base is not None
-            and n <= small_materialize_limit
+            and n <= _SMALL_SORT_MATERIALIZE_LIMIT
             and not any(
                 self._is_list_column(col) or self._is_varlen_scalar_column(col)
                 for col in self._schema.columns
