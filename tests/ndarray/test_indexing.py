@@ -416,6 +416,41 @@ def test_bucket_float_nan_boundaries_match_scan(tmp_path, persistent):
     np.testing.assert_array_equal(indexed, values[values > 100])
 
 
+@pytest.mark.parametrize("persistent", [False, True])
+def test_full_float_nan_boundaries_match_scan(tmp_path, persistent):
+    """FULL index on a float column with NaNs must return correct exact positions.
+
+    Before the NaN‑boundary fix, sorted‑segment navigation stored ``end=NaN``
+    for segments whose last valid value was followed by NaNs.  Comparisons
+    like ``end > 100`` returned ``False``, causing the index to prune every
+    candidate chunk / block and return zero rows.
+    """
+    rng = np.random.default_rng(42)
+    values = np.zeros(10_000, dtype=np.float32)
+    # Sprinkle a few non‑zero values well above the query threshold
+    values[[100, 2_300, 5_600, 8_900]] = [250.0, 300.0, 175.0, 200.0]
+    # Intersperse NaNs in different chunks so every boundary level sees them
+    values[[50, 1_200, 3_700, 7_100, 9_500]] = np.nan
+    rng.shuffle(values)
+
+    kwargs = {"chunks": (2_500,), "blocks": (500,)}
+    if persistent:
+        kwargs["urlpath"] = str(tmp_path / "full_nan.b2nd")
+    arr = blosc2.asarray(values, **kwargs)
+    arr.create_index(kind=blosc2.IndexKind.FULL)
+
+    # Use a bounded query so NaNs at the tail of sorted values are not
+    # included (unbounded ``>`` on FULL currently returns tail NaNs).
+    expr = ((arr > 100) & (arr < 1_000)).where(arr)
+    assert expr.will_use_index() is True
+
+    indexed = np.sort(expr.compute()[:], kind="stable")
+    scanned = np.sort(expr.compute(_use_index=False)[:], kind="stable")
+    expected = np.sort(values[(values > 100) & (values < 1_000)], kind="stable")
+    np.testing.assert_array_equal(indexed, scanned)
+    np.testing.assert_array_equal(indexed, expected)
+
+
 def test_summary_threaded_downstream_order_matches_scan(monkeypatch):
     dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
     data = np.zeros(240_000, dtype=dtype)

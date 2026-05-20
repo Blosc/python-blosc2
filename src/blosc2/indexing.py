@@ -5443,6 +5443,15 @@ def _candidate_units_from_boundaries(boundaries: np.ndarray, plan: ExactPredicat
         return np.zeros(0, dtype=bool)
     starts = boundaries["start"]
     ends = boundaries["end"]
+    if ends.dtype.kind == "f":
+        nan_mask = np.isnan(ends)
+        if np.any(nan_mask):
+            ends = ends.copy()
+            ends[nan_mask] = np.inf
+        nan_mask_start = np.isnan(starts)
+        if np.any(nan_mask_start):
+            starts = starts.copy()
+            starts[nan_mask_start] = -np.inf
     candidate = np.ones(len(boundaries), dtype=bool)
     if plan.lower is not None:
         candidate &= ends >= plan.lower if plan.lower_inclusive else ends > plan.lower
