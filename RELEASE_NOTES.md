@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.3.3 to 4.3.4
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.3.1 to 4.3.3
 
 note: 4.3.2 was an internal pre-release that was not published to PyPI.
