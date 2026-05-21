@@ -16,9 +16,9 @@ Tutorials
    tutorials/08.schunk-slicing_and_beyond
    tutorials/09.ucodecs-ufilters
    tutorials/10.prefilters
+   tutorials/11.containers
    tutorials/11.objectarray
    tutorials/12.batcharray
-   tutorials/13.containers
    tutorials/13.ctable-basics
    tutorials/14.indexing-arrays
    tutorials/15.indexing-ctables
