@@ -1,6 +1,8 @@
 # Release notes
 
-## Changes from 4.3.1 to 4.3.2
+## Changes from 4.3.1 to 4.3.3
+
+note: 4.3.2 was an internal pre-release that was not published to PyPI.
 
 This is a maintenance release focused on CTable display ergonomics, indexed-query
 correctness, and query-planner performance.

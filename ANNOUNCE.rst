@@ -1,7 +1,7 @@
-Announcing Python-Blosc2 4.3.2
+Announcing Python-Blosc2 4.3.3
 ===============================
 
-We are happy to announce Python-Blosc2 4.3.2, a maintenance release focused on
+We are happy to announce Python-Blosc2 4.3.3, a maintenance release focused on
 ``CTable`` display ergonomics, indexed-query correctness, and query-planner
 performance.
 
