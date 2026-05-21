@@ -41,16 +41,28 @@ def test_display_rows_printoption_truncates_to_five_head_and_tail_rows():
 
         blosc2.set_printoptions(display_rows=20)
         rendered = str(t)
-        assert "50 rows hidden" in rendered
+        assert "\n\n[60 rows x 5 columns]" in rendered
+        assert "rows hidden" not in rendered
+        assert "─" not in rendered
+        assert "int64" not in rendered
+        assert "float64" not in rendered
         head_pos, tail_pos, hidden = t._display_positions()
         assert head_pos.tolist() == [0, 1, 2, 3, 4]
         assert tail_pos.tolist() == [55, 56, 57, 58, 59]
         assert hidden == 50
+
+        blosc2.set_printoptions(fancy=True)
+        rendered = str(t)
+        assert "50 rows hidden" in rendered
+        assert "60 rows x 5 columns" not in rendered
+        assert "int64" in rendered
+        assert "float64" in rendered
     finally:
         blosc2.set_printoptions(
             display_index=previous["display_index"],
             display_rows=previous["display_rows"],
             display_precision=previous["display_precision"],
+            fancy=previous["fancy"],
         )
 
 
@@ -83,6 +95,7 @@ def test_display_precision_printoption_formats_float_values():
             display_index=previous["display_index"],
             display_rows=previous["display_rows"],
             display_precision=previous["display_precision"],
+            fancy=previous["fancy"],
         )
 
 

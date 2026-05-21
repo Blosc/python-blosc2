@@ -174,7 +174,12 @@ class NullPolicy:
 
 DEFAULT_NULL_POLICY = NullPolicy()
 _NULL_POLICY = contextvars.ContextVar("blosc2_null_policy", default=DEFAULT_NULL_POLICY)
-_CTABLE_PRINT_OPTIONS: dict[str, Any] = {"display_index": True, "display_rows": 100, "display_precision": 6}
+_CTABLE_PRINT_OPTIONS: dict[str, Any] = {
+    "display_index": True,
+    "display_rows": 100,
+    "display_precision": 6,
+    "fancy": False,
+}
 _SMALL_SORT_MATERIALIZE_LIMIT = 4096
 
 
@@ -188,6 +193,7 @@ def set_printoptions(
     display_index: bool | None = None,
     display_rows: int | None = None,
     display_precision: int | None = None,
+    fancy: bool | None = None,
 ) -> None:
     """Set global display options for :class:`CTable` string representations.
 
@@ -204,6 +210,11 @@ def set_printoptions(
         Number of digits after the decimal point for floating-point values in
         table displays.  Trailing zeros are trimmed.  ``None`` leaves the
         current setting unchanged.
+    fancy:
+        Whether to use the more decorated table display, including separator
+        rules and a detailed footer.  ``False`` (default) uses a simpler
+        pandas-like footer such as ``[726017 rows x 5 columns]`` and omits
+        separator rules.  ``None`` leaves the current setting unchanged.
     """
     if display_index is not None:
         if not isinstance(display_index, bool):
@@ -221,6 +232,10 @@ def set_printoptions(
         ):
             raise TypeError("display_precision must be a non-negative int or None")
         _CTABLE_PRINT_OPTIONS["display_precision"] = display_precision
+    if fancy is not None:
+        if not isinstance(fancy, bool):
+            raise TypeError("fancy must be a bool or None")
+        _CTABLE_PRINT_OPTIONS["fancy"] = fancy
 
 
 def get_printoptions() -> dict[str, Any]:
@@ -3455,6 +3470,119 @@ class CTable(Generic[RowT]):
             rows.append(row)
         return rows
 
+    def _display_separator(
+        self,
+        widths: dict[str, int],
+        display_cols: list[str],
+        display_index: bool,
+        index_width: int,
+        fancy: bool,
+    ) -> str | None:
+        if not fancy:
+            return None
+        sep_parts = ["─" * (widths[n] + 2) for n in display_cols]
+        if display_index:
+            sep_parts.insert(0, "─" * (index_width + 2))
+        return "  ".join(sep_parts)
+
+    def _display_dtype_row(self, display_cols: list[str]) -> dict:
+        dtype_row = {}
+        for n in display_cols:
+            if n == "...":
+                dtype_row[n] = "..."
+            else:
+                dtype_row[n] = self._dtype_info_label(
+                    self._col_dtype(n),
+                    self._schema.columns_by_name[n].spec if n in self._schema.columns_by_name else None,
+                )
+        return dtype_row
+
+    @staticmethod
+    def _display_footer(nrows: int, ncols: int, hidden: int, hidden_cols: int, fancy: bool) -> list[str]:
+        if not fancy:
+            return ["", f"[{nrows} rows x {ncols} columns]"]
+        footer = f"{nrows:,} rows × {ncols} columns"
+        notes = []
+        if hidden > 0:
+            notes.append(f"{hidden:,} rows hidden")
+        if hidden_cols > 0:
+            notes.append(f"{hidden_cols:,} columns hidden")
+        if notes:
+            footer += f"  ({', '.join(notes)})"
+        return [footer]
+
+    def _display_lines_with_index(
+        self,
+        *,
+        display_cols: list[str],
+        widths: dict[str, int],
+        index_name: str,
+        index_width: int,
+        head_pos,
+        tail_pos,
+        hidden: int,
+        sep: str | None,
+        fancy: bool,
+    ) -> list[str]:
+        header_row = {n: n for n in display_cols}
+        lines = [
+            self._format_display_row_with_index(header_row, widths, display_cols, index_name, index_width)
+        ]
+        if fancy:
+            dtype_row = self._display_dtype_row(display_cols)
+            lines.append(
+                self._format_display_row_with_index(dtype_row, widths, display_cols, None, index_width)
+            )
+        if sep is not None:
+            lines.append(sep)
+        lines.extend(
+            self._format_display_row_with_index(row, widths, display_cols, i, index_width)
+            for i, row in enumerate(self._rows_to_dicts(head_pos, display_cols))
+        )
+        if hidden > 0:
+            lines.append(
+                self._format_display_row_with_index(
+                    dict.fromkeys(display_cols, "..."), widths, display_cols, "...", index_width
+                )
+            )
+        tail_start = self._n_rows - len(tail_pos)
+        lines.extend(
+            self._format_display_row_with_index(row, widths, display_cols, tail_start + i, index_width)
+            for i, row in enumerate(self._rows_to_dicts(tail_pos, display_cols))
+        )
+        return lines
+
+    def _display_lines_without_index(
+        self,
+        *,
+        display_cols: list[str],
+        widths: dict[str, int],
+        head_pos,
+        tail_pos,
+        hidden: int,
+        sep: str | None,
+        fancy: bool,
+    ) -> list[str]:
+        header_row = {n: n for n in display_cols}
+        lines = [self._format_display_row(header_row, widths, display_cols)]
+        if fancy:
+            lines.append(
+                self._format_display_row(self._display_dtype_row(display_cols), widths, display_cols)
+            )
+        if sep is not None:
+            lines.append(sep)
+        lines.extend(
+            self._format_display_row(row, widths, display_cols)
+            for row in self._rows_to_dicts(head_pos, display_cols)
+        )
+        if hidden > 0:
+            lines.append(self._format_display_row(dict.fromkeys(display_cols, "..."), widths, display_cols))
+        lines.extend(
+            self._format_display_row(row, widths, display_cols)
+            for row in self._rows_to_dicts(tail_pos, display_cols)
+        )
+        return lines
+
     def to_string(self, *, display_index: bool | None = None, index_name: str = "") -> str:
         """Return a tabular string representation of the table.
 
@@ -3482,73 +3610,34 @@ class CTable(Generic[RowT]):
             display_index=display_index, index_width=index_width
         )
         widths = self._display_widths(display_cols)
-        sep_parts = ["─" * (widths[n] + 2) for n in display_cols]
-        if display_index:
-            sep_parts.insert(0, "─" * (index_width + 2))
-        sep = "  ".join(sep_parts)
+        fancy = _CTABLE_PRINT_OPTIONS["fancy"]
+        sep = self._display_separator(widths, display_cols, display_index, index_width, fancy)
 
-        dtype_row = {}
-        for n in display_cols:
-            if n == "...":
-                dtype_row[n] = "..."
-            else:
-                dtype_row[n] = self._dtype_info_label(
-                    self._col_dtype(n),
-                    self._schema.columns_by_name[n].spec if n in self._schema.columns_by_name else None,
-                )
-
-        header_row = {n: n for n in display_cols}
         if display_index:
-            lines = [
-                self._format_display_row_with_index(
-                    header_row, widths, display_cols, index_name, index_width
-                ),
-                self._format_display_row_with_index(dtype_row, widths, display_cols, None, index_width),
-                sep,
-            ]
-            lines.extend(
-                self._format_display_row_with_index(row, widths, display_cols, i, index_width)
-                for i, row in enumerate(self._rows_to_dicts(head_pos, display_cols))
-            )
-            if hidden > 0:
-                lines.append(
-                    self._format_display_row_with_index(
-                        dict.fromkeys(display_cols, "..."), widths, display_cols, "...", index_width
-                    )
-                )
-            tail_start = nrows - len(tail_pos)
-            lines.extend(
-                self._format_display_row_with_index(row, widths, display_cols, tail_start + i, index_width)
-                for i, row in enumerate(self._rows_to_dicts(tail_pos, display_cols))
+            lines = self._display_lines_with_index(
+                display_cols=display_cols,
+                widths=widths,
+                index_name=index_name,
+                index_width=index_width,
+                head_pos=head_pos,
+                tail_pos=tail_pos,
+                hidden=hidden,
+                sep=sep,
+                fancy=fancy,
             )
         else:
-            lines = [
-                self._format_display_row(header_row, widths, display_cols),
-                self._format_display_row(dtype_row, widths, display_cols),
-                sep,
-            ]
-            lines.extend(
-                self._format_display_row(row, widths, display_cols)
-                for row in self._rows_to_dicts(head_pos, display_cols)
+            lines = self._display_lines_without_index(
+                display_cols=display_cols,
+                widths=widths,
+                head_pos=head_pos,
+                tail_pos=tail_pos,
+                hidden=hidden,
+                sep=sep,
+                fancy=fancy,
             )
-            if hidden > 0:
-                lines.append(
-                    self._format_display_row(dict.fromkeys(display_cols, "..."), widths, display_cols)
-                )
-            lines.extend(
-                self._format_display_row(row, widths, display_cols)
-                for row in self._rows_to_dicts(tail_pos, display_cols)
-            )
-        lines.append(sep)
-        footer = f"{nrows:,} rows × {ncols} columns"
-        notes = []
-        if hidden > 0:
-            notes.append(f"{hidden:,} rows hidden")
-        if hidden_cols > 0:
-            notes.append(f"{hidden_cols:,} columns hidden")
-        if notes:
-            footer += f"  ({', '.join(notes)})"
-        lines.append(footer)
+        if sep is not None:
+            lines.append(sep)
+        lines.extend(self._display_footer(nrows, ncols, hidden, hidden_cols, fancy))
         return "\n".join(lines)
 
     def __str__(self) -> str:

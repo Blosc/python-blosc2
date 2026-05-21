@@ -128,8 +128,9 @@ def test_to_string_display_index():
     lines = text.splitlines()
 
     assert "row" in lines[0]
-    assert lines[3].lstrip().startswith("0")
+    assert lines[1].lstrip().startswith("0")
     assert lines[-3].lstrip().startswith("9")
+    assert lines[-2] == ""
 
 
 def test_global_printoptions_display_index():
@@ -137,7 +138,7 @@ def test_global_printoptions_display_index():
     old_display_index = blosc2.get_printoptions()["display_index"]
     try:
         blosc2.set_printoptions(display_index=True)
-        assert str(t).splitlines()[3].lstrip().startswith("0")
+        assert str(t).splitlines()[1].lstrip().startswith("0")
     finally:
         blosc2.set_printoptions(display_index=old_display_index)
 
