@@ -959,7 +959,6 @@ __all__ = [  # noqa : RUF022
     "hypot",
     "imag",
     "iinfo",
-    "indices",
     "isdtype",
     "isfinite",
     "isinf",
