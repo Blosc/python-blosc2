@@ -176,7 +176,7 @@ DEFAULT_NULL_POLICY = NullPolicy()
 _NULL_POLICY = contextvars.ContextVar("blosc2_null_policy", default=DEFAULT_NULL_POLICY)
 _CTABLE_PRINT_OPTIONS: dict[str, Any] = {
     "display_index": True,
-    "display_rows": 100,
+    "display_rows": 60,
     "display_precision": 6,
     "fancy": False,
 }
@@ -3402,32 +3402,42 @@ class CTable(Generic[RowT]):
         return display_cols, hidden
 
     @staticmethod
-    def _format_cell(value, width: int) -> str:
+    def _cell_text(value, float_precision: int | None = None) -> str:
         if isinstance(value, np.datetime64):
             s = str(value).replace("T", " ")
             if s.endswith(".000"):
                 s = s[:-4]
-        elif isinstance(value, np.ndarray):
+            return s
+        if isinstance(value, np.ndarray):
             if value.ndim == 1 and value.size <= 6:
-                s = np.array2string(value, separator=", ", max_line_width=10_000)
-            else:
-                s = f"ndarray(shape={value.shape}, dtype={value.dtype})"
-        elif isinstance(value, (float, np.floating)):
-            s = np.format_float_positional(
-                float(value), precision=_CTABLE_PRINT_OPTIONS["display_precision"], trim="-"
+                return np.array2string(value, separator=", ", max_line_width=10_000)
+            return f"ndarray(shape={value.shape}, dtype={value.dtype})"
+        if isinstance(value, (float, np.floating)):
+            precision = (
+                _CTABLE_PRINT_OPTIONS["display_precision"] if float_precision is None else float_precision
             )
-        else:
-            s = str(value)
+            if _CTABLE_PRINT_OPTIONS["fancy"]:
+                return np.format_float_positional(float(value), precision=precision, trim="-")
+            return f"{float(value):.{precision}f}"
+        return str(value)
+
+    @staticmethod
+    def _format_cell(value, width: int, float_precision: int | None = None) -> str:
+        s = CTable._cell_text(value, float_precision)
         if len(s) > width:
             s = s[: width - 1] + "…"
-        return f" {s:<{width}} "
+        if _CTABLE_PRINT_OPTIONS["fancy"]:
+            return f" {s:>{width}} "
+        return f"{s:>{width}}"
 
     @staticmethod
     def _format_index_cell(value, width: int) -> str:
         s = "" if value is None else str(value)
         if len(s) > width:
             s = s[: width - 1] + "…"
-        return f" {s:>{width}} "
+        if _CTABLE_PRINT_OPTIONS["fancy"]:
+            return f" {s:<{width}} "
+        return f"{s:<{width}}"
 
     @staticmethod
     def _display_index_width(nrows: int, hidden: int, index_name: str) -> int:
@@ -3436,8 +3446,15 @@ class CTable(Generic[RowT]):
             width = max(width, 3)
         return width
 
-    def _format_display_row(self, values: dict, widths: dict[str, int], col_names: list[str]) -> str:
-        return "  ".join(self._format_cell(values[n], widths[n]) for n in col_names)
+    def _format_display_row(
+        self,
+        values: dict,
+        widths: dict[str, int],
+        col_names: list[str],
+        float_precisions: dict[str, int] | None = None,
+    ) -> str:
+        float_precisions = {} if float_precisions is None else float_precisions
+        return "  ".join(self._format_cell(values[n], widths[n], float_precisions.get(n)) for n in col_names)
 
     def _format_display_row_with_index(
         self,
@@ -3446,11 +3463,12 @@ class CTable(Generic[RowT]):
         col_names: list[str],
         index_value,
         index_width: int,
+        float_precisions: dict[str, int] | None = None,
     ) -> str:
         return (
             self._format_index_cell(index_value, index_width)
             + "  "
-            + self._format_display_row(values, widths, col_names)
+            + self._format_display_row(values, widths, col_names, float_precisions)
         )
 
     def _rows_to_dicts(self, positions, col_names: list[str] | None = None) -> list[dict]:
@@ -3497,6 +3515,50 @@ class CTable(Generic[RowT]):
                 )
         return dtype_row
 
+    def _compact_float_precisions(self, display_cols: list[str], head_pos, tail_pos) -> dict[str, int]:
+        default_precision = _CTABLE_PRINT_OPTIONS["display_precision"]
+        precisions: dict[str, int] = {}
+        for n in display_cols:
+            finite_float_seen = False
+            integer_valued = True
+            for positions in (head_pos, tail_pos):
+                for row in self._rows_to_dicts(positions, [n]):
+                    value = row[n]
+                    if not isinstance(value, (float, np.floating)):
+                        continue
+                    value = float(value)
+                    if not np.isfinite(value):
+                        continue
+                    finite_float_seen = True
+                    if not value.is_integer():
+                        integer_valued = False
+                        break
+                if not integer_valued:
+                    break
+            if finite_float_seen and integer_valued:
+                precisions[n] = 1
+            else:
+                precisions[n] = default_precision
+        return precisions
+
+    def _compact_display_widths(
+        self,
+        display_cols: list[str],
+        head_pos,
+        tail_pos,
+        hidden: int,
+        float_precisions: dict[str, int],
+    ) -> dict[str, int]:
+        widths = {n: len(n) for n in display_cols}
+        if hidden > 0:
+            for n in display_cols:
+                widths[n] = max(widths[n], 3)
+        for positions in (head_pos, tail_pos):
+            for row in self._rows_to_dicts(positions, display_cols):
+                for n, value in row.items():
+                    widths[n] = max(widths[n], len(self._cell_text(value, float_precisions.get(n))))
+        return widths
+
     @staticmethod
     def _display_footer(nrows: int, ncols: int, hidden: int, hidden_cols: int, fancy: bool) -> list[str]:
         if not fancy:
@@ -3523,31 +3585,43 @@ class CTable(Generic[RowT]):
         hidden: int,
         sep: str | None,
         fancy: bool,
+        float_precisions: dict[str, int] | None = None,
     ) -> list[str]:
         header_row = {n: n for n in display_cols}
         lines = [
-            self._format_display_row_with_index(header_row, widths, display_cols, index_name, index_width)
+            self._format_display_row_with_index(
+                header_row, widths, display_cols, index_name, index_width, float_precisions
+            )
         ]
         if fancy:
             dtype_row = self._display_dtype_row(display_cols)
             lines.append(
-                self._format_display_row_with_index(dtype_row, widths, display_cols, None, index_width)
+                self._format_display_row_with_index(
+                    dtype_row, widths, display_cols, None, index_width, float_precisions
+                )
             )
         if sep is not None:
             lines.append(sep)
         lines.extend(
-            self._format_display_row_with_index(row, widths, display_cols, i, index_width)
+            self._format_display_row_with_index(row, widths, display_cols, i, index_width, float_precisions)
             for i, row in enumerate(self._rows_to_dicts(head_pos, display_cols))
         )
         if hidden > 0:
             lines.append(
                 self._format_display_row_with_index(
-                    dict.fromkeys(display_cols, "..."), widths, display_cols, "...", index_width
+                    dict.fromkeys(display_cols, "..."),
+                    widths,
+                    display_cols,
+                    "...",
+                    index_width,
+                    float_precisions,
                 )
             )
         tail_start = self._n_rows - len(tail_pos)
         lines.extend(
-            self._format_display_row_with_index(row, widths, display_cols, tail_start + i, index_width)
+            self._format_display_row_with_index(
+                row, widths, display_cols, tail_start + i, index_width, float_precisions
+            )
             for i, row in enumerate(self._rows_to_dicts(tail_pos, display_cols))
         )
         return lines
@@ -3562,23 +3636,30 @@ class CTable(Generic[RowT]):
         hidden: int,
         sep: str | None,
         fancy: bool,
+        float_precisions: dict[str, int] | None = None,
     ) -> list[str]:
         header_row = {n: n for n in display_cols}
-        lines = [self._format_display_row(header_row, widths, display_cols)]
+        lines = [self._format_display_row(header_row, widths, display_cols, float_precisions)]
         if fancy:
             lines.append(
-                self._format_display_row(self._display_dtype_row(display_cols), widths, display_cols)
+                self._format_display_row(
+                    self._display_dtype_row(display_cols), widths, display_cols, float_precisions
+                )
             )
         if sep is not None:
             lines.append(sep)
         lines.extend(
-            self._format_display_row(row, widths, display_cols)
+            self._format_display_row(row, widths, display_cols, float_precisions)
             for row in self._rows_to_dicts(head_pos, display_cols)
         )
         if hidden > 0:
-            lines.append(self._format_display_row(dict.fromkeys(display_cols, "..."), widths, display_cols))
+            lines.append(
+                self._format_display_row(
+                    dict.fromkeys(display_cols, "..."), widths, display_cols, float_precisions
+                )
+            )
         lines.extend(
-            self._format_display_row(row, widths, display_cols)
+            self._format_display_row(row, widths, display_cols, float_precisions)
             for row in self._rows_to_dicts(tail_pos, display_cols)
         )
         return lines
@@ -3609,8 +3690,13 @@ class CTable(Generic[RowT]):
         display_cols, hidden_cols = self._display_columns(
             display_index=display_index, index_width=index_width
         )
-        widths = self._display_widths(display_cols)
         fancy = _CTABLE_PRINT_OPTIONS["fancy"]
+        float_precisions = {} if fancy else self._compact_float_precisions(display_cols, head_pos, tail_pos)
+        widths = (
+            self._display_widths(display_cols)
+            if fancy
+            else self._compact_display_widths(display_cols, head_pos, tail_pos, hidden, float_precisions)
+        )
         sep = self._display_separator(widths, display_cols, display_index, index_width, fancy)
 
         if display_index:
@@ -3624,6 +3710,7 @@ class CTable(Generic[RowT]):
                 hidden=hidden,
                 sep=sep,
                 fancy=fancy,
+                float_precisions=float_precisions,
             )
         else:
             lines = self._display_lines_without_index(
@@ -3634,6 +3721,7 @@ class CTable(Generic[RowT]):
                 hidden=hidden,
                 sep=sep,
                 fancy=fancy,
+                float_precisions=float_precisions,
             )
         if sep is not None:
             lines.append(sep)
