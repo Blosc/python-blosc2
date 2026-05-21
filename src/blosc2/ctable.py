@@ -197,8 +197,9 @@ def set_printoptions(
         Whether ``str(ctable)`` should include a pandas-like logical row index
         column.  ``None`` leaves the current setting unchanged.
     display_rows:
-        Maximum number of rows to display before truncating to a head/tail view.
-        ``None`` leaves the current setting unchanged.
+        Maximum number of rows allowed before truncating to a compact head/tail
+        view (five first and five last rows, when possible).  ``None`` leaves
+        the current setting unchanged.
     display_precision:
         Number of digits after the decimal point for floating-point values in
         table displays.  Trailing zeros are trimmed.  ``None`` leaves the
@@ -3309,14 +3310,17 @@ class CTable(Generic[RowT]):
         display_rows = _CTABLE_PRINT_OPTIONS["display_rows"] if display_rows is None else display_rows
         if display_rows == 0:
             return np.empty(0, dtype=np.intp), np.empty(0, dtype=np.intp), nrows
-        head_rows = (display_rows + 1) // 2
-        tail_rows = display_rows // 2
-        hidden = max(0, nrows - display_rows)
         valid_np = self._valid_rows[:]
         all_pos = np.where(valid_np)[0]
-        if hidden == 0:
+        if nrows <= display_rows:
             return all_pos, np.array([], dtype=all_pos.dtype), 0
-        return all_pos[:head_rows], all_pos[-tail_rows:], hidden
+
+        preview_rows = min(10, display_rows)
+        head_rows = (preview_rows + 1) // 2
+        tail_rows = preview_rows // 2
+        hidden = max(0, nrows - head_rows - tail_rows)
+        tail_pos = all_pos[-tail_rows:] if tail_rows else np.array([], dtype=all_pos.dtype)
+        return all_pos[:head_rows], tail_pos, hidden
 
     def _display_widths(self, col_names: list[str] | None = None) -> dict[str, int]:
         widths: dict[str, int] = {}

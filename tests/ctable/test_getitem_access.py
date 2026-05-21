@@ -32,7 +32,7 @@ DATA = [
 ]
 
 
-def test_display_rows_printoption_shows_up_to_configured_limit():
+def test_display_rows_printoption_truncates_to_five_head_and_tail_rows():
     previous = blosc2.get_printoptions()
     try:
         t = CTable(AccessRow, new_data=[(i, float(i), True, str(i), [i]) for i in range(60)])
@@ -41,7 +41,11 @@ def test_display_rows_printoption_shows_up_to_configured_limit():
 
         blosc2.set_printoptions(display_rows=20)
         rendered = str(t)
-        assert "40 rows hidden" in rendered
+        assert "50 rows hidden" in rendered
+        head_pos, tail_pos, hidden = t._display_positions()
+        assert head_pos.tolist() == [0, 1, 2, 3, 4]
+        assert tail_pos.tolist() == [55, 56, 57, 58, 59]
+        assert hidden == 50
     finally:
         blosc2.set_printoptions(
             display_index=previous["display_index"],
