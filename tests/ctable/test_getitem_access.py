@@ -44,7 +44,41 @@ def test_display_rows_printoption_shows_up_to_configured_limit():
         assert "40 rows hidden" in rendered
     finally:
         blosc2.set_printoptions(
-            display_index=previous["display_index"], display_rows=previous["display_rows"]
+            display_index=previous["display_index"],
+            display_rows=previous["display_rows"],
+            display_precision=previous["display_precision"],
+        )
+
+
+def test_rename_column_recomputes_display_width_for_shorter_name():
+    @dataclass
+    class WidthRow:
+        very_long_temporary_name: float = blosc2.field(blosc2.float64())
+
+    t = CTable(WidthRow, new_data=[(1.0,)])
+    original_width = t._col_widths["very_long_temporary_name"]
+
+    t.rename_column("very_long_temporary_name", "x")
+
+    assert t._col_widths["x"] < original_width
+    assert t._col_widths["x"] == max(len("x"), t._schema.columns_by_name["x"].display_width)
+
+
+def test_display_precision_printoption_formats_float_values():
+    previous = blosc2.get_printoptions()
+    try:
+        t = CTable(AccessRow, new_data=[(1, 1.23456789, True, "x", [1])])
+        assert "1.234568" in str(t)
+
+        blosc2.set_printoptions(display_precision=2)
+        rendered = str(t)
+        assert "1.23" in rendered
+        assert "1.234568" not in rendered
+    finally:
+        blosc2.set_printoptions(
+            display_index=previous["display_index"],
+            display_rows=previous["display_rows"],
+            display_precision=previous["display_precision"],
         )
 
 

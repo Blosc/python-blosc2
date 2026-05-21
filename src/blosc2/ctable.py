@@ -174,7 +174,7 @@ class NullPolicy:
 
 DEFAULT_NULL_POLICY = NullPolicy()
 _NULL_POLICY = contextvars.ContextVar("blosc2_null_policy", default=DEFAULT_NULL_POLICY)
-_CTABLE_PRINT_OPTIONS: dict[str, Any] = {"display_index": False, "display_rows": 100}
+_CTABLE_PRINT_OPTIONS: dict[str, Any] = {"display_index": False, "display_rows": 100, "display_precision": 6}
 _SMALL_SORT_MATERIALIZE_LIMIT = 4096
 
 
@@ -183,7 +183,12 @@ def get_null_policy() -> NullPolicy:
     return _NULL_POLICY.get()
 
 
-def set_printoptions(*, display_index: bool | None = None, display_rows: int | None = None) -> None:
+def set_printoptions(
+    *,
+    display_index: bool | None = None,
+    display_rows: int | None = None,
+    display_precision: int | None = None,
+) -> None:
     """Set global display options for :class:`CTable` string representations.
 
     Parameters
@@ -194,6 +199,10 @@ def set_printoptions(*, display_index: bool | None = None, display_rows: int | N
     display_rows:
         Maximum number of rows to display before truncating to a head/tail view.
         ``None`` leaves the current setting unchanged.
+    display_precision:
+        Number of digits after the decimal point for floating-point values in
+        table displays.  Trailing zeros are trimmed.  ``None`` leaves the
+        current setting unchanged.
     """
     if display_index is not None:
         if not isinstance(display_index, bool):
@@ -203,6 +212,14 @@ def set_printoptions(*, display_index: bool | None = None, display_rows: int | N
         if not isinstance(display_rows, int) or isinstance(display_rows, bool) or display_rows < 0:
             raise TypeError("display_rows must be a non-negative int or None")
         _CTABLE_PRINT_OPTIONS["display_rows"] = display_rows
+    if display_precision is not None:
+        if (
+            not isinstance(display_precision, int)
+            or isinstance(display_precision, bool)
+            or display_precision < 0
+        ):
+            raise TypeError("display_precision must be a non-negative int or None")
+        _CTABLE_PRINT_OPTIONS["display_precision"] = display_precision
 
 
 def get_printoptions() -> dict[str, Any]:
@@ -3376,6 +3393,10 @@ class CTable(Generic[RowT]):
                 s = np.array2string(value, separator=", ", max_line_width=10_000)
             else:
                 s = f"ndarray(shape={value.shape}, dtype={value.dtype})"
+        elif isinstance(value, (float, np.floating)):
+            s = np.format_float_positional(
+                float(value), precision=_CTABLE_PRINT_OPTIONS["display_precision"], trim="-"
+            )
         else:
             s = str(value)
         if len(s) > width:
@@ -6784,9 +6805,10 @@ class CTable(Generic[RowT]):
 
         idx = self.col_names.index(old)
         self.col_names[idx] = new
-        self._col_widths[new] = max(len(new), self._col_widths.pop(old))
-
         old_compiled = self._schema.columns_by_name[old]
+        self._col_widths.pop(old)
+        self._col_widths[new] = max(len(new), old_compiled.display_width)
+
         renamed = CompiledColumn(
             name=new,
             py_type=old_compiled.py_type,
