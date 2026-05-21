@@ -1376,6 +1376,8 @@ def test_ctable_b2z_to_b2d_roundtrip(tmp_path):
 
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
 def test_ctable_with_string_column(tmp_path, storage_type):
+    if blosc2.IS_WASM:
+        pytest.skip("Pyodide reports unraisable finalizer warnings for inline CTable string-column handles")
     """CTable with a string column round-trips correctly through TreeStore."""
     path = str(tmp_path / f"bundle.{storage_type}")
     t = blosc2.CTable(_RowStr)
