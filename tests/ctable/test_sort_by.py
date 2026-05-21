@@ -30,6 +30,13 @@ class StrRow:
 
 
 @dataclass
+class DictSortRow:
+    value: int = blosc2.field(blosc2.int64(ge=0))
+    sort_key: int = blosc2.field(blosc2.int64(ge=0))
+    label: str = blosc2.field(blosc2.dictionary())
+
+
+@dataclass
 class ListRow:
     id: int = blosc2.field(blosc2.int64(ge=0))
     tags: list[str] = blosc2.field(  # noqa: RUF009
@@ -73,6 +80,21 @@ def test_sort_accepts_nested_column_selector_from_view():
     s = view.sort_by(t.trip.sec)
 
     np.testing.assert_array_equal(s["trip.sec"][:], [1, 2, 3, 4])
+
+
+def test_sort_projected_view_with_dictionary_column_above_default_capacity():
+    n = 5000
+    data = [(i, n - i, f"label-{i % 7}") for i in range(n)]
+    t = CTable(DictSortRow, new_data=data)
+
+    view = t.where(t.value >= 0, columns=["value", "sort_key", "label"])
+    sorted_view = view.sort_by(t.sort_key)
+
+    assert sorted_view.nrows == n
+    assert len(sorted_view._cols["label"].codes) >= n
+    np.testing.assert_array_equal(sorted_view["sort_key"][:5], [1, 2, 3, 4, 5])
+    # Regression check: rendering used to index dictionary codes beyond their capacity.
+    assert "label" in str(sorted_view)
 
 
 def test_sort_accepts_column_selectors_in_multi_key_list():
