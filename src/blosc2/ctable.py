@@ -2693,6 +2693,28 @@ class CTable(Generic[RowT]):
         """Return cached live-row count without triggering a scan."""
         return getattr(self, "_n_rows_cached", None)
 
+    def _iter_live_positions_chunks(self):
+        """Yield chunks of physical positions for live rows without materialising the full mask."""
+        valid_rows = self._valid_rows
+        n = len(valid_rows)
+        chunks = getattr(valid_rows, "chunks", None)
+        chunk_len = chunks[0] if chunks else n
+
+        for start in range(0, n, chunk_len):
+            stop = min(start + chunk_len, n)
+            local_pos = np.flatnonzero(valid_rows[start:stop])
+            if len(local_pos):
+                yield (local_pos + start).astype(np.intp, copy=False)
+
+    def _live_positions_from_valid_rows_chunks(self) -> np.ndarray:
+        """Return live physical row positions by scanning the validity NDArray chunk-wise."""
+        positions = list(self._iter_live_positions_chunks())
+        if not positions:
+            return np.empty(0, dtype=np.intp)
+        if len(positions) == 1:
+            return positions[0]
+        return np.concatenate(positions).astype(np.intp, copy=False)
+
     def __init__(
         self,
         row_type: type[RowT],
@@ -4230,7 +4252,7 @@ class CTable(Generic[RowT]):
             return self.view(self._valid_rows)
 
         rng = np.random.default_rng(seed)
-        all_pos = np.where(self._valid_rows[:])[0]
+        all_pos = self._live_positions_from_valid_rows_chunks()
         chosen = rng.choice(all_pos, size=n, replace=False)
 
         mask = np.zeros(len(self._valid_rows), dtype=np.bool_)
@@ -6545,7 +6567,7 @@ class CTable(Generic[RowT]):
 
         spec, default, column_config = self._column_spec_default_and_config(spec)
 
-        live_pos = np.where(self._valid_rows[:])[0]
+        live_pos = self._live_positions_from_valid_rows_chunks()
         if default is MISSING and len(live_pos) > 0:
             raise ValueError(
                 "add_column() requires a default declared as blosc2.field(..., default=...) "
@@ -7260,7 +7282,7 @@ class CTable(Generic[RowT]):
         if name not in self._materialized_cols:
             raise KeyError(f"{name!r} is not a generated/materialized column.")
         meta = self._materialized_cols[name]
-        live_pos = np.where(self._valid_rows[:])[0]
+        live_pos = self._live_positions_from_valid_rows_chunks()
         if meta.get("transformer_kind") == "row_transformer":
             transformer = RowTransformer.from_metadata(meta["transformer"])
             values = np.asarray(transformer.evaluate_existing(self), dtype=meta["dtype"])
@@ -7425,7 +7447,7 @@ class CTable(Generic[RowT]):
         if name in self._computed_cols:
             raise ValueError(f"A computed column named {name!r} already exists.")
 
-        live_pos = np.where(self._valid_rows[:])[0]
+        live_pos = self._live_positions_from_valid_rows_chunks()
         if isinstance(values, RowTransformer):
             transformer = values
             for dep in transformer.source_columns:
@@ -8165,9 +8187,9 @@ class CTable(Generic[RowT]):
 
         cols, ascending = self._normalise_sort_keys(cols, ascending)
 
-        # Live physical positions
-        valid_np = self._valid_rows[:]
-        live_pos = np.where(valid_np)[0]
+        # Live physical positions.  Scan the validity NDArray chunk-wise to avoid
+        # materialising the whole mask as a single NumPy array.
+        live_pos = self._live_positions_from_valid_rows_chunks()
         n = len(live_pos)
 
         if n == 0:
@@ -9678,8 +9700,7 @@ class CTable(Generic[RowT]):
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
             raise ValueError("Cannot delete rows from a view.")
-        valid_rows_np = self._valid_rows[:]
-        true_pos = np.where(valid_rows_np)[0]
+        true_pos = self._live_positions_from_valid_rows_chunks()
 
         if isinstance(ind, Iterable) and not isinstance(ind, (str, bytes)):
             ind = list(ind)
@@ -9690,8 +9711,7 @@ class CTable(Generic[RowT]):
         n_deleted = len(np.unique(false_pos))
         n_rows = self.nrows
 
-        valid_rows_np[false_pos] = False
-        self._valid_rows[:] = valid_rows_np  # write back in-place; no new array created
+        self._valid_rows[false_pos] = False
         self._n_rows = n_rows - n_deleted
         if self._last_pos is None or np.any(false_pos == self._last_pos - 1):
             self._last_pos = None  # last live row deleted; recalculate on next write
@@ -10095,7 +10115,7 @@ class CTable(Generic[RowT]):
         if filter_len != target_len:
             if filter_len == self.nrows:
                 physical = blosc2.zeros(target_len, dtype=np.bool_)
-                live_pos = np.where(self._valid_rows[:])[0]
+                live_pos = self._live_positions_from_valid_rows_chunks()
                 physical[live_pos] = filter[:]
                 filter = physical
                 filter_intersected = True
@@ -10115,15 +10135,14 @@ class CTable(Generic[RowT]):
         return result if columns is None else result.select(list(columns))
 
     def _run_row_logic(self, ind: int | slice | str | Iterable) -> CTable:
-        valid_rows_np = self._valid_rows[:]
-        true_pos = np.where(valid_rows_np)[0]
+        true_pos = self._live_positions_from_valid_rows_chunks()
 
         if isinstance(ind, Iterable) and not isinstance(ind, (str, bytes)):
             ind = list(ind)
 
         mant_pos = true_pos[ind]
 
-        new_mask_np = np.zeros_like(valid_rows_np, dtype=bool)
+        new_mask_np = np.zeros(len(self._valid_rows), dtype=bool)
         new_mask_np[mant_pos] = True
 
         new_mask = blosc2.asarray(new_mask_np)
