@@ -1391,6 +1391,11 @@ def test_ctable_with_string_column(tmp_path, storage_type):
         names = [str(n) for n in t2["name"][:]]
         assert "alice" in names
         assert "bob" in names
+        # Drop the inline CTable handle before the TreeStore removes the
+        # temporary directory backing .b2z members.  Pyodide is especially
+        # sensitive to finalizers for string-column leaves that outlive the
+        # extracted bundle directory, reporting them as unraisable exceptions.
+        del t2
 
 
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
