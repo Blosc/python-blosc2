@@ -8,7 +8,7 @@
    version="1.1"
    id="svg68"
    sodipodi:docname="overview.svg"
-   inkscape:version="1.4 (e7c3feb1, 2024-10-09)"
+   inkscape:version="1.4.3 (0d15f75, 2025-12-25)"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
    xmlns="http://www.w3.org/2000/svg"
@@ -25,12 +25,12 @@
      showgrid="false"
      inkscape:zoom="0.9625"
      inkscape:cx="600"
-     inkscape:cy="410.38961"
-     inkscape:window-width="1712"
-     inkscape:window-height="1045"
+     inkscape:cy="409.87013"
+     inkscape:window-width="1638"
+     inkscape:window-height="1186"
      inkscape:window-x="0"
-     inkscape:window-y="34"
-     inkscape:window-maximized="1"
+     inkscape:window-y="30"
+     inkscape:window-maximized="0"
      inkscape:current-layer="svg68" />
   <title
      id="title">python-blosc2 container family overview</title>
@@ -97,6 +97,30 @@
          d="M 0 0 L 10 5 L 0 10 z"
          fill="#007a86"
          id="path2" />
+    </marker>
+    <marker
+       id="arrowhead-blue-5"
+       markerWidth="10"
+       markerHeight="10"
+       refX="8"
+       refY="5"
+       orient="auto">
+      <path
+         d="M 0,0 10,5 0,10 Z"
+         fill="#002a64"
+         id="path1-5" />
+    </marker>
+    <marker
+       id="arrowhead-blue-5-0"
+       markerWidth="10"
+       markerHeight="10"
+       refX="8"
+       refY="5"
+       orient="auto">
+      <path
+         d="M 0,0 10,5 0,10 Z"
+         fill="#002a64"
+         id="path1-5-1" />
     </marker>
   </defs>
   <text
@@ -218,12 +242,14 @@
        x="60"
        y="100"
        class="tiny"
-       id="text18">VL</text>
+       id="text18"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:11px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">CT</text>
     <text
        x="90"
        y="100"
        class="tiny"
-       id="text19">BA</text>
+       id="text19"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:11px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">LA</text>
   </g>
   <g
      transform="translate(415 170)"
@@ -242,8 +268,8 @@
        stroke-width="2.16662"
        id="path19" />
     <rect
-       x="34"
-       y="72"
+       x="26"
+       y="64"
        width="26"
        height="16"
        class="chunk"
@@ -252,13 +278,23 @@
        id="rect20" />
     <rect
        x="66"
-       y="72"
+       y="64"
        width="20"
        height="16"
        class="meta"
        rx="5"
        ry="5"
        id="rect21" />
+    <rect
+       x="96.168831"
+       y="63.883118"
+       width="20"
+       height="16"
+       class="meta"
+       rx="5"
+       ry="5"
+       id="rect21-7"
+       style="fill:#007a86" />
     <text
        x="142"
        y="40"
@@ -307,12 +343,14 @@
        x="60"
        y="100"
        class="tiny"
-       id="text26">VL</text>
+       id="text26"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:11px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">CT</text>
     <text
        x="90"
        y="100"
        class="tiny"
-       id="text27">BA</text>
+       id="text27"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:11px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">LA</text>
   </g>
   <g
      transform="translate(735 170)"
@@ -431,12 +469,14 @@
        x="60"
        y="100"
        class="tiny"
-       id="text37">VL</text>
+       id="text37"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:11px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">CT</text>
     <text
        x="90"
        y="100"
        class="tiny"
-       id="text38">BA</text>
+       id="text38"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:11px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">LA</text>
   </g>
   <g
      transform="translate(95 390)"
@@ -510,48 +550,59 @@
        height="118"
        class="box-soft"
        id="rect45" />
-    <rect
-       x="20"
-       y="28"
-       width="74"
-       height="16"
-       class="chunk"
-       rx="8"
-       ry="8"
-       id="rect46" />
-    <rect
-       x="20"
-       y="54"
-       width="42"
-       height="16"
-       class="chunk"
-       rx="8"
-       ry="8"
-       id="rect47" />
-    <rect
-       x="20"
-       y="80"
-       width="92"
-       height="16"
-       class="chunk"
-       rx="8"
-       ry="8"
-       id="rect48" />
+    <g
+       id="g5">
+      <rect
+         x="15.911184"
+         y="-47.068916"
+         width="92"
+         height="16"
+         class="chunk"
+         rx="8"
+         ry="8"
+         id="rect48"
+         transform="rotate(89.131375)" />
+      <rect
+         x="16.348074"
+         y="-75.884628"
+         width="92"
+         height="16"
+         class="chunk"
+         rx="8"
+         ry="8"
+         id="rect48-2"
+         transform="rotate(89.131375)"
+         style="fill:#007a86;fill-opacity:1" />
+      <rect
+         x="16.784966"
+         y="-104.70034"
+         width="92"
+         height="16"
+         class="chunk"
+         rx="8"
+         ry="8"
+         id="rect48-3"
+         transform="rotate(89.131375)"
+         style="fill:#002a64;fill-opacity:1" />
+    </g>
     <text
        x="132"
        y="40"
        class="label"
-       id="text48">VLArray</text>
+       id="text48"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:20px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">CTable</text>
     <text
        x="132"
        y="64"
        class="body"
-       id="text49">variable-length entries</text>
+       id="text49"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">columar table</text>
     <text
        x="132"
        y="84"
        class="body"
-       id="text50">one item per entry</text>
+       id="text50"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">one row per entry</text>
   </g>
   <g
      transform="translate(735 390)"
@@ -618,17 +669,20 @@
        x="132"
        y="40"
        class="label"
-       id="text53">BatchArray</text>
+       id="text53"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:20px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">ListArray</text>
     <text
        x="132"
        y="64"
        class="body"
-       id="text54">batch-oriented entries</text>
+       id="text54"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">variable-length entries</text>
     <text
        x="132"
        y="84"
        class="body"
-       id="text55">one batch per chunk</text>
+       id="text55"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">ragged typed data</text>
   </g>
   <g
      transform="translate(43,590)"
@@ -765,10 +819,19 @@
      marker-end="url(#arrowhead-blue)"
      id="path65" />
   <path
-     d="M 550 508 L 550 605"
+     d="m 685.40972,446.36374 41.34391,0.23823"
      class="arrow"
-     marker-end="url(#arrowhead-blue)"
-     id="path66" />
+     marker-end="url(#arrowhead-blue-5)"
+     id="path66-8"
+     sodipodi:nodetypes="cc"
+     style="fill:none;stroke:#002a64;stroke-width:2.26999;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#arrowhead-blue-5)" />
+  <path
+     d="m 411.76532,452.32256 -41.34077,0.56284"
+     class="arrow"
+     marker-end="url(#arrowhead-blue-5-0)"
+     id="path66-8-3"
+     sodipodi:nodetypes="cc"
+     style="fill:none;stroke:#002a64;stroke-width:2.26999;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#arrowhead-blue-5-0)" />
   <path
      d="M 870 508 L 870 556 L 635 556 L 635 605"
      class="arrow"
