@@ -576,10 +576,25 @@ def test_ctable_schema_dict_round_trip():
 
 def test_ctable_vlstring_str_display():
     ct = blosc2.CTable(VLRow, new_data=ROWS)
-    s = str(ct)
-    assert "vlstring" in s
-    assert "vlbytes" in s
-    assert "hello world" in s
+    previous = blosc2.get_printoptions()
+    try:
+        s = str(ct)
+        assert "vlstring" not in s
+        assert "vlbytes" not in s
+        assert "hello world" in s
+
+        blosc2.set_printoptions(fancy=True)
+        s = str(ct)
+        assert "vlstring" in s
+        assert "vlbytes" in s
+        assert "hello world" in s
+    finally:
+        blosc2.set_printoptions(
+            display_index=previous["display_index"],
+            display_rows=previous["display_rows"],
+            display_precision=previous["display_precision"],
+            fancy=previous["fancy"],
+        )
 
 
 def test_ctable_vlstring_repr():
