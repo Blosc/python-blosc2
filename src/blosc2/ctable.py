@@ -174,7 +174,7 @@ class NullPolicy:
 
 DEFAULT_NULL_POLICY = NullPolicy()
 _NULL_POLICY = contextvars.ContextVar("blosc2_null_policy", default=DEFAULT_NULL_POLICY)
-_CTABLE_PRINT_OPTIONS: dict[str, Any] = {"display_index": False}
+_CTABLE_PRINT_OPTIONS: dict[str, Any] = {"display_index": False, "display_rows": 100}
 _SMALL_SORT_MATERIALIZE_LIMIT = 4096
 
 
@@ -183,7 +183,7 @@ def get_null_policy() -> NullPolicy:
     return _NULL_POLICY.get()
 
 
-def set_printoptions(*, display_index: bool | None = None) -> None:
+def set_printoptions(*, display_index: bool | None = None, display_rows: int | None = None) -> None:
     """Set global display options for :class:`CTable` string representations.
 
     Parameters
@@ -191,11 +191,18 @@ def set_printoptions(*, display_index: bool | None = None) -> None:
     display_index:
         Whether ``str(ctable)`` should include a pandas-like logical row index
         column.  ``None`` leaves the current setting unchanged.
+    display_rows:
+        Maximum number of rows to display before truncating to a head/tail view.
+        ``None`` leaves the current setting unchanged.
     """
     if display_index is not None:
         if not isinstance(display_index, bool):
             raise TypeError("display_index must be a bool or None")
         _CTABLE_PRINT_OPTIONS["display_index"] = display_index
+    if display_rows is not None:
+        if not isinstance(display_rows, int) or isinstance(display_rows, bool) or display_rows < 0:
+            raise TypeError("display_rows must be a non-negative int or None")
+        _CTABLE_PRINT_OPTIONS["display_rows"] = display_rows
 
 
 def get_printoptions() -> dict[str, Any]:
@@ -3280,14 +3287,19 @@ class CTable(Generic[RowT]):
     # Display
     # ------------------------------------------------------------------
 
-    def _display_positions(self, head_tail: int = 10):
+    def _display_positions(self, display_rows: int | None = None):
         nrows = self._n_rows
-        hidden = max(0, nrows - head_tail * 2)
+        display_rows = _CTABLE_PRINT_OPTIONS["display_rows"] if display_rows is None else display_rows
+        if display_rows == 0:
+            return np.empty(0, dtype=np.intp), np.empty(0, dtype=np.intp), nrows
+        head_rows = (display_rows + 1) // 2
+        tail_rows = display_rows // 2
+        hidden = max(0, nrows - display_rows)
         valid_np = self._valid_rows[:]
         all_pos = np.where(valid_np)[0]
-        if nrows <= head_tail * 2:
+        if hidden == 0:
             return all_pos, np.array([], dtype=all_pos.dtype), 0
-        return all_pos[:head_tail], all_pos[-head_tail:], hidden
+        return all_pos[:head_rows], all_pos[-tail_rows:], hidden
 
     def _display_widths(self, col_names: list[str] | None = None) -> dict[str, int]:
         widths: dict[str, int] = {}
