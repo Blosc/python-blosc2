@@ -107,6 +107,7 @@ def test_create_expression_index_in_memory():
     assert t.index(name="vc").name == "vc"
 
 
+@pytest.mark.heavy
 def test_where_with_expression_index_matches_scan_in_memory():
     t = _make_table(200)
     t.create_index(expression="value * category", kind=blosc2.IndexKind.FULL, name="vc")
@@ -204,6 +205,7 @@ def test_compact_index_in_memory():
     t.compact_index("id")
 
 
+@pytest.mark.heavy
 def test_multi_column_conjunction_uses_multiple_indexes_in_memory():
     t = _make_table(200)
     t.create_index("id", kind=blosc2.IndexKind.FULL)
@@ -321,6 +323,7 @@ def test_where_with_index_matches_scan_persistent(tmpdir):
     assert ids_idx == ids_scan
 
 
+@pytest.mark.heavy
 def test_relative_b2d_ctable_index_sidecars_survive_reopen(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     t = _make_table(200, persistent_path="table.b2d")
@@ -535,6 +538,7 @@ def test_view_cannot_compact_index():
         view.compact_index("id")
 
 
+@pytest.mark.heavy
 def test_view_query_uses_root_index():
     t = _make_table(200)
     t.create_index("id")

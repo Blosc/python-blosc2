@@ -609,6 +609,7 @@ def test_matmul_disk():
     blosc2.remove_urlpath("c_test.b2nd")
 
 
+@pytest.mark.heavy
 @pytest.mark.parametrize(
     ("shape1", "chunk1", "block1", "shape2", "chunk2", "block2", "chunkres", "axes"),
     [
