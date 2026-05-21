@@ -2,7 +2,62 @@
 
 ## Changes from 4.3.1 to 4.3.2
 
-XXX version-specific blurb XXX
+This is a maintenance release focused on CTable display ergonomics, indexed-query
+correctness, and query-planner performance.
+
+### CTable display and print options
+
+- **Pandas-like CTable display by default**: `str(table)` / `print(table)` now use
+  a compact, pandas/DuckDB-style table representation, including a displayed
+  logical row index, numeric alignment, compact spacing, and a trailing footer
+  such as `[726017 rows x 5 columns]`.
+- **Configurable display options**: added `blosc2.set_printoptions()` and
+  `blosc2.get_printoptions()` for CTable rendering.  The supported options are
+  `display_index`, `display_rows`, `display_precision`, and `fancy`.
+- **`CTable.to_string()`**: added a one-off formatting API for producing CTable
+  string representations without changing global print options.
+- **Compact truncation for large tables**: when a table exceeds the configured
+  `display_rows` threshold, only the first five and last five rows are shown,
+  with an ellipsis row in between.
+- **Float display refinements**: compact mode uses pandas-like fixed precision
+  for floating-point columns, and integer-valued float columns are displayed
+  with a single decimal place.
+- **Fancy display preserved**: `set_printoptions(fancy=True)` restores the more
+  decorated display with dtype rows, separator rules, and hidden row/column
+  counts.
+
+### Indexed queries and sorting
+
+- **Cross-column exact index refinement**: multi-column conjunctions can now use
+  exact positions from a selective indexed column (`FULL`, `PARTIAL`, or `OPSI`)
+  as a compact pre-filter, then refine the remaining predicates on those
+  positions instead of scanning the full table.
+- **NaN-safe index boundary navigation**: fixed sorted-boundary navigation for
+  floating-point indexes containing `NaN` values, so indexed results match scan
+  results for bucket/full index lookups.
+- **Better index-planner heuristics**: the planner now avoids low-value indexed
+  paths when segment pruning is unlikely to help, and avoids expensive scalar
+  specialization for non-scalar arrays.
+- **Faster filtered sorting**: small filtered views can be materialized and
+  sorted directly, avoiding an extra gather of sort keys.
+
+### Performance and fixes
+
+- Avoid full materialization of `valid_rows` in several CTable code paths.
+- Keep row counts lazy for views and avoid unnecessary `nrows` calls in the
+  query planner.
+- Reduced overhead in root-column iteration and small query-planner operations.
+- Fixed dictionary-column capacity handling during Arrow import and a regression
+  affecting dictionary columns.
+- Marked additional long-running tests as `heavy` to reduce default test-suite
+  runtime.
+
+### Documentation
+
+- Updated the containers tutorial with dedicated `ListArray` and `CTable`
+  sections, including CTable's columnar storage model and support for columns
+  backed by `NDArray`, `BatchArray`, `ObjectArray`, `ListArray`, and related
+  containers.
 
 ## Changes from 4.3.0 to 4.3.1
 

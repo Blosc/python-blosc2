@@ -1,55 +1,51 @@
-Announcing Python-Blosc2 4.3.1
+Announcing Python-Blosc2 4.3.2
 ===============================
 
-We are happy to announce Python-Blosc2 4.3.1, a maintenance release focused on
-``CTable`` nested-column ergonomics, grouped reductions, and API/documentation
-polish.
+We are happy to announce Python-Blosc2 4.3.2, a maintenance release focused on
+``CTable`` display ergonomics, indexed-query correctness, and query-planner
+performance.
 
 The main improvements are:
 
-- **Nested names in group-by results**: ``CTable.group_by()`` results can now
-  preserve dotted/nested column names such as ``trip.sec`` instead of requiring
-  Python-identifier-only output names.
+- **Pandas/DuckDB-like CTable display**: ``str(table)`` and ``print(table)`` now
+  use a compact tabular representation by default, including a displayed logical
+  row index, numeric alignment, compact spacing, and a footer such as::
 
-- **Column-object selectors**: ``CTable.group_by()`` and ``CTable.sort_by()`` now
-  accept ``Column`` objects in addition to string names.  This enables natural
-  nested-column idioms such as::
+      [726017 rows x 5 columns]
 
-      t.group_by(t.trip.sec).size()
-      t.sort_by(t.trip.sec)
+- **Configurable CTable printing**: added ``blosc2.set_printoptions()`` and
+  ``blosc2.get_printoptions()`` with options for ``display_index``,
+  ``display_rows``, ``display_precision``, and ``fancy``.  Use
+  ``set_printoptions(fancy=True)`` to restore the decorated display with dtype
+  rows, separator rules, and hidden row/column counts.
 
-- **Grouped arg reductions**: ``CTableGroupBy`` now supports ``argmin()`` and
-  ``argmax()``, plus ``agg({"col": "argmin"})`` and
-  ``agg({"col": "argmax"})``.  Results are logical row positions in the
-  grouped table or view; groups with no non-null values return ``-1``.
+- **Indexed-query correctness and performance**: fixed NaN-sensitive sorted
+  boundary navigation for floating-point indexes, improved index-planner
+  heuristics, and added cross-column exact index refinement for selective
+  multi-column conjunctions.
 
-- **``blosc2.array()``**: added a NumPy-like constructor for NDArrays.  It
-  mirrors ``blosc2.asarray()`` but defaults to ``copy=True``, so passing an
-  existing ``NDArray`` creates a copy unless ``copy=False`` or ``copy=None`` is
-  requested.
+- **Faster filtered sorting and CTable internals**: small filtered views can be
+  materialized and sorted directly, and several CTable paths avoid unnecessary
+  ``valid_rows`` materialization and row-count work.
 
-- **Reference documentation updates**: expanded the CTable docs with
-  ``RowTransformer`` and ``Column.row_transformer``; documented
-  ``CTableGroupBy.argmin`` / ``argmax``; added public schema factory functions
-  such as ``blosc2.ndarray()`` and ``blosc2.dictionary()`` to the Schema Specs
-  reference; and moved ``blosc2.group_reduce()`` into the Reduction Functions
-  reference.
+- **Dictionary-column fixes**: fixed dictionary-column capacity handling during
+  Arrow import and a regression affecting dictionary columns.
 
-A small nested-column example::
+A small display example::
 
     import blosc2
 
     t = blosc2.open("chicago-taxi.b2z")
-    v = t.where((t.payment.tips > 100) & (t.trip.sec > 60))
+    result = t.where((t.payment.tips > 100) & (t.trip.km > 0)).select(
+        ["payment.tips", "payment.total", "trip.sec", "trip.km", "company"]
+    )
 
-    # Attribute-style nested Column selector
-    print(v.group_by(t.trip.sec).size())
+    # Compact pandas-like display by default
+    print(result)
 
-    # Logical row positions of the maximum tip per trip duration
-    print(v.group_by(t.trip.sec).argmax(t.payment.tips))
-
-    # Sort by a nested Column selector
-    print(v.sort_by(t.trip.sec).select(["payment.tips", "trip.sec", "company"]))
+    # Decorated display, including dtype rows and separator rules
+    blosc2.set_printoptions(fancy=True)
+    print(result)
 
 Install it with::
 
