@@ -174,7 +174,7 @@ class NullPolicy:
 
 DEFAULT_NULL_POLICY = NullPolicy()
 _NULL_POLICY = contextvars.ContextVar("blosc2_null_policy", default=DEFAULT_NULL_POLICY)
-_CTABLE_PRINT_OPTIONS: dict[str, Any] = {"display_index": False, "display_rows": 100, "display_precision": 6}
+_CTABLE_PRINT_OPTIONS: dict[str, Any] = {"display_index": True, "display_rows": 100, "display_precision": 6}
 _SMALL_SORT_MATERIALIZE_LIMIT = 4096
 
 
