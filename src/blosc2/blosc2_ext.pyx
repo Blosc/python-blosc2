@@ -619,6 +619,8 @@ cdef extern from "b2nd.h":
                        const int64_t *stop)
     int b2nd_from_cbuffer(b2nd_context_t *ctx, b2nd_array_t **array, void *buffer, int64_t buffersize)
     int b2nd_to_cbuffer(b2nd_array_t *array, void *buffer, int64_t buffersize)
+    int b2nd_get_sparse_cbuffer(b2nd_array_t *array, int64_t ncoords, const int64_t *coords,
+                                void *buffer, int64_t buffersize)
     int b2nd_from_cframe(uint8_t *cframe, int64_t cframe_len, c_bool copy, b2nd_array_t ** array);
     int b2nd_to_cframe(const b2nd_array_t *array, uint8_t ** cframe, int64_t *cframe_len,
                        c_bool *needs_free);
@@ -3575,7 +3577,8 @@ cdef class NDArray:
             PyBuffer_Release(&view)
             raise ValueError("destination buffer is smaller than the requested sparse selection")
 
-        rc = blosc2_schunk_get_sparse(self.array.sc, ncoords, <const int64_t *> coords_.data, <void *> view.buf)
+        rc = b2nd_get_sparse_cbuffer(self.array, ncoords, <const int64_t *> coords_.data,
+                                     <void *> view.buf, view.len)
         PyBuffer_Release(&view)
         _check_rc(rc, "Error while getting the sparse selection")
         return arr

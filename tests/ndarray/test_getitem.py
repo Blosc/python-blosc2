@@ -189,6 +189,21 @@ def test_take_sparse_negative_indices():
     np.testing.assert_array_equal(a[idx], npa[idx])
 
 
+def test_take_sparse_structured_non_behaved_partitions():
+    npa = np.empty((100,), dtype=[("a", np.int32), ("b", np.int32)])
+    npa["a"] = np.arange(1, 101)
+    npa["b"] = np.arange(200, 100, -1)
+    a = blosc2.asarray(npa, chunks=(44,), blocks=(33,))
+
+    for idx in [
+        np.arange(2, 100),
+        np.arange(99, 1, -1),
+        np.array([5, 1, 5, 99, 0, 44, 43], dtype=np.int64),
+    ]:
+        np.testing.assert_array_equal(a.take_sparse(idx), npa[idx])
+        np.testing.assert_array_equal(a[idx], npa[idx])
+
+
 @pytest.mark.parametrize(
     ("shape", "chunkshape", "axis", "indices"),
     [
