@@ -99,6 +99,22 @@ def test_where_with_index_matches_scan_in_memory():
     assert ids_idx == ids_scan
 
 
+def test_indexed_where_view_sort_by_reuses_cached_live_positions(monkeypatch):
+    t = _make_table(200)
+    t.create_index("id", kind=blosc2.IndexKind.FULL)
+
+    view = t.where(t["id"] > 100, columns=["id", "value"])
+    assert view._cached_live_positions is not None
+
+    def fail_iter_live_positions_chunks():
+        raise AssertionError("sort_by() should reuse cached live positions")
+
+    monkeypatch.setattr(view, "_iter_live_positions_chunks", fail_iter_live_positions_chunks)
+    sorted_view = view.sort_by("id")
+
+    assert sorted_view["id"][:].tolist() == list(range(101, 200))
+
+
 def test_create_expression_index_in_memory():
     t = _make_table(50)
     idx = t.create_index(expression="value * category", kind=blosc2.IndexKind.FULL, name="vc")
@@ -306,6 +322,33 @@ def test_catalog_survives_reopen(tmpdir):
     assert len(idxs) == 1
     assert idxs[0].col_name == "id"
     assert not idxs[0].stale
+
+
+def test_index_catalog_cached_per_opened_ctable(tmpdir, monkeypatch):
+    path = str(tmpdir / "table.b2d")
+    t = _make_table(200, persistent_path=path)
+    t.create_index("id", kind=blosc2.IndexKind.FULL)
+    del t
+
+    with blosc2.open(path, mode="r") as t2:
+        calls = 0
+        original = t2._storage.load_index_catalog
+
+        def wrapped_load_index_catalog():
+            nonlocal calls
+            calls += 1
+            return original()
+
+        monkeypatch.setattr(t2._storage, "load_index_catalog", wrapped_load_index_catalog)
+
+        first = t2.where(t2["id"] > 100, columns=["id", "value"]).sort_by("id")
+        second = t2.where(t2["id"] > 150, columns=["id", "value"]).sort_by("id")
+        idxs = t2.indexes
+
+        assert first["id"][:].tolist() == list(range(101, 200))
+        assert second["id"][:].tolist() == list(range(151, 200))
+        assert len(idxs) == 1
+        assert calls == 1
 
 
 @pytest.mark.heavy

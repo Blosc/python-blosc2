@@ -2751,12 +2751,19 @@ class CTable(Generic[RowT]):
 
     def _live_positions_from_valid_rows_chunks(self) -> np.ndarray:
         """Return live physical row positions by scanning the validity NDArray chunk-wise."""
+        cached = getattr(self, "_cached_live_positions", None)
+        if cached is not None:
+            return cached
         positions = list(self._iter_live_positions_chunks())
         if not positions:
-            return np.empty(0, dtype=np.intp)
-        if len(positions) == 1:
-            return positions[0]
-        return np.concatenate(positions).astype(np.intp, copy=False)
+            result = np.empty(0, dtype=np.intp)
+        elif len(positions) == 1:
+            result = positions[0]
+        else:
+            result = np.concatenate(positions).astype(np.intp, copy=False)
+        if self.base is not None:
+            self._cached_live_positions = result
+        return result
 
     def __init__(
         self,
@@ -2787,6 +2794,8 @@ class CTable(Generic[RowT]):
         self._computed_cols: dict[str, dict] = {}  # virtual/computed columns
         self._materialized_cols: dict[str, dict] = {}  # stored columns auto-filled from expressions
         self._expr_index_arrays: dict[str, blosc2.NDArray] = {}
+        self._cached_index_catalog: dict | None = None
+        self._cached_live_positions: np.ndarray | None = None
         self._col_widths: dict[str, int] = {}
         self.col_names: list[str] = []
         self.auto_compact = compact
@@ -4403,6 +4412,8 @@ class CTable(Generic[RowT]):
         obj._computed_cols = parent._computed_cols  # shared — LazyExpr refs remain valid
         obj._materialized_cols = parent._materialized_cols
         obj._expr_index_arrays = parent._expr_index_arrays
+        obj._cached_index_catalog = None
+        obj._cached_live_positions = None
         obj._col_widths = parent._col_widths
         obj.col_names = parent.col_names
         obj.auto_compact = parent.auto_compact
@@ -4562,6 +4573,8 @@ class CTable(Generic[RowT]):
             name: dict(self._materialized_cols[name]) for name in cols if name in self._materialized_cols
         }
         obj._expr_index_arrays = self._expr_index_arrays
+        obj._cached_index_catalog = None
+        obj._cached_live_positions = getattr(self, "_cached_live_positions", None)
 
         # Computed columns — share the same definitions (LazyExpr refs remain valid)
         obj._computed_cols = {
@@ -6934,12 +6947,13 @@ class CTable(Generic[RowT]):
                 + ". Drop those columns first."
             )
 
-        catalog = self._storage.load_index_catalog()
+        catalog = self._get_index_catalog()
         if name in catalog:
             descriptor = catalog.pop(name)
             self._validate_index_descriptor(name, descriptor)
             self._drop_index_descriptor(name, descriptor)
             self._storage.save_index_catalog(catalog)
+            self._invalidate_index_catalog_cache()
 
         if isinstance(self._storage, FileTableStorage):
             self._storage.delete_column(name)
@@ -7010,7 +7024,7 @@ class CTable(Generic[RowT]):
                 + ". Drop those computed columns first."
             )
 
-        catalog = self._storage.load_index_catalog()
+        catalog = self._get_index_catalog()
         rebuild_kwargs = None
         if old in catalog:
             descriptor = catalog.pop(old)
@@ -7018,6 +7032,7 @@ class CTable(Generic[RowT]):
             rebuild_kwargs = self._index_create_kwargs_from_descriptor(descriptor)
             self._drop_index_descriptor(old, descriptor)
             self._storage.save_index_catalog(catalog)
+            self._invalidate_index_catalog_cache()
 
         if isinstance(self._storage, FileTableStorage):
             self._cols[new] = self._storage.rename_column(old, new)
@@ -8282,7 +8297,7 @@ class CTable(Generic[RowT]):
         queries and is much slower for full-table streaming.
         """
         root = self._root_table
-        catalog = root._storage.load_index_catalog()
+        catalog = root._get_index_catalog()
         descriptor = None
 
         if name in root._cols:
@@ -8832,11 +8847,22 @@ class CTable(Generic[RowT]):
             t = t.base
         return t
 
+    def _invalidate_index_catalog_cache(self) -> None:
+        self._root_table._cached_index_catalog = None
+
+    def _get_index_catalog(self) -> dict:
+        root = self._root_table
+        catalog = getattr(root, "_cached_index_catalog", None)
+        if catalog is None:
+            catalog = root._storage.load_index_catalog()
+            root._cached_index_catalog = catalog
+        return catalog
+
     def _mark_all_indexes_stale(self) -> None:
         """Bump value_epoch and mark every catalog entry stale on the root table."""
         root = self._root_table
         root._storage.bump_value_epoch()
-        catalog = root._storage.load_index_catalog()
+        catalog = root._get_index_catalog()
         if not catalog:
             return
         changed = False
@@ -8846,6 +8872,7 @@ class CTable(Generic[RowT]):
                 changed = True
         if changed:
             root._storage.save_index_catalog(catalog)
+            root._invalidate_index_catalog_cache()
 
     @staticmethod
     def _validate_index_descriptor(col_name: str, descriptor: dict) -> None:
@@ -9039,7 +9066,7 @@ class CTable(Generic[RowT]):
         self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
     ) -> tuple[str, dict]:
         """Resolve an index catalog entry by column, expression, or label."""
-        catalog = self._root_table._storage.load_index_catalog()
+        catalog = self._root_table._get_index_catalog()
         if col_name is not None and expression is not None:
             raise ValueError("col_name and expression are mutually exclusive")
         if col_name is not None:
@@ -9299,7 +9326,7 @@ class CTable(Generic[RowT]):
         method_str = _normalize_full_build_method(method) if kind_str == "full" else None
         if method is not None and kind_str != "full":
             raise ValueError("method is only supported for kind=IndexKind.FULL")
-        catalog = self._storage.load_index_catalog()
+        catalog = self._get_index_catalog()
 
         if expression is not None:
             target, dtype = self._normalize_table_expression_target(expression, operands)
@@ -9335,6 +9362,7 @@ class CTable(Generic[RowT]):
             descriptor["built_value_epoch"] = value_epoch
             catalog[token] = descriptor
             self._storage.save_index_catalog(catalog)
+            self._invalidate_index_catalog_cache()
             return blosc2.Index._from_table(self, token, descriptor)
 
         if col_name is None:
@@ -9407,9 +9435,10 @@ class CTable(Generic[RowT]):
         value_epoch, _ = self._storage.get_epoch_counters()
         descriptor["built_value_epoch"] = value_epoch
 
-        catalog = self._storage.load_index_catalog()
+        catalog = self._get_index_catalog()
         catalog[col_name] = descriptor
         self._storage.save_index_catalog(catalog)
+        self._invalidate_index_catalog_cache()
         return blosc2.Index._from_table(self, col_name, descriptor)
 
     def drop_index(
@@ -9422,11 +9451,12 @@ class CTable(Generic[RowT]):
         lookup_key, descriptor = self._resolve_index_catalog_entry(
             col_name, expression=expression, name=name
         )
-        catalog = self._storage.load_index_catalog()
+        catalog = self._get_index_catalog()
         catalog.pop(lookup_key, None)
         self._validate_index_descriptor(lookup_key, descriptor)
         self._drop_index_descriptor(lookup_key, descriptor)
         self._storage.save_index_catalog(catalog)
+        self._invalidate_index_catalog_cache()
 
     def rebuild_index(
         self, col_name: str | None = None, *, expression: str | None = None, name: str | None = None
@@ -9465,7 +9495,7 @@ class CTable(Generic[RowT]):
             col_name, expression=expression, name=name
         )
         col_arr = self._index_target_array(lookup_key, descriptor)
-        catalog = self._storage.load_index_catalog()
+        catalog = self._get_index_catalog()
 
         if _is_persistent_array(col_arr):
             anchor = self._storage.index_anchor_path(lookup_key)
@@ -9483,6 +9513,7 @@ class CTable(Generic[RowT]):
             updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
             catalog[lookup_key] = updated_desc
             self._storage.save_index_catalog(catalog)
+            self._invalidate_index_catalog_cache()
             return blosc2.Index._from_table(self, lookup_key, updated_desc)
         else:
             _ix_compact_index(col_arr)
@@ -9493,6 +9524,7 @@ class CTable(Generic[RowT]):
                 updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
                 catalog[lookup_key] = updated_desc
                 self._storage.save_index_catalog(catalog)
+                self._invalidate_index_catalog_cache()
                 return blosc2.Index._from_table(self, lookup_key, updated_desc)
             return blosc2.Index._from_table(self, lookup_key, descriptor)
 
@@ -9508,7 +9540,7 @@ class CTable(Generic[RowT]):
     @property
     def indexes(self) -> list[blosc2.Index]:
         """Return a list of :class:`blosc2.Index` handles for all active indexes."""
-        catalog = self._root_table._storage.load_index_catalog()
+        catalog = self._root_table._get_index_catalog()
         return [blosc2.Index._from_table(self, col_name, desc) for col_name, desc in catalog.items()]
 
     def _rewrite_expression_query_for_index(
@@ -9672,7 +9704,7 @@ class CTable(Generic[RowT]):
         )
 
         root = self._root_table
-        catalog = root._storage.load_index_catalog()
+        catalog = root._get_index_catalog()
         if not catalog:
             return None
 
@@ -10411,7 +10443,9 @@ class CTable(Generic[RowT]):
                 valid_pos = positions[(positions >= 0) & (positions < total)]
                 mask[valid_pos] = True
                 mask &= self._valid_rows[:]
+                valid_pos = np.flatnonzero(mask).astype(np.intp, copy=False)
                 result = self.view(blosc2.asarray(mask))
+                result._cached_live_positions = valid_pos
                 return result if columns is None else result.select(list(columns))
 
         target_len = len(self._valid_rows)
