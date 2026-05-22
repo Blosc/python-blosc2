@@ -9550,18 +9550,28 @@ class CTable(Generic[RowT]):
         return mask
 
     @staticmethod
-    def _evaluate_expression_at(expr_result, candidates):
+    def _evaluate_expression_at(expr_result, candidates, *, prefetched: dict | None = None):
         """Evaluate *expr_result* on the operand rows at *candidates*.
 
         Returns a boolean ``numpy.ndarray`` the same length as *candidates*,
         or ``None`` if evaluation fails.
+
+        Parameters
+        ----------
+        prefetched:
+            Optional dict mapping operand variable names to already-gathered
+            NumPy arrays.  When provided, those operands are reused instead of
+            re-read from storage.
         """
         try:
             operands = {}
             for var_name, arr in expr_result.operands.items():
-                sliced = arr[candidates]
-                if hasattr(sliced, "__array__"):
-                    sliced = np.asarray(sliced)
+                if prefetched is not None and var_name in prefetched:
+                    sliced = prefetched[var_name]
+                else:
+                    sliced = arr[candidates]
+                    if hasattr(sliced, "__array__"):
+                        sliced = np.asarray(sliced)
                 operands[var_name] = sliced
             return blosc2.evaluate(expr_result.expression, operands)
         except Exception:
@@ -9691,12 +9701,45 @@ class CTable(Generic[RowT]):
             # sequential miniexpr scan, which is very fast for simple predicates.
             # Keep this intentionally conservative until sparse gathers become
             # cheaper or the planner has a richer cost model.
-            max_sparse_refine_candidates = 1024
+            max_sparse_refine_candidates = 10240
             candidates = np.asarray(plan.partial_exact_positions, dtype=np.int64)
             if len(candidates) > max_sparse_refine_candidates:
                 return None
-            candidates = _exclude_null_positions(candidates)
-            restricted = self._evaluate_expression_at(expr_result, candidates)
+
+            # Read the primary column once and reuse for both null filtering
+            # and refinement, avoiding a second sparse gather later.
+            primary_op_name = next(
+                (vn for vn, va in expr_result.operands.items() if va is primary_col_arr), None
+            )
+            prefetched = None
+            if nullable_indexed and primary_op_name is not None:
+                raw = primary_col_arr[candidates]
+                raw = np.asarray(raw) if hasattr(raw, "__array__") else raw
+                pos = candidates
+                for name in nullable_indexed:
+                    if name == primary_col_name:
+                        nv = getattr(root._schema.columns_by_name[name].spec, "null_value", None)
+                        if isinstance(nv, float) and np.isnan(nv):
+                            keep = ~np.isnan(raw)
+                        else:
+                            keep = raw != nv
+                        pos = pos[keep]
+                        raw = raw[keep]  # already filtered for refinement reuse
+                    else:
+                        col = root._schema.columns_by_name[name]
+                        vals = root._cols[name][pos]
+                        nv = getattr(col.spec, "null_value", None)
+                        if isinstance(nv, float) and np.isnan(nv):
+                            keep = ~np.isnan(vals)
+                        else:
+                            keep = vals != nv
+                        pos = pos[keep]
+                candidates = pos
+                prefetched = {primary_op_name: raw}
+            else:
+                candidates = _exclude_null_positions(candidates)
+
+            restricted = self._evaluate_expression_at(expr_result, candidates, prefetched=prefetched)
             if restricted is not None and restricted.dtype == np.bool_:
                 refined = candidates[np.asarray(restricted, dtype=bool)]
                 return _exclude_null_positions(refined)
