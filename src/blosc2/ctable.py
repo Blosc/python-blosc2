@@ -180,7 +180,9 @@ _CTABLE_PRINT_OPTIONS: dict[str, Any] = {
     "display_precision": 6,
     "fancy": False,
 }
-_SMALL_SORT_MATERIALIZE_LIMIT = 50_000_000
+_SMALL_NROWS_LIMIT = 50_000_000
+_SMALL_SORT_MATERIALIZE_LIMIT = _SMALL_NROWS_LIMIT
+_WHERE_NUMPY_MASK_LIMIT = _SMALL_NROWS_LIMIT
 
 
 def get_null_policy() -> NullPolicy:
@@ -5496,6 +5498,21 @@ class CTable(Generic[RowT]):
         return None
 
     @classmethod
+    def _trim_arrow_import_capacity(cls, obj, columns, new_cols, new_valid, n_rows: int) -> None:
+        """Shrink append-only Arrow-import columns from capacity to actual row count."""
+        if n_rows <= 0 or len(new_valid) == n_rows:
+            return
+        for col in columns:
+            if cls._is_list_column(col) or cls._is_varlen_scalar_column(col):
+                continue
+            if cls._is_dictionary_column(col):
+                new_cols[col.name].resize((n_rows,))
+            else:
+                new_cols[col.name].resize(cls._column_physical_shape(col, n_rows))
+        new_valid.resize((n_rows,))
+        new_valid[:] = True
+
+    @classmethod
     def _write_arrow_batches(cls, obj, batches, columns, new_cols, new_valid) -> None:
         pos = 0
         list_normalizers = {
@@ -5516,6 +5533,7 @@ class CTable(Generic[RowT]):
                 or cls._is_dictionary_column(col)
             ):
                 new_cols[col.name].flush()
+        cls._trim_arrow_import_capacity(obj, columns, new_cols, new_valid, pos)
         obj._n_rows = pos
         obj._last_pos = pos
 
@@ -10378,7 +10396,16 @@ class CTable(Generic[RowT]):
         all_rows_valid = known_n_rows == target_len
         filter_intersected = False
 
-        filter = expr_result.compute() if isinstance(expr_result, blosc2.LazyExpr) else expr_result
+        # For moderately-sized boolean filters, prefer a NumPy materialization.
+        # LazyExpr.compute() creates a compressed NDArray and a non-compacted table
+        # still needs a second pass to intersect it with _valid_rows.  Evaluating to
+        # NumPy lets us do that intersection in-memory and only compress the final
+        # mask once in view().  Above the threshold, keep the compressed path so peak
+        # memory does not scale too aggressively with the column size.
+        if isinstance(expr_result, blosc2.LazyExpr):
+            filter = expr_result[:] if target_len <= _WHERE_NUMPY_MASK_LIMIT else expr_result.compute()
+        else:
+            filter = expr_result
 
         if getattr(filter, "ndim", 1) != 1:
             raise ValueError(
@@ -10404,7 +10431,10 @@ class CTable(Generic[RowT]):
                 filter_intersected = False
 
         if not filter_intersected and not all_rows_valid:
-            filter = (filter & self._valid_rows).compute()
+            if isinstance(filter, np.ndarray):
+                filter &= self._valid_rows[:]
+            else:
+                filter = (filter & self._valid_rows).compute()
 
         result = self.view(filter)
         return result if columns is None else result.select(list(columns))
