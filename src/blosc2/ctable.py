@@ -180,7 +180,7 @@ _CTABLE_PRINT_OPTIONS: dict[str, Any] = {
     "display_precision": 6,
     "fancy": False,
 }
-_SMALL_SORT_MATERIALIZE_LIMIT = 4096
+_SMALL_SORT_MATERIALIZE_LIMIT = 50_000_000
 
 
 def get_null_policy() -> NullPolicy:
@@ -9664,7 +9664,7 @@ class CTable(Generic[RowT]):
         # the upcoming query always loads the correct sidecar for this column.
         from blosc2.indexing import _clear_cached_data
 
-        for _col_name, col_arr, descriptor in indexed_columns:
+        for _col_name, col_arr, descriptor in indexed_columns[:1]:
             arr_key = _array_key(col_arr)
             if _is_persistent_array(col_arr):
                 store = _PERSISTENT_INDEXES.get(arr_key) or _default_index_store()
