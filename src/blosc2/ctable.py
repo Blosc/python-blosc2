@@ -183,6 +183,7 @@ _CTABLE_PRINT_OPTIONS: dict[str, Any] = {
 _SMALL_NROWS_LIMIT = 50_000_000
 _SMALL_SORT_MATERIALIZE_LIMIT = _SMALL_NROWS_LIMIT
 _WHERE_NUMPY_MASK_LIMIT = _SMALL_NROWS_LIMIT
+_MAX_GROWTH_ROWS = 1_048_576
 
 
 def get_null_policy() -> NullPolicy:
@@ -2864,6 +2865,8 @@ class CTable(Generic[RowT]):
         storage = getattr(self, "_storage", None)
         try:
             self._flush_varlen_columns()
+            if not self._read_only and self.base is None:
+                self.trim_capacity()
         except Exception:
             with contextlib.suppress(Exception):
                 if storage is not None and hasattr(storage, "close"):
@@ -3305,18 +3308,47 @@ class CTable(Generic[RowT]):
         self._last_pos = last_true_pos + 1
         return self._last_pos
 
-    def _grow(self) -> None:
-        """Double the scalar-column capacity and the valid_rows mask."""
-        c = len(self._valid_rows)
+    def trim_capacity(self) -> None:
+        """Shrink fixed-width physical storage to the last live row position.
+
+        This removes unused append capacity while preserving holes left by deletes
+        before the last live row.  List and variable-length scalar columns already
+        grow to their logical length and are left untouched.
+        """
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
+        if self.base is not None:
+            raise ValueError("Cannot trim capacity of a view.")
+
+        target = self._resolve_last_pos()
+        if target <= 0 or target >= len(self._valid_rows):
+            return
+
         for name, col_arr in self._cols.items():
             cc = self._schema.columns_by_name[name]
             if self._is_list_column(cc) or self._is_varlen_scalar_column(cc):
                 continue
             if self._is_dictionary_column(cc):
-                col_arr.resize((c * 2,))
+                col_arr.resize((target,))
                 continue
-            col_arr.resize(self._column_physical_shape(cc, c * 2))
-        self._valid_rows.resize((c * 2,))
+            col_arr.resize(self._column_physical_shape(cc, target))
+        self._valid_rows.resize((target,))
+        self._last_pos = target
+
+    def _grow(self) -> None:
+        """Grow scalar-column capacity and the valid_rows mask by one table chunk."""
+        c = len(self._valid_rows)
+        growth_rows = min(c, _MAX_GROWTH_ROWS)
+        new_capacity = c + growth_rows
+        for name, col_arr in self._cols.items():
+            cc = self._schema.columns_by_name[name]
+            if self._is_list_column(cc) or self._is_varlen_scalar_column(cc):
+                continue
+            if self._is_dictionary_column(cc):
+                col_arr.resize((new_capacity,))
+                continue
+            col_arr.resize(self._column_physical_shape(cc, new_capacity))
+        self._valid_rows.resize((new_capacity,))
 
     # ------------------------------------------------------------------
     # Display
@@ -5498,19 +5530,10 @@ class CTable(Generic[RowT]):
         return None
 
     @classmethod
-    def _trim_arrow_import_capacity(cls, obj, columns, new_cols, new_valid, n_rows: int) -> None:
+    def _trim_arrow_import_capacity(cls, obj, n_rows: int) -> None:
         """Shrink append-only Arrow-import columns from capacity to actual row count."""
-        if n_rows <= 0 or len(new_valid) == n_rows:
-            return
-        for col in columns:
-            if cls._is_list_column(col) or cls._is_varlen_scalar_column(col):
-                continue
-            if cls._is_dictionary_column(col):
-                new_cols[col.name].resize((n_rows,))
-            else:
-                new_cols[col.name].resize(cls._column_physical_shape(col, n_rows))
-        new_valid.resize((n_rows,))
-        new_valid[:] = True
+        obj._last_pos = n_rows
+        obj.trim_capacity()
 
     @classmethod
     def _write_arrow_batches(cls, obj, batches, columns, new_cols, new_valid) -> None:
@@ -5533,7 +5556,7 @@ class CTable(Generic[RowT]):
                 or cls._is_dictionary_column(col)
             ):
                 new_cols[col.name].flush()
-        cls._trim_arrow_import_capacity(obj, columns, new_cols, new_valid, pos)
+        cls._trim_arrow_import_capacity(obj, pos)
         obj._n_rows = pos
         obj._last_pos = pos
 
