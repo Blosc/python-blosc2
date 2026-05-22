@@ -464,6 +464,29 @@ class LazyArray(ABC, blosc2.Operand):
               failures are raised instead of silently falling back to regular chunked eval
               for non-DSL expressions.
 
+            - ``jit`` (bool | None): enable (``True``) or disable (``False``) JIT compilation
+              of the expression via miniexpr.  When ``None`` (default), JIT is only used
+              for DSL kernels; plain expressions are evaluated by the bytecode interpreter.
+              Setting ``jit=True`` forces auto-lift of plain expressions into JIT-compiled
+              kernels.
+
+            - ``jit_backend`` (str | None): select the JIT compiler backend.  Valid
+              values are ``"tcc"`` (bundled Tiny C Compiler) and ``"cc"`` (system C
+              compiler, e.g. gcc or clang).  ``None`` (default) defers to the miniexpr
+              default (``"tcc"``).
+
+            - ``BLOSC_ME_JIT`` environment variable: when set to ``"1"``, ``"true"``,
+              ``"on"``, ``"tcc"``, or ``"cc"``, it forces ``jit=True`` for all
+              ``compute()`` and ``__getitem__`` calls where ``jit`` is not explicitly
+              passed.  Setting it to ``"tcc"`` or ``"cc"`` also selects that backend
+              unless ``jit_backend`` is given explicitly.
+
+            - ``BLOSC_ME_JIT_TRACE`` environment variable: when set to ``"1"``,
+              ``"true"``, or ``"on"``, prints a one-line diagnostic to stdout
+              showing which compute engine was selected (``miniexpr`` or
+              ``ne_evaluate``), the JIT mode and backend if applicable, and the
+              expression being evaluated.
+
         Returns
         -------
         out: :ref:`NDArray`
@@ -662,6 +685,21 @@ def compute_broadcast_shape(arrays):
     # When dealing with UDFs, one can arrive params that are not arrays
     shapes = [arr.shape for arr in arrays if hasattr(arr, "shape") and arr is not np]
     return np.broadcast_shapes(*shapes) if shapes else None
+
+
+def _jit_from_env(jit, jit_backend):
+    """Apply BLOSC_ME_JIT environment variable to jit/jit_backend defaults."""
+    if jit is not None:
+        return jit, jit_backend
+    env_jit = os.environ.get("BLOSC_ME_JIT", "")
+    if not env_jit:
+        return jit, jit_backend
+    env_jit_lower = env_jit.lower()
+    if env_jit_lower in ("1", "true", "on", "tcc", "cc"):
+        jit = True
+    if jit_backend is None and env_jit_lower in ("tcc", "cc"):
+        jit_backend = env_jit_lower
+    return jit, jit_backend
 
 
 # Define the patterns for validation
@@ -1578,6 +1616,14 @@ def fast_eval(  # noqa: C901
 
     if is_dsl and not use_miniexpr:
         _raise_dsl_miniexpr_required(dsl_disable_reason)
+
+    if os.environ.get("BLOSC_ME_JIT_TRACE", "").lower() in ("1", "true", "on"):
+        engine = (
+            "miniexpr" if use_miniexpr else ("ne_evaluate" if isinstance(expr_string, str) else "python-udf")
+        )
+        jit_info = f"jit={jit}, backend={jit_backend}" if use_miniexpr else ""
+        expr_short = str(expr_string)[:120].replace("\n", " ")
+        print(f"[blosc2] engine={engine} {jit_info} expr={expr_short}", flush=True)
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
@@ -3941,6 +3987,7 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
         kwargs.setdefault("fp_accuracy", fp_accuracy)
+        jit, jit_backend = _jit_from_env(jit, jit_backend)
         if jit is not None:
             kwargs["jit"] = jit
         if jit_backend is not None:
