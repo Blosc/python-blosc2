@@ -1585,7 +1585,7 @@ class Column:
                     target_codes.add(dc.value_to_code(v))
         if not target_codes:
             return np.zeros(len(live_pos), dtype=bool)
-        live_codes = np.asarray(dc.codes[live_pos], dtype=np.int32)
+        live_codes = dc.codes[live_pos]
         mask = np.zeros(len(live_codes), dtype=bool)
         for code in target_codes:
             mask |= live_codes == np.int32(code)
@@ -4101,7 +4101,7 @@ class CTable(Generic[RowT]):
                 disk_dc.flush()
                 # Copy live codes
                 if n_live > 0:
-                    raw_codes = np.asarray(src_dc.codes[live_pos], dtype=np.int32)
+                    raw_codes = src_dc.codes[live_pos]
                     disk_dc.codes[:n_live] = raw_codes
                 continue
             shape = self._column_physical_shape(col, capacity)
@@ -4928,7 +4928,7 @@ class CTable(Generic[RowT]):
                             pa.DictionaryArray.from_arrays(pa_indices, pa_dict, ordered=spec.ordered)
                         )
                     else:
-                        raw_codes = np.asarray(dc.codes[batch_real_pos], dtype=np.int32)
+                        raw_codes = dc.codes[batch_real_pos]
                         null_mask = raw_codes == np.int32(spec.null_code)
                         safe_codes = raw_codes.copy()
                         safe_codes[null_mask] = 0
@@ -8155,7 +8155,7 @@ class CTable(Generic[RowT]):
                 continue
             if self._is_dictionary_column(col):
                 # Keep dictionary values intact; just compact the codes.
-                live_codes = np.asarray(v.codes[real_poss[: self._n_rows]], dtype=np.int32)
+                live_codes = v.codes[real_poss[: self._n_rows]]
                 v.codes[: self._n_rows] = live_codes
                 continue
             start = 0
@@ -8451,7 +8451,7 @@ class CTable(Generic[RowT]):
         for col in self._schema.columns:
             arr = self._cols[col.name]
             if self._is_dictionary_column(col):
-                gathered[col.name] = np.asarray(arr.codes[live_pos], dtype=np.int32)
+                gathered[col.name] = arr.codes[live_pos]
             else:
                 gathered[col.name] = arr[live_pos]
 
@@ -8507,7 +8507,7 @@ class CTable(Generic[RowT]):
                 new_arr.flush()
                 self._cols[col.name] = new_arr
             elif self._is_dictionary_column(col):
-                sorted_codes = np.asarray(arr.codes[sorted_pos], dtype=np.int32)
+                sorted_codes = arr.codes[sorted_pos]
                 arr.codes[:n] = sorted_codes
             else:
                 arr[:n] = arr[sorted_pos]
@@ -8530,7 +8530,7 @@ class CTable(Generic[RowT]):
                 # Copy dictionary values, then sorted codes.
                 for v in arr.dictionary:
                     result._cols[col_name].encode(v)
-                sorted_codes = np.asarray(arr.codes[sorted_pos], dtype=np.int32)
+                sorted_codes = arr.codes[sorted_pos]
                 result._cols[col_name].codes[:n] = sorted_codes
             else:
                 result._cols[col_name][:n] = arr[sorted_pos]
@@ -8614,7 +8614,7 @@ class CTable(Generic[RowT]):
                 for v in arr.dictionary:
                     result._cols[col_name].encode(v)
                 pos_slice = live_pos if compact else np.arange(n, dtype=np.int64)
-                raw_codes = np.asarray(arr.codes[pos_slice], dtype=np.int32)
+                raw_codes = arr.codes[pos_slice]
                 result._cols[col_name].codes[:n] = raw_codes
             else:
                 result._cols[col_name][:n] = arr[live_pos] if compact else arr[:n]
