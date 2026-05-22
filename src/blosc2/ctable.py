@@ -4425,6 +4425,23 @@ class CTable(Generic[RowT]):
         obj._last_pos = None
         return obj
 
+    def _view_from_positions(self, positions: np.ndarray) -> CTable:
+        """Return a row-filter view from physical row positions."""
+        positions = np.asarray(positions, dtype=np.intp)
+        total = len(self._valid_rows)
+        if len(positions):
+            positions = positions[(positions >= 0) & (positions < total)]
+        if len(positions) and self._known_n_rows() != total:
+            keep = np.asarray(self._valid_rows[positions], dtype=bool)
+            positions = positions[keep]
+        mask = np.zeros(total, dtype=np.bool_)
+        if len(positions):
+            mask[positions] = True
+        result = CTable._make_view(self, blosc2.asarray(mask))
+        result._cached_live_positions = positions
+        result._n_rows = len(positions)
+        return result
+
     def view(self, new_valid_rows):
         """Return a row-filter view backed by a boolean mask array without copying data."""
         if isinstance(new_valid_rows, np.ndarray) and new_valid_rows.dtype == np.bool_:
@@ -10438,14 +10455,7 @@ class CTable(Generic[RowT]):
         if isinstance(expr_result, blosc2.LazyExpr):
             positions = self._try_index_where(expr_result)
             if positions is not None:
-                total = len(self._valid_rows)
-                mask = np.zeros(total, dtype=bool)
-                valid_pos = positions[(positions >= 0) & (positions < total)]
-                mask[valid_pos] = True
-                mask &= self._valid_rows[:]
-                valid_pos = np.flatnonzero(mask).astype(np.intp, copy=False)
-                result = self.view(blosc2.asarray(mask))
-                result._cached_live_positions = valid_pos
+                result = self._view_from_positions(positions)
                 return result if columns is None else result.select(list(columns))
 
         target_len = len(self._valid_rows)
