@@ -171,6 +171,24 @@ def test_ndarray(dtype):
     np.testing.assert_almost_equal(a_slice, na_slice)
 
 
+def test_take_sparse_matches_numpy(tmp_path):
+    npa = np.arange(1000, dtype=np.int32)
+    a = blosc2.asarray(npa, chunks=(128,), urlpath=tmp_path / "take_sparse.b2nd", mode="w")
+    idx = np.array([999, 998, 997, 997, 500, 129, 128, 127, 126, 33, 32, 31, 31, 0], dtype=np.int64)
+
+    np.testing.assert_array_equal(a.take_sparse(idx), npa[idx])
+    np.testing.assert_array_equal(a[idx], npa[idx])
+
+
+def test_take_sparse_negative_indices():
+    npa = np.arange(20, dtype=np.int32)
+    a = blosc2.asarray(npa, chunks=(8,))
+    idx = np.array([-1, -5, 0, 3], dtype=np.int64)
+
+    np.testing.assert_array_equal(a.take_sparse(idx), npa[idx])
+    np.testing.assert_array_equal(a[idx], npa[idx])
+
+
 @pytest.mark.parametrize(
     ("shape", "chunkshape", "axis", "indices"),
     [

@@ -113,6 +113,30 @@ ufunc_map_1param = {
 }
 
 
+def normalize_1d_sparse_indices(key, size: int) -> np.ndarray | None:
+    if isinstance(key, list):
+        indices = np.asarray(key)
+    elif isinstance(key, np.ndarray):
+        indices = key
+    else:
+        return None
+
+    if indices.ndim != 1 or not np.issubdtype(indices.dtype, np.integer):
+        return None
+
+    indices = np.ascontiguousarray(indices, dtype=np.int64)
+    if len(indices) == 0:
+        return indices
+
+    negative = indices < 0
+    if np.any(negative):
+        indices = indices.copy()
+        indices[negative] += size
+    if np.any((indices < 0) | (indices >= size)):
+        raise IndexError("index out of bounds for axis 0")
+    return indices
+
+
 @runtime_checkable
 class Array(Protocol):
     """
@@ -4312,6 +4336,18 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 out = super().set_slice((locstart, locstop), chunk)  # load updated partial chunk into array
         return out
 
+    def take_sparse(self, indices: list[int] | np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
+        if self.ndim != 1:
+            raise ValueError("take_sparse is only supported for 1-D arrays")
+        indices = normalize_1d_sparse_indices(indices, self.shape[0])
+        if indices is None:
+            raise TypeError("take_sparse only supports 1-D integer index arrays")
+        return self._take_sparse_normalized(indices, out)
+
+    def _take_sparse_normalized(self, indices: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
+        out = np.empty(indices.shape, dtype=self.dtype) if out is None else out
+        return super().get_1d_sparse_numpy(out, indices)
+
     def __getitem__(
         self,
         key: None
@@ -4380,6 +4416,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         key = key[()] if isinstance(key, NDArray) else key  # key not iterable
         key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
+
+        sparse_indices = normalize_1d_sparse_indices(key, self.shape[0]) if self.ndim == 1 else None
+        if sparse_indices is not None:
+            return self._take_sparse_normalized(sparse_indices)
 
         # decompress NDArrays
         key_, mask = process_key(key, self.shape)  # internally handles key an integer

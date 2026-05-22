@@ -494,6 +494,7 @@ cdef extern from "blosc2.h":
     int blosc2_schunk_get_vlblock(blosc2_schunk *schunk, int64_t nchunk, int32_t nblock,
                                   uint8_t **dest, int32_t *destsize)
     int blosc2_schunk_get_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
+    int blosc2_schunk_get_sparse(blosc2_schunk *schunk, int64_t ncoords, const int64_t *coords, void *buffer)
     int blosc2_schunk_set_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
     int blosc2_schunk_get_cparams(blosc2_schunk *schunk, blosc2_cparams** cparams)
     int blosc2_schunk_get_dparams(blosc2_schunk *schunk, blosc2_dparams** dparams)
@@ -3558,6 +3559,25 @@ cdef class NDArray:
         if rc < 0:
             raise RuntimeError("Error while decoding the requested span")
 
+        return arr
+
+    def get_1d_sparse_numpy(self, arr, coords):
+        if self.ndim != 1:
+            raise ValueError("get_1d_sparse_numpy is only supported for 1-D arrays")
+
+        cdef np.ndarray[np.int64_t, ndim=1, mode="c"] coords_ = np.ascontiguousarray(coords, dtype=np.int64)
+        cdef Py_buffer view
+        cdef int64_t ncoords = coords_.shape[0]
+        cdef int rc
+
+        PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
+        if view.len < ncoords * self.array.sc.typesize:
+            PyBuffer_Release(&view)
+            raise ValueError("destination buffer is smaller than the requested sparse selection")
+
+        rc = blosc2_schunk_get_sparse(self.array.sc, ncoords, <const int64_t *> coords_.data, <void *> view.buf)
+        PyBuffer_Release(&view)
+        _check_rc(rc, "Error while getting the sparse selection")
         return arr
 
     def get_oindex_numpy(self, arr, key):
