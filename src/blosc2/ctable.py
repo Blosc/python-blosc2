@@ -8775,6 +8775,14 @@ class CTable(Generic[RowT]):
     # Index management
     # ------------------------------------------------------------------
 
+    # Cost-model constants for cross-column index refinement.
+    # Calibrated from profiling with sparse-gather optimisations.
+    #   _GATHER_COST_MS_PER_1K_ITEMS_PER_OP  ≈ ms to sparse-gather 1000 items from one operand column
+    #   _SCAN_COST_MS_PER_1M_ROWS             ≈ ms to miniexpr-scan 1 million rows
+    # If refinement cost exceeds scan cost, fall back to a full scan.
+    _GATHER_COST_MS_PER_1K_ITEMS_PER_OP: float = 3.5
+    _SCAN_COST_MS_PER_1M_ROWS: float = 4.3
+
     @property
     def _root_table(self) -> CTable:
         """Return the root (non-view) table; *self* if not a view."""
@@ -9699,11 +9707,17 @@ class CTable(Generic[RowT]):
             # candidate positions using sparse/fancy indexing.  For compressed
             # columns this can touch many chunks and be slower than the regular
             # sequential miniexpr scan, which is very fast for simple predicates.
-            # Keep this intentionally conservative until sparse gathers become
-            # cheaper or the planner has a richer cost model.
-            max_sparse_refine_candidates = 10240
+            # Use a cost model to compare refinement vs full scan.
             candidates = np.asarray(plan.partial_exact_positions, dtype=np.int64)
-            if len(candidates) > max_sparse_refine_candidates:
+            n_candidates = len(candidates)
+            n_operands = len(expr_result.operands)
+            target_len = len(root._valid_rows)
+
+            estimated_refine_ms = (
+                (n_candidates / 1000.0) * CTable._GATHER_COST_MS_PER_1K_ITEMS_PER_OP * n_operands
+            )
+            estimated_scan_ms = (target_len / 1_000_000.0) * CTable._SCAN_COST_MS_PER_1M_ROWS
+            if estimated_refine_ms > estimated_scan_ms:
                 return None
 
             # Read the primary column once and reuse for both null filtering
