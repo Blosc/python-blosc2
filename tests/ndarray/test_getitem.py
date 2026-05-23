@@ -171,25 +171,25 @@ def test_ndarray(dtype):
     np.testing.assert_almost_equal(a_slice, na_slice)
 
 
-def test_take_sparse_matches_numpy(tmp_path):
+def test_take_1d_uses_sparse_path_matches_numpy(tmp_path):
     npa = np.arange(1000, dtype=np.int32)
     a = blosc2.asarray(npa, chunks=(128,), urlpath=tmp_path / "take_sparse.b2nd", mode="w")
     idx = np.array([999, 998, 997, 997, 500, 129, 128, 127, 126, 33, 32, 31, 31, 0], dtype=np.int64)
 
-    np.testing.assert_array_equal(a.take_sparse(idx), npa[idx])
+    np.testing.assert_array_equal(a.take(idx)[()], npa[idx])
     np.testing.assert_array_equal(a[idx], npa[idx])
 
 
-def test_take_sparse_negative_indices():
+def test_take_1d_sparse_path_negative_indices():
     npa = np.arange(20, dtype=np.int32)
     a = blosc2.asarray(npa, chunks=(8,))
     idx = np.array([-1, -5, 0, 3], dtype=np.int64)
 
-    np.testing.assert_array_equal(a.take_sparse(idx), npa[idx])
+    np.testing.assert_array_equal(a.take(idx)[()], npa[idx])
     np.testing.assert_array_equal(a[idx], npa[idx])
 
 
-def test_take_sparse_structured_non_behaved_partitions():
+def test_take_1d_sparse_path_structured_non_behaved_partitions():
     npa = np.empty((100,), dtype=[("a", np.int32), ("b", np.int32)])
     npa["a"] = np.arange(1, 101)
     npa["b"] = np.arange(200, 100, -1)
@@ -200,8 +200,56 @@ def test_take_sparse_structured_non_behaved_partitions():
         np.arange(99, 1, -1),
         np.array([5, 1, 5, 99, 0, 44, 43], dtype=np.int64),
     ]:
-        np.testing.assert_array_equal(a.take_sparse(idx), npa[idx])
+        np.testing.assert_array_equal(a.take(idx)[()], npa[idx])
         np.testing.assert_array_equal(a[idx], npa[idx])
+
+
+def test_ndarray_take_1d_matches_numpy():
+    npa = np.arange(20, dtype=np.int32)
+    a = blosc2.asarray(npa, chunks=(7,))
+    idx = np.array([5, 1, -1, 5, 0], dtype=np.int64)
+
+    result = a.take(idx)
+    assert isinstance(result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[()], np.take(npa, idx))
+
+
+def test_ndarray_take_axis_with_nd_indices_matches_numpy():
+    npa = np.arange(3 * 4 * 5, dtype=np.int32).reshape(3, 4, 5)
+    a = blosc2.asarray(npa, chunks=(2, 2, 3))
+    idx = np.array([[3, 0], [1, -1]], dtype=np.int64)
+
+    expected = np.take(npa, idx, axis=1)
+    result = a.take(idx, axis=1)
+    top_level_result = blosc2.take(a, idx, axis=1)
+    assert isinstance(result, blosc2.NDArray)
+    assert isinstance(top_level_result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[()], expected)
+    np.testing.assert_array_equal(top_level_result[()], expected)
+
+
+def test_ndarray_take_axis_none_nd_fallback_matches_numpy():
+    npa = np.arange(3 * 4 * 5, dtype=np.int32).reshape(3, 4, 5)
+    a = blosc2.asarray(npa, chunks=(2, 2, 3))
+    idx = np.array([[0, -1], [17, 5]], dtype=np.int64)
+
+    expected = np.take(npa, idx, axis=None)
+    result = a.take(idx)
+    top_level_result = blosc2.take(a, idx)
+    assert isinstance(result, blosc2.NDArray)
+    assert isinstance(top_level_result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[()], expected)
+    np.testing.assert_array_equal(top_level_result[()], expected)
+
+
+def test_ndarray_take_rejects_bad_indices_and_axis():
+    a = blosc2.asarray(np.arange(12, dtype=np.int32).reshape(3, 4))
+    with pytest.raises(TypeError, match="integer"):
+        a.take(np.array([1.5]), axis=0)
+    with pytest.raises(ValueError, match="axis"):
+        a.take([0], axis=2)
+    with pytest.raises(IndexError, match="bounds"):
+        a.take([3], axis=0)
 
 
 @pytest.mark.parametrize(

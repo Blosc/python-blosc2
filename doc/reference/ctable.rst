@@ -234,7 +234,8 @@ CTable indexing is type-driven::
     t["amount"]                 # column access
     t[3]                        # one row as a namedtuple-like object
     t[3:8]                      # row view
-    t[[1, 4, 7]]                # gathered-row view
+    t[[1, 4, 7]]                # gathered-row view (mask-based)
+    t.take([1, 4, 1])           # materialized row gather preserving order/duplicates
     t[mask]                     # filtered row view
     t[t.amount > 100]           # LazyExpr filtered row view, like where()
     t[["region", "amount"]]   # projected column view
@@ -257,6 +258,7 @@ When a NumPy structured array is needed, materialize explicitly::
 
     CTable.where
     CTable.view
+    CTable.take
     CTable.select
     CTable.head
     CTable.tail
@@ -267,6 +269,7 @@ When a NumPy structured array is needed, materialize explicitly::
 
 .. automethod:: CTable.where
 .. automethod:: CTable.view
+.. automethod:: CTable.take
 .. automethod:: CTable.select
 .. automethod:: CTable.head
 .. automethod:: CTable.tail
@@ -524,10 +527,12 @@ Data access
 .. autosummary::
 
     Column.view
+    Column.take
     Column.iter_chunks
     Column.assign
 
 .. autoproperty:: Column.view
+.. automethod:: Column.take
 .. automethod:: Column.iter_chunks
 .. automethod:: Column.assign
 

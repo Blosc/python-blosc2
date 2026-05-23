@@ -22,6 +22,7 @@ In addition, all the functions from the :ref:`LazyArray` section can be used wit
         __len__
         __getitem__
         __setitem__
+        take
 
     Utility Methods
     ---------------
@@ -30,6 +31,7 @@ In addition, all the functions from the :ref:`LazyArray` section can be used wit
     .. automethod:: __len__
     .. automethod:: __getitem__
     .. automethod:: __setitem__
+    .. automethod:: take
 
 Constructors
 ------------

@@ -981,6 +981,18 @@ class Column:
         """
         return ColumnViewIndexer(self)
 
+    def take(self, indices, /) -> Column:
+        """Return a column containing values at the requested logical positions.
+
+        Indices are relative to the live values visible through this column
+        (including any column view mask).  The result preserves the order of
+        ``indices`` and any duplicates.
+        """
+        if self.is_computed:
+            raise ValueError("Column.take is not supported for computed columns yet.")
+        table_view = self._table.view(self._valid_rows).select([self._col_name])
+        return table_view.take(indices)[self._col_name]
+
     def __setitem__(self, key: int | slice | list | np.ndarray, value):  # noqa: C901
         """Set one or more live column values; accepts the same index forms as :meth:`__getitem__`."""
         if self._table._read_only:
@@ -4432,6 +4444,62 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise ValueError()
 
         return CTable._make_view(self, new_valid_rows)
+
+    @staticmethod
+    def _normalize_row_take_indices(indices, size: int) -> np.ndarray:
+        if isinstance(indices, blosc2.NDArray):
+            indices = indices[()]
+        indices = np.asarray(indices)
+        if indices.ndim == 0:
+            indices = indices.reshape(1)
+        if indices.ndim != 1:
+            raise ValueError("CTable.take indices must be a 1-D integer array")
+        if indices.size == 0:
+            return np.ascontiguousarray(indices, dtype=np.int64)
+        if not np.issubdtype(indices.dtype, np.integer):
+            raise TypeError("CTable.take indices must be integers")
+        normalized = np.ascontiguousarray(indices, dtype=np.int64)
+        negative = normalized < 0
+        if np.any(negative):
+            normalized = normalized.copy()
+            normalized[negative] += size
+        if np.any((normalized < 0) | (normalized >= size)):
+            raise IndexError("CTable.take index out of bounds")
+        return normalized
+
+    def take(self, indices, /) -> CTable:
+        """Return a compact table containing rows at the requested positions.
+
+        Indices are interpreted as logical row positions among live rows.  The
+        returned table preserves the order of ``indices`` and any duplicates,
+        unlike mask-based views.
+        """
+        logical_pos = self._normalize_row_take_indices(indices, self.nrows)
+        physical_pos = self._live_positions_from_valid_rows_chunks()[logical_pos]
+        n = len(physical_pos)
+
+        result = self._empty_copy(capacity=n)
+        for col in self._schema.columns:
+            col_name = col.name
+            arr = self._cols[col_name]
+            if self._is_list_column(col):
+                result._cols[col_name].extend((arr[int(pos)] for pos in physical_pos), validate=False)
+                result._cols[col_name].flush()
+            elif self._is_varlen_scalar_column(col):
+                result._cols[col_name].extend(arr[int(pos)] for pos in physical_pos)
+                result._cols[col_name].flush()
+            elif self._is_dictionary_column(col):
+                for v in arr.dictionary:
+                    result._cols[col_name].encode(v)
+                result._cols[col_name].codes[:n] = arr.codes._take_numpy(physical_pos, axis=0)
+            else:
+                result._cols[col_name][:n] = arr._take_numpy(physical_pos, axis=0)
+
+        result._valid_rows[:n] = True
+        result._valid_rows[n:] = False
+        result._n_rows = n
+        result._last_pos = n - 1 if n > 0 else None
+        return result
 
     def head(self, N: int = 5) -> CTable:
         """Return a view of the first *N* live rows (default 5)."""

@@ -4,6 +4,17 @@
 
 XXX version-specific blurb XXX
 
+### Take/gather APIs
+
+- Added `NDArray.take()` following Array API `take` shape semantics, including
+  `axis=None` flattening and N-dimensional integer indices.  One-dimensional
+  gathers use the existing sparse C-level path internally.
+- Extended top-level `blosc2.take()` to dispatch to `NDArray.take()`,
+  `CTable.take()`, and `Column.take()` while preserving the input container
+  type.
+- Added `CTable.take()` and `Column.take()` for logical row/value gathers that
+  preserve order and duplicate indices, unlike mask-based views.
+
 ## Changes from 4.3.1 to 4.3.3
 
 note: 4.3.2 was an internal pre-release that was not published to PyPI.

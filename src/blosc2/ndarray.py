@@ -4336,17 +4336,73 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 out = super().set_slice((locstart, locstop), chunk)  # load updated partial chunk into array
         return out
 
-    def take_sparse(self, indices: list[int] | np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
-        if self.ndim != 1:
-            raise ValueError("take_sparse is only supported for 1-D arrays")
-        indices = normalize_1d_sparse_indices(indices, self.shape[0])
-        if indices is None:
-            raise TypeError("take_sparse only supports 1-D integer index arrays")
-        return self._take_sparse_normalized(indices, out)
+    @staticmethod
+    def _normalize_take_indices(indices, size: int) -> np.ndarray:
+        if isinstance(indices, NDArray):
+            indices = indices[()]
+        indices = np.asarray(indices)
+        if indices.size == 0:
+            return np.ascontiguousarray(indices, dtype=np.int64)
+        if not np.issubdtype(indices.dtype, np.integer):
+            raise TypeError("take indices must be an integer array")
+        normalized = np.ascontiguousarray(indices, dtype=np.int64)
+        negative = normalized < 0
+        if np.any(negative):
+            normalized = normalized.copy()
+            normalized[negative] += size
+        if np.any((normalized < 0) | (normalized >= size)):
+            raise IndexError("take index out of bounds")
+        return normalized
+
+    @staticmethod
+    def _normalize_take_axis(axis: int, ndim: int) -> int:
+        if not isinstance(axis, (int, np.integer)):
+            raise TypeError("axis must be an integer or None")
+        axis = int(axis)
+        if axis < 0:
+            axis += ndim
+        if not 0 <= axis < ndim:
+            raise ValueError(f"axis {axis} is out of bounds for array of dimension {ndim}")
+        return axis
 
     def _take_sparse_normalized(self, indices: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
         out = np.empty(indices.shape, dtype=self.dtype) if out is None else out
         return super().get_1d_sparse_numpy(out, indices)
+
+    def _take_numpy(self, indices, /, *, axis: int | None = None) -> np.ndarray:
+        """Return a NumPy buffer for :meth:`take` and internal gather paths."""
+        if axis is None:
+            normalized = self._normalize_take_indices(indices, self.size)
+            if self.ndim == 1:
+                flat = normalized.reshape(-1)
+                return self._take_sparse_normalized(flat).reshape(normalized.shape)
+            return np.take(self[:], normalized, axis=None)
+
+        axis = self._normalize_take_axis(axis, self.ndim)
+        normalized = self._normalize_take_indices(indices, self.shape[axis])
+        flat = normalized.reshape(-1)
+        result_shape = self.shape[:axis] + normalized.shape + self.shape[axis + 1 :]
+        if flat.size == 0:
+            return np.empty(result_shape, dtype=self.dtype)
+        if self.ndim == 1:
+            return self._take_sparse_normalized(flat).reshape(result_shape)
+
+        selection = [np.arange(dim, dtype=np.int64) for dim in self.shape]
+        selection[axis] = flat
+        orthogonal_shape = self.shape[:axis] + (flat.size,) + self.shape[axis + 1 :]
+        out = np.empty(orthogonal_shape, dtype=self.dtype)
+        self.get_oindex_numpy(out, selection)
+        return out.reshape(result_shape)
+
+    def take(self, indices, /, *, axis: int | None = None) -> NDArray:
+        """Return elements selected by integer indices.
+
+        This follows the Array API ``take`` shape rules: when ``axis`` is
+        ``None`` the array is conceptually flattened and the result has the
+        same shape as ``indices``; otherwise the indexed axis is replaced by
+        ``indices.shape``.
+        """
+        return blosc2.asarray(self._take_numpy(indices, axis=axis))
 
     def __getitem__(
         self,
@@ -7192,43 +7248,46 @@ def full_like(x: blosc2.Array, fill_value: bool | int | float | complex, dtype=N
     return blosc2.full(shape=x.shape, fill_value=fill_value, dtype=dtype, **kwargs)
 
 
-def take(x: blosc2.Array, indices: blosc2.Array, axis: int | None = None) -> NDArray:
-    """
-    Returns elements of an array along an axis.
+def take(x: blosc2.Array, indices: blosc2.Array, axis: int | None = None):
+    """Return elements selected by integer indices.
+
+    For array inputs, this follows the Array API ``take`` shape rules: when
+    ``axis`` is ``None``, *x* is conceptually flattened and the output shape is
+    ``indices.shape``; otherwise the indexed axis is replaced by
+    ``indices.shape``.  For :class:`CTable` and :class:`Column` inputs, indices
+    select logical rows/values and ``axis`` is not supported.
 
     Parameters
     ----------
-    x: blosc2.Array
-        Input array. Should have one or more dimensions (axes).
+    x: blosc2.Array, CTable, Column, or array-like
+        Input object.  ``NDArray`` inputs return an ``NDArray``;
+        ``CTable`` inputs return a ``CTable``; ``Column`` inputs return a
+        ``Column``.  Other array-like inputs are converted to a Blosc2
+        ``NDArray`` result.
 
     indices: array-like
-        Array indices. The array must be one-dimensional and have an integer data type.
+        Integer indices.  Negative indices are normalized relative to the
+        selected axis (or to the flattened array when ``axis`` is ``None``).
+        For array inputs, indices may have any shape.
 
     axis: int | None
-        Axis over which to select values.
-        If x is a one-dimensional array, providing an axis is optional; however, if x
-        has more than one dimension, providing an axis is required. Default: None.
+        Axis over which to select values for array inputs.  If ``None``, the
+        input array is flattened before selection.  Must be ``None`` for
+        ``CTable`` and ``Column`` inputs.
 
     Returns
     -------
-    out: NDArray
-        Selected indices of x.
+    out: NDArray | CTable | Column
+        Selected values, preserving the container type for ``NDArray``,
+        ``CTable`` and ``Column`` inputs.
     """
-    if axis is None:
-        axis = 0
-        if x.ndim != 1:
-            raise ValueError("Must specify axis parameter if x is not 1D.")
-    if axis < 0:
-        axis += x.ndim
-    if not isinstance(axis, int | np.integer):
-        raise ValueError("Axis must be integer.")
-    if isinstance(indices, list):
-        indices = np.asarray(indices)
-    if indices.ndim != 1:
-        raise ValueError("Indices must be 1D array.")
-    key = tuple(indices if i == axis else slice(None, None, 1) for i in range(x.ndim))
-    # TODO: Implement fancy indexing in .slice so that this is more efficient
-    return blosc2.asarray(x[key])
+    if isinstance(x, NDArray):
+        return x.take(indices, axis=axis)
+    if isinstance(x, (blosc2.CTable, blosc2.Column)):
+        if axis is not None:
+            raise ValueError("axis is not supported for CTable or Column")
+        return x.take(indices)
+    return blosc2.asarray(np.take(np.asarray(x), np.asarray(indices), axis=axis))
 
 
 def take_along_axis(x: blosc2.Array, indices: blosc2.Array, axis: int = -1) -> NDArray:
