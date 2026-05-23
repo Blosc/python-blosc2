@@ -119,12 +119,9 @@ class TreeStore(DictStore):
         If None, the default Blosc2 storage properties are used.
     threshold : int, optional
         Threshold for the array size (bytes) to be kept in the embed store.
-        If the *compressed* array size is below this threshold, it will be
-        stored in the embed store instead of as a separate file. If None,
-        in-memory arrays are stored in the embed store and on-disk arrays
-        are stored as separate files.
-        C2Array objects will always be stored in the embed store,
-        regardless of their size.
+        Default is 0, meaning values are persisted as external files by
+        default.  C2Array objects are always stored in the embed store
+        regardless of this setting.
 
     Examples
     --------
