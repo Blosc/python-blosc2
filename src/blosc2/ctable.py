@@ -2795,6 +2795,7 @@ class CTable(Generic[RowT]):
         self._materialized_cols: dict[str, dict] = {}  # stored columns auto-filled from expressions
         self._expr_index_arrays: dict[str, blosc2.NDArray] = {}
         self._cached_index_catalog: dict | None = None
+        self._cached_index_catalog_revision: int | None = None
         self._cached_live_positions: np.ndarray | None = None
         self._col_widths: dict[str, int] = {}
         self.col_names: list[str] = []
@@ -8914,14 +8915,18 @@ class CTable(Generic[RowT]):
         return t
 
     def _invalidate_index_catalog_cache(self) -> None:
-        self._root_table._cached_index_catalog = None
+        root = self._root_table
+        root._cached_index_catalog = None
+        root._cached_index_catalog_revision = None
 
     def _get_index_catalog(self) -> dict:
         root = self._root_table
+        revision = root._storage.index_catalog_revision()
         catalog = getattr(root, "_cached_index_catalog", None)
-        if catalog is None:
+        if catalog is None or getattr(root, "_cached_index_catalog_revision", None) != revision:
             catalog = root._storage.load_index_catalog()
             root._cached_index_catalog = catalog
+            root._cached_index_catalog_revision = revision
         return catalog
 
     def _mark_all_indexes_stale(self) -> None:

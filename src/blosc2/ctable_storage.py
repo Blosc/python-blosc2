@@ -158,6 +158,13 @@ class TableStorage:
         """Persist *catalog* (column_name → descriptor dict)."""
         raise NotImplementedError
 
+    def index_catalog_revision(self) -> int:
+        """Return a process-local revision for cache invalidation."""
+        return int(getattr(self, "_index_catalog_revision", 0))
+
+    def _bump_index_catalog_revision(self) -> None:
+        self._index_catalog_revision = self.index_catalog_revision() + 1
+
     def get_epoch_counters(self) -> tuple[int, int]:
         """Return ``(value_epoch, visibility_epoch)``."""
         raise NotImplementedError
@@ -268,6 +275,7 @@ class InMemoryTableStorage(TableStorage):
 
     def save_index_catalog(self, catalog: dict) -> None:
         self._index_catalog = copy.deepcopy(catalog)
+        self._bump_index_catalog_revision()
 
     def get_epoch_counters(self) -> tuple[int, int]:
         return self._value_epoch, self._visibility_epoch
@@ -718,6 +726,7 @@ class FileTableStorage(TableStorage):
         working_dir = self._open_store().working_dir
         relativized = {col: self._relativize_descriptor(desc, working_dir) for col, desc in catalog.items()}
         meta.vlmeta["index_catalog"] = relativized
+        self._bump_index_catalog_revision()
 
     def get_epoch_counters(self) -> tuple[int, int]:
         meta = self._open_meta()
@@ -1151,6 +1160,7 @@ class TreeStoreTableStorage(TableStorage):
             col: FileTableStorage._relativize_descriptor(desc, working_dir) for col, desc in catalog.items()
         }
         meta.vlmeta["index_catalog"] = relativized
+        self._bump_index_catalog_revision()
 
     def get_epoch_counters(self) -> tuple[int, int]:
         meta = self._open_meta()
