@@ -2835,6 +2835,10 @@ class CTable(Generic[RowT]):
                 cc = self._schema.columns_by_name[name]
                 self._col_widths[name] = max(len(name), cc.display_width)
             self._n_rows = None
+            # Restore cached row count from saved metadata so that
+            # where() can skip the _valid_rows intersection for all-valid tables.
+            if "n_rows" in schema_dict:
+                self._n_rows_cached = schema_dict["n_rows"]
             self._last_pos = None  # resolve lazily on first write
             # ---- Restore computed/materialized column metadata (if any) ----
             self._computed_cols = {}
@@ -2868,10 +2872,17 @@ class CTable(Generic[RowT]):
 
             if new_data is not None:
                 self._load_initial_data(new_data)
+                # Persist the row count so subsequent opens can skip the
+                # _valid_rows intersection in where().
+                self._save_n_rows_to_meta()
 
     def close(self) -> None:
         """Close any persistent backing store held by this table."""
         storage = getattr(self, "_storage", None)
+        # Persist row count for root tables so subsequent opens can skip
+        # the _valid_rows intersection in where() for all-valid tables.
+        if not self._read_only and self.base is None:
+            self._save_n_rows_to_meta()
         try:
             self._flush_varlen_columns()
             if not self._read_only and self.base is None:
@@ -4242,6 +4253,10 @@ class CTable(Generic[RowT]):
             obj._col_widths[name] = max(len(name), cc.display_width)
 
         obj._n_rows = None
+        # Restore cached row count from saved metadata so that
+        # where() can skip the _valid_rows intersection for all-valid tables.
+        if "n_rows" in schema_dict:
+            obj._n_rows_cached = schema_dict["n_rows"]
         obj._last_pos = None
         obj._computed_cols = {}
         obj._materialized_cols = {}
@@ -7165,6 +7180,9 @@ class CTable(Generic[RowT]):
     def _schema_dict_with_computed(self) -> dict:
         """Return the schema dict extended with computed/materialized metadata."""
         d = schema_to_dict(self._schema)
+        n_rows = self._known_n_rows()
+        if n_rows is not None:
+            d["n_rows"] = n_rows
         if self._computed_cols:
             d["computed_columns"] = [
                 {
@@ -7192,6 +7210,37 @@ class CTable(Generic[RowT]):
                 materialized.append(entry)
             d["materialized_columns"] = materialized
         return d
+
+    def _save_n_rows_to_meta(self) -> None:
+        """Persist the cached row count into the _meta SChunk's vlmeta.
+
+        Updates the vlmeta of the existing _meta SChunk directly and writes
+        it back to its backing store.  This avoids going through save_schema()
+        which can route through the embed store where SChunk slice writes may
+        fail when the backing store has chunksize=-1.
+        """
+        n_rows = self._known_n_rows()
+        if n_rows is None:
+            return
+        storage = self._storage
+        if not hasattr(storage, "_open_meta"):
+            return
+        try:
+            meta = storage._open_meta()
+            schema_raw = meta.vlmeta.get("schema")
+            if schema_raw is None:
+                return
+            schema_dict = json.loads(schema_raw)
+            schema_dict["n_rows"] = n_rows
+            meta.vlmeta["schema"] = json.dumps(schema_dict)
+            # Persist: for FileTableStorage, rewrite the external _meta.b2f file.
+            if hasattr(storage, "_meta_path"):
+                meta.save(urlpath=storage._meta_path, mode="w")
+            elif hasattr(storage, "_write_leaf"):
+                # TreeStoreTableStorage
+                storage._write_leaf("/_meta", meta, ".b2f")
+        except Exception:
+            pass  # best-effort; failure must not prevent close()
 
     def _load_computed_cols_from_schema(self, schema_dict: dict) -> None:
         """Reconstruct ``_computed_cols`` from persisted metadata.

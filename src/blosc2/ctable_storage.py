@@ -369,6 +369,12 @@ class FileTableStorage(TableStorage):
         self._root = urlpath
         self._mode = mode
         self._meta: blosc2.SChunk | None = None
+        # CTable internals must always use external-file storage (never the
+        # embed store) so that small SChunk overwrites (e.g. _meta with
+        # nbytes=0) are reliably persisted.  Normalise a pre-existing store
+        # that was opened by generic dispatch without this setting.
+        if store is not None and store.threshold != 0:
+            store.threshold = 0
         self._store: blosc2.TreeStore | None = store
 
     # ------------------------------------------------------------------

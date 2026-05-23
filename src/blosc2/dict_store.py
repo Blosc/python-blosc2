@@ -465,6 +465,13 @@ class DictStore:
             rel_path = rel_path.replace(os.sep, "/")
             self.map_tree[key] = rel_path
         else:
+            # Remove any old external file so it doesn't shadow the embed-stored
+            # value on read (map_tree is checked first in __getitem__).
+            if key in self.map_tree:
+                old_filepath = self.map_tree.pop(key)
+                old_full_path = os.path.join(self.working_dir, old_filepath)
+                if os.path.exists(old_full_path):
+                    os.remove(old_full_path)
             if external_file:
                 # Embed a copy by using cframe
                 value = blosc2.from_cframe(value.to_cframe())
