@@ -240,24 +240,77 @@ def preview_array(
 
 
 def preview_ctable(
-    obj: Any, *, start: int = 0, stop: int = 20, columns: list[str] | None = None, max_cols: int = 10
+    obj: Any,
+    *,
+    start: int = 0,
+    stop: int = 20,
+    columns: list[str] | None = None,
+    max_cols: int = 10,
+    include_expensive: bool = False,
 ) -> dict[str, Any]:
-    """Return a bounded column-oriented preview from a CTable."""
+    """Return a bounded column-oriented preview from a CTable.
+
+    Complex nested/list/object columns may require one variable-length block
+    read per row.  By default, keep table navigation responsive by showing a
+    placeholder for those columns instead of decoding them eagerly.
+    """
     all_columns = list(getattr(obj, "col_names", []))
     visible_columns = all_columns if columns is None else [name for name in columns if name in all_columns]
     hidden_columns = max(0, len(visible_columns) - max_cols)
     visible_columns = visible_columns[:max_cols]
     start = max(0, start)
     stop = min(max(start, stop), len(obj))
-    data = {name: safe_asarray(obj[name][start:stop]) for name in visible_columns}
+    data = {}
+    skipped_columns = {}
+    nrows = stop - start
+    for name in visible_columns:
+        if not include_expensive and is_expensive_ctable_column(obj, name):
+            label = ctable_column_label(obj, name)
+            placeholder = f"<{label}; skipped>"
+            data[name] = np.full(nrows, placeholder, dtype=object)
+            skipped_columns[name] = label
+        else:
+            data[name] = safe_asarray(obj[name][start:stop])
     return {
         "start": start,
         "stop": stop,
         "nrows": len(obj),
         "columns": visible_columns,
         "hidden_columns": hidden_columns,
+        "skipped_columns": skipped_columns,
         "data": data,
     }
+
+
+def is_expensive_ctable_column(obj: Any, name: str) -> bool:
+    """Return whether previewing a CTable column is likely row-by-row expensive."""
+    try:
+        schema = obj.schema_dict()
+    except Exception:
+        return False
+    for column in schema.get("columns", []):
+        if column.get("name") != name:
+            continue
+        return column.get("kind") in {"list", "struct", "object", "ndarray"}
+    return False
+
+
+def ctable_column_label(obj: Any, name: str) -> str:
+    """Return a compact schema label for *name*."""
+    try:
+        schema = dict(obj.info_items).get("schema", {})
+        label = schema.get(name)
+        if label is not None:
+            return str(label)
+    except Exception:
+        pass
+    try:
+        for column in obj.schema_dict().get("columns", []):
+            if column.get("name") == name:
+                return str(column.get("kind", "complex"))
+    except Exception:
+        pass
+    return "complex"
 
 
 def safe_asarray(values: Any) -> np.ndarray:

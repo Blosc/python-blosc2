@@ -128,6 +128,29 @@ def test_ctable_preview_buffer_reuses_loaded_rows(tmp_path):
         np.testing.assert_array_equal(page1["data"]["x"], np.arange(5, 10))
 
 
+def test_preview_ctable_skips_expensive_nested_columns_by_default():
+    class Table:
+        def __init__(self):
+            self.col_names = ["path"]
+
+        def __len__(self):
+            return 3
+
+        def __getitem__(self, name):
+            raise AssertionError("expensive column should not be read")
+
+        def schema_dict(self):
+            return {"columns": [{"name": "path", "kind": "list", "item": {"kind": "struct"}}]}
+
+        @property
+        def info_items(self):
+            return [("schema", {"path": "list[struct]"})]
+
+    preview = preview_ctable(Table(), max_cols=1)
+    assert preview["skipped_columns"] == {"path": "list[struct]"}
+    assert preview["data"]["path"].tolist() == ["<list[struct]; skipped>"] * 3
+
+
 def test_ctable_preview_header_uses_column_names_without_dtype_labels():
     preview = {
         "start": 0,

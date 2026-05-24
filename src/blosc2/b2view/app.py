@@ -6,7 +6,8 @@ from typing import ClassVar
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import DataTable, Footer, Header, Static, Tree
+from textual.screen import ModalScreen
+from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
 
 from blosc2.b2view.model import StoreBrowser
 from blosc2.b2view.render import format_cell, make_metadata_renderable, make_preview_renderables
@@ -45,6 +46,59 @@ class BufferedDataTable(DataTable):
         super().action_page_up()
 
 
+class GoToRowScreen(ModalScreen[int | None]):
+    """Small modal asking for a global row number."""
+
+    CSS = """
+    GoToRowScreen {
+        align: center middle;
+    }
+    #goto-dialog {
+        width: 50;
+        height: auto;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #goto-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, *, nrows: int, current: int):
+        super().__init__()
+        self.nrows = nrows
+        self.current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="goto-dialog"):
+            yield Static(f"Go to row 0..{self.nrows - 1} (current: {self.current})", id="goto-title")
+            yield Input(placeholder="row number", id="goto-input")
+
+    def on_mount(self) -> None:
+        input_widget = self.query_one("#goto-input", Input)
+        input_widget.value = str(self.current)
+        input_widget.focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        value = event.value.strip().replace("_", "")
+        try:
+            row = int(value)
+        except ValueError:
+            self.query_one("#goto-title", Static).update("Please enter an integer row number")
+            return
+        if not 0 <= row < self.nrows:
+            self.query_one("#goto-title", Static).update(f"Row must be in range 0..{self.nrows - 1}")
+            return
+        self.dismiss(row)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class B2ViewApp(App):
     """Browse TreeStore hierarchy and preview objects."""
 
@@ -67,6 +121,7 @@ class B2ViewApp(App):
         ("q", "quit", "Quit"),
         ("tab", "focus_next_panel", "Next panel"),
         ("shift+tab", "focus_previous_panel", "Previous panel"),
+        ("g", "go_to_row", "Go to row"),
         ("r", "refresh", "Refresh"),
     ]
 
@@ -95,9 +150,10 @@ class B2ViewApp(App):
                         yield Static("Select a node", id="metadata")
                 with Vertical(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
+                    data_pane.border_subtitle = "g(oto)"
                     yield Static("", id="data-header")
                     with Horizontal(id="data-table-row"):
-                        yield BufferedDataTable(id="data-table", show_row_labels=False, zebra_stripes=True)
+                        yield BufferedDataTable(id="data-table", show_row_labels=True, zebra_stripes=True)
                         yield Static("", id="row-scrollbar")
                     with VerticalScroll(id="data-scroll", can_focus=True):
                         yield Static("", id="preview")
@@ -251,7 +307,10 @@ class B2ViewApp(App):
                 table.add_column(name, key=name)
             nrows = data["stop"] - data["start"]
             for i in range(nrows):
-                table.add_row(*[format_cell(data["data"][name][i]) for name in data["columns"]])
+                table.add_row(
+                    *[format_cell(data["data"][name][i]) for name in data["columns"]],
+                    label=str(data["start"] + i),
+                )
             nrows = data["stop"] - data["start"]
             cursor_row = min(max(0, cursor_row), max(0, nrows - 1))
             table.cursor_coordinate = (cursor_row, 0)
@@ -338,6 +397,26 @@ class B2ViewApp(App):
 
     def action_focus_previous_panel(self) -> None:
         self._focus_panel(-1)
+
+    def action_go_to_row(self) -> None:
+        if self.table_page is None or not self.query_one("#data-table-row", Horizontal).display:
+            self.notify("Go to row is only available for table previews", severity="warning")
+            return
+        current = self.table_page["start"] + self.query_one("#data-table", DataTable).cursor_row
+        screen = GoToRowScreen(nrows=self.table_page["nrows"], current=current)
+        self.push_screen(screen, self._go_to_row)
+
+    def _go_to_row(self, row: int | None) -> None:
+        if row is None or self.table_page is None:
+            return
+        page_size = self._table_page_size()
+        start = (row // page_size) * page_size
+        data = self._load_table_page(self.selected_path, start)
+        self._update_data_table(data, cursor_row=row - data["start"])
+        self.query_one("#data-header", Static).update(
+            f"rows {data['start']}:{data['stop']} of {data['nrows']}"
+        )
+        self.query_one("#data-table", DataTable).focus()
 
     def action_refresh(self) -> None:
         tree = self.query_one("#tree", Tree)
