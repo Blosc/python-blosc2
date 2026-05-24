@@ -5,7 +5,7 @@ import dataclasses
 import numpy as np
 
 import blosc2
-from blosc2.b2view.model import StoreBrowser, preview_array, preview_ctable
+from blosc2.b2view.model import StoreBrowser, preview_array, preview_array_2d, preview_ctable
 from blosc2.b2view.render import make_preview_renderables
 
 
@@ -51,9 +51,10 @@ def test_store_browser_metadata_and_previews(tmp_path):
         assert arr_info.kind == "ndarray"
         assert arr_info.metadata["shape"] == (3, 4)
         assert arr_info.metadata["dtype"] == "int64"
-        np.testing.assert_array_equal(
-            browser.preview("/group/arr", max_rows=2, max_cols=3), np.array([[0, 1, 2], [4, 5, 6]])
-        )
+        arr_preview = browser.preview("/group/arr", max_rows=2, max_cols=3)
+        assert arr_preview["source_kind"] == "ndarray2d"
+        np.testing.assert_array_equal(arr_preview["data"]["0"], np.array([0, 4]))
+        np.testing.assert_array_equal(arr_preview["data"]["2"], np.array([2, 6]))
 
         table_info = browser.get_info("/table")
         assert table_info.kind == "ctable"
@@ -80,28 +81,31 @@ def test_store_browser_supports_standalone_ctable(tmp_path):
         np.testing.assert_array_equal(preview["data"]["x"], np.array([0, 1]))
 
 
-def test_preview_ctable_preserves_ragged_nested_values():
-    class Column:
-        def __init__(self, values):
-            self.values = values
+def test_preview_array_2d_returns_grid_preview():
+    arr = np.arange(30).reshape(5, 6)
+    preview = preview_array_2d(arr, start=1, stop=4, col_start=2, max_cols=3)
+    assert preview["start"] == 1
+    assert preview["stop"] == 4
+    assert preview["nrows"] == 5
+    assert preview["columns"] == ["2", "3", "4"]
+    assert preview["hidden_columns"] == 3
+    assert preview["col_start"] == 2
+    assert preview["col_stop"] == 5
+    assert preview["ncols"] == 6
+    np.testing.assert_array_equal(preview["data"]["2"], np.array([8, 14, 20]))
+    np.testing.assert_array_equal(preview["data"]["4"], np.array([10, 16, 22]))
 
-        def __getitem__(self, key):
-            return self.values[key]
 
-    class Table:
-        def __init__(self):
-            self.col_names = ["path"]
-            self.columns = {"path": Column([[{"x": 1}], [{"x": 2}, {"x": 3}]])}
+def test_store_browser_uses_grid_preview_for_2d_ndarray(tmp_path):
+    path = tmp_path / "bundle.b2z"
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/arr"] = np.arange(30).reshape(5, 6)
 
-        def __len__(self):
-            return 2
-
-        def __getitem__(self, name):
-            return self.columns[name]
-
-    preview = preview_ctable(Table(), max_cols=1)
-    assert preview["data"]["path"].dtype == object
-    assert preview["data"]["path"][1] == [{"x": 2}, {"x": 3}]
+    with StoreBrowser(str(path)) as browser:
+        preview = browser.preview("/arr", start=2, stop=5, max_cols=2)
+        assert preview["source_kind"] == "ndarray2d"
+        assert preview["columns"] == ["0", "1"]
+        np.testing.assert_array_equal(preview["data"]["1"], np.array([13, 19, 25]))
 
 
 def test_ctable_preview_buffer_reuses_loaded_rows(tmp_path):
@@ -118,7 +122,7 @@ def test_ctable_preview_buffer_reuses_loaded_rows(tmp_path):
         app.browser = browser
         app.table_buffer = None
         app.query_one = lambda selector, cls=None: type(
-            "FakeTable", (), {"size": type("Size", (), {"height": 6})()}
+            "FakeTable", (), {"size": type("Size", (), {"height": 6, "width": 80})()}
         )()
         page0 = app._load_table_page("/", 0)
         first_buffer = app.table_buffer
@@ -149,6 +153,30 @@ def test_preview_ctable_skips_expensive_nested_columns_by_default():
     preview = preview_ctable(Table(), max_cols=1)
     assert preview["skipped_columns"] == {"path": "list[struct]"}
     assert preview["data"]["path"].tolist() == ["<list[struct]; skipped>"] * 3
+
+
+def test_ctable_preview_preserves_ragged_nested_values():
+    class Column:
+        def __init__(self, values):
+            self.values = values
+
+        def __getitem__(self, key):
+            return self.values[key]
+
+    class Table:
+        def __init__(self):
+            self.col_names = ["path"]
+            self.columns = {"path": Column([[{"x": 1}], [{"x": 2}, {"x": 3}]])}
+
+        def __len__(self):
+            return 2
+
+        def __getitem__(self, name):
+            return self.columns[name]
+
+    preview = preview_ctable(Table(), max_cols=1)
+    assert preview["data"]["path"].dtype == object
+    assert preview["data"]["path"][1] == [{"x": 2}, {"x": 3}]
 
 
 def test_ctable_preview_header_uses_column_names_without_dtype_labels():

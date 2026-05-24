@@ -112,13 +112,32 @@ def format_cell(value: Any) -> str:
     if isinstance(value, np.generic):
         value = value.item()
     if isinstance(value, np.ndarray):
-        text = np.array2string(value, threshold=20)
+        text = np.array2string(value, threshold=20, formatter={"float_kind": lambda x: _fmt_float(x)})
     elif isinstance(value, (list, tuple, dict)):
         text = pformat(value, compact=True, width=80)
+    elif isinstance(value, float):
+        text = _fmt_float(value)
     else:
         text = str(value)
     text = " ".join(text.splitlines())
     return text if len(text) <= 200 else text[:197] + "..."
+
+
+def _fmt_float(x: float) -> str:
+    """Show floats with a fixed width of 9 characters and up to 6 decimal digits, right-aligned."""
+    if abs(x) >= 1e9 or (abs(x) < 1e-6 and abs(x) > 0):
+        return f"{x: .6e}"
+    if abs(x) == 0:
+        return " 0.0"
+    abs_x = abs(x)
+    # Choose format to keep total width ~9 chars including leading space for sign
+    if abs_x < 10:
+        return f"{x:9.6f}"[:9]
+    if abs_x < 1000:
+        return f"{x:9.3f}"[:9]
+    if abs_x < 1e6:
+        return f"{x:9.0f}"[:9]
+    return f"{x:9.0f}"[:9]
 
 
 _format_cell = format_cell

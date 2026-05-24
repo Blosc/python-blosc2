@@ -129,12 +129,17 @@ class StoreBrowser:
         slices: tuple[Any, ...] | None = None,
         max_rows: int = 20,
         max_cols: int = 10,
+        col_start: int = 0,
     ) -> Any:
         """Return a bounded data preview for *path*."""
         path = self.normalize_path(path)
         obj = self._get_object(path)
         kind = object_kind(obj)
         if kind in {"ndarray", "c2array"}:
+            shape = tuple(getattr(obj, "shape", ()) or ())
+            if slices is None and len(shape) == 2:
+                stop = min(start + max_rows, shape[0]) if stop is None else stop
+                return preview_array_2d(obj, start=start, stop=stop, col_start=col_start, max_cols=max_cols)
             return preview_array(obj, slices=slices, max_rows=max_rows, max_cols=max_cols)
         if kind == "ctable":
             stop = min(start + max_rows, len(obj)) if stop is None else stop
@@ -216,6 +221,36 @@ def object_metadata(obj: Any) -> dict[str, Any]:
             "cbytes": getattr(obj, "cbytes", None),
         }
     return {"repr": repr(obj)}
+
+
+def preview_array_2d(
+    obj: Any, *, start: int = 0, stop: int = 20, col_start: int = 0, max_cols: int = 10
+) -> dict[str, Any]:
+    """Return a bounded row/column preview for a 2-D array."""
+    shape = tuple(getattr(obj, "shape", ()) or ())
+    if len(shape) != 2:
+        raise ValueError(f"Expected a 2-D array, got shape {shape!r}")
+    nrows, ncols = shape
+    start = max(0, min(start, nrows))
+    stop = min(max(start, stop), nrows)
+    col_start = max(0, min(col_start, ncols))
+    col_stop = min(col_start + max_cols, ncols)
+    columns = [str(i) for i in range(col_start, col_stop)]
+    values = np.asarray(obj[(slice(start, stop), slice(col_start, col_stop))])
+    data = {str(col): values[:, i] for i, col in enumerate(range(col_start, col_stop))}
+    return {
+        "start": start,
+        "stop": stop,
+        "nrows": nrows,
+        "columns": columns,
+        "hidden_columns": max(0, ncols - (col_stop - col_start)),
+        "data": data,
+        "source_kind": "ndarray2d",
+        "shape": shape,
+        "col_start": col_start,
+        "col_stop": col_stop,
+        "ncols": ncols,
+    }
 
 
 def preview_array(
