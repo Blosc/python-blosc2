@@ -172,6 +172,9 @@ class B2ViewApp(App):
         ("r", "restore_or_refresh", "Restore/Refresh"),
         Binding("t", "grid_row_top", "Top", show=False),
         Binding("b", "grid_row_bottom", "Bottom", show=False),
+        Binding("[", "slice_prev", "Slice prev", show=False),
+        Binding("]", "slice_next", "Slice next", show=False),
+        Binding("d", "dim_cycle", "Next dim", show=False),
     ]
 
     def __init__(self, urlpath: str, *, preview_rows: int = 20, preview_cols: int = 10):
@@ -185,6 +188,9 @@ class B2ViewApp(App):
         self.table_page: dict | None = None
         self.table_buffer: dict | None = None
         self.grid_col_start = 0
+        self.slice_indices: list[int] = []
+        self.active_dim = 0
+        self.n_leading_dims = 0
         self.loading_table_page = False
 
     def compose(self) -> ComposeResult:
@@ -200,7 +206,7 @@ class B2ViewApp(App):
                         yield Static("Select a node", id="metadata")
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
-                    data_pane.border_subtitle = "t(op) - b(ottom) - g(oto)"
+                    data_pane.border_subtitle = "[] dim - d(im) | t(op) - b(ottom) - g(oto)"
                     yield Static("", id="data-header")
                     with Horizontal(id="data-table-row"):
                         yield BufferedDataTable(id="data-table", show_row_labels=True, zebra_stripes=True)
@@ -257,6 +263,9 @@ class B2ViewApp(App):
             metadata.update(make_metadata_renderable(info))
             self.table_buffer = None
             self.grid_col_start = 0
+            self.slice_indices = []
+            self.active_dim = 0
+            self.n_leading_dims = 0
             if info.kind == "group":
                 data_header.display = False
                 data_table_row.display = False
@@ -270,6 +279,11 @@ class B2ViewApp(App):
                     data_table_row.display = True
                     data_scroll.display = False
                     preview.update("")
+                    ndim = info.metadata.get("ndim", 0)
+                    self.n_leading_dims = max(0, ndim - 2)
+                    if self.n_leading_dims > 0 and not self.slice_indices:
+                        self.slice_indices = [0] * self.n_leading_dims
+                        self.active_dim = 0
                     data = self._load_table_page(path, 0)
                 else:
                     data = self.browser.preview(path, max_rows=self.preview_rows, max_cols=self.preview_cols)
@@ -301,8 +315,9 @@ class B2ViewApp(App):
 
     @staticmethod
     def _uses_grid_preview(info) -> bool:
+        # 1D, 2D, 3D+ NDArray/C2Array all use grid preview
         return info.kind == "ctable" or (
-            info.kind in {"ndarray", "c2array"} and info.metadata.get("ndim") in (1, 2)
+            info.kind in {"ndarray", "c2array"} and info.metadata.get("ndim", 0) >= 1
         )
 
     def _col_page_size(self) -> int:
@@ -335,9 +350,9 @@ class B2ViewApp(App):
         if self.table_buffer is not None:
             buffer_start = self.table_buffer["start"]
             buffer_stop = self.table_buffer["stop"]
-            same_columns = (
-                self.table_buffer.get("source_kind") != "ndarray2d"
-                or self.table_buffer.get("col_start") == self.grid_col_start
+            same_columns = self.table_buffer.get("source_kind") not in {"ndarray2d", "ndarray_slice"} or (
+                self.table_buffer.get("col_start") == self.grid_col_start
+                and self.table_buffer.get("slice_indices") == self.slice_indices
             )
             if same_columns and buffer_start <= start and start + page_size <= buffer_stop:
                 data = self._slice_table_buffer(start, page_size)
@@ -355,6 +370,7 @@ class B2ViewApp(App):
             max_rows=buffer_size,
             max_cols=self._col_page_size(),
             col_start=self.grid_col_start,
+            slice_indices=self.slice_indices,
         )
         self.table_buffer = data
         data = self._slice_table_buffer(start, page_size)
@@ -378,7 +394,15 @@ class B2ViewApp(App):
             "data": {name: values[offset : offset + count] for name, values in buffer["data"].items()},
             **{
                 key: buffer[key]
-                for key in ("source_kind", "shape", "col_start", "col_stop", "ncols")
+                for key in (
+                    "source_kind",
+                    "shape",
+                    "col_start",
+                    "col_stop",
+                    "ncols",
+                    "slice_indices",
+                    "n_slices_per_dim",
+                )
                 if key in buffer
             },
         }
@@ -433,7 +457,7 @@ class B2ViewApp(App):
         if self.loading_table_page or self.table_page is None:
             return False
         page = self.table_page
-        if page.get("source_kind") != "ndarray2d":
+        if page.get("source_kind") not in ("ndarray2d", "ndarray_slice"):
             return False
         page_cols = max(1, len(page["columns"]))
         ncols = page["ncols"]
@@ -456,7 +480,10 @@ class B2ViewApp(App):
         return True
 
     def _grid_col_home(self) -> bool:
-        if self.table_page is None or self.table_page.get("source_kind") != "ndarray2d":
+        if self.table_page is None or self.table_page.get("source_kind") not in (
+            "ndarray2d",
+            "ndarray_slice",
+        ):
             return False
         self.grid_col_start = 0
         self.table_buffer = None
@@ -467,7 +494,10 @@ class B2ViewApp(App):
         return True
 
     def _grid_col_end(self) -> bool:
-        if self.table_page is None or self.table_page.get("source_kind") != "ndarray2d":
+        if self.table_page is None or self.table_page.get("source_kind") not in (
+            "ndarray2d",
+            "ndarray_slice",
+        ):
             return False
         page = self.table_page
         page_cols = max(1, len(page["columns"]))
@@ -480,9 +510,27 @@ class B2ViewApp(App):
         return True
 
     def _update_data_header(self, data: dict) -> None:
-        header = f"rows {data['start']}:{data['stop']} of {data['nrows']}"
-        if data.get("source_kind") == "ndarray2d":
-            header += f", cols {data['col_start']}:{data['col_stop']} of {data['ncols']}"
+        header = ""
+        if data.get("source_kind") == "ndarray_slice":
+            indices = data.get("slice_indices", [])
+            n_per_dim = data.get("n_slices_per_dim", [])
+            n_leading = len(indices)
+            for i in range(n_leading):
+                idx = indices[i]
+                n = n_per_dim[i] if i < len(n_per_dim) else 0
+                if i == self.active_dim:
+                    header += f"d{i} [{idx}] of {n}, "
+                else:
+                    header += f"d{i} {idx} of {n}, "
+            header += f"d{n_leading}[{data['start']}:{data['stop']}], "
+            header += f"d{n_leading + 1}[{data['col_start']}:{data['col_stop']}]"
+        elif data.get("source_kind") == "ndarray2d":
+            header += f"d0[{data['start']}:{data['stop']}], "
+            header += f"d1[{data['col_start']}:{data['col_stop']}]"
+        else:
+            header += f"rows {data['start']}:{data['stop']} of {data['nrows']}"
+            if "col_start" in data:
+                header += f", cols {data['col_start']}:{data['col_stop']} of {data['ncols']}"
         self.query_one("#data-header", Static).update(header)
 
     def _make_global_scrollbar(self, *, start: int, stop: int, total: int, size: int, track: str) -> str:
@@ -514,7 +562,7 @@ class B2ViewApp(App):
 
     def _update_global_col_scrollbar(self, data: dict) -> None:
         scrollbar = self.query_one("#col-scrollbar", Static)
-        if data.get("source_kind") != "ndarray2d":
+        if data.get("source_kind") not in ("ndarray2d", "ndarray_slice"):
             scrollbar.display = False
             scrollbar.update("")
             return
@@ -568,9 +616,20 @@ class B2ViewApp(App):
     def action_focus_previous_panel(self) -> None:
         self._focus_panel(-1)
 
+    def _in_data_grid(self) -> bool:
+        """Return True if focus is inside the data pane and a grid is active."""
+        if self.table_page is None:
+            return False
+        if not self.query_one("#data-table-row", Horizontal).display:
+            return False
+        focused = self.focused
+        if focused is None:
+            return False
+        pane = self.query_one("#data-pane", Vertical)
+        return focused is pane or pane in focused.ancestors
+
     def action_go_to_row(self) -> None:
-        if self.table_page is None or not self.query_one("#data-table-row", Horizontal).display:
-            self.notify("Go to row is only available for table previews", severity="warning")
+        if not self._in_data_grid():
             return
         current = self.table_page["start"] + self.query_one("#data-table", DataTable).cursor_row
         screen = GoToRowScreen(nrows=self.table_page["nrows"], current=current)
@@ -631,14 +690,58 @@ class B2ViewApp(App):
         self.load_children(node)
         self.update_panels(node.data or "/")
 
+    def _slice_direction(self, direction: int) -> None:
+        if self.table_page is None or self.table_page.get("source_kind") != "ndarray_slice":
+            return
+        if not self.slice_indices:
+            return
+        dim = self.active_dim
+        current = self.slice_indices[dim]
+        n = self.table_page.get("n_slices_per_dim", [0] * len(self.slice_indices))[dim]
+        if direction > 0:
+            if current >= n - 1:
+                return
+            self.slice_indices[dim] = current + 1
+        else:
+            if current <= 0:
+                return
+            self.slice_indices[dim] = current - 1
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, self.table_page["start"])
+        cursor_row = self.query_one("#data-table", DataTable).cursor_row
+        self._update_data_table(data, cursor_row=cursor_row)
+        self._update_data_header(data)
+
+    def action_slice_prev(self) -> None:
+        if not self._in_data_grid():
+            return
+        self._slice_direction(-1)
+
+    def action_slice_next(self) -> None:
+        if not self._in_data_grid():
+            return
+        self._slice_direction(1)
+
+    def action_dim_cycle(self) -> None:
+        if not self._in_data_grid():
+            return
+        if self.table_page.get("source_kind") != "ndarray_slice":
+            return
+        ndims = len(self.slice_indices)
+        if ndims <= 1:
+            self.notify("Only one leading dimension to navigate")
+            return
+        self.active_dim = (self.active_dim + 1) % ndims
+        self._update_data_header(self.table_page)
+
     def action_grid_row_top(self) -> None:
         """Jump to the first row of the table."""
-        if self.table_page is None:
+        if not self._in_data_grid():
             return
         self._go_to_row(0)
 
     def action_grid_row_bottom(self) -> None:
         """Jump to the last row of the table."""
-        if self.table_page is None:
+        if not self._in_data_grid():
             return
         self._go_to_row(self.table_page["nrows"] - 1)

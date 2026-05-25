@@ -130,6 +130,7 @@ class StoreBrowser:
         max_rows: int = 20,
         max_cols: int = 10,
         col_start: int = 0,
+        slice_indices: list[int] | None = None,
     ) -> Any:
         """Return a bounded data preview for *path*."""
         path = self.normalize_path(path)
@@ -138,6 +139,15 @@ class StoreBrowser:
         if kind in {"ndarray", "c2array"}:
             shape = tuple(getattr(obj, "shape", ()) or ())
             if slices is None:
+                if len(shape) >= 3:
+                    return preview_array_nd_slice(
+                        obj,
+                        slice_indices=slice_indices,
+                        start=start,
+                        stop=stop,
+                        col_start=col_start,
+                        max_cols=max_cols,
+                    )
                 if len(shape) == 2:
                     stop = min(start + max_rows, shape[0]) if stop is None else stop
                     return preview_array_2d(
@@ -227,6 +237,57 @@ def object_metadata(obj: Any) -> dict[str, Any]:
             "cbytes": getattr(obj, "cbytes", None),
         }
     return {"repr": repr(obj)}
+
+
+def preview_array_nd_slice(
+    obj: Any,
+    *,
+    slice_indices: list[int] | None = None,
+    start: int = 0,
+    stop: int = 20,
+    col_start: int = 0,
+    max_cols: int = 10,
+) -> dict[str, Any]:
+    """Return a bounded 2-D slice preview for N-D arrays (N >= 3)."""
+    shape = tuple(getattr(obj, "shape", ()) or ())
+    ndim = len(shape)
+    if ndim < 3:
+        raise ValueError(f"Expected an N-D array with N >= 3, got shape {shape!r}")
+    n_leading = ndim - 2
+    n_slices_per_dim = list(shape[:n_leading])
+    if slice_indices is None or len(slice_indices) != n_leading:
+        slice_indices = [0] * n_leading
+    # Clamp
+    slice_indices = [
+        min(max(0, idx), n_slices_per_dim[i] - 1) if n_slices_per_dim[i] > 0 else 0
+        for i, idx in enumerate(slice_indices)
+    ]
+    nrows, ncols = shape[-2], shape[-1]
+    if stop is None:
+        stop = min(start + 20, nrows)
+    start = max(0, min(start, nrows))
+    stop = min(max(start, stop), nrows)
+    col_start = max(0, min(col_start, ncols))
+    col_stop = min(col_start + max_cols, ncols)
+    columns = [str(i) for i in range(col_start, col_stop)]
+    idx = tuple(slice_indices) + (slice(start, stop), slice(col_start, col_stop))
+    values = np.asarray(obj[idx])
+    data = {str(col): values[:, i] for i, col in enumerate(range(col_start, col_stop))}
+    return {
+        "start": start,
+        "stop": stop,
+        "nrows": nrows,
+        "columns": columns,
+        "hidden_columns": max(0, ncols - (col_stop - col_start)),
+        "data": data,
+        "source_kind": "ndarray_slice",
+        "shape": shape,
+        "col_start": col_start,
+        "col_stop": col_stop,
+        "ncols": ncols,
+        "slice_indices": slice_indices,
+        "n_slices_per_dim": n_slices_per_dim,
+    }
 
 
 def preview_array_2d(
