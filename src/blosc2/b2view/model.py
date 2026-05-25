@@ -110,13 +110,15 @@ class StoreBrowser:
                 "children": len(self.store.get_children(path)),
                 "descendants": len(self.store.get_descendants(path)),
             }
-            user_attrs = self._vlmeta_dict(self.store.vlmeta) if path == "/" else None
+            user_attrs = self._vlmeta_dict(self.store.vlmeta)
             return ObjectInfo(path=path, kind=kind, metadata=metadata, user_attrs=user_attrs)
 
         obj = self._get_object(path)
         metadata = object_metadata(obj)
         metadata.setdefault("type", type(obj).__name__)
         user_attrs = self._vlmeta_dict(getattr(obj, "vlmeta", None))
+        if user_attrs is None and self.is_tree:
+            user_attrs = self._vlmeta_dict(self.store.vlmeta)
         return ObjectInfo(path=path, kind=kind, metadata=metadata, user_attrs=user_attrs)
 
     def preview(
@@ -177,6 +179,18 @@ class StoreBrowser:
         if path != "/":
             raise KeyError(f"Standalone objects only expose the root path '/', got {path!r}")
 
+    _INTERNAL_VLMETA_KEYS = frozenset(
+        {
+            "kind",
+            "version",
+            "schema",
+            "n_rows",
+            "value_epoch",
+            "computed_columns",
+            "materialized_columns",
+        }
+    )
+
     @staticmethod
     def _vlmeta_dict(vlmeta) -> dict[str, Any] | None:
         if vlmeta is None:
@@ -188,7 +202,10 @@ class StoreBrowser:
                 data = {name: vlmeta[name] for name in vlmeta}
             except Exception:
                 return None
-        return data or None
+        if data is None:
+            return None
+        # Filter out internal blosc2 metadata keys (schema, version, etc.)
+        return {k: v for k, v in data.items() if k not in StoreBrowser._INTERNAL_VLMETA_KEYS}
 
 
 def object_kind(obj: Any) -> str:

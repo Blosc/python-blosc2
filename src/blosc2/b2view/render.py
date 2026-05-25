@@ -11,7 +11,6 @@ import numpy as np
 
 def make_metadata_renderable(info):
     """Return a Rich renderable for ObjectInfo metadata."""
-    from rich.pretty import Pretty
     from rich.table import Table
 
     table = Table(show_header=False, box=None, expand=True)
@@ -21,8 +20,6 @@ def make_metadata_renderable(info):
     table.add_row("kind", info.kind)
     for key, value in info.metadata.items():
         table.add_row(str(key), _format_metadata_value(value))
-    if info.user_attrs:
-        table.add_row("user_attrs", Pretty(info.user_attrs))
     return table
 
 

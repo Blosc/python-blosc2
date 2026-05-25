@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -147,7 +147,8 @@ class B2ViewApp(App):
     #main { height: 1fr; }
     #tree-pane { width: 35%; border: solid $primary; }
     #right-pane { width: 65%; }
-    #meta-pane { height: 40%; border: solid $secondary; }
+    #top-row { height: 40%; }
+    #meta-pane, #vlmeta-pane { width: 50%; border: solid $secondary; }
     #data-pane { height: 60%; border: solid $secondary; }
     #tree { height: 1fr; }
     #data-header { height: auto; padding: 0 1; }
@@ -155,8 +156,8 @@ class B2ViewApp(App):
     #data-table { width: 1fr; height: 1fr; }
     #row-scrollbar { width: 1; height: 1fr; color: $accent; }
     #col-scrollbar { height: 1; width: 1fr; color: $accent; }
-    #meta-scroll, #data-scroll { height: 1fr; padding: 0 1; }
-    #tree-pane:focus-within, #meta-pane:focus-within, #data-pane:focus-within { border: heavy $accent; }
+    #meta-scroll, #vlmeta-scroll, #data-scroll { height: 1fr; padding: 0 1; }
+    #tree-pane:focus-within, #meta-pane:focus-within, #vlmeta-pane:focus-within, #data-pane:focus-within { border: heavy $accent; }
     B2ViewPanel.-maximized,
     #tree-pane.-maximized,
     #meta-pane.-maximized,
@@ -200,10 +201,15 @@ class B2ViewApp(App):
                 tree_pane.border_title = "tree"
                 yield Tree("/", id="tree")
             with Vertical(id="right-pane"):
-                with B2ViewPanel(id="meta-pane") as meta_pane:
-                    meta_pane.border_title = "meta"
-                    with VerticalScroll(id="meta-scroll", can_focus=True):
-                        yield Static("Select a node", id="metadata")
+                with Horizontal(id="top-row"):
+                    with B2ViewPanel(id="meta-pane") as meta_pane:
+                        meta_pane.border_title = "meta"
+                        with VerticalScroll(id="meta-scroll", can_focus=True):
+                            yield Static("Select a node", id="metadata")
+                    with B2ViewPanel(id="vlmeta-pane") as vlmeta_pane:
+                        vlmeta_pane.border_title = "vlmeta"
+                        with VerticalScroll(id="vlmeta-scroll", can_focus=True):
+                            yield Static("", id="vlmetadata")
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
                     data_pane.border_subtitle = "[] dim - d(im) | t(op) - b(ottom) - g(oto)"
@@ -258,6 +264,8 @@ class B2ViewApp(App):
         data_table_row = self.query_one("#data-table-row", Horizontal)
         data_scroll = self.query_one("#data-scroll", VerticalScroll)
         preview = self.query_one("#preview", Static)
+        vlmeta_pane = self.query_one("#vlmeta-pane", B2ViewPanel)
+        vlmeta_widget = self.query_one("#vlmetadata", Static)
         try:
             info = self.browser.get_info(path)
             metadata.update(make_metadata_renderable(info))
@@ -273,6 +281,7 @@ class B2ViewApp(App):
                 self.query_one("#col-scrollbar", Static).display = False
                 data_header.update("")
                 preview.update("Group node; select an array or table to preview.")
+                self._update_vlmeta(vlmeta_pane, vlmeta_widget, path)
             else:
                 if self._uses_grid_preview(info):
                     data_header.display = True
@@ -298,6 +307,7 @@ class B2ViewApp(App):
                     self.query_one("#col-scrollbar", Static).display = False
                     data_header.update("" if header is None else header)
                     preview.update(body)
+            self._update_vlmeta(vlmeta_pane, vlmeta_widget, path)
             self._reset_panel_scroll()
         except Exception as exc:
             metadata.update(f"Error reading {path}: {exc}")
@@ -307,7 +317,45 @@ class B2ViewApp(App):
             self.query_one("#col-scrollbar", Static).display = False
             data_header.update("")
             preview.update("")
+            self._update_vlmeta(vlmeta_pane, vlmeta_widget, None)
             self._reset_panel_scroll()
+
+    @staticmethod
+    def _format_vlmeta_value(value: Any) -> str:
+        """Format a vlmeta value for display."""
+        if isinstance(value, bool):
+            return str(value)
+        if isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(value, (list, tuple)):
+            return ", ".join(str(v) for v in value)
+        if isinstance(value, dict):
+            return ", ".join(f"{k}: {v}" for k, v in value.items())
+        return str(value)
+
+    def _update_vlmeta(self, pane, widget: Static, path: str | None) -> None:
+        """Populate the vlmeta pane with variable-length metadata."""
+        pane.display = True
+        if path is None or self.browser is None:
+            widget.update("<not available>")
+            return
+        try:
+            info = self.browser.get_info(path)
+            if info.user_attrs is None:
+                widget.update("<not available>")
+            elif not info.user_attrs:
+                widget.update("")
+            else:
+                from rich.table import Table
+
+                table = Table(show_header=False, box=None, expand=True)
+                table.add_column("key", style="bold cyan", no_wrap=True)
+                table.add_column("value")
+                for k, v in info.user_attrs.items():
+                    table.add_row(str(k), self._format_vlmeta_value(v))
+                widget.update(table)
+        except Exception:
+            widget.update("<not available>")
 
     @staticmethod
     def _is_table_preview(data) -> bool:
@@ -598,6 +646,7 @@ class B2ViewApp(App):
         return [
             self.query_one("#tree", Tree),
             self.query_one("#meta-scroll", VerticalScroll),
+            self.query_one("#vlmeta-scroll", VerticalScroll),
             data_panel,
         ]
 
@@ -639,7 +688,7 @@ class B2ViewApp(App):
         focused = self.focused
         if focused is None:
             return None
-        for selector in ("#tree-pane", "#meta-pane", "#data-pane"):
+        for selector in ("#tree-pane", "#meta-pane", "#vlmeta-pane", "#data-pane"):
             pane = self.query_one(selector, Vertical)
             if focused is pane or pane in focused.ancestors:
                 return pane

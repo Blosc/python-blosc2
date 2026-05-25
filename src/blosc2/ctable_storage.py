@@ -299,6 +299,7 @@ class InMemoryTableStorage(TableStorage):
 _META_KEY = "/_meta"
 _VALID_ROWS_KEY = "/_valid_rows"
 _COLS_DIR = "_cols"
+_VLMETA_KEY = "/_vlmeta"
 
 
 def split_field_path(path: str) -> tuple[str, ...]:
@@ -377,6 +378,7 @@ class FileTableStorage(TableStorage):
         self._root = urlpath
         self._mode = mode
         self._meta: blosc2.SChunk | None = None
+        self._vlmeta: blosc2.SChunk | None = None
         # CTable internals must always use external-file storage (never the
         # embed store) so that small SChunk overwrites (e.g. _meta with
         # nbytes=0) are reliably persisted.  Normalise a pre-existing store
@@ -397,6 +399,10 @@ class FileTableStorage(TableStorage):
     def _valid_rows_path(self) -> str:
         return self._key_to_path(_VALID_ROWS_KEY)
 
+    @property
+    def _vlmeta_path(self) -> str:
+        return self._key_to_path(_VLMETA_KEY)
+
     def _col_path(self, name: str) -> str:
         return self._key_to_path(self._col_key(name))
 
@@ -416,7 +422,7 @@ class FileTableStorage(TableStorage):
 
     def _key_to_path(self, key: str) -> str:
         rel_key = key.lstrip("/")
-        suffix = ".b2f" if key == _META_KEY else ".b2nd"
+        suffix = ".b2f" if key in (_META_KEY, _VLMETA_KEY) else ".b2nd"
         if self._root.endswith(".b2d"):
             return os.path.join(self._root, rel_key + suffix)
         return os.path.join(self._root, rel_key + suffix)
@@ -570,6 +576,40 @@ class FileTableStorage(TableStorage):
         if not isinstance(opened, blosc2.SChunk):
             raise ValueError("CTable manifest '/_meta' must materialize as an SChunk.")
         self._meta = opened
+
+    def save_vlmeta(self, schunk: blosc2.SChunk) -> None:
+        """Persist the user vlmeta SChunk to the storage."""
+        if self._mode == "r":
+            return
+        self._vlmeta = schunk
+        if self._store is not None:
+            self._store[_VLMETA_KEY] = schunk
+
+    def _open_vlmeta(self) -> blosc2.SChunk | None:
+        """Open (or return cached) the ``/_vlmeta`` SChunk.
+
+        Returns ``None`` if the file does not exist (read-only open of a
+        table that never had user vlmeta written).
+        """
+        uv = getattr(self, "_vlmeta", None)
+        if uv is not None:
+            return uv
+        # Try TreeStore first
+        try:
+            opened = self._open_store()[_VLMETA_KEY]
+            if isinstance(opened, blosc2.SChunk):
+                self._vlmeta = opened
+                return opened
+        except (KeyError, FileNotFoundError):
+            pass
+        # Fallback: try opening the filesystem path directly
+        uv_path = self._vlmeta_path
+        if os.path.exists(uv_path):
+            opened = blosc2.open(uv_path, mode="r")
+            if isinstance(opened, blosc2.SChunk):
+                self._vlmeta = opened
+                return opened
+        return None
 
     def _open_meta(self) -> blosc2.SChunk:
         """Open (or return cached) the ``/_meta`` SChunk."""
@@ -788,6 +828,7 @@ class TreeStoreTableStorage(TableStorage):
         self._mode = mode
         self._owns_store = owns_store
         self._meta: blosc2.SChunk | None = None
+        self._vlmeta: blosc2.SChunk | None = None
 
     # ------------------------------------------------------------------
     # Key / path helpers
@@ -1073,6 +1114,31 @@ class TreeStoreTableStorage(TableStorage):
             kind = kind.decode()
         if kind != "ctable":
             raise ValueError(f"Object at {self._root_key!r} is not a CTable (kind={kind!r})")
+
+    def save_vlmeta(self, schunk: blosc2.SChunk) -> None:
+        """Persist the user vlmeta SChunk to the outer TreeStore."""
+        if self._mode == "r":
+            return
+        self._vlmeta = schunk
+        self._write_leaf("/_vlmeta", schunk, ".b2f")
+
+    def _open_vlmeta(self) -> blosc2.SChunk | None:
+        """Open (or return cached) the ``/_vlmeta`` SChunk.
+
+        Returns ``None`` if the leaf does not exist (read-only open of a
+        table that never had user vlmeta written).
+        """
+        uv = getattr(self, "_vlmeta", None)
+        if uv is not None:
+            return uv
+        try:
+            opened = self._open_leaf("/_vlmeta")
+        except (KeyError, FileNotFoundError):
+            return None
+        if not isinstance(opened, blosc2.SChunk):
+            return None
+        self._vlmeta = opened
+        return opened
 
     def column_names_from_schema(self) -> list[str]:
         return [c["name"] for c in self.load_schema()["columns"]]

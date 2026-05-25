@@ -81,6 +81,107 @@ def test_schema_saved_in_meta_vlmeta():
 
 
 # ---------------------------------------------------------------------------
+# CTable.vlmeta property
+# ---------------------------------------------------------------------------
+
+
+def test_ctable_vlmeta_in_memory():
+    """CTable.vlmeta works for in-memory tables."""
+    t = CTable(Row)
+    # Initially empty
+    assert t.vlmeta[:] == {}
+    # Set and get
+    t.vlmeta["author"] = "test"
+    t.vlmeta["version"] = 2
+    t.vlmeta["active"] = True
+    assert t.vlmeta["author"] == "test"
+    assert t.vlmeta[:]["author"] == "test"
+    assert t.vlmeta[:]["version"] == 2
+    assert t.vlmeta[:]["active"] is True
+
+
+def test_ctable_vlmeta_persistent(tmp_path):
+    """CTable.vlmeta round-trips through close/reopen."""
+    path = str(tmp_path / "vlmeta.b2z")
+    t = CTable(Row, urlpath=path, mode="w", expected_size=16)
+    t.append((1, 10.0, True))
+    t.vlmeta["description"] = "test table"
+    t.vlmeta["rows"] = 1
+    t.vlmeta["tags"] = ["a", "b", "c"]
+    t.close()
+
+    t2 = CTable(Row, urlpath=path, mode="a")
+    assert t2.vlmeta[:]["description"] == "test table"
+    assert t2.vlmeta[:]["rows"] == 1
+    assert t2.vlmeta[:]["tags"] == ["a", "b", "c"]
+
+
+def test_ctable_vlmeta_value_types(tmp_path):
+    """CTable.vlmeta supports various value types via msgpack."""
+    path = str(tmp_path / "vlmeta_types.b2z")
+    t = CTable(Row, urlpath=path, mode="w", expected_size=16)
+    t.append((1, 10.0, True))
+    t.vlmeta["bool_val"] = True
+    t.vlmeta["int_val"] = 42
+    t.vlmeta["float_val"] = 3.14
+    t.vlmeta["str_val"] = "hello"
+    t.vlmeta["list_val"] = [1, 2, 3]
+    t.vlmeta["dict_val"] = {"a": 1}
+    t.close()
+
+    t2 = CTable(Row, urlpath=path, mode="a")
+    assert t2.vlmeta[:]["bool_val"] is True
+    assert t2.vlmeta[:]["int_val"] == 42
+    assert t2.vlmeta[:]["float_val"] == 3.14
+    assert t2.vlmeta[:]["str_val"] == "hello"
+    assert t2.vlmeta[:]["list_val"] == [1, 2, 3]
+    assert t2.vlmeta[:]["dict_val"] == {"a": 1}
+
+
+def test_ctable_vlmeta_delete(tmp_path):
+    """CTable.vlmeta supports deletion of keys."""
+    path = str(tmp_path / "vlmeta_del.b2z")
+    t = CTable(Row, urlpath=path, mode="w", expected_size=16)
+    t.append((1, 10.0, True))
+    t.vlmeta["keep"] = "stay"
+    t.vlmeta["remove"] = "go"
+    del t.vlmeta["remove"]
+    assert "remove" not in t.vlmeta[:]
+    assert t.vlmeta[:]["keep"] == "stay"
+    t.close()
+
+    t2 = CTable(Row, urlpath=path, mode="a")
+    assert "remove" not in t2.vlmeta[:]
+    assert t2.vlmeta[:]["keep"] == "stay"
+
+
+def test_ctable_vlmeta_no_internal_keys(tmp_path):
+    """Internal schema keys are NOT in user vlmeta (separate storage)."""
+    path = str(tmp_path / "vlmeta_int.b2z")
+    t = CTable(Row, urlpath=path, mode="w", expected_size=16)
+    t.append((1, 10.0, True))
+    t.close()
+
+    t2 = CTable(Row, urlpath=path, mode="a")
+    # User vlmeta is separate from internal schema vlmeta
+    assert "kind" not in t2.vlmeta[:]
+    assert "schema" not in t2.vlmeta[:]
+    assert "version" not in t2.vlmeta[:]
+
+
+def test_ctable_vlmeta_reopen_read_only(tmp_path):
+    """Vlmeta is readable in read-only mode."""
+    path = str(tmp_path / "vlmeta_ro.b2z")
+    t = CTable(Row, urlpath=path, mode="w", expected_size=16)
+    t.append((1, 10.0, True))
+    t.vlmeta["data"] = "secret"
+    t.close()
+
+    t2 = CTable(Row, urlpath=path, mode="r")
+    assert t2.vlmeta[:]["data"] == "secret"
+
+
+# ---------------------------------------------------------------------------
 # Round-trip: data survives reopen
 # ---------------------------------------------------------------------------
 

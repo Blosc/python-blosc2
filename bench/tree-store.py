@@ -82,7 +82,8 @@ def _leaf_shape(ndim: int, max_elems: int) -> tuple[int, ...]:
 
 
 def create_store(
-    nlevels: int, nleaves: int, max_elems: int, nrows: int
+    nlevels: int, nleaves: int, max_elems: int, nrows: int,
+    no_vlmeta: bool = False,
 ) -> tuple[float, int]:
     """Create the TreeStore; return (wall_clock, total_elements_written)."""
     _clean(OUTPUT_FILE)
@@ -94,10 +95,14 @@ def create_store(
         nelem = int(np.prod(shape)) if shape else 1
         if ndim == 0:
             # linspace does not support 0‑d outputs; use a 0‑d array
-            leaf_arrays_np[ndim] = np.array(0.5, dtype=np.float64)
+            if not no_vlmeta:
+                # blosc2 scalar so we can set vlmeta before storing
+                leaf_arrays_np[ndim] = blosc2.asarray(np.array(0.5, dtype=np.float64))
+            else:
+                leaf_arrays_np[ndim] = np.array(0.5, dtype=np.float64)
         else:
-            arr = blosc2.linspace(0, 1, num=nelem, shape=shape, dtype=np.float64)
-            leaf_arrays_np[ndim] = arr[:]
+            leaf_arrays_np[ndim] = blosc2.linspace(0, 1, num=nelem,
+                shape=shape, dtype=np.float64)
 
     total_elements = sum(
         leaf_arrays_np[ndim].size for ndim in range(nleaves)
@@ -127,16 +132,39 @@ def create_store(
     tstore = blosc2.TreeStore(OUTPUT_FILE, mode="w")
 
     try:
+        if not no_vlmeta:
+            tstore.vlmeta["author"] = "benchmark"
+            tstore.vlmeta["purpose"] = "testing"
+            tstore.vlmeta["commit"] = "abc123"
         for level in range(nlevels):
             parent = f"/level{level}"
             # Store NDArray leaves – each leaf gets the array for its dimension
             for leaf in range(nleaves):
                 key = f"{parent}/leaf{leaf}"
-                tstore[key] = leaf_arrays_np[leaf]
+                arr = leaf_arrays_np[leaf]
+                if not no_vlmeta:
+                    # Add diverse vlmeta types
+                    arr.vlmeta["is_even"] = leaf % 2 == 0  # bool
+                    arr.vlmeta["index"] = leaf  # int
+                    arr.vlmeta["value"] = float(leaf) * 0.5  # float
+                    arr.vlmeta["complex"] = f"{leaf}+{leaf*2}j"  # complex as string
+                    arr.vlmeta["label"] = f"leaf_{leaf}"  # string
+                    arr.vlmeta["tags"] = [f"tag_{leaf}", f"tag_{leaf+1}"]  # list
+                    arr.vlmeta["coords"] = [leaf, leaf * 2]  # list (vlmeta compatible)
+                    arr.vlmeta["meta"] = {"key": f"val_{leaf}", "n": leaf}  # dict
+                tstore[key] = arr
 
             # Store one CTable per level
             table_key = f"{parent}/ctable"
             tstore[table_key] = tmpl_table
+            if not no_vlmeta:
+                # Set vlmeta on the stored CTable while still in write mode
+                ct = tstore[table_key]
+                ct.vlmeta["description"] = f"Level {level} CTable"
+                ct.vlmeta["author"] = "blosc2"
+                ct.vlmeta["ncols"] = 4
+                ct.vlmeta["has_index"] = True
+                ct.vlmeta["tags_list"] = ["benchmark", "testing", f"level_{level}"]
 
             if (level + 1) % max(1, nlevels // 10) == 0 or level == nlevels - 1:
                 print(f"  Level {level + 1}/{nlevels} done "
@@ -242,12 +270,17 @@ def main() -> None:
         "--no-create", action="store_true",
         help="Skip creation; only open/list an existing file",
     )
+    parser.add_argument(
+        "--no-vlmeta", action="store_true",
+        help="Skip adding vlmeta attributes to leaves and groups",
+    )
     args = parser.parse_args()
 
     total_elements = 0
     if not args.no_create:
         t_create, total_elements = create_store(
-            args.nlevels, args.nleaves, args.max_elems, args.nrows
+            args.nlevels, args.nleaves, args.max_elems, args.nrows,
+            no_vlmeta=args.no_vlmeta,
         )
     else:
         if not os.path.exists(OUTPUT_FILE):

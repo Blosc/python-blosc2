@@ -2850,6 +2850,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # the _valid_rows intersection in where() for all-valid tables.
         if not self._read_only and self.base is None:
             self._save_n_rows_to_meta()
+        # Persist user vlmeta if a dedicated SChunk was created
+        if storage is not None:
+            uv = getattr(storage, "_vlmeta", None)
+            if uv is not None and hasattr(storage, "save_vlmeta"):
+                storage.save_vlmeta(uv)
         try:
             self._flush_varlen_columns()
             if not self._read_only and self.base is None:
@@ -8894,6 +8899,56 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def schema(self) -> CompiledSchema:
         """The compiled schema that drives this table's columns and validation."""
         return self._schema
+
+    @property
+    def vlmeta(self):
+        """Variable-length metadata attached to this table.
+
+        Returns a mapping-like proxy that supports item access, iteration,
+        and the ``[:]`` bulk getter.  Values are serialised via msgpack, so
+        all standard types (int, float, str, bool, list, dict) are supported.
+        The metadata is stored separately from the internal schema metadata
+        and persists through ``close()`` / reopen for disk-backed tables.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import dataclasses
+        >>> @dataclasses.dataclass
+        ... class Row:
+        ...     x: int = 0
+        >>> t = blosc2.CTable(Row)
+        >>> t.vlmeta["author"] = "Alice"
+        >>> t.vlmeta["tags"] = ["alpha", "beta"]
+        >>> t.vlmeta["count"] = 42
+        >>> print(t.vlmeta["author"])
+        Alice
+        >>> print(t.vlmeta[:])
+        {'author': 'Alice', 'tags': ['alpha', 'beta'], 'count': 42}
+        >>> del t.vlmeta["count"]
+        >>> for name in t.vlmeta:
+        ...     print(name, t.vlmeta[name])
+        ...
+        author Alice
+        tags ['alpha', 'beta']
+        """
+        storage = getattr(self, "_storage", None)
+        if storage is None:
+            raise AttributeError("CTable has no storage backend")
+        if not hasattr(storage, "_open_meta"):
+            # In-memory table: create a simple SChunk to hold vlmeta lazily
+            _tmp = getattr(storage, "_vlmeta_schunk", None)
+            if _tmp is None:
+                storage._vlmeta_schunk = blosc2.SChunk()
+            return storage._vlmeta_schunk.vlmeta
+        # Persistent table: use the dedicated user-vlmeta SChunk
+        meta = storage._open_vlmeta()
+        if meta is None:
+            # First access — create an in-memory SChunk; it will be saved
+            # to disk when the table is closed.
+            meta = blosc2.SChunk()
+            storage._vlmeta = meta
+        return meta.vlmeta
 
     def column_schema(self, name: str) -> CompiledColumn:
         """Return the :class:`CompiledColumn` descriptor for *name*.
