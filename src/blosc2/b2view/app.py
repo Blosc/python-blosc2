@@ -202,11 +202,18 @@ class B2ViewApp(App):
     ]
 
     def __init__(
-        self, urlpath: str, *, start_path: str = "/", preview_rows: int = 20, preview_cols: int = 10
+        self,
+        urlpath: str,
+        *,
+        start_path: str = "/",
+        start_panel: str = "tree",
+        preview_rows: int = 20,
+        preview_cols: int = 10,
     ):
         super().__init__()
         self.urlpath = urlpath
         self.start_path = start_path
+        self.start_panel = start_panel
         self.preview_rows = preview_rows
         self.preview_cols = preview_cols
         self.browser: StoreBrowser | None = None
@@ -262,6 +269,26 @@ class B2ViewApp(App):
         else:
             self.call_after_refresh(self.update_panels, "/")
             tree.focus()
+
+        # Override focus after render settles, when starting panel is not the tree
+        if self.start_panel != "tree":
+            self.set_timer(0.05, lambda: self._focus_panel_by_name(self.start_panel))
+
+    def _focus_panel_by_name(self, name: str) -> None:
+        """Focus a panel by its user-facing name."""
+        panel_map = {
+            "tree": lambda: self.query_one("#tree", Tree),
+            "meta": lambda: self.query_one("#meta-scroll", VerticalScroll),
+            "vlmeta": lambda: self.query_one("#vlmeta-scroll", VerticalScroll),
+            "data": lambda: (
+                self.query_one("#data-table", DataTable)
+                if self.query_one("#data-table-row", Horizontal).display
+                else self.query_one("#data-scroll", VerticalScroll)
+            ),
+        }
+        getter = panel_map.get(name)
+        if getter is not None:
+            getter().focus()
 
     def _navigate_to_path(self, path: str) -> None:
         """Expand the tree and select the node at *path*."""
