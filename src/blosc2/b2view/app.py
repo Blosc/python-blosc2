@@ -86,14 +86,6 @@ class BufferedDataTable(DataTable):
         else:
             super().action_scroll_end()
 
-    def action_scroll_top(self) -> None:
-        getattr(self.app, "action_grid_row_home", lambda: None)()
-        return
-
-    def action_scroll_bottom(self) -> None:
-        getattr(self.app, "action_grid_row_end", lambda: None)()
-        return
-
 
 class GoToRowScreen(ModalScreen[int | None]):
     """Small modal asking for a global row number."""
@@ -178,8 +170,8 @@ class B2ViewApp(App):
         Binding("g", "go_to_row", "Go to row", show=False),
         ("m", "maximize_panel", "Maximize"),
         ("r", "restore_or_refresh", "Restore/Refresh"),
-        ("ctrl+home", "grid_row_home", "First row"),
-        ("ctrl+end", "grid_row_end", "Last row"),
+        Binding("t", "grid_row_top", "Top", show=False),
+        Binding("b", "grid_row_bottom", "Bottom", show=False),
     ]
 
     def __init__(self, urlpath: str, *, preview_rows: int = 20, preview_cols: int = 10):
@@ -208,7 +200,7 @@ class B2ViewApp(App):
                         yield Static("Select a node", id="metadata")
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
-                    data_pane.border_subtitle = "g(oto)"
+                    data_pane.border_subtitle = "t(op) - b(ottom) - g(oto)"
                     yield Static("", id="data-header")
                     with Horizontal(id="data-table-row"):
                         yield BufferedDataTable(id="data-table", show_row_labels=True, zebra_stripes=True)
@@ -639,13 +631,13 @@ class B2ViewApp(App):
         self.load_children(node)
         self.update_panels(node.data or "/")
 
-    def action_grid_row_home(self) -> None:
+    def action_grid_row_top(self) -> None:
         """Jump to the first row of the table."""
         if self.table_page is None:
             return
         self._go_to_row(0)
 
-    def action_grid_row_end(self) -> None:
+    def action_grid_row_bottom(self) -> None:
         """Jump to the last row of the table."""
         if self.table_page is None:
             return
