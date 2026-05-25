@@ -137,9 +137,15 @@ class StoreBrowser:
         kind = object_kind(obj)
         if kind in {"ndarray", "c2array"}:
             shape = tuple(getattr(obj, "shape", ()) or ())
-            if slices is None and len(shape) == 2:
-                stop = min(start + max_rows, shape[0]) if stop is None else stop
-                return preview_array_2d(obj, start=start, stop=stop, col_start=col_start, max_cols=max_cols)
+            if slices is None:
+                if len(shape) == 2:
+                    stop = min(start + max_rows, shape[0]) if stop is None else stop
+                    return preview_array_2d(
+                        obj, start=start, stop=stop, col_start=col_start, max_cols=max_cols
+                    )
+                if len(shape) == 1:
+                    stop = min(start + max_rows, shape[0]) if stop is None else stop
+                    return preview_array_1d(obj, start=start, stop=stop)
             return preview_array(obj, slices=slices, max_rows=max_rows, max_cols=max_cols)
         if kind == "ctable":
             stop = min(start + max_rows, len(obj)) if stop is None else stop
@@ -250,6 +256,29 @@ def preview_array_2d(
         "col_start": col_start,
         "col_stop": col_stop,
         "ncols": ncols,
+    }
+
+
+def preview_array_1d(obj: Any, *, start: int = 0, stop: int = 20, **kwargs) -> dict[str, Any]:
+    """Return a bounded row preview for a 1-D array."""
+    shape = tuple(getattr(obj, "shape", ()) or ())
+    if len(shape) != 1:
+        raise ValueError(f"Expected a 1-D array, got shape {shape!r}")
+    nrows = shape[0]
+    start = max(0, min(start, nrows))
+    stop = min(max(start, stop), nrows)
+    data = {
+        "value": np.asarray(obj[start:stop]),
+    }
+    return {
+        "start": start,
+        "stop": stop,
+        "nrows": nrows,
+        "columns": ["value"],
+        "hidden_columns": 0,
+        "data": data,
+        "source_kind": "ndarray1d",
+        "shape": shape,
     }
 
 

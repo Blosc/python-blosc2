@@ -302,7 +302,7 @@ class B2ViewApp(App):
     @staticmethod
     def _uses_grid_preview(info) -> bool:
         return info.kind == "ctable" or (
-            info.kind in {"ndarray", "c2array"} and info.metadata.get("ndim") == 2
+            info.kind in {"ndarray", "c2array"} and info.metadata.get("ndim") in (1, 2)
         )
 
     def _col_page_size(self) -> int:

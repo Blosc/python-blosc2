@@ -5,7 +5,13 @@ import dataclasses
 import numpy as np
 
 import blosc2
-from blosc2.b2view.model import StoreBrowser, preview_array, preview_array_2d, preview_ctable
+from blosc2.b2view.model import (
+    StoreBrowser,
+    preview_array,
+    preview_array_1d,
+    preview_array_2d,
+    preview_ctable,
+)
 from blosc2.b2view.render import make_preview_renderables
 
 
@@ -79,6 +85,17 @@ def test_store_browser_supports_standalone_ctable(tmp_path):
         assert info.metadata["rows"] == 4
         preview = browser.preview("/", max_rows=2)
         np.testing.assert_array_equal(preview["data"]["x"], np.array([0, 1]))
+
+
+def test_preview_array_1d_returns_grid_preview():
+    arr = np.arange(10)
+    preview = preview_array_1d(arr, start=3, stop=7)
+    assert preview["start"] == 3
+    assert preview["stop"] == 7
+    assert preview["nrows"] == 10
+    assert preview["columns"] == ["value"]
+    assert preview["source_kind"] == "ndarray1d"
+    np.testing.assert_array_equal(preview["data"]["value"], np.array([3, 4, 5, 6]))
 
 
 def test_preview_array_2d_returns_grid_preview():
