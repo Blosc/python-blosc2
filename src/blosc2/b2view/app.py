@@ -10,7 +10,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
 
-from blosc2.b2view.model import StoreBrowser
+from blosc2.b2view.model import DataSliceLayout, StoreBrowser
 from blosc2.b2view.render import format_cell, make_metadata_renderable, make_preview_renderables
 
 _KIND_ICONS = {
@@ -33,24 +33,40 @@ class BufferedDataTable(DataTable):
     """DataTable with app-controlled page changes at row boundaries."""
 
     def action_cursor_down(self) -> None:
-        if self.cursor_row >= self.row_count - 1 and getattr(self.app, "page_table", lambda _: False)(1):
+        app = self.app
+        if getattr(app, "_dim_mode", False):
+            getattr(app, "_dim_adjust", lambda _: None)(-1)
+            return
+        if self.cursor_row >= self.row_count - 1 and getattr(app, "page_table", lambda _: False)(1):
             return
         super().action_cursor_down()
 
     def action_cursor_up(self) -> None:
-        if self.cursor_row <= 0 and getattr(self.app, "page_table", lambda _: False)(-1):
+        app = self.app
+        if getattr(app, "_dim_mode", False):
+            getattr(app, "_dim_adjust", lambda _: None)(1)
+            return
+        if self.cursor_row <= 0 and getattr(app, "page_table", lambda _: False)(-1):
             return
         super().action_cursor_up()
 
     def action_cursor_right(self) -> None:
+        app = self.app
+        if getattr(app, "_dim_mode", False):
+            getattr(app, "_dim_cursor", lambda _: None)(1)
+            return
         if self.cursor_column >= len(self.columns) - 1 and getattr(
-            self.app, "page_grid_columns", lambda _: False
+            app, "page_grid_columns", lambda _: False
         )(1):
             return
         super().action_cursor_right()
 
     def action_cursor_left(self) -> None:
-        if self.cursor_column <= 0 and getattr(self.app, "page_grid_columns", lambda _: False)(-1):
+        app = self.app
+        if getattr(app, "_dim_mode", False):
+            getattr(app, "_dim_cursor", lambda _: None)(-1)
+            return
+        if self.cursor_column <= 0 and getattr(app, "page_grid_columns", lambda _: False)(-1):
             return
         super().action_cursor_left()
 
@@ -73,6 +89,13 @@ class BufferedDataTable(DataTable):
         if getattr(self.app, "page_grid_columns", lambda _: False)(-1):
             return
         super().action_page_left()
+
+    def action_select_cursor(self) -> None:
+        app = self.app
+        if getattr(app, "_dim_mode", False):
+            getattr(app, "action_dim_toggle_nav", lambda: None)()
+            return
+        super().action_select_cursor()
 
     def action_scroll_home(self) -> None:
         if getattr(self.app, "_grid_col_home", lambda: False)():
@@ -173,14 +196,17 @@ class B2ViewApp(App):
         ("r", "restore_or_refresh", "Restore/Refresh"),
         Binding("t", "grid_row_top", "Top", show=False),
         Binding("b", "grid_row_bottom", "Bottom", show=False),
-        Binding("[", "slice_prev", "Slice prev", show=False),
-        Binding("]", "slice_next", "Slice next", show=False),
-        Binding("d", "dim_cycle", "Next dim", show=False),
+        Binding("d", "dim_cycle", "Dim mode", show=False),
+        Binding("enter", "dim_toggle_nav", "Toggle nav", show=False),
+        Binding("escape", "dim_exit", "Exit dim mode", show=False),
     ]
 
-    def __init__(self, urlpath: str, *, preview_rows: int = 20, preview_cols: int = 10):
+    def __init__(
+        self, urlpath: str, *, start_path: str = "/", preview_rows: int = 20, preview_cols: int = 10
+    ):
         super().__init__()
         self.urlpath = urlpath
+        self.start_path = start_path
         self.preview_rows = preview_rows
         self.preview_cols = preview_cols
         self.browser: StoreBrowser | None = None
@@ -189,9 +215,9 @@ class B2ViewApp(App):
         self.table_page: dict | None = None
         self.table_buffer: dict | None = None
         self.grid_col_start = 0
-        self.slice_indices: list[int] = []
-        self.active_dim = 0
-        self.n_leading_dims = 0
+        self._data_layout: DataSliceLayout | None = None
+        self._active_dim = 0
+        self._dim_mode = False
         self.loading_table_page = False
 
     def compose(self) -> ComposeResult:
@@ -212,7 +238,7 @@ class B2ViewApp(App):
                             yield Static("", id="vlmetadata")
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
-                    data_pane.border_subtitle = "[] dim - d(im) | t(op) - b(ottom) - g(oto)"
+                    data_pane.border_subtitle = "d(im mode) | t(op) - b(ottom) - g(oto)"
                     yield Static("", id="data-header")
                     with Horizontal(id="data-table-row"):
                         yield BufferedDataTable(id="data-table", show_row_labels=True, zebra_stripes=True)
@@ -230,8 +256,43 @@ class B2ViewApp(App):
         tree.root.expand()
         self.query_one("#data-table-row", Horizontal).display = False
         self.query_one("#col-scrollbar", Static).display = False
-        self.call_after_refresh(self.update_panels, "/")
-        tree.focus()
+
+        if self.start_path and self.start_path != "/":
+            self._navigate_to_path(self.start_path)
+        else:
+            self.call_after_refresh(self.update_panels, "/")
+            tree.focus()
+
+    def _navigate_to_path(self, path: str) -> None:
+        """Expand the tree and select the node at *path*."""
+        tree = self.query_one("#tree", Tree)
+        parts = [p for p in path.split("/") if p]
+        node = tree.root
+        # Walk down the tree expanding each level
+        for part in parts:
+            self.load_children(node)
+            found = None
+            for child in node.children:
+                if child.label and child.label.plain.endswith(f" {part}"):
+                    found = child
+                    break
+            if found is None:
+                # Path not found — fall back to root
+                self.call_after_refresh(self.update_panels, "/")
+                tree.focus()
+                return
+            if found.allow_expand:
+                self.load_children(found)
+            found.expand()
+            node = found
+
+        # Selecting the node fires NodeSelected → on_tree_node_selected → update_panels
+        def _do_select():
+            tree.select_node(node)
+            tree.scroll_to_node(node)
+            tree.focus()
+
+        self.call_after_refresh(_do_select)
 
     def on_unmount(self) -> None:
         if self.browser is not None:
@@ -271,9 +332,9 @@ class B2ViewApp(App):
             metadata.update(make_metadata_renderable(info))
             self.table_buffer = None
             self.grid_col_start = 0
-            self.slice_indices = []
-            self.active_dim = 0
-            self.n_leading_dims = 0
+            self._data_layout = None
+            self._active_dim = 0
+            self._dim_mode = False
             if info.kind == "group":
                 data_header.display = False
                 data_table_row.display = False
@@ -288,11 +349,11 @@ class B2ViewApp(App):
                     data_table_row.display = True
                     data_scroll.display = False
                     preview.update("")
-                    ndim = info.metadata.get("ndim", 0)
-                    self.n_leading_dims = max(0, ndim - 2)
-                    if self.n_leading_dims > 0 and not self.slice_indices:
-                        self.slice_indices = [0] * self.n_leading_dims
-                        self.active_dim = 0
+                    shape = tuple(info.metadata.get("shape", ()) or ())
+                    ndim = len(shape)
+                    if ndim >= 1 and self._data_layout is None:
+                        self._data_layout = DataSliceLayout.from_shape(shape)
+                        self._active_dim = 0
                     data = self._load_table_page(path, 0)
                 else:
                     data = self.browser.preview(path, max_rows=self.preview_rows, max_cols=self.preview_cols)
@@ -395,12 +456,23 @@ class B2ViewApp(App):
             raise RuntimeError("Store browser is not open")
         page_size = self._table_page_size()
         start = max(0, start)
+        layout = self._data_layout
+
         if self.table_buffer is not None:
             buffer_start = self.table_buffer["start"]
             buffer_stop = self.table_buffer["stop"]
             same_columns = self.table_buffer.get("source_kind") not in {"ndarray2d", "ndarray_slice"} or (
                 self.table_buffer.get("col_start") == self.grid_col_start
-                and self.table_buffer.get("slice_indices") == self.slice_indices
+                and self.table_buffer.get("slice_indices")
+                == (
+                    [
+                        layout.fixed_values.get(i, 0)
+                        for i in range(len(layout.shape))
+                        if i in layout.fixed_values
+                    ]
+                    if layout is not None
+                    else []
+                )
             )
             if same_columns and buffer_start <= start and start + page_size <= buffer_stop:
                 data = self._slice_table_buffer(start, page_size)
@@ -408,22 +480,50 @@ class B2ViewApp(App):
                 return data
 
         buffer_size = page_size * 10
-        # Keep requested page around the middle of the buffer.  This makes both
-        # forward and backward page turns fast after a boundary-crossing fetch.
         buffer_start = max(0, start - page_size * 4)
-        data = self.browser.preview(
-            path,
-            start=buffer_start,
-            stop=buffer_start + buffer_size,
-            max_rows=buffer_size,
-            max_cols=self._col_page_size(),
-            col_start=self.grid_col_start,
-            slice_indices=self.slice_indices,
-        )
+
+        if layout is not None and len(layout.shape) >= 1:
+            # Use the layout-based preview for all array types (1D+)
+            # Scalar view (0 navigable dims) always starts at 0
+            if not layout.navigable_dims:
+                start = 0
+            self._sync_layout_scroll(start, layout)
+            data = self.browser.preview(
+                path,
+                max_rows=buffer_size,
+                max_cols=self._col_page_size(),
+                layout=layout,
+            )
+        else:
+            # CTable or non-array objects — use legacy preview
+            data = self.browser.preview(
+                path,
+                start=buffer_start,
+                stop=buffer_start + buffer_size,
+                max_rows=buffer_size,
+                max_cols=self._col_page_size(),
+                col_start=self.grid_col_start,
+            )
         self.table_buffer = data
         data = self._slice_table_buffer(start, page_size)
         self.table_page = data
         return data
+
+    def _sync_layout_scroll(self, start: int, layout: DataSliceLayout) -> None:
+        """Update the layout's row/col scroll positions to match the page start."""
+        if layout is None:
+            return
+        navigable = layout.navigable_dims
+        if len(navigable) >= 1:
+            row_dim = navigable[0]
+            total = layout.shape[row_dim]
+            layout.row_start = max(0, min(start, total))
+            layout.row_stop = min(layout.row_start + self._table_page_size() * 10, total)
+        if len(navigable) >= 2:
+            col_dim = navigable[1]
+            total = layout.shape[col_dim]
+            layout.col_start = max(0, min(self.grid_col_start, total))
+            layout.col_stop = min(layout.col_start + self._col_page_size(), total)
 
     def _slice_table_buffer(self, start: int, page_size: int) -> dict:
         if self.table_buffer is None:
@@ -558,28 +658,43 @@ class B2ViewApp(App):
         return True
 
     def _update_data_header(self, data: dict) -> None:
-        header = ""
-        if data.get("source_kind") == "ndarray_slice":
-            indices = data.get("slice_indices", [])
-            n_per_dim = data.get("n_slices_per_dim", [])
-            n_leading = len(indices)
-            for i in range(n_leading):
-                idx = indices[i]
-                n = n_per_dim[i] if i < len(n_per_dim) else 0
-                if i == self.active_dim:
-                    header += f"d{i} [{idx}] of {n}, "
+        layout = self._data_layout
+        header_parts: list[str] = []
+
+        if layout is not None and len(layout.shape) >= 1:
+            ndim = len(layout.shape)
+            for i in range(ndim):
+                is_active = i == self._active_dim
+
+                if i in layout.fixed_values:
+                    idx = layout.fixed_values[i]
+                    part = f"d{i} [{idx}]"
+                elif i in layout.navigable_dims:
+                    pos = layout.navigable_dims.index(i)
+                    if pos == 0:
+                        s, e = data["start"], data["stop"]
+                    else:
+                        s, e = data.get("col_start", 0), data.get("col_stop", 0)
+                    part = f"d{i}[{s}:{e}]"
                 else:
-                    header += f"d{i} {idx} of {n}, "
-            header += f"d{n_leading}[{data['start']}:{data['stop']}], "
-            header += f"d{n_leading + 1}[{data['col_start']}:{data['col_stop']}]"
-        elif data.get("source_kind") == "ndarray2d":
-            header += f"d0[{data['start']}:{data['stop']}], "
-            header += f"d1[{data['col_start']}:{data['col_stop']}]"
+                    part = f"d{i} ?"
+
+                if is_active and self._dim_mode:
+                    part = f"[bold]{part}[/bold]"
+                header_parts.append(part)
+
+            if self._dim_mode:
+                header_parts.append("[reverse] DIM MODE [/reverse]")
+                header_parts.append("←→dim  ↑↓val  <Enter>fix/nav  <Esc>exit")
         else:
-            header += f"rows {data['start']}:{data['stop']} of {data['nrows']}"
+            header_parts.append(f"rows {data['start']}:{data['stop']} of {data['nrows']}")
             if "col_start" in data:
-                header += f", cols {data['col_start']}:{data['col_stop']} of {data['ncols']}"
-        self.query_one("#data-header", Static).update(header)
+                header_parts.append(f"cols {data['col_start']}:{data['col_stop']} of {data['ncols']}")
+
+        line = ", ".join(header_parts)
+        if self._dim_mode and layout is not None:
+            line = f"[reverse]{line}[/reverse]"
+        self.query_one("#data-header", Static).update(line)
 
     def _make_global_scrollbar(self, *, start: int, stop: int, total: int, size: int, track: str) -> str:
         size = max(1, size)
@@ -739,49 +854,166 @@ class B2ViewApp(App):
         self.load_children(node)
         self.update_panels(node.data or "/")
 
-    def _slice_direction(self, direction: int) -> None:
-        if self.table_page is None or self.table_page.get("source_kind") != "ndarray_slice":
+    def _adjust_fixed_value(self, direction: int) -> None:
+        """Adjust the fixed value of the active dimension (if it is fixed).
+
+        In DIM mode the value wraps around at boundaries (0 ↔ max).
+        """
+        layout = self._data_layout
+        if layout is None or self.table_page is None:
             return
-        if not self.slice_indices:
+        dim = self._active_dim
+        if dim not in layout.fixed_values:
             return
-        dim = self.active_dim
-        current = self.slice_indices[dim]
-        n = self.table_page.get("n_slices_per_dim", [0] * len(self.slice_indices))[dim]
-        if direction > 0:
-            if current >= n - 1:
-                return
-            self.slice_indices[dim] = current + 1
+        total = layout.shape[dim]
+        if total <= 0:
+            return
+        current = layout.fixed_values[dim]
+        if self._dim_mode and total > 1:
+            # Cycle: up at max → 0, down at 0 → max-1
+            new_val = (current + direction) % total
         else:
-            if current <= 0:
-                return
-            self.slice_indices[dim] = current - 1
+            # Clamp at boundaries (normal mode)
+            if direction > 0:
+                if current >= total - 1:
+                    return
+                new_val = current + 1
+            else:
+                if current <= 0:
+                    return
+                new_val = current - 1
+        new_fixed = dict(layout.fixed_values)
+        new_fixed[dim] = new_val
+        self._data_layout = layout.copy_with(fixed_values=new_fixed)
         self.table_buffer = None
         data = self._load_table_page(self.selected_path, self.table_page["start"])
         cursor_row = self.query_one("#data-table", DataTable).cursor_row
         self._update_data_table(data, cursor_row=cursor_row)
         self._update_data_header(data)
 
-    def action_slice_prev(self) -> None:
-        if not self._in_data_grid():
-            return
-        self._slice_direction(-1)
+    def _rebuild_layout(self, navigable: list[int]) -> DataSliceLayout:
+        """Return a copy of the current layout with the given *navigable* dims.
 
-    def action_slice_next(self) -> None:
-        if not self._in_data_grid():
+        All non-navigable dimensions are fixed at their previous value (or 0).
+        """
+        layout = self._data_layout
+        if layout is None:
+            raise RuntimeError("No layout available")
+        new_fixed: dict[int, int] = {}
+        for d in range(len(layout.shape)):
+            if d in navigable:
+                continue
+            if d in layout.fixed_values:
+                new_fixed[d] = layout.fixed_values[d]
+            else:
+                new_fixed[d] = 0
+        return layout.copy_with(fixed_values=new_fixed, navigable_dims=navigable)
+
+    def _dim_toggle(self) -> None:
+        """: key — toggle active dim between fixed and navigable."""
+        layout = self._data_layout
+        if layout is None or self.table_page is None:
             return
-        self._slice_direction(1)
+        dim = self._active_dim
+        if dim not in range(len(layout.shape)):
+            return
+
+        if dim in layout.navigable_dims:
+            # Navigable → fixed (at index 0)
+            new_nav = [d for d in layout.navigable_dims if d != dim]
+            self._data_layout = self._rebuild_layout(new_nav)
+        elif dim in layout.fixed_values:
+            # Fixed → navigable (if room)
+            if len(layout.navigable_dims) >= 2:
+                self.notify("At most 2 navigable dimensions are allowed")
+                return
+            new_nav = sorted(layout.navigable_dims + [dim])
+            self._data_layout = self._rebuild_layout(new_nav)
+        else:
+            return
+
+        # Refresh the display (DataTable for 1-2 nav dims, same path for 0)
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, self.table_page["start"])
+        cursor_row = self.query_one("#data-table", DataTable).cursor_row
+        self._update_data_table(data, cursor_row=cursor_row)
+        self._update_data_header(data)
+
+    def _dim_cursor(self, direction: int) -> None:
+        """In dim mode, move the active dimension up (+1) or down (-1)."""
+        layout = self._data_layout
+        if layout is None or len(layout.shape) < 1:
+            return
+        ndim = len(layout.shape)
+        self._active_dim = (self._active_dim + direction) % ndim
+        if self.table_page is not None:
+            self._update_data_header(self.table_page)
+
+    def _dim_adjust(self, direction: int) -> None:
+        """In DIM mode, adjust the active dim: fixed value or navigable viewport."""
+        layout = self._data_layout
+        if layout is None or self.table_page is None:
+            return
+        dim = self._active_dim
+        if dim in layout.fixed_values:
+            self._adjust_fixed_value(direction)
+        elif dim in layout.navigable_dims:
+            self._scroll_navigable_viewport(direction)
+
+    def _scroll_navigable_viewport(self, direction: int) -> None:
+        """Shift the viewport of a navigable dimension by one step (wraps)."""
+        layout = self._data_layout
+        if layout is None or self.table_page is None:
+            return
+        dim = self._active_dim
+        if dim not in layout.navigable_dims:
+            return
+
+        pos = layout.navigable_dims.index(dim)
+        page = self.table_page
+        total = layout.shape[dim]
+
+        if pos == 0:
+            # Row navigable dim — shift start by one row (wraps)
+            new_start = (page["start"] + direction) % total
+            self.table_buffer = None
+            data = self._load_table_page(self.selected_path, new_start)
+        else:
+            # Column navigable dim — shift col_start by one column (wraps)
+            new_col = (page["col_start"] + direction) % total
+            self.grid_col_start = new_col
+            self.table_buffer = None
+            data = self._load_table_page(self.selected_path, page["start"])
+
+        self._update_data_table(data)
+        self._update_data_header(data)
 
     def action_dim_cycle(self) -> None:
+        """d key — toggle DIM mode on/off."""
         if not self._in_data_grid():
             return
-        if self.table_page.get("source_kind") != "ndarray_slice":
+        layout = self._data_layout
+        if layout is None or len(layout.shape) < 1:
+            self.notify("No dimensions to navigate")
             return
-        ndims = len(self.slice_indices)
-        if ndims <= 1:
-            self.notify("Only one leading dimension to navigate")
+
+        self._dim_mode = not self._dim_mode
+        if self.table_page is not None:
+            self._update_data_header(self.table_page)
+
+    def action_dim_toggle_nav(self) -> None:
+        """Enter — toggle active dim between fixed and navigable (in dim mode)."""
+        if not self._in_data_grid() or not self._dim_mode:
             return
-        self.active_dim = (self.active_dim + 1) % ndims
-        self._update_data_header(self.table_page)
+        self._dim_toggle()
+
+    def action_dim_exit(self) -> None:
+        """Escape: exit dim mode."""
+        if not self._dim_mode:
+            return
+        self._dim_mode = False
+        if self.table_page is not None:
+            self._update_data_header(self.table_page)
 
     def action_grid_row_top(self) -> None:
         """Jump to the first row of the table."""

@@ -31,6 +31,97 @@ class ObjectInfo:
     user_attrs: dict[str, Any] | None = None
 
 
+@dataclass
+class DataSliceLayout:
+    """Describes the fixed/navigable state for slicing an N-D array into a 2-D table view.
+
+    At most 2 dimensions can be navigable (shown as table rows/columns).
+    All other dimensions must be fixed at a specific index value.
+    """
+
+    shape: tuple[int, ...]
+    fixed_values: dict[int, int]  # dim_index → fixed index value
+    navigable_dims: list[int]  # sorted list of up to 2 navigable dim indices
+
+    # Current scroll positions for navigable dims
+    # (index 0 → rows, index 1 → cols if present)
+    row_start: int = 0
+    row_stop: int = 0
+    col_start: int = 0
+    col_stop: int = 0
+
+    @classmethod
+    def from_shape(cls, shape: tuple[int, ...]) -> DataSliceLayout:
+        """Create a default layout: leading dims fixed at 0, last up-to-2 dims navigable."""
+        ndim = len(shape)
+        if ndim <= 2:
+            navigable = list(range(ndim))
+            fixed: dict[int, int] = {}
+        else:
+            navigable = list(range(ndim - 2, ndim))
+            fixed = dict.fromkeys(range(ndim - 2), 0)
+        return cls(
+            shape=shape,
+            fixed_values=fixed,
+            navigable_dims=navigable,
+        )
+
+    def make_slices(self, max_rows: int = 20, max_cols: int = 10) -> tuple[int | slice, ...]:
+        """Build the tuple of index expressions for slicing into the array.
+
+        Uses *max_rows* and *max_cols* to size the navigable dimensions when
+        ``row_stop <= row_start`` (i.e. no explicit stop was set).
+        """
+        slices: list[int | slice] = []
+        for i in range(len(self.shape)):
+            if i in self.fixed_values:
+                slices.append(self.fixed_values[i])
+            elif self.navigable_dims and i == self.navigable_dims[0]:
+                start = max(0, min(self.row_start, self.shape[i]))
+                if self.row_stop > self.row_start:
+                    stop = min(self.row_stop, self.shape[i])
+                else:
+                    stop = min(start + max_rows, self.shape[i])
+                slices.append(slice(start, stop))
+            elif len(self.navigable_dims) > 1 and i == self.navigable_dims[1]:
+                start = max(0, min(self.col_start, self.shape[i]))
+                if self.col_stop > self.col_start:
+                    stop = min(self.col_stop, self.shape[i])
+                else:
+                    stop = min(start + max_cols, self.shape[i])
+                slices.append(slice(start, stop))
+            else:
+                slices.append(slice(0, self.shape[i]))
+        return tuple(slices)
+
+    def copy_with(
+        self,
+        *,
+        fixed_values: dict[int, int] | None = None,
+        navigable_dims: list[int] | None = None,
+        row_start: int | None = None,
+        row_stop: int | None = None,
+        col_start: int | None = None,
+        col_stop: int | None = None,
+    ) -> DataSliceLayout:
+        """Return a new layout with specified fields overridden."""
+        return DataSliceLayout(
+            shape=self.shape,
+            fixed_values=self.fixed_values if fixed_values is None else fixed_values,
+            navigable_dims=list(self.navigable_dims) if navigable_dims is None else navigable_dims,
+            row_start=self.row_start if row_start is None else row_start,
+            row_stop=self.row_stop if row_stop is None else row_stop,
+            col_start=self.col_start if col_start is None else col_start,
+            col_stop=self.col_stop if col_stop is None else col_stop,
+        )
+
+    def total_for_dim(self, dim: int) -> int:
+        """Return the total size of *dim*."""
+        if 0 <= dim < len(self.shape):
+            return self.shape[dim]
+        return 0
+
+
 class StoreBrowser:
     """Small, read-only adapter used by the b2view UI.
 
@@ -133,14 +224,23 @@ class StoreBrowser:
         max_cols: int = 10,
         col_start: int = 0,
         slice_indices: list[int] | None = None,
+        layout: DataSliceLayout | None = None,
     ) -> Any:
-        """Return a bounded data preview for *path*."""
+        """Return a bounded data preview for *path*.
+
+        For N-D arrays (N >= 3) a *layout* may be provided instead of the
+        legacy *slice_indices*, *start*/*stop*, *col_start* parameters.
+        """
         path = self.normalize_path(path)
         obj = self._get_object(path)
         kind = object_kind(obj)
         if kind in {"ndarray", "c2array"}:
             shape = tuple(getattr(obj, "shape", ()) or ())
             if slices is None:
+                if layout is not None:
+                    return preview_array_from_layout(
+                        obj, layout=layout, max_rows=max_rows, max_cols=max_cols
+                    )
                 if len(shape) >= 3:
                     return preview_array_nd_slice(
                         obj,
@@ -254,6 +354,114 @@ def object_metadata(obj: Any) -> dict[str, Any]:
             "cbytes": getattr(obj, "cbytes", None),
         }
     return {"repr": repr(obj)}
+
+
+def preview_array_from_layout(
+    obj: Any,
+    *,
+    layout: DataSliceLayout,
+    max_rows: int = 20,
+    max_cols: int = 10,
+) -> dict[str, Any]:
+    """Return a bounded preview for an N-D array using a *layout*.
+
+    The layout describes which dimensions are fixed (slider) vs navigable
+    (table rows/columns).  At most 2 navigable dimensions are allowed.
+    """
+    shape = tuple(getattr(obj, "shape", ()) or ())
+    if len(shape) != len(layout.shape):
+        raise ValueError(f"Layout shape {layout.shape} does not match object shape {shape}")
+    ndim = len(shape)
+    navigable = layout.navigable_dims
+
+    # Determine row and col navigable dims
+    row_dim = navigable[0] if len(navigable) >= 1 else None
+    col_dim = navigable[1] if len(navigable) >= 2 else None
+
+    # Page sizes
+    nrows = shape[row_dim] if row_dim is not None else 1
+    ncols = shape[col_dim] if col_dim is not None else 1
+
+    # Clamp fixed values
+    fixed_values = {}
+    for d, val in layout.fixed_values.items():
+        total = shape[d]
+        fixed_values[d] = max(0, min(val, total - 1)) if total > 0 else 0
+
+    # Ensure every non-navigable dim is fixed at 0 (safety catch)
+    for i in range(ndim):
+        if i not in fixed_values and (row_dim is None or i != row_dim) and (col_dim is None or i != col_dim):
+            fixed_values[i] = 0
+
+    # Build slicing tuple
+    idx: list[int | slice] = []
+    for i in range(ndim):
+        if i in fixed_values:
+            idx.append(fixed_values[i])
+        elif row_dim is not None and i == row_dim:
+            start = max(0, min(layout.row_start, nrows))
+            stop = min(max(start, start + max_rows), nrows)
+            idx.append(slice(start, stop))
+        elif col_dim is not None and i == col_dim:
+            col_start = max(0, min(layout.col_start, ncols))
+            col_stop = min(col_start + max_cols, ncols)
+            idx.append(slice(col_start, col_stop))
+        else:
+            # Shouldn't happen: non-navigable dims are caught above
+            idx.append(slice(0, shape[i]))
+
+    values = np.asarray(obj[tuple(idx)])
+
+    # Build column labels — match data keys below
+    if col_dim is not None:
+        col_start = max(0, min(layout.col_start, ncols))
+        col_stop = min(col_start + max_cols, ncols)
+        columns = [str(i) for i in range(col_start, col_stop)]
+    elif row_dim is not None:
+        columns = ["value"]
+    else:
+        columns = ["value"]
+
+    # Extract 2-D data from result
+    data: dict[str, Any] = {}
+    if row_dim is not None and col_dim is not None:
+        # 2-D navigable → 2-D table
+        col_start = max(0, min(layout.col_start, ncols))
+        col_stop = min(col_start + max_cols, ncols)
+        for i, c in enumerate(range(col_start, col_stop)):
+            data[str(c)] = values[:, i]
+    elif row_dim is not None:
+        # Only rows navigable → 1-D view
+        data["value"] = values
+    else:
+        # 0 navigable → scalar
+        data["value"] = np.asarray([values.item()]) if np.ndim(values) == 0 else np.asarray([values])
+
+    row_start_val = max(0, min(layout.row_start, nrows)) if row_dim is not None else 0
+    row_stop_val = min(row_start_val + max_rows, nrows) if row_dim is not None else 1
+    col_start_val = max(0, min(layout.col_start, ncols)) if col_dim is not None else 0
+    col_stop_val = min(col_start_val + max_cols, ncols) if col_dim is not None else 1
+
+    result: dict[str, Any] = {
+        "start": row_start_val,
+        "stop": row_stop_val,
+        "nrows": nrows,
+        "columns": columns,
+        "hidden_columns": max(0, ncols - (col_stop_val - col_start_val)),
+        "data": data,
+        "source_kind": "ndarray_slice",
+        "shape": shape,
+        "col_start": col_start_val,
+        "col_stop": col_stop_val,
+        "ncols": ncols,
+        "layout": layout,
+        "slice_indices": [fixed_values.get(i, 0) for i in range(min(ndim - 2, ndim))],
+        "n_slices_per_dim": [shape[i] for i in range(ndim) if i in fixed_values],
+    }
+    # Keep legacy fields for backward compat
+    result["slice_indices"] = [fixed_values.get(i, 0) for i in range(ndim) if i in fixed_values]
+    result["n_slices_per_dim"] = [shape[i] for i in range(ndim) if i in fixed_values]
+    return result
 
 
 def preview_array_nd_slice(
