@@ -4382,23 +4382,19 @@ class NDArray(blosc2_ext.NDArray, Operand):
         result_shape = self.shape[:axis] + normalized.shape + self.shape[axis + 1 :]
         if flat.size == 0:
             return np.empty(result_shape, dtype=self.dtype)
+        if self.ndim == 1:
+            return self._take_sparse_normalized(flat).reshape(result_shape)
 
-        # Build flat C-order coordinates for every output element.
-        # Dimensions < axis and > axis iterate over the full range,
-        # while dimension ``axis`` is replaced by the given indices.
-        # Broadcasting avoids materialising a full coordinate tensor.
-        grid = []
-        for d in range(self.ndim):
-            if d == axis:
-                shape = [1] * self.ndim
-                shape[d] = flat.size
-                grid.append(flat.reshape(shape))
-            else:
-                shape = [1] * self.ndim
-                shape[d] = self.shape[d]
-                grid.append(np.arange(self.shape[d], dtype=np.int64).reshape(shape))
-        flat_coords = np.ravel_multi_index(grid, self.shape).ravel()
-        out = self._take_sparse_normalized(flat_coords)
+        # For ndim > 1 axis-based take, use orthogonal selection which
+        # decompresses each chunk once and copies contiguous row/slab
+        # slices.  Per-element sparse gather is the wrong tool here
+        # because it would iterate over every individual element
+        # coordinate (n_indices × product of other dims).
+        selection = [np.arange(dim, dtype=np.int64) for dim in self.shape]
+        selection[axis] = flat
+        orthogonal_shape = self.shape[:axis] + (flat.size,) + self.shape[axis + 1 :]
+        out = np.empty(orthogonal_shape, dtype=self.dtype)
+        self.get_oindex_numpy(out, selection)
         return out.reshape(result_shape)
 
     def take(self, indices, /, *, axis: int | None = None) -> NDArray:
