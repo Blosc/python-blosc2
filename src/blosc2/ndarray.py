@@ -4367,16 +4367,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     def _take_sparse_normalized(self, indices: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
         out = np.empty(indices.shape, dtype=self.dtype) if out is None else out
-        return super().get_1d_sparse_numpy(out, indices)
+        return super().get_sparse_numpy(out, indices)
 
     def _take_numpy(self, indices, /, *, axis: int | None = None) -> np.ndarray:
         """Return a NumPy buffer for :meth:`take` and internal gather paths."""
         if axis is None:
             normalized = self._normalize_take_indices(indices, self.size)
-            if self.ndim == 1:
-                flat = normalized.reshape(-1)
-                return self._take_sparse_normalized(flat).reshape(normalized.shape)
-            return np.take(self[:], normalized, axis=None)
+            flat = normalized.reshape(-1)
+            return self._take_sparse_normalized(flat).reshape(normalized.shape)
 
         axis = self._normalize_take_axis(axis, self.ndim)
         normalized = self._normalize_take_indices(indices, self.shape[axis])
@@ -4384,14 +4382,23 @@ class NDArray(blosc2_ext.NDArray, Operand):
         result_shape = self.shape[:axis] + normalized.shape + self.shape[axis + 1 :]
         if flat.size == 0:
             return np.empty(result_shape, dtype=self.dtype)
-        if self.ndim == 1:
-            return self._take_sparse_normalized(flat).reshape(result_shape)
 
-        selection = [np.arange(dim, dtype=np.int64) for dim in self.shape]
-        selection[axis] = flat
-        orthogonal_shape = self.shape[:axis] + (flat.size,) + self.shape[axis + 1 :]
-        out = np.empty(orthogonal_shape, dtype=self.dtype)
-        self.get_oindex_numpy(out, selection)
+        # Build flat C-order coordinates for every output element.
+        # Dimensions < axis and > axis iterate over the full range,
+        # while dimension ``axis`` is replaced by the given indices.
+        # Broadcasting avoids materialising a full coordinate tensor.
+        grid = []
+        for d in range(self.ndim):
+            if d == axis:
+                shape = [1] * self.ndim
+                shape[d] = flat.size
+                grid.append(flat.reshape(shape))
+            else:
+                shape = [1] * self.ndim
+                shape[d] = self.shape[d]
+                grid.append(np.arange(self.shape[d], dtype=np.int64).reshape(shape))
+        flat_coords = np.ravel_multi_index(grid, self.shape).ravel()
+        out = self._take_sparse_normalized(flat_coords)
         return out.reshape(result_shape)
 
     def take(self, indices, /, *, axis: int | None = None) -> NDArray:
@@ -4403,6 +4410,24 @@ class NDArray(blosc2_ext.NDArray, Operand):
         ``indices.shape``.
         """
         return blosc2.asarray(self._take_numpy(indices, axis=axis))
+
+    def _try_sparse_fancy_index(self, key) -> np.ndarray | None:
+        """Try to handle integer-array fancy indexing via the sparse gather path.
+
+        If *key* is a single integer array (list or ndarray, any dimensionality)
+        route it through ``_take_numpy`` which uses ``b2nd_get_sparse_cbuffer``.
+        Return the result ndarray on success, or ``None`` to signal that the
+        caller should fall back to the regular fancy-indexing machinery.
+        """
+        if isinstance(key, (slice, tuple)):
+            return None
+        if not isinstance(key, (list, np.ndarray)):
+            return None
+        key_arr = np.asarray(key)
+        if not (np.issubdtype(key_arr.dtype, np.integer) and key_arr.ndim >= 1):
+            return None
+        # 1-D: axis=None (flat); ndim>1: axis=0 (row selection)
+        return self._take_numpy(key_arr, axis=None if self.ndim == 1 else 0)
 
     def __getitem__(
         self,
@@ -4473,9 +4498,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         key = key[()] if isinstance(key, NDArray) else key  # key not iterable
         key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
 
-        sparse_indices = normalize_1d_sparse_indices(key, self.shape[0]) if self.ndim == 1 else None
-        if sparse_indices is not None:
-            return self._take_sparse_normalized(sparse_indices)
+        # Integer array fancy indexing -> route through the efficient sparse
+        # gather (b2nd_get_sparse_cbuffer) for all dimensionalities.
+        result = self._try_sparse_fancy_index(key)
+        if result is not None:
+            return result
 
         # decompress NDArrays
         key_, mask = process_key(key, self.shape)  # internally handles key an integer

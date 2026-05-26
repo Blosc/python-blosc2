@@ -306,3 +306,238 @@ def test_take_along_axis(shape, chunkshape, axis):
 
     # Compare
     np.testing.assert_array_equal(result[()], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "axis", "indices"),
+    [
+        # 2D
+        ((6, 7), (4, 5), (3, 4), 0, [0, 3, 5]),
+        ((6, 7), (4, 5), (3, 4), 1, [0, 3, 6]),
+        ((20, 15), (6, 7), (3, 4), 0, [0, 10, 19]),
+        ((20, 15), (6, 7), (3, 4), 1, [0, 7, 14]),
+        # 3D
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 0, [0, 2, 4]),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 1, [0, 3, 5]),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 2, [0, 3, 6]),
+        ((9, 10, 11), (4, 5, 6), (2, 3, 3), 0, [0, 4, 8]),
+        ((9, 10, 11), (4, 5, 6), (2, 3, 3), 1, [0, 5, 9]),
+        ((9, 10, 11), (4, 5, 6), (2, 3, 3), 2, [0, 5, 10]),
+        # 4D
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), 0, [0, 2, 3]),
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), 2, [0, 3, 5]),
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), 3, [0, 3, 6]),
+    ],
+)
+def test_ndarray_take_ndim(shape, chunks, blocks, axis, indices):
+    npa = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    expected = np.take(npa, indices, axis=axis)
+    result = a.take(indices, axis=axis)
+    top_result = blosc2.take(a, indices, axis=axis)
+
+    assert isinstance(result, blosc2.NDArray)
+    assert isinstance(top_result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[:], expected)
+    np.testing.assert_array_equal(top_result[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "indices"),
+    [
+        # 2D, 3D, 4D with axis=None
+        ((6, 7), (4, 5), (3, 4), [0, 10, 41]),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), [0, 50, 209]),
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), [0, 100, 500, 839]),
+    ],
+)
+def test_ndarray_take_ndim_axis_none(shape, chunks, blocks, indices):
+    npa = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    expected = np.take(npa, indices, axis=None)
+    result = a.take(indices)
+    top_result = blosc2.take(a, indices)
+
+    assert isinstance(result, blosc2.NDArray)
+    assert isinstance(top_result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[:], expected)
+    np.testing.assert_array_equal(top_result[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "axis", "indices"),
+    [
+        # 2D, 3D, 4D with multi-dim index arrays
+        ((6, 7), (4, 5), (3, 4), 1, np.array([[0, 3], [6, 2]])),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 0, np.array([[0, 2], [4, 1]])),
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), 2, np.array([[0, 3], [5, 1]])),
+    ],
+)
+def test_ndarray_take_ndim_multidim_indices(shape, chunks, blocks, axis, indices):
+    npa = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    expected = np.take(npa, indices, axis=axis)
+    result = a.take(indices, axis=axis)
+
+    assert isinstance(result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "axis", "indices"),
+    [
+        # Negative indices
+        ((6, 7), (4, 5), (3, 4), 0, [-1, -3, 0]),
+        ((6, 7), (4, 5), (3, 4), 1, [-1, -7, 3, 0]),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 2, [-1, -7, 3]),
+        # Duplicate indices
+        ((6, 7), (4, 5), (3, 4), 0, [0, 5, 0, 5, 3]),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 1, [3, 3, 5, 5, 0]),
+        # Single index (scalar-like list)
+        ((6, 7), (4, 5), (3, 4), 0, [3]),
+        ((6, 7), (4, 5), (3, 4), 1, [0]),
+        # Empty indices
+        ((6, 7), (4, 5), (3, 4), 0, []),
+        ((6, 7), (4, 5), (3, 4), 1, []),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 0, []),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 1, []),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 2, []),
+    ],
+)
+def test_ndarray_take_ndim_edge_cases(shape, chunks, blocks, axis, indices):
+    npa = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    expected = np.take(npa, indices, axis=axis)
+    result = a.take(indices, axis=axis)
+
+    assert isinstance(result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "axis"),
+    [
+        # 2D with non-behaved (non-even) partitions
+        ((7, 11), (5, 7), (3, 5), 0),
+        ((7, 11), (5, 7), (3, 5), 1),
+        # 3D with non-behaved partitions
+        ((7, 11, 13), (5, 7, 8), (3, 4, 5), 0),
+        ((7, 11, 13), (5, 7, 8), (3, 4, 5), 1),
+        ((7, 11, 13), (5, 7, 8), (3, 4, 5), 2),
+    ],
+)
+def test_ndarray_take_ndim_non_behaved_partitions(shape, chunks, blocks, axis):
+    npa = np.arange(np.prod(shape), dtype=np.int32).reshape(shape)
+    a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    rng = np.random.default_rng(42)
+    indices = rng.integers(0, shape[axis], size=min(shape[axis], 8)).tolist()
+
+    expected = np.take(npa, indices, axis=axis)
+    result = a.take(indices, axis=axis)
+
+    assert isinstance(result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "axis"),
+    [
+        # Different dtypes
+        ((6, 7), (4, 5), (3, 4), 0),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 1),
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), 2),
+    ],
+)
+def test_ndarray_take_ndim_dtypes(shape, chunks, blocks, axis):
+    for dtype in [np.int32, np.int64, np.float32, np.float64, np.complex128]:
+        npa = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
+        a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+        rng = np.random.default_rng(42)
+        indices = rng.integers(0, shape[axis], size=min(shape[axis], 5)).tolist()
+
+        expected = np.take(npa, indices, axis=axis)
+        result = a.take(indices, axis=axis)
+
+        assert isinstance(result, blosc2.NDArray)
+        np.testing.assert_array_equal(result[:], expected)
+
+
+# --- __getitem__ fancy indexing with integer arrays (uses b2nd_get_sparse_cbuffer) ---
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "indices"),
+    [
+        # 1-D with 1-D index (was already sparse, regression check)
+        ((100,), (23,), (7,), [0, 5, 50, 99]),
+        # 1-D with 2-D index (was fancy indexing before, now sparse)
+        ((100,), (23,), (7,), [[1, 3], [5, 7]]),
+        # 2-D with 1-D index (was fancy indexing before, now sparse)
+        ((6, 7), (4, 5), (3, 4), [0, 3, 5]),
+        ((20, 15), (6, 7), (3, 4), [0, 10, 19]),
+        # 2-D with 2-D index (was fancy indexing before, now sparse)
+        ((6, 7), (4, 5), (3, 4), [[0, 3], [5, 2]]),
+        # 3-D with 1-D index
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), [0, 2, 4]),
+        # 3-D with 2-D index
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), [[0, 2], [4, 1]]),
+        # 4-D with 1-D index
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), [0, 2, 3]),
+    ],
+)
+def test_getitem_integer_array_fancy_index(shape, chunks, blocks, indices):
+    npa = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    expected = npa[indices]
+    result = a[indices]
+
+    assert isinstance(result, np.ndarray)
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "indices"),
+    [
+        ((6, 7), [-1, 0, 3, -3]),
+        ((6, 7), [0, 5, 0, 5, 3]),
+        ((6, 7), [3]),
+        ((6, 7), []),
+        ((5, 6, 7), [-1, 0, 4, -2]),
+        ((5, 6, 7), [0, 4, 0, 2]),
+        ((5, 6, 7), [2]),
+        ((5, 6, 7), []),
+    ],
+)
+def test_getitem_integer_array_edge_cases(shape, indices):
+    npa = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa)
+
+    expected = npa[indices]
+    result = a[indices]
+
+    assert isinstance(result, np.ndarray)
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_getitem_integer_array_out_of_bounds():
+    a = blosc2.asarray(np.arange(12, dtype=np.int32).reshape(3, 4))
+    with pytest.raises(IndexError, match="bounds"):
+        _ = a[[3]]
+    with pytest.raises(IndexError, match="bounds"):
+        _ = a[[-4]]
+
+
+def test_getitem_integer_array_still_uses_fancy_for_boolean():
+    """Boolean arrays should NOT be routed through the sparse path."""
+    a = blosc2.asarray(np.arange(12, dtype=np.int32).reshape(3, 4))
+    mask = np.array([True, False, True])
+    expected = np.arange(12, dtype=np.int32).reshape(3, 4)[mask]
+    result = a[mask]
+    np.testing.assert_array_equal(result, expected)

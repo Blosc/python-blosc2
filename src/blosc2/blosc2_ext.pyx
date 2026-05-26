@@ -3562,10 +3562,7 @@ cdef class NDArray:
 
         return arr
 
-    def get_1d_sparse_numpy(self, arr, coords):
-        if self.ndim != 1:
-            raise ValueError("get_1d_sparse_numpy is only supported for 1-D arrays")
-
+    def get_sparse_numpy(self, arr, coords):
         cdef np.ndarray[np.int64_t, ndim=1, mode="c"] coords_ = np.ascontiguousarray(coords, dtype=np.int64)
         cdef Py_buffer view
         cdef int64_t ncoords = coords_.shape[0]
