@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 
 import numpy as np
+import pytest
 
 import blosc2
 from blosc2.b2view.model import (
@@ -126,6 +127,7 @@ def test_store_browser_uses_grid_preview_for_2d_ndarray(tmp_path):
 
 
 def test_ctable_preview_buffer_reuses_loaded_rows(tmp_path):
+    pytest.importorskip("textual", reason="b2view TUI requires textual")
     path = tmp_path / "table.b2z"
     persistent = blosc2.CTable(Row, urlpath=str(path), mode="w")
     for i in range(100):
@@ -208,6 +210,7 @@ def test_ctable_preview_header_uses_column_names_without_dtype_labels():
             "value": np.array([1], dtype=np.int64),
         },
     }
+    pytest.importorskip("rich", reason="b2view rendering requires rich")
     from rich.console import Console
 
     header, _ = make_preview_renderables(preview)
