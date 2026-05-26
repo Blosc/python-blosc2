@@ -494,7 +494,6 @@ cdef extern from "blosc2.h":
     int blosc2_schunk_get_vlblock(blosc2_schunk *schunk, int64_t nchunk, int32_t nblock,
                                   uint8_t **dest, int32_t *destsize)
     int blosc2_schunk_get_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
-    int blosc2_schunk_get_sparse(blosc2_schunk *schunk, int64_t ncoords, const int64_t *coords, void *buffer)
     int blosc2_schunk_set_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
     int blosc2_schunk_get_cparams(blosc2_schunk *schunk, blosc2_cparams** cparams)
     int blosc2_schunk_get_dparams(blosc2_schunk *schunk, blosc2_dparams** dparams)
