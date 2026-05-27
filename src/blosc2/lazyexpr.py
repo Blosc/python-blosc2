@@ -142,19 +142,23 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
 
 def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _order=None):
     chunk_indices = None
-    if expression in {"o0", "(o0)"} and where is None:
-        # We don't have an actual expression, so avoid a copy except to make contiguous (later)
-        return chunk_operands["o0"], None
-    # Apply the where condition (in result)
+
+    # Apply the where condition (in result) — fusion path, evaluate before shortcut
     if where is not None and len(where) == 2:
         # x = chunk_operands["_where_x"]
         # y = chunk_operands["_where_y"]
-        # result = np.where(result, x, y)
         # numexpr is a bit faster than np.where, and we can fuse operations in this case
         new_expr = f"where({expression}, _where_x, _where_y)"
         return ne_evaluate(new_expr, chunk_operands, **ne_args), None
 
-    result = ne_evaluate(expression, chunk_operands, **ne_args)
+    # If the expression is a simple operand reference (e.g. "key", "o0"),
+    # grab it directly from chunk_operands instead of calling ne_evaluate.
+    # This avoids ~150 µs of numexpr parsing/setup overhead per chunk.
+    _expr = expression.strip("()")
+    if _expr in chunk_operands:
+        result = chunk_operands[_expr]
+    else:
+        result = ne_evaluate(expression, chunk_operands, **ne_args)
     if where is None:
         return result, None
     elif len(where) == 1:
