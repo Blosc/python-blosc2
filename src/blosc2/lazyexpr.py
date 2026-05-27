@@ -1491,8 +1491,9 @@ def fast_eval(  # noqa: C901
     if strict_miniexpr is None:
         # Be strict by default for DSL kernels to avoid silently losing DSL fast-path regressions.
         strict_miniexpr = bool(is_dsl)
-    if where is not None:
-        # miniexpr does not support where(); use the regular path.
+    if where is not None and len(where) != 2:
+        # miniexpr does not support cardinality-changing where (len==1);
+        # where(cond, x, y) with two args is element-wise and IS supported.
         use_miniexpr = False
         if is_dsl:
             dsl_disable_reason = "DSL kernels cannot be run without miniexpr."
@@ -1635,9 +1636,14 @@ def fast_eval(  # noqa: C901
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         prefilter_set = False
         try:
+            # Fuse where(cond, x, y) into the expression for miniexpr
+            _pref_expr = expr_string_miniexpr
+            _pref_ops = operands_miniexpr
+            if where is not None and len(where) == 2:
+                _pref_expr = f"where({_pref_expr}, _where_x, _where_y)"
             res_eval._set_pref_expr(
-                expr_string_miniexpr,
-                operands_miniexpr,
+                _pref_expr,
+                _pref_ops,
                 fp_accuracy=fp_accuracy,
                 jit=jit,
             )
