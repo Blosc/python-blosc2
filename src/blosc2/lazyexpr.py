@@ -3861,6 +3861,43 @@ class LazyExpr(LazyArray):
             return lazy_item == () or all(isinstance(s, slice) and s == slice(None) for s in lazy_item)
         return False
 
+    @staticmethod
+    def _collect_flat_indices_from_bool_ndarray(bool_ndarray):
+        """Collect flat indices of True positions from a compressed boolean NDArray.
+
+        Iterates chunks, decompressing each and collecting :func:`np.flatnonzero`
+        results.  This avoids materializing the full uncompressed array.
+
+        Parameters
+        ----------
+        bool_ndarray: blosc2.NDArray
+            A 1D NDArray with boolean dtype.
+
+        Returns
+        -------
+        np.ndarray
+            Flat indices of True positions (int64).
+        """
+        nchunks = bool_ndarray.schunk.nchunks
+        chunk_len = bool_ndarray.chunks[0]
+        all_indices = []
+        offset = 0
+
+        for nchunk in range(nchunks):
+            raw = bool_ndarray.schunk.decompress_chunk(nchunk)
+            arr = np.frombuffer(raw, dtype=np.bool_)
+            # Truncate to the logical chunk size (buffer may include padding)
+            if len(arr) > chunk_len:
+                arr = arr[:chunk_len]
+            idx = np.flatnonzero(arr)
+            if len(idx) > 0:
+                all_indices.append(idx + offset)
+            offset += chunk_len
+
+        if not all_indices:
+            return np.array([], dtype=np.int64)
+        return np.concatenate(all_indices)
+
     def _where_getitem_fastpath(self, item, kwargs):
         """Fast path for where(cond, x) full-slice getitem calls.
 
@@ -3890,8 +3927,15 @@ class LazyExpr(LazyArray):
         if not blosc2.isdtype(cond_expr.dtype, "bool"):
             return None
 
+        target = self._where_args["_where_x"]
+
+        # Evaluate the condition using the miniexpr prefilter (fastest path)
         mask = cond_expr.compute(())
-        return self._where_args["_where_x"][mask]
+
+        # Collect flat indices by iterating the compressed bool chunks,
+        # avoiding a full-mask decompression + count_nonzero + flatnonzero
+        flat_indices = self._collect_flat_indices_from_bool_ndarray(mask)
+        return blosc2.take(target, flat_indices, axis=None)[:]
 
     def _compute_expr(self, item, kwargs):
         if any(method in self.expression for method in eager_funcs):
