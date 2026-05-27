@@ -4494,6 +4494,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
         key = key[()] if isinstance(key, NDArray) else key  # key not iterable
         key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
 
+        # Check boolean array key early to avoid expensive process_key / nonzero
+        if hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_) and key.shape == self.shape:
+            # This can be interpreted as a boolean expression but only for key shape same as self shape
+            expr = blosc2.LazyExpr._new_expr("key", {"key": key}, guess=False).where(self)
+            # Decorate with where and force a getitem operation to return actual values.
+            # This behavior is consistent with NumPy, although different from e.g. ['expr']
+            # which returns a lazy expression.
+            # This is faster than the fancy indexing path
+            return expr[:]
+
         # Integer array fancy indexing -> route through the efficient sparse
         # gather (b2nd_get_sparse_cbuffer) for all dimensionalities.
         result = self._try_sparse_fancy_index(key)
@@ -4517,16 +4527,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     return np.expand_dims(self._get_set_findex_default(_slice, out=out), 0)
                 else:  # do nothing
                     return np.empty((0,) + self.shape, dtype=self.dtype)
-            elif (
-                hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_) and key.shape == self.shape
-            ):  # check ORIGINAL key
-                # This can be interpreted as a boolean expression but only for key shape same as self shape
-                expr = blosc2.LazyExpr._new_expr("key", {"key": key}, guess=False).where(self)
-                # Decorate with where and force a getitem operation to return actual values.
-                # This behavior is consistent with NumPy, although different from e.g. ['expr']
-                # which returns a lazy expression.
-                # This is faster than the fancy indexing path
-                return expr[:]
             return self.get_fselection_numpy(key)  # fancy index default, can be quite slow
 
         start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
