@@ -3865,8 +3865,9 @@ class LazyExpr(LazyArray):
     def _collect_flat_indices_from_bool_ndarray(bool_ndarray):
         """Collect flat indices of True positions from a compressed boolean NDArray.
 
-        Iterates chunks, decompressing each and collecting :func:`np.flatnonzero`
-        results.  This avoids materializing the full uncompressed array.
+        Uses :meth:`~blosc2.NDArray.iterchunks_info` to skip chunks that are
+        special values (e.g. all-False ``ZERO``), avoiding decompression and
+        scanning for those chunks.
 
         Parameters
         ----------
@@ -3878,21 +3879,31 @@ class LazyExpr(LazyArray):
         np.ndarray
             Flat indices of True positions (int64).
         """
-        nchunks = bool_ndarray.schunk.nchunks
         chunk_len = bool_ndarray.chunks[0]
         all_indices = []
-        offset = 0
 
-        for nchunk in range(nchunks):
-            raw = bool_ndarray.schunk.decompress_chunk(nchunk)
+        for info in bool_ndarray.iterchunks_info():
+            # Skip special-value chunks that are entirely False
+            if info.special == blosc2.SpecialValue.ZERO:
+                continue
+            if info.special == blosc2.SpecialValue.VALUE:
+                if not info.repeated_value:  # repeated_value is False/0
+                    continue
+                # repeated_value is True: all elements in this chunk are True
+                offset = info.nchunk * chunk_len
+                all_indices.append(np.arange(offset, offset + chunk_len, dtype=np.int64))
+                continue
+
+            # Normal chunk: decompress and scan for True positions
+            raw = bool_ndarray.schunk.decompress_chunk(info.nchunk)
             arr = np.frombuffer(raw, dtype=np.bool_)
             # Truncate to the logical chunk size (buffer may include padding)
             if len(arr) > chunk_len:
                 arr = arr[:chunk_len]
             idx = np.flatnonzero(arr)
             if len(idx) > 0:
+                offset = info.nchunk * chunk_len
                 all_indices.append(idx + offset)
-            offset += chunk_len
 
         if not all_indices:
             return np.array([], dtype=np.int64)
@@ -3999,8 +4010,8 @@ class LazyExpr(LazyArray):
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
 
         # Optimization: for where(cond, x) (1-arg) with a boolean condition,
-        # compute the cond mask first via miniexpr and route through
-        # NDArray._getitem_bool_mask sparse/dense handling.
+        # evaluate the cond mask via miniexpr, collect flat indices from the
+        # compressed result, and gather matching elements with take().
         fastpath_result = self._where_getitem_fastpath(item, kwargs)
         if fastpath_result is not None:
             return fastpath_result
