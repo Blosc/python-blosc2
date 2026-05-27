@@ -4425,6 +4425,26 @@ class NDArray(blosc2_ext.NDArray, Operand):
         # 1-D: axis=None (flat); ndim>1: axis=0 (row selection)
         return self._take_numpy(key_arr, axis=None if self.ndim == 1 else 0)
 
+    def _getitem_bool_mask(self, key):
+        """Handle boolean array key with optional sparse-gather fast path.
+
+        Returns the result array or ``None`` if *key* is not a matching
+        boolean mask (caller should continue with regular indexing).
+        """
+        if not (hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_) and key.shape == self.shape):
+            return None
+        # For sparse boolean masks, converting to flat indices and using the
+        # sparse-gather path is faster than decompressing every data chunk.
+        try:
+            idx = _bool_mask_to_flat_indices(key, self.schunk.nchunks)
+        except _BoolMaskDense:
+            pass
+        else:
+            return blosc2.take(self, idx, axis=None)[:]
+        # Fall through to the LazyExpr path for dense masks
+        expr = blosc2.LazyExpr._new_expr("key", {"key": key}, guess=False).where(self)
+        return expr[:]
+
     def __getitem__(
         self,
         key: None
@@ -4495,14 +4515,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
 
         # Check boolean array key early to avoid expensive process_key / nonzero
-        if hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_) and key.shape == self.shape:
-            # This can be interpreted as a boolean expression but only for key shape same as self shape
-            expr = blosc2.LazyExpr._new_expr("key", {"key": key}, guess=False).where(self)
-            # Decorate with where and force a getitem operation to return actual values.
-            # This behavior is consistent with NumPy, although different from e.g. ['expr']
-            # which returns a lazy expression.
-            # This is faster than the fancy indexing path
-            return expr[:]
+        result = self._getitem_bool_mask(key)
+        if result is not None:
+            return result
 
         # Integer array fancy indexing -> route through the efficient sparse
         # gather (b2nd_get_sparse_cbuffer) for all dimensionalities.
@@ -7423,3 +7438,48 @@ def meshgrid(*arrays: blosc2.Array, indexing: str = "xy") -> Sequence[NDArray]:
     for a in myarrs:
         out += (broadcast_to(a, shape),)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Sparse boolean-mask helper (used by NDArray.__getitem__)
+# ---------------------------------------------------------------------------
+
+
+class _BoolMaskDense(Exception):
+    """Raised when a boolean mask is too dense for the sparse-gather fast path."""
+
+
+def _bool_mask_to_flat_indices(bool_arr, nchunks_data):
+    """Convert a sparse boolean mask to flat indices, or raise _BoolMaskDense.
+
+    For numpy masks, uses ``np.count_nonzero`` / ``np.flatnonzero``.
+    For blosc2 NDArray masks, iterates chunks incrementally and bails out
+    early when the mask is too dense.
+    """
+    # Threshold: if True values exceed the number of data chunks times a
+    # generous factor, the LazyExpr full-scan path is likely faster.
+    threshold = builtins.max(nchunks_data * 500, 50_000)
+
+    if isinstance(bool_arr, np.ndarray):
+        n_true = np.count_nonzero(bool_arr)
+        if n_true >= threshold:
+            raise _BoolMaskDense
+        return np.flatnonzero(bool_arr)
+
+    # blosc2 NDArray: iterate chunks incrementally
+    total_true = 0
+    flat_parts = []
+    offset = 0
+    for nchunk in range(bool_arr.schunk.nchunks):
+        raw = bool_arr.schunk.decompress_chunk(nchunk)
+        chunk = np.frombuffer(raw, dtype=np.bool_)
+        n_true = np.count_nonzero(chunk)
+        total_true += n_true
+        if total_true >= threshold:
+            raise _BoolMaskDense
+        if n_true > 0:
+            flat_parts.append(np.flatnonzero(chunk) + offset)
+        offset += len(chunk)
+    if not flat_parts:
+        return np.array([], dtype=np.int64)
+    return np.concatenate(flat_parts)
