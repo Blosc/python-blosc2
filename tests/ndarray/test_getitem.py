@@ -156,6 +156,21 @@ def test_lazyexpr_where_full_slice_no_recursion():
     np.testing.assert_allclose(a[a < 5][:], expected)
 
 
+def test_lazyexpr_where_full_slice_persisted_reuses_shared_chunk_cache(tmp_path):
+    nitems = 60_000
+    expected = np.linspace(0, 1, nitems)
+    a = blosc2.asarray(
+        expected, chunks=(20_000,), blocks=(2_000,), urlpath=str(tmp_path / "persisted.b2nd"), mode="w"
+    )
+    old_nthreads = blosc2.nthreads
+    blosc2.set_nthreads(max(2, old_nthreads))
+    try:
+        for _ in range(10):
+            np.testing.assert_allclose(a[a < 5][:], expected)
+    finally:
+        blosc2.set_nthreads(old_nthreads)
+
+
 def test_sparse_bool_mask_routes_through_take_fastpath(monkeypatch):
     nitems = 120_000
     npa = np.arange(nitems, dtype=np.int32)
