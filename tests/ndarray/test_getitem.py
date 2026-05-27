@@ -139,6 +139,62 @@ def test_bool_values(shape, chunks, blocks, idx):
     assert b2a[idx].ndim == npa[idx].ndim
 
 
+def test_dense_bool_ndarray_mask_no_recursion():
+    nitems = 60_000
+    npa = np.arange(nitems, dtype=np.int32)
+    a = blosc2.asarray(npa, chunks=(20_000,))
+    mask = blosc2.asarray(np.ones(nitems, dtype=np.bool_), chunks=(20_000,))
+
+    np.testing.assert_array_equal(a[mask], npa)
+
+
+def test_lazyexpr_where_full_slice_no_recursion():
+    nitems = 60_000
+    a = blosc2.linspace(0, 1, nitems, chunks=(20_000,))
+    expected = np.linspace(0, 1, nitems)
+
+    np.testing.assert_allclose(a[a < 5][:], expected)
+
+
+def test_sparse_bool_mask_routes_through_take_fastpath(monkeypatch):
+    nitems = 120_000
+    npa = np.arange(nitems, dtype=np.int32)
+    a = blosc2.asarray(npa, chunks=(20_000,))
+    mask = np.zeros(nitems, dtype=np.bool_)
+    mask[[1, 10, 11_111, 55_555, nitems - 1]] = True
+
+    call_count = {"take": 0}
+    original_take = blosc2.take
+
+    def wrapped_take(*args, **kwargs):
+        call_count["take"] += 1
+        return original_take(*args, **kwargs)
+
+    monkeypatch.setattr(blosc2, "take", wrapped_take)
+
+    np.testing.assert_array_equal(a[mask], npa[mask])
+    assert call_count["take"] == 1
+
+
+def test_dense_bool_mask_skips_take_fastpath(monkeypatch):
+    nitems = 60_000
+    npa = np.arange(nitems, dtype=np.int32)
+    a = blosc2.asarray(npa, chunks=(20_000,))
+    mask = np.ones(nitems, dtype=np.bool_)
+
+    call_count = {"take": 0}
+    original_take = blosc2.take
+
+    def wrapped_take(*args, **kwargs):
+        call_count["take"] += 1
+        return original_take(*args, **kwargs)
+
+    monkeypatch.setattr(blosc2, "take", wrapped_take)
+
+    np.testing.assert_array_equal(a[mask], npa[mask])
+    assert call_count["take"] == 0
+
+
 @pytest.mark.parametrize(
     ("shape", "chunks", "blocks"),
     [

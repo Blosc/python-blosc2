@@ -3852,6 +3852,47 @@ class LazyExpr(LazyArray):
 
         return value, expression[idx:idx2]
 
+    @staticmethod
+    def _is_full_slice(lazy_item):
+        """Return True if *lazy_item* is a no-op full slice (() or slice(None))."""
+        if isinstance(lazy_item, slice):
+            return lazy_item == slice(None)
+        if isinstance(lazy_item, tuple):
+            return lazy_item == () or all(isinstance(s, slice) and s == slice(None) for s in lazy_item)
+        return False
+
+    def _where_getitem_fastpath(self, item, kwargs):
+        """Fast path for where(cond, x) full-slice getitem calls.
+
+        Returns ``None`` when the fast path does not apply.
+        """
+        simple_operand_expr = self.expression.strip("() ") in self.operands
+        if not (
+            hasattr(self, "_where_args")
+            and len(self._where_args) == 1
+            and not hasattr(self, "_indices")
+            and not hasattr(self, "_order")
+            and "_reduce_args" not in kwargs
+            and isinstance(self._where_args["_where_x"], blosc2.NDArray)
+            and self._is_full_slice(item)
+            and not simple_operand_expr
+        ):
+            return None
+
+        # Preserve index/caching behavior for indexed queries.
+        if kwargs.get("_use_index", True):
+            from . import indexing
+
+            if indexing.will_use_index(self):
+                return None
+
+        cond_expr = blosc2.LazyExpr._new_expr(self.expression, self.operands, guess=False)
+        if not blosc2.isdtype(cond_expr.dtype, "bool"):
+            return None
+
+        mask = cond_expr.compute(())
+        return self._where_args["_where_x"][mask]
+
     def _compute_expr(self, item, kwargs):
         if any(method in self.expression for method in eager_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
@@ -3912,6 +3953,13 @@ class LazyExpr(LazyArray):
                 lazy_expr = blosc2.LazyExpr(new_op=(lazy_expr, None, None))
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
+
+        # Optimization: for where(cond, x) (1-arg) with a boolean condition,
+        # compute the cond mask first via miniexpr and route through
+        # NDArray._getitem_bool_mask sparse/dense handling.
+        fastpath_result = self._where_getitem_fastpath(item, kwargs)
+        if fastpath_result is not None:
+            return fastpath_result
 
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 
