@@ -57,7 +57,7 @@ def test_store_browser_metadata_and_previews(tmp_path):
         arr_info = browser.get_info("/group/arr")
         assert arr_info.kind == "ndarray"
         assert arr_info.metadata["shape"] == (3, 4)
-        assert arr_info.metadata["dtype"] == "int64"
+        assert arr_info.metadata["dtype"] == np.arange(12).dtype.name
         arr_preview = browser.preview("/group/arr", max_rows=2, max_cols=3)
         assert arr_preview["source_kind"] == "ndarray2d"
         np.testing.assert_array_equal(arr_preview["data"]["0"], np.array([0, 4]))
