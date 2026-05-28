@@ -182,7 +182,6 @@ _CTABLE_PRINT_OPTIONS: dict[str, Any] = {
 }
 _SMALL_NROWS_LIMIT = 10_000_000
 _SMALL_SORT_MATERIALIZE_LIMIT = _SMALL_NROWS_LIMIT
-_WHERE_NUMPY_MASK_LIMIT = _SMALL_NROWS_LIMIT
 _MAX_GROWTH_ROWS = 1_048_576
 
 
@@ -9561,14 +9560,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         all_rows_valid = known_n_rows == target_len
         filter_intersected = False
 
-        # For moderately-sized boolean filters, prefer a NumPy materialization.
-        # LazyExpr.compute() creates a compressed NDArray and a non-compacted table
-        # still needs a second pass to intersect it with _valid_rows.  Evaluating to
-        # NumPy lets us do that intersection in-memory and only compress the final
-        # mask once in view().  Above the threshold, keep the compressed path so peak
-        # memory does not scale too aggressively with the column size.
+        # Prefer a compressed boolean mask for LazyExpr filters so temporary
+        # mask materialization stays compact even for medium-sized selections.
         if isinstance(expr_result, blosc2.LazyExpr):
-            filter = expr_result[:] if target_len <= _WHERE_NUMPY_MASK_LIMIT else expr_result.compute()
+            filter = expr_result.compute()
         else:
             filter = expr_result
 
