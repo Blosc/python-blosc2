@@ -6,6 +6,7 @@
 #######################################################################
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -169,6 +170,48 @@ def test_lazyexpr_where_full_slice_persisted_reuses_shared_chunk_cache(tmp_path)
             np.testing.assert_allclose(a[a < 5][:], expected)
     finally:
         blosc2.set_nthreads(old_nthreads)
+
+
+def test_lazyexpr_where_full_slice_cached_repeat_avoids_full_mask_scan(monkeypatch):
+    nitems = 60_000
+    expected = np.arange(5, dtype=np.int64)
+    a = blosc2.asarray(np.arange(nitems, dtype=np.int64), chunks=(20_000,))
+
+    np.testing.assert_allclose(a[a < 5][:], expected)
+    monkeypatch.setattr(
+        blosc2.LazyExpr,
+        "_collect_flat_indices_from_bool_ndarray",
+        staticmethod(lambda _mask: (_ for _ in ()).throw(AssertionError("mask scan should be cached"))),
+    )
+
+    np.testing.assert_allclose(a[a < 5][:], expected)
+
+
+@pytest.mark.parametrize("mode", ["r", "a"])
+def test_lazyexpr_where_full_slice_persistent_uses_hot_cache_without_persisting(tmp_path, monkeypatch, mode):
+    nitems = 60_000
+    expected = np.arange(5, dtype=np.int64)
+    urlpath = tmp_path / "persisted_readonly.b2nd"
+    blosc2.asarray(
+        np.arange(nitems, dtype=np.int64), chunks=(20_000,), blocks=(2_000,), urlpath=urlpath, mode="w"
+    )
+    persisted = blosc2.open(urlpath, mode=mode)
+    initial_size = urlpath.stat().st_size
+    indexing = __import__("blosc2.indexing", fromlist=["QUERY_CACHE_VLMETA_KEY", "_hot_cache_clear"])
+    payload_path = Path(indexing._query_cache_payload_path(persisted))
+    indexing._hot_cache_clear()
+
+    np.testing.assert_allclose(persisted[persisted < 5][:], expected)
+    monkeypatch.setattr(
+        blosc2.LazyExpr,
+        "_collect_flat_indices_from_bool_ndarray",
+        staticmethod(lambda _mask: (_ for _ in ()).throw(AssertionError("mask scan should be cached"))),
+    )
+
+    np.testing.assert_allclose(persisted[persisted < 5][:], expected)
+    assert not payload_path.exists()
+    assert urlpath.stat().st_size == initial_size
+    assert indexing.QUERY_CACHE_VLMETA_KEY not in persisted.schunk.vlmeta
 
 
 def test_sparse_bool_mask_routes_through_take_fastpath(monkeypatch):

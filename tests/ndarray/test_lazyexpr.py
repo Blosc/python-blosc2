@@ -1778,7 +1778,11 @@ def test_lazyexpr_vlmeta_in_memory_and_persisted(tmp_path):
     assert restored.vlmeta["name"] == "sum"
     assert restored.vlmeta["config"] == {"scale": 1}
 
-    restored.vlmeta["note"] = "persisted"
+    with pytest.raises(ValueError, match="reading mode"):
+        restored.vlmeta["note"] = "persisted"
+
+    writable = blosc2.open(str(expr_path), mode="a")
+    writable.vlmeta["note"] = "persisted"
     reopened = blosc2.open(str(expr_path), mode="r")
     assert reopened.vlmeta["note"] == "persisted"
     np.testing.assert_array_equal(reopened[:], np.arange(5, dtype=np.int64) * 2)

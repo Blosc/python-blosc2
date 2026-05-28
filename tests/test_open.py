@@ -180,14 +180,17 @@ def test_open_defaults_to_readonly(tmp_path):
     # Opening without explicit mode should work (read-only by default)
     obj = blosc2.open(urlpath)
     assert obj.schunk.mode == "r"
+    assert obj.schunk.vlmeta.mode == "r"
 
 
 def test_open_explicit_mode_no_warn(tmp_path):
     """No warnings are emitted when mode is explicitly given."""
     urlpath = str(tmp_path / "test.b2nd")
     blosc2.asarray(np.arange(10), urlpath=urlpath, mode="w")
-    _ = blosc2.open(urlpath, mode="r")
-    _ = blosc2.open(urlpath, mode="a")
+    obj = blosc2.open(urlpath, mode="r")
+    assert obj.schunk.vlmeta.mode == "r"
+    obj = blosc2.open(urlpath, mode="a")
+    assert obj.schunk.vlmeta.mode == "a"
 
 
 def test_open_mmap_defaults_to_readonly(tmp_path):

@@ -69,7 +69,9 @@ _HOT_CACHE: dict[tuple[tuple[str, str | int], str], np.ndarray] = {}
 _HOT_CACHE_ORDER: list[tuple[tuple[str, str | int], str]] = []
 # Total bytes of arrays currently in the hot cache.
 _HOT_CACHE_BYTES: int = 0
-# Persistent ObjectArray handles: resolved urlpath -> open ObjectArray object.
+# Legacy query-cache sidecar handles: resolved urlpath -> open ObjectArray object.
+# Query caches are hot-cache-only now, but we keep this state so invalidation can
+# still drop stale artifacts produced by older versions.
 _QUERY_CACHE_STORE_HANDLES: dict[str, object] = {}
 # Cached mmap handles for data arrays used in full-query gather: urlpath -> NDArray.
 _GATHER_MMAP_HANDLES: dict[str, object] = {}
@@ -435,45 +437,18 @@ def _normalize_query_cache_catalog(catalog: dict) -> dict:
 
 
 def _load_query_cache_catalog(array: blosc2.NDArray) -> dict | None:
-    """Read the query-cache catalog from *array* vlmeta, or return None."""
-    if not _is_persistent_array(array):
-        return None
-    try:
-        cat = array.schunk.vlmeta[QUERY_CACHE_VLMETA_KEY]
-    except KeyError:
-        return None
-    if not isinstance(cat, dict) or cat.get("version") != QUERY_CACHE_FORMAT_VERSION:
-        return None
-    return _normalize_query_cache_catalog(cat)
+    """Return ``None`` because query caches are intentionally not persisted."""
+    return None
 
 
 def _save_query_cache_catalog(array: blosc2.NDArray, catalog: dict) -> None:
-    """Write *catalog* back to *array* vlmeta."""
-    array.schunk.vlmeta[QUERY_CACHE_VLMETA_KEY] = catalog
+    """No-op: query caches are intentionally not persisted."""
+    return
 
 
 def _open_query_cache_store(array: blosc2.NDArray, *, create: bool = False):
-    """Return an open (writable) ObjectArray for the persistent payload store.
-
-    Returns ``None`` if the array is not persistent.  When *create* is True the
-    store is created if it does not yet exist.
-    """
-    _purge_stale_persistent_caches()
-    if not _is_persistent_array(array):
-        return None
-    path = _query_cache_payload_path(array)
-    cached = _QUERY_CACHE_STORE_HANDLES.get(path)
-    if cached is not None:
-        return cached
-    if Path(path).exists():
-        vla = blosc2.ObjectArray(storage=blosc2.Storage(urlpath=path, mode="a"))
-        _QUERY_CACHE_STORE_HANDLES[path] = vla
-        return vla
-    if not create:
-        return None
-    vla = blosc2.ObjectArray(storage=blosc2.Storage(urlpath=path, mode="w"))
-    _QUERY_CACHE_STORE_HANDLES[path] = vla
-    return vla
+    """Return ``None`` because query caches are intentionally not persisted."""
+    return
 
 
 def _close_query_cache_store(path: str) -> None:
@@ -595,25 +570,8 @@ def _hot_cache_clear(scope: tuple[str, str | int] | None = None) -> None:
 
 
 def _persistent_cache_lookup(array: blosc2.NDArray, digest: str) -> np.ndarray | None:
-    """Return coordinates from the persistent cache for *digest*, or ``None``."""
-    catalog = _load_query_cache_catalog(array)
-    if catalog is None:
-        return None
-    entry = catalog.get("entries", {}).get(digest)
-    if entry is None:
-        return None
-    slot = entry["slot"]
-    store = _open_query_cache_store(array)
-    if store is None or slot >= len(store):
-        return None
-    payload = store[slot]
-    if not isinstance(payload, dict) or payload.get("version") != QUERY_CACHE_FORMAT_VERSION:
-        return None
-    try:
-        coords = _decode_coords_payload(payload)
-    except Exception:
-        return None
-    return coords
+    """Return ``None`` because query caches are intentionally not persisted."""
+    return None
 
 
 def _query_cache_entry_nbytes(coords: np.ndarray) -> int:
@@ -644,51 +602,8 @@ def _persistent_cache_insert(
     coords: np.ndarray,
     query_descriptor: dict,
 ) -> bool:
-    """Append *coords* to the persistent cache and update the catalog.
-
-    Returns ``True`` on success, ``False`` if the entry is too large or the
-    persistent budget is exceeded.
-    """
-    catalog = _load_query_cache_catalog(array)
-    payload_path = _query_cache_payload_path(array)
-    if catalog is None:
-        catalog = _default_query_cache_catalog(payload_path)
-    elif digest in catalog.get("entries", {}):
-        return True
-
-    payload_mapping = _encode_coords_payload(coords)
-    nbytes = _query_cache_entry_nbytes(coords)
-
-    max_entry = catalog.get("max_entry_nbytes", QUERY_CACHE_MAX_ENTRY_NBYTES)
-    if nbytes > max_entry:
-        return False
-
-    max_persistent = catalog.get("max_persistent_nbytes", QUERY_CACHE_MAX_PERSISTENT_NBYTES)
-    current_persistent = int(catalog.get("persistent_nbytes", 0))
-    if current_persistent + nbytes > max_persistent:
-        if nbytes > max_persistent:
-            return False
-        catalog = _reset_persistent_query_cache_catalog(array, catalog)
-        current_persistent = 0
-
-    store = _open_query_cache_store(array, create=True)
-    if store is None:
-        return False
-
-    slot = len(store)
-    store.append(payload_mapping)
-
-    catalog["entries"][digest] = {
-        "slot": slot,
-        "nbytes": nbytes,
-        "nrows": len(coords),
-        "dtype": payload_mapping["dtype"],
-        "query": query_descriptor,
-    }
-    catalog["persistent_nbytes"] = current_persistent + nbytes
-    catalog["next_slot"] = slot + 1
-    _save_query_cache_catalog(array, catalog)
-    return True
+    """Return ``False`` because query caches are intentionally not persisted."""
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -731,17 +646,7 @@ def get_cached_coords(
     scope = _query_cache_scope(owner)
     descriptor = _normalize_query_descriptor(expression, tokens, order)
     digest = _query_cache_digest(descriptor)
-    # 1. In-process hot cache.
-    coords = _hot_cache_get(digest, scope=scope)
-    if coords is not None:
-        return coords
-    # 2. Persistent cache (persistent arrays only).
-    if _is_persistent_array(owner):
-        coords = _persistent_cache_lookup(owner, digest)
-        if coords is not None:
-            _hot_cache_put(digest, coords, scope=scope)
-            return coords
-    return None
+    return _hot_cache_get(digest, scope=scope)
 
 
 def store_cached_coords(
@@ -751,14 +656,12 @@ def store_cached_coords(
     order: list[str] | None,
     coords: np.ndarray,
 ) -> None:
-    """Store *coords* in both the hot cache and (if persistent) the payload store."""
+    """Store *coords* in the in-process hot cache only."""
     owner = _query_cache_owner(array)
     scope = _query_cache_scope(owner)
     descriptor = _normalize_query_descriptor(expression, tokens, order)
     digest = _query_cache_digest(descriptor)
     _hot_cache_put(digest, coords, scope=scope)
-    if _is_persistent_array(owner):
-        _persistent_cache_insert(owner, digest, coords, descriptor)
 
 
 def _supported_index_dtype(dtype: np.dtype) -> bool:

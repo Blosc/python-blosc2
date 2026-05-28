@@ -3914,6 +3914,8 @@ class LazyExpr(LazyArray):
 
         Returns ``None`` when the fast path does not apply.
         """
+        from . import indexing
+
         simple_operand_expr = self.expression.strip("() ") in self.operands
         if not (
             hasattr(self, "_where_args")
@@ -3928,25 +3930,34 @@ class LazyExpr(LazyArray):
             return None
 
         # Preserve index/caching behavior for indexed queries.
-        if kwargs.get("_use_index", True):
-            from . import indexing
-
-            if indexing.will_use_index(self):
-                return None
+        if kwargs.get("_use_index", True) and indexing.will_use_index(self):
+            return None
 
         cond_expr = blosc2.LazyExpr._new_expr(self.expression, self.operands, guess=False)
         if not blosc2.isdtype(cond_expr.dtype, "bool"):
             return None
 
         target = self._where_args["_where_x"]
+        if cond_expr.ndim != 1 or target.ndim != 1:
+            return None
 
-        # Evaluate the condition using the miniexpr prefilter (fastest path)
+        cache_tokens = [indexing.SELF_TARGET_NAME]
+        cached_coords = indexing.get_cached_coords(target, self.expression, cache_tokens, None)
+        if cached_coords is not None:
+            cached_plan = indexing.IndexPlan(
+                usable=True, reason="cache-hit", base=target, exact_positions=cached_coords
+            )
+            return indexing.evaluate_full_query(self._where_args, cached_plan)
+
+        # Evaluate the condition using the miniexpr prefilter (fastest first pass)
         mask = cond_expr.compute(())
 
         # Collect flat indices by iterating the compressed bool chunks,
-        # avoiding a full-mask decompression + count_nonzero + flatnonzero
+        # avoiding a full-mask decompression + count_nonzero + flatnonzero.
         flat_indices = self._collect_flat_indices_from_bool_ndarray(mask)
-        return blosc2.take(target, flat_indices, axis=None)[:]
+        indexing.store_cached_coords(target, self.expression, cache_tokens, None, flat_indices)
+        plan = indexing.IndexPlan(usable=True, reason="mask-scan", base=target, exact_positions=flat_indices)
+        return indexing.evaluate_full_query(self._where_args, plan)
 
     def _compute_expr(self, item, kwargs):
         if any(method in self.expression for method in eager_funcs):
@@ -4010,8 +4021,7 @@ class LazyExpr(LazyArray):
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
 
         # Optimization: for where(cond, x) (1-arg) with a boolean condition,
-        # evaluate the cond mask via miniexpr, collect flat indices from the
-        # compressed result, and gather matching elements with take().
+        # stream matching values chunk-by-chunk without materializing the full mask.
         fastpath_result = self._where_getitem_fastpath(item, kwargs)
         if fastpath_result is not None:
             return fastpath_result

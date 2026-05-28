@@ -96,6 +96,16 @@ def test_with_compression():
     assert value.cparams.codec == blosc2.Codec.BLOSCLZ
 
 
+def test_from_schunk_preserves_mode(populate_nodes):
+    schunk = blosc2.blosc2_ext.open("test_estore.b2e", mode="r", offset=0)
+    estore = blosc2.EmbedStore(_from_schunk=schunk)
+
+    assert estore.mode == "r"
+    assert estore.storage.mode == "r"
+    assert estore._store.mode == "r"
+    assert set(estore.keys()) == {"/node1", "/node2", "/node3"}
+
+
 def test_with_many_nodes():
     # Create a estore with many nodes
     N = 200

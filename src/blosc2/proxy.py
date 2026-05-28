@@ -433,8 +433,14 @@ class Proxy(blosc2.Operand):
         [17 18 19]
         [22 23 24]]
         """
-        # Populate the cache
-        self.fetch(item)
+        # Populate the cache when possible.  Read-only reopens must remain
+        # observational, so fall back to the source without mutating the cache.
+        try:
+            self.fetch(item)
+        except ValueError as exc:
+            if getattr(self._schunk_cache, "mode", None) != "r" or "reading mode" not in str(exc):
+                raise
+            return self.src[item]
         return self._cache[item]
 
     @property

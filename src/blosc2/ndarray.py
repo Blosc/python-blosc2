@@ -3800,7 +3800,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
     """Compressed, chunked N-dimensional array with NumPy-like indexing."""
 
     def __init__(self, **kwargs):
-        self._schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
+        schunk_kwargs = {"_schunk": kwargs["_schunk"], "_is_view": True}
+        mode = kwargs.pop("mode", None)
+        if mode is not None:
+            schunk_kwargs["mode"] = mode
+        self._schunk = SChunk(**schunk_kwargs)  # SChunk Python instance
         self._keep_last_read = False
         # Where to store the last read data
         self._last_read = {}

@@ -98,11 +98,19 @@ class EmbedStore:
         self.mmap_mode = mmap_mode
 
         if _from_schunk is not None:
+            self.urlpath = _from_schunk.urlpath
             self.cparams = _from_schunk.cparams
             self.dparams = _from_schunk.dparams
-            self.mode = mode
+            self.mode = _from_schunk.mode
+            self.mmap_mode = getattr(_from_schunk, "mmap_mode", None)
             self._store = _from_schunk
-            self.storage = blosc2.Storage()
+            self.storage = blosc2.Storage(
+                contiguous=_from_schunk.contiguous,
+                urlpath=_from_schunk.urlpath,
+                mode=self.mode,
+                mmap_mode=self.mmap_mode,
+                initial_mapping_size=getattr(_from_schunk, "initial_mapping_size", None),
+            )
             self.storage.meta = _from_schunk.meta
             self._load_metadata()
             return
