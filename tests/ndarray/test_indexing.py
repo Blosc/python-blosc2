@@ -1661,6 +1661,10 @@ def test_hot_cache_put_then_get():
     _clear_caches()
     coords = np.array([1, 2, 3], dtype=np.int64)
     indexing._hot_cache_put("abc", coords)
+    entry = next(iter(indexing._HOT_CACHE.values()))
+    assert isinstance(entry, indexing._CompressedHotCoords)
+    assert isinstance(entry.data, bytes)
+    assert entry.nbytes == indexing._HOT_CACHE_BYTES
     result = indexing._hot_cache_get("abc")
     assert result is not None
     np.testing.assert_array_equal(result, coords)
@@ -1678,18 +1682,21 @@ def test_hot_cache_scope_isolation():
 
 def test_hot_cache_byte_limit_evicts_lru():
     _clear_caches()
-    # Each entry is 100 * 8 = 800 bytes. Budget is 128 KB = 131072 bytes.
-    # Fill with 165 entries (165 * 800 = 132000 > 131072); expect oldest evicted.
-    entry_size = 100
-    for i in range(165):
-        coords = np.arange(entry_size, dtype=np.int64)
-        indexing._hot_cache_put(f"key{i}", coords)
+    coords = np.arange(10_000, dtype=np.int64)
+    compressed = indexing._compress_hot_coords(coords)
+    original_budget = indexing.QUERY_CACHE_MAX_MEM_NBYTES
+    try:
+        indexing.QUERY_CACHE_MAX_MEM_NBYTES = compressed.nbytes * 2
+        for i in range(3):
+            indexing._hot_cache_put(f"key{i}", coords)
 
-    # First keys should have been evicted.
-    assert indexing._hot_cache_get("key0") is None
-    # Most recent keys should still be present.
-    assert indexing._hot_cache_get("key164") is not None
-    assert indexing._HOT_CACHE_BYTES <= indexing.QUERY_CACHE_MAX_MEM_NBYTES
+        # First key should have been evicted, the two newest should remain.
+        assert indexing._hot_cache_get("key0") is None
+        assert indexing._hot_cache_get("key1") is not None
+        assert indexing._hot_cache_get("key2") is not None
+        assert indexing._HOT_CACHE_BYTES <= indexing.QUERY_CACHE_MAX_MEM_NBYTES
+    finally:
+        indexing.QUERY_CACHE_MAX_MEM_NBYTES = original_budget
 
 
 def test_hot_cache_clear():

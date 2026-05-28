@@ -63,8 +63,21 @@ QUERY_CACHE_MAX_ENTRY_NBYTES = 65_536  # 64 KB of logical int64 positions per pe
 QUERY_CACHE_MAX_MEM_NBYTES = 131_072  # 128 KB for the in-process hot cache
 QUERY_CACHE_MAX_PERSISTENT_NBYTES = 4 * 1024 * 1024  # 4 MB of logical int64 positions in the payload store
 
-# In-process hot cache: (array-scope, digest) -> decoded np.ndarray of coordinates.
-_HOT_CACHE: dict[tuple[tuple[str, str | int], str], np.ndarray] = {}
+
+@dataclass(frozen=True, slots=True)
+class _CompressedHotCoords:
+    dtype: str
+    nrows: int
+    compressed: bool
+    data: bytes
+
+    @property
+    def nbytes(self) -> int:
+        return len(self.data)
+
+
+# In-process hot cache: (array-scope, digest) -> compressed coordinate payload.
+_HOT_CACHE: dict[tuple[tuple[str, str | int], str], _CompressedHotCoords] = {}
 # Insertion-order list for LRU eviction.
 _HOT_CACHE_ORDER: list[tuple[tuple[str, str | int], str]] = []
 # Total bytes of arrays currently in the hot cache.
@@ -518,24 +531,49 @@ def _hot_cache_key(
     return (_HOT_CACHE_GLOBAL_SCOPE if scope is None else scope, digest)
 
 
+def _compress_hot_coords(coords: np.ndarray) -> _CompressedHotCoords:
+    payload = _encode_coords_payload(np.asarray(coords))
+    raw = payload["data"]
+    compressed = False
+    data = raw
+    if len(raw) != 0:
+        dtype = np.dtype(payload["dtype"])
+        candidate = blosc2.compress2(raw, typesize=dtype.itemsize, codec=blosc2.Codec.LZ4, clevel=5)
+        if len(candidate) < len(raw):
+            data = candidate
+            compressed = True
+    return _CompressedHotCoords(
+        dtype=payload["dtype"], nrows=int(payload["nrows"]), compressed=compressed, data=data
+    )
+
+
+def _decompress_hot_coords(entry: _CompressedHotCoords) -> np.ndarray:
+    dtype = np.dtype(entry.dtype)
+    if entry.nrows == 0:
+        return np.empty((0,), dtype=dtype)
+    raw = blosc2.decompress2(entry.data) if entry.compressed else entry.data
+    return np.frombuffer(raw, dtype=dtype, count=entry.nrows).copy()
+
+
 def _hot_cache_get(digest: str, scope: tuple[str, str | int] | None = None) -> np.ndarray | None:
     """Return the cached coordinate array for *digest*, or ``None``."""
     key = _hot_cache_key(digest, scope)
-    arr = _HOT_CACHE.get(key)
-    if arr is None:
+    entry = _HOT_CACHE.get(key)
+    if entry is None:
         return None
     # Move to most-recently-used position.
     with contextlib.suppress(ValueError):
         _HOT_CACHE_ORDER.remove(key)
     _HOT_CACHE_ORDER.append(key)
-    return arr
+    return _decompress_hot_coords(entry)
 
 
 def _hot_cache_put(digest: str, coords: np.ndarray, scope: tuple[str, str | int] | None = None) -> None:
     """Insert *coords* into the hot cache, evicting LRU entries if needed."""
     global _HOT_CACHE_BYTES
     key = _hot_cache_key(digest, scope)
-    entry_bytes = coords.nbytes
+    entry = _compress_hot_coords(coords)
+    entry_bytes = entry.nbytes
     if entry_bytes > QUERY_CACHE_MAX_MEM_NBYTES:
         # Single entry too large; skip.
         return
@@ -550,7 +588,7 @@ def _hot_cache_put(digest: str, coords: np.ndarray, scope: tuple[str, str | int]
         evicted = _HOT_CACHE.pop(oldest, None)
         if evicted is not None:
             _HOT_CACHE_BYTES -= evicted.nbytes
-    _HOT_CACHE[key] = coords
+    _HOT_CACHE[key] = entry
     _HOT_CACHE_ORDER.append(key)
     _HOT_CACHE_BYTES += entry_bytes
 
