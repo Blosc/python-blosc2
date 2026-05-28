@@ -142,19 +142,23 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
 
 def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _order=None):
     chunk_indices = None
-    if expression in {"o0", "(o0)"} and where is None:
-        # We don't have an actual expression, so avoid a copy except to make contiguous (later)
-        return chunk_operands["o0"], None
-    # Apply the where condition (in result)
+
+    # Apply the where condition (in result) — fusion path, evaluate before shortcut
     if where is not None and len(where) == 2:
         # x = chunk_operands["_where_x"]
         # y = chunk_operands["_where_y"]
-        # result = np.where(result, x, y)
         # numexpr is a bit faster than np.where, and we can fuse operations in this case
         new_expr = f"where({expression}, _where_x, _where_y)"
         return ne_evaluate(new_expr, chunk_operands, **ne_args), None
 
-    result = ne_evaluate(expression, chunk_operands, **ne_args)
+    # If the expression is a simple operand reference (e.g. "key", "o0"),
+    # grab it directly from chunk_operands instead of calling ne_evaluate.
+    # This avoids ~150 µs of numexpr parsing/setup overhead per chunk.
+    _expr = expression.strip("()")
+    if _expr in chunk_operands:
+        result = chunk_operands[_expr]
+    else:
+        result = ne_evaluate(expression, chunk_operands, **ne_args)
     if where is None:
         return result, None
     elif len(where) == 1:
@@ -219,6 +223,7 @@ blosc2_funcs = constructors + linalg_funcs + elementwise_funcs + reducers
 # functions that have to be evaluated before chunkwise lazyexpr machinery
 eager_funcs = linalg_funcs + reducers + ["slice"] + ["." + attr for attr in linalg_attrs]
 functions = blosc2_funcs
+_TRANSIENT_MASK_CPARAMS = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=5, filters=[blosc2.Filter.SHUFFLE])
 _constructor_call_patterns = {name: re.compile(rf"\b{re.escape(name)}\s*\(") for name in constructors}
 
 
@@ -392,6 +397,18 @@ class LazyArray(ABC, blosc2.Operand):
             self._vlmeta_proxy = LazyArrayVLMeta(self)
         return self._vlmeta_proxy
 
+    def __enter__(self) -> LazyArray:
+        """Enter a context manager and return this lazy array."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Exit a context manager.
+
+        Lazy arrays do not currently keep explicit closeable resources, so this
+        is a logical no-op kept for API consistency with :func:`blosc2.open`.
+        """
+        return False
+
     @abstractmethod
     def argsort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         """
@@ -463,6 +480,29 @@ class LazyArray(ABC, blosc2.Operand):
             - ``strict_miniexpr`` (bool): controls whether miniexpr compilation/execution
               failures are raised instead of silently falling back to regular chunked eval
               for non-DSL expressions.
+
+            - ``jit`` (bool | None): enable (``True``) or disable (``False``) JIT compilation
+              of the expression via miniexpr.  When ``None`` (default), JIT is only used
+              for DSL kernels; plain expressions are evaluated by the bytecode interpreter.
+              Setting ``jit=True`` forces auto-lift of plain expressions into JIT-compiled
+              kernels.
+
+            - ``jit_backend`` (str | None): select the JIT compiler backend.  Valid
+              values are ``"tcc"`` (bundled Tiny C Compiler) and ``"cc"`` (system C
+              compiler, e.g. gcc or clang).  ``None`` (default) defers to the miniexpr
+              default (``"tcc"``).
+
+            - ``BLOSC_ME_JIT`` environment variable: when set to ``"1"``, ``"true"``,
+              ``"on"``, ``"tcc"``, or ``"cc"``, it forces ``jit=True`` for all
+              ``compute()`` and ``__getitem__`` calls where ``jit`` is not explicitly
+              passed.  Setting it to ``"tcc"`` or ``"cc"`` also selects that backend
+              unless ``jit_backend`` is given explicitly.
+
+            - ``BLOSC_ME_JIT_TRACE`` environment variable: when set to ``"1"``,
+              ``"true"``, or ``"on"``, prints a one-line diagnostic to stdout
+              showing which compute engine was selected (``miniexpr`` or
+              ``ne_evaluate``), the JIT mode and backend if applicable, and the
+              expression being evaluated.
 
         Returns
         -------
@@ -662,6 +702,21 @@ def compute_broadcast_shape(arrays):
     # When dealing with UDFs, one can arrive params that are not arrays
     shapes = [arr.shape for arr in arrays if hasattr(arr, "shape") and arr is not np]
     return np.broadcast_shapes(*shapes) if shapes else None
+
+
+def _jit_from_env(jit, jit_backend):
+    """Apply BLOSC_ME_JIT environment variable to jit/jit_backend defaults."""
+    if jit is not None:
+        return jit, jit_backend
+    env_jit = os.environ.get("BLOSC_ME_JIT", "")
+    if not env_jit:
+        return jit, jit_backend
+    env_jit_lower = env_jit.lower()
+    if env_jit_lower in ("1", "true", "on", "tcc", "cc"):
+        jit = True
+    if jit_backend is None and env_jit_lower in ("tcc", "cc"):
+        jit_backend = env_jit_lower
+    return jit, jit_backend
 
 
 # Define the patterns for validation
@@ -1449,8 +1504,9 @@ def fast_eval(  # noqa: C901
     if strict_miniexpr is None:
         # Be strict by default for DSL kernels to avoid silently losing DSL fast-path regressions.
         strict_miniexpr = bool(is_dsl)
-    if where is not None:
-        # miniexpr does not support where(); use the regular path.
+    if where is not None and len(where) != 2:
+        # miniexpr does not support cardinality-changing where (len==1);
+        # where(cond, x, y) with two args is element-wise and IS supported.
         use_miniexpr = False
         if is_dsl:
             dsl_disable_reason = "DSL kernels cannot be run without miniexpr."
@@ -1579,15 +1635,28 @@ def fast_eval(  # noqa: C901
     if is_dsl and not use_miniexpr:
         _raise_dsl_miniexpr_required(dsl_disable_reason)
 
+    if os.environ.get("BLOSC_ME_JIT_TRACE", "").lower() in ("1", "true", "on"):
+        engine = (
+            "miniexpr" if use_miniexpr else ("ne_evaluate" if isinstance(expr_string, str) else "python-udf")
+        )
+        jit_info = f"jit={jit}, backend={jit_backend}" if use_miniexpr else ""
+        expr_short = str(expr_string)[:120].replace("\n", " ")
+        print(f"[blosc2] engine={engine} {jit_info} expr={expr_short}", flush=True)
+
     if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
         # All values will be overwritten, so we can use an uninitialized array
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         prefilter_set = False
         try:
+            # Fuse where(cond, x, y) into the expression for miniexpr
+            _pref_expr = expr_string_miniexpr
+            _pref_ops = operands_miniexpr
+            if where is not None and len(where) == 2:
+                _pref_expr = f"where({_pref_expr}, _where_x, _where_y)"
             res_eval._set_pref_expr(
-                expr_string_miniexpr,
-                operands_miniexpr,
+                _pref_expr,
+                _pref_ops,
                 fp_accuracy=fp_accuracy,
                 jit=jit,
             )
@@ -2023,9 +2092,12 @@ def slices_eval(  # noqa: C901
 
         if where is None or len(where) == 2:
             if behaved and result.shape == out.chunks and result.dtype == out.dtype:
-                # Fast path
-                # TODO: Check this only works when slice is ()
-                out.schunk.update_data(nchunk, result, copy=False)
+                # Fast path: only use it when the output chunk index is valid
+                # (operand and output may have different chunk layouts when slicing)
+                if nchunk < out.schunk.nchunks:
+                    out.schunk.update_data(nchunk, result, copy=False)
+                else:
+                    out[cslice_subidx] = result
             else:
                 try:
                     out[cslice_subidx] = result
@@ -2280,6 +2352,13 @@ def reduce_slices(  # noqa: C901
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
 
+    # Validate axis against operand dimensions before any computation.
+    if axis is not None and not np.isscalar(axis):
+        ndim = len(shape)
+        for ax in axis:
+            if ax < -ndim or ax >= ndim:
+                raise np.exceptions.AxisError(ax, ndim)
+
     _slice = _slice.raw
     shape_slice = shape
     mask_slice = np.array([isinstance(i, int) for i in _slice], dtype=np.bool_)
@@ -2466,7 +2545,11 @@ def reduce_slices(  # noqa: C901
             if reduce_op in {ReduceOp.ANY, ReduceOp.ALL}:
                 result = reduce_op.value(aux_reduc, **reduce_args)
             else:
-                result = reduce_op.value.reduce(aux_reduc, **reduce_args)
+                # The accumulator is always 1-D (one slot per output block).
+                # The original axis may refer to dimensions that no longer
+                # exist after per-block reduction.  Use axis=0 to combine
+                # all block results.
+                result = reduce_op.value.reduce(aux_reduc, axis=0)
             return result
 
     # Iterate over the operands and get the chunks
@@ -3112,8 +3195,20 @@ class LazyExpr(LazyArray):
             if not (isinstance(value2, blosc2.Operand | np.ndarray) or np.isscalar(value2))
             else value2
         )
-        # Reset values represented as np.int64 etc. to be set as Python natives
-        value2 = value2.item() if np.isscalar(value2) and hasattr(value2, "item") else value2
+
+        # Reset values represented as np.int64 etc. to be set as Python natives,
+        # BUT preserve numpy integer scalars that require explicit typing (unsigned or
+        # 64-bit) so that dtype-sensitive backends (numexpr) don't downcast them to int32.
+        def _to_native_if_safe(v):
+            if not (np.isscalar(v) and hasattr(v, "item")):
+                return v
+            dt = np.dtype(type(v))
+            # Keep typed when unsigned or itemsize >= 8 to avoid silent int32 truncation.
+            if np.issubdtype(dt, np.unsignedinteger) or dt.itemsize >= 8:
+                return v
+            return v.item()
+
+        value2 = _to_native_if_safe(value2)
 
         if isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
             if isinstance(value1, LazyExpr):
@@ -3146,14 +3241,22 @@ class LazyExpr(LazyArray):
             self.expression = "o0"
             self.operands = {"o0": ne_evaluate(f"({value1!r} {op} {value2!r})")}  # eager evaluation
         elif np.isscalar(value2):
-            self.operands = {"o0": value1}
-            self.expression = f"(o0 {op} {value2!r})"
+            if hasattr(value2, "dtype"):  # typed numpy scalar — keep as named operand
+                self.operands = {"o0": value1, "o1": value2}
+                self.expression = f"(o0 {op} o1)"
+            else:
+                self.operands = {"o0": value1}
+                self.expression = f"(o0 {op} {value2!r})"
         elif hasattr(value2, "shape") and value2.shape == ():
             self.operands = {"o0": value1}
             self.expression = f"(o0 {op} {value2[()]})"
         elif np.isscalar(value1):
-            self.operands = {"o0": value2}
-            self.expression = f"({value1!r} {op} o0)"
+            if hasattr(value1, "dtype"):  # typed numpy scalar — keep as named operand
+                self.operands = {"o0": value2, "o1": value1}
+                self.expression = f"(o1 {op} o0)"
+            else:
+                self.operands = {"o0": value2}
+                self.expression = f"({value1!r} {op} o0)"
         elif hasattr(value1, "shape") and value1.shape == ():
             self.operands = {"o0": value2}
             self.expression = f"({value1[()]} {op} o0)"
@@ -3796,6 +3899,113 @@ class LazyExpr(LazyArray):
 
         return value, expression[idx:idx2]
 
+    @staticmethod
+    def _is_full_slice(lazy_item):
+        """Return True if *lazy_item* is a no-op full slice (() or slice(None))."""
+        if isinstance(lazy_item, slice):
+            return lazy_item == slice(None)
+        if isinstance(lazy_item, tuple):
+            return lazy_item == () or all(isinstance(s, slice) and s == slice(None) for s in lazy_item)
+        return False
+
+    @staticmethod
+    def _collect_flat_indices_from_bool_ndarray(bool_ndarray):
+        """Collect flat indices of True positions from a compressed boolean NDArray.
+
+        Uses :meth:`~blosc2.NDArray.iterchunks_info` to skip chunks that are
+        special values (e.g. all-False ``ZERO``), avoiding decompression and
+        scanning for those chunks.
+
+        Parameters
+        ----------
+        bool_ndarray: blosc2.NDArray
+            A 1D NDArray with boolean dtype.
+
+        Returns
+        -------
+        np.ndarray
+            Flat indices of True positions (int64).
+        """
+        chunk_len = bool_ndarray.chunks[0]
+        all_indices = []
+
+        for info in bool_ndarray.iterchunks_info():
+            # Skip special-value chunks that are entirely False
+            if info.special == blosc2.SpecialValue.ZERO:
+                continue
+            if info.special == blosc2.SpecialValue.VALUE:
+                if not info.repeated_value:  # repeated_value is False/0
+                    continue
+                # repeated_value is True: all elements in this chunk are True
+                offset = info.nchunk * chunk_len
+                all_indices.append(np.arange(offset, offset + chunk_len, dtype=np.int64))
+                continue
+
+            # Normal chunk: decompress and scan for True positions
+            raw = bool_ndarray.schunk.decompress_chunk(info.nchunk)
+            arr = np.frombuffer(raw, dtype=np.bool_)
+            # Truncate to the logical chunk size (buffer may include padding)
+            if len(arr) > chunk_len:
+                arr = arr[:chunk_len]
+            idx = np.flatnonzero(arr)
+            if len(idx) > 0:
+                offset = info.nchunk * chunk_len
+                all_indices.append(idx + offset)
+
+        if not all_indices:
+            return np.array([], dtype=np.int64)
+        return np.concatenate(all_indices)
+
+    def _where_getitem_fastpath(self, item, kwargs):
+        """Fast path for where(cond, x) full-slice getitem calls.
+
+        Returns ``None`` when the fast path does not apply.
+        """
+        from . import indexing
+
+        simple_operand_expr = self.expression.strip("() ") in self.operands
+        if not (
+            hasattr(self, "_where_args")
+            and len(self._where_args) == 1
+            and not hasattr(self, "_indices")
+            and not hasattr(self, "_order")
+            and "_reduce_args" not in kwargs
+            and isinstance(self._where_args["_where_x"], blosc2.NDArray)
+            and self._is_full_slice(item)
+            and not simple_operand_expr
+        ):
+            return None
+
+        # Preserve index/caching behavior for indexed queries.
+        if kwargs.get("_use_index", True) and indexing.will_use_index(self):
+            return None
+
+        cond_expr = blosc2.LazyExpr._new_expr(self.expression, self.operands, guess=False)
+        if not blosc2.isdtype(cond_expr.dtype, "bool"):
+            return None
+
+        target = self._where_args["_where_x"]
+        if cond_expr.ndim != 1 or target.ndim != 1:
+            return None
+
+        cache_tokens = [indexing.SELF_TARGET_NAME]
+        cached_coords = indexing.get_cached_coords(target, self.expression, cache_tokens, None)
+        if cached_coords is not None:
+            cached_plan = indexing.IndexPlan(
+                usable=True, reason="cache-hit", base=target, exact_positions=cached_coords
+            )
+            return indexing.evaluate_full_query(self._where_args, cached_plan)
+
+        # Evaluate the condition using the miniexpr prefilter (fastest first pass)
+        mask = cond_expr.compute((), cparams=_TRANSIENT_MASK_CPARAMS)
+
+        # Collect flat indices by iterating the compressed bool chunks,
+        # avoiding a full-mask decompression + count_nonzero + flatnonzero.
+        flat_indices = self._collect_flat_indices_from_bool_ndarray(mask)
+        indexing.store_cached_coords(target, self.expression, cache_tokens, None, flat_indices)
+        plan = indexing.IndexPlan(usable=True, reason="mask-scan", base=target, exact_positions=flat_indices)
+        return indexing.evaluate_full_query(self._where_args, plan)
+
     def _compute_expr(self, item, kwargs):
         if any(method in self.expression for method in eager_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
@@ -3856,6 +4066,12 @@ class LazyExpr(LazyArray):
                 lazy_expr = blosc2.LazyExpr(new_op=(lazy_expr, None, None))
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
+
+        # Optimization: for where(cond, x) (1-arg) with a boolean condition,
+        # stream matching values chunk-by-chunk without materializing the full mask.
+        fastpath_result = self._where_getitem_fastpath(item, kwargs)
+        if fastpath_result is not None:
+            return fastpath_result
 
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 
@@ -3941,6 +4157,7 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
         kwargs.setdefault("fp_accuracy", fp_accuracy)
+        jit, jit_backend = _jit_from_env(jit, jit_backend)
         if jit is not None:
             kwargs["jit"] = jit
         if jit_backend is not None:

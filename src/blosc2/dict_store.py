@@ -71,16 +71,15 @@ class DictStore:
         If None, the default Blosc2 storage properties are used.
     threshold : int or None, optional
         Threshold (in bytes of uncompressed data) under which values are kept
-        in the embedded store. If None, in-memory arrays are stored in the
-        embedded store and on-disk arrays are stored as separate files.
-        C2Array objects will always be stored in the embedded store,
-        regardless of their size.
+        in the embedded store. Default is 0, meaning all values are persisted
+        as external files by default.  C2Array objects are always stored in
+        the embedded store regardless of this setting.
 
     Examples
     --------
     >>> dstore = DictStore(localpath="my_dstore.b2z", mode="w")
-    >>> dstore["/node1"] = np.array([1, 2, 3])  # goes to embed store
-    >>> dstore["/node2"] = blosc2.ones(2)  # goes to embed store
+    >>> dstore["/node1"] = np.array([1, 2, 3])
+    >>> dstore["/node2"] = blosc2.ones(2)
     >>> arr_external = blosc2.arange(3, urlpath="ext_node3.b2nd", mode="w")
     >>> dstore["/dir1/node3"] = arr_external  # external file in dir1 (.b2nd)
     >>> schunk = blosc2.SChunk(chunksize=32)
@@ -110,7 +109,7 @@ class DictStore:
         cparams: blosc2.CParams | None = None,
         dparams: blosc2.DParams | None = None,
         storage: blosc2.Storage | None = None,
-        threshold: int | None = 2**13,
+        threshold: int | None = 0,
         *,
         mmap_mode: str | None = None,
         _storage_meta: dict | None = None,
@@ -465,6 +464,13 @@ class DictStore:
             rel_path = rel_path.replace(os.sep, "/")
             self.map_tree[key] = rel_path
         else:
+            # Remove any old external file so it doesn't shadow the embed-stored
+            # value on read (map_tree is checked first in __getitem__).
+            if key in self.map_tree:
+                old_filepath = self.map_tree.pop(key)
+                old_full_path = os.path.join(self.working_dir, old_filepath)
+                if os.path.exists(old_full_path):
+                    os.remove(old_full_path)
             if external_file:
                 # Embed a copy by using cframe
                 value = blosc2.from_cframe(value.to_cframe())

@@ -57,6 +57,15 @@ north_big = north.where(north.amount > 100)
 print(f"North region + amount > 100: {len(north_big)} rows")
 print(north_big)
 
+# -- materialized gather via take() -----------------------------------------
+# Unlike mask-based views, take() preserves order and duplicate positions.
+priority = t.take([7, 1, 7])
+print("Priority sales (order and duplicates preserved):")
+print(priority[["id", "region", "amount"]])
+
+# Column.take() applies the same logical-row gather to a single column.
+print("Priority amounts:", t.amount.take([7, 1, 7])[:].tolist())
+
 # -- column projection via [] (no data copy) --------------------------------
 slim = t[["id", "amount"]]
 print("id + amount only:")

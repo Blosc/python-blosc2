@@ -77,6 +77,26 @@ def test_open(urlpath, chunksize, nchunks):
     blosc2.remove_urlpath(proxy_urlpath)
 
 
+def test_open_readonly_proxy_keeps_schunk_cache_and_source_readonly(tmp_path):
+    source_path = tmp_path / "source.b2frame"
+    proxy_path = tmp_path / "proxy.b2frame"
+    data = np.arange(200, dtype="int32")
+    source = blosc2.SChunk(chunksize=40, data=data, urlpath=str(source_path), cparams={"typesize": 4})
+    proxy = blosc2.Proxy(source, urlpath=str(proxy_path), mode="w")
+    proxy.fetch()
+    cached_size = proxy_path.stat().st_size
+    expected = data.tobytes()
+    del proxy, source
+
+    readonly = blosc2.open(str(proxy_path))
+
+    assert readonly.schunk.mode == "r"
+    assert readonly.schunk.vlmeta.mode == "r"
+    assert readonly.src.mode == "r"
+    assert readonly[0 : len(data) * data.dtype.itemsize] == expected
+    assert proxy_path.stat().st_size == cached_size
+
+
 # Test the ProxySource class
 def test_proxy_source():
     # Define an object that will be used as a source

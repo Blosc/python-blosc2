@@ -105,6 +105,30 @@ def test_open(urlpath, shape, chunks, blocks, slices, dtype):
     blosc2.remove_urlpath(proxy_urlpath)
 
 
+def test_open_readonly_proxy_keeps_cache_and_source_readonly(tmp_path):
+    source_path = tmp_path / "source.b2nd"
+    proxy_path = tmp_path / "proxy.b2nd"
+    data = np.arange(120, dtype=np.int32).reshape(12, 10)
+
+    source = blosc2.asarray(data, chunks=(4, 5), blocks=(2, 5), urlpath=source_path, mode="w")
+    proxy = blosc2.Proxy(source, urlpath=proxy_path, mode="w")
+    proxy.fetch()
+    cached_size = proxy_path.stat().st_size
+    del proxy, source
+
+    readonly = blosc2.open(proxy_path)
+
+    assert readonly.schunk.mode == "r"
+    assert readonly.schunk.vlmeta.mode == "r"
+    assert readonly.src.schunk.mode == "r"
+    np.testing.assert_array_equal(readonly[:], data)
+    assert proxy_path.stat().st_size == cached_size
+
+    with blosc2.open(proxy_path) as readonly_ctx:
+        assert isinstance(readonly_ctx, blosc2.Proxy)
+        np.testing.assert_array_equal(readonly_ctx[:], data)
+
+
 # Test the ProxyNDSources interface
 @pytest.mark.parametrize(
     ("shape", "chunks", "blocks"),

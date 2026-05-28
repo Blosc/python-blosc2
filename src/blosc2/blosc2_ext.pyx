@@ -618,6 +618,8 @@ cdef extern from "b2nd.h":
                        const int64_t *stop)
     int b2nd_from_cbuffer(b2nd_context_t *ctx, b2nd_array_t **array, void *buffer, int64_t buffersize)
     int b2nd_to_cbuffer(b2nd_array_t *array, void *buffer, int64_t buffersize)
+    int b2nd_get_sparse_cbuffer(b2nd_array_t *array, int64_t ncoords, const int64_t *coords,
+                                void *buffer, int64_t buffersize)
     int b2nd_from_cframe(uint8_t *cframe, int64_t cframe_len, c_bool copy, b2nd_array_t ** array);
     int b2nd_to_cframe(const b2nd_array_t *array, uint8_t ** cframe, int64_t *cframe_len,
                        c_bool *needs_free);
@@ -774,8 +776,22 @@ ctypedef struct udf_udata:
     int64_t chunks_in_array[B2ND_MAX_DIM]
     int64_t blocks_in_chunk[B2ND_MAX_DIM]
 
+ctypedef enum:
+    ME_CACHE_EMPTY
+    ME_CACHE_LOADING
+    ME_CACHE_READY
+    ME_CACHE_ERROR
+
+ctypedef struct me_input_cache_s:
+    uint8_t* data
+    int64_t nchunk
+    int state
+    PyThread_type_lock state_lock
+    PyThread_type_lock ready_lock
+
 ctypedef struct me_udata:
     b2nd_array_t** inputs
+    me_input_cache_s* input_chunk_caches
     int ninputs
     me_eval_params* eval_params
     b2nd_array_t* array
@@ -811,14 +827,9 @@ cdef _check_comp_length(comp_name, comp_len):
 
 
 blosc2_init()
-cdef PyThread_type_lock chunk_cache_lock = PyThread_allocate_lock()
-if chunk_cache_lock == NULL:
-    raise MemoryError("Could not allocate chunk cache lock")
 
 @atexit.register
 def destroy():
-    if chunk_cache_lock != NULL:
-        PyThread_free_lock(chunk_cache_lock)
     blosc2_destroy()
 
 
@@ -2300,6 +2311,9 @@ cdef class SChunk:
         cdef udf_udata* udf_data
         cdef user_filters_udata* udata
         cdef mm_udata* mm_data
+        cdef me_udata* me_data
+        cdef me_input_cache_s* input_cache
+        cdef int i
 
         if func_name is not None and func_name in blosc2.prefilter_funcs:
             del blosc2.prefilter_funcs[func_name]
@@ -2309,12 +2323,22 @@ cdef class SChunk:
             if self.schunk.storage.cparams.preparams != NULL:
                 me_data = <me_udata*>self.schunk.storage.cparams.preparams.user_data
                 if me_data != NULL:
-                    if me_data.inputs != NULL:
+                    if me_data.input_chunk_caches != NULL:
                         for i in range(me_data.ninputs):
-                            if me_data.inputs[i].chunk_cache.data != NULL:
-                                free(me_data.inputs[i].chunk_cache.data)
-                                me_data.inputs[i].chunk_cache.data = NULL
-                                me_data.inputs[i].chunk_cache.nchunk = -1
+                            input_cache = &me_data.input_chunk_caches[i]
+                            if input_cache.data != NULL:
+                                free(input_cache.data)
+                                input_cache.data = NULL
+                            input_cache.nchunk = -1
+                            input_cache.state = ME_CACHE_EMPTY
+                            if input_cache.state_lock != NULL:
+                                PyThread_free_lock(input_cache.state_lock)
+                                input_cache.state_lock = NULL
+                            if input_cache.ready_lock != NULL:
+                                PyThread_free_lock(input_cache.ready_lock)
+                                input_cache.ready_lock = NULL
+                        free(me_data.input_chunk_caches)
+                    if me_data.inputs != NULL:
                         free(me_data.inputs)
                     if me_data.miniexpr_handle != NULL:  # XXX do we really need the conditional?
                         me_free(me_data.miniexpr_handle)
@@ -2362,15 +2386,11 @@ cdef class SChunk:
             if self.schunk.storage.dparams.postfilter != NULL:
                 self.remove_postfilter(func_name=None, _new_ctx=False)
 
-            # Release the GIL while freeing the C-Blosc2 super-chunk.
-            # blosc2_schunk_free -> blosc2_free_ctx -> release_threadpool
-            # joins worker pthreads; holding the GIL here can cause hangs
-            # when thousands of SChunks are finalized at once (e.g. during
-            # gc.collect() in Python 3.14+ where gen-2 threshold is 0).
+            # Free the C-Blosc2 super-chunk with the GIL held so threadpool
+            # teardown cannot race with active miniexpr workers.
             schunk_ptr = self.schunk
             self.schunk = NULL
-            with nogil:
-                blosc2_schunk_free(schunk_ptr)
+            blosc2_schunk_free(schunk_ptr)
 
 
 # postfilter
@@ -2433,6 +2453,8 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef uint8_t* src
     cdef uint8_t* chunk
     cdef c_bool needs_free
+    cdef uint8_t* loaded_chunk
+    cdef me_input_cache_s* input_cache
     cdef int32_t chunk_nbytes, chunk_cbytes, block_nbytes
     cdef int start, blocknitems, expected_blocknitems
     cdef int64_t valid_nitems
@@ -2467,30 +2489,58 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         if ndarr.sc.storage.urlpath == NULL:
             src = ndarr.sc.data[nchunk]
         else:
-            # We need to get the chunk from disk/network
-            if ndarr.chunk_cache.nchunk != nchunk:
-                PyThread_acquire_lock(chunk_cache_lock, 1)
-                # We need to check again, as another thread may have updated the cache already
-                if ndarr.chunk_cache.nchunk != nchunk:
-                    if ndarr.chunk_cache.data != NULL:
-                        free(ndarr.chunk_cache.data)
-                        ndarr.chunk_cache.data = NULL
-                    rc = blosc2_schunk_get_chunk(ndarr.sc, nchunk, &chunk, &needs_free)
-                    if rc < 0:
-                        PyThread_release_lock(chunk_cache_lock)
-                        raise ValueError("miniexpr: error getting chunk")
-                    if not needs_free:
-                        src = <uint8_t*> malloc(rc)
-                        if src == NULL:
-                            PyThread_release_lock(chunk_cache_lock)
-                            raise MemoryError("miniexpr: cannot allocate chunk copy")
-                        memcpy(src, chunk, rc)
-                    else:
-                        src = chunk
-                    ndarr.chunk_cache.data = src
-                    ndarr.chunk_cache.nchunk = nchunk
-                PyThread_release_lock(chunk_cache_lock)
-            src = ndarr.chunk_cache.data
+            input_cache = &udata.input_chunk_caches[i]
+            if input_cache.state_lock == NULL or input_cache.ready_lock == NULL:
+                raise MemoryError("miniexpr: cache locks not assigned")
+            while True:
+                PyThread_acquire_lock(input_cache.state_lock, 1)
+                if input_cache.state == ME_CACHE_READY and input_cache.nchunk == nchunk and input_cache.data != NULL:
+                    src = input_cache.data
+                    PyThread_release_lock(input_cache.state_lock)
+                    break
+                if input_cache.state == ME_CACHE_ERROR and input_cache.nchunk == nchunk:
+                    PyThread_release_lock(input_cache.state_lock)
+                    raise ValueError("miniexpr: error getting chunk")
+                if input_cache.state == ME_CACHE_LOADING:
+                    PyThread_release_lock(input_cache.state_lock)
+                    PyThread_acquire_lock(input_cache.ready_lock, 1)
+                    PyThread_release_lock(input_cache.ready_lock)
+                    continue
+                PyThread_acquire_lock(input_cache.ready_lock, 1)
+                input_cache.state = ME_CACHE_LOADING
+                input_cache.nchunk = nchunk
+                PyThread_release_lock(input_cache.state_lock)
+
+                rc = blosc2_schunk_get_chunk(ndarr.sc, nchunk, &chunk, &needs_free)
+                if rc < 0:
+                    PyThread_acquire_lock(input_cache.state_lock, 1)
+                    input_cache.state = ME_CACHE_ERROR
+                    PyThread_release_lock(input_cache.state_lock)
+                    PyThread_release_lock(input_cache.ready_lock)
+                    raise ValueError("miniexpr: error getting chunk")
+
+                if not needs_free:
+                    loaded_chunk = <uint8_t*> malloc(rc)
+                    if loaded_chunk == NULL:
+                        PyThread_acquire_lock(input_cache.state_lock, 1)
+                        input_cache.state = ME_CACHE_ERROR
+                        PyThread_release_lock(input_cache.state_lock)
+                        PyThread_release_lock(input_cache.ready_lock)
+                        raise MemoryError("miniexpr: cannot allocate chunk copy")
+                    memcpy(loaded_chunk, chunk, rc)
+                else:
+                    loaded_chunk = chunk
+
+                PyThread_acquire_lock(input_cache.state_lock, 1)
+                if input_cache.data != NULL:
+                    free(input_cache.data)
+                input_cache.data = loaded_chunk
+                input_cache.nchunk = nchunk
+                input_cache.state = ME_CACHE_READY
+                src = input_cache.data
+                PyThread_release_lock(input_cache.state_lock)
+                PyThread_release_lock(input_cache.ready_lock)
+                break
         rc = blosc2_cbuffer_sizes(src, &chunk_nbytes, &chunk_cbytes, &block_nbytes)
         if rc < 0:
             raise ValueError("miniexpr: error getting cbuffer sizes")
@@ -3086,7 +3136,7 @@ def open(urlpath, mode, offset, **kwargs):
 
     if is_ndarray:
         res = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
-                             _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+                             _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL), mode=mode)
         if cparams is not None:
             res.schunk.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
         else:
@@ -3560,6 +3610,23 @@ cdef class NDArray:
 
         return arr
 
+    def get_sparse_numpy(self, arr, coords):
+        cdef np.ndarray[np.int64_t, ndim=1, mode="c"] coords_ = np.ascontiguousarray(coords, dtype=np.int64)
+        cdef Py_buffer view
+        cdef int64_t ncoords = coords_.shape[0]
+        cdef int rc
+
+        PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
+        if view.len < ncoords * self.array.sc.typesize:
+            PyBuffer_Release(&view)
+            raise ValueError("destination buffer is smaller than the requested sparse selection")
+
+        rc = b2nd_get_sparse_cbuffer(self.array, ncoords, <const int64_t *> coords_.data,
+                                     <void *> view.buf, view.len)
+        PyBuffer_Release(&view)
+        _check_rc(rc, "Error while getting the sparse selection")
+        return arr
+
     def get_oindex_numpy(self, arr, key):
         """
         Orthogonal indexing. Key is a tuple of lists of integer indices.
@@ -3751,17 +3818,78 @@ cdef class NDArray:
         return udata
 
     cdef me_udata *_fill_me_udata(self, inputs, fp_accuracy, aux_reduc, jit=None):
-        cdef me_udata *udata = <me_udata *> malloc(sizeof(me_udata))
+        cdef me_udata *udata = <me_udata *> calloc(1, sizeof(me_udata))
+        cdef me_eval_params* eval_params
+        cdef b2nd_array_t** inputs_
+        cdef me_input_cache_s* input_chunk_caches
+        cdef void* aux_reduc_ptr = NULL
+        cdef int i
+        if aux_reduc is not None:
+            if not isinstance(aux_reduc, np.ndarray):
+                raise TypeError("aux_reduc must be a NumPy array")
+            aux_reduc_ptr = <void *> np.PyArray_DATA(<np.ndarray> aux_reduc)
         operands = list(inputs.values())
         ninputs = len(operands)
-        cdef b2nd_array_t** inputs_ = <b2nd_array_t**> malloc(ninputs * sizeof(b2nd_array_t*))
+        if udata == NULL:
+            raise MemoryError("Cannot allocate miniexpr user data")
+        inputs_ = NULL
+        if ninputs > 0:
+            inputs_ = <b2nd_array_t**> malloc(ninputs * sizeof(b2nd_array_t*))
+            if inputs_ == NULL:
+                free(udata)
+                raise MemoryError("Cannot allocate miniexpr input table")
         for i, operand in enumerate(operands):
             inputs_[i] = <b2nd_array_t*><uintptr_t>operand.c_array
-            inputs_[i].chunk_cache.nchunk = -1
-            inputs_[i].chunk_cache.data = NULL
         udata.inputs = inputs_
         udata.ninputs = ninputs
-        cdef me_eval_params* eval_params = <me_eval_params*> malloc(sizeof(me_eval_params))
+        input_chunk_caches = NULL
+        if ninputs > 0:
+            input_chunk_caches = <me_input_cache_s*> calloc(ninputs, sizeof(me_input_cache_s))
+            if input_chunk_caches == NULL:
+                free(inputs_)
+                free(udata)
+                raise MemoryError("Cannot allocate miniexpr chunk caches")
+            for i in range(ninputs):
+                input_chunk_caches[i].nchunk = -1
+                input_chunk_caches[i].state = ME_CACHE_EMPTY
+                input_chunk_caches[i].state_lock = PyThread_allocate_lock()
+                if input_chunk_caches[i].state_lock == NULL:
+                    while i > 0:
+                        i -= 1
+                        if input_chunk_caches[i].state_lock != NULL:
+                            PyThread_free_lock(input_chunk_caches[i].state_lock)
+                        if input_chunk_caches[i].ready_lock != NULL:
+                            PyThread_free_lock(input_chunk_caches[i].ready_lock)
+                    free(input_chunk_caches)
+                    free(inputs_)
+                    free(udata)
+                    raise MemoryError("Cannot allocate miniexpr chunk cache state lock")
+                input_chunk_caches[i].ready_lock = PyThread_allocate_lock()
+                if input_chunk_caches[i].ready_lock == NULL:
+                    PyThread_free_lock(input_chunk_caches[i].state_lock)
+                    input_chunk_caches[i].state_lock = NULL
+                    while i > 0:
+                        i -= 1
+                        if input_chunk_caches[i].state_lock != NULL:
+                            PyThread_free_lock(input_chunk_caches[i].state_lock)
+                        if input_chunk_caches[i].ready_lock != NULL:
+                            PyThread_free_lock(input_chunk_caches[i].ready_lock)
+                    free(input_chunk_caches)
+                    free(inputs_)
+                    free(udata)
+                    raise MemoryError("Cannot allocate miniexpr chunk cache ready lock")
+        udata.input_chunk_caches = input_chunk_caches
+        eval_params = <me_eval_params*> malloc(sizeof(me_eval_params))
+        if eval_params == NULL:
+            for i in range(ninputs):
+                if input_chunk_caches[i].state_lock != NULL:
+                    PyThread_free_lock(input_chunk_caches[i].state_lock)
+                if input_chunk_caches[i].ready_lock != NULL:
+                    PyThread_free_lock(input_chunk_caches[i].ready_lock)
+            free(input_chunk_caches)
+            free(inputs_)
+            free(udata)
+            raise MemoryError("Cannot allocate miniexpr eval params")
         eval_params.disable_simd = False
         eval_params.simd_ulp_mode = ME_SIMD_ULP_3_5 if fp_accuracy == blosc2.FPAccuracy.MEDIUM else ME_SIMD_ULP_1
         if jit is None:
@@ -3772,11 +3900,6 @@ cdef class NDArray:
             eval_params.jit_mode = ME_JIT_OFF
         udata.eval_params = eval_params
         udata.array = self.array
-        cdef void* aux_reduc_ptr = NULL
-        if aux_reduc is not None:
-            if not isinstance(aux_reduc, np.ndarray):
-                raise TypeError("aux_reduc must be a NumPy array")
-            aux_reduc_ptr = <void *> np.PyArray_DATA(<np.ndarray> aux_reduc)
         udata.aux_reduc_ptr = aux_reduc_ptr
         # Save these in udf_udata to avoid computing them for each block
         for i in range(self.array.ndim):

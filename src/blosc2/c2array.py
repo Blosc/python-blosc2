@@ -246,6 +246,18 @@ class C2Array(blosc2.Operand):
         cparams.pop("filters, meta", None)
         self._cparams = blosc2.CParams(**cparams)
 
+    def __enter__(self) -> C2Array:
+        """Enter a context manager and return this remote array."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Exit a context manager.
+
+        ``C2Array`` does not currently hold explicit closeable resources, so this
+        is a logical no-op kept for API consistency with :func:`blosc2.open`.
+        """
+        return False
+
     def _to_b2object_payload(self) -> dict:
         payload = encode_b2object_payload(self)
         if payload is None:

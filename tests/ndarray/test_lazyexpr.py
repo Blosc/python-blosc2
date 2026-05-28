@@ -1760,6 +1760,10 @@ def test_save_proxy_operands_reopen_default_mode(tmp_path):
     assert isinstance(restored, blosc2.LazyExpr)
     np.testing.assert_array_equal(restored[:], np.arange(10, dtype=np.int64) * 2)
 
+    with blosc2.open(str(expr_path), mode="r") as restored_ctx:
+        assert isinstance(restored_ctx, blosc2.LazyExpr)
+        np.testing.assert_array_equal(restored_ctx[:], np.arange(10, dtype=np.int64) * 2)
+
 
 def test_lazyexpr_vlmeta_in_memory_and_persisted(tmp_path):
     a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(tmp_path / "a.b2nd"), mode="w")
@@ -1778,7 +1782,11 @@ def test_lazyexpr_vlmeta_in_memory_and_persisted(tmp_path):
     assert restored.vlmeta["name"] == "sum"
     assert restored.vlmeta["config"] == {"scale": 1}
 
-    restored.vlmeta["note"] = "persisted"
+    with pytest.raises(ValueError, match="reading mode"):
+        restored.vlmeta["note"] = "persisted"
+
+    writable = blosc2.open(str(expr_path), mode="a")
+    writable.vlmeta["note"] = "persisted"
     reopened = blosc2.open(str(expr_path), mode="r")
     assert reopened.vlmeta["note"] == "persisted"
     np.testing.assert_array_equal(reopened[:], np.arange(5, dtype=np.int64) * 2)

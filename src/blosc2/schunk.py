@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import weakref
 import zipfile
 from collections import namedtuple
 from collections.abc import Iterator, Mapping, MutableMapping
@@ -43,12 +44,48 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     references only; purely in-memory operands are intentionally rejected.
     """
 
-    def __init__(self, schunk, urlpath, mode, mmap_mode, initial_mapping_size):
-        self.urlpath = urlpath
-        self.mode = mode
-        self.mmap_mode = mmap_mode
-        self.initial_mapping_size = initial_mapping_size
+    def __init__(self, owner, schunk):
+        self._owner_ref = weakref.ref(owner)
         super().__init__(schunk)
+
+    @property
+    def _owner(self):
+        owner = self._owner_ref()
+        if owner is None:
+            raise ReferenceError("The parent SChunk for this vlmeta object no longer exists")
+        return owner
+
+    @property
+    def urlpath(self):
+        return self._owner.urlpath
+
+    @urlpath.setter
+    def urlpath(self, value):
+        self._owner.urlpath = value
+
+    @property
+    def mode(self):
+        return self._owner.mode
+
+    @mode.setter
+    def mode(self, value):
+        self._owner.mode = value
+
+    @property
+    def mmap_mode(self):
+        return self._owner.mmap_mode
+
+    @mmap_mode.setter
+    def mmap_mode(self, value):
+        self._owner.mmap_mode = value
+
+    @property
+    def initial_mapping_size(self):
+        return self._owner.initial_mapping_size
+
+    @initial_mapping_size.setter
+    def initial_mapping_size(self, value):
+        self._owner.initial_mapping_size = value
 
     def __setitem__(self, name, content):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
@@ -357,11 +394,21 @@ class SChunk(blosc2_ext.SChunk):
                 chunksize = 2**28
 
         super().__init__(_schunk=sc, chunksize=chunksize, data=data, **kwargs)
-        self._vlmeta = vlmeta(
-            super().c_schunk, self.urlpath, self.mode, self.mmap_mode, self.initial_mapping_size
-        )
+        self._vlmeta = vlmeta(self, super().c_schunk)
         self._cparams = super().get_cparams()
         self._dparams = super().get_dparams()
+
+    def __enter__(self) -> SChunk:
+        """Enter a context manager and return this super-chunk."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Exit a context manager.
+
+        For regular :func:`blosc2.open` handles this is a logical no-op kept for
+        API symmetry with higher-level persistent containers.
+        """
+        return False
 
     @property
     def cparams(self) -> blosc2.CParams:
@@ -1667,12 +1714,9 @@ def process_opened_object(res):
     meta = getattr(res, "schunk", res).meta
     if "proxy-source" in meta:
         proxy_cache = res
-        cache_schunk = getattr(res, "schunk", res)
-        if getattr(cache_schunk, "urlpath", None) is not None and getattr(cache_schunk, "mode", None) == "r":
-            proxy_cache = blosc2_ext.open(cache_schunk.urlpath, "a", 0)
         proxy_src = meta["proxy-source"]
         if proxy_src["local_abspath"] is not None:
-            src = blosc2.open(proxy_src["local_abspath"], mode="a")
+            src = blosc2.open(proxy_src["local_abspath"], mode="r")
             return blosc2.Proxy(src, _cache=proxy_cache)
         elif proxy_src["urlpath"] is not None:
             src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
@@ -1788,6 +1832,14 @@ def open(
         'a' means read/write (create if it doesn't exist);
         'w' means create (overwrite if it exists). Defaults to 'r' (
         read-only).
+
+        Open modes also define the allowed persistence side effects:
+
+        - ``'r'`` never writes to the persistent object or any sidecar/cache file.
+          Query acceleration and other execution caches remain process-local only.
+        - ``'a'`` and ``'w'`` may persist explicit user-visible changes such as data,
+          metadata, and index maintenance, but execution caches and query memoization
+          still remain process-local only.
     offset: int, optional
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
@@ -1816,11 +1868,20 @@ def open(
 
     Notes
     -----
-    * This is just a 'logical' open, so there is no `close()` counterpart because
-      currently, there is no need for it.
+    * Returned objects can be used as context managers for API consistency.
+      For objects with an explicit ``close()`` implementation, exiting the
+      context will close/flush them; for logical handles such as regular
+      :class:`SChunk`, :class:`NDArray`, :class:`C2Array`, :class:`Proxy`, and
+      :class:`LazyArray`, exiting the context is currently a no-op.
 
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
       must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
+
+    * Persistent data handling follows a strict no-hidden-writes rule:
+
+      - ``mode='r'`` is observational only and never mutates the opened object.
+      - ``mode='a'`` / ``mode='w'`` only persist explicit mutations requested by the
+        caller; runtime caches are not serialized back to disk.
 
     * If the original object saved in :paramref:`urlpath` is a :ref:`Proxy`,
       this function will only return a :ref:`Proxy` if its source is a local

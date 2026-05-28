@@ -48,6 +48,7 @@ from blosc2.schema_compiler import _validate_column_name, schema_to_dict
 
 DEFAULT_BATCH_SIZE = 2048
 MAX_ELEMENT_WRITE_BATCH = 5_000_000  # cap on flattened elements yielded per write
+UNNAMED_ROOT_CAPACITY_SAFETY = 1.15  # first-batch estimates are often a little low
 
 
 def require_pyarrow():
@@ -1060,7 +1061,9 @@ def import_unnamed_root_separate_cols(
                 avg_per_outer_row = n_elems_sampled / n_outer_sampled
                 estimated_batch_rows = max(1, round(args.parquet_batch_size * avg_per_outer_row))
                 estimate = round(total_parquet_rows * avg_per_outer_row)
-                if args.max_rows is not None:
+                if args.max_rows is None:
+                    estimate = round(estimate * UNNAMED_ROOT_CAPACITY_SAFETY)
+                else:
                     estimate = min(estimate, args.max_rows)
                 capacity_hint = max(1, estimate)
         except Exception:

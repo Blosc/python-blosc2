@@ -517,6 +517,11 @@ def test_lazyudf_vlmeta_roundtrip(tmp_path):
     assert restored.vlmeta["name"] == "increment"
     assert restored.vlmeta["attrs"] == {"version": 1}
 
+    with blosc2.open(str(expr_path), mode="r") as restored_ctx:
+        assert isinstance(restored_ctx, blosc2.LazyUDF)
+        assert restored_ctx.vlmeta["name"] == "increment"
+        assert restored_ctx.vlmeta["attrs"] == {"version": 1}
+
 
 # Test get_chunk method
 def test_get_chunk():

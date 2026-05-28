@@ -35,6 +35,10 @@ def test_open_c2array(cat2_context):
     a_open = blosc2.open(urlpath, mode="r")
     np.testing.assert_allclose(a1[:], a_open[:])
 
+    with blosc2.open(urlpath, mode="r") as a_ctx:
+        assert isinstance(a_ctx, blosc2.C2Array)
+        np.testing.assert_allclose(a1[:], a_ctx[:])
+
     ## Test slicing
     np.testing.assert_allclose(a1[:10], a_open[:10])
     np.testing.assert_allclose(a1.slice(slice(1, 10, 1))[:], a_open.slice(slice(1, 10, 1))[:])

@@ -6,6 +6,7 @@
 #######################################################################
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -139,6 +140,119 @@ def test_bool_values(shape, chunks, blocks, idx):
     assert b2a[idx].ndim == npa[idx].ndim
 
 
+def test_dense_bool_ndarray_mask_no_recursion():
+    nitems = 60_000
+    npa = np.arange(nitems, dtype=np.int32)
+    a = blosc2.asarray(npa, chunks=(20_000,))
+    mask = blosc2.asarray(np.ones(nitems, dtype=np.bool_), chunks=(20_000,))
+
+    np.testing.assert_array_equal(a[mask], npa)
+
+
+def test_lazyexpr_where_full_slice_no_recursion():
+    nitems = 60_000
+    a = blosc2.linspace(0, 1, nitems, chunks=(20_000,))
+    expected = np.linspace(0, 1, nitems)
+
+    np.testing.assert_allclose(a[a < 5][:], expected)
+
+
+def test_lazyexpr_where_full_slice_persisted_reuses_shared_chunk_cache(tmp_path):
+    nitems = 60_000
+    expected = np.linspace(0, 1, nitems)
+    a = blosc2.asarray(
+        expected, chunks=(20_000,), blocks=(2_000,), urlpath=str(tmp_path / "persisted.b2nd"), mode="w"
+    )
+    old_nthreads = blosc2.nthreads
+    blosc2.set_nthreads(max(2, old_nthreads))
+    try:
+        for _ in range(10):
+            np.testing.assert_allclose(a[a < 5][:], expected)
+    finally:
+        blosc2.set_nthreads(old_nthreads)
+
+
+def test_lazyexpr_where_full_slice_cached_repeat_avoids_full_mask_scan(monkeypatch):
+    nitems = 60_000
+    expected = np.arange(5, dtype=np.int64)
+    a = blosc2.asarray(np.arange(nitems, dtype=np.int64), chunks=(20_000,))
+
+    np.testing.assert_allclose(a[a < 5][:], expected)
+    monkeypatch.setattr(
+        blosc2.LazyExpr,
+        "_collect_flat_indices_from_bool_ndarray",
+        staticmethod(lambda _mask: (_ for _ in ()).throw(AssertionError("mask scan should be cached"))),
+    )
+
+    np.testing.assert_allclose(a[a < 5][:], expected)
+
+
+@pytest.mark.parametrize("mode", ["r", "a"])
+def test_lazyexpr_where_full_slice_persistent_uses_hot_cache_without_persisting(tmp_path, monkeypatch, mode):
+    nitems = 60_000
+    expected = np.arange(5, dtype=np.int64)
+    urlpath = tmp_path / "persisted_readonly.b2nd"
+    blosc2.asarray(
+        np.arange(nitems, dtype=np.int64), chunks=(20_000,), blocks=(2_000,), urlpath=urlpath, mode="w"
+    )
+    persisted = blosc2.open(urlpath, mode=mode)
+    initial_size = urlpath.stat().st_size
+    indexing = __import__("blosc2.indexing", fromlist=["QUERY_CACHE_VLMETA_KEY", "_hot_cache_clear"])
+    payload_path = Path(indexing._query_cache_payload_path(persisted))
+    indexing._hot_cache_clear()
+
+    np.testing.assert_allclose(persisted[persisted < 5][:], expected)
+    monkeypatch.setattr(
+        blosc2.LazyExpr,
+        "_collect_flat_indices_from_bool_ndarray",
+        staticmethod(lambda _mask: (_ for _ in ()).throw(AssertionError("mask scan should be cached"))),
+    )
+
+    np.testing.assert_allclose(persisted[persisted < 5][:], expected)
+    assert not payload_path.exists()
+    assert urlpath.stat().st_size == initial_size
+    assert indexing.QUERY_CACHE_VLMETA_KEY not in persisted.schunk.vlmeta
+
+
+def test_sparse_bool_mask_routes_through_take_fastpath(monkeypatch):
+    nitems = 120_000
+    npa = np.arange(nitems, dtype=np.int32)
+    a = blosc2.asarray(npa, chunks=(20_000,))
+    mask = np.zeros(nitems, dtype=np.bool_)
+    mask[[1, 10, 11_111, 55_555, nitems - 1]] = True
+
+    call_count = {"take": 0}
+    original_take = blosc2.take
+
+    def wrapped_take(*args, **kwargs):
+        call_count["take"] += 1
+        return original_take(*args, **kwargs)
+
+    monkeypatch.setattr(blosc2, "take", wrapped_take)
+
+    np.testing.assert_array_equal(a[mask], npa[mask])
+    assert call_count["take"] == 1
+
+
+def test_dense_bool_mask_skips_take_fastpath(monkeypatch):
+    nitems = 60_000
+    npa = np.arange(nitems, dtype=np.int32)
+    a = blosc2.asarray(npa, chunks=(20_000,))
+    mask = np.ones(nitems, dtype=np.bool_)
+
+    call_count = {"take": 0}
+    original_take = blosc2.take
+
+    def wrapped_take(*args, **kwargs):
+        call_count["take"] += 1
+        return original_take(*args, **kwargs)
+
+    monkeypatch.setattr(blosc2, "take", wrapped_take)
+
+    np.testing.assert_array_equal(a[mask], npa[mask])
+    assert call_count["take"] == 0
+
+
 @pytest.mark.parametrize(
     ("shape", "chunks", "blocks"),
     [
@@ -169,6 +283,87 @@ def test_ndarray(dtype):
     nparray = np.arange(size - 1, -1, -1, dtype=np.int64).reshape(shape)
     na_slice = na[nparray]
     np.testing.assert_almost_equal(a_slice, na_slice)
+
+
+def test_take_1d_uses_sparse_path_matches_numpy(tmp_path):
+    npa = np.arange(1000, dtype=np.int32)
+    a = blosc2.asarray(npa, chunks=(128,), urlpath=tmp_path / "take_sparse.b2nd", mode="w")
+    idx = np.array([999, 998, 997, 997, 500, 129, 128, 127, 126, 33, 32, 31, 31, 0], dtype=np.int64)
+
+    np.testing.assert_array_equal(a.take(idx)[()], npa[idx])
+    np.testing.assert_array_equal(a[idx], npa[idx])
+
+
+def test_take_1d_sparse_path_negative_indices():
+    npa = np.arange(20, dtype=np.int32)
+    a = blosc2.asarray(npa, chunks=(8,))
+    idx = np.array([-1, -5, 0, 3], dtype=np.int64)
+
+    np.testing.assert_array_equal(a.take(idx)[()], npa[idx])
+    np.testing.assert_array_equal(a[idx], npa[idx])
+
+
+def test_take_1d_sparse_path_structured_non_behaved_partitions():
+    npa = np.empty((100,), dtype=[("a", np.int32), ("b", np.int32)])
+    npa["a"] = np.arange(1, 101)
+    npa["b"] = np.arange(200, 100, -1)
+    a = blosc2.asarray(npa, chunks=(44,), blocks=(33,))
+
+    for idx in [
+        np.arange(2, 100),
+        np.arange(99, 1, -1),
+        np.array([5, 1, 5, 99, 0, 44, 43], dtype=np.int64),
+    ]:
+        np.testing.assert_array_equal(a.take(idx)[()], npa[idx])
+        np.testing.assert_array_equal(a[idx], npa[idx])
+
+
+def test_ndarray_take_1d_matches_numpy():
+    npa = np.arange(20, dtype=np.int32)
+    a = blosc2.asarray(npa, chunks=(7,))
+    idx = np.array([5, 1, -1, 5, 0], dtype=np.int64)
+
+    result = a.take(idx)
+    assert isinstance(result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[()], np.take(npa, idx))
+
+
+def test_ndarray_take_axis_with_nd_indices_matches_numpy():
+    npa = np.arange(3 * 4 * 5, dtype=np.int32).reshape(3, 4, 5)
+    a = blosc2.asarray(npa, chunks=(2, 2, 3))
+    idx = np.array([[3, 0], [1, -1]], dtype=np.int64)
+
+    expected = np.take(npa, idx, axis=1)
+    result = a.take(idx, axis=1)
+    top_level_result = blosc2.take(a, idx, axis=1)
+    assert isinstance(result, blosc2.NDArray)
+    assert isinstance(top_level_result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[()], expected)
+    np.testing.assert_array_equal(top_level_result[()], expected)
+
+
+def test_ndarray_take_axis_none_nd_fallback_matches_numpy():
+    npa = np.arange(3 * 4 * 5, dtype=np.int32).reshape(3, 4, 5)
+    a = blosc2.asarray(npa, chunks=(2, 2, 3))
+    idx = np.array([[0, -1], [17, 5]], dtype=np.int64)
+
+    expected = np.take(npa, idx, axis=None)
+    result = a.take(idx)
+    top_level_result = blosc2.take(a, idx)
+    assert isinstance(result, blosc2.NDArray)
+    assert isinstance(top_level_result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[()], expected)
+    np.testing.assert_array_equal(top_level_result[()], expected)
+
+
+def test_ndarray_take_rejects_bad_indices_and_axis():
+    a = blosc2.asarray(np.arange(12, dtype=np.int32).reshape(3, 4))
+    with pytest.raises(TypeError, match="integer"):
+        a.take(np.array([1.5]), axis=0)
+    with pytest.raises(ValueError, match="axis"):
+        a.take([0], axis=2)
+    with pytest.raises(IndexError, match="bounds"):
+        a.take([3], axis=0)
 
 
 @pytest.mark.parametrize(
@@ -225,3 +420,238 @@ def test_take_along_axis(shape, chunkshape, axis):
 
     # Compare
     np.testing.assert_array_equal(result[()], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "axis", "indices"),
+    [
+        # 2D
+        ((6, 7), (4, 5), (3, 4), 0, [0, 3, 5]),
+        ((6, 7), (4, 5), (3, 4), 1, [0, 3, 6]),
+        ((20, 15), (6, 7), (3, 4), 0, [0, 10, 19]),
+        ((20, 15), (6, 7), (3, 4), 1, [0, 7, 14]),
+        # 3D
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 0, [0, 2, 4]),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 1, [0, 3, 5]),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 2, [0, 3, 6]),
+        ((9, 10, 11), (4, 5, 6), (2, 3, 3), 0, [0, 4, 8]),
+        ((9, 10, 11), (4, 5, 6), (2, 3, 3), 1, [0, 5, 9]),
+        ((9, 10, 11), (4, 5, 6), (2, 3, 3), 2, [0, 5, 10]),
+        # 4D
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), 0, [0, 2, 3]),
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), 2, [0, 3, 5]),
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), 3, [0, 3, 6]),
+    ],
+)
+def test_ndarray_take_ndim(shape, chunks, blocks, axis, indices):
+    npa = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    expected = np.take(npa, indices, axis=axis)
+    result = a.take(indices, axis=axis)
+    top_result = blosc2.take(a, indices, axis=axis)
+
+    assert isinstance(result, blosc2.NDArray)
+    assert isinstance(top_result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[:], expected)
+    np.testing.assert_array_equal(top_result[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "indices"),
+    [
+        # 2D, 3D, 4D with axis=None
+        ((6, 7), (4, 5), (3, 4), [0, 10, 41]),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), [0, 50, 209]),
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), [0, 100, 500, 839]),
+    ],
+)
+def test_ndarray_take_ndim_axis_none(shape, chunks, blocks, indices):
+    npa = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    expected = np.take(npa, indices, axis=None)
+    result = a.take(indices)
+    top_result = blosc2.take(a, indices)
+
+    assert isinstance(result, blosc2.NDArray)
+    assert isinstance(top_result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[:], expected)
+    np.testing.assert_array_equal(top_result[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "axis", "indices"),
+    [
+        # 2D, 3D, 4D with multi-dim index arrays
+        ((6, 7), (4, 5), (3, 4), 1, np.array([[0, 3], [6, 2]])),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 0, np.array([[0, 2], [4, 1]])),
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), 2, np.array([[0, 3], [5, 1]])),
+    ],
+)
+def test_ndarray_take_ndim_multidim_indices(shape, chunks, blocks, axis, indices):
+    npa = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    expected = np.take(npa, indices, axis=axis)
+    result = a.take(indices, axis=axis)
+
+    assert isinstance(result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "axis", "indices"),
+    [
+        # Negative indices
+        ((6, 7), (4, 5), (3, 4), 0, [-1, -3, 0]),
+        ((6, 7), (4, 5), (3, 4), 1, [-1, -7, 3, 0]),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 2, [-1, -7, 3]),
+        # Duplicate indices
+        ((6, 7), (4, 5), (3, 4), 0, [0, 5, 0, 5, 3]),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 1, [3, 3, 5, 5, 0]),
+        # Single index (scalar-like list)
+        ((6, 7), (4, 5), (3, 4), 0, [3]),
+        ((6, 7), (4, 5), (3, 4), 1, [0]),
+        # Empty indices
+        ((6, 7), (4, 5), (3, 4), 0, []),
+        ((6, 7), (4, 5), (3, 4), 1, []),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 0, []),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 1, []),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 2, []),
+    ],
+)
+def test_ndarray_take_ndim_edge_cases(shape, chunks, blocks, axis, indices):
+    npa = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    expected = np.take(npa, indices, axis=axis)
+    result = a.take(indices, axis=axis)
+
+    assert isinstance(result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "axis"),
+    [
+        # 2D with non-behaved (non-even) partitions
+        ((7, 11), (5, 7), (3, 5), 0),
+        ((7, 11), (5, 7), (3, 5), 1),
+        # 3D with non-behaved partitions
+        ((7, 11, 13), (5, 7, 8), (3, 4, 5), 0),
+        ((7, 11, 13), (5, 7, 8), (3, 4, 5), 1),
+        ((7, 11, 13), (5, 7, 8), (3, 4, 5), 2),
+    ],
+)
+def test_ndarray_take_ndim_non_behaved_partitions(shape, chunks, blocks, axis):
+    npa = np.arange(np.prod(shape), dtype=np.int32).reshape(shape)
+    a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    rng = np.random.default_rng(42)
+    indices = rng.integers(0, shape[axis], size=min(shape[axis], 8)).tolist()
+
+    expected = np.take(npa, indices, axis=axis)
+    result = a.take(indices, axis=axis)
+
+    assert isinstance(result, blosc2.NDArray)
+    np.testing.assert_array_equal(result[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "axis"),
+    [
+        # Different dtypes
+        ((6, 7), (4, 5), (3, 4), 0),
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), 1),
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), 2),
+    ],
+)
+def test_ndarray_take_ndim_dtypes(shape, chunks, blocks, axis):
+    for dtype in [np.int32, np.int64, np.float32, np.float64, np.complex128]:
+        npa = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
+        a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+        rng = np.random.default_rng(42)
+        indices = rng.integers(0, shape[axis], size=min(shape[axis], 5)).tolist()
+
+        expected = np.take(npa, indices, axis=axis)
+        result = a.take(indices, axis=axis)
+
+        assert isinstance(result, blosc2.NDArray)
+        np.testing.assert_array_equal(result[:], expected)
+
+
+# --- __getitem__ fancy indexing with integer arrays (uses b2nd_get_sparse_cbuffer) ---
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "indices"),
+    [
+        # 1-D with 1-D index (was already sparse, regression check)
+        ((100,), (23,), (7,), [0, 5, 50, 99]),
+        # 1-D with 2-D index (was fancy indexing before, now sparse)
+        ((100,), (23,), (7,), [[1, 3], [5, 7]]),
+        # 2-D with 1-D index (was fancy indexing before, now sparse)
+        ((6, 7), (4, 5), (3, 4), [0, 3, 5]),
+        ((20, 15), (6, 7), (3, 4), [0, 10, 19]),
+        # 2-D with 2-D index (was fancy indexing before, now sparse)
+        ((6, 7), (4, 5), (3, 4), [[0, 3], [5, 2]]),
+        # 3-D with 1-D index
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), [0, 2, 4]),
+        # 3-D with 2-D index
+        ((5, 6, 7), (3, 4, 5), (2, 2, 3), [[0, 2], [4, 1]]),
+        # 4-D with 1-D index
+        ((4, 5, 6, 7), (3, 3, 4, 5), (2, 2, 2, 3), [0, 2, 3]),
+    ],
+)
+def test_getitem_integer_array_fancy_index(shape, chunks, blocks, indices):
+    npa = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    expected = npa[indices]
+    result = a[indices]
+
+    assert isinstance(result, np.ndarray)
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "indices"),
+    [
+        ((6, 7), [-1, 0, 3, -3]),
+        ((6, 7), [0, 5, 0, 5, 3]),
+        ((6, 7), [3]),
+        ((6, 7), []),
+        ((5, 6, 7), [-1, 0, 4, -2]),
+        ((5, 6, 7), [0, 4, 0, 2]),
+        ((5, 6, 7), [2]),
+        ((5, 6, 7), []),
+    ],
+)
+def test_getitem_integer_array_edge_cases(shape, indices):
+    npa = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa)
+
+    expected = npa[indices]
+    result = a[indices]
+
+    assert isinstance(result, np.ndarray)
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_getitem_integer_array_out_of_bounds():
+    a = blosc2.asarray(np.arange(12, dtype=np.int32).reshape(3, 4))
+    with pytest.raises(IndexError, match="bounds"):
+        _ = a[[3]]
+    with pytest.raises(IndexError, match="bounds"):
+        _ = a[[-4]]
+
+
+def test_getitem_integer_array_still_uses_fancy_for_boolean():
+    """Boolean arrays should NOT be routed through the sparse path."""
+    a = blosc2.asarray(np.arange(12, dtype=np.int32).reshape(3, 4))
+    mask = np.array([True, False, True])
+    expected = np.arange(12, dtype=np.int32).reshape(3, 4)[mask]
+    result = a[mask]
+    np.testing.assert_array_equal(result, expected)

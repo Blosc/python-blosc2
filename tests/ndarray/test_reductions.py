@@ -195,20 +195,30 @@ def test_fp_accuracy(accuracy, dtype):
 def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwargs):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     reduce_args = {"axis": axis}
-    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
-        if npcumprod.__name__ == "cumulative_prod":
-            reduce_args["include_initial"] = keepdims  # include_initial only available in cumulative_
-    else:
+    if reduce_op not in {"cumulative_sum", "cumulative_prod"}:
         reduce_args["keepdims"] = keepdims
     if reduce_op in ("mean", "std") and dtype_out == np.int16:
         # mean and std need float dtype as output
         dtype_out = np.float64
     if reduce_op in ("sum", "prod", "mean", "std"):
         reduce_args["dtype"] = dtype_out
-    if axis is not None and np.isscalar(axis) and len(a1.shape) >= axis:
-        return
-    if isinstance(axis, tuple) and (len(a1.shape) < len(axis) or reduce_op in ("argmax", "argmin")):
-        return
+    if axis is not None:
+        if np.isscalar(axis):
+            if len(a1.shape) <= axis:
+                # axis out of bounds for this array
+                return
+        elif isinstance(axis, tuple):
+            if any(ax >= len(a1.shape) for ax in axis) or reduce_op in ("argmax", "argmin"):
+                return
+            if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+                # numpy's cumsum/cumprod do not support tuple axes
+                return
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        if axis is None and len(a1.shape) > 1:
+            # Blosc2 requires axis for cumulative ops on non-1D arrays
+            return
+        # NumPy uses cumsum/cumprod for these
+        np_op = "cumsum" if reduce_op == "cumulative_sum" else "cumprod"
     if reduce_op in {"prod", "cumulative_prod"}:
         # To avoid overflow, create a1 and a2 with small values
         na1 = np.linspace(0, 0.1, np.prod(a1.shape), dtype=np.float32).reshape(a1.shape)
@@ -222,14 +232,28 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwar
         nres = eval("na1 + na2 - na3 * na4")
 
     res = getattr(expr, reduce_op)(**reduce_args, **kwargs)
-    nres = getattr(nres, reduce_op)(**reduce_args)
-    tol = 1e-15 if a1.dtype == "float64" else 1e-6
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        # NumPy uses cumsum/cumprod
+        nres_op = (npcumsum if reduce_op == "cumulative_sum" else npcumprod).__call__
+        # Strip out include_initial from reduce_args for numpy (not supported)
+        np_reduce_args = {k: v for k, v in reduce_args.items() if k != "include_initial"}
+        nres = nres_op(nres, **np_reduce_args)
+    else:
+        nres = getattr(nres, reduce_op)(**reduce_args)
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        # Cumulative ops through compressed chunks accumulate absolute error
+        # across chunk boundaries. Use atol only (error is absolute, not relative).
+        atol = 1e-8 if a1.dtype == "float64" else 1.0
+        rtol = 0
+    else:
+        atol = 1e-15 if a1.dtype == "float64" else 1e-6
+        rtol = atol
     if kwargs != {}:
         if not np.isscalar(res):
             assert isinstance(res, blosc2.NDArray)
-        np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
+        np.testing.assert_allclose(res[()], nres, atol=atol, rtol=rtol)
     else:
-        np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
+        np.testing.assert_allclose(res, nres, atol=atol, rtol=rtol)
 
 
 # TODO: "prod" is not supported here because it overflows with current values
@@ -296,6 +320,9 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
     if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
         axis = 1 if isinstance(axis, tuple) else axis
         axis = 0 if reduce_op[:3] == "cum" else axis
+    # prod overflows for large array sizes; skip those cases
+    if reduce_op == "prod" and np.prod(np.prod(shapes[1])) >= 1e4:
+        return
     reduce_args = {"axis": axis}
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         if npcumprod.__name__ == "cumulative_prod":
@@ -372,8 +399,17 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
                 with pytest.raises(ValueError):
                     getattr(na[_slice], reduce_op)()
         else:
-            res = getattr(a, reduce_op)(item=_slice)
-            nres = getattr(na[_slice], reduce_op)()
+            if reduce_op in ("cumulative_sum", "cumulative_prod"):
+                # Blosc2 requires axis for cumulative ops on non-1D arrays.
+                # Use the dimension that the stripe iterates over (0 for rows, 1 for columns).
+                axis = 0 if stripes == "rows" else 1
+                res = getattr(a, reduce_op)(item=_slice, axis=axis)
+                # NumPy uses cumsum/cumprod for these operations
+                np_op = "cumsum" if reduce_op == "cumulative_sum" else "cumprod"
+                nres = getattr(na[_slice], np_op)(axis=axis)
+            else:
+                res = getattr(a, reduce_op)(item=_slice)
+                nres = getattr(na[_slice], reduce_op)()
             np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 

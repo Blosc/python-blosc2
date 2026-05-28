@@ -113,6 +113,30 @@ ufunc_map_1param = {
 }
 
 
+def normalize_1d_sparse_indices(key, size: int) -> np.ndarray | None:
+    if isinstance(key, list):
+        indices = np.asarray(key)
+    elif isinstance(key, np.ndarray):
+        indices = key
+    else:
+        return None
+
+    if indices.ndim != 1 or not np.issubdtype(indices.dtype, np.integer):
+        return None
+
+    indices = np.ascontiguousarray(indices, dtype=np.int64)
+    if len(indices) == 0:
+        return indices
+
+    negative = indices < 0
+    if np.any(negative):
+        indices = indices.copy()
+        indices[negative] += size
+    if np.any((indices < 0) | (indices >= size)):
+        raise IndexError("index out of bounds for axis 0")
+    return indices
+
+
 @runtime_checkable
 class Array(Protocol):
     """
@@ -3776,7 +3800,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
     """Compressed, chunked N-dimensional array with NumPy-like indexing."""
 
     def __init__(self, **kwargs):
-        self._schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
+        schunk_kwargs = {"_schunk": kwargs["_schunk"], "_is_view": True}
+        mode = kwargs.pop("mode", None)
+        if mode is not None:
+            schunk_kwargs["mode"] = mode
+        self._schunk = SChunk(**schunk_kwargs)  # SChunk Python instance
         self._keep_last_read = False
         # Where to store the last read data
         self._last_read = {}
@@ -3785,6 +3813,18 @@ class NDArray(blosc2_ext.NDArray, Operand):
         # Accessor to fields
         field_names = tuple(self.dtype.fields) if self.dtype.fields else ()
         self._fields = FieldsAccessor(self, field_names)
+
+    def __enter__(self) -> NDArray:
+        """Enter a context manager and return this array."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Exit a context manager.
+
+        For regular :func:`blosc2.open` handles this is a logical no-op kept for
+        API symmetry with higher-level persistent containers.
+        """
+        return False
 
     @property
     def cparams(self) -> blosc2.CParams:
@@ -4312,6 +4352,115 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 out = super().set_slice((locstart, locstop), chunk)  # load updated partial chunk into array
         return out
 
+    @staticmethod
+    def _normalize_take_indices(indices, size: int) -> np.ndarray:
+        if isinstance(indices, NDArray):
+            indices = indices[()]
+        indices = np.asarray(indices)
+        if indices.size == 0:
+            return np.ascontiguousarray(indices, dtype=np.int64)
+        if not np.issubdtype(indices.dtype, np.integer):
+            raise TypeError("take indices must be an integer array")
+        normalized = np.ascontiguousarray(indices, dtype=np.int64)
+        negative = normalized < 0
+        if np.any(negative):
+            normalized = normalized.copy()
+            normalized[negative] += size
+        if np.any((normalized < 0) | (normalized >= size)):
+            raise IndexError("take index out of bounds")
+        return normalized
+
+    @staticmethod
+    def _normalize_take_axis(axis: int, ndim: int) -> int:
+        if not isinstance(axis, (int, np.integer)):
+            raise TypeError("axis must be an integer or None")
+        axis = int(axis)
+        if axis < 0:
+            axis += ndim
+        if not 0 <= axis < ndim:
+            raise ValueError(f"axis {axis} is out of bounds for array of dimension {ndim}")
+        return axis
+
+    def _take_sparse_normalized(self, indices: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
+        out = np.empty(indices.shape, dtype=self.dtype) if out is None else out
+        return super().get_sparse_numpy(out, indices)
+
+    def _take_numpy(self, indices, /, *, axis: int | None = None) -> np.ndarray:
+        """Return a NumPy buffer for :meth:`take` and internal gather paths."""
+        if axis is None:
+            normalized = self._normalize_take_indices(indices, self.size)
+            flat = normalized.reshape(-1)
+            return self._take_sparse_normalized(flat).reshape(normalized.shape)
+
+        axis = self._normalize_take_axis(axis, self.ndim)
+        normalized = self._normalize_take_indices(indices, self.shape[axis])
+        flat = normalized.reshape(-1)
+        result_shape = self.shape[:axis] + normalized.shape + self.shape[axis + 1 :]
+        if flat.size == 0:
+            return np.empty(result_shape, dtype=self.dtype)
+        if self.ndim == 1:
+            return self._take_sparse_normalized(flat).reshape(result_shape)
+
+        # For ndim > 1 axis-based take, use orthogonal selection which
+        # decompresses each chunk once and copies contiguous row/slab
+        # slices.  Per-element sparse gather is the wrong tool here
+        # because it would iterate over every individual element
+        # coordinate (n_indices × product of other dims).
+        selection = [np.arange(dim, dtype=np.int64) for dim in self.shape]
+        selection[axis] = flat
+        orthogonal_shape = self.shape[:axis] + (flat.size,) + self.shape[axis + 1 :]
+        out = np.empty(orthogonal_shape, dtype=self.dtype)
+        self.get_oindex_numpy(out, selection)
+        return out.reshape(result_shape)
+
+    def take(self, indices, /, *, axis: int | None = None) -> NDArray:
+        """Return elements selected by integer indices.
+
+        This follows the Array API ``take`` shape rules: when ``axis`` is
+        ``None`` the array is conceptually flattened and the result has the
+        same shape as ``indices``; otherwise the indexed axis is replaced by
+        ``indices.shape``.
+        """
+        return blosc2.asarray(self._take_numpy(indices, axis=axis))
+
+    def _try_sparse_fancy_index(self, key) -> np.ndarray | None:
+        """Try to handle integer-array fancy indexing via the sparse gather path.
+
+        If *key* is a single integer array (list or ndarray, any dimensionality)
+        route it through ``_take_numpy`` which uses ``b2nd_get_sparse_cbuffer``.
+        Return the result ndarray on success, or ``None`` to signal that the
+        caller should fall back to the regular fancy-indexing machinery.
+        """
+        if isinstance(key, (slice, tuple)):
+            return None
+        if not isinstance(key, (list, np.ndarray)):
+            return None
+        key_arr = np.asarray(key)
+        if not (np.issubdtype(key_arr.dtype, np.integer) and key_arr.ndim >= 1):
+            return None
+        # 1-D: axis=None (flat); ndim>1: axis=0 (row selection)
+        return self._take_numpy(key_arr, axis=None if self.ndim == 1 else 0)
+
+    def _getitem_bool_mask(self, key):
+        """Handle boolean array key with optional sparse-gather fast path.
+
+        Returns the result array or ``None`` if *key* is not a matching
+        boolean mask (caller should continue with regular indexing).
+        """
+        if not (hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_) and key.shape == self.shape):
+            return None
+        # For sparse boolean masks, converting to flat indices and using the
+        # sparse-gather path is faster than decompressing every data chunk.
+        try:
+            idx = _bool_mask_to_flat_indices(key, self.schunk.nchunks)
+        except _BoolMaskDense:
+            pass
+        else:
+            return blosc2.take(self, idx, axis=None)[:]
+        # Fall through to the LazyExpr path for dense masks
+        expr = blosc2.LazyExpr._new_expr("key", {"key": key}, guess=False).where(self)
+        return expr[:]
+
     def __getitem__(
         self,
         key: None
@@ -4381,6 +4530,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
         key = key[()] if isinstance(key, NDArray) else key  # key not iterable
         key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
 
+        # Check boolean array key early to avoid expensive process_key / nonzero
+        result = self._getitem_bool_mask(key)
+        if result is not None:
+            return result
+
+        # Integer array fancy indexing -> route through the efficient sparse
+        # gather (b2nd_get_sparse_cbuffer) for all dimensionalities.
+        result = self._try_sparse_fancy_index(key)
+        if result is not None:
+            return result
+
         # decompress NDArrays
         key_, mask = process_key(key, self.shape)  # internally handles key an integer
         key = key[()] if hasattr(key, "shape") and key.shape == () else key  # convert to scalar
@@ -4398,16 +4558,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     return np.expand_dims(self._get_set_findex_default(_slice, out=out), 0)
                 else:  # do nothing
                     return np.empty((0,) + self.shape, dtype=self.dtype)
-            elif (
-                hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_) and key.shape == self.shape
-            ):  # check ORIGINAL key
-                # This can be interpreted as a boolean expression but only for key shape same as self shape
-                expr = blosc2.LazyExpr._new_expr("key", {"key": key}, guess=False).where(self)
-                # Decorate with where and force a getitem operation to return actual values.
-                # This behavior is consistent with NumPy, although different from e.g. ['expr']
-                # which returns a lazy expression.
-                # This is faster than the fancy indexing path
-                return expr[:]
             return self.get_fselection_numpy(key)  # fancy index default, can be quite slow
 
         start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
@@ -7152,43 +7302,46 @@ def full_like(x: blosc2.Array, fill_value: bool | int | float | complex, dtype=N
     return blosc2.full(shape=x.shape, fill_value=fill_value, dtype=dtype, **kwargs)
 
 
-def take(x: blosc2.Array, indices: blosc2.Array, axis: int | None = None) -> NDArray:
-    """
-    Returns elements of an array along an axis.
+def take(x: blosc2.Array, indices: blosc2.Array, axis: int | None = None):
+    """Return elements selected by integer indices.
+
+    For array inputs, this follows the Array API ``take`` shape rules: when
+    ``axis`` is ``None``, *x* is conceptually flattened and the output shape is
+    ``indices.shape``; otherwise the indexed axis is replaced by
+    ``indices.shape``.  For :class:`CTable` and :class:`Column` inputs, indices
+    select logical rows/values and ``axis`` is not supported.
 
     Parameters
     ----------
-    x: blosc2.Array
-        Input array. Should have one or more dimensions (axes).
+    x: blosc2.Array, CTable, Column, or array-like
+        Input object.  ``NDArray`` inputs return an ``NDArray``;
+        ``CTable`` inputs return a ``CTable``; ``Column`` inputs return a
+        ``Column``.  Other array-like inputs are converted to a Blosc2
+        ``NDArray`` result.
 
     indices: array-like
-        Array indices. The array must be one-dimensional and have an integer data type.
+        Integer indices.  Negative indices are normalized relative to the
+        selected axis (or to the flattened array when ``axis`` is ``None``).
+        For array inputs, indices may have any shape.
 
     axis: int | None
-        Axis over which to select values.
-        If x is a one-dimensional array, providing an axis is optional; however, if x
-        has more than one dimension, providing an axis is required. Default: None.
+        Axis over which to select values for array inputs.  If ``None``, the
+        input array is flattened before selection.  Must be ``None`` for
+        ``CTable`` and ``Column`` inputs.
 
     Returns
     -------
-    out: NDArray
-        Selected indices of x.
+    out: NDArray | CTable | Column
+        Selected values, preserving the container type for ``NDArray``,
+        ``CTable`` and ``Column`` inputs.
     """
-    if axis is None:
-        axis = 0
-        if x.ndim != 1:
-            raise ValueError("Must specify axis parameter if x is not 1D.")
-    if axis < 0:
-        axis += x.ndim
-    if not isinstance(axis, int | np.integer):
-        raise ValueError("Axis must be integer.")
-    if isinstance(indices, list):
-        indices = np.asarray(indices)
-    if indices.ndim != 1:
-        raise ValueError("Indices must be 1D array.")
-    key = tuple(indices if i == axis else slice(None, None, 1) for i in range(x.ndim))
-    # TODO: Implement fancy indexing in .slice so that this is more efficient
-    return blosc2.asarray(x[key])
+    if isinstance(x, NDArray):
+        return x.take(indices, axis=axis)
+    if isinstance(x, (blosc2.CTable, blosc2.Column)):
+        if axis is not None:
+            raise ValueError("axis is not supported for CTable or Column")
+        return x.take(indices)
+    return blosc2.asarray(np.take(np.asarray(x), np.asarray(indices), axis=axis))
 
 
 def take_along_axis(x: blosc2.Array, indices: blosc2.Array, axis: int = -1) -> NDArray:
@@ -7301,3 +7454,48 @@ def meshgrid(*arrays: blosc2.Array, indexing: str = "xy") -> Sequence[NDArray]:
     for a in myarrs:
         out += (broadcast_to(a, shape),)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Sparse boolean-mask helper (used by NDArray.__getitem__)
+# ---------------------------------------------------------------------------
+
+
+class _BoolMaskDense(Exception):
+    """Raised when a boolean mask is too dense for the sparse-gather fast path."""
+
+
+def _bool_mask_to_flat_indices(bool_arr, nchunks_data):
+    """Convert a sparse boolean mask to flat indices, or raise _BoolMaskDense.
+
+    For numpy masks, uses ``np.count_nonzero`` / ``np.flatnonzero``.
+    For blosc2 NDArray masks, iterates chunks incrementally and bails out
+    early when the mask is too dense.
+    """
+    # Threshold: if True values exceed the number of data chunks times a
+    # generous factor, the LazyExpr full-scan path is likely faster.
+    threshold = builtins.max(nchunks_data * 500, 50_000)
+
+    if isinstance(bool_arr, np.ndarray):
+        n_true = np.count_nonzero(bool_arr)
+        if n_true >= threshold:
+            raise _BoolMaskDense
+        return np.flatnonzero(bool_arr)
+
+    # blosc2 NDArray: iterate chunks incrementally
+    total_true = 0
+    flat_parts = []
+    offset = 0
+    for nchunk in range(bool_arr.schunk.nchunks):
+        raw = bool_arr.schunk.decompress_chunk(nchunk)
+        chunk = np.frombuffer(raw, dtype=np.bool_)
+        n_true = np.count_nonzero(chunk)
+        total_true += n_true
+        if total_true >= threshold:
+            raise _BoolMaskDense
+        if n_true > 0:
+            flat_parts.append(np.flatnonzero(chunk) + offset)
+        offset += len(chunk)
+    if not flat_parts:
+        return np.array([], dtype=np.int64)
+    return np.concatenate(flat_parts)
