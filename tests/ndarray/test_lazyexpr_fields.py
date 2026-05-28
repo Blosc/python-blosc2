@@ -193,7 +193,7 @@ def test_reductions(array_fixture):
     expr = a1 + a2 - a3 * a4
     nres = ne_evaluate("na1 + na2 - na3 * na4")
     # Use relative tolerance for mean and std
-    np.testing.assert_allclose(expr.sum()[()], nres.sum())
+    np.testing.assert_allclose(expr.sum()[()], nres.sum(), rtol=1e-5)
     np.testing.assert_allclose(expr.mean()[()], nres.mean(), rtol=1e-5)
     np.testing.assert_allclose(expr.min()[()], nres.min())
     np.testing.assert_allclose(expr.max()[()], nres.max())

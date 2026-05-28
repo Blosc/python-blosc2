@@ -3188,8 +3188,20 @@ class LazyExpr(LazyArray):
             if not (isinstance(value2, blosc2.Operand | np.ndarray) or np.isscalar(value2))
             else value2
         )
-        # Reset values represented as np.int64 etc. to be set as Python natives
-        value2 = value2.item() if np.isscalar(value2) and hasattr(value2, "item") else value2
+
+        # Reset values represented as np.int64 etc. to be set as Python natives,
+        # BUT preserve numpy integer scalars that require explicit typing (unsigned or
+        # 64-bit) so that dtype-sensitive backends (numexpr) don't downcast them to int32.
+        def _to_native_if_safe(v):
+            if not (np.isscalar(v) and hasattr(v, "item")):
+                return v
+            dt = np.dtype(type(v))
+            # Keep typed when unsigned or itemsize >= 8 to avoid silent int32 truncation.
+            if np.issubdtype(dt, np.unsignedinteger) or dt.itemsize >= 8:
+                return v
+            return v.item()
+
+        value2 = _to_native_if_safe(value2)
 
         if isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
             if isinstance(value1, LazyExpr):
@@ -3222,14 +3234,22 @@ class LazyExpr(LazyArray):
             self.expression = "o0"
             self.operands = {"o0": ne_evaluate(f"({value1!r} {op} {value2!r})")}  # eager evaluation
         elif np.isscalar(value2):
-            self.operands = {"o0": value1}
-            self.expression = f"(o0 {op} {value2!r})"
+            if hasattr(value2, "dtype"):  # typed numpy scalar — keep as named operand
+                self.operands = {"o0": value1, "o1": value2}
+                self.expression = f"(o0 {op} o1)"
+            else:
+                self.operands = {"o0": value1}
+                self.expression = f"(o0 {op} {value2!r})"
         elif hasattr(value2, "shape") and value2.shape == ():
             self.operands = {"o0": value1}
             self.expression = f"(o0 {op} {value2[()]})"
         elif np.isscalar(value1):
-            self.operands = {"o0": value2}
-            self.expression = f"({value1!r} {op} o0)"
+            if hasattr(value1, "dtype"):  # typed numpy scalar — keep as named operand
+                self.operands = {"o0": value2, "o1": value1}
+                self.expression = f"(o1 {op} o0)"
+            else:
+                self.operands = {"o0": value2}
+                self.expression = f"({value1!r} {op} o0)"
         elif hasattr(value1, "shape") and value1.shape == ():
             self.operands = {"o0": value2}
             self.expression = f"({value1[()]} {op} o0)"

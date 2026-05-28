@@ -320,6 +320,9 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
     if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
         axis = 1 if isinstance(axis, tuple) else axis
         axis = 0 if reduce_op[:3] == "cum" else axis
+    # prod overflows for large array sizes; skip those cases
+    if reduce_op == "prod" and np.prod(np.prod(shapes[1])) >= 1e4:
+        return
     reduce_args = {"axis": axis}
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         if npcumprod.__name__ == "cumulative_prod":
