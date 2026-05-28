@@ -223,6 +223,7 @@ blosc2_funcs = constructors + linalg_funcs + elementwise_funcs + reducers
 # functions that have to be evaluated before chunkwise lazyexpr machinery
 eager_funcs = linalg_funcs + reducers + ["slice"] + ["." + attr for attr in linalg_attrs]
 functions = blosc2_funcs
+_TRANSIENT_MASK_CPARAMS = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=5, filters=[blosc2.Filter.SHUFFLE])
 _constructor_call_patterns = {name: re.compile(rf"\b{re.escape(name)}\s*\(") for name in constructors}
 
 
@@ -3950,7 +3951,7 @@ class LazyExpr(LazyArray):
             return indexing.evaluate_full_query(self._where_args, cached_plan)
 
         # Evaluate the condition using the miniexpr prefilter (fastest first pass)
-        mask = cond_expr.compute(())
+        mask = cond_expr.compute((), cparams=_TRANSIENT_MASK_CPARAMS)
 
         # Collect flat indices by iterating the compressed bool chunks,
         # avoiding a full-mask decompression + count_nonzero + flatnonzero.
