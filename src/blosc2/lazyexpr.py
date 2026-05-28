@@ -2352,6 +2352,13 @@ def reduce_slices(  # noqa: C901
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
 
+    # Validate axis against operand dimensions before any computation.
+    if axis is not None and not np.isscalar(axis):
+        ndim = len(shape)
+        for ax in axis:
+            if ax < -ndim or ax >= ndim:
+                raise np.exceptions.AxisError(ax, ndim)
+
     _slice = _slice.raw
     shape_slice = shape
     mask_slice = np.array([isinstance(i, int) for i in _slice], dtype=np.bool_)
