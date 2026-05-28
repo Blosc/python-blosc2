@@ -124,6 +124,10 @@ def test_open_readonly_proxy_keeps_cache_and_source_readonly(tmp_path):
     np.testing.assert_array_equal(readonly[:], data)
     assert proxy_path.stat().st_size == cached_size
 
+    with blosc2.open(proxy_path) as readonly_ctx:
+        assert isinstance(readonly_ctx, blosc2.Proxy)
+        np.testing.assert_array_equal(readonly_ctx[:], data)
+
 
 # Test the ProxyNDSources interface
 @pytest.mark.parametrize(

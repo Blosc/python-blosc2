@@ -201,3 +201,25 @@ def test_open_mmap_defaults_to_readonly(tmp_path):
     urlpath = str(tmp_path / "test.b2nd")
     blosc2.asarray(np.arange(10), urlpath=urlpath, mode="w")
     obj = blosc2.open(urlpath, mmap_mode="r")
+    assert obj.schunk.mode == "r"
+    assert obj.schunk.vlmeta.mode == "r"
+
+
+def test_open_ndarray_context_manager(tmp_path):
+    urlpath = tmp_path / "array.b2nd"
+    expected = np.arange(12).reshape(3, 4)
+    blosc2.asarray(expected, urlpath=urlpath, mode="w")
+
+    with blosc2.open(urlpath) as arr:
+        assert isinstance(arr, blosc2.NDArray)
+        np.testing.assert_array_equal(arr[:], expected)
+
+
+def test_open_schunk_context_manager(tmp_path):
+    urlpath = tmp_path / "schunk.b2frame"
+    data = np.arange(20, dtype=np.int32)
+    blosc2.SChunk(data=data, urlpath=urlpath, mode="w", cparams={"typesize": data.dtype.itemsize})
+
+    with blosc2.open(urlpath, mode="r") as schunk:
+        assert isinstance(schunk, blosc2.SChunk)
+        assert schunk[:] == data.tobytes()

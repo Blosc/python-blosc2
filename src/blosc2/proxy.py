@@ -266,6 +266,18 @@ class Proxy(blosc2.Operand):
             for key in vlmeta:
                 self._schunk_cache.vlmeta[key] = vlmeta[key]
 
+    def __enter__(self) -> "Proxy":
+        """Enter a context manager and return this proxy."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Exit a context manager.
+
+        ``Proxy`` does not currently expose an explicit close operation; the
+        underlying cache object manages its own lifetime.
+        """
+        return False
+
     def fetch(self, item: slice | list[slice] | None = ()) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
         Get the container used as cache with the requested data updated.

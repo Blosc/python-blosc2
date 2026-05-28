@@ -397,6 +397,18 @@ class LazyArray(ABC, blosc2.Operand):
             self._vlmeta_proxy = LazyArrayVLMeta(self)
         return self._vlmeta_proxy
 
+    def __enter__(self) -> LazyArray:
+        """Enter a context manager and return this lazy array."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Exit a context manager.
+
+        Lazy arrays do not currently keep explicit closeable resources, so this
+        is a logical no-op kept for API consistency with :func:`blosc2.open`.
+        """
+        return False
+
     @abstractmethod
     def argsort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         """

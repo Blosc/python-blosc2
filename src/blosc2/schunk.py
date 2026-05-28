@@ -398,6 +398,18 @@ class SChunk(blosc2_ext.SChunk):
         self._cparams = super().get_cparams()
         self._dparams = super().get_dparams()
 
+    def __enter__(self) -> SChunk:
+        """Enter a context manager and return this super-chunk."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Exit a context manager.
+
+        For regular :func:`blosc2.open` handles this is a logical no-op kept for
+        API symmetry with higher-level persistent containers.
+        """
+        return False
+
     @property
     def cparams(self) -> blosc2.CParams:
         """
@@ -1856,8 +1868,11 @@ def open(
 
     Notes
     -----
-    * This is just a 'logical' open, so there is no `close()` counterpart because
-      currently, there is no need for it.
+    * Returned objects can be used as context managers for API consistency.
+      For objects with an explicit ``close()`` implementation, exiting the
+      context will close/flush them; for logical handles such as regular
+      :class:`SChunk`, :class:`NDArray`, :class:`C2Array`, :class:`Proxy`, and
+      :class:`LazyArray`, exiting the context is currently a no-op.
 
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
       must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.

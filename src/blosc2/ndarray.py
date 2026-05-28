@@ -3814,6 +3814,18 @@ class NDArray(blosc2_ext.NDArray, Operand):
         field_names = tuple(self.dtype.fields) if self.dtype.fields else ()
         self._fields = FieldsAccessor(self, field_names)
 
+    def __enter__(self) -> NDArray:
+        """Enter a context manager and return this array."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Exit a context manager.
+
+        For regular :func:`blosc2.open` handles this is a logical no-op kept for
+        API symmetry with higher-level persistent containers.
+        """
+        return False
+
     @property
     def cparams(self) -> blosc2.CParams:
         """The compression parameters used by the array."""
