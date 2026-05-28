@@ -2092,9 +2092,12 @@ def slices_eval(  # noqa: C901
 
         if where is None or len(where) == 2:
             if behaved and result.shape == out.chunks and result.dtype == out.dtype:
-                # Fast path
-                # TODO: Check this only works when slice is ()
-                out.schunk.update_data(nchunk, result, copy=False)
+                # Fast path: only use it when the output chunk index is valid
+                # (operand and output may have different chunk layouts when slicing)
+                if nchunk < out.schunk.nchunks:
+                    out.schunk.update_data(nchunk, result, copy=False)
+                else:
+                    out[cslice_subidx] = result
             else:
                 try:
                     out[cslice_subidx] = result
@@ -2535,7 +2538,11 @@ def reduce_slices(  # noqa: C901
             if reduce_op in {ReduceOp.ANY, ReduceOp.ALL}:
                 result = reduce_op.value(aux_reduc, **reduce_args)
             else:
-                result = reduce_op.value.reduce(aux_reduc, **reduce_args)
+                # The accumulator is always 1-D (one slot per output block).
+                # The original axis may refer to dimensions that no longer
+                # exist after per-block reduction.  Use axis=0 to combine
+                # all block results.
+                result = reduce_op.value.reduce(aux_reduc, axis=0)
             return result
 
     # Iterate over the operands and get the chunks
