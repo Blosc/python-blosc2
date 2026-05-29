@@ -197,5 +197,85 @@ def test_valid_rows():
     assert blosc2.count_nonzero(table_extended._valid_rows) == 5
 
 
+def test_fixed_columns_share_aligned_grid():
+    """Fixed-size scalar columns share one chunk/block grid so lazy
+    expressions over mixed dtypes can take the fast_eval path."""
+
+    @dataclass
+    class MixedRow:
+        a: float = blosc2.field(blosc2.float32(), default=0.0)
+        b: float = blosc2.field(blosc2.float32(), default=0.0)
+        c: float = blosc2.field(blosc2.float32(), default=0.0)
+        d: float = blosc2.field(blosc2.float64(), default=0.0)
+        n: int = blosc2.field(blosc2.int32(), default=0)
+
+    table = CTable(MixedRow, expected_size=4_000_000)
+    grids = {(table._cols[name].chunks, table._cols[name].blocks) for name in table.col_names}
+    assert len(grids) == 1, f"columns are not aligned: {grids}"
+
+    # The _valid_rows mask shares the same grid so where() keeps the fast path.
+    assert table._valid_rows.chunks == table._cols["a"].chunks
+    assert table._valid_rows.blocks == table._cols["a"].blocks
+
+    # The table exposes the shared grid via .chunks / .blocks.
+    assert table.chunks == table._cols["a"].chunks
+    assert table.blocks == table._cols["a"].blocks
+    assert table.chunks is not None
+    assert len(table.chunks) == 1
+
+
+def test_wide_string_column_excluded_from_aligned_grid():
+    """Very wide fixed-width string columns keep per-dtype sizing instead of
+    inheriting the shared grid (which would produce huge chunks)."""
+
+    @dataclass
+    class WideRow:
+        a: float = blosc2.field(blosc2.float32(), default=0.0)
+        d: float = blosc2.field(blosc2.float64(), default=0.0)
+        s: str = blosc2.field(blosc2.string(max_length=50000), default="")
+
+    table = CTable(WideRow, expected_size=4_000_000)
+    # Numeric columns share the aligned grid...
+    assert table._cols["a"].chunks == table._cols["d"].chunks
+    assert table._cols["a"].blocks == table._cols["d"].blocks
+    # ...but the wide string column does not (it would blow up the chunk size).
+    assert table._cols["s"].chunks != table._cols["a"].chunks
+    # The reported grid reflects the aligned (numeric) set.
+    assert table.chunks == table._cols["a"].chunks
+
+
+def test_from_arrow_aligns_columns_and_mask():
+    """The Arrow-import path (used by parquet-to-blosc2) aligns fixed-size
+    columns and the _valid_rows mask on a single shared grid."""
+    pa = pytest.importorskip("pyarrow")
+
+    n = 200_000
+    rng = np.random.default_rng(0)
+    tbl = pa.table(
+        {
+            "tips": pa.array(rng.random(n).astype("f4")),
+            "km": pa.array(rng.random(n).astype("f4")),
+            "lon": pa.array(-rng.random(n)),  # float64: previously misaligned
+        }
+    )
+    table = CTable.from_arrow(tbl.schema, tbl.to_batches(), capacity_hint=n)
+    grids = {(table._cols[name].chunks, table._cols[name].blocks) for name in table.col_names}
+    grids.add((table._valid_rows.chunks, table._valid_rows.blocks))
+    assert len(grids) == 1, f"from_arrow did not align grids: {grids}"
+
+
+def test_empty_table_grid_properties():
+    """A table with no fixed-size scalar columns reports None for chunks/blocks
+    only when there is nothing to align."""
+
+    @dataclass
+    class ScalarRow:
+        x: int = blosc2.field(blosc2.int64(), default=0)
+
+    table = CTable(ScalarRow, expected_size=1000)
+    assert table.chunks is not None
+    assert table.blocks is not None
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

@@ -2828,12 +2828,26 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._last_pos = 0
 
             default_chunks, default_blocks = compute_chunks_blocks((expected_size,))
+            # Compute the table-wide shared grid once so both the _valid_rows
+            # mask and the fixed-size columns use it; this keeps where() on the
+            # fast_eval path (the boolean mask is combined with the condition).
+            shared_chunks, shared_blocks, aligned_names = self._compute_aligned_grid(
+                self._schema.columns, expected_size
+            )
+            valid_chunks = shared_chunks if shared_chunks is not None else default_chunks
+            valid_blocks = shared_blocks if shared_blocks is not None else default_blocks
             self._valid_rows = storage.create_valid_rows(
                 shape=(expected_size,),
-                chunks=default_chunks,
-                blocks=default_blocks,
+                chunks=valid_chunks,
+                blocks=valid_blocks,
             )
-            self._init_columns(expected_size, default_chunks, default_blocks, storage)
+            self._init_columns(
+                expected_size,
+                default_chunks,
+                default_blocks,
+                storage,
+                aligned_grid=(shared_chunks, shared_blocks, aligned_names),
+            )
             storage.save_schema(schema_to_dict(self._schema))
 
             if new_data is not None:
@@ -3101,10 +3115,94 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             ):
                 self._cols[col.name].flush()
 
+    # Common itemsizes we snap the representative (median) itemsize to when
+    # computing the table-wide shared chunk/block grid.
+    _COMMON_ITEMSIZES = (1, 2, 4, 8, 16)
+
+    @staticmethod
+    def _snap_itemsize(median: float) -> int:
+        """Snap *median* to the nearest value in :attr:`_COMMON_ITEMSIZES`.
+
+        Ties round down (the strict ``<`` comparison keeps the first, smaller
+        candidate), so a median of 6 snaps to 4 rather than 8.
+        """
+        best = CTable._COMMON_ITEMSIZES[0]
+        best_dist = abs(median - best)
+        for value in CTable._COMMON_ITEMSIZES[1:]:
+            dist = abs(median - value)
+            if dist < best_dist:
+                best, best_dist = value, dist
+        return best
+
+    @classmethod
+    def _compute_aligned_grid(cls, columns, capacity: int):
+        """Compute a single chunk/block grid shared by fixed-size columns.
+
+        All 1-D fixed-size scalar columns (no user-pinned grid) are sized to one
+        common ``(chunks, blocks)`` so that lazy expressions over them take the
+        ``fast_eval`` path (which requires identical element-unit chunk/block
+        grids across operands).  The same grid is also applied to the
+        ``_valid_rows`` mask so that ``where()`` keeps the fast path when it
+        combines the condition with the mask.
+
+        The grid is sized for the *median* itemsize of the eligible columns,
+        snapped to the nearest common itemsize.  A column joins the aligned set
+        only if the shared grid does not blow its chunk size past ~4x what it
+        would pick on its own; this keeps wide string columns (e.g. ``U183642``)
+        on per-dtype sizing instead of producing multi-GB chunks.
+
+        ``columns`` is an iterable of :class:`CompiledColumn`.  Returns a
+        ``(shared_chunks, shared_blocks, included_names)`` tuple, where
+        ``included_names`` is the set of column names that should use the shared
+        grid.  Returns ``(None, None, set())`` when there is nothing to align.
+        """
+        eligible = []
+        for col in columns:
+            if (
+                cls._is_list_column(col)
+                or cls._is_varlen_scalar_column(col)
+                or cls._is_dictionary_column(col)
+            ):
+                continue
+            if col.dtype is None:
+                continue
+            if col.config.chunks is not None or col.config.blocks is not None:
+                continue
+            if len(cls._column_physical_shape(col, capacity)) != 1:
+                continue
+            eligible.append(col)
+
+        if not eligible:
+            return None, None, set()
+
+        itemsizes = [np.dtype(col.dtype).itemsize for col in eligible]
+        snapped = cls._snap_itemsize(float(np.median(itemsizes)))
+        shared_chunks, shared_blocks = compute_chunks_blocks((capacity,), dtype=np.dtype(f"V{snapped}"))
+
+        included = set()
+        for col in eligible:
+            natural_chunks, _ = cls._column_chunks_blocks(col, cls._column_physical_shape(col, capacity))
+            # Only align columns whose shared-grid chunk stays within ~4x the
+            # chunk they would choose on their own (in rows; itemsize cancels).
+            if shared_chunks[0] <= 4 * natural_chunks[0]:
+                included.add(col.name)
+
+        if not included:
+            return None, None, set()
+        return shared_chunks, shared_blocks, included
+
     def _init_columns(
-        self, expected_size: int, default_chunks, default_blocks, storage: TableStorage
+        self,
+        expected_size: int,
+        default_chunks,
+        default_blocks,
+        storage: TableStorage,
+        aligned_grid: tuple | None = None,
     ) -> None:
         """Create one physical column per compiled schema column."""
+        if aligned_grid is None:
+            aligned_grid = self._compute_aligned_grid(self._schema.columns, expected_size)
+        shared_chunks, shared_blocks, aligned_names = aligned_grid
         for col in self._schema.columns:
             self.col_names.append(col.name)
             self._col_widths[col.name] = max(len(col.name), col.display_width)
@@ -3142,7 +3240,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             blocks = col_storage["blocks"]
             shape = self._column_physical_shape(col, expected_size)
             if col.config.chunks is None and col.config.blocks is None:
-                chunks, blocks = self._column_chunks_blocks(col, shape)
+                if col.name in aligned_names:
+                    # Use the table-wide shared grid so lazy expressions over
+                    # this column take the fast_eval path.
+                    chunks, blocks = shared_chunks, shared_blocks
+                else:
+                    chunks, blocks = self._column_chunks_blocks(col, shape)
             self._cols[col.name] = storage.create_column(
                 col.name,
                 dtype=col.dtype,
@@ -4077,12 +4180,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         capacity = max(n_live, 1)
 
         default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        # Align fixed-size scalar columns (and the _valid_rows mask) on one
+        # shared grid so lazy expressions over the saved table take the
+        # fast_eval path on reopen.
+        shared_chunks, shared_blocks, aligned_names = self._compute_aligned_grid(
+            self._schema.columns, capacity
+        )
 
         # --- valid_rows (all True, compacted) ---
         disk_valid = storage.create_valid_rows(
             shape=(capacity,),
-            chunks=default_chunks,
-            blocks=default_blocks,
+            chunks=shared_chunks if shared_chunks is not None else default_chunks,
+            blocks=shared_blocks if shared_blocks is not None else default_blocks,
         )
         if n_live > 0:
             disk_valid[:n_live] = True
@@ -4130,7 +4239,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     disk_dc.codes[:n_live] = raw_codes
                 continue
             shape = self._column_physical_shape(col, capacity)
-            dtype_chunks, dtype_blocks = self._column_chunks_blocks(col, shape)
+            if col.name in aligned_names:
+                dtype_chunks, dtype_blocks = shared_chunks, shared_blocks
+            else:
+                dtype_chunks, dtype_blocks = self._column_chunks_blocks(col, shape)
             col_storage = self._resolve_column_storage(col, dtype_chunks, dtype_blocks)
             disk_col = storage.create_column(
                 name,
@@ -4264,7 +4376,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return cls._open_from_storage(storage)
 
     @classmethod
-    def load(cls, urlpath: str) -> CTable:
+    def load(cls, urlpath: str) -> CTable:  # noqa: C901
         """Load a persistent table from *urlpath* into RAM.
 
         The schema is read from the table's metadata — the original Python
@@ -4308,11 +4420,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         mem_storage = InMemoryTableStorage()
         bool_chunks, bool_blocks = compute_chunks_blocks((capacity,), dtype=np.dtype(np.bool_))
+        # Align fixed-size scalar columns (and the _valid_rows mask) on one
+        # shared grid so lazy expressions over them take the fast_eval path.
+        shared_chunks, shared_blocks, aligned_names = cls._compute_aligned_grid(schema.columns, capacity)
 
         mem_valid = mem_storage.create_valid_rows(
             shape=(capacity,),
-            chunks=bool_chunks,
-            blocks=bool_blocks,
+            chunks=shared_chunks if shared_chunks is not None else bool_chunks,
+            blocks=shared_blocks if shared_blocks is not None else bool_blocks,
         )
         if phys_size > 0:
             mem_valid[:phys_size] = disk_valid[:]
@@ -4344,7 +4459,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 mem_cols[name] = mem_col
                 continue
             shape = cls._column_physical_shape(col, capacity)
-            col_chunks, col_blocks = cls._column_chunks_blocks(col, shape)
+            if name in aligned_names:
+                col_chunks, col_blocks = shared_chunks, shared_blocks
+            else:
+                col_chunks, col_blocks = cls._column_chunks_blocks(col, shape)
             mem_col = mem_storage.create_column(
                 name,
                 dtype=col.dtype,
@@ -5483,9 +5601,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         cls, storage: TableStorage, columns: list[CompiledColumn], capacity: int, cparams, dparams
     ):
         default_chunks, default_blocks = compute_chunks_blocks((capacity,))
-        new_valid = storage.create_valid_rows(
-            shape=(capacity,), chunks=default_chunks, blocks=default_blocks
-        )
+        # Align fixed-size scalar columns (and the _valid_rows mask) on one
+        # shared grid so lazy expressions over them take the fast_eval path.
+        shared_chunks, shared_blocks, aligned_names = cls._compute_aligned_grid(columns, capacity)
+        valid_chunks = shared_chunks if shared_chunks is not None else default_chunks
+        valid_blocks = shared_blocks if shared_blocks is not None else default_blocks
+        new_valid = storage.create_valid_rows(shape=(capacity,), chunks=valid_chunks, blocks=valid_blocks)
         new_cols: dict[str, blosc2.NDArray | ListArray | _ScalarVarLenArray | DictionaryColumn] = {}
         for col in columns:
             if cls._is_list_column(col):
@@ -5506,7 +5627,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 shape = cls._column_physical_shape(col, capacity)
                 chunks, blocks = default_chunks, default_blocks
-                if col.dtype is not None:
+                if col.name in aligned_names:
+                    chunks, blocks = shared_chunks, shared_blocks
+                elif col.dtype is not None:
                     chunks, blocks = cls._column_chunks_blocks(col, shape)
                 new_cols[col.name] = storage.create_column(
                     col.name,
@@ -6575,17 +6698,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         n = len(col_data[0]) if ncols > 0 else 0
         capacity = max(n, 1)
         default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        # Align fixed-size scalar columns (and the _valid_rows mask) on one
+        # shared grid so lazy expressions over them take the fast_eval path.
+        shared_chunks, shared_blocks, aligned_names = cls._compute_aligned_grid(schema.columns, capacity)
         mem_storage = InMemoryTableStorage()
 
         new_valid = mem_storage.create_valid_rows(
             shape=(capacity,),
-            chunks=default_chunks,
-            blocks=default_blocks,
+            chunks=shared_chunks if shared_chunks is not None else default_chunks,
+            blocks=shared_blocks if shared_blocks is not None else default_blocks,
         )
         new_cols: dict[str, blosc2.NDArray] = {}
         for col in schema.columns:
             shape = cls._column_physical_shape(col, capacity)
-            chunks, blocks = cls._column_chunks_blocks(col, shape)
+            if col.name in aligned_names:
+                chunks, blocks = shared_chunks, shared_blocks
+            else:
+                chunks, blocks = cls._column_chunks_blocks(col, shape)
             new_cols[col.name] = mem_storage.create_column(
                 col.name,
                 dtype=col.dtype,
@@ -6720,12 +6849,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         n = len(df)
         capacity = max(n, 1)
         default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        # Align fixed-size scalar columns (and the _valid_rows mask) on one
+        # shared grid so lazy expressions over them take the fast_eval path.
+        shared_chunks, shared_blocks, aligned_names = cls._compute_aligned_grid(schema.columns, capacity)
         mem_storage = InMemoryTableStorage()
 
         new_valid = mem_storage.create_valid_rows(
             shape=(capacity,),
-            chunks=default_chunks,
-            blocks=default_blocks,
+            chunks=shared_chunks if shared_chunks is not None else default_chunks,
+            blocks=shared_blocks if shared_blocks is not None else default_blocks,
         )
         new_cols: dict[str, Any] = {}
         for col in schema.columns:
@@ -6757,7 +6889,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 new_cols[col.name] = dict_col
                 continue
             shape = cls._column_physical_shape(col, capacity)
-            chunks, blocks = cls._column_chunks_blocks(col, shape)
+            if col.name in aligned_names:
+                chunks, blocks = shared_chunks, shared_blocks
+            else:
+                chunks, blocks = cls._column_chunks_blocks(col, shape)
             new_cols[col.name] = mem_storage.create_column(
                 col.name,
                 dtype=col.dtype,
@@ -7149,6 +7284,49 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ``lazy`` (:class:`blosc2.LazyExpr`), and ``dtype``.
         """
         return dict(self._computed_cols)  # shallow copy so callers can't mutate
+
+    def _aligned_grid(self) -> tuple | None:
+        """Return ``(chunks, blocks)`` shared by the aligned fixed-size columns.
+
+        Inspects the actual stored 1-D NDArray columns and returns the grid
+        used by the largest aligned subset (the fast-path set), or ``None`` when
+        there are no such columns.  Works for both freshly created and reopened
+        tables since it reads the columns' real chunk/block shapes.
+        """
+        from collections import Counter
+
+        grids = Counter()
+        for name in self._stored_col_names:
+            col = self._cols.get(name) if hasattr(self._cols, "get") else self._cols[name]
+            chunks = getattr(col, "chunks", None)
+            blocks = getattr(col, "blocks", None)
+            if chunks is None or blocks is None or len(chunks) != 1:
+                continue
+            grids[(tuple(chunks), tuple(blocks))] += 1
+        if not grids:
+            return None
+        (chunks, blocks), _ = grids.most_common(1)[0]
+        return chunks, blocks
+
+    @property
+    def chunks(self) -> tuple | None:
+        """Chunk shape shared by the table's aligned fixed-size columns.
+
+        ``None`` if the table has no fixed-size scalar columns.  See
+        :attr:`blocks` for the matching block shape.
+        """
+        grid = self._aligned_grid()
+        return grid[0] if grid is not None else None
+
+    @property
+    def blocks(self) -> tuple | None:
+        """Block shape shared by the table's aligned fixed-size columns.
+
+        ``None`` if the table has no fixed-size scalar columns.  See
+        :attr:`chunks` for the matching chunk shape.
+        """
+        grid = self._aligned_grid()
+        return grid[1] if grid is not None else None
 
     def _ensure_generated_column_not_stale(self, name: str) -> None:
         meta = self._root_table._materialized_cols.get(name)
@@ -8781,12 +8959,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         capacity = max(capacity if capacity is not None else self._n_rows, 1)
         default_chunks, default_blocks = compute_chunks_blocks((capacity,))
+        # Align fixed-size scalar columns (and the _valid_rows mask) on one
+        # shared grid so lazy expressions over them take the fast_eval path.
+        shared_chunks, shared_blocks, aligned_names = self._compute_aligned_grid(
+            self._schema.columns, capacity
+        )
         mem_storage = InMemoryTableStorage()
 
         new_valid = mem_storage.create_valid_rows(
             shape=(capacity,),
-            chunks=default_chunks,
-            blocks=default_blocks,
+            chunks=shared_chunks if shared_chunks is not None else default_chunks,
+            blocks=shared_blocks if shared_blocks is not None else default_blocks,
         )
         new_cols = {}
         for col in self._schema.columns:
@@ -8820,7 +9003,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 chunks = col_storage["chunks"]
                 blocks = col_storage["blocks"]
                 if col.config.chunks is None and col.config.blocks is None:
-                    chunks, blocks = self._column_chunks_blocks(col, shape)
+                    if col.name in aligned_names:
+                        chunks, blocks = shared_chunks, shared_blocks
+                    else:
+                        chunks, blocks = self._column_chunks_blocks(col, shape)
                 new_cols[col.name] = mem_storage.create_column(
                     col.name,
                     dtype=col.dtype,
