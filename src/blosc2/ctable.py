@@ -3119,6 +3119,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     # computing the table-wide shared chunk/block grid.
     _COMMON_ITEMSIZES = (1, 2, 4, 8, 16)
 
+    # Fixed-width string/bytes columns up to this many bytes join the shared
+    # grid (so string filters stay on the fast path); ``U32`` is 128 bytes
+    # under NumPy's 4-bytes-per-char Unicode dtype.  Larger string columns are
+    # better stored as dictionary columns.
+    _MAX_ALIGNED_STR_ITEMSIZE = 128
+
     @staticmethod
     def _snap_itemsize(median: float) -> int:
         """Snap *median* to the nearest value in :attr:`_COMMON_ITEMSIZES`.
@@ -3145,18 +3151,24 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ``_valid_rows`` mask so that ``where()`` keeps the fast path when it
         combines the condition with the mask.
 
-        The grid is sized for the *median* itemsize of the eligible columns,
-        snapped to the nearest common itemsize.  A column joins the aligned set
-        only if the shared grid does not blow its chunk size past ~4x what it
-        would pick on its own; this keeps wide string columns (e.g. ``U183642``)
-        on per-dtype sizing instead of producing multi-GB chunks.
+        The grid is sized for the *median* itemsize of the eligible numeric
+        columns (the operands that dominate fused arithmetic), snapped to the
+        nearest common itemsize.  Numeric columns join the aligned set only if
+        the shared grid does not blow their chunk size past ~4x what they would
+        pick on their own; this keeps wide numeric columns on per-dtype sizing.
+
+        Fixed-width string/bytes columns are kept *out* of the median (so they
+        don't coarsen the numeric grid) but still join the aligned set when
+        their itemsize is at most :attr:`_MAX_ALIGNED_STR_ITEMSIZE`, so string
+        filters stay on the fast path.  Wider string columns (e.g. ``U183642``)
+        keep per-dtype sizing instead of producing multi-GB chunks.
 
         ``columns`` is an iterable of :class:`CompiledColumn`.  Returns a
         ``(shared_chunks, shared_blocks, included_names)`` tuple, where
         ``included_names`` is the set of column names that should use the shared
         grid.  Returns ``(None, None, set())`` when there is nothing to align.
         """
-        eligible = []
+        numeric, strings = [], []
         for col in columns:
             if (
                 cls._is_list_column(col)
@@ -3170,21 +3182,33 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 continue
             if len(cls._column_physical_shape(col, capacity)) != 1:
                 continue
-            eligible.append(col)
+            if np.dtype(col.dtype).kind in ("U", "S"):
+                strings.append(col)
+            else:
+                numeric.append(col)
 
-        if not eligible:
+        if not numeric and not strings:
             return None, None, set()
 
-        itemsizes = [np.dtype(col.dtype).itemsize for col in eligible]
+        # Size the grid from the numeric columns; if the table is all strings,
+        # fall back to sizing it from the string columns instead.
+        basis = numeric or strings
+        itemsizes = [np.dtype(col.dtype).itemsize for col in basis]
         snapped = cls._snap_itemsize(float(np.median(itemsizes)))
         shared_chunks, shared_blocks = compute_chunks_blocks((capacity,), dtype=np.dtype(f"V{snapped}"))
 
         included = set()
-        for col in eligible:
+        for col in numeric:
             natural_chunks, _ = cls._column_chunks_blocks(col, cls._column_physical_shape(col, capacity))
-            # Only align columns whose shared-grid chunk stays within ~4x the
-            # chunk they would choose on their own (in rows; itemsize cancels).
+            # Only align numeric columns whose shared-grid chunk stays within
+            # ~4x the chunk they would choose on their own (in rows; itemsize
+            # cancels).
             if shared_chunks[0] <= 4 * natural_chunks[0]:
+                included.add(col.name)
+        for col in strings:
+            # Fixed strings join via an absolute byte ceiling, not the relative
+            # cap: they fast-path equality filters and a few-MB block is fine.
+            if np.dtype(col.dtype).itemsize <= cls._MAX_ALIGNED_STR_ITEMSIZE:
                 included.add(col.name)
 
         if not included:

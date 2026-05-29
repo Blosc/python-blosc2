@@ -244,6 +244,39 @@ def test_wide_string_column_excluded_from_aligned_grid():
     assert table.chunks == table._cols["a"].chunks
 
 
+def test_small_strings_align_but_large_ones_do_not():
+    """Fixed strings up to 128 bytes (U32) join the shared grid so string
+    filters stay on the fast path; larger ones keep per-dtype sizing."""
+
+    @dataclass
+    class StrRow:
+        a: float = blosc2.field(blosc2.float32(), default=0.0)
+        b: float = blosc2.field(blosc2.float32(), default=0.0)
+        s32: str = blosc2.field(blosc2.string(max_length=32), default="")  # 128 bytes
+        s64: str = blosc2.field(blosc2.string(max_length=64), default="")  # 256 bytes
+
+    table = CTable(StrRow, expected_size=4_000_000)
+    numeric_grid = table._cols["a"].chunks
+    # Strings stay out of the median, so the grid is still sized for float32.
+    assert table._cols["b"].chunks == numeric_grid
+    # U32 (128 bytes) joins the shared grid; U64 (256 bytes) does not.
+    assert table._cols["s32"].chunks == numeric_grid
+    assert table._cols["s64"].chunks != numeric_grid
+
+
+def test_all_string_table_aligns():
+    """A table with only fixed-string columns still shares one grid."""
+
+    @dataclass
+    class OnlyStr:
+        s: str = blosc2.field(blosc2.string(max_length=8), default="")
+        t: str = blosc2.field(blosc2.string(max_length=16), default="")
+
+    table = CTable(OnlyStr, expected_size=1000)
+    assert table._cols["s"].chunks == table._cols["t"].chunks
+    assert table.chunks == table._cols["s"].chunks
+
+
 def test_from_arrow_aligns_columns_and_mask():
     """The Arrow-import path (used by parquet-to-blosc2) aligns fixed-size
     columns and the _valid_rows mask on a single shared grid."""
