@@ -2671,6 +2671,66 @@ class _LazyColumnDict(dict):
             dict.__delitem__(self, name)
 
 
+class _ChunkAlignedWriter:
+    """Buffer writes to a fixed-size NDArray and flush them chunk-aligned.
+
+    During Arrow/Parquet import the incoming batches have variable, non
+    chunk-aligned sizes, so writing each one straight to ``arr[pos:pos+m]``
+    makes most writes straddle chunk boundaries — forcing a
+    decompress-merge-recompress of partially filled chunks.  This buffer
+    accumulates appended arrays and writes them out in exact ``chunk_len``
+    blocks aligned to chunk boundaries, so every chunk is compressed once.
+    Only the final flush may write a partial (sub-chunk) tail.
+    """
+
+    __slots__ = ("arr", "chunk_len", "pending", "pending_n", "wpos")
+
+    def __init__(self, arr, chunk_len: int) -> None:
+        self.arr = arr
+        self.chunk_len = chunk_len
+        self.pending: list[np.ndarray] = []
+        self.pending_n = 0
+        self.wpos = 0
+
+    def append(self, block: np.ndarray) -> None:
+        if len(block) == 0:
+            return
+        self.pending.append(block)
+        self.pending_n += len(block)
+        while self.pending_n >= self.chunk_len:
+            self._write(self._take(self.chunk_len))
+
+    def flush(self) -> None:
+        if self.pending_n:
+            self._write(self._take(self.pending_n))
+
+    def _write(self, block: np.ndarray) -> None:
+        n = len(block)
+        self.arr[self.wpos : self.wpos + n] = block
+        self.wpos += n
+
+    def _take(self, n: int) -> np.ndarray:
+        """Pull exactly *n* rows from the front of the pending queue."""
+        # Fast path: the head array already holds exactly the requested rows.
+        if len(self.pending[0]) == n:
+            self.pending_n -= n
+            return self.pending.pop(0)
+        parts: list[np.ndarray] = []
+        need = n
+        while need > 0:
+            head = self.pending[0]
+            if len(head) <= need:
+                parts.append(head)
+                need -= len(head)
+                self.pending.pop(0)
+            else:
+                parts.append(head[:need])
+                self.pending[0] = head[need:]
+                need = 0
+        self.pending_n -= n
+        return parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+
 class CTable(_CTableIndexingMixin, Generic[RowT]):
     """Columnar compressed table with typed columns and row-oriented access."""
 
@@ -5762,12 +5822,28 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             for col in columns
             if cls._is_list_column(col)
         }
+        # Buffer fixed-size column writes and flush them chunk-aligned so each
+        # chunk is compressed once instead of being merged on every batch.
+        writers = {
+            col.name: _ChunkAlignedWriter(new_cols[col.name], new_cols[col.name].chunks[0])
+            for col in columns
+            if not (
+                cls._is_list_column(col)
+                or cls._is_varlen_scalar_column(col)
+                or cls._is_dictionary_column(col)
+            )
+        }
         for batch in batches:
             end = pos + len(batch)
             while end > len(new_valid):
                 obj._grow()
                 new_valid = obj._valid_rows
-            pos = cls._write_arrow_batch(batch, columns, new_cols, new_valid, pos, list_normalizers)
+            pos = cls._write_arrow_batch(batch, columns, new_cols, new_valid, pos, list_normalizers, writers)
+        for writer in writers.values():
+            writer.flush()
+        # All imported rows are valid; mark them in a single aligned write.
+        if pos:
+            new_valid[:pos] = True
         for col in columns:
             if (
                 cls._is_list_column(col)
@@ -5780,7 +5856,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._last_pos = pos
 
     @classmethod
-    def _write_arrow_batch(cls, batch, columns, new_cols, new_valid, pos: int, list_normalizers) -> int:
+    def _write_arrow_batch(
+        cls, batch, columns, new_cols, new_valid, pos: int, list_normalizers, writers
+    ) -> int:
         m = len(batch)
         if m == 0:
             return pos
@@ -5810,8 +5888,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     # Plain string array: encode values into the dictionary.
                     new_cols[col.name][pos : pos + m] = arrow_col.to_pylist()
             else:
-                new_cols[col.name][pos : pos + m] = cls._arrow_column_to_numpy(arrow_col, col)
-        new_valid[pos : pos + m] = True
+                writers[col.name].append(cls._arrow_column_to_numpy(arrow_col, col))
         return pos + m
 
     @staticmethod
