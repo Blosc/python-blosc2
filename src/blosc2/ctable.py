@@ -5702,12 +5702,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     col.name, spec=col.spec, cparams=cparams, dparams=dparams
                 )
             elif cls._is_dictionary_column(col):
-                dict_col = storage.create_dictionary_column(
-                    col.name, spec=col.spec, cparams=cparams, dparams=dparams
+                # Create the int32 codes array at full capacity with the aligned
+                # grid (codes are int32, so they match the shared numeric grid).
+                # This avoids a create-then-resize and the catastrophic 4096-row
+                # default chunking, and lets dict-column filters use the fast path.
+                if shared_chunks is not None:
+                    codes_chunks, codes_blocks = shared_chunks, shared_blocks
+                else:
+                    codes_chunks, codes_blocks = compute_chunks_blocks((capacity,), dtype=np.dtype(np.int32))
+                new_cols[col.name] = storage.create_dictionary_column(
+                    col.name,
+                    spec=col.spec,
+                    cparams=cparams,
+                    dparams=dparams,
+                    codes_shape=(capacity,),
+                    codes_chunks=codes_chunks,
+                    codes_blocks=codes_blocks,
                 )
-                if len(dict_col.codes) < capacity:
-                    dict_col.resize((capacity,))
-                new_cols[col.name] = dict_col
             else:
                 shape = cls._column_physical_shape(col, capacity)
                 chunks, blocks = default_chunks, default_blocks

@@ -364,6 +364,30 @@ def test_chunk_aligned_writer_matches_direct_write(batch_size):
     np.testing.assert_array_equal(arr[:], data)
 
 
+def test_from_arrow_dictionary_codes_use_aligned_grid():
+    """Imported dictionary columns create their int32 codes at full capacity
+    on the aligned grid, not the tiny 4096-row default (which caused a
+    create-then-resize and thousands of micro-chunks)."""
+    n = 500_000
+    rng = np.random.default_rng(0)
+    labels = np.array(["alpha", "beta", "gamma", "delta", "epsilon"])
+    schema = pa.schema(
+        [
+            pa.field("a", pa.float32()),
+            pa.field("c", pa.dictionary(pa.int32(), pa.string())),
+        ]
+    )
+    a = pa.array(rng.random(n).astype("f4"))
+    c = pa.array(labels[rng.integers(0, len(labels), n)]).dictionary_encode()
+    t = CTable.from_arrow(schema, [pa.record_batch([a, c], schema=schema)], capacity_hint=n)
+
+    codes = t._cols["c"].codes
+    # Codes share the numeric column's (aligned) grid and are not micro-chunked.
+    assert codes.chunks == t._cols["a"].chunks
+    assert codes.schunk.nchunks < 10
+    assert list(t["c"][:5]) == c.to_pylist()[:5]
+
+
 def test_from_arrow_variable_batches_roundtrip():
     """Variable-sized Arrow batches that straddle the column chunk grid import
     losslessly (exercises the chunk-aligned write buffer)."""
