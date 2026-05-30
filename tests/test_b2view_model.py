@@ -65,7 +65,7 @@ def test_store_browser_metadata_and_previews(tmp_path):
 
         table_info = browser.get_info("/table")
         assert table_info.kind == "ctable"
-        assert table_info.metadata["rows"] == 6
+        assert table_info.metadata["nrows"] == 6
         preview = browser.preview("/table", max_rows=3, max_cols=1)
         assert preview["columns"] == ["x"]
         assert preview["hidden_columns"] == 1
@@ -83,7 +83,7 @@ def test_store_browser_supports_standalone_ctable(tmp_path):
         assert browser.list_children("/") == []
         info = browser.get_info("/")
         assert info.kind == "ctable"
-        assert info.metadata["rows"] == 4
+        assert info.metadata["nrows"] == 4
         preview = browser.preview("/", max_rows=2)
         np.testing.assert_array_equal(preview["data"]["x"], np.array([0, 1]))
 

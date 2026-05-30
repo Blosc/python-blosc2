@@ -649,7 +649,7 @@ class ListArray:
             ("pending_rows", len(self._pending_cells) if self.spec.storage == "batch" else 0),
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),
-            ("cratio", f"{self.cratio:.2f}"),
+            ("cratio", f"{self.cratio:.2f}x"),
         ]
 
     def to_cframe(self) -> bytes:

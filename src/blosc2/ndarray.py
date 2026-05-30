@@ -3935,7 +3935,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         chunks  : (10,)
         blocks  : (10,)
         dtype   : int64
-        cratio  : 0.73
+        cratio  : 0.73x
         cparams : {'blocksize': 80,
         'clevel': 1,
         'codec': <Codec.ZSTD: 5>,
@@ -3968,7 +3968,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         items += [("dtype", self.dtype)]
         items += [("nbytes", format_nbytes_info(self.nbytes))]
         items += [("cbytes", format_nbytes_info(self.cbytes))]
-        items += [("cratio", f"{self.cratio:.2f}")]
+        items += [("cratio", f"{self.cratio:.2f}x")]
         items += [("cparams", self.cparams)]
         items += [("dparams", self.dparams)]
         return items

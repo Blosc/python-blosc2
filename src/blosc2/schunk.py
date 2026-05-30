@@ -535,7 +535,7 @@ class SChunk(blosc2_ext.SChunk):
         typesize  : 1
         nbytes    : 24000
         cbytes    : 82
-        cratio    : 292.68
+        cratio    : 292.68x
         cparams   : CParams(codec=<Codec.ZSTD: 5>, codec_meta=0, clevel=1, use_dict=False, typesize=1,
                   : nthreads=8, blocksize=0, splitmode=<SplitMode.AUTO_SPLIT: 3>,
                   : filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>,
@@ -557,7 +557,7 @@ class SChunk(blosc2_ext.SChunk):
         items += [("typesize", self.typesize)]
         items += [("nbytes", format_nbytes_info(self.nbytes))]
         items += [("cbytes", format_nbytes_info(self.cbytes))]
-        items += [("cratio", f"{self.cratio:.2f}")]
+        items += [("cratio", f"{self.cratio:.2f}x")]
         items += [("cparams", self.cparams)]
         items += [("dparams", self.dparams)]
         return items

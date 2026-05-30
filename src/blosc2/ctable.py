@@ -1207,33 +1207,41 @@ class Column:
         spec = col_meta.spec if col_meta is not None else None
         chunks = getattr(raw, "chunks", None)
         blocks = getattr(raw, "blocks", None)
+
+        if self.is_list:
+            backend = "list"
+        elif self.is_varlen_scalar:
+            backend = "variable-length scalar"
+        elif self.is_dictionary:
+            backend = "dictionary"
+        else:
+            backend = "NDArray" if isinstance(raw, blosc2.NDArray) else type(raw).__name__
+
+        # Virtual computed columns are not stored; otherwise report the table's
+        # storage kind, mirroring CTable.info's persistent/in-memory wording.
+        if self.is_computed:
+            storage = "computed"
+        elif isinstance(table._storage, FileTableStorage):
+            storage = "persistent"
+        else:
+            storage = "in-memory"
+
+        # Block order mirrors CTable.info: identity, shape/grid, sizes, content,
+        # then compression params.
         items: list[tuple[str, object]] = [
             ("type", self.__class__.__name__),
             ("name", self._col_name),
-            ("nrows", len(self)),
-            ("shape", self.shape),
+            ("dtype", table._dtype_info_label(self.dtype, spec)),
+            ("backend", backend),
+            ("storage", storage),
         ]
+
+        items.append(("nrows", len(self)))
+        items.append(("shape", self.shape))
         if chunks is not None:
             items.append(("chunks", chunks))
         if blocks is not None:
             items.append(("blocks", blocks))
-        items.extend(
-            [
-                ("dtype", table._dtype_info_label(self.dtype, spec)),
-                ("computed", self.is_computed),
-                ("nullable", self.null_value is not None or getattr(spec, "nullable", False)),
-            ]
-        )
-
-        if self.is_list:
-            items.append(("storage", "list"))
-        elif self.is_varlen_scalar:
-            items.append(("storage", "variable-length scalar"))
-        elif self.is_dictionary:
-            items.append(("storage", "dictionary"))
-            items.append(("dictionary_size", len(raw.dictionary)))
-        else:
-            items.append(("storage", "ndarray" if isinstance(raw, blosc2.NDArray) else type(raw).__name__))
 
         nbytes = getattr(raw, "nbytes", None)
         cbytes = getattr(raw, "cbytes", None)
@@ -1243,11 +1251,12 @@ class Column:
         if cbytes is not None:
             items.append(("cbytes", format_nbytes_info(cbytes)))
         if cratio is not None:
-            items.append(("cratio", f"{cratio:.2f}"))
+            items.append(("cratio", f"{cratio:.2f}x"))
 
-        urlpath = getattr(raw, "urlpath", None)
-        if urlpath is not None:
-            items.append(("urlpath", urlpath))
+        items.append(("nullable", self.null_value is not None or getattr(spec, "nullable", False)))
+        if self.is_dictionary:
+            items.append(("dictionary_size", len(raw.dictionary)))
+
         cparams = getattr(raw, "cparams", None)
         dparams = getattr(raw, "dparams", None)
         if cparams is not None:
@@ -2568,7 +2577,7 @@ class _NestedColumnNamespace:
             ("nrows", self.nrows),
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),
-            ("cratio", f"{self.cratio:.1f}x"),
+            ("cratio", f"{self.cratio:.2f}x"),
             ("schema", schema_summary),
         ]
 
@@ -9303,17 +9312,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         items = [
             ("type", self.__class__.__name__),
             ("storage", storage_type),
-            ("rows", self.nrows),
-            ("columns", self.ncols),
             ("view", self.base is not None),
+            ("nrows", self.nrows),
+            ("ncols", self.ncols),
+            ("chunks", self.chunks if self.chunks is not None else "none (no fixed-size columns)"),
+            ("blocks", self.blocks if self.blocks is not None else "none (no fixed-size columns)"),
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),
-            ("cratio", f"{self.cratio:.1f}x"),
+            ("cratio", f"{self.cratio:.2f}x"),
             ("schema", schema_summary),
-            (
-                "valid_rows_mask",
-                f"cbytes={format_nbytes_info(self._valid_rows.cbytes)}",
-            ),
             ("indexes", index_summary if index_summary else "none"),
         ]
         if urlpath is not None:
