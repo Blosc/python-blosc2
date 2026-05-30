@@ -248,6 +248,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[c.name for c in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
     parser.add_argument(
+        "--reduce-mem",
+        action="store_true",
+        help=(
+            "Shrink an auto-chosen Parquet batch size so a single Arrow read batch fits a "
+            "small memory budget, lowering peak RSS at the cost of import speed. "
+            "Only affects auto batch sizing for unnamed-root list<struct<...>> flattening; "
+            "an explicit --batch-size is always left untouched."
+        ),
+    )
+    parser.add_argument(
         "--mem-report",
         action="store_true",
         help="Print process/Arrow memory diagnostics at import phases and during batch processing.",
@@ -1030,7 +1040,12 @@ def _apply_parquet_batch_memory_budget(args, sample, n_outer_sampled: int) -> No
     + write buffers + Arrow pool), so an auto-chosen parquet batch size is capped
     to keep peak RSS well under ~1 GB.  An explicit --parquet-batch-size is left
     untouched.
+
+    Opt-in via --reduce-mem: it trades import speed for lower peak RSS, so the
+    default keeps the original (larger) auto batch sizes.
     """
+    if not getattr(args, "reduce_mem", False):
+        return
     if not getattr(args, "parquet_batch_size_auto", False):
         return
     bytes_per_outer = sample.nbytes / n_outer_sampled
