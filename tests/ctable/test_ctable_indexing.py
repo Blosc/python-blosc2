@@ -748,3 +748,58 @@ def test_summary_index_compact_store_no_cross_column_confusion(tmp_path):
     with blosc2.open(path) as r:
         got = r.where((r.a > 90) & (r.b > 0) & (r.c < 0)).nrows
     assert got == expected, f"index returned {got}, expected {expected} (scan)"
+
+
+@dataclasses.dataclass
+class _GranRow:
+    # Small explicit grid so the SUMMARY index spans several chunks/blocks.
+    v: float = blosc2.field(blosc2.float64(), chunks=(1000,), blocks=(250,))
+
+
+def _make_gran_table(n=5000):
+    rng = np.random.default_rng(1)
+    t = blosc2.CTable(_GranRow)
+    t.extend([(x,) for x in (rng.random(n) * 100).tolist()])
+    return t, rng
+
+
+def test_summary_index_defaults_to_block_granularity():
+    t, _ = _make_gran_table()
+    t.create_index("v", kind=blosc2.IndexKind.SUMMARY)
+    levels = list(dict(t._get_index_catalog())["v"]["levels"].keys())
+    assert levels == ["block"]
+
+
+@pytest.mark.parametrize("granularity", ["chunk", "block", "subblock"])
+def test_summary_index_granularity_override(granularity):
+    t, rng = _make_gran_table()
+    t.create_index("v", kind=blosc2.IndexKind.SUMMARY, granularity=granularity)
+    levels = list(dict(t._get_index_catalog())["v"]["levels"].keys())
+    assert levels == [granularity]
+    # Correctness must hold regardless of granularity.
+    v = t["v"][:]
+    expected = int((v > 95).sum())
+    assert t.where(t.v > 95).nrows == expected
+
+
+def test_summary_granularity_rejects_invalid_value():
+    t, _ = _make_gran_table()
+    with pytest.raises(ValueError, match="granularity must be one of"):
+        t.create_index("v", kind=blosc2.IndexKind.SUMMARY, granularity="bogus")
+
+
+def test_granularity_only_valid_for_summary():
+    t, _ = _make_gran_table()
+    with pytest.raises(ValueError, match=r"only supported for kind=IndexKind\.SUMMARY"):
+        t.create_index("v", kind=blosc2.IndexKind.BUCKET, granularity="block")
+
+
+@pytest.mark.parametrize("threshold", [5.0, 50.0, 99.0, 99.99])
+def test_summary_cost_gate_correctness_across_selectivity(threshold):
+    """The SUMMARY cost gate may use the index (selective query) or fall back to
+    a scan (broad query); both branches must return scan-correct results."""
+    t, _ = _make_gran_table(n=6000)
+    t.create_index("v", kind=blosc2.IndexKind.SUMMARY)  # block granularity
+    v = t["v"][:]
+    expected = int((v > threshold).sum())
+    assert t.where(t.v > threshold).nrows == expected

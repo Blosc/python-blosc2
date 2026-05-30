@@ -88,6 +88,16 @@ class _CTableIndexingMixin:
     _GATHER_COST_MS_PER_1K_ITEMS_PER_OP: float = 3.5
     _SCAN_COST_MS_PER_1M_ROWS: float = 4.3
 
+    # Cost-model constants for the segment-summary (SUMMARY index) gate.
+    # A segment query evaluates only surviving segments, but each one carries
+    # fixed overhead (open + decompress + miniexpr + merge) that scales with the
+    # number of operand columns read.  When enough segments survive, that
+    # overhead exceeds a plain sequential scan, so the planner falls back.
+    #   _SEGMENT_SCAN_MS_PER_1M_ROWS_PER_OP ≈ ms to sequentially scan 1M rows of one column
+    #   _SEGMENT_OVERHEAD_MS_PER_OP         ≈ fixed ms per surviving segment per operand column
+    _SEGMENT_SCAN_MS_PER_1M_ROWS_PER_OP: float = 1.6
+    _SEGMENT_OVERHEAD_MS_PER_OP: float = 1.0
+
     @property
     def _root_table(self) -> CTable:
         """Return the root (non-view) table; *self* if not a view."""
@@ -357,6 +367,7 @@ class _CTableIndexingMixin:
         cparams_obj,
         method: str | None = None,
         opsi_max_cycles: int | None = None,
+        summary_levels: tuple[str, ...] | None = None,
     ) -> dict:
         """Build index sidecar files for a persistent-table column; return the descriptor."""
         import tempfile
@@ -399,7 +410,9 @@ class _CTableIndexingMixin:
 
         if use_ooc:
             resolved_tmpdir = _resolve_full_index_tmpdir(proxy, tmpdir)
-            levels = _build_levels_descriptor_ooc(proxy, target, token, kind, dtype, persistent, cparams_obj)
+            levels = _build_levels_descriptor_ooc(
+                proxy, target, token, kind, dtype, persistent, cparams_obj, summary_levels=summary_levels
+            )
             bucket = (
                 _build_bucket_descriptor_ooc(
                     proxy, target, token, kind, dtype, optlevel, persistent, cparams_obj
@@ -446,7 +459,15 @@ class _CTableIndexingMixin:
         else:
             values = _values_for_target(proxy, target)
             levels = _build_levels_descriptor(
-                proxy, target, token, kind, dtype, values, persistent, cparams_obj
+                proxy,
+                target,
+                token,
+                kind,
+                dtype,
+                values,
+                persistent,
+                cparams_obj,
+                summary_levels=summary_levels,
             )
             bucket = (
                 _build_bucket_descriptor(proxy, token, kind, values, optlevel, persistent, cparams_obj)
@@ -501,6 +522,7 @@ class _CTableIndexingMixin:
         name: str | None = None,
         build: str = "auto",
         tmpdir: str | None = None,
+        granularity: str | None = None,
         **kwargs,
     ) -> blosc2.Index:
         """Build and register an index for a stored column or table expression.
@@ -540,8 +562,18 @@ class _CTableIndexingMixin:
         needed to accelerate ``sort_by``.
 
         ``SUMMARY`` stores only per‑segment min/max and is the
-        lightest kind; it may still skip chunks for broad range
+        lightest kind; it may still skip segments for broad range
         queries but cannot accelerate ``sort_by``.
+
+        .. rubric:: SUMMARY granularity
+
+        For ``kind=SUMMARY``, ``granularity`` controls the segment size of the
+        min/max summaries: ``"block"`` (the default) summarizes at Blosc2 block
+        granularity, ``"chunk"`` at the coarser chunk granularity, and
+        ``"subblock"`` at an even finer level.  Finer granularity prunes more
+        segments for selective predicates (at a small, proportional increase in
+        sidecar size) but adds per‑segment overhead for unselective ones.
+        ``granularity`` is only valid for ``kind=SUMMARY``.
         """
         if self.base is not None:
             raise ValueError("Cannot create an index on a view.")
@@ -562,6 +594,7 @@ class _CTableIndexingMixin:
             _normalize_full_build_method,
             _normalize_index_cparams,
             _normalize_index_kind,
+            _resolve_summary_levels,
             _target_token,
         )
         from blosc2.indexing import create_index as _ix_create_index
@@ -579,6 +612,9 @@ class _CTableIndexingMixin:
         method_str = _normalize_full_build_method(method) if kind_str == "full" else None
         if method is not None and kind_str != "full":
             raise ValueError("method is only supported for kind=IndexKind.FULL")
+        if granularity is not None and kind_str != "summary":
+            raise ValueError("granularity is only supported for kind=IndexKind.SUMMARY")
+        summary_levels = _resolve_summary_levels(granularity)
         catalog = self._get_index_catalog()
 
         if expression is not None:
@@ -600,6 +636,7 @@ class _CTableIndexingMixin:
                 cparams=cparams_obj,
                 method=method_str,
                 opsi_max_cycles=opsi_max_cycles,
+                summary_levels=summary_levels,
             )
             store = _IN_MEMORY_INDEXES.get(id(expr_arr))
             if store is None:
@@ -668,6 +705,7 @@ class _CTableIndexingMixin:
                 cparams_obj=cparams_obj,
                 method=method_str,
                 opsi_max_cycles=opsi_max_cycles,
+                summary_levels=summary_levels,
             )
         else:
             _ix_create_index(
@@ -681,6 +719,7 @@ class _CTableIndexingMixin:
                 cparams=cparams_obj,
                 method=method_str,
                 opsi_max_cycles=opsi_max_cycles,
+                summary_levels=summary_levels,
             )
             store = _IN_MEMORY_INDEXES[id(col_arr)]
             descriptor = _copy_descriptor(store["indexes"]["__self__"])
@@ -1080,10 +1119,22 @@ class _CTableIndexingMixin:
             return _exclude_null_positions(positions)
 
         if plan.candidate_units is not None and plan.segment_len is not None:
-            # When segment summaries prune fewer than half the candidate
-            # units, the per‑segment evaluation overhead outweighs a plain
-            # scan.  Fall back to the scan path.
-            if plan.total_units > 0 and plan.selected_units / plan.total_units > 0.5:
+            # Cost model: a segment query reads/evaluates only the surviving
+            # segments, but each one carries fixed per-segment overhead that
+            # scales with the operand count.  Compare estimated segment-query
+            # cost against a plain scan and fall back when the index would not
+            # actually pay off (e.g. matches scattered across many segments).
+            n_ops = max(1, len(expr_result.operands))
+            segment_len = int(plan.segment_len)
+            selected = int(plan.selected_units)
+            total_rows = int(plan.total_units) * segment_len
+            selected_rows = selected * segment_len
+            scan_ms = (total_rows / 1e6) * self._SEGMENT_SCAN_MS_PER_1M_ROWS_PER_OP * n_ops
+            index_ms = (
+                selected * n_ops * self._SEGMENT_OVERHEAD_MS_PER_OP
+                + (selected_rows / 1e6) * self._SEGMENT_SCAN_MS_PER_1M_ROWS_PER_OP * n_ops
+            )
+            if selected > 0 and index_ms >= scan_ms:
                 return None
             _, positions = evaluate_segment_query(
                 expression, merged_operands, {}, where_dict, plan, return_positions=True

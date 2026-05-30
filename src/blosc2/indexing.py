@@ -41,12 +41,29 @@ FLAG_ALL_NAN = np.uint8(1 << 0)
 FLAG_HAS_NAN = np.uint8(1 << 1)
 
 SEGMENT_LEVELS_BY_KIND = {
-    "summary": ("chunk",),
+    # SUMMARY stores per-segment min/max.  Block granularity prunes far more
+    # finely than whole-chunk min/max (chunks can be ~10-100x larger than
+    # blocks), so it is the default; callers may override per index via the
+    # ``granularity`` option (see ``SUMMARY_GRANULARITIES``).
+    "summary": ("block",),
     "bucket": ("chunk", "block"),
     "partial": ("chunk", "block", "subblock"),
     "full": ("chunk", "block", "subblock"),
     "opsi": ("chunk", "block", "subblock"),
 }
+
+# Valid ``granularity`` values for SUMMARY indexes, coarsest to finest.
+SUMMARY_GRANULARITIES = ("chunk", "block", "subblock")
+
+
+def _resolve_summary_levels(granularity: str | None) -> tuple[str, ...] | None:
+    """Map a SUMMARY ``granularity`` to the level tuple, or ``None`` for default."""
+    if granularity is None:
+        return None
+    if granularity not in SUMMARY_GRANULARITIES:
+        raise ValueError(f"granularity must be one of {SUMMARY_GRANULARITIES}, got {granularity!r}")
+    return (granularity,)
+
 
 _IN_MEMORY_INDEXES: dict[int, dict] = {}
 _IN_MEMORY_INDEX_FINALIZERS: dict[int, weakref.finalize] = {}
@@ -1244,9 +1261,11 @@ def _build_levels_descriptor(
     values: np.ndarray,
     persistent: bool,
     cparams: dict | None = None,
+    summary_levels: tuple[str, ...] | None = None,
 ) -> dict:
     levels = {}
-    for level in SEGMENT_LEVELS_BY_KIND[kind]:
+    levels_to_build = summary_levels if summary_levels is not None else SEGMENT_LEVELS_BY_KIND[kind]
+    for level in levels_to_build:
         segment_len = _segment_len(array, level)
         summaries = _compute_segment_summaries(values, dtype, segment_len)
         sidecar = _store_array_sidecar(
@@ -1269,11 +1288,12 @@ def _build_levels_descriptor_ooc(
     dtype: np.dtype,
     persistent: bool,
     cparams: dict | None = None,
+    summary_levels: tuple[str, ...] | None = None,
 ) -> dict:
     size = int(array.shape[0])
     summary_dtype = _summary_dtype(dtype)
     chunk_len = int(array.chunks[0])
-    levels_to_build = SEGMENT_LEVELS_BY_KIND[kind]
+    levels_to_build = summary_levels if summary_levels is not None else SEGMENT_LEVELS_BY_KIND[kind]
     segment_lens = {level: _segment_len(array, level) for level in levels_to_build}
     nsegments_total = {level: math.ceil(size / slen) for level, slen in segment_lens.items()}
     all_summaries = {level: np.empty(n, dtype=summary_dtype) for level, n in nsegments_total.items()}
@@ -3823,6 +3843,7 @@ def create_index(
     cparams = _normalize_index_cparams(kwargs.pop("cparams", None))
     method = kwargs.pop("method", None)
     opsi_max_cycles_arg = kwargs.pop("opsi_max_cycles", None)
+    summary_levels = kwargs.pop("summary_levels", None)
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"unexpected keyword argument(s): {unexpected}")
@@ -3845,7 +3866,9 @@ def create_index(
     use_ooc = _resolve_ooc_mode(kind, build)
 
     if use_ooc:
-        levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent, cparams)
+        levels = _build_levels_descriptor_ooc(
+            array, target, token, kind, dtype, persistent, cparams, summary_levels=summary_levels
+        )
         bucket = (
             _build_bucket_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
             if kind == "bucket"
@@ -3889,7 +3912,9 @@ def create_index(
         )
     else:
         values = _values_for_target(array, target)
-        levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent, cparams)
+        levels = _build_levels_descriptor(
+            array, target, token, kind, dtype, values, persistent, cparams, summary_levels=summary_levels
+        )
         bucket = (
             _build_bucket_descriptor(array, token, kind, values, optlevel, persistent, cparams)
             if kind == "bucket"
