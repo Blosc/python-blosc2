@@ -705,3 +705,46 @@ def test_indexing_purge_tolerates_reentrant_sidecar_handle_cache_mutation(monkey
 
     assert stale_key not in indexing._SIDECAR_HANDLE_CACHE
     indexing._SIDECAR_HANDLE_CACHE.pop(injected_key, None)
+
+
+def test_summary_index_compact_store_no_cross_column_confusion(tmp_path):
+    """Regression: a SUMMARY index on one column of a compact (.b2z) store must
+    not be applied to a *different* column's predicate.
+
+    In compact stores every column shares one urlpath, so the urlpath-keyed
+    index store could hand back the indexed column's descriptor for an unrelated
+    column.  After column alignment siblings also share shape/chunks, defeating
+    the only guard that previously distinguished them.  A predicate impossible
+    for the indexed column's value range (``c < 0`` while the indexed column
+    ``a`` is non-negative) was then applied to ``a``'s per-segment min/max,
+    wrongly pruning every segment and silently returning 0 rows.
+    """
+
+    @dataclasses.dataclass
+    class Aligned:
+        # Force a small shared chunk grid so the SUMMARY index has several
+        # segments and all columns are chunk-aligned (same shape and chunks).
+        a: float = blosc2.field(blosc2.float32(), chunks=(1000,), blocks=(250,))
+        b: float = blosc2.field(blosc2.float32(), chunks=(1000,), blocks=(250,))
+        c: float = blosc2.field(blosc2.float64(), chunks=(1000,), blocks=(250,))
+
+    n = 10_000
+    rng = np.random.default_rng(0)
+    a = (rng.random(n) * 100).astype(np.float32)  # always >= 0 (indexed column)
+    b = (rng.random(n) + 1).astype(np.float32)  # always > 0
+    c = rng.random(n) * 200 - 100  # spans negatives, so "c < 0" matches real rows
+
+    t = blosc2.CTable(Aligned)
+    t.extend(list(zip(a.tolist(), b.tolist(), c.tolist(), strict=True)))
+    path = str(tmp_path / "aligned.b2z")
+    t.to_b2z(path)
+
+    with blosc2.open(path, mode="a") as w:
+        w.create_index("a", kind=blosc2.IndexKind.SUMMARY)
+
+    expected = int(((a > 90) & (b > 0) & (c < 0)).sum())
+    assert expected > 0  # the predicate must actually match real rows
+
+    with blosc2.open(path) as r:
+        got = r.where((r.a > 90) & (r.b > 0) & (r.c < 0)).nrows
+    assert got == expected, f"index returned {got}, expected {expected} (scan)"

@@ -51,6 +51,14 @@ SEGMENT_LEVELS_BY_KIND = {
 _IN_MEMORY_INDEXES: dict[int, dict] = {}
 _IN_MEMORY_INDEX_FINALIZERS: dict[int, weakref.finalize] = {}
 _PERSISTENT_INDEXES: dict[tuple[str, str | int], dict] = {}
+# Records which array object owns the descriptor cached at a given
+# ``(array_key, token)``.  In compact stores (.b2z/.b2d) every CTable column
+# shares one urlpath, so ``_array_key`` collides across columns and a column's
+# index store can be returned for a *different* column's predicate.  This map
+# lets ``_descriptor_for_target`` reject a descriptor when the querying array is
+# not the one the descriptor was registered for.  It is in-memory only and is
+# never persisted to disk.
+_DESCRIPTOR_OWNERS: dict[tuple, int] = {}
 _DATA_CACHE: dict[tuple[int, str | None, str, str], np.ndarray] = {}
 _SIDECAR_HANDLE_CACHE: dict[tuple[int, str | None, str, str], object] = {}
 
@@ -265,6 +273,17 @@ def _array_key(array: blosc2.NDArray) -> tuple[str, str | int]:
     if _is_persistent_array(array):
         return ("persistent", str(Path(array.urlpath).resolve()))
     return ("memory", id(array))
+
+
+def _register_descriptor_owner(array: blosc2.NDArray, token: str) -> None:
+    """Record that *array* owns the descriptor cached at ``(_array_key, token)``.
+
+    Called when a CTable injects a column's index descriptor into the shared
+    (urlpath-keyed) persistent store, so that :func:`_descriptor_for_target` can
+    later tell that descriptor apart from a sibling column whose ``_array_key``
+    collides.
+    """
+    _DESCRIPTOR_OWNERS[(_array_key(array), token)] = id(array)
 
 
 def _field_token(field: str | None) -> str:
@@ -4725,8 +4744,17 @@ def _descriptor_for(array: blosc2.NDArray, field: str | None) -> dict | None:
 
 
 def _descriptor_for_target(array: blosc2.NDArray, target: dict) -> dict | None:
-    descriptor = _load_store(array)["indexes"].get(_target_token(target))
+    token = _target_token(target)
+    descriptor = _load_store(array)["indexes"].get(token)
     if descriptor is None or descriptor.get("stale", False):
+        return None
+    # In compact stores every column shares one urlpath, so the urlpath-keyed
+    # index store can hand back a *sibling* column's descriptor.  When an owner
+    # was registered for this (array_key, token), require *array* to be it;
+    # otherwise this predicate is on a different column that merely shares the
+    # urlpath and (post column-alignment) the same shape/chunks.
+    owner_id = _DESCRIPTOR_OWNERS.get((_array_key(array), token))
+    if owner_id is not None and owner_id != id(array):
         return None
     if descriptor.get("version") != INDEX_FORMAT_VERSION:
         return None

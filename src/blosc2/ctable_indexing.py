@@ -967,7 +967,7 @@ class _CTableIndexingMixin:
         # returns the same key for every column — causing _SIDECAR_HANDLE_CACHE
         # collisions across queries.  Clear stale handles before each injection so
         # the upcoming query always loads the correct sidecar for this column.
-        from blosc2.indexing import _clear_cached_data
+        from blosc2.indexing import _clear_cached_data, _register_descriptor_owner
 
         for _col_name, col_arr, descriptor in indexed_columns[:1]:
             arr_key = _array_key(col_arr)
@@ -981,6 +981,10 @@ class _CTableIndexingMixin:
                 store = _IN_MEMORY_INDEXES.get(id(col_arr)) or _default_index_store()
                 store["indexes"][descriptor["token"]] = descriptor
                 _IN_MEMORY_INDEXES[id(col_arr)] = store
+            # Record the owning array so a sibling column sharing this urlpath
+            # (and, after column alignment, the same shape/chunks) cannot match
+            # this descriptor in _descriptor_for_target.
+            _register_descriptor_owner(col_arr, descriptor["token"])
 
         where_dict = {"_where_x": primary_col_arr}
         merged_operands = {**operands, "_where_x": primary_col_arr}
