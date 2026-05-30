@@ -2486,11 +2486,29 @@ class _StructPathColumn:
             yield self._row_value_at_logical(i)
 
 
-class _NestedColumnNamespace:
-    """Attribute proxy for dotted nested column paths.
+class NestedColumn:
+    """A read-only accessor for a nested (dotted) group of CTable columns.
 
-    Allows `t.trip.begin.lon` when the physical leaf column is named
-    `"trip.begin.lon"`.
+    Returned by attribute access on a :class:`CTable` (or on another
+    ``NestedColumn``) when the name refers to an internal node of the dotted
+    column tree rather than a leaf.  For a table flattened from a
+    ``struct``/``list<struct>`` schema, ``t.trip`` is a ``NestedColumn``
+    grouping every leaf under the ``trip.`` prefix, while a leaf such as
+    ``t.trip.sec`` (or ``t.trip.begin.lon``) is a :class:`Column`.  Drilling
+    into an intermediate node (e.g. ``t.trip.begin``) yields another
+    ``NestedColumn``.
+
+    Exposes aggregate metadata over its descendant leaf columns
+    (:attr:`col_names`, :attr:`nrows`, :attr:`ncols`, :attr:`nbytes`,
+    :attr:`cbytes`, :attr:`cratio`) and an :attr:`info` report.
+
+    Examples
+    --------
+    >>> t.trip                      # doctest: +SKIP
+    <NestedColumn 'trip'>
+    >>> t.trip.col_names            # doctest: +SKIP
+    ['sec', 'km', 'begin.lon', ...]
+    >>> t.trip.sec                  # a leaf -> Column            # doctest: +SKIP
     """
 
     def __init__(self, table: CTable, prefix: str):
@@ -2600,11 +2618,11 @@ class _NestedColumnNamespace:
         for col_name in self._table.col_names:
             parts = split_field_path(col_name)
             if parts[: len(path_parts)] == path_parts and len(parts) > len(path_parts):
-                return _NestedColumnNamespace(self._table, path)
+                return NestedColumn(self._table, path)
         raise AttributeError(path)
 
     def __repr__(self) -> str:
-        return f"<NestedColumnNamespace {self._prefix!r}>"
+        return f"<NestedColumn {self._prefix!r}>"
 
 
 class _LazyColumnDict(dict):
@@ -8536,7 +8554,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         for name in self.col_names:
             parts = split_field_path(name)
             if parts[: len(prefix_parts)] == prefix_parts and len(parts) > len(prefix_parts):
-                return _NestedColumnNamespace(self, prefix)
+                return NestedColumn(self, prefix)
         return None
 
     def __getattr__(self, s: str):

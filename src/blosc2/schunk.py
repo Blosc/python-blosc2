@@ -533,15 +533,16 @@ class SChunk(blosc2_ext.SChunk):
         chunksize : 24000
         blocksize : 0
         typesize  : 1
-        nbytes    : 24000
-        cbytes    : 82
+        nbytes    : 24000 (23.44 KiB)
+        cbytes    : 82 (82 B)
         cratio    : 292.68x
-        cparams   : CParams(codec=<Codec.ZSTD: 5>, codec_meta=0, clevel=1, use_dict=False, typesize=1,
+        cparams   : CParams(codec=<Codec.ZSTD: 5>, codec_meta=0, clevel=5, use_dict=False, typesize=1,
                   : nthreads=8, blocksize=0, splitmode=<SplitMode.AUTO_SPLIT: 3>,
                   : filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>,
                   : <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.SHUFFLE: 1>], filters_meta=[0,
                   : 0, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)
         dparams   : DParams(nthreads=8)
+        <BLANKLINE>
         """
         return InfoReporter(self)
 

@@ -617,6 +617,54 @@ Null sentinel values are automatically excluded from all aggregates.
 
 ----
 
+.. _NestedColumn:
+
+NestedColumn
+============
+
+A read-only accessor for a nested (dotted) group of CTable columns, returned by
+attribute access on a :class:`CTable` (or on another ``NestedColumn``) when the
+name refers to an internal node of the dotted column tree rather than a leaf.
+
+For a table flattened from a ``struct`` / ``list<struct>`` schema (see
+:ref:`Nested fields <NestedFields>`), ``t.trip`` is a ``NestedColumn`` grouping
+every leaf under the ``trip.`` prefix, while a leaf such as ``t.trip.sec`` or
+``t.trip.begin.lon`` is a :class:`Column`.  Drilling into an intermediate node
+yields another ``NestedColumn``::
+
+    t.trip                     # <NestedColumn 'trip'>
+    t.trip.col_names           # ['sec', 'km', 'begin.lon', 'begin.lat', ...]
+    t.trip.begin               # <NestedColumn 'trip.begin'>
+    t.trip.begin.lon           # Column
+    print(t.trip.info)         # aggregate metadata over the group
+
+Users do not instantiate ``NestedColumn`` directly.
+
+.. autoclass:: NestedColumn
+
+.. rubric:: Attributes
+
+.. autosummary::
+
+    NestedColumn.col_names
+    NestedColumn.nrows
+    NestedColumn.ncols
+    NestedColumn.nbytes
+    NestedColumn.cbytes
+    NestedColumn.cratio
+    NestedColumn.info
+
+.. autoproperty:: NestedColumn.col_names
+.. autoproperty:: NestedColumn.nrows
+.. autoproperty:: NestedColumn.ncols
+.. autoproperty:: NestedColumn.nbytes
+.. autoproperty:: NestedColumn.cbytes
+.. autoproperty:: NestedColumn.cratio
+.. autoproperty:: NestedColumn.info
+
+
+----
+
 .. _SchemaSpecs:
 
 Schema Specs
@@ -760,6 +808,8 @@ to a typed representation.  They are not used as an implicit fallback during
 Parquet import; unsupported Arrow/Parquet types still raise unless explicitly
 imported through :meth:`CTable.from_arrow` with ``object_fallback=True``.
 
+.. _NestedFields:
+
 Nested fields
 -------------
 
@@ -802,6 +852,11 @@ attribute proxies::
 
     t["trip.begin.lon"].mean()      # Column object (fast path)
     t.trip.begin.lon.max()          # attribute proxy, same column
+
+Accessing an intermediate prefix such as ``t.trip`` or ``t.trip.begin`` returns
+a :class:`~blosc2.NestedColumn` that groups all descendant leaves and reports
+aggregate metadata via :attr:`~blosc2.NestedColumn.info`; a leaf such as
+``t.trip.begin.lon`` returns a :class:`Column`.
 
 A literal ``.``, ``/``, or ``\\`` inside an Arrow field name is escaped with a
 backslash in the logical column name.  For example, path segments

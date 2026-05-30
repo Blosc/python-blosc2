@@ -348,7 +348,7 @@ def test_nested_column_namespace_info():
     assert t.trip.col_names == ["begin.lon", "begin.lat"]
 
     text = repr(info)
-    assert "NestedColumnNamespace" in text
+    assert "NestedColumn" in text
     assert "storage" in text
     assert "schema" in text
     assert "begin.lon" in text

@@ -3935,23 +3935,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
         chunks  : (10,)
         blocks  : (10,)
         dtype   : int64
-        cratio  : 0.73x
-        cparams : {'blocksize': 80,
-        'clevel': 1,
-        'codec': <Codec.ZSTD: 5>,
-        'codec_meta': 0,
-        'filters': [<Filter.NOFILTER: 0>,
-                <Filter.NOFILTER: 0>,
-                <Filter.NOFILTER: 0>,
-                <Filter.NOFILTER: 0>,
-                <Filter.NOFILTER: 0>,
-                <Filter.SHUFFLE: 1>],
-        'filters_meta': [0, 0, 0, 0, 0, 0],
-        'nthreads': 4,
-        'splitmode': <SplitMode.ALWAYS_SPLIT: 1>,
-        'typesize': 8,
-        'use_dict': 0}
-        dparams : {'nthreads': 4}
+        nbytes  : 80 (80 B)
+        cbytes  : 98 (98 B)
+        cratio  : 0.82x
+        cparams : CParams(codec=<Codec.ZSTD: 5>, codec_meta=0, clevel=5, use_dict=False, typesize=8,
+                : nthreads=8, blocksize=80, splitmode=<SplitMode.AUTO_SPLIT: 3>,
+                : filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>,
+                : <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.SHUFFLE: 1>], filters_meta=[0, 0,
+                : 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)
+        dparams : DParams(nthreads=8)
+        <BLANKLINE>
         """
         return InfoReporter(self)
 

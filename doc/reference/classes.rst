@@ -55,6 +55,7 @@ Columnar table containers, column views, indexes, and CTable schema helpers.
 
     CTable
     Column
+    NestedColumn
     Index
     NullPolicy
 
