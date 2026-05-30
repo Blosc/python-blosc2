@@ -477,7 +477,7 @@ class C2Array(blosc2.Operand):
         items += [("dtype", self.dtype)]
         items += [("nbytes", format_nbytes_info(self.nbytes))]
         items += [("cbytes", format_nbytes_info(self.cbytes))]
-        items += [("cratio", f"{self.cratio:.2f}")]
+        items += [("cratio", f"{self.cratio:.2f}x")]
         items += [("cparams", self.cparams)]
         # items += [("dparams", self.dparams)]
         return items

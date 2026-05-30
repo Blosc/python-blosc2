@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -91,7 +92,7 @@ def test_column_info():
     assert "physical_length" not in text
     assert "logical_shape" not in text
     assert "table_physical_length" not in text
-    assert "storage" in text
+    assert "backend" in text
 
 
 def test_dictionary_column_info():
@@ -814,7 +815,7 @@ def test_info_shows_open_mode_for_persistent_table(tmp_path):
     info = repr(opened.info)
     assert "capacity" not in info
     assert "read_only" not in info
-    assert "open_mode       : r" in info
+    assert "open_mode : r" in info
     opened.close()
 
 
@@ -822,13 +823,6 @@ def test_info_schema_expands_unicode_dtype_labels():
     t = CTable(StrRow, new_data=[("alpha",), ("beta",)])
     info = repr(t.info)
     assert "U16 (Unicode)" in info
-
-
-def test_info_valid_rows_mask_only_reports_cbytes():
-    t = CTable(Row, new_data=DATA20)
-    info = repr(t.info)
-    assert "valid_rows_mask : cbytes=" in info
-    assert "valid_rows_mask : nbytes=" not in info
 
 
 def test_info_indexes_only_report_cbytes(tmp_path):
@@ -843,17 +837,18 @@ def test_info_indexes_only_report_cbytes(tmp_path):
     t.create_index("id", kind=blosc2.IndexKind.FULL)
 
     info = repr(t.info)
-    index_block = info.split("indexes         :", 1)[1]
+    index_block = info.split("indexes   :", 1)[1]
     assert "cbytes=" in index_block
     assert "nbytes=" not in index_block
     assert "cratio=" not in index_block
 
 
-def test_info_cratio_uses_one_decimal_with_suffix():
+def test_info_cratio_uses_two_decimals_with_suffix():
     t = CTable(Row, new_data=DATA20)
     info = repr(t.info)
-    assert "cratio          :" in info
-    assert "x" in next(line for line in info.splitlines() if line.startswith("cratio"))
+    assert "cratio  :" in info
+    cratio_line = next(line for line in info.splitlines() if line.startswith("cratio"))
+    assert re.search(r"cratio\s+:\s+\d+\.\d{2}x", cratio_line)
 
 
 # -------------------------------------------------------------------

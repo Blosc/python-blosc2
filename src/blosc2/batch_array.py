@@ -948,7 +948,7 @@ class BatchArray:
             ("nitems", sum(batch_sizes)),
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),
-            ("cratio", f"{self.cratio:.2f}"),
+            ("cratio", f"{self.cratio:.2f}x"),
             ("cparams", self.cparams),
             ("dparams", self.dparams),
         ]

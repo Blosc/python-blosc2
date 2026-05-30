@@ -142,27 +142,35 @@ class DictionaryColumn:
         """
         local_dict = arrow_col.dictionary.to_pylist()
 
-        # Build local-code → global-code mapping.
-        local_to_global: dict[int, int] = {}
+        # Build a local-code → global-code lookup table.  The chunk-local
+        # dictionary is small (one entry per distinct value in the batch), so
+        # this Python loop is cheap; the per-row translation below is vectorised.
+        lut = np.empty(len(local_dict), dtype=np.int32)
         for local_code, value in enumerate(local_dict):
-            if value is None:
-                local_to_global[local_code] = self._spec.null_code
-            else:
-                local_to_global[local_code] = self.encode(value)
+            lut[local_code] = self._spec.null_code if value is None else self.encode(value)
 
         if ordered and len(local_dict) > 0:
             self._validate_ordered_chunk_dict(local_dict)
 
-        # Translate Arrow indices to global int32 codes.
-        indices = arrow_col.indices.to_pylist()
-        global_codes = np.empty(m, dtype=np.int32)
-        for i, idx in enumerate(indices):
-            if idx is None:
-                if not self._spec.nullable:
-                    raise ValueError("Dictionary column is not nullable but Arrow input contains nulls.")
-                global_codes[i] = self._spec.null_code
+        # Translate Arrow indices to global int32 codes with a single numpy
+        # gather (lut[indices]) instead of a per-row Python loop.
+        indices = arrow_col.indices
+        if indices.null_count:
+            if not self._spec.nullable:
+                raise ValueError("Dictionary column is not nullable but Arrow input contains nulls.")
+            if len(lut) == 0:
+                global_codes = np.full(m, self._spec.null_code, dtype=np.int32)
             else:
-                global_codes[i] = local_to_global[int(idx)]
+                null_mask = np.asarray(indices.is_null())
+                local_codes = indices.fill_null(0).to_numpy(zero_copy_only=False)
+                global_codes = lut[local_codes]
+                global_codes[null_mask] = self._spec.null_code
+        elif len(lut) == 0:
+            # No local entries and no nulls means an empty batch.
+            global_codes = np.empty(m, dtype=np.int32)
+        else:
+            local_codes = indices.to_numpy(zero_copy_only=False)
+            global_codes = lut[local_codes]
 
         self._codes[pos : pos + m] = global_codes
 

@@ -384,7 +384,7 @@ class ObjectArray:
             ("chunk_cbytes_avg", f"{avg_chunk_cbytes:.2f}"),
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),
-            ("cratio", f"{self.cratio:.2f}"),
+            ("cratio", f"{self.cratio:.2f}x"),
             ("cparams", self.cparams),
             ("dparams", self.dparams),
         ]

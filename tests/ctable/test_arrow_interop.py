@@ -345,5 +345,79 @@ def test_from_arrow_unsupported_type_raises():
         CTable.from_arrow(at.schema, at.to_batches())
 
 
+@pytest.mark.parametrize("batch_size", [1, 7, 100, 333, 1000, 1500])
+def test_chunk_aligned_writer_matches_direct_write(batch_size):
+    """The import-time buffered writer reproduces a plain element-by-element
+    write regardless of how appends straddle chunk boundaries."""
+    from blosc2.ctable import _ChunkAlignedWriter
+
+    n = 4321
+    chunk_len = 1000
+    data = np.arange(n, dtype=np.float64)
+
+    arr = blosc2.empty((n,), dtype=np.float64, chunks=(chunk_len,))
+    writer = _ChunkAlignedWriter(arr, chunk_len)
+    for start in range(0, n, batch_size):
+        writer.append(data[start : start + batch_size])
+    writer.flush()
+
+    np.testing.assert_array_equal(arr[:], data)
+
+
+def test_from_arrow_dictionary_codes_use_aligned_grid():
+    """Imported dictionary columns create their int32 codes at full capacity
+    on the aligned grid, not the tiny 4096-row default (which caused a
+    create-then-resize and thousands of micro-chunks)."""
+    n = 500_000
+    rng = np.random.default_rng(0)
+    labels = np.array(["alpha", "beta", "gamma", "delta", "epsilon"])
+    schema = pa.schema(
+        [
+            pa.field("a", pa.float32()),
+            pa.field("c", pa.dictionary(pa.int32(), pa.string())),
+        ]
+    )
+    a = pa.array(rng.random(n).astype("f4"))
+    c = pa.array(labels[rng.integers(0, len(labels), n)]).dictionary_encode()
+    t = CTable.from_arrow(schema, [pa.record_batch([a, c], schema=schema)], capacity_hint=n)
+
+    codes = t._cols["c"].codes
+    # Codes share the numeric column's (aligned) grid and are not micro-chunked.
+    assert codes.chunks == t._cols["a"].chunks
+    assert codes.schunk.nchunks < 10
+    assert list(t["c"][:5]) == c.to_pylist()[:5]
+
+
+def test_from_arrow_variable_batches_roundtrip():
+    """Variable-sized Arrow batches that straddle the column chunk grid import
+    losslessly (exercises the chunk-aligned write buffer)."""
+
+    @dataclass
+    class Row:
+        a: float = blosc2.field(blosc2.float32(), default=0.0)
+        d: float = blosc2.field(blosc2.float64(), default=0.0)
+
+    rng = np.random.default_rng(0)
+    sizes = [854_973, 996_662, 1_002_093, 145_272]  # uneven, cross 1.25M chunks
+    n = sum(sizes)
+    a_all = rng.random(n).astype("f4")
+    d_all = -rng.random(n)
+
+    schema = pa.schema([pa.field("a", pa.float32()), pa.field("d", pa.float64())])
+    batches, off = [], 0
+    for s in sizes:
+        batches.append(
+            pa.record_batch([pa.array(a_all[off : off + s]), pa.array(d_all[off : off + s])], schema=schema)
+        )
+        off += s
+
+    t = CTable.from_arrow(schema, batches, capacity_hint=n)
+    assert len(t) == n
+    np.testing.assert_array_equal(t._cols["a"][:], a_all)
+    np.testing.assert_array_equal(t._cols["d"][:], d_all)
+    # All rows marked valid by the single end-of-import write.
+    assert int(blosc2.count_nonzero(t._valid_rows[:n])) == n
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

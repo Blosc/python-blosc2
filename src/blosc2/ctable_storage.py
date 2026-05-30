@@ -227,11 +227,20 @@ class InMemoryTableStorage(TableStorage):
     def open_varlen_scalar_column(self, name, spec):
         raise RuntimeError("In-memory tables have no on-disk representation to open.")
 
-    def create_dictionary_column(self, name, *, spec, cparams=None, dparams=None):
+    def create_dictionary_column(
+        self,
+        name,
+        *,
+        spec,
+        cparams=None,
+        dparams=None,
+        codes_shape=(4096,),
+        codes_chunks=(4096,),
+        codes_blocks=(256,),
+    ):
         from blosc2.schema import VLStringSpec
 
-        chunks, blocks = (4096,), (256,)
-        codes = blosc2.zeros((4096,), dtype=np.int32, chunks=chunks, blocks=blocks)
+        codes = blosc2.zeros(codes_shape, dtype=np.int32, chunks=codes_chunks, blocks=codes_blocks)
         dict_store = _ScalarVarLenArray(VLStringSpec(nullable=False))
         return DictionaryColumn(spec, codes, dict_store)
 
@@ -509,16 +518,26 @@ class FileTableStorage(TableStorage):
         _validate_role_metadata(backend, spec)
         return _ScalarVarLenArray(spec, backend)
 
-    def create_dictionary_column(self, name, *, spec, cparams=None, dparams=None) -> DictionaryColumn:
+    def create_dictionary_column(
+        self,
+        name,
+        *,
+        spec,
+        cparams=None,
+        dparams=None,
+        codes_shape=(4096,),
+        codes_chunks=(4096,),
+        codes_blocks=(256,),
+    ) -> DictionaryColumn:
         from blosc2.schema import VLStringSpec
 
         # Codes: stored as a regular NDArray under _cols/name
         codes = self.create_column(
             name,
             dtype=np.int32,
-            shape=(4096,),
-            chunks=(4096,),
-            blocks=(256,),
+            shape=codes_shape,
+            chunks=codes_chunks,
+            blocks=codes_blocks,
             cparams=cparams,
             dparams=dparams,
         )
@@ -1009,15 +1028,18 @@ class TreeStoreTableStorage(TableStorage):
         spec,
         cparams=None,
         dparams=None,
+        codes_shape=(4096,),
+        codes_chunks=(4096,),
+        codes_blocks=(256,),
     ) -> DictionaryColumn:
         from blosc2.schema import VLStringSpec
 
         codes = self.create_column(
             name,
             dtype=np.int32,
-            shape=(4096,),
-            chunks=(4096,),
-            blocks=(256,),
+            shape=codes_shape,
+            chunks=codes_chunks,
+            blocks=codes_blocks,
             cparams=cparams,
             dparams=dparams,
         )

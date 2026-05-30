@@ -49,6 +49,11 @@ from blosc2.schema_compiler import _validate_column_name, schema_to_dict
 DEFAULT_BATCH_SIZE = 2048
 MAX_ELEMENT_WRITE_BATCH = 5_000_000  # cap on flattened elements yielded per write
 UNNAMED_ROOT_CAPACITY_SAFETY = 1.15  # first-batch estimates are often a little low
+# Target in-memory size of one Arrow read batch for the unnamed-root flatten
+# path.  Nested list<struct> batches amplify ~10x downstream (flatten + cast +
+# write buffers + Arrow pool), so an auto parquet batch size is capped to keep
+# this Arrow batch small enough that peak RSS stays well under ~1 GB.
+PARQUET_BATCH_ARROW_BUDGET = 48 * 2**20  # 48 MiB
 
 
 def require_pyarrow():
@@ -242,6 +247,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[c.name for c in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
+    parser.add_argument(
+        "--reduce-mem",
+        action="store_true",
+        help=(
+            "Shrink an auto-chosen Parquet batch size so a single Arrow read batch fits a "
+            "small memory budget, lowering peak RSS at the cost of import speed. "
+            "Only affects auto batch sizing for unnamed-root list<struct<...>> flattening; "
+            "an explicit --batch-size is always left untouched."
+        ),
+    )
     parser.add_argument(
         "--mem-report",
         action="store_true",
@@ -1018,6 +1033,27 @@ def _flatten_root_batches_with_progress(
             break
 
 
+def _apply_parquet_batch_memory_budget(args, sample, n_outer_sampled: int) -> None:
+    """Shrink an auto parquet batch size so one Arrow read batch fits the budget.
+
+    Nested list<struct> batches amplify several-fold downstream (flatten + cast
+    + write buffers + Arrow pool), so an auto-chosen parquet batch size is capped
+    to keep peak RSS well under ~1 GB.  An explicit --parquet-batch-size is left
+    untouched.
+
+    Opt-in via --reduce-mem: it trades import speed for lower peak RSS, so the
+    default keeps the original (larger) auto batch sizes.
+    """
+    if not getattr(args, "reduce_mem", False):
+        return
+    if not getattr(args, "parquet_batch_size_auto", False):
+        return
+    bytes_per_outer = sample.nbytes / n_outer_sampled
+    if bytes_per_outer > 0:
+        budget_rows = max(1, int(PARQUET_BATCH_ARROW_BUDGET / bytes_per_outer))
+        args.parquet_batch_size = min(args.parquet_batch_size, budget_rows)
+
+
 def import_unnamed_root_separate_cols(
     args,
     input_path: Path,
@@ -1051,14 +1087,16 @@ def import_unnamed_root_separate_cols(
     estimated_batch_rows = None
     if total_parquet_rows is not None and total_parquet_rows > 0:
         try:
-            sample = next(
-                pf.iter_batches(batch_size=min(args.parquet_batch_size, total_parquet_rows)),
-                None,
-            )
+            # Sample only a few outer rows: enough for the per-outer-row ratio
+            # and byte estimate, while avoiding a large transient Arrow batch
+            # (which the Arrow pool would retain and inflate peak RSS).
+            sample_rows = min(args.parquet_batch_size, total_parquet_rows, 64)
+            sample = next(pf.iter_batches(batch_size=sample_rows), None)
             if sample is not None and len(sample) > 0:
                 n_outer_sampled = len(sample)
                 n_elems_sampled = len(sample.column(0).flatten())
                 avg_per_outer_row = n_elems_sampled / n_outer_sampled
+                _apply_parquet_batch_memory_budget(args, sample, n_outer_sampled)
                 estimated_batch_rows = max(1, round(args.parquet_batch_size * avg_per_outer_row))
                 estimate = round(total_parquet_rows * avg_per_outer_row)
                 if args.max_rows is None:
@@ -1515,6 +1553,7 @@ def resolve_default_batch_sizes(args, *, parquet_specified: bool, blosc2_specifi
         # Parquet batches are outer rows, while Blosc2 batches are flattened
         # CTable rows.  Keep them independent so a large write batch does not
         # accidentally imply a huge Parquet read batch (and vice versa).
+        args.parquet_batch_size_auto = not parquet_specified
         if not parquet_specified:
             args.parquet_batch_size = average_parquet_row_group_size(args.input_path) or DEFAULT_BATCH_SIZE
         if not blosc2_specified:

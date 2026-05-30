@@ -341,8 +341,8 @@ def object_metadata(obj: Any) -> dict[str, Any]:
             return dict(obj.info_items)
         except Exception:
             return {
-                "rows": getattr(obj, "nrows", len(obj)),
-                "columns": getattr(obj, "ncols", len(getattr(obj, "col_names", []))),
+                "nrows": getattr(obj, "nrows", len(obj)),
+                "ncols": getattr(obj, "ncols", len(getattr(obj, "col_names", []))),
                 "schema": {
                     name: str(getattr(obj[name], "dtype", None)) for name in getattr(obj, "col_names", [])
                 },
