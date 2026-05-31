@@ -2221,3 +2221,39 @@ def test_simpleproxy(xp, dtype):
     assert lexpr.dtype == res.dtype
     assert lexpr.shape == res.shape
     np.testing.assert_array_equal(lexpr[()], res)
+
+
+@pytest.mark.parametrize(("chunk_len", "block_len"), [(20000, 5000), (30000, 16384)])
+def test_miniexpr_candidate_block_skip(chunk_len, block_len):
+    """The miniexpr prefilter must skip non-candidate blocks (writing False)
+    when a candidate-block bitmap is supplied via ``_candidate_blocks``.
+
+    Covers both the aligned case (chunk multiple of block) and the padded case
+    (chunk not a multiple of block, so blocks are chunk-relative)."""
+    import math
+
+    n = 100000
+    a = blosc2.asarray(np.arange(n, dtype="f8"), chunks=(chunk_len,), blocks=(block_len,))
+    bpc = math.ceil(chunk_len / block_len)
+    nblocks = math.ceil(n / chunk_len) * bpc
+    expr = blosc2.lazyexpr("a > -1", operands={"a": a})  # predicate is always True
+
+    # Mark only a couple of global blocks as candidates.
+    marked = [g for g in (1, 2, nblocks - 1) if g < nblocks]
+    bm = np.zeros(nblocks, dtype=np.uint8)
+    bm[marked] = 1
+
+    mask = expr.compute(_candidate_blocks=bm)[:]
+    got = set(np.flatnonzero(mask).tolist())
+
+    expected: set[int] = set()
+    for g in marked:
+        nchunk, nblock = divmod(g, bpc)
+        lo = nchunk * chunk_len + nblock * block_len
+        hi = min(lo + block_len, (nchunk + 1) * chunk_len, n)
+        if lo < hi:
+            expected |= set(range(lo, hi))
+    assert got == expected
+
+    # Without a bitmap every row is evaluated (predicate always True).
+    assert int(expr.compute()[:].sum()) == n

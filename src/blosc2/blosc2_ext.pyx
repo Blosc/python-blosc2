@@ -799,6 +799,13 @@ ctypedef struct me_udata:
     int64_t chunks_in_array[B2ND_MAX_DIM]
     int64_t blocks_in_chunk[B2ND_MAX_DIM]
     me_expr* miniexpr_handle
+    # Optional candidate-block bitmap (1-D arrays only).  When non-NULL, blocks
+    # whose byte is 0 are skipped: the prefilter writes a zero (false) output
+    # and returns without decompressing inputs or running miniexpr.  Indexed by
+    # the global block number ``nchunk * blocks_in_chunk[0] + nblock``.  NULL
+    # means "evaluate every block" (the default, fully inert).
+    const uint8_t* candidate_blocks
+    int64_t candidate_blocks_len
 
 ctypedef struct mm_udata:
     b2nd_array_t** inputs
@@ -2458,6 +2465,7 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef int32_t chunk_nbytes, chunk_cbytes, block_nbytes
     cdef int start, blocknitems, expected_blocknitems
     cdef int64_t valid_nitems
+    cdef int64_t global_block
     cdef int32_t input_typesize
     cdef blosc2_context* dctx
     expected_blocknitems = -1
@@ -2483,6 +2491,17 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             memset(params_output, 0, udata.array.blocknitems * typesize)
         free(input_buffers)
         return 0
+
+    # Candidate-block pruning (1-D arrays only): when a bitmap is supplied and
+    # this block is not a candidate, write a zero (false) result and return
+    # without decompressing inputs or running miniexpr.  Disabled for reductions
+    # (aux_reduc_ptr) to avoid perturbing accumulator state.
+    if udata.candidate_blocks != NULL and udata.aux_reduc_ptr == NULL:
+        global_block = nchunk * udata.blocks_in_chunk[0] + nblock
+        if 0 <= global_block < udata.candidate_blocks_len and udata.candidate_blocks[global_block] == 0:
+            memset(params_output, 0, udata.array.blocknitems * typesize)
+            free(input_buffers)
+            return 0
 
     for i in range(udata.ninputs):
         ndarr = udata.inputs[i]
@@ -3951,7 +3970,8 @@ cdef class NDArray:
 
         return udata
 
-    def _set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+    def _set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None,
+                       candidate_blocks=None):
         # Set prefilter for miniexpr
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> miniexpr_prefilter
@@ -3963,6 +3983,17 @@ cdef class NDArray:
             jit_mode = ME_JIT_OFF
 
         cdef me_udata* udata = self._fill_me_udata(inputs, fp_accuracy, aux_reduc, jit=jit)
+
+        # Optional candidate-block bitmap (1-D only): a contiguous uint8 array,
+        # one byte per global miniexpr block (0 = skip, non-zero = evaluate).
+        # The contiguous buffer is returned so the caller can keep it alive until
+        # the prefilter is removed (the prefilter runs synchronously during the
+        # update_data loop); letting it be collected would dangle the pointer.
+        cdef np.ndarray cb = None
+        if candidate_blocks is not None and self.array.ndim == 1:
+            cb = np.ascontiguousarray(candidate_blocks, dtype=np.uint8)
+            udata.candidate_blocks = <const uint8_t*> np.PyArray_DATA(cb)
+            udata.candidate_blocks_len = <int64_t> cb.shape[0]
 
         # Get the compiled expression handle for multi-threading
         cdef Py_ssize_t n = len(inputs)
@@ -4035,6 +4066,10 @@ cdef class NDArray:
         self.array.sc.cctx = blosc2_create_cctx(dereference(cparams))
         if self.array.sc.cctx == NULL:
             raise RuntimeError("Could not create compression context")
+
+        # Return the anchored bitmap buffer (or None) so the caller keeps it
+        # alive for the duration of the prefilter-driven update_data loop.
+        return cb
 
     def _set_pref_matmul(self, inputs, fp_accuracy):
         # Set prefilter for miniexpr

@@ -89,14 +89,15 @@ class _CTableIndexingMixin:
     _SCAN_COST_MS_PER_1M_ROWS: float = 4.3
 
     # Cost-model constants for the segment-summary (SUMMARY index) gate.
-    # A segment query evaluates only surviving segments, but each one carries
-    # fixed overhead (open + decompress + miniexpr + merge) that scales with the
-    # number of operand columns read.  When enough segments survive, that
-    # overhead exceeds a plain sequential scan, so the planner falls back.
+    # Surviving blocks are evaluated through miniexpr with a candidate-block
+    # bitmap (non-candidate blocks are skipped inside the prefilter), so the
+    # per-block overhead is small; what matters is that, once enough blocks
+    # survive, evaluating them (plus iterating every chunk) costs more than a
+    # plain sequential scan, and the planner falls back.
     #   _SEGMENT_SCAN_MS_PER_1M_ROWS_PER_OP ≈ ms to sequentially scan 1M rows of one column
-    #   _SEGMENT_OVERHEAD_MS_PER_OP         ≈ fixed ms per surviving segment per operand column
+    #   _SEGMENT_OVERHEAD_MS_PER_OP         ≈ fixed ms per surviving block per operand column
     _SEGMENT_SCAN_MS_PER_1M_ROWS_PER_OP: float = 1.6
-    _SEGMENT_OVERHEAD_MS_PER_OP: float = 1.0
+    _SEGMENT_OVERHEAD_MS_PER_OP: float = 0.2
 
     @property
     def _root_table(self) -> CTable:
@@ -956,6 +957,47 @@ class _CTableIndexingMixin:
                 seen.add(col_name)
         return indexed
 
+    @staticmethod
+    def _summary_candidate_block_bitmap(primary_col_arr, plan) -> np.ndarray | None:
+        """Project a SUMMARY plan's surviving flat segments onto a per-block
+        candidate bitmap in *miniexpr* block coordinates (1-D only).
+
+        Returns a ``uint8`` array with one byte per global miniexpr block
+        (``nchunk * blocks_per_chunk + nblock``): 1 = the block overlaps a
+        surviving segment and must be evaluated, 0 = it can be skipped.  A block
+        is marked conservatively (any overlap with a survivor), which is always
+        safe because the prefilter re-evaluates the exact predicate per row.
+        """
+        chunks = getattr(primary_col_arr, "chunks", None)
+        blocks = getattr(primary_col_arr, "blocks", None)
+        shape = getattr(primary_col_arr, "shape", None)
+        if not chunks or not blocks or not shape or len(shape) != 1:
+            return None
+        chunk_len = int(chunks[0])
+        block_len = int(blocks[0])
+        nrows = int(shape[0])
+        seg_len = int(plan.segment_len)
+        if chunk_len <= 0 or block_len <= 0 or nrows <= 0 or seg_len <= 0:
+            return None
+        cu = np.asarray(plan.candidate_units, dtype=bool)
+        nseg = len(cu)
+        blocks_per_chunk = -(-chunk_len // block_len)  # ceil
+        nchunks = -(-nrows // chunk_len)
+        nblocks = nchunks * blocks_per_chunk
+        g = np.arange(nblocks, dtype=np.int64)
+        nchunk = g // blocks_per_chunk
+        nblock = g % blocks_per_chunk
+        lo = nchunk * chunk_len + nblock * block_len
+        chunk_end = np.minimum((nchunk + 1) * chunk_len, nrows)
+        hi = np.minimum(lo + block_len, chunk_end)
+        has_rows = lo < chunk_end  # padding-only blocks have no real rows
+        # Segments overlapping [lo, hi); test via a cumulative-sum range query.
+        s_lo = np.clip(lo // seg_len, 0, nseg)
+        s_hi = np.clip(np.where(has_rows, (hi - 1) // seg_len, lo // seg_len) + 1, 0, nseg)
+        csum = np.concatenate(([0], np.cumsum(cu.astype(np.int64))))
+        any_survivor = (csum[s_hi] - csum[s_lo]) > 0
+        return (has_rows & any_survivor).astype(np.uint8)
+
     def _try_index_where(self, expr_result: blosc2.LazyExpr) -> np.ndarray | None:  # noqa: C901
         """Attempt to resolve *expr_result* via a column index.
 
@@ -1136,6 +1178,22 @@ class _CTableIndexingMixin:
             )
             if selected > 0 and index_ms >= scan_ms:
                 return None
+            # Preferred path: evaluate the predicate through miniexpr with a
+            # candidate-block bitmap, so non-surviving blocks are skipped inside
+            # the fast_eval/miniexpr engine (no per-segment Python loop).  The
+            # resulting mask is identical to a full scan's (pruned blocks contain
+            # no matches by construction), so positions are exact.  Falls back to
+            # the per-segment query if the bitmap path is unavailable.
+            bitmap = self._summary_candidate_block_bitmap(primary_col_arr, plan)
+            if bitmap is not None:
+                try:
+                    mask = expr_result.compute(_candidate_blocks=bitmap)
+                    mask_arr = mask[:] if isinstance(mask, blosc2.NDArray) else np.asarray(mask)
+                except Exception:
+                    mask_arr = None
+                if mask_arr is not None and mask_arr.dtype == np.bool_:
+                    positions = np.flatnonzero(mask_arr).astype(np.int64)
+                    return _exclude_null_positions(positions)
             _, positions = evaluate_segment_query(
                 expression, merged_operands, {}, where_dict, plan, return_positions=True
             )

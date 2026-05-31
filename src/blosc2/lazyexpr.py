@@ -1501,6 +1501,10 @@ def fast_eval(  # noqa: C901
     dtype = kwargs.pop("dtype", None)
     requested_shape = kwargs.pop("shape", None)
     where: dict | None = kwargs.pop("_where_args", None)
+    # Optional candidate-block bitmap (1-D miniexpr only): uint8, one byte per
+    # global block (0 = skip → false output, non-zero = evaluate).  Used by the
+    # CTable SUMMARY-index path to skip non-candidate blocks inside miniexpr.
+    candidate_blocks = kwargs.pop("_candidate_blocks", None)
     if strict_miniexpr is None:
         # Be strict by default for DSL kernels to avoid silently losing DSL fast-path regressions.
         strict_miniexpr = bool(is_dsl)
@@ -1654,19 +1658,26 @@ def fast_eval(  # noqa: C901
             _pref_ops = operands_miniexpr
             if where is not None and len(where) == 2:
                 _pref_expr = f"where({_pref_expr}, _where_x, _where_y)"
-            res_eval._set_pref_expr(
-                _pref_expr,
-                _pref_ops,
-                fp_accuracy=fp_accuracy,
-                jit=jit,
-            )
+            # _cb_anchor keeps the contiguous bitmap alive for the whole
+            # update_data loop (the prefilter dereferences it per block).  Pass
+            # candidate_blocks only when present so external wrappers of
+            # _set_pref_expr with the legacy signature keep working.
+            _pref_kwargs = {"fp_accuracy": fp_accuracy, "jit": jit}
+            if candidate_blocks is not None:
+                _pref_kwargs["candidate_blocks"] = candidate_blocks
+            _cb_anchor = res_eval._set_pref_expr(_pref_expr, _pref_ops, **_pref_kwargs)
             prefilter_set = True
             # print("expr->miniexpr:", expression, fp_accuracy)
             # Data to compress is fetched from operands, so it can be uninitialized here
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
-            # Exercise prefilter for each chunk
+            # Exercise prefilter for each chunk.  With a candidate bitmap the
+            # prefilter zeroes non-candidate blocks without decompressing inputs
+            # or running miniexpr, which is where the savings come from.
             for nchunk in range(res_eval.schunk.nchunks):
                 res_eval.schunk.update_data(nchunk, data, copy=False)
+            # _cb_anchor (if any) stays referenced until fast_eval returns, which
+            # is after the finally below removes the prefilter — so the buffer
+            # safely outlives every prefilter dereference.
         except Exception as e:
             use_miniexpr = False
             if is_dsl:
