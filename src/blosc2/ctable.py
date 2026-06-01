@@ -4396,7 +4396,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self.save(urlpath, overwrite=overwrite)
         return os.path.abspath(urlpath)
 
-    def _save_to_storage(self, storage: TableStorage) -> None:
+    def _save_to_storage(
+        self,
+        storage: TableStorage,
+        *,
+        blocks_override: tuple[int, ...] | None = None,
+        cparams_override: dict[str, Any] | None = None,
+    ) -> None:
         """Write all live rows and columns into *storage*.
 
         The caller is responsible for calling ``storage.close()`` when done.
@@ -4409,6 +4415,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         live_pos = np.where(valid_np)[0]
         n_live = len(live_pos)
         capacity = max(n_live, 1)
+        # True when all live positions are [0, 1, ..., n_live-1] — no gaps or tombstones.
+        no_deletions = n_live > 0 and int(live_pos[0]) == 0 and int(live_pos[-1]) == n_live - 1
 
         default_chunks, default_blocks = compute_chunks_blocks((capacity,))
         # Align fixed-size scalar columns (and the _valid_rows mask) on one
@@ -4430,26 +4438,33 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # --- columns ---
         for col in self._schema.columns:
             name = col.name
+            col_cparams = col.config.cparams if col.config.cparams is not None else self._table_cparams
+            eff_cparams = cparams_override if cparams_override is not None else col_cparams
             if self._is_list_column(col):
                 disk_col = storage.create_list_column(
                     name,
                     spec=col.spec,
-                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
+                    cparams=eff_cparams,
                     dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
                 )
                 if n_live > 0:
-                    disk_col.extend((self._cols[name][int(pos)] for pos in live_pos), validate=False)
+                    src_la = self._cols[name]
+                    # Bulk slice avoids per-element Python overhead when rows are dense.
+                    items = src_la[:n_live] if no_deletions else (src_la[int(pos)] for pos in live_pos)
+                    disk_col.extend(items, validate=False)
                     disk_col.flush()
                 continue
             if self._is_varlen_scalar_column(col):
                 disk_col = storage.create_varlen_scalar_column(
                     name,
                     spec=col.spec,
-                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
+                    cparams=eff_cparams,
                     dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
                 )
                 if n_live > 0:
-                    disk_col.extend(self._cols[name][int(pos)] for pos in live_pos)
+                    src_vl = self._cols[name]
+                    items = src_vl[:n_live] if no_deletions else (src_vl[int(pos)] for pos in live_pos)
+                    disk_col.extend(items)
                     disk_col.flush()
                 continue
             if self._is_dictionary_column(col):
@@ -4457,17 +4472,21 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 disk_dc = storage.create_dictionary_column(
                     name,
                     spec=col.spec,
-                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
+                    cparams=eff_cparams,
                     dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
                 )
                 # Copy dictionary values first
                 for v in src_dc.dictionary:
                     disk_dc.encode(v)
                 disk_dc.flush()
+                # Resize codes to the target capacity before writing — the default
+                # codes_shape=(4096,) in create_dictionary_column is too small.
+                if len(disk_dc.codes) < capacity:
+                    disk_dc.codes.resize((capacity,))
                 # Copy live codes
                 if n_live > 0:
-                    raw_codes = src_dc.codes[live_pos]
-                    disk_dc.codes[:n_live] = raw_codes
+                    pos_slice = np.arange(n_live, dtype=np.int64) if no_deletions else live_pos
+                    disk_dc.codes[:n_live] = src_dc.codes[pos_slice]
                 continue
             shape = self._column_physical_shape(col, capacity)
             if col.name in aligned_names:
@@ -4475,17 +4494,36 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 dtype_chunks, dtype_blocks = self._column_chunks_blocks(col, shape)
             col_storage = self._resolve_column_storage(col, dtype_chunks, dtype_blocks)
-            disk_col = storage.create_column(
-                name,
-                dtype=col.dtype,
-                shape=shape,
-                chunks=col_storage["chunks"],
-                blocks=col_storage["blocks"],
-                cparams=col_storage.get("cparams"),
-                dparams=col_storage.get("dparams"),
-            )
-            if n_live > 0:
-                disk_col[:n_live] = self._cols[name][live_pos]
+            src_arr = self._cols[name]
+            # Fast reblock path: use NDArray.copy() for a single C-level
+            # decompress+recompress pass.  Only safe when the source array has
+            # no spare capacity (src shape == n_live); otherwise copy() would
+            # include uninitialised rows beyond the live watermark.
+            if (
+                no_deletions
+                and src_arr.shape[0] == n_live
+                and (blocks_override is not None or cparams_override is not None)
+            ):
+                copy_kwargs: dict[str, Any] = {}
+                if blocks_override is not None:
+                    copy_kwargs["blocks"] = blocks_override
+                if cparams_override is not None:
+                    copy_kwargs["cparams"] = cparams_override
+                new_arr = src_arr.copy(**copy_kwargs)
+                storage.install_column(name, new_arr)
+            else:
+                disk_col = storage.create_column(
+                    name,
+                    dtype=col.dtype,
+                    shape=shape,
+                    chunks=col_storage["chunks"],
+                    blocks=blocks_override if blocks_override is not None else col_storage["blocks"],
+                    cparams=cparams_override if cparams_override is not None else col_storage.get("cparams"),
+                    dparams=col_storage.get("dparams"),
+                )
+                if n_live > 0:
+                    # Slice is ~30x faster than fancy-index for sequential no-deletion access.
+                    disk_col[:n_live] = src_arr[:n_live] if no_deletions else src_arr[live_pos]
 
         storage.save_schema(self._schema_dict_with_computed())
 
@@ -9341,6 +9379,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         *,
         urlpath: str | os.PathLike[str] | None = None,
         overwrite: bool = False,
+        blocks: int | tuple[int, ...] | None = None,
+        cparams: dict[str, Any] | None = None,
     ) -> CTable:
         """Return a new standalone copy of this table.
 
@@ -9366,9 +9406,45 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             in-memory copy.
         overwrite:
             If ``True``, replace an existing persistent destination.
+        blocks:
+            Block size (in items) to use for all scalar columns in the copy.
+            Overrides the block size inherited from the source schema.  Pass an
+            ``int`` for a 1-D block or a ``tuple`` for multi-dimensional arrays.
+            Summary indexes are rebuilt with the new block granularity.
+        cparams:
+            Compression parameters (codec, clevel, …) to apply to all columns
+            in the copy.  Overrides per-column and table-level settings from
+            the source.
         """
         if urlpath is not None:
             urlpath = os.fspath(urlpath)
+            if blocks is not None or cparams is not None:
+                # When storage layout changes we must go through _save_to_storage
+                # directly — to_b2z/to_b2d may take the physical-pack fast path
+                # which zips existing compressed leaves as-is, silently ignoring
+                # any block/cparams override.
+                # For views (base is not None) _save_to_storage already limits
+                # iteration to self._schema.columns and self._cols, so no in-memory
+                # intermediate is needed.
+                _blocks = (blocks,) if isinstance(blocks, int) else blocks
+                file_storage = FileTableStorage(urlpath, "w")
+                target_path = file_storage._root
+                if os.path.exists(target_path):
+                    if not overwrite:
+                        raise ValueError(
+                            f"Path {target_path!r} already exists. Use overwrite=True to replace."
+                        )
+                    if os.path.isdir(target_path):
+                        shutil.rmtree(target_path)
+                    else:
+                        os.remove(target_path)
+                self._save_to_storage(file_storage, blocks_override=_blocks, cparams_override=cparams)
+                file_storage.close()
+                # Open with mode="a" so _build_summary_indexes() fires automatically,
+                # then re-open read-only for the caller.
+                result = CTable.open(urlpath, mode="a")
+                result.close()
+                return CTable.open(urlpath, mode="r")
             if urlpath.endswith(".b2z"):
                 self.to_b2z(urlpath, overwrite=overwrite, compact=compact)
             else:
@@ -9395,24 +9471,29 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if n == 0:
                 n = int(live_pos[-1]) + 1 if n_live > 0 else 0
 
-        result = self._empty_copy(capacity=n)
+        # When all live positions are exactly [0, 1, …, n_live-1] a slice read is
+        # ~30× faster than fancy indexing.  Check via O(1) boundary test.
+        is_dense = compact and n_live > 0 and int(live_pos[0]) == 0 and int(live_pos[-1]) == n_live - 1
+
+        _blocks = (blocks,) if isinstance(blocks, int) else blocks
+        result = self._empty_copy(capacity=n, blocks_override=_blocks, cparams_override=cparams)
 
         for col in self._schema.columns:
             col_name = col.name
             arr = self._cols[col_name]
             if self._is_list_column(col):
-                src = (arr[int(pos)] for pos in live_pos) if compact else (arr[i] for i in range(n))
+                src = arr[:n_live] if is_dense else (arr[int(pos)] for pos in live_pos) if compact else (arr[i] for i in range(n))
                 result._cols[col_name].extend(src, validate=False)
                 result._cols[col_name].flush()
             elif self._is_dictionary_column(col):
                 # Copy dictionary values, then copy (live) codes.
                 for v in arr.dictionary:
                     result._cols[col_name].encode(v)
-                pos_slice = live_pos if compact else np.arange(n, dtype=np.int64)
+                pos_slice = np.arange(n_live, dtype=np.int64) if is_dense else (live_pos if compact else np.arange(n, dtype=np.int64))
                 raw_codes = arr.codes[pos_slice]
                 result._cols[col_name].codes[:n] = raw_codes
             else:
-                result._cols[col_name][:n] = arr[live_pos] if compact else arr[:n]
+                result._cols[col_name][:n] = arr[:n_live] if is_dense else (arr[live_pos] if compact else arr[:n])
 
         if compact:
             result._valid_rows[:n] = True
@@ -9425,7 +9506,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         return result
 
-    def _empty_copy(self, capacity: int | None = None) -> CTable:
+    def _empty_copy(
+        self,
+        capacity: int | None = None,
+        *,
+        blocks_override: tuple[int, ...] | None = None,
+        cparams_override: dict[str, Any] | None = None,
+    ) -> CTable:
         """Return a new empty in-memory CTable with the same schema and capacity."""
         from blosc2 import compute_chunks_blocks
 
@@ -9446,25 +9533,26 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         new_cols = {}
         for col in self._schema.columns:
             col_storage = self._resolve_column_storage(col, default_chunks, default_blocks)
+            eff_cparams = cparams_override if cparams_override is not None else col_storage.get("cparams")
             if self._is_list_column(col):
                 new_cols[col.name] = mem_storage.create_list_column(
                     col.name,
                     spec=col.spec,
-                    cparams=col_storage.get("cparams"),
+                    cparams=eff_cparams,
                     dparams=col_storage.get("dparams"),
                 )
             elif self._is_varlen_scalar_column(col):
                 new_cols[col.name] = mem_storage.create_varlen_scalar_column(
                     col.name,
                     spec=col.spec,
-                    cparams=col_storage.get("cparams"),
+                    cparams=eff_cparams,
                     dparams=col_storage.get("dparams"),
                 )
             elif self._is_dictionary_column(col):
                 dict_col = mem_storage.create_dictionary_column(
                     col.name,
                     spec=col.spec,
-                    cparams=col_storage.get("cparams"),
+                    cparams=eff_cparams,
                     dparams=col_storage.get("dparams"),
                 )
                 if len(dict_col.codes) < capacity:
@@ -9479,13 +9567,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         chunks, blocks = shared_chunks, shared_blocks
                     else:
                         chunks, blocks = self._column_chunks_blocks(col, shape)
+                if blocks_override is not None:
+                    blocks = blocks_override
                 new_cols[col.name] = mem_storage.create_column(
                     col.name,
                     dtype=col.dtype,
                     shape=shape,
                     chunks=chunks,
                     blocks=blocks,
-                    cparams=col_storage.get("cparams"),
+                    cparams=eff_cparams,
                     dparams=col_storage.get("dparams"),
                 )
 

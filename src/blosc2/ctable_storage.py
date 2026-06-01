@@ -66,6 +66,15 @@ class TableStorage:
     ) -> blosc2.NDArray:
         raise NotImplementedError
 
+    def install_column(self, name: str, ndarray: "blosc2.NDArray") -> "blosc2.NDArray":
+        """Store a pre-built NDArray as column *name*, preserving its storage config.
+
+        Faster than create_column + fill when the caller already has the fully
+        compressed array (e.g. from NDArray.copy with new block settings).
+        Subclasses should override with a path that avoids double recompression.
+        """
+        raise NotImplementedError
+
     def open_column(self, name: str) -> blosc2.NDArray:
         raise NotImplementedError
 
@@ -206,6 +215,10 @@ class InMemoryTableStorage(TableStorage):
         if dparams is not None:
             kwargs["dparams"] = dparams
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
+
+    def install_column(self, name, ndarray: "blosc2.NDArray") -> "blosc2.NDArray":
+        """Store a pre-built NDArray as column *name* (skips the zeros+fill pattern)."""
+        return ndarray
 
     def open_column(self, name):
         raise RuntimeError("In-memory tables have no on-disk representation to open.")
@@ -471,6 +484,12 @@ class FileTableStorage(TableStorage):
         col = blosc2.zeros(shape, dtype=dtype, **kwargs)
         store = self._open_store()
         store[self._col_key(name)] = col
+        return store[self._col_key(name)]
+
+    def install_column(self, name, ndarray: "blosc2.NDArray") -> "blosc2.NDArray":
+        """Store a pre-built NDArray as column *name* (skips the zeros+fill pattern)."""
+        store = self._open_store()
+        store[self._col_key(name)] = ndarray
         return store[self._col_key(name)]
 
     def open_column(self, name: str) -> blosc2.NDArray:
@@ -951,6 +970,15 @@ class TreeStoreTableStorage(TableStorage):
         self._store.map_tree[self._table_key(self._col_logical_key(name))] = rel_path
         self._store._modified = True
         return col
+
+    def install_column(self, name: str, ndarray: "blosc2.NDArray") -> "blosc2.NDArray":
+        dest_path = self._dest_path(self._col_logical_key(name), ".b2nd")
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        saved = ndarray.copy(urlpath=dest_path)
+        rel_path = os.path.relpath(dest_path, self._working_dir()).replace(os.sep, "/")
+        self._store.map_tree[self._table_key(self._col_logical_key(name))] = rel_path
+        self._store._modified = True
+        return saved
 
     def open_column(self, name: str) -> blosc2.NDArray:
         return self._open_leaf(self._col_logical_key(name))
