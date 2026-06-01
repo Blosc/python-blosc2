@@ -369,6 +369,7 @@ class _CTableIndexingMixin:
         method: str | None = None,
         opsi_max_cycles: int | None = None,
         summary_levels: tuple[str, ...] | None = None,
+        precomputed_summaries: dict | None = None,
     ) -> dict:
         """Build index sidecar files for a persistent-table column; return the descriptor."""
         import tempfile
@@ -412,7 +413,15 @@ class _CTableIndexingMixin:
         if use_ooc:
             resolved_tmpdir = _resolve_full_index_tmpdir(proxy, tmpdir)
             levels = _build_levels_descriptor_ooc(
-                proxy, target, token, kind, dtype, persistent, cparams_obj, summary_levels=summary_levels
+                proxy,
+                target,
+                token,
+                kind,
+                dtype,
+                persistent,
+                cparams_obj,
+                summary_levels=summary_levels,
+                precomputed_summaries=precomputed_summaries,
             )
             bucket = (
                 _build_bucket_descriptor_ooc(
@@ -601,6 +610,7 @@ class _CTableIndexingMixin:
         cparams_obj = _normalize_index_cparams(kwargs.pop("cparams", None))
         method = kwargs.pop("method", None)
         opsi_max_cycles = kwargs.pop("opsi_max_cycles", None)
+        precomputed_summaries = kwargs.pop("precomputed_summaries", None)
         if opsi_max_cycles is not None:
             opsi_max_cycles = max(1, int(opsi_max_cycles))
         if kwargs:
@@ -705,6 +715,7 @@ class _CTableIndexingMixin:
                 method=method_str,
                 opsi_max_cycles=opsi_max_cycles,
                 summary_levels=summary_levels,
+                precomputed_summaries=precomputed_summaries if kind_str == "summary" else None,
             )
         else:
             _ix_create_index(
@@ -719,6 +730,7 @@ class _CTableIndexingMixin:
                 method=method_str,
                 opsi_max_cycles=opsi_max_cycles,
                 summary_levels=summary_levels,
+                precomputed_summaries=precomputed_summaries if kind_str == "summary" else None,
             )
             store = _IN_MEMORY_INDEXES[id(col_arr)]
             descriptor = _copy_descriptor(store["indexes"]["__self__"])

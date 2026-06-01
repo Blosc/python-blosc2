@@ -998,6 +998,9 @@ class Column:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.is_computed:
             raise ValueError(f"Column {self._col_name!r} is a computed column and cannot be written to.")
+        # In-place column mutation invalidates any incremental summary accumulator
+        # for this column (the close-time builder falls back to a full rescan).
+        self._table._root_table._invalidate_summary_accumulator(self._col_name)
         if isinstance(key, int):
             n_rows = len(self)
             if key < 0:
@@ -2710,14 +2713,17 @@ class _ChunkAlignedWriter:
     Only the final flush may write a partial (sub-chunk) tail.
     """
 
-    __slots__ = ("arr", "chunk_len", "pending", "pending_n", "wpos")
+    __slots__ = ("arr", "chunk_len", "on_write", "pending", "pending_n", "wpos")
 
-    def __init__(self, arr, chunk_len: int) -> None:
+    def __init__(self, arr, chunk_len: int, on_write=None) -> None:
         self.arr = arr
         self.chunk_len = chunk_len
         self.pending: list[np.ndarray] = []
         self.pending_n = 0
         self.wpos = 0
+        # Optional callback(start_pos, block) invoked for each chunk-aligned
+        # write, used to fold per-block summaries incrementally.
+        self.on_write = on_write
 
     def append(self, block: np.ndarray) -> None:
         if len(block) == 0:
@@ -2733,6 +2739,8 @@ class _ChunkAlignedWriter:
 
     def _write(self, block: np.ndarray) -> None:
         n = len(block)
+        if self.on_write is not None:
+            self.on_write(self.wpos, block)
         self.arr[self.wpos : self.wpos + n] = block
         self.wpos += n
 
@@ -2756,6 +2764,88 @@ class _ChunkAlignedWriter:
                 need = 0
         self.pending_n -= n
         return parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+
+class _ColumnSummaryAccumulator:
+    """Incrementally accumulate per-block min/max for a SUMMARY index.
+
+    As contiguous numpy data is appended to a scalar column during a build
+    (import, ``extend``, row ``append``), this folds it into per-block min/max
+    summaries while the data is still uncompressed in memory.  At close, the
+    accumulated summaries are handed to the index builder, avoiding a full
+    decompression pass over the column just to recompute min/max.
+
+    The accumulator only stays valid while writes are pure forward-contiguous
+    appends covering ``[0, n)``.  Any out-of-order feed, in-place update, or
+    compaction marks it invalid via :meth:`invalidate`, and the index builder
+    transparently falls back to the out-of-core (decompress-and-scan) path.
+    """
+
+    __slots__ = ("_carry", "_parts", "_total", "block_len", "dtype", "summary_dtype", "valid")
+
+    def __init__(self, dtype: np.dtype, block_len: int) -> None:
+        from blosc2.indexing import _summary_dtype
+
+        self.dtype = np.dtype(dtype)
+        self.block_len = int(block_len)
+        self.summary_dtype = _summary_dtype(self.dtype)
+        self._parts: list[np.ndarray] = []  # completed per-block summary chunks
+        self._carry: np.ndarray | None = None  # trailing < block_len values
+        self._total = 0  # number of elements fed (== next expected start_pos)
+        self.valid = self.block_len > 0
+
+    def invalidate(self) -> None:
+        self.valid = False
+        self._parts = []
+        self._carry = None
+
+    def feed(self, start_pos: int, values: np.ndarray) -> None:
+        if not self.valid:
+            return
+        if start_pos != self._total:
+            self.invalidate()
+            return
+        from blosc2.indexing import _fill_summaries_from_2d
+
+        values = np.ascontiguousarray(values)
+        if values.ndim != 1:
+            # Not a plain scalar column write (e.g. an ndarray column); summaries
+            # don't apply -- disable rather than risk a wrong result.
+            self.invalidate()
+            return
+        m = values.shape[0]
+        if m == 0:
+            return
+        buf = values if self._carry is None else np.concatenate([self._carry, values])
+        n = buf.shape[0]
+        n_complete = n // self.block_len
+        if n_complete:
+            data_2d = buf[: n_complete * self.block_len].reshape(n_complete, self.block_len)
+            block_summ = np.empty(n_complete, dtype=self.summary_dtype)
+            _fill_summaries_from_2d(data_2d, block_summ, 0, self.dtype)
+            self._parts.append(block_summ)
+        rem = n - n_complete * self.block_len
+        self._carry = buf[n_complete * self.block_len :].copy() if rem else None
+        self._total = start_pos + m
+
+    def finalize(self, expected_size: int) -> np.ndarray | None:
+        """Return the full per-block summary array, or None if unusable.
+
+        *expected_size* is the column's physical length the index will summarize;
+        the accumulator must have covered exactly that many elements.
+        """
+        if not self.valid or self._total != expected_size:
+            return None
+        from blosc2.indexing import _fill_summaries_from_2d
+
+        parts = list(self._parts)
+        if self._carry is not None and self._carry.shape[0]:
+            tail = np.empty(1, dtype=self.summary_dtype)
+            _fill_summaries_from_2d(self._carry.reshape(1, -1), tail, 0, self.dtype)
+            parts.append(tail)
+        if not parts:
+            return np.empty(0, dtype=self.summary_dtype)
+        return np.concatenate(parts)
 
 
 class CTable(_CTableIndexingMixin, Generic[RowT]):
@@ -5945,7 +6035,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # Buffer fixed-size column writes and flush them chunk-aligned so each
         # chunk is compressed once instead of being merged on every batch.
         writers = {
-            col.name: _ChunkAlignedWriter(new_cols[col.name], new_cols[col.name].chunks[0])
+            col.name: _ChunkAlignedWriter(
+                new_cols[col.name],
+                new_cols[col.name].chunks[0],
+                on_write=obj._summary_feeder(col.name),
+            )
             for col in columns
             if not (
                 cls._is_list_column(col)
@@ -7677,6 +7771,106 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         except Exception:
             pass  # best-effort; failure must not prevent close()
 
+    def _is_summary_eligible_column(self, col) -> bool:
+        """True if *col* can carry an automatic SUMMARY index.
+
+        Eligible columns are stored, scalar, numeric-or-boolean, and not
+        list/varlen/dictionary/computed.  Shared by the close-time builder and
+        the incremental accumulator so both agree on the column set.
+        """
+        name = col.name
+        if name in self._computed_cols:
+            return False
+        if self._is_list_column(col) or self._is_varlen_scalar_column(col):
+            return False
+        if self._is_dictionary_column(col) or self._is_ndarray_column(col):
+            return False
+        spec = col.spec
+        return hasattr(spec, "dtype") and (
+            np.issubdtype(np.dtype(spec.dtype), np.number) or np.issubdtype(np.dtype(spec.dtype), np.bool_)
+        )
+
+    def _get_summary_accumulator(self, name: str):
+        """Return the live per-block summary accumulator for *name*, or None.
+
+        Lazily creates one the first time an eligible column on a writable
+        top-level table is fed.  ``None`` (cached) means the column is not a
+        candidate for incremental summaries; an *invalid* accumulator means a
+        non-append mutation happened and the close-time builder must fall back
+        to the out-of-core path.
+        """
+        if self.base is not None or getattr(self, "_read_only", False):
+            return None
+        if not getattr(self, "_create_summary_index", True):
+            return None
+        accs = self.__dict__.get("_summary_accumulators")
+        if accs is None:
+            accs = {}
+            self._summary_accumulators = accs
+        if name in accs:
+            return accs[name]
+        col = self._schema.columns_by_name.get(name)
+        arr = self._cols.get(name)
+        if col is None or arr is None or not self._is_summary_eligible_column(col):
+            accs[name] = None
+            return None
+        try:
+            block_len = int(arr.blocks[0])
+            dtype = arr.dtype
+        except Exception:
+            accs[name] = None
+            return None
+        acc = _ColumnSummaryAccumulator(dtype, block_len)
+        accs[name] = acc
+        return acc
+
+    def _summary_feeder(self, name: str):
+        """Return a ``callback(start_pos, values)`` bound to *name*, or None."""
+        acc = self._get_summary_accumulator(name)
+        if acc is None:
+            return None
+        return acc.feed
+
+    def _feed_summary(self, name: str, start_pos: int, values: np.ndarray) -> None:
+        acc = self._get_summary_accumulator(name)
+        if acc is not None:
+            acc.feed(start_pos, values)
+
+    def _invalidate_summary_accumulator(self, name: str) -> None:
+        accs = self.__dict__.get("_summary_accumulators")
+        if accs:
+            acc = accs.get(name)
+            if acc is not None:
+                acc.invalidate()
+
+    def _invalidate_all_summary_accumulators(self) -> None:
+        accs = self.__dict__.get("_summary_accumulators")
+        if accs:
+            for acc in accs.values():
+                if acc is not None:
+                    acc.invalidate()
+
+    def _precomputed_summary_for(self, name: str):
+        """Return ``{"block": summaries}`` for *name* if a valid accumulator
+        fully covers the column's physical extent, else None."""
+        accs = self.__dict__.get("_summary_accumulators")
+        if not accs:
+            return None
+        acc = accs.get(name)
+        if acc is None:
+            return None
+        arr = self._cols.get(name)
+        if arr is None:
+            return None
+        try:
+            expected = int(arr.shape[0])
+        except Exception:
+            return None
+        summaries = acc.finalize(expected)
+        if summaries is None:
+            return None
+        return {"block": summaries}
+
     def _build_summary_indexes(self) -> None:
         """Create SUMMARY indexes for all eligible scalar columns.
 
@@ -7685,33 +7879,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         columns are already indexed (e.g. from a prior close), this is a no-op.
         Failure on any individual column is silently ignored — it must not
         prevent close().
+
+        When an incremental per-block accumulator fully covers a column (the
+        common build-from-empty case), its precomputed summaries are handed to
+        ``create_index`` so the column is *not* decompressed again just to
+        recompute min/max.  Otherwise the index builder falls back to the
+        out-of-core decompress-and-scan path transparently.
         """
-        # Collect eligible column names: stored, scalar, numeric, non-dict,
-        # non-list, non-varlen, and not already indexed.
         catalog = self._get_index_catalog()
         indexed = set(catalog) if catalog else set()
-        eligible = []
-        for col in self._schema.columns:
-            name = col.name
-            if name in indexed:
-                continue
-            if name in self._computed_cols:
-                continue
-            if self._is_list_column(col) or self._is_varlen_scalar_column(col):
-                continue
-            if self._is_dictionary_column(col):
-                continue
-            # Only index columns whose dtype is numeric or boolean.
-            spec = col.spec
-            if not (
-                hasattr(spec, "dtype")
-                and (
-                    np.issubdtype(np.dtype(spec.dtype), np.number)
-                    or np.issubdtype(np.dtype(spec.dtype), np.bool_)
-                )
-            ):
-                continue
-            eligible.append(name)
+        eligible = [
+            col.name
+            for col in self._schema.columns
+            if col.name not in indexed and self._is_summary_eligible_column(col)
+        ]
         if not eligible:
             self._summary_indexes_built = True
             return
@@ -7720,7 +7901,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         for name in eligible:
             try:
-                self.create_index(name, kind=blosc2.IndexKind.SUMMARY)
+                precomputed = self._precomputed_summary_for(name)
+                if precomputed is not None:
+                    self.create_index(name, kind=blosc2.IndexKind.SUMMARY, precomputed_summaries=precomputed)
+                else:
+                    self.create_index(name, kind=blosc2.IndexKind.SUMMARY)
             except Exception:
                 warnings.warn(
                     f"Failed to create SUMMARY index for column {name!r}; skipping.",
@@ -8736,6 +8921,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise ValueError("Cannot compact a view.")
         if self._last_pos is not None and self._last_pos == self._n_rows:
             return
+        # Compaction rewrites physical column layout; incremental summaries no
+        # longer correspond to it.
+        self._invalidate_all_summary_accumulators()
         self._flush_varlen_columns()
         real_poss = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
         for col in self._schema.columns:
@@ -9608,6 +9796,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 col_array[pos] = row[name]  # DictionaryColumn encodes on __setitem__
             else:
                 col_array[pos] = row[name]
+                acc = self._get_summary_accumulator(name)
+                if acc is not None and acc.valid:
+                    acc.feed(pos, np.asarray([row[name]], dtype=col_array.dtype))
 
         n_rows = self.nrows
         self._valid_rows[pos] = True
@@ -9828,7 +10019,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 # DictionaryColumn.__setitem__ with a slice encodes all values.
                 self._cols[name][start_pos:end_pos] = dict_processed_cols[name]
             else:
-                self._cols[name][start_pos:end_pos] = scalar_processed_cols[name][:]
+                values = scalar_processed_cols[name]
+                self._cols[name][start_pos:end_pos] = values[:]
+                self._feed_summary(name, start_pos, values)
 
         n_rows = self.nrows
         self._valid_rows[start_pos:end_pos] = True

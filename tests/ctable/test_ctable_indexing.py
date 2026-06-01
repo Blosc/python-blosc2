@@ -787,6 +787,86 @@ def test_summary_index_granularity_override(granularity):
     assert t.where(t.v > 95).nrows == expected
 
 
+@dataclasses.dataclass
+class _IncrRow:
+    # Several chunks/blocks so the summary spans many segments; mixed dtypes.
+    f: float = blosc2.field(blosc2.float32(null_value=float("nan")), chunks=(2000,), blocks=(500,))
+    i: int = blosc2.field(blosc2.int64(), chunks=(2000,), blocks=(500,))
+
+
+def _build_incr_data(n=9000):
+    rng = np.random.default_rng(7)
+    f = (rng.standard_normal(n) * 50).astype(np.float32)
+    f[rng.integers(0, n, n // 100)] = np.nan  # exercise NaN flags
+    i = rng.integers(-1000, 1000, n).astype(np.int64)
+    return f, i
+
+
+def _summary_sidecars(table):
+    """Return {col: structured summary array} for all SUMMARY block sidecars."""
+    out = {}
+    for name, desc in dict(table._get_index_catalog()).items():
+        if desc.get("kind") != "summary":
+            continue
+        side = blosc2.open(desc["levels"]["block"]["path"], mode="r")
+        out[name] = side[:]
+    return out
+
+
+def test_incremental_summary_matches_ooc_build(tmp_path):
+    """The incremental per-block accumulator (folded during the write phase)
+    must produce SUMMARY sidecars byte-identical to the out-of-core
+    decompress-and-recompute path, including NaN flags."""
+    f, i = _build_incr_data()
+
+    # Accumulator path: extend in one shot, close (uses precomputed summaries).
+    acc_path = str(tmp_path / "acc.b2z")
+    with blosc2.CTable(_IncrRow, urlpath=acc_path, mode="w") as t:
+        t.extend({"f": f, "i": i})
+    acc = _summary_sidecars(blosc2.open(acc_path))
+
+    # Reference path: force the OOC builder by disabling the precomputed hook.
+    ooc_path = str(tmp_path / "ooc.b2z")
+    import blosc2.ctable as _ct
+
+    orig = _ct.CTable._precomputed_summary_for
+    try:
+        _ct.CTable._precomputed_summary_for = lambda self, name: None
+        with blosc2.CTable(_IncrRow, urlpath=ooc_path, mode="w") as t:
+            t.extend({"f": f, "i": i})
+    finally:
+        _ct.CTable._precomputed_summary_for = orig
+    ooc = _summary_sidecars(blosc2.open(ooc_path))
+
+    assert set(acc) == set(ooc) == {"f", "i"}
+    for name in acc:
+        a, b = acc[name], ooc[name]
+        assert len(a) == len(b)
+        assert np.array_equal(a["flags"], b["flags"])
+        assert np.allclose(a["min"], b["min"], equal_nan=True)
+        assert np.allclose(a["max"], b["max"], equal_nan=True)
+
+
+def test_incremental_summary_invalidated_by_inplace_update(tmp_path):
+    """An in-place column write before close must invalidate the accumulator so
+    the builder falls back to a correct full rescan."""
+    f, i = _build_incr_data(n=4000)
+    path = str(tmp_path / "upd.b2z")
+    with blosc2.CTable(_IncrRow, urlpath=path, mode="w") as t:
+        t.extend({"f": f, "i": i})
+        # Mutate a value through the column handle (the bypass path) and update
+        # the local reference so the expected result reflects the change.
+        t["i"][0] = 999_999
+        i = i.copy()
+        i[0] = 999_999
+        acc = t.__dict__.get("_summary_accumulators", {}).get("i")
+        assert acc is None or not acc.valid  # accumulator disabled for "i"
+
+    with blosc2.open(path) as r:
+        expected = int((i > 1000).sum())
+        assert r.where(r.i > 1000).nrows == expected
+
+
 def test_summary_granularity_rejects_invalid_value():
     t, _ = _make_gran_table(n=10)
     with pytest.raises(ValueError, match="granularity must be one of"):

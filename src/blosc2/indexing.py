@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import tempfile
+import warnings
 import weakref
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -1058,7 +1059,11 @@ def _fill_summaries_from_2d(
     if n == 0:
         return
     if dtype.kind == "f":
-        with np.errstate(all="ignore"):
+        # All-NaN blocks make np.nanmin/nanmax emit "All-NaN slice encountered";
+        # their results are immediately overwritten with zero below, so silence
+        # the (purely cosmetic) RuntimeWarning.
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.filterwarnings("ignore", r"All-NaN slice encountered", RuntimeWarning)
             has_nan = np.any(np.isnan(data_2d), axis=1)
             all_nan = np.all(np.isnan(data_2d), axis=1)
             mins = np.nanmin(data_2d, axis=1)
@@ -1289,6 +1294,7 @@ def _build_levels_descriptor_ooc(
     persistent: bool,
     cparams: dict | None = None,
     summary_levels: tuple[str, ...] | None = None,
+    precomputed_summaries: dict[str, np.ndarray] | None = None,
 ) -> dict:
     size = int(array.shape[0])
     summary_dtype = _summary_dtype(dtype)
@@ -1298,11 +1304,29 @@ def _build_levels_descriptor_ooc(
     nsegments_total = {level: math.ceil(size / slen) for level, slen in segment_lens.items()}
     all_summaries = {level: np.empty(n, dtype=summary_dtype) for level, n in nsegments_total.items()}
 
+    # Incremental fast path: summaries already accumulated during the write phase
+    # (e.g. CTable import folds per-block min/max as data is appended, when it is
+    # still uncompressed in memory).  Using them avoids decompressing the whole
+    # column back just to recompute min/max.  Only trusted when every requested
+    # level is present with the exact expected segment count and dtype; otherwise
+    # fall through to the decompression pass below.
+    use_precomputed = precomputed_summaries is not None and all(
+        level in precomputed_summaries
+        and precomputed_summaries[level].dtype == summary_dtype
+        and len(precomputed_summaries[level]) == nsegments_total[level]
+        for level in levels_to_build
+    )
+    if use_precomputed:
+        for level in levels_to_build:
+            all_summaries[level] = np.ascontiguousarray(precomputed_summaries[level])
+
     # Fast path: all segment sizes are ≤ chunk_len and divide it evenly, so no segment
     # spans a chunk boundary.  A single decompression pass over the data suffices.
     can_fast = all(slen <= chunk_len and chunk_len % slen == 0 for slen in segment_lens.values())
 
-    if can_fast:
+    if use_precomputed:
+        pass
+    elif can_fast:
         seg_offsets = dict.fromkeys(levels_to_build, 0)
         nchunks = math.ceil(size / chunk_len)
         for chunk_id in range(nchunks):
@@ -3844,6 +3868,7 @@ def create_index(
     method = kwargs.pop("method", None)
     opsi_max_cycles_arg = kwargs.pop("opsi_max_cycles", None)
     summary_levels = kwargs.pop("summary_levels", None)
+    precomputed_summaries = kwargs.pop("precomputed_summaries", None)
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"unexpected keyword argument(s): {unexpected}")
@@ -3867,7 +3892,15 @@ def create_index(
 
     if use_ooc:
         levels = _build_levels_descriptor_ooc(
-            array, target, token, kind, dtype, persistent, cparams, summary_levels=summary_levels
+            array,
+            target,
+            token,
+            kind,
+            dtype,
+            persistent,
+            cparams,
+            summary_levels=summary_levels,
+            precomputed_summaries=precomputed_summaries,
         )
         bucket = (
             _build_bucket_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
