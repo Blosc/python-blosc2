@@ -88,6 +88,15 @@ class TableStorage:
     ) -> ListArray:
         raise NotImplementedError
 
+    def install_list_column(self, name: str, list_array: "ListArray") -> "ListArray":
+        """Store a pre-built ListArray as column *name*.
+
+        Faster than create_list_column + extend when the caller already has the
+        fully populated array (e.g. from ListArray.copy with chunk_copy).
+        Subclasses should override with a path that skips element-wise iteration.
+        """
+        raise NotImplementedError
+
     def open_list_column(self, name: str) -> ListArray:
         raise NotImplementedError
 
@@ -230,6 +239,10 @@ class InMemoryTableStorage(TableStorage):
         if dparams is not None:
             kwargs["dparams"] = dparams
         return ListArray(spec=spec, **kwargs)
+
+    def install_list_column(self, name, list_array: "ListArray") -> "ListArray":
+        """Store a pre-built ListArray (in-memory: chunk_copy without urlpath)."""
+        return list_array.copy()
 
     def open_list_column(self, name):
         raise RuntimeError("In-memory tables have no on-disk representation to open.")
@@ -503,6 +516,14 @@ class FileTableStorage(TableStorage):
             kwargs["dparams"] = dparams
         os.makedirs(os.path.dirname(self._list_col_path(name)), exist_ok=True)
         return ListArray(spec=spec, **kwargs)
+
+    def install_list_column(self, name, list_array: "ListArray") -> "ListArray":
+        """Bulk-copy a pre-built ListArray to the column path (chunk-level transfer)."""
+        dest_path = self._list_col_path(name)
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        result = list_array.copy(urlpath=dest_path, mode="w", contiguous=True)
+        result.flush()
+        return result
 
     def open_list_column(self, name: str) -> ListArray:
         store = self._open_store()
@@ -1002,6 +1023,14 @@ class TreeStoreTableStorage(TableStorage):
             kwargs["dparams"] = dparams
         os.makedirs(os.path.dirname(self._list_col_path(name)), exist_ok=True)
         return ListArray(spec=spec, **kwargs)
+
+    def install_list_column(self, name: str, list_array: "ListArray") -> "ListArray":
+        """Bulk-copy a pre-built ListArray to the column path (chunk-level transfer)."""
+        dest_path = self._list_col_path(name)
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        result = list_array.copy(urlpath=dest_path, mode="w", contiguous=True)
+        result.flush()
+        return result
 
     def open_list_column(self, name: str) -> ListArray:
         if self._store.is_zip_store and self._mode == "r":

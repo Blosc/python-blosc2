@@ -957,6 +957,78 @@ class BatchArray:
         """Serialize the full store to a Blosc2 cframe buffer."""
         return self.schunk.to_cframe()
 
+    def chunk_copy(self, **kwargs: Any) -> BatchArray:
+        """Create a copy by transferring compressed chunks directly at the C level.
+
+        This is significantly faster than :meth:`copy` because it bypasses all
+        Python-level serialisation/deserialisation: each blosc2 chunk is read
+        from the source SChunk and appended to the destination SChunk as raw
+        compressed bytes.
+
+        The destination is created with the **same** ``cparams`` as the source
+        so existing chunks are accepted without recompression.  Passing a
+        ``cparams`` override is not allowed (raises :class:`ValueError`); use
+        :meth:`copy` instead if you need to change the compression settings.
+
+        Parameters
+        ----------
+        **kwargs:
+            Forwarded to the :class:`BatchArray` constructor.  Typical use
+            cases: ``urlpath`` / ``mode`` (persistent copy), ``contiguous``,
+            ``dparams``.  Do **not** pass ``cparams``, ``meta``, ``serializer``
+            or ``items_per_block``.
+
+        Returns
+        -------
+        BatchArray
+            A new standalone copy with identical data and storage metadata.
+
+        Raises
+        ------
+        ValueError
+            If ``cparams`` is in *kwargs* (recompression is not supported by
+            this method).
+
+        See Also
+        --------
+        copy : Element-wise copy that supports cparams overrides.
+        """
+        if "cparams" in kwargs:
+            raise ValueError(
+                "chunk_copy() does not support a cparams override because it transfers "
+                "pre-compressed chunks as-is.  Use copy() if you need to change cparams."
+            )
+        if "meta" in kwargs:
+            raise ValueError("meta should not be passed to chunk_copy")
+        kwargs["cparams"] = copy.deepcopy(self.cparams)
+        kwargs.setdefault("dparams", copy.deepcopy(self.dparams))
+        kwargs.setdefault("items_per_block", self.items_per_block)
+        kwargs.setdefault("serializer", self.serializer)
+        kwargs.setdefault("contiguous", self.schunk.contiguous)
+        if "urlpath" in kwargs and "mode" not in kwargs:
+            kwargs["mode"] = "w"
+        kwargs["meta"] = self._copy_meta()
+
+        out = BatchArray(**kwargs)
+
+        src_sc = self.schunk
+        dst_sc = out.schunk
+        for i in range(src_sc.nchunks):
+            dst_sc.append_chunk(src_sc.get_chunk(i))
+
+        # Persist batch_lengths so reopening the file skips the recompute scan.
+        out._batch_lengths = (
+            list(self._load_or_compute_batch_lengths()) if src_sc.nchunks > 0 else []
+        )
+        out._persist_batch_lengths()
+        out._invalidate_item_cache()
+
+        # Preserve any user-defined vlmeta items (batch-lengths key is internal).
+        for key, value in self._user_vlmeta_items().items():
+            out.vlmeta[key] = value
+
+        return out
+
     def copy(self, **kwargs: Any) -> BatchArray:
         """Create a copy of the store with optional constructor overrides."""
         if "meta" in kwargs:

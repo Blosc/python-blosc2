@@ -4441,18 +4441,21 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             col_cparams = col.config.cparams if col.config.cparams is not None else self._table_cparams
             eff_cparams = cparams_override if cparams_override is not None else col_cparams
             if self._is_list_column(col):
-                disk_col = storage.create_list_column(
-                    name,
-                    spec=col.spec,
-                    cparams=eff_cparams,
-                    dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
-                )
-                if n_live > 0:
-                    src_la = self._cols[name]
-                    # Bulk slice avoids per-element Python overhead when rows are dense.
-                    items = src_la[:n_live] if no_deletions else (src_la[int(pos)] for pos in live_pos)
-                    disk_col.extend(items, validate=False)
-                    disk_col.flush()
+                src_la = self._cols[name]
+                if no_deletions and cparams_override is None and not src_la._pending_cells:
+                    # Fast path: C-level chunk transfer, no Python decompression.
+                    storage.install_list_column(name, src_la)
+                else:
+                    disk_col = storage.create_list_column(
+                        name,
+                        spec=col.spec,
+                        cparams=eff_cparams,
+                        dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
+                    )
+                    if n_live > 0:
+                        items = src_la[:n_live] if no_deletions else (src_la[int(pos)] for pos in live_pos)
+                        disk_col.extend(items, validate=False)
+                        disk_col.flush()
                 continue
             if self._is_varlen_scalar_column(col):
                 disk_col = storage.create_varlen_scalar_column(

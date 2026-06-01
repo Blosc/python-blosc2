@@ -727,3 +727,76 @@ def test_batcharray_in_dict_store():
         assert [batch[:] for batch in restored] == BATCHES
 
     blosc2.remove_urlpath(path)
+
+
+# ---------------------------------------------------------------------------
+# chunk_copy() tests
+# ---------------------------------------------------------------------------
+
+def test_batcharray_chunk_copy_inmemory():
+    ba = blosc2.BatchArray()
+    ba.extend(BATCHES)
+
+    copied = ba.chunk_copy()
+
+    assert [b[:] for b in copied] == BATCHES
+    assert copied.urlpath is None
+    assert copied.cparams == ba.cparams
+
+
+def test_batcharray_chunk_copy_persistent(tmp_path):
+    src_path = str(tmp_path / "src.b2b")
+    dst_path = str(tmp_path / "dst.b2b")
+
+    src = blosc2.BatchArray(urlpath=src_path, mode="w", contiguous=True)
+    src.extend(BATCHES)
+
+    copied = src.chunk_copy(urlpath=dst_path)
+
+    assert [b[:] for b in copied] == BATCHES
+    assert copied.urlpath == dst_path
+    assert copied.schunk.contiguous is True
+
+    # Reopen and verify
+    reopened = blosc2.open(dst_path)
+    assert [b[:] for b in reopened] == BATCHES
+
+
+def test_batcharray_chunk_copy_preserves_user_vlmeta():
+    ba = blosc2.BatchArray()
+    ba.vlmeta["tag"] = {"version": 7}
+    ba.extend(BATCHES)
+
+    copied = ba.chunk_copy()
+
+    assert copied.vlmeta["tag"] == {"version": 7}
+    assert [b[:] for b in copied] == BATCHES
+
+
+def test_batcharray_chunk_copy_empty():
+    ba = blosc2.BatchArray()
+    copied = ba.chunk_copy()
+    assert len(list(copied)) == 0
+
+
+def test_batcharray_chunk_copy_rejects_cparams():
+    ba = blosc2.BatchArray()
+    ba.extend(BATCHES)
+    with pytest.raises(ValueError, match="cparams"):
+        ba.chunk_copy(cparams={"codec": blosc2.Codec.LZ4})
+
+
+def test_batcharray_chunk_copy_batch_lengths_roundtrip(tmp_path):
+    # batch_lengths must survive close/reopen without recomputation.
+    src = blosc2.BatchArray(items_per_block=2)
+    for _ in range(50):
+        src.extend(BATCHES)
+
+    dst_path = str(tmp_path / "copy.b2b")
+    copied = src.chunk_copy(urlpath=dst_path)
+    assert copied._batch_lengths is not None
+
+    reopened = blosc2.open(dst_path)
+    assert isinstance(reopened, blosc2.BatchArray)
+    assert reopened._batch_lengths is not None
+    assert sum(reopened._batch_lengths) == sum(src._load_or_compute_batch_lengths())
