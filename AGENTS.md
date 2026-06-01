@@ -8,6 +8,14 @@ Tests are under `tests/`, with additional doctests enabled for select modules pe
 Examples are in `examples/`, and performance/benchmark scripts live in `bench/`.
 
 ## Build, Test, and Development Commands
+**IMPORTANT — Environment**: Always use the `blosc2` conda environment for
+running Python, tests, and any build/install commands
+(`conda activate blosc2`, or `conda run -n blosc2 …`). It holds the working
+editable install whose compiled extension matches the `src/` sources. Other
+interpreters (e.g. the miniforge base env) may load a stale `blosc2_ext`
+shared library and fail with errors like
+`AttributeError: 'super' object has no attribute 'get_sparse_numpy'`.
+
 - `pip install .` builds the bundled C-Blosc2 and installs the package.
 - `pip install -e .` installs in editable mode for local development.
 - `CMAKE_PREFIX_PATH=/usr/local USE_SYSTEM_BLOSC2=1 pip install -e .` builds
