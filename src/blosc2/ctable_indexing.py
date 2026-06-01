@@ -1177,6 +1177,16 @@ class _CTableIndexingMixin:
             for name, _arr, _descriptor in indexed_columns
             if getattr(root._schema.columns_by_name[name].spec, "null_value", None) is not None
         ]
+        # A NaN null sentinel can never satisfy a comparison (every comparison
+        # with NaN is False), so the predicate itself already drops those rows;
+        # only non-NaN sentinels (which *can* match a predicate) need explicit
+        # position-based exclusion.  This lets the fast mask-direct path apply to
+        # NaN-nullable columns instead of falling back to the positions path.
+        nullable_needs_exclude = []
+        for name in nullable_indexed:
+            nv = getattr(root._schema.columns_by_name[name].spec, "null_value", None)
+            if not (isinstance(nv, float) and np.isnan(nv)):
+                nullable_needs_exclude.append(name)
 
         # Global null post-filtering is not correct for OR expressions.
         if nullable_indexed and ("|" in expr_result.expression or " or " in expr_result.expression):
@@ -1332,9 +1342,10 @@ class _CTableIndexingMixin:
                 # compressed boolean mask identical to a full scan's.  Return it
                 # as-is (no positions round-trip) when no null post-filtering is
                 # needed; the caller views it directly and extracts positions
-                # lazily.  With nullable indexed columns, fall back to positions
-                # so the per-column null sentinels are excluded.
-                if not nullable_indexed:
+                # lazily.  Only columns whose null sentinel can satisfy the
+                # predicate (non-NaN) require the positions fall-back; NaN
+                # sentinels are already excluded by the predicate itself.
+                if not nullable_needs_exclude:
                     try:
                         mask = expr_result.compute(_candidate_blocks=bitmap)
                     except Exception:
