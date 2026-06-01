@@ -87,6 +87,7 @@ def test_drop_indexed_column_clears_catalog():
         t.index("id")
 
 
+@pytest.mark.heavy
 def test_where_with_index_matches_scan_in_memory():
     t = _make_table(200)
     t.create_index("id")
@@ -99,6 +100,7 @@ def test_where_with_index_matches_scan_in_memory():
     assert ids_idx == ids_scan
 
 
+@pytest.mark.heavy
 def test_indexed_where_view_sort_by_reuses_cached_live_positions(monkeypatch):
     t = _make_table(200)
     t.create_index("id", kind=blosc2.IndexKind.FULL)
@@ -324,6 +326,7 @@ def test_catalog_survives_reopen(tmpdir):
     assert not idxs[0].stale
 
 
+@pytest.mark.heavy
 def test_index_catalog_cached_per_opened_ctable(tmpdir, monkeypatch):
     path = str(tmpdir / "table.b2d")
     t = _make_table(200, persistent_path=path)
@@ -521,6 +524,7 @@ def test_delete_bumps_visibility_epoch_persistent(tmpdir):
     assert vis_e >= 1
 
 
+@pytest.mark.heavy
 def test_query_after_reopen_persistent(tmpdir):
     path = str(tmpdir / "table.b2d")
     t = _make_table(100, persistent_path=path)
@@ -770,7 +774,8 @@ def test_summary_index_defaults_to_block_granularity():
     assert levels == ["block"]
 
 
-@pytest.mark.parametrize("granularity", ["chunk", "block", "subblock"])
+@pytest.mark.heavy
+@pytest.mark.parametrize("granularity", ["chunk", "block"])
 def test_summary_index_granularity_override(granularity):
     t, rng = _make_gran_table()
     t.create_index("v", kind=blosc2.IndexKind.SUMMARY, granularity=granularity)
@@ -783,17 +788,18 @@ def test_summary_index_granularity_override(granularity):
 
 
 def test_summary_granularity_rejects_invalid_value():
-    t, _ = _make_gran_table()
+    t, _ = _make_gran_table(n=10)
     with pytest.raises(ValueError, match="granularity must be one of"):
         t.create_index("v", kind=blosc2.IndexKind.SUMMARY, granularity="bogus")
 
 
 def test_granularity_only_valid_for_summary():
-    t, _ = _make_gran_table()
+    t, _ = _make_gran_table(n=10)
     with pytest.raises(ValueError, match=r"only supported for kind=IndexKind\.SUMMARY"):
         t.create_index("v", kind=blosc2.IndexKind.BUCKET, granularity="block")
 
 
+@pytest.mark.heavy
 @pytest.mark.parametrize("threshold", [5.0, 50.0, 99.0, 99.99])
 def test_summary_cost_gate_correctness_across_selectivity(threshold):
     """The SUMMARY cost gate may use the index (selective query) or fall back to

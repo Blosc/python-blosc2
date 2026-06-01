@@ -53,7 +53,7 @@ SEGMENT_LEVELS_BY_KIND = {
 }
 
 # Valid ``granularity`` values for SUMMARY indexes, coarsest to finest.
-SUMMARY_GRANULARITIES = ("chunk", "block", "subblock")
+SUMMARY_GRANULARITIES = ("chunk", "block")
 
 
 def _resolve_summary_levels(granularity: str | None) -> tuple[str, ...] | None:

@@ -570,10 +570,8 @@ class _CTableIndexingMixin:
 
         For ``kind=SUMMARY``, ``granularity`` controls the segment size of the
         min/max summaries: ``"block"`` (the default) summarizes at Blosc2 block
-        granularity, ``"chunk"`` at the coarser chunk granularity, and
-        ``"subblock"`` at an even finer level.  Finer granularity prunes more
-        segments for selective predicates (at a small, proportional increase in
-        sidecar size) but adds per‑segment overhead for unselective ones.
+        granularity; ``"chunk"`` uses the coarser chunk granularity (fewer
+        summary entries, cheaper to build, less selective pruning).
         ``granularity`` is only valid for ``kind=SUMMARY``.
         """
         if self.base is not None:
