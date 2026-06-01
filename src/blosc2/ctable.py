@@ -2829,7 +2829,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         validate: bool = True,
         cparams: dict[str, Any] | None = None,
         dparams: dict[str, Any] | None = None,
+        create_summary_index: bool = True,
     ) -> None:
+        """Create a new CTable or open an existing one.
+
+        Parameters
+        ----------
+        create_summary_index:
+            If ``True`` (default), SUMMARY indexes are automatically built for
+            all eligible scalar columns on :meth:`close`.  These indexes are
+            extremely cheap to store (< 0.1% of column size) and accelerate
+            ``where()`` queries without any user action.  Set to ``False`` to
+            disable.
+        """
         # Auto-size: if the caller didn't specify expected_size and new_data has a
         # known length, pre-allocate just enough (×2 for headroom, min 64).
         # Fall back to 1 M when new_data has no __len__ or is absent.
@@ -2852,6 +2864,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self._col_widths: dict[str, int] = {}
         self.col_names: list[str] = []
         self.auto_compact = compact
+        self._create_summary_index = create_summary_index
+        self._summary_indexes_built = False
         self.base = None
 
         # Choose storage backend
@@ -2899,6 +2913,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._expr_index_arrays = {}
             self._load_computed_cols_from_schema(schema_dict)
             self._load_materialized_cols_from_schema(schema_dict)
+            # Restore auto-index preference from the schema.
+            self._create_summary_index = schema_dict.get("create_summary_index", True)
+            self._summary_indexes_built = schema_dict.get("summary_indexes_built", False)
         else:
             # ---- Create new table ----
             if storage.is_read_only():
@@ -2959,6 +2976,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._flush_varlen_columns()
             if not self._read_only and self.base is None:
                 self.trim_capacity()
+            # Build SUMMARY indexes for eligible columns on first close
+            # (one-time).  These are cheap (~<0.1% of column size) and
+            # accelerate queries without any user action.
+            if (
+                not self._read_only
+                and self.base is None
+                and getattr(self, "_create_summary_index", True)
+                and not getattr(self, "_summary_indexes_built", False)
+            ):
+                self._build_summary_indexes()
+                # Persist that indexes have been built so subsequent opens
+                # skip the catalog check.
+                self._save_n_rows_to_meta()
         except Exception:
             with contextlib.suppress(Exception):
                 if storage is not None and hasattr(storage, "close"):
@@ -4438,6 +4468,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._col_widths = {}
         obj.col_names = col_names
         obj.auto_compact = False
+        obj._create_summary_index = schema_dict.get("create_summary_index", True)
+        obj._summary_indexes_built = schema_dict.get("summary_indexes_built", False)
         obj.base = None
 
         obj._valid_rows = storage.open_valid_rows()
@@ -4601,6 +4633,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
         obj.col_names = col_names
         obj.auto_compact = False
+        obj._create_summary_index = schema_dict.get("create_summary_index", True)
+        obj._summary_indexes_built = schema_dict.get("summary_indexes_built", False)
         obj.base = None
         obj._valid_rows = mem_valid
         obj._n_rows = n_live
@@ -4632,6 +4666,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._col_widths = parent._col_widths
         obj.col_names = parent.col_names
         obj.auto_compact = parent.auto_compact
+        obj._create_summary_index = parent._create_summary_index
+        obj._summary_indexes_built = True  # views never build indexes themselves
         obj.base = parent
         obj._valid_rows = new_valid_rows
         # Keep row counts lazy for views.  Many pipelines (e.g. where(...).sort_by(...))
@@ -4884,6 +4920,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._n_rows = self._known_n_rows()
         obj._last_pos = self._last_pos
         obj.auto_compact = self.auto_compact
+        obj._create_summary_index = self._create_summary_index
+        obj._summary_indexes_built = True  # views never build indexes
         obj.base = self
 
         # Stored columns — same NDArray objects, no copy
@@ -5798,7 +5836,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     @classmethod
     def _new_arrow_import_ctable(
-        cls, compiled, storage, new_cols, new_valid, columns, *, cparams, dparams, validate
+        cls,
+        compiled,
+        storage,
+        new_cols,
+        new_valid,
+        columns,
+        *,
+        cparams,
+        dparams,
+        validate,
+        create_summary_index=True,
     ):
         obj = cls.__new__(cls)
         obj._row_type = None
@@ -5812,6 +5860,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in columns}
         obj.col_names = [col.name for col in columns]
         obj.auto_compact = False
+        obj._create_summary_index = create_summary_index
+        obj._summary_indexes_built = False
         obj.base = None
         obj._computed_cols = {}
         obj._materialized_cols = {}
@@ -6180,6 +6230,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         object_fallback: bool = False,
         column_cparams: Mapping[str, dict[str, Any]] | None = None,
         separate_nested_cols: bool = False,
+        create_summary_index: bool = True,
     ) -> CTable:
         """Build a :class:`CTable` from an Arrow schema and iterable of record batches.
 
@@ -6372,6 +6423,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             cparams=cparams,
             dparams=dparams,
             validate=validate,
+            create_summary_index=create_summary_index,
         )
         cls._write_arrow_batches(obj, batches, columns, new_cols, new_valid)
         return obj
@@ -6908,6 +6960,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
         obj.col_names = [col.name for col in schema.columns]
         obj.auto_compact = False
+        obj._create_summary_index = True
+        obj._summary_indexes_built = False
         obj.base = None
         obj._computed_cols = {}  # from_csv creates no computed columns
         obj._materialized_cols = {}
@@ -7086,6 +7140,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
         obj.col_names = [col.name for col in schema.columns]
         obj.auto_compact = False
+        obj._create_summary_index = True
+        obj._summary_indexes_built = False
         obj.base = None
         obj._computed_cols = {}
         obj._materialized_cols = {}
@@ -7559,6 +7615,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         n_rows = self._known_n_rows()
         if n_rows is not None:
             d["n_rows"] = n_rows
+        d["create_summary_index"] = getattr(self, "_create_summary_index", True)
+        d["summary_indexes_built"] = getattr(self, "_summary_indexes_built", False)
         if self._computed_cols:
             d["computed_columns"] = [
                 {
@@ -7608,6 +7666,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 return
             schema_dict = json.loads(schema_raw)
             schema_dict["n_rows"] = n_rows
+            schema_dict["summary_indexes_built"] = getattr(self, "_summary_indexes_built", False)
             meta.vlmeta["schema"] = json.dumps(schema_dict)
             # Persist: for FileTableStorage, rewrite the external _meta.b2f file.
             if hasattr(storage, "_meta_path"):
@@ -7617,6 +7676,57 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 storage._write_leaf("/_meta", meta, ".b2f")
         except Exception:
             pass  # best-effort; failure must not prevent close()
+
+    def _build_summary_indexes(self) -> None:
+        """Create SUMMARY indexes for all eligible scalar columns.
+
+        Called once from :meth:`close` when ``create_summary_index=True`` (the default).
+        Skips list, varlen, dictionary, and computed columns.  If all eligible
+        columns are already indexed (e.g. from a prior close), this is a no-op.
+        Failure on any individual column is silently ignored — it must not
+        prevent close().
+        """
+        # Collect eligible column names: stored, scalar, numeric, non-dict,
+        # non-list, non-varlen, and not already indexed.
+        catalog = self._get_index_catalog()
+        indexed = set(catalog) if catalog else set()
+        eligible = []
+        for col in self._schema.columns:
+            name = col.name
+            if name in indexed:
+                continue
+            if name in self._computed_cols:
+                continue
+            if self._is_list_column(col) or self._is_varlen_scalar_column(col):
+                continue
+            if self._is_dictionary_column(col):
+                continue
+            # Only index columns whose dtype is numeric or boolean.
+            spec = col.spec
+            if not (
+                hasattr(spec, "dtype")
+                and (
+                    np.issubdtype(np.dtype(spec.dtype), np.number)
+                    or np.issubdtype(np.dtype(spec.dtype), np.bool_)
+                )
+            ):
+                continue
+            eligible.append(name)
+        if not eligible:
+            self._summary_indexes_built = True
+            return
+
+        import warnings
+
+        for name in eligible:
+            try:
+                self.create_index(name, kind=blosc2.IndexKind.SUMMARY)
+            except Exception:
+                warnings.warn(
+                    f"Failed to create SUMMARY index for column {name!r}; skipping.",
+                    stacklevel=2,
+                )
+        self._summary_indexes_built = True
 
     def _load_computed_cols_from_schema(self, schema_dict: dict) -> None:
         """Reconstruct ``_computed_cols`` from persisted metadata.
@@ -9196,6 +9306,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._cols = new_cols
         obj._col_widths = self._col_widths.copy()
         obj.col_names = [col.name for col in self._schema.columns]
+        obj.auto_compact = self.auto_compact
+        obj._create_summary_index = self._create_summary_index
+        obj._summary_indexes_built = False  # compact creates a new copy; indexes not yet built
         obj._materialized_cols = {name: dict(meta) for name, meta in self._materialized_cols.items()}
         obj._expr_index_arrays = dict(self._expr_index_arrays)
         # Rebuild computed columns with the new NDArray objects as operands

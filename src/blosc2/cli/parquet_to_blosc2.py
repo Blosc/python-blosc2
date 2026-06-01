@@ -308,6 +308,17 @@ def build_parser() -> argparse.ArgumentParser:
             "--no-separate-nested-cols when closer Parquet schema fidelity is desired."
         ),
     )
+    parser.add_argument(
+        "--no-summary-index",
+        action="store_false",
+        dest="create_summary_index",
+        default=True,
+        help=(
+            "Disable automatic SUMMARY index creation on close. "
+            "By default, SUMMARY indexes are built for all eligible scalar columns, "
+            "which costs <0.1%% of column size and accelerates WHERE queries."
+        ),
+    )
     return parser
 
 
@@ -1172,6 +1183,7 @@ def import_unnamed_root_separate_cols(
         blosc2_batch_size=args.blosc2_batch_size,
         blosc2_items_per_block=args.blosc2_items_per_block,
         list_serializer=args.list_serializer,
+        create_summary_index=args.create_summary_index,
     )
 
     maybe_memory_report(args, "after CTable import", pa)
@@ -1305,6 +1317,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         blosc2_items_per_block=args.blosc2_items_per_block,
         list_serializer=args.list_serializer,
         column_cparams=float_trunc_column_cparams or None,
+        create_summary_index=args.create_summary_index,
     )
     maybe_memory_report(args, "after CTable import", pa)
     store_original_arrow_metadata(ct, parquet_schema, import_schema, conversions, column_name_map)
