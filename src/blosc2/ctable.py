@@ -7200,8 +7200,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         spec, default, column_config = self._column_spec_default_and_config(spec)
 
-        live_pos = self._live_positions_from_valid_rows_chunks()
-        if default is MISSING and len(live_pos) > 0:
+        n_live = self.nrows
+        if default is MISSING and n_live > 0:
             raise ValueError(
                 "add_column() requires a default declared as blosc2.field(..., default=...) "
                 "when the table has live rows."
@@ -7224,7 +7224,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 cparams=col_storage.get("cparams"),
                 dparams=col_storage.get("dparams"),
             )
-            for _ in live_pos:
+            for _ in range(n_live):
                 new_col.append(default)
             new_col.flush()
         elif self._is_list_column(compiled_col):
@@ -7258,11 +7258,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 cparams=col_storage.get("cparams"),
                 dparams=col_storage.get("dparams"),
             )
-            if len(live_pos) > 0:
+            if n_live > 0:
                 if self._is_ndarray_column(compiled_col):
-                    new_col[live_pos] = np.broadcast_to(default_val, (len(live_pos), *spec.item_shape))
+                    new_col[self._valid_rows] = np.broadcast_to(default_val, (n_live, *spec.item_shape))
                 else:
-                    new_col[live_pos] = default_val
+                    new_col[self._valid_rows] = default_val
 
         compiled_col.default = default
         self._cols[name] = new_col
@@ -7995,18 +7995,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if name not in self._materialized_cols:
             raise KeyError(f"{name!r} is not a generated/materialized column.")
         meta = self._materialized_cols[name]
-        live_pos = self._live_positions_from_valid_rows_chunks()
+        n_live = self.nrows
         if meta.get("transformer_kind") == "row_transformer":
             transformer = RowTransformer.from_metadata(meta["transformer"])
             values = np.asarray(transformer.evaluate_existing(self), dtype=meta["dtype"])
         else:
             raw_columns = {dep: self[dep][:] for dep in meta["col_deps"]}
             values = self._evaluate_expression_materialized_batch(meta, raw_columns)
-        if len(values) != len(live_pos):
-            raise ValueError(
-                f"Generated column {name!r} produced {len(values)} values, expected {len(live_pos)}."
-            )
-        self._cols[name][live_pos] = values
+        if len(values) != n_live:
+            raise ValueError(f"Generated column {name!r} produced {len(values)} values, expected {n_live}.")
+        self._cols[name][self._valid_rows] = values
         meta["stale"] = False
         self._mark_all_indexes_stale()
         if isinstance(self._storage, FileTableStorage):
@@ -8160,7 +8158,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if name in self._computed_cols:
             raise ValueError(f"A computed column named {name!r} already exists.")
 
-        live_pos = self._live_positions_from_valid_rows_chunks()
+        n_live = self.nrows
         if isinstance(values, RowTransformer):
             transformer = values
             for dep in transformer.source_columns:
@@ -8171,7 +8169,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     raise TypeError(f"RowTransformer source {dep!r} is not an ndarray column.")
             generated_values = (
                 transformer.evaluate_existing(self)
-                if len(live_pos)
+                if n_live
                 else transformer.evaluate_batch(
                     {
                         transformer.source: np.zeros(
@@ -8197,7 +8195,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if generated_values.ndim != 1:
                 raise TypeError("Expression generated columns must produce a 1-D scalar result.")
             generated_values = (
-                generated_values[live_pos]
+                generated_values[self._valid_rows[:]]
                 if len(generated_values) == len(self._valid_rows)
                 else generated_values
             )
@@ -8213,20 +8211,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if create_index and isinstance(spec, NDArraySpec):
             raise ValueError("Generated columns intended for indexing must be 1-D scalar columns.")
         generated_values = np.asarray(generated_values, dtype=spec.dtype)
-        if len(generated_values) != len(live_pos):
+        if len(generated_values) != n_live:
             raise ValueError(
-                f"Generated column {name!r} produced {len(generated_values)} values, expected {len(live_pos)}."
+                f"Generated column {name!r} produced {len(generated_values)} values, expected {n_live}."
             )
-        if isinstance(spec, NDArraySpec) and generated_values.shape != (len(live_pos), *spec.item_shape):
+        if isinstance(spec, NDArraySpec) and generated_values.shape != (n_live, *spec.item_shape):
             raise ValueError(
-                f"Generated column {name!r} expected shape {(len(live_pos), *spec.item_shape)}, got {generated_values.shape}."
+                f"Generated column {name!r} expected shape {(n_live, *spec.item_shape)}, got {generated_values.shape}."
             )
 
         self._create_empty_stored_column(name, np.dtype(spec.dtype), spec=spec)
         self._materialized_cols[name] = metadata
         try:
-            if len(live_pos):
-                self._cols[name][live_pos] = generated_values
+            if n_live:
+                self._cols[name][self._valid_rows] = generated_values
             if create_index:
                 self.create_index(name)
         except Exception:
@@ -9941,8 +9939,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if filter_len != target_len:
             if filter_len == self.nrows:
                 physical = blosc2.zeros(target_len, dtype=np.bool_)
-                live_pos = self._live_positions_from_valid_rows_chunks()
-                physical[live_pos] = filter[:]
+                physical[self._valid_rows] = filter[:]
                 filter = physical
                 filter_intersected = True
             elif filter_len > target_len:
