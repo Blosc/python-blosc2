@@ -1327,6 +1327,20 @@ class _CTableIndexingMixin:
             if bitmap is None:
                 bitmap = self._summary_candidate_block_bitmap(primary_col_arr, plan)
             if bitmap is not None:
+                # Mask-direct: SUMMARY evaluates the predicate through miniexpr
+                # with the candidate-block bitmap, so the result is already a
+                # compressed boolean mask identical to a full scan's.  Return it
+                # as-is (no positions round-trip) when no null post-filtering is
+                # needed; the caller views it directly and extracts positions
+                # lazily.  With nullable indexed columns, fall back to positions
+                # so the per-column null sentinels are excluded.
+                if not nullable_indexed:
+                    try:
+                        mask = expr_result.compute(_candidate_blocks=bitmap)
+                    except Exception:
+                        mask = None
+                    if isinstance(mask, blosc2.NDArray) and mask.dtype == np.bool_:
+                        return mask
                 positions = self._block_pruned_positions(expr_result, bitmap, primary_col_arr)
                 if positions is not None:
                     return _exclude_null_positions(positions)

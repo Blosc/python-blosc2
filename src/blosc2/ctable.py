@@ -4649,13 +4649,45 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if len(positions) and self._known_n_rows() != total:
             keep = np.asarray(self._valid_rows[positions], dtype=bool)
             positions = positions[keep]
-        mask = np.zeros(total, dtype=np.bool_)
-        if len(positions):
-            mask[positions] = True
-        result = CTable._make_view(self, blosc2.asarray(mask))
+        result = CTable._make_view(self, self._bool_mask_from_positions(positions, total))
         result._cached_live_positions = positions
         result._n_rows = len(positions)
         return result
+
+    # Rows per chunk when building a positions view mask.  The mask is written
+    # one chunk at a time, so this trades peak memory against build time: each
+    # touched chunk costs ~one compress (time) and ~2x this many bytes (bool)
+    # held transiently (peak).  A full numpy mask is a single fast compress but
+    # materializes the whole ``total``-element array (~1 byte/row).  ~4M keeps
+    # peak to a few MB while staying few enough chunks that the per-chunk
+    # compress cost does not dominate; lower it for less memory at more chunks.
+    _MASK_BUILD_CHUNK_ROWS = 4_000_000
+
+    def _bool_mask_from_positions(self, positions: np.ndarray, total: int) -> blosc2.NDArray:
+        """Build the compressed boolean row mask for a positions view.
+
+        The mask is written chunk-by-chunk (only chunks that contain a position
+        are touched), so it never materializes the full ``total``-element
+        uncompressed array — a sparse selection out of millions of rows costs a
+        few chunk buffers instead of the whole mask.  The chunk size is capped
+        (not the column grid) so peak memory stays bounded without paying a
+        compress per column-chunk.
+        """
+        if total <= 0:
+            return blosc2.zeros(max(total, 0), dtype=np.bool_)
+        chunk_len = min(total, self._MASK_BUILD_CHUNK_ROWS)
+        mask = blosc2.zeros(total, dtype=np.bool_, chunks=(chunk_len,))
+        if len(positions) == 0:
+            return mask
+        chunk_len = int(mask.chunks[0])
+        chunk_of = positions // chunk_len
+        for c in np.unique(chunk_of):
+            lo = int(c) * chunk_len
+            hi = min(lo + chunk_len, total)
+            buf = np.zeros(hi - lo, dtype=np.bool_)
+            buf[positions[chunk_of == c] - lo] = True
+            mask[lo:hi] = buf
+        return mask
 
     def view(self, new_valid_rows):
         """Return a row-filter view backed by a boolean mask array without copying data."""
@@ -9764,7 +9796,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _guard_varlen_scalar_expression(self, expr: str) -> None:
         self._guard_scalar_expression(expr)
 
-    def where(
+    def where(  # noqa: C901
         self,
         expr_result: str | np.ndarray | blosc2.NDArray | blosc2.LazyExpr | Column,
         *,
@@ -9873,10 +9905,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         # Attempt index-accelerated filtering before falling back to a full scan.
         if isinstance(expr_result, blosc2.LazyExpr):
-            positions = self._try_index_where(expr_result)
-            if positions is not None:
-                result = self._view_from_positions(positions)
-                return result if columns is None else result.select(list(columns))
+            index_result = self._try_index_where(expr_result)
+            if index_result is not None:
+                if isinstance(index_result, blosc2.NDArray):
+                    # Mask-producing index (SUMMARY/BUCKET): keep the compressed
+                    # boolean mask and route it through the same downstream path a
+                    # plain scan uses (no positions <-> mask round-trip).  The
+                    # view extracts live positions lazily if sort_by/gather needs
+                    # them.  Position-producing indexes (FULL/PARTIAL/OPSI) still
+                    # return positions and go through _view_from_positions.
+                    expr_result = index_result
+                else:
+                    result = self._view_from_positions(index_result)
+                    return result if columns is None else result.select(list(columns))
 
         target_len = len(self._valid_rows)
         known_n_rows = self._known_n_rows()
