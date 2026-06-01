@@ -6239,18 +6239,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             list_array = batch.column(0)
             # flatten() skips null outer list rows and concatenates element values
             struct_values = list_array.flatten()
-            if max_rows is not None:
-                remaining = max_rows - rows_seen
-                if len(struct_values) > remaining:
-                    struct_values = struct_values.slice(0, remaining)
-            n_values = len(struct_values)
-            if n_values == 0:
+            if len(struct_values) == 0:
                 # Emit an empty record batch that still carries the inner schema
                 empty_arrays = [pa.array([], type=f.type) for f in inner_schema]
                 yield pa.record_batch(empty_arrays, schema=inner_schema)
                 continue
-            rows_seen += n_values
-            yield pa.RecordBatch.from_struct_array(struct_values)
+            rb = pa.RecordBatch.from_struct_array(struct_values)
+            if max_rows is not None:
+                # Slice the *record batch* rather than the flattened struct array:
+                # ListArray.flatten() can return an offset view, and some pyarrow
+                # versions don't honor that offset in from_struct_array(), which
+                # would silently import the untruncated batch.  RecordBatch.slice
+                # is always respected downstream.
+                remaining = max_rows - rows_seen
+                if len(rb) > remaining:
+                    rb = rb.slice(0, remaining)
+            rows_seen += len(rb)
+            yield rb
 
     @staticmethod
     def _flatten_arrow_struct_schema(pa, schema):
