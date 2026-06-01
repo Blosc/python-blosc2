@@ -803,3 +803,76 @@ def test_summary_cost_gate_correctness_across_selectivity(threshold):
     v = t["v"][:]
     expected = int((v > threshold).sum())
     assert t.where(t.v > threshold).nrows == expected
+
+
+@dataclasses.dataclass
+class _TwoColRow:
+    a: float = blosc2.field(blosc2.float64(), chunks=(50000,), blocks=(2048,))
+    b: float = blosc2.field(blosc2.float64(), chunks=(50000,), blocks=(2048,))
+
+
+def test_multi_column_summary_combined_block_pruning(tmp_path):
+    """A conjunction over several SUMMARY-indexed columns must AND their per-block
+    masks, pruning more than any single column — and stay scan-correct.
+
+    ``a`` ascending and ``b`` descending give tight per-block ranges, so
+    ``a > 0.8N`` and ``b > 0.8N`` prune *disjoint* blocks and their AND is empty.
+    """
+    import blosc2.ctable_indexing as cti
+
+    n = 200_000
+    a = np.arange(n, dtype="f8")
+    b = (n - 1 - np.arange(n)).astype("f8")
+    t = blosc2.CTable(_TwoColRow)
+    t.extend(list(zip(a.tolist(), b.tolist(), strict=True)))
+    path = str(tmp_path / "twocol.b2z")
+    t.to_b2z(path)
+    with blosc2.open(path, mode="a") as w:
+        w.create_index("a", kind=blosc2.IndexKind.SUMMARY)
+        w.create_index("b", kind=blosc2.IndexKind.SUMMARY)
+
+    with blosc2.open(path) as r:
+        # Per-column masks prune ~20% each; the combined (AND) mask is empty.
+        cat = dict(r._get_index_catalog())
+        expr = (r.a > 0.8 * n) & (r.b > 0.8 * n)
+        idx = r._find_indexed_columns(r._cols, cat, expr.operands)
+        combined = cti._CTableIndexingMixin._combined_summary_block_bitmap(r, expr, idx, idx[0][1])
+        a_only = r.a > 0.8 * n
+        a_idx = r._find_indexed_columns(r._cols, cat, a_only.operands)
+        a_mask = cti._CTableIndexingMixin._combined_summary_block_bitmap(r, a_only, a_idx, a_idx[0][1])
+        assert int(a_mask.sum()) > 0  # 'a' alone keeps some blocks
+        assert int(combined.sum()) == 0  # the AND prunes everything
+
+        # Correctness across several conjunctions (engaged and scan paths).
+        for cond, expected in [
+            ((r.a > 0.8 * n) & (r.b > 0.8 * n), int(((a > 0.8 * n) & (b > 0.8 * n)).sum())),
+            ((r.a > 0.6 * n) & (r.b > 0.7 * n), int(((a > 0.6 * n) & (b > 0.7 * n)).sum())),
+            ((r.a > 1000) & (r.b > 1000), int(((a > 1000) & (b > 1000)).sum())),
+        ]:
+            assert r.where(cond).nrows == expected
+
+
+@dataclasses.dataclass
+class _SortedRow:
+    v: float = blosc2.field(blosc2.float64(), chunks=(2000,), blocks=(500,))
+
+
+def test_summary_chunk_skip_scoped_extraction(tmp_path):
+    """Sorted column so a high threshold matches only the last chunk(s): exercises
+    the chunk-skip + scoped-extraction path (few candidate chunks) as well as the
+    full-mask path (many candidate chunks).  Both must be scan-correct."""
+    n = 20_000  # 10 chunks of 2000, 4 blocks each
+    v = np.arange(n, dtype="f8")  # ascending
+    t = blosc2.CTable(_SortedRow)
+    t.extend([(x,) for x in v.tolist()])
+    path = str(tmp_path / "sorted.b2z")
+    t.to_b2z(path)
+    with blosc2.open(path, mode="a") as w:
+        w.create_index("v", kind=blosc2.IndexKind.SUMMARY)
+
+    with blosc2.open(path) as r:
+        for frac in (0.05, 0.5, 0.95, 0.99, 0.999, 1.5):
+            thr = frac * n
+            assert r.where(r.v > thr).nrows == int((v > thr).sum())
+            # A negative threshold matches everything (full-mask path).
+        assert r.where(r.v > -1).nrows == n
