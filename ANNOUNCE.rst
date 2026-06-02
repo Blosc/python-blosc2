@@ -1,51 +1,69 @@
-Announcing Python-Blosc2 4.3.3
-===============================
+Announcing Python-Blosc2 4.4.0
+==============================
 
-We are happy to announce Python-Blosc2 4.3.3, a maintenance release focused on
-``CTable`` display ergonomics, indexed-query correctness, and query-planner
-performance.
+We are happy to announce Python-Blosc2 4.4.0, a feature release that brings an
+interactive TUI data viewer, automatic SUMMARY indexes for fast WHERE queries,
+chunk-aligned Arrow/Parquet imports, expanded ``where()`` acceleration, and a
+range of CTable ergonomics and performance improvements.
 
-The main improvements are:
+The main highlights are:
 
-- **Pandas/DuckDB-like CTable display**: ``str(table)`` and ``print(table)`` now
-  use a compact tabular representation by default, including a displayed logical
-  row index, numeric alignment, compact spacing, and a footer such as::
+- **New ``b2view`` interactive viewer**: a terminal-based viewer for all blosc2
+  containers (``NDArray``, ``CTable``, ``SChunk``, ``BatchArray``, …), launched
+  with ``b2view <file>`` or ``blosc2.b2view()``.  Supports full 1-D/2-D/N-D
+  browsing, ``CTable`` row navigation, a vlmeta pane, and keyboard shortcuts.
 
-      [726017 rows x 5 columns]
+- **Automatic SUMMARY indexes**: when a ``CTable`` is closed after writing,
+  SUMMARY indexes (per-block min/max) are built by default for all eligible
+  scalar columns.  They are accumulated *incrementally* during writes so the
+  close step adds almost no extra cost.  At query time, a block-skip prefilter
+  uses these bitmaps to skip blocks that cannot satisfy the WHERE predicate,
+  reducing decompression work for selective queries.
 
-- **Configurable CTable printing**: added ``blosc2.set_printoptions()`` and
-  ``blosc2.get_printoptions()`` with options for ``display_index``,
-  ``display_rows``, ``display_precision``, and ``fancy``.  Use
-  ``set_printoptions(fancy=True)`` to restore the decorated display with dtype
-  rows, separator rules, and hidden row/column counts.
+- **Chunk-aligned Arrow/Parquet imports**: fixed-size columns are now written on
+  a shared chunk/block grid and incoming batches are buffered to exact chunk
+  boundaries, so every chunk is compressed exactly once.  Dictionary columns are
+  imported in bulk.  A new ``--reduce-mem`` CLI flag caps Arrow read-batch size
+  for memory-constrained nested imports.
 
-- **Indexed-query correctness and performance**: fixed NaN-sensitive sorted
-  boundary navigation for floating-point indexes, improved index-planner
-  heuristics, and added cross-column exact index refinement for selective
-  multi-column conjunctions.
+- **``where()`` and miniexpr acceleration**: single- and two-argument ``where``
+  calls are now dispatched directly to miniexpr, avoiding numexpr overhead.
+  Sparse boolean masks trigger a fast gather path, and a new pre-check skips
+  per-chunk numexpr setup when the condition is trivially true or false.
 
-- **Faster filtered sorting and CTable internals**: small filtered views can be
-  materialized and sorted directly, and several CTable paths avoid unnecessary
-  ``valid_rows`` materialization and row-count work.
+- **``CTable.copy()`` enhancements**: a new C-level bulk copy path
+  (``chunk_copy()``) transfers pre-compressed chunks without
+  serialization/recompression.  ``copy()`` now accepts ``chunks``, ``blocks``,
+  and ``cparams`` overrides; the ``parquet-to-blosc2`` CLI gains ``--chunks``
+  and ``--blocks`` flags.
 
-- **Dictionary-column fixes**: fixed dictionary-column capacity handling during
-  Arrow import and a regression affecting dictionary columns.
+- **``sort_by()`` on views is now lazy**: sorting a filtered view returns a
+  position-reordered view whose columns are read in sorted order without a full
+  materialization pass.
 
-A small display example::
+- **``context manager`` support for ``blosc2.open()``**: all objects returned by
+  ``blosc2.open()`` now support the ``with`` statement for clean flush-and-close
+  semantics.
+
+- **``NestedColumn`` public class**: the dotted-column accessor is now a proper
+  public class with aggregate metadata (``nbytes``, ``cbytes``, ``cratio``) and
+  a structured ``.info`` report.
+
+- **Python 3.10 dropped**: Python 3.11 is now the minimum supported version.
+
+A small example showing the new SUMMARY index benefit::
 
     import blosc2
 
-    t = blosc2.open("chicago-taxi.b2z")
-    result = t.where((t.payment.tips > 100) & (t.trip.km > 0)).select(
-        ["payment.tips", "payment.total", "trip.sec", "trip.km", "company"]
-    )
+    # Create a table and let SUMMARY indexes be built automatically on close
+    t = blosc2.CTable(Row, urlpath="my_table.b2d", mode="w")
+    t.extend(data)
+    t.close()   # SUMMARY indexes built here
 
-    # Compact pandas-like display by default
-    print(result)
-
-    # Decorated display, including dtype rows and separator rules
-    blosc2.set_printoptions(fancy=True)
-    print(result)
+    # Re-open and run a selective WHERE query — block skipping kicks in
+    t = blosc2.open("my_table.b2d")
+    result = t.where(t.value > 0.99)
+    print(result[:])
 
 Install it with::
 
@@ -55,6 +73,22 @@ Install it with::
 For more info, see the release notes at:
 
 https://github.com/Blosc/python-blosc2/releases
+
+What is Python-Blosc2?
+----------------------
+
+Python-Blosc2 is a high-performance compressor, compute engine, and format
+for binary data containers that are portable, and open-source. It comes with
+a lazy expression engine allowing for complex calculations on compressed data,
+whether stored in memory, on disk, or over the network (e.g., via
+`Caterva2 <https://github.com/ironArray/Caterva2>`_).  It is especially
+optimized for storing and retrieving data from N-dimensional arrays (`NDArray`),
+columnar tables (`CTable`), and a query/indexing layer.  The main use case is
+fast, compressed, out-of-core numerical data — especially when data is too
+large to fit comfortably in RAM.
+
+More info: https://www.blosc.org/python-blosc2/getting_started/overview.html
+
 
 Sources repository
 ------------------

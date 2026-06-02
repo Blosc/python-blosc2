@@ -1,19 +1,170 @@
 # Release notes
 
-## Changes from 4.3.3 to 4.3.4
+## Changes from 4.3.3 to 4.4.0
 
-XXX version-specific blurb XXX
+This is a feature release focused on a new interactive data viewer, automatic
+SUMMARY indexes for fast WHERE queries, chunk-aligned Arrow/Parquet imports,
+expanded `where()` acceleration via miniexpr, and a range of CTable ergonomics
+and performance improvements.  Python 3.10 support has been dropped; Python
+3.11 is now the minimum.
+
+### b2view: interactive Text User Interface data viewer
+
+- **New `b2view` command**: a terminal-based interactive viewer for all
+  blosc2 containers — `NDArray`, `CTable`, `SChunk`, `BatchArray`, and more.
+  Launch it with `b2view <file>` or as `blosc2.b2view()` from Python.
+- **Full 1-D and 2-D browsing**: arrays with more than two dimensions are
+  sliceable along any axis; 1-D arrays are shown as a single-column table.
+- **CTable navigation**: scroll through rows with keyboard shortcuts; `t`/`b`
+  jump to the top/bottom; `--panel` jumps straight to a named panel on launch.
+- **`CTable.vlmeta` panel**: variable-length metadata is exposed in a dedicated
+  panel.
+- **New dim mode**: navigate along all dimensions freely for N-D arrays.
+
+### SUMMARY indexes for fast WHERE queries
+
+- **Automatic SUMMARY index creation**: when a `CTable` is closed after a
+  write session, SUMMARY indexes (per-block min/max) are built by default for
+  all eligible scalar columns with no extra configuration needed.
+- **Incremental build during writes**: indexes are accumulated block-by-block
+  during `extend()` and Arrow import, so closing the table costs almost nothing
+  beyond the write already done.
+- **Block-skip prefilter**: the miniexpr prefilter uses SUMMARY bitmaps to skip
+  entire blocks whose min/max range cannot satisfy the WHERE predicate, reducing
+  decompression work for selective queries.
+- **Conjunction support**: per-column SUMMARY block masks are combined with
+  bitwise AND so multi-column conjunctions prune blocks efficiently.
+- **Cost gate**: a cost model guards index use; the SUMMARY path is skipped when
+  block skipping is unlikely to help (e.g. very low selectivity).
+- **`--no-summary-index`**: new CLI flag for `parquet-to-blosc2` to disable
+  automatic index creation on import.
+
+### CTable column grid alignment
+
+- **Shared chunk/block grid for scalar columns**: fixed-size columns are now
+  written on a shared chunk/block grid derived from the numeric column widths,
+  so all columns have identical chunk boundaries.  This makes multi-column
+  SUMMARY scans and chunk-parallel reads significantly faster.
+- **Chunk-aligned Arrow import**: incoming Arrow/Parquet batches are buffered
+  and flushed in exact chunk-sized blocks, so each chunk is compressed exactly
+  once instead of being split across batch boundaries.
+- **Vectorized dictionary-column import**: dictionary codes are now written in
+  bulk at full chunk capacity rather than element by element.
+- **Small fixed strings on the grid**: fixed-length string columns narrow enough
+  to share the numeric grid are admitted to it, reducing the number of distinct
+  chunk sizes.
+- **`--reduce-mem`**: new CLI option for `parquet-to-blosc2` to cap the Arrow
+  read-batch size on nested `list<struct>` imports, keeping peak RSS low at a
+  modest speed cost.
+
+### CTable.copy() enhancements
+
+- **C-level bulk copy for `ListArray` and `BatchArray`**: a new `chunk_copy()`
+  method transfers pre-compressed chunks directly at the C level, bypassing
+  Python-level serialization and recompression.  `CTable.copy()` uses this path
+  automatically.
+- **`chunks=` / `blocks=` overrides in `CTable.copy()`**: callers can now
+  specify target chunk and block sizes for the output copy.
+- **`cparams` and `blocks` overrides**: `CTable.copy()` accepts `cparams` and
+  `blocks` to recompress the copy with different settings.
+- **`--chunks` / `--blocks`** added to the `parquet-to-blosc2` CLI.
 
 ### Take/gather APIs
 
 - Added `NDArray.take()` following Array API `take` shape semantics, including
   `axis=None` flattening and N-dimensional integer indices.  One-dimensional
-  gathers use the existing sparse C-level path internally.
+  gathers use a new sparse C-level path (`b2nd_get_sparse_cbuffer`) internally.
 - Extended top-level `blosc2.take()` to dispatch to `NDArray.take()`,
   `CTable.take()`, and `Column.take()` while preserving the input container
   type.
 - Added `CTable.take()` and `Column.take()` for logical row/value gathers that
   preserve order and duplicate indices, unlike mask-based views.
+- For `ndim > 1` axis-based take, orthogonal selection is used internally for
+  better performance.
+
+### where() and miniexpr acceleration
+
+- **`where(cond, x)` via miniexpr**: the single-argument `where` (fill-with-zero
+  variant) is now handled directly by the miniexpr engine when the condition is
+  a boolean array, avoiding a numexpr round-trip.
+- **`where(cond, x, y)` via miniexpr**: the two-argument flavor is likewise
+  dispatched to miniexpr for element-wise conditional selection.
+- **Sparse boolean mask fast path**: when a boolean indexing result is very
+  sparse (high selectivity), auto-detection switches to a fast gather path
+  instead of a full-array scan.
+- **Early boolean key check**: `NDArray.__getitem__` with a boolean array key
+  now detects it before the general `process_key` / `nonzero` path, avoiding
+  wasted work.
+- **Compressed transient masks**: temporary boolean masks created during
+  queries are now stored as LZ4-compressed blosc2 arrays, reducing memory
+  pressure without measurable speed regression.
+- **`BLOSC_ME_JIT` / `BLOSC_ME_JIT_TRACE`**: new environment variables to
+  control and trace the miniexpr JIT backend at runtime.
+
+### CTable views and lazy sorting
+
+- **`sort_by()` on a view is now lazy**: calling `sort_by()` on a filtered view
+  returns a position-reordered view without materializing data; the sort
+  positions are cached and used directly on column access.
+- **Lazy column materialization in filtered views**: `select()` on a view no
+  longer materializes unneeded columns eagerly; columns are resolved only when
+  accessed.
+
+### NestedColumn and .info improvements
+
+- **`NestedColumn` public class**: the previously internal
+  `_NestedColumnNamespace` has been renamed and promoted to `NestedColumn`,
+  providing aggregate metadata (`col_names`, `nrows`, `nbytes`, `cbytes`,
+  `cratio`) and a structured `.info` report over a group of dotted columns.
+- **Uniform `.info` across containers**: `Column.info`, `CTable.info`,
+  `NestedColumn.info`, and related classes now follow a consistent field order
+  (identity → shape/grid → sizes → content → compression params).
+
+### Context manager support for blosc2.open()
+
+- All objects returned by `blosc2.open()` — `NDArray`, `SChunk`, `CTable`,
+  `BatchArray`, `ListArray`, and stores — now support the `with` statement.
+  The `__exit__` method flushes and closes the underlying storage.
+
+### Performance improvements and fixes
+
+- **CTable.nrows stored persistently**: row counts are written to metadata on
+  close and read back on open, avoiding a full column scan at startup.
+- **Index sidecar loading from .b2z**: SUMMARY/BUCKET sidecars inside `.b2z`
+  archives are now read in-place rather than extracted to a temporary directory,
+  cutting open latency for indexed tables.
+- **Compressed query cache**: the hot query-result cache is now stored
+  LZ4-compressed, reducing its memory footprint with negligible overhead.
+- **Query cache consistency fixes**: on-disk query cache side effects and a
+  miniexpr chunk-cache race condition on Apple Silicon have been resolved.
+- **macOS L2 floor for chunk sizing**: on macOS the full L2 cache is used as a
+  floor for automatic chunk sizing, giving better compression/speed trade-offs.
+- **Better Apple Silicon L3 handling**: missing L3 cache on Apple Silicon is
+  handled more gracefully in the cache-size heuristic.
+- **Table capacity management**: large CTables grow more conservatively, and
+  capacity is trimmed on close and after Arrow import to reclaim over-allocated
+  space.
+- **Faster iteration with `iterchunks_info()`**: several hot loops switched to
+  `iterchunks_info()` for lower overhead per chunk.
+- **Cost-model index refinement threshold**: the previously hardcoded threshold
+  for switching between index and scan has been replaced with a data-driven cost
+  model.
+- **Index prefetch reuse**: data already prefetched during an index lookup is
+  reused in the refinement phase, avoiding redundant I/O.
+- **`DictStore` embed disabled by default**: embedding a store inside a dict
+  store is now opt-in (it was error-prone as the default).
+- **Fixed wasm32 issue**: a 32-bit platform arithmetic fix for reduce operations.
+- **Chunks never exceed array dimension**: `compute_chunks_blocks` now
+  guarantees chunk dimensions are capped at the array shape dimension.
+- **`max_rows` robust to older PyArrow**: truncation logic no longer depends on
+  PyArrow APIs that are absent in older releases.
+- **`cratio` display**: compression ratio is now shown with an explicit `x`
+  suffix (e.g. `2.47x`) throughout `.info` output.
+- Updated bundled C-Blosc2 to the latest release.
+
+### Dropped Python 3.10 support
+
+- Python 3.11 is now the minimum supported version.
 
 ## Changes from 4.3.1 to 4.3.3
 
