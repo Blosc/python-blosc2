@@ -8,3 +8,4 @@ Getting Started
     installation
     tutorials
     dsl_syntax
+    parquet_to_blosc2
