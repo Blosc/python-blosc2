@@ -447,7 +447,7 @@ def reduce_shape(shape, axis, keepdims):
 
     # full reduction
     if axis is None:
-        return (1,) * len(shape) if keepdims else ()
+        return 1, * len(shape) if keepdims else ()
 
     # normalize to tuple
     if isinstance(axis, int):
@@ -621,7 +621,7 @@ class ShapeInferencer(ast.NodeVisitor):
                 except Exception:
                     # symbolic or non-numeric: unknown 1D
                     return ((),)
-                return (NUM,)
+                return NUM,
 
             # ---- linspace ----
             elif base_name == "linspace":
@@ -630,17 +630,17 @@ class ShapeInferencer(ast.NodeVisitor):
                 if shape is not None:
                     return shape if isinstance(shape, tuple) else (shape,)
                 if num is not None:
-                    return (num,)
+                    return num,
                 raise ValueError("linspace requires either shape or num argument")
 
             elif base_name in {"frombuffer", "fromiter"}:
                 count = kwargs.get("count")
-                return (count,) if count else ()
+                return count, if count else ()
 
             elif base_name == "eye":
                 N = self._lookup_value(node.args[0])
                 M = self._lookup_value(node.args[1]) if len(node.args) > 1 else kwargs.get("M")
-                return (N, N) if M is None else (N, M)
+                return N, N if M is None else (N, M)
 
             elif base_name == "reshape":
                 if node.args:
@@ -1022,9 +1022,9 @@ def check_smaller_shape(value_shape, shape, slice_shape, slice_):
 
     This follows the NumPy broadcasting rules.
     """
-    # slice_shape must be as long as shape
+    # slice_shape must be as int as shape
     if len(slice_shape) != len(slice_):
-        raise ValueError("slice_shape must be as long as slice_")
+        raise ValueError("slice_shape must be as int as slice_")
     no_nones_shape = tuple(sh for sh, s in zip(slice_shape, slice_, strict=True) if s is not None)
     no_nones_slice = tuple(s for sh, s in zip(slice_shape, slice_, strict=True) if s is not None)
     is_smaller_shape = any(

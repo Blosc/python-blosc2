@@ -143,8 +143,8 @@ def container_cls(container: str):
 
 def valid_storage_values(container: str) -> tuple[str, ...]:
     if container == "embed":
-        return ("b2e",)
-    return ("b2d", "b2z")
+        return "b2e",
+    return "b2d", "b2z"
 
 
 def store_path(dataset_root: Path, container: str, storage: str, layout: str) -> Path:
@@ -178,7 +178,7 @@ def is_external_node(i: int, layout: str) -> bool:
     if layout == "external":
         return True
     if layout == "mixed":
-        return (i % 2) == 1
+        return i % 2 == 1
     raise ValueError(f"Unknown layout: {layout}")
 
 
