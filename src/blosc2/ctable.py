@@ -4520,7 +4520,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 eff_chunks = chunks_override if chunks_override is not None else col_storage["chunks"]
                 if chunks_override is not None and blocks_override is None:
-                    eff_blocks = None  # auto-pick blocks for the new chunk size
+                    _sb = shared_blocks if shared_blocks is not None else default_blocks
+                    if _sb is not None and all(b <= c for b, c in zip(_sb, chunks_override)):
+                        eff_blocks = _sb
+                    else:
+                        eff_blocks = None
                 else:
                     eff_blocks = blocks_override if blocks_override is not None else col_storage["blocks"]
                 disk_col = storage.create_column(
@@ -5918,7 +5922,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     @classmethod
     def _create_arrow_import_columns(
-        cls, storage: TableStorage, columns: list[CompiledColumn], capacity: int, cparams, dparams
+        cls,
+        storage: TableStorage,
+        columns: list[CompiledColumn],
+        capacity: int,
+        cparams,
+        dparams,
+        chunks_override: tuple[int, ...] | None = None,
+        blocks_override: tuple[int, ...] | None = None,
     ):
         default_chunks, default_blocks = compute_chunks_blocks((capacity,))
         # Align fixed-size scalar columns (and the _valid_rows mask) on one
@@ -5962,6 +5973,24 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     chunks, blocks = shared_chunks, shared_blocks
                 elif col.dtype is not None:
                     chunks, blocks = cls._column_chunks_blocks(col, shape)
+                if chunks_override is not None:
+                    chunks = chunks_override
+                    if blocks_override is None:
+                        # Use the shared grid's blocks so all columns stay on the
+                        # same (chunks, blocks) pair — required for fast_eval.
+                        # Letting each dtype auto-pick its own blocks produces
+                        # different values (e.g. 37376 for float32 vs 32768 for
+                        # float64), which breaks alignment across columns.
+                        # Guard: shared_blocks must fit within chunks_override.
+                        eff_blocks = shared_blocks if shared_blocks is not None else default_blocks
+                        if eff_blocks is not None and all(
+                            b <= c for b, c in zip(eff_blocks, chunks_override)
+                        ):
+                            blocks = eff_blocks
+                        else:
+                            blocks = None  # chunks too small; let blosc2 auto-pick
+                if blocks_override is not None:
+                    blocks = blocks_override
                 new_cols[col.name] = storage.create_column(
                     col.name,
                     dtype=col.dtype,
@@ -6379,6 +6408,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         column_cparams: Mapping[str, dict[str, Any]] | None = None,
         separate_nested_cols: bool = False,
         create_summary_index: bool = True,
+        chunks: int | tuple[int, ...] | None = None,
+        blocks: int | tuple[int, ...] | None = None,
     ) -> CTable:
         """Build a :class:`CTable` from an Arrow schema and iterable of record batches.
 
@@ -6559,8 +6590,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             capacity = _EXPECTED_SIZE_DEFAULT
         else:
             capacity = max(capacity_hint or 1, 1)
+        _chunks = (chunks,) if isinstance(chunks, int) else chunks
+        _blocks = (blocks,) if isinstance(blocks, int) else blocks
         storage = cls._storage_for_arrow_import(urlpath, mode)
-        new_cols, new_valid = cls._create_arrow_import_columns(storage, columns, capacity, cparams, dparams)
+        new_cols, new_valid = cls._create_arrow_import_columns(
+            storage, columns, capacity, cparams, dparams, _chunks, _blocks
+        )
         storage.save_schema(schema_to_dict(compiled))
         obj = cls._new_arrow_import_ctable(
             compiled,
@@ -9599,7 +9634,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if chunks_override is not None:
                     chunks = chunks_override
                     if blocks_override is None:
-                        blocks = None  # let blosc2 auto-pick blocks for the new chunk size
+                        eff_blocks = shared_blocks if shared_blocks is not None else default_blocks
+                        if eff_blocks is not None and all(
+                            b <= c for b, c in zip(eff_blocks, chunks_override)
+                        ):
+                            blocks = eff_blocks
+                        else:
+                            blocks = None
                 if blocks_override is not None:
                     blocks = blocks_override
                 new_cols[col.name] = mem_storage.create_column(

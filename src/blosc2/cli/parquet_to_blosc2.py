@@ -245,6 +245,27 @@ def build_parser() -> argparse.ArgumentParser:
             "coarsest lossless unit per column."
         ),
     )
+    parser.add_argument(
+        "--chunks",
+        type=int,
+        default=None,
+        help=(
+            "Chunk size (in rows) for all scalar columns in the imported CTable. "
+            "Overrides the automatic chunk size chosen by blosc2.compute_chunks_blocks(). "
+            "Only affects fixed-width scalar columns; list, varlen, and dictionary columns "
+            "use their own internal chunking."
+        ),
+    )
+    parser.add_argument(
+        "--blocks",
+        type=int,
+        default=None,
+        help=(
+            "Block size (in rows) for all scalar columns in the imported CTable. "
+            "Overrides the automatic block size chosen by blosc2.compute_chunks_blocks(). "
+            "Must be <= chunks; if omitted when --chunks is given, blosc2 picks a suitable block size."
+        ),
+    )
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[c.name for c in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
     parser.add_argument(
@@ -910,6 +931,10 @@ def print_import_plan(
     print(f"List serializer:       {args.list_serializer}")
     print(f"Codec / level:         {args.codec} / {args.clevel}")
     print(f"Use dict:              {args.use_dict}")
+    if args.chunks is not None:
+        print(f"Chunks:                {args.chunks:,}")
+    if args.blocks is not None:
+        print(f"Blocks:                {args.blocks:,}")
     trunc_global = getattr(args, "float_trunc_prec_global", None)
     trunc_columns = getattr(args, "float_trunc_prec_columns", {})
     if trunc_global is not None:
@@ -1166,6 +1191,10 @@ def import_unnamed_root_separate_cols(
     print(f"List serializer:       {args.list_serializer}")
     print(f"Codec / level:         {args.codec} / {args.clevel}")
     print(f"Use dict:              {args.use_dict}")
+    if args.chunks is not None:
+        print(f"Chunks:                {args.chunks:,}")
+    if args.blocks is not None:
+        print(f"Blocks:                {args.blocks:,}")
     print()
 
     cparams = blosc2.CParams(codec=blosc2.Codec[args.codec], clevel=args.clevel, use_dict=args.use_dict)
@@ -1184,6 +1213,8 @@ def import_unnamed_root_separate_cols(
         blosc2_items_per_block=args.blosc2_items_per_block,
         list_serializer=args.list_serializer,
         create_summary_index=args.create_summary_index,
+        chunks=args.chunks,
+        blocks=args.blocks,
     )
 
     maybe_memory_report(args, "after CTable import", pa)
@@ -1232,6 +1263,12 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         raise ValueError("--fixed-str-maxlen must be positive")
     if args.fixed_bytes_maxlen is not None and args.fixed_bytes_maxlen <= 0:
         raise ValueError("--fixed-bytes-maxlen must be positive")
+    if args.chunks is not None and args.chunks <= 0:
+        raise ValueError("--chunks must be positive")
+    if args.blocks is not None and args.blocks <= 0:
+        raise ValueError("--blocks must be positive")
+    if args.chunks is not None and args.blocks is not None and args.blocks > args.chunks:
+        raise ValueError("--blocks cannot be greater than --chunks")
     parse_float_trunc_prec_options(args)
     if args.max_rows is not None and args.max_rows < 0:
         raise ValueError("--max-rows must be non-negative")
@@ -1318,6 +1355,8 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
         list_serializer=args.list_serializer,
         column_cparams=float_trunc_column_cparams or None,
         create_summary_index=args.create_summary_index,
+        chunks=args.chunks,
+        blocks=args.blocks,
     )
     maybe_memory_report(args, "after CTable import", pa)
     store_original_arrow_metadata(ct, parquet_schema, import_schema, conversions, column_name_map)
