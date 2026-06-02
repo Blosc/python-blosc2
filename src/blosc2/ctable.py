@@ -865,13 +865,23 @@ class Column:
                 key += n_rows
             if not (0 <= key < n_rows):
                 raise IndexError(f"index {key} is out of bounds for column with size {n_rows}")
-            pos_true = _find_physical_index(self._valid_rows, key)
+            # For sorted views the cached positions hold rows in sorted (not
+            # physical-ascending) order — use the key-th entry directly.
+            _slp = getattr(self._table, "_cached_live_positions", None)
+            if _slp is not None and self._table.base is not None:
+                pos_true = int(_slp[key])
+            else:
+                pos_true = _find_physical_index(self._valid_rows, key)
             if self.is_dictionary:
                 return self._raw_col[int(pos_true)]
             return self._maybe_decode_timestamp_values(self._raw_col[int(pos_true)])
 
         elif isinstance(key, slice):
-            real_pos = np.where(self._valid_rows[:])[0]
+            _slp = getattr(self._table, "_cached_live_positions", None)
+            if _slp is not None and self._table.base is not None:
+                real_pos = _slp
+            else:
+                real_pos = np.where(self._valid_rows[:])[0]
             start, stop, step = key.indices(len(real_pos))
             if start >= stop:
                 if self.is_list or self.is_varlen_scalar or self.is_dictionary:
@@ -895,7 +905,11 @@ class Column:
                 raise IndexError(
                     f"Boolean mask length {len(key)} does not match number of live rows {n_live}."
                 )
-            all_pos = np.where(self._valid_rows[:])[0]
+            _slp = getattr(self._table, "_cached_live_positions", None)
+            if _slp is not None and self._table.base is not None:
+                all_pos = _slp
+            else:
+                all_pos = np.where(self._valid_rows[:])[0]
             phys_indices = all_pos[key]
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
@@ -905,7 +919,11 @@ class Column:
             return self._maybe_decode_timestamp_values(self._raw_col[phys_indices])
 
         elif isinstance(key, (list, tuple, np.ndarray)):
-            real_pos = np.where(self._valid_rows[:])[0]
+            _slp = getattr(self._table, "_cached_live_positions", None)
+            if _slp is not None and self._table.base is not None:
+                real_pos = _slp
+            else:
+                real_pos = np.where(self._valid_rows[:])[0]
             phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
@@ -4147,7 +4165,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             index += n_rows
         if not (0 <= index < n_rows):
             raise IndexError(f"row index {index} is out of bounds for table with {n_rows} rows")
-        pos = _find_physical_index(self._valid_rows, index)
+        _slp = getattr(self, "_cached_live_positions", None)
+        if _slp is not None and self.base is not None:
+            pos = int(_slp[index])
+        else:
+            pos = _find_physical_index(self._valid_rows, index)
 
         nested_meta = self._schema.metadata.get("nested") if self._schema.metadata else None
         reconstruct = isinstance(nested_meta, dict) and bool(nested_meta.get("reconstruct_rows", False))
@@ -9319,6 +9341,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if inplace:
             self._sort_by_inplace(sorted_pos, n)
             return self
+
+        # When sorting a view, return a new lazy sorted view rather than
+        # eagerly materialising all columns.  The new view shares _cols with
+        # the base and stores the sorted physical positions in
+        # _cached_live_positions.  Column reads and row iteration on the result
+        # use those positions directly, so columns are fetched on demand and in
+        # the correct sorted order — identical performance to pre-projecting
+        # with columns= before calling sort_by.
+        if self.base is not None:
+            result = CTable._make_view(self, self._valid_rows)
+            result._cached_live_positions = sorted_pos
+            result._n_rows = n
+            return result
 
         return self._sorted_copy_from_positions(sorted_pos, n)
 
