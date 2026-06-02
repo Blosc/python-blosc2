@@ -7,10 +7,13 @@
 #######################################################################
 import os
 import time
+
 import numpy as np
+from memory_profiler import memory_usage
+
 import blosc2
 from blosc2 import DictStore
-from memory_profiler import memory_usage
+
 
 def make_arrays(n, min_size, max_size, dtype="f8"):
     sizes = np.linspace(min_size, max_size, n).astype(int)

@@ -66,7 +66,7 @@ class TableStorage:
     ) -> blosc2.NDArray:
         raise NotImplementedError
 
-    def install_column(self, name: str, ndarray: "blosc2.NDArray") -> "blosc2.NDArray":
+    def install_column(self, name: str, ndarray: blosc2.NDArray) -> blosc2.NDArray:
         """Store a pre-built NDArray as column *name*, preserving its storage config.
 
         Faster than create_column + fill when the caller already has the fully
@@ -88,7 +88,7 @@ class TableStorage:
     ) -> ListArray:
         raise NotImplementedError
 
-    def install_list_column(self, name: str, list_array: "ListArray") -> "ListArray":
+    def install_list_column(self, name: str, list_array: ListArray) -> ListArray:
         """Store a pre-built ListArray as column *name*.
 
         Faster than create_list_column + extend when the caller already has the
@@ -225,7 +225,7 @@ class InMemoryTableStorage(TableStorage):
             kwargs["dparams"] = dparams
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
-    def install_column(self, name, ndarray: "blosc2.NDArray") -> "blosc2.NDArray":
+    def install_column(self, name, ndarray: blosc2.NDArray) -> blosc2.NDArray:
         """Store a pre-built NDArray as column *name* (skips the zeros+fill pattern)."""
         return ndarray
 
@@ -240,7 +240,7 @@ class InMemoryTableStorage(TableStorage):
             kwargs["dparams"] = dparams
         return ListArray(spec=spec, **kwargs)
 
-    def install_list_column(self, name, list_array: "ListArray") -> "ListArray":
+    def install_list_column(self, name, list_array: ListArray) -> ListArray:
         """Store a pre-built ListArray (in-memory: chunk_copy without urlpath)."""
         return list_array.copy()
 
@@ -500,7 +500,7 @@ class FileTableStorage(TableStorage):
         store[self._col_key(name)] = col
         return store[self._col_key(name)]
 
-    def install_column(self, name, ndarray: "blosc2.NDArray") -> "blosc2.NDArray":
+    def install_column(self, name, ndarray: blosc2.NDArray) -> blosc2.NDArray:
         """Store a pre-built NDArray as column *name* (skips the zeros+fill pattern)."""
         store = self._open_store()
         store[self._col_key(name)] = ndarray
@@ -518,7 +518,7 @@ class FileTableStorage(TableStorage):
         os.makedirs(os.path.dirname(self._list_col_path(name)), exist_ok=True)
         return ListArray(spec=spec, **kwargs)
 
-    def install_list_column(self, name, list_array: "ListArray") -> "ListArray":
+    def install_list_column(self, name, list_array: ListArray) -> ListArray:
         """Bulk-copy a pre-built ListArray to the column path (chunk-level transfer)."""
         dest_path = self._list_col_path(name)
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
@@ -1015,7 +1015,7 @@ class TreeStoreTableStorage(TableStorage):
         self._store._modified = True
         return col
 
-    def install_column(self, name: str, ndarray: "blosc2.NDArray") -> "blosc2.NDArray":
+    def install_column(self, name: str, ndarray: blosc2.NDArray) -> blosc2.NDArray:
         dest_path = self._dest_path(self._col_logical_key(name), ".b2nd")
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         saved = ndarray.copy(urlpath=dest_path)
@@ -1047,7 +1047,7 @@ class TreeStoreTableStorage(TableStorage):
         os.makedirs(os.path.dirname(self._list_col_path(name)), exist_ok=True)
         return ListArray(spec=spec, **kwargs)
 
-    def install_list_column(self, name: str, list_array: "ListArray") -> "ListArray":
+    def install_list_column(self, name: str, list_array: ListArray) -> ListArray:
         """Bulk-copy a pre-built ListArray to the column path (chunk-level transfer)."""
         dest_path = self._list_col_path(name)
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)

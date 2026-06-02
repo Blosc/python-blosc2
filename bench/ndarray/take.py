@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import argparse
 import shutil
-import sys
 import tempfile
+import threading
 import time
+import time as _time
 from pathlib import Path
 
 import h5py
@@ -32,8 +33,6 @@ import hdf5plugin
 import matplotlib.pyplot as plt
 import numpy as np
 import psutil
-import threading
-import time as _time
 import zarr
 from zarr.codecs import BloscCodec, BytesCodec
 
@@ -124,7 +123,6 @@ def create_arrays(shape, dtype=np.float64, del_source=False):
 # benchmark runner
 # ---------------------------------------------------------------------------
 
-import psutil
 
 
 def _peak_memory(func, *args, **kwargs):
@@ -240,7 +238,7 @@ def run_benchmark(a_b2, a_np, a_z, a_h5, ndim, n_runs=3, sparse=False,
             )
             actual_counts.append(n_actual)
             continue
-        elif sparse:
+        if sparse:
             # --- sparse path (axis=None, flat element gather) -------------
             # numpy
             elapsed = []

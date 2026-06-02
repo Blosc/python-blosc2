@@ -1701,7 +1701,7 @@ def compute_chunks_blocks(  # noqa: C901
         # chunks never exceed the array size.
         chunks = [
             min(s, c if c % b == 0 else (c // b + 1) * b)
-            for s, c, b in zip(shape, chunks, blocks)
+            for s, c, b in zip(shape, chunks, blocks, strict=False)
         ]
 
     return tuple(chunks), tuple(blocks)

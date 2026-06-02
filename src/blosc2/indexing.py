@@ -199,7 +199,7 @@ def _purge_stale_persistent_caches() -> None:
         _hot_cache_clear(scope=scope)
 
 
-def _open_sidecar_file(path: str, mmap_mode=None) -> "blosc2.NDArray":
+def _open_sidecar_file(path: str, mmap_mode=None) -> blosc2.NDArray:
     """Open an index sidecar file, using zip-offset access when registered."""
     reg = _SIDECAR_ZIP_REGISTRY.get(path)
     if reg is not None:

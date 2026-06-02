@@ -1090,7 +1090,7 @@ def _apply_parquet_batch_memory_budget(args, sample, n_outer_sampled: int) -> No
         args.parquet_batch_size = min(args.parquet_batch_size, budget_rows)
 
 
-def import_unnamed_root_separate_cols(
+def import_unnamed_root_separate_cols(  # noqa: C901
     args,
     input_path: Path,
     output_path: Path,
@@ -1252,7 +1252,7 @@ def import_unnamed_root_separate_cols(
     return col_names
 
 
-def import_parquet_to_ctable(args, input_path: Path, output_path: Path):
+def import_parquet_to_ctable(args, input_path: Path, output_path: Path):  # noqa: C901
     if args.parquet_batch_size <= 0:
         raise ValueError("--parquet-batch-size must be positive")
     if args.blosc2_batch_size is not None and args.blosc2_batch_size <= 0:

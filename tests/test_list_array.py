@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 
 import blosc2
@@ -184,8 +186,6 @@ def test_listarray_copy_large_batch(tmp_path):
 # ---------------------------------------------------------------------------
 # CTable integration: copy with list column uses fast path
 # ---------------------------------------------------------------------------
-
-from dataclasses import dataclass
 
 
 @dataclass

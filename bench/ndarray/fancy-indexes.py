@@ -38,7 +38,6 @@ Benchmarked paths
 from __future__ import annotations
 
 import argparse
-import sys
 import threading
 import time as _time
 from time import perf_counter

@@ -4422,7 +4422,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self.save(urlpath, overwrite=overwrite)
         return os.path.abspath(urlpath)
 
-    def _save_to_storage(
+    def _save_to_storage(  # noqa: C901
         self,
         storage: TableStorage,
         *,
@@ -4477,7 +4477,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         name,
                         spec=col.spec,
                         cparams=eff_cparams,
-                        dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
+                        dparams=col.config.dparams
+                        if col.config.dparams is not None
+                        else self._table_dparams,
                     )
                     if n_live > 0:
                         items = src_la[:n_live] if no_deletions else (src_la[int(pos)] for pos in live_pos)
@@ -4532,7 +4534,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if (
                 no_deletions
                 and src_arr.shape[0] == n_live
-                and (chunks_override is not None or blocks_override is not None or cparams_override is not None)
+                and (
+                    chunks_override is not None
+                    or blocks_override is not None
+                    or cparams_override is not None
+                )
             ):
                 copy_kwargs: dict[str, Any] = {}
                 if chunks_override is not None:
@@ -4547,7 +4553,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 eff_chunks = chunks_override if chunks_override is not None else col_storage["chunks"]
                 if chunks_override is not None and blocks_override is None:
                     _sb = shared_blocks if shared_blocks is not None else default_blocks
-                    if _sb is not None and all(b <= c for b, c in zip(_sb, chunks_override)):
+                    if _sb is not None and all(b <= c for b, c in zip(_sb, chunks_override, strict=False)):
                         eff_blocks = _sb
                     else:
                         eff_blocks = None
@@ -6010,7 +6016,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         # Guard: shared_blocks must fit within chunks_override.
                         eff_blocks = shared_blocks if shared_blocks is not None else default_blocks
                         if eff_blocks is not None and all(
-                            b <= c for b, c in zip(eff_blocks, chunks_override)
+                            b <= c for b, c in zip(eff_blocks, chunks_override, strict=False)
                         ):
                             blocks = eff_blocks
                         else:
@@ -9443,7 +9449,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         result._last_pos = n
         return result
 
-    def copy(
+    def copy(  # noqa: C901
         self,
         compact: bool = True,
         *,
@@ -9569,18 +9575,30 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             col_name = col.name
             arr = self._cols[col_name]
             if self._is_list_column(col):
-                src = arr[:n_live] if is_dense else (arr[int(pos)] for pos in live_pos) if compact else (arr[i] for i in range(n))
+                src = (
+                    arr[:n_live]
+                    if is_dense
+                    else (arr[int(pos)] for pos in live_pos)
+                    if compact
+                    else (arr[i] for i in range(n))
+                )
                 result._cols[col_name].extend(src, validate=False)
                 result._cols[col_name].flush()
             elif self._is_dictionary_column(col):
                 # Copy dictionary values, then copy (live) codes.
                 for v in arr.dictionary:
                     result._cols[col_name].encode(v)
-                pos_slice = np.arange(n_live, dtype=np.int64) if is_dense else (live_pos if compact else np.arange(n, dtype=np.int64))
+                pos_slice = (
+                    np.arange(n_live, dtype=np.int64)
+                    if is_dense
+                    else (live_pos if compact else np.arange(n, dtype=np.int64))
+                )
                 raw_codes = arr.codes[pos_slice]
                 result._cols[col_name].codes[:n] = raw_codes
             else:
-                result._cols[col_name][:n] = arr[:n_live] if is_dense else (arr[live_pos] if compact else arr[:n])
+                result._cols[col_name][:n] = (
+                    arr[:n_live] if is_dense else (arr[live_pos] if compact else arr[:n])
+                )
 
         if compact:
             result._valid_rows[:n] = True
@@ -9660,7 +9678,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     if blocks_override is None:
                         eff_blocks = shared_blocks if shared_blocks is not None else default_blocks
                         if eff_blocks is not None and all(
-                            b <= c for b, c in zip(eff_blocks, chunks_override)
+                            b <= c for b, c in zip(eff_blocks, chunks_override, strict=False)
                         ):
                             blocks = eff_blocks
                         else:
