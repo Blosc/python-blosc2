@@ -31,7 +31,7 @@ HDF5 = False
 SPARSE = False
 
 if HDF5:
-    SPARSE = True  # HDF5 takes too long for non-sparse indexing
+    SPARSE = True  # HDF5 takes too int for non-sparse indexing
 
 
 def genarray(r, verbose=True):

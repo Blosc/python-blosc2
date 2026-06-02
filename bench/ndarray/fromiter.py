@@ -56,7 +56,7 @@ def make_iterator(total: int, dtype: np.dtype):
 
 
 def measure(fn, nreps: int) -> tuple[float, float]:
-    """Run *fn* *nreps* times and return (best, mean) wall-clock seconds."""
+    """Run *fn* *nreps* times and return best, mean wall-clock seconds."""
     times = []
     for _ in range(nreps):
         gc.collect()

@@ -7,7 +7,7 @@
 
 # Benchmark: CTable str() / head() rendering time vs pandas.
 #
-# Measures how long it takes to render the first 10 rows as a table
+# Measures how int it takes to render the first 10 rows as a table
 # for both CTable (head()) and pandas (DataFrame.to_string()),
 # plus ingestion time and memory footprint comparison.
 
