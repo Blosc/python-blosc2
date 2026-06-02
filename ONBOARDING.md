@@ -1,6 +1,6 @@
 # Onboarding for new contributors
 
-Welcome to python-blosc2!  This document gives you the lay of the land before
+Welcome to Python-Blosc2!  This document gives you the lay of the land before
 you open your first PR.  For build instructions, testing commands, and tooling
 setup, see [README_DEVELOPERS.md](README_DEVELOPERS.md).
 
@@ -8,11 +8,9 @@ setup, see [README_DEVELOPERS.md](README_DEVELOPERS.md).
 
 ## What the project is
 
-python-blosc2 is a Python wrapper around the [C-Blosc2](https://github.com/Blosc/c-blosc2)
-compression library, extended with a NumPy-compatible N-dimensional array
-(`NDArray`), a columnar table (`CTable`), a lazy expression engine, and a
-query/indexing layer.  The main use case is fast, compressed, out-of-core
-numerical data — especially when data is too large to fit comfortably in RAM.
+Python-Blosc2 is a high-performance compressor, compute engine, and format for binary data containers that are portable, and open-source. It comes with a lazy expression engine allowing for complex calculations on compressed data, whether stored in memory, on disk, or over the network (e.g., via `Caterva2 <https://github.com/ironArray/Caterva2>`_).  It is especially optimized for storing and retrieving data from N-dimensional arrays (`NDArray`), columnar tables (`CTable`), and a query/indexing layer.  The main use case is fast, compressed, out-of-core numerical data — especially when data is too large to fit comfortably in RAM.
+
+[C-Blosc2](https://www.blosc.org/c-blosc2/c-blosc2.html) is used under the hood as its compression backend. Written in C, and building on its predecessor [C-Blosc](https://github.com/Blosc/c-blosc), C-Blosc2 aims to be an extremely fast meta-compressor for binary data, supporting a diverse set of strategies, and with an extensible plugin architecture for a wide range of codecs and filters.
 
 ---
 
