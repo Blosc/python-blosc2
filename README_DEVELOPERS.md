@@ -1,6 +1,6 @@
 # Requirements for developers
 
-Python 3.10–3.14 is supported.
+Python 3.11–3.14 is supported.
 
 ## Setting up a development environment
 
