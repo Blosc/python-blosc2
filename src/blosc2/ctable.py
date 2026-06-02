@@ -4400,6 +4400,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self,
         storage: TableStorage,
         *,
+        chunks_override: tuple[int, ...] | None = None,
         blocks_override: tuple[int, ...] | None = None,
         cparams_override: dict[str, Any] | None = None,
     ) -> None:
@@ -4505,9 +4506,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if (
                 no_deletions
                 and src_arr.shape[0] == n_live
-                and (blocks_override is not None or cparams_override is not None)
+                and (chunks_override is not None or blocks_override is not None or cparams_override is not None)
             ):
                 copy_kwargs: dict[str, Any] = {}
+                if chunks_override is not None:
+                    copy_kwargs["chunks"] = chunks_override
                 if blocks_override is not None:
                     copy_kwargs["blocks"] = blocks_override
                 if cparams_override is not None:
@@ -4515,12 +4518,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 new_arr = src_arr.copy(**copy_kwargs)
                 storage.install_column(name, new_arr)
             else:
+                eff_chunks = chunks_override if chunks_override is not None else col_storage["chunks"]
+                if chunks_override is not None and blocks_override is None:
+                    eff_blocks = None  # auto-pick blocks for the new chunk size
+                else:
+                    eff_blocks = blocks_override if blocks_override is not None else col_storage["blocks"]
                 disk_col = storage.create_column(
                     name,
                     dtype=col.dtype,
                     shape=shape,
-                    chunks=col_storage["chunks"],
-                    blocks=blocks_override if blocks_override is not None else col_storage["blocks"],
+                    chunks=eff_chunks,
+                    blocks=eff_blocks,
                     cparams=cparams_override if cparams_override is not None else col_storage.get("cparams"),
                     dparams=col_storage.get("dparams"),
                 )
@@ -9382,6 +9390,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         *,
         urlpath: str | os.PathLike[str] | None = None,
         overwrite: bool = False,
+        chunks: int | tuple[int, ...] | None = None,
         blocks: int | tuple[int, ...] | None = None,
         cparams: dict[str, Any] | None = None,
     ) -> CTable:
@@ -9409,6 +9418,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             in-memory copy.
         overwrite:
             If ``True``, replace an existing persistent destination.
+        chunks:
+            Chunk size (in items) to use for all scalar columns in the copy.
+            Overrides the chunk size inherited from the source schema.  Pass an
+            ``int`` for a 1-D chunk or a ``tuple`` for multi-dimensional arrays.
         blocks:
             Block size (in items) to use for all scalar columns in the copy.
             Overrides the block size inherited from the source schema.  Pass an
@@ -9421,14 +9434,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if urlpath is not None:
             urlpath = os.fspath(urlpath)
-            if blocks is not None or cparams is not None:
+            if chunks is not None or blocks is not None or cparams is not None:
                 # When storage layout changes we must go through _save_to_storage
                 # directly — to_b2z/to_b2d may take the physical-pack fast path
                 # which zips existing compressed leaves as-is, silently ignoring
-                # any block/cparams override.
+                # any chunk/block/cparams override.
                 # For views (base is not None) _save_to_storage already limits
                 # iteration to self._schema.columns and self._cols, so no in-memory
                 # intermediate is needed.
+                _chunks = (chunks,) if isinstance(chunks, int) else chunks
                 _blocks = (blocks,) if isinstance(blocks, int) else blocks
                 file_storage = FileTableStorage(urlpath, "w")
                 target_path = file_storage._root
@@ -9441,7 +9455,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         shutil.rmtree(target_path)
                     else:
                         os.remove(target_path)
-                self._save_to_storage(file_storage, blocks_override=_blocks, cparams_override=cparams)
+                self._save_to_storage(
+                    file_storage,
+                    chunks_override=_chunks,
+                    blocks_override=_blocks,
+                    cparams_override=cparams,
+                )
                 file_storage.close()
                 # Open with mode="a" so _build_summary_indexes() fires automatically,
                 # then re-open read-only for the caller.
@@ -9478,8 +9497,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # ~30× faster than fancy indexing.  Check via O(1) boundary test.
         is_dense = compact and n_live > 0 and int(live_pos[0]) == 0 and int(live_pos[-1]) == n_live - 1
 
+        _chunks = (chunks,) if isinstance(chunks, int) else chunks
         _blocks = (blocks,) if isinstance(blocks, int) else blocks
-        result = self._empty_copy(capacity=n, blocks_override=_blocks, cparams_override=cparams)
+        result = self._empty_copy(
+            capacity=n,
+            chunks_override=_chunks,
+            blocks_override=_blocks,
+            cparams_override=cparams,
+        )
 
         for col in self._schema.columns:
             col_name = col.name
@@ -9513,6 +9538,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self,
         capacity: int | None = None,
         *,
+        chunks_override: tuple[int, ...] | None = None,
         blocks_override: tuple[int, ...] | None = None,
         cparams_override: dict[str, Any] | None = None,
     ) -> CTable:
@@ -9570,6 +9596,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         chunks, blocks = shared_chunks, shared_blocks
                     else:
                         chunks, blocks = self._column_chunks_blocks(col, shape)
+                if chunks_override is not None:
+                    chunks = chunks_override
+                    if blocks_override is None:
+                        blocks = None  # let blosc2 auto-pick blocks for the new chunk size
                 if blocks_override is not None:
                     blocks = blocks_override
                 new_cols[col.name] = mem_storage.create_column(
