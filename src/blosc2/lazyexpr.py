@@ -4045,7 +4045,7 @@ class LazyExpr(LazyArray):
                     if len(self._where_args) == 1:
                         # We have a single argument
                         where_x = self._where_args["_where_x"]
-                        return (where_x[:][lazy_expr])[key]
+                        return where_x[:][lazy_expr][key]
                     if len(self._where_args) == 2:
                         # We have two arguments
                         where_x = self._where_args["_where_x"]

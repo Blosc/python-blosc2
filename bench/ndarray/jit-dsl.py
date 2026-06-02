@@ -85,7 +85,7 @@ def mandelbrot_dsl(cr, ci, max_iter):
         zi = zi2
         i = i + 1
     # Mandelbrot-like iterate z <- z^2 + c (returns final magnitude proxy).
-    return (zr * zr) + (zi * zi)
+    return zr * zr + (zi * zi)
 
 
 def _bench_cold_warm(fn, reps: int, warmup: int) -> tuple[float, float, float]:

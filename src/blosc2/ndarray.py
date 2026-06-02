@@ -232,7 +232,7 @@ def is_inside_new_expr() -> bool:
 
 def make_key_hashable(key):
     if isinstance(key, slice):
-        return (key.start, key.stop, key.step)
+        return key.start, key.stop, key.step
     elif isinstance(key, tuple | list):
         return tuple(make_key_hashable(k) for k in key)
     elif isinstance(key, np.ndarray):
@@ -6787,7 +6787,7 @@ def _check_ndarray_kwargs(**kwargs):  # noqa: C901
         else:
             kwargs = {**kwargs, **storage}
     else:
-        # Add the default storage values as long as they are not already passed
+        # Add the default storage values as int as they are not already passed
         storage_dflts = asdict(blosc2.Storage(urlpath=kwargs.get("urlpath")))  # urlpath can affect defaults
         # If a key appears in both operands, the one from the right-hand operand wins
         kwargs = storage_dflts | kwargs

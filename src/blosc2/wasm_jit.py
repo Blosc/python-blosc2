@@ -131,11 +131,11 @@ _REGISTER_HELPERS_JS = r"""
     if (isWasmTable(value)) {
       return true;
     }
-    return (
+    return 
       typeof value.get === "function" &&
       typeof value.grow === "function" &&
       typeof value.length === "number"
-    );
+    ;
   };
 
   const findMemoryOrTableByType = (wantMemory) => {

@@ -115,7 +115,7 @@ def _insert_with_strategy(
     catalog = _load_or_create_catalog(arr, state, strategy)
     if digest in catalog.get("entries", {}):
         end = time.perf_counter_ns()
-        return (end - start) / 1_000_000
+        return end - start / 1_000_000
 
     store = _load_or_create_store(arr, state, strategy)
     slot = len(store)
@@ -137,7 +137,7 @@ def _insert_with_strategy(
         state.catalog = catalog
 
     end = time.perf_counter_ns()
-    return (end - start) / 1_000_000
+    return end - start / 1_000_000
 
 
 def _flush_state(arr: blosc2.NDArray, state: InsertState | None, strategy: str) -> None:

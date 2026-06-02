@@ -642,7 +642,7 @@ import numpy as np
 
 @blosc2.dsl_kernel
 def kernel_const_subexpr(x, start, step):
-    return (start + step) * x
+    return start + step * x
 
 
 x = blosc2.asarray(np.linspace(0.8, 1.2, 100000, dtype=np.float64), chunks=(10000,), blocks=(2000,))
@@ -869,7 +869,7 @@ def kernel_save_loop(x, y):
 
 
 def _save_reload_compute(kernel, inputs_np, inputs_b2, dtype, urlpaths, extra_kwargs=None):
-    """Save a LazyUDF backed by *kernel*, reload it, and return (reloaded_expr, result)."""
+    """Save a LazyUDF backed by *kernel*, reload it, and return reloaded_expr, result."""
     lazy = blosc2.lazyudf(kernel, inputs_b2, dtype=dtype, **(extra_kwargs or {}))
     lazy.save(urlpath=urlpaths["lazy"])
     reloaded = blosc2.open(urlpaths["lazy"], mode="r")

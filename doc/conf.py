@@ -257,7 +257,7 @@ def linkcode_resolve(domain, info):
 def process_sig(app, what, name, obj, options, signature, return_annotation):
     if signature and hidden in signature:
         signature = signature.split(hidden)[0] + ")"
-    return (signature, return_annotation)
+    return signature, return_annotation
 
 
 def setup(app):
