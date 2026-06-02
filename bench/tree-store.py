@@ -82,7 +82,10 @@ def _leaf_shape(ndim: int, max_elems: int) -> tuple[int, ...]:
 
 
 def create_store(
-    nlevels: int, nleaves: int, max_elems: int, nrows: int,
+    nlevels: int,
+    nleaves: int,
+    max_elems: int,
+    nrows: int,
     no_vlmeta: bool = False,
 ) -> tuple[float, int]:
     """Create the TreeStore; return (wall_clock, total_elements_written)."""
@@ -101,32 +104,27 @@ def create_store(
             else:
                 leaf_arrays_np[ndim] = np.array(0.5, dtype=np.float64)
         else:
-            leaf_arrays_np[ndim] = blosc2.linspace(0, 1, num=nelem,
-                shape=shape, dtype=np.float64)
+            leaf_arrays_np[ndim] = blosc2.linspace(0, 1, num=nelem, shape=shape, dtype=np.float64)
 
-    total_elements = sum(
-        leaf_arrays_np[ndim].size for ndim in range(nleaves)
-    ) * nlevels
+    total_elements = sum(leaf_arrays_np[ndim].size for ndim in range(nleaves)) * nlevels
 
     # Pre-populate a single CTable that we will copy for every level.
     tmpl_table = blosc2.CTable(_Row, expected_size=nrows, validate=False)
-    rows = [
-        (i % 2 == 0, i, float(i) * 1.5, f"str_{i:06d}") for i in range(nrows)
-    ]
+    rows = [(i % 2 == 0, i, float(i) * 1.5, f"str_{i:06d}") for i in range(nrows)]
     tmpl_table.extend(rows, validate=False)
 
-    print(f"\nCreating TreeStore with {nlevels} level(s), "
-          f"{nleaves} leave(s) each, {nrows} CTable row(s) per level...")
+    print(
+        f"\nCreating TreeStore with {nlevels} level(s), "
+        f"{nleaves} leave(s) each, {nrows} CTable row(s) per level..."
+    )
     print(f"  Max elements per leaf:  {max_elems:,}")
     for ndim in range(min(nleaves, 10)):
         shape = _leaf_shape(ndim, max_elems)
         nelem = int(np.prod(shape)) if shape else 1
-        print(f"    leaf{ndim}: shape={shape}, elements={nelem:,}, "
-              f"uncompressed={_fmt_bytes(nelem * 8)}")
+        print(f"    leaf{ndim}: shape={shape}, elements={nelem:,}, uncompressed={_fmt_bytes(nelem * 8)}")
     if nleaves > 10:
         print(f"    ... ({nleaves - 10} more)")
-    print(f"  CTable rows: {nrows}  |  "
-          f"uncompressed table size: {_fmt_bytes(tmpl_table.nbytes)}")
+    print(f"  CTable rows: {nrows}  |  uncompressed table size: {_fmt_bytes(tmpl_table.nbytes)}")
 
     t0 = time.perf_counter()
     tstore = blosc2.TreeStore(OUTPUT_FILE, mode="w")
@@ -147,9 +145,9 @@ def create_store(
                     arr.vlmeta["is_even"] = leaf % 2 == 0  # bool
                     arr.vlmeta["index"] = leaf  # int
                     arr.vlmeta["value"] = float(leaf) * 0.5  # float
-                    arr.vlmeta["complex"] = f"{leaf}+{leaf*2}j"  # complex as string
+                    arr.vlmeta["complex"] = f"{leaf}+{leaf * 2}j"  # complex as string
                     arr.vlmeta["label"] = f"leaf_{leaf}"  # string
-                    arr.vlmeta["tags"] = [f"tag_{leaf}", f"tag_{leaf+1}"]  # list
+                    arr.vlmeta["tags"] = [f"tag_{leaf}", f"tag_{leaf + 1}"]  # list
                     arr.vlmeta["coords"] = [leaf, leaf * 2]  # list (vlmeta compatible)
                     arr.vlmeta["meta"] = {"key": f"val_{leaf}", "n": leaf}  # dict
                 tstore[key] = arr
@@ -167,8 +165,7 @@ def create_store(
                 ct.vlmeta["tags_list"] = ["benchmark", "testing", f"level_{level}"]
 
             if (level + 1) % max(1, nlevels // 10) == 0 or level == nlevels - 1:
-                print(f"  Level {level + 1}/{nlevels} done "
-                      f"({time.perf_counter() - t0:.2f}s so far)")
+                print(f"  Level {level + 1}/{nlevels} done ({time.perf_counter() - t0:.2f}s so far)")
     finally:
         tstore.close()
 
@@ -209,8 +206,9 @@ def list_store() -> float:
         tstore.close()
 
     elapsed = time.perf_counter() - t0
-    print(f"  Walked {n_arrays} NDArray leaves ({_fmt_bytes(total_ndim_bytes)}) "
-          f"and {n_tables} CTable leaves")
+    print(
+        f"  Walked {n_arrays} NDArray leaves ({_fmt_bytes(total_ndim_bytes)}) and {n_tables} CTable leaves"
+    )
     print(f"  Listed in {elapsed:.3f}s")
     return elapsed
 
@@ -237,8 +235,7 @@ def open_and_list() -> tuple[float, float]:
 
     tstore.close()
 
-    print(f"  Open: {t_open:.3f}s  |  Listing: {t_list:.3f}s  "
-          f"({n_arrays} array(s), {n_tables} CTable(s))")
+    print(f"  Open: {t_open:.3f}s  |  Listing: {t_list:.3f}s  ({n_arrays} array(s), {n_tables} CTable(s))")
     return t_open, t_list
 
 
@@ -250,28 +247,38 @@ def main() -> None:
         description="Benchmark TreeStore hierarchy creation / opening / listing",
     )
     parser.add_argument(
-        "--nlevels", type=int, default=10,
+        "--nlevels",
+        type=int,
+        default=10,
         help="Number of hierarchy levels (default: %(default)s)",
     )
     parser.add_argument(
-        "--nleaves", type=int, default=10,
+        "--nleaves",
+        type=int,
+        default=10,
         help="Number of NDArray leaves per level (default: %(default)s)",
     )
     parser.add_argument(
-        "--max-elems", type=int, default=1_000_000,
+        "--max-elems",
+        type=int,
+        default=1_000_000,
         help="Max elements per leaf; leafN gets N-d shape with "
-             "side = int(max_elems^(1/N)) (default: %(default)s)",
+        "side = int(max_elems^(1/N)) (default: %(default)s)",
     )
     parser.add_argument(
-        "--nrows", type=int, default=1000,
+        "--nrows",
+        type=int,
+        default=1000,
         help="Number of rows in the per-level CTable (default: %(default)s)",
     )
     parser.add_argument(
-        "--no-create", action="store_true",
+        "--no-create",
+        action="store_true",
         help="Skip creation; only open/list an existing file",
     )
     parser.add_argument(
-        "--no-vlmeta", action="store_true",
+        "--no-vlmeta",
+        action="store_true",
         help="Skip adding vlmeta attributes to leaves and groups",
     )
     args = parser.parse_args()
@@ -279,14 +286,15 @@ def main() -> None:
     total_elements = 0
     if not args.no_create:
         t_create, total_elements = create_store(
-            args.nlevels, args.nleaves, args.max_elems, args.nrows,
+            args.nlevels,
+            args.nleaves,
+            args.max_elems,
+            args.nrows,
             no_vlmeta=args.no_vlmeta,
         )
     else:
         if not os.path.exists(OUTPUT_FILE):
-            parser.error(
-                f"--no-create was passed but {OUTPUT_FILE} does not exist."
-            )
+            parser.error(f"--no-create was passed but {OUTPUT_FILE} does not exist.")
         t_create = None
 
     t_open, t_list = open_and_list()
@@ -296,13 +304,11 @@ def main() -> None:
     # If we didn't create, estimate total elements from the store itself
     if total_elements == 0:
         total_elements = args.nlevels * sum(
-            int(np.prod(_leaf_shape(d, args.max_elems)))
-            if _leaf_shape(d, args.max_elems) else 1
+            int(np.prod(_leaf_shape(d, args.max_elems))) if _leaf_shape(d, args.max_elems) else 1
             for d in range(args.nleaves)
         )
     total_data_bytes = (
-        total_elements * 8
-        + args.nlevels * args.nrows * (1 + 8 + 8 + 16)  # rough for table
+        total_elements * 8 + args.nlevels * args.nrows * (1 + 8 + 8 + 16)  # rough for table
     )
     file_size = os.path.getsize(OUTPUT_FILE)
 
@@ -319,8 +325,7 @@ def main() -> None:
     print(f"  Compression ratio:   {total_data_bytes / file_size:0.2f}x")
     if t_create is not None:
         print(f"\n  Creation time:       {t_create:0.3f}s")
-        print(f"  Write throughput:    "
-              f"{total_data_bytes / t_create / 1e9:0.2f} GB/s")
+        print(f"  Write throughput:    {total_data_bytes / t_create / 1e9:0.2f} GB/s")
     print(f"\n  Open time:           {t_open:0.3f}s")
     print(f"  List (walk) time:    {t_list:0.3f}s")
     print(f"\n  Output file:         {OUTPUT_FILE}")

@@ -1694,6 +1694,15 @@ def compute_chunks_blocks(  # noqa: C901
         if chunksize % blocksize != 0:
             chunksize = chunksize // blocksize * blocksize
         chunks = compute_partition(chunksize // itemsize, shape, blocks)
+        # compute_partition snaps to a divisor of shape, which can break the
+        # "chunks is a multiple of blocks" invariant established above.  Restore
+        # it by rounding each chunks dimension up to the next multiple of the
+        # corresponding blocks dimension, capped at the shape dimension so that
+        # chunks never exceed the array size.
+        chunks = [
+            min(s, c if c % b == 0 else (c // b + 1) * b)
+            for s, c, b in zip(shape, chunks, blocks, strict=False)
+        ]
 
     return tuple(chunks), tuple(blocks)
 

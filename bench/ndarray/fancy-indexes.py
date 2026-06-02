@@ -38,7 +38,6 @@ Benchmarked paths
 from __future__ import annotations
 
 import argparse
-import sys
 import threading
 import time as _time
 from time import perf_counter
@@ -52,12 +51,14 @@ import blosc2
 # ---------------------------------------------------------------------------
 # plot style
 # ---------------------------------------------------------------------------
-plt.rcParams.update({
-    "text.usetex": False,
-    "font.size": 14,
-    "figure.dpi": 150,
-    "savefig.dpi": 150,
-})
+plt.rcParams.update(
+    {
+        "text.usetex": False,
+        "font.size": 14,
+        "figure.dpi": 150,
+        "savefig.dpi": 150,
+    }
+)
 plt.style.use("seaborn-v0_8-paper")
 
 COLORS = {
@@ -77,6 +78,7 @@ MARKERS = {
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
 
 def _compute_shape(ndim: int, n_elements: int) -> tuple[int, ...]:
     """Roughly-cubic shape with the given number of dimensions."""
@@ -124,17 +126,22 @@ def _make_bool_mask(shape, flat_indices):
 # array creation
 # ---------------------------------------------------------------------------
 
+
 def create_array(shape):
     """Create an in-memory blosc2 linspace array."""
     n_elements = np.prod(shape)
-    print(f"Shape: {shape}  |  n_elements: {n_elements:_}  "
-          f"|  dtype: float64  |  total: {n_elements * 8 / 1e9:.2f} GB")
+    print(
+        f"Shape: {shape}  |  n_elements: {n_elements:_}  "
+        f"|  dtype: float64  |  total: {n_elements * 8 / 1e9:.2f} GB"
+    )
     t0 = perf_counter()
     a = blosc2.linspace(0.0, 1.0, int(n_elements), shape=shape)
     t = perf_counter() - t0
-    print(f"blosc2.linspace created in {t:.2f}s  "
-          f"cratio={a.schunk.cratio:.1f}x  "
-          f"cbytes={a.schunk.cbytes / 1e6:.1f} MB")
+    print(
+        f"blosc2.linspace created in {t:.2f}s  "
+        f"cratio={a.schunk.cratio:.1f}x  "
+        f"cbytes={a.schunk.cbytes / 1e6:.1f} MB"
+    )
     print()
     return a
 
@@ -143,14 +150,13 @@ def create_array(shape):
 # benchmark runner
 # ---------------------------------------------------------------------------
 
+
 def run_benchmark(a, ndim, max_idx=100_000, n_runs=3, profile_mem=False):
     """Compare bool-mask, coord-list, mask→coords, and lazy-expr indexing."""
     n_elements = a.size
     max_idx = min(max_idx, n_elements)
 
-    n_indices_list = np.unique(
-        np.logspace(0, np.log10(max(1, max_idx)), num=12, dtype=np.int64)
-    )
+    n_indices_list = np.unique(np.logspace(0, np.log10(max(1, max_idx)), num=12, dtype=np.int64))
     print(f"Index counts: {n_indices_list.tolist()}")
     if profile_mem:
         print("(memory-profiling mode, 1 run per point)")
@@ -172,6 +178,7 @@ def run_benchmark(a, ndim, max_idx=100_000, n_runs=3, profile_mem=False):
         threshold = n_actual / n_elements if n_actual > 0 else 0.0
 
         if profile_mem:
+
             def _bool():
                 return a[bool_mask]
 
@@ -256,13 +263,19 @@ def run_benchmark(a, ndim, max_idx=100_000, n_runs=3, profile_mem=False):
 # plotting
 # ---------------------------------------------------------------------------
 
+
 def plot_results(n_indices, results, ndim, arr_size, output, profile_mem=False):
     fig, ax = plt.subplots(figsize=(10, 6))
 
     for label, times in results.items():
         ax.plot(
-            n_indices, times, color=COLORS[label], marker=MARKERS[label],
-            label=label, linewidth=2, markersize=7,
+            n_indices,
+            times,
+            color=COLORS[label],
+            marker=MARKERS[label],
+            label=label,
+            linewidth=2,
+            markersize=7,
         )
 
     ax.set_xscale("log")
@@ -270,10 +283,7 @@ def plot_results(n_indices, results, ndim, arr_size, output, profile_mem=False):
     if not profile_mem:
         ax.set_yscale("log")
     ax.set_ylabel("Peak memory (MB)" if profile_mem else "Time (s)")
-    title = (
-        f"Bool mask vs coord list fancy indexing — "
-        f"ndim={ndim}, arr-size={arr_size:_}"
-    )
+    title = f"Bool mask vs coord list fancy indexing — ndim={ndim}, arr-size={arr_size:_}"
     if profile_mem:
         title += " (memory)"
     ax.set_title(title)
@@ -292,28 +302,36 @@ def plot_results(n_indices, results, ndim, arr_size, output, profile_mem=False):
 # main
 # ---------------------------------------------------------------------------
 
+
 def parse_args():
-    p = argparse.ArgumentParser(
-        description="Benchmark bool-mask fancy indexing vs coord-list sparse read"
-    )
+    p = argparse.ArgumentParser(description="Benchmark bool-mask fancy indexing vs coord-list sparse read")
     p.add_argument(
-        "--ndim", type=int, default=3,
+        "--ndim",
+        type=int,
+        default=3,
         help="Number of dimensions (default: 3)",
     )
     p.add_argument(
-        "--arr-size", type=int, default=100_000_000,
+        "--arr-size",
+        type=int,
+        default=100_000_000,
         help="Total number of elements (default: 100_000_000)",
     )
     p.add_argument(
-        "--max-idx", type=int, default=100_000,
+        "--max-idx",
+        type=int,
+        default=100_000,
         help="Maximum number of indices to test (default: 100_000)",
     )
     p.add_argument(
-        "--output", type=str, default=None,
+        "--output",
+        type=str,
+        default=None,
         help="Save plot to this path (PNG). If omitted, display interactively.",
     )
     p.add_argument(
-        "--profile-mem", action="store_true",
+        "--profile-mem",
+        action="store_true",
         help="Measure peak memory (MB) instead of timing.",
     )
     return p.parse_args()
@@ -332,13 +350,15 @@ def main():
 
     a = create_array(shape)
 
-    n_indices, results = run_benchmark(
-        a, args.ndim, max_idx=args.max_idx, profile_mem=args.profile_mem
-    )
+    n_indices, results = run_benchmark(a, args.ndim, max_idx=args.max_idx, profile_mem=args.profile_mem)
 
     plot_results(
-        n_indices, results, args.ndim, args.arr_size,
-        args.output, profile_mem=args.profile_mem,
+        n_indices,
+        results,
+        args.ndim,
+        args.arr_size,
+        args.output,
+        profile_mem=args.profile_mem,
     )
 
     print("\nDone!")

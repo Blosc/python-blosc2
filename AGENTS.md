@@ -8,6 +8,14 @@ Tests are under `tests/`, with additional doctests enabled for select modules pe
 Examples are in `examples/`, and performance/benchmark scripts live in `bench/`.
 
 ## Build, Test, and Development Commands
+**IMPORTANT — Environment**: Always use the `blosc2` conda environment for
+running Python, tests, and any build/install commands
+(`conda activate blosc2`, or `conda run -n blosc2 …`). It holds the working
+editable install whose compiled extension matches the `src/` sources. Other
+interpreters (e.g. the miniforge base env) may load a stale `blosc2_ext`
+shared library and fail with errors like
+`AttributeError: 'super' object has no attribute 'get_sparse_numpy'`.
+
 - `pip install .` builds the bundled C-Blosc2 and installs the package.
 - `pip install -e .` installs in editable mode for local development.
 - `CMAKE_PREFIX_PATH=/usr/local USE_SYSTEM_BLOSC2=1 pip install -e .` builds
@@ -49,5 +57,11 @@ include clear reproduction steps for bug fixes.
 
 **IMPORTANT — Agent commit policy**: Never run `git commit`, `git push`,
 `git reset`, `git rebase`, or any other destructive/state-changing git operation.
-Do not ask for permission to do so either. Committing and all repo state changes
-are exclusively the user’s decision. Just do the code work and stop there.
+Committing and all repo state changes are exclusively the user’s decision.
+
+Never ask, offer, suggest, or otherwise raise the topic of committing — not
+"Want me to commit?", not "Should I commit these as one commit or split?", not
+"ready to commit". Do not propose commit messages or splits unprompted. When the
+code work is done, summarize what changed and stop. The user alone decides if and
+when to commit, and will say so explicitly when they want it. Only act on commits
+when the user directly instructs you to.

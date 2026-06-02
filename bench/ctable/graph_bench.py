@@ -32,10 +32,7 @@ def make_data(n: int) -> list:
     rng = np.random.default_rng(42)
     scores = rng.uniform(0, 100, n)
     actives = (rng.integers(0, 2, n)).astype(bool)
-    return [
-        [i, float(scores[i]), bool(actives[i]), f"item_{i % 1000}"]
-        for i in range(n)
-    ]
+    return [[i, float(scores[i]), bool(actives[i]), f"item_{i % 1000}"] for i in range(n)]
 
 
 def bench_extend(n: int, data: list) -> float:

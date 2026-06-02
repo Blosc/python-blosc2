@@ -343,6 +343,58 @@ def test_copy_non_b2z_urlpath_uses_directory_store():
     assert list(copied["id"][:]) == [10]
 
 
+def test_copy_chunks_override_inmemory():
+    """copy(chunks=N) applies the chunk size to all scalar columns (in-memory)."""
+    N = 100
+    t = CTable(Row, new_data=[(i, float(i % 100), True) for i in range(N)])
+
+    copied = t.copy(chunks=20)
+
+    assert len(copied) == N
+    assert list(copied["id"][:]) == list(range(N))
+    for name in ("id", "score"):
+        assert copied._cols[name].chunks == (20,)
+
+
+def test_copy_chunks_and_blocks_override_inmemory():
+    """copy(chunks=N, blocks=M) applies both overrides to scalar columns."""
+    N = 100
+    t = CTable(Row, new_data=[(i, float(i % 100), True) for i in range(N)])
+
+    copied = t.copy(chunks=50, blocks=10)
+
+    assert len(copied) == N
+    for name in ("id", "score"):
+        assert copied._cols[name].chunks == (50,)
+        assert copied._cols[name].blocks == (10,)
+
+
+def test_copy_chunks_override_to_disk(tmp_path):
+    """copy(chunks=N, urlpath=...) applies the chunk size on the saved columns."""
+    dest = str(tmp_path / "out.b2d")
+    N = 100
+    t = CTable(Row, new_data=[(i, float(i % 100), True) for i in range(N)])
+
+    copied = t.copy(chunks=30, urlpath=dest)
+
+    assert len(copied) == N
+    assert list(copied["id"][:]) == list(range(N))
+    for name in ("id", "score"):
+        assert copied._cols[name].chunks == (30,)
+
+
+def test_copy_chunks_data_integrity():
+    """Data values are unchanged after copy with a chunks override."""
+    rows = [(i, float(i % 100), i % 2 == 0) for i in range(50)]
+    t = CTable(Row, new_data=rows)
+
+    copied = t.copy(chunks=12)
+
+    assert list(copied["id"][:]) == [r[0] for r in rows]
+    assert list(copied["score"][:]) == pytest.approx([r[1] for r in rows])
+    assert list(copied["active"][:]) == [r[2] for r in rows]
+
+
 def test_column_order_preserved_after_reopen():
     """Column order from the schema JSON is respected on reopen."""
     path = table_path("order")

@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import tempfile
+import warnings
 import weakref
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -41,16 +42,41 @@ FLAG_ALL_NAN = np.uint8(1 << 0)
 FLAG_HAS_NAN = np.uint8(1 << 1)
 
 SEGMENT_LEVELS_BY_KIND = {
-    "summary": ("chunk",),
+    # SUMMARY stores per-segment min/max.  Block granularity prunes far more
+    # finely than whole-chunk min/max (chunks can be ~10-100x larger than
+    # blocks), so it is the default; callers may override per index via the
+    # ``granularity`` option (see ``SUMMARY_GRANULARITIES``).
+    "summary": ("block",),
     "bucket": ("chunk", "block"),
     "partial": ("chunk", "block", "subblock"),
     "full": ("chunk", "block", "subblock"),
     "opsi": ("chunk", "block", "subblock"),
 }
 
+# Valid ``granularity`` values for SUMMARY indexes, coarsest to finest.
+SUMMARY_GRANULARITIES = ("chunk", "block")
+
+
+def _resolve_summary_levels(granularity: str | None) -> tuple[str, ...] | None:
+    """Map a SUMMARY ``granularity`` to the level tuple, or ``None`` for default."""
+    if granularity is None:
+        return None
+    if granularity not in SUMMARY_GRANULARITIES:
+        raise ValueError(f"granularity must be one of {SUMMARY_GRANULARITIES}, got {granularity!r}")
+    return (granularity,)
+
+
 _IN_MEMORY_INDEXES: dict[int, dict] = {}
 _IN_MEMORY_INDEX_FINALIZERS: dict[int, weakref.finalize] = {}
 _PERSISTENT_INDEXES: dict[tuple[str, str | int], dict] = {}
+# Records which array object owns the descriptor cached at a given
+# ``(array_key, token)``.  In compact stores (.b2z/.b2d) every CTable column
+# shares one urlpath, so ``_array_key`` collides across columns and a column's
+# index store can be returned for a *different* column's predicate.  This map
+# lets ``_descriptor_for_target`` reject a descriptor when the querying array is
+# not the one the descriptor was registered for.  It is in-memory only and is
+# never persisted to disk.
+_DESCRIPTOR_OWNERS: dict[tuple, int] = {}
 _DATA_CACHE: dict[tuple[int, str | None, str, str], np.ndarray] = {}
 _SIDECAR_HANDLE_CACHE: dict[tuple[int, str | None, str, str], object] = {}
 
@@ -88,6 +114,11 @@ _HOT_CACHE_BYTES: int = 0
 _QUERY_CACHE_STORE_HANDLES: dict[str, object] = {}
 # Cached mmap handles for data arrays used in full-query gather: urlpath -> NDArray.
 _GATHER_MMAP_HANDLES: dict[str, object] = {}
+# Registry for index sidecar files stored inside a .b2z bundle.
+# Maps absolute sidecar path -> (b2z_path, data_offset_in_zip).
+# Populated by the storage layer so indexing code can open sidecars without
+# extracting them to a temporary directory first.
+_SIDECAR_ZIP_REGISTRY: dict[str, tuple[str, int]] = {}
 _HOT_CACHE_GLOBAL_SCOPE = ("global", 0)
 
 FULL_OOC_RUN_ITEMS = 10_000_000
@@ -166,6 +197,19 @@ def _purge_stale_persistent_caches() -> None:
 
     for scope in stale_scopes:
         _hot_cache_clear(scope=scope)
+
+
+def _open_sidecar_file(path: str, mmap_mode=None) -> blosc2.NDArray:
+    """Open an index sidecar file, using zip-offset access when registered."""
+    reg = _SIDECAR_ZIP_REGISTRY.get(path)
+    if reg is not None:
+        b2z_path, offset = reg
+        from blosc2.schunk import process_opened_object
+
+        return process_opened_object(
+            blosc2.blosc2_ext.open(b2z_path, mode="r", offset=offset, mmap_mode=mmap_mode)
+        )
+    return blosc2.open(path, mode="r", mmap_mode=mmap_mode)
 
 
 @dataclass(slots=True)
@@ -265,6 +309,17 @@ def _array_key(array: blosc2.NDArray) -> tuple[str, str | int]:
     if _is_persistent_array(array):
         return ("persistent", str(Path(array.urlpath).resolve()))
     return ("memory", id(array))
+
+
+def _register_descriptor_owner(array: blosc2.NDArray, token: str) -> None:
+    """Record that *array* owns the descriptor cached at ``(_array_key, token)``.
+
+    Called when a CTable injects a column's index descriptor into the shared
+    (urlpath-keyed) persistent store, so that :func:`_descriptor_for_target` can
+    later tell that descriptor apart from a sibling column whose ``_array_key``
+    collides.
+    """
+    _DESCRIPTOR_OWNERS[(_array_key(array), token)] = id(array)
 
 
 def _field_token(field: str | None) -> str:
@@ -939,7 +994,7 @@ def _open_sidecar_handle(array: blosc2.NDArray, token: str, category: str, name:
             raise RuntimeError("sidecar handle path is not available")
         handle = legacy if isinstance(legacy, blosc2.NDArray) else blosc2.asarray(np.asarray(legacy))
     else:
-        handle = blosc2.open(path, mode="r", mmap_mode=_INDEX_MMAP_MODE)
+        handle = _open_sidecar_file(path, _INDEX_MMAP_MODE)
     _SIDECAR_HANDLE_CACHE[cache_key] = handle
     return handle
 
@@ -1022,7 +1077,11 @@ def _fill_summaries_from_2d(
     if n == 0:
         return
     if dtype.kind == "f":
-        with np.errstate(all="ignore"):
+        # All-NaN blocks make np.nanmin/nanmax emit "All-NaN slice encountered";
+        # their results are immediately overwritten with zero below, so silence
+        # the (purely cosmetic) RuntimeWarning.
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.filterwarnings("ignore", r"All-NaN slice encountered", RuntimeWarning)
             has_nan = np.any(np.isnan(data_2d), axis=1)
             all_nan = np.all(np.isnan(data_2d), axis=1)
             mins = np.nanmin(data_2d, axis=1)
@@ -1068,7 +1127,7 @@ def _compute_sorted_boundaries_from_sidecar(
 ) -> np.ndarray:
     nsegments = math.ceil(length / segment_len)
     boundaries = np.empty(nsegments, dtype=_boundary_dtype(dtype))
-    sidecar = blosc2.open(path, mode="r", mmap_mode=_INDEX_MMAP_MODE)
+    sidecar = _open_sidecar_file(path, _INDEX_MMAP_MODE)
     start_value = np.empty(1, dtype=dtype)
     end_value = np.empty(1, dtype=dtype)
     for idx in range(nsegments):
@@ -1225,9 +1284,11 @@ def _build_levels_descriptor(
     values: np.ndarray,
     persistent: bool,
     cparams: dict | None = None,
+    summary_levels: tuple[str, ...] | None = None,
 ) -> dict:
     levels = {}
-    for level in SEGMENT_LEVELS_BY_KIND[kind]:
+    levels_to_build = summary_levels if summary_levels is not None else SEGMENT_LEVELS_BY_KIND[kind]
+    for level in levels_to_build:
         segment_len = _segment_len(array, level)
         summaries = _compute_segment_summaries(values, dtype, segment_len)
         sidecar = _store_array_sidecar(
@@ -1250,20 +1311,40 @@ def _build_levels_descriptor_ooc(
     dtype: np.dtype,
     persistent: bool,
     cparams: dict | None = None,
+    summary_levels: tuple[str, ...] | None = None,
+    precomputed_summaries: dict[str, np.ndarray] | None = None,
 ) -> dict:
     size = int(array.shape[0])
     summary_dtype = _summary_dtype(dtype)
     chunk_len = int(array.chunks[0])
-    levels_to_build = SEGMENT_LEVELS_BY_KIND[kind]
+    levels_to_build = summary_levels if summary_levels is not None else SEGMENT_LEVELS_BY_KIND[kind]
     segment_lens = {level: _segment_len(array, level) for level in levels_to_build}
     nsegments_total = {level: math.ceil(size / slen) for level, slen in segment_lens.items()}
     all_summaries = {level: np.empty(n, dtype=summary_dtype) for level, n in nsegments_total.items()}
+
+    # Incremental fast path: summaries already accumulated during the write phase
+    # (e.g. CTable import folds per-block min/max as data is appended, when it is
+    # still uncompressed in memory).  Using them avoids decompressing the whole
+    # column back just to recompute min/max.  Only trusted when every requested
+    # level is present with the exact expected segment count and dtype; otherwise
+    # fall through to the decompression pass below.
+    use_precomputed = precomputed_summaries is not None and all(
+        level in precomputed_summaries
+        and precomputed_summaries[level].dtype == summary_dtype
+        and len(precomputed_summaries[level]) == nsegments_total[level]
+        for level in levels_to_build
+    )
+    if use_precomputed:
+        for level in levels_to_build:
+            all_summaries[level] = np.ascontiguousarray(precomputed_summaries[level])
 
     # Fast path: all segment sizes are ≤ chunk_len and divide it evenly, so no segment
     # spans a chunk boundary.  A single decompression pass over the data suffices.
     can_fast = all(slen <= chunk_len and chunk_len % slen == 0 for slen in segment_lens.values())
 
-    if can_fast:
+    if use_precomputed:
+        pass
+    elif can_fast:
         seg_offsets = dict.fromkeys(levels_to_build, 0)
         nchunks = math.ceil(size / chunk_len)
         for chunk_id in range(nchunks):
@@ -1317,7 +1398,7 @@ def _sidecar_storage_geometry(
 ) -> tuple[int, int]:
     if path is None:
         return fallback_chunk_len, fallback_block_len
-    sidecar = blosc2.open(path, mode="r", mmap_mode=_INDEX_MMAP_MODE)
+    sidecar = _open_sidecar_file(path, _INDEX_MMAP_MODE)
     return int(sidecar.chunks[0]), int(sidecar.blocks[0])
 
 
@@ -2846,7 +2927,7 @@ def _copy_sidecar_to_temp_run(
     cparams: dict | None = None,
 ) -> Path:
     out_path = workdir / f"{prefix}.b2nd"
-    sidecar = blosc2.open(path, mode="r", mmap_mode=_INDEX_MMAP_MODE)
+    sidecar = _open_sidecar_file(path, _INDEX_MMAP_MODE)
     output = _create_blosc2_temp_array(out_path, length, dtype, FULL_OOC_MERGE_BUFFER_ITEMS, cparams)
     chunk_len = int(sidecar.chunks[0])
     for chunk_id, start in enumerate(range(0, length, chunk_len)):
@@ -3804,6 +3885,8 @@ def create_index(
     cparams = _normalize_index_cparams(kwargs.pop("cparams", None))
     method = kwargs.pop("method", None)
     opsi_max_cycles_arg = kwargs.pop("opsi_max_cycles", None)
+    summary_levels = kwargs.pop("summary_levels", None)
+    precomputed_summaries = kwargs.pop("precomputed_summaries", None)
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"unexpected keyword argument(s): {unexpected}")
@@ -3826,7 +3909,17 @@ def create_index(
     use_ooc = _resolve_ooc_mode(kind, build)
 
     if use_ooc:
-        levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent, cparams)
+        levels = _build_levels_descriptor_ooc(
+            array,
+            target,
+            token,
+            kind,
+            dtype,
+            persistent,
+            cparams,
+            summary_levels=summary_levels,
+            precomputed_summaries=precomputed_summaries,
+        )
         bucket = (
             _build_bucket_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
             if kind == "bucket"
@@ -3870,7 +3963,9 @@ def create_index(
         )
     else:
         values = _values_for_target(array, target)
-        levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent, cparams)
+        levels = _build_levels_descriptor(
+            array, target, token, kind, dtype, values, persistent, cparams, summary_levels=summary_levels
+        )
         bucket = (
             _build_bucket_descriptor(array, token, kind, values, optlevel, persistent, cparams)
             if kind == "bucket"
@@ -3984,14 +4079,14 @@ def iter_index_components(array: blosc2.NDArray, descriptor: dict):
 
 def _component_nbytes(array: blosc2.NDArray, descriptor: dict, component: IndexComponent) -> int:
     if component.path is not None:
-        return int(blosc2.open(component.path, mode="r", mmap_mode=_INDEX_MMAP_MODE).nbytes)
+        return int(_open_sidecar_file(component.path, _INDEX_MMAP_MODE).nbytes)
     token = descriptor["token"]
     return int(_load_array_sidecar(array, token, component.category, component.name).nbytes)
 
 
 def _component_cbytes(array: blosc2.NDArray, descriptor: dict, component: IndexComponent) -> int:
     if component.path is not None:
-        return int(blosc2.open(component.path, mode="r", mmap_mode=_INDEX_MMAP_MODE).cbytes)
+        return int(_open_sidecar_file(component.path, _INDEX_MMAP_MODE).cbytes)
     token = descriptor["token"]
     sidecar = _load_array_sidecar(array, token, component.category, component.name)
     kwargs = {}
@@ -4725,8 +4820,17 @@ def _descriptor_for(array: blosc2.NDArray, field: str | None) -> dict | None:
 
 
 def _descriptor_for_target(array: blosc2.NDArray, target: dict) -> dict | None:
-    descriptor = _load_store(array)["indexes"].get(_target_token(target))
+    token = _target_token(target)
+    descriptor = _load_store(array)["indexes"].get(token)
     if descriptor is None or descriptor.get("stale", False):
+        return None
+    # In compact stores every column shares one urlpath, so the urlpath-keyed
+    # index store can hand back a *sibling* column's descriptor.  When an owner
+    # was registered for this (array_key, token), require *array* to be it;
+    # otherwise this predicate is on a different column that merely shares the
+    # urlpath and (post column-alignment) the same shape/chunks.
+    owner_id = _DESCRIPTOR_OWNERS.get((_array_key(array), token))
+    if owner_id is not None and owner_id != id(array):
         return None
     if descriptor.get("version") != INDEX_FORMAT_VERSION:
         return None
@@ -6118,17 +6222,17 @@ def _bucket_masks_from_bucket_chunk_nav_ooc(
         batch_values = (
             values_sidecar
             if bucket.get("values_path") is None
-            else blosc2.open(bucket["values_path"], mode="r", mmap_mode=_INDEX_MMAP_MODE)
+            else _open_sidecar_file(bucket["values_path"], _INDEX_MMAP_MODE)
         )
         batch_buckets = (
             bucket_sidecar
             if bucket.get("bucket_positions_path") is None
-            else blosc2.open(bucket["bucket_positions_path"], mode="r", mmap_mode=_INDEX_MMAP_MODE)
+            else _open_sidecar_file(bucket["bucket_positions_path"], _INDEX_MMAP_MODE)
         )
         batch_l2 = (
             l2_sidecar
             if bucket.get("l2_path") is None
-            else blosc2.open(bucket["l2_path"], mode="r", mmap_mode=_INDEX_MMAP_MODE)
+            else _open_sidecar_file(bucket["l2_path"], _INDEX_MMAP_MODE)
         )
         batch_results = []
         batch_candidate_segments = 0

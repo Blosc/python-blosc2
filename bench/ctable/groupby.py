@@ -96,7 +96,9 @@ def make_key_data(key_codes: np.ndarray, dictionary: bool, key_dtype: str):
     return key_codes.astype(np.dtype(key_dtype), copy=False)
 
 
-def make_data(nrows: int, ngroups: int, ngroups2: int, dictionary: bool, key_dtype: str, multi_key: bool, seed: int):
+def make_data(
+    nrows: int, ngroups: int, ngroups2: int, dictionary: bool, key_dtype: str, multi_key: bool, seed: int
+):
     rng = np.random.default_rng(seed)
     key_codes = rng.integers(0, ngroups, size=nrows, dtype=np.int32)
     values = rng.random(nrows, dtype=np.float64)
@@ -114,7 +116,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rows", type=parse_int, default=10_000_000)
     parser.add_argument("--groups", type=parse_int, default=1_000)
-    parser.add_argument("--groups2", type=parse_int, default=None, help="Number of groups for key1 with --multi-key")
+    parser.add_argument(
+        "--groups2", type=parse_int, default=None, help="Number of groups for key1 with --multi-key"
+    )
     parser.add_argument("--chunk-size", type=parse_int, default=None)
     parser.add_argument("--dictionary", action="store_true", help="Use a dictionary-encoded string key")
     parser.add_argument(
@@ -149,7 +153,9 @@ def main() -> None:
         f"chunk_size={args.chunk_size} urlpath={args.urlpath}"
     )
 
-    data = make_data(args.rows, args.groups, groups2, args.dictionary, args.key_dtype, args.multi_key, args.seed)
+    data = make_data(
+        args.rows, args.groups, groups2, args.dictionary, args.key_dtype, args.multi_key, args.seed
+    )
     Row = build_row_type(args.dictionary, args.key_dtype, args.multi_key)
 
     kwargs = {}

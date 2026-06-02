@@ -559,11 +559,66 @@ class ListArray:
         yield from self[:]
 
     def copy(self, **kwargs: Any) -> ListArray:
-        """Return a copy, optionally with different storage arguments."""
+        """Return a copy, optionally with different storage arguments.
+
+        When ``cparams`` is not overridden *and* there are no unflushed
+        (pending) rows, this uses :meth:`blosc2.BatchArray.chunk_copy` for
+        batch-storage arrays: compressed chunks are transferred at the C level
+        without any Python-level deserialisation.  The speed-up is dramatic for
+        large arrays — copying 24 M rows of GPS-path data takes seconds instead
+        of hours.
+
+        For ``vl``-storage arrays, or when ``cparams`` is overridden, this
+        falls back to an element-wise copy.
+
+        Parameters
+        ----------
+        **kwargs:
+            Forwarded to the underlying backend or :class:`ListArray`
+            constructor.  Common options: ``urlpath``, ``cparams``, ``dparams``,
+            ``contiguous``.
+
+        Returns
+        -------
+        ListArray
+            A new standalone copy.
+        """
+        if self.spec.storage == "batch" and not self._pending_cells and "cparams" not in kwargs:
+            return self._copy_fast_batch(**kwargs)
+
+        # Slow path: element-wise copy via extend().
         out = ListArray(spec=self.spec, **kwargs)
         out.extend(self)
         if self.spec.storage == "batch":
             out.flush()
+        return out
+
+    def _copy_fast_batch(self, **kwargs: Any) -> ListArray:
+        """Chunk-level copy for batch-storage ListArrays (no Python decompression)."""
+        # The backend BatchArray.chunk_copy() handles cparams / vlmeta / chunk transfer.
+        # Extract only the storage kwargs relevant to BatchArray (urlpath, mode,
+        # contiguous, dparams); ListArray-level options (spec, serializer, …) must not
+        # be forwarded.
+        _LA_ONLY = {
+            "spec",
+            "item_spec",
+            "nullable",
+            "storage",
+            "serializer",
+            "batch_rows",
+            "items_per_block",
+            "_from_schunk",
+        }
+        ba_kwargs = {k: v for k, v in kwargs.items() if k not in _LA_ONLY}
+        new_ba = self._backend.chunk_copy(**ba_kwargs)
+        out = ListArray.__new__(ListArray)
+        out.spec = self.spec
+        out._backend = new_ba
+        out._pending_cells = []
+        out._persisted_row_count = self._persisted_row_count
+        out._persisted_prefix_cache = None
+        out._cached_batch_index = None
+        out._cached_batch_values = None
         return out
 
     @property

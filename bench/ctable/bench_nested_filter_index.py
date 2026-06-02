@@ -25,7 +25,6 @@ import numpy as np
 
 import blosc2
 
-
 # ---------------------------------------------------------------------------
 # Schema helpers
 # ---------------------------------------------------------------------------
@@ -62,13 +61,13 @@ def _build_data(n: int) -> dict:
     }
 
 
-def _build_flat(data: dict, n: int) -> "blosc2.CTable":
+def _build_flat(data: dict, n: int) -> blosc2.CTable:
     t = blosc2.CTable(FlatRow, expected_size=n)
     t.extend(data)
     return t
 
 
-def _build_nested(data: dict, n: int) -> "blosc2.CTable":
+def _build_nested(data: dict, n: int) -> blosc2.CTable:
     t = blosc2.CTable(NestedRow, expected_size=n)
     t.extend(data)
     # Rename to dotted nested names

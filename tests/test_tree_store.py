@@ -1483,7 +1483,11 @@ def test_ctable_inline_index_roundtrip(tmp_path, storage_type):
 
     with blosc2.open(path, mode="r") as ts:
         table = ts["/table"]
-        assert len(table.indexes) == 1
+        # The explicit BUCKET index on "x" plus the auto-created SUMMARY
+        # index on "y" (create_index=True by default on close).
+        assert len(table.indexes) == 2
+        assert any(idx.col_name == "x" and idx.kind == "bucket" for idx in table.indexes)
+        assert any(idx.col_name == "y" and idx.kind == "summary" for idx in table.indexes)
         np.testing.assert_array_equal(list(table.where(table["x"] > 95)["x"][:]), [96, 97, 98, 99])
 
 

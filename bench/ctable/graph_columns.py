@@ -32,8 +32,7 @@ def make_schema_and_data(n_cols: int, n_rows: int):
 
     # Build dataclass dynamically
     dc_fields = [
-        (f"col_{i}", float, dataclasses.field(default=blosc2.field(blosc2.float64())))
-        for i in range(n_cols)
+        (f"col_{i}", float, dataclasses.field(default=blosc2.field(blosc2.float64()))) for i in range(n_cols)
     ]
     Row = dataclasses.make_dataclass("Row", dc_fields)
 

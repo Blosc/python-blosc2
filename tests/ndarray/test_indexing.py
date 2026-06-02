@@ -514,7 +514,7 @@ def test_summary_threaded_downstream_order_matches_scan(monkeypatch):
     explanation = expr.explain()
 
     assert explanation["will_use_index"] is True
-    assert explanation["level"] == "chunk"
+    assert explanation["level"] == "block"  # SUMMARY defaults to block granularity
 
     indexed = expr.compute()[:]
     scanned = expr.compute(_use_index=False)[:]

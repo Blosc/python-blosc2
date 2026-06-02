@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 import blosc2
+import blosc2.indexing
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -87,6 +88,7 @@ def test_drop_indexed_column_clears_catalog():
         t.index("id")
 
 
+@pytest.mark.heavy
 def test_where_with_index_matches_scan_in_memory():
     t = _make_table(200)
     t.create_index("id")
@@ -99,6 +101,7 @@ def test_where_with_index_matches_scan_in_memory():
     assert ids_idx == ids_scan
 
 
+@pytest.mark.heavy
 def test_indexed_where_view_sort_by_reuses_cached_live_positions(monkeypatch):
     t = _make_table(200)
     t.create_index("id", kind=blosc2.IndexKind.FULL)
@@ -324,6 +327,7 @@ def test_catalog_survives_reopen(tmpdir):
     assert not idxs[0].stale
 
 
+@pytest.mark.heavy
 def test_index_catalog_cached_per_opened_ctable(tmpdir, monkeypatch):
     path = str(tmpdir / "table.b2d")
     t = _make_table(200, persistent_path=path)
@@ -521,6 +525,7 @@ def test_delete_bumps_visibility_epoch_persistent(tmpdir):
     assert vis_e >= 1
 
 
+@pytest.mark.heavy
 def test_query_after_reopen_persistent(tmpdir):
     path = str(tmpdir / "table.b2d")
     t = _make_table(100, persistent_path=path)
@@ -705,3 +710,256 @@ def test_indexing_purge_tolerates_reentrant_sidecar_handle_cache_mutation(monkey
 
     assert stale_key not in indexing._SIDECAR_HANDLE_CACHE
     indexing._SIDECAR_HANDLE_CACHE.pop(injected_key, None)
+
+
+def test_summary_index_compact_store_no_cross_column_confusion(tmp_path):
+    """Regression: a SUMMARY index on one column of a compact (.b2z) store must
+    not be applied to a *different* column's predicate.
+
+    In compact stores every column shares one urlpath, so the urlpath-keyed
+    index store could hand back the indexed column's descriptor for an unrelated
+    column.  After column alignment siblings also share shape/chunks, defeating
+    the only guard that previously distinguished them.  A predicate impossible
+    for the indexed column's value range (``c < 0`` while the indexed column
+    ``a`` is non-negative) was then applied to ``a``'s per-segment min/max,
+    wrongly pruning every segment and silently returning 0 rows.
+    """
+
+    @dataclasses.dataclass
+    class Aligned:
+        # Force a small shared chunk grid so the SUMMARY index has several
+        # segments and all columns are chunk-aligned (same shape and chunks).
+        a: float = blosc2.field(blosc2.float32(), chunks=(1000,), blocks=(250,))
+        b: float = blosc2.field(blosc2.float32(), chunks=(1000,), blocks=(250,))
+        c: float = blosc2.field(blosc2.float64(), chunks=(1000,), blocks=(250,))
+
+    n = 10_000
+    rng = np.random.default_rng(0)
+    a = (rng.random(n) * 100).astype(np.float32)  # always >= 0 (indexed column)
+    b = (rng.random(n) + 1).astype(np.float32)  # always > 0
+    c = rng.random(n) * 200 - 100  # spans negatives, so "c < 0" matches real rows
+
+    t = blosc2.CTable(Aligned)
+    t.extend(list(zip(a.tolist(), b.tolist(), c.tolist(), strict=True)))
+    path = str(tmp_path / "aligned.b2z")
+    t.to_b2z(path)
+
+    with blosc2.open(path, mode="a") as w:
+        w.create_index("a", kind=blosc2.IndexKind.SUMMARY)
+
+    expected = int(((a > 90) & (b > 0) & (c < 0)).sum())
+    assert expected > 0  # the predicate must actually match real rows
+
+    with blosc2.open(path) as r:
+        got = r.where((r.a > 90) & (r.b > 0) & (r.c < 0)).nrows
+    assert got == expected, f"index returned {got}, expected {expected} (scan)"
+
+
+@dataclasses.dataclass
+class _GranRow:
+    # Small explicit grid so the SUMMARY index spans several chunks/blocks.
+    v: float = blosc2.field(blosc2.float64(), chunks=(1000,), blocks=(250,))
+
+
+def _make_gran_table(n=5000):
+    rng = np.random.default_rng(1)
+    t = blosc2.CTable(_GranRow)
+    t.extend([(x,) for x in (rng.random(n) * 100).tolist()])
+    return t, rng
+
+
+def test_summary_index_defaults_to_block_granularity():
+    t, _ = _make_gran_table()
+    t.create_index("v", kind=blosc2.IndexKind.SUMMARY)
+    levels = list(dict(t._get_index_catalog())["v"]["levels"].keys())
+    assert levels == ["block"]
+
+
+@pytest.mark.heavy
+@pytest.mark.parametrize("granularity", ["chunk", "block"])
+def test_summary_index_granularity_override(granularity):
+    t, rng = _make_gran_table()
+    t.create_index("v", kind=blosc2.IndexKind.SUMMARY, granularity=granularity)
+    levels = list(dict(t._get_index_catalog())["v"]["levels"].keys())
+    assert levels == [granularity]
+    # Correctness must hold regardless of granularity.
+    v = t["v"][:]
+    expected = int((v > 95).sum())
+    assert t.where(t.v > 95).nrows == expected
+
+
+@dataclasses.dataclass
+class _IncrRow:
+    # Several chunks/blocks so the summary spans many segments; mixed dtypes.
+    f: float = blosc2.field(blosc2.float32(null_value=float("nan")), chunks=(2000,), blocks=(500,))
+    i: int = blosc2.field(blosc2.int64(), chunks=(2000,), blocks=(500,))
+
+
+def _build_incr_data(n=9000):
+    rng = np.random.default_rng(7)
+    f = (rng.standard_normal(n) * 50).astype(np.float32)
+    f[rng.integers(0, n, n // 100)] = np.nan  # exercise NaN flags
+    i = rng.integers(-1000, 1000, n).astype(np.int64)
+    return f, i
+
+
+def _summary_sidecars(table):
+    """Return {col: structured summary array} for all SUMMARY block sidecars."""
+    out = {}
+    for name, desc in dict(table._get_index_catalog()).items():
+        if desc.get("kind") != "summary":
+            continue
+        side = blosc2.indexing._open_sidecar_file(desc["levels"]["block"]["path"])
+        out[name] = side[:]
+    return out
+
+
+def test_incremental_summary_matches_ooc_build(tmp_path):
+    """The incremental per-block accumulator (folded during the write phase)
+    must produce SUMMARY sidecars byte-identical to the out-of-core
+    decompress-and-recompute path, including NaN flags."""
+    f, i = _build_incr_data()
+
+    # Accumulator path: extend in one shot, close (uses precomputed summaries).
+    acc_path = str(tmp_path / "acc.b2z")
+    with blosc2.CTable(_IncrRow, urlpath=acc_path, mode="w") as t:
+        t.extend({"f": f, "i": i})
+    acc = _summary_sidecars(blosc2.open(acc_path))
+
+    # Reference path: force the OOC builder by disabling the precomputed hook.
+    ooc_path = str(tmp_path / "ooc.b2z")
+    import blosc2.ctable as _ct
+
+    orig = _ct.CTable._precomputed_summary_for
+    try:
+        _ct.CTable._precomputed_summary_for = lambda self, name: None
+        with blosc2.CTable(_IncrRow, urlpath=ooc_path, mode="w") as t:
+            t.extend({"f": f, "i": i})
+    finally:
+        _ct.CTable._precomputed_summary_for = orig
+    ooc = _summary_sidecars(blosc2.open(ooc_path))
+
+    assert set(acc) == set(ooc) == {"f", "i"}
+    for name in acc:
+        a, b = acc[name], ooc[name]
+        assert len(a) == len(b)
+        assert np.array_equal(a["flags"], b["flags"])
+        assert np.allclose(a["min"], b["min"], equal_nan=True)
+        assert np.allclose(a["max"], b["max"], equal_nan=True)
+
+
+def test_incremental_summary_invalidated_by_inplace_update(tmp_path):
+    """An in-place column write before close must invalidate the accumulator so
+    the builder falls back to a correct full rescan."""
+    f, i = _build_incr_data(n=4000)
+    path = str(tmp_path / "upd.b2z")
+    with blosc2.CTable(_IncrRow, urlpath=path, mode="w") as t:
+        t.extend({"f": f, "i": i})
+        # Mutate a value through the column handle (the bypass path) and update
+        # the local reference so the expected result reflects the change.
+        t["i"][0] = 999_999
+        i = i.copy()
+        i[0] = 999_999
+        acc = t.__dict__.get("_summary_accumulators", {}).get("i")
+        assert acc is None or not acc.valid  # accumulator disabled for "i"
+
+    with blosc2.open(path) as r:
+        expected = int((i > 1000).sum())
+        assert r.where(r.i > 1000).nrows == expected
+
+
+def test_summary_granularity_rejects_invalid_value():
+    t, _ = _make_gran_table(n=10)
+    with pytest.raises(ValueError, match="granularity must be one of"):
+        t.create_index("v", kind=blosc2.IndexKind.SUMMARY, granularity="bogus")
+
+
+def test_granularity_only_valid_for_summary():
+    t, _ = _make_gran_table(n=10)
+    with pytest.raises(ValueError, match=r"only supported for kind=IndexKind\.SUMMARY"):
+        t.create_index("v", kind=blosc2.IndexKind.BUCKET, granularity="block")
+
+
+@pytest.mark.heavy
+@pytest.mark.parametrize("threshold", [5.0, 50.0, 99.0, 99.99])
+def test_summary_cost_gate_correctness_across_selectivity(threshold):
+    """The SUMMARY cost gate may use the index (selective query) or fall back to
+    a scan (broad query); both branches must return scan-correct results."""
+    t, _ = _make_gran_table(n=6000)
+    t.create_index("v", kind=blosc2.IndexKind.SUMMARY)  # block granularity
+    v = t["v"][:]
+    expected = int((v > threshold).sum())
+    assert t.where(t.v > threshold).nrows == expected
+
+
+@dataclasses.dataclass
+class _TwoColRow:
+    a: float = blosc2.field(blosc2.float64(), chunks=(50000,), blocks=(2048,))
+    b: float = blosc2.field(blosc2.float64(), chunks=(50000,), blocks=(2048,))
+
+
+def test_multi_column_summary_combined_block_pruning(tmp_path):
+    """A conjunction over several SUMMARY-indexed columns must AND their per-block
+    masks, pruning more than any single column — and stay scan-correct.
+
+    ``a`` ascending and ``b`` descending give tight per-block ranges, so
+    ``a > 0.8N`` and ``b > 0.8N`` prune *disjoint* blocks and their AND is empty.
+    """
+    import blosc2.ctable_indexing as cti
+
+    n = 200_000
+    a = np.arange(n, dtype="f8")
+    b = (n - 1 - np.arange(n)).astype("f8")
+    t = blosc2.CTable(_TwoColRow)
+    t.extend(list(zip(a.tolist(), b.tolist(), strict=True)))
+    path = str(tmp_path / "twocol.b2z")
+    t.to_b2z(path)
+    with blosc2.open(path, mode="a") as w:
+        w.create_index("a", kind=blosc2.IndexKind.SUMMARY)
+        w.create_index("b", kind=blosc2.IndexKind.SUMMARY)
+
+    with blosc2.open(path) as r:
+        # Per-column masks prune ~20% each; the combined (AND) mask is empty.
+        cat = dict(r._get_index_catalog())
+        expr = (r.a > 0.8 * n) & (r.b > 0.8 * n)
+        idx = r._find_indexed_columns(r._cols, cat, expr.operands)
+        combined = cti._CTableIndexingMixin._combined_summary_block_bitmap(r, expr, idx, idx[0][1])
+        a_only = r.a > 0.8 * n
+        a_idx = r._find_indexed_columns(r._cols, cat, a_only.operands)
+        a_mask = cti._CTableIndexingMixin._combined_summary_block_bitmap(r, a_only, a_idx, a_idx[0][1])
+        assert int(a_mask.sum()) > 0  # 'a' alone keeps some blocks
+        assert int(combined.sum()) == 0  # the AND prunes everything
+
+        # Correctness across several conjunctions (engaged and scan paths).
+        for cond, expected in [
+            ((r.a > 0.8 * n) & (r.b > 0.8 * n), int(((a > 0.8 * n) & (b > 0.8 * n)).sum())),
+            ((r.a > 0.6 * n) & (r.b > 0.7 * n), int(((a > 0.6 * n) & (b > 0.7 * n)).sum())),
+            ((r.a > 1000) & (r.b > 1000), int(((a > 1000) & (b > 1000)).sum())),
+        ]:
+            assert r.where(cond).nrows == expected
+
+
+@dataclasses.dataclass
+class _SortedRow:
+    v: float = blosc2.field(blosc2.float64(), chunks=(2000,), blocks=(500,))
+
+
+def test_summary_chunk_skip_scoped_extraction(tmp_path):
+    """Sorted column so a high threshold matches only the last chunk(s): exercises
+    the chunk-skip + scoped-extraction path (few candidate chunks) as well as the
+    full-mask path (many candidate chunks).  Both must be scan-correct."""
+    n = 20_000  # 10 chunks of 2000, 4 blocks each
+    v = np.arange(n, dtype="f8")  # ascending
+    t = blosc2.CTable(_SortedRow)
+    t.extend([(x,) for x in v.tolist()])
+    path = str(tmp_path / "sorted.b2z")
+    t.to_b2z(path)
+    with blosc2.open(path, mode="a") as w:
+        w.create_index("v", kind=blosc2.IndexKind.SUMMARY)
+
+    with blosc2.open(path) as r:
+        for frac in (0.05, 0.5, 0.95, 0.99, 0.999, 1.5):
+            thr = frac * n
+            assert r.where(r.v > thr).nrows == int((v > thr).sum())
+            # A negative threshold matches everything (full-mask path).
+        assert r.where(r.v > -1).nrows == n

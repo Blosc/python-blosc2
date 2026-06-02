@@ -865,13 +865,23 @@ class Column:
                 key += n_rows
             if not (0 <= key < n_rows):
                 raise IndexError(f"index {key} is out of bounds for column with size {n_rows}")
-            pos_true = _find_physical_index(self._valid_rows, key)
+            # For sorted views the cached positions hold rows in sorted (not
+            # physical-ascending) order — use the key-th entry directly.
+            _slp = getattr(self._table, "_cached_live_positions", None)
+            if _slp is not None and self._table.base is not None:
+                pos_true = int(_slp[key])
+            else:
+                pos_true = _find_physical_index(self._valid_rows, key)
             if self.is_dictionary:
                 return self._raw_col[int(pos_true)]
             return self._maybe_decode_timestamp_values(self._raw_col[int(pos_true)])
 
         elif isinstance(key, slice):
-            real_pos = np.where(self._valid_rows[:])[0]
+            _slp = getattr(self._table, "_cached_live_positions", None)
+            if _slp is not None and self._table.base is not None:
+                real_pos = _slp
+            else:
+                real_pos = np.where(self._valid_rows[:])[0]
             start, stop, step = key.indices(len(real_pos))
             if start >= stop:
                 if self.is_list or self.is_varlen_scalar or self.is_dictionary:
@@ -895,7 +905,11 @@ class Column:
                 raise IndexError(
                     f"Boolean mask length {len(key)} does not match number of live rows {n_live}."
                 )
-            all_pos = np.where(self._valid_rows[:])[0]
+            _slp = getattr(self._table, "_cached_live_positions", None)
+            if _slp is not None and self._table.base is not None:
+                all_pos = _slp
+            else:
+                all_pos = np.where(self._valid_rows[:])[0]
             phys_indices = all_pos[key]
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
@@ -905,7 +919,11 @@ class Column:
             return self._maybe_decode_timestamp_values(self._raw_col[phys_indices])
 
         elif isinstance(key, (list, tuple, np.ndarray)):
-            real_pos = np.where(self._valid_rows[:])[0]
+            _slp = getattr(self._table, "_cached_live_positions", None)
+            if _slp is not None and self._table.base is not None:
+                real_pos = _slp
+            else:
+                real_pos = np.where(self._valid_rows[:])[0]
             phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
@@ -998,6 +1016,9 @@ class Column:
             raise ValueError("Table is read-only (opened with mode='r').")
         if self.is_computed:
             raise ValueError(f"Column {self._col_name!r} is a computed column and cannot be written to.")
+        # In-place column mutation invalidates any incremental summary accumulator
+        # for this column (the close-time builder falls back to a full rescan).
+        self._table._root_table._invalidate_summary_accumulator(self._col_name)
         if isinstance(key, int):
             n_rows = len(self)
             if key < 0:
@@ -2710,14 +2731,17 @@ class _ChunkAlignedWriter:
     Only the final flush may write a partial (sub-chunk) tail.
     """
 
-    __slots__ = ("arr", "chunk_len", "pending", "pending_n", "wpos")
+    __slots__ = ("arr", "chunk_len", "on_write", "pending", "pending_n", "wpos")
 
-    def __init__(self, arr, chunk_len: int) -> None:
+    def __init__(self, arr, chunk_len: int, on_write=None) -> None:
         self.arr = arr
         self.chunk_len = chunk_len
         self.pending: list[np.ndarray] = []
         self.pending_n = 0
         self.wpos = 0
+        # Optional callback(start_pos, block) invoked for each chunk-aligned
+        # write, used to fold per-block summaries incrementally.
+        self.on_write = on_write
 
     def append(self, block: np.ndarray) -> None:
         if len(block) == 0:
@@ -2733,6 +2757,8 @@ class _ChunkAlignedWriter:
 
     def _write(self, block: np.ndarray) -> None:
         n = len(block)
+        if self.on_write is not None:
+            self.on_write(self.wpos, block)
         self.arr[self.wpos : self.wpos + n] = block
         self.wpos += n
 
@@ -2756,6 +2782,88 @@ class _ChunkAlignedWriter:
                 need = 0
         self.pending_n -= n
         return parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+
+class _ColumnSummaryAccumulator:
+    """Incrementally accumulate per-block min/max for a SUMMARY index.
+
+    As contiguous numpy data is appended to a scalar column during a build
+    (import, ``extend``, row ``append``), this folds it into per-block min/max
+    summaries while the data is still uncompressed in memory.  At close, the
+    accumulated summaries are handed to the index builder, avoiding a full
+    decompression pass over the column just to recompute min/max.
+
+    The accumulator only stays valid while writes are pure forward-contiguous
+    appends covering ``[0, n)``.  Any out-of-order feed, in-place update, or
+    compaction marks it invalid via :meth:`invalidate`, and the index builder
+    transparently falls back to the out-of-core (decompress-and-scan) path.
+    """
+
+    __slots__ = ("_carry", "_parts", "_total", "block_len", "dtype", "summary_dtype", "valid")
+
+    def __init__(self, dtype: np.dtype, block_len: int) -> None:
+        from blosc2.indexing import _summary_dtype
+
+        self.dtype = np.dtype(dtype)
+        self.block_len = int(block_len)
+        self.summary_dtype = _summary_dtype(self.dtype)
+        self._parts: list[np.ndarray] = []  # completed per-block summary chunks
+        self._carry: np.ndarray | None = None  # trailing < block_len values
+        self._total = 0  # number of elements fed (== next expected start_pos)
+        self.valid = self.block_len > 0
+
+    def invalidate(self) -> None:
+        self.valid = False
+        self._parts = []
+        self._carry = None
+
+    def feed(self, start_pos: int, values: np.ndarray) -> None:
+        if not self.valid:
+            return
+        if start_pos != self._total:
+            self.invalidate()
+            return
+        from blosc2.indexing import _fill_summaries_from_2d
+
+        values = np.ascontiguousarray(values)
+        if values.ndim != 1:
+            # Not a plain scalar column write (e.g. an ndarray column); summaries
+            # don't apply -- disable rather than risk a wrong result.
+            self.invalidate()
+            return
+        m = values.shape[0]
+        if m == 0:
+            return
+        buf = values if self._carry is None else np.concatenate([self._carry, values])
+        n = buf.shape[0]
+        n_complete = n // self.block_len
+        if n_complete:
+            data_2d = buf[: n_complete * self.block_len].reshape(n_complete, self.block_len)
+            block_summ = np.empty(n_complete, dtype=self.summary_dtype)
+            _fill_summaries_from_2d(data_2d, block_summ, 0, self.dtype)
+            self._parts.append(block_summ)
+        rem = n - n_complete * self.block_len
+        self._carry = buf[n_complete * self.block_len :].copy() if rem else None
+        self._total = start_pos + m
+
+    def finalize(self, expected_size: int) -> np.ndarray | None:
+        """Return the full per-block summary array, or None if unusable.
+
+        *expected_size* is the column's physical length the index will summarize;
+        the accumulator must have covered exactly that many elements.
+        """
+        if not self.valid or self._total != expected_size:
+            return None
+        from blosc2.indexing import _fill_summaries_from_2d
+
+        parts = list(self._parts)
+        if self._carry is not None and self._carry.shape[0]:
+            tail = np.empty(1, dtype=self.summary_dtype)
+            _fill_summaries_from_2d(self._carry.reshape(1, -1), tail, 0, self.dtype)
+            parts.append(tail)
+        if not parts:
+            return np.empty(0, dtype=self.summary_dtype)
+        return np.concatenate(parts)
 
 
 class CTable(_CTableIndexingMixin, Generic[RowT]):
@@ -2829,7 +2937,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         validate: bool = True,
         cparams: dict[str, Any] | None = None,
         dparams: dict[str, Any] | None = None,
+        create_summary_index: bool = True,
     ) -> None:
+        """Create a new CTable or open an existing one.
+
+        Parameters
+        ----------
+        create_summary_index:
+            If ``True`` (default), SUMMARY indexes are automatically built for
+            all eligible scalar columns on :meth:`close`.  These indexes are
+            extremely cheap to store (< 0.1% of column size) and accelerate
+            ``where()`` queries without any user action.  Set to ``False`` to
+            disable.
+        """
         # Auto-size: if the caller didn't specify expected_size and new_data has a
         # known length, pre-allocate just enough (×2 for headroom, min 64).
         # Fall back to 1 M when new_data has no __len__ or is absent.
@@ -2852,6 +2972,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self._col_widths: dict[str, int] = {}
         self.col_names: list[str] = []
         self.auto_compact = compact
+        self._create_summary_index = create_summary_index
+        self._summary_indexes_built = False
         self.base = None
 
         # Choose storage backend
@@ -2899,6 +3021,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._expr_index_arrays = {}
             self._load_computed_cols_from_schema(schema_dict)
             self._load_materialized_cols_from_schema(schema_dict)
+            # Restore auto-index preference from the schema.
+            self._create_summary_index = schema_dict.get("create_summary_index", True)
+            self._summary_indexes_built = schema_dict.get("summary_indexes_built", False)
         else:
             # ---- Create new table ----
             if storage.is_read_only():
@@ -2959,6 +3084,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._flush_varlen_columns()
             if not self._read_only and self.base is None:
                 self.trim_capacity()
+            # Build SUMMARY indexes for eligible columns on first close
+            # (one-time).  These are cheap (~<0.1% of column size) and
+            # accelerate queries without any user action.
+            if (
+                not self._read_only
+                and self.base is None
+                and getattr(self, "_create_summary_index", True)
+                and not getattr(self, "_summary_indexes_built", False)
+            ):
+                self._build_summary_indexes()
+                # Persist that indexes have been built so subsequent opens
+                # skip the catalog check.
+                self._save_n_rows_to_meta()
         except Exception:
             with contextlib.suppress(Exception):
                 if storage is not None and hasattr(storage, "close"):
@@ -3564,8 +3702,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         display_rows = _CTABLE_PRINT_OPTIONS["display_rows"] if display_rows is None else display_rows
         if display_rows == 0:
             return np.empty(0, dtype=np.intp), np.empty(0, dtype=np.intp), nrows
-        valid_np = self._valid_rows[:]
-        all_pos = np.where(valid_np)[0]
+        _slp = getattr(self, "_cached_live_positions", None)
+        if _slp is not None and self.base is not None:
+            all_pos = _slp
+        else:
+            valid_np = self._valid_rows[:]
+            all_pos = np.where(valid_np)[0]
         if nrows <= display_rows:
             return all_pos, np.array([], dtype=all_pos.dtype), 0
 
@@ -4027,7 +4169,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             index += n_rows
         if not (0 <= index < n_rows):
             raise IndexError(f"row index {index} is out of bounds for table with {n_rows} rows")
-        pos = _find_physical_index(self._valid_rows, index)
+        _slp = getattr(self, "_cached_live_positions", None)
+        if _slp is not None and self.base is not None:
+            pos = int(_slp[index])
+        else:
+            pos = _find_physical_index(self._valid_rows, index)
 
         nested_meta = self._schema.metadata.get("nested") if self._schema.metadata else None
         reconstruct = isinstance(nested_meta, dict) and bool(nested_meta.get("reconstruct_rows", False))
@@ -4276,7 +4422,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self.save(urlpath, overwrite=overwrite)
         return os.path.abspath(urlpath)
 
-    def _save_to_storage(self, storage: TableStorage) -> None:
+    def _save_to_storage(  # noqa: C901
+        self,
+        storage: TableStorage,
+        *,
+        chunks_override: tuple[int, ...] | None = None,
+        blocks_override: tuple[int, ...] | None = None,
+        cparams_override: dict[str, Any] | None = None,
+    ) -> None:
         """Write all live rows and columns into *storage*.
 
         The caller is responsible for calling ``storage.close()`` when done.
@@ -4289,6 +4442,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         live_pos = np.where(valid_np)[0]
         n_live = len(live_pos)
         capacity = max(n_live, 1)
+        # True when all live positions are [0, 1, ..., n_live-1] — no gaps or tombstones.
+        no_deletions = n_live > 0 and int(live_pos[0]) == 0 and int(live_pos[-1]) == n_live - 1
 
         default_chunks, default_blocks = compute_chunks_blocks((capacity,))
         # Align fixed-size scalar columns (and the _valid_rows mask) on one
@@ -4310,26 +4465,38 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # --- columns ---
         for col in self._schema.columns:
             name = col.name
+            col_cparams = col.config.cparams if col.config.cparams is not None else self._table_cparams
+            eff_cparams = cparams_override if cparams_override is not None else col_cparams
             if self._is_list_column(col):
-                disk_col = storage.create_list_column(
-                    name,
-                    spec=col.spec,
-                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
-                    dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
-                )
-                if n_live > 0:
-                    disk_col.extend((self._cols[name][int(pos)] for pos in live_pos), validate=False)
-                    disk_col.flush()
+                src_la = self._cols[name]
+                if no_deletions and cparams_override is None and not src_la._pending_cells:
+                    # Fast path: C-level chunk transfer, no Python decompression.
+                    storage.install_list_column(name, src_la)
+                else:
+                    disk_col = storage.create_list_column(
+                        name,
+                        spec=col.spec,
+                        cparams=eff_cparams,
+                        dparams=col.config.dparams
+                        if col.config.dparams is not None
+                        else self._table_dparams,
+                    )
+                    if n_live > 0:
+                        items = src_la[:n_live] if no_deletions else (src_la[int(pos)] for pos in live_pos)
+                        disk_col.extend(items, validate=False)
+                        disk_col.flush()
                 continue
             if self._is_varlen_scalar_column(col):
                 disk_col = storage.create_varlen_scalar_column(
                     name,
                     spec=col.spec,
-                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
+                    cparams=eff_cparams,
                     dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
                 )
                 if n_live > 0:
-                    disk_col.extend(self._cols[name][int(pos)] for pos in live_pos)
+                    src_vl = self._cols[name]
+                    items = src_vl[:n_live] if no_deletions else (src_vl[int(pos)] for pos in live_pos)
+                    disk_col.extend(items)
                     disk_col.flush()
                 continue
             if self._is_dictionary_column(col):
@@ -4337,17 +4504,21 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 disk_dc = storage.create_dictionary_column(
                     name,
                     spec=col.spec,
-                    cparams=col.config.cparams if col.config.cparams is not None else self._table_cparams,
+                    cparams=eff_cparams,
                     dparams=col.config.dparams if col.config.dparams is not None else self._table_dparams,
                 )
                 # Copy dictionary values first
                 for v in src_dc.dictionary:
                     disk_dc.encode(v)
                 disk_dc.flush()
+                # Resize codes to the target capacity before writing — the default
+                # codes_shape=(4096,) in create_dictionary_column is too small.
+                if len(disk_dc.codes) < capacity:
+                    disk_dc.codes.resize((capacity,))
                 # Copy live codes
                 if n_live > 0:
-                    raw_codes = src_dc.codes[live_pos]
-                    disk_dc.codes[:n_live] = raw_codes
+                    pos_slice = np.arange(n_live, dtype=np.int64) if no_deletions else live_pos
+                    disk_dc.codes[:n_live] = src_dc.codes[pos_slice]
                 continue
             shape = self._column_physical_shape(col, capacity)
             if col.name in aligned_names:
@@ -4355,17 +4526,51 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 dtype_chunks, dtype_blocks = self._column_chunks_blocks(col, shape)
             col_storage = self._resolve_column_storage(col, dtype_chunks, dtype_blocks)
-            disk_col = storage.create_column(
-                name,
-                dtype=col.dtype,
-                shape=shape,
-                chunks=col_storage["chunks"],
-                blocks=col_storage["blocks"],
-                cparams=col_storage.get("cparams"),
-                dparams=col_storage.get("dparams"),
-            )
-            if n_live > 0:
-                disk_col[:n_live] = self._cols[name][live_pos]
+            src_arr = self._cols[name]
+            # Fast reblock path: use NDArray.copy() for a single C-level
+            # decompress+recompress pass.  Only safe when the source array has
+            # no spare capacity (src shape == n_live); otherwise copy() would
+            # include uninitialised rows beyond the live watermark.
+            if (
+                no_deletions
+                and src_arr.shape[0] == n_live
+                and (
+                    chunks_override is not None
+                    or blocks_override is not None
+                    or cparams_override is not None
+                )
+            ):
+                copy_kwargs: dict[str, Any] = {}
+                if chunks_override is not None:
+                    copy_kwargs["chunks"] = chunks_override
+                if blocks_override is not None:
+                    copy_kwargs["blocks"] = blocks_override
+                if cparams_override is not None:
+                    copy_kwargs["cparams"] = cparams_override
+                new_arr = src_arr.copy(**copy_kwargs)
+                storage.install_column(name, new_arr)
+            else:
+                eff_chunks = chunks_override if chunks_override is not None else col_storage["chunks"]
+                if chunks_override is not None and blocks_override is None:
+                    _sb = shared_blocks if shared_blocks is not None else default_blocks
+                    if _sb is not None and all(b <= c for b, c in zip(_sb, chunks_override, strict=False)):
+                        eff_blocks = _sb
+                    else:
+                        eff_blocks = None
+                else:
+                    eff_blocks = blocks_override if blocks_override is not None else col_storage["blocks"]
+                disk_col = storage.create_column(
+                    name,
+                    dtype=col.dtype,
+                    shape=shape,
+                    chunks=eff_chunks,
+                    blocks=eff_blocks,
+                    cparams=cparams_override if cparams_override is not None else col_storage.get("cparams"),
+                    dparams=col_storage.get("dparams"),
+                )
+                if n_live > 0:
+                    # Slice is ~30x faster than fancy-index for sequential no-deletion access.
+                    disk_col[:n_live] = src_arr[:n_live] if no_deletions else src_arr[live_pos]
 
         storage.save_schema(self._schema_dict_with_computed())
 
@@ -4438,6 +4643,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._col_widths = {}
         obj.col_names = col_names
         obj.auto_compact = False
+        obj._create_summary_index = schema_dict.get("create_summary_index", True)
+        obj._summary_indexes_built = schema_dict.get("summary_indexes_built", False)
         obj.base = None
 
         obj._valid_rows = storage.open_valid_rows()
@@ -4601,6 +4808,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
         obj.col_names = col_names
         obj.auto_compact = False
+        obj._create_summary_index = schema_dict.get("create_summary_index", True)
+        obj._summary_indexes_built = schema_dict.get("summary_indexes_built", False)
         obj.base = None
         obj._valid_rows = mem_valid
         obj._n_rows = n_live
@@ -4632,6 +4841,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._col_widths = parent._col_widths
         obj.col_names = parent.col_names
         obj.auto_compact = parent.auto_compact
+        obj._create_summary_index = parent._create_summary_index
+        obj._summary_indexes_built = True  # views never build indexes themselves
         obj.base = parent
         obj._valid_rows = new_valid_rows
         # Keep row counts lazy for views.  Many pipelines (e.g. where(...).sort_by(...))
@@ -4649,13 +4860,45 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if len(positions) and self._known_n_rows() != total:
             keep = np.asarray(self._valid_rows[positions], dtype=bool)
             positions = positions[keep]
-        mask = np.zeros(total, dtype=np.bool_)
-        if len(positions):
-            mask[positions] = True
-        result = CTable._make_view(self, blosc2.asarray(mask))
+        result = CTable._make_view(self, self._bool_mask_from_positions(positions, total))
         result._cached_live_positions = positions
         result._n_rows = len(positions)
         return result
+
+    # Rows per chunk when building a positions view mask.  The mask is written
+    # one chunk at a time, so this trades peak memory against build time: each
+    # touched chunk costs ~one compress (time) and ~2x this many bytes (bool)
+    # held transiently (peak).  A full numpy mask is a single fast compress but
+    # materializes the whole ``total``-element array (~1 byte/row).  ~4M keeps
+    # peak to a few MB while staying few enough chunks that the per-chunk
+    # compress cost does not dominate; lower it for less memory at more chunks.
+    _MASK_BUILD_CHUNK_ROWS = 4_000_000
+
+    def _bool_mask_from_positions(self, positions: np.ndarray, total: int) -> blosc2.NDArray:
+        """Build the compressed boolean row mask for a positions view.
+
+        The mask is written chunk-by-chunk (only chunks that contain a position
+        are touched), so it never materializes the full ``total``-element
+        uncompressed array — a sparse selection out of millions of rows costs a
+        few chunk buffers instead of the whole mask.  The chunk size is capped
+        (not the column grid) so peak memory stays bounded without paying a
+        compress per column-chunk.
+        """
+        if total <= 0:
+            return blosc2.zeros(max(total, 0), dtype=np.bool_)
+        chunk_len = min(total, self._MASK_BUILD_CHUNK_ROWS)
+        mask = blosc2.zeros(total, dtype=np.bool_, chunks=(chunk_len,))
+        if len(positions) == 0:
+            return mask
+        chunk_len = int(mask.chunks[0])
+        chunk_of = positions // chunk_len
+        for c in np.unique(chunk_of):
+            lo = int(c) * chunk_len
+            hi = min(lo + chunk_len, total)
+            buf = np.zeros(hi - lo, dtype=np.bool_)
+            buf[positions[chunk_of == c] - lo] = True
+            mask[lo:hi] = buf
+        return mask
 
     def view(self, new_valid_rows):
         """Return a row-filter view backed by a boolean mask array without copying data."""
@@ -4852,6 +5095,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._n_rows = self._known_n_rows()
         obj._last_pos = self._last_pos
         obj.auto_compact = self.auto_compact
+        obj._create_summary_index = self._create_summary_index
+        obj._summary_indexes_built = True  # views never build indexes
         obj.base = self
 
         # Stored columns — same NDArray objects, no copy
@@ -5709,7 +5954,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     @classmethod
     def _create_arrow_import_columns(
-        cls, storage: TableStorage, columns: list[CompiledColumn], capacity: int, cparams, dparams
+        cls,
+        storage: TableStorage,
+        columns: list[CompiledColumn],
+        capacity: int,
+        cparams,
+        dparams,
+        chunks_override: tuple[int, ...] | None = None,
+        blocks_override: tuple[int, ...] | None = None,
     ):
         default_chunks, default_blocks = compute_chunks_blocks((capacity,))
         # Align fixed-size scalar columns (and the _valid_rows mask) on one
@@ -5753,6 +6005,24 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     chunks, blocks = shared_chunks, shared_blocks
                 elif col.dtype is not None:
                     chunks, blocks = cls._column_chunks_blocks(col, shape)
+                if chunks_override is not None:
+                    chunks = chunks_override
+                    if blocks_override is None:
+                        # Use the shared grid's blocks so all columns stay on the
+                        # same (chunks, blocks) pair — required for fast_eval.
+                        # Letting each dtype auto-pick its own blocks produces
+                        # different values (e.g. 37376 for float32 vs 32768 for
+                        # float64), which breaks alignment across columns.
+                        # Guard: shared_blocks must fit within chunks_override.
+                        eff_blocks = shared_blocks if shared_blocks is not None else default_blocks
+                        if eff_blocks is not None and all(
+                            b <= c for b, c in zip(eff_blocks, chunks_override, strict=False)
+                        ):
+                            blocks = eff_blocks
+                        else:
+                            blocks = None  # chunks too small; let blosc2 auto-pick
+                if blocks_override is not None:
+                    blocks = blocks_override
                 new_cols[col.name] = storage.create_column(
                     col.name,
                     dtype=col.dtype,
@@ -5766,7 +6036,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     @classmethod
     def _new_arrow_import_ctable(
-        cls, compiled, storage, new_cols, new_valid, columns, *, cparams, dparams, validate
+        cls,
+        compiled,
+        storage,
+        new_cols,
+        new_valid,
+        columns,
+        *,
+        cparams,
+        dparams,
+        validate,
+        create_summary_index=True,
     ):
         obj = cls.__new__(cls)
         obj._row_type = None
@@ -5780,6 +6060,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in columns}
         obj.col_names = [col.name for col in columns]
         obj.auto_compact = False
+        obj._create_summary_index = create_summary_index
+        obj._summary_indexes_built = False
         obj.base = None
         obj._computed_cols = {}
         obj._materialized_cols = {}
@@ -5863,7 +6145,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # Buffer fixed-size column writes and flush them chunk-aligned so each
         # chunk is compressed once instead of being merged on every batch.
         writers = {
-            col.name: _ChunkAlignedWriter(new_cols[col.name], new_cols[col.name].chunks[0])
+            col.name: _ChunkAlignedWriter(
+                new_cols[col.name],
+                new_cols[col.name].chunks[0],
+                on_write=obj._summary_feeder(col.name),
+            )
             for col in columns
             if not (
                 cls._is_list_column(col)
@@ -6063,18 +6349,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             list_array = batch.column(0)
             # flatten() skips null outer list rows and concatenates element values
             struct_values = list_array.flatten()
-            if max_rows is not None:
-                remaining = max_rows - rows_seen
-                if len(struct_values) > remaining:
-                    struct_values = struct_values.slice(0, remaining)
-            n_values = len(struct_values)
-            if n_values == 0:
+            if len(struct_values) == 0:
                 # Emit an empty record batch that still carries the inner schema
                 empty_arrays = [pa.array([], type=f.type) for f in inner_schema]
                 yield pa.record_batch(empty_arrays, schema=inner_schema)
                 continue
-            rows_seen += n_values
-            yield pa.RecordBatch.from_struct_array(struct_values)
+            rb = pa.RecordBatch.from_struct_array(struct_values)
+            if max_rows is not None:
+                # Slice the *record batch* rather than the flattened struct array:
+                # ListArray.flatten() can return an offset view, and some pyarrow
+                # versions don't honor that offset in from_struct_array(), which
+                # would silently import the untruncated batch.  RecordBatch.slice
+                # is always respected downstream.
+                remaining = max_rows - rows_seen
+                if len(rb) > remaining:
+                    rb = rb.slice(0, remaining)
+            rows_seen += len(rb)
+            yield rb
 
     @staticmethod
     def _flatten_arrow_struct_schema(pa, schema):
@@ -6148,6 +6439,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         object_fallback: bool = False,
         column_cparams: Mapping[str, dict[str, Any]] | None = None,
         separate_nested_cols: bool = False,
+        create_summary_index: bool = True,
+        chunks: int | tuple[int, ...] | None = None,
+        blocks: int | tuple[int, ...] | None = None,
     ) -> CTable:
         """Build a :class:`CTable` from an Arrow schema and iterable of record batches.
 
@@ -6328,8 +6622,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             capacity = _EXPECTED_SIZE_DEFAULT
         else:
             capacity = max(capacity_hint or 1, 1)
+        _chunks = (chunks,) if isinstance(chunks, int) else chunks
+        _blocks = (blocks,) if isinstance(blocks, int) else blocks
         storage = cls._storage_for_arrow_import(urlpath, mode)
-        new_cols, new_valid = cls._create_arrow_import_columns(storage, columns, capacity, cparams, dparams)
+        new_cols, new_valid = cls._create_arrow_import_columns(
+            storage, columns, capacity, cparams, dparams, _chunks, _blocks
+        )
         storage.save_schema(schema_to_dict(compiled))
         obj = cls._new_arrow_import_ctable(
             compiled,
@@ -6340,6 +6638,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             cparams=cparams,
             dparams=dparams,
             validate=validate,
+            create_summary_index=create_summary_index,
         )
         cls._write_arrow_batches(obj, batches, columns, new_cols, new_valid)
         return obj
@@ -6876,6 +7175,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
         obj.col_names = [col.name for col in schema.columns]
         obj.auto_compact = False
+        obj._create_summary_index = True
+        obj._summary_indexes_built = False
         obj.base = None
         obj._computed_cols = {}  # from_csv creates no computed columns
         obj._materialized_cols = {}
@@ -7054,6 +7355,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._col_widths = {col.name: max(len(col.name), col.display_width) for col in schema.columns}
         obj.col_names = [col.name for col in schema.columns]
         obj.auto_compact = False
+        obj._create_summary_index = True
+        obj._summary_indexes_built = False
         obj.base = None
         obj._computed_cols = {}
         obj._materialized_cols = {}
@@ -7168,8 +7471,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         spec, default, column_config = self._column_spec_default_and_config(spec)
 
-        live_pos = self._live_positions_from_valid_rows_chunks()
-        if default is MISSING and len(live_pos) > 0:
+        n_live = self.nrows
+        if default is MISSING and n_live > 0:
             raise ValueError(
                 "add_column() requires a default declared as blosc2.field(..., default=...) "
                 "when the table has live rows."
@@ -7192,7 +7495,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 cparams=col_storage.get("cparams"),
                 dparams=col_storage.get("dparams"),
             )
-            for _ in live_pos:
+            for _ in range(n_live):
                 new_col.append(default)
             new_col.flush()
         elif self._is_list_column(compiled_col):
@@ -7226,11 +7529,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 cparams=col_storage.get("cparams"),
                 dparams=col_storage.get("dparams"),
             )
-            if len(live_pos) > 0:
+            if n_live > 0:
                 if self._is_ndarray_column(compiled_col):
-                    new_col[live_pos] = np.broadcast_to(default_val, (len(live_pos), *spec.item_shape))
+                    new_col[self._valid_rows] = np.broadcast_to(default_val, (n_live, *spec.item_shape))
                 else:
-                    new_col[live_pos] = default_val
+                    new_col[self._valid_rows] = default_val
 
         compiled_col.default = default
         self._cols[name] = new_col
@@ -7527,6 +7830,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         n_rows = self._known_n_rows()
         if n_rows is not None:
             d["n_rows"] = n_rows
+        d["create_summary_index"] = getattr(self, "_create_summary_index", True)
+        d["summary_indexes_built"] = getattr(self, "_summary_indexes_built", False)
         if self._computed_cols:
             d["computed_columns"] = [
                 {
@@ -7576,6 +7881,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 return
             schema_dict = json.loads(schema_raw)
             schema_dict["n_rows"] = n_rows
+            schema_dict["summary_indexes_built"] = getattr(self, "_summary_indexes_built", False)
             meta.vlmeta["schema"] = json.dumps(schema_dict)
             # Persist: for FileTableStorage, rewrite the external _meta.b2f file.
             if hasattr(storage, "_meta_path"):
@@ -7585,6 +7891,148 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 storage._write_leaf("/_meta", meta, ".b2f")
         except Exception:
             pass  # best-effort; failure must not prevent close()
+
+    def _is_summary_eligible_column(self, col) -> bool:
+        """True if *col* can carry an automatic SUMMARY index.
+
+        Eligible columns are stored, scalar, numeric-or-boolean, and not
+        list/varlen/dictionary/computed.  Shared by the close-time builder and
+        the incremental accumulator so both agree on the column set.
+        """
+        name = col.name
+        if name in self._computed_cols:
+            return False
+        if self._is_list_column(col) or self._is_varlen_scalar_column(col):
+            return False
+        if self._is_dictionary_column(col) or self._is_ndarray_column(col):
+            return False
+        spec = col.spec
+        return hasattr(spec, "dtype") and (
+            np.issubdtype(np.dtype(spec.dtype), np.number) or np.issubdtype(np.dtype(spec.dtype), np.bool_)
+        )
+
+    def _get_summary_accumulator(self, name: str):
+        """Return the live per-block summary accumulator for *name*, or None.
+
+        Lazily creates one the first time an eligible column on a writable
+        top-level table is fed.  ``None`` (cached) means the column is not a
+        candidate for incremental summaries; an *invalid* accumulator means a
+        non-append mutation happened and the close-time builder must fall back
+        to the out-of-core path.
+        """
+        if self.base is not None or getattr(self, "_read_only", False):
+            return None
+        if not getattr(self, "_create_summary_index", True):
+            return None
+        accs = self.__dict__.get("_summary_accumulators")
+        if accs is None:
+            accs = {}
+            self._summary_accumulators = accs
+        if name in accs:
+            return accs[name]
+        col = self._schema.columns_by_name.get(name)
+        arr = self._cols.get(name)
+        if col is None or arr is None or not self._is_summary_eligible_column(col):
+            accs[name] = None
+            return None
+        try:
+            block_len = int(arr.blocks[0])
+            dtype = arr.dtype
+        except Exception:
+            accs[name] = None
+            return None
+        acc = _ColumnSummaryAccumulator(dtype, block_len)
+        accs[name] = acc
+        return acc
+
+    def _summary_feeder(self, name: str):
+        """Return a ``callback(start_pos, values)`` bound to *name*, or None."""
+        acc = self._get_summary_accumulator(name)
+        if acc is None:
+            return None
+        return acc.feed
+
+    def _feed_summary(self, name: str, start_pos: int, values: np.ndarray) -> None:
+        acc = self._get_summary_accumulator(name)
+        if acc is not None:
+            acc.feed(start_pos, values)
+
+    def _invalidate_summary_accumulator(self, name: str) -> None:
+        accs = self.__dict__.get("_summary_accumulators")
+        if accs:
+            acc = accs.get(name)
+            if acc is not None:
+                acc.invalidate()
+
+    def _invalidate_all_summary_accumulators(self) -> None:
+        accs = self.__dict__.get("_summary_accumulators")
+        if accs:
+            for acc in accs.values():
+                if acc is not None:
+                    acc.invalidate()
+
+    def _precomputed_summary_for(self, name: str):
+        """Return ``{"block": summaries}`` for *name* if a valid accumulator
+        fully covers the column's physical extent, else None."""
+        accs = self.__dict__.get("_summary_accumulators")
+        if not accs:
+            return None
+        acc = accs.get(name)
+        if acc is None:
+            return None
+        arr = self._cols.get(name)
+        if arr is None:
+            return None
+        try:
+            expected = int(arr.shape[0])
+        except Exception:
+            return None
+        summaries = acc.finalize(expected)
+        if summaries is None:
+            return None
+        return {"block": summaries}
+
+    def _build_summary_indexes(self) -> None:
+        """Create SUMMARY indexes for all eligible scalar columns.
+
+        Called once from :meth:`close` when ``create_summary_index=True`` (the default).
+        Skips list, varlen, dictionary, and computed columns.  If all eligible
+        columns are already indexed (e.g. from a prior close), this is a no-op.
+        Failure on any individual column is silently ignored — it must not
+        prevent close().
+
+        When an incremental per-block accumulator fully covers a column (the
+        common build-from-empty case), its precomputed summaries are handed to
+        ``create_index`` so the column is *not* decompressed again just to
+        recompute min/max.  Otherwise the index builder falls back to the
+        out-of-core decompress-and-scan path transparently.
+        """
+        catalog = self._get_index_catalog()
+        indexed = set(catalog) if catalog else set()
+        eligible = [
+            col.name
+            for col in self._schema.columns
+            if col.name not in indexed and self._is_summary_eligible_column(col)
+        ]
+        if not eligible:
+            self._summary_indexes_built = True
+            return
+
+        import warnings
+
+        for name in eligible:
+            try:
+                precomputed = self._precomputed_summary_for(name)
+                if precomputed is not None:
+                    self.create_index(name, kind=blosc2.IndexKind.SUMMARY, precomputed_summaries=precomputed)
+                else:
+                    self.create_index(name, kind=blosc2.IndexKind.SUMMARY)
+            except Exception:
+                warnings.warn(
+                    f"Failed to create SUMMARY index for column {name!r}; skipping.",
+                    stacklevel=2,
+                )
+        self._summary_indexes_built = True
 
     def _load_computed_cols_from_schema(self, schema_dict: dict) -> None:
         """Reconstruct ``_computed_cols`` from persisted metadata.
@@ -7963,18 +8411,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if name not in self._materialized_cols:
             raise KeyError(f"{name!r} is not a generated/materialized column.")
         meta = self._materialized_cols[name]
-        live_pos = self._live_positions_from_valid_rows_chunks()
+        n_live = self.nrows
         if meta.get("transformer_kind") == "row_transformer":
             transformer = RowTransformer.from_metadata(meta["transformer"])
             values = np.asarray(transformer.evaluate_existing(self), dtype=meta["dtype"])
         else:
             raw_columns = {dep: self[dep][:] for dep in meta["col_deps"]}
             values = self._evaluate_expression_materialized_batch(meta, raw_columns)
-        if len(values) != len(live_pos):
-            raise ValueError(
-                f"Generated column {name!r} produced {len(values)} values, expected {len(live_pos)}."
-            )
-        self._cols[name][live_pos] = values
+        if len(values) != n_live:
+            raise ValueError(f"Generated column {name!r} produced {len(values)} values, expected {n_live}.")
+        self._cols[name][self._valid_rows] = values
         meta["stale"] = False
         self._mark_all_indexes_stale()
         if isinstance(self._storage, FileTableStorage):
@@ -8128,7 +8574,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if name in self._computed_cols:
             raise ValueError(f"A computed column named {name!r} already exists.")
 
-        live_pos = self._live_positions_from_valid_rows_chunks()
+        n_live = self.nrows
         if isinstance(values, RowTransformer):
             transformer = values
             for dep in transformer.source_columns:
@@ -8139,7 +8585,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     raise TypeError(f"RowTransformer source {dep!r} is not an ndarray column.")
             generated_values = (
                 transformer.evaluate_existing(self)
-                if len(live_pos)
+                if n_live
                 else transformer.evaluate_batch(
                     {
                         transformer.source: np.zeros(
@@ -8165,7 +8611,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if generated_values.ndim != 1:
                 raise TypeError("Expression generated columns must produce a 1-D scalar result.")
             generated_values = (
-                generated_values[live_pos]
+                generated_values[self._valid_rows[:]]
                 if len(generated_values) == len(self._valid_rows)
                 else generated_values
             )
@@ -8181,20 +8627,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if create_index and isinstance(spec, NDArraySpec):
             raise ValueError("Generated columns intended for indexing must be 1-D scalar columns.")
         generated_values = np.asarray(generated_values, dtype=spec.dtype)
-        if len(generated_values) != len(live_pos):
+        if len(generated_values) != n_live:
             raise ValueError(
-                f"Generated column {name!r} produced {len(generated_values)} values, expected {len(live_pos)}."
+                f"Generated column {name!r} produced {len(generated_values)} values, expected {n_live}."
             )
-        if isinstance(spec, NDArraySpec) and generated_values.shape != (len(live_pos), *spec.item_shape):
+        if isinstance(spec, NDArraySpec) and generated_values.shape != (n_live, *spec.item_shape):
             raise ValueError(
-                f"Generated column {name!r} expected shape {(len(live_pos), *spec.item_shape)}, got {generated_values.shape}."
+                f"Generated column {name!r} expected shape {(n_live, *spec.item_shape)}, got {generated_values.shape}."
             )
 
         self._create_empty_stored_column(name, np.dtype(spec.dtype), spec=spec)
         self._materialized_cols[name] = metadata
         try:
-            if len(live_pos):
-                self._cols[name][live_pos] = generated_values
+            if n_live:
+                self._cols[name][self._valid_rows] = generated_values
             if create_index:
                 self.create_index(name)
         except Exception:
@@ -8596,6 +9042,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise ValueError("Cannot compact a view.")
         if self._last_pos is not None and self._last_pos == self._n_rows:
             return
+        # Compaction rewrites physical column layout; incremental summaries no
+        # longer correspond to it.
+        self._invalidate_all_summary_accumulators()
         self._flush_varlen_columns()
         real_poss = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
         for col in self._schema.columns:
@@ -8880,21 +9329,6 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if sorted_pos is not None and len(sorted_pos) != n:
                 sorted_pos = None
 
-        # For small filtered views, materialise selected columns once and sort those
-        # small arrays in memory.  This avoids gathering the sort keys and then
-        # gathering the result columns again from the large backing arrays.
-        if (
-            sorted_pos is None
-            and not inplace
-            and self.base is not None
-            and n <= _SMALL_SORT_MATERIALIZE_LIMIT
-            and not any(
-                self._is_list_column(col) or self._is_varlen_scalar_column(col)
-                for col in self._schema.columns
-            )
-        ):
-            return self._sorted_small_copy_from_live_positions(cols, ascending, live_pos, n)
-
         if sorted_pos is None:
             order = np.lexsort(self._build_lex_keys(cols, ascending, live_pos, n))
             sorted_pos = live_pos[order]
@@ -8902,6 +9336,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if inplace:
             self._sort_by_inplace(sorted_pos, n)
             return self
+
+        # When sorting a view, return a new lazy sorted view rather than
+        # eagerly materialising all columns.  The new view shares _cols with
+        # the base and stores the sorted physical positions in
+        # _cached_live_positions.  Column reads and row iteration on the result
+        # use those positions directly, so columns are fetched on demand and in
+        # the correct sorted order — identical performance to pre-projecting
+        # with columns= before calling sort_by.
+        if self.base is not None:
+            result = CTable._make_view(self, self._valid_rows)
+            result._cached_live_positions = sorted_pos
+            result._n_rows = n
+            return result
 
         return self._sorted_copy_from_positions(sorted_pos, n)
 
@@ -9002,12 +9449,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         result._last_pos = n
         return result
 
-    def copy(
+    def copy(  # noqa: C901
         self,
         compact: bool = True,
         *,
         urlpath: str | os.PathLike[str] | None = None,
         overwrite: bool = False,
+        chunks: int | tuple[int, ...] | None = None,
+        blocks: int | tuple[int, ...] | None = None,
+        cparams: dict[str, Any] | None = None,
     ) -> CTable:
         """Return a new standalone copy of this table.
 
@@ -9033,9 +9483,55 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             in-memory copy.
         overwrite:
             If ``True``, replace an existing persistent destination.
+        chunks:
+            Chunk size (in items) to use for all scalar columns in the copy.
+            Overrides the chunk size inherited from the source schema.  Pass an
+            ``int`` for a 1-D chunk or a ``tuple`` for multi-dimensional arrays.
+        blocks:
+            Block size (in items) to use for all scalar columns in the copy.
+            Overrides the block size inherited from the source schema.  Pass an
+            ``int`` for a 1-D block or a ``tuple`` for multi-dimensional arrays.
+            Summary indexes are rebuilt with the new block granularity.
+        cparams:
+            Compression parameters (codec, clevel, …) to apply to all columns
+            in the copy.  Overrides per-column and table-level settings from
+            the source.
         """
         if urlpath is not None:
             urlpath = os.fspath(urlpath)
+            if chunks is not None or blocks is not None or cparams is not None:
+                # When storage layout changes we must go through _save_to_storage
+                # directly — to_b2z/to_b2d may take the physical-pack fast path
+                # which zips existing compressed leaves as-is, silently ignoring
+                # any chunk/block/cparams override.
+                # For views (base is not None) _save_to_storage already limits
+                # iteration to self._schema.columns and self._cols, so no in-memory
+                # intermediate is needed.
+                _chunks = (chunks,) if isinstance(chunks, int) else chunks
+                _blocks = (blocks,) if isinstance(blocks, int) else blocks
+                file_storage = FileTableStorage(urlpath, "w")
+                target_path = file_storage._root
+                if os.path.exists(target_path):
+                    if not overwrite:
+                        raise ValueError(
+                            f"Path {target_path!r} already exists. Use overwrite=True to replace."
+                        )
+                    if os.path.isdir(target_path):
+                        shutil.rmtree(target_path)
+                    else:
+                        os.remove(target_path)
+                self._save_to_storage(
+                    file_storage,
+                    chunks_override=_chunks,
+                    blocks_override=_blocks,
+                    cparams_override=cparams,
+                )
+                file_storage.close()
+                # Open with mode="a" so _build_summary_indexes() fires automatically,
+                # then re-open read-only for the caller.
+                result = CTable.open(urlpath, mode="a")
+                result.close()
+                return CTable.open(urlpath, mode="r")
             if urlpath.endswith(".b2z"):
                 self.to_b2z(urlpath, overwrite=overwrite, compact=compact)
             else:
@@ -9062,24 +9558,47 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if n == 0:
                 n = int(live_pos[-1]) + 1 if n_live > 0 else 0
 
-        result = self._empty_copy(capacity=n)
+        # When all live positions are exactly [0, 1, …, n_live-1] a slice read is
+        # ~30× faster than fancy indexing.  Check via O(1) boundary test.
+        is_dense = compact and n_live > 0 and int(live_pos[0]) == 0 and int(live_pos[-1]) == n_live - 1
+
+        _chunks = (chunks,) if isinstance(chunks, int) else chunks
+        _blocks = (blocks,) if isinstance(blocks, int) else blocks
+        result = self._empty_copy(
+            capacity=n,
+            chunks_override=_chunks,
+            blocks_override=_blocks,
+            cparams_override=cparams,
+        )
 
         for col in self._schema.columns:
             col_name = col.name
             arr = self._cols[col_name]
             if self._is_list_column(col):
-                src = (arr[int(pos)] for pos in live_pos) if compact else (arr[i] for i in range(n))
+                src = (
+                    arr[:n_live]
+                    if is_dense
+                    else (arr[int(pos)] for pos in live_pos)
+                    if compact
+                    else (arr[i] for i in range(n))
+                )
                 result._cols[col_name].extend(src, validate=False)
                 result._cols[col_name].flush()
             elif self._is_dictionary_column(col):
                 # Copy dictionary values, then copy (live) codes.
                 for v in arr.dictionary:
                     result._cols[col_name].encode(v)
-                pos_slice = live_pos if compact else np.arange(n, dtype=np.int64)
+                pos_slice = (
+                    np.arange(n_live, dtype=np.int64)
+                    if is_dense
+                    else (live_pos if compact else np.arange(n, dtype=np.int64))
+                )
                 raw_codes = arr.codes[pos_slice]
                 result._cols[col_name].codes[:n] = raw_codes
             else:
-                result._cols[col_name][:n] = arr[live_pos] if compact else arr[:n]
+                result._cols[col_name][:n] = (
+                    arr[:n_live] if is_dense else (arr[live_pos] if compact else arr[:n])
+                )
 
         if compact:
             result._valid_rows[:n] = True
@@ -9092,7 +9611,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         return result
 
-    def _empty_copy(self, capacity: int | None = None) -> CTable:
+    def _empty_copy(
+        self,
+        capacity: int | None = None,
+        *,
+        chunks_override: tuple[int, ...] | None = None,
+        blocks_override: tuple[int, ...] | None = None,
+        cparams_override: dict[str, Any] | None = None,
+    ) -> CTable:
         """Return a new empty in-memory CTable with the same schema and capacity."""
         from blosc2 import compute_chunks_blocks
 
@@ -9113,25 +9639,26 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         new_cols = {}
         for col in self._schema.columns:
             col_storage = self._resolve_column_storage(col, default_chunks, default_blocks)
+            eff_cparams = cparams_override if cparams_override is not None else col_storage.get("cparams")
             if self._is_list_column(col):
                 new_cols[col.name] = mem_storage.create_list_column(
                     col.name,
                     spec=col.spec,
-                    cparams=col_storage.get("cparams"),
+                    cparams=eff_cparams,
                     dparams=col_storage.get("dparams"),
                 )
             elif self._is_varlen_scalar_column(col):
                 new_cols[col.name] = mem_storage.create_varlen_scalar_column(
                     col.name,
                     spec=col.spec,
-                    cparams=col_storage.get("cparams"),
+                    cparams=eff_cparams,
                     dparams=col_storage.get("dparams"),
                 )
             elif self._is_dictionary_column(col):
                 dict_col = mem_storage.create_dictionary_column(
                     col.name,
                     spec=col.spec,
-                    cparams=col_storage.get("cparams"),
+                    cparams=eff_cparams,
                     dparams=col_storage.get("dparams"),
                 )
                 if len(dict_col.codes) < capacity:
@@ -9146,13 +9673,25 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         chunks, blocks = shared_chunks, shared_blocks
                     else:
                         chunks, blocks = self._column_chunks_blocks(col, shape)
+                if chunks_override is not None:
+                    chunks = chunks_override
+                    if blocks_override is None:
+                        eff_blocks = shared_blocks if shared_blocks is not None else default_blocks
+                        if eff_blocks is not None and all(
+                            b <= c for b, c in zip(eff_blocks, chunks_override, strict=False)
+                        ):
+                            blocks = eff_blocks
+                        else:
+                            blocks = None
+                if blocks_override is not None:
+                    blocks = blocks_override
                 new_cols[col.name] = mem_storage.create_column(
                     col.name,
                     dtype=col.dtype,
                     shape=shape,
                     chunks=chunks,
                     blocks=blocks,
-                    cparams=col_storage.get("cparams"),
+                    cparams=eff_cparams,
                     dparams=col_storage.get("dparams"),
                 )
 
@@ -9166,6 +9705,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._cols = new_cols
         obj._col_widths = self._col_widths.copy()
         obj.col_names = [col.name for col in self._schema.columns]
+        obj.auto_compact = self.auto_compact
+        obj._create_summary_index = self._create_summary_index
+        obj._summary_indexes_built = False  # compact creates a new copy; indexes not yet built
         obj._materialized_cols = {name: dict(meta) for name, meta in self._materialized_cols.items()}
         obj._expr_index_arrays = dict(self._expr_index_arrays)
         # Rebuild computed columns with the new NDArray objects as operands
@@ -9465,6 +10007,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 col_array[pos] = row[name]  # DictionaryColumn encodes on __setitem__
             else:
                 col_array[pos] = row[name]
+                acc = self._get_summary_accumulator(name)
+                if acc is not None and acc.valid:
+                    acc.feed(pos, np.asarray([row[name]], dtype=col_array.dtype))
 
         n_rows = self.nrows
         self._valid_rows[pos] = True
@@ -9685,7 +10230,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 # DictionaryColumn.__setitem__ with a slice encodes all values.
                 self._cols[name][start_pos:end_pos] = dict_processed_cols[name]
             else:
-                self._cols[name][start_pos:end_pos] = scalar_processed_cols[name][:]
+                values = scalar_processed_cols[name]
+                self._cols[name][start_pos:end_pos] = values[:]
+                self._feed_summary(name, start_pos, values)
 
         n_rows = self.nrows
         self._valid_rows[start_pos:end_pos] = True
@@ -9764,7 +10311,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _guard_varlen_scalar_expression(self, expr: str) -> None:
         self._guard_scalar_expression(expr)
 
-    def where(
+    def where(  # noqa: C901
         self,
         expr_result: str | np.ndarray | blosc2.NDArray | blosc2.LazyExpr | Column,
         *,
@@ -9873,10 +10420,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         # Attempt index-accelerated filtering before falling back to a full scan.
         if isinstance(expr_result, blosc2.LazyExpr):
-            positions = self._try_index_where(expr_result)
-            if positions is not None:
-                result = self._view_from_positions(positions)
-                return result if columns is None else result.select(list(columns))
+            index_result = self._try_index_where(expr_result)
+            if index_result is not None:
+                if isinstance(index_result, blosc2.NDArray):
+                    # Mask-producing index (SUMMARY/BUCKET): keep the compressed
+                    # boolean mask and route it through the same downstream path a
+                    # plain scan uses (no positions <-> mask round-trip).  The
+                    # view extracts live positions lazily if sort_by/gather needs
+                    # them.  Position-producing indexes (FULL/PARTIAL/OPSI) still
+                    # return positions and go through _view_from_positions.
+                    expr_result = index_result
+                else:
+                    result = self._view_from_positions(index_result)
+                    return result if columns is None else result.select(list(columns))
 
         target_len = len(self._valid_rows)
         known_n_rows = self._known_n_rows()
@@ -9900,8 +10456,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if filter_len != target_len:
             if filter_len == self.nrows:
                 physical = blosc2.zeros(target_len, dtype=np.bool_)
-                live_pos = self._live_positions_from_valid_rows_chunks()
-                physical[live_pos] = filter[:]
+                physical[self._valid_rows] = filter[:]
                 filter = physical
                 filter_intersected = True
             elif filter_len > target_len:

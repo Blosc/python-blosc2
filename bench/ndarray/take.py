@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import argparse
 import shutil
-import sys
 import tempfile
+import threading
 import time
+import time as _time
 from pathlib import Path
 
 import h5py
@@ -32,8 +33,6 @@ import hdf5plugin
 import matplotlib.pyplot as plt
 import numpy as np
 import psutil
-import threading
-import time as _time
 import zarr
 from zarr.codecs import BloscCodec, BytesCodec
 
@@ -42,17 +41,20 @@ import blosc2
 # ---------------------------------------------------------------------------
 # plot style
 # ---------------------------------------------------------------------------
-plt.rcParams.update({
-    "text.usetex": False,
-    "font.size": 14,
-    "figure.dpi": 150,
-    "savefig.dpi": 150,
-})
+plt.rcParams.update(
+    {
+        "text.usetex": False,
+        "font.size": 14,
+        "figure.dpi": 150,
+        "savefig.dpi": 150,
+    }
+)
 plt.style.use("seaborn-v0_8-paper")
 
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
 
 def _compute_shape(ndim: int, n_elements: int) -> tuple[int, ...]:
     """Roughly-cubic shape with the given number of dimensions."""
@@ -62,9 +64,11 @@ def _compute_shape(ndim: int, n_elements: int) -> tuple[int, ...]:
     shape[0] = max(1, n_elements // int(np.prod(shape[1:])))
     return tuple(shape)
 
+
 # ---------------------------------------------------------------------------
 # array creation
 # ---------------------------------------------------------------------------
+
 
 def _chunks(shape):
     """Chunk shape used by all backends (~1/4 of each dimension)."""
@@ -82,15 +86,20 @@ def create_arrays(shape, dtype=np.float64, del_source=False):
     # --- blosc2 ---------------------------------------------------------
     t0 = time.time()
     b2path = tmpdir / "data.b2nd"
-    a_b2 = blosc2.asarray(data, chunks=chunks, urlpath=str(b2path),
-                           cparams={"codec": blosc2.Codec.ZSTD, "clevel": 5})
-    print(f"Shape: {shape}  |  n_elements: {n_elements:_}  "
-          f"|  itemsize: {data.itemsize}  |  total: {data.nbytes / 1e9:.2f} GB")
+    a_b2 = blosc2.asarray(
+        data, chunks=chunks, urlpath=str(b2path), cparams={"codec": blosc2.Codec.ZSTD, "clevel": 5}
+    )
+    print(
+        f"Shape: {shape}  |  n_elements: {n_elements:_}  "
+        f"|  itemsize: {data.itemsize}  |  total: {data.nbytes / 1e9:.2f} GB"
+    )
     print(f"Chunks: {chunks}  |  Blocks: {a_b2.blocks}")
     print(f"Tmp dir: {tmpdir}")
-    print(f"blosc2 created in {time.time() - t0:.2f}s  "
-          f"cratio={a_b2.schunk.cratio:.1f}x  "
-          f"cbytes={a_b2.schunk.cbytes / 1e6:.1f} MB")
+    print(
+        f"blosc2 created in {time.time() - t0:.2f}s  "
+        f"cratio={a_b2.schunk.cratio:.1f}x  "
+        f"cbytes={a_b2.schunk.cbytes / 1e6:.1f} MB"
+    )
     print()
 
     # --- numpy ----------------------------------------------------------
@@ -99,9 +108,14 @@ def create_arrays(shape, dtype=np.float64, del_source=False):
     # --- zarr -----------------------------------------------------------
     t0 = time.time()
     zpath = tmpdir / "data.zarr"
-    a_z = zarr.open_array(str(zpath), mode="w", shape=shape, dtype=dtype, chunks=chunks,
-                           codecs=[BytesCodec(),
-                                   BloscCodec(cname="zstd", clevel=5, shuffle="shuffle")])
+    a_z = zarr.open_array(
+        str(zpath),
+        mode="w",
+        shape=shape,
+        dtype=dtype,
+        chunks=chunks,
+        codecs=[BytesCodec(), BloscCodec(cname="zstd", clevel=5, shuffle="shuffle")],
+    )
     a_z[:] = data
     print(f"zarr  created in {time.time() - t0:.2f}s")
 
@@ -109,8 +123,9 @@ def create_arrays(shape, dtype=np.float64, del_source=False):
     t0 = time.time()
     h5path = tmpdir / "data.h5"
     h5f = h5py.File(str(h5path), "w")
-    a_h5 = h5f.create_dataset("data", data=data, chunks=chunks,
-                               **hdf5plugin.Blosc2(cname="zstd", clevel=5, filters=1))
+    a_h5 = h5f.create_dataset(
+        "data", data=data, chunks=chunks, **hdf5plugin.Blosc2(cname="zstd", clevel=5, filters=1)
+    )
     print(f"h5py  created in {time.time() - t0:.2f}s")
     print()
 
@@ -123,8 +138,6 @@ def create_arrays(shape, dtype=np.float64, del_source=False):
 # ---------------------------------------------------------------------------
 # benchmark runner
 # ---------------------------------------------------------------------------
-
-import psutil
 
 
 def _peak_memory(func, *args, **kwargs):
@@ -170,16 +183,13 @@ def _select_indices(rng, size, n_indices):
     return idx
 
 
-def run_benchmark(a_b2, a_np, a_z, a_h5, ndim, n_runs=3, sparse=False,
-                  profile_mem=False):
+def run_benchmark(a_b2, a_np, a_z, a_h5, ndim, n_runs=3, sparse=False, profile_mem=False):
     """Run the fancy-indexing benchmark for a range of index counts."""
     shape = a_np.shape
     size = a_np.size if sparse else shape[0]  # flat size for sparse, axis-0 for orthogonal
     max_indices = min(100_000, size)
 
-    n_indices_list = np.unique(
-        np.logspace(0, np.log10(max(1, max_indices)), num=12, dtype=np.int64)
-    )
+    n_indices_list = np.unique(np.logspace(0, np.log10(max(1, max_indices)), num=12, dtype=np.int64))
     print(f"Index counts: {n_indices_list.tolist()}")
 
     if profile_mem:
@@ -206,22 +216,29 @@ def run_benchmark(a_b2, a_np, a_z, a_h5, ndim, n_runs=3, sparse=False,
                 # zarr/h5py lack sparse gather — measure full-read + np.take
                 def _b2():
                     return blosc2.take(a_b2, idx, axis=None)[:]
+
                 def _np():
                     return np.take(a_np, idx, axis=None)
+
                 def _zarr():
                     return np.take(a_z[:], idx, axis=None)
+
                 def _h5():
                     return np.take(a_h5[:], idx, axis=None)
             else:
+
                 def _b2():
                     return blosc2.take(a_b2, idx, axis=0)[:]
+
                 def _np():
                     return np.take(a_np, idx, axis=0)
+
                 def _zarr():
                     if ndim == 1:
                         return a_z.oindex[(idx,)]
                     sel = (idx,) + (slice(None),) * (ndim - 1)
                     return a_z.oindex[sel]
+
                 def _h5():
                     sel = (idx.tolist(),) + (slice(None),) * (ndim - 1)
                     return a_h5[sel]
@@ -240,7 +257,7 @@ def run_benchmark(a_b2, a_np, a_z, a_h5, ndim, n_runs=3, sparse=False,
             )
             actual_counts.append(n_actual)
             continue
-        elif sparse:
+        if sparse:
             # --- sparse path (axis=None, flat element gather) -------------
             # numpy
             elapsed = []
@@ -340,8 +357,13 @@ def plot_results(n_indices, results, ndim, arr_size, output, sparse=False, profi
 
     for label, times in results.items():
         ax.plot(
-            n_indices, times, color=COLORS[label], marker=MARKERS[label],
-            label=label, linewidth=2, markersize=7,
+            n_indices,
+            times,
+            color=COLORS[label],
+            marker=MARKERS[label],
+            label=label,
+            linewidth=2,
+            markersize=7,
         )
 
     ax.set_xscale("log")
@@ -368,19 +390,32 @@ def plot_results(n_indices, results, ndim, arr_size, output, sparse=False, profi
 # main
 # ---------------------------------------------------------------------------
 
+
 def parse_args():
     p = argparse.ArgumentParser(description="Benchmark take() across numpy/blosc2/zarr/h5py")
     p.add_argument("--ndim", type=int, default=1, help="Number of dimensions (default: 1)")
     p.add_argument(
-        "--arr-size", type=int, default=100_000_000,
+        "--arr-size",
+        type=int,
+        default=100_000_000,
         help="Total number of elements (default: 100M)",
     )
-    p.add_argument("--output", type=str, default=None,
-                   help="Path to save the plot (PNG). If omitted, the plot is shown.")
-    p.add_argument("--sparse", action="store_true",
-                   help="Use axis=None (flat element gather via b2nd_get_sparse_cbuffer).")
-    p.add_argument("--profile-mem", action="store_true",
-                   help="Measure peak memory (MB) per library (tracemalloc).  Skips numpy.")
+    p.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Path to save the plot (PNG). If omitted, the plot is shown.",
+    )
+    p.add_argument(
+        "--sparse",
+        action="store_true",
+        help="Use axis=None (flat element gather via b2nd_get_sparse_cbuffer).",
+    )
+    p.add_argument(
+        "--profile-mem",
+        action="store_true",
+        help="Measure peak memory (MB) per library (tracemalloc).  Skips numpy.",
+    )
     return p.parse_args()
 
 
@@ -389,15 +424,21 @@ def main():
     shape = _compute_shape(args.ndim, args.arr_size)
     dtype = np.float64
 
-    a_b2, a_np, a_z, a_h5, tmpdir = create_arrays(shape, dtype,
-                                                      del_source=args.profile_mem)
+    a_b2, a_np, a_z, a_h5, tmpdir = create_arrays(shape, dtype, del_source=args.profile_mem)
 
     try:
-        n_indices, results = run_benchmark(a_b2, a_np, a_z, a_h5, args.ndim,
-                                            sparse=args.sparse,
-                                            profile_mem=args.profile_mem)
-        plot_results(n_indices, results, args.ndim, args.arr_size, args.output,
-                     sparse=args.sparse, profile_mem=args.profile_mem)
+        n_indices, results = run_benchmark(
+            a_b2, a_np, a_z, a_h5, args.ndim, sparse=args.sparse, profile_mem=args.profile_mem
+        )
+        plot_results(
+            n_indices,
+            results,
+            args.ndim,
+            args.arr_size,
+            args.output,
+            sparse=args.sparse,
+            profile_mem=args.profile_mem,
+        )
     finally:
         # Cleanup temp files
         if tmpdir.exists():

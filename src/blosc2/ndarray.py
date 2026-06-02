@@ -5666,9 +5666,18 @@ def empty(shape: int | tuple | list, dtype: np.dtype | str | None = np.float64, 
                 The block shape. If None (default), Blosc2 will compute
                 an efficient block shape. This will override the `blocksize`
                 in the cparams if they are provided.
-
-        The other keyword arguments supported are the same as for the
-        :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>` constructor.
+            storage: :class:`blosc2.Storage` or dict
+                All the storage parameters that you want to use as
+                a :class:`blosc2.Storage` or dict instance.
+            cparams: :class:`blosc2.CParams` or dict
+                All the compression parameters that you want to use as
+                a :class:`blosc2.CParams` or dict instance.
+            dparams: :class:`blosc2.DParams` or dict
+                All the decompression parameters that you want to use as
+                a :class:`blosc2.DParams` or dict instance.
+            others: Any
+                If `storage` is not passed, all the parameters of a :class:`blosc2.Storage`
+                can be passed as keyword arguments.
 
     Returns
     -------

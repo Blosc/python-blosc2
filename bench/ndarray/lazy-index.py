@@ -49,9 +49,9 @@ def _compute_shape(ndim: int, n_elements: int) -> tuple[int, ...]:
 
 
 def profile_lazy_index(ndim, arr_size, threshold):
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"ndim={ndim}, arr-size={arr_size:_}, threshold={threshold}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print()
 
     shape = _compute_shape(ndim, arr_size)
@@ -63,7 +63,7 @@ def profile_lazy_index(ndim, arr_size, threshold):
     t_create = perf_counter() - t0
     print(f"Array shape:         {shape}")
     print(f"Total elements:      {n_elements:_}")
-    print(f"Uncompressed size:   {a.nbytes/1e9:.2f} GB")
+    print(f"Uncompressed size:   {a.nbytes / 1e9:.2f} GB")
     print(f"Chunks:              {a.chunks}")
     print(f"Number of chunks:    {a.schunk.nchunks}")
     print(f"Create time:         {t_create:.3f}s")
@@ -87,12 +87,12 @@ def profile_lazy_index(ndim, arr_size, threshold):
 
     print(f"{'--- Path comparison ---':^50}")
     print(f"{'Path':<35} {'Time (ms)':<15}")
-    print(f"{'-'*50}")
-    print(f"{'a[a < threshold][:]  (lazy)':<35} {t_lazy*1000:<15.1f}")
-    print(f"")
-    print(f"{'  (a<threshold).compute()':<35} {t_bool_compute*1000:<15.1f}")
-    print(f"{'  a[bool_arr]  (concrete)':<35} {t_concrete*1000:<15.1f}")
-    print(f"{'  total (bool path)':<35} {t_total_bool*1000:<15.1f}")
+    print(f"{'-' * 50}")
+    print(f"{'a[a < threshold][:]  (lazy)':<35} {t_lazy * 1000:<15.1f}")
+    print("")
+    print(f"{'  (a<threshold).compute()':<35} {t_bool_compute * 1000:<15.1f}")
+    print(f"{'  a[bool_arr]  (concrete)':<35} {t_concrete * 1000:<15.1f}")
+    print(f"{'  total (bool path)':<35} {t_total_bool * 1000:<15.1f}")
     print()
 
     assert np.array_equal(result, result2), "Results must match"
@@ -145,14 +145,16 @@ def profile_lazy_index(ndim, arr_size, threshold):
 
     print(f"{'--- Per-chunk breakdown (×{nchunks} chunks) ---':^65}")
     print(f"{'Operation':<40} {'per chunk':<12} {'×' + str(nchunks) + ' total':<15}")
-    print(f"{'-'*67}")
-    print(f"{'decompress_chunk':<40} {t_dec*1e6:>8.0f} µs  {t_dec*nchunks*1000:>8.1f} ms")
-    print(f"{'decompress + numexpr eval':<40} {t_dec_ne*1e6:>8.0f} µs  {t_dec_ne*nchunks*1000:>8.1f} ms")
+    print(f"{'-' * 67}")
+    print(f"{'decompress_chunk':<40} {t_dec * 1e6:>8.0f} µs  {t_dec * nchunks * 1000:>8.1f} ms")
     print(
-        f"{'slice bool + decompress + gather':<40} {t_bool_gather*1e6:>8.0f} µs  {t_bool_gather*nchunks*1000:>8.1f} ms"
+        f"{'decompress + numexpr eval':<40} {t_dec_ne * 1e6:>8.0f} µs  {t_dec_ne * nchunks * 1000:>8.1f} ms"
     )
     print(
-        f"{'decompress + eval + gather (lazy)':<40} {t_dec_ne_gather*1e6:>8.0f} µs  {t_dec_ne_gather*nchunks*1000:>8.1f} ms"
+        f"{'slice bool + decompress + gather':<40} {t_bool_gather * 1e6:>8.0f} µs  {t_bool_gather * nchunks * 1000:>8.1f} ms"
+    )
+    print(
+        f"{'decompress + eval + gather (lazy)':<40} {t_dec_ne_gather * 1e6:>8.0f} µs  {t_dec_ne_gather * nchunks * 1000:>8.1f} ms"
     )
     print()
 
@@ -160,27 +162,29 @@ def profile_lazy_index(ndim, arr_size, threshold):
     print(f"{'--- Hotspot analysis ---':^50}")
     print()
     print(f"The lazy path (a[a<{threshold}][:]) fuses the comparison into the")
-    print(f"chunk evaluation, calling numexpr on the decompressed chunk data.")
+    print("chunk evaluation, calling numexpr on the decompressed chunk data.")
     print()
-    print(f"The concrete boolean path (a[bool_arr]) was previously ~8× slower")
-    print(f"because NDArray.__getitem__ called process_key() which invokes")
+    print("The concrete boolean path (a[bool_arr]) was previously ~8× slower")
+    print("because NDArray.__getitem__ called process_key() which invokes")
     print(f"np.nonzero() on the boolean array, scanning all {n_elements:_} elements")
-    print(f"and allocating index arrays — work that was immediately discarded.")
+    print("and allocating index arrays — work that was immediately discarded.")
     print()
-    print(f"With the fix (bool array check moved before process_key), the")
-    print(f"boolean path now takes the same fast LazyExpr route as the lazy path.")
+    print("With the fix (bool array check moved before process_key), the")
+    print("boolean path now takes the same fast LazyExpr route as the lazy path.")
     print()
 
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print("SUMMARY")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print()
     print(f"  Query (lazy):                     a[a < {threshold}][:]")
     print(f"  Query (concrete):                 a[bool_arr] with bool_arr = (a<{threshold}).compute()")
-    print(f"  Matching elements:                {result.size} / {n_elements:_} ({result.size/n_elements*100:.5f}%)")
-    print(f"  Lazy path time:                   {t_lazy*1000:.1f} ms")
-    print(f"  Concrete path time:               {t_concrete*1000:.1f} ms")
-    print(f"  Ratio (concrete/lazy):            {t_concrete/t_lazy:.1f}x")
+    print(
+        f"  Matching elements:                {result.size} / {n_elements:_} ({result.size / n_elements * 100:.5f}%)"
+    )
+    print(f"  Lazy path time:                   {t_lazy * 1000:.1f} ms")
+    print(f"  Concrete path time:               {t_concrete * 1000:.1f} ms")
+    print(f"  Ratio (concrete/lazy):            {t_concrete / t_lazy:.1f}x")
     print()
 
 

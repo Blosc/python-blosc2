@@ -88,6 +88,17 @@ class _CTableIndexingMixin:
     _GATHER_COST_MS_PER_1K_ITEMS_PER_OP: float = 3.5
     _SCAN_COST_MS_PER_1M_ROWS: float = 4.3
 
+    # Cost-model constants for the segment-summary (SUMMARY index) gate.
+    # Surviving blocks are evaluated through miniexpr with a candidate-block
+    # bitmap (non-candidate blocks are skipped inside the prefilter), so the
+    # per-block overhead is small; what matters is that, once enough blocks
+    # survive, evaluating them (plus iterating every chunk) costs more than a
+    # plain sequential scan, and the planner falls back.
+    #   _SEGMENT_SCAN_MS_PER_1M_ROWS_PER_OP ≈ ms to sequentially scan 1M rows of one column
+    #   _SEGMENT_OVERHEAD_MS_PER_OP         ≈ fixed ms per surviving block per operand column
+    _SEGMENT_SCAN_MS_PER_1M_ROWS_PER_OP: float = 1.6
+    _SEGMENT_OVERHEAD_MS_PER_OP: float = 0.2
+
     @property
     def _root_table(self) -> CTable:
         """Return the root (non-view) table; *self* if not a view."""
@@ -357,6 +368,8 @@ class _CTableIndexingMixin:
         cparams_obj,
         method: str | None = None,
         opsi_max_cycles: int | None = None,
+        summary_levels: tuple[str, ...] | None = None,
+        precomputed_summaries: dict | None = None,
     ) -> dict:
         """Build index sidecar files for a persistent-table column; return the descriptor."""
         import tempfile
@@ -399,7 +412,17 @@ class _CTableIndexingMixin:
 
         if use_ooc:
             resolved_tmpdir = _resolve_full_index_tmpdir(proxy, tmpdir)
-            levels = _build_levels_descriptor_ooc(proxy, target, token, kind, dtype, persistent, cparams_obj)
+            levels = _build_levels_descriptor_ooc(
+                proxy,
+                target,
+                token,
+                kind,
+                dtype,
+                persistent,
+                cparams_obj,
+                summary_levels=summary_levels,
+                precomputed_summaries=precomputed_summaries,
+            )
             bucket = (
                 _build_bucket_descriptor_ooc(
                     proxy, target, token, kind, dtype, optlevel, persistent, cparams_obj
@@ -446,7 +469,15 @@ class _CTableIndexingMixin:
         else:
             values = _values_for_target(proxy, target)
             levels = _build_levels_descriptor(
-                proxy, target, token, kind, dtype, values, persistent, cparams_obj
+                proxy,
+                target,
+                token,
+                kind,
+                dtype,
+                values,
+                persistent,
+                cparams_obj,
+                summary_levels=summary_levels,
             )
             bucket = (
                 _build_bucket_descriptor(proxy, token, kind, values, optlevel, persistent, cparams_obj)
@@ -501,6 +532,7 @@ class _CTableIndexingMixin:
         name: str | None = None,
         build: str = "auto",
         tmpdir: str | None = None,
+        granularity: str | None = None,
         **kwargs,
     ) -> blosc2.Index:
         """Build and register an index for a stored column or table expression.
@@ -540,8 +572,16 @@ class _CTableIndexingMixin:
         needed to accelerate ``sort_by``.
 
         ``SUMMARY`` stores only per‑segment min/max and is the
-        lightest kind; it may still skip chunks for broad range
+        lightest kind; it may still skip segments for broad range
         queries but cannot accelerate ``sort_by``.
+
+        .. rubric:: SUMMARY granularity
+
+        For ``kind=SUMMARY``, ``granularity`` controls the segment size of the
+        min/max summaries: ``"block"`` (the default) summarizes at Blosc2 block
+        granularity; ``"chunk"`` uses the coarser chunk granularity (fewer
+        summary entries, cheaper to build, less selective pruning).
+        ``granularity`` is only valid for ``kind=SUMMARY``.
         """
         if self.base is not None:
             raise ValueError("Cannot create an index on a view.")
@@ -562,6 +602,7 @@ class _CTableIndexingMixin:
             _normalize_full_build_method,
             _normalize_index_cparams,
             _normalize_index_kind,
+            _resolve_summary_levels,
             _target_token,
         )
         from blosc2.indexing import create_index as _ix_create_index
@@ -569,6 +610,7 @@ class _CTableIndexingMixin:
         cparams_obj = _normalize_index_cparams(kwargs.pop("cparams", None))
         method = kwargs.pop("method", None)
         opsi_max_cycles = kwargs.pop("opsi_max_cycles", None)
+        precomputed_summaries = kwargs.pop("precomputed_summaries", None)
         if opsi_max_cycles is not None:
             opsi_max_cycles = max(1, int(opsi_max_cycles))
         if kwargs:
@@ -579,6 +621,9 @@ class _CTableIndexingMixin:
         method_str = _normalize_full_build_method(method) if kind_str == "full" else None
         if method is not None and kind_str != "full":
             raise ValueError("method is only supported for kind=IndexKind.FULL")
+        if granularity is not None and kind_str != "summary":
+            raise ValueError("granularity is only supported for kind=IndexKind.SUMMARY")
+        summary_levels = _resolve_summary_levels(granularity)
         catalog = self._get_index_catalog()
 
         if expression is not None:
@@ -600,6 +645,7 @@ class _CTableIndexingMixin:
                 cparams=cparams_obj,
                 method=method_str,
                 opsi_max_cycles=opsi_max_cycles,
+                summary_levels=summary_levels,
             )
             store = _IN_MEMORY_INDEXES.get(id(expr_arr))
             if store is None:
@@ -668,6 +714,8 @@ class _CTableIndexingMixin:
                 cparams_obj=cparams_obj,
                 method=method_str,
                 opsi_max_cycles=opsi_max_cycles,
+                summary_levels=summary_levels,
+                precomputed_summaries=precomputed_summaries if kind_str == "summary" else None,
             )
         else:
             _ix_create_index(
@@ -681,6 +729,8 @@ class _CTableIndexingMixin:
                 cparams=cparams_obj,
                 method=method_str,
                 opsi_max_cycles=opsi_max_cycles,
+                summary_levels=summary_levels,
+                precomputed_summaries=precomputed_summaries if kind_str == "summary" else None,
             )
             store = _IN_MEMORY_INDEXES[id(col_arr)]
             descriptor = _copy_descriptor(store["indexes"]["__self__"])
@@ -917,6 +967,186 @@ class _CTableIndexingMixin:
                 seen.add(col_name)
         return indexed
 
+    @staticmethod
+    def _project_units_to_block_bitmap(primary_col_arr, candidate_units, segment_len) -> np.ndarray | None:
+        """Project surviving flat segments onto a per-block candidate bitmap in
+        *miniexpr* block coordinates (1-D only).
+
+        Returns a ``uint8`` array with one byte per global miniexpr block
+        (``nchunk * blocks_per_chunk + nblock``): 1 = the block overlaps a
+        surviving segment and must be evaluated, 0 = it can be skipped.  A block
+        is marked conservatively (any overlap with a survivor), which is always
+        safe because the prefilter re-evaluates the exact predicate per row.
+        """
+        chunks = getattr(primary_col_arr, "chunks", None)
+        blocks = getattr(primary_col_arr, "blocks", None)
+        shape = getattr(primary_col_arr, "shape", None)
+        if not chunks or not blocks or not shape or len(shape) != 1:
+            return None
+        chunk_len = int(chunks[0])
+        block_len = int(blocks[0])
+        nrows = int(shape[0])
+        seg_len = int(segment_len)
+        if chunk_len <= 0 or block_len <= 0 or nrows <= 0 or seg_len <= 0:
+            return None
+        cu = np.asarray(candidate_units, dtype=bool)
+        nseg = len(cu)
+        blocks_per_chunk = -(-chunk_len // block_len)  # ceil
+        nchunks = -(-nrows // chunk_len)
+        nblocks = nchunks * blocks_per_chunk
+        g = np.arange(nblocks, dtype=np.int64)
+        nchunk = g // blocks_per_chunk
+        nblock = g % blocks_per_chunk
+        lo = nchunk * chunk_len + nblock * block_len
+        chunk_end = np.minimum((nchunk + 1) * chunk_len, nrows)
+        hi = np.minimum(lo + block_len, chunk_end)
+        has_rows = lo < chunk_end  # padding-only blocks have no real rows
+        # Segments overlapping [lo, hi); test via a cumulative-sum range query.
+        s_lo = np.clip(lo // seg_len, 0, nseg)
+        s_hi = np.clip(np.where(has_rows, (hi - 1) // seg_len, lo // seg_len) + 1, 0, nseg)
+        csum = np.concatenate(([0], np.cumsum(cu.astype(np.int64))))
+        any_survivor = (csum[s_hi] - csum[s_lo]) > 0
+        return (has_rows & any_survivor).astype(np.uint8)
+
+    @staticmethod
+    def _summary_candidate_block_bitmap(primary_col_arr, plan) -> np.ndarray | None:
+        """Single-column candidate-block bitmap from a SUMMARY plan."""
+        return _CTableIndexingMixin._project_units_to_block_bitmap(
+            primary_col_arr, plan.candidate_units, plan.segment_len
+        )
+
+    @staticmethod
+    def _flatten_conjunction(expression: str):
+        """Return the list of ``ast.Compare`` leaves of a pure conjunction
+        (``&`` / ``and`` of comparisons), or ``None`` if the expression is not a
+        pure conjunction of comparisons (e.g. it contains ``|``, ``~``, or a
+        bare boolean operand)."""
+        import ast
+
+        try:
+            root = ast.parse(expression, mode="eval").body
+        except (SyntaxError, ValueError):
+            return None
+        out = []
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
+                stack.extend(node.values)
+            elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd):
+                stack.extend((node.left, node.right))
+            elif isinstance(node, ast.Compare):
+                out.append(node)
+            else:
+                return None  # not a pure conjunction of comparisons
+        return out
+
+    def _combined_summary_block_bitmap(self, expr_result, indexed_columns, primary_col_arr):
+        """Combine per-column SUMMARY block masks for a conjunction.
+
+        For ``(a > x) & (b > y) & (c < z)`` where several of ``a``/``b``/``c``
+        carry SUMMARY indexes, each column's summaries yield a candidate-block
+        mask (in the shared miniexpr-block grid); ANDing them prunes a block
+        unless *every* indexed predicate could match in it.  Returns the combined
+        ``uint8`` bitmap, or ``None`` when the expression is not a pure
+        conjunction or no indexed column contributes a usable range predicate.
+        """
+        from blosc2.indexing import (
+            _candidate_units_from_summary_handle,
+            _clear_cached_data,
+            _finest_level,
+            _open_level_summary_handle,
+            _target_from_compare,
+        )
+
+        compares = self._flatten_conjunction(expr_result.expression)
+        if compares is None:
+            return None
+        operands = expr_result.operands
+        desc_by_id = {id(arr): desc for _name, arr, desc in indexed_columns}
+        per_col: dict[int, np.ndarray] = {}
+        for node in compares:
+            target = _target_from_compare(node, operands)
+            if target is None:
+                continue
+            base, _target_info, op, value = target
+            desc = desc_by_id.get(id(base))
+            if desc is None or desc.get("kind") != "summary":
+                continue  # non-indexed predicate: contributes no pruning (sound for AND)
+            level = _finest_level(desc)
+            try:
+                # In compact stores every column shares one urlpath, so the
+                # sidecar-handle cache key collides across columns; clear it so
+                # each column opens *its own* summary sidecar, not a sibling's.
+                _clear_cached_data(base, desc["token"])
+                summaries = _open_level_summary_handle(base, desc, level)
+                cu = _candidate_units_from_summary_handle(summaries, op, value, np.dtype(desc["dtype"]))
+            except (RuntimeError, ValueError, TypeError, KeyError):
+                continue
+            seg_len = desc["levels"][level]["segment_len"]
+            bm = self._project_units_to_block_bitmap(primary_col_arr, cu, seg_len)
+            if bm is None:
+                continue
+            # Multiple predicates on the same column AND together (e.g. a>1 & a<5).
+            per_col[id(base)] = bm if id(base) not in per_col else (per_col[id(base)] & bm)
+        if not per_col:
+            return None
+        combined = None
+        for bm in per_col.values():
+            combined = bm if combined is None else (combined & bm)
+        return combined
+
+    def _block_pruned_positions(self, expr_result, bitmap, primary_col_arr):
+        """Evaluate the predicate through miniexpr with *bitmap* and return the
+        matching physical positions.
+
+        Chunks with no candidate block are skipped inside fast_eval
+        (``_prune_chunks``), and positions are extracted by **streaming** the
+        candidate chunks one at a time (``decompress_chunk`` → ``flatnonzero`` →
+        offset).  This never materializes the full boolean mask as one big numpy
+        array — only one chunk (~chunk_len bytes) is uncompressed at a time —
+        and is faster than a bulk ``mask[:]`` + ``flatnonzero`` even when every
+        chunk is a candidate.  Returns the positions array, or ``None`` if the
+        bitmap path is unavailable.
+        """
+        chunks = getattr(primary_col_arr, "chunks", None)
+        blocks = getattr(primary_col_arr, "blocks", None)
+        shape = getattr(primary_col_arr, "shape", None)
+        chunk_mask = None
+        if chunks and blocks and shape and len(shape) == 1:
+            chunk_len = int(chunks[0])
+            block_len = int(blocks[0])
+            bpc = -(-chunk_len // block_len)
+            if block_len > 0 and len(bitmap) % bpc == 0:
+                chunk_mask = bitmap.reshape(len(bitmap) // bpc, bpc).any(axis=1)
+        try:
+            if chunk_mask is None:
+                # Geometry unknown (e.g. non-1-D): fall back to a bulk mask read.
+                mask = expr_result.compute(_candidate_blocks=bitmap)
+                mask_arr = mask[:] if isinstance(mask, blosc2.NDArray) else np.asarray(mask)
+                if mask_arr.dtype != np.bool_:
+                    return None
+                return np.flatnonzero(mask_arr).astype(np.int64)
+
+            nrows = int(shape[0])
+            mask = expr_result.compute(_candidate_blocks=bitmap, _prune_chunks=True)
+            if not isinstance(mask, blosc2.NDArray) or mask.dtype != np.bool_:
+                return None
+            if mask.schunk.nchunks != len(chunk_mask):
+                return None  # unexpected geometry; bail rather than read garbage
+            parts = []
+            for chunk_idx in np.flatnonzero(chunk_mask):
+                chunk_idx = int(chunk_idx)
+                lo = chunk_idx * chunk_len
+                vlen = min(chunk_len, nrows - lo)  # trim block-alignment padding
+                sub = np.frombuffer(mask.schunk.decompress_chunk(chunk_idx), dtype=np.bool_)[:vlen]
+                rel = np.flatnonzero(sub)
+                if len(rel):
+                    parts.append(rel.astype(np.int64) + lo)
+            return np.concatenate(parts) if parts else np.empty(0, dtype=np.int64)
+        except Exception:
+            return None
+
     def _try_index_where(self, expr_result: blosc2.LazyExpr) -> np.ndarray | None:  # noqa: C901
         """Attempt to resolve *expr_result* via a column index.
 
@@ -957,6 +1187,16 @@ class _CTableIndexingMixin:
             for name, _arr, _descriptor in indexed_columns
             if getattr(root._schema.columns_by_name[name].spec, "null_value", None) is not None
         ]
+        # A NaN null sentinel can never satisfy a comparison (every comparison
+        # with NaN is False), so the predicate itself already drops those rows;
+        # only non-NaN sentinels (which *can* match a predicate) need explicit
+        # position-based exclusion.  This lets the fast mask-direct path apply to
+        # NaN-nullable columns instead of falling back to the positions path.
+        nullable_needs_exclude = []
+        for name in nullable_indexed:
+            nv = getattr(root._schema.columns_by_name[name].spec, "null_value", None)
+            if not (isinstance(nv, float) and np.isnan(nv)):
+                nullable_needs_exclude.append(name)
 
         # Global null post-filtering is not correct for OR expressions.
         if nullable_indexed and ("|" in expr_result.expression or " or " in expr_result.expression):
@@ -967,7 +1207,7 @@ class _CTableIndexingMixin:
         # returns the same key for every column — causing _SIDECAR_HANDLE_CACHE
         # collisions across queries.  Clear stale handles before each injection so
         # the upcoming query always loads the correct sidecar for this column.
-        from blosc2.indexing import _clear_cached_data
+        from blosc2.indexing import _clear_cached_data, _register_descriptor_owner
 
         for _col_name, col_arr, descriptor in indexed_columns[:1]:
             arr_key = _array_key(col_arr)
@@ -981,6 +1221,10 @@ class _CTableIndexingMixin:
                 store = _IN_MEMORY_INDEXES.get(id(col_arr)) or _default_index_store()
                 store["indexes"][descriptor["token"]] = descriptor
                 _IN_MEMORY_INDEXES[id(col_arr)] = store
+            # Record the owning array so a sibling column sharing this urlpath
+            # (and, after column alignment, the same shape/chunks) cannot match
+            # this descriptor in _descriptor_for_target.
+            _register_descriptor_owner(col_arr, descriptor["token"])
 
         where_dict = {"_where_x": primary_col_arr}
         merged_operands = {**operands, "_where_x": primary_col_arr}
@@ -1076,11 +1320,51 @@ class _CTableIndexingMixin:
             return _exclude_null_positions(positions)
 
         if plan.candidate_units is not None and plan.segment_len is not None:
-            # When segment summaries prune fewer than half the candidate
-            # units, the per‑segment evaluation overhead outweighs a plain
-            # scan.  Fall back to the scan path.
-            if plan.total_units > 0 and plan.selected_units / plan.total_units > 0.5:
+            # Cheap pre-gate on the primary column's pruning (the plan is already
+            # computed).  When the primary alone cannot prune enough, a plain scan
+            # is cheaper, so fall back before doing any extra (per-column) work.
+            n_ops = max(1, len(expr_result.operands))
+            segment_len = int(plan.segment_len)
+            selected = int(plan.selected_units)
+            total_rows = int(plan.total_units) * segment_len
+            selected_rows = selected * segment_len
+            scan_ms = (total_rows / 1e6) * self._SEGMENT_SCAN_MS_PER_1M_ROWS_PER_OP * n_ops
+            index_ms = (
+                selected * n_ops * self._SEGMENT_OVERHEAD_MS_PER_OP
+                + (selected_rows / 1e6) * self._SEGMENT_SCAN_MS_PER_1M_ROWS_PER_OP * n_ops
+            )
+            if selected > 0 and index_ms >= scan_ms:
                 return None
+            # Preferred path: evaluate the predicate through miniexpr with a
+            # candidate-block bitmap, so non-surviving blocks are skipped inside
+            # the fast_eval/miniexpr engine (no per-segment Python loop).  For a
+            # conjunction, every column with a SUMMARY index contributes a block
+            # mask and they are ANDed, pruning more than the primary alone.  The
+            # masked result equals a full scan's (pruned blocks have no matches),
+            # so positions are exact.  Falls back to the per-segment query if the
+            # bitmap path is unavailable.
+            bitmap = self._combined_summary_block_bitmap(expr_result, indexed_columns, primary_col_arr)
+            if bitmap is None:
+                bitmap = self._summary_candidate_block_bitmap(primary_col_arr, plan)
+            if bitmap is not None:
+                # Mask-direct: SUMMARY evaluates the predicate through miniexpr
+                # with the candidate-block bitmap, so the result is already a
+                # compressed boolean mask identical to a full scan's.  Return it
+                # as-is (no positions round-trip) when no null post-filtering is
+                # needed; the caller views it directly and extracts positions
+                # lazily.  Only columns whose null sentinel can satisfy the
+                # predicate (non-NaN) require the positions fall-back; NaN
+                # sentinels are already excluded by the predicate itself.
+                if not nullable_needs_exclude:
+                    try:
+                        mask = expr_result.compute(_candidate_blocks=bitmap)
+                    except Exception:
+                        mask = None
+                    if isinstance(mask, blosc2.NDArray) and mask.dtype == np.bool_:
+                        return mask
+                positions = self._block_pruned_positions(expr_result, bitmap, primary_col_arr)
+                if positions is not None:
+                    return _exclude_null_positions(positions)
             _, positions = evaluate_segment_query(
                 expression, merged_operands, {}, where_dict, plan, return_positions=True
             )
