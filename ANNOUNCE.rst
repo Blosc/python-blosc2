@@ -1,7 +1,7 @@
-Announcing Python-Blosc2 4.4.0
+Announcing Python-Blosc2 4.4.1
 ==============================
 
-We are happy to announce Python-Blosc2 4.4.0, a feature release that brings an
+We are happy to announce Python-Blosc2 4.4.1, a feature release that brings an
 interactive TUI data viewer, automatic SUMMARY indexes for fast WHERE queries,
 chunk-aligned Arrow/Parquet imports, expanded ``where()`` acceleration, and a
 range of CTable ergonomics and performance improvements.

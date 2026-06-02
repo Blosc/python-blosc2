@@ -1,6 +1,6 @@
 # Release notes
 
-## Changes from 4.3.3 to 4.4.0
+## Changes from 4.3.3 to 4.4.1
 
 This is a feature release focused on a new interactive data viewer, automatic
 SUMMARY indexes for fast WHERE queries, chunk-aligned Arrow/Parquet imports,
@@ -151,6 +151,7 @@ and performance improvements.  Python 3.10 support has been dropped; Python
   model.
 - **Index prefetch reuse**: data already prefetched during an index lookup is
   reused in the refinement phase, avoiding redundant I/O.
+- **Simplify index sidecar filenames** in _indexes/{col}/ directories.
 - **`DictStore` embed disabled by default**: embedding a store inside a dict
   store is now opt-in (it was error-prone as the default).
 - **Fixed wasm32 issue**: a 32-bit platform arithmetic fix for reduce operations.
