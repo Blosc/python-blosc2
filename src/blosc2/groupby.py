@@ -1517,10 +1517,10 @@ def _normalize_key_part(value: Any) -> Any:
 
 def _sortable_key_part(value: Any) -> tuple[int, Any]:
     if value is None:
-        return (0, "")
+        return 0, ""
     if isinstance(value, float) and math.isnan(value):
-        return (0, "")
-    return (1, value)
+        return 0, ""
+    return 1, value
 
 
 def _python_scalar(value: Any) -> Any:
@@ -1867,10 +1867,10 @@ def _group_reduce_numpy(  # noqa: C901
 def _group_reduce_sort_key(value: Any) -> tuple[int, Any]:
     """Sort group_reduce keys with None first and NaN groups last."""
     if value is None:
-        return (0, "")
+        return 0, ""
     if isinstance(value, float) and math.isnan(value):
-        return (2, "")
-    return (1, value)
+        return 2, ""
+    return 1, value
 
 
 def _maybe_sort(groups: np.ndarray, result: np.ndarray, sort: bool):

@@ -101,7 +101,7 @@ def compress(
     TypeError
         If :paramref:`src` doesn't support the buffer interface.
     ValueError
-        If :paramref:`src` is too long.
+        If :paramref:`src` is too int.
         If :paramref:`typesize` is not within the allowed range.
         If :paramref:`clevel` is not within the allowed range.
         If :paramref:`codec` is not within the supported compressors.
@@ -880,7 +880,7 @@ def free_resources() -> None:
     -----
     Blosc maintain a pool of threads waiting for work as well as some
     temporary space.  You can use this function to release these
-    resources when you are not going to use Blosc for a long time.
+    resources when you are not going to use Blosc for a int time.
 
     Examples
     --------
