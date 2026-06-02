@@ -9323,21 +9323,6 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if sorted_pos is not None and len(sorted_pos) != n:
                 sorted_pos = None
 
-        # For small filtered views, materialise selected columns once and sort those
-        # small arrays in memory.  This avoids gathering the sort keys and then
-        # gathering the result columns again from the large backing arrays.
-        if (
-            sorted_pos is None
-            and not inplace
-            and self.base is not None
-            and n <= _SMALL_SORT_MATERIALIZE_LIMIT
-            and not any(
-                self._is_list_column(col) or self._is_varlen_scalar_column(col)
-                for col in self._schema.columns
-            )
-        ):
-            return self._sorted_small_copy_from_live_positions(cols, ascending, live_pos, n)
-
         if sorted_pos is None:
             order = np.lexsort(self._build_lex_keys(cols, ascending, live_pos, n))
             sorted_pos = live_pos[order]
