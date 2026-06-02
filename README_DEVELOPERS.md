@@ -1,62 +1,99 @@
 # Requirements for developers
 
-We are using Ruff as code formatter and as a linter.  It is automatically enforced
-if you activate these as plugins for [pre-commit](https://pre-commit.com).  You can activate
-the pre-commit actions by following the [instructions](https://pre-commit.com/#installation).
-As the config files are already there, this essentially boils down to:
+Python 3.10–3.14 is supported.
 
-``` bash
-  python -m pip install pre-commit
-  pre-commit install
-```
+## Setting up a development environment
 
-You are done!
+The recommended workflow uses [uv](https://docs.astral.sh/uv/), which handles
+virtual environments and dependency installation in one step.  pip works too and
+the commands are shown side-by-side where they differ.
 
-## Building from sources
-
-``python-blosc2`` includes the C-Blosc2 source code and can be built in place:
-
-``` bash
-    git clone https://github.com/Blosc/python-blosc2/
-    cd python-blosc2
-    pip install .   # add -e for editable mode
-```
-
-On Windows, clang-cl is required now. Make sure LLVM
-is on PATH and build with Ninja, for example:
+### Clone and install (editable)
 
 ```bash
-CMAKE_GENERATOR=Ninja \
-CC=clang-cl \
-CXX=clang-cl \
-pip install -e .
+git clone https://github.com/Blosc/python-blosc2/
+cd python-blosc2
+
+# uv — creates a venv automatically and installs all deps
+uv sync --group dev --group test
+
+# pip — activate your own venv first, then:
+pip install -e ".[parquet,tui]"
+pip install pytest  # or: pip install -e ".[parquet,tui]" with the test group below
 ```
 
-There are situations where you may want to build the C-Blosc2 library separately, for example, when debugging issues in the C library. In that case, let's assume you have the C-Blosc2 library installed in `/usr/local`:
+The project uses [PEP 735 dependency groups](https://peps.python.org/pep-0735/)
+defined in `pyproject.toml`:
+
+| Group | Contents |
+|---|---|
+| `dev` | dask, pandas, pyarrow, jupyterlab, ruff, pre-commit, … |
+| `test` | pytest, psutil |
+| `doc` | Sphinx and all documentation build dependencies |
+
+To install a specific group with pip (pip ≥ 25.3 supports `--group`):
+
+```bash
+pip install --group test
+pip install --group doc
+```
+
+### pre-commit (code style)
+
+Ruff is enforced as formatter and linter via [pre-commit](https://pre-commit.com).
+Activate the hooks once after cloning:
+
+```bash
+pre-commit install
+```
+
+Pre-commit will now run automatically on `git commit`.
+
+### On Windows
+
+clang-cl is required.  Make sure LLVM is on `PATH` and build with Ninja:
+
+```bash
+CMAKE_GENERATOR=Ninja CC=clang-cl CXX=clang-cl pip install -e .
+```
+
+### Using a separately-built C-Blosc2
+
+When debugging issues in the C library it can be useful to build C-Blosc2
+separately.  Assuming it is installed in `/usr/local`:
 
 ```bash
 CMAKE_PREFIX_PATH=/usr/local USE_SYSTEM_BLOSC2=1 pip install -e .
 ```
 
-and then, you can run the tests with:
+Run the tests pointing at that library:
 
 ```bash
 LD_LIBRARY_PATH=/usr/local/lib pytest
 ```
 
-[replace `LD_LIBRARY_PATH` with the appropriate environment variable for your system, such as `DYLD_LIBRARY_PATH` on macOS or `PATH` on Windows, if necessary].
-
-That's it! You can now proceed to the testing section.
+(Replace `LD_LIBRARY_PATH` with `DYLD_LIBRARY_PATH` on macOS or `PATH` on Windows.)
 
 ### Speeding up local builds (sccache + Ninja)
 
 If you do frequent local rebuilds, sccache can significantly speed up C/C++ rebuilds.
 
+**macOS**
+
 ```bash
 brew install sccache ninja
 ```
 
-Then run:
+**Linux**
+
+```bash
+# Via cargo (works everywhere):
+cargo install sccache
+# Or from your distro (Debian/Ubuntu):
+apt install sccache
+```
+
+Then build with:
 
 ```bash
 CMAKE_C_COMPILER_LAUNCHER=sccache \
@@ -64,8 +101,10 @@ SKBUILD_BUILD_DIR=build \
 pip install -e . --no-build-isolation
 ```
 
-Using `SKBUILD_BUILD_DIR` keeps a stable build directory between runs, which
-improves incremental rebuilds and sccache hit rates.
+`SKBUILD_BUILD_DIR` keeps a stable build directory between runs, which improves
+incremental rebuilds and sccache hit rates.  `--no-build-isolation` lets
+scikit-build-core reuse the existing build tree instead of rebuilding from
+scratch in a fresh environment.
 
 Check cache stats with:
 
@@ -75,22 +114,29 @@ sccache --show-stats
 
 ## Testing
 
-We are using pytest for testing.  You can run the tests by executing
+We use pytest.  Run the full suite:
 
-``` bash
-  pytest
+```bash
+pytest
 ```
 
-If you want to run a heavyweight version of the tests, you can use the following command:
+Run only a subset (faster feedback during development):
 
-``` bash
-  pytest -m "heavy"
+```bash
+pytest tests/ctable/       # CTable-specific tests
+pytest tests/ndarray/      # NDArray-specific tests
 ```
 
-If you want to run the network tests, you can use the following command:
+Heavyweight tests (larger data volumes):
 
-``` bash
-  pytest -m "network"
+```bash
+pytest -m "heavy"
+```
+
+Network tests:
+
+```bash
+pytest -m "network"
 ```
 
 ## Matmul backend discovery
