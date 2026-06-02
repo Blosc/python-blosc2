@@ -78,7 +78,7 @@ def _leaf_shape(ndim: int, max_elems: int) -> tuple[int, ...]:
     if ndim == 0:
         return ()
     side = int(max_elems ** (1.0 / ndim))
-    return (side,) * ndim
+    return side, * ndim
 
 
 def create_store(
@@ -88,7 +88,7 @@ def create_store(
     nrows: int,
     no_vlmeta: bool = False,
 ) -> tuple[float, int]:
-    """Create the TreeStore; return (wall_clock, total_elements_written)."""
+    """Create the TreeStore; return wall_clock, total_elements_written."""
     _clean(OUTPUT_FILE)
 
     # Pre-build one array per unique dimensionality (leaf ``i`` → *i*‑d).

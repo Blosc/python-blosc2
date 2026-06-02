@@ -1006,7 +1006,7 @@ class _CTableIndexingMixin:
         s_hi = np.clip(np.where(has_rows, (hi - 1) // seg_len, lo // seg_len) + 1, 0, nseg)
         csum = np.concatenate(([0], np.cumsum(cu.astype(np.int64))))
         any_survivor = (csum[s_hi] - csum[s_lo]) > 0
-        return (has_rows & any_survivor).astype(np.uint8)
+        return has_rows & any_survivor.astype(np.uint8)
 
     @staticmethod
     def _summary_candidate_block_bitmap(primary_col_arr, plan) -> np.ndarray | None:

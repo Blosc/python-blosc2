@@ -98,7 +98,7 @@ def update(frame_num):
         # Final frame to show the total time
         elapsed_time = time.time() - start_time + time_gen_frames
         ax.set_title(f"Generated {n_frames} frames in {elapsed_time:.2f} seconds")
-    return (im,)
+    return im,
 
 
 # --- Matplotlib Animation ---

@@ -768,7 +768,7 @@ def vlstring(
 ) -> VLStringSpec:
     """Build a variable-length scalar string schema descriptor.
 
-    Use this as an explicit opt-in when a CTable column holds long or
+    Use this as an explicit opt-in when a CTable column holds int or
     wildly variable-length strings that would waste space in a fixed-width
     ``string(max_length=N)`` column.  Must be requested via
     ``blosc2.field(blosc2.vlstring())`` — it is never inferred automatically
@@ -813,7 +813,7 @@ def vlbytes(
 ) -> VLBytesSpec:
     """Build a variable-length scalar bytes schema descriptor.
 
-    Use this as an explicit opt-in when a CTable column holds long or
+    Use this as an explicit opt-in when a CTable column holds int or
     wildly variable-length byte strings.  Must be requested via
     ``blosc2.field(blosc2.vlbytes())`` — it is never inferred automatically
     from plain ``bytes`` annotations.

@@ -20,7 +20,7 @@ BATCHES = [
 def _make_payload(seed, size):
     base = bytes((seed + i) % 251 for i in range(251))
     reps = size // len(base) + 1
-    return (base * reps)[:size]
+    return base * reps[:size]
 
 
 def _storage(contiguous, urlpath, mode="w"):

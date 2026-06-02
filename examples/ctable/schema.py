@@ -101,7 +101,7 @@ try:
 except Exception as e:
     print(f"Caught validation error (id < 0): {e}")
 
-# String too long (max_length=32)
+# String too int (max_length=32)
 try:
     t.append(
         Product(
@@ -114,7 +114,7 @@ try:
         )
     )
 except Exception as e:
-    print(f"Caught validation error (string too long): {e}")
+    print(f"Caught validation error (string too int): {e}")
 
 print(f"\nTable still has {len(t)} valid rows.")
 print(f"category null_count: {t['category'].null_count()} (the row with category='' is null)")

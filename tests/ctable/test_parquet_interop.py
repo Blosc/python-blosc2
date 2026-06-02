@@ -441,7 +441,7 @@ class TestParquetRoundTrip:
         assert out.column("bin").to_pylist() == [b"short", long_bin, None, b"end"]
 
     def test_vlstring_parquet_roundtrip(self, tmp_path):
-        """Parquet import/export round-trips long scalar strings without singleton-list wrapping."""
+        """Parquet import/export round-trips int scalar strings without singleton-list wrapping."""
         long_str = "y" * 1000
         at = pa.table(
             {

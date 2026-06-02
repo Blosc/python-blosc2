@@ -824,7 +824,7 @@ class Column:
         if self._mask is None:
             return self._table._valid_rows
 
-        return (self._table._valid_rows & self._mask).compute()
+        return self._table._valid_rows & self._mask.compute()
 
     def _lazy_valid_rows(self):
         """Return this column's visible-row mask without forcing lazy evaluation."""
@@ -3139,8 +3139,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     @staticmethod
     def _column_physical_shape(col: CompiledColumn, capacity: int) -> tuple[int, ...]:
         if CTable._is_ndarray_column(col):
-            return (capacity, *col.spec.item_shape)
-        return (capacity,)
+            return capacity, *col.spec.item_shape
+        return capacity,
 
     @staticmethod
     def _ndarray_null_item(spec: NDArraySpec) -> np.ndarray:
@@ -9095,7 +9095,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         cols: str | list[str],
         ascending: bool | list[bool],
     ) -> tuple[list[str], list[bool]]:
-        """Validate and normalise sort key arguments; return (cols, ascending)."""
+        """Validate and normalise sort key arguments; return cols, ascending."""
         if isinstance(cols, str) or isinstance(getattr(cols, "_col_name", None), str):
             cols = [self._column_selector_name(cols)]
         else:
@@ -9909,11 +9909,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if isinstance(spec, NDArraySpec):
             return spec.display_label()
         if isinstance(spec, timestamp):
-            return (
+            return 
                 f"timestamp[{spec.unit}]"
                 if spec.timezone is None
                 else f"timestamp[{spec.unit}, {spec.timezone}]"
-            )
+            
         if dtype is None:
             return "None"
         if dtype.kind == "U":

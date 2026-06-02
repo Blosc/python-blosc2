@@ -13,7 +13,7 @@ import blosc2
 
 @blosc2.dsl_kernel
 def _wasm_kernel(x, y):
-    return (x + y) * 1.5 - 0.25
+    return x + y * 1.5 - 0.25
 
 
 @pytest.mark.skipif(not blosc2.IS_WASM, reason="WASM-only integration test")

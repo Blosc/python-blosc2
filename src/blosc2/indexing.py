@@ -63,7 +63,7 @@ def _resolve_summary_levels(granularity: str | None) -> tuple[str, ...] | None:
         return None
     if granularity not in SUMMARY_GRANULARITIES:
         raise ValueError(f"granularity must be one of {SUMMARY_GRANULARITIES}, got {granularity!r}")
-    return (granularity,)
+    return granularity,
 
 
 _IN_MEMORY_INDEXES: dict[int, dict] = {}
@@ -583,7 +583,7 @@ def _decode_coords_payload(payload: dict) -> np.ndarray:
 def _hot_cache_key(
     digest: str, scope: tuple[str, str | int] | None = None
 ) -> tuple[tuple[str, str | int], str]:
-    return (_HOT_CACHE_GLOBAL_SCOPE if scope is None else scope, digest)
+    return _HOT_CACHE_GLOBAL_SCOPE if scope is None else scope, digest
 
 
 def _compress_hot_coords(coords: np.ndarray) -> _CompressedHotCoords:
@@ -1503,7 +1503,7 @@ def _full_sidecar_geometry(array: blosc2.NDArray, optlevel: int) -> tuple[tuple[
     chunk_multiplier = _index_chunk_multiplier_for_optlevel(optlevel)
     block_len = int(array.blocks[0])
     chunk_len = _opsi_storage_chunk_len(int(array.chunks[0]), block_len, chunk_multiplier)
-    return (chunk_len,), (block_len,), chunk_multiplier
+    return chunk_len,, (block_len,), chunk_multiplier
 
 
 def _stream_copy_temp_run_to_full_sidecars(
@@ -2783,7 +2783,7 @@ def _temp_run_storage_geometry(
     chunk_items = max(1, min(length, buffer_items))
     target_block_bytes = 256 * 1024
     block_items = max(1, min(chunk_items, target_block_bytes // max(1, dtype.itemsize)))
-    return (chunk_items,), (block_items,)
+    return chunk_items,, (block_items,)
 
 
 def _path_disk_bytes(path: Path | str) -> int:
@@ -3386,7 +3386,7 @@ def _opsi_ordered_le_array(left: np.ndarray, right: np.ndarray, dtype: np.dtype)
         return left <= right
     left_nan = np.isnan(left)
     right_nan = np.isnan(right)
-    return (~left_nan & right_nan) | (left_nan & right_nan) | (~left_nan & ~right_nan & (left <= right))
+    return ~left_nan & right_nan | (left_nan & right_nan) | (~left_nan & ~right_nan & (left <= right))
 
 
 def _opsi_is_csi(stage: OpsiStageSidecars, dtype: np.dtype) -> bool:
@@ -3408,7 +3408,7 @@ def _opsi_block_pruning_score(stage: OpsiStageSidecars, dtype: np.dtype) -> tupl
     the remaining candidates across the file.
     """
     if stage.nblocks <= 1:
-        return (1.0, 1, 1.0, 1.0)
+        return 1.0, 1, 1.0, 1.0
     mins = _read_sidecar_span(stage.mins, 0, stage.nblocks)
     medians = _read_sidecar_span(stage.medians, 0, stage.nblocks)
     maxs = _read_sidecar_span(stage.maxs, 0, stage.nblocks)
@@ -5189,12 +5189,12 @@ def _plan_segment_compare(node: ast.Compare, operands: dict) -> SegmentPredicate
 
 
 def _same_segment_space(left: SegmentPredicatePlan, right: SegmentPredicatePlan) -> bool:
-    return (
+    return 
         left.base is right.base
         and left.level == right.level
         and left.segment_len == right.segment_len
         and left.candidate_units.shape == right.candidate_units.shape
-    )
+    
 
 
 def _merge_segment_plans(
