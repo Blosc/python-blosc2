@@ -2498,7 +2498,7 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     # (aux_reduc_ptr) to avoid perturbing accumulator state.
     if udata.candidate_blocks != NULL and udata.aux_reduc_ptr == NULL:
         global_block = nchunk * udata.blocks_in_chunk[0] + nblock
-        if 0 <= global_block < udata.candidate_blocks_len and udata.candidate_blocks[global_block] == 0:
+        if global_block < udata.candidate_blocks_len and udata.candidate_blocks[global_block] == 0:
             memset(params_output, 0, udata.array.blocknitems * typesize)
             free(input_buffers)
             return 0

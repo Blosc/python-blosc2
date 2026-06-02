@@ -832,6 +832,13 @@ class Column:
             return self._table._valid_rows
         return self._table._valid_rows & self._mask
 
+    def _resolve_live_positions(self) -> np.ndarray:
+        """Physical positions for all live rows, respecting sorted-view order."""
+        slp = getattr(self._table, "_cached_live_positions", None)
+        if slp is not None and self._table.base is not None:
+            return slp
+        return np.where(self._valid_rows[:])[0]
+
     def __getitem__(self, key: int | slice | list | np.ndarray):
         """Return values for the given logical index.
 
@@ -877,11 +884,7 @@ class Column:
             return self._maybe_decode_timestamp_values(self._raw_col[int(pos_true)])
 
         elif isinstance(key, slice):
-            _slp = getattr(self._table, "_cached_live_positions", None)
-            if _slp is not None and self._table.base is not None:
-                real_pos = _slp
-            else:
-                real_pos = np.where(self._valid_rows[:])[0]
+            real_pos = self._resolve_live_positions()
             start, stop, step = key.indices(len(real_pos))
             if start >= stop:
                 if self.is_list or self.is_varlen_scalar or self.is_dictionary:
@@ -905,11 +908,7 @@ class Column:
                 raise IndexError(
                     f"Boolean mask length {len(key)} does not match number of live rows {n_live}."
                 )
-            _slp = getattr(self._table, "_cached_live_positions", None)
-            if _slp is not None and self._table.base is not None:
-                all_pos = _slp
-            else:
-                all_pos = np.where(self._valid_rows[:])[0]
+            all_pos = self._resolve_live_positions()
             phys_indices = all_pos[key]
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
@@ -919,11 +918,7 @@ class Column:
             return self._maybe_decode_timestamp_values(self._raw_col[phys_indices])
 
         elif isinstance(key, (list, tuple, np.ndarray)):
-            _slp = getattr(self._table, "_cached_live_positions", None)
-            if _slp is not None and self._table.base is not None:
-                real_pos = _slp
-            else:
-                real_pos = np.where(self._valid_rows[:])[0]
+            real_pos = self._resolve_live_positions()
             phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
             if self.is_computed:
                 raw_np = np.asarray(self._raw_col[:])
@@ -2825,12 +2820,12 @@ class _ColumnSummaryAccumulator:
             return
         from blosc2.indexing import _fill_summaries_from_2d
 
-        values = np.ascontiguousarray(values)
         if values.ndim != 1:
             # Not a plain scalar column write (e.g. an ndarray column); summaries
             # don't apply -- disable rather than risk a wrong result.
             self.invalidate()
             return
+        values = np.ascontiguousarray(values)
         m = values.shape[0]
         if m == 0:
             return
