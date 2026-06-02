@@ -1697,9 +1697,12 @@ def compute_chunks_blocks(  # noqa: C901
         # compute_partition snaps to a divisor of shape, which can break the
         # "chunks is a multiple of blocks" invariant established above.  Restore
         # it by rounding each chunks dimension up to the next multiple of the
-        # corresponding blocks dimension.  Blosc2 allows chunks > shape (the
-        # last chunk is simply partial), so rounding up is always safe.
-        chunks = [c if c % b == 0 else (c // b + 1) * b for c, b in zip(chunks, blocks)]
+        # corresponding blocks dimension, capped at the shape dimension so that
+        # chunks never exceed the array size.
+        chunks = [
+            min(s, c if c % b == 0 else (c // b + 1) * b)
+            for s, c, b in zip(shape, chunks, blocks)
+        ]
 
     return tuple(chunks), tuple(blocks)
 
