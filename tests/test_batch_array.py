@@ -733,6 +733,7 @@ def test_batcharray_in_dict_store():
 # chunk_copy() tests
 # ---------------------------------------------------------------------------
 
+
 def test_batcharray_chunk_copy_inmemory():
     ba = blosc2.BatchArray()
     ba.extend(BATCHES)
