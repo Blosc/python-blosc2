@@ -3702,8 +3702,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         display_rows = _CTABLE_PRINT_OPTIONS["display_rows"] if display_rows is None else display_rows
         if display_rows == 0:
             return np.empty(0, dtype=np.intp), np.empty(0, dtype=np.intp), nrows
-        valid_np = self._valid_rows[:]
-        all_pos = np.where(valid_np)[0]
+        _slp = getattr(self, "_cached_live_positions", None)
+        if _slp is not None and self.base is not None:
+            all_pos = _slp
+        else:
+            valid_np = self._valid_rows[:]
+            all_pos = np.where(valid_np)[0]
         if nrows <= display_rows:
             return all_pos, np.array([], dtype=all_pos.dtype), 0
 
