@@ -933,7 +933,17 @@ def _sanitize_sidecar_root(urlpath: str | Path) -> tuple[Path, str]:
 
 def _sidecar_path(array: blosc2.NDArray, token: str, kind: str, name: str) -> str:
     path, root = _sanitize_sidecar_root(array.urlpath)
-    return str(path.with_name(f"{root}.__index__.{_sanitize_token(token)}.{kind}.{name}.b2nd"))
+    # Drop redundant kind prefix when category == kind (e.g. "summary.block" under kind="summary").
+    if name.startswith(f"{kind}."):
+        name = name[len(kind) + 1 :]
+    # Omit __self__ token: it is the common case (self-indexed column) and adds no information.
+    token_part = f".{_sanitize_token(token)}" if token != SELF_TARGET_NAME else ""
+    # CTable index anchors use "_anchor" as a placeholder; the _indexes/{col}/ directory
+    # already identifies the column, so no prefix is needed in the filename.
+    # For standalone NDArray indexes the root.__index__ prefix avoids collisions with sibling files.
+    if root == "_anchor":
+        return str(path.parent / f"{kind}{token_part}.{name}.b2nd")
+    return str(path.parent / f"{root}.__index__{token_part}.{kind}.{name}.b2nd")
 
 
 def _segment_len(array: blosc2.NDArray, level: str) -> int:
