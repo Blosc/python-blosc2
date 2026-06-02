@@ -421,6 +421,7 @@ class FileTableStorage(TableStorage):
         if store is not None and store.threshold != 0:
             store.threshold = 0
         self._store: blosc2.TreeStore | None = store
+        self._registered_sidecar_paths: list[str] = []
 
     # ------------------------------------------------------------------
     # Key helpers
@@ -729,6 +730,7 @@ class FileTableStorage(TableStorage):
         raise KeyError(old)
 
     def close(self) -> None:
+        self._unregister_sidecar_zip_paths()
         if self._store is not None:
             self._store.close()
             self._store = None
@@ -736,10 +738,20 @@ class FileTableStorage(TableStorage):
 
     def discard(self) -> None:
         """Clean up without repacking the .b2z archive."""
+        self._unregister_sidecar_zip_paths()
         if self._store is not None:
             self._store.discard()
             self._store = None
         self._meta = None
+
+    def _unregister_sidecar_zip_paths(self) -> None:
+        if not self._registered_sidecar_paths:
+            return
+        from blosc2.indexing import _SIDECAR_ZIP_REGISTRY
+
+        for path in self._registered_sidecar_paths:
+            _SIDECAR_ZIP_REGISTRY.pop(path, None)
+        self._registered_sidecar_paths.clear()
 
     # -- Index catalog and epoch helpers -------------------------------------
 
@@ -783,20 +795,25 @@ class FileTableStorage(TableStorage):
                 obj[key] = os.path.abspath(v) if os.path.exists(v) else os.path.join(working_dir, v)
         return d
 
-    def _ensure_index_files_extracted(self, store, rel_paths: list[str]) -> None:
-        """Extract *rel_paths* from the zip into the working_dir (read mode only)."""
-        import zipfile
+    def _register_index_zip_paths(self, store, descriptor: dict) -> None:
+        """Register sidecar paths from *descriptor* in the zip-offset registry.
 
-        for rel in rel_paths:
-            dest = os.path.join(store.working_dir, rel)
-            if os.path.exists(dest):
+        This lets indexing code open sidecar arrays directly at their byte offset
+        inside the .b2z archive, avoiding the need to extract them to disk first.
+        """
+        from blosc2.indexing import _SIDECAR_ZIP_REGISTRY
+
+        working_dir = store.working_dir
+        for obj, key in self._walk_descriptor_paths(descriptor):
+            abs_path = obj[key]
+            if abs_path in _SIDECAR_ZIP_REGISTRY:
                 continue
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            rel = os.path.relpath(abs_path, working_dir).replace(os.sep, "/")
             info = store.offsets.get(rel)
             if info is None:
                 continue
-            with zipfile.ZipFile(store.b2z_path, "r") as zf, zf.open(rel) as src, open(dest, "wb") as dst:
-                dst.write(src.read())
+            _SIDECAR_ZIP_REGISTRY[abs_path] = (store.b2z_path, info["offset"])
+            self._registered_sidecar_paths.append(abs_path)
 
     def load_index_catalog(self) -> dict:
         meta = self._open_meta()
@@ -806,18 +823,12 @@ class FileTableStorage(TableStorage):
         catalog = copy.deepcopy(raw)
         store = self._open_store()
         working_dir = store.working_dir
-        # Expand relative paths and, for b2z read mode, extract sidecar files.
-        rel_paths_needed = []
+        # Expand relative paths and, for b2z read mode, register sidecars in the
+        # zip-offset registry so indexing code can open them without extraction.
         for col_name, descriptor in catalog.items():
             catalog[col_name] = self._absolutize_descriptor(descriptor, working_dir)
             if store.is_zip_store and self._mode == "r":
-                for obj, key in self._walk_descriptor_paths(catalog[col_name]):
-                    v = obj[key]
-                    rel = os.path.relpath(v, working_dir)
-                    if not os.path.exists(v):
-                        rel_paths_needed.append(rel.replace(os.sep, "/"))
-        if rel_paths_needed and store.is_zip_store and self._mode == "r":
-            self._ensure_index_files_extracted(store, rel_paths_needed)
+                self._register_index_zip_paths(store, catalog[col_name])
         return catalog
 
     def save_index_catalog(self, catalog: dict) -> None:
@@ -888,6 +899,7 @@ class TreeStoreTableStorage(TableStorage):
         self._owns_store = owns_store
         self._meta: blosc2.SChunk | None = None
         self._vlmeta: blosc2.SChunk | None = None
+        self._registered_sidecar_paths: list[str] = []
 
     # ------------------------------------------------------------------
     # Key / path helpers
@@ -953,16 +965,27 @@ class TreeStoreTableStorage(TableStorage):
         return self._mode
 
     def close(self) -> None:
+        self._unregister_sidecar_zip_paths()
         if self._owns_store and self._store is not None:
             self._store.close()
             self._store = None
         self._meta = None
 
     def discard(self) -> None:
+        self._unregister_sidecar_zip_paths()
         if self._owns_store and self._store is not None:
             self._store.discard()
             self._store = None
         self._meta = None
+
+    def _unregister_sidecar_zip_paths(self) -> None:
+        if not self._registered_sidecar_paths:
+            return
+        from blosc2.indexing import _SIDECAR_ZIP_REGISTRY
+
+        for path in self._registered_sidecar_paths:
+            _SIDECAR_ZIP_REGISTRY.pop(path, None)
+        self._registered_sidecar_paths.clear()
 
     # ------------------------------------------------------------------
     # TableStorage interface — columns and valid_rows
@@ -1270,33 +1293,28 @@ class TreeStoreTableStorage(TableStorage):
         catalog = copy.deepcopy(raw)
         working_dir = self._working_dir()
         store = self._store
-        rel_paths_needed = []
         for col_name, descriptor in catalog.items():
             catalog[col_name] = FileTableStorage._absolutize_descriptor(descriptor, working_dir)
             if store.is_zip_store and self._mode == "r":
-                for obj, key in FileTableStorage._walk_descriptor_paths(catalog[col_name]):
-                    v = obj[key]
-                    if not os.path.exists(v):
-                        rel_paths_needed.append(os.path.relpath(v, working_dir).replace(os.sep, "/"))
-        if rel_paths_needed:
-            self._ensure_index_files_extracted(rel_paths_needed)
+                self._register_index_zip_paths(catalog[col_name])
         return catalog
 
-    def _ensure_index_files_extracted(self, rel_paths: list[str]) -> None:
-        import zipfile
+    def _register_index_zip_paths(self, descriptor: dict) -> None:
+        """Register sidecar paths from *descriptor* in the zip-offset registry."""
+        from blosc2.indexing import _SIDECAR_ZIP_REGISTRY
 
         store = self._store
-        for rel in rel_paths:
-            dest = os.path.join(self._working_dir(), rel)
-            if os.path.exists(dest):
+        working_dir = self._working_dir()
+        for obj, key in FileTableStorage._walk_descriptor_paths(descriptor):
+            abs_path = obj[key]
+            if abs_path in _SIDECAR_ZIP_REGISTRY:
                 continue
+            rel = os.path.relpath(abs_path, working_dir).replace(os.sep, "/")
             info = store.offsets.get(rel)
             if info is None:
                 continue
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            with zipfile.ZipFile(store.b2z_path, "r") as zf:
-                with zf.open(rel) as src, open(dest, "wb") as dst:
-                    dst.write(src.read())
+            _SIDECAR_ZIP_REGISTRY[abs_path] = (store.b2z_path, info["offset"])
+            self._registered_sidecar_paths.append(abs_path)
 
     def save_index_catalog(self, catalog: dict) -> None:
         meta = self._open_meta()

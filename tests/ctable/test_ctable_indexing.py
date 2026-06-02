@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 import blosc2
+import blosc2.indexing
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -808,7 +809,7 @@ def _summary_sidecars(table):
     for name, desc in dict(table._get_index_catalog()).items():
         if desc.get("kind") != "summary":
             continue
-        side = blosc2.open(desc["levels"]["block"]["path"], mode="r")
+        side = blosc2.indexing._open_sidecar_file(desc["levels"]["block"]["path"])
         out[name] = side[:]
     return out
 

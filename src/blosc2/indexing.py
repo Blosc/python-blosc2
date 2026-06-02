@@ -114,6 +114,11 @@ _HOT_CACHE_BYTES: int = 0
 _QUERY_CACHE_STORE_HANDLES: dict[str, object] = {}
 # Cached mmap handles for data arrays used in full-query gather: urlpath -> NDArray.
 _GATHER_MMAP_HANDLES: dict[str, object] = {}
+# Registry for index sidecar files stored inside a .b2z bundle.
+# Maps absolute sidecar path -> (b2z_path, data_offset_in_zip).
+# Populated by the storage layer so indexing code can open sidecars without
+# extracting them to a temporary directory first.
+_SIDECAR_ZIP_REGISTRY: dict[str, tuple[str, int]] = {}
 _HOT_CACHE_GLOBAL_SCOPE = ("global", 0)
 
 FULL_OOC_RUN_ITEMS = 10_000_000
@@ -192,6 +197,19 @@ def _purge_stale_persistent_caches() -> None:
 
     for scope in stale_scopes:
         _hot_cache_clear(scope=scope)
+
+
+def _open_sidecar_file(path: str, mmap_mode=None) -> "blosc2.NDArray":
+    """Open an index sidecar file, using zip-offset access when registered."""
+    reg = _SIDECAR_ZIP_REGISTRY.get(path)
+    if reg is not None:
+        b2z_path, offset = reg
+        from blosc2.schunk import process_opened_object
+
+        return process_opened_object(
+            blosc2.blosc2_ext.open(b2z_path, mode="r", offset=offset, mmap_mode=mmap_mode)
+        )
+    return blosc2.open(path, mode="r", mmap_mode=mmap_mode)
 
 
 @dataclass(slots=True)
@@ -976,7 +994,7 @@ def _open_sidecar_handle(array: blosc2.NDArray, token: str, category: str, name:
             raise RuntimeError("sidecar handle path is not available")
         handle = legacy if isinstance(legacy, blosc2.NDArray) else blosc2.asarray(np.asarray(legacy))
     else:
-        handle = blosc2.open(path, mode="r", mmap_mode=_INDEX_MMAP_MODE)
+        handle = _open_sidecar_file(path, _INDEX_MMAP_MODE)
     _SIDECAR_HANDLE_CACHE[cache_key] = handle
     return handle
 
@@ -1109,7 +1127,7 @@ def _compute_sorted_boundaries_from_sidecar(
 ) -> np.ndarray:
     nsegments = math.ceil(length / segment_len)
     boundaries = np.empty(nsegments, dtype=_boundary_dtype(dtype))
-    sidecar = blosc2.open(path, mode="r", mmap_mode=_INDEX_MMAP_MODE)
+    sidecar = _open_sidecar_file(path, _INDEX_MMAP_MODE)
     start_value = np.empty(1, dtype=dtype)
     end_value = np.empty(1, dtype=dtype)
     for idx in range(nsegments):
@@ -1380,7 +1398,7 @@ def _sidecar_storage_geometry(
 ) -> tuple[int, int]:
     if path is None:
         return fallback_chunk_len, fallback_block_len
-    sidecar = blosc2.open(path, mode="r", mmap_mode=_INDEX_MMAP_MODE)
+    sidecar = _open_sidecar_file(path, _INDEX_MMAP_MODE)
     return int(sidecar.chunks[0]), int(sidecar.blocks[0])
 
 
@@ -2909,7 +2927,7 @@ def _copy_sidecar_to_temp_run(
     cparams: dict | None = None,
 ) -> Path:
     out_path = workdir / f"{prefix}.b2nd"
-    sidecar = blosc2.open(path, mode="r", mmap_mode=_INDEX_MMAP_MODE)
+    sidecar = _open_sidecar_file(path, _INDEX_MMAP_MODE)
     output = _create_blosc2_temp_array(out_path, length, dtype, FULL_OOC_MERGE_BUFFER_ITEMS, cparams)
     chunk_len = int(sidecar.chunks[0])
     for chunk_id, start in enumerate(range(0, length, chunk_len)):
@@ -4061,14 +4079,14 @@ def iter_index_components(array: blosc2.NDArray, descriptor: dict):
 
 def _component_nbytes(array: blosc2.NDArray, descriptor: dict, component: IndexComponent) -> int:
     if component.path is not None:
-        return int(blosc2.open(component.path, mode="r", mmap_mode=_INDEX_MMAP_MODE).nbytes)
+        return int(_open_sidecar_file(component.path, _INDEX_MMAP_MODE).nbytes)
     token = descriptor["token"]
     return int(_load_array_sidecar(array, token, component.category, component.name).nbytes)
 
 
 def _component_cbytes(array: blosc2.NDArray, descriptor: dict, component: IndexComponent) -> int:
     if component.path is not None:
-        return int(blosc2.open(component.path, mode="r", mmap_mode=_INDEX_MMAP_MODE).cbytes)
+        return int(_open_sidecar_file(component.path, _INDEX_MMAP_MODE).cbytes)
     token = descriptor["token"]
     sidecar = _load_array_sidecar(array, token, component.category, component.name)
     kwargs = {}
@@ -6204,17 +6222,17 @@ def _bucket_masks_from_bucket_chunk_nav_ooc(
         batch_values = (
             values_sidecar
             if bucket.get("values_path") is None
-            else blosc2.open(bucket["values_path"], mode="r", mmap_mode=_INDEX_MMAP_MODE)
+            else _open_sidecar_file(bucket["values_path"], _INDEX_MMAP_MODE)
         )
         batch_buckets = (
             bucket_sidecar
             if bucket.get("bucket_positions_path") is None
-            else blosc2.open(bucket["bucket_positions_path"], mode="r", mmap_mode=_INDEX_MMAP_MODE)
+            else _open_sidecar_file(bucket["bucket_positions_path"], _INDEX_MMAP_MODE)
         )
         batch_l2 = (
             l2_sidecar
             if bucket.get("l2_path") is None
-            else blosc2.open(bucket["l2_path"], mode="r", mmap_mode=_INDEX_MMAP_MODE)
+            else _open_sidecar_file(bucket["l2_path"], _INDEX_MMAP_MODE)
         )
         batch_results = []
         batch_candidate_segments = 0
