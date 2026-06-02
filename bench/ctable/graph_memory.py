@@ -90,7 +90,9 @@ def to_mb(b: int) -> float:
 PANDAS_BYTES_PER_ROW = NP_DTYPE.itemsize  # int64 + float64 + bool = 17 bytes
 
 print("Memory benchmark — pandas vs CTable compressed  (log row counts)\n")
-print(f"{'Size':>8}  {'pandas (MB)':>13}  {'ct random (MB)':>16}  {'ct medium (MB)':>16}  {'ct easy (MB)':>14}")
+print(
+    f"{'Size':>8}  {'pandas (MB)':>13}  {'ct random (MB)':>16}  {'ct medium (MB)':>16}  {'ct easy (MB)':>14}"
+)
 print("-" * 74)
 
 pandas_mem, ct_random, ct_medium, ct_easy = [], [], [], []
@@ -99,13 +101,22 @@ for n in SIZES:
     p_mem = n * PANDAS_BYTES_PER_ROW
     pandas_mem.append(p_mem)
 
-    d = make_random(n);  ct_r = build_ctable(d);  del d
-    d = make_medium(n);  ct_m = build_ctable(d);  del d
-    d = make_easy(n);    ct_e = build_ctable(d);  del d
+    d = make_random(n)
+    ct_r = build_ctable(d)
+    del d
+    d = make_medium(n)
+    ct_m = build_ctable(d)
+    del d
+    d = make_easy(n)
+    ct_e = build_ctable(d)
+    del d
 
-    ct_random.append(ct_r.cbytes);  del ct_r
-    ct_medium.append(ct_m.cbytes);  del ct_m
-    ct_easy.append(ct_e.cbytes);    del ct_e
+    ct_random.append(ct_r.cbytes)
+    del ct_r
+    ct_medium.append(ct_m.cbytes)
+    del ct_m
+    ct_easy.append(ct_e.cbytes)
+    del ct_e
 
     print(
         f"{fmt_size(n):>8}  {to_mb(p_mem):>13.4f}"
@@ -123,13 +134,34 @@ x = np.arange(len(SIZES))
 fig, (ax_log, ax_lin) = plt.subplots(1, 2, figsize=(18, 5))
 
 for ax, yscale, ylabel in [
-    (ax_log, "log",    "Memory (MB, log scale)"),
+    (ax_log, "log", "Memory (MB, log scale)"),
     (ax_lin, "linear", "Memory (MB)"),
 ]:
-    ax.plot(x, [to_mb(v) for v in pandas_mem], "o-",  linewidth=2, color="gray",        label="pandas")
-    ax.plot(x, [to_mb(v) for v in ct_random],  "s--", linewidth=2, color="steelblue",   label="CTable compressed (random)")
-    ax.plot(x, [to_mb(v) for v in ct_medium],  "D--", linewidth=2, color="orange",      label="CTable compressed (medium)")
-    ax.plot(x, [to_mb(v) for v in ct_easy],    "^-",  linewidth=2, color="forestgreen", label="CTable compressed (easy)")
+    ax.plot(x, [to_mb(v) for v in pandas_mem], "o-", linewidth=2, color="gray", label="pandas")
+    ax.plot(
+        x,
+        [to_mb(v) for v in ct_random],
+        "s--",
+        linewidth=2,
+        color="steelblue",
+        label="CTable compressed (random)",
+    )
+    ax.plot(
+        x,
+        [to_mb(v) for v in ct_medium],
+        "D--",
+        linewidth=2,
+        color="orange",
+        label="CTable compressed (medium)",
+    )
+    ax.plot(
+        x,
+        [to_mb(v) for v in ct_easy],
+        "^-",
+        linewidth=2,
+        color="forestgreen",
+        label="CTable compressed (easy)",
+    )
     ax.set_yscale(yscale)
     ax.set_xlabel("Number of rows")
     ax.set_ylabel(ylabel)

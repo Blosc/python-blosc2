@@ -1017,9 +1017,7 @@ class BatchArray:
             dst_sc.append_chunk(src_sc.get_chunk(i))
 
         # Persist batch_lengths so reopening the file skips the recompute scan.
-        out._batch_lengths = (
-            list(self._load_or_compute_batch_lengths()) if src_sc.nchunks > 0 else []
-        )
+        out._batch_lengths = list(self._load_or_compute_batch_lengths()) if src_sc.nchunks > 0 else []
         out._persist_batch_lengths()
         out._invalidate_item_cache()
 

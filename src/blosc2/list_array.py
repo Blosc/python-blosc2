@@ -583,11 +583,7 @@ class ListArray:
         ListArray
             A new standalone copy.
         """
-        if (
-            self.spec.storage == "batch"
-            and not self._pending_cells
-            and "cparams" not in kwargs
-        ):
+        if self.spec.storage == "batch" and not self._pending_cells and "cparams" not in kwargs:
             return self._copy_fast_batch(**kwargs)
 
         # Slow path: element-wise copy via extend().
@@ -603,7 +599,16 @@ class ListArray:
         # Extract only the storage kwargs relevant to BatchArray (urlpath, mode,
         # contiguous, dparams); ListArray-level options (spec, serializer, …) must not
         # be forwarded.
-        _LA_ONLY = {"spec", "item_spec", "nullable", "storage", "serializer", "batch_rows", "items_per_block", "_from_schunk"}
+        _LA_ONLY = {
+            "spec",
+            "item_spec",
+            "nullable",
+            "storage",
+            "serializer",
+            "batch_rows",
+            "items_per_block",
+            "_from_schunk",
+        }
         ba_kwargs = {k: v for k, v in kwargs.items() if k not in _LA_ONLY}
         new_ba = self._backend.chunk_copy(**ba_kwargs)
         out = ListArray.__new__(ListArray)
