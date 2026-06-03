@@ -140,3 +140,27 @@ try:
     print(" ", t5["net_value"][:])
 finally:
     shutil.rmtree(tmpdir2)
+
+# ---------------------------------------------------------------------------
+# 5. Persisting jit_backend — use cc compiler for better code on this kernel
+# ---------------------------------------------------------------------------
+
+tmpdir3 = tempfile.mkdtemp()
+path3 = f"{tmpdir3}/trades_cc.b2d"
+try:
+    t6 = blosc2.CTable(Trade, new_data=TRADES)
+    # jit_backend="cc" uses the system C compiler (gcc/clang) instead of TCC.
+    # This choice is persisted in the column metadata and restored on open —
+    # no need to set BLOSC_ME_JIT=cc or repeat jit_backend= after reloading.
+    t6.add_generated_column(
+        "net_value",
+        values=blosc2.lazyudf(net_value, (t6.price, t6.shares, t6.fee_pct), jit_backend="cc"),
+    )
+    t6.save(path3)
+
+    t7 = blosc2.open(path3, mode="a")
+    t7.append({"ticker": "TSLA", "price": 248.0, "shares": 120, "fee_pct": 0.10})
+    print("\nAfter reload (jit_backend=cc persisted) — auto-filled row:")
+    print(" ", t7["net_value"][:])
+finally:
+    shutil.rmtree(tmpdir3)

@@ -340,6 +340,18 @@ functions, and :class:`blosc2.LazyUDF` objects.  DSL kernels support full Python
 control flow (``if``/``else``, ``where()``, loops) and have their source
 persisted and recompiled on open.
 
+When passing a :class:`blosc2.LazyUDF` built with an explicit ``jit_backend=``
+(e.g. ``jit_backend="cc"`` to use the system C compiler instead of the default
+TCC), that choice is persisted in the column metadata and automatically restored
+on :func:`blosc2.open`.  This matters for kernels where one backend produces
+measurably faster code — the optimised backend stays active for the lifetime of
+the table without any extra configuration::
+
+    t.add_generated_column(
+        "score",
+        values=blosc2.lazyudf(my_kernel, (t.col_a, t.col_b), jit_backend="cc"),
+    )
+
 When a computed result should become a stored snapshot rather than a live
 virtual column, use :meth:`CTable.materialize_computed_column` to convert it
 in place.

@@ -7823,15 +7823,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             computed = []
             for name, cc in self._computed_cols.items():
                 if cc.get("kind") == "dsl":
-                    computed.append(
-                        {
-                            "name": name,
-                            "kind": "dsl",
-                            "dsl_source": cc["dsl_source"],
-                            "col_deps": cc["col_deps"],
-                            "dtype": str(cc["dtype"]),
-                        }
-                    )
+                    entry = {
+                        "name": name,
+                        "kind": "dsl",
+                        "dsl_source": cc["dsl_source"],
+                        "col_deps": cc["col_deps"],
+                        "dtype": str(cc["dtype"]),
+                    }
+                    if cc.get("jit_backend") is not None:
+                        entry["jit_backend"] = cc["jit_backend"]
+                    computed.append(entry)
                 else:
                     computed.append(
                         {
@@ -7859,6 +7860,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     entry["transformer"] = meta["transformer"]
                 if meta.get("dsl_source") is not None:
                     entry["dsl_source"] = meta["dsl_source"]
+                if meta.get("jit_backend") is not None:
+                    entry["jit_backend"] = meta["jit_backend"]
                 materialized.append(entry)
             d["materialized_columns"] = materialized
         return d
@@ -8057,6 +8060,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     "kernel": kernel_from_source(dsl_source),
                     "col_deps": col_deps,
                     "dtype": dtype,
+                    "jit_backend": cc_meta.get("jit_backend"),
                 }
             else:
                 expression = cc_meta["expression"]
@@ -8087,6 +8091,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 loaded["transformer"] = dict(meta["transformer"])
             if meta.get("dsl_source") is not None:
                 loaded["dsl_source"] = meta["dsl_source"]
+            if meta.get("jit_backend") is not None:
+                loaded["jit_backend"] = meta["jit_backend"]
             self._materialized_cols[meta["name"]] = loaded
 
     def _require_computed_column(self, name: str) -> dict:
@@ -8348,6 +8354,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 "dtype": target_dtype,
                 "transformer_kind": "dsl",
                 "stale": False,
+                "jit_backend": cc.get("jit_backend"),
             }
         else:
             self._materialized_cols[target_name] = {
@@ -8479,7 +8486,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             kernel = obj.func
             if kernel.dsl_error is not None:
                 raise blosc2.DSLSyntaxError(f"Invalid DSL kernel: {kernel.dsl_error}")
-            return {"kind": "dsl", "kernel": kernel, "col_deps": self._dsl_deps_from_lazyudf(obj)}
+            return {
+                "kind": "dsl",
+                "kernel": kernel,
+                "col_deps": self._dsl_deps_from_lazyudf(obj),
+                "jit_backend": obj.kwargs.get("jit_backend"),
+            }
         lazy, col_deps = self._normalize_expression_transformer(obj)
         return {"kind": "expression", "lazy": lazy, "col_deps": col_deps}
 
@@ -8517,7 +8529,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if cc.get("kind") == "dsl":
             operands = tuple(self._cols[d] for d in cc["col_deps"])
-            return blosc2.lazyudf(cc["kernel"], operands, dtype=cc["dtype"]).compute()
+            return blosc2.lazyudf(
+                cc["kernel"],
+                operands,
+                dtype=cc["dtype"],
+                jit_backend=cc.get("jit_backend"),
+            ).compute()
         return cc["lazy"]
 
     def _evaluate_expression_materialized_batch(
@@ -8553,7 +8570,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if pad:
             arrays = [np.concatenate([arr, arr]) for arr in arrays]
         operands = tuple(blosc2.asarray(arr) for arr in arrays)
-        result = blosc2.lazyudf(kernel, operands, dtype=out_dtype).compute()[:]
+        result = blosc2.lazyudf(
+            kernel,
+            operands,
+            dtype=out_dtype,
+            jit_backend=meta.get("jit_backend"),
+        ).compute()[:]
         result = np.asarray(result, dtype=out_dtype)
         return result[:1] if pad else result
 
@@ -8818,8 +8840,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if dtype is not None
                 else self._dsl_result_dtype(kernel, col_deps, None)
             )
+            jit_backend = desc.get("jit_backend")
             operands = tuple(self._cols[d] for d in col_deps)
-            generated_values = np.asarray(blosc2.lazyudf(kernel, operands, dtype=compute_dtype).compute()[:])
+            generated_values = np.asarray(
+                blosc2.lazyudf(kernel, operands, dtype=compute_dtype, jit_backend=jit_backend).compute()[:]
+            )
             if generated_values.ndim != 1:
                 raise TypeError("DSL generated columns must produce a 1-D scalar result.")
             generated_values = (
@@ -8836,6 +8861,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 "dtype": np.dtype(spec.dtype),
                 "transformer_kind": "dsl",
                 "stale": False,
+                "jit_backend": jit_backend,
             }
         else:
             lazy, col_deps = desc["lazy"], desc["col_deps"]
@@ -9046,6 +9072,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 "kernel": kernel,
                 "col_deps": col_deps,
                 "dtype": self._dsl_result_dtype(kernel, col_deps, dtype),
+                "jit_backend": desc.get("jit_backend"),
             }
         else:
             lazy = desc["lazy"]
