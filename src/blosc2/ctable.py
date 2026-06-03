@@ -8998,13 +8998,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             expensive = t.where(t.total > 100)
             total_revenue = t.total.sum()
 
-        Computed columns are virtual and read-only.  Materialize one when a
-        stored snapshot or an indexable column is needed::
-
-            t.materialize_computed_column("total", new_name="total_stored")
-            t.create_index("total_stored")
-
-        For maintained stored results, prefer generated columns::
+        Computed columns are virtual and read-only and cannot be indexed.  If
+        you need to filter or sort by this value frequently, use a generated
+        column instead — it is physically stored and can be indexed::
 
             t.add_generated_column(
                 "total_stored",
@@ -9012,6 +9008,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 dtype=blosc2.float64(),
                 create_index=True,
             )
+
+        Or convert an existing computed column to a stored snapshot::
+
+            t.materialize_computed_column("total", new_name="total_stored")
+            t.create_index("total_stored")
 
         Raises
         ------

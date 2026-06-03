@@ -315,16 +315,34 @@ Mutations
 ---------
 
 In addition to physical schema changes such as :meth:`CTable.add_column`,
-CTables can host **computed columns** backed by a lazy expression over stored
-columns.  Computed columns are read-only, use no extra storage, participate in
-display, filtering, sorting, and aggregates, and are persisted across
-:meth:`CTable.save`, :meth:`CTable.load`, and :meth:`CTable.open`.
+CTables support two kinds of derived columns:
 
-When a computed result should become a normal stored column, use
-:meth:`CTable.materialize_computed_column`.  The materialized column is a stored
-snapshot that can be indexed like any other stored column.  New rows inserted
-later via :meth:`CTable.append` or :meth:`CTable.extend` auto-fill omitted
-materialized-column values from the recorded expression metadata.
+**Computed columns** (:meth:`CTable.add_computed_column`) are purely virtual —
+they use no extra storage, are evaluated on demand, and are read-only.  They
+participate in display, filtering, sorting, and aggregates, and are persisted
+across save/open round-trips.  Because they have no physical storage, they
+**cannot be indexed**.
+
+**Generated columns** (:meth:`CTable.add_generated_column`) are physically
+stored.  Their values are computed once and written to disk; new rows appended
+later are auto-filled automatically.  Because the data is real, generated
+columns **can be indexed** with :meth:`CTable.create_index`, which makes
+``where()`` queries on them fast.
+
+**Practical rule**: use a computed column when you just need a derived value
+available for display, export, or occasional reads.  Use a generated column
+(optionally with ``create_index=True``) when you need to filter or sort by a
+derived value frequently — the index pays for itself after the first few
+queries.
+
+Both forms accept plain expression strings, :func:`blosc2.dsl_kernel`-decorated
+functions, and :class:`blosc2.LazyUDF` objects.  DSL kernels support full Python
+control flow (``if``/``else``, ``where()``, loops) and have their source
+persisted and recompiled on open.
+
+When a computed result should become a stored snapshot rather than a live
+virtual column, use :meth:`CTable.materialize_computed_column` to convert it
+in place.
 
 .. autosummary::
 
