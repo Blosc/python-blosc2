@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.4.1 to 4.4.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.3.3 to 4.4.1
 
 This is a feature release focused on a new interactive data viewer, automatic

@@ -1,8 +1,8 @@
 Announcing Python-Blosc2 4.4.1
 ==============================
 
-We are happy to announce Python-Blosc2 4.4.1, a feature release that brings an
-interactive TUI data viewer, automatic SUMMARY indexes for fast WHERE queries,
+We are happy to announce this feature release that brings an interactive
+TUI data viewer, automatic SUMMARY indexes for fast WHERE queries,
 chunk-aligned Arrow/Parquet imports, expanded ``where()`` acceleration, and a
 range of CTable ergonomics and performance improvements.
 
@@ -78,7 +78,7 @@ What is Python-Blosc2?
 ----------------------
 
 Python-Blosc2 is a high-performance compressor, compute engine, and format
-for binary data containers that are portable, and open-source. It comes with
+for binary data containers that are portable and open-source. It comes with
 a lazy expression engine allowing for complex calculations on compressed data,
 whether stored in memory, on disk, or over the network (e.g., via
 `Caterva2 <https://github.com/ironArray/Caterva2>`_).  It is especially
