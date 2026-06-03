@@ -7,9 +7,7 @@
 
 from __future__ import annotations
 
-import builtins
 import inspect
-import linecache
 import pathlib
 import textwrap
 from dataclasses import asdict
@@ -18,7 +16,7 @@ from typing import Any
 import numpy as np
 
 import blosc2
-from blosc2.dsl_kernel import DSLKernel
+from blosc2.dsl_kernel import DSLKernel, kernel_from_source
 
 _B2OBJECT_META_KEY = "b2o"
 _B2OBJECT_VERSION = 1
@@ -190,18 +188,7 @@ def decode_structured_lazyudf(payload, *, carrier_path=None):
     if not isinstance(kwargs, dict):
         raise TypeError("Structured LazyUDF payload requires a mapping 'kwargs'")
 
-    local_ns = {}
-    filename = f"<{name}>"
-    safe_globals = {
-        "__builtins__": {k: v for k, v in builtins.__dict__.items() if k != "__import__"},
-        "np": np,
-        "blosc2": blosc2,
-    }
-    linecache.cache[filename] = (len(udf_source), None, udf_source.splitlines(True), filename)
-    exec(compile(udf_source, filename, "exec"), safe_globals, local_ns)
-    func = local_ns[name]
-    if not isinstance(func, DSLKernel):
-        func = DSLKernel(func)
+    func = kernel_from_source(udf_source, name)
     ordered_operands_payload = {f"o{n}": operands_payload[f"o{n}"] for n in range(len(operands_payload))}
     operands, missing_ops = decode_operand_mapping(ordered_operands_payload, base_path=carrier_path)
     if missing_ops:
