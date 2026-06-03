@@ -128,6 +128,54 @@ def test_asarray_ndarray_copies_for_dtype_changes_and_rejects_copy_false(tmp_pat
         blosc2.asarray(array, urlpath=tmp_path / "persisted_copy_false.b2nd", mode="w", copy=False)
 
 
+def test_array_creates_ndarray_from_sequence():
+    a = blosc2.array([1, 2, 3])
+
+    assert isinstance(a, blosc2.NDArray)
+    np.testing.assert_array_equal(a[:], np.array([1, 2, 3]))
+
+
+def test_array_copies_ndarray_by_default():
+    a = blosc2.asarray([1, 2, 3])
+
+    b = blosc2.array(a)
+
+    assert b is not a
+    np.testing.assert_array_equal(b[:], a[:])
+
+
+def test_array_copy_false_reuses_compatible_ndarray():
+    a = blosc2.asarray([1, 2, 3])
+
+    b = blosc2.array(a, copy=False)
+
+    assert b is a
+
+
+def test_array_copy_false_rejects_required_copy():
+    a = blosc2.asarray([1, 2, 3])
+
+    with pytest.raises(ValueError, match="copy=False"):
+        blosc2.array(a, dtype=np.float64, copy=False)
+
+
+def test_array_copy_none_matches_asarray_for_compatible_ndarray():
+    a = blosc2.asarray([1, 2, 3])
+
+    b = blosc2.array(a, copy=None)
+
+    assert b is a
+
+
+def test_array_honors_constructor_kwargs():
+    a = blosc2.array([1, 2, 3, 4], dtype=np.float32, chunks=(4,), blocks=(2,))
+
+    assert a.dtype == np.dtype(np.float32)
+    assert a.chunks == (4,)
+    assert a.blocks == (2,)
+    np.testing.assert_array_equal(a[:], np.array([1, 2, 3, 4], dtype=np.float32))
+
+
 def test_ndarray_info_has_human_sizes():
     array = blosc2.asarray(np.arange(16, dtype=np.int32))
 
