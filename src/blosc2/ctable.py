@@ -10624,7 +10624,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     def where(  # noqa: C901
         self,
-        expr_result: str | np.ndarray | blosc2.NDArray | blosc2.LazyExpr | Column,
+        expr_result: str | np.ndarray | blosc2.NDArray | blosc2.LazyExpr | blosc2.LazyUDF | Column,
         *,
         columns: list[str] | tuple[str, ...] | None = None,
     ) -> CTable:
@@ -10636,9 +10636,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         The predicate can be supplied as a boolean :class:`blosc2.LazyExpr`,
         a boolean :class:`blosc2.NDArray`, a boolean NumPy array, a boolean
-        ``Column``, or a string expression evaluated against this table's
-        columns.  String expressions can reference stored and computed columns
-        directly by name.
+        ``Column``, a :class:`blosc2.LazyUDF` (including those backed by a
+        :func:`blosc2.dsl_kernel`), or a string expression evaluated against
+        this table's columns.  String expressions can reference stored and
+        computed columns directly by name.
 
         The returned object is a :class:`CTable` view sharing the original
         column data.  The row-selection mask is evaluated immediately and
@@ -10722,6 +10723,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             expr_result = (
                 expr_result._raw_col == 1 if expr_result._is_nullable_bool else expr_result._raw_col
             )
+        if isinstance(expr_result, blosc2.LazyUDF):
+            # DSL miniexpr only supports full-array getitem, so we cannot stream
+            # a LazyUDF chunk-by-chunk the way LazyExpr does.  Materialise the
+            # full boolean array upfront and let the NDArray path handle it.
+            expr_result = expr_result.compute()
 
         if not (
             isinstance(expr_result, (blosc2.NDArray, blosc2.LazyExpr))
