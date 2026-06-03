@@ -8640,9 +8640,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         Supported signatures are::
 
             add_generated_column(name, *, values="price * qty", dtype=..., create_index=False)
-            add_generated_column(name, *, values=lazy_expr, dtype=..., create_index=False)
-            add_generated_column(name, *, values=lambda cols: cols["price"] * 1.21, dtype=...)
+            add_generated_column(name, *, values=lazy_expr, dtype=...)
             add_generated_column(name, *, values=dsl_kernel, inputs=["price", "qty"], dtype=...)
+            add_generated_column(name, *, values=blosc2.lazyudf(dsl_kernel, (t.price, t.qty)))
+            add_generated_column(name, *, values=lambda cols: cols["price"] * 1.21, dtype=...)
             add_generated_column(name, *, values=t.embedding.row_transformer.norm(axis=0), dtype=...)
             add_generated_column(name, *, values=t.image.row_transformer.mean(axis=(0, 1)),
                                  dtype=blosc2.ndarray((3,), dtype=...))
@@ -8661,15 +8662,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
               per row.
             * :class:`blosc2.LazyExpr`: scalar lazy expression over stored
               columns of this table.  It must produce a 1-D scalar stream.
+            * :func:`blosc2.dsl_kernel`-decorated kernel passed directly with
+              ``inputs=[...]`` — one stored scalar column name per kernel
+              parameter, bound positionally.  Produces one scalar per row.
+              The kernel source is persisted and recompiled on open; appended
+              rows are auto-filled and :meth:`refresh_generated_column`
+              recomputes after in-place edits.
+            * :class:`blosc2.LazyUDF` built from a :func:`blosc2.dsl_kernel` via
+              :func:`blosc2.lazyudf` — column bindings are inferred by identity
+              from the operands, so ``inputs=`` is not needed.  Accepts
+              :class:`Column` accessors (``t.col1``) or raw NDArrays as
+              operands.  Same persistence and auto-fill behaviour as above.
             * callable: called as ``values(self._cols)`` and must return a
-              :class:`blosc2.LazyExpr` (or a :class:`blosc2.LazyUDF`) over stored
-              columns of this table.
-            * :func:`blosc2.dsl_kernel`-decorated kernel: pass it directly with
-              ``inputs=[...]`` naming one stored scalar column per kernel
-              parameter.  Produces one scalar per row.  The kernel source is
-              persisted and recompiled on open; appended rows are auto-filled
-              and :meth:`refresh_generated_column` recomputes after in-place
-              edits.
+              :class:`blosc2.LazyExpr` or a :class:`blosc2.LazyUDF` backed by a
+              :func:`blosc2.dsl_kernel`.
             * :class:`RowTransformer`: row-wise projection/reduction bound to a
               fixed-shape ndarray column, e.g.
               ``t.embedding.row_transformer.norm(axis=0)`` or
@@ -8694,10 +8700,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             generated columns raise :class:`ValueError` when indexing is
             requested.
         inputs:
-            Only used when *values* is a :func:`blosc2.dsl_kernel`-decorated
-            kernel passed directly: a list of stored scalar column names, one per
-            kernel parameter, bound positionally.  Ignored for other *values*
-            forms.
+            Only used when *values* is a bare :func:`blosc2.dsl_kernel`: a list
+            of stored scalar column names, one per kernel parameter, bound
+            positionally.  Not needed when passing a :class:`blosc2.LazyUDF` or
+            a callable — bindings are inferred from the operands in those cases.
 
         Examples
         --------
@@ -8896,10 +8902,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         Supported signatures are::
 
-            add_computed_column(name, "price * qty", dtype=None)
-            add_computed_column(name, lazy_expr, dtype=None)
-            add_computed_column(name, lambda cols: cols["price"] * cols["qty"], dtype=None)
-            add_computed_column(name, dsl_kernel, inputs=["price", "qty"], dtype=None)
+            add_computed_column(name, "price * qty")
+            add_computed_column(name, lazy_expr)
+            add_computed_column(name, dsl_kernel, inputs=["price", "qty"])
+            add_computed_column(name, blosc2.lazyudf(dsl_kernel, (t.price, t.qty)))
+            add_computed_column(name, lambda cols: cols["price"] * cols["qty"])
 
         Parameters
         ----------
@@ -8913,16 +8920,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
               ``"price * qty"``.
             * :class:`blosc2.LazyExpr`: lazy expression over stored columns of
               this table.
+            * :func:`blosc2.dsl_kernel`-decorated kernel passed directly with
+              ``inputs=[...]`` — one stored scalar column name per kernel
+              parameter, bound positionally.  The kernel may use loops,
+              ``if``/``else`` and ``where(...)``.  Its source is persisted and
+              recompiled on open; the column stays virtual/unstored.
+            * :class:`blosc2.LazyUDF` built from a :func:`blosc2.dsl_kernel` via
+              :func:`blosc2.lazyudf` — column bindings are inferred by identity
+              from the operands, so ``inputs=`` is not needed.  Accepted forms
+              include ``blosc2.lazyudf(kernel, (t.col1, t.col2))`` (using
+              :class:`Column` accessors) or the raw NDArray equivalents.
             * callable: called as ``expr(self._cols)`` and must return a
-              :class:`blosc2.LazyExpr` (or a :class:`blosc2.LazyUDF`) over stored
-              columns of this table.
-            * :func:`blosc2.dsl_kernel`-decorated kernel: pass it directly with
-              ``inputs=[...]`` naming one stored scalar column per kernel
-              parameter.  The kernel may use loops, ``if``/``else`` and
-              ``where(...)``.  DSL columns are persisted (their source is stored
-              and recompiled on open) and may be referenced inside
-              :meth:`where` predicates.  Their values are recomputed on each
-              access (the column stays virtual/unstored).
+              :class:`blosc2.LazyExpr` or a :class:`blosc2.LazyUDF` backed by a
+              :func:`blosc2.dsl_kernel`.
+
+            DSL columns (last three forms) are persisted — their source is stored
+            and recompiled on open — and may be referenced inside :meth:`where`
+            predicates.
 
             Expressions must depend only on stored columns of this table;
             computed columns cannot depend on other computed columns in this
@@ -8933,17 +8947,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         dtype:
             Optional dtype override for the computed values.  For expression
             forms it is inferred from the resulting :class:`blosc2.LazyExpr`
-            when omitted.  For a DSL kernel passed directly, an omitted dtype is
-            inferred by NumPy type promotion of the input column dtypes (correct
-            for elementwise arithmetic kernels); pass *dtype* explicitly for
-            kernels that change the type (comparisons/``where``/casts) or when
-            the kernel has no column inputs.  This changes the dtype reported by
-            the CTable column wrapper; it does not create physical storage.
+            when omitted.  For DSL forms, an omitted dtype is inferred by NumPy
+            type promotion of the input column dtypes (correct for elementwise
+            arithmetic kernels); pass *dtype* explicitly for kernels that change
+            the type (comparisons/``where``/casts) or when the kernel has no
+            column inputs.  This changes the dtype reported by the CTable column
+            wrapper; it does not create physical storage.
         inputs:
-            Only used when *expr* is a :func:`blosc2.dsl_kernel`-decorated kernel
-            passed directly: a list of stored scalar column names, one per kernel
-            parameter, bound positionally (kernel parameter ``i`` ← ``inputs[i]``).
-            Ignored for the other *expr* forms.
+            Only used when *expr* is a bare :func:`blosc2.dsl_kernel`: a list of
+            stored scalar column names, one per kernel parameter, bound
+            positionally (kernel parameter ``i`` ← ``inputs[i]``).  Not needed
+            when passing a :class:`blosc2.LazyUDF` or a callable — bindings are
+            inferred from the operands in those cases.
 
         Examples
         --------
