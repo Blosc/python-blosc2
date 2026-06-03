@@ -493,10 +493,10 @@ class LazyArray(ABC, blosc2.Operand):
               default (``"tcc"``).
 
             - ``BLOSC_ME_JIT`` environment variable: when set to ``"1"``, ``"true"``,
-              ``"on"``, ``"tcc"``, or ``"cc"``, it forces ``jit=True`` for all
-              ``compute()`` and ``__getitem__`` calls where ``jit`` is not explicitly
-              passed.  Setting it to ``"tcc"`` or ``"cc"`` also selects that backend
-              unless ``jit_backend`` is given explicitly.
+              ``"on"``, ``"tcc"``, or ``"cc"``, it forces ``jit=True`` and overrides
+              both the ``jit`` and ``jit_backend`` arguments — this lets you switch
+              JIT on or change backends from the command line without touching code.
+              Setting it to ``"tcc"`` or ``"cc"`` also selects that backend.
 
             - ``BLOSC_ME_JIT_TRACE`` environment variable: when set to ``"1"``,
               ``"true"``, or ``"on"``, prints a one-line diagnostic to stdout
@@ -709,15 +709,14 @@ def compute_broadcast_shape(arrays):
 
 def _jit_from_env(jit, jit_backend):
     """Apply BLOSC_ME_JIT environment variable to jit/jit_backend defaults."""
-    if jit is not None:
-        return jit, jit_backend
     env_jit = os.environ.get("BLOSC_ME_JIT", "")
     if not env_jit:
         return jit, jit_backend
     env_jit_lower = env_jit.lower()
+    # Env var always wins over both jit= and jit_backend= for easy CLI experimentation.
     if env_jit_lower in ("1", "true", "on", "tcc", "cc"):
         jit = True
-    if jit_backend is None and env_jit_lower in ("tcc", "cc"):
+    if env_jit_lower in ("tcc", "cc"):
         jit_backend = env_jit_lower
     return jit, jit_backend
 
