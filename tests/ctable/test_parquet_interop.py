@@ -986,14 +986,12 @@ class TestUnnamedRootImport:
         expected = [r["payment"]["fare"] for outer in rows for r in outer][:4]
         assert len(ct) == 4
         np.testing.assert_allclose(ct["payment.fare"][:].tolist(), expected)
-        assert ct._schema.metadata["nested"]["original_root"]["kind"] == "unnamed_list_struct"
 
     def test_max_rows_zero_imports_empty_flattened_table(self):
         ct, _ = self._make_ct(n_outer_rows=3, max_rows=0)
         assert len(ct) == 0
         assert "column_0" not in ct.col_names
         assert "trip.begin.lon" in ct.col_names
-        assert ct._schema.metadata["nested"]["original_root"]["kind"] == "unnamed_list_struct"
 
     # ------------------------------------------------------------------
     # Column names — no column_0, no unnamed root in col_names
@@ -1061,29 +1059,6 @@ class TestUnnamedRootImport:
         assert len(result) == expected_count
 
     # ------------------------------------------------------------------
-    # Provenance metadata
-    # ------------------------------------------------------------------
-
-    def test_original_root_metadata_present(self):
-        ct, _ = self._make_ct()
-        nested = ct._schema.metadata.get("nested", {})
-        assert "original_root" in nested
-
-    def test_original_root_metadata_kind(self):
-        ct, _ = self._make_ct()
-        orig = ct._schema.metadata["nested"]["original_root"]
-        assert orig["kind"] == "unnamed_list_struct"
-
-    def test_original_root_metadata_field_name(self):
-        ct, _ = self._make_ct()
-        orig = ct._schema.metadata["nested"]["original_root"]
-        assert orig["field_name"] == ""
-
-    def test_original_root_metadata_preserve_grouping_false(self):
-        ct, _ = self._make_ct()
-        orig = ct._schema.metadata["nested"]["original_root"]
-        assert orig["preserve_grouping"] is False
-
     # ------------------------------------------------------------------
     # Persistence: .b2d reopen
     # ------------------------------------------------------------------
@@ -1112,15 +1087,6 @@ class TestUnnamedRootImport:
         ct.close()
         ct2 = CTable.open(str(tmp_path / "taxi.b2d"), mode="r")
         np.testing.assert_allclose(ct2["payment.fare"][:].tolist(), expected_fares)
-        ct2.close()
-
-    def test_b2d_reopen_original_root_metadata(self, tmp_path):
-        buf, _ = _make_taxi_parquet_buf()
-        ct = CTable.from_parquet(buf, separate_nested_cols=True, urlpath=str(tmp_path / "taxi.b2d"))
-        ct.close()
-        ct2 = CTable.open(str(tmp_path / "taxi.b2d"), mode="r")
-        orig = ct2._schema.metadata["nested"]["original_root"]
-        assert orig["kind"] == "unnamed_list_struct"
         ct2.close()
 
     def test_b2z_reopen(self, tmp_path):

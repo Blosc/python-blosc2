@@ -28,7 +28,7 @@ def test_schema_version_2_with_nested_metadata_roundtrip():
     assert "nested" in d["metadata"]
 
     restored = schema_from_dict(d)
-    assert restored.metadata["nested"]["physical_to_storage"]["x.y"] == "_cols/x/y"
+    assert restored.metadata["nested"]["logical_to_physical"]["x.y"] == "x.y"
 
 
 def test_empty_root_metadata_exports_back_to_empty_arrow_name():

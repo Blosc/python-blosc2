@@ -826,7 +826,7 @@ def transform_batch(
 
 
 def store_original_arrow_metadata(
-    ct, original_schema, imported_schema, conversions: dict, column_name_map: dict | None = None
+    ct, original_schema, conversions: dict, column_name_map: dict | None = None
 ) -> None:
     column_name_map = column_name_map or {}
     fields_meta = {}
@@ -838,17 +838,10 @@ def store_original_arrow_metadata(
         ctable_name = column_name_map.get(field.name, field.name)
         if ctable_name != field.name:
             entry["ctable_name"] = ctable_name
-        entry["original_arrow_type"] = str(field.type)
-        if ctable_name in imported_schema.names:
-            entry["ctable_arrow_type"] = str(imported_schema.field(ctable_name).type)
-        elif field.name in imported_schema.names:
-            entry["ctable_arrow_type"] = str(imported_schema.field(field.name).type)
         fields_meta[field.name] = entry
     ct._schema.metadata = {
         "arrow": {
             "schema_ipc_base64": encode_arrow_schema(original_schema),
-            "schema_string": original_schema.to_string(),
-            "imported_schema_ipc_base64": encode_arrow_schema(imported_schema),
             "fields": fields_meta,
         }
     }
@@ -1106,7 +1099,6 @@ def import_unnamed_root_separate_cols(  # noqa: C901
 
     Returns the list of imported CTable column names.
     """
-    from blosc2.schema_compiler import schema_to_dict
 
     inner_schema = blosc2.CTable._inner_schema_for_unnamed_root(pa, parquet_schema)
     total_parquet_rows = pf.metadata.num_rows if pf.metadata is not None else None
@@ -1218,17 +1210,6 @@ def import_unnamed_root_separate_cols(  # noqa: C901
     )
 
     maybe_memory_report(args, "after CTable import", pa)
-
-    # Store the original_root provenance metadata so that reopened CTables know
-    # they came from an unnamed-root list<struct<...>> file.
-    nested_meta = ct._schema.metadata.get("nested", {})
-    nested_meta["original_root"] = {
-        "kind": "unnamed_list_struct",
-        "field_name": "",
-        "preserve_grouping": False,
-    }
-    ct._schema.metadata["nested"] = nested_meta
-    ct._storage.save_schema(schema_to_dict(ct._schema))
 
     maybe_memory_report(args, "after metadata save", pa)
 
@@ -1359,7 +1340,7 @@ def import_parquet_to_ctable(args, input_path: Path, output_path: Path):  # noqa
         blocks=args.blocks,
     )
     maybe_memory_report(args, "after CTable import", pa)
-    store_original_arrow_metadata(ct, parquet_schema, import_schema, conversions, column_name_map)
+    store_original_arrow_metadata(ct, parquet_schema, conversions, column_name_map)
     maybe_memory_report(args, "after metadata save", pa)
     elapsed = time.perf_counter() - t0
     rows = len(ct)

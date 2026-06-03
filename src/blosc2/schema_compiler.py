@@ -485,7 +485,6 @@ def schema_to_dict(schema: CompiledSchema) -> dict[str, Any]:
     schema_version = 2 if schema.metadata.get("nested") is not None else 1
     result = {
         "version": schema_version,
-        "row_cls": schema.row_cls.__name__ if schema.row_cls is not None else None,
         "columns": cols,
     }
     if schema.metadata:

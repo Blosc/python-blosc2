@@ -190,7 +190,7 @@ def test_column_cparams_stored():
 def test_schema_to_dict_structure():
     d = schema_to_dict(compile_schema(Simple))
     assert d["version"] == 1
-    assert d["row_cls"] == "Simple"
+    assert "row_cls" not in d
     assert len(d["columns"]) == 3
 
 

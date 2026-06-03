@@ -36,7 +36,6 @@ from blosc2.ctable_storage import (
     InMemoryTableStorage,
     TableStorage,
     TreeStoreTableStorage,
-    _column_name_to_relpath,
     join_field_path,
     split_field_path,
 )
@@ -6255,7 +6254,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             schema_ipc_base64 = base64.b64encode(schema_ipc).decode("ascii")
         except Exception:
             schema_ipc_base64 = None
-        arrow_meta = {"schema_string": schema.to_string()}
+        arrow_meta = {}
         if schema_ipc_base64 is not None:
             arrow_meta["schema_ipc_base64"] = schema_ipc_base64
         return {"arrow": arrow_meta}
@@ -6265,15 +6264,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         column_names: list[str], *, empty_root_physical: str | None = None
     ) -> dict:
         logical_to_physical = {}
-        physical_to_storage = {}
         for name in column_names:
             logical_to_physical[name] = name
-            physical_to_storage[name] = f"_cols/{_column_name_to_relpath(name)}"
         nested = {
             "version": 1,
-            "logical_root": "",
             "logical_to_physical": logical_to_physical,
-            "physical_to_storage": physical_to_storage,
         }
         if empty_root_physical:
             logical_to_physical[""] = empty_root_physical
@@ -6580,8 +6575,6 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         )
         if flattened_structs:
             metadata["nested"]["reconstruct_rows"] = True
-        if original_root_metadata is not None:
-            metadata["nested"]["original_root"] = original_root_metadata
         compiled_columns_by_name = {col.name: col for col in columns}
         for name, spec in original_top_level_struct_specs.items():
             if name in compiled_columns_by_name:
@@ -6932,13 +6925,6 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 list_serializer=list_serializer,
                 separate_nested_cols=False,
             )
-            nested_meta = ct._schema.metadata.get("nested", {})
-            nested_meta["original_root"] = {
-                "kind": "unnamed_list_struct",
-                "field_name": "",
-                "preserve_grouping": False,
-            }
-            ct._schema.metadata["nested"] = nested_meta
             ct._storage.save_schema(schema_to_dict(ct._schema))
             return ct
 

@@ -238,7 +238,7 @@ def test_schema_dict():
     t = CTable(Row)
     d = t.schema_dict()
     assert d["version"] == 1
-    assert d["row_cls"] == "Row"
+    assert "row_cls" not in d
     col_names = [c["name"] for c in d["columns"]]
     assert col_names == ["id", "score", "active"]
 
