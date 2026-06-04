@@ -250,5 +250,60 @@ def test_complex_scenarios():
     assert t4.ncols == 4
 
 
+def test_extend_blosc2_ndarray_chunked():
+    """extend() with blosc2.NDArray inputs decompresses chunk-by-chunk; values round-trip correctly."""
+    n = 200
+
+    @dataclass
+    class R:
+        x: float = blosc2.field(blosc2.float64())
+        y: int = blosc2.field(blosc2.int64())
+
+    arr_x = blosc2.asarray(np.arange(n, dtype=np.float64), chunks=(32,))
+    arr_y = blosc2.asarray(np.arange(n, dtype=np.int64) * 2, chunks=(32,))
+
+    t = CTable(R)
+    t.extend({"x": arr_x, "y": arr_y}, validate=False)
+
+    assert len(t) == n
+    np.testing.assert_array_equal(t["x"][:], np.arange(n, dtype=np.float64))
+    np.testing.assert_array_equal(t["y"][:], np.arange(n, dtype=np.int64) * 2)
+
+
+def test_extend_blosc2_ndarray_uneven_chunks():
+    """Chunked extend works when nrows is not a multiple of chunk_size."""
+    n = 70  # not a multiple of chunk_size=32
+
+    @dataclass
+    class R:
+        v: float = blosc2.field(blosc2.float64())
+
+    arr = blosc2.asarray(np.linspace(0, 1, n), chunks=(32,))
+    t = CTable(R)
+    t.extend({"v": arr}, validate=False)
+
+    assert len(t) == n
+    np.testing.assert_allclose(t["v"][:], np.linspace(0, 1, n))
+
+
+def test_extend_mixed_numpy_and_blosc2_ndarray():
+    """extend() handles a mix of plain numpy arrays and blosc2.NDArrays in the same call."""
+    n = 100
+
+    @dataclass
+    class R:
+        a: float = blosc2.field(blosc2.float64())
+        b: int = blosc2.field(blosc2.int64())
+
+    arr_a = blosc2.asarray(np.ones(n, dtype=np.float64), chunks=(25,))
+    arr_b = np.arange(n, dtype=np.int64)  # plain numpy
+
+    t = CTable(R)
+    t.extend({"a": arr_a, "b": arr_b}, validate=False)
+
+    np.testing.assert_array_equal(t["a"][:], np.ones(n))
+    np.testing.assert_array_equal(t["b"][:], np.arange(n, dtype=np.int64))
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

@@ -1047,25 +1047,74 @@ class Column:
                 self._raw_col[phys_indices] = value
 
         elif isinstance(key, (slice, list, tuple, np.ndarray)):
-            real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
-            if isinstance(key, slice):
-                lindices = range(*key.indices(len(real_pos)))
-                phys_indices = np.array([real_pos[i] for i in lindices], dtype=np.int64)
-            else:
-                phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
-
-            if self.is_list or self.is_varlen_scalar:
-                if len(value) != len(phys_indices):
-                    raise ValueError("Length mismatch in list-column assignment")
-                for pos, cell in zip(phys_indices, value, strict=True):
-                    self._raw_col[int(pos)] = cell
-            else:
+            # Fast path: slice of a blosc2.NDArray into a scalar or ndarray column when
+            # there are no deleted rows (physical positions == logical positions).
+            # Skips the O(n) validity-mask gather and decompresses one chunk at a time.
+            if (
+                isinstance(key, slice)
+                and isinstance(value, blosc2.NDArray)
+                and not self.is_list
+                and not self.is_varlen_scalar
+                and self._table._last_pos == self._table._n_rows
+            ):
+                start, stop, step = key.indices(len(self))
+                chunk_size = value.chunks[0] if value.chunks else 65536
                 if self.is_ndarray:
                     spec = self._table._schema.columns_by_name[self._col_name].spec
-                    value = CTable._coerce_ndarray_batch(self._col_name, spec, value, len(phys_indices))
-                elif isinstance(value, (list, tuple)):
-                    value = np.array(value, dtype=self._raw_col.dtype)
-                self._raw_col[phys_indices] = value
+
+                    def _coerce(v, n):
+                        return CTable._coerce_ndarray_batch(self._col_name, spec, v, n)
+                else:
+                    tgt_dtype = self._raw_col.dtype
+
+                    def _coerce(v, n):
+                        return np.ascontiguousarray(v, dtype=tgt_dtype)
+
+                if step == 1:
+                    n_selected = stop - start
+                    for c in range(0, n_selected, chunk_size):
+                        c_end = min(c + chunk_size, n_selected)
+                        chunk = _coerce(value[c:c_end], c_end - c)
+                        self._raw_col[start + c : start + c_end] = chunk
+                else:
+                    # Non-unit step: build phys_indices but still decompress value in chunks.
+                    logi_indices = list(range(start, stop, step))
+                    n_selected = len(logi_indices)
+                    phys_indices = np.array(logi_indices, dtype=np.int64)
+                    for c in range(0, n_selected, chunk_size):
+                        c_end = min(c + chunk_size, n_selected)
+                        chunk = _coerce(value[c:c_end], c_end - c)
+                        self._raw_col[phys_indices[c:c_end]] = chunk
+            else:
+                real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
+                if isinstance(key, slice):
+                    lindices = range(*key.indices(len(real_pos)))
+                    phys_indices = np.array([real_pos[i] for i in lindices], dtype=np.int64)
+                else:
+                    phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
+
+                if self.is_list or self.is_varlen_scalar:
+                    if len(value) != len(phys_indices):
+                        raise ValueError("Length mismatch in list-column assignment")
+                    for pos, cell in zip(phys_indices, value, strict=True):
+                        self._raw_col[int(pos)] = cell
+                else:
+                    if self.is_ndarray:
+                        spec = self._table._schema.columns_by_name[self._col_name].spec
+                        value = CTable._coerce_ndarray_batch(self._col_name, spec, value, len(phys_indices))
+                    elif isinstance(value, (list, tuple)):
+                        value = np.array(value, dtype=self._raw_col.dtype)
+                    # Decompress value in chunks to bound peak memory when it is a blosc2.NDArray.
+                    if isinstance(value, blosc2.NDArray):
+                        chunk_size = value.chunks[0] if value.chunks else 65536
+                        n = len(phys_indices)
+                        tgt_dtype = self._raw_col.dtype
+                        for c in range(0, n, chunk_size):
+                            c_end = min(c + chunk_size, n)
+                            chunk = np.ascontiguousarray(value[c:c_end], dtype=tgt_dtype)
+                            self._raw_col[phys_indices[c:c_end]] = chunk
+                    else:
+                        self._raw_col[phys_indices] = value
 
         else:
             raise TypeError(f"Invalid index type: {type(key)}")
@@ -10521,7 +10570,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         name, col_meta.spec, raw_columns[name], new_nrows
                     )
                 else:
-                    scalar_processed_cols[name] = np.ascontiguousarray(raw_columns[name], dtype=target_dtype)
+                    raw = raw_columns[name]
+                    if isinstance(raw, blosc2.NDArray):
+                        # Keep as-is; written chunk-by-chunk in the write loop below.
+                        scalar_processed_cols[name] = raw
+                    else:
+                        scalar_processed_cols[name] = np.ascontiguousarray(raw, dtype=target_dtype)
 
         end_pos = start_pos + new_nrows
 
@@ -10544,8 +10598,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 self._cols[name][start_pos:end_pos] = dict_processed_cols[name]
             else:
                 values = scalar_processed_cols[name]
-                self._cols[name][start_pos:end_pos] = values[:]
-                self._feed_summary(name, start_pos, values)
+                if isinstance(values, blosc2.NDArray):
+                    # Decompress one chunk at a time to bound peak memory usage.
+                    tgt = self._cols[name]
+                    chunk_size = values.chunks[0] if values.chunks else 65536
+                    for c in range(0, new_nrows, chunk_size):
+                        c_end = min(c + chunk_size, new_nrows)
+                        chunk = np.ascontiguousarray(values[c:c_end], dtype=tgt.dtype)
+                        tgt[start_pos + c : start_pos + c_end] = chunk
+                        self._feed_summary(name, start_pos + c, chunk)
+                else:
+                    self._cols[name][start_pos:end_pos] = values[:]
+                    self._feed_summary(name, start_pos, values)
 
         n_rows = self.nrows
         self._valid_rows[start_pos:end_pos] = True

@@ -947,5 +947,57 @@ def test_slice_returns_numpy_not_column():
     assert isinstance(t.id.view[:], blosc2.Column)
 
 
+def test_column_setitem_blosc2_ndarray_no_holes():
+    """col[:] = blosc2.NDArray takes the no-holes fast path and round-trips correctly."""
+    n = 200
+
+    @dataclass
+    class R:
+        id: int = blosc2.field(blosc2.int64(ge=0))
+        val: float = blosc2.field(blosc2.float64(), default=0.0)
+
+    t = CTable(R, new_data=[(i, 0.0) for i in range(n)])
+    arr = blosc2.asarray(np.arange(n, dtype=np.float64) * 3.14, chunks=(32,))
+    t["val"][:] = arr
+
+    np.testing.assert_allclose(t["val"][:], np.arange(n, dtype=np.float64) * 3.14)
+
+
+def test_column_setitem_blosc2_ndarray_no_holes_uneven_chunks():
+    """Fast path works when nrows is not a multiple of chunk_size."""
+    n = 70
+
+    @dataclass
+    class R:
+        id: int = blosc2.field(blosc2.int64(ge=0))
+        val: float = blosc2.field(blosc2.float64(), default=0.0)
+
+    t = CTable(R, new_data=[(i, 0.0) for i in range(n)])
+    arr = blosc2.asarray(np.linspace(1.0, 2.0, n), chunks=(32,))
+    t["val"][:] = arr
+
+    np.testing.assert_allclose(t["val"][:], np.linspace(1.0, 2.0, n))
+
+
+def test_column_setitem_blosc2_ndarray_with_holes():
+    """col[:] = blosc2.NDArray with deleted rows uses chunked fancy-index path; values align to live rows."""
+    n = 20
+
+    @dataclass
+    class R:
+        id: int = blosc2.field(blosc2.int64(ge=0))
+        val: float = blosc2.field(blosc2.float64(), default=0.0)
+
+    t = CTable(R, new_data=[(i, 0.0) for i in range(n)])
+    # Delete every other row so physical positions diverge from logical positions.
+    t.delete(list(range(0, n, 2)))
+    n_live = len(t)
+
+    arr = blosc2.asarray(np.arange(n_live, dtype=np.float64) * 7.0, chunks=(3,))
+    t["val"][:] = arr
+
+    np.testing.assert_allclose(t["val"][:], np.arange(n_live, dtype=np.float64) * 7.0)
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

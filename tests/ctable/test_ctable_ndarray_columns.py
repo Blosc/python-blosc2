@@ -229,3 +229,24 @@ def test_nullable_ndarray_arrow_roundtrip():
     assert rt.codes.null_count() == 1
     np.testing.assert_array_equal(rt.embedding.is_null(), t.embedding.is_null())
     np.testing.assert_array_equal(rt.codes.is_null(), t.codes.is_null())
+
+
+def test_ndarray_column_setitem_blosc2_ndarray_no_holes():
+    """col[:] = blosc2.NDArray fast path works for fixed-shape ndarray columns."""
+    n = 50
+
+    @dataclass
+    class R:
+        id: int = blosc2.field(blosc2.int32())
+        emb: object = blosc2.field(blosc2.ndarray((4,), dtype=blosc2.float32()))
+
+    t = blosc2.CTable(R, new_data=[(i, np.zeros(4, dtype=np.float32)) for i in range(n)])
+
+    # Build a (n, 4) blosc2.NDArray with small chunks to force multiple iterations.
+    data = np.arange(n * 4, dtype=np.float32).reshape(n, 4)
+    arr = blosc2.asarray(data, chunks=(8, 4))
+
+    t["emb"][:] = arr
+
+    result = np.stack(t["emb"][:])
+    np.testing.assert_array_equal(result, data)
