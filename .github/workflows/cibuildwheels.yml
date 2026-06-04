@@ -87,7 +87,7 @@ jobs:
         run: echo "C:\\Program Files\\LLVM\\bin" >> $env:GITHUB_PATH
 
       - name: Install MSVC amd64
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@v1.13.0
         with:
           arch: amd64
 
