@@ -457,12 +457,7 @@ def reshape(
     Examples
     --------
     >>> import blosc2
-    >>> import numpy as np
-    >>> shape = [23 * 11]
-    >>> a = np.arange(np.prod(shape))
-    >>> # Create an array
-    >>> b = blosc2.asarray(a)
-    >>> # Reshape the array
+    >>> b = blosc2.arange(253)
     >>> c = blosc2.reshape(b, (11, 23))
     >>> print(c.shape)
     (11, 23)
@@ -603,11 +598,8 @@ def sum(
 
     Examples
     --------
-    >>> import numpy as np
     >>> import blosc2
-    >>> # Example array
-    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
-    >>> nd_array = blosc2.asarray(array)
+    >>> nd_array = blosc2.array([[1, 2, 3], [4, 5, 6]])
     >>> # Sum all elements in the array (axis=None)
     >>> total_sum = blosc2.sum(nd_array)
     >>> print("Sum of all elements:", total_sum)
@@ -718,11 +710,8 @@ def mean(
 
     Examples
     --------
-    >>> import numpy as np
     >>> import blosc2
-    >>> # Example array
-    >>> array = np.array([[1, 2, 3], [4, 5, 6]]
-    >>> nd_array = blosc2.asarray(array)
+    >>> nd_array = blosc2.array([[1, 2, 3], [4, 5, 6]])
     >>> # Compute the mean of all elements in the array (axis=None)
     >>> overall_mean = blosc2.mean(nd_array)
     >>> print("Mean of all elements:", overall_mean)
@@ -781,11 +770,8 @@ def std(
 
     Examples
     --------
-    >>> import numpy as np
     >>> import blosc2
-    >>> # Create an instance of NDArray with some data
-    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
-    >>> nd_array = blosc2.asarray(array)
+    >>> nd_array = blosc2.array([[1, 2, 3], [4, 5, 6]])
     >>> # Compute the standard deviation of the entire array
     >>> std_all = blosc2.std(nd_array)
     >>> print("Standard deviation of the entire array:", std_all)
@@ -826,11 +812,8 @@ def var(
 
     Examples
     --------
-    >>> import numpy as np
     >>> import blosc2
-    >>> # Create an instance of NDArray with some data
-    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
-    >>> nd_array = blosc2.asarray(array)
+    >>> nd_array = blosc2.array([[1, 2, 3], [4, 5, 6]])
     >>> # Compute the variance of the entire array
     >>> var_all = blosc2.var(nd_array)
     >>> print("Variance of the entire array:", var_all)
@@ -869,11 +852,8 @@ def prod(
 
     Examples
     --------
-    >>> import numpy as np
     >>> import blosc2
-    >>> # Create an instance of NDArray with some data
-    >>> array = np.array([[11, 22, 33], [4, 15, 36]])
-    >>> nd_array = blosc2.asarray(array)
+    >>> nd_array = blosc2.array([[11, 22, 33], [4, 15, 36]])
     >>> # Compute the product of all elements in the array
     >>> prod_all = blosc2.prod(nd_array)
     >>> print("Product of all elements in the array:", prod_all)
@@ -927,10 +907,8 @@ def min(
 
     Examples
     --------
-    >>> import numpy as np
     >>> import blosc2
-    >>> array = np.array([1, 3, 7, 8, 9, 31])
-    >>> nd_array = blosc2.asarray(array)
+    >>> nd_array = blosc2.array([1, 3, 7, 8, 9, 31])
     >>> min_all = blosc2.min(nd_array)
     >>> print("Minimum of all elements in the array:", min_all)
     Minimum of all elements in the array: 1
@@ -968,9 +946,7 @@ def max(
     Examples
     --------
     >>> import blosc2
-    >>> import numpy as np
-    >>> data = np.array([[11, 2, 36, 24, 5, 69], [73, 81, 49, 6, 73, 0]])
-    >>> ndarray = blosc2.asarray(data)
+    >>> ndarray = blosc2.array([[11, 2, 36, 24, 5, 69], [73, 81, 49, 6, 73, 0]])
     >>> print("NDArray data:", ndarray[:])
     NDArray data:  [[11  2 36 24  5 69]
                     [73 81 49  6 73  0]]
@@ -1013,10 +989,7 @@ def any(
     Examples
     --------
     >>> import blosc2
-    >>> import numpy as np
-    >>> data = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 0]])
-    >>> # Convert the NumPy array to a Blosc2 NDArray
-    >>> ndarray = blosc2.asarray(data)
+    >>> ndarray = blosc2.array([[1, 0, 0], [0, 1, 0], [0, 0, 0]])
     >>> print("NDArray data:", ndarray[:])
     NDArray data: [[1 0 0]
                     [0 1 0]
@@ -1113,10 +1086,8 @@ def all(
 
     Examples
     --------
-    >>> import numpy as np
     >>> import blosc2
-    >>> data = np.array([True, True, False, True, True, True])
-    >>> ndarray = blosc2.asarray(data)
+    >>> ndarray = blosc2.array([True, True, False, True, True, True])
     >>> # Test if all elements are True along the default axis (flattened array)
     >>> result_flat = blosc2.all(ndarray)
     >>> print("All elements are True (flattened):", result_flat)
@@ -1959,10 +1930,8 @@ def contains(ndarr: blosc2.Array, value: str | bytes | blosc2.Array, /) -> blosc
 
     Examples
     --------
-    >>> import numpy as np
     >>> import blosc2
-    >>> values = np.array([b"apple", b"xxbananaxxx", b"cherry", b"date"])
-    >>> text_values = blosc2.asarray(values)
+    >>> text_values = blosc2.array([b"apple", b"xxbananaxxx", b"cherry", b"date"])
     >>> value_to_check = b"banana"
     >>> expr = blosc2.contains(text_values, value_to_check)
     >>> result = expr.compute()
@@ -2036,8 +2005,7 @@ def isnan(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     --------
     >>> import numpy as np
     >>> import blosc2
-    >>> values = np.array([-5, -3, np.nan, 2, 4])
-    >>> ndarray = blosc2.asarray(values)
+    >>> ndarray = blosc2.array([-5, -3, np.nan, 2, 4])
     >>> result_ = blosc2.isnan(ndarray)
     >>> result = result_[:]
     >>> print("isnan:", result)
@@ -2068,8 +2036,7 @@ def isfinite(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     --------
     >>> import numpy as np
     >>> import blosc2
-    >>> values = np.array([-5, -3, np.inf, 2, 4])
-    >>> ndarray = blosc2.asarray(values)
+    >>> ndarray = blosc2.array([-5, -3, np.inf, 2, 4])
     >>> result_ = blosc2.isfinite(ndarray)
     >>> result = result_[:]
     >>> print("isfinite:", result)
@@ -2100,8 +2067,7 @@ def isinf(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     --------
     >>> import numpy as np
     >>> import blosc2
-    >>> values = np.array([-5, -3, np.inf, 2, 4])
-    >>> ndarray = blosc2.asarray(values)
+    >>> ndarray = blosc2.array([-5, -3, np.inf, 2, 4])
     >>> result_ = blosc2.isinf(ndarray)
     >>> result = result_[:]
     >>> print("isinf:", result)
@@ -3925,10 +3891,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         Examples
         --------
-        >>> import numpy as np
         >>> import blosc2
-        >>> my_array = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-        >>> array = blosc2.asarray(my_array)
+        >>> array = blosc2.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
         >>> print(array.info)
         type    : NDArray
         shape   : (10,)
@@ -4090,9 +4054,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Examples
         --------
         >>> import blosc2
-        >>> import numpy as np
-        >>> array = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-        >>> ndarray = blosc2.asarray(array)
+        >>> ndarray = blosc2.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
         >>> print("Block size:", ndarray.blocksize)
         Block size: 80
         """
@@ -4717,8 +4679,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> import blosc2
         >>> import numpy as np
         >>> # Create an SChunk with some data
-        >>> array = np.arange(10)
-        >>> ndarray = blosc2.asarray(array)
+        >>> ndarray = blosc2.arange(10)
         >>> chunk = ndarray.get_chunk(0)
         >>> # Decompress the chunk to convert it into a numpy array
         >>> decompressed_chunk = blosc2.decompress(chunk)
@@ -5157,13 +5118,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Examples
         --------
         >>> import blosc2
-        >>> import numpy as np
         >>> import math
-        >>> dtype = np.dtype(np.float32)
         >>> shape = [23, 11]
-        >>> a = np.linspace(1, 3, num=math.prod(shape)).reshape(shape)
-        >>> # Create an array
-        >>> b = blosc2.asarray(a)
+        >>> b = blosc2.linspace(1, 3, num=math.prod(shape), shape=shape)
         >>> newshape = [50, 10]
         >>> # Extend first dimension, shrink second dimension
         >>> b.resize(newshape)
@@ -5250,11 +5207,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Examples
         --------
         >>> import blosc2
-        >>> import numpy as np
         >>> shape = [23, 11]
-        >>> a = np.arange(np.prod(shape)).reshape(shape)
-        >>> # Create an array
-        >>> b = blosc2.asarray(a)
+        >>> b = blosc2.arange(253, shape=shape)
         >>> slices = (slice(3, 7), slice(1, 11))
         >>> # Get a slice as a new NDArray
         >>> c = b.slice(slices)
@@ -6373,10 +6327,8 @@ def copy(array: NDArray, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray
 
     Examples
     --------
-    >>> import numpy as np
     >>> import blosc2
-    >>> # Create an instance of NDArray with some data
-    >>> original_array = blosc2.asarray(np.array([[1.1, 2.2, 3.3], [4.4, 5.5, 6.6]]))
+    >>> original_array = blosc2.array([[1.1, 2.2, 3.3], [4.4, 5.5, 6.6]])
     >>> # Create a copy of the array without changing dtype
     >>> copied_array = blosc2.copy(original_array)
     >>> print("Copied array (default dtype):")
@@ -6617,11 +6569,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     --------
     >>> import blosc2
     >>> import numpy as np
-    >>> # Create some data
-    >>> shape = [25, 10]
-    >>> a = np.arange(0, np.prod(shape), dtype=np.int64).reshape(shape)
-    >>> # Create a NDArray from a NumPy array
-    >>> nda = blosc2.asarray(a)
+    >>> nda = blosc2.arange(250, dtype=np.int64, shape=(25, 10))
     >>> # NDArray inputs are returned as-is unless a copy is requested
     >>> blosc2.asarray(nda) is nda
     True
