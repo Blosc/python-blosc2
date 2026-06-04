@@ -819,6 +819,24 @@ class Column:
         return col is not None and isinstance(col.spec, NDArraySpec)
 
     @property
+    def array(self):
+        """The underlying storage container for this column, without null-value processing.
+
+        Returns the raw :class:`blosc2.NDArray`, :class:`~blosc2.ListArray`,
+        :class:`~blosc2.DictionaryColumn`, or scalar varlen array directly,
+        allowing bulk reads that bypass the null-sentinel scan in
+        :meth:`__getitem__`.
+
+        Raises :exc:`AttributeError` for computed (virtual) columns, which have
+        no backing storage.
+        """
+        if self.is_computed:
+            raise AttributeError(
+                f"Column {self._col_name!r} is a computed column and has no underlying array"
+            )
+        return self._raw_col
+
+    @property
     def _valid_rows(self):
         if self._mask is None:
             return self._table._valid_rows

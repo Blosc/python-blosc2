@@ -1041,5 +1041,89 @@ def test_column_setitem_blosc2_ndarray_with_holes():
     np.testing.assert_allclose(t["val"][:], np.arange(n_live, dtype=np.float64) * 7.0)
 
 
+# -------------------------------------------------------------------
+# Column.array property
+# -------------------------------------------------------------------
+
+
+@dataclass
+class ArrayRow:
+    value: float = blosc2.field(blosc2.float64())
+    label: str = blosc2.field(blosc2.dictionary())
+    name: str = blosc2.field(blosc2.string(max_length=32))
+    tags: list[str] = blosc2.field(  # noqa: RUF009
+        blosc2.list(blosc2.string(max_length=16))
+    )
+
+
+def test_column_array_ndarray():
+    """array on a numeric column returns the underlying NDArray directly."""
+    t = CTable(Row, new_data=DATA20)
+    raw = t.id.array
+    assert isinstance(raw, blosc2.NDArray)
+    assert raw is t._cols["id"]
+
+
+def test_column_array_dictionary():
+    """array on a dictionary column returns the underlying DictionaryColumn."""
+    from blosc2.dictionary_column import DictionaryColumn
+
+    t = CTable(DictRow, new_data=[("acme", 1.0), ("globex", 2.0), ("acme", 3.0)])
+    raw = t.vendor.array
+    assert isinstance(raw, DictionaryColumn)
+    assert raw is t._cols["vendor"]
+
+
+def test_column_array_varlen_scalar():
+    """array on a varlen-string column returns the underlying _ScalarVarLenArray."""
+    from blosc2.scalar_array import _ScalarVarLenArray
+
+    @dataclass
+    class VLRow:
+        note: str = blosc2.field(blosc2.vlstring())
+
+    t = CTable(VLRow, new_data=[("hello",), ("world",)])
+    raw = t.note.array
+    assert isinstance(raw, _ScalarVarLenArray)
+    assert raw is t._cols["note"]
+
+
+def test_column_array_list():
+    """array on a list column returns the underlying ListArray."""
+    from blosc2.list_array import ListArray
+
+    t = CTable(
+        ArrayRow,
+        new_data=[
+            (1.0, "a", "foo", ["x", "y"]),
+            (2.0, "b", "bar", ["z"]),
+        ],
+    )
+    raw = t.tags.array
+    assert isinstance(raw, ListArray)
+    assert raw is t._cols["tags"]
+
+
+def test_column_array_computed_raises():
+    """array raises AttributeError for computed (virtual) columns."""
+    t = CTable(Row, new_data=DATA20)
+    t.add_computed_column("double_score", lambda cols: cols["score"] * 2)
+    with pytest.raises(AttributeError, match="computed"):
+        _ = t.double_score.array
+
+
+def test_column_array_bypasses_null_scan():
+    """array returns values that include the raw sentinel, not NaN-substituted values."""
+
+    @dataclass
+    class NullRow:
+        x: float = blosc2.field(blosc2.float64(null_value=-1.0))
+
+    t = CTable(NullRow, new_data=[(1.0,), (-1.0,), (3.0,)])
+    raw = t.x.array[:]
+    # The raw array contains the sentinel as-is, not converted to NaN.
+    assert raw[1] == -1.0
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
