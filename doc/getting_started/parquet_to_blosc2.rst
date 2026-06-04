@@ -26,11 +26,13 @@ Run the snippet below once to produce ``sample.parquet`` with three columns
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    table = pa.table({
-        "id":    pa.array([1, 2, 3, 4], type=pa.int64()),
-        "name":  pa.array(["Alice", "Bob", "Charlie", "David"], type=pa.string()),
-        "score": pa.array([85.5, 90.0, 78.2, 95.4], type=pa.float64()),
-    })
+    table = pa.table(
+        {
+            "id": pa.array([1, 2, 3, 4], type=pa.int64()),
+            "name": pa.array(["Alice", "Bob", "Charlie", "David"], type=pa.string()),
+            "score": pa.array([85.5, 90.0, 78.2, 95.4], type=pa.float64()),
+        }
+    )
 
     pq.write_table(table, "sample.parquet")
 
