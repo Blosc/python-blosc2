@@ -618,6 +618,78 @@ def validate_dsl(func):
     }
 
 
+def kernel_from_source(source: str, name: str | None = None) -> DSLKernel:
+    """Reconstruct a :class:`DSLKernel` from its stored source text.
+
+    Executes *source* in a restricted namespace (builtins minus ``__import__``,
+    plus ``np`` and ``blosc2``), extracts the defined function, and wraps it in
+    a :class:`DSLKernel`.  This is the inverse of persisting
+    :attr:`DSLKernel.dsl_source` and is shared by the persisted-``LazyUDF``
+    decoder and the CTable DSL-column loaders.
+
+    Parameters
+    ----------
+    source
+        Complete, standalone function-definition source (as produced by
+        :attr:`DSLKernel.dsl_source` or :func:`inspect.getsource`).
+    name
+        Name of the function to extract from *source*.  When omitted, the
+        single top-level function definition in *source* is used.
+    """
+    import builtins
+    import linecache
+
+    import numpy as np
+
+    import blosc2
+
+    tree = ast.parse(source)
+    func_defs = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+    if name is None:
+        if len(func_defs) != 1:
+            raise ValueError(
+                "kernel_from_source requires an explicit 'name' when 'source' does not "
+                "contain exactly one top-level function definition"
+            )
+        name = func_defs[0].name
+
+    # Security: reject sources that include top-level statements with
+    # side effects (assignments, calls, loops, etc.) beyond the function
+    # definition itself.  Imports and docstrings are permitted.
+    allowed_nodes = (ast.FunctionDef, ast.Import, ast.ImportFrom)
+    for node in tree.body:
+        if isinstance(node, allowed_nodes):
+            continue
+        # A bare string literal at module level is a docstring — safe.
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            continue
+        raise ValueError(
+            f"kernel_from_source source must contain only a function definition "
+            f"(optionally preceded by imports), but found: {ast.dump(node)[:120]}"
+        )
+
+    local_ns: dict = {}
+    filename = f"<{name}>"
+    safe_globals = {
+        "__builtins__": {k: v for k, v in builtins.__dict__.items() if k != "__import__"},
+        "np": np,
+        "blosc2": blosc2,
+    }
+    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+    exec(compile(source, filename, "exec"), safe_globals, local_ns)
+    try:
+        func = local_ns[name]
+    except KeyError:
+        raise ValueError(f"kernel_from_source: source did not define function {name!r}") from None
+    if not isinstance(func, DSLKernel):
+        func = DSLKernel(func)
+    return func
+
+
 class DSLBuilder:
     _binop_map: ClassVar[dict[type[ast.operator], str]] = {
         ast.Add: "+",

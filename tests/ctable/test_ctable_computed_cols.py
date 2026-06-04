@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 
 import numpy as np
@@ -795,3 +796,254 @@ def test_computed_column_compact():
     # After compact, live rows are price=1,3,4,5 and qty=1,3,4,5
     expected = np.array([1.0, 9.0, 16.0, 25.0])
     np.testing.assert_allclose(arr, expected)
+
+
+# ---------------------------------------------------------------------------
+# 26. DSL kernels as computed columns
+# ---------------------------------------------------------------------------
+
+# Shared DSL kernels used across the DSL tests
+
+
+@blosc2.dsl_kernel
+def total(price, qty):
+    return price * qty
+
+
+@blosc2.dsl_kernel
+def total_with_tax(price, qty, tax):
+    return price * qty * (1.0 + tax)
+
+
+@blosc2.dsl_kernel
+def is_large(price, qty):
+    return price * qty > 10
+
+
+def test_dsl_computed_column_inputs_form():
+    """Bare DSLKernel + inputs= binds parameters positionally."""
+    t = _make_invoice_table(5)
+    t.add_computed_column("total", total, inputs=["price", "qty"])
+    np.testing.assert_allclose(t["total"][:], [1.0, 4.0, 9.0, 16.0, 25.0])
+
+
+def test_dsl_computed_column_lazyudf_form():
+    """LazyUDF form infers col_deps by identity — no inputs= needed."""
+    t = _make_invoice_table(5)
+    t.add_computed_column("total", blosc2.lazyudf(total, (t.price, t.qty)))
+    np.testing.assert_allclose(t["total"][:], [1.0, 4.0, 9.0, 16.0, 25.0])
+
+
+def test_dsl_computed_column_dtype_inferred():
+    """dtype is inferred from input column dtypes when omitted."""
+    t = _make_invoice_table(3)
+    t.add_computed_column("total", total, inputs=["price", "qty"])
+    assert t._computed_cols["total"]["dtype"] == np.dtype(np.float64)
+
+
+def test_dsl_computed_column_dtype_explicit():
+    """Explicit dtype overrides inference — needed for type-changing kernels."""
+    t = _make_invoice_table(5)  # totals: 1, 4, 9, 16, 25 — last two exceed 10
+    t.add_computed_column("is_large", is_large, inputs=["price", "qty"], dtype=bool)
+    assert t._computed_cols["is_large"]["dtype"] == np.dtype(bool)
+    result = t["is_large"][:]
+    np.testing.assert_array_equal(result, [False, False, False, True, True])
+
+
+def test_dsl_computed_column_where_via_string():
+    """DSL computed column is reachable from a where() string predicate."""
+    t = _make_invoice_table(5)
+    t.add_computed_column("total", total, inputs=["price", "qty"])
+    view = t.where("total > 10")
+    np.testing.assert_allclose(view["total"][:], [16.0, 25.0])
+
+
+def test_dsl_computed_column_where_via_column():
+    """DSL computed column participates in column-expression where()."""
+    t = _make_invoice_table(5)
+    t.add_computed_column("total", total, inputs=["price", "qty"])
+    view = t.where(t.total > 10)
+    assert len(view) == 2
+
+
+def test_dsl_computed_column_no_storage():
+    """DSL computed column must not add physical storage."""
+    t = _make_invoice_table(3)
+    nb_before = t.nbytes
+    t.add_computed_column("total", total, inputs=["price", "qty"])
+    assert t.nbytes == nb_before
+    assert "total" not in t._cols
+
+
+def test_dsl_computed_column_persistence(tmp_path):
+    """DSL kernel source is persisted and the column is available after open."""
+    t = _make_invoice_table(5)
+    t.add_computed_column("total", total, inputs=["price", "qty"])
+    path = str(tmp_path / "tbl")
+    t.save(path)
+
+    t2 = blosc2.open(path)
+    assert "total" in t2._computed_cols
+    assert t2._computed_cols["total"]["kind"] == "dsl"
+    np.testing.assert_allclose(t2["total"][:], [1.0, 4.0, 9.0, 16.0, 25.0])
+
+
+def test_dsl_computed_column_inputs_mismatch_raises():
+    """inputs= count not matching kernel parameter count raises ValueError."""
+    t = _make_invoice_table(3)
+    with pytest.raises(ValueError, match="inputs"):
+        t.add_computed_column("total", total, inputs=["price"])  # total needs 2
+
+
+def test_dsl_computed_column_inputs_required_raises():
+    """Bare DSLKernel without inputs= raises TypeError."""
+    t = _make_invoice_table(3)
+    with pytest.raises(TypeError, match="inputs"):
+        t.add_computed_column("total", total)
+
+
+# ---------------------------------------------------------------------------
+# 27. LazyUDF directly in where()
+# ---------------------------------------------------------------------------
+
+
+def test_lazyudf_in_where_direct():
+    """LazyUDF passed directly to where() — no .compute() needed."""
+    t = _make_invoice_table(5)
+    cond = blosc2.lazyudf(is_large, (t.price, t.qty), dtype=bool)
+    view = t.where(cond)
+    assert len(view) == 2
+    np.testing.assert_allclose(view["price"][:], [4.0, 5.0])
+
+
+def test_lazyudf_in_where_column_inputs():
+    """Column accessors are accepted directly as lazyudf inputs in where()."""
+    t = _make_invoice_table(5)
+    cond = blosc2.lazyudf(is_large, (t.price, t.qty), dtype=bool)
+    view = t.where(cond)
+    assert len(view) == 2
+
+
+# ---------------------------------------------------------------------------
+# 28. lazyudf dtype inference
+# ---------------------------------------------------------------------------
+
+
+def test_lazyudf_dtype_inferred_from_inputs():
+    """dtype is inferred from NDArray input dtypes for DSL kernels."""
+    a = blosc2.arange(5, dtype=np.float64)
+    b = blosc2.arange(1, 6, dtype=np.float64)
+    result = blosc2.lazyudf(total, (a, b)).compute()
+    assert result.dtype == np.dtype(np.float64)
+    np.testing.assert_allclose(result[:5], [0.0, 2.0, 6.0, 12.0, 20.0])
+
+
+def test_lazyudf_dtype_required_for_plain_udf():
+    """Plain (non-DSL) UDF without dtype= raises TypeError."""
+    a = blosc2.arange(5, dtype=np.float64)
+    with pytest.raises(TypeError, match="dtype is required"):
+        blosc2.lazyudf(lambda ins, out, off: None, [a])
+
+
+def test_lazyudf_column_inputs_accepted():
+    """Column instances are unwrapped to their backing NDArray automatically."""
+    t = _make_invoice_table(5)
+    result = blosc2.lazyudf(total, (t.price, t.qty)).compute()
+    np.testing.assert_allclose(result[:5], [1.0, 4.0, 9.0, 16.0, 25.0])
+
+
+# ---------------------------------------------------------------------------
+# 29. DSL kernels as generated columns
+# ---------------------------------------------------------------------------
+
+
+def test_dsl_generated_column_inputs_form():
+    """DSL kernel + inputs= creates a stored generated column."""
+    t = _make_invoice_table(5)
+    t.add_generated_column("total", values=total, inputs=["price", "qty"])
+    assert "total" in t._cols
+    np.testing.assert_allclose(t["total"][:], [1.0, 4.0, 9.0, 16.0, 25.0])
+
+
+def test_dsl_generated_column_lazyudf_form():
+    """LazyUDF form creates a stored generated column without inputs=."""
+    t = _make_invoice_table(5)
+    t.add_generated_column("total", values=blosc2.lazyudf(total, (t.price, t.qty)))
+    assert "total" in t._cols
+    np.testing.assert_allclose(t["total"][:], [1.0, 4.0, 9.0, 16.0, 25.0])
+
+
+def test_dsl_generated_column_autofill_append():
+    """Appended rows are auto-filled using the persisted DSL kernel."""
+    t = _make_invoice_table(3)
+    t.add_generated_column("total", values=total, inputs=["price", "qty"])
+    t.append((4.0, 4, 0.1))
+    np.testing.assert_allclose(t["total"][:], [1.0, 4.0, 9.0, 16.0])
+
+
+def test_dsl_generated_column_persistence_and_append(tmp_path):
+    """DSL generated column survives save/open and auto-fills after reload."""
+    t = _make_invoice_table(3)
+    t.add_generated_column("total", values=total, inputs=["price", "qty"])
+    path = str(tmp_path / "tbl")
+    t.save(path)
+
+    t2 = blosc2.open(path, mode="a")
+    assert "total" in t2._materialized_cols
+    assert t2._materialized_cols["total"]["transformer_kind"] == "dsl"
+    t2.append((4.0, 4, 0.1))
+    np.testing.assert_allclose(t2["total"][:], [1.0, 4.0, 9.0, 16.0])
+
+
+def test_dsl_generated_column_refresh(tmp_path):
+    """refresh_generated_column recomputes from the DSL kernel."""
+    t = _make_invoice_table(3)
+    t.add_generated_column("total", values=total, inputs=["price", "qty"])
+    # Force-write wrong values directly
+    t._cols["total"][:3] = np.array([0.0, 0.0, 0.0])
+    t.refresh_generated_column("total")
+    np.testing.assert_allclose(t["total"][:], [1.0, 4.0, 9.0])
+
+
+# ---------------------------------------------------------------------------
+# 30. jit_backend persistence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="cc backend requires a system C compiler")
+def test_dsl_jit_backend_persisted_in_schema():
+    """jit_backend set via lazyudf() is stored in the column schema."""
+    t = _make_invoice_table(3)
+    t.add_generated_column(
+        "total",
+        values=blosc2.lazyudf(total, (t.price, t.qty), jit_backend="cc"),
+    )
+    schema = t._schema_dict_with_computed()
+    mat = {m["name"]: m for m in schema["materialized_columns"]}
+    assert mat["total"]["jit_backend"] == "cc"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="cc backend requires a system C compiler")
+def test_dsl_jit_backend_restored_after_open(tmp_path):
+    """jit_backend is restored from schema on open and used for auto-fill."""
+    t = _make_invoice_table(3)
+    t.add_generated_column(
+        "total",
+        values=blosc2.lazyudf(total, (t.price, t.qty), jit_backend="cc"),
+    )
+    path = str(tmp_path / "tbl")
+    t.save(path)
+
+    t2 = blosc2.open(path, mode="a")
+    assert t2._materialized_cols["total"].get("jit_backend") == "cc"
+    t2.append((4.0, 4, 0.1))
+    np.testing.assert_allclose(t2["total"][:], [1.0, 4.0, 9.0, 16.0])
+
+
+def test_dsl_no_jit_backend_not_in_schema():
+    """jit_backend is absent from schema when not specified (keeps files clean)."""
+    t = _make_invoice_table(3)
+    t.add_generated_column("total", values=total, inputs=["price", "qty"])
+    schema = t._schema_dict_with_computed()
+    mat = {m["name"]: m for m in schema["materialized_columns"]}
+    assert "jit_backend" not in mat["total"]

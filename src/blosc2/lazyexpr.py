@@ -12,6 +12,7 @@ import ast
 import asyncio
 import builtins
 import concurrent.futures
+import contextlib
 import copy
 import enum
 import inspect
@@ -493,10 +494,10 @@ class LazyArray(ABC, blosc2.Operand):
               default (``"tcc"``).
 
             - ``BLOSC_ME_JIT`` environment variable: when set to ``"1"``, ``"true"``,
-              ``"on"``, ``"tcc"``, or ``"cc"``, it forces ``jit=True`` for all
-              ``compute()`` and ``__getitem__`` calls where ``jit`` is not explicitly
-              passed.  Setting it to ``"tcc"`` or ``"cc"`` also selects that backend
-              unless ``jit_backend`` is given explicitly.
+              ``"on"``, ``"tcc"``, or ``"cc"``, it forces ``jit=True`` and overrides
+              both the ``jit`` and ``jit_backend`` arguments — this lets you switch
+              JIT on or change backends from the command line without touching code.
+              Setting it to ``"tcc"`` or ``"cc"`` also selects that backend.
 
             - ``BLOSC_ME_JIT_TRACE`` environment variable: when set to ``"1"``,
               ``"true"``, or ``"on"``, prints a one-line diagnostic to stdout
@@ -682,6 +683,9 @@ def convert_inputs(inputs):
         return []
     inputs_ = []
     for obj in inputs:
+        # CTable Column — unwrap to the backing NDArray so shape and identity match.
+        with contextlib.suppress(AttributeError):
+            obj = obj._raw_col
         if not isinstance(obj, np.ndarray | blosc2.Operand) and not np.isscalar(obj):
             try:
                 obj = blosc2.SimpleProxy(obj)
@@ -706,15 +710,14 @@ def compute_broadcast_shape(arrays):
 
 def _jit_from_env(jit, jit_backend):
     """Apply BLOSC_ME_JIT environment variable to jit/jit_backend defaults."""
-    if jit is not None:
-        return jit, jit_backend
     env_jit = os.environ.get("BLOSC_ME_JIT", "")
     if not env_jit:
         return jit, jit_backend
     env_jit_lower = env_jit.lower()
+    # Env var always wins over both jit= and jit_backend= for easy CLI experimentation.
     if env_jit_lower in ("1", "true", "on", "tcc", "cc"):
         jit = True
-    if jit_backend is None and env_jit_lower in ("tcc", "cc"):
+    if env_jit_lower in ("tcc", "cc"):
         jit_backend = env_jit_lower
     return jit, jit_backend
 
@@ -4755,7 +4758,7 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
 def lazyudf(
     func: Callable[[tuple, np.ndarray, tuple[int]], None],
     inputs: Sequence[Any] | None,
-    dtype: np.dtype,
+    dtype: np.dtype | None = None,
     shape: tuple | list | None = None,
     chunked_eval: bool = True,
     jit: bool | None = None,
@@ -4786,8 +4789,11 @@ def lazyudf(
         any other object is supported too, and it will be passed as-is to the
         user-defined function. If not needed, this can be empty, but `shape` must
         be provided.
-    dtype: np.dtype
-        The resulting ndarray dtype in NumPy format.
+    dtype: np.dtype, optional
+        The resulting ndarray dtype in NumPy format.  When omitted and *func*
+        is a :class:`DSLKernel`, the dtype is inferred by NumPy type promotion
+        of the input dtypes.  For type-changing kernels (comparisons, casts)
+        pass *dtype* explicitly.  Required for plain Python UDFs.
     shape: tuple, optional
         The shape of the resulting array. If None, the shape will be guessed from inputs.
     chunked_eval: bool, optional
@@ -4845,6 +4851,16 @@ def lazyudf(
     if isinstance(func, DSLKernel) and func.dsl_error is not None:
         udf_name = getattr(func.func, "__name__", func.__name__)
         raise DSLSyntaxError(f"Invalid DSL kernel '{udf_name}'.\n{func.dsl_error}") from None
+    if dtype is None:
+        if isinstance(func, DSLKernel):
+            dep_dtypes = [arr.dtype for arr in (inputs or []) if hasattr(arr, "dtype")]
+            if not dep_dtypes:
+                raise TypeError(
+                    "Cannot infer dtype for DSL kernel with no array inputs; pass dtype= explicitly."
+                )
+            dtype = np.result_type(*dep_dtypes)
+        else:
+            raise TypeError("dtype is required for non-DSL UDFs.")
     return LazyUDF(func, inputs, dtype, shape, chunked_eval, jit, jit_backend, **kwargs)
 
 

@@ -77,6 +77,8 @@ container objects in Python-Blosc2:
   `buffer protocol <https://docs.python.org/3/c-api/buffer.html>`_.
 * ``NDArray``: An N-Dimensional store that mirrors the NumPy API, enhanced with
   efficient compressed data storage.
+* ``CTable``: A columnar table for structured, record-oriented data with a
+  powerful query engine built on top of compressed ``NDArray`` columns.
 
 These containers are described in more detail below.
 
@@ -256,6 +258,96 @@ expression, where the operands are on disk, with the result being a
 parameter in ``compute()`` or ``sum()`` functions). For a more in-depth look at
 this example, with performance comparisons, see this
 `compute-bigger blog post <https://ironarray.io/blog/compute-bigger>`_.
+
+Querying Columnar Data with CTable
+===================================
+
+``CTable`` is Python-Blosc2's columnar store for structured, record-oriented
+data.  Each column is a compressed ``NDArray``, so the same chunking,
+compression, and compute-engine machinery that powers ``NDArray`` expressions
+is available for tabular queries — with no data copy required.
+
+Schemas are defined with plain Python dataclasses, supporting a rich mix of
+types including integers, floats, booleans, and strings:
+
+.. code-block:: python
+
+    from dataclasses import dataclass
+    import blosc2
+
+
+    @dataclass
+    class Row:
+        passenger_count: int = blosc2.field(blosc2.int32())
+        shared: bool = blosc2.field(blosc2.bool())
+        tips: float = blosc2.field(blosc2.float32())
+        km: float = blosc2.field(blosc2.float32())
+        lon: float = blosc2.field(blosc2.float32())
+        company: str = blosc2.field(blosc2.string(max_length=50))
+
+
+    t = blosc2.CTable(Row, expected_size=10_000_000)
+
+Columns support the full lazy-expression syntax, so compound boolean filters
+are written naturally and evaluated in a single pass over the compressed data:
+
+.. code-block:: python
+
+    condition = (t.tips > 100) & (t.km > 0) & (t.lon < -10)
+    result = t.where(condition).sort_by("km")
+
+Beyond filtering and sorting, ``CTable`` offers:
+
+* **Aggregations and group-by** — ``groupby()``, ``sum()``, ``mean()``,
+  ``min()``, ``max()``, ``std()`` and more, optionally with a ``where=``
+  mask for conditional aggregation.
+* **Computed and generated columns** — columns whose values are derived from
+  other columns via a lazy expression, evaluated on the fly without storing
+  extra data.
+* **Automatic SUMMARY indexes** — per-block min/max indexes built
+  transparently at write time, enabling ``where()`` to skip entire blocks
+  that cannot contain matching rows, dramatically reducing I/O for
+  high-selectivity queries.
+* **Schema validation** — type and constraint checking (``ge=``, ``le=``,
+  nullable, etc.) enforced at insert time, keeping data quality guarantees
+  inside the table itself.
+* **Null handling** — first-class nullable columns with ``notnull()``,
+  ``null_count``, and null-aware aggregations.
+* **Nested field paths** — hierarchically structured schemas expose columns
+  as ``t.payment.tips``, ``t.trip.begin.lon``, etc., keeping query code
+  readable even for wide, deeply nested records.
+* **Parquet and Arrow round-trips** — load from and save to Parquet or Apache
+  Arrow with a single call, making it easy to interoperate with the broader
+  data ecosystem.
+* **Persistent storage** — open and save tables to disk (``CTable.open()``,
+  ``CTable.save()``); in-memory and on-disk tables share the same API.
+
+.. code-block:: python
+
+    # Load from Parquet, filter, and persist the result
+    t = blosc2.CTable.from_parquet("trips.parquet")
+    result = t.where((t.tips > 100) & (t.km > 0)).sort_by("km")
+    result.save("filtered_trips.b2z")
+
+.. tip::
+
+   **Free ~30% speedup for large tables:** set the ``BLOSC_ME_JIT=cc``
+   environment variable to have filter expressions JIT-compiled by the system C
+   compiler (clang/gcc) with ``-O3`` and auto-vectorisation, instead of the
+   default bytecode interpreter.  The compiled kernel is cached on disk so
+   subsequent runs pay no compilation cost.
+
+   .. code-block:: bash
+
+      BLOSC_ME_JIT=cc python my_script.py
+
+   Benchmarks on tables from 50 M to 500 M rows show a consistent ~30%
+   speedup across Intel, AMD, and Apple Silicon hardware.  The one-time
+   compilation cost on Linux (gcc, ~30 ms) is negligible; on macOS (clang,
+   ~400 ms) it is only worth paying for large tables or repeated queries.
+   For small tables (< ~50 M rows) the default bytecode interpreter is
+   perfectly adequate.  See the :py:meth:`blosc2.LazyArray.compute` docstring
+   for the full list of ``BLOSC_ME_JIT`` values and options.
 
 Hopefully, this overview has provided a good understanding of Python-Blosc2's
 capabilities. To begin your journey with Python-Blosc2, proceed to the
