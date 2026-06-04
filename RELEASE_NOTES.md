@@ -2,7 +2,89 @@
 
 ## Changes from 4.4.1 to 4.4.2
 
-XXX version-specific blurb XXX
+This is a feature and maintenance release that promotes DSL kernels to
+first-class CTable computed columns, adds a new `CTable.__setitem__`
+assignment idiom, optimises bulk NDArray writes, and fixes several
+correctness issues.
+
+### DSL kernels as first-class CTable columns
+
+- **`add_computed_column()` accepts DSL kernels**: `@blosc2.dsl_kernel`-decorated
+  functions can now back virtual computed columns directly, in addition to
+  the existing string-expression form.  The column survives save/open
+  round-trips via persisted `dsl_source`.
+- **`add_generated_column()` accepts DSL kernels**: stored generated columns
+  (written during `append`/`extend` and on `refresh_generated_column()`)
+  now support DSL kernels as their transformer.
+- **`CTable.where()` accepts UDF/DSL kernels**: filter predicates are no
+  longer limited to expression strings — any DSL kernel can be passed directly.
+- **`dtype` inference for DSL kernels**: when `dtype` is omitted,
+  `lazyudf()` infers the output dtype via NumPy type promotion of the input
+  column dtypes.  Pass `dtype` explicitly for type-changing kernels
+  (comparisons, casts).
+- **`kernel_from_source()` utility**: new `dsl_kernel.kernel_from_source()`
+  reconstructs a `DSLKernel` from its stored source text, shared by the
+  CTable DSL-column loaders and the persisted `LazyUDF` decoder.
+- **Security note**: `.b2d` files from untrusted sources that contain DSL
+  computed columns execute stored Python source on open.  A warning is now
+  included in the documentation.
+
+### New `CTable.__setitem__` column-assignment API
+
+- **`t["col"] = arr`**: new shorthand equivalent to `t["col"][:] = arr`.
+  Accepts any array-like including `blosc2.NDArray`.  Raises `KeyError` for
+  unknown columns and `ValueError` for views or read-only tables.
+
+### Chunked NDArray writes in `extend()` and `Column.__setitem__`
+
+- **`extend({"col": ndarray})` decompresses chunk-by-chunk**: when a
+  `blosc2.NDArray` is passed as a column value to `extend()`, it is now
+  written in chunks instead of being fully decompressed upfront.  Pass
+  `validate=False` to avoid a transient full decompression during constraint
+  checking.
+- **`col[:] = blosc2_ndarray` fast path**: a new no-holes fast path in
+  `Column.__setitem__` skips the O(n) validity-mask gather and writes the
+  NDArray one chunk at a time using contiguous slice writes.  Works for both
+  scalar and fixed-shape ndarray columns.  Falls back to a chunked fancy-index
+  path when deleted rows are present.
+
+### `BLOSC_ME_JIT` environment variable override
+
+- **Full CLI override**: `BLOSC_ME_JIT` now takes unconditional priority over
+  both the `jit=` and `jit_backend=` keyword arguments, making it easy to
+  switch JIT backends from the command line without modifying code.
+
+### Correctness fixes
+
+- **View corruption in `Column.__setitem__`**: a `None == None` guard
+  evaluation on view-backed columns could fire the NDArray fast path,
+  bypassing physical-position remapping and silently corrupting rows.  Fixed
+  by explicitly checking `base is None` before activating the fast path.
+- **`CTable.__setitem__` view guard**: the new `t["col"] = arr` API now
+  raises `ValueError` on views, matching the contract of all other mutating
+  CTable methods.
+- **Fast path enabled for disk-opened tables**: the fast path previously
+  remained dormant for tables opened from disk because `_last_pos` starts as
+  `None`.  The guard now calls `_resolve_last_pos()` to lazily initialise it.
+- **DSL column `jit_backend` preserved in `_empty_copy`**: the `jit_backend`
+  setting was silently dropped during internal table copies; it is now
+  retained.
+- **`lazyexpr` Column unwrapping**: `convert_inputs()` now automatically
+  unwraps `CTable.Column` objects to their backing NDArray so that shape and
+  identity checks work correctly.
+
+### Documentation and examples
+
+- **Parquet-to-blosc2 walkthrough**: new step-by-step tutorial added to the
+  getting-started section. Thanks to @SyedIshmumAhnaf.
+- **CTable performance tips**: new section in the overview covering when to
+  prefer computed vs. generated columns, chunk sizing, and query optimisation.
+- **Simplified docstring examples**: examples throughout `ndarray.py` and
+  `ctable.py` now use `blosc2.array()`, `blosc2.arange()`, and
+  `blosc2.linspace()` directly instead of two-step numpy-then-`asarray`
+  patterns.
+- **`udf-computed-col.py` example**: new end-to-end example demonstrating DSL
+  kernel computed and generated columns.
 
 ## Changes from 4.3.3 to 4.4.1
 
