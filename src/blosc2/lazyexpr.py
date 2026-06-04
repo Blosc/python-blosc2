@@ -12,6 +12,7 @@ import ast
 import asyncio
 import builtins
 import concurrent.futures
+import contextlib
 import copy
 import enum
 import inspect
@@ -683,7 +684,7 @@ def convert_inputs(inputs):
     inputs_ = []
     for obj in inputs:
         # CTable Column — unwrap to the backing NDArray so shape and identity match.
-        if hasattr(obj, "_raw_col"):
+        with contextlib.suppress(AttributeError):
             obj = obj._raw_col
         if not isinstance(obj, np.ndarray | blosc2.Operand) and not np.isscalar(obj):
             try:

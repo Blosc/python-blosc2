@@ -1914,7 +1914,7 @@ class Column:
             return None
         if isinstance(where, str):
             self._table._guard_varlen_scalar_expression(where)
-            operands = self._table._where_expression_operands()
+            operands = self._table._where_expression_operands(where)
             where, operands = self._table._rewrite_nested_expression(where, operands)
             where = blosc2.lazyexpr(where, operands)
         if isinstance(where, np.ndarray) and where.dtype == np.bool_:
@@ -8383,7 +8383,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             lazy = expr(self._cols)
         elif isinstance(expr, str):
             self._guard_scalar_expression(expr)
-            operands = self._where_expression_operands()
+            operands = self._where_expression_operands(expr)
             expr, operands = self._rewrite_nested_expression(expr, operands)
             lazy = blosc2.lazyexpr(expr, operands)
         else:
@@ -10015,13 +10015,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if cc.get("kind") == "dsl":
                 # DSL entries hold the live kernel; the LazyUDF is rebuilt on
                 # demand from obj._cols, so no operand rebinding is needed here.
-                obj._computed_cols[cc_name] = {
+                dsl_entry: dict[str, Any] = {
                     "kind": "dsl",
                     "dsl_source": cc["dsl_source"],
                     "kernel": cc["kernel"],
                     "col_deps": cc["col_deps"],
                     "dtype": cc["dtype"],
+                    **({"jit_backend": cc["jit_backend"]} if "jit_backend" in cc else {}),
                 }
+                obj._computed_cols[cc_name] = dsl_entry
             else:
                 operands = {f"o{i}": new_cols[dep] for i, dep in enumerate(cc["col_deps"])}
                 new_lazy = blosc2.lazyexpr(cc["expression"], operands)
@@ -10555,7 +10557,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     # Filtering
     # ------------------------------------------------------------------
 
-    def _where_expression_operands(self) -> dict[str, blosc2.NDArray | blosc2.LazyExpr]:
+    def _where_expression_operands(
+        self, expr: str | None = None
+    ) -> dict[str, blosc2.NDArray | blosc2.LazyExpr]:
         operands = {}
         for name, arr in self._cols.items():
             col = self._schema.columns_by_name.get(name)
@@ -10566,7 +10570,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 or self._is_ndarray_column(col)
             ):
                 operands[name] = arr
-        operands.update({name: self._build_computed_lazy(cc) for name, cc in self._computed_cols.items()})
+        for name, cc in self._computed_cols.items():
+            if expr is None or self._expression_references_name(expr, name):
+                operands[name] = self._build_computed_lazy(cc)
         return operands
 
     def _rewrite_nested_expression(
@@ -10714,7 +10720,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if isinstance(expr_result, str):
             self._guard_varlen_scalar_expression(expr_result)
-            operands = self._where_expression_operands()
+            operands = self._where_expression_operands(expr_result)
             expr_result, operands = self._rewrite_nested_expression(expr_result, operands)
             expr_result = blosc2.lazyexpr(expr_result, operands)
         if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:

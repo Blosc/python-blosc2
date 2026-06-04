@@ -340,6 +340,14 @@ functions, and :class:`blosc2.LazyUDF` objects.  DSL kernels support full Python
 control flow (``if``/``else``, ``where()``, loops) and have their source
 persisted and recompiled on open.
 
+.. warning::
+
+    Because DSL kernel source is persisted in the table metadata and re-executed
+    during :func:`blosc2.open`, **do not open** ``.b2d`` files from untrusted
+    sources if they may contain DSL computed or generated columns.  The kernel
+    source runs with restricted builtins (no ``__import__``), but arbitrary
+    Python code execution still carries risk.
+
 When passing a :class:`blosc2.LazyUDF` built with an explicit ``jit_backend=``
 (e.g. ``jit_backend="cc"`` to use the system C compiler instead of the default
 TCC), that choice is persisted in the column metadata and automatically restored

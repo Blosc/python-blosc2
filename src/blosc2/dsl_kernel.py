@@ -643,15 +643,34 @@ def kernel_from_source(source: str, name: str | None = None) -> DSLKernel:
 
     import blosc2
 
+    tree = ast.parse(source)
+    func_defs = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
     if name is None:
-        tree = ast.parse(source)
-        func_defs = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
         if len(func_defs) != 1:
             raise ValueError(
                 "kernel_from_source requires an explicit 'name' when 'source' does not "
                 "contain exactly one top-level function definition"
             )
         name = func_defs[0].name
+
+    # Security: reject sources that include top-level statements with
+    # side effects (assignments, calls, loops, etc.) beyond the function
+    # definition itself.  Imports and docstrings are permitted.
+    allowed_nodes = (ast.FunctionDef, ast.Import, ast.ImportFrom)
+    for node in tree.body:
+        if isinstance(node, allowed_nodes):
+            continue
+        # A bare string literal at module level is a docstring — safe.
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            continue
+        raise ValueError(
+            f"kernel_from_source source must contain only a function definition "
+            f"(optionally preceded by imports), but found: {ast.dump(node)[:120]}"
+        )
 
     local_ns: dict = {}
     filename = f"<{name}>"
@@ -662,7 +681,10 @@ def kernel_from_source(source: str, name: str | None = None) -> DSLKernel:
     }
     linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
     exec(compile(source, filename, "exec"), safe_globals, local_ns)
-    func = local_ns[name]
+    try:
+        func = local_ns[name]
+    except KeyError:
+        raise ValueError(f"kernel_from_source: source did not define function {name!r}") from None
     if not isinstance(func, DSLKernel):
         func = DSLKernel(func)
     return func
