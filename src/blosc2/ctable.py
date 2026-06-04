@@ -8566,6 +8566,25 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 "jit_backend": obj.kwargs.get("jit_backend"),
             }
         lazy, col_deps = self._normalize_expression_transformer(obj)
+        # Guard: verify the expression string round-trips before storing.
+        # An empty string means the LazyExpr was not fully constructed, and a
+        # malformed string would silently break on reload.  Catching both here
+        # gives an early, actionable error instead of a confusing failure later.
+        expression = lazy.expression
+        if not expression:
+            raise ValueError(
+                "The computed-column expression serializes to an empty string "
+                "and cannot be persisted. Make sure the lambda returns a "
+                "blosc2 expression built from table columns (e.g. cols['x'] * 2)."
+            )
+        try:
+            _ops = {f"o{i}": self._cols[dep] for i, dep in enumerate(col_deps)}
+            blosc2.lazyexpr(expression, _ops)
+        except Exception as exc:
+            raise ValueError(
+                f"The computed-column expression {expression!r} cannot be safely "
+                f"persisted and reloaded: {exc}"
+            ) from exc
         return {"kind": "expression", "lazy": lazy, "col_deps": col_deps}
 
     def _dsl_result_dtype(self, kernel, col_deps, dtype):

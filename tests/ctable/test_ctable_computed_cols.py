@@ -1047,3 +1047,37 @@ def test_dsl_no_jit_backend_not_in_schema():
     schema = t._schema_dict_with_computed()
     mat = {m["name"]: m for m in schema["materialized_columns"]}
     assert "jit_backend" not in mat["total"]
+
+
+def test_add_computed_column_empty_expression_raises(monkeypatch):
+    """add_computed_column raises ValueError when the LazyExpr serializes to empty string."""
+    t = _make_invoice_table()
+
+    original_normalize = t._normalize_expression_transformer.__func__
+
+    def patched(self, expr):
+        lazy, col_deps = original_normalize(self, expr)
+        monkeypatch.setattr(lazy, "expression", "")
+        return lazy, col_deps
+
+    monkeypatch.setattr(type(t), "_normalize_expression_transformer", patched)
+
+    with pytest.raises(ValueError, match="empty string"):
+        t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
+
+
+def test_add_computed_column_malformed_expression_raises(monkeypatch):
+    """add_computed_column raises ValueError when the expression string cannot be re-parsed."""
+    t = _make_invoice_table()
+
+    original_normalize = t._normalize_expression_transformer.__func__
+
+    def patched(self, expr):
+        lazy, col_deps = original_normalize(self, expr)
+        monkeypatch.setattr(lazy, "expression", "this is not valid @@@ numexpr")
+        return lazy, col_deps
+
+    monkeypatch.setattr(type(t), "_normalize_expression_transformer", patched)
+
+    with pytest.raises(ValueError, match="cannot be safely persisted"):
+        t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
