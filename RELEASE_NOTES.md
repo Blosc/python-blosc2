@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.4.2 to 4.4.3
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.4.1 to 4.4.2
 
 This is a feature and maintenance release that promotes DSL kernels to
