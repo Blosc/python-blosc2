@@ -961,6 +961,34 @@ def test_ctable_setitem_unknown_column_raises():
         t["nonexistent"] = np.zeros(20)
 
 
+def test_ctable_setitem_view_raises():
+    """t['col'] = arr on a view raises ValueError instead of silently mutating the parent."""
+    t = CTable(Row, new_data=DATA20)
+    view = t.where("id >= 0")
+    with pytest.raises(ValueError, match="view"):
+        view["score"] = np.zeros(len(view))
+
+
+def test_column_setitem_ndarray_fast_path_on_disk_table(tmp_path):
+    """Fast path fires for a disk-opened table (not just freshly-built in-memory tables)."""
+    n = 60
+    urlpath = str(tmp_path / "tbl.b2")
+
+    @dataclass
+    class R:
+        id: int = blosc2.field(blosc2.int64(ge=0))
+        val: float = blosc2.field(blosc2.float64(), default=0.0)
+
+    t = CTable(R, new_data=[(i, 0.0) for i in range(n)], urlpath=urlpath, mode="w")
+    t.close()
+
+    t2 = CTable(R, urlpath=urlpath, mode="a")
+    arr = blosc2.asarray(np.arange(n, dtype=np.float64), chunks=(16,))
+    t2["val"][:] = arr
+    np.testing.assert_array_equal(t2["val"][:], np.arange(n, dtype=np.float64))
+    t2.close()
+
+
 def test_column_setitem_blosc2_ndarray_no_holes():
     """col[:] = blosc2.NDArray takes the no-holes fast path and round-trips correctly."""
     n = 200

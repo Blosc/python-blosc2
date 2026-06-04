@@ -1050,14 +1050,20 @@ class Column:
             # Fast path: slice of a blosc2.NDArray into a scalar or ndarray column when
             # there are no deleted rows (physical positions == logical positions).
             # Skips the O(n) validity-mask gather and decompresses one chunk at a time.
+            # Guards: must not be a view (views have _last_pos=_n_rows=None, so
+            # None==None would be True and bypass the physical-position remapping);
+            # _resolve_last_pos() handles disk-opened tables where _last_pos starts None.
+            _tbl = self._table
             if (
                 isinstance(key, slice)
                 and isinstance(value, blosc2.NDArray)
                 and not self.is_list
                 and not self.is_varlen_scalar
-                and self._table._last_pos == self._table._n_rows
+                and _tbl.base is None
+                and _tbl._resolve_last_pos() == _tbl._n_rows
             ):
-                start, stop, step = key.indices(len(self))
+                n_live = _tbl._n_rows
+                start, stop, step = key.indices(n_live)
                 chunk_size = value.chunks[0] if value.chunks else 65536
                 if self.is_ndarray:
                     spec = self._table._schema.columns_by_name[self._col_name].spec
@@ -9396,6 +9402,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise TypeError(
                 f"CTable.__setitem__ only accepts a column name string, got {type(key).__name__!r}"
             )
+        if self.base is not None:
+            raise ValueError("Table is a view and cannot be modified.")
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
         physical = self._logical_to_physical_name(key)
         if physical not in self._cols:
             raise KeyError(f"Column {key!r} does not exist; use add_column() to add new columns")
@@ -10631,6 +10641,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     raw = raw_columns[name]
                     if isinstance(raw, blosc2.NDArray):
                         # Keep as-is; written chunk-by-chunk in the write loop below.
+                        # Note: if do_validate=True, validate_column_batch() above will
+                        # have already decompressed this column transiently for constraint
+                        # checking.  Pass validate=False to avoid that peak-memory spike.
                         scalar_processed_cols[name] = raw
                     else:
                         scalar_processed_cols[name] = np.ascontiguousarray(raw, dtype=target_dtype)
