@@ -9343,6 +9343,64 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise TypeError("Tuple indexing is not supported for CTable in V1")
         return self._getitem_row_selector(key)
 
+    def __setitem__(self, key: str, value) -> None:
+        """Overwrite all live rows of a stored column.
+
+        ``t["col"] = arr`` is equivalent to ``t["col"][:] = arr``.  *value*
+        may be any array-like accepted by :meth:`Column.__setitem__`, including
+        a :class:`blosc2.NDArray` (written chunk-by-chunk without full
+        decompression when there are no deleted rows).
+
+        Raises ``KeyError`` if *key* is not a stored column name, and
+        ``ValueError`` if the table is read-only or a view.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> from dataclasses import dataclass
+        >>> import numpy as np
+        >>> @dataclass
+        ... class Row:
+        ...     price: float = blosc2.field(blosc2.float64())
+        ...     embedding: object = blosc2.field(blosc2.ndarray((4,), dtype=blosc2.float32()))
+        >>> t = blosc2.CTable(Row, new_data=[
+        ...     (0.0, np.zeros(4, dtype=np.float32)),
+        ...     (0.0, np.zeros(4, dtype=np.float32)),
+        ...     (0.0, np.zeros(4, dtype=np.float32)),
+        ... ])
+
+        Overwrite a scalar column from a NumPy array:
+
+        >>> t["price"] = np.array([1.1, 2.2, 3.3])
+        >>> t["price"][:]
+        array([1.1, 2.2, 3.3])
+
+        Overwrite from a compressed :class:`blosc2.NDArray` without loading the
+        full array into memory:
+
+        >>> prices = blosc2.array([1.1, 2.2, 3.3])
+        >>> t["price"] = prices
+        >>> t["price"][:]
+        array([1.1, 2.2, 3.3])
+
+        Overwrite a fixed-shape ndarray column (e.g. embeddings):
+
+        >>> data = blosc2.arange(12, dtype=np.float32, shape=(3, 4))
+        >>> t["embedding"] = data
+        >>> t["embedding"][:]
+        array([[ 0.,  1.,  2.,  3.],
+               [ 4.,  5.,  6.,  7.],
+               [ 8.,  9., 10., 11.]], dtype=float32)
+        """
+        if not isinstance(key, str):
+            raise TypeError(
+                f"CTable.__setitem__ only accepts a column name string, got {type(key).__name__!r}"
+            )
+        physical = self._logical_to_physical_name(key)
+        if physical not in self._cols:
+            raise KeyError(f"Column {key!r} does not exist; use add_column() to add new columns")
+        Column(self, physical)[:] = value
+
     def _nested_namespace(self, prefix: str):
         prefix_parts = split_field_path(prefix)
         for name in self.col_names:

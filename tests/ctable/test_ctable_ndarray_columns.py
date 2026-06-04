@@ -246,7 +246,7 @@ def test_ndarray_column_setitem_blosc2_ndarray_no_holes():
     data = np.arange(n * 4, dtype=np.float32).reshape(n, 4)
     arr = blosc2.asarray(data, chunks=(8, 4))
 
-    t["emb"][:] = arr
+    t["emb"] = arr
 
     result = np.stack(t["emb"][:])
     np.testing.assert_array_equal(result, data)

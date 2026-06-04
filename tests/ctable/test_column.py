@@ -947,6 +947,20 @@ def test_slice_returns_numpy_not_column():
     assert isinstance(t.id.view[:], blosc2.Column)
 
 
+def test_ctable_setitem_column_assignment():
+    """t['col'] = arr is equivalent to t['col'][:] = arr."""
+    t = CTable(Row, new_data=DATA20)
+    new_scores = np.arange(20, dtype=np.float64)
+    t["score"] = new_scores
+    np.testing.assert_array_equal(t["score"][:], new_scores)
+
+
+def test_ctable_setitem_unknown_column_raises():
+    t = CTable(Row, new_data=DATA20)
+    with pytest.raises(KeyError, match="does not exist"):
+        t["nonexistent"] = np.zeros(20)
+
+
 def test_column_setitem_blosc2_ndarray_no_holes():
     """col[:] = blosc2.NDArray takes the no-holes fast path and round-trips correctly."""
     n = 200
