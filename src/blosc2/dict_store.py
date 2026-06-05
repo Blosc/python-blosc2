@@ -164,11 +164,17 @@ class DictStore:
             # Default extensionless new stores to directory-backed layout.
             self.is_zip_store = False
         if self.is_zip_store:
-            if tmpdir is None:
+            if self.mode == "r":
+                # Read mode only needs working_dir as a path namespace for relative↔absolute
+                # key arithmetic.  No files are ever written, so no real directory is needed.
+                self._temp_dir_obj = None
+                self.working_dir = os.path.splitext(os.path.abspath(self.localpath))[0]
+            elif tmpdir is None:
                 b2z_parent = os.path.dirname(os.path.abspath(self.localpath))
                 self._temp_dir_obj = tempfile.TemporaryDirectory(dir=b2z_parent)
                 self.working_dir = self._temp_dir_obj.name
             else:
+                self._temp_dir_obj = None
                 self.working_dir = tmpdir
                 os.makedirs(tmpdir, exist_ok=True)
             self.b2z_path = self.localpath
