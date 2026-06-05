@@ -264,10 +264,13 @@ class CTableGroupBy:
             fast = self._try_execute_cython_float_integral_key_f64_sum(specs)
             if fast is not None:
                 return fast
-            fast = self._try_execute_cython_float_hash(specs)
+            # Dense single-key path also covers integral-valued float keys with a
+            # compact non-negative range (e.g. float32 second/id columns), so try
+            # it before the generic float hash path, which is markedly slower.
+            fast = self._try_execute_dense_single_int_key(specs)
             if fast is not None:
                 return fast
-            fast = self._try_execute_dense_single_int_key(specs)
+            fast = self._try_execute_cython_float_hash(specs)
             if fast is not None:
                 return fast
 
@@ -1033,8 +1036,12 @@ class CTableGroupBy:
         key_info = self.table._schema.columns_by_name[key_name]
         key_is_dict = self.table._is_dictionary_column(key_info)
         key_dtype = np.dtype(np.int32) if key_is_dict else getattr(key_info.spec, "dtype", None)
-        if key_dtype is None or key_dtype.kind not in "biu":
+        if key_dtype is None or key_dtype.kind not in "biuf":
             return None
+        # Float keys are accepted only when their values are integral and fit a
+        # compact non-negative range; per-chunk casting verifies integrality and
+        # bails (falling back to the hash path) on the first fractional value.
+        key_is_integral_float = (not key_is_dict) and key_dtype.kind == "f"
         if any(spec.op in {"min", "max"} and spec.input_col is not None for spec in specs):
             for spec in specs:
                 if spec.op in {"min", "max"} and spec.input_col is not None:
@@ -1107,6 +1114,16 @@ class CTableGroupBy:
             keys = np.asarray(raw_keys[live_mask])
             if keys.dtype.kind == "b":
                 keys = keys.astype(np.int8, copy=False)
+            elif key_is_integral_float:
+                # Non-finite keys (NaN/inf, e.g. a retained NaN group when
+                # dropna=False) and fractional keys both make the dense integer
+                # mapping invalid; defer to the generic/hash fallback.
+                if not np.all(np.isfinite(keys)):
+                    return None
+                keys_int = keys.astype(np.int64)
+                if not np.array_equal(keys_int, keys):
+                    return None
+                keys = keys_int
             if len(keys) == 0:
                 continue
             min_key = int(np.min(keys))
@@ -1159,7 +1176,12 @@ class CTableGroupBy:
         group_codes = np.nonzero(present)[0]
         rows = []
         for code in group_codes:
-            key_value = self.table._cols[key_name].decode(int(code)) if key_is_dict else _python_scalar(code)
+            if key_is_dict:
+                key_value = self.table._cols[key_name].decode(int(code))
+            elif key_is_integral_float:
+                key_value = float(code)
+            else:
+                key_value = _python_scalar(code)
             row = {key_name: key_value}
             for spec in specs:
                 state = states[spec.output_col]

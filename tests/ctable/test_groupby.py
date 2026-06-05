@@ -265,6 +265,31 @@ def test_groupby_float_integral_fast_path_falls_back_for_nan_group_when_kept():
     assert got[1][1] == 2.0
 
 
+@pytest.mark.parametrize("row_type", [Float64KeyRow, Float32KeyRow])
+def test_groupby_integral_float_key_dense_min_max(row_type):
+    # Non-negative integral float keys take the dense single-key path (the same
+    # one used for integer keys), which also covers min/max -- not just sum.
+    t = CTable(row_type, new_data=[(2.0, 5.0), (1.0, 9.0), (2.0, 3.0), (1.0, 4.0)])
+
+    out_max = t.group_by("key", sort=True).max("value")
+    out_min = t.group_by("key", sort=True).min("value")
+
+    assert rows(out_max) == [(1.0, 9.0), (2.0, 5.0)]
+    assert rows(out_min) == [(1.0, 4.0), (2.0, 3.0)]
+    # The key column keeps its original float dtype in the result.
+    assert out_max._cols["key"][:].dtype == t._cols["key"][:].dtype
+
+
+def test_groupby_integral_float_key_falls_back_for_negative_keys():
+    # Negative keys cannot use the dense (non-negative) mapping; the generic
+    # path must still produce correct max results.
+    t = CTable(Float64KeyRow, new_data=[(-1.0, 5.0), (-1.0, 8.0), (2.0, 3.0)])
+
+    out = t.group_by("key", sort=True).max("value")
+
+    assert rows(out) == [(-1.0, 8.0), (2.0, 3.0)]
+
+
 def test_group_reduce_object_keys_sort_with_none():
     groups, sizes = blosc2.group_reduce(
         np.array([None, "b", "a", "b"], dtype=object), sort=True, dropna=False
