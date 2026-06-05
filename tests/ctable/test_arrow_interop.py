@@ -189,6 +189,46 @@ def test_from_arrow_column_cparams(tmp_path):
     assert reopened._cols["x"].cparams.filters[:2] == [blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE]
 
 
+def test_from_arrow_column_cparams_nested_struct(tmp_path):
+    # Regression: column_cparams with TRUNC_PREC must be applied to leaf columns
+    # produced by struct flattening, not silently dropped.
+    struct_type = pa.struct(
+        [
+            pa.field("lon", pa.float64()),
+            pa.field("lat", pa.float64()),
+        ]
+    )
+    at = pa.table(
+        {
+            "pos": pa.array(
+                [{"lon": -87.6, "lat": 41.8}, {"lon": -87.7, "lat": 41.9}],
+                type=struct_type,
+            ),
+            "fare": pa.array([10.0, 20.0], type=pa.float32()),
+        }
+    )
+    trunc_cparams = {
+        "codec": blosc2.Codec.ZSTD.value,
+        "clevel": 5,
+        "typesize": 8,
+        "filters": [blosc2.Filter.TRUNC_PREC.value, blosc2.Filter.SHUFFLE.value],
+        "filters_meta": [22, 0],
+    }
+    t = CTable.from_arrow(
+        at.schema,
+        at.to_batches(),
+        urlpath=str(tmp_path / "trunc_nested.b2d"),
+        column_cparams={"pos.lon": trunc_cparams, "pos.lat": trunc_cparams},
+    )
+    assert t.col_names == ["pos.lon", "pos.lat", "fare"]
+    assert t._cols["pos.lon"].cparams.filters[:2] == [blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE]
+    assert t._cols["pos.lon"].cparams.filters_meta[:2] == [22, 0]
+    assert t._cols["pos.lat"].cparams.filters[:2] == [blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE]
+    # fare is float32, no TRUNC_PREC requested
+    assert blosc2.Filter.TRUNC_PREC not in t._cols["fare"].cparams.filters
+    t.close()
+
+
 def test_from_arrow_string_values():
     # Without string_max_length, scalar strings become vlstring columns.
     # Accessing [:] on a vlstring column returns a Python list, not an ndarray.

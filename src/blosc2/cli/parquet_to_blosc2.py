@@ -1101,6 +1101,8 @@ def import_unnamed_root_separate_cols(  # noqa: C901
     """
 
     inner_schema = blosc2.CTable._inner_schema_for_unnamed_root(pa, parquet_schema)
+    flat_inner_schema = blosc2.CTable._flatten_arrow_struct_schema(pa, inner_schema)
+    float_trunc_column_cparams = build_float_trunc_column_cparams(pa, flat_inner_schema, args)
     total_parquet_rows = pf.metadata.num_rows if pf.metadata is not None else None
 
     # ------------------------------------------------------------------
@@ -1187,6 +1189,13 @@ def import_unnamed_root_separate_cols(  # noqa: C901
         print(f"Chunks:                {args.chunks:,}")
     if args.blocks is not None:
         print(f"Blocks:                {args.blocks:,}")
+    trunc_global = getattr(args, "float_trunc_prec_global", None)
+    trunc_columns = getattr(args, "float_trunc_prec_columns", {})
+    if trunc_global is not None:
+        print(f"Float trunc precision: {trunc_global} bits (all float columns)")
+    if trunc_columns:
+        formatted = ", ".join(f"{name}={bits}" for name, bits in sorted(trunc_columns.items()))
+        print(f"Float trunc columns:   {formatted}")
     print()
 
     cparams = blosc2.CParams(codec=blosc2.Codec[args.codec], clevel=args.clevel, use_dict=args.use_dict)
@@ -1204,6 +1213,7 @@ def import_unnamed_root_separate_cols(  # noqa: C901
         blosc2_batch_size=args.blosc2_batch_size,
         blosc2_items_per_block=args.blosc2_items_per_block,
         list_serializer=args.list_serializer,
+        column_cparams=float_trunc_column_cparams or None,
         create_summary_index=args.create_summary_index,
         chunks=args.chunks,
         blocks=args.blocks,
