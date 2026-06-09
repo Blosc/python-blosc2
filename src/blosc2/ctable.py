@@ -2729,18 +2729,34 @@ class _LazyColumnDict(dict):
     the column payloads.
     """
 
-    def __init__(self, table: CTable, storage: TableStorage, col_names: list[str]):
+    def __init__(
+        self,
+        table: CTable,
+        storage: TableStorage,
+        col_names: list[str],
+        *,
+        source_cols: dict | None = None,
+    ):
         super().__init__()
         self._table = table
         self._storage = storage
         self._col_names = list(col_names)
         self._available = set(col_names)
+        # When set, columns are projected lazily from another table's ``_cols``
+        # mapping (e.g. a ``select()`` view) instead of opened from storage.
+        # The source mapping itself opens on demand, so the same NDArray object
+        # is shared (no copy) — identical to eager projection, just deferred.
+        self._source_cols = source_cols
 
     def _load(self, name: str):
         if name not in self._available:
             raise KeyError(name)
         if not dict.__contains__(self, name):
-            dict.__setitem__(self, name, self._table._open_column_from_storage(self._storage, name))
+            if self._source_cols is not None:
+                value = self._source_cols[name]
+            else:
+                value = self._table._open_column_from_storage(self._storage, name)
+            dict.__setitem__(self, name, value)
         return dict.__getitem__(self, name)
 
     def _load_all(self) -> None:
@@ -5177,8 +5193,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._summary_indexes_built = True  # views never build indexes
         obj.base = self
 
-        # Stored columns — same NDArray objects, no copy
-        obj._cols = {name: self._cols[name] for name in cols if name in self._cols}
+        # Stored columns — same NDArray objects, no copy.  Project lazily so a
+        # column is only opened when the view actually reads it: selecting then
+        # touching a subset (or aggregating one column) no longer opens every
+        # projected column up front.
+        stored_names = [name for name in cols if name in self._cols]
+        obj._cols = _LazyColumnDict(obj, self._storage, stored_names, source_cols=self._cols)
         obj.col_names = list(cols)
         obj._materialized_cols = {
             name: dict(self._materialized_cols[name]) for name in cols if name in self._materialized_cols
