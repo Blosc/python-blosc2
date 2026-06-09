@@ -3935,6 +3935,28 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             + self._format_display_row(values, widths, col_names, float_precisions)
         )
 
+    def _prewarm_display_cache(self, display_cols: list[str], head_pos, tail_pos) -> None:
+        """Pre-populate the render cache with one combined head+tail gather/col.
+
+        Each storage column is then sparse-read a single time (for head ∪ tail)
+        instead of once per slice; the values are split back so the
+        ``(col, id(head_pos))`` and ``(col, id(tail_pos))`` lookups made by
+        precision detection, width sizing and row rendering all hit the cache.
+        Only pays off when both slices are non-empty.
+        """
+        cache = getattr(self, "_display_fetch_cache", None)
+        if cache is None or len(head_pos) == 0 or len(tail_pos) == 0:
+            return
+        real_cols = [n for n in display_cols if n != "..." and (n in self._cols or n in self._computed_cols)]
+        if not real_cols:
+            return
+        nh = len(head_pos)
+        combined = np.concatenate([head_pos, tail_pos])
+        for name in real_cols:
+            vals = self._fetch_col_at_positions_uncached(name, combined)
+            cache[(name, id(head_pos))] = vals[:nh]
+            cache[(name, id(tail_pos))] = vals[nh:]
+
     def _rows_to_dicts(self, positions, col_names: list[str] | None = None) -> list[dict]:
         if len(positions) == 0:
             return []
@@ -4165,6 +4187,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         display_cols, hidden_cols = self._display_columns(
             display_index=display_index, index_width=index_width
         )
+        # Warm the fetch cache with a single combined head+tail gather per column.
+        # head_pos/tail_pos land in different blocks, but folding them into one
+        # sparse read still halves the per-call gather overhead vs reading head
+        # and tail separately (and every downstream consumer hits the cache).
+        self._prewarm_display_cache(display_cols, head_pos, tail_pos)
         fancy = _CTABLE_PRINT_OPTIONS["fancy"]
         float_precisions = {} if fancy else self._compact_float_precisions(display_cols, head_pos, tail_pos)
         widths = (
