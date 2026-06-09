@@ -950,9 +950,21 @@ class _CTableIndexingMixin:
         indexed = []
         seen = set()
         indexed_arrays = {}
+        # Any column referenced by *operands* was already opened to build the
+        # predicate expression, so it is present in the column cache.  A still
+        # un-materialized indexed column therefore cannot be an operand: skip it
+        # instead of opening it.  Without this, a predicate on a few columns
+        # would eagerly open *every* indexed column (e.g. all 11 SUMMARY indexes
+        # on a wide persistent table) — a pure cold-start cost.  Falling back to
+        # the old behaviour for non-dict mappings keeps correctness; at worst a
+        # genuinely-unloaded operand would miss the index and full-scan.
+        cache_is_dict = isinstance(root_cols, dict)
         for col_name, descriptor in catalog.items():
-            if col_name in root_cols:
-                indexed_arrays[col_name] = (root_cols[col_name], descriptor)
+            if col_name not in root_cols:
+                continue
+            if cache_is_dict and not dict.__contains__(root_cols, col_name):
+                continue
+            indexed_arrays[col_name] = (root_cols[col_name], descriptor)
 
         for operand in operands.values():
             if not isinstance(operand, blosc2.NDArray):
