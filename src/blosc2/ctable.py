@@ -4134,6 +4134,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         nrows = self._n_rows
         ncols = len(self.col_names)
         head_pos, tail_pos, hidden = self._display_positions()
+        # Memoise per-column sparse gathers for the duration of this render so
+        # the repeated (column, head_pos/tail_pos) lookups across precision,
+        # width and row formatting only touch storage once.  head_pos/tail_pos
+        # stay referenced below, so keying the cache on their id() is safe.
+        self._display_fetch_cache = {}
+        try:
+            return self._to_string_body(display_index, index_name, nrows, ncols, head_pos, tail_pos, hidden)
+        finally:
+            self._display_fetch_cache = None
+
+    def _to_string_body(self, display_index, index_name, nrows, ncols, head_pos, tail_pos, hidden) -> str:
         index_width = self._display_index_width(nrows, hidden, index_name) if display_index else 0
         display_cols, hidden_cols = self._display_columns(
             display_index=display_index, index_width=index_width
@@ -7862,7 +7873,25 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return re.sub(r"\bo(\d+)\b", _sub, cc["expression"])
 
     def _fetch_col_at_positions(self, name: str, positions: np.ndarray):
-        """Fetch values at *positions* (physical indices) — used for display."""
+        """Fetch values at *positions* (physical indices) — used for display.
+
+        During a single ``to_string()`` call the same ``(column, positions)``
+        pair is requested repeatedly — by float-precision detection, column
+        width sizing and the final row rendering — all sharing the same
+        ``head_pos``/``tail_pos`` arrays.  When ``to_string`` installs a
+        ``_display_fetch_cache`` we memoise the sparse gather (keyed by the
+        positions array identity) so each column is read from storage once
+        instead of ~6 times.
+        """
+        cache = getattr(self, "_display_fetch_cache", None)
+        if cache is None:
+            return self._fetch_col_at_positions_uncached(name, positions)
+        key = (name, id(positions))
+        if key not in cache:
+            cache[key] = self._fetch_col_at_positions_uncached(name, positions)
+        return cache[key]
+
+    def _fetch_col_at_positions_uncached(self, name: str, positions: np.ndarray):
         cc = self._computed_cols.get(name)
         if cc is not None:
             if len(positions) == 0:
