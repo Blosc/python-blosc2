@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import ast
-import asyncio
 import builtins
 import concurrent.futures
 import contextlib
@@ -29,7 +28,7 @@ from collections.abc import MutableMapping
 from dataclasses import asdict
 from enum import Enum
 from pathlib import Path
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from typing import TYPE_CHECKING, Any
 
 from numpy.exceptions import ComplexWarning
@@ -1239,8 +1238,28 @@ def get_chunk(arr, info, nchunk):
     return arr[slice_]
 
 
-async def async_read_chunks(arrs, info, queue):
-    loop = asyncio.get_event_loop()
+def _stoppable_put(queue, item, stop):
+    """Put *item* into the bounded *queue*, giving up when *stop* gets set.
+
+    Returns False when aborted, so the producer can exit instead of blocking
+    forever on a queue whose consumer is gone.
+    """
+    while not stop.is_set():
+        try:
+            queue.put(item, timeout=0.1)
+            return True
+        except Full:
+            continue
+    return False
+
+
+def read_chunks_worker(arrs, info, queue, stop):
+    """Read the chunks of all operands concurrently and feed them into *queue*.
+
+    For each chunk index, the reads are submitted to a thread pool (one task per
+    operand) so that file reads and decompression overlap; the bounded queue in
+    :func:`sync_read_chunks` provides the prefetch ahead of the consumer.
+    """
     shape, chunks_ = arrs[0].shape, arrs[0].chunks
     max_workers = max(1, min(len(arrs), int(getattr(blosc2, "nthreads", 1) or 1)))
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1250,42 +1269,34 @@ async def async_read_chunks(arrs, info, queue):
                 my_chunk_iter = sliced_chunk_iter(chunks_, (), shape, axis=info[-1], nchunk=True)
             info = info[:4]
         for i, nchunk in enumerate(my_chunk_iter):
-            futures = [
-                (index, loop.run_in_executor(executor, get_chunk, arr, info, nchunk))
-                for index, arr in enumerate(arrs)
-            ]
-            chunks = await asyncio.gather(*(future for index, future in futures), return_exceptions=True)
-            chunks_sorted = []
-            for chunk in chunks:
-                if isinstance(chunk, Exception):
-                    # Handle the exception (e.g., log it, raise a custom exception, etc.)
-                    print(f"Exception occurred: {chunk}")
-                    raise chunk
-                chunks_sorted.append(chunk)
-            queue.put((i, chunks_sorted))  # use non-async queue.put()
+            futures = [executor.submit(get_chunk, arr, info, nchunk) for arr in arrs]
+            # result() keeps operand order and propagates the first exception raised
+            if not _stoppable_put(queue, (i, [future.result() for future in futures]), stop):
+                return
 
-    queue.put(None)  # signal the end of the chunks
-
-
-def async_read_chunks_thread(arrs, info, queue):
-    asyncio.run(async_read_chunks(arrs, info, queue))
+    _stoppable_put(queue, None, stop)  # signal the end of the chunks
 
 
 def sync_read_chunks(arrs, info):
     queue_size = 2  # maximum number of chunks in the queue
     queue = Queue(maxsize=queue_size)
+    # Signals the producer to bail out when the consumer goes away (e.g. an
+    # exception during evaluation closes this generator early); without it,
+    # the producer can block forever on a full queue and deadlock the
+    # thread.join() below during generator finalization.
+    stop = threading.Event()
     worker_exc = None
 
-    def _run_async_reader():
+    def _run_reader():
         nonlocal worker_exc
         try:
-            async_read_chunks_thread(arrs, info, queue)
+            read_chunks_worker(arrs, info, queue, stop)
         except BaseException as exc:
             worker_exc = exc
-            queue.put(None)
+            _stoppable_put(queue, None, stop)
 
-    # Start the async file reading in a separate thread
-    thread = threading.Thread(target=_run_async_reader)
+    # Start the file reading in a separate thread
+    thread = threading.Thread(target=_run_reader)
     thread.start()
 
     try:
@@ -1305,6 +1316,7 @@ def sync_read_chunks(arrs, info):
                     break
                 continue
     finally:
+        stop.set()
         thread.join()
 
 
