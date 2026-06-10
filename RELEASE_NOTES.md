@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.4.3 to 4.4.4
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.4.2 to 4.4.3
 
 This is a maintenance release focused on faster CTable cold-start, printing
