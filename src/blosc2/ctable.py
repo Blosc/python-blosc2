@@ -819,13 +819,23 @@ class Column:
         return col is not None and isinstance(col.spec, NDArraySpec)
 
     @property
-    def array(self):
+    def raw(self):
         """The underlying storage container for this column, without null-value processing.
 
         Returns the raw :class:`blosc2.NDArray`, :class:`~blosc2.ListArray`,
-        :class:`~blosc2.DictionaryColumn`, or scalar varlen array directly,
-        allowing bulk reads that bypass the null-sentinel scan in
-        :meth:`__getitem__`.
+        :class:`~blosc2.DictionaryColumn`, or scalar varlen array directly.
+        Unlike :meth:`__getitem__`, which always materializes NumPy arrays,
+        this is the column as a blosc2-native compressed object: usable as a
+        lazy-expression operand without decompressing, and exposing storage
+        details such as ``schunk``, ``chunks``, ``cparams`` or
+        ``iterchunks_info()``.
+
+        This is a physical view of the column: fixed-width containers are
+        over-allocated to chunk capacity for appends, so their first axis is
+        longer than ``len(column)`` and positions of rows deleted from the
+        table still hold their old values.  No validity-mask or null-sentinel
+        processing is applied; use the :class:`Column` interface for logical
+        reads.
 
         Raises :exc:`AttributeError` for computed (virtual) columns, which have
         no backing storage.

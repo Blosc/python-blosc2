@@ -565,11 +565,13 @@ Data access
 .. autosummary::
 
     Column.view
+    Column.raw
     Column.take
     Column.iter_chunks
     Column.assign
 
 .. autoproperty:: Column.view
+.. autoproperty:: Column.raw
 .. automethod:: Column.take
 .. automethod:: Column.iter_chunks
 .. automethod:: Column.assign

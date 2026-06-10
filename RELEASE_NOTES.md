@@ -2,7 +2,74 @@
 
 ## Changes from 4.4.2 to 4.4.3
 
-XXX version-specific blurb XXX
+This is a maintenance release focused on faster CTable cold-start, printing
+and groupby performance, a lighter `import blosc2`, new raw-storage access
+for columns, and support for the new J2K/HTJ2K codec plugins.
+
+### CTable performance
+
+- **Lazy column opening in views**: `select()` (and other view-producing
+  operations) no longer open every projected column up front.  A column is
+  only opened from storage when the view actually reads it, so selecting and
+  then touching a subset of columns — or aggregating a single one — skips
+  the cold-start cost of the rest.
+- **Lazy index opening in queries**: query planning no longer opens every
+  SUMMARY-indexed column on a wide persistent table; only indexes for
+  columns actually referenced by the predicate are loaded.
+- **Faster table printing**: `repr()`/`to_string()` now memoise per-column
+  sparse gathers for the duration of a render and combine the head and tail
+  rows into a single sparse read per column.  Each column is read from
+  storage once instead of ~6 times (precision detection, width sizing and
+  row rendering all hit the cache).
+- **Groupby with integral float keys**: float key columns whose values are
+  integral and fit a compact non-negative range (e.g. float32 id/second
+  columns) now take the dense single-key fast path instead of the markedly
+  slower generic float-hash path.  Fractional or non-finite keys fall back
+  automatically.
+- **No tempdir in read mode**: opening a `.b2z`/`.b2d` store in `'r'` mode
+  no longer creates a temporary working directory, since nothing is ever
+  written.
+
+### Lighter imports and prefetcher rework
+
+- **asyncio dependency dropped**: the on-disk chunk prefetcher used by the
+  UDF and numexpr fallback engines now uses plain `concurrent.futures`
+  instead of an asyncio event loop.  `import blosc2` no longer pulls in
+  ~30 asyncio modules, saving ~3 MB of memory footprint at import time.
+- **Prefetcher deadlock fixed**: an exception during evaluation could leave
+  the generator finalizer blocked forever in `thread.join()` while the
+  reader thread was stuck on a full prefetch queue.  A stop event now makes
+  the producer bail out when its consumer goes away.
+
+### New features
+
+- **`Column.raw` accessor**: returns the underlying storage container of a
+  column (`NDArray`, `ListArray`, `DictionaryColumn`, …) directly.  Unlike
+  `Column.__getitem__`, which always materializes NumPy arrays, this is the
+  column as a blosc2-native compressed object — usable as a lazy-expression
+  operand without decompressing, and exposing storage details like `schunk`,
+  `chunks` or `cparams`.  Note that this is a *physical* view: fixed-width
+  containers are over-allocated to chunk capacity, so slice to `len(table)`
+  to get just the live rows, and no validity-mask or null-sentinel
+  processing is applied.  Raises `AttributeError` for computed columns,
+  which have no backing storage.
+- **J2K and HTJ2K codec IDs**: `blosc2.Codec.J2K` and `blosc2.Codec.HTJ2K`
+  expose the IDs for the new JPEG 2000 codec plugins (installable with
+  `pip install blosc2-j2k` and `pip install blosc2-htj2k`).
+
+### Fixes
+
+- **`--float-trunc-prec` and nested columns**: the precision-truncation
+  filter of the `parquet_to_blosc2` CLI now propagates to float fields
+  inside nested (struct/list) columns too.
+- **Guard for unsupported computed-column expressions**: expressions that
+  would serialize to an empty or non-round-trippable string are now rejected
+  with an early, actionable `ValueError` at `add_computed_column()` time,
+  instead of silently breaking on reload.
+
+### Build
+
+- **C-Blosc2 updated to 3.1.3.**
 
 ## Changes from 4.4.1 to 4.4.2
 

@@ -1,57 +1,61 @@
-Announcing Python-Blosc2 4.4.2
+Announcing Python-Blosc2 4.4.3
 ==============================
 
-We are happy to announce this feature and maintenance release that promotes
-DSL kernels to first-class CTable computed columns, adds a convenient new
-column-assignment API, speeds up bulk NDArray writes, and fixes several
-correctness issues.
+We are happy to announce this maintenance release that makes CTable
+cold-start, printing, querying and groupby noticeably faster, trims the
+memory footprint of ``import blosc2``, adds raw-storage access for columns,
+and exposes the new JPEG 2000 codec plugins.
 
 The main highlights are:
 
-- **DSL kernels as first-class CTable columns**: ``@blosc2.jit``-decorated
-  functions can now back virtual computed columns, stored generated columns,
-  and ``where()`` filter predicates directly — in addition to the existing
-  string-expression form.  Columns survive save/open round-trips via
-  persisted source.
+- **Faster CTable cold-start**: views created by ``select()`` now open
+  columns lazily — only the columns actually read are loaded from storage —
+  and queries only open the SUMMARY indexes referenced by the predicate,
+  instead of every indexed column on a wide persistent table.
 
-- **New ``t["col"] = arr`` assignment**: a clean shorthand for overwriting all
-  live rows of a column.  Accepts any array-like, including ``blosc2.NDArray``.
+- **Faster printing and groupby**: table rendering now performs a single
+  combined sparse read per column (instead of ~6), and groupby takes the
+  dense fast path for float key columns whose values are integral and fit a
+  compact non-negative range.
 
-- **Chunked NDArray writes**: passing a ``blosc2.NDArray`` to ``extend()`` or
-  ``col[:] = arr`` now decompresses one chunk at a time instead of loading
-  the entire array into memory, keeping peak RSS bounded for large columns.
+- **Lighter imports**: the on-disk chunk prefetcher no longer uses asyncio,
+  so ``import blosc2`` skips ~30 asyncio modules and saves ~3 MB of memory.
+  A latent prefetcher deadlock on early iterator close was fixed as well.
 
-- **``BLOSC_ME_JIT`` full override**: the environment variable now takes
-  unconditional priority over both ``jit=`` and ``jit_backend=`` keyword
-  arguments, making backend switching from the command line effortless.
+- **New ``Column.raw`` accessor**: the underlying storage container
+  (``NDArray``, ``ListArray``, …) as a blosc2-native compressed object —
+  unlike ``col[...]`` reads, which always materialize NumPy arrays.  Useful
+  as a lazy-expression operand and for storage introspection.
 
-- **Correctness fixes**: a ``None == None`` guard bug that could corrupt rows
-  when writing to a view-backed column via the NDArray fast path; a missing
-  view guard in the new ``__setitem__``; and the fast path being silently
-  disabled for disk-opened tables have all been fixed.
+- **J2K and HTJ2K codecs**: ``blosc2.Codec.J2K`` and ``blosc2.Codec.HTJ2K``
+  expose the IDs for the new JPEG 2000 plugins (``pip install blosc2-j2k``
+  / ``pip install blosc2-htj2k``).  Also, C-Blosc2 has been updated to 3.1.3.
 
-A quick example of the new DSL computed column API::
+- **Fixes**: ``--float-trunc-prec`` in the ``parquet_to_blosc2`` CLI now
+  propagates to nested columns; unsupported computed-column expressions are
+  rejected early with an actionable error; and opening a ``.b2z``/``.b2d``
+  store in read mode no longer creates a temporary directory.
+
+A quick example of the new ``Column.raw`` accessor::
 
     import blosc2
     import dataclasses
-    import numpy as np
 
     @dataclasses.dataclass
     class Row:
         price: float = blosc2.field(blosc2.float64())
         qty:   int   = blosc2.field(blosc2.int64())
 
-    @blosc2.dsl_kernel
-    def revenue(price, qty):
-        return price * qty
-
     t = blosc2.CTable(Row, new_data=[(1.5, 10), (2.0, 5), (3.0, 3)])
-    t.add_computed_column("revenue", revenue, inputs=["price", "qty"])
-    print(t["revenue"][:])   # array([15., 10.,  9.])
 
-    # Column assignment with a blosc2.NDArray — written chunk-by-chunk
-    new_prices = blosc2.array([1.0, 2.5, 4.0])
-    t["price"] = new_prices
+    # The raw storage container, as a blosc2-native compressed object.
+    # It is over-allocated to chunk capacity, so slice to the live row count.
+    raw = t["price"].raw      # a blosc2.NDArray
+    print(raw[:len(t)])         # [1.5 2.  3. ]
+
+    # Usable directly as a lazy-expression operand, without decompressing
+    expr = raw * 2.0
+    print(expr[:len(t)])        # [3. 4. 6.]
 
 Install it with::
 
