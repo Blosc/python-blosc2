@@ -380,25 +380,29 @@ def test_batcharray_respects_explicit_use_dict_and_non_zstd():
     assert barray.cparams.use_dict is False
 
 
-def test_batcharray_guess_items_per_block_uses_l1_for_low_clevel(monkeypatch):
+def test_batcharray_guess_items_per_block_uses_1mib_budget_for_low_clevel(monkeypatch):
+    # Budgets are fixed; detected cache sizes must not influence the layout.
     monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
     monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 1000)
     barray = blosc2.BatchArray(cparams={"clevel": 3})
-    assert barray._guess_blocksize([30, 30, 30, 30]) == 3
+    # 1 MiB budget: three 300 KiB payloads fit, a fourth would exceed it
+    assert barray._guess_blocksize([300 * 1024] * 4) == 3
 
 
-def test_batcharray_guess_items_per_block_uses_half_l2_for_default_clevel(monkeypatch):
+def test_batcharray_guess_items_per_block_uses_8mib_budget_for_default_clevel(monkeypatch):
     monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
     monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 150)
     barray = blosc2.BatchArray(cparams={"clevel": 5})
-    assert barray._guess_blocksize([60, 60, 60, 60]) == 1
+    # 8 MiB budget: a single 5 MiB payload fits, a second would exceed it
+    assert barray._guess_blocksize([5 * 2**20] * 4) == 1
 
 
-def test_batcharray_guess_items_per_block_uses_l2_for_high_clevel(monkeypatch):
+def test_batcharray_guess_items_per_block_uses_16mib_budget_for_high_clevel(monkeypatch):
     monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
     monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 150)
     barray = blosc2.BatchArray(cparams={"clevel": 7})
-    assert barray._guess_blocksize([60, 60, 60, 60]) == 2
+    # 16 MiB budget: two 6 MiB payloads fit, a third would exceed it
+    assert barray._guess_blocksize([6 * 2**20] * 4) == 2
 
 
 def test_batcharray_guess_items_per_block_uses_full_batch_for_clevel_9(monkeypatch):

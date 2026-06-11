@@ -177,13 +177,13 @@ class BatchArray:
         Maximum number of items stored in each internal variable-length block.
         The last block in a batch may contain fewer items than this cap. If not
         provided, a value is inferred from the first batch using the serialized
-        item sizes and the compression level. For ``clevel`` 1 through 5, the
-        heuristic targets the L1 data-cache size for faster scans and item
-        lookups. For ``clevel`` 6 through 8, it targets the L2 cache size for
-        larger blocks and better compression. At ``clevel`` 9, the whole batch
-        is kept as one block. Smaller blocks generally improve random access
-        and cache behavior, while larger blocks generally improve compression
-        ratio.
+        item sizes and the compression level. The heuristic uses fixed byte
+        budgets so that the layout (and hence the compression ratio) does not
+        depend on the CPU it was created on: 1 MiB for ``clevel`` 1 through 3,
+        8 MiB for ``clevel`` 4 through 6, and 16 MiB for ``clevel`` 7 and 8.
+        At ``clevel`` 9, the whole batch is kept as one block. Smaller blocks
+        generally improve random access, while larger blocks generally improve
+        compression ratio.
     serializer : {"msgpack", "arrow"}, optional
         Serializer used for batch payloads. ``"msgpack"`` is the default and is
         the general-purpose choice for Python items, including nested Blosc2
@@ -609,14 +609,19 @@ class BatchArray:
         # too small for codecs like Zstd to exploit cross-row redundancy.  Use larger
         # cache-budget tiers as clevel increases, while avoiding full L2 blocks at the
         # default clevel to keep random access reasonably granular.
+        # UPDATE: to avoid cratio differences between CPUs, better use fixed budgets instead
+        # of CPU cache sizes.
         if clevel == 9:
             return len(payload_sizes)
         if 0 < clevel <= 3:
-            budget = blosc2.cpu_info.get("l1_data_cache_size")
+            # budget = blosc2.cpu_info.get("l1_data_cache_size")
+            budget = 2**20  #  1 MB
         elif 3 < clevel <= 6:
-            budget = blosc2.cpu_info.get("l2_cache_size") // 2
+            # budget = blosc2.cpu_info.get("l2_cache_size") // 2
+            budget = 2**23  #  8 MB
         elif 6 < clevel < 9:
-            budget = blosc2.cpu_info.get("l2_cache_size")
+            # budget = blosc2.cpu_info.get("l2_cache_size")
+            budget = 2**24  # 16 MB
         else:
             return len(payload_sizes)
         if not isinstance(budget, int) or budget <= 0:
