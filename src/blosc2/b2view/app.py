@@ -118,6 +118,102 @@ class BufferedDataTable(DataTable):
             super().action_scroll_end()
 
 
+class HelpScreen(ModalScreen[None]):
+    """Modal listing all key bindings, grouped by area."""
+
+    CSS = """
+    HelpScreen {
+        align: center middle;
+    }
+    #help-dialog {
+        width: 62;
+        height: auto;
+        max-height: 90%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #help-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #help-body {
+        height: auto;
+    }
+    """
+
+    BINDINGS: ClassVar = [
+        ("escape", "close", "Close"),
+        ("question_mark", "close", "Close"),
+        ("q", "close", "Close"),
+    ]
+
+    _SECTIONS: ClassVar = [
+        (
+            "Panels",
+            [
+                ("tab / shift+tab", "next / previous panel"),
+                ("m", "maximize the focused panel"),
+                ("r", "restore panel (or refresh the tree)"),
+                ("q", "quit"),
+            ],
+        ),
+        (
+            "Tree",
+            [
+                ("up / down", "move between nodes"),
+                ("enter", "select node (and expand groups)"),
+            ],
+        ),
+        (
+            "Data grid — rows",
+            [
+                ("up / down", "move cursor; pages at the edges"),
+                ("pageup / pagedown", "previous / next page"),
+                ("t / b", "first / last row"),
+                ("g", "go to row..."),
+            ],
+        ),
+        (
+            "Data grid — columns",
+            [
+                ("left / right", "move cursor; pages at the edges"),
+                ("s / e  (home / end)", "first / last column window"),
+            ],
+        ),
+        (
+            "Dim mode (N-D arrays)",
+            [
+                ("d", "toggle dim mode"),
+                ("left / right", "select the active dimension"),
+                ("up / down", "change fixed index / scroll viewport"),
+                ("enter", "toggle fixed <-> navigable"),
+                ("escape", "exit dim mode"),
+            ],
+        ),
+    ]
+
+    def compose(self) -> ComposeResult:
+        from rich.table import Table
+
+        body = Table(show_header=False, box=None, padding=(0, 1))
+        body.add_column("key", style="bold cyan", no_wrap=True)
+        body.add_column("action")
+        for i, (section, entries) in enumerate(self._SECTIONS):
+            if i:
+                body.add_row("", "")
+            body.add_row(f"[bold]{section}[/bold]", "")
+            for key, action in entries:
+                body.add_row(key, action)
+        with Vertical(id="help-dialog"):
+            yield Static("b2view keys  (esc to close)", id="help-title")
+            with VerticalScroll(id="help-body"):
+                yield Static(body)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class GoToRowScreen(ModalScreen[int | None]):
     """Small modal asking for a global row number."""
 
@@ -197,6 +293,7 @@ class B2ViewApp(App):
 
     BINDINGS: ClassVar = [
         ("q", "quit", "Quit"),
+        ("question_mark", "show_help", "Help"),
         ("tab", "focus_next_panel", "Next panel"),
         ("shift+tab", "focus_previous_panel", "Previous panel"),
         Binding("g", "go_to_row", "Go to row", show=False),
@@ -1202,6 +1299,9 @@ class B2ViewApp(App):
         if not self._in_data_grid():
             return
         self._go_to_row(self.table_page["nrows"] - 1)
+
+    def action_show_help(self) -> None:
+        self.push_screen(HelpScreen())
 
     def action_grid_col_start(self) -> None:
         """Jump to the first column window (alias of Home)."""

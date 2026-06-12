@@ -39,7 +39,7 @@ pytest.importorskip("pytest_asyncio")
 import tree_store_gen as gen
 from textual.widgets import DataTable, Input, Tree
 
-from blosc2.b2view.app import B2ViewApp, GoToRowScreen
+from blosc2.b2view.app import B2ViewApp, GoToRowScreen, HelpScreen
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.tui]
 
@@ -134,6 +134,14 @@ async def test_tree_and_panel_focus(store_path):
         await pilot.press("down", "enter")  # -> first child of level0
         await wait_for_table(pilot)
         assert app.selected_path == first_child.path
+
+        # '?' opens the help screen; escape closes it
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpScreen)
 
 
 # ── 1-D array: row paging beyond the viewport ────────────────────────────

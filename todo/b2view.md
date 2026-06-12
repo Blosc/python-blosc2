@@ -18,9 +18,6 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 - [ ] Row paging can lose page alignment after dim-mode single-row scrolls
       (`_scroll_navigable_viewport` shifts by 1); consider re-aligning on the
       next page up/down, as column paging does now.
-- [ ] Discoverability: the jump keys are now in the data panel subtitle, but
-      the footer still only shows the generic bindings; consider a help
-      screen (`?`) listing all data-grid keys.
 
 ### Data panel
 
@@ -68,3 +65,6 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 - 2026-06-12: `s`/`e` keys jump to the start/end column window (aliases of
   Home/End, which were undiscoverable); the data panel subtitle now lists
   all jump keys: `rows: t/b/g | cols: s/e`.
+- 2026-06-12: `?` opens a help screen listing all keys grouped by area
+  (panels, tree, grid rows/columns, dim mode); shown in the footer, closed
+  with esc/`?`/`q`.
