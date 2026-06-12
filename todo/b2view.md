@@ -61,3 +61,6 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
   points align down the column; zeros are formatted like their neighbors
   (all-zero columns still show plain 0.0).  Unit tests in
   `tests/b2view/test_render.py`.
+- 2026-06-12: Row paging/jumps (page up/down, `t`/`b`, `g`oto, dim-mode
+  changes) keep the cursor on its current column; only selecting a new node
+  resets it to the first column.

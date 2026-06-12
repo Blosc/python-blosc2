@@ -393,7 +393,8 @@ class B2ViewApp(App):
                 else:
                     data = self.browser.preview(path, max_rows=self.preview_rows, max_cols=self.preview_cols)
                 if self._is_table_preview(data):
-                    self._update_data_table(data)
+                    # A freshly selected node starts at the first column
+                    self._update_data_table(data, cursor_col=0)
                     self._update_data_header(data)
                     self.call_after_refresh(self._ensure_viewport_consistent)
                 else:
@@ -698,8 +699,11 @@ class B2ViewApp(App):
             },
         }
 
-    def _update_data_table(self, data: dict, *, cursor_row: int = 0, cursor_col: int = 0) -> None:
+    def _update_data_table(self, data: dict, *, cursor_row: int = 0, cursor_col: int | None = None) -> None:
+        """Refresh the data grid; *cursor_col* None keeps the current column."""
         table = self.query_one("#data-table", DataTable)
+        if cursor_col is None:
+            cursor_col = table.cursor_column
         self.loading_table_page = True
         try:
             table.clear(columns=True)

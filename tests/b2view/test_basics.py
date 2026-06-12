@@ -296,12 +296,27 @@ async def test_ctable_row_paging_and_goto(store_path):
         expected = gen.ctable_values(NROWS)
         np.testing.assert_array_equal(page["data"]["b"], expected["b"][: page["stop"]])
 
+        # Row paging and jumps must keep the cursor on the current column
+        cursor_col = page["columns"].index("c")
+        table.move_cursor(column=cursor_col)
+
+        await pilot.press("pagedown")
+        await wait_for_table(pilot)
+        assert app.table_page["start"] > 0
+        assert table.cursor_column == cursor_col
+
+        await pilot.press("pageup")
+        await wait_for_table(pilot)
+        assert app.table_page["start"] == 0
+        assert table.cursor_column == cursor_col
+
         # 'b' jumps to the last row
         await pilot.press("b")
         await wait_for_table(pilot)
         page = app.table_page
         assert page["stop"] == NROWS
         assert page["start"] + table.cursor_row == NROWS - 1
+        assert table.cursor_column == cursor_col
 
         # 'g' opens the goto modal; submit a row in the middle
         await pilot.press("g")
@@ -314,6 +329,7 @@ async def test_ctable_row_paging_and_goto(store_path):
         page = app.table_page
         assert page["start"] <= 250 < page["stop"]
         assert page["start"] + table.cursor_row == 250
+        assert table.cursor_column == cursor_col  # goto keeps the column too
         np.testing.assert_array_equal(page["data"]["b"], expected["b"][page["start"] : page["stop"]])
 
 
