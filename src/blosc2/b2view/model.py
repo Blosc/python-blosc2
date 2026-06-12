@@ -136,6 +136,9 @@ class StoreBrowser:
         self.urlpath = urlpath
         self.store = blosc2.open(urlpath, mode="r")
         self.is_tree = isinstance(self.store, blosc2.TreeStore)
+        # Per-path row filters for CTable nodes (path -> expr / where() view)
+        self._filters: dict[str, str] = {}
+        self._filter_views: dict[str, Any] = {}
 
     def close(self) -> None:
         close = getattr(self.store, "close", None)
@@ -260,6 +263,7 @@ class StoreBrowser:
                     return preview_array_1d(obj, start=start, stop=stop)
             return preview_array(obj, slices=slices, max_rows=max_rows, max_cols=max_cols)
         if kind == "ctable":
+            obj = self._filter_views.get(path, obj)
             stop = min(start + max_rows, len(obj)) if stop is None else stop
             return preview_ctable(
                 obj, start=start, stop=stop, columns=columns, max_cols=max_cols, col_start=col_start
@@ -272,6 +276,31 @@ class StoreBrowser:
         """Return the column names for a CTable path, or None for other kinds."""
         names = list(getattr(self._get_object(path), "col_names", []) or [])
         return names or None
+
+    def set_filter(self, path: str, expr: str | None) -> int:
+        """Set or clear the row filter of a CTable path; return its row count.
+
+        An empty (or None) *expr* clears the filter.  Errors from ``where()``
+        propagate to the caller and leave any previous filter untouched.
+        """
+        path = self.normalize_path(path)
+        expr = (expr or "").strip()
+        if not expr:
+            self._filters.pop(path, None)
+            self._filter_views.pop(path, None)
+            return len(self._get_object(path))
+        view = self._get_object(path).where(expr)
+        self._filters[path] = expr
+        self._filter_views[path] = view
+        return len(view)
+
+    def get_filter(self, path: str) -> str | None:
+        """Return the active filter expression for *path*, if any."""
+        return self._filters.get(self.normalize_path(path))
+
+    def base_nrows(self, path: str) -> int:
+        """Return the unfiltered row count of the CTable at *path*."""
+        return len(self._get_object(path))
 
     def _get_object(self, path: str) -> Any:
         """Return the object represented by *path*."""

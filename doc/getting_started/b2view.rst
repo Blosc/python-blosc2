@@ -76,6 +76,22 @@ select the active dimension, ``up`` / ``down`` change its fixed index (or
 scroll the viewport), ``enter`` toggles a dimension between fixed and
 navigable, and ``escape`` leaves dim mode.
 
+Step 4 — Filter CTable rows
+---------------------------
+
+On a CTable node, press ``f`` and type a filter expression to page through
+only the matching rows — the same expressions ``CTable.where()`` accepts,
+including dotted nested column names and ``and`` / ``or``:
+
+.. code-block:: text
+
+    payment.tips > 100 and trip.km > 0 and trip.sec > 0
+
+The data header shows the active filter and the matching row count; all
+navigation (paging, ``g``, ``t`` / ``b``) then operates on the filtered
+rows.  Press ``escape`` (or submit an empty expression) to go back to the
+unfiltered table; each node remembers its filter for the session.
+
 CLI options
 -----------
 

@@ -39,7 +39,7 @@ pytest.importorskip("pytest_asyncio")
 import tree_store_gen as gen
 from textual.widgets import DataTable, Input, Tree
 
-from blosc2.b2view.app import B2ViewApp, GoToColumnScreen, GoToRowScreen, HelpScreen
+from blosc2.b2view.app import B2ViewApp, FilterScreen, GoToColumnScreen, GoToRowScreen, HelpScreen
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.tui]
 
@@ -487,3 +487,62 @@ async def test_ctable_column_paging(store_path):
         assert page["viewport_width"] == table.size.width
         assert len(page["columns"]) < len(wide_columns)
         assert table.virtual_size.width <= table.size.width
+
+
+# ── CTable filtering ─────────────────────────────────────────────────────
+
+
+async def test_ctable_filtering(store_path):
+    """The 'f' modal filters CTable rows; errors and clearing keep state sane."""
+    app = B2ViewApp(store_path, start_path="/level0/ctable", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        await focus_data_table(pilot)
+        expected = gen.ctable_values(NROWS)
+
+        async def submit_filter(expr: str) -> None:
+            await pilot.press("f")
+            await pilot.pause()
+            assert isinstance(app.screen, FilterScreen)
+            app.screen.query_one("#filter-input", Input).value = expr
+            await pilot.press("enter")
+            await wait_for_table(pilot)
+
+        # Apply a filter: rows with b in [100, 110) (column b holds 0..NROWS-1)
+        await submit_filter("b >= 100 and b < 110")
+        page = app.table_page
+        assert page["nrows"] == 10
+        np.testing.assert_array_equal(page["data"]["b"], expected["b"][100:110])
+        np.testing.assert_allclose(page["data"]["c"], expected["c"][100:110])
+
+        # An invalid expression notifies and keeps the previous filter
+        await submit_filter("nosuchcol > 1")
+        assert app.browser.get_filter("/level0/ctable") == "b >= 100 and b < 110"
+        assert app.table_page["nrows"] == 10
+
+        # Re-opening the modal prefills the active filter; escape cancels
+        await pilot.press("f")
+        await pilot.pause()
+        assert app.screen.query_one("#filter-input", Input).value == "b >= 100 and b < 110"
+        await pilot.press("escape")
+        await wait_for_table(pilot)
+        assert app.table_page["nrows"] == 10
+
+        # A filter matching nothing yields an empty (but live) grid
+        await submit_filter("b < 0")
+        assert app.table_page["nrows"] == 0
+
+        # An empty input clears the filter and restores the full table
+        await submit_filter("")
+        page = app.table_page
+        assert app.browser.get_filter("/level0/ctable") is None
+        assert page["nrows"] == NROWS
+        np.testing.assert_array_equal(page["data"]["b"], expected["b"][: page["stop"]])
+
+        # Escape on the data grid also clears an active filter
+        await submit_filter("b >= 100 and b < 110")
+        assert app.table_page["nrows"] == 10
+        await pilot.press("escape")
+        await wait_for_table(pilot)
+        assert app.browser.get_filter("/level0/ctable") is None
+        assert app.table_page["nrows"] == NROWS
