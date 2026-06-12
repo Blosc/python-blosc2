@@ -27,9 +27,7 @@ def main(argv: list[str] | None = None) -> int:
         from blosc2.b2view.app import B2ViewApp
     except ImportError as exc:
         print(
-            "b2view requires the optional TUI dependencies. Install them with:\n"
-            "\n"
-            '    pip install "blosc2[tui]"\n',
+            "b2view could not import its TUI dependencies. Install them with:\n\n    pip install textual\n",
             file=sys.stderr,
         )
         print(f"Original import error: {exc}", file=sys.stderr)
