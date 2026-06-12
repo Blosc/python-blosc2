@@ -354,5 +354,65 @@ def test_sort_readonly_inplace_raises():
         shutil.rmtree(path, ignore_errors=True)
 
 
+# ===========================================================================
+# Regression: sort_by on an unprojected view must not gather all columns
+# ===========================================================================
+
+
+@dataclass
+class WideSortRow:
+    a: int = blosc2.field(blosc2.int64(), default=0)
+    b: float = blosc2.field(blosc2.float64(), default=0.0)
+    c: float = blosc2.field(blosc2.float64(), default=0.0)
+    d: str = ""
+    e: int = blosc2.field(blosc2.int64(), default=0)
+
+
+def _loaded_columns(table) -> set[str]:
+    """Columns whose payload has actually been opened.
+
+    ``_cols`` is a ``_LazyColumnDict``; bypassing its ``__contains__`` with
+    ``dict.__contains__`` reveals what was loaded without forcing a load.
+    """
+    return {name for name in table.col_names if dict.__contains__(table._cols, name)}
+
+
+def test_sort_unprojected_view_opens_only_needed_columns(tmp_path):
+    """``where(cond).sort_by(key)`` without ``columns=`` used to gather every
+    column of the view (~30x slower than projecting first).  It must open only
+    the condition and sort-key columns, deferring the rest until read."""
+    n = 1000
+    i = np.arange(n)
+    data = np.empty(n, dtype=[("a", "<i8"), ("b", "<f8"), ("c", "<f8"), ("d", "U10"), ("e", "<i8")])
+    data["a"] = i
+    data["b"] = (i * 7919) % n  # a permutation: distinct values, no sort ties
+    data["c"] = i * 0.5
+    data["d"] = np.char.add("s", i.astype("U6"))
+    data["e"] = i * 3
+
+    urlpath = str(tmp_path / "wide-sort.b2z")
+    t = CTable(WideSortRow, urlpath=urlpath, mode="w", expected_size=n)
+    t.extend(data, validate=False)
+    t.close()
+
+    t = blosc2.open(urlpath)
+    try:
+        assert _loaded_columns(t) == set()
+
+        res = t.where(t.a >= n - 100).sort_by("b")
+        assert _loaded_columns(t) <= {"a", "b"}
+        assert _loaded_columns(res) <= {"a", "b"}
+
+        # Deferred columns are still served correctly, on demand only
+        mask = data["a"] >= n - 100
+        order = np.argsort(data["b"][mask], kind="stable")
+        np.testing.assert_array_equal(res["e"][:], data["e"][mask][order])
+        loaded = _loaded_columns(res)
+        assert "c" not in loaded
+        assert "d" not in loaded
+    finally:
+        t.close()
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
