@@ -23,7 +23,7 @@ Source code
 
     git clone https://github.com/Blosc/python-blosc2/
     cd python-blosc2
-    pip install .[test]   # install with test dependencies
+    pip install . --group test   # install with test dependencies
 
 That's all. You can proceed with testing section now.
 
