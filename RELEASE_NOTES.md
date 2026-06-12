@@ -2,7 +2,58 @@
 
 ## Changes from 4.4.3 to 4.4.4
 
-XXX version-specific blurb XXX
+This release promotes the `b2view` terminal viewer to a core feature —
+installed by default, with new interactive row and column filtering — and
+makes BatchArray block layouts (and hence compression ratios) reproducible
+across CPUs.
+
+### b2view, the terminal data viewer
+
+- **Installed by default**: `textual` and `rich` are now regular
+  dependencies, so the `b2view` CLI works out of the box (the `[tui]` extra
+  is gone).  A getting-started walkthrough was added to the docs, and the
+  README now lists the CLI tools.
+- **Row filtering**: pressing `f` on a CTable node opens a modal that takes
+  the same string expressions as `CTable.where()` (dotted nested names,
+  `and`/`or`) and pages through the matching view.  Filters are remembered
+  per node for the session, the data header shows the active filter plus
+  the unfiltered total, and escape (or an empty expression) clears it.
+- **Column filtering**: `/` narrows the visible columns by case-insensitive
+  substring; column paging and the `c` goto-column modal then operate on
+  that subset.  Combines freely with the row filter; escape clears one
+  layer per press (rows first, then columns).
+- **Mouse handling**: the terminal owns the mouse by default, so native
+  text selection/copy works like in any CLI program; `--mouse` lets b2view
+  capture it instead (click-to-focus, wheel scrolling by half a page,
+  paging at the edges).
+- **Navigation**: `?` opens a help screen listing all keys; `c` jumps to a
+  column by index, exact name or unique name prefix; `s`/`e` jump to the
+  first/last column window; row paging and jumps keep the cursor on its
+  column; dim-mode index/viewport movements clamp at the boundaries instead
+  of wrapping around.
+- **Rendering**: column windows are fitted from measured rendered widths
+  (and re-fitted on terminal resize and panel maximize/restore), and float
+  columns use a uniform number of decimals so decimal points align down
+  the column.
+- **Test suite**: first automated tests for the TUI — Pilot-driven keyboard
+  journeys against a deterministic generated store (marker `tui`), plus
+  render unit tests.  Skipped on wasm, where Textual apps cannot start
+  (no termios).
+
+### BatchArray
+
+- **Reproducible block layouts**: automatic variable-length block sizing
+  now uses fixed byte budgets (1 MiB for clevel 1-3, 8 MiB for 4-6, 16 MiB
+  for 7-8) instead of the CPU cache sizes, so the layout — and hence the
+  compression ratio — no longer depends on the machine that created the
+  array.
+
+### Build and docs
+
+- **Installing test dependencies**: the docs now use
+  `pip install . --group test` (a PEP 735 dependency group); the stale
+  `[test]` extra syntax was removed.
+- **cibuildwheel updated to 4.0.**
 
 ## Changes from 4.4.2 to 4.4.3
 
