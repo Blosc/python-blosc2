@@ -473,6 +473,104 @@ class B2ViewApp(App):
         usable = max(1, width - 6)
         return max(1, usable // col_width)
 
+    # DataTable pads each cell with one space on both sides (cell_padding=1)
+    _CELL_PAD = 2
+
+    def _data_table_width(self) -> int:
+        return self.query_one("#data-table", DataTable).size.width
+
+    def _col_avail_width(self, nrows: int) -> int:
+        """Width available for data columns, or 0 before layout has settled."""
+        width = self._data_table_width()
+        if width <= 1:
+            return 0
+        label_width = len(str(max(0, int(nrows) - 1))) + self._CELL_PAD
+        return max(1, width - label_width)
+
+    def _candidate_max_cols(self) -> int:
+        """Upper bound of columns worth fetching before the width-based trim."""
+        width = self._data_table_width()
+        if width <= 1:
+            return self.preview_cols
+        # The narrowest possible column is one character plus padding.
+        return max(1, width // (1 + self._CELL_PAD))
+
+    @classmethod
+    def _measure_column_widths(cls, data: dict) -> list[int]:
+        """Rendered width (content + padding) of every column in *data*."""
+        widths = []
+        for name in data["columns"]:
+            content = max(
+                len(str(name)),
+                max((len(format_cell(value)) for value in data["data"][name]), default=1),
+            )
+            widths.append(content + cls._CELL_PAD)
+        return widths
+
+    def _trim_columns_to_fit(self, data: dict) -> dict:
+        """Drop trailing columns of *data* that do not fit the table width.
+
+        The preview fetches a generous candidate window of columns; this
+        second pass measures the actual rendered cell widths and keeps only
+        as many whole columns as truly fit the data table.
+        """
+        if data.get("source_kind") not in _COL_PAGED_KINDS:
+            return data
+        avail = self._col_avail_width(data["nrows"])
+        if avail <= 0:
+            return data  # layout not settled; keep the estimate-based window
+        widths = self._measure_column_widths(data)
+        keep = 0
+        total = 0
+        for width in widths:
+            if keep >= 1 and total + width > avail:
+                break
+            total += width
+            keep += 1
+        if keep >= len(data["columns"]):
+            return data
+        kept = data["columns"][:keep]
+        data = dict(data)
+        data["data"] = {name: data["data"][name] for name in kept}
+        data["columns"] = kept
+        data["col_stop"] = data["col_start"] + keep
+        data["hidden_columns"] = max(0, data["ncols"] - keep)
+        return data
+
+    def _fetch_columns_for_measure(self, col_start: int, count: int) -> dict:
+        """Fetch the current page rows for columns [col_start, col_start+count)."""
+        page = self.table_page
+        max_rows = max(1, page["stop"] - page["start"])
+        layout = self._data_layout
+        if layout is not None and len(layout.shape) >= 1:
+            probe = layout.copy_with(row_start=page["start"], col_start=col_start)
+            return self.browser.preview(self.selected_path, max_rows=max_rows, max_cols=count, layout=probe)
+        return self.browser.preview(
+            self.selected_path,
+            start=page["start"],
+            stop=page["stop"],
+            max_cols=count,
+            col_start=col_start,
+        )
+
+    def _fit_col_start_backward(self, end: int) -> int:
+        """Start of the widest whole-column window ending just before *end*."""
+        page = self.table_page
+        avail = self._col_avail_width(page["nrows"])
+        if avail <= 0:
+            return max(0, end - max(1, self._col_page_size()))
+        candidate = min(end, max(1, avail // (1 + self._CELL_PAD)))
+        cand_start = end - candidate
+        widths = self._measure_column_widths(self._fetch_columns_for_measure(cand_start, candidate))
+        start = end - 1  # always keep at least one column
+        total = widths[-1]
+        for i in range(len(widths) - 2, -1, -1):
+            if total + widths[i] > avail:
+                break
+            total += widths[i]
+            start = cand_start + i
+        return max(0, start)
+
     def _table_page_size(self) -> int:
         table = self.query_one("#data-table", DataTable)
         # Keep only rows likely to be visible.  The DataTable header consumes one
@@ -526,7 +624,7 @@ class B2ViewApp(App):
             data = self.browser.preview(
                 path,
                 max_rows=buffer_size,
-                max_cols=self._col_page_size(),
+                max_cols=self._candidate_max_cols(),
                 layout=layout,
             )
         else:
@@ -536,9 +634,11 @@ class B2ViewApp(App):
                 start=buffer_start,
                 stop=buffer_start + buffer_size,
                 max_rows=buffer_size,
-                max_cols=self._col_page_size(),
+                max_cols=self._candidate_max_cols(),
                 col_start=self.grid_col_start,
             )
+        data = self._trim_columns_to_fit(data)
+        data["viewport_width"] = self._data_table_width()
         self.table_buffer = data
         data = self._slice_table_buffer(start, page_size)
         self.table_page = data
@@ -585,6 +685,7 @@ class B2ViewApp(App):
                     "ncols",
                     "slice_indices",
                     "n_slices_per_dim",
+                    "viewport_width",
                 )
                 if key in buffer
             },
@@ -642,22 +743,21 @@ class B2ViewApp(App):
         page = self.table_page
         if page.get("source_kind") not in _COL_PAGED_KINDS:
             return False
-        page_cols = max(1, len(page["columns"]))
-        ncols = page["ncols"]
-        col_start = page["col_start"]
+        # Whole-column windows of data-dependent size: paging right starts at
+        # the first hidden column; paging left fits as many whole columns as
+        # possible ending just before the current first one (no skips, no gaps).
         if direction > 0:
-            if page["col_stop"] >= ncols:
+            if page["col_stop"] >= page["ncols"]:
                 return False
-            self.grid_col_start = min(ncols - 1, col_start + page_cols)
-            cursor_col = 0
+            self.grid_col_start = page["col_stop"]
         else:
-            if col_start <= 0:
+            if page["col_start"] <= 0:
                 return False
-            self.grid_col_start = max(0, col_start - page_cols)
-            cursor_col = page_cols - 1
+            self.grid_col_start = self._fit_col_start_backward(page["col_start"])
         self.table_buffer = None
         data = self._load_table_page(self.selected_path, page["start"])
         cursor_row = self.query_one("#data-table", DataTable).cursor_row
+        cursor_col = 0 if direction > 0 else len(data["columns"]) - 1
         self._update_data_table(data, cursor_row=cursor_row, cursor_col=cursor_col)
         self._update_data_header(data)
         return True
@@ -677,12 +777,12 @@ class B2ViewApp(App):
         if self.table_page is None or self.table_page.get("source_kind") not in _COL_PAGED_KINDS:
             return False
         page = self.table_page
-        page_cols = max(1, len(page["columns"]))
-        self.grid_col_start = max(0, page["ncols"] - page_cols)
+        # Jump to the widest whole-column window ending at the last column
+        self.grid_col_start = self._fit_col_start_backward(page["ncols"])
         self.table_buffer = None
         data = self._load_table_page(self.selected_path, page["start"])
         cursor_row = self.query_one("#data-table", DataTable).cursor_row
-        self._update_data_table(data, cursor_row=cursor_row, cursor_col=page_cols - 1)
+        self._update_data_table(data, cursor_row=cursor_row, cursor_col=len(data["columns"]) - 1)
         self._update_data_header(data)
         return True
 
@@ -868,9 +968,8 @@ class B2ViewApp(App):
         rows_want = min(self._table_page_size(), page["nrows"] - page["start"])
         cols_ok = True
         if page.get("source_kind") in _COL_PAGED_KINDS:
-            cols_loaded = page["col_stop"] - page["col_start"]
-            cols_want = min(self._col_page_size(), page["ncols"] - page["col_start"])
-            cols_ok = cols_loaded == cols_want
+            # The column window is fitted to the width current at load time
+            cols_ok = page.get("viewport_width") == self._data_table_width()
         if rows_loaded == rows_want and cols_ok:
             return
         self._reload_table_for_current_viewport()

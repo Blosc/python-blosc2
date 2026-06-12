@@ -226,6 +226,29 @@ async def test_2d_paging(store_path):
         assert app.table_page["stop"] == LEAF2_SHAPE[0]
         assert table.cursor_row == last_cursor
 
+        # 'end' jumps to the widest whole-column window ending at the last
+        # column; paging left from there must not skip any column.
+        await pilot.press("end")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["col_stop"] == LEAF2_SHAPE[1]
+        end_col_start = page["col_start"]
+        assert end_col_start > 0
+
+        table.move_cursor(column=0)
+        await pilot.press("left")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["col_start"] < end_col_start
+        assert page["col_stop"] >= end_col_start  # no column skipped
+        for c in range(page["col_start"], page["col_stop"]):
+            np.testing.assert_allclose(page["data"][str(c)], expected[page["start"] : page["stop"], c])
+
+        # 'home' returns to the first column window
+        await pilot.press("home")
+        await wait_for_table(pilot)
+        assert app.table_page["col_start"] == 0
+
 
 # ── 3-D array: dim mode navigation ───────────────────────────────────────
 
@@ -315,6 +338,8 @@ async def test_ctable_column_paging(store_path):
         # The visible columns are the leading ones, in schema order
         assert first_columns == all_names[: len(first_columns)]
         assert app.query_one("#col-scrollbar").display
+        # The two-pass fit must not overflow the table (no inner h-scroll)
+        assert table.virtual_size.width <= table.size.width
 
         # Page right from the last visible column
         table.move_cursor(column=len(first_columns) - 1)
@@ -338,6 +363,30 @@ async def test_ctable_column_paging(store_path):
         assert page["columns"] == first_columns
         assert table.cursor_column == len(right_columns) - 1
         _assert_ctable_window_values(page, expected)
+
+        # 'end' jumps to the widest whole-column window ending at the last
+        # column, and paging left from there must not skip any column.
+        await pilot.press("end")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["col_stop"] == gen.NCOLS
+        end_col_start = page["col_start"]
+        assert end_col_start > 0
+        assert table.cursor_column == len(page["columns"]) - 1
+
+        table.move_cursor(column=0)
+        await pilot.press("left")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["col_start"] < end_col_start
+        assert page["col_stop"] >= end_col_start  # no column skipped
+        assert page["columns"] == all_names[page["col_start"] : page["col_stop"]]
+        _assert_ctable_window_values(page, expected)
+
+        # 'home' returns to the first window
+        await pilot.press("home")
+        await wait_for_table(pilot)
+        assert app.table_page["col_start"] == 0
 
         # Column paging must not lose the current row: goto 150, page right
         await pilot.press("g")
