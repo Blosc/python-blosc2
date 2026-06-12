@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
+from rich.markup import escape as markup_escape
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -11,7 +12,15 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
 
 from blosc2.b2view.model import DataSliceLayout, StoreBrowser
-from blosc2.b2view.render import format_cell, make_metadata_renderable, make_preview_renderables
+from blosc2.b2view.render import (
+    column_float_decimals,
+    format_cell,
+    make_metadata_renderable,
+    make_preview_renderables,
+)
+
+if TYPE_CHECKING:
+    from textual import events
 
 _KIND_ICONS = {
     "group": "📁",
@@ -21,6 +30,9 @@ _KIND_ICONS = {
     "schunk": "▣",
     "unknown": "?",
 }
+
+# Source kinds whose data grid supports horizontal (column) paging.
+_COL_PAGED_KINDS = frozenset({"ndarray2d", "ndarray_slice", "ctable"})
 
 
 class B2ViewPanel(Vertical):
@@ -97,6 +109,31 @@ class BufferedDataTable(DataTable):
             return
         super().action_select_cursor()
 
+    def _wheel_step(self) -> int:
+        # Half the visible rows per tick; arrow keys remain the
+        # single-step path (also for dim-mode index changes).
+        return max(1, self.row_count // 2)
+
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        # The grid holds exactly one viewport-sized page, so the default
+        # scroll handler has nothing to scroll; move the cursor instead,
+        # which pages at the edges just like the arrow keys.
+        event.stop()
+        event.prevent_default()
+        for _ in range(self._wheel_step()):
+            self.action_cursor_down()
+
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        event.stop()
+        event.prevent_default()
+        for _ in range(self._wheel_step()):
+            self.action_cursor_up()
+
+    def on_resize(self, event) -> None:
+        # The column/row windows are fitted to this table's size; re-check
+        # whenever it changes (terminal resize, panel maximize, ...).
+        getattr(self.app, "_on_data_table_resized", lambda: None)()
+
     def action_scroll_home(self) -> None:
         if getattr(self.app, "_grid_col_home", lambda: False)():
             pass
@@ -108,6 +145,106 @@ class BufferedDataTable(DataTable):
             pass
         else:
             super().action_scroll_end()
+
+
+class HelpScreen(ModalScreen[None]):
+    """Modal listing all key bindings, grouped by area."""
+
+    CSS = """
+    HelpScreen {
+        align: center middle;
+    }
+    #help-dialog {
+        width: 62;
+        height: auto;
+        max-height: 90%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #help-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #help-body {
+        height: auto;
+    }
+    """
+
+    BINDINGS: ClassVar = [
+        ("escape", "close", "Close"),
+        ("question_mark", "close", "Close"),
+        ("q", "close", "Close"),
+    ]
+
+    _SECTIONS: ClassVar = [
+        (
+            "Panels",
+            [
+                ("tab / shift+tab", "next / previous panel"),
+                ("m", "maximize the focused panel"),
+                ("r", "restore panel (or refresh the tree)"),
+                ("q", "quit"),
+            ],
+        ),
+        (
+            "Tree",
+            [
+                ("up / down", "move between nodes"),
+                ("enter", "select node (and expand groups)"),
+            ],
+        ),
+        (
+            "Data grid — rows",
+            [
+                ("up / down", "move cursor; pages at the edges"),
+                ("pageup / pagedown", "previous / next page"),
+                ("t / b", "first / last row"),
+                ("g", "go to row..."),
+                ("f", "filter rows (CTable)"),
+                ("escape", "clear the active filter"),
+            ],
+        ),
+        (
+            "Data grid — columns",
+            [
+                ("left / right", "move cursor; pages at the edges"),
+                ("s / e  (home / end)", "first / last column window"),
+                ("c", "go to column index or name..."),
+                ("/", "filter visible columns by substring (CTable)"),
+            ],
+        ),
+        (
+            "Dim mode (N-D arrays)",
+            [
+                ("d", "toggle dim mode"),
+                ("left / right", "select the active dimension"),
+                ("up / down", "change fixed index / scroll viewport"),
+                ("enter", "toggle fixed <-> navigable"),
+                ("escape", "exit dim mode"),
+            ],
+        ),
+    ]
+
+    def compose(self) -> ComposeResult:
+        from rich.table import Table
+
+        body = Table(show_header=False, box=None, padding=(0, 1))
+        body.add_column("key", style="bold cyan", no_wrap=True)
+        body.add_column("action")
+        for i, (section, entries) in enumerate(self._SECTIONS):
+            if i:
+                body.add_row("", "")
+            body.add_row(f"[bold]{section}[/bold]", "")
+            for key, action in entries:
+                body.add_row(key, action)
+        with Vertical(id="help-dialog"):
+            yield Static("b2view keys  (esc to close)", id="help-title")
+            with VerticalScroll(id="help-body"):
+                yield Static(body)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
 
 
 class GoToRowScreen(ModalScreen[int | None]):
@@ -163,6 +300,131 @@ class GoToRowScreen(ModalScreen[int | None]):
         self.dismiss(None)
 
 
+class GoToColumnScreen(ModalScreen[int | None]):
+    """Small modal asking for a column index or (for CTables) a column name."""
+
+    CSS = """
+    GoToColumnScreen {
+        align: center middle;
+    }
+    #gotocol-dialog {
+        width: 50;
+        height: auto;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #gotocol-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, *, ncols: int, current: int, names: list[str] | None = None):
+        super().__init__()
+        self.ncols = ncols
+        self.current = current
+        self.names = names
+
+    def compose(self) -> ComposeResult:
+        what = f"column 0..{self.ncols - 1}"
+        if self.names:
+            what += " or name"
+        with Vertical(id="gotocol-dialog"):
+            yield Static(f"Go to {what} (current: {self.current})", id="gotocol-title")
+            yield Input(placeholder="column index or name", id="gotocol-input")
+
+    def on_mount(self) -> None:
+        input_widget = self.query_one("#gotocol-input", Input)
+        input_widget.value = str(self.current)
+        input_widget.focus()
+
+    def _fail(self, message: str) -> None:
+        self.query_one("#gotocol-title", Static).update(message)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        value = event.value.strip().replace("_", "")
+        try:
+            col = int(value)
+        except ValueError:
+            col = self._match_name(event.value.strip())
+            if col is None:
+                return
+        if not 0 <= col < self.ncols:
+            self._fail(f"Column must be in range 0..{self.ncols - 1}")
+            return
+        self.dismiss(col)
+
+    def _match_name(self, value: str) -> int | None:
+        """Resolve a column name (exact, or unique prefix) to its index."""
+        if not self.names:
+            self._fail("Please enter an integer column index")
+            return None
+        if value in self.names:
+            return self.names.index(value)
+        matches = [i for i, name in enumerate(self.names) if name.startswith(value)] if value else []
+        if len(matches) == 1:
+            return matches[0]
+        self._fail(f"{'Ambiguous' if matches else 'Unknown'} column name {value!r}")
+        return None
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class FilterScreen(ModalScreen[str | None]):
+    """Small modal asking for a CTable filter (row expression or column pattern)."""
+
+    CSS = """
+    FilterScreen {
+        align: center middle;
+    }
+    #filter-dialog {
+        width: 70;
+        height: auto;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #filter-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+
+    def __init__(
+        self,
+        *,
+        current: str | None = None,
+        title: str = "Filter rows (empty clears)",
+        placeholder: str = "e.g. payment.tips > 100 and trip.km > 0",
+    ):
+        super().__init__()
+        self.current = current or ""
+        self.title_text = title
+        self.placeholder = placeholder
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="filter-dialog"):
+            yield Static(self.title_text, id="filter-title")
+            yield Input(placeholder=self.placeholder, id="filter-input")
+
+    def on_mount(self) -> None:
+        input_widget = self.query_one("#filter-input", Input)
+        input_widget.value = self.current
+        input_widget.focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip())
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class B2ViewApp(App):
     """Browse TreeStore hierarchy and preview objects."""
 
@@ -189,6 +451,7 @@ class B2ViewApp(App):
 
     BINDINGS: ClassVar = [
         ("q", "quit", "Quit"),
+        ("question_mark", "show_help", "Help"),
         ("tab", "focus_next_panel", "Next panel"),
         ("shift+tab", "focus_previous_panel", "Previous panel"),
         Binding("g", "go_to_row", "Go to row", show=False),
@@ -196,6 +459,11 @@ class B2ViewApp(App):
         ("r", "restore_or_refresh", "Restore/Refresh"),
         Binding("t", "grid_row_top", "Top", show=False),
         Binding("b", "grid_row_bottom", "Bottom", show=False),
+        Binding("s", "grid_col_start", "Row start", show=False),
+        Binding("e", "grid_col_end", "Row end", show=False),
+        Binding("c", "go_to_column", "Go to column", show=False),
+        Binding("f", "filter_rows", "Filter rows", show=False),
+        Binding("slash", "filter_columns", "Filter columns", show=False),
         Binding("d", "dim_cycle", "Dim mode", show=False),
         Binding("enter", "dim_toggle_nav", "Toggle nav", show=False),
         Binding("escape", "dim_exit", "Exit dim mode", show=False),
@@ -245,7 +513,7 @@ class B2ViewApp(App):
                             yield Static("", id="vlmetadata")
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
-                    data_pane.border_subtitle = "d(im mode) | t(op) - b(ottom) - g(oto)"
+                    data_pane.border_subtitle = "?(help) | d(im mode) | filter: f(rows) /(cols) | rows: t/b/g(oto) | cols: s/e/c(goto)"
                     yield Static("", id="data-header")
                     with Horizontal(id="data-table-row"):
                         yield BufferedDataTable(id="data-table", show_row_labels=True, zebra_stripes=True)
@@ -385,8 +653,10 @@ class B2ViewApp(App):
                 else:
                     data = self.browser.preview(path, max_rows=self.preview_rows, max_cols=self.preview_cols)
                 if self._is_table_preview(data):
-                    self._update_data_table(data)
+                    # A freshly selected node starts at the first column
+                    self._update_data_table(data, cursor_col=0)
                     self._update_data_header(data)
+                    self.call_after_refresh(self._ensure_viewport_consistent)
                 else:
                     header, body = make_preview_renderables(data)
                     data_header.display = header is not None
@@ -469,6 +739,106 @@ class B2ViewApp(App):
         usable = max(1, width - 6)
         return max(1, usable // col_width)
 
+    # DataTable pads each cell with one space on both sides (cell_padding=1)
+    _CELL_PAD = 2
+
+    def _data_table_width(self) -> int:
+        return self.query_one("#data-table", DataTable).size.width
+
+    def _col_avail_width(self, nrows: int) -> int:
+        """Width available for data columns, or 0 before layout has settled."""
+        width = self._data_table_width()
+        if width <= 1:
+            return 0
+        label_width = len(str(max(0, int(nrows) - 1))) + self._CELL_PAD
+        return max(1, width - label_width)
+
+    def _candidate_max_cols(self) -> int:
+        """Upper bound of columns worth fetching before the width-based trim."""
+        width = self._data_table_width()
+        if width <= 1:
+            return self.preview_cols
+        # The narrowest possible column is one character plus padding.
+        return max(1, width // (1 + self._CELL_PAD))
+
+    @classmethod
+    def _measure_column_widths(cls, data: dict) -> list[int]:
+        """Rendered width (content + padding) of every column in *data*."""
+        widths = []
+        for name in data["columns"]:
+            cells = data["data"][name]
+            decimals = column_float_decimals(cells)
+            content = max(
+                len(str(name)),
+                max((len(format_cell(value, float_decimals=decimals)) for value in cells), default=1),
+            )
+            widths.append(content + cls._CELL_PAD)
+        return widths
+
+    def _trim_columns_to_fit(self, data: dict) -> dict:
+        """Drop trailing columns of *data* that do not fit the table width.
+
+        The preview fetches a generous candidate window of columns; this
+        second pass measures the actual rendered cell widths and keeps only
+        as many whole columns as truly fit the data table.
+        """
+        if data.get("source_kind") not in _COL_PAGED_KINDS:
+            return data
+        avail = self._col_avail_width(data["nrows"])
+        if avail <= 0:
+            return data  # layout not settled; keep the estimate-based window
+        widths = self._measure_column_widths(data)
+        keep = 0
+        total = 0
+        for width in widths:
+            if keep >= 1 and total + width > avail:
+                break
+            total += width
+            keep += 1
+        if keep >= len(data["columns"]):
+            return data
+        kept = data["columns"][:keep]
+        data = dict(data)
+        data["data"] = {name: data["data"][name] for name in kept}
+        data["columns"] = kept
+        data["col_stop"] = data["col_start"] + keep
+        data["hidden_columns"] = max(0, data["ncols"] - keep)
+        return data
+
+    def _fetch_columns_for_measure(self, col_start: int, count: int) -> dict:
+        """Fetch the current page rows for columns [col_start, col_start+count)."""
+        page = self.table_page
+        max_rows = max(1, page["stop"] - page["start"])
+        layout = self._data_layout
+        if layout is not None and len(layout.shape) >= 1:
+            probe = layout.copy_with(row_start=page["start"], col_start=col_start)
+            return self.browser.preview(self.selected_path, max_rows=max_rows, max_cols=count, layout=probe)
+        return self.browser.preview(
+            self.selected_path,
+            start=page["start"],
+            stop=page["stop"],
+            max_cols=count,
+            col_start=col_start,
+        )
+
+    def _fit_col_start_backward(self, end: int) -> int:
+        """Start of the widest whole-column window ending just before *end*."""
+        page = self.table_page
+        avail = self._col_avail_width(page["nrows"])
+        if avail <= 0:
+            return max(0, end - max(1, self._col_page_size()))
+        candidate = min(end, max(1, avail // (1 + self._CELL_PAD)))
+        cand_start = end - candidate
+        widths = self._measure_column_widths(self._fetch_columns_for_measure(cand_start, candidate))
+        start = end - 1  # always keep at least one column
+        total = widths[-1]
+        for i in range(len(widths) - 2, -1, -1):
+            if total + widths[i] > avail:
+                break
+            total += widths[i]
+            start = cand_start + i
+        return max(0, start)
+
     def _table_page_size(self) -> int:
         table = self.query_one("#data-table", DataTable)
         # Keep only rows likely to be visible.  The DataTable header consumes one
@@ -488,10 +858,11 @@ class B2ViewApp(App):
         if self.table_buffer is not None:
             buffer_start = self.table_buffer["start"]
             buffer_stop = self.table_buffer["stop"]
-            same_columns = self.table_buffer.get("source_kind") not in {"ndarray2d", "ndarray_slice"} or (
-                self.table_buffer.get("col_start") == self.grid_col_start
-                and self.table_buffer.get("slice_indices")
-                == (
+            buffer_kind = self.table_buffer.get("source_kind")
+            if buffer_kind in {"ndarray2d", "ndarray_slice"}:
+                same_columns = self.table_buffer.get(
+                    "col_start"
+                ) == self.grid_col_start and self.table_buffer.get("slice_indices") == (
                     [
                         layout.fixed_values.get(i, 0)
                         for i in range(len(layout.shape))
@@ -500,7 +871,10 @@ class B2ViewApp(App):
                     if layout is not None
                     else []
                 )
-            )
+            elif buffer_kind == "ctable":
+                same_columns = self.table_buffer.get("col_start") == self.grid_col_start
+            else:
+                same_columns = True
             if same_columns and buffer_start <= start and start + page_size <= buffer_stop:
                 data = self._slice_table_buffer(start, page_size)
                 self.table_page = data
@@ -518,7 +892,7 @@ class B2ViewApp(App):
             data = self.browser.preview(
                 path,
                 max_rows=buffer_size,
-                max_cols=self._col_page_size(),
+                max_cols=self._candidate_max_cols(),
                 layout=layout,
             )
         else:
@@ -528,9 +902,11 @@ class B2ViewApp(App):
                 start=buffer_start,
                 stop=buffer_start + buffer_size,
                 max_rows=buffer_size,
-                max_cols=self._col_page_size(),
+                max_cols=self._candidate_max_cols(),
                 col_start=self.grid_col_start,
             )
+        data = self._trim_columns_to_fit(data)
+        data["viewport_width"] = self._data_table_width()
         self.table_buffer = data
         data = self._slice_table_buffer(start, page_size)
         self.table_page = data
@@ -577,22 +953,34 @@ class B2ViewApp(App):
                     "ncols",
                     "slice_indices",
                     "n_slices_per_dim",
+                    "viewport_width",
                 )
                 if key in buffer
             },
         }
 
-    def _update_data_table(self, data: dict, *, cursor_row: int = 0, cursor_col: int = 0) -> None:
+    def _update_data_table(self, data: dict, *, cursor_row: int = 0, cursor_col: int | None = None) -> None:
+        """Refresh the data grid; *cursor_col* None keeps the current column."""
         table = self.query_one("#data-table", DataTable)
+        if cursor_col is None:
+            cursor_col = table.cursor_column
         self.loading_table_page = True
         try:
             table.clear(columns=True)
             for name in data["columns"]:
                 table.add_column(name, key=name)
+            # Uniform decimals per float column, taken from the whole buffer
+            # when available so the format is stable while paging rows.
+            buffer = self.table_buffer
+            source = buffer if buffer is not None and buffer["columns"] == data["columns"] else data
+            decimals = {name: column_float_decimals(source["data"][name]) for name in data["columns"]}
             nrows = data["stop"] - data["start"]
             for i in range(nrows):
                 table.add_row(
-                    *[format_cell(data["data"][name][i]) for name in data["columns"]],
+                    *[
+                        format_cell(data["data"][name][i], float_decimals=decimals[name])
+                        for name in data["columns"]
+                    ],
                     label=str(data["start"] + i),
                 )
             nrows = data["stop"] - data["start"]
@@ -632,33 +1020,29 @@ class B2ViewApp(App):
         if self.loading_table_page or self.table_page is None:
             return False
         page = self.table_page
-        if page.get("source_kind") not in ("ndarray2d", "ndarray_slice"):
+        if page.get("source_kind") not in _COL_PAGED_KINDS:
             return False
-        page_cols = max(1, len(page["columns"]))
-        ncols = page["ncols"]
-        col_start = page["col_start"]
+        # Whole-column windows of data-dependent size: paging right starts at
+        # the first hidden column; paging left fits as many whole columns as
+        # possible ending just before the current first one (no skips, no gaps).
         if direction > 0:
-            if page["col_stop"] >= ncols:
+            if page["col_stop"] >= page["ncols"]:
                 return False
-            self.grid_col_start = min(ncols - 1, col_start + page_cols)
-            cursor_col = 0
+            self.grid_col_start = page["col_stop"]
         else:
-            if col_start <= 0:
+            if page["col_start"] <= 0:
                 return False
-            self.grid_col_start = max(0, col_start - page_cols)
-            cursor_col = page_cols - 1
+            self.grid_col_start = self._fit_col_start_backward(page["col_start"])
         self.table_buffer = None
         data = self._load_table_page(self.selected_path, page["start"])
         cursor_row = self.query_one("#data-table", DataTable).cursor_row
+        cursor_col = 0 if direction > 0 else len(data["columns"]) - 1
         self._update_data_table(data, cursor_row=cursor_row, cursor_col=cursor_col)
         self._update_data_header(data)
         return True
 
     def _grid_col_home(self) -> bool:
-        if self.table_page is None or self.table_page.get("source_kind") not in (
-            "ndarray2d",
-            "ndarray_slice",
-        ):
+        if self.table_page is None or self.table_page.get("source_kind") not in _COL_PAGED_KINDS:
             return False
         self.grid_col_start = 0
         self.table_buffer = None
@@ -669,18 +1053,15 @@ class B2ViewApp(App):
         return True
 
     def _grid_col_end(self) -> bool:
-        if self.table_page is None or self.table_page.get("source_kind") not in (
-            "ndarray2d",
-            "ndarray_slice",
-        ):
+        if self.table_page is None or self.table_page.get("source_kind") not in _COL_PAGED_KINDS:
             return False
         page = self.table_page
-        page_cols = max(1, len(page["columns"]))
-        self.grid_col_start = max(0, page["ncols"] - page_cols)
+        # Jump to the widest whole-column window ending at the last column
+        self.grid_col_start = self._fit_col_start_backward(page["ncols"])
         self.table_buffer = None
         data = self._load_table_page(self.selected_path, page["start"])
         cursor_row = self.query_one("#data-table", DataTable).cursor_row
-        self._update_data_table(data, cursor_row=cursor_row, cursor_col=page_cols - 1)
+        self._update_data_table(data, cursor_row=cursor_row, cursor_col=len(data["columns"]) - 1)
         self._update_data_header(data)
         return True
 
@@ -717,6 +1098,17 @@ class B2ViewApp(App):
             header_parts.append(f"rows {data['start']}:{data['stop']} of {data['nrows']}")
             if "col_start" in data:
                 header_parts.append(f"cols {data['col_start']}:{data['col_stop']} of {data['ncols']}")
+            if data.get("source_kind") == "ctable" and self.browser is not None:
+                flt = self.browser.get_filter(self.selected_path)
+                col_flt = self.browser.get_column_filter(self.selected_path)
+                if flt:
+                    total = self.browser.base_nrows(self.selected_path)
+                    header_parts.append(f"filter: [bold]{markup_escape(flt)}[/bold] ({total} total)")
+                if col_flt:
+                    total_cols = self.browser.base_ncols(self.selected_path)
+                    header_parts.append(f"cols: [bold]{markup_escape(col_flt)}[/bold] ({total_cols} total)")
+                if flt or col_flt:
+                    header_parts.append("<Esc>clear")
 
         line = ", ".join(header_parts)
         if self._dim_mode and layout is not None:
@@ -752,7 +1144,7 @@ class B2ViewApp(App):
 
     def _update_global_col_scrollbar(self, data: dict) -> None:
         scrollbar = self.query_one("#col-scrollbar", Static)
-        if data.get("source_kind") not in ("ndarray2d", "ndarray_slice"):
+        if data.get("source_kind") not in _COL_PAGED_KINDS:
             scrollbar.display = False
             scrollbar.update("")
             return
@@ -826,6 +1218,84 @@ class B2ViewApp(App):
         screen = GoToRowScreen(nrows=self.table_page["nrows"], current=current)
         self.push_screen(screen, self._go_to_row)
 
+    def action_go_to_column(self) -> None:
+        if not self._in_data_grid():
+            return
+        page = self.table_page
+        if page.get("source_kind") not in _COL_PAGED_KINDS:
+            return
+        current = page["col_start"] + self.query_one("#data-table", DataTable).cursor_column
+        names = self.browser.column_names(self.selected_path) if page["source_kind"] == "ctable" else None
+        screen = GoToColumnScreen(ncols=page["ncols"], current=current, names=names)
+        self.push_screen(screen, self._go_to_column)
+
+    def action_filter_rows(self) -> None:
+        if not self._in_data_grid():
+            return
+        if self.table_page.get("source_kind") != "ctable":
+            self.notify("Filtering is only supported for CTable nodes", severity="warning")
+            return
+        screen = FilterScreen(current=self.browser.get_filter(self.selected_path))
+        self.push_screen(screen, self._apply_filter)
+
+    def _apply_filter(self, expr: str | None) -> None:
+        if expr is None or self.browser is None or self.table_page is None:
+            return
+        if expr == (self.browser.get_filter(self.selected_path) or ""):
+            return
+        try:
+            self.browser.set_filter(self.selected_path, expr)
+        except Exception as exc:
+            self.notify(f"Invalid filter: {exc}", severity="error")
+            return
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, 0)
+        self._update_data_table(data, cursor_row=0, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
+    def action_filter_columns(self) -> None:
+        if not self._in_data_grid():
+            return
+        if self.table_page.get("source_kind") != "ctable":
+            self.notify("Column filtering is only supported for CTable nodes", severity="warning")
+            return
+        screen = FilterScreen(
+            current=self.browser.get_column_filter(self.selected_path),
+            title="Filter columns by substring (empty clears)",
+            placeholder="e.g. payment",
+        )
+        self.push_screen(screen, self._apply_column_filter)
+
+    def _apply_column_filter(self, pattern: str | None) -> None:
+        if pattern is None or self.browser is None or self.table_page is None:
+            return
+        if pattern == (self.browser.get_column_filter(self.selected_path) or ""):
+            return
+        try:
+            self.browser.set_column_filter(self.selected_path, pattern)
+        except Exception as exc:
+            self.notify(f"Invalid column filter: {exc}", severity="error")
+            return
+        self.grid_col_start = 0
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, self.table_page["start"])
+        cursor_row = self.query_one("#data-table", DataTable).cursor_row
+        self._update_data_table(data, cursor_row=cursor_row, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
+    def _go_to_column(self, col: int | None) -> None:
+        if col is None or self.table_page is None:
+            return
+        self.grid_col_start = col
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, self.table_page["start"])
+        cursor_row = self.query_one("#data-table", DataTable).cursor_row
+        self._update_data_table(data, cursor_row=cursor_row, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
     def _focused_pane(self):
         focused = self.focused
         if focused is None:
@@ -850,6 +1320,30 @@ class B2ViewApp(App):
             self.call_after_refresh(self._reload_table_for_current_viewport)
             return
         self.action_refresh()
+
+    def _ensure_viewport_consistent(self) -> None:
+        """Reload the page if it was sized before the layout had settled.
+
+        The first page of a node may be loaded while the DataTable still has
+        no size, in which case the CLI fallbacks (preview_rows/preview_cols)
+        determine the window.  Later paging then uses the settled viewport
+        sizes, so the windows would drift unless we reload once here.
+        """
+        page = self.table_page
+        if page is None or not self.query_one("#data-table-row", Horizontal).display:
+            return
+        rows_loaded = page["stop"] - page["start"]
+        rows_want = min(self._table_page_size(), page["nrows"] - page["start"])
+        cols_ok = True
+        if page.get("source_kind") in _COL_PAGED_KINDS:
+            # The column window is fitted to the width current at load time
+            cols_ok = page.get("viewport_width") == self._data_table_width()
+        if rows_loaded == rows_want and cols_ok:
+            return
+        self._reload_table_for_current_viewport()
+
+    def _on_data_table_resized(self) -> None:
+        self.call_after_refresh(self._ensure_viewport_consistent)
 
     def _reload_table_for_current_viewport(self) -> None:
         """Reload the table page after layout changes such as maximize/restore."""
@@ -884,7 +1378,7 @@ class B2ViewApp(App):
     def _adjust_fixed_value(self, direction: int) -> None:
         """Adjust the fixed value of the active dimension (if it is fixed).
 
-        In DIM mode the value wraps around at boundaries (0 ↔ max).
+        The value clamps at the boundaries (no wrap-around).
         """
         layout = self._data_layout
         if layout is None or self.table_page is None:
@@ -896,19 +1390,9 @@ class B2ViewApp(App):
         if total <= 0:
             return
         current = layout.fixed_values[dim]
-        if self._dim_mode and total > 1:
-            # Cycle: up at max → 0, down at 0 → max-1
-            new_val = (current + direction) % total
-        else:
-            # Clamp at boundaries (normal mode)
-            if direction > 0:
-                if current >= total - 1:
-                    return
-                new_val = current + 1
-            else:
-                if current <= 0:
-                    return
-                new_val = current - 1
+        new_val = min(max(current + direction, 0), total - 1)
+        if new_val == current:
+            return
         new_fixed = dict(layout.fixed_values)
         new_fixed[dim] = new_val
         self._data_layout = layout.copy_with(fixed_values=new_fixed)
@@ -988,7 +1472,7 @@ class B2ViewApp(App):
             self._scroll_navigable_viewport(direction)
 
     def _scroll_navigable_viewport(self, direction: int) -> None:
-        """Shift the viewport of a navigable dimension by one step (wraps)."""
+        """Shift the viewport of a navigable dimension by one step (clamps)."""
         layout = self._data_layout
         if layout is None or self.table_page is None:
             return
@@ -1001,13 +1485,19 @@ class B2ViewApp(App):
         total = layout.shape[dim]
 
         if pos == 0:
-            # Row navigable dim — shift start by one row (wraps)
-            new_start = (page["start"] + direction) % total
+            # Row navigable dim — shift start by one row, keeping a full page
+            max_start = max(0, total - self._table_page_size())
+            new_start = min(max(page["start"] + direction, 0), max_start)
+            if new_start == page["start"]:
+                return
             self.table_buffer = None
             data = self._load_table_page(self.selected_path, new_start)
         else:
-            # Column navigable dim — shift col_start by one column (wraps)
-            new_col = (page["col_start"] + direction) % total
+            # Column navigable dim — shift col_start by one whole column
+            max_col = self._fit_col_start_backward(total)
+            new_col = min(max(page["col_start"] + direction, 0), max_col)
+            if new_col == page["col_start"]:
+                return
             self.grid_col_start = new_col
             self.table_buffer = None
             data = self._load_table_page(self.selected_path, page["start"])
@@ -1035,12 +1525,26 @@ class B2ViewApp(App):
         self._dim_toggle()
 
     def action_dim_exit(self) -> None:
-        """Escape: exit dim mode."""
-        if not self._dim_mode:
+        """Escape: exit dim mode, or clear an active CTable filter.
+
+        One layer per press: dim mode, then the row filter, then the
+        column filter.
+        """
+        if self._dim_mode:
+            self._dim_mode = False
+            if self.table_page is not None:
+                self._update_data_header(self.table_page)
             return
-        self._dim_mode = False
-        if self.table_page is not None:
-            self._update_data_header(self.table_page)
+        if (
+            not self._in_data_grid()
+            or self.table_page.get("source_kind") != "ctable"
+            or self.browser is None
+        ):
+            return
+        if self.browser.get_filter(self.selected_path):
+            self._apply_filter("")
+        elif self.browser.get_column_filter(self.selected_path):
+            self._apply_column_filter("")
 
     def action_grid_row_top(self) -> None:
         """Jump to the first row of the table."""
@@ -1053,3 +1557,16 @@ class B2ViewApp(App):
         if not self._in_data_grid():
             return
         self._go_to_row(self.table_page["nrows"] - 1)
+
+    def action_show_help(self) -> None:
+        self.push_screen(HelpScreen())
+
+    def action_grid_col_start(self) -> None:
+        """Jump to the first column window (alias of Home)."""
+        if self._in_data_grid():
+            self._grid_col_home()
+
+    def action_grid_col_end(self) -> None:
+        """Jump to the last column window (alias of End)."""
+        if self._in_data_grid():
+            self._grid_col_end()

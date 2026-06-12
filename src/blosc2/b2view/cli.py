@@ -18,6 +18,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="tree",
         help="Panel to focus on startup",
     )
+    parser.add_argument(
+        "--mouse",
+        action="store_true",
+        help="Capture the mouse for clicking and scrolling (disables the terminal's native text selection)",
+    )
     return parser
 
 
@@ -27,9 +32,7 @@ def main(argv: list[str] | None = None) -> int:
         from blosc2.b2view.app import B2ViewApp
     except ImportError as exc:
         print(
-            "b2view requires the optional TUI dependencies. Install them with:\n"
-            "\n"
-            '    pip install "blosc2[tui]"\n',
+            "b2view could not import its TUI dependencies. Install them with:\n\n    pip install textual\n",
             file=sys.stderr,
         )
         print(f"Original import error: {exc}", file=sys.stderr)
@@ -42,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         preview_rows=args.preview_rows,
         preview_cols=args.preview_cols,
     )
-    app.run()
+    app.run(mouse=args.mouse)
     return 0
 
 

@@ -105,7 +105,34 @@ def _format_metadata_value(value: Any) -> str:
     return str(value)
 
 
-def format_cell(value: Any) -> str:
+def column_float_decimals(values: Any) -> int | None:
+    """Return a uniform decimal count for a float column, or None.
+
+    The count derives from the column's maximum magnitude so every cell fits
+    the same ~9 character budget that _fmt_float uses per value: digits move
+    from the fraction to the integer part as magnitudes grow, but uniformly
+    for the whole column, keeping the decimal points aligned.
+
+    Returns None when *values* is not a float column or when its magnitude
+    calls for scientific notation (handled per value by _fmt_float).
+    """
+    arr = np.asarray(values)
+    if arr.dtype.kind != "f" or arr.size == 0:
+        return None
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return None
+    largest = float(np.max(np.abs(finite)))
+    if largest == 0:
+        return 1  # an all-zero column reads best as plain 0.0
+    if largest >= 1e9 or largest < 1e-6:
+        return None
+    int_digits = max(1, int(np.floor(np.log10(largest))) + 1)
+    # 9-char budget: sign/pad + int digits + decimal point + decimals
+    return max(0, 7 - int_digits)
+
+
+def format_cell(value: Any, *, float_decimals: int | None = None) -> str:
     if isinstance(value, np.generic):
         value = value.item()
     if isinstance(value, np.ndarray):
@@ -113,7 +140,7 @@ def format_cell(value: Any) -> str:
     elif isinstance(value, (list, tuple, dict)):
         text = pformat(value, compact=True, width=80)
     elif isinstance(value, float):
-        text = _fmt_float(value)
+        text = _fmt_float(value) if float_decimals is None else f"{value:9.{float_decimals}f}"
     else:
         text = str(value)
     text = " ".join(text.splitlines())

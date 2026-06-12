@@ -38,6 +38,8 @@ dependencies = [
     "numexpr>=2.14.1; platform_machine != 'wasm32'",
     "pydantic",
     "requests",
+    "rich",
+    "textual",
     "threadpoolctl; platform_machine != 'wasm32'",
 ]
 version = "4.4.4.dev0"
@@ -50,7 +52,6 @@ documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [project.optional-dependencies]
 parquet = ["pyarrow"]
-tui = ["textual", "rich"]
 
 [project.scripts]
 parquet-to-blosc2 = "blosc2.cli.parquet_to_blosc2:main"
@@ -74,6 +75,8 @@ dev = [
 ]
 test = [
     "pytest",
+    # for the b2view Pilot tests
+    "pytest-asyncio",
     "psutil; platform_machine != 'wasm32'",
     # torch is optional because it is quite large (but will still be used if found)
     # "torch; platform_machine != 'wasm32'",
