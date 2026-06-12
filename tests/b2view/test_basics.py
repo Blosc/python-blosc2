@@ -36,6 +36,13 @@ import pytest
 pytest.importorskip("textual")
 pytest.importorskip("pytest_asyncio")
 
+import blosc2
+
+if blosc2.IS_WASM:
+    # Instantiating a Textual app selects a terminal driver, and the Linux
+    # driver needs termios, which Emscripten does not provide.
+    pytest.skip("Textual apps need a terminal driver (termios)", allow_module_level=True)
+
 import tree_store_gen as gen
 from textual.widgets import DataTable, Input, Tree
 

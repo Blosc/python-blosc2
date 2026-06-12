@@ -128,6 +128,8 @@ def test_store_browser_uses_grid_preview_for_2d_ndarray(tmp_path):
 
 def test_ctable_preview_buffer_reuses_loaded_rows(tmp_path):
     pytest.importorskip("textual", reason="b2view TUI requires textual")
+    if blosc2.IS_WASM:
+        pytest.skip("instantiating a Textual app needs a terminal driver (termios)")
     path = tmp_path / "table.b2z"
     persistent = blosc2.CTable(Row, urlpath=str(path), mode="w")
     for i in range(100):
