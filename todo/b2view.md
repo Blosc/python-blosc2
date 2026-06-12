@@ -11,10 +11,10 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ### Navigation
 
-- [ ] Go-to-column: a column analogue of the `g`(oto row) modal, for jumping
-      directly to a column index (arrays) or a column name (CTables).
 - [ ] Column-name search/filter for wide CTables (e.g. `/` to filter the
-      visible columns by substring).
+      visible columns by substring).  Note: the `c` goto-column modal already
+      resolves unique name prefixes; this item is about *filtering* the
+      visible set, not jumping.
 - [ ] Row paging can lose page alignment after dim-mode single-row scrolls
       (`_scroll_navigable_viewport` shifts by 1); consider re-aligning on the
       next page up/down, as column paging does now.
@@ -28,8 +28,6 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ### Testing
 
-- [ ] Terminal-resize behavior: `on_resize` re-checks viewport consistency,
-      but there is no Pilot test resizing the terminal mid-session.
 - [ ] Visual regressions: consider `pytest-textual-snapshot` (SVG snapshots)
       if rendering glitches become a recurring theme.
 
@@ -68,3 +66,10 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 - 2026-06-12: `?` opens a help screen listing all keys grouped by area
   (panels, tree, grid rows/columns, dim mode); shown in the footer, closed
   with esc/`?`/`q`.
+- 2026-06-12: `c` opens a go-to-column modal: accepts a column index, and
+  for CTables also an exact column name or a unique name prefix; the target
+  becomes the first visible column, keeping the row position.
+- 2026-06-12: Resize Pilot test (`pilot.resize_terminal`) — it immediately
+  caught that the resize handler lived on the App, which never receives
+  Resize events; moved to BufferedDataTable.on_resize, so the windows now
+  re-fit on terminal resize and panel maximize/restore for real.

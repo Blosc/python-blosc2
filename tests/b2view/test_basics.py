@@ -39,7 +39,7 @@ pytest.importorskip("pytest_asyncio")
 import tree_store_gen as gen
 from textual.widgets import DataTable, Input, Tree
 
-from blosc2.b2view.app import B2ViewApp, GoToRowScreen, HelpScreen
+from blosc2.b2view.app import B2ViewApp, GoToColumnScreen, GoToRowScreen, HelpScreen
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.tui]
 
@@ -257,6 +257,18 @@ async def test_2d_paging(store_path):
         await wait_for_table(pilot)
         assert app.table_page["col_start"] == 0
 
+        # 'c' jumps to a column by index (arrays have no column names)
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(app.screen, GoToColumnScreen)
+        app.screen.query_one("#gotocol-input", Input).value = "97"
+        await pilot.press("enter")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["col_start"] == 97
+        assert page["col_stop"] == LEAF2_SHAPE[1]
+        np.testing.assert_allclose(page["data"]["97"], expected[page["start"] : page["stop"], 97])
+
 
 # ── 3-D array: dim mode navigation ───────────────────────────────────────
 
@@ -430,3 +442,48 @@ async def test_ctable_column_paging(store_path):
         assert page["col_start"] > 0
         assert page["start"] + table.cursor_row == 150
         _assert_ctable_window_values(page, expected)
+
+        # 'c' goes to a column by name; the row position is kept
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(app.screen, GoToColumnScreen)
+        app.screen.query_one("#gotocol-input", Input).value = "v12"
+        await pilot.press("enter")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["col_start"] == all_names.index("v12")
+        assert page["columns"][0] == "v12"
+        assert table.cursor_column == 0
+        assert page["start"] + table.cursor_row == 150
+        _assert_ctable_window_values(page, expected)
+
+        # An ambiguous name prefix keeps the modal open; escape cancels
+        await pilot.press("c")
+        await pilot.pause()
+        app.screen.query_one("#gotocol-input", Input).value = "v1"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, GoToColumnScreen)
+        await pilot.press("escape")
+        await wait_for_table(pilot)
+        assert app.table_page["col_start"] == all_names.index("v12")
+
+        # ...and a numeric index works as well
+        await pilot.press("c")
+        await pilot.pause()
+        app.screen.query_one("#gotocol-input", Input).value = "0"
+        await pilot.press("enter")
+        await wait_for_table(pilot)
+        assert app.table_page["col_start"] == 0
+
+        # Shrinking the terminal re-fits the column window to the new width
+        wide_columns = list(app.table_page["columns"])
+        await pilot.resize_terminal(80, 40)
+        for _ in range(100):
+            await pilot.pause()
+            if not app.loading_table_page and app.table_page.get("viewport_width") == table.size.width:
+                break
+        page = app.table_page
+        assert page["viewport_width"] == table.size.width
+        assert len(page["columns"]) < len(wide_columns)
+        assert table.virtual_size.width <= table.size.width

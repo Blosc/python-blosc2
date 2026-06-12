@@ -105,6 +105,11 @@ class BufferedDataTable(DataTable):
             return
         super().action_select_cursor()
 
+    def on_resize(self, event) -> None:
+        # The column/row windows are fitted to this table's size; re-check
+        # whenever it changes (terminal resize, panel maximize, ...).
+        getattr(self.app, "_on_data_table_resized", lambda: None)()
+
     def action_scroll_home(self) -> None:
         if getattr(self.app, "_grid_col_home", lambda: False)():
             pass
@@ -179,6 +184,7 @@ class HelpScreen(ModalScreen[None]):
             [
                 ("left / right", "move cursor; pages at the edges"),
                 ("s / e  (home / end)", "first / last column window"),
+                ("c", "go to column index or name..."),
             ],
         ),
         (
@@ -267,6 +273,80 @@ class GoToRowScreen(ModalScreen[int | None]):
         self.dismiss(None)
 
 
+class GoToColumnScreen(ModalScreen[int | None]):
+    """Small modal asking for a column index or (for CTables) a column name."""
+
+    CSS = """
+    GoToColumnScreen {
+        align: center middle;
+    }
+    #gotocol-dialog {
+        width: 50;
+        height: auto;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #gotocol-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, *, ncols: int, current: int, names: list[str] | None = None):
+        super().__init__()
+        self.ncols = ncols
+        self.current = current
+        self.names = names
+
+    def compose(self) -> ComposeResult:
+        what = f"column 0..{self.ncols - 1}"
+        if self.names:
+            what += " or name"
+        with Vertical(id="gotocol-dialog"):
+            yield Static(f"Go to {what} (current: {self.current})", id="gotocol-title")
+            yield Input(placeholder="column index or name", id="gotocol-input")
+
+    def on_mount(self) -> None:
+        input_widget = self.query_one("#gotocol-input", Input)
+        input_widget.value = str(self.current)
+        input_widget.focus()
+
+    def _fail(self, message: str) -> None:
+        self.query_one("#gotocol-title", Static).update(message)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        value = event.value.strip().replace("_", "")
+        try:
+            col = int(value)
+        except ValueError:
+            col = self._match_name(event.value.strip())
+            if col is None:
+                return
+        if not 0 <= col < self.ncols:
+            self._fail(f"Column must be in range 0..{self.ncols - 1}")
+            return
+        self.dismiss(col)
+
+    def _match_name(self, value: str) -> int | None:
+        """Resolve a column name (exact, or unique prefix) to its index."""
+        if not self.names:
+            self._fail("Please enter an integer column index")
+            return None
+        if value in self.names:
+            return self.names.index(value)
+        matches = [i for i, name in enumerate(self.names) if name.startswith(value)] if value else []
+        if len(matches) == 1:
+            return matches[0]
+        self._fail(f"{'Ambiguous' if matches else 'Unknown'} column name {value!r}")
+        return None
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class B2ViewApp(App):
     """Browse TreeStore hierarchy and preview objects."""
 
@@ -303,6 +383,7 @@ class B2ViewApp(App):
         Binding("b", "grid_row_bottom", "Bottom", show=False),
         Binding("s", "grid_col_start", "Row start", show=False),
         Binding("e", "grid_col_end", "Row end", show=False),
+        Binding("c", "go_to_column", "Go to column", show=False),
         Binding("d", "dim_cycle", "Dim mode", show=False),
         Binding("enter", "dim_toggle_nav", "Toggle nav", show=False),
         Binding("escape", "dim_exit", "Exit dim mode", show=False),
@@ -352,9 +433,7 @@ class B2ViewApp(App):
                             yield Static("", id="vlmetadata")
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
-                    data_pane.border_subtitle = (
-                        "d(im mode) | rows: t(op)/b(ottom)/g(oto) | cols: s(tart)/e(nd)"
-                    )
+                    data_pane.border_subtitle = "?(help) | d(im mode) | rows: t/b/g(oto) | cols: s/e/c(goto)"
                     yield Static("", id="data-header")
                     with Horizontal(id="data-table-row"):
                         yield BufferedDataTable(id="data-table", show_row_labels=True, zebra_stripes=True)
@@ -1048,6 +1127,28 @@ class B2ViewApp(App):
         screen = GoToRowScreen(nrows=self.table_page["nrows"], current=current)
         self.push_screen(screen, self._go_to_row)
 
+    def action_go_to_column(self) -> None:
+        if not self._in_data_grid():
+            return
+        page = self.table_page
+        if page.get("source_kind") not in _COL_PAGED_KINDS:
+            return
+        current = page["col_start"] + self.query_one("#data-table", DataTable).cursor_column
+        names = self.browser.column_names(self.selected_path) if page["source_kind"] == "ctable" else None
+        screen = GoToColumnScreen(ncols=page["ncols"], current=current, names=names)
+        self.push_screen(screen, self._go_to_column)
+
+    def _go_to_column(self, col: int | None) -> None:
+        if col is None or self.table_page is None:
+            return
+        self.grid_col_start = col
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, self.table_page["start"])
+        cursor_row = self.query_one("#data-table", DataTable).cursor_row
+        self._update_data_table(data, cursor_row=cursor_row, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
     def _focused_pane(self):
         focused = self.focused
         if focused is None:
@@ -1094,7 +1195,7 @@ class B2ViewApp(App):
             return
         self._reload_table_for_current_viewport()
 
-    def on_resize(self, event) -> None:
+    def _on_data_table_resized(self) -> None:
         self.call_after_refresh(self._ensure_viewport_consistent)
 
     def _reload_table_for_current_viewport(self) -> None:

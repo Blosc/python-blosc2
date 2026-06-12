@@ -268,6 +268,11 @@ class StoreBrowser:
             return {"message": "SChunk byte preview is not implemented yet."}
         return {"message": f"Preview is not supported for {kind!r} objects."}
 
+    def column_names(self, path: str) -> list[str] | None:
+        """Return the column names for a CTable path, or None for other kinds."""
+        names = list(getattr(self._get_object(path), "col_names", []) or [])
+        return names or None
+
     def _get_object(self, path: str) -> Any:
         """Return the object represented by *path*."""
         path = self.normalize_path(path)
