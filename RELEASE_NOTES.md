@@ -1,6 +1,8 @@
 # Release notes
 
-## Changes from 4.4.3 to 4.4.4
+## Changes from 4.4.3 to 4.4.5
+
+Note: 4.4.4 was skipped due to a failure during the release process.
 
 This release promotes the `b2view` terminal viewer to a core feature —
 installed by default, with new interactive row and column filtering — and

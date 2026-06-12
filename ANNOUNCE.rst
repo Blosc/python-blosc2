@@ -1,4 +1,4 @@
-Announcing Python-Blosc2 4.4.4
+Announcing Python-Blosc2 4.4.5
 ==============================
 
 We are happy to announce this release, which promotes the ``b2view``
