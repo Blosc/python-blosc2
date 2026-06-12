@@ -22,6 +22,9 @@ _KIND_ICONS = {
     "unknown": "?",
 }
 
+# Source kinds whose data grid supports horizontal (column) paging.
+_COL_PAGED_KINDS = frozenset({"ndarray2d", "ndarray_slice", "ctable"})
+
 
 class B2ViewPanel(Vertical):
     """Pane container that can be maximized."""
@@ -387,6 +390,7 @@ class B2ViewApp(App):
                 if self._is_table_preview(data):
                     self._update_data_table(data)
                     self._update_data_header(data)
+                    self.call_after_refresh(self._ensure_viewport_consistent)
                 else:
                     header, body = make_preview_renderables(data)
                     data_header.display = header is not None
@@ -488,10 +492,11 @@ class B2ViewApp(App):
         if self.table_buffer is not None:
             buffer_start = self.table_buffer["start"]
             buffer_stop = self.table_buffer["stop"]
-            same_columns = self.table_buffer.get("source_kind") not in {"ndarray2d", "ndarray_slice"} or (
-                self.table_buffer.get("col_start") == self.grid_col_start
-                and self.table_buffer.get("slice_indices")
-                == (
+            buffer_kind = self.table_buffer.get("source_kind")
+            if buffer_kind in {"ndarray2d", "ndarray_slice"}:
+                same_columns = self.table_buffer.get(
+                    "col_start"
+                ) == self.grid_col_start and self.table_buffer.get("slice_indices") == (
                     [
                         layout.fixed_values.get(i, 0)
                         for i in range(len(layout.shape))
@@ -500,7 +505,10 @@ class B2ViewApp(App):
                     if layout is not None
                     else []
                 )
-            )
+            elif buffer_kind == "ctable":
+                same_columns = self.table_buffer.get("col_start") == self.grid_col_start
+            else:
+                same_columns = True
             if same_columns and buffer_start <= start and start + page_size <= buffer_stop:
                 data = self._slice_table_buffer(start, page_size)
                 self.table_page = data
@@ -632,7 +640,7 @@ class B2ViewApp(App):
         if self.loading_table_page or self.table_page is None:
             return False
         page = self.table_page
-        if page.get("source_kind") not in ("ndarray2d", "ndarray_slice"):
+        if page.get("source_kind") not in _COL_PAGED_KINDS:
             return False
         page_cols = max(1, len(page["columns"]))
         ncols = page["ncols"]
@@ -655,10 +663,7 @@ class B2ViewApp(App):
         return True
 
     def _grid_col_home(self) -> bool:
-        if self.table_page is None or self.table_page.get("source_kind") not in (
-            "ndarray2d",
-            "ndarray_slice",
-        ):
+        if self.table_page is None or self.table_page.get("source_kind") not in _COL_PAGED_KINDS:
             return False
         self.grid_col_start = 0
         self.table_buffer = None
@@ -669,10 +674,7 @@ class B2ViewApp(App):
         return True
 
     def _grid_col_end(self) -> bool:
-        if self.table_page is None or self.table_page.get("source_kind") not in (
-            "ndarray2d",
-            "ndarray_slice",
-        ):
+        if self.table_page is None or self.table_page.get("source_kind") not in _COL_PAGED_KINDS:
             return False
         page = self.table_page
         page_cols = max(1, len(page["columns"]))
@@ -752,7 +754,7 @@ class B2ViewApp(App):
 
     def _update_global_col_scrollbar(self, data: dict) -> None:
         scrollbar = self.query_one("#col-scrollbar", Static)
-        if data.get("source_kind") not in ("ndarray2d", "ndarray_slice"):
+        if data.get("source_kind") not in _COL_PAGED_KINDS:
             scrollbar.display = False
             scrollbar.update("")
             return
@@ -850,6 +852,31 @@ class B2ViewApp(App):
             self.call_after_refresh(self._reload_table_for_current_viewport)
             return
         self.action_refresh()
+
+    def _ensure_viewport_consistent(self) -> None:
+        """Reload the page if it was sized before the layout had settled.
+
+        The first page of a node may be loaded while the DataTable still has
+        no size, in which case the CLI fallbacks (preview_rows/preview_cols)
+        determine the window.  Later paging then uses the settled viewport
+        sizes, so the windows would drift unless we reload once here.
+        """
+        page = self.table_page
+        if page is None or not self.query_one("#data-table-row", Horizontal).display:
+            return
+        rows_loaded = page["stop"] - page["start"]
+        rows_want = min(self._table_page_size(), page["nrows"] - page["start"])
+        cols_ok = True
+        if page.get("source_kind") in _COL_PAGED_KINDS:
+            cols_loaded = page["col_stop"] - page["col_start"]
+            cols_want = min(self._col_page_size(), page["ncols"] - page["col_start"])
+            cols_ok = cols_loaded == cols_want
+        if rows_loaded == rows_want and cols_ok:
+            return
+        self._reload_table_for_current_viewport()
+
+    def on_resize(self, event) -> None:
+        self.call_after_refresh(self._ensure_viewport_consistent)
 
     def _reload_table_for_current_viewport(self) -> None:
         """Reload the table page after layout changes such as maximize/restore."""

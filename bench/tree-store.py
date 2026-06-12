@@ -9,7 +9,8 @@
 Benchmark for TreeStore hierarchical creation, opening, and listing.
 
 Creates a hierarchy of N1 levels, each with N2 NDArray leaves and one
-CTable (4 cols: bool, int, float, string) with N5 rows.  Leaf ``N``
+CTable (20 cols: bool, int, float, string plus 16 numeric columns) with
+N5 rows.  Leaf ``N``
 receives an *N*-dimensional array (leaf0 is 0‑d, leaf1 is 1‑d, …) with
 each side ``int(MAX_ELEMS ** (1/N))`` so that no array exceeds MAX_ELEMS
 elements.  Everything is written to ``tree-store.b2z`` and the script
@@ -33,6 +34,10 @@ OUTPUT_FILE = "tree-store.b2z"
 
 # ── Row schema for the CTable ────────────────────────────────────────────
 
+# 4 base columns plus 16 extra numeric ones (v04..v19), wide enough to
+# exceed the data panel viewport of b2view.
+NCOLS = 20
+
 
 @dataclasses.dataclass
 class _Row:
@@ -40,6 +45,47 @@ class _Row:
     b: int = blosc2.field(blosc2.int64(), default=0)
     c: float = blosc2.field(blosc2.float64(), default=0.0)
     d: str = ""
+    v04: int = blosc2.field(blosc2.int64(), default=0)
+    v05: float = blosc2.field(blosc2.float64(), default=0.0)
+    v06: int = blosc2.field(blosc2.int64(), default=0)
+    v07: float = blosc2.field(blosc2.float64(), default=0.0)
+    v08: int = blosc2.field(blosc2.int64(), default=0)
+    v09: float = blosc2.field(blosc2.float64(), default=0.0)
+    v10: int = blosc2.field(blosc2.int64(), default=0)
+    v11: float = blosc2.field(blosc2.float64(), default=0.0)
+    v12: int = blosc2.field(blosc2.int64(), default=0)
+    v13: float = blosc2.field(blosc2.float64(), default=0.0)
+    v14: int = blosc2.field(blosc2.int64(), default=0)
+    v15: float = blosc2.field(blosc2.float64(), default=0.0)
+    v16: int = blosc2.field(blosc2.int64(), default=0)
+    v17: float = blosc2.field(blosc2.float64(), default=0.0)
+    v18: int = blosc2.field(blosc2.int64(), default=0)
+    v19: float = blosc2.field(blosc2.float64(), default=0.0)
+
+
+def ctable_values(nrows: int) -> dict[str, np.ndarray]:
+    """Deterministic column values for the CTable; row *i* is predictable.
+
+    Tests (e.g. tests/b2view/test_basics.py) rely on these formulas to check
+    that a given viewport shows the expected values:
+
+    - a: i % 2 == 0
+    - b: i
+    - c: i * 1.5
+    - d: "str_%06d" % i
+    - v{k}, even k: i * k
+    - v{k}, odd k:  linspace(0, k, nrows)[i] == i * k / (nrows - 1)
+    """
+    i = np.arange(nrows)
+    values: dict[str, np.ndarray] = {
+        "a": i % 2 == 0,
+        "b": i,
+        "c": i * 1.5,
+        "d": np.char.add("str_", np.char.zfill(i.astype("U6"), 6)),
+    }
+    for k in range(4, NCOLS):
+        values[f"v{k:02d}"] = i * k if k % 2 == 0 else np.linspace(0, k, num=nrows)
+    return values
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -87,9 +133,16 @@ def create_store(
     max_elems: int,
     nrows: int,
     no_vlmeta: bool = False,
+    output: str = OUTPUT_FILE,
+    verbose: bool = True,
 ) -> tuple[float, int]:
     """Create the TreeStore; return (wall_clock, total_elements_written)."""
-    _clean(OUTPUT_FILE)
+
+    def log(*args, **kwargs):
+        if verbose:
+            print(*args, **kwargs)
+
+    _clean(output)
 
     # Pre-build one array per unique dimensionality (leaf ``i`` → *i*‑d).
     leaf_arrays_np: dict[int, np.ndarray] = {}
@@ -109,25 +162,30 @@ def create_store(
     total_elements = sum(leaf_arrays_np[ndim].size for ndim in range(nleaves)) * nlevels
 
     # Pre-populate a single CTable that we will copy for every level.
+    # Columns are filled from vectorized, predictable sequences (arange /
+    # linspace flavored) so they are fast to build and compress very well.
     tmpl_table = blosc2.CTable(_Row, expected_size=nrows, validate=False)
-    rows = [(i % 2 == 0, i, float(i) * 1.5, f"str_{i:06d}") for i in range(nrows)]
-    tmpl_table.extend(rows, validate=False)
+    cols = ctable_values(nrows)
+    struct = np.empty(nrows, dtype=[(name, vals.dtype) for name, vals in cols.items()])
+    for name, vals in cols.items():
+        struct[name] = vals
+    tmpl_table.extend(struct, validate=False)
 
-    print(
+    log(
         f"\nCreating TreeStore with {nlevels} level(s), "
         f"{nleaves} leave(s) each, {nrows} CTable row(s) per level..."
     )
-    print(f"  Max elements per leaf:  {max_elems:,}")
+    log(f"  Max elements per leaf:  {max_elems:,}")
     for ndim in range(min(nleaves, 10)):
         shape = _leaf_shape(ndim, max_elems)
         nelem = int(np.prod(shape)) if shape else 1
-        print(f"    leaf{ndim}: shape={shape}, elements={nelem:,}, uncompressed={_fmt_bytes(nelem * 8)}")
+        log(f"    leaf{ndim}: shape={shape}, elements={nelem:,}, uncompressed={_fmt_bytes(nelem * 8)}")
     if nleaves > 10:
-        print(f"    ... ({nleaves - 10} more)")
-    print(f"  CTable rows: {nrows}  |  uncompressed table size: {_fmt_bytes(tmpl_table.nbytes)}")
+        log(f"    ... ({nleaves - 10} more)")
+    log(f"  CTable rows: {nrows}  |  uncompressed table size: {_fmt_bytes(tmpl_table.nbytes)}")
 
     t0 = time.perf_counter()
-    tstore = blosc2.TreeStore(OUTPUT_FILE, mode="w")
+    tstore = blosc2.TreeStore(output, mode="w")
 
     try:
         if not no_vlmeta:
@@ -160,12 +218,12 @@ def create_store(
                 ct = tstore[table_key]
                 ct.vlmeta["description"] = f"Level {level} CTable"
                 ct.vlmeta["author"] = "blosc2"
-                ct.vlmeta["ncols"] = 4
+                ct.vlmeta["ncols"] = tmpl_table.ncols
                 ct.vlmeta["has_index"] = True
                 ct.vlmeta["tags_list"] = ["benchmark", "testing", f"level_{level}"]
 
             if (level + 1) % max(1, nlevels // 10) == 0 or level == nlevels - 1:
-                print(f"  Level {level + 1}/{nlevels} done ({time.perf_counter() - t0:.2f}s so far)")
+                log(f"  Level {level + 1}/{nlevels} done ({time.perf_counter() - t0:.2f}s so far)")
     finally:
         tstore.close()
 
@@ -308,7 +366,8 @@ def main() -> None:
             for d in range(args.nleaves)
         )
     total_data_bytes = (
-        total_elements * 8 + args.nlevels * args.nrows * (1 + 8 + 8 + 16)  # rough for table
+        # rough per-row table size: bool + int64 + float64 + str + 16 numeric cols
+        total_elements * 8 + args.nlevels * args.nrows * (1 + 8 + 8 + 16 + 16 * 8)
     )
     file_size = os.path.getsize(OUTPUT_FILE)
 

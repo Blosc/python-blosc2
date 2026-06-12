@@ -261,7 +261,9 @@ class StoreBrowser:
             return preview_array(obj, slices=slices, max_rows=max_rows, max_cols=max_cols)
         if kind == "ctable":
             stop = min(start + max_rows, len(obj)) if stop is None else stop
-            return preview_ctable(obj, start=start, stop=stop, columns=columns, max_cols=max_cols)
+            return preview_ctable(
+                obj, start=start, stop=stop, columns=columns, max_cols=max_cols, col_start=col_start
+            )
         if kind == "schunk":
             return {"message": "SChunk byte preview is not implemented yet."}
         return {"message": f"Preview is not supported for {kind!r} objects."}
@@ -596,18 +598,25 @@ def preview_ctable(
     stop: int = 20,
     columns: list[str] | None = None,
     max_cols: int = 10,
+    col_start: int = 0,
     include_expensive: bool = False,
 ) -> dict[str, Any]:
     """Return a bounded column-oriented preview from a CTable.
+
+    *col_start* selects the first visible column, so wide tables can be
+    paged horizontally just like 2-D arrays.
 
     Complex nested/list/object columns may require one variable-length block
     read per row.  By default, keep table navigation responsive by showing a
     placeholder for those columns instead of decoding them eagerly.
     """
     all_columns = list(getattr(obj, "col_names", []))
-    visible_columns = all_columns if columns is None else [name for name in columns if name in all_columns]
-    hidden_columns = max(0, len(visible_columns) - max_cols)
-    visible_columns = visible_columns[:max_cols]
+    selectable = all_columns if columns is None else [name for name in columns if name in all_columns]
+    ncols = len(selectable)
+    col_start = max(0, min(col_start, max(0, ncols - 1)))
+    col_stop = min(col_start + max_cols, ncols)
+    visible_columns = selectable[col_start:col_stop]
+    hidden_columns = max(0, ncols - len(visible_columns))
     start = max(0, start)
     stop = min(max(start, stop), len(obj))
     data = {}
@@ -629,6 +638,10 @@ def preview_ctable(
         "hidden_columns": hidden_columns,
         "skipped_columns": skipped_columns,
         "data": data,
+        "source_kind": "ctable",
+        "col_start": col_start,
+        "col_stop": col_stop,
+        "ncols": ncols,
     }
 
 

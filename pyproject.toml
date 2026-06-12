@@ -74,6 +74,8 @@ dev = [
 ]
 test = [
     "pytest",
+    # for the b2view Pilot tests (which also need the 'tui' extra)
+    "pytest-asyncio",
     "psutil; platform_machine != 'wasm32'",
     # torch is optional because it is quite large (but will still be used if found)
     # "torch; platform_machine != 'wasm32'",
