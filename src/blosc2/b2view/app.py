@@ -204,6 +204,8 @@ class B2ViewApp(App):
         ("r", "restore_or_refresh", "Restore/Refresh"),
         Binding("t", "grid_row_top", "Top", show=False),
         Binding("b", "grid_row_bottom", "Bottom", show=False),
+        Binding("s", "grid_col_start", "Row start", show=False),
+        Binding("e", "grid_col_end", "Row end", show=False),
         Binding("d", "dim_cycle", "Dim mode", show=False),
         Binding("enter", "dim_toggle_nav", "Toggle nav", show=False),
         Binding("escape", "dim_exit", "Exit dim mode", show=False),
@@ -253,7 +255,9 @@ class B2ViewApp(App):
                             yield Static("", id="vlmetadata")
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
-                    data_pane.border_subtitle = "d(im mode) | t(op) - b(ottom) - g(oto)"
+                    data_pane.border_subtitle = (
+                        "d(im mode) | rows: t(op)/b(ottom)/g(oto) | cols: s(tart)/e(nd)"
+                    )
                     yield Static("", id="data-header")
                     with Horizontal(id="data-table-row"):
                         yield BufferedDataTable(id="data-table", show_row_labels=True, zebra_stripes=True)
@@ -1198,3 +1202,13 @@ class B2ViewApp(App):
         if not self._in_data_grid():
             return
         self._go_to_row(self.table_page["nrows"] - 1)
+
+    def action_grid_col_start(self) -> None:
+        """Jump to the first column window (alias of Home)."""
+        if self._in_data_grid():
+            self._grid_col_home()
+
+    def action_grid_col_end(self) -> None:
+        """Jump to the last column window (alias of End)."""
+        if self._in_data_grid():
+            self._grid_col_end()

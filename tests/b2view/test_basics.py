@@ -380,9 +380,10 @@ async def test_ctable_column_paging(store_path):
         assert table.cursor_column == len(right_columns) - 1
         _assert_ctable_window_values(page, expected)
 
-        # 'end' jumps to the widest whole-column window ending at the last
+        # 'e' jumps to the widest whole-column window ending at the last
         # column, and paging left from there must not skip any column.
-        await pilot.press("end")
+        # ('s'/'e' are aliases of Home/End, which the 2-D test covers.)
+        await pilot.press("e")
         await wait_for_table(pilot)
         page = app.table_page
         assert page["col_stop"] == gen.NCOLS
@@ -399,8 +400,8 @@ async def test_ctable_column_paging(store_path):
         assert page["columns"] == all_names[page["col_start"] : page["col_stop"]]
         _assert_ctable_window_values(page, expected)
 
-        # 'home' returns to the first window
-        await pilot.press("home")
+        # 's' returns to the first window
+        await pilot.press("s")
         await wait_for_table(pilot)
         assert app.table_page["col_start"] == 0
 
