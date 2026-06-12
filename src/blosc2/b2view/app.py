@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -17,6 +17,9 @@ from blosc2.b2view.render import (
     make_metadata_renderable,
     make_preview_renderables,
 )
+
+if TYPE_CHECKING:
+    from textual import events
 
 _KIND_ICONS = {
     "group": "📁",
@@ -104,6 +107,26 @@ class BufferedDataTable(DataTable):
             getattr(app, "action_dim_toggle_nav", lambda: None)()
             return
         super().action_select_cursor()
+
+    def _wheel_step(self) -> int:
+        # Half the visible rows per tick; arrow keys remain the
+        # single-step path (also for dim-mode index changes).
+        return max(1, self.row_count // 2)
+
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        # The grid holds exactly one viewport-sized page, so the default
+        # scroll handler has nothing to scroll; move the cursor instead,
+        # which pages at the edges just like the arrow keys.
+        event.stop()
+        event.prevent_default()
+        for _ in range(self._wheel_step()):
+            self.action_cursor_down()
+
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        event.stop()
+        event.prevent_default()
+        for _ in range(self._wheel_step()):
+            self.action_cursor_up()
 
     def on_resize(self, event) -> None:
         # The column/row windows are fitted to this table's size; re-check
@@ -1231,7 +1254,7 @@ class B2ViewApp(App):
     def _adjust_fixed_value(self, direction: int) -> None:
         """Adjust the fixed value of the active dimension (if it is fixed).
 
-        In DIM mode the value wraps around at boundaries (0 ↔ max).
+        The value clamps at the boundaries (no wrap-around).
         """
         layout = self._data_layout
         if layout is None or self.table_page is None:
@@ -1243,19 +1266,9 @@ class B2ViewApp(App):
         if total <= 0:
             return
         current = layout.fixed_values[dim]
-        if self._dim_mode and total > 1:
-            # Cycle: up at max → 0, down at 0 → max-1
-            new_val = (current + direction) % total
-        else:
-            # Clamp at boundaries (normal mode)
-            if direction > 0:
-                if current >= total - 1:
-                    return
-                new_val = current + 1
-            else:
-                if current <= 0:
-                    return
-                new_val = current - 1
+        new_val = min(max(current + direction, 0), total - 1)
+        if new_val == current:
+            return
         new_fixed = dict(layout.fixed_values)
         new_fixed[dim] = new_val
         self._data_layout = layout.copy_with(fixed_values=new_fixed)
@@ -1335,7 +1348,7 @@ class B2ViewApp(App):
             self._scroll_navigable_viewport(direction)
 
     def _scroll_navigable_viewport(self, direction: int) -> None:
-        """Shift the viewport of a navigable dimension by one step (wraps)."""
+        """Shift the viewport of a navigable dimension by one step (clamps)."""
         layout = self._data_layout
         if layout is None or self.table_page is None:
             return
@@ -1348,13 +1361,19 @@ class B2ViewApp(App):
         total = layout.shape[dim]
 
         if pos == 0:
-            # Row navigable dim — shift start by one row (wraps)
-            new_start = (page["start"] + direction) % total
+            # Row navigable dim — shift start by one row, keeping a full page
+            max_start = max(0, total - self._table_page_size())
+            new_start = min(max(page["start"] + direction, 0), max_start)
+            if new_start == page["start"]:
+                return
             self.table_buffer = None
             data = self._load_table_page(self.selected_path, new_start)
         else:
-            # Column navigable dim — shift col_start by one column (wraps)
-            new_col = (page["col_start"] + direction) % total
+            # Column navigable dim — shift col_start by one whole column
+            max_col = self._fit_col_start_backward(total)
+            new_col = min(max(page["col_start"] + direction, 0), max_col)
+            if new_col == page["col_start"]:
+                return
             self.grid_col_start = new_col
             self.table_buffer = None
             data = self._load_table_page(self.selected_path, page["start"])

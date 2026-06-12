@@ -42,6 +42,11 @@ left, and **meta**, **vlmeta** and **data** panels for the node selected
 in the tree.  Move between panels with ``tab`` / ``shift+tab``, maximize
 the focused one with ``m`` (``r`` restores it), and quit with ``q``.
 
+By default the mouse is left to the terminal, so selecting and copying text
+works as in any other command line program.  Pass ``--mouse`` to let b2view
+capture it instead: panels become clickable and the wheel scrolls the data
+grid (paging at the boundaries), at the cost of native text selection.
+
 You can also jump straight to a node and panel:
 
 .. code-block:: console
