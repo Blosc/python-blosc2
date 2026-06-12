@@ -55,3 +55,9 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
   paging left and `end` fit whole columns backward; windows are stable
   within a row buffer (widths measured over the buffer, not the visible
   page).  Superseded the fixed-multiple alignment policy above.
+- 2026-06-12: Uniform decimals per float column — the decimal count is
+  chosen once per column from its max magnitude in the buffer
+  (`column_float_decimals` in render.py) instead of per value, so decimal
+  points align down the column; zeros are formatted like their neighbors
+  (all-zero columns still show plain 0.0).  Unit tests in
+  `tests/b2view/test_render.py`.

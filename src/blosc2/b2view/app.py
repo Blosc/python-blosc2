@@ -11,7 +11,12 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
 
 from blosc2.b2view.model import DataSliceLayout, StoreBrowser
-from blosc2.b2view.render import format_cell, make_metadata_renderable, make_preview_renderables
+from blosc2.b2view.render import (
+    column_float_decimals,
+    format_cell,
+    make_metadata_renderable,
+    make_preview_renderables,
+)
 
 _KIND_ICONS = {
     "group": "📁",
@@ -500,9 +505,11 @@ class B2ViewApp(App):
         """Rendered width (content + padding) of every column in *data*."""
         widths = []
         for name in data["columns"]:
+            cells = data["data"][name]
+            decimals = column_float_decimals(cells)
             content = max(
                 len(str(name)),
-                max((len(format_cell(value)) for value in data["data"][name]), default=1),
+                max((len(format_cell(value, float_decimals=decimals)) for value in cells), default=1),
             )
             widths.append(content + cls._CELL_PAD)
         return widths
@@ -698,10 +705,18 @@ class B2ViewApp(App):
             table.clear(columns=True)
             for name in data["columns"]:
                 table.add_column(name, key=name)
+            # Uniform decimals per float column, taken from the whole buffer
+            # when available so the format is stable while paging rows.
+            buffer = self.table_buffer
+            source = buffer if buffer is not None and buffer["columns"] == data["columns"] else data
+            decimals = {name: column_float_decimals(source["data"][name]) for name in data["columns"]}
             nrows = data["stop"] - data["start"]
             for i in range(nrows):
                 table.add_row(
-                    *[format_cell(data["data"][name][i]) for name in data["columns"]],
+                    *[
+                        format_cell(data["data"][name][i], float_decimals=decimals[name])
+                        for name in data["columns"]
+                    ],
                     label=str(data["start"] + i),
                 )
             nrows = data["stop"] - data["start"]
