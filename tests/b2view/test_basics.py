@@ -546,3 +546,53 @@ async def test_ctable_filtering(store_path):
         await wait_for_table(pilot)
         assert app.browser.get_filter("/level0/ctable") is None
         assert app.table_page["nrows"] == NROWS
+
+        # ── Column filtering ('/' modal) ─────────────────────────────────
+
+        async def submit_column_filter(pattern: str) -> None:
+            await pilot.press("slash")
+            await pilot.pause()
+            assert isinstance(app.screen, FilterScreen)
+            app.screen.query_one("#filter-input", Input).value = pattern
+            await pilot.press("enter")
+            await wait_for_table(pilot)
+
+        # 'v1' matches v10..v19; paging universe shrinks to those 10 columns
+        await submit_column_filter("v1")
+        page = app.table_page
+        assert page["ncols"] == 10
+        assert page["columns"][0] == "v10"
+        assert all(name.startswith("v1") for name in page["columns"])
+
+        # The goto-column modal resolves names within the filtered set
+        await pilot.press("c")
+        await pilot.pause()
+        app.screen.query_one("#gotocol-input", Input).value = "v15"
+        await pilot.press("enter")
+        await wait_for_table(pilot)
+        assert app.table_page["columns"][0] == "v15"
+
+        # Row and column filters combine (back at the first column window)
+        await pilot.press("s")
+        await wait_for_table(pilot)
+        await submit_filter("b >= 100 and b < 110")
+        page = app.table_page
+        assert page["nrows"] == 10
+        assert page["ncols"] == 10
+        np.testing.assert_array_equal(page["data"]["v10"], expected["v10"][100:110])
+
+        # A pattern matching nothing notifies and keeps the selection
+        await submit_column_filter("nosuchcol")
+        assert app.browser.get_column_filter("/level0/ctable") == "v1"
+        assert app.table_page["ncols"] == 10
+
+        # Escape clears one layer at a time: row filter first, then columns
+        await pilot.press("escape")
+        await wait_for_table(pilot)
+        assert app.browser.get_filter("/level0/ctable") is None
+        assert app.table_page["nrows"] == NROWS
+        assert app.table_page["ncols"] == 10
+        await pilot.press("escape")
+        await wait_for_table(pilot)
+        assert app.browser.get_column_filter("/level0/ctable") is None
+        assert app.table_page["ncols"] == len(expected)

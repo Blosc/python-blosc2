@@ -211,6 +211,7 @@ class HelpScreen(ModalScreen[None]):
                 ("left / right", "move cursor; pages at the edges"),
                 ("s / e  (home / end)", "first / last column window"),
                 ("c", "go to column index or name..."),
+                ("/", "filter visible columns by substring (CTable)"),
             ],
         ),
         (
@@ -374,7 +375,7 @@ class GoToColumnScreen(ModalScreen[int | None]):
 
 
 class FilterScreen(ModalScreen[str | None]):
-    """Small modal asking for a CTable row filter expression."""
+    """Small modal asking for a CTable filter (row expression or column pattern)."""
 
     CSS = """
     FilterScreen {
@@ -395,14 +396,22 @@ class FilterScreen(ModalScreen[str | None]):
 
     BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, *, current: str | None = None):
+    def __init__(
+        self,
+        *,
+        current: str | None = None,
+        title: str = "Filter rows (empty clears)",
+        placeholder: str = "e.g. payment.tips > 100 and trip.km > 0",
+    ):
         super().__init__()
         self.current = current or ""
+        self.title_text = title
+        self.placeholder = placeholder
 
     def compose(self) -> ComposeResult:
         with Vertical(id="filter-dialog"):
-            yield Static("Filter rows (empty clears)", id="filter-title")
-            yield Input(placeholder="e.g. payment.tips > 100 and trip.km > 0", id="filter-input")
+            yield Static(self.title_text, id="filter-title")
+            yield Input(placeholder=self.placeholder, id="filter-input")
 
     def on_mount(self) -> None:
         input_widget = self.query_one("#filter-input", Input)
@@ -454,6 +463,7 @@ class B2ViewApp(App):
         Binding("e", "grid_col_end", "Row end", show=False),
         Binding("c", "go_to_column", "Go to column", show=False),
         Binding("f", "filter_rows", "Filter rows", show=False),
+        Binding("slash", "filter_columns", "Filter columns", show=False),
         Binding("d", "dim_cycle", "Dim mode", show=False),
         Binding("enter", "dim_toggle_nav", "Toggle nav", show=False),
         Binding("escape", "dim_exit", "Exit dim mode", show=False),
@@ -503,9 +513,7 @@ class B2ViewApp(App):
                             yield Static("", id="vlmetadata")
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
-                    data_pane.border_subtitle = (
-                        "?(help) | d(im mode) | f(ilter) | rows: t/b/g(oto) | cols: s/e/c(goto)"
-                    )
+                    data_pane.border_subtitle = "?(help) | d(im mode) | filter: f(rows) /(cols) | rows: t/b/g(oto) | cols: s/e/c(goto)"
                     yield Static("", id="data-header")
                     with Horizontal(id="data-table-row"):
                         yield BufferedDataTable(id="data-table", show_row_labels=True, zebra_stripes=True)
@@ -1092,10 +1100,15 @@ class B2ViewApp(App):
                 header_parts.append(f"cols {data['col_start']}:{data['col_stop']} of {data['ncols']}")
             if data.get("source_kind") == "ctable" and self.browser is not None:
                 flt = self.browser.get_filter(self.selected_path)
+                col_flt = self.browser.get_column_filter(self.selected_path)
                 if flt:
                     total = self.browser.base_nrows(self.selected_path)
                     header_parts.append(f"filter: [bold]{markup_escape(flt)}[/bold] ({total} total)")
-                    header_parts.append("<f>edit <Esc>clear")
+                if col_flt:
+                    total_cols = self.browser.base_ncols(self.selected_path)
+                    header_parts.append(f"cols: [bold]{markup_escape(col_flt)}[/bold] ({total_cols} total)")
+                if flt or col_flt:
+                    header_parts.append("<Esc>clear")
 
         line = ", ".join(header_parts)
         if self._dim_mode and layout is not None:
@@ -1238,6 +1251,37 @@ class B2ViewApp(App):
         self.table_buffer = None
         data = self._load_table_page(self.selected_path, 0)
         self._update_data_table(data, cursor_row=0, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
+    def action_filter_columns(self) -> None:
+        if not self._in_data_grid():
+            return
+        if self.table_page.get("source_kind") != "ctable":
+            self.notify("Column filtering is only supported for CTable nodes", severity="warning")
+            return
+        screen = FilterScreen(
+            current=self.browser.get_column_filter(self.selected_path),
+            title="Filter columns by substring (empty clears)",
+            placeholder="e.g. payment",
+        )
+        self.push_screen(screen, self._apply_column_filter)
+
+    def _apply_column_filter(self, pattern: str | None) -> None:
+        if pattern is None or self.browser is None or self.table_page is None:
+            return
+        if pattern == (self.browser.get_column_filter(self.selected_path) or ""):
+            return
+        try:
+            self.browser.set_column_filter(self.selected_path, pattern)
+        except Exception as exc:
+            self.notify(f"Invalid column filter: {exc}", severity="error")
+            return
+        self.grid_col_start = 0
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, self.table_page["start"])
+        cursor_row = self.query_one("#data-table", DataTable).cursor_row
+        self._update_data_table(data, cursor_row=cursor_row, cursor_col=0)
         self._update_data_header(data)
         self.query_one("#data-table", DataTable).focus()
 
@@ -1481,19 +1525,26 @@ class B2ViewApp(App):
         self._dim_toggle()
 
     def action_dim_exit(self) -> None:
-        """Escape: exit dim mode, or clear an active CTable filter."""
+        """Escape: exit dim mode, or clear an active CTable filter.
+
+        One layer per press: dim mode, then the row filter, then the
+        column filter.
+        """
         if self._dim_mode:
             self._dim_mode = False
             if self.table_page is not None:
                 self._update_data_header(self.table_page)
             return
         if (
-            self._in_data_grid()
-            and self.table_page.get("source_kind") == "ctable"
-            and self.browser is not None
-            and self.browser.get_filter(self.selected_path)
+            not self._in_data_grid()
+            or self.table_page.get("source_kind") != "ctable"
+            or self.browser is None
         ):
+            return
+        if self.browser.get_filter(self.selected_path):
             self._apply_filter("")
+        elif self.browser.get_column_filter(self.selected_path):
+            self._apply_column_filter("")
 
     def action_grid_row_top(self) -> None:
         """Jump to the first row of the table."""

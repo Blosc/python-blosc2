@@ -11,10 +11,6 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ### Navigation
 
-- [ ] Column-name search/filter for wide CTables (e.g. `/` to filter the
-      visible columns by substring).  Note: the `c` goto-column modal already
-      resolves unique name prefixes; this item is about *filtering* the
-      visible set, not jumping.
 - [ ] Row paging can lose page alignment after dim-mode single-row scrolls
       (`_scroll_navigable_viewport` shifts by 1); consider re-aligning on the
       next page up/down, as column paging does now.
@@ -73,3 +69,21 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
   caught that the resize handler lived on the App, which never receives
   Resize events; moved to BufferedDataTable.on_resize, so the windows now
   re-fit on terminal resize and panel maximize/restore for real.
+- 2026-06-12: The terminal owns the mouse by default, so native text
+  selection/copy works; `--mouse` lets b2view capture it instead
+  (click-to-focus, wheel scrolls the data grid by half a page, paging at
+  the edges via the same path as the arrow keys).
+- 2026-06-12: Dim-mode index/viewport movements clamp at the boundaries
+  instead of wrapping (left/right dimension *selection* still cycles);
+  navigable viewports clamp to the last full page / whole-column window.
+- 2026-06-12: CTable row filtering — `f` opens a modal that takes the same
+  string expressions as `CTable.where()` (dotted nested names, and/or) and
+  pages through the matching view; escape or an empty expression clears,
+  filters are remembered per node (`StoreBrowser.set_filter`), and the data
+  header shows the active filter plus the unfiltered total.
+- 2026-06-12: CTable column filtering — `/` filters the visible columns by
+  case-insensitive substring (`StoreBrowser.set_column_filter`); column
+  paging, the two-pass width fit and the `c` goto-column modal all operate
+  on the filtered subset (`preview_ctable` already took a `columns`
+  universe).  Combines freely with the row filter; escape clears one layer
+  per press (dim mode, then rows, then columns).

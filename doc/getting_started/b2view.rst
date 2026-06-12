@@ -92,6 +92,12 @@ navigation (paging, ``g``, ``t`` / ``b``) then operates on the filtered
 rows.  Press ``escape`` (or submit an empty expression) to go back to the
 unfiltered table; each node remembers its filter for the session.
 
+Columns can be filtered too: press ``/`` and type a case-insensitive
+substring (e.g. ``payment``) to show only the matching columns — column
+paging and the ``c`` goto-column modal then operate on that subset.  Row
+and column filters combine freely; ``escape`` clears them one layer at a
+time (row filter first, then columns).
+
 CLI options
 -----------
 

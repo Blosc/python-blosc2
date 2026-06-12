@@ -139,6 +139,9 @@ class StoreBrowser:
         # Per-path row filters for CTable nodes (path -> expr / where() view)
         self._filters: dict[str, str] = {}
         self._filter_views: dict[str, Any] = {}
+        # Per-path column filters (path -> substring pattern / matched names)
+        self._column_filters: dict[str, str] = {}
+        self._column_selections: dict[str, list[str]] = {}
 
     def close(self) -> None:
         close = getattr(self.store, "close", None)
@@ -264,6 +267,8 @@ class StoreBrowser:
             return preview_array(obj, slices=slices, max_rows=max_rows, max_cols=max_cols)
         if kind == "ctable":
             obj = self._filter_views.get(path, obj)
+            if columns is None:
+                columns = self._column_selections.get(path)
             stop = min(start + max_rows, len(obj)) if stop is None else stop
             return preview_ctable(
                 obj, start=start, stop=stop, columns=columns, max_cols=max_cols, col_start=col_start
@@ -273,7 +278,15 @@ class StoreBrowser:
         return {"message": f"Preview is not supported for {kind!r} objects."}
 
     def column_names(self, path: str) -> list[str] | None:
-        """Return the column names for a CTable path, or None for other kinds."""
+        """Return the column names for a CTable path, or None for other kinds.
+
+        When a column filter is active, only the matching names are returned
+        (navigation operates on the filtered universe).
+        """
+        path = self.normalize_path(path)
+        selection = self._column_selections.get(path)
+        if selection is not None:
+            return list(selection)
         names = list(getattr(self._get_object(path), "col_names", []) or [])
         return names or None
 
@@ -301,6 +314,37 @@ class StoreBrowser:
     def base_nrows(self, path: str) -> int:
         """Return the unfiltered row count of the CTable at *path*."""
         return len(self._get_object(path))
+
+    def set_column_filter(self, path: str, pattern: str | None) -> int:
+        """Set or clear the column filter of a CTable path; return the match count.
+
+        Columns are matched by case-insensitive substring, keeping the table
+        order.  An empty (or None) *pattern* clears the filter.  A pattern
+        matching no column raises ValueError and leaves any previous filter
+        untouched.
+        """
+        path = self.normalize_path(path)
+        pattern = (pattern or "").strip()
+        all_names = list(getattr(self._get_object(path), "col_names", []) or [])
+        if not pattern:
+            self._column_filters.pop(path, None)
+            self._column_selections.pop(path, None)
+            return len(all_names)
+        needle = pattern.lower()
+        selection = [name for name in all_names if needle in name.lower()]
+        if not selection:
+            raise ValueError(f"no column matches {pattern!r}")
+        self._column_filters[path] = pattern
+        self._column_selections[path] = selection
+        return len(selection)
+
+    def get_column_filter(self, path: str) -> str | None:
+        """Return the active column filter pattern for *path*, if any."""
+        return self._column_filters.get(self.normalize_path(path))
+
+    def base_ncols(self, path: str) -> int:
+        """Return the unfiltered column count of the CTable at *path*."""
+        return len(list(getattr(self._get_object(path), "col_names", []) or []))
 
     def _get_object(self, path: str) -> Any:
         """Return the object represented by *path*."""
