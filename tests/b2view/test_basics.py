@@ -276,6 +276,34 @@ async def test_2d_paging(store_path):
         assert page["col_stop"] == LEAF2_SHAPE[1]
         np.testing.assert_allclose(page["data"]["97"], expected[page["start"] : page["stop"], 97])
 
+        # Row paging re-aligns after a dim-mode single-row scroll.  Back to the
+        # top so the row window starts on a page_size boundary.
+        await pilot.press("t")
+        await wait_for_table(pilot)
+        assert app.table_page["start"] == 0
+        page_size = app._table_page_size()
+        assert page_size < LEAF2_SHAPE[0]  # several row pages exist
+
+        # In dim mode the active (row) dim scrolls by one row, nudging the
+        # window off the page grid.
+        await pilot.press("d")
+        assert app._dim_mode
+        await pilot.press("up")
+        await wait_for_table(pilot)
+        assert app.table_page["start"] == 1  # off-grid by one row
+        await pilot.press("escape")
+        assert not app._dim_mode
+
+        # An explicit page down now snaps back onto the page grid instead of
+        # carrying the one-row offset (the bug), and page up returns to 0.
+        await pilot.press("pagedown")
+        await wait_for_table(pilot)
+        assert app.table_page["start"] == page_size
+
+        await pilot.press("pageup")
+        await wait_for_table(pilot)
+        assert app.table_page["start"] == 0
+
 
 # ── 3-D array: dim mode navigation ───────────────────────────────────────
 
