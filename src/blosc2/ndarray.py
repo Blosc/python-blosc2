@@ -46,6 +46,13 @@ from .utils import (
     slice_to_chunktuple,
 )
 
+# Upper bound on the number of coordinates the strided-slice sparse-gather
+# fast path will build (see NDArray._try_subsample_gather).  Caps both the
+# int64 coordinate array (~8 MB at this size) and the per-coordinate scattered
+# copies, so a dense slice such as ``a[::2]`` falls back to the bulk path
+# instead of materializing a huge coordinate set.
+_SUBSAMPLE_GATHER_MAX_COORDS = 1_000_000
+
 # These functions in ufunc_map in ufunc_map_1param are implemented in numexpr and so we call
 # those instead (since numexpr uses multithreading it is faster)
 ufunc_map = {
@@ -4272,9 +4279,56 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return super().set_oindex_numpy(key, arr)
 
+    def _try_subsample_gather(self, start, stop, step, shape):
+        """Fast path for a coarse strided read via the sparse-gather primitive.
+
+        Returns a NumPy array of the (post-squeeze) *shape* when the selection
+        is a coarse subsample worth routing through ``b2nd_get_sparse_cbuffer``
+        (decompressing only the blocks that actually hold a selected element),
+        or ``None`` to fall back to the dense per-chunk path.
+
+        Engages only when every step is positive, the result fits
+        ``_SUBSAMPLE_GATHER_MAX_COORDS``, and at least one axis strides by at
+        least its block extent (so whole blocks are skipped — the condition
+        under which gather decompresses strictly fewer blocks than the dense
+        bounding-box read).
+        """
+        ndim = self.ndim
+        if builtins.any(s <= 0 for s in step):  # negative steps keep the dense path
+            return None
+
+        blocks = self.blocks
+        if not builtins.any(step[d] > 1 and step[d] >= blocks[d] for d in range(ndim)):
+            return None
+
+        # Per-axis sample positions; matches the (sp-st-sign)//stp+1 count.
+        positions = [np.arange(start[d], stop[d], step[d]) for d in range(ndim)]
+        nelems = 1
+        for p in positions:
+            nelems *= p.size
+        if not 0 < nelems <= _SUBSAMPLE_GATHER_MAX_COORDS:
+            return None
+
+        # Flat C-order linear indices over the full real-axis grid.
+        flat = np.zeros((), dtype=np.int64)
+        cstride = 1
+        for d in range(ndim - 1, -1, -1):
+            contrib = (positions[d].astype(np.int64) * cstride).reshape((-1,) + (1,) * (ndim - 1 - d))
+            flat = flat + contrib
+            cstride *= self.shape[d]
+        flat = np.ascontiguousarray(flat).reshape(-1)
+
+        return self._take_sparse_normalized(flat).reshape(shape)
+
     def _get_set_nonunit_steps(self, _slice, out=None, value=None):
         start, stop, step, mask = _slice
         _get = out is not None
+        if _get:
+            # Coarse strided reads can skip whole blocks: route them through the
+            # sparse-gather primitive instead of decompressing full chunks.
+            gathered = self._try_subsample_gather(start, stop, step, out.shape)
+            if gathered is not None:
+                return gathered
         out = self if out is None else out  # default return for setitem with no intersecting chunks
         if 0 in self.shape:
             return out
@@ -4437,8 +4491,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Parameters
         ----------
         key: int, slice, sequence of (slices, int), array of bools, LazyExpr or str
-            The slice(s) to be retrieved. Note that step parameter is not yet honored
-            in slices. If a LazyExpr is provided, the expression is expected to be of
+            The slice(s) to be retrieved. Slice steps (including negative steps)
+            are honored. If a LazyExpr is provided, the expression is expected to be of
             boolean type, and the result will be another LazyExpr returning the values
             of this array where the expression is True.
             When key is a (nd-)array of bools, the result will be the values of ``self``
