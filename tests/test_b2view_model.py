@@ -231,23 +231,56 @@ def test_preview_array_high_dimensional_slice():
     np.testing.assert_array_equal(preview, arr[0, :2, :3])
 
 
-def test_plot_series_1d_strided_overview(tmp_path):
+def test_plot_series_1d_envelope_captures_extremes(tmp_path):
     path = tmp_path / "plot1d.b2z"
-    n = 1000
+    n = 100_000
+    data = np.linspace(0, 1, num=n)
+    data[12345] = 9.0  # a spike between bucket samples
+    data[98765] = -9.0
     with blosc2.TreeStore(str(path), mode="w") as store:
-        store["/wave"] = blosc2.linspace(0, 1, num=n)
+        store["/wave"] = blosc2.asarray(data)
 
     with StoreBrowser(str(path)) as browser:
         series = browser.plot_series("/wave", max_points=300)
         assert series["n"] == n
-        assert series["step"] == 4  # ceil(1000 / 300)
-        np.testing.assert_array_equal(series["x"], np.arange(0, n, 4))
-        np.testing.assert_allclose(series["y"], np.linspace(0, 1, n)[::4])
+        assert series["method"] == "reduce"  # NDArray leaf, fits the read budget
+        assert len(series["x"]) <= 300
+        # The envelope must contain the true global extremes, including spikes
+        assert np.isclose(np.nanmax(series["ymax"]), 9.0)
+        assert np.isclose(np.nanmin(series["ymin"]), -9.0)
 
-        # Small arrays are returned whole (step 1)
+        # Small arrays: one bucket per element, ymin == ymax == the values
         small = browser.plot_series("/wave", max_points=n)
-        assert small["step"] == 1
-        assert len(small["y"]) == n
+        assert len(small["x"]) == n
+        np.testing.assert_allclose(small["ymin"], data)
+        np.testing.assert_allclose(small["ymax"], data)
+
+
+def test_plot_series_uses_summary_index_when_available(tmp_path):
+    # A persisted CTable builds SUMMARY indexes on close; plot_series should
+    # read per-block min/max from the index (no data decompression).
+    path = str(tmp_path / "plotsum.b2t")
+    n = 200_000
+    data = np.linspace(-1.0, 1.0, n)
+    data[1234] = 7.0  # spikes the per-block summary must capture
+    data[199_001] = -7.0
+
+    @dataclasses.dataclass
+    class VRow:
+        v: float = blosc2.field(blosc2.float64(), default=0.0)
+
+    arr = np.empty(n, dtype=[("v", "<f8")])
+    arr["v"] = data
+    table = blosc2.CTable(VRow, urlpath=path, mode="w", expected_size=n)
+    table.extend(arr, validate=False)
+    table.close()
+
+    with StoreBrowser(path) as browser:
+        series = browser.plot_series("/", column="v", max_points=2000)
+        assert series["method"] == "summary"
+        assert series["n"] == n
+        assert np.isclose(np.nanmax(series["ymax"]), 7.0)
+        assert np.isclose(np.nanmin(series["ymin"]), -7.0)
 
 
 def test_plot_series_2d_column_with_layout(tmp_path):
@@ -262,8 +295,11 @@ def test_plot_series_2d_column_with_layout(tmp_path):
         layout = DataSliceLayout.from_shape((200, 8))
         series = browser.plot_series("/grid", column=5, layout=layout, max_points=50)
         assert series["n"] == 200
-        assert series["step"] == 4
-        np.testing.assert_allclose(series["y"], values[::4, 5])
+        assert series["method"] == "reduce"
+        # Column 5 over all rows, bucketed; envelope brackets the true column
+        col = values[:, 5]
+        assert np.isclose(np.nanmax(series["ymax"]), col.max())
+        assert np.isclose(np.nanmin(series["ymin"]), col.min())
 
 
 def test_plot_series_ctable_column_honors_row_filter(tmp_path):
@@ -274,11 +310,15 @@ def test_plot_series_ctable_column_honors_row_filter(tmp_path):
     with StoreBrowser(str(path)) as browser:
         series = browser.plot_series("/table", column="y", max_points=1000)
         assert series["n"] == 100
-        assert series["step"] == 1
-        np.testing.assert_allclose(series["y"], np.arange(100) * 1.5)
+        # In-memory TreeStore CTable has no summary index -> exact reduce
+        assert series["method"] in ("summary", "reduce")
+        assert np.isclose(np.nanmax(series["ymax"]), 99 * 1.5)
+        assert np.isclose(np.nanmin(series["ymin"]), 0.0)
 
-        # An active row filter restricts the plotted universe
+        # An active row filter restricts the plotted universe (and forces reduce)
         browser.set_filter("/table", "x >= 50")
         filtered = browser.plot_series("/table", column="y", max_points=1000)
         assert filtered["n"] == 50
-        np.testing.assert_allclose(filtered["y"], np.arange(50, 100) * 1.5)
+        assert filtered["method"] == "reduce"
+        assert np.isclose(np.nanmin(filtered["ymin"]), 50 * 1.5)
+        assert np.isclose(np.nanmax(filtered["ymax"]), 99 * 1.5)

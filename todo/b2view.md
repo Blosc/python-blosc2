@@ -21,15 +21,16 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
       placeholder; offer on-demand decoding (e.g. a key to materialize the
       column, or decode just the cursor row).
 - [ ] SChunk preview is not implemented (`model.preview` returns a message).
-- [ ] Plotting follow-ups for the `p` key: maybe a live mini-plot that
-      follows paging, or zoom into a row range from the plot modal.  If
-      character resolution proves too coarse, `textual-image` can render
-      real matplotlib output on kitty/iTerm2/sixel terminals, degrading to
-      half-blocks elsewhere.  Note: plain striding can alias periodic data;
-      a chunk-aggregated min/max envelope would be the audio-editor-style
-      fix.  (The strided read that `plot_series` issues now hits the core
-      NDArray sparse-gather fast path automatically when step >= block, i.e.
-      for large arrays — see `NDArray._try_subsample_gather`.)
+- [ ] Plotting follow-ups for the `p` key: a live mini-plot that follows
+      paging, or zoom into a row range from the plot modal.  If character
+      resolution proves too coarse, `textual-image` can render real matplotlib
+      output on kitty/iTerm2/sixel terminals, degrading to half-blocks
+      elsewhere.
+- [ ] Tier-2 plot envelope (`_reduce_envelope`) materializes the series via
+      `obj[:]`, so it is bounded by `_PLOT_FULL_READ_MAX_BYTES` (~1 GB) and
+      falls back to a labeled strided sample above that.  Lift the ceiling by
+      chunk-streaming the per-bucket min/max instead of reading the whole
+      series at once.
 
 ### Testing
 
@@ -72,11 +73,18 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
   buffer in a modal, via the optional `textual-plotext` package (new `plot`
   extra); braille scatter, NaN/inf filtered, non-numeric columns and a
   missing package just notify.  Works headless in Pilot tests.
-- 2026-06-12: The `p` plot now shows a downsampled overview of the *whole*
-  series (`StoreBrowser.plot_series`): a single strided blosc2 read of at
-  most ~2000 points (10 ms on a 10M-element array), never materializing the
-  full data; honors layout (fixed dims) for N-D arrays and active row
-  filters for CTables.
+- 2026-06-12: The `p` plot shows a downsampled overview of the *whole*
+  series (`StoreBrowser.plot_series`); honors layout (fixed dims) for N-D
+  arrays and active row filters for CTables.
+- 2026-06-13: `p` plot is now a peak-preserving **min/max envelope** (was
+  plain strided decimation, which aliased and hid extremes between samples).
+  `plot_series` returns `{x, ymin, ymax, n, method}` and picks the cheapest
+  tier: (1) `summary` — per-block min/max straight from the column's SUMMARY
+  index, no decompression (~44x faster, the big win for large persisted /
+  parquet columns; identity case only); (2) `reduce` — read + per-bucket
+  min/max, bounded by `_PLOT_FULL_READ_MAX_BYTES` (~1 GB); (3) `sample` —
+  labeled strided fallback above that ceiling.  `PlotScreen` draws the
+  upper/lower envelope; the title states the method.
 - 2026-06-12: `?` opens a help screen listing all keys grouped by area
   (panels, tree, grid rows/columns, dim mode); shown in the footer, closed
   with esc/`?`/`q`.

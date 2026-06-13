@@ -618,7 +618,7 @@ async def test_ctable_filtering(store_path):
 
 
 async def test_plot_column(store_path):
-    """'p' plots a downsampled whole-array overview in a modal."""
+    """'p' plots a min/max envelope of the whole 1-D leaf in a modal."""
     pytest.importorskip("textual_plotext")
     from blosc2.b2view.app import PlotScreen
 
@@ -632,13 +632,13 @@ async def test_plot_column(store_path):
         assert isinstance(app.screen, PlotScreen)
         screen = app.screen
 
-        # The series covers the whole 1-D leaf, downsampled by striding
-        step = -(-LEAF1_LEN // app._PLOT_MAX_POINTS)
-        assert step > 1  # the leaf is larger than the point budget
-        assert list(screen.x) == list(range(0, LEAF1_LEN, step))
-        np.testing.assert_allclose(screen.y, leaf1_values()[::step])
+        # Bucketed envelope covering the whole leaf; bracketed by true extremes
+        assert 0 < len(screen.x) <= app._PLOT_MAX_POINTS
+        leaf = leaf1_values()
+        assert min(screen.ymin) <= leaf.min() + 1e-9
+        assert max(screen.ymax) >= leaf.max() - 1e-9
         assert "leaf1" in screen.plot_title
-        assert f"step {step}" in screen.plot_title
+        assert "envelope" in screen.plot_title
 
         # 'p' (like escape) closes the plot again
         await pilot.press("p")
