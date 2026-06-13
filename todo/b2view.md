@@ -26,12 +26,6 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
       resolution proves too coarse, `textual-image` can render real matplotlib
       output on kitty/iTerm2/sixel terminals, degrading to half-blocks
       elsewhere.
-- [ ] Tier-2 plot envelope (`_reduce_envelope`) materializes the series via
-      `obj[:]`, so it is bounded by `_PLOT_FULL_READ_MAX_BYTES` (~1 GB) and
-      falls back to a labeled strided sample above that.  Lift the ceiling by
-      chunk-streaming the per-bucket min/max instead of reading the whole
-      series at once.
-
 ### Testing
 
 - [ ] Visual regressions: consider `pytest-textual-snapshot` (SVG snapshots)
@@ -39,6 +33,16 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ## Done
 
+- 2026-06-13: Tier-2 plot envelope is no longer capped at
+  `_PLOT_FULL_READ_MAX_BYTES` (~1 GB).  Above the ceiling, **local** objects
+  (CTable columns, N-D arrays) are streamed in bounded spans
+  (`_minmax_buckets_streaming`, ~`_PLOT_STREAM_BUFFER_BYTES` per read, aligned
+  to native chunks) and the envelope stays **exact** (`method="reduce"`); only
+  remote `c2array`s still fall back to the labeled strided `sample` (streaming
+  would mean many round-trips).  Min/max are associative, so arbitrary span
+  boundaries reproduce the single-read result bit-for-bit.  Unit tests in
+  `tests/b2view/test_plot_model.py` (exactness vs full read, spike a sample
+  would miss, all-NaN/int/edge cases, remote-stays-sample).
 - 2026-06-12: Pilot-based test suite (`tests/b2view/test_basics.py`) with a
   deterministic store generator (`tests/b2view/tree_store_gen.py`); marker
   `tui`.
