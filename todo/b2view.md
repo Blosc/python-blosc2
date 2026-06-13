@@ -27,7 +27,9 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
       real matplotlib output on kitty/iTerm2/sixel terminals, degrading to
       half-blocks elsewhere.  Note: plain striding can alias periodic data;
       a chunk-aggregated min/max envelope would be the audio-editor-style
-      fix.
+      fix.  (The strided read that `plot_series` issues now hits the core
+      NDArray sparse-gather fast path automatically when step >= block, i.e.
+      for large arrays — see `NDArray._try_subsample_gather`.)
 
 ### Testing
 
