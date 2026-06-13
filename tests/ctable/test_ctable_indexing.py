@@ -1014,3 +1014,148 @@ def test_summary_chunk_skip_scoped_extraction(tmp_path):
             assert r.where(r.v > thr).nrows == int((v > thr).sum())
             # A negative threshold matches everything (full-mask path).
         assert r.where(r.v > -1).nrows == n
+
+
+# ---------------------------------------------------------------------------
+# Cross-column SUMMARY-index pruning on compact (.b2z) stores
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class _CrossRow:
+    # Small explicit grid so the SUMMARY index spans many block-segments and
+    # both columns are chunk/block aligned (shared row→segment grid).
+    a: float = blosc2.field(blosc2.float64(), chunks=(1000,), blocks=(250,))
+    b: float = blosc2.field(blosc2.float64(), chunks=(1000,), blocks=(250,))
+
+
+def _build_cross_b2z(tmp_path, a, b, name):
+    """Compact .b2z with SUMMARY indexes on *both* columns."""
+    t = blosc2.CTable(_CrossRow)
+    t.extend(list(zip(a.tolist(), b.tolist(), strict=True)))
+    path = str(tmp_path / name)
+    t.to_b2z(path)
+    with blosc2.open(path, mode="a") as w:
+        w.create_index("a", kind=blosc2.IndexKind.SUMMARY)
+        w.create_index("b", kind=blosc2.IndexKind.SUMMARY)
+    return path
+
+
+def _spy_on_plans(monkeypatch):
+    """Patch ``plan_query`` to record every ``IndexPlan`` it returns.
+
+    ``_try_index_where`` imports ``plan_query`` from ``blosc2.indexing`` at call
+    time, so patching the module attribute is picked up by the next query.
+    """
+    plans = []
+    orig = blosc2.indexing.plan_query
+
+    def spy(*args, **kwargs):
+        plan = orig(*args, **kwargs)
+        plans.append(plan)
+        return plan
+
+    monkeypatch.setattr(blosc2.indexing, "plan_query", spy)
+    return plans
+
+
+def test_cross_column_and_prunes_segments_compact_b2z(tmp_path, monkeypatch):
+    """Regression guard: an AND across two SUMMARY-indexed columns of a compact
+    store must combine their per-segment candidate masks (intersection) instead
+    of falling back to a full scan.  See todo/multiple-indexes-in-queries.md —
+    the per-column-token change alone made the cross-column merge fail and
+    silently disable pruning."""
+    n = 10_000
+    a = np.arange(n, dtype=np.float64)  # ascending → segment-selective
+    b = np.random.default_rng(0).random(n) * 1000.0  # random → non-selective
+    path = _build_cross_b2z(tmp_path, a, b, "and.b2z")
+
+    expected = int(((a > n - 100) & (b > 500.0)).sum())
+    assert expected > 0  # predicate must match real rows
+
+    plans = _spy_on_plans(monkeypatch)
+    with blosc2.open(path) as r:
+        got = r.where(f"(a > {n - 100}) & (b > 500.0)").nrows
+    assert got == expected
+
+    pruned = [p for p in plans if p.usable and p.selected_units < p.total_units]
+    assert pruned, "cross-column AND fell back to a full scan instead of pruning"
+
+
+def test_cross_column_or_prunes_segments_compact_b2z(tmp_path, monkeypatch):
+    """An OR across two SUMMARY-indexed columns must union their candidate masks
+    (both sides segment-selective ⇒ still prunes), and stay correct."""
+    n = 10_000
+    a = np.arange(n, dtype=np.float64)  # ascending  → high values at high index
+    b = np.arange(n, 0, -1, dtype=np.float64)  # descending → high values at low index
+    path = _build_cross_b2z(tmp_path, a, b, "or.b2z")
+
+    expected = int(((a > n - 100) | (b > n - 100)).sum())
+    assert expected > 0
+
+    plans = _spy_on_plans(monkeypatch)
+    with blosc2.open(path) as r:
+        got = r.where(f"(a > {n - 100}) | (b > {n - 100})").nrows
+    assert got == expected
+
+    pruned = [p for p in plans if p.usable and p.selected_units < p.total_units]
+    assert pruned, "cross-column OR fell back to a full scan instead of pruning"
+
+
+def test_cross_column_predicates_match_scan_compact_b2z(tmp_path):
+    """Cross-column AND/OR over two SUMMARY-indexed columns must match the
+    boolean-mask (no-index) result across selective, non-selective, empty, and
+    mixed-direction predicates."""
+    n = 8_000
+    rng = np.random.default_rng(3)
+    a = (rng.random(n) * 100).astype(np.float64)
+    b = (rng.random(n) * 100).astype(np.float64)
+    path = _build_cross_b2z(tmp_path, a, b, "corr.b2z")
+
+    cases = [
+        ("(a > 90) & (b > 10)", (a > 90) & (b > 10)),  # selective ∧ non-selective
+        ("(a > 50) & (b > 50)", (a > 50) & (b > 50)),  # both moderately selective
+        ("(a > 10) | (b > 90)", (a > 10) | (b > 90)),  # OR
+        ("(a > 99.9) & (b > 99.9)", (a > 99.9) & (b > 99.9)),  # near-empty intersection
+        ("(a < 5) & (b > 0)", (a < 5) & (b > 0)),  # low-end selective
+    ]
+    with blosc2.open(path) as r:
+        for expr, mask in cases:
+            assert r.where(expr).nrows == int(mask.sum()), expr
+
+
+def _seg_plan(units, *, base_nrows=1000, segment_len=250, level="block"):
+    import types
+
+    from blosc2.indexing import SegmentPredicatePlan
+
+    return SegmentPredicatePlan(
+        base=types.SimpleNamespace(shape=(base_nrows,)),
+        candidate_units=np.asarray(units, dtype=bool),
+        descriptor={"token": "x"},
+        target={},
+        field=None,
+        level=level,
+        segment_len=segment_len,
+    )
+
+
+def test_merge_segment_plans_intersection_union_and_fallback():
+    """Unit-level guard for the cross-column merge semantics."""
+    from blosc2.indexing import _merge_segment_plans
+
+    left = _seg_plan([1, 1, 1, 0])
+    right = _seg_plan([0, 1, 1, 1])
+
+    # Grid-compatible AND → intersection; OR → union.
+    np.testing.assert_array_equal(_merge_segment_plans(left, right, "and").candidate_units, [0, 1, 1, 0])
+    np.testing.assert_array_equal(_merge_segment_plans(left, right, "or").candidate_units, [1, 1, 1, 1])
+
+    # Incompatible grid (different segment_len): AND keeps the more selective
+    # side (fewer candidate rows = fewer nonzero units × segment_len), never a
+    # full scan; OR cannot prune safely → None.
+    coarse = _seg_plan([1, 1], segment_len=500)  # 2 units selected
+    fine = _seg_plan([1, 0, 0, 0])  # 1 unit selected, finer grid
+    assert _merge_segment_plans(coarse, fine, "and") is fine  # fine prunes more
+    assert _merge_segment_plans(fine, coarse, "and") is fine
+    assert _merge_segment_plans(coarse, fine, "or") is None

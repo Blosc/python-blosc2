@@ -1276,12 +1276,14 @@ def _plain_index_cparams(cparams: dict | blosc2.CParams | None) -> dict | None:
     return {key: _plain_value(value) for key, value in cparams.items()}
 
 
-def _load_array_sidecar(array: blosc2.NDArray, token: str, category: str, name: str) -> np.ndarray:
+def _load_array_sidecar(
+    array: blosc2.NDArray, token: str, category: str, name: str, path: str | None = None
+) -> np.ndarray:
     cache_key = _data_cache_key(array, token, category, name)
     cached = _DATA_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    handle = _SIDECAR_HANDLE_CACHE.get(_sidecar_handle_cache_key(array, token, category, name))
+    handle = _SIDECAR_HANDLE_CACHE.get(_sidecar_handle_cache_key(array, token, category, name, path))
     if handle is None:
         raise RuntimeError("in-memory index metadata is missing from the current process")
     data = _read_sidecar_span(handle, 0, int(handle.shape[0]))
@@ -4095,14 +4097,14 @@ def _component_nbytes(array: blosc2.NDArray, descriptor: dict, component: IndexC
     if component.path is not None:
         return int(_open_sidecar_file(component.path, _INDEX_MMAP_MODE).nbytes)
     token = descriptor["token"]
-    return int(_load_array_sidecar(array, token, component.category, component.name).nbytes)
+    return int(_load_array_sidecar(array, token, component.category, component.name, component.path).nbytes)
 
 
 def _component_cbytes(array: blosc2.NDArray, descriptor: dict, component: IndexComponent) -> int:
     if component.path is not None:
         return int(_open_sidecar_file(component.path, _INDEX_MMAP_MODE).cbytes)
     token = descriptor["token"]
-    sidecar = _load_array_sidecar(array, token, component.category, component.name)
+    sidecar = _load_array_sidecar(array, token, component.category, component.name, component.path)
     kwargs = {}
     cparams = descriptor.get("cparams")
     if cparams is not None:
@@ -4833,8 +4835,14 @@ def _descriptor_for(array: blosc2.NDArray, field: str | None) -> dict | None:
     return _descriptor_for_target(array, _field_target_descriptor(field))
 
 
-def _descriptor_for_target(array: blosc2.NDArray, target: dict) -> dict | None:
+def _descriptor_for_target(
+    array: blosc2.NDArray, target: dict, array_to_col: dict | None = None
+) -> dict | None:
     token = _target_token(target)
+    if array_to_col is not None and token == SELF_TARGET_NAME:
+        col_name = array_to_col.get(id(array))
+        if col_name is not None:
+            token = col_name
     descriptor = _load_store(array)["indexes"].get(token)
     if descriptor is None or descriptor.get("stale", False):
         return None
@@ -5175,12 +5183,14 @@ def _finest_level(descriptor: dict) -> str:
     return level_names[-1]
 
 
-def _plan_segment_compare(node: ast.Compare, operands: dict) -> SegmentPredicatePlan | None:
+def _plan_segment_compare(
+    node: ast.Compare, operands: dict, array_to_col: dict | None = None
+) -> SegmentPredicatePlan | None:
     target = _target_from_compare(node, operands)
     if target is None:
         return None
     base, target_info, op, value = target
-    descriptor = _descriptor_for_target(base, target_info)
+    descriptor = _descriptor_for_target(base, target_info, array_to_col)
     if descriptor is None:
         return None
     level = _finest_level(descriptor)
@@ -5202,19 +5212,45 @@ def _plan_segment_compare(node: ast.Compare, operands: dict) -> SegmentPredicate
     )
 
 
-def _same_segment_space(left: SegmentPredicatePlan, right: SegmentPredicatePlan) -> bool:
+def _grid_compatible_segment_plans(left: SegmentPredicatePlan, right: SegmentPredicatePlan) -> bool:
+    """Whether two segment plans share an identical row→segment grid.
+
+    Segments are row-aligned (segment ``i`` always covers rows
+    ``[i*segment_len, (i+1)*segment_len)``), so two plans with the same level,
+    ``segment_len``, candidate-mask shape, and row count map every segment index
+    to the same rows — even when they belong to *different* columns.  This is
+    what lets cross-column AND/OR intersect their per-segment candidate masks.
+    Compact-store columns that join the auto-aligned fast-eval grid share
+    ``segment_len``; columns excluded from alignment may not, and fall back.
+    """
     return (
-        left.base is right.base
-        and left.level == right.level
+        left.level == right.level
         and left.segment_len == right.segment_len
         and left.candidate_units.shape == right.candidate_units.shape
+        and int(left.base.shape[0]) == int(right.base.shape[0])
     )
+
+
+def _segment_plan_scan_rows(plan: SegmentPredicatePlan) -> int:
+    """Estimated rows the downstream scan must visit for *plan* (selectivity)."""
+    return int(np.count_nonzero(plan.candidate_units)) * int(plan.segment_len)
 
 
 def _merge_segment_plans(
     left: SegmentPredicatePlan, right: SegmentPredicatePlan, op: str
 ) -> SegmentPredicatePlan | None:
-    if not _same_segment_space(left, right):
+    if not _grid_compatible_segment_plans(left, right):
+        # Different columns can carry indexes on incompatible grids (e.g. a
+        # column excluded from the aligned fast-eval set).  We cannot combine
+        # their per-segment masks directly.
+        if op == "and":
+            # AND pruning by a *superset* of the true candidates is always
+            # correct, because the downstream scan re-evaluates the full
+            # predicate per row.  Keep whichever single side prunes more so we
+            # never do worse than single-column pruning.
+            return left if _segment_plan_scan_rows(left) <= _segment_plan_scan_rows(right) else right
+        # OR cannot be pruned to one side's segments — the other column may
+        # match rows in segments this side discarded.  Fall back to full scan.
         return None
     if op == "and":
         candidate_units = left.candidate_units & right.candidate_units
@@ -5231,11 +5267,13 @@ def _merge_segment_plans(
     )
 
 
-def _plan_segment_boolop(node: ast.BoolOp, operands: dict) -> SegmentPredicatePlan | None:
+def _plan_segment_boolop(
+    node: ast.BoolOp, operands: dict, array_to_col: dict | None = None
+) -> SegmentPredicatePlan | None:
     op = "and" if isinstance(node.op, ast.And) else "or" if isinstance(node.op, ast.Or) else None
     if op is None:
         return None
-    plans = [_plan_segment_node(value, operands) for value in node.values]
+    plans = [_plan_segment_node(value, operands, array_to_col) for value in node.values]
     if op == "and":
         plans = [plan for plan in plans if plan is not None]
         if not plans:
@@ -5252,7 +5290,9 @@ def _plan_segment_boolop(node: ast.BoolOp, operands: dict) -> SegmentPredicatePl
     return plan
 
 
-def _plan_segment_bitop(node: ast.BinOp, operands: dict) -> SegmentPredicatePlan | None:
+def _plan_segment_bitop(
+    node: ast.BinOp, operands: dict, array_to_col: dict | None = None
+) -> SegmentPredicatePlan | None:
     if isinstance(node.op, ast.BitAnd):
         op = "and"
     elif isinstance(node.op, ast.BitOr):
@@ -5260,8 +5300,8 @@ def _plan_segment_bitop(node: ast.BinOp, operands: dict) -> SegmentPredicatePlan
     else:
         return None
 
-    left = _plan_segment_node(node.left, operands)
-    right = _plan_segment_node(node.right, operands)
+    left = _plan_segment_node(node.left, operands, array_to_col)
+    right = _plan_segment_node(node.right, operands, array_to_col)
     if op == "and":
         if left is None:
             return right
@@ -5273,22 +5313,26 @@ def _plan_segment_bitop(node: ast.BinOp, operands: dict) -> SegmentPredicatePlan
     return _merge_segment_plans(left, right, op)
 
 
-def _plan_segment_node(node: ast.AST, operands: dict) -> SegmentPredicatePlan | None:
+def _plan_segment_node(
+    node: ast.AST, operands: dict, array_to_col: dict | None = None
+) -> SegmentPredicatePlan | None:
     if isinstance(node, ast.Compare):
-        return _plan_segment_compare(node, operands)
+        return _plan_segment_compare(node, operands, array_to_col)
     if isinstance(node, ast.BoolOp):
-        return _plan_segment_boolop(node, operands)
+        return _plan_segment_boolop(node, operands, array_to_col)
     if isinstance(node, ast.BinOp):
-        return _plan_segment_bitop(node, operands)
+        return _plan_segment_bitop(node, operands, array_to_col)
     return None
 
 
-def _plan_exact_compare(node: ast.Compare, operands: dict) -> ExactPredicatePlan | None:
+def _plan_exact_compare(
+    node: ast.Compare, operands: dict, array_to_col: dict | None = None
+) -> ExactPredicatePlan | None:
     target = _target_from_compare(node, operands)
     if target is None:
         return None
     base, target_info, op, value = target
-    descriptor = _descriptor_for_target(base, target_info)
+    descriptor = _descriptor_for_target(base, target_info, array_to_col)
     if descriptor is None or descriptor.get("kind") not in {"bucket", "partial", "full", "opsi"}:
         return None
     try:
@@ -5400,16 +5444,18 @@ def _merge_exact_plans(
     )
 
 
-def _plan_exact_conjunction(node: ast.AST, operands: dict) -> list[ExactPredicatePlan] | None:
+def _plan_exact_conjunction(
+    node: ast.AST, operands: dict, array_to_col: dict | None = None
+) -> list[ExactPredicatePlan] | None:
     if isinstance(node, ast.Compare):
-        plan = _plan_exact_compare(node, operands)
+        plan = _plan_exact_compare(node, operands, array_to_col)
         return None if plan is None else [plan]
     if isinstance(node, ast.BoolOp):
         if not isinstance(node.op, ast.And):
             return None
         plans = []
         for value in node.values:
-            subplans = _plan_exact_conjunction(value, operands)
+            subplans = _plan_exact_conjunction(value, operands, array_to_col)
             if subplans is None:
                 return None
             plans.extend(subplans)
@@ -5417,8 +5463,8 @@ def _plan_exact_conjunction(node: ast.AST, operands: dict) -> list[ExactPredicat
     if isinstance(node, ast.BinOp):
         if not isinstance(node.op, ast.BitAnd):
             return None
-        left = _plan_exact_conjunction(node.left, operands)
-        right = _plan_exact_conjunction(node.right, operands)
+        left = _plan_exact_conjunction(node.left, operands, array_to_col)
+        right = _plan_exact_conjunction(node.right, operands, array_to_col)
         if left is None and right is None:
             return None
         if left is None:
@@ -5429,10 +5475,12 @@ def _plan_exact_conjunction(node: ast.AST, operands: dict) -> list[ExactPredicat
     return None
 
 
-def _plan_exact_boolop(node: ast.BoolOp, operands: dict) -> ExactPredicatePlan | None:
+def _plan_exact_boolop(
+    node: ast.BoolOp, operands: dict, array_to_col: dict | None = None
+) -> ExactPredicatePlan | None:
     if not isinstance(node.op, ast.And):
         return None
-    plans = [_plan_exact_node(value, operands) for value in node.values]
+    plans = [_plan_exact_node(value, operands, array_to_col) for value in node.values]
     if any(plan is None for plan in plans):
         return None
     plan = plans[0]
@@ -5444,23 +5492,27 @@ def _plan_exact_boolop(node: ast.BoolOp, operands: dict) -> ExactPredicatePlan |
     return plan
 
 
-def _plan_exact_bitop(node: ast.BinOp, operands: dict) -> ExactPredicatePlan | None:
+def _plan_exact_bitop(
+    node: ast.BinOp, operands: dict, array_to_col: dict | None = None
+) -> ExactPredicatePlan | None:
     if not isinstance(node.op, ast.BitAnd):
         return None
-    left = _plan_exact_node(node.left, operands)
-    right = _plan_exact_node(node.right, operands)
+    left = _plan_exact_node(node.left, operands, array_to_col)
+    right = _plan_exact_node(node.right, operands, array_to_col)
     if left is None or right is None:
         return None
     return _merge_exact_plans(left, right, "and")
 
 
-def _plan_exact_node(node: ast.AST, operands: dict) -> ExactPredicatePlan | None:
+def _plan_exact_node(
+    node: ast.AST, operands: dict, array_to_col: dict | None = None
+) -> ExactPredicatePlan | None:
     if isinstance(node, ast.Compare):
-        return _plan_exact_compare(node, operands)
+        return _plan_exact_compare(node, operands, array_to_col)
     if isinstance(node, ast.BoolOp):
-        return _plan_exact_boolop(node, operands)
+        return _plan_exact_boolop(node, operands, array_to_col)
     if isinstance(node, ast.BinOp):
-        return _plan_exact_bitop(node, operands)
+        return _plan_exact_bitop(node, operands, array_to_col)
     return None
 
 
@@ -6706,7 +6758,14 @@ def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
     return IndexPlan(False, "available positional index does not prune any units for this predicate")
 
 
-def plan_query(expression: str, operands: dict, where: dict | None, *, use_index: bool = True) -> IndexPlan:
+def plan_query(
+    expression: str,
+    operands: dict,
+    where: dict | None,
+    *,
+    use_index: bool = True,
+    array_to_col: dict | None = None,
+) -> IndexPlan:
     if not use_index:
         return IndexPlan(False, "index usage disabled for this query")
     if where is None or len(where) != 1:
@@ -6717,13 +6776,13 @@ def plan_query(expression: str, operands: dict, where: dict | None, *, use_index
     except SyntaxError:
         return IndexPlan(False, "expression is not valid Python syntax for planning")
 
-    exact_terms = _plan_exact_conjunction(tree.body, operands)
+    exact_terms = _plan_exact_conjunction(tree.body, operands, array_to_col)
     if exact_terms is not None and len(exact_terms) > 1:
         multi_exact_plan = _plan_multi_exact_query(exact_terms)
         if multi_exact_plan is not None:
             return multi_exact_plan
 
-    exact_plan = _plan_exact_node(tree.body, operands)
+    exact_plan = _plan_exact_node(tree.body, operands, array_to_col)
     if exact_plan is not None:
         exact_query_plan = _plan_single_exact_query(exact_plan)
         if exact_query_plan.usable:
@@ -6738,7 +6797,7 @@ def plan_query(expression: str, operands: dict, where: dict | None, *, use_index
         if cross_col is not None:
             return cross_col
 
-    segment_plan = _plan_segment_node(tree.body, operands)
+    segment_plan = _plan_segment_node(tree.body, operands, array_to_col)
     if segment_plan is None:
         return IndexPlan(False, "no usable index was found for this predicate")
 

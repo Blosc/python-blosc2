@@ -738,6 +738,16 @@ class _CTableIndexingMixin:
         value_epoch, _ = self._storage.get_epoch_counters()
         descriptor["built_value_epoch"] = value_epoch
 
+        if is_persistent:
+            # Use column name as token so sibling columns in compact stores get
+            # distinct keys in the shared _PERSISTENT_INDEXES store (all columns
+            # share the same urlpath yet must not collide on "__self__").  File
+            # paths were built with token="__self__" (omitted from the filename)
+            # and remain unchanged; only the in-memory key is affected.
+            # In-memory CTables already have unique _IN_MEMORY_INDEXES entries
+            # per column (keyed by id(array)), so no token change is needed.
+            descriptor["token"] = col_name
+
         catalog = self._get_index_catalog()
         catalog[col_name] = descriptor
         self._storage.save_index_catalog(catalog)
@@ -1221,27 +1231,31 @@ class _CTableIndexingMixin:
         # the upcoming query always loads the correct sidecar for this column.
         from blosc2.indexing import _clear_cached_data, _register_descriptor_owner
 
-        for _col_name, col_arr, descriptor in indexed_columns[:1]:
+        # Build column-name → array mapping so the planner can resolve the
+        # correct per-column token instead of the generic "__self__".
+        array_to_col = {}
+        for _col_name, col_arr, descriptor in indexed_columns:
+            array_to_col[id(col_arr)] = _col_name
             arr_key = _array_key(col_arr)
             if _is_persistent_array(col_arr):
                 store = _PERSISTENT_INDEXES.get(arr_key) or _default_index_store()
-                if store["indexes"].get(descriptor["token"]) is not descriptor:
-                    _clear_cached_data(col_arr, descriptor["token"])
-                store["indexes"][descriptor["token"]] = descriptor
+                if store["indexes"].get(_col_name) is not descriptor:
+                    _clear_cached_data(col_arr, _col_name)
+                store["indexes"][_col_name] = descriptor
                 _PERSISTENT_INDEXES[arr_key] = store
             else:
                 store = _IN_MEMORY_INDEXES.get(id(col_arr)) or _default_index_store()
-                store["indexes"][descriptor["token"]] = descriptor
+                store["indexes"][_col_name] = descriptor
                 _IN_MEMORY_INDEXES[id(col_arr)] = store
             # Record the owning array so a sibling column sharing this urlpath
             # (and, after column alignment, the same shape/chunks) cannot match
             # this descriptor in _descriptor_for_target.
-            _register_descriptor_owner(col_arr, descriptor["token"])
+            _register_descriptor_owner(col_arr, _col_name)
 
         where_dict = {"_where_x": primary_col_arr}
         merged_operands = {**operands, "_where_x": primary_col_arr}
 
-        plan = plan_query(expression, merged_operands, where_dict)
+        plan = plan_query(expression, merged_operands, where_dict, array_to_col=array_to_col)
         if not plan.usable:
             return None
 
