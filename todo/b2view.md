@@ -21,6 +21,13 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
       placeholder; offer on-demand decoding (e.g. a key to materialize the
       column, or decode just the cursor row).
 - [ ] SChunk preview is not implemented (`model.preview` returns a message).
+- [ ] Plotting follow-ups for the `p` key: maybe a live mini-plot that
+      follows paging, or zoom into a row range from the plot modal.  If
+      character resolution proves too coarse, `textual-image` can render
+      real matplotlib output on kitty/iTerm2/sixel terminals, degrading to
+      half-blocks elsewhere.  Note: plain striding can alias periodic data;
+      a chunk-aggregated min/max envelope would be the audio-editor-style
+      fix.
 
 ### Testing
 
@@ -59,6 +66,15 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 - 2026-06-12: `s`/`e` keys jump to the start/end column window (aliases of
   Home/End, which were undiscoverable); the data panel subtitle now lists
   all jump keys: `rows: t/b/g | cols: s/e`.
+- 2026-06-12: `p` plots the cursor column (or a 1-D leaf) of the loaded row
+  buffer in a modal, via the optional `textual-plotext` package (new `plot`
+  extra); braille scatter, NaN/inf filtered, non-numeric columns and a
+  missing package just notify.  Works headless in Pilot tests.
+- 2026-06-12: The `p` plot now shows a downsampled overview of the *whole*
+  series (`StoreBrowser.plot_series`): a single strided blosc2 read of at
+  most ~2000 points (10 ms on a 10M-element array), never materializing the
+  full data; honors layout (fixed dims) for N-D arrays and active row
+  filters for CTables.
 - 2026-06-12: `?` opens a help screen listing all keys grouped by area
   (panels, tree, grid rows/columns, dim mode); shown in the footer, closed
   with esc/`?`/`q`.

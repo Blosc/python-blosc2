@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar
 
+import numpy as np
 from rich.markup import escape as markup_escape
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
+
+try:
+    from textual_plotext import PlotextPlot
+except ImportError:  # plotting is optional
+    PlotextPlot = None
 
 from blosc2.b2view.model import DataSliceLayout, StoreBrowser
 from blosc2.b2view.render import (
@@ -212,6 +218,7 @@ class HelpScreen(ModalScreen[None]):
                 ("s / e  (home / end)", "first / last column window"),
                 ("c", "go to column index or name..."),
                 ("/", "filter visible columns by substring (CTable)"),
+                ("p", "plot a whole-column overview (needs textual-plotext)"),
             ],
         ),
         (
@@ -425,6 +432,55 @@ class FilterScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class PlotScreen(ModalScreen[None]):
+    """Modal plotting one numeric column of the data grid (textual-plotext)."""
+
+    CSS = """
+    PlotScreen {
+        align: center middle;
+    }
+    #plot-dialog {
+        width: 90%;
+        height: 80%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #plot-title {
+        text-style: bold;
+        height: 1;
+    }
+    #plot-widget {
+        height: 1fr;
+    }
+    """
+
+    BINDINGS: ClassVar = [
+        ("escape", "close", "Close"),
+        ("q", "close", "Close"),
+        ("p", "close", "Close"),
+    ]
+
+    def __init__(self, *, title: str, x, y):
+        super().__init__()
+        self.plot_title = title
+        self.x = list(x)
+        self.y = list(y)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="plot-dialog"):
+            yield Static(markup_escape(self.plot_title), id="plot-title")
+            yield PlotextPlot(id="plot-widget")
+
+    def on_mount(self) -> None:
+        plt = self.query_one(PlotextPlot).plt
+        plt.plot(self.x, self.y, marker="braille")
+        plt.xlabel("row")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class B2ViewApp(App):
     """Browse TreeStore hierarchy and preview objects."""
 
@@ -464,6 +520,7 @@ class B2ViewApp(App):
         Binding("c", "go_to_column", "Go to column", show=False),
         Binding("f", "filter_rows", "Filter rows", show=False),
         Binding("slash", "filter_columns", "Filter columns", show=False),
+        Binding("p", "plot_column", "Plot column", show=False),
         Binding("d", "dim_cycle", "Dim mode", show=False),
         Binding("enter", "dim_toggle_nav", "Toggle nav", show=False),
         Binding("escape", "dim_exit", "Exit dim mode", show=False),
@@ -513,7 +570,10 @@ class B2ViewApp(App):
                             yield Static("", id="vlmetadata")
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
-                    data_pane.border_subtitle = "?(help) | d(im mode) | filter: f(rows) /(cols) | rows: t/b/g(oto) | cols: s/e/c(goto)"
+                    data_pane.border_subtitle = (
+                        "?(help) | d(im mode) | filter: f(rows) /(cols) | "
+                        "rows: t/b/g(oto) | cols: s/e/c(goto) | p(lot)"
+                    )
                     yield Static("", id="data-header")
                     with Horizontal(id="data-table-row"):
                         yield BufferedDataTable(id="data-table", show_row_labels=True, zebra_stripes=True)
@@ -1217,6 +1277,52 @@ class B2ViewApp(App):
         current = self.table_page["start"] + self.query_one("#data-table", DataTable).cursor_row
         screen = GoToRowScreen(nrows=self.table_page["nrows"], current=current)
         self.push_screen(screen, self._go_to_row)
+
+    _PLOT_MAX_POINTS = 2000
+
+    def action_plot_column(self) -> None:
+        """p key — plot a downsampled overview of the whole cursor column."""
+        if not self._in_data_grid():
+            return
+        if PlotextPlot is None:
+            self.notify("Plotting needs the 'textual-plotext' package", severity="warning")
+            return
+        buffer = self.table_buffer or self.table_page
+        columns = buffer["columns"]
+        if not columns:
+            return
+        cursor_col = self.query_one("#data-table", DataTable).cursor_column
+        name = columns[min(max(0, cursor_col), len(columns) - 1)]
+        # Cheap numeric check on the already-loaded buffer; this also rejects
+        # expensive object columns before any whole-column strided read.
+        sample = np.asarray(buffer["data"][name])
+        if sample.dtype.kind not in "iufb":
+            self.notify(f"Column {name!r} is not numeric", severity="warning")
+            return
+
+        column: str | int | None
+        if buffer.get("source_kind") == "ctable":
+            column = name
+        elif name.isdigit():  # array grids label columns with global indices
+            column = int(name)
+        else:  # 1-D arrays (single navigable dim) have one "value" column
+            column = None
+        series = self.browser.plot_series(
+            self.selected_path, column=column, layout=self._data_layout, max_points=self._PLOT_MAX_POINTS
+        )
+
+        x, y = series["x"], np.asarray(series["y"])
+        if y.dtype.kind == "b":
+            y = y.astype(np.int64)
+        finite = np.isfinite(y.astype(np.float64))
+        x, y = x[finite], y[finite]
+        if x.size == 0:
+            self.notify(f"Column {name!r} has no finite values to plot", severity="warning")
+            return
+        title = f"{self.selected_path} · {name} · {series['n']} rows"
+        if series["step"] > 1:
+            title += f" (step {series['step']})"
+        self.push_screen(PlotScreen(title=title, x=x, y=y))
 
     def action_go_to_column(self) -> None:
         if not self._in_data_grid():
