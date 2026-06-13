@@ -222,6 +222,15 @@ class HelpScreen(ModalScreen[None]):
             ],
         ),
         (
+            "Plot modal (after 'p')",
+            [
+                ("+ / -", "zoom in / out about the centre"),
+                ("left / right", "pan the zoomed window"),
+                ("0", "reset to the whole series"),
+                ("g", "type an exact start:stop row range"),
+            ],
+        ),
+        (
             "Dim mode (N-D arrays)",
             [
                 ("d", "toggle dim mode"),
@@ -432,8 +441,97 @@ class FilterScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+def _plot_view(series: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
+    """Turn a ``plot_series`` result into drawable arrays + a method label.
+
+    Drops all-NaN buckets (no finite extremes) and maps the read method to a
+    human description shown in the title.
+    """
+    x = np.asarray(series["x"])
+    ymin = np.asarray(series["ymin"], dtype=np.float64)
+    ymax = np.asarray(series["ymax"], dtype=np.float64)
+    finite = np.isfinite(ymin) & np.isfinite(ymax)
+    x, ymin, ymax = x[finite], ymin[finite], ymax[finite]
+    method = series.get("method")
+    descr = {"summary": "min/max envelope", "reduce": "min/max envelope"}.get(
+        method, "sampled — may miss extremes"
+    )
+    return x, ymin, ymax, descr
+
+
+class PlotRangeScreen(ModalScreen["tuple[int, int] | None"]):
+    """Small modal asking for an explicit ``start:stop`` row range."""
+
+    CSS = """
+    PlotRangeScreen {
+        align: center middle;
+    }
+    #range-dialog {
+        width: 50;
+        height: auto;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #range-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, *, n: int, start: int, stop: int):
+        super().__init__()
+        self.n = n
+        self.start = start
+        self.stop = stop
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="range-dialog"):
+            yield Static(
+                f"Row range start:stop within 0..{self.n} (current {self.start}:{self.stop})",
+                id="range-title",
+            )
+            yield Input(placeholder="start:stop", id="range-input")
+
+    def on_mount(self) -> None:
+        widget = self.query_one("#range-input", Input)
+        widget.value = f"{self.start}:{self.stop}"
+        widget.focus()
+
+    def _parse(self, text: str) -> tuple[int, int] | None:
+        if ":" not in text:
+            return None
+        lo, hi = text.split(":", 1)
+        try:
+            start = int(lo) if lo.strip() else 0
+            stop = int(hi) if hi.strip() else self.n
+        except ValueError:
+            return None
+        start = max(0, min(start, self.n))
+        stop = max(0, min(stop, self.n))
+        return None if stop <= start else (start, stop)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        parsed = self._parse(event.value.strip().replace("_", ""))
+        if parsed is None:
+            self.query_one("#range-title", Static).update("Enter a range as start:stop")
+            return
+        self.dismiss(parsed)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class PlotScreen(ModalScreen[None]):
-    """Modal plotting one numeric column of the data grid (textual-plotext)."""
+    """Modal plotting one numeric column; zoomable into a row sub-range.
+
+    Keys: ``+``/``-`` zoom about the view centre, ``←``/``→`` pan, ``0`` reset to
+    the whole series, ``g`` type an exact ``start:stop`` range.  Each change
+    re-fetches the envelope for the new range (exact for sub-ranges) via the
+    *fetch* closure, so zooming reveals detail the whole-series buckets hide.
+    """
 
     CSS = """
     PlotScreen {
@@ -453,34 +551,114 @@ class PlotScreen(ModalScreen[None]):
     #plot-widget {
         height: 1fr;
     }
+    #plot-keys {
+        height: 1;
+        color: $text-muted;
+    }
     """
+
+    _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · q close"
+    _MIN_WIDTH = 16  # smallest zoom window (rows), so the envelope still reads
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
         ("q", "close", "Close"),
         ("p", "close", "Close"),
+        ("plus", "zoom_in", "Zoom in"),
+        ("equals_sign", "zoom_in", "Zoom in"),
+        ("minus", "zoom_out", "Zoom out"),
+        ("left", "pan_left", "Pan left"),
+        ("right", "pan_right", "Pan right"),
+        ("0", "reset_range", "Reset"),
+        ("g", "goto_range", "Range"),
     ]
 
-    def __init__(self, *, title: str, x, ymin, ymax):
+    def __init__(self, *, title_prefix: str, fetch, n: int, row_start: int, row_stop: int, series: dict):
         super().__init__()
-        self.plot_title = title
+        self.title_prefix = title_prefix
+        self._fetch = fetch
+        self.n = n
+        self.row_start = row_start
+        self.row_stop = row_stop
+        self._apply(series)
+
+    def _apply(self, series: dict) -> None:
+        x, ymin, ymax, descr = _plot_view(series)
         self.x = list(x)
         self.ymin = list(ymin)
         self.ymax = list(ymax)
+        full = self.row_start == 0 and self.row_stop == self.n
+        rng = "" if full else f" · rows {self.row_start}:{self.row_stop}"
+        note = "" if self.x else " · (no finite values in range)"
+        self.plot_title = f"{self.title_prefix} · {self.n} rows{rng} · {descr}{note}"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="plot-dialog"):
             yield Static(markup_escape(self.plot_title), id="plot-title")
             yield PlotextPlot(id="plot-widget")
+            yield Static(self._KEYS_HINT, id="plot-keys")
 
     def on_mount(self) -> None:
-        plt = self.query_one(PlotextPlot).plt
-        # Draw the max (upper) and min (lower) envelope.  When they coincide
-        # (a sampled series) this reads as a single line.
-        plt.plot(self.x, self.ymax, marker="braille")
-        if self.ymin != self.ymax:
-            plt.plot(self.x, self.ymin, marker="braille")
+        self._redraw()
+
+    def _redraw(self) -> None:
+        widget = self.query_one(PlotextPlot)
+        plt = widget.plt
+        plt.clear_figure()
+        if self.x:
+            # Upper (max) and lower (min) envelope; a single line when they
+            # coincide (a sampled series).
+            plt.plot(self.x, self.ymax, marker="braille")
+            if self.ymin != self.ymax:
+                plt.plot(self.x, self.ymin, marker="braille")
         plt.xlabel("row")
+        widget.refresh()
+        self.query_one("#plot-title", Static).update(markup_escape(self.plot_title))
+
+    def _set_range(self, start: int, stop: int) -> None:
+        start = max(0, min(int(start), self.n))
+        stop = max(0, min(int(stop), self.n))
+        if stop <= start or (start, stop) == (self.row_start, self.row_stop):
+            return
+        self.row_start, self.row_stop = start, stop
+        self._apply(self._fetch(start, stop))
+        self._redraw()
+
+    def _zoom(self, factor: float) -> None:
+        width = self.row_stop - self.row_start
+        center = (self.row_start + self.row_stop) // 2
+        new_w = width // 2 if factor < 1 else width * 2
+        new_w = max(min(self._MIN_WIDTH, self.n), min(self.n, new_w))
+        start = max(0, min(center - new_w // 2, self.n - new_w))
+        self._set_range(start, start + new_w)
+
+    def _pan(self, direction: int) -> None:
+        width = self.row_stop - self.row_start
+        delta = max(1, width // 4) * direction
+        start = max(0, min(self.row_start + delta, self.n - width))
+        self._set_range(start, start + width)
+
+    def action_zoom_in(self) -> None:
+        self._zoom(0.5)
+
+    def action_zoom_out(self) -> None:
+        self._zoom(2.0)
+
+    def action_pan_left(self) -> None:
+        self._pan(-1)
+
+    def action_pan_right(self) -> None:
+        self._pan(1)
+
+    def action_reset_range(self) -> None:
+        self._set_range(0, self.n)
+
+    def action_goto_range(self) -> None:
+        def _on_range(result: tuple[int, int] | None) -> None:
+            if result is not None:
+                self._set_range(*result)
+
+        self.app.push_screen(PlotRangeScreen(n=self.n, start=self.row_start, stop=self.row_stop), _on_range)
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -1326,25 +1504,34 @@ class B2ViewApp(App):
             column = int(name)
         else:  # 1-D arrays (single navigable dim) have one "value" column
             column = None
-        series = self.browser.plot_series(
-            self.selected_path, column=column, layout=self._data_layout, max_points=self._PLOT_MAX_POINTS
-        )
 
-        x = np.asarray(series["x"])
-        ymin = np.asarray(series["ymin"], dtype=np.float64)
-        ymax = np.asarray(series["ymax"], dtype=np.float64)
-        # Keep only buckets with finite extremes (drops all-NaN buckets).
-        finite = np.isfinite(ymin) & np.isfinite(ymax)
-        x, ymin, ymax = x[finite], ymin[finite], ymax[finite]
+        layout = self._data_layout
+
+        def fetch(start: int, stop: int | None) -> dict:
+            return self.browser.plot_series(
+                self.selected_path,
+                column=column,
+                layout=layout,
+                max_points=self._PLOT_MAX_POINTS,
+                row_start=start,
+                row_stop=stop,
+            )
+
+        series = fetch(0, None)  # whole series (uses the fast SUMMARY tier if any)
+        x, _ymin, _ymax, _descr = _plot_view(series)
         if x.size == 0:
             self.notify(f"Column {name!r} has no finite values to plot", severity="warning")
             return
-        method = series.get("method")
-        descr = {"summary": "min/max envelope", "reduce": "min/max envelope"}.get(
-            method, "sampled — may miss extremes"
+        self.push_screen(
+            PlotScreen(
+                title_prefix=f"{self.selected_path} · {name}",
+                fetch=fetch,
+                n=series["n"],
+                row_start=series["row_start"],
+                row_stop=series["row_stop"],
+                series=series,
+            )
         )
-        title = f"{self.selected_path} · {name} · {series['n']} rows · {descr}"
-        self.push_screen(PlotScreen(title=title, x=x, ymin=ymin, ymax=ymax))
 
     def action_go_to_column(self) -> None:
         if not self._in_data_grid():

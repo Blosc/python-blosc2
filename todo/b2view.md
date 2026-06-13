@@ -15,11 +15,11 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
       placeholder; offer on-demand decoding (e.g. a key to materialize the
       column, or decode just the cursor row).
 - [ ] SChunk preview is not implemented (`model.preview` returns a message).
-- [ ] Plotting follow-ups for the `p` key: a live mini-plot that follows
-      paging, or zoom into a row range from the plot modal.  If character
-      resolution proves too coarse, `textual-image` can render real matplotlib
-      output on kitty/iTerm2/sixel terminals, degrading to half-blocks
-      elsewhere.
+- [ ] Plotting follow-ups for the `p` key (remaining): a live mini-plot in the
+      data panel that follows paging; and, if braille resolution proves too
+      coarse, `textual-image` to render real matplotlib output on
+      kitty/iTerm2/sixel terminals, degrading to half-blocks elsewhere.
+      (Row-range zoom — done 2026-06-13.)
 ### Testing
 
 - [ ] Visual regressions: consider `pytest-textual-snapshot` (SVG snapshots)
@@ -27,6 +27,15 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ## Done
 
+- 2026-06-13: The `p` plot modal is now zoomable into a row range.
+  `plot_series` gained `row_start`/`row_stop` (the whole series keeps the fast
+  SUMMARY tier; a sub-range is read exactly, with `x` in absolute rows).
+  `PlotScreen` holds a fetch closure + total `n` and re-queries on `+`/`-`
+  (zoom about centre), `←`/`→` (pan), `0` (reset), `g` (type an exact
+  `start:stop` via `PlotRangeScreen`); a key hint line and a `?`-help group
+  advertise the keys.  Tests: `tests/b2view/test_plot_model.py`
+  (sub-range exactness, clamping/ordering) and the extended `test_plot_column`
+  Pilot journey.
 - 2026-06-13: Row paging re-aligns to the page grid after dim-mode single-row
   scrolls.  `_scroll_navigable_viewport` shifts `start` by one row, which used
   to make every later page up/down carry that offset; `page_table` now takes

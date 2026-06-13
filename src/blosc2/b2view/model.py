@@ -384,25 +384,31 @@ class StoreBrowser:
         column: str | int | None = None,
         layout: DataSliceLayout | None = None,
         max_points: int = 2000,
+        row_start: int = 0,
+        row_stop: int | None = None,
     ) -> dict[str, Any]:
         """Return a peak-preserving overview of one series for plotting.
 
-        The result is ``{"x", "ymin", "ymax", "n", "method"}`` with at most
-        *max_points* buckets; ``ymin``/``ymax`` are the per-bucket extremes so a
-        plotted envelope never hides a peak or trough.  Three tiers, cheapest
-        first:
+        The result is ``{"x", "ymin", "ymax", "n", "row_start", "row_stop",
+        "method"}`` with at most *max_points* buckets; ``ymin``/``ymax`` are the
+        per-bucket extremes so a plotted envelope never hides a peak or trough,
+        ``n`` is the *total* series length and ``row_start``/``row_stop`` the
+        plotted range.  Three tiers, cheapest first:
 
         - ``"summary"``: read precomputed per-block min/max from the column's
-          SUMMARY index — no data decompression (CTable columns, no active
-          filter, numeric).
-        - ``"reduce"``: read the whole series and reduce per bucket (exact,
-          but O(n) and bounded by ``_PLOT_FULL_READ_MAX_BYTES``).
-        - ``"sample"``: strided sample for series too large to read fully; this
-          may miss extremes, so callers should label it.
+          SUMMARY index — no data decompression (whole series only; CTable
+          columns, no active filter, numeric).
+        - ``"reduce"``: read the (sub)series and reduce per bucket — exact,
+          O(range), streamed in bounded spans above ``_PLOT_FULL_READ_MAX_BYTES``
+          for local objects.
+        - ``"sample"``: strided sample for a remote series too large to read
+          fully; this may miss extremes, so callers should label it.
 
-        The series is a CTable column (*column* is its name; an active row
-        filter is honored) or an array (*column* is the global index along the
-        column dimension of *layout*, or None for 1-D arrays).
+        Pass *row_start*/*row_stop* to zoom into a sub-range (always read
+        exactly; ``x`` stays in absolute row coordinates).  The series is a
+        CTable column (*column* is its name; an active row filter is honored) or
+        an array (*column* is the global index along the column dimension of
+        *layout*, or None for 1-D arrays).
         """
         path = self.normalize_path(path)
         obj = self._get_object(path)
@@ -412,22 +418,23 @@ class StoreBrowser:
             filtered = path in self._filter_views
             view = self._filter_views.get(path, obj)
             n = len(view)
-            if not filtered:
+            start, stop = self._clamp_range(row_start, row_stop, n)
+            if start == 0 and stop == n and not filtered:
                 env = self._column_summary_envelope(obj, column, n, max_points)
                 if env is not None:
-                    return {**env, "n": n, "method": "summary"}
+                    return {**env, "n": n, "row_start": start, "row_stop": stop, "method": "summary"}
             col = view[column]
-            itemsize = np.dtype(col.dtype).itemsize
-            if n * itemsize > _PLOT_FULL_READ_MAX_BYTES:
-                # Local column: stream an exact envelope in bounded spans.
-                chunks = getattr(col, "chunks", None)
-                span = _stream_span(n, itemsize, chunks[0] if chunks else None)
-                env = _minmax_buckets_streaming(
-                    lambda s, e: safe_asarray(col[s:e]), n, max_points, span=span
-                )
-                return {**env, "n": n, "method": "reduce"}
-            vals = safe_asarray(col[:]) if n else np.empty(0)
-            return {**_reduce_envelope(vals, n, max_points), "n": n, "method": "reduce"}
+            chunks = getattr(col, "chunks", None)
+            return self._range_envelope(
+                lambda s, e, st=1: safe_asarray(col[s:e:st]),
+                start,
+                stop,
+                n,
+                np.dtype(col.dtype).itemsize,
+                chunks[0] if chunks else None,
+                remote=False,
+                max_points=max_points,
+            )
 
         if kind in {"ndarray", "c2array"}:
             shape = tuple(getattr(obj, "shape", ()) or ())
@@ -436,6 +443,7 @@ class StoreBrowser:
                 raise ValueError("Cannot plot a scalar")
             row_dim = layout.navigable_dims[0] if layout is not None and layout.navigable_dims else 0
             n = shape[row_dim]
+            start, stop = self._clamp_range(row_start, row_stop, n)
 
             def _row_index(row_slice):
                 idx: list[int | slice] = []
@@ -454,25 +462,61 @@ class StoreBrowser:
                         idx.append(0)
                 return tuple(idx)
 
-            itemsize = np.dtype(obj.dtype).itemsize
-            if n * itemsize > _PLOT_FULL_READ_MAX_BYTES:
-                if kind == "c2array":
-                    # Remote: stream of small reads would mean many round-trips;
-                    # keep the labeled strided sample as the last resort.
-                    step = max(1, -(-n // max_points))
-                    y = np.asarray(obj[_row_index(slice(0, n, step))]) if n else np.empty(0)
-                    return {"x": np.arange(0, n, step), "ymin": y, "ymax": y, "n": n, "method": "sample"}
-                # Local N-D array: stream an exact envelope along the row dim.
-                chunks = getattr(obj, "chunks", None)
-                span = _stream_span(n, itemsize, chunks[row_dim] if chunks else None)
-                env = _minmax_buckets_streaming(
-                    lambda s, e: np.asarray(obj[_row_index(slice(s, e, 1))]), n, max_points, span=span
-                )
-                return {**env, "n": n, "method": "reduce"}
-            vals = np.asarray(obj[_row_index(slice(0, n))]) if n else np.empty(0)
-            return {**_reduce_envelope(vals, n, max_points), "n": n, "method": "reduce"}
+            chunks = getattr(obj, "chunks", None)
+            return self._range_envelope(
+                lambda s, e, st=1: np.asarray(obj[_row_index(slice(s, e, st))]),
+                start,
+                stop,
+                n,
+                np.dtype(obj.dtype).itemsize,
+                chunks[row_dim] if chunks else None,
+                remote=(kind == "c2array"),
+                max_points=max_points,
+            )
 
         raise ValueError(f"Cannot plot {kind!r} objects")
+
+    @staticmethod
+    def _clamp_range(row_start: int, row_stop: int | None, n: int) -> tuple[int, int]:
+        start = 0 if row_start is None else max(0, min(int(row_start), n))
+        stop = n if row_stop is None else max(0, min(int(row_stop), n))
+        return (stop, start) if stop < start else (start, stop)
+
+    def _range_envelope(
+        self,
+        read,
+        start: int,
+        stop: int,
+        n_total: int,
+        itemsize: int,
+        chunklen: int | None,
+        *,
+        remote: bool,
+        max_points: int,
+    ) -> dict[str, Any]:
+        """Envelope of rows ``[start, stop)`` via *read(s, e, step=1)``, with ``x``
+        in absolute row coordinates.  Reads the range exactly (reduce/stream),
+        falling back to a strided sample only for large *remote* ranges."""
+        rng = stop - start
+        base = {"n": n_total, "row_start": start, "row_stop": stop}
+        if rng <= 0:
+            empty = np.empty(0)
+            return {"x": empty, "ymin": empty, "ymax": empty, **base, "method": "reduce"}
+        if rng * itemsize > _PLOT_FULL_READ_MAX_BYTES:
+            if remote:
+                step = max(1, -(-rng // max_points))
+                y = np.asarray(read(start, stop, step))
+                x = np.arange(start, stop, step)
+                m = min(len(x), len(y))
+                return {"x": x[:m], "ymin": y[:m], "ymax": y[:m], **base, "method": "sample"}
+            span = _stream_span(rng, itemsize, chunklen)
+            env = _minmax_buckets_streaming(
+                lambda s, e: read(start + s, start + e), rng, max_points, span=span
+            )
+        else:
+            env = _reduce_envelope(np.asarray(read(start, stop)), rng, max_points)
+        env["x"] = np.asarray(env["x"]) + start
+        return {**env, **base, "method": "reduce"}
 
     def _column_summary_envelope(
         self, table: Any, column: str | int | None, n: int, max_points: int
