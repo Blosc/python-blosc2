@@ -970,8 +970,10 @@ def _clear_cached_data(array: blosc2.NDArray, token: str) -> None:
         _SIDECAR_HANDLE_CACHE.pop(key, None)
 
 
-def _sidecar_handle_cache_key(array: blosc2.NDArray, token: str, category: str, name: str):
-    return (_array_key(array), token, category, name)
+def _sidecar_handle_cache_key(
+    array: blosc2.NDArray, token: str, category: str, name: str, path: str | None = None
+):
+    return (_array_key(array), token, category, name, path)
 
 
 def _sidecar_storage_category(category: str) -> str:
@@ -984,12 +986,14 @@ def _invalidate_sidecar_cache_entries(array: blosc2.NDArray, token: str, categor
     categories = {storage_category, f"{storage_category}_handle"}
     for cache_category in categories:
         _DATA_CACHE.pop(_data_cache_key(array, token, cache_category, name), None)
-        _SIDECAR_HANDLE_CACHE.pop(_sidecar_handle_cache_key(array, token, cache_category, name), None)
+        prefix = _sidecar_handle_cache_key(array, token, cache_category, name)
+        for key in [k for k in _SIDECAR_HANDLE_CACHE if k[:4] == prefix[:4]]:
+            _SIDECAR_HANDLE_CACHE.pop(key, None)
 
 
 def _open_sidecar_handle(array: blosc2.NDArray, token: str, category: str, name: str, path: str | None):
     _purge_stale_persistent_caches()
-    cache_key = _sidecar_handle_cache_key(array, token, category, name)
+    cache_key = _sidecar_handle_cache_key(array, token, category, name, path)
     cached = _SIDECAR_HANDLE_CACHE.get(cache_key)
     if cached is not None:
         return cached
