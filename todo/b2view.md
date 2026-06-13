@@ -9,12 +9,6 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ## Pending
 
-### Navigation
-
-- [ ] Row paging can lose page alignment after dim-mode single-row scrolls
-      (`_scroll_navigable_viewport` shifts by 1); consider re-aligning on the
-      next page up/down, as column paging does now.
-
 ### Data panel
 
 - [ ] CTable expensive columns (list/struct/object) show a `<...; skipped>`
@@ -33,6 +27,12 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ## Done
 
+- 2026-06-13: Row paging re-aligns to the page grid after dim-mode single-row
+  scrolls.  `_scroll_navigable_viewport` shifts `start` by one row, which used
+  to make every later page up/down carry that offset; `page_table` now takes
+  `align=` and an explicit page up/down (only — cursor-edge paging stays
+  contiguous) snaps `start` to the nearest page_size boundary, mirroring column
+  paging's per-page re-fit.  Regression covered in `test_2d_paging`.
 - 2026-06-13: Tier-2 plot envelope is no longer capped at
   `_PLOT_FULL_READ_MAX_BYTES` (~1 GB).  Above the ceiling, **local** objects
   (CTable columns, N-D arrays) are streamed in bounded spans

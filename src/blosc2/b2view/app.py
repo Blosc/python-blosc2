@@ -89,12 +89,12 @@ class BufferedDataTable(DataTable):
         super().action_cursor_left()
 
     def action_page_down(self) -> None:
-        if getattr(self.app, "page_table", lambda _: False)(1):
+        if getattr(self.app, "page_table", lambda *a, **k: False)(1, align=True):
             return
         super().action_page_down()
 
     def action_page_up(self) -> None:
-        if getattr(self.app, "page_table", lambda _: False)(-1):
+        if getattr(self.app, "page_table", lambda *a, **k: False)(-1, align=True):
             return
         super().action_page_up()
 
@@ -1061,7 +1061,7 @@ class B2ViewApp(App):
     def _finish_table_page_load(self) -> None:
         self.loading_table_page = False
 
-    def page_table(self, direction: int) -> bool:
+    def page_table(self, direction: int, *, align: bool = False) -> bool:
         if self.loading_table_page or self.table_page is None:
             return False
         page = self.table_page
@@ -1069,13 +1069,27 @@ class B2ViewApp(App):
         if direction > 0:
             if page["stop"] >= page["nrows"]:
                 return False
-            data = self._load_table_page(self.selected_path, page["stop"])
+            # An explicit page down re-aligns to the page grid: dim-mode
+            # single-row scrolls (_scroll_navigable_viewport) can leave `start`
+            # off a page_size boundary, and contiguous paging from `stop` would
+            # carry that offset forever.  Snapping to the next page_size
+            # multiple mirrors how column paging re-fits on each page.  For an
+            # already-aligned page this equals `stop`, so cursor-edge paging
+            # (align=False) is unchanged.
+            new_start = (page["start"] // page_size + 1) * page_size if align else page["stop"]
+            data = self._load_table_page(self.selected_path, new_start)
             cursor_row = 0
         else:
             if page["start"] <= 0:
                 return False
-            start = max(0, page["start"] - page_size)
-            data = self._load_table_page(self.selected_path, start)
+            if align:
+                # Previous grid line: floor for an off-grid start, start-page
+                # for an aligned one (ceil-div keeps aligned pages contiguous).
+                new_start = (-(-page["start"] // page_size) - 1) * page_size
+            else:
+                new_start = page["start"] - page_size
+            new_start = max(0, new_start)
+            data = self._load_table_page(self.selected_path, new_start)
             cursor_row = data["stop"] - data["start"] - 1
         self._update_data_table(data, cursor_row=cursor_row)
         self._update_data_header(data)
