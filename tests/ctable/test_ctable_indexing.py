@@ -755,6 +755,57 @@ def test_summary_index_compact_store_no_cross_column_confusion(tmp_path):
     assert got == expected, f"index returned {got}, expected {expected} (scan)"
 
 
+def test_sidecar_handle_cache_no_cross_column_collision(tmp_path):
+    """Regression: in a compact (.b2z) multi-column store, reading the SUMMARY
+    block sidecar handle for each column must return *that* column's data, not
+    a sibling's.
+
+    The process-wide ``_SIDECAR_HANDLE_CACHE`` was keyed only by
+    ``(_array_key, token, category, name)``.  In compact stores all columns
+    share the same urlpath → same ``_array_key``, so sibling columns collided
+    on a single cache entry and every column received the handle opened first.
+    Including ``path`` in the key fixes this.
+    """
+
+    @dataclasses.dataclass
+    class Distinct:
+        a: float = blosc2.field(blosc2.float64(), chunks=(500,), blocks=(250,))
+        b: float = blosc2.field(blosc2.float64(), chunks=(500,), blocks=(250,))
+
+    n = 1000
+    rng = np.random.default_rng(42)
+    # Non-overlapping ranges so we can trivially tell columns apart by max.
+    a = (rng.random(n) * 10).astype(np.float64)  # max ≈ 10
+    b = (rng.random(n) * 100 + 100).astype(np.float64)  # max ≈ 200, min ≥ 100
+
+    t = blosc2.CTable(Distinct)
+    t.extend(list(zip(a.tolist(), b.tolist(), strict=True)))
+    path = str(tmp_path / "distinct.b2z")
+    t.to_b2z(path)
+
+    # Build SUMMARY indexes on both columns.
+    with blosc2.open(path, mode="a") as w:
+        w.create_index("a", kind=blosc2.IndexKind.SUMMARY)
+        w.create_index("b", kind=blosc2.IndexKind.SUMMARY)
+
+    with blosc2.open(path) as r:
+        catalog = dict(r._get_index_catalog())
+        nd_a = r["a"]._raw_col
+        nd_b = r["b"]._raw_col
+
+        summary_a = blosc2.indexing._open_level_summary_handle(nd_a, catalog["a"], "block")
+        summary_b = blosc2.indexing._open_level_summary_handle(nd_b, catalog["b"], "block")
+
+    max_a = summary_a["max"].max()
+    max_b = summary_b["max"].max()
+
+    # Without the fix, both handles return the same (first-opened) column's data
+    # because the cache key collides.  With the fix they must differ.
+    assert max_a != max_b, f"cross-column collision: both max values are {max_a}"
+    assert max_a < 11, f"column a max {max_a} outside expected range [0, 10]"
+    assert 100 <= max_b <= 200, f"column b max {max_b} outside expected range [100, 200]"
+
+
 @dataclasses.dataclass
 class _GranRow:
     # Small explicit grid so the SUMMARY index spans several chunks/blocks.
