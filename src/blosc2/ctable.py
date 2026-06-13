@@ -866,6 +866,23 @@ class Column:
             return slp
         return np.where(self._valid_rows[:])[0]
 
+    def _has_identity_positions(self) -> bool:
+        """True when logical row ``k`` maps to physical row ``k`` for every row.
+
+        Holds for a base table with no column mask, no sorted/filtered view, and
+        no deletions.  In that case a logical slice is a physical slice, so it
+        can be read straight from the underlying NDArray instead of resolving
+        and gathering explicit live positions.  All checks are O(1) (cached
+        counts / lengths) — no validity scan is triggered.
+        """
+        t = self._table
+        if self._mask is not None or t.base is not None:
+            return False
+        if getattr(t, "_cached_live_positions", None) is not None:
+            return False
+        n = t._known_n_rows()  # cached live-row count, may be None
+        return n is not None and n == len(t._valid_rows)
+
     def __getitem__(self, key: int | slice | list | np.ndarray):
         """Return values for the given logical index.
 
@@ -911,6 +928,18 @@ class Column:
             return self._maybe_decode_timestamp_values(self._raw_col[int(pos_true)])
 
         elif isinstance(key, slice):
+            # Identity fast path: when logical positions equal physical ones, a
+            # logical slice is a physical slice.  Read it straight from the
+            # underlying NDArray, skipping the O(nrows) live-position scan and
+            # letting NDArray's strided-gather fast path handle coarse steps.
+            # Restricted to positive steps and plain stored columns; everything
+            # else falls through to the position-gather path below unchanged.
+            if (
+                (key.step is None or key.step > 0)
+                and not (self.is_computed or self.is_list or self.is_varlen_scalar or self.is_dictionary)
+                and self._has_identity_positions()
+            ):
+                return self._maybe_decode_timestamp_values(np.asarray(self._raw_col[key]))
             real_pos = self._resolve_live_positions()
             start, stop, step = key.indices(len(real_pos))
             if start >= stop:
