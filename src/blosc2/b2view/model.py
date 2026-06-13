@@ -10,10 +10,14 @@ import numpy as np
 
 import blosc2
 
-# Above this uncompressed size, plot_series falls back to a strided sample
-# instead of reading the whole series for an exact min/max envelope (the full
-# read both materializes the data and costs O(n)).  ~1 GB ≈ 125M float64.
+# Above this uncompressed size, plot_series does not read the whole series at
+# once for an exact min/max envelope.  Local objects are instead streamed in
+# bounded spans (still exact); only remote c2arrays fall back to a strided
+# sample to avoid many network round-trips.  ~1 GB ≈ 125M float64.
 _PLOT_FULL_READ_MAX_BYTES = 1_000_000_000
+
+# Target size of a single streamed read in the exact-but-bounded envelope path.
+_PLOT_STREAM_BUFFER_BYTES = 64_000_000  # ~64 MB
 
 
 def _minmax_buckets(
@@ -53,6 +57,58 @@ def _reduce_envelope(vals: np.ndarray, n: int, max_points: int) -> dict[str, np.
         empty = np.empty(0)
         return {"x": empty, "ymin": empty, "ymax": empty}
     return _minmax_buckets(vals, vals, np.arange(vals.shape[0]), n, max_points)
+
+
+def _bucket_geometry(n: int, max_points: int) -> tuple[int, int]:
+    """Return ``(group, nbuckets)`` for an *n*-row series cut into ``<= max_points``
+    contiguous buckets, matching the grouping policy of :func:`_minmax_buckets`
+    so the streamed and full-read envelopes bucket rows identically."""
+    if n <= 0:
+        return 1, 0
+    group = 1 if n <= max_points else -(-n // max_points)  # ceil
+    nbuckets = -(-n // group)  # ceil
+    return group, nbuckets
+
+
+def _minmax_buckets_streaming(read_chunk, n: int, max_points: int, *, span: int) -> dict[str, np.ndarray]:
+    """Exact per-bucket min/max envelope, read in row spans of at most *span*.
+
+    Equivalent to reading the whole series and calling :func:`_reduce_envelope`,
+    but never holds more than *span* rows in memory.  *read_chunk* is a callable
+    ``(start, stop) -> 1-D array`` for that row range.  Because min/max are
+    associative, arbitrary span boundaries (including ones that fall inside a
+    bucket) yield a result identical to the single-read path.
+    """
+    group, nbuckets = _bucket_geometry(n, max_points)
+    if nbuckets == 0:
+        empty = np.empty(0)
+        return {"x": empty, "ymin": empty, "ymax": empty}
+    ymin = np.full(nbuckets, np.inf)
+    ymax = np.full(nbuckets, -np.inf)
+    span = max(1, int(span))
+    for s in range(0, n, span):
+        e = min(s + span, n)
+        vals = np.asarray(read_chunk(s, e), dtype=float).ravel()[: e - s]
+        bidx = np.arange(s, e) // group  # global bucket per row, non-decreasing
+        seg_starts = np.concatenate(([0], np.flatnonzero(np.diff(bidx)) + 1))
+        buckets = bidx[seg_starts]  # unique within this span (contiguous runs)
+        lo = np.where(np.isnan(vals), np.inf, vals)
+        hi = np.where(np.isnan(vals), -np.inf, vals)
+        ymin[buckets] = np.minimum(ymin[buckets], np.minimum.reduceat(lo, seg_starts))
+        ymax[buckets] = np.maximum(ymax[buckets], np.maximum.reduceat(hi, seg_starts))
+    ymin = np.where(np.isinf(ymin), np.nan, ymin)
+    ymax = np.where(np.isinf(ymax), np.nan, ymax)
+    x = np.minimum(np.arange(nbuckets) * group, max(0, n - 1))
+    return {"x": x, "ymin": ymin, "ymax": ymax}
+
+
+def _stream_span(n: int, itemsize: int, chunklen: int | None) -> int:
+    """Rows per streamed read: ~``_PLOT_STREAM_BUFFER_BYTES`` worth, aligned to
+    whole native chunks when possible (chunks are the decompression unit)."""
+    budget = max(1, _PLOT_STREAM_BUFFER_BYTES // max(1, itemsize))
+    if chunklen and chunklen > 0:
+        return chunklen if chunklen >= budget else (budget // chunklen) * chunklen
+    return budget
 
 
 @dataclass(frozen=True)
@@ -360,12 +416,17 @@ class StoreBrowser:
                 env = self._column_summary_envelope(obj, column, n, max_points)
                 if env is not None:
                     return {**env, "n": n, "method": "summary"}
-            itemsize = np.dtype(view[column].dtype).itemsize
+            col = view[column]
+            itemsize = np.dtype(col.dtype).itemsize
             if n * itemsize > _PLOT_FULL_READ_MAX_BYTES:
-                step = max(1, -(-n // max_points))
-                y = safe_asarray(view[column][::step]) if n else np.empty(0)
-                return {"x": np.arange(0, n, step), "ymin": y, "ymax": y, "n": n, "method": "sample"}
-            vals = safe_asarray(view[column][:]) if n else np.empty(0)
+                # Local column: stream an exact envelope in bounded spans.
+                chunks = getattr(col, "chunks", None)
+                span = _stream_span(n, itemsize, chunks[0] if chunks else None)
+                env = _minmax_buckets_streaming(
+                    lambda s, e: safe_asarray(col[s:e]), n, max_points, span=span
+                )
+                return {**env, "n": n, "method": "reduce"}
+            vals = safe_asarray(col[:]) if n else np.empty(0)
             return {**_reduce_envelope(vals, n, max_points), "n": n, "method": "reduce"}
 
         if kind in {"ndarray", "c2array"}:
@@ -395,9 +456,19 @@ class StoreBrowser:
 
             itemsize = np.dtype(obj.dtype).itemsize
             if n * itemsize > _PLOT_FULL_READ_MAX_BYTES:
-                step = max(1, -(-n // max_points))
-                y = np.asarray(obj[_row_index(slice(0, n, step))]) if n else np.empty(0)
-                return {"x": np.arange(0, n, step), "ymin": y, "ymax": y, "n": n, "method": "sample"}
+                if kind == "c2array":
+                    # Remote: stream of small reads would mean many round-trips;
+                    # keep the labeled strided sample as the last resort.
+                    step = max(1, -(-n // max_points))
+                    y = np.asarray(obj[_row_index(slice(0, n, step))]) if n else np.empty(0)
+                    return {"x": np.arange(0, n, step), "ymin": y, "ymax": y, "n": n, "method": "sample"}
+                # Local N-D array: stream an exact envelope along the row dim.
+                chunks = getattr(obj, "chunks", None)
+                span = _stream_span(n, itemsize, chunks[row_dim] if chunks else None)
+                env = _minmax_buckets_streaming(
+                    lambda s, e: np.asarray(obj[_row_index(slice(s, e, 1))]), n, max_points, span=span
+                )
+                return {**env, "n": n, "method": "reduce"}
             vals = np.asarray(obj[_row_index(slice(0, n))]) if n else np.empty(0)
             return {**_reduce_envelope(vals, n, max_points), "n": n, "method": "reduce"}
 
