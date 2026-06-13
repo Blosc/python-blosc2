@@ -932,24 +932,24 @@ class Column:
             # logical slice is a physical slice.  Read it straight from the
             # underlying NDArray, skipping the O(nrows) live-position scan and
             # letting NDArray's strided-gather fast path handle coarse steps.
-            # Restricted to positive steps and plain stored columns; everything
-            # else falls through to the position-gather path below unchanged.
+            # Plain stored columns only; everything else falls through to the
+            # position-gather path below.
             if (
-                (key.step is None or key.step > 0)
-                and not (self.is_computed or self.is_list or self.is_varlen_scalar or self.is_dictionary)
+                not (self.is_computed or self.is_list or self.is_varlen_scalar or self.is_dictionary)
                 and self._has_identity_positions()
             ):
                 return self._maybe_decode_timestamp_values(np.asarray(self._raw_col[key]))
             real_pos = self._resolve_live_positions()
-            start, stop, step = key.indices(len(real_pos))
-            if start >= stop:
+            # Apply the slice straight to the physical positions so that all
+            # slice semantics (including negative steps) follow NumPy.
+            selected_pos = real_pos[key]
+            if selected_pos.size == 0:
                 if self.is_list or self.is_varlen_scalar or self.is_dictionary:
                     return []
                 if self.is_ndarray:
                     spec = self._table._schema.columns_by_name[self._col_name].spec
                     return np.empty((0, *spec.item_shape), dtype=self.dtype)
                 return np.array([], dtype=self.dtype)
-            selected_pos = real_pos[start:stop:step]  # physical row positions
             if self.is_computed:
                 lo, hi = int(selected_pos.min()), int(selected_pos.max())
                 chunk = np.asarray(self._raw_col[lo : hi + 1])
