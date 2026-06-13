@@ -277,6 +277,55 @@ class StoreBrowser:
             return {"message": "SChunk byte preview is not implemented yet."}
         return {"message": f"Preview is not supported for {kind!r} objects."}
 
+    def plot_series(
+        self,
+        path: str,
+        *,
+        column: str | int | None = None,
+        layout: DataSliceLayout | None = None,
+        max_points: int = 2000,
+    ) -> dict[str, Any]:
+        """Return a bounded ``{"x", "y", "n", "step"}`` overview of one series.
+
+        The series is a CTable column (*column* is its name; an active row
+        filter is honored) or an array (*column* is the global index along
+        the column dimension of *layout*, or None for 1-D arrays).  The whole
+        length is covered with a single strided blosc2 read of at most
+        *max_points* elements — the full data is never materialized.
+        """
+        path = self.normalize_path(path)
+        obj = self._get_object(path)
+        kind = object_kind(obj)
+
+        if kind == "ctable":
+            obj = self._filter_views.get(path, obj)
+            n = len(obj)
+            step = max(1, -(-n // max_points))
+            y = safe_asarray(obj[column][::step]) if n else np.empty(0)
+        elif kind in {"ndarray", "c2array"}:
+            shape = tuple(getattr(obj, "shape", ()) or ())
+            ndim = len(shape)
+            if ndim == 0:
+                raise ValueError("Cannot plot a scalar")
+            row_dim = layout.navigable_dims[0] if layout is not None and layout.navigable_dims else 0
+            n = shape[row_dim]
+            step = max(1, -(-n // max_points))
+            idx: list[int | slice] = []
+            for i in range(ndim):
+                if i == row_dim:
+                    idx.append(slice(0, n, step))
+                elif layout is not None and i in layout.fixed_values:
+                    idx.append(layout.fixed_values[i])
+                elif layout is not None and len(layout.navigable_dims) > 1 and i == layout.navigable_dims[1]:
+                    idx.append(int(column))
+                else:
+                    idx.append(0)
+            y = np.asarray(obj[tuple(idx)]) if n else np.empty(0)
+        else:
+            raise ValueError(f"Cannot plot {kind!r} objects")
+
+        return {"x": np.arange(0, n, step), "y": y, "n": n, "step": step}
+
     def column_names(self, path: str) -> list[str] | None:
         """Return the column names for a CTable path, or None for other kinds.
 

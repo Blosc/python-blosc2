@@ -229,3 +229,56 @@ def test_preview_array_high_dimensional_slice():
     arr = np.arange(2 * 3 * 4).reshape(2, 3, 4)
     preview = preview_array(arr, max_rows=2, max_cols=3)
     np.testing.assert_array_equal(preview, arr[0, :2, :3])
+
+
+def test_plot_series_1d_strided_overview(tmp_path):
+    path = tmp_path / "plot1d.b2z"
+    n = 1000
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/wave"] = blosc2.linspace(0, 1, num=n)
+
+    with StoreBrowser(str(path)) as browser:
+        series = browser.plot_series("/wave", max_points=300)
+        assert series["n"] == n
+        assert series["step"] == 4  # ceil(1000 / 300)
+        np.testing.assert_array_equal(series["x"], np.arange(0, n, 4))
+        np.testing.assert_allclose(series["y"], np.linspace(0, 1, n)[::4])
+
+        # Small arrays are returned whole (step 1)
+        small = browser.plot_series("/wave", max_points=n)
+        assert small["step"] == 1
+        assert len(small["y"]) == n
+
+
+def test_plot_series_2d_column_with_layout(tmp_path):
+    from blosc2.b2view.model import DataSliceLayout
+
+    path = tmp_path / "plot2d.b2z"
+    values = np.linspace(0, 1, 200 * 8).reshape(200, 8)
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/grid"] = values
+
+    with StoreBrowser(str(path)) as browser:
+        layout = DataSliceLayout.from_shape((200, 8))
+        series = browser.plot_series("/grid", column=5, layout=layout, max_points=50)
+        assert series["n"] == 200
+        assert series["step"] == 4
+        np.testing.assert_allclose(series["y"], values[::4, 5])
+
+
+def test_plot_series_ctable_column_honors_row_filter(tmp_path):
+    path = tmp_path / "plotct.b2z"
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/table"] = make_ctable(100)
+
+    with StoreBrowser(str(path)) as browser:
+        series = browser.plot_series("/table", column="y", max_points=1000)
+        assert series["n"] == 100
+        assert series["step"] == 1
+        np.testing.assert_allclose(series["y"], np.arange(100) * 1.5)
+
+        # An active row filter restricts the plotted universe
+        browser.set_filter("/table", "x >= 50")
+        filtered = browser.plot_series("/table", column="y", max_points=1000)
+        assert filtered["n"] == 50
+        np.testing.assert_allclose(filtered["y"], np.arange(50, 100) * 1.5)

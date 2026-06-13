@@ -495,6 +495,15 @@ async def test_ctable_column_paging(store_path):
         assert len(page["columns"]) < len(wide_columns)
         assert table.virtual_size.width <= table.size.width
 
+        # 'p' on a non-numeric column must not open a plot (notify only).
+        # This also passes when textual-plotext is not installed.
+        await pilot.press("s")
+        await wait_for_table(pilot)
+        table.move_cursor(column=app.table_page["columns"].index("d"))
+        await pilot.press("p")
+        await pilot.pause()
+        assert type(app.screen).__name__ != "PlotScreen"
+
 
 # ── CTable filtering ─────────────────────────────────────────────────────
 
@@ -603,3 +612,35 @@ async def test_ctable_filtering(store_path):
         await wait_for_table(pilot)
         assert app.browser.get_column_filter("/level0/ctable") is None
         assert app.table_page["ncols"] == len(expected)
+
+
+# ── Plotting ('p' key, optional textual-plotext) ─────────────────────────
+
+
+async def test_plot_column(store_path):
+    """'p' plots a downsampled whole-array overview in a modal."""
+    pytest.importorskip("textual_plotext")
+    from blosc2.b2view.app import PlotScreen
+
+    app = B2ViewApp(store_path, start_path="/level0/leaf1", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        await focus_data_table(pilot)
+
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)
+        screen = app.screen
+
+        # The series covers the whole 1-D leaf, downsampled by striding
+        step = -(-LEAF1_LEN // app._PLOT_MAX_POINTS)
+        assert step > 1  # the leaf is larger than the point budget
+        assert list(screen.x) == list(range(0, LEAF1_LEN, step))
+        np.testing.assert_allclose(screen.y, leaf1_values()[::step])
+        assert "leaf1" in screen.plot_title
+        assert f"step {step}" in screen.plot_title
+
+        # 'p' (like escape) closes the plot again
+        await pilot.press("p")
+        await pilot.pause()
+        assert not isinstance(app.screen, PlotScreen)
