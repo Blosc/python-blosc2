@@ -10,6 +10,50 @@ import numpy as np
 
 import blosc2
 
+# Above this uncompressed size, plot_series falls back to a strided sample
+# instead of reading the whole series for an exact min/max envelope (the full
+# read both materializes the data and costs O(n)).  ~1 GB ≈ 125M float64.
+_PLOT_FULL_READ_MAX_BYTES = 1_000_000_000
+
+
+def _minmax_buckets(
+    vmin: np.ndarray, vmax: np.ndarray, positions: np.ndarray, n: int, max_points: int
+) -> dict[str, np.ndarray]:
+    """Reduce per-element (or per-block) min/max into <= *max_points* buckets.
+
+    *vmin*/*vmax* are the per-source-unit minima/maxima, *positions* the global
+    row index of each unit's start, *n* the total row count.  NaN units (already
+    NaN in *vmin*/*vmax*) are ignored within a bucket; an all-NaN bucket stays
+    NaN.  Returns ``{"x", "ymin", "ymax"}`` with bucket-center x positions.
+    """
+    nunits = vmin.shape[0]
+    if nunits == 0:
+        empty = np.empty(0)
+        return {"x": empty, "ymin": empty, "ymax": empty}
+    if nunits <= max_points:
+        starts = np.arange(nunits)
+    else:
+        group = -(-nunits // max_points)  # ceil
+        starts = np.arange(0, nunits, group)
+    # NaN-aware reduceat: +inf/-inf neutralizes NaN units, then mapped back.
+    lo = np.where(np.isnan(vmin), np.inf, vmin)
+    hi = np.where(np.isnan(vmax), -np.inf, vmax)
+    ymin = np.minimum.reduceat(lo, starts)
+    ymax = np.maximum.reduceat(hi, starts)
+    ymin = np.where(np.isinf(ymin), np.nan, ymin)
+    ymax = np.where(np.isinf(ymax), np.nan, ymax)
+    x = np.minimum(positions[starts], max(0, n - 1))
+    return {"x": x, "ymin": ymin, "ymax": ymax}
+
+
+def _reduce_envelope(vals: np.ndarray, n: int, max_points: int) -> dict[str, np.ndarray]:
+    """Per-bucket min/max envelope of an in-memory 1-D series."""
+    vals = np.asarray(vals)
+    if vals.shape[0] == 0:
+        empty = np.empty(0)
+        return {"x": empty, "ymin": empty, "ymax": empty}
+    return _minmax_buckets(vals, vals, np.arange(vals.shape[0]), n, max_points)
+
 
 @dataclass(frozen=True)
 class NodeInfo:
@@ -285,46 +329,120 @@ class StoreBrowser:
         layout: DataSliceLayout | None = None,
         max_points: int = 2000,
     ) -> dict[str, Any]:
-        """Return a bounded ``{"x", "y", "n", "step"}`` overview of one series.
+        """Return a peak-preserving overview of one series for plotting.
+
+        The result is ``{"x", "ymin", "ymax", "n", "method"}`` with at most
+        *max_points* buckets; ``ymin``/``ymax`` are the per-bucket extremes so a
+        plotted envelope never hides a peak or trough.  Three tiers, cheapest
+        first:
+
+        - ``"summary"``: read precomputed per-block min/max from the column's
+          SUMMARY index — no data decompression (CTable columns, no active
+          filter, numeric).
+        - ``"reduce"``: read the whole series and reduce per bucket (exact,
+          but O(n) and bounded by ``_PLOT_FULL_READ_MAX_BYTES``).
+        - ``"sample"``: strided sample for series too large to read fully; this
+          may miss extremes, so callers should label it.
 
         The series is a CTable column (*column* is its name; an active row
-        filter is honored) or an array (*column* is the global index along
-        the column dimension of *layout*, or None for 1-D arrays).  The whole
-        length is covered with a single strided blosc2 read of at most
-        *max_points* elements — the full data is never materialized.
+        filter is honored) or an array (*column* is the global index along the
+        column dimension of *layout*, or None for 1-D arrays).
         """
         path = self.normalize_path(path)
         obj = self._get_object(path)
         kind = object_kind(obj)
 
         if kind == "ctable":
-            obj = self._filter_views.get(path, obj)
-            n = len(obj)
-            step = max(1, -(-n // max_points))
-            y = safe_asarray(obj[column][::step]) if n else np.empty(0)
-        elif kind in {"ndarray", "c2array"}:
+            filtered = path in self._filter_views
+            view = self._filter_views.get(path, obj)
+            n = len(view)
+            if not filtered:
+                env = self._column_summary_envelope(obj, column, n, max_points)
+                if env is not None:
+                    return {**env, "n": n, "method": "summary"}
+            itemsize = np.dtype(view[column].dtype).itemsize
+            if n * itemsize > _PLOT_FULL_READ_MAX_BYTES:
+                step = max(1, -(-n // max_points))
+                y = safe_asarray(view[column][::step]) if n else np.empty(0)
+                return {"x": np.arange(0, n, step), "ymin": y, "ymax": y, "n": n, "method": "sample"}
+            vals = safe_asarray(view[column][:]) if n else np.empty(0)
+            return {**_reduce_envelope(vals, n, max_points), "n": n, "method": "reduce"}
+
+        if kind in {"ndarray", "c2array"}:
             shape = tuple(getattr(obj, "shape", ()) or ())
             ndim = len(shape)
             if ndim == 0:
                 raise ValueError("Cannot plot a scalar")
             row_dim = layout.navigable_dims[0] if layout is not None and layout.navigable_dims else 0
             n = shape[row_dim]
-            step = max(1, -(-n // max_points))
-            idx: list[int | slice] = []
-            for i in range(ndim):
-                if i == row_dim:
-                    idx.append(slice(0, n, step))
-                elif layout is not None and i in layout.fixed_values:
-                    idx.append(layout.fixed_values[i])
-                elif layout is not None and len(layout.navigable_dims) > 1 and i == layout.navigable_dims[1]:
-                    idx.append(int(column))
-                else:
-                    idx.append(0)
-            y = np.asarray(obj[tuple(idx)]) if n else np.empty(0)
-        else:
-            raise ValueError(f"Cannot plot {kind!r} objects")
 
-        return {"x": np.arange(0, n, step), "y": y, "n": n, "step": step}
+            def _row_index(row_slice):
+                idx: list[int | slice] = []
+                for i in range(ndim):
+                    if i == row_dim:
+                        idx.append(row_slice)
+                    elif layout is not None and i in layout.fixed_values:
+                        idx.append(layout.fixed_values[i])
+                    elif (
+                        layout is not None
+                        and len(layout.navigable_dims) > 1
+                        and i == layout.navigable_dims[1]
+                    ):
+                        idx.append(int(column))
+                    else:
+                        idx.append(0)
+                return tuple(idx)
+
+            itemsize = np.dtype(obj.dtype).itemsize
+            if n * itemsize > _PLOT_FULL_READ_MAX_BYTES:
+                step = max(1, -(-n // max_points))
+                y = np.asarray(obj[_row_index(slice(0, n, step))]) if n else np.empty(0)
+                return {"x": np.arange(0, n, step), "ymin": y, "ymax": y, "n": n, "method": "sample"}
+            vals = np.asarray(obj[_row_index(slice(0, n))]) if n else np.empty(0)
+            return {**_reduce_envelope(vals, n, max_points), "n": n, "method": "reduce"}
+
+        raise ValueError(f"Cannot plot {kind!r} objects")
+
+    def _column_summary_envelope(
+        self, table: Any, column: str | int | None, n: int, max_points: int
+    ) -> dict[str, np.ndarray] | None:
+        """Build a min/max envelope from a column's SUMMARY index, or None.
+
+        Reads precomputed per-block ``(min, max)`` from the index — no data
+        decompression.  Returns None when there is no usable summary (non-string
+        column, no index, non-numeric, or unsupported level).
+        """
+        if not isinstance(column, str):
+            return None
+        try:
+            idx = table.index(column)
+        except Exception:
+            return None
+        if getattr(idx, "kind", None) != "summary":
+            return None
+        try:
+            desc = idx.descriptor
+            levels = desc.get("levels") or {}
+            level = "block" if "block" in levels else next(iter(levels), None)
+            if level is None or np.dtype(desc["dtype"]).kind not in "iuf":
+                return None
+            from blosc2.indexing import FLAG_ALL_NAN, _open_level_summary_handle
+
+            handle = _open_level_summary_handle(idx._target_array(), desc, level)
+            bmin = np.asarray(handle["min"][:])
+            bmax = np.asarray(handle["max"][:])
+            flags = np.asarray(handle["flags"][:])
+        except Exception:
+            return None
+        if bmin.shape[0] == 0:
+            return None
+        all_nan = (flags & FLAG_ALL_NAN) != 0
+        if all_nan.any():
+            bmin = np.where(all_nan, np.nan, bmin)
+            bmax = np.where(all_nan, np.nan, bmax)
+        block = int(desc["blocks"][0])
+        positions = np.arange(bmin.shape[0]) * block
+        return _minmax_buckets(bmin, bmax, positions, n, max_points)
 
     def column_names(self, path: str) -> list[str] | None:
         """Return the column names for a CTable path, or None for other kinds.

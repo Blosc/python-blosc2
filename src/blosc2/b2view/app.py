@@ -461,11 +461,12 @@ class PlotScreen(ModalScreen[None]):
         ("p", "close", "Close"),
     ]
 
-    def __init__(self, *, title: str, x, y):
+    def __init__(self, *, title: str, x, ymin, ymax):
         super().__init__()
         self.plot_title = title
         self.x = list(x)
-        self.y = list(y)
+        self.ymin = list(ymin)
+        self.ymax = list(ymax)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="plot-dialog"):
@@ -474,7 +475,11 @@ class PlotScreen(ModalScreen[None]):
 
     def on_mount(self) -> None:
         plt = self.query_one(PlotextPlot).plt
-        plt.plot(self.x, self.y, marker="braille")
+        # Draw the max (upper) and min (lower) envelope.  When they coincide
+        # (a sampled series) this reads as a single line.
+        plt.plot(self.x, self.ymax, marker="braille")
+        if self.ymin != self.ymax:
+            plt.plot(self.x, self.ymin, marker="braille")
         plt.xlabel("row")
 
     def action_close(self) -> None:
@@ -1311,18 +1316,21 @@ class B2ViewApp(App):
             self.selected_path, column=column, layout=self._data_layout, max_points=self._PLOT_MAX_POINTS
         )
 
-        x, y = series["x"], np.asarray(series["y"])
-        if y.dtype.kind == "b":
-            y = y.astype(np.int64)
-        finite = np.isfinite(y.astype(np.float64))
-        x, y = x[finite], y[finite]
+        x = np.asarray(series["x"])
+        ymin = np.asarray(series["ymin"], dtype=np.float64)
+        ymax = np.asarray(series["ymax"], dtype=np.float64)
+        # Keep only buckets with finite extremes (drops all-NaN buckets).
+        finite = np.isfinite(ymin) & np.isfinite(ymax)
+        x, ymin, ymax = x[finite], ymin[finite], ymax[finite]
         if x.size == 0:
             self.notify(f"Column {name!r} has no finite values to plot", severity="warning")
             return
-        title = f"{self.selected_path} · {name} · {series['n']} rows"
-        if series["step"] > 1:
-            title += f" (step {series['step']})"
-        self.push_screen(PlotScreen(title=title, x=x, y=y))
+        method = series.get("method")
+        descr = {"summary": "min/max envelope", "reduce": "min/max envelope"}.get(
+            method, "sampled — may miss extremes"
+        )
+        title = f"{self.selected_path} · {name} · {series['n']} rows · {descr}"
+        self.push_screen(PlotScreen(title=title, x=x, ymin=ymin, ymax=ymax))
 
     def action_go_to_column(self) -> None:
         if not self._in_data_grid():
