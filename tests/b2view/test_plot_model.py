@@ -144,6 +144,34 @@ def test_streaming_reducer_all_nan_bucket_stays_nan():
     assert np.isnan(env["ymax"]).all()
 
 
+@pytest.mark.parametrize(("node", "column"), [("/leaf", None), ("/ctable", "x")])
+def test_plot_series_subrange_is_exact(plot_store, node, column):
+    path, vals = plot_store
+    s, e = 4000, 9000
+    with StoreBrowser(path) as browser:
+        sub = browser.plot_series(node, column=column, max_points=MAX_POINTS, row_start=s, row_stop=e)
+    assert sub["n"] == N  # total, not the range
+    assert (sub["row_start"], sub["row_stop"]) == (s, e)
+    expected = _reduce_envelope(vals[s:e], e - s, MAX_POINTS)
+    np.testing.assert_array_equal(sub["x"], np.asarray(expected["x"]) + s)  # absolute x
+    np.testing.assert_allclose(sub["ymin"], expected["ymin"], equal_nan=True)
+    np.testing.assert_allclose(sub["ymax"], expected["ymax"], equal_nan=True)
+
+
+def test_plot_series_range_clamps_and_orders(plot_store):
+    path, _ = plot_store
+    with StoreBrowser(path) as browser:
+        # row_stop past the end clamps to n
+        clamped = browser.plot_series("/leaf", row_stop=10 * N)
+        assert clamped["row_stop"] == N
+        # start > stop is swapped into a valid range
+        swapped = browser.plot_series("/leaf", row_start=5000, row_stop=1000)
+        assert (swapped["row_start"], swapped["row_stop"]) == (1000, 5000)
+        # an empty range yields no buckets
+        empty = browser.plot_series("/leaf", row_start=2000, row_stop=2000)
+        assert len(empty["x"]) == 0
+
+
 def test_streaming_reducer_integer_dtype():
     vals = np.arange(1000, dtype=np.int64)
     env = _minmax_buckets_streaming(lambda s, e: vals[s:e], 1000, 100, span=33)

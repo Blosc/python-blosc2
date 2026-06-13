@@ -668,6 +668,55 @@ async def test_plot_column(store_path):
         assert "leaf1" in screen.plot_title
         assert "envelope" in screen.plot_title
 
+        # ── Zoom / pan / reset / exact range from the plot modal ─────────
+        from blosc2.b2view.app import PlotRangeScreen
+
+        n = screen.n
+        assert (screen.row_start, screen.row_stop) == (0, n)
+
+        # '+' zooms in about the centre: the window halves and re-centres.
+        await pilot.press("plus")
+        await pilot.pause()
+        assert screen.row_stop - screen.row_start == n // 2
+        assert screen.row_start > 0
+        assert "rows" in screen.plot_title
+
+        # '-' zooms back out to the whole series.
+        await pilot.press("minus")
+        await pilot.pause()
+        assert (screen.row_start, screen.row_stop) == (0, n)
+
+        # Pan right shifts a zoomed window without changing its width.
+        await pilot.press("plus")
+        await pilot.pause()
+        width = screen.row_stop - screen.row_start
+        start_before = screen.row_start
+        await pilot.press("right")
+        await pilot.pause()
+        assert screen.row_start > start_before
+        assert screen.row_stop - screen.row_start == width
+
+        # '0' resets to the whole series.
+        await pilot.press("0")
+        await pilot.pause()
+        assert (screen.row_start, screen.row_stop) == (0, n)
+
+        # 'g' opens a range modal; an exact range zooms there and reads it exactly.
+        await pilot.press("g")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotRangeScreen)
+        app.screen.query_one("#range-input", Input).value = "1000:2000"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)
+        screen = app.screen
+        assert (screen.row_start, screen.row_stop) == (1000, 2000)
+        sub = leaf1_values()[1000:2000]
+        assert min(screen.ymin) <= sub.min() + 1e-9
+        assert max(screen.ymax) >= sub.max() - 1e-9
+        assert min(screen.x) >= 1000
+        assert max(screen.x) < 2000
+
         # 'p' (like escape) closes the plot again
         await pilot.press("p")
         await pilot.pause()
