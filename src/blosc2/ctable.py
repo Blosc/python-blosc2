@@ -3067,10 +3067,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ----------
         create_summary_index:
             If ``True`` (default), SUMMARY indexes are automatically built for
-            all eligible scalar columns on :meth:`close`.  These indexes are
-            extremely cheap to store (< 0.1% of column size) and accelerate
-            ``where()`` queries without any user action.  Set to ``False`` to
-            disable.
+            all eligible scalar columns.  These indexes are extremely cheap to
+            store (< 0.1% of column size) and accelerate ``where()`` queries
+            without any user action.  Set to ``False`` to disable.
+
+            The build is triggered by :meth:`close`, not by table creation, so
+            *when* it happens depends on the table's lifecycle:
+
+            - **Persistent** tables (``urlpath=...``) are closed as part of
+              normal use, so they get these indexes and reopen with them.
+            - A **purely in-memory** table is never closed automatically, so it
+              is *not* indexed unless you close it explicitly or use it as a
+              context manager (``with blosc2.CTable(...) as t:``).  Otherwise
+              call :meth:`create_index` yourself.
+
+            Note that :meth:`to_b2z` and :meth:`save` write live rows through a
+            logical copy and do **not** trigger the build; index the source
+            table (or the reopened result) explicitly if you need it.
         """
         # Auto-size: if the caller didn't specify expected_size and new_data has a
         # known length, pre-allocate just enough (×2 for headroom, min 64).
@@ -3191,7 +3204,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 self._save_n_rows_to_meta()
 
     def close(self) -> None:
-        """Close any persistent backing store held by this table."""
+        """Close any persistent backing store held by this table.
+
+        On the first close of a writable root table, this also builds the
+        automatic SUMMARY indexes (unless ``create_summary_index=False``); see
+        the ``create_summary_index`` parameter of :class:`CTable` for how this
+        interacts with in-memory vs. persistent tables.
+        """
         storage = getattr(self, "_storage", None)
         # Persist row count for root tables so subsequent opens can skip
         # the _valid_rows intersection in where() for all-valid tables.
