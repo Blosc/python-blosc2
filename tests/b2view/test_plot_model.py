@@ -172,6 +172,27 @@ def test_plot_series_range_clamps_and_orders(plot_store):
         assert len(empty["x"]) == 0
 
 
+@pytest.mark.parametrize(("node", "column"), [("/leaf", None), ("/ctable", "x")])
+def test_read_series_returns_exact_raw_values(plot_store, node, column):
+    """read_series is the unbucketed counterpart of plot_series (for the 'h' view)."""
+    path, vals = plot_store
+    s, e = 4000, 9000
+    with StoreBrowser(path) as browser:
+        raw = browser.read_series(node, column=column, row_start=s, row_stop=e)
+    assert raw["n"] == N  # total, not the range
+    assert (raw["row_start"], raw["row_stop"]) == (s, e)
+    np.testing.assert_array_equal(raw["x"], np.arange(s, e))  # absolute rows
+    np.testing.assert_array_equal(raw["y"], vals[s:e])  # NaNs compare equal by position
+
+
+def test_read_series_clamps_range(plot_store):
+    path, vals = plot_store
+    with StoreBrowser(path) as browser:
+        clamped = browser.read_series("/leaf", row_stop=10 * N)
+    assert clamped["row_stop"] == N
+    assert clamped["y"].shape == (N,)
+
+
 def test_streaming_reducer_integer_dtype():
     vals = np.arange(1000, dtype=np.int64)
     env = _minmax_buckets_streaming(lambda s, e: vals[s:e], 1000, 100, span=33)

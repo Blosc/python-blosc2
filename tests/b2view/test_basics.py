@@ -799,3 +799,51 @@ async def test_plot_view_locks_ctable_window(store_path):
         assert app.row_window is None
         assert app.browser.get_row_window("/level0/ctable") is False
         assert app.table_page["nrows"] == NROWS
+
+
+async def test_plot_hires_view(store_path):
+    """'h' opens a high-res matplotlib image over the braille plot; 'q' returns."""
+    pytest.importorskip("textual_plotext")
+    pytest.importorskip("textual_image")
+    pytest.importorskip("matplotlib")
+    from blosc2.b2view.app import HiResPlotScreen, PlotScreen
+
+    app = B2ViewApp(store_path, start_path="/level0/ctable", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        table = await focus_data_table(pilot)
+        table.move_cursor(column=app.table_page["columns"].index("b"))
+
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)
+
+        # Force a tiny cap so the un-zoomed series (300 rows) is "too large":
+        # 'h' asks the user to zoom in and stays on the braille plot.
+        app.screen._HIRES_MAX_POINTS = 50
+        await pilot.press("h")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)  # not opened
+
+        # Zoom to a small range, then 'h' opens the high-res image screen.
+        await pilot.press("g")
+        await pilot.pause()
+        app.screen.query_one("#range-input", Input).value = "100:140"
+        await pilot.press("enter")
+        await pilot.pause()
+        plot = app.screen
+        assert (plot.row_start, plot.row_stop) == (100, 140)
+
+        await pilot.press("h")
+        await pilot.pause()
+        assert isinstance(app.screen, HiResPlotScreen)
+        # The image rendered and mounted (UnicodeImage in a headless test).
+        from blosc2.b2view.app import TextualImage
+
+        assert app.screen.query_one("#hires-image", TextualImage) is not None
+
+        # 'q' returns to the braille plot with the zoom intact.
+        await pilot.press("q")
+        await pilot.pause()
+        assert app.screen is plot
+        assert (plot.row_start, plot.row_stop) == (100, 140)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
@@ -16,6 +17,13 @@ try:
     from textual_plotext import PlotextPlot
 except ImportError:  # plotting is optional
     PlotextPlot = None
+
+try:
+    # Auto-selects the best terminal image protocol (kitty/iTerm2/sixel),
+    # degrading to colored half-cells; used by the high-res 'h' plot view.
+    from textual_image.widget import Image as TextualImage
+except ImportError:  # high-res view is optional
+    TextualImage = None
 
 from blosc2.b2view.model import DataSliceLayout, StoreBrowser
 from blosc2.b2view.render import (
@@ -229,6 +237,7 @@ class HelpScreen(ModalScreen[None]):
                 ("0", "reset to the whole series"),
                 ("g", "type an exact start:stop row range"),
                 ("v", "lock the data grid to the current range (esc unlocks)"),
+                ("h", "high-res matplotlib image of the current range"),
             ],
         ),
         (
@@ -561,8 +570,9 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
     }
     """
 
-    _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · v view rows · q close"
+    _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · v view rows · h hi-res · q close"
     _MIN_WIDTH = 16  # smallest zoom window (rows), so the envelope still reads
+    _HIRES_MAX_POINTS = 50_000  # above this, ask the user to zoom in first
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
@@ -576,12 +586,24 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
         ("0", "reset_range", "Reset"),
         ("g", "goto_range", "Range"),
         ("v", "view_range", "View rows"),
+        ("h", "hires", "High-res"),
     ]
 
-    def __init__(self, *, title_prefix: str, fetch, n: int, row_start: int, row_stop: int, series: dict):
+    def __init__(
+        self,
+        *,
+        title_prefix: str,
+        fetch,
+        n: int,
+        row_start: int,
+        row_stop: int,
+        series: dict,
+        raw_fetch=None,
+    ):
         super().__init__()
         self.title_prefix = title_prefix
         self._fetch = fetch
+        self._raw_fetch = raw_fetch  # (start, stop) -> {"x", "y", ...} raw read
         self.n = n
         self.row_start = row_start
         self.row_stop = row_stop
@@ -669,8 +691,134 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
         """v key — close the plot and jump the data grid to the current range."""
         self.dismiss((self.row_start, self.row_stop))
 
+    def action_hires(self) -> None:
+        """h key — open a high-res matplotlib image of the current raw range.
+
+        Pushed on top of this screen so ``q`` returns to the braille view with
+        the zoom intact.  The braille envelope stays the fast navigator; this is
+        the drill-down once you have zoomed to a range worth seeing in detail.
+        """
+        if self._raw_fetch is None or TextualImage is None or not _matplotlib_available():
+            self.app.notify(
+                "High-res view needs the 'textual-image' and 'matplotlib' packages",
+                severity="warning",
+            )
+            return
+        width = self.row_stop - self.row_start
+        if width > self._HIRES_MAX_POINTS:
+            self.app.notify(
+                f"Zoom in to ≤ {self._HIRES_MAX_POINTS} rows for a high-res view (now {width})",
+                severity="warning",
+            )
+            return
+        series = self._raw_fetch(self.row_start, self.row_stop)
+        self.app.push_screen(HiResPlotScreen(title=self.plot_title, x=series["x"], y=series["y"]))
+
     def action_close(self) -> None:
         self.dismiss(None)
+
+
+def _matplotlib_available() -> bool:
+    """Whether matplotlib can be imported (the high-res view needs it)."""
+    try:
+        import matplotlib  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+class HiResPlotScreen(ModalScreen[None]):
+    """A high-res matplotlib image of a raw series range, over the braille plot.
+
+    Rendered with matplotlib (Agg) to a PNG and shown via ``textual-image``,
+    which auto-selects the best terminal protocol (kitty/iTerm2/sixel) and
+    degrades to colored half-cells elsewhere.  ``q``/``esc``/``h`` return to the
+    braille view underneath with its zoom intact.
+    """
+
+    CSS = """
+    HiResPlotScreen {
+        align: center middle;
+    }
+    #hires-dialog {
+        width: 95%;
+        height: 90%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #hires-title {
+        text-style: bold;
+        height: 1;
+    }
+    #hires-body {
+        height: 1fr;
+        width: 1fr;
+        align: center middle;
+    }
+    #hires-image {
+        width: 100%;
+        height: 100%;
+    }
+    #hires-keys {
+        height: 1;
+        color: $text-muted;
+    }
+    """
+
+    _KEYS_HINT = "q/esc/h · back to braille"
+
+    BINDINGS: ClassVar = [
+        ("escape", "close", "Close"),
+        ("q", "close", "Close"),
+        ("h", "close", "Close"),
+    ]
+
+    def __init__(self, *, title: str, x, y):
+        super().__init__()
+        self._title = title
+        self._x = x
+        self._y = y
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="hires-dialog"):
+            yield Static(markup_escape(self._title), id="hires-title")
+            # A VerticalScroll is focusable, so the screen's key bindings fire
+            # (the image widget itself is not focusable).
+            yield VerticalScroll(id="hires-body")
+            yield Static(self._KEYS_HINT, id="hires-keys")
+
+    def on_mount(self) -> None:
+        body = self.query_one("#hires-body", VerticalScroll)
+        body.focus()
+        try:
+            png = self._render_png()
+        except Exception as exc:  # pragma: no cover - defensive
+            body.mount(Static(f"Could not render: {exc}"))
+            return
+        body.mount(TextualImage(io.BytesIO(png), id="hires-image"))
+
+    def _render_png(self) -> bytes:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(12, 6), dpi=110)
+        ax.plot(self._x, self._y, linewidth=0.8, color="#1f77b4")
+        ax.set_xlabel("row")
+        ax.margins(x=0)
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png")
+        plt.close(fig)
+        return buf.getvalue()
+
+    def action_close(self) -> None:
+        # pop_screen (not dismiss): this screen is pushed without a result
+        # callback, so it returns to the braille PlotScreen with its zoom intact.
+        self.app.pop_screen()
 
 
 class B2ViewApp(App):
@@ -1547,6 +1695,15 @@ class B2ViewApp(App):
                 row_stop=stop,
             )
 
+        def raw_fetch(start: int, stop: int | None) -> dict:
+            return self.browser.read_series(
+                self.selected_path,
+                column=column,
+                layout=layout,
+                row_start=start,
+                row_stop=stop,
+            )
+
         series = fetch(0, None)  # whole series (uses the fast SUMMARY tier if any)
         x, _ymin, _ymax, _descr = _plot_view(series)
         if x.size == 0:
@@ -1560,6 +1717,7 @@ class B2ViewApp(App):
                 row_start=series["row_start"],
                 row_stop=series["row_stop"],
                 series=series,
+                raw_fetch=raw_fetch,
             ),
             self._view_plot_range,
         )

@@ -502,6 +502,64 @@ class StoreBrowser:
 
         raise ValueError(f"Cannot plot {kind!r} objects")
 
+    def read_series(
+        self,
+        path: str,
+        *,
+        column: str | int | None = None,
+        layout: DataSliceLayout | None = None,
+        row_start: int = 0,
+        row_stop: int | None = None,
+    ) -> dict[str, Any]:
+        """Return the *raw* values of one series over ``[row_start, row_stop)``.
+
+        Same series selection as :meth:`plot_series` (CTable column honoring an
+        active filter, or an array column via *layout*) but with no bucketing —
+        every value is read exactly, for the high-res ``h`` view.  The result is
+        ``{"x", "y", "n", "row_start", "row_stop"}`` with ``x`` in absolute row
+        coordinates.  This reads exactly what is asked, so callers must bound the
+        range first (see ``B2ViewApp._HIRES_MAX_POINTS``).
+        """
+        path = self.normalize_path(path)
+        obj = self._get_object(path)
+        kind = object_kind(obj)
+
+        if kind == "ctable":
+            view = self._filter_views.get(path, obj)
+            n = len(view)
+            start, stop = self._clamp_range(row_start, row_stop, n)
+            y = safe_asarray(view[column][start:stop])
+        elif kind in {"ndarray", "c2array"}:
+            shape = tuple(getattr(obj, "shape", ()) or ())
+            ndim = len(shape)
+            if ndim == 0:
+                raise ValueError("Cannot plot a scalar")
+            row_dim = layout.navigable_dims[0] if layout is not None and layout.navigable_dims else 0
+            n = shape[row_dim]
+            start, stop = self._clamp_range(row_start, row_stop, n)
+            # Same column/fixed-dim selection as plot_series' array branch.
+            idx: list[int | slice] = []
+            for i in range(ndim):
+                if i == row_dim:
+                    idx.append(slice(start, stop))
+                elif layout is not None and i in layout.fixed_values:
+                    idx.append(layout.fixed_values[i])
+                elif layout is not None and len(layout.navigable_dims) > 1 and i == layout.navigable_dims[1]:
+                    idx.append(int(column))
+                else:
+                    idx.append(0)
+            y = np.asarray(obj[tuple(idx)])
+        else:
+            raise ValueError(f"Cannot plot {kind!r} objects")
+
+        return {
+            "x": np.arange(start, stop),
+            "y": y,
+            "n": n,
+            "row_start": start,
+            "row_stop": stop,
+        }
+
     @staticmethod
     def _clamp_range(row_start: int, row_stop: int | None, n: int) -> tuple[int, int]:
         start = 0 if row_start is None else max(0, min(int(row_start), n))

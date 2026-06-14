@@ -15,19 +15,6 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
       placeholder; offer on-demand decoding (e.g. a key to materialize the
       column, or decode just the cursor row).
 - [ ] SChunk preview is not implemented (`model.preview` returns a message).
-- [ ] `m` key in the plot modal: render a high-res matplotlib view of the
-      *currently shown* range (the braille envelope stays the fast navigator;
-      `m` is the explicit drill-down for the range you zoomed/panned to).
-      Plot the *raw* values of the window read exactly (so "high-res" means more
-      detail, not just more pixels of the same min/max buckets) — cap the window
-      so an un-zoomed million-row series doesn't trigger a huge read (require
-      zooming in, or fall back to the envelope above the cap).  Display via
-      `textual-image` with a capability ladder: real image on kitty/iTerm2/sixel
-      → half-blocks elsewhere → "terminal can't show images, staying in braille"
-      message.  Push it as a screen on top of `PlotScreen` so `q` returns to the
-      braille view with the zoom intact.  Deps: add `textual-image` and promote
-      `matplotlib` from the dev group into the `plot` extra.  Gated on need:
-      only worth it if the ~200-point braille resolution proves too coarse.
 - [ ] Live mini-plot in the data panel that follows paging: a small,
       always-visible braille plot of the current row window (or cursor column),
       redrawn on paging — a sparkline companion to the table, vs. the one-shot
@@ -40,6 +27,17 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ## Done
 
+- 2026-06-14: `h` in the plot modal opens a high-res matplotlib image of the
+  current raw range, over the braille plot (`q`/`esc`/`h` return with the zoom
+  intact).  `model.read_series` reads the exact values for `[row_start, row_stop)`
+  (same series selection as `plot_series`, no bucketing); `PlotScreen` gets a
+  `raw_fetch` closure and an `action_hires` that caps the window at
+  `_HIRES_MAX_POINTS` (50k — else "zoom in" notice).  `HiResPlotScreen` renders
+  matplotlib (Agg) to a PNG and shows it via `textual-image`'s auto `Image`
+  (kitty/iTerm2/sixel → half-cells); a focusable `VerticalScroll` body keeps the
+  screen's keys live, and it closes with `pop_screen` (pushed without a result
+  callback).  Deps: `textual-image` + `matplotlib` added to the `plot` extra.
+  Tests: `read_series` cases in `test_plot_model.py` and `test_plot_hires_view`.
 - 2026-06-14: NDArray sources also support the `v` locked window, copy-free via
   the layout (not `NDArray.slice`, which copies).  `DataSliceLayout` gained a
   `row_window` field + `row_window_bounds`; `preview_array_from_layout` narrows
