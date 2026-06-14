@@ -28,13 +28,6 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
       braille view with the zoom intact.  Deps: add `textual-image` and promote
       `matplotlib` from the dev group into the `plot` extra.  Gated on need:
       only worth it if the ~200-point braille resolution proves too coarse.
-- [ ] Extend the `v` locked row window to NDArray sources.  The CTable path
-      (no-copy `slice` view) shipped 2026-06-14; plain NDArray plots still fall
-      back to a cursor jump.  Do it copy-free via the layout, not
-      `NDArray.slice` (which copies): clamp `DataSliceLayout`'s navigable row
-      dim to `[start, stop]`, offset paging by `start`, and report the windowed
-      length so the grid bounds match the CTable behaviour.  Reuse the existing
-      `self.row_window` state and `esc`-unlock layer.
 - [ ] Live mini-plot in the data panel that follows paging: a small,
       always-visible braille plot of the current row window (or cursor column),
       redrawn on paging — a sparkline companion to the table, vs. the one-shot
@@ -47,6 +40,15 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ## Done
 
+- 2026-06-14: NDArray sources also support the `v` locked window, copy-free via
+  the layout (not `NDArray.slice`, which copies).  `DataSliceLayout` gained a
+  `row_window` field + `row_window_bounds`; `preview_array_from_layout` narrows
+  the navigable row dim to `[w0, w1)` — it reports `nrows = w1 - w0` (so paging
+  is bounded) and offsets every read by `w0` (so logical row 0 reads absolute
+  `w0`).  `_sync_layout_scroll` clamps scroll to the window length.
+  `_view_plot_range` routes ctable→slice-view / ndarray→layout, and
+  `_enter`/`_exit_row_window` share a `_reload_row_window` helper.  Covered by
+  the NDArray-leaf window assertions in the extended `test_plot_column`.
 - 2026-06-14: `v` in the plot modal locks the data grid to the navigated row
   range (esc unlocks).  Backed by a new public `CTable.slice(start, stop=None,
   *, copy=True)` — `range`-style/`slice`-object bounds in live-row space,
@@ -57,9 +59,8 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
   an active filter); `len(view)` bounds paging for free.  App holds
   `self.row_window`; `_enter_row_window`/`_exit_row_window` reload in place, the
   header shows a `WINDOW a:b` chip, and `action_dim_exit` gained the unlock
-  layer.  NDArray plots still fall back to a cursor jump (see Pending).  Tests:
-  `tests/ctable/test_ctable_slice.py` and `test_plot_view_locks_ctable_window`
-  (plus the cursor-jump fallback still covered in `test_plot_column`).
+  layer.  Tests: `CTable.slice` cases in `tests/ctable/test_ctable_take.py` and
+  `test_plot_view_locks_ctable_window`.
 - 2026-06-13: The `p` plot modal is now zoomable into a row range.
   `plot_series` gained `row_start`/`row_stop` (the whole series keeps the fast
   SUMMARY tier; a sub-range is read exactly, with `x` in absolute rows).

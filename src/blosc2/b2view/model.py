@@ -150,6 +150,11 @@ class DataSliceLayout:
     col_start: int = 0
     col_stop: int = 0
 
+    # Optional locked window (absolute [start, stop)) on the navigable row dim.
+    # When set, the grid sees a row dimension of length ``stop - start`` whose
+    # logical row 0 maps to absolute row ``start`` (see ``preview_array_from_layout``).
+    row_window: tuple[int, int] | None = None
+
     @classmethod
     def from_shape(cls, shape: tuple[int, ...]) -> DataSliceLayout:
         """Create a default layout: leading dims fixed at 0, last up-to-2 dims navigable."""
@@ -213,7 +218,21 @@ class DataSliceLayout:
             row_stop=self.row_stop if row_stop is None else row_stop,
             col_start=self.col_start if col_start is None else col_start,
             col_stop=self.col_stop if col_stop is None else col_stop,
+            row_window=self.row_window,
         )
+
+    def row_window_bounds(self, row_dim: int | None) -> tuple[int, int]:
+        """Return the absolute [start, stop) extent of the navigable row dim.
+
+        Narrowed to ``row_window`` when one is set; otherwise the full dim.
+        """
+        full = self.shape[row_dim] if row_dim is not None else 1
+        if row_dim is None or self.row_window is None:
+            return 0, full
+        w0, w1 = self.row_window
+        w0 = max(0, min(w0, full))
+        w1 = max(w0, min(w1, full))
+        return w0, w1
 
     def total_for_dim(self, dim: int) -> int:
         """Return the total size of *dim*."""
@@ -768,8 +787,11 @@ def preview_array_from_layout(
     row_dim = navigable[0] if len(navigable) >= 1 else None
     col_dim = navigable[1] if len(navigable) >= 2 else None
 
-    # Page sizes
-    nrows = shape[row_dim] if row_dim is not None else 1
+    # Page sizes.  A locked row window narrows the navigable row dim to
+    # [win_lo, win_hi): the grid sees only ``nrows`` rows (so paging cannot
+    # leave it) and every read is offset by ``win_lo``.
+    win_lo, win_hi = layout.row_window_bounds(row_dim)
+    nrows = (win_hi - win_lo) if row_dim is not None else 1
     ncols = shape[col_dim] if col_dim is not None else 1
 
     # Clamp fixed values
@@ -789,9 +811,10 @@ def preview_array_from_layout(
         if i in fixed_values:
             idx.append(fixed_values[i])
         elif row_dim is not None and i == row_dim:
+            # ``layout.row_start`` is window-relative; offset into the array.
             start = max(0, min(layout.row_start, nrows))
-            stop = min(max(start, start + max_rows), nrows)
-            idx.append(slice(start, stop))
+            stop = min(start + max_rows, nrows)
+            idx.append(slice(win_lo + start, win_lo + stop))
         elif col_dim is not None and i == col_dim:
             col_start = max(0, min(layout.col_start, ncols))
             col_stop = min(col_start + max_cols, ncols)

@@ -1176,7 +1176,10 @@ class B2ViewApp(App):
         navigable = layout.navigable_dims
         if len(navigable) >= 1:
             row_dim = navigable[0]
-            total = layout.shape[row_dim]
+            # A locked window shortens the navigable row dim; scroll is
+            # window-relative, so clamp to the window length.
+            win_lo, win_hi = layout.row_window_bounds(row_dim)
+            total = win_hi - win_lo
             layout.row_start = max(0, min(start, total))
             layout.row_stop = min(layout.row_start + self._table_page_size() * 10, total)
         if len(navigable) >= 2:
@@ -1365,6 +1368,10 @@ class B2ViewApp(App):
             if self._dim_mode:
                 header_parts.append("[reverse] DIM MODE [/reverse]")
                 header_parts.append("←→dim  ↑↓val  <Enter>fix/nav  <Esc>exit")
+            elif self.row_window is not None:
+                ws, we = self.row_window
+                header_parts.append(f"[reverse] WINDOW {ws}:{we} [/reverse]")
+                header_parts.append("<Esc>unlock")
         else:
             header_parts.append(f"rows {data['start']}:{data['stop']} of {data['nrows']}")
             if "col_start" in data:
@@ -1560,43 +1567,56 @@ class B2ViewApp(App):
     def _view_plot_range(self, span: tuple[int, int] | None) -> None:
         """Lock the data grid to a row range chosen with 'v' in the plot modal.
 
-        For CTable nodes the grid is replaced in place with a zero-copy
-        ``slice`` view of the range, so paging cannot leave it (``esc`` unlocks).
-        Other source kinds (e.g. plain NDArrays) fall back to a cursor jump until
-        their windowing lands.
+        The grid is replaced in place with just the range, so paging cannot
+        leave it (``esc`` unlocks).  CTable nodes use a zero-copy ``slice`` view;
+        NDArray nodes narrow the layout's navigable row dim.  Other source kinds
+        fall back to a cursor jump.
         """
         if span is None or self.table_page is None:
             return
         start, stop = span
-        if self.table_page.get("source_kind") == "ctable" and self.browser is not None:
-            self._enter_row_window(start, stop)
+        kind = self.table_page.get("source_kind")
+        if kind == "ctable" and self.browser is not None:
+            self._enter_row_window(start, stop, backend="ctable")
+        elif kind in {"ndarray_slice", "ndarray2d"} and self._data_layout is not None:
+            self._enter_row_window(start, stop, backend="ndarray")
         else:
             self._go_to_row(start)
             self.notify(f"Viewing rows {start}:{stop}")
 
-    def _enter_row_window(self, start: int, stop: int) -> None:
-        """Replace the CTable grid with a locked [start:stop] window view."""
-        try:
-            self.browser.set_row_window(self.selected_path, start, stop)
-        except Exception as exc:  # pragma: no cover - defensive
-            self.notify(f"Could not lock rows: {exc}", severity="error")
-            return
+    def _enter_row_window(self, start: int, stop: int, *, backend: str) -> None:
+        """Replace the grid with a locked [start:stop] window (in place)."""
+        if backend == "ctable":
+            try:
+                self.browser.set_row_window(self.selected_path, start, stop)
+            except Exception as exc:  # pragma: no cover - defensive
+                self.notify(f"Could not lock rows: {exc}", severity="error")
+                return
+        else:  # ndarray: narrow the navigable row dim, scroll back to its top
+            self._data_layout.row_window = (start, stop)
+            self._data_layout.row_start = 0
+            self._data_layout.row_stop = 0
         self.row_window = (start, stop)
-        self.table_buffer = None
-        data = self._load_table_page(self.selected_path, 0)
-        self._update_data_table(data, cursor_row=0, cursor_col=0)
-        self._update_data_header(data)
-        self.query_one("#data-table", DataTable).focus()
+        self._reload_row_window(0)
         self.notify(f"Locked to rows {start}:{stop} · esc to unlock")
 
     def _exit_row_window(self) -> None:
-        """Unlock the row window and restore the full CTable grid."""
-        if self.row_window is None or self.browser is None:
+        """Unlock the row window and restore the full grid."""
+        if self.row_window is None:
             return
-        self.browser.clear_row_window(self.selected_path)
+        if self.browser is not None:
+            self.browser.clear_row_window(self.selected_path)
+        if self._data_layout is not None and self._data_layout.row_window is not None:
+            self._data_layout.row_window = None
+            self._data_layout.row_start = 0
+            self._data_layout.row_stop = 0
         self.row_window = None
+        self._reload_row_window(0)
+
+    def _reload_row_window(self, start: int) -> None:
+        """Rebuild the data grid from scratch after a window change."""
         self.table_buffer = None
-        data = self._load_table_page(self.selected_path, 0)
+        data = self._load_table_page(self.selected_path, start)
         self._update_data_table(data, cursor_row=0, cursor_col=0)
         self._update_data_header(data)
         self.query_one("#data-table", DataTable).focus()

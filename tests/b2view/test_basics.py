@@ -717,13 +717,32 @@ async def test_plot_column(store_path):
         assert min(screen.x) >= 1000
         assert max(screen.x) < 2000
 
-        # 'v' closes the plot and jumps the data grid to the range start (1000),
-        # leaving the table navigable rather than clipping it to the range.
+        # 'v' locks the 1-D array grid to the [1000:2000) window via the layout:
+        # the grid sees 1000 rows, re-indexed from 0, and logical row 0 reads
+        # absolute row 1000.  Paging cannot leave the window.
         await pilot.press("v")
-        await pilot.pause()
+        await wait_for_table(pilot)
         assert not isinstance(app.screen, PlotScreen)
         table = app.query_one("#data-table", DataTable)
-        assert app.table_page["start"] + table.cursor_row == 1000
+        assert app.row_window == (1000, 2000)
+        page = app.table_page
+        assert page["nrows"] == 1000
+        assert page["start"] == 0
+        assert page["data"]["value"][0] == pytest.approx(leaf1_values()[1000])
+
+        # 'b'(ottom) lands on the window's last row (absolute 1999), still inside.
+        await pilot.press("b")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["stop"] == 1000
+        assert page["data"]["value"][table.cursor_row] == pytest.approx(leaf1_values()[1999])
+
+        # 'esc' unlocks and restores the full array.
+        await pilot.press("escape")
+        await wait_for_table(pilot)
+        assert app.row_window is None
+        assert app._data_layout.row_window is None
+        assert app.table_page["nrows"] == LEAF1_LEN
 
         # 'p' (like escape) closes the plot again
         await pilot.press("p")
