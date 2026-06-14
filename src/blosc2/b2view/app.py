@@ -208,7 +208,7 @@ class HelpScreen(ModalScreen[None]):
                 ("t / b", "first / last row"),
                 ("g", "go to row..."),
                 ("f", "filter rows (CTable)"),
-                ("escape", "clear the active filter"),
+                ("escape", "unlock a row window / clear the active filter"),
             ],
         ),
         (
@@ -228,6 +228,7 @@ class HelpScreen(ModalScreen[None]):
                 ("left / right", "pan the zoomed window"),
                 ("0", "reset to the whole series"),
                 ("g", "type an exact start:stop row range"),
+                ("v", "lock the data grid to the current range (esc unlocks)"),
             ],
         ),
         (
@@ -524,13 +525,16 @@ class PlotRangeScreen(ModalScreen["tuple[int, int] | None"]):
         self.dismiss(None)
 
 
-class PlotScreen(ModalScreen[None]):
+class PlotScreen(ModalScreen["tuple[int, int] | None"]):
     """Modal plotting one numeric column; zoomable into a row sub-range.
 
     Keys: ``+``/``-`` zoom about the view centre, ``←``/``→`` pan, ``0`` reset to
     the whole series, ``g`` type an exact ``start:stop`` range.  Each change
     re-fetches the envelope for the new range (exact for sub-ranges) via the
     *fetch* closure, so zooming reveals detail the whole-series buckets hide.
+
+    ``v`` dismisses with the current ``(row_start, row_stop)`` so the caller can
+    jump the data grid to the range you navigated to; closing dismisses ``None``.
     """
 
     CSS = """
@@ -557,7 +561,7 @@ class PlotScreen(ModalScreen[None]):
     }
     """
 
-    _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · q close"
+    _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · v view rows · q close"
     _MIN_WIDTH = 16  # smallest zoom window (rows), so the envelope still reads
 
     BINDINGS: ClassVar = [
@@ -571,6 +575,7 @@ class PlotScreen(ModalScreen[None]):
         ("right", "pan_right", "Pan right"),
         ("0", "reset_range", "Reset"),
         ("g", "goto_range", "Range"),
+        ("v", "view_range", "View rows"),
     ]
 
     def __init__(self, *, title_prefix: str, fetch, n: int, row_start: int, row_stop: int, series: dict):
@@ -660,6 +665,10 @@ class PlotScreen(ModalScreen[None]):
 
         self.app.push_screen(PlotRangeScreen(n=self.n, start=self.row_start, stop=self.row_stop), _on_range)
 
+    def action_view_range(self) -> None:
+        """v key — close the plot and jump the data grid to the current range."""
+        self.dismiss((self.row_start, self.row_stop))
+
     def action_close(self) -> None:
         self.dismiss(None)
 
@@ -734,6 +743,8 @@ class B2ViewApp(App):
         self._active_dim = 0
         self._dim_mode = False
         self.loading_table_page = False
+        # Absolute (start, stop) of a locked row window from the plot's 'v' key.
+        self.row_window: tuple[int, int] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -873,6 +884,9 @@ class B2ViewApp(App):
             self._data_layout = None
             self._active_dim = 0
             self._dim_mode = False
+            # A locked row window does not survive navigating to a node.
+            self.row_window = None
+            self.browser.clear_row_window(path)
             if info.kind == "group":
                 data_header.display = False
                 data_table_row.display = False
@@ -1355,22 +1369,31 @@ class B2ViewApp(App):
             header_parts.append(f"rows {data['start']}:{data['stop']} of {data['nrows']}")
             if "col_start" in data:
                 header_parts.append(f"cols {data['col_start']}:{data['col_stop']} of {data['ncols']}")
-            if data.get("source_kind") == "ctable" and self.browser is not None:
-                flt = self.browser.get_filter(self.selected_path)
-                col_flt = self.browser.get_column_filter(self.selected_path)
-                if flt:
-                    total = self.browser.base_nrows(self.selected_path)
-                    header_parts.append(f"filter: [bold]{markup_escape(flt)}[/bold] ({total} total)")
-                if col_flt:
-                    total_cols = self.browser.base_ncols(self.selected_path)
-                    header_parts.append(f"cols: [bold]{markup_escape(col_flt)}[/bold] ({total_cols} total)")
-                if flt or col_flt:
-                    header_parts.append("<Esc>clear")
+            header_parts.extend(self._window_and_filter_chips(data))
 
         line = ", ".join(header_parts)
         if self._dim_mode and layout is not None:
             line = f"[reverse]{line}[/reverse]"
         self.query_one("#data-header", Static).update(line)
+
+    def _window_and_filter_chips(self, data: dict) -> list[str]:
+        """Header chips for a locked row window and any active CTable filters."""
+        chips: list[str] = []
+        if self.row_window is not None:
+            ws, we = self.row_window
+            chips.append(f"[reverse] WINDOW {ws}:{we} [/reverse]")
+        if data.get("source_kind") == "ctable" and self.browser is not None:
+            flt = self.browser.get_filter(self.selected_path)
+            col_flt = self.browser.get_column_filter(self.selected_path)
+            if flt:
+                total = self.browser.base_nrows(self.selected_path)
+                chips.append(f"filter: [bold]{markup_escape(flt)}[/bold] ({total} total)")
+            if col_flt:
+                total_cols = self.browser.base_ncols(self.selected_path)
+                chips.append(f"cols: [bold]{markup_escape(col_flt)}[/bold] ({total_cols} total)")
+            if flt or col_flt or self.row_window is not None:
+                chips.append("<Esc>unlock/clear")
+        return chips
 
     def _make_global_scrollbar(self, *, start: int, stop: int, total: int, size: int, track: str) -> str:
         size = max(1, size)
@@ -1530,8 +1553,53 @@ class B2ViewApp(App):
                 row_start=series["row_start"],
                 row_stop=series["row_stop"],
                 series=series,
-            )
+            ),
+            self._view_plot_range,
         )
+
+    def _view_plot_range(self, span: tuple[int, int] | None) -> None:
+        """Lock the data grid to a row range chosen with 'v' in the plot modal.
+
+        For CTable nodes the grid is replaced in place with a zero-copy
+        ``slice`` view of the range, so paging cannot leave it (``esc`` unlocks).
+        Other source kinds (e.g. plain NDArrays) fall back to a cursor jump until
+        their windowing lands.
+        """
+        if span is None or self.table_page is None:
+            return
+        start, stop = span
+        if self.table_page.get("source_kind") == "ctable" and self.browser is not None:
+            self._enter_row_window(start, stop)
+        else:
+            self._go_to_row(start)
+            self.notify(f"Viewing rows {start}:{stop}")
+
+    def _enter_row_window(self, start: int, stop: int) -> None:
+        """Replace the CTable grid with a locked [start:stop] window view."""
+        try:
+            self.browser.set_row_window(self.selected_path, start, stop)
+        except Exception as exc:  # pragma: no cover - defensive
+            self.notify(f"Could not lock rows: {exc}", severity="error")
+            return
+        self.row_window = (start, stop)
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, 0)
+        self._update_data_table(data, cursor_row=0, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+        self.notify(f"Locked to rows {start}:{stop} · esc to unlock")
+
+    def _exit_row_window(self) -> None:
+        """Unlock the row window and restore the full CTable grid."""
+        if self.row_window is None or self.browser is None:
+            return
+        self.browser.clear_row_window(self.selected_path)
+        self.row_window = None
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, 0)
+        self._update_data_table(data, cursor_row=0, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
 
     def action_go_to_column(self) -> None:
         if not self._in_data_grid():
@@ -1840,15 +1908,18 @@ class B2ViewApp(App):
         self._dim_toggle()
 
     def action_dim_exit(self) -> None:
-        """Escape: exit dim mode, or clear an active CTable filter.
+        """Escape: exit dim mode, unlock a row window, or clear a CTable filter.
 
-        One layer per press: dim mode, then the row filter, then the
-        column filter.
+        One layer per press: dim mode, then the locked row window, then the
+        row filter, then the column filter.
         """
         if self._dim_mode:
             self._dim_mode = False
             if self.table_page is not None:
                 self._update_data_header(self.table_page)
+            return
+        if self.row_window is not None:
+            self._exit_row_window()
             return
         if (
             not self._in_data_grid()

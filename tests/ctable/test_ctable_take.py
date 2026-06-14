@@ -159,3 +159,61 @@ def test_top_level_take_rejects_axis_for_ctable_and_column():
         blosc2.take(t, [0], axis=0)
     with pytest.raises(ValueError, match="axis"):
         blosc2.take(t["id"], [0], axis=0)
+
+
+# ── CTable.slice (contiguous range of live rows; copy or zero-copy view) ──
+
+
+def test_slice_range_styles_agree():
+    """slice(stop), slice(start, stop) and slice(slice(...)) select the same rows."""
+    t = make_table(10)
+    expected = np.arange(2, 6, dtype=np.int32)
+    np.testing.assert_array_equal(t.slice(2, 6)["id"][:], expected)
+    np.testing.assert_array_equal(t.slice(slice(2, 6))["id"][:], expected)
+    # single-arg form behaves like range(stop)
+    np.testing.assert_array_equal(t.slice(4)["id"][:], np.arange(0, 4, dtype=np.int32))
+
+
+def test_slice_negative_and_out_of_range_bounds_clamp():
+    t = make_table(10)
+    # negative start counts from the end
+    np.testing.assert_array_equal(t.slice(-3, 10)["id"][:], np.arange(7, 10, dtype=np.int32))
+    # stop past the end clamps; start past stop is empty
+    np.testing.assert_array_equal(t.slice(8, 999)["id"][:], np.arange(8, 10, dtype=np.int32))
+    assert t.slice(6, 2).nrows == 0
+
+
+def test_slice_copy_false_is_a_zero_copy_view():
+    t = make_table(8)
+    view = t.slice(2, 6, copy=False)
+    # Shares the parent's column storage (no copy) and re-indexes from 0.
+    assert view._cols is t._cols
+    assert view.base is t
+    assert view.nrows == 4
+    np.testing.assert_array_equal(view["id"][:], np.arange(2, 6, dtype=np.int32))
+
+
+def test_slice_copy_true_is_an_independent_compact_table():
+    t = make_table(8)
+    sub = t.slice(2, 6)  # copy=True by default
+    assert sub._cols is not t._cols
+    assert sub.nrows == 4
+    np.testing.assert_array_equal(sub["id"][:], np.arange(2, 6, dtype=np.int32))
+
+
+def test_slice_skips_deleted_rows_in_logical_space():
+    t = make_table(8)
+    t.delete(2)
+    t.delete(5)
+    # Live logical ids are [0, 1, 3, 4, 6, 7]; logical [1:4] -> ids [1, 3, 4].
+    for copy in (True, False):
+        sub = t.slice(1, 4, copy=copy)
+        np.testing.assert_array_equal(sub["id"][:], np.array([1, 3, 4], dtype=np.int32))
+
+
+def test_slice_rejects_step_and_double_bounds():
+    t = make_table(4)
+    with pytest.raises(ValueError, match="step"):
+        t.slice(slice(0, 4, 2))
+    with pytest.raises(TypeError):
+        t.slice(slice(0, 4), 4)

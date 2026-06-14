@@ -717,7 +717,66 @@ async def test_plot_column(store_path):
         assert min(screen.x) >= 1000
         assert max(screen.x) < 2000
 
+        # 'v' closes the plot and jumps the data grid to the range start (1000),
+        # leaving the table navigable rather than clipping it to the range.
+        await pilot.press("v")
+        await pilot.pause()
+        assert not isinstance(app.screen, PlotScreen)
+        table = app.query_one("#data-table", DataTable)
+        assert app.table_page["start"] + table.cursor_row == 1000
+
         # 'p' (like escape) closes the plot again
         await pilot.press("p")
         await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)
+        await pilot.press("p")
+        await pilot.pause()
         assert not isinstance(app.screen, PlotScreen)
+
+
+async def test_plot_view_locks_ctable_window(store_path):
+    """'v' on a CTable plot replaces the grid with a locked [start:stop] window."""
+    pytest.importorskip("textual_plotext")
+    from blosc2.b2view.app import PlotScreen
+
+    app = B2ViewApp(store_path, start_path="/level0/ctable", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        table = await focus_data_table(pilot)
+        assert app.table_page["nrows"] == NROWS
+
+        # Plot column 'b' (== row index), then zoom to an exact 100:110 range.
+        table.move_cursor(column=app.table_page["columns"].index("b"))
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)
+        await pilot.press("g")
+        await pilot.pause()
+        app.screen.query_one("#range-input", Input).value = "100:110"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert (app.screen.row_start, app.screen.row_stop) == (100, 110)
+
+        # 'v' locks the grid to that window: the modal closes, the grid shows
+        # exactly those 10 rows (b == 100..109), re-indexed from 0.
+        await pilot.press("v")
+        await wait_for_table(pilot)
+        assert not isinstance(app.screen, PlotScreen)
+        assert app.row_window == (100, 110)
+        page = app.table_page
+        assert page["nrows"] == 10
+        np.testing.assert_array_equal(page["data"]["b"], np.arange(100, 110))
+
+        # Paging cannot leave the window: 'b'(ottom) lands on its last row (109).
+        await pilot.press("b")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["stop"] == 10
+        assert page["data"]["b"][table.cursor_row] == 109
+
+        # 'esc' unlocks and restores the full table.
+        await pilot.press("escape")
+        await wait_for_table(pilot)
+        assert app.row_window is None
+        assert app.browser.get_row_window("/level0/ctable") is False
+        assert app.table_page["nrows"] == NROWS

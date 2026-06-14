@@ -5156,6 +5156,45 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         result._last_pos = n - 1 if n > 0 else None
         return result
 
+    def slice(self, start, stop=None, /, *, copy: bool = True) -> CTable:
+        """Return a contiguous range of live (non-deleted) rows.
+
+        The range is given the way :func:`range` takes its bounds, either as a
+        single stop (``table.slice(stop)``), as start/stop integers
+        (``table.slice(start, stop)``), or as a Python ``slice``
+        (``table.slice(slice(start, stop))``).  Negative bounds count from the
+        end; ``step`` is not supported.
+
+        Parameters
+        ----------
+        start, stop:
+            Range bounds, interpreted as logical positions among the live rows.
+        copy:
+            When ``True`` (the default, mirroring :meth:`NDArray.slice`) a compact
+            copy of the range is returned.  When ``False`` a zero-copy view is
+            returned instead, sharing the parent's column data (read-only, like
+            :meth:`head`/:meth:`tail`).
+
+        Returns
+        -------
+        out: :ref:`CTable`
+            The requested rows, re-indexed from 0.
+        """
+        if isinstance(start, slice):
+            if stop is not None:
+                raise TypeError("pass either a slice or start/stop integers, not both")
+            key = start
+        else:
+            key = slice(0, start) if stop is None else slice(start, stop)
+        if key.step not in (None, 1):
+            raise ValueError("CTable.slice does not support a step")
+        lo, hi, _ = key.indices(self.nrows)
+        hi = max(lo, hi)
+        if copy:
+            return self.take(np.arange(lo, hi, dtype=np.int64))
+        positions = self._live_positions_from_valid_rows_chunks()[lo:hi]
+        return self._view_from_positions(np.asarray(positions))
+
     def head(self, N: int = 5) -> CTable:
         """Return a view of the first *N* live rows (default 5)."""
         if N <= 0:

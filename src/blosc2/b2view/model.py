@@ -239,6 +239,8 @@ class StoreBrowser:
         # Per-path row filters for CTable nodes (path -> expr / where() view)
         self._filters: dict[str, str] = {}
         self._filter_views: dict[str, Any] = {}
+        # Per-path locked row windows for CTable nodes (path -> slice() view)
+        self._window_views: dict[str, Any] = {}
         # Per-path column filters (path -> substring pattern / matched names)
         self._column_filters: dict[str, str] = {}
         self._column_selections: dict[str, list[str]] = {}
@@ -366,7 +368,12 @@ class StoreBrowser:
                     return preview_array_1d(obj, start=start, stop=stop)
             return preview_array(obj, slices=slices, max_rows=max_rows, max_cols=max_cols)
         if kind == "ctable":
-            obj = self._filter_views.get(path, obj)
+            # A locked row window (set by 'v') takes precedence; it is sliced
+            # from whatever was visible, so it already folds in any row filter.
+            if path in self._window_views:
+                obj = self._window_views[path]
+            else:
+                obj = self._filter_views.get(path, obj)
             if columns is None:
                 columns = self._column_selections.get(path)
             stop = min(start + max_rows, len(obj)) if stop is None else stop
@@ -592,6 +599,27 @@ class StoreBrowser:
     def get_filter(self, path: str) -> str | None:
         """Return the active filter expression for *path*, if any."""
         return self._filters.get(self.normalize_path(path))
+
+    def set_row_window(self, path: str, start: int, stop: int) -> int:
+        """Lock the CTable at *path* to live rows ``[start:stop]``; return its length.
+
+        The window is a zero-copy :meth:`CTable.slice` view of whatever is
+        currently visible (so it composes over any active row filter).  Paging
+        then cannot leave the range because the view reports only its own rows.
+        """
+        path = self.normalize_path(path)
+        base = self._filter_views.get(path, self._get_object(path))
+        view = base.slice(start, stop, copy=False)
+        self._window_views[path] = view
+        return len(view)
+
+    def clear_row_window(self, path: str) -> None:
+        """Remove any locked row window from *path*."""
+        self._window_views.pop(self.normalize_path(path), None)
+
+    def get_row_window(self, path: str) -> bool:
+        """Return whether *path* currently has a locked row window."""
+        return self.normalize_path(path) in self._window_views
 
     def base_nrows(self, path: str) -> int:
         """Return the unfiltered row count of the CTable at *path*."""

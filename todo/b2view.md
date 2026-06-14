@@ -15,11 +15,31 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
       placeholder; offer on-demand decoding (e.g. a key to materialize the
       column, or decode just the cursor row).
 - [ ] SChunk preview is not implemented (`model.preview` returns a message).
-- [ ] Plotting follow-ups for the `p` key (remaining): a live mini-plot in the
-      data panel that follows paging; and, if braille resolution proves too
-      coarse, `textual-image` to render real matplotlib output on
-      kitty/iTerm2/sixel terminals, degrading to half-blocks elsewhere.
-      (Row-range zoom — done 2026-06-13.)
+- [ ] `m` key in the plot modal: render a high-res matplotlib view of the
+      *currently shown* range (the braille envelope stays the fast navigator;
+      `m` is the explicit drill-down for the range you zoomed/panned to).
+      Plot the *raw* values of the window read exactly (so "high-res" means more
+      detail, not just more pixels of the same min/max buckets) — cap the window
+      so an un-zoomed million-row series doesn't trigger a huge read (require
+      zooming in, or fall back to the envelope above the cap).  Display via
+      `textual-image` with a capability ladder: real image on kitty/iTerm2/sixel
+      → half-blocks elsewhere → "terminal can't show images, staying in braille"
+      message.  Push it as a screen on top of `PlotScreen` so `q` returns to the
+      braille view with the zoom intact.  Deps: add `textual-image` and promote
+      `matplotlib` from the dev group into the `plot` extra.  Gated on need:
+      only worth it if the ~200-point braille resolution proves too coarse.
+- [ ] Extend the `v` locked row window to NDArray sources.  The CTable path
+      (no-copy `slice` view) shipped 2026-06-14; plain NDArray plots still fall
+      back to a cursor jump.  Do it copy-free via the layout, not
+      `NDArray.slice` (which copies): clamp `DataSliceLayout`'s navigable row
+      dim to `[start, stop]`, offset paging by `start`, and report the windowed
+      length so the grid bounds match the CTable behaviour.  Reuse the existing
+      `self.row_window` state and `esc`-unlock layer.
+- [ ] Live mini-plot in the data panel that follows paging: a small,
+      always-visible braille plot of the current row window (or cursor column),
+      redrawn on paging — a sparkline companion to the table, vs. the one-shot
+      `p` modal.  Reuses `plot_series`; the work is layout (find room in the
+      data panel) and wiring the redraw to the paging events.
 ### Testing
 
 - [ ] Visual regressions: consider `pytest-textual-snapshot` (SVG snapshots)
@@ -27,6 +47,19 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ## Done
 
+- 2026-06-14: `v` in the plot modal locks the data grid to the navigated row
+  range (esc unlocks).  Backed by a new public `CTable.slice(start, stop=None,
+  *, copy=True)` — `range`-style/`slice`-object bounds in live-row space,
+  `copy=False` returns a zero-copy view (via `_view_from_positions`, like
+  `head`/`tail`), `copy=True` a compact copy (via `take`), mirroring
+  `NDArray.slice`.  b2view registers the `copy=False` view per-path in the
+  model's `_window_views` (precedence over `_filter_views`, so it composes over
+  an active filter); `len(view)` bounds paging for free.  App holds
+  `self.row_window`; `_enter_row_window`/`_exit_row_window` reload in place, the
+  header shows a `WINDOW a:b` chip, and `action_dim_exit` gained the unlock
+  layer.  NDArray plots still fall back to a cursor jump (see Pending).  Tests:
+  `tests/ctable/test_ctable_slice.py` and `test_plot_view_locks_ctable_window`
+  (plus the cursor-jump fallback still covered in `test_plot_column`).
 - 2026-06-13: The `p` plot modal is now zoomable into a row range.
   `plot_series` gained `row_start`/`row_stop` (the whole series keeps the fast
   SUMMARY tier; a sub-range is read exactly, with `x` in absolute rows).
