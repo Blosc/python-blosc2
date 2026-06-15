@@ -8,7 +8,10 @@ metadata and vlmeta of the selected node, and a paged view of the data
 itself — NDArrays of any dimensionality as well as CTables.
 
 ``b2view`` is installed with python-blosc2; no extra dependencies are
-needed.
+needed, including the in-terminal braille plot (the ``p`` key).  Only the
+high-resolution image view (the ``h`` key) needs the ``hires`` extra —
+``pip install "blosc2[hires]"``.  See :doc:`installation` for the list of
+extras.
 
 Step 1 — Create a sample store
 ------------------------------

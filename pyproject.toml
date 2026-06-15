@@ -40,6 +40,7 @@ dependencies = [
     "requests",
     "rich",
     "textual",
+    "textual-plotext",
     "threadpoolctl; platform_machine != 'wasm32'",
 ]
 version = "4.4.6.dev0"
@@ -52,9 +53,11 @@ documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [project.optional-dependencies]
 parquet = ["pyarrow"]
-# in-terminal plots for the 'p' key in b2view; 'h' adds a high-res matplotlib
-# view rendered as a real image (kitty/iTerm2/sixel) or half-cells elsewhere
-plot = ["textual-plotext", "textual-image", "matplotlib"]
+# The b2view TUI and its in-terminal braille plot (the 'p' key) are core deps,
+# so they work out of the box.  This extra only adds the high-res 'h' view,
+# which renders a real matplotlib image (kitty/iTerm2/sixel, or half-cells
+# elsewhere) — matplotlib is the heavy part, hence the opt-in.
+hires = ["textual-image", "matplotlib"]
 
 [project.scripts]
 parquet-to-blosc2 = "blosc2.cli.parquet_to_blosc2:main"

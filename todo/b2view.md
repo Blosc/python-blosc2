@@ -52,7 +52,7 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
   matplotlib (Agg) to a PNG and shows it via `textual-image`'s auto `Image`
   (kitty/iTerm2/sixel → half-cells); a focusable `VerticalScroll` body keeps the
   screen's keys live, and it closes with `pop_screen` (pushed without a result
-  callback).  Deps: `textual-image` + `matplotlib` added to the `plot` extra.
+  callback).  Deps: `textual-image` + `matplotlib` in the `hires` extra.
   Tests: `read_series` cases in `test_plot_model.py` and `test_plot_hires_view`.
 - 2026-06-14: NDArray sources also support the `v` locked window, copy-free via
   the layout (not `NDArray.slice`, which copies).  `DataSliceLayout` gained a
@@ -131,9 +131,9 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
   Home/End, which were undiscoverable); the data panel subtitle now lists
   all jump keys: `rows: t/b/g | cols: s/e`.
 - 2026-06-12: `p` plots the cursor column (or a 1-D leaf) of the loaded row
-  buffer in a modal, via the optional `textual-plotext` package (new `plot`
-  extra); braille scatter, NaN/inf filtered, non-numeric columns and a
-  missing package just notify.  Works headless in Pilot tests.
+  buffer in a modal, via the `textual-plotext` package (a core dep);
+  braille scatter, NaN/inf filtered, non-numeric columns and a missing
+  package just notify.  Works headless in Pilot tests.
 - 2026-06-12: The `p` plot shows a downsampled overview of the *whole*
   series (`StoreBrowser.plot_series`); honors layout (fixed dims) for N-D
   arrays and active row filters for CTables.
