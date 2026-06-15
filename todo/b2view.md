@@ -11,7 +11,6 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ### Data panel
 
-- [ ] SChunk preview is not implemented (`model.preview` returns a message).
 ### Testing
 
 - [ ] Visual regressions: consider `pytest-textual-snapshot` (SVG snapshots)
@@ -19,6 +18,19 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ## Done
 
+- 2026-06-15: SChunk preview — a paged, `xxd`-style hex dump in the data grid
+  (was an unimplemented-message stub).  `preview_schunk` reads only the visible
+  byte span (`obj[a:b]`) and returns the standard preview dict with
+  `source_kind="schunk"`, two columns (`hex` | `ascii`) and a new `row_labels`
+  field (hex byte offsets shown in the gutter); each grid row is one
+  `bytes_per_row` span, so the existing row paging / `t`/`b` / `g`oto / scrollbar
+  all apply unchanged and a multi-GB SChunk previews instantly.  Hex bytes are
+  grouped into `typesize`-wide items (`schunk_row_geometry` picks ~16 bytes/row,
+  never below one whole item).  `_uses_grid_preview` now routes schunk to the
+  grid; `_slice_table_buffer` carries `row_labels`/`nbytes`/`typesize`;
+  `_update_data_table` uses `row_labels` for the gutter; the header reads
+  "hex dump · N bytes (typesize ...)".  Tests: `preview_schunk` cases in
+  `test_b2view_model.py` and the Pilot `test_schunk_hex_dump_paging`.
 - 2026-06-15: Expensive CTable cells (list/struct/object/ndarray columns) show a
   `<...; skipped>` placeholder; **Enter** on such a cell now decodes just that
   one cell on demand into a `CellDetailScreen` modal (pretty-printed, scrollable,

@@ -895,3 +895,54 @@ async def test_enter_decodes_skipped_cell(tmp_path):
         await pilot.pause()
         assert not isinstance(app.screen, CellDetailScreen)
         assert table.cursor_row == 2
+
+
+# ── SChunk: paged hex dump in the data grid ──────────────────────────────
+
+
+async def test_schunk_hex_dump_paging(tmp_path):
+    """An SChunk node renders a paged hex+ascii dump with byte-offset labels."""
+    path = str(tmp_path / "raw.b2z")
+    # 4 KiB of a repeating 0..255 ramp, so values at any offset are predictable.
+    payload = bytes(range(256)) * 16
+    with blosc2.TreeStore(path, mode="w") as store:
+        store["/raw"] = blosc2.SChunk(chunksize=2**16, data=payload)
+
+    app = B2ViewApp(path, start_path="/raw", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        table = await focus_data_table(pilot)
+
+        page = app.table_page
+        assert page["source_kind"] == "schunk"
+        assert page["columns"] == ["hex", "ascii"]
+        assert page["nrows"] == len(payload) // 16  # 16 bytes/row
+        assert page["start"] == 0
+        first_stop = page["stop"]
+        assert first_stop < page["nrows"]  # bigger than one viewport
+
+        # Row 0 is bytes 0x00..0x0f; the gutter shows the hex byte offset.
+        assert page["row_labels"][0] == "00000000"
+        assert page["data"]["hex"][0] == "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f"
+
+        # The header reports the dump in bytes, not "rows".
+        from textual.widgets import Static
+
+        header = app.query_one("#data-header", Static).render()
+        assert f"{len(payload)} bytes" in str(header)
+
+        # Page forward by stepping off the last visible row; offsets keep going.
+        table.move_cursor(row=first_stop - 1)
+        await pilot.press("down")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["start"] == first_stop
+        assert page["row_labels"][0] == format(first_stop * 16, "08x")
+
+        # 'b' jumps to the last row of the dump.
+        await pilot.press("b")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["stop"] == page["nrows"]
+        last_offset = (page["nrows"] - 1) * 16
+        assert page["row_labels"][-1] == format(last_offset, "08x")

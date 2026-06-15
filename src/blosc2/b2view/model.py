@@ -400,7 +400,8 @@ class StoreBrowser:
                 obj, start=start, stop=stop, columns=columns, max_cols=max_cols, col_start=col_start
             )
         if kind == "schunk":
-            return {"message": "SChunk byte preview is not implemented yet."}
+            stop = start + max_rows if stop is None else stop
+            return preview_schunk(obj, start=start, stop=stop)
         return {"message": f"Preview is not supported for {kind!r} objects."}
 
     def plot_series(
@@ -1133,6 +1134,62 @@ def preview_ctable(
         "col_start": col_start,
         "col_stop": col_stop,
         "ncols": ncols,
+    }
+
+
+def schunk_row_geometry(typesize: int) -> tuple[int, int]:
+    """Return ``(items_per_row, bytes_per_row)`` for the hex dump.
+
+    Bytes are grouped into ``typesize``-wide items (so a 4-byte typesize shows
+    32-bit words); ``items_per_row`` is chosen so a row is ~16 bytes wide, and
+    never below one whole item.
+    """
+    typesize = max(1, int(typesize or 1))
+    items_per_row = max(1, 16 // typesize)
+    return items_per_row, items_per_row * typesize
+
+
+def preview_schunk(obj: Any, *, start: int = 0, stop: int = 20) -> dict[str, Any]:
+    """Return a bounded ``xxd``-style hex dump of an SChunk's raw bytes.
+
+    Each grid row is one ``bytes_per_row`` span (a multiple of ``typesize``);
+    *start*/*stop* are in those row units, so the existing row-paging machinery
+    applies unchanged.  Only the visible byte span is read (``obj[a:b]``), so a
+    multi-GB SChunk previews instantly.  The byte offset is the row label.
+    """
+    nbytes = int(getattr(obj, "nbytes", 0) or 0)
+    typesize = max(1, int(getattr(obj, "typesize", 1) or 1))
+    items_per_row, bytes_per_row = schunk_row_geometry(typesize)
+    total_rows = (nbytes + bytes_per_row - 1) // bytes_per_row
+    start = max(0, start)
+    stop = min(max(start, stop), total_rows)
+    byte_start = start * bytes_per_row
+    byte_stop = min(stop * bytes_per_row, nbytes)
+    raw = bytes(obj[byte_start:byte_stop]) if byte_stop > byte_start else b""
+    hex_width = items_per_row * typesize * 2 + (items_per_row - 1)
+    hex_col: list[str] = []
+    ascii_col: list[str] = []
+    labels: list[str] = []
+    for r in range(stop - start):
+        chunk = raw[r * bytes_per_row : (r + 1) * bytes_per_row]
+        items = [chunk[k : k + typesize].hex() for k in range(0, len(chunk), typesize)]
+        hex_col.append(" ".join(items).ljust(hex_width))
+        ascii_col.append("".join(chr(b) if 0x20 <= b <= 0x7E else "." for b in chunk))
+        labels.append(format(byte_start + r * bytes_per_row, "08x"))
+    return {
+        "start": start,
+        "stop": stop,
+        "nrows": total_rows,
+        "columns": ["hex", "ascii"],
+        "hidden_columns": 0,
+        "row_labels": labels,
+        "data": {
+            "hex": np.array(hex_col, dtype=object),
+            "ascii": np.array(ascii_col, dtype=object),
+        },
+        "source_kind": "schunk",
+        "typesize": typesize,
+        "nbytes": nbytes,
     }
 
 

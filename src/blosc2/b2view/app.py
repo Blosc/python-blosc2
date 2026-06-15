@@ -1198,8 +1198,9 @@ class B2ViewApp(App):
 
     @staticmethod
     def _uses_grid_preview(info) -> bool:
-        # 1D, 2D, 3D+ NDArray/C2Array all use grid preview
-        return info.kind == "ctable" or (
+        # 1D, 2D, 3D+ NDArray/C2Array all use grid preview; SChunk uses it for
+        # the paged hex dump (rows of 16 bytes).
+        return info.kind in {"ctable", "schunk"} or (
             info.kind in {"ndarray", "c2array"} and info.metadata.get("ndim", 0) >= 1
         )
 
@@ -1423,6 +1424,11 @@ class B2ViewApp(App):
             "columns": buffer["columns"],
             "hidden_columns": buffer["hidden_columns"],
             "data": {name: values[offset : offset + count] for name, values in buffer["data"].items()},
+            **(
+                {"row_labels": buffer["row_labels"][offset : offset + count]}
+                if "row_labels" in buffer
+                else {}
+            ),
             **{
                 key: buffer[key]
                 for key in (
@@ -1434,6 +1440,8 @@ class B2ViewApp(App):
                     "slice_indices",
                     "n_slices_per_dim",
                     "viewport_width",
+                    "nbytes",
+                    "typesize",
                 )
                 if key in buffer
             },
@@ -1455,13 +1463,16 @@ class B2ViewApp(App):
             source = buffer if buffer is not None and buffer["columns"] == data["columns"] else data
             decimals = {name: column_float_decimals(source["data"][name]) for name in data["columns"]}
             nrows = data["stop"] - data["start"]
+            # SChunk hex dumps carry explicit (hex byte-offset) row labels;
+            # everything else labels the gutter with the logical row number.
+            row_labels = data.get("row_labels")
             for i in range(nrows):
                 table.add_row(
                     *[
                         format_cell(data["data"][name][i], float_decimals=decimals[name])
                         for name in data["columns"]
                     ],
-                    label=str(data["start"] + i),
+                    label=row_labels[i] if row_labels is not None else str(data["start"] + i),
                 )
             nrows = data["stop"] - data["start"]
             cursor_row = min(max(0, cursor_row), max(0, nrows - 1))
@@ -1592,6 +1603,11 @@ class B2ViewApp(App):
                 ws, we = self.row_window
                 header_parts.append(f"[reverse] WINDOW {ws}:{we} [/reverse]")
                 header_parts.append("<Esc>unlock")
+        elif data.get("source_kind") == "schunk":
+            # The hex dump is paged in 16-byte rows; report it in bytes.
+            header_parts.append(f"hex dump · {data.get('nbytes', 0)} bytes")
+            if data.get("typesize", 1) > 1:
+                header_parts.append(f"typesize {data['typesize']}")
         else:
             header_parts.append(f"rows {data['start']}:{data['stop']} of {data['nrows']}")
             if "col_start" in data:

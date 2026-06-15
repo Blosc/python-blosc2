@@ -12,6 +12,8 @@ from blosc2.b2view.model import (
     preview_array_1d,
     preview_array_2d,
     preview_ctable,
+    preview_schunk,
+    schunk_row_geometry,
 )
 from blosc2.b2view.render import make_preview_renderables
 
@@ -209,6 +211,59 @@ def test_read_cell_honors_filter_view_row_space(tmp_path):
         # read_cell row 0 must resolve to the first *visible* row (id == 2).
         assert browser.read_cell("/t", "tags", 0) == [2, 20]
         assert browser.read_cell("/t", "tags", 1) == [3, 30]
+
+
+def test_schunk_row_geometry_groups_by_typesize():
+    assert schunk_row_geometry(1) == (16, 16)
+    assert schunk_row_geometry(2) == (8, 16)
+    assert schunk_row_geometry(4) == (4, 16)
+    assert schunk_row_geometry(8) == (2, 16)
+    assert schunk_row_geometry(3) == (5, 15)  # rows stay a whole multiple of typesize
+    assert schunk_row_geometry(32) == (1, 32)  # never below one whole item
+
+
+def test_preview_schunk_hex_dump_bytes_and_offsets():
+    data = bytes(range(256))
+    s = blosc2.SChunk(chunksize=2**16, data=data)
+    p = preview_schunk(s, start=0, stop=4)
+
+    assert p["source_kind"] == "schunk"
+    assert p["columns"] == ["hex", "ascii"]
+    assert p["nrows"] == 16  # 256 bytes / 16 per row
+    assert p["nbytes"] == 256
+    # Row 0 is bytes 0x00..0x0f, byte-offset label in hex.
+    assert p["row_labels"][:2] == ["00000000", "00000010"]
+    assert p["data"]["hex"][0] == "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f"
+    # Printable ASCII renders; non-printable bytes become dots.
+    assert p["data"]["ascii"][0] == "." * 16
+    assert p["data"]["ascii"][3] == "0123456789:;<=>?"  # bytes 0x30..0x3f
+
+
+def test_preview_schunk_groups_hex_by_typesize():
+    s = blosc2.SChunk(chunksize=2**16, cparams={"typesize": 4}, data=bytes(range(32)))
+    p = preview_schunk(s, start=0, stop=2)
+    assert p["typesize"] == 4
+    # 4-byte items, no inter-byte spaces inside an item.
+    assert p["data"]["hex"][0] == "00010203 04050607 08090a0b 0c0d0e0f"
+
+
+def test_preview_schunk_paging_reads_only_the_window(tmp_path):
+    path = tmp_path / "raw.b2z"
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/raw"] = blosc2.SChunk(chunksize=2**16, data=bytes(range(256)))
+
+    with StoreBrowser(str(path)) as browser:
+        # A later page resolves the right byte offsets without reading earlier rows.
+        page = browser.preview("/raw", start=10, stop=12)
+        assert page["row_labels"] == ["000000a0", "000000b0"]  # rows 10, 11 → bytes 160, 176
+        assert page["data"]["hex"][0].startswith("a0 a1 a2 a3")
+
+
+def test_preview_schunk_empty():
+    s = blosc2.SChunk(chunksize=2**16)
+    p = preview_schunk(s, start=0, stop=20)
+    assert p["nrows"] == 0
+    assert list(p["data"]["hex"]) == []
 
 
 def test_ctable_preview_preserves_ragged_nested_values():
