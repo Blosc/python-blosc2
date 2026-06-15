@@ -983,6 +983,9 @@ class B2ViewApp(App):
         self._active_dim = 0
         self._dim_mode = False
         self.loading_table_page = False
+        # One-shot: apply the --panel start focus after the first update_panels,
+        # once the data panel's display/contents have settled (see update_panels).
+        self._apply_focus_on_next_update = False
         # Absolute (start, stop) of a locked row window from the plot's 'v' key.
         self.row_window: tuple[int, int] | None = None
 
@@ -1028,15 +1031,18 @@ class B2ViewApp(App):
         self.query_one("#data-table-row", Horizontal).display = False
         self.query_one("#col-scrollbar", Static).display = False
 
+        # Focus the requested start panel after the first update_panels has set
+        # up the data panel (its display and contents), so 'data' lands on the
+        # populated grid instead of racing the node selection.
+        self._apply_focus_on_next_update = True
         if self.start_path and self.start_path != "/":
             self._navigate_to_path(self.start_path)
         else:
             self.call_after_refresh(self.update_panels, "/")
-            tree.focus()
 
-        # Override focus after render settles, when starting panel is not the tree
-        if self.start_panel != "tree":
-            self.set_timer(0.05, lambda: self._focus_panel_by_name(self.start_panel))
+    def _apply_start_focus(self) -> None:
+        """Focus the panel requested on startup (the --panel option)."""
+        self._focus_panel_by_name(self.start_panel)
 
     def _focus_panel_by_name(self, name: str) -> None:
         """Focus a panel by its user-facing name."""
@@ -1077,11 +1083,12 @@ class B2ViewApp(App):
             found.expand()
             node = found
 
-        # Selecting the node fires NodeSelected → on_tree_node_selected → update_panels
+        # Selecting the node fires NodeSelected → on_tree_node_selected →
+        # update_panels, which applies the one-shot start-panel focus once the
+        # data panel is populated (see _apply_focus_on_next_update).
         def _do_select():
             tree.select_node(node)
             tree.scroll_to_node(node)
-            tree.focus()
 
         self.call_after_refresh(_do_select)
 
@@ -1176,6 +1183,12 @@ class B2ViewApp(App):
             preview.update("")
             self._update_vlmeta(vlmeta_pane, vlmeta_widget, None)
             self._reset_panel_scroll()
+
+        # The data panel's display/contents are now settled; apply the one-shot
+        # startup focus (deferred one frame so the target widget is rendered).
+        if self._apply_focus_on_next_update:
+            self._apply_focus_on_next_update = False
+            self.call_after_refresh(self._apply_start_focus)
 
     @staticmethod
     def _format_vlmeta_value(value: Any) -> str:

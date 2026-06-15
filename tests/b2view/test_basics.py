@@ -119,6 +119,36 @@ def _assert_ctable_window_values(page, expected):
 # ── Tree and panel focus navigation ──────────────────────────────────────
 
 
+async def _wait_focus(pilot, expected_id: str) -> str | None:
+    """Pause until the focused widget is *expected_id* (or give up)."""
+    for _ in range(30):
+        await pilot.pause()
+        if getattr(pilot.app.focused, "id", None) == expected_id:
+            break
+    return getattr(pilot.app.focused, "id", None)
+
+
+async def test_start_panel_focus_with_path(store_path):
+    """``--panel`` focuses the right widget on startup, even with a ``--path``.
+
+    Regression: the data panel was left unfocused when both a starting path
+    and ``--panel data`` were given (a timer raced the node selection, which
+    pulled focus back to the tree).
+    """
+    # The bug case: data panel on a leaf must focus the data grid itself.
+    app = B2ViewApp(store_path, start_path="/level0/leaf1", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        assert await _wait_focus(pilot, "data-table") == "data-table"
+
+    # Other panels still land where asked.
+    for panel, expected in [("meta", "meta-scroll"), ("tree", "tree")]:
+        app = B2ViewApp(store_path, start_path="/level0/leaf1", start_panel=panel)
+        async with app.run_test(size=TERM_SIZE) as pilot:
+            await wait_for_table(pilot)
+            assert await _wait_focus(pilot, expected) == expected
+
+
 async def test_tree_and_panel_focus(store_path):
     """Tab cycles the panels; Down/Enter in the tree selects nodes."""
     app = B2ViewApp(store_path)
