@@ -11,6 +11,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.theme import Theme
 from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
 
 try:
@@ -47,6 +48,25 @@ _KIND_ICONS = {
 
 # Source kinds whose data grid supports horizontal (column) paging.
 _COL_PAGED_KINDS = frozenset({"ndarray2d", "ndarray_slice", "ctable"})
+
+# Blosc2-branded palette layered over Textual's default dark canvas: only the
+# logo colors are overridden (background/surface/panel stay None so they derive
+# the same near-black as textual-dark).  Turquoise is used for all borders and
+# scrollbars (deep blue is too dark to read on the dark canvas), with yellow as
+# the accent for the focused pane's border.
+BLOSC2_THEME = Theme(
+    name="blosc2",
+    primary="#007a86",  # turquoise
+    secondary="#007a86",  # turquoise (deep blue reads poorly on a dark canvas)
+    accent="#df9e00",  # yellow
+    foreground="#e0e0e0",  # match textual-dark's foreground
+    dark=True,
+)
+
+
+def _accent_chip(text: str) -> str:
+    """A reverse-video status chip in the brand accent (dark text on yellow)."""
+    return f"[$background on $accent] {text} [/]"
 
 
 class B2ViewPanel(Vertical):
@@ -907,8 +927,8 @@ class B2ViewApp(App):
     #data-header { height: auto; padding: 0 1; }
     #data-table-row { height: 1fr; }
     #data-table { width: 1fr; height: 1fr; }
-    #row-scrollbar { width: 1; height: 1fr; color: $accent; }
-    #col-scrollbar { height: 1; width: 1fr; color: $accent; }
+    #row-scrollbar { width: 1; height: 1fr; color: $primary; }
+    #col-scrollbar { height: 1; width: 1fr; color: $primary; }
     #meta-scroll, #vlmeta-scroll, #data-scroll { height: 1fr; padding: 0 1; }
     #tree-pane:focus-within, #meta-pane:focus-within, #vlmeta-pane:focus-within, #data-pane:focus-within { border: heavy $accent; }
     B2ViewPanel.-maximized,
@@ -998,6 +1018,8 @@ class B2ViewApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.register_theme(BLOSC2_THEME)
+        self.theme = "blosc2"
         self.browser = StoreBrowser(self.urlpath)
         tree = self.query_one("#tree", Tree)
         tree.root.data = "/"
@@ -1597,11 +1619,13 @@ class B2ViewApp(App):
                 header_parts.append(part)
 
             if self._dim_mode:
-                header_parts.append("[reverse] DIM MODE [/reverse]")
+                # The whole line is accent-reversed below; this chip is a cutout
+                # (accent text on the dark canvas) so it stands out against it.
+                header_parts.append("[$accent on $background] DIM MODE [/]")
                 header_parts.append("←→dim  ↑↓val  <Enter>fix/nav  <Esc>exit")
             elif self.row_window is not None:
                 ws, we = self.row_window
-                header_parts.append(f"[reverse] WINDOW {ws}:{we} [/reverse]")
+                header_parts.append(_accent_chip(f"WINDOW {ws}:{we}"))
                 header_parts.append("<Esc>unlock")
         elif data.get("source_kind") == "schunk":
             # The hex dump is paged in 16-byte rows; report it in bytes.
@@ -1616,7 +1640,7 @@ class B2ViewApp(App):
 
         line = ", ".join(header_parts)
         if self._dim_mode and layout is not None:
-            line = f"[reverse]{line}[/reverse]"
+            line = f"[$background on $accent]{line}[/]"
         self.query_one("#data-header", Static).update(line)
 
     def _window_and_filter_chips(self, data: dict) -> list[str]:
@@ -1624,7 +1648,7 @@ class B2ViewApp(App):
         chips: list[str] = []
         if self.row_window is not None:
             ws, we = self.row_window
-            chips.append(f"[reverse] WINDOW {ws}:{we} [/reverse]")
+            chips.append(_accent_chip(f"WINDOW {ws}:{we}"))
         if data.get("source_kind") == "ctable" and self.browser is not None:
             flt = self.browser.get_filter(self.selected_path)
             col_flt = self.browser.get_column_filter(self.selected_path)
