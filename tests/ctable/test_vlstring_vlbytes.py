@@ -600,6 +600,6 @@ def test_ctable_vlstring_str_display():
 def test_ctable_vlstring_repr():
     ct = blosc2.CTable(VLRow, new_data=ROWS)
     r = repr(ct)
-    # repr is now the tabular view (same as str); the footer carries the count.
+    # repr is now the tabular view (same as str); a small table shows no footer.
     assert r == str(ct)
-    assert "5 rows" in r
+    assert "id" in r.splitlines()[0]  # column header present

@@ -120,13 +120,19 @@ def test_to_string_is_full_by_default():
     blosc2.set_printoptions(display_rows=20, display_width=40)  # would truncate str()
     try:
         full = t.to_string()
-        # All 200 rows present (header + 200 + footer), no row/col ellipsis.
-        assert "...; rows hidden" not in full
-        assert full.splitlines()[-1].strip().startswith("[200 rows")
+        lines = full.splitlines()
+        # All 200 rows present (header + 200 data rows), no dimensions footer
+        # (pandas convention) and no row/col ellipsis.
+        assert len(lines) == 201
+        assert "rows x" not in full  # no dimensions footer
+        assert "columns]" not in full
+        assert lines[-1].split()[0] == "199"  # last data row
         assert "c00" in full  # first column shown
         assert "c07" in full  # last column shown
         # str() still truncates per the options.
         assert str(t).count("\n") < full.count("\n")
+        # opt-in footer for those who want it
+        assert t.to_string(show_dimensions=True).splitlines()[-1].strip().startswith("[200 rows")
     finally:
         blosc2.set_printoptions(display_rows=60, display_width=None)
 
@@ -137,6 +143,19 @@ def test_to_string_max_rows_and_max_width_truncate():
     assert truncated.count("\n") < t.to_string().count("\n")
     # A narrow width budget drops middle columns with an ellipsis column.
     assert any(line.strip().startswith("...") or " ... " in line for line in truncated.splitlines())
+
+
+def test_dimensions_footer_follows_pandas():
+    """No footer from to_string() or an untruncated str(); shown when truncated."""
+    small = _wide_table(nrows=5)
+    assert "rows x" not in small.to_string()  # to_string omits it (pandas)
+    # Pin the width so columns never truncate; then the only question is rows.
+    with blosc2.printoptions(display_width=-1):
+        assert "rows x" not in str(small)  # nothing truncated -> no footer
+        assert str(small) == repr(small)
+
+        big = _wide_table(nrows=200)  # 200 > display_rows default 60 -> rows truncated
+        assert "[200 rows x 8 columns]" in str(big)  # truncated -> footer shown
 
 
 def test_display_rows_minus_one_shows_all():

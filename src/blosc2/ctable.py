@@ -4264,6 +4264,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         *,
         max_rows: int | None = None,
         max_width: int | None = None,
+        show_dimensions: bool | str = False,
         display_index: bool | None = None,
         index_name: str = "",
     ) -> str:
@@ -4285,6 +4286,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             Character budget for column fitting.  ``None`` (default) or ``-1``
             shows all columns; a positive int truncates the middle ones with
             ``...`` to fit.
+        show_dimensions:
+            Whether to append a ``[N rows x M columns]`` footer.  ``False``
+            (default) omits it, matching ``pandas``' ``to_string()``; ``True``
+            always shows it; ``"truncate"`` shows it only when the view is
+            truncated (the behaviour of ``str``/``repr``).
         display_index:
             Whether to include a pandas-like logical row index column.  If
             ``None`` (default), use the global value configured with
@@ -4310,13 +4316,30 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self._display_fetch_cache = {}
         try:
             return self._to_string_body(
-                display_index, index_name, nrows, ncols, head_pos, tail_pos, hidden, max_width
+                display_index,
+                index_name,
+                nrows,
+                ncols,
+                head_pos,
+                tail_pos,
+                hidden,
+                max_width,
+                show_dimensions,
             )
         finally:
             self._display_fetch_cache = None
 
     def _to_string_body(
-        self, display_index, index_name, nrows, ncols, head_pos, tail_pos, hidden, max_width=None
+        self,
+        display_index,
+        index_name,
+        nrows,
+        ncols,
+        head_pos,
+        tail_pos,
+        hidden,
+        max_width=None,
+        show_dimensions=False,
     ) -> str:
         index_width = self._display_index_width(nrows, hidden, index_name) if display_index else 0
         display_cols, hidden_cols = self._display_columns(
@@ -4362,7 +4385,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             )
         if sep is not None:
             lines.append(sep)
-        lines.extend(self._display_footer(nrows, ncols, hidden, hidden_cols, fancy))
+        # pandas convention: to_string() omits the dimensions footer
+        # (show_dimensions=False); str/repr show it only when truncated.
+        truncated = hidden > 0 or hidden_cols > 0
+        if show_dimensions is True or (show_dimensions == "truncate" and truncated):
+            lines.extend(self._display_footer(nrows, ncols, hidden, hidden_cols, fancy))
         return "\n".join(lines)
 
     def __str__(self) -> str:
@@ -4371,7 +4398,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         width = opts["display_width"]
         if width is None:  # auto: fit to the current terminal
             width = shutil.get_terminal_size((120, 20)).columns
-        return self.to_string(max_rows=opts["display_rows"], max_width=width)
+        return self.to_string(max_rows=opts["display_rows"], max_width=width, show_dimensions="truncate")
 
     def __repr__(self) -> str:
         """Same truncated table as ``str`` (pandas/polars convention).
@@ -7278,8 +7305,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     # CSV interop
     # ------------------------------------------------------------------
 
-    def to_csv(self, path: str, *, header: bool = True, sep: str = ",") -> None:
-        """Write all live rows to a CSV file.
+    def to_csv(self, path: str | None = None, *, header: bool = True, sep: str = ",") -> str | None:
+        """Write all live rows to CSV.
 
         Uses Python's stdlib ``csv`` module — no extra dependency required.
         Fixed-shape ndarray column cells are serialised as JSON arrays for
@@ -7288,13 +7315,21 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         Parameters
         ----------
         path:
-            Destination file path.  Created or overwritten.
+            Destination file path (created or overwritten).  If ``None`` (the
+            default), nothing is written and the CSV is returned as a string,
+            like ``pandas``' ``DataFrame.to_csv()``.
         header:
             If ``True`` (default), write column names as the first row.
         sep:
             Field delimiter.  Defaults to ``","``; use ``"\\t"`` for TSV.
+
+        Returns
+        -------
+        str or None
+            The CSV text when *path* is ``None``, otherwise ``None``.
         """
         import csv
+        import io
 
         n = len(self)
         arrays: list = []
@@ -7313,12 +7348,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 arrays.append(col[:])
 
-        with open(path, "w", newline="") as f:
+        def _write(f) -> None:
             writer = csv.writer(f, delimiter=sep)
             if header:
                 writer.writerow(self.col_names)
             for row in zip(*arrays, strict=True):
                 writer.writerow(row)
+
+        if path is None:
+            buf = io.StringIO(newline="")
+            _write(buf)
+            return buf.getvalue()
+        with open(path, "w", newline="") as f:
+            _write(f)
+        return None
 
     @staticmethod
     def _csv_ndarray_col_to_array(raw: list[str], col) -> np.ndarray:

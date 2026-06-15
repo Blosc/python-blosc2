@@ -11,6 +11,10 @@ XXX version-specific blurb XXX
   `max_width` parameters truncate on demand.  *Behaviour change*: previously
   `to_string()` returned the truncated view; code that relied on that should
   pass `max_rows=`/`max_width=` (or use `str()`).
+- **The `[N rows x M columns]` dimensions footer now follows pandas**: omitted by
+  `to_string()` (pass `show_dimensions=True` to force it), and shown by
+  `str`/`repr`/`print` only when the view is actually truncated.  Previously it
+  was always appended.
 - **`repr(ctable)` now shows the same truncated table as `str(ctable)`**
   (pandas/polars convention), instead of the one-line `CTable<…>` summary.  The
   compact summary remains available via `ctable.info`.
@@ -21,6 +25,12 @@ XXX version-specific blurb XXX
 - **New `blosc2.printoptions(...)` context manager** temporarily sets the display
   options and restores them on exit, e.g.
   `with blosc2.printoptions(display_rows=-1, display_width=-1): print(t)`.
+
+### CTable I/O
+
+- **`CTable.to_csv()` now accepts no path**, returning the CSV as a string like
+  `pandas`' `DataFrame.to_csv()`.  Passing a path still writes the file (and
+  returns `None`); the returned string is byte-for-byte the same as the file.
 
 ## Changes from 4.4.3 to 4.4.5
 
