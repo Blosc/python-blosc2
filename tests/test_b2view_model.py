@@ -12,6 +12,8 @@ from blosc2.b2view.model import (
     preview_array_1d,
     preview_array_2d,
     preview_ctable,
+    preview_schunk,
+    schunk_row_geometry,
 )
 from blosc2.b2view.render import make_preview_renderables
 
@@ -176,6 +178,94 @@ def test_preview_ctable_skips_expensive_nested_columns_by_default():
     assert preview["data"]["path"].tolist() == ["<list[struct]; skipped>"] * 3
 
 
+@dataclasses.dataclass
+class TaggedRow:
+    id: int = blosc2.field(blosc2.int32())
+    tags: list[int] = blosc2.field(blosc2.list(blosc2.int64(), nullable=True))  # noqa: RUF009
+
+
+def test_read_cell_decodes_expensive_column_on_demand(tmp_path):
+    path = tmp_path / "tagged.b2z"
+    rows = [(0, [0]), (1, [1, 10]), (2, [2, 20, 200]), (3, None)]
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/t"] = blosc2.CTable(TaggedRow, new_data=rows)
+
+    with StoreBrowser(str(path)) as browser:
+        # The expensive list column is a placeholder in the preview, ...
+        preview = browser.preview("/t", max_cols=2)
+        assert "tags" in preview["skipped_columns"]
+        # ... but read_cell decodes the exact cell the grid row points at.
+        assert browser.read_cell("/t", "tags", 2) == [2, 20, 200]
+        assert browser.read_cell("/t", "tags", 0) == [0]
+        assert browser.read_cell("/t", "tags", 3) is None
+
+
+def test_read_cell_honors_filter_view_row_space(tmp_path):
+    path = tmp_path / "tagged_filter.b2z"
+    rows = [(0, [0]), (1, [1, 10]), (2, [2, 20]), (3, [3, 30])]
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/t"] = blosc2.CTable(TaggedRow, new_data=rows)
+
+    with StoreBrowser(str(path)) as browser:
+        browser.set_filter("/t", "id >= 2")  # live view is rows [2, 3]
+        # read_cell row 0 must resolve to the first *visible* row (id == 2).
+        assert browser.read_cell("/t", "tags", 0) == [2, 20]
+        assert browser.read_cell("/t", "tags", 1) == [3, 30]
+
+
+def test_schunk_row_geometry_groups_by_typesize():
+    assert schunk_row_geometry(1) == (16, 16)
+    assert schunk_row_geometry(2) == (8, 16)
+    assert schunk_row_geometry(4) == (4, 16)
+    assert schunk_row_geometry(8) == (2, 16)
+    assert schunk_row_geometry(3) == (5, 15)  # rows stay a whole multiple of typesize
+    assert schunk_row_geometry(32) == (1, 32)  # never below one whole item
+
+
+def test_preview_schunk_hex_dump_bytes_and_offsets():
+    data = bytes(range(256))
+    s = blosc2.SChunk(chunksize=2**16, data=data)
+    p = preview_schunk(s, start=0, stop=4)
+
+    assert p["source_kind"] == "schunk"
+    assert p["columns"] == ["hex", "ascii"]
+    assert p["nrows"] == 16  # 256 bytes / 16 per row
+    assert p["nbytes"] == 256
+    # Row 0 is bytes 0x00..0x0f, byte-offset label in hex.
+    assert p["row_labels"][:2] == ["00000000", "00000010"]
+    assert p["data"]["hex"][0] == "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f"
+    # Printable ASCII renders; non-printable bytes become dots.
+    assert p["data"]["ascii"][0] == "." * 16
+    assert p["data"]["ascii"][3] == "0123456789:;<=>?"  # bytes 0x30..0x3f
+
+
+def test_preview_schunk_groups_hex_by_typesize():
+    s = blosc2.SChunk(chunksize=2**16, cparams={"typesize": 4}, data=bytes(range(32)))
+    p = preview_schunk(s, start=0, stop=2)
+    assert p["typesize"] == 4
+    # 4-byte items, no inter-byte spaces inside an item.
+    assert p["data"]["hex"][0] == "00010203 04050607 08090a0b 0c0d0e0f"
+
+
+def test_preview_schunk_paging_reads_only_the_window(tmp_path):
+    path = tmp_path / "raw.b2z"
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/raw"] = blosc2.SChunk(chunksize=2**16, data=bytes(range(256)))
+
+    with StoreBrowser(str(path)) as browser:
+        # A later page resolves the right byte offsets without reading earlier rows.
+        page = browser.preview("/raw", start=10, stop=12)
+        assert page["row_labels"] == ["000000a0", "000000b0"]  # rows 10, 11 → bytes 160, 176
+        assert page["data"]["hex"][0].startswith("a0 a1 a2 a3")
+
+
+def test_preview_schunk_empty():
+    s = blosc2.SChunk(chunksize=2**16)
+    p = preview_schunk(s, start=0, stop=20)
+    assert p["nrows"] == 0
+    assert list(p["data"]["hex"]) == []
+
+
 def test_ctable_preview_preserves_ragged_nested_values():
     class Column:
         def __init__(self, values):
@@ -229,3 +319,96 @@ def test_preview_array_high_dimensional_slice():
     arr = np.arange(2 * 3 * 4).reshape(2, 3, 4)
     preview = preview_array(arr, max_rows=2, max_cols=3)
     np.testing.assert_array_equal(preview, arr[0, :2, :3])
+
+
+def test_plot_series_1d_envelope_captures_extremes(tmp_path):
+    path = tmp_path / "plot1d.b2z"
+    n = 100_000
+    data = np.linspace(0, 1, num=n)
+    data[12345] = 9.0  # a spike between bucket samples
+    data[98765] = -9.0
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/wave"] = blosc2.asarray(data)
+
+    with StoreBrowser(str(path)) as browser:
+        series = browser.plot_series("/wave", max_points=300)
+        assert series["n"] == n
+        assert series["method"] == "reduce"  # NDArray leaf, fits the read budget
+        assert len(series["x"]) <= 300
+        # The envelope must contain the true global extremes, including spikes
+        assert np.isclose(np.nanmax(series["ymax"]), 9.0)
+        assert np.isclose(np.nanmin(series["ymin"]), -9.0)
+
+        # Small arrays: one bucket per element, ymin == ymax == the values
+        small = browser.plot_series("/wave", max_points=n)
+        assert len(small["x"]) == n
+        np.testing.assert_allclose(small["ymin"], data)
+        np.testing.assert_allclose(small["ymax"], data)
+
+
+def test_plot_series_uses_summary_index_when_available(tmp_path):
+    # A persisted CTable builds SUMMARY indexes on close; plot_series should
+    # read per-block min/max from the index (no data decompression).
+    path = str(tmp_path / "plotsum.b2t")
+    n = 200_000
+    data = np.linspace(-1.0, 1.0, n)
+    data[1234] = 7.0  # spikes the per-block summary must capture
+    data[199_001] = -7.0
+
+    @dataclasses.dataclass
+    class VRow:
+        v: float = blosc2.field(blosc2.float64(), default=0.0)
+
+    arr = np.empty(n, dtype=[("v", "<f8")])
+    arr["v"] = data
+    table = blosc2.CTable(VRow, urlpath=path, mode="w", expected_size=n)
+    table.extend(arr, validate=False)
+    table.close()
+
+    with StoreBrowser(path) as browser:
+        series = browser.plot_series("/", column="v", max_points=2000)
+        assert series["method"] == "summary"
+        assert series["n"] == n
+        assert np.isclose(np.nanmax(series["ymax"]), 7.0)
+        assert np.isclose(np.nanmin(series["ymin"]), -7.0)
+
+
+def test_plot_series_2d_column_with_layout(tmp_path):
+    from blosc2.b2view.model import DataSliceLayout
+
+    path = tmp_path / "plot2d.b2z"
+    values = np.linspace(0, 1, 200 * 8).reshape(200, 8)
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/grid"] = values
+
+    with StoreBrowser(str(path)) as browser:
+        layout = DataSliceLayout.from_shape((200, 8))
+        series = browser.plot_series("/grid", column=5, layout=layout, max_points=50)
+        assert series["n"] == 200
+        assert series["method"] == "reduce"
+        # Column 5 over all rows, bucketed; envelope brackets the true column
+        col = values[:, 5]
+        assert np.isclose(np.nanmax(series["ymax"]), col.max())
+        assert np.isclose(np.nanmin(series["ymin"]), col.min())
+
+
+def test_plot_series_ctable_column_honors_row_filter(tmp_path):
+    path = tmp_path / "plotct.b2z"
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/table"] = make_ctable(100)
+
+    with StoreBrowser(str(path)) as browser:
+        series = browser.plot_series("/table", column="y", max_points=1000)
+        assert series["n"] == 100
+        # In-memory TreeStore CTable has no summary index -> exact reduce
+        assert series["method"] in ("summary", "reduce")
+        assert np.isclose(np.nanmax(series["ymax"]), 99 * 1.5)
+        assert np.isclose(np.nanmin(series["ymin"]), 0.0)
+
+        # An active row filter restricts the plotted universe (and forces reduce)
+        browser.set_filter("/table", "x >= 50")
+        filtered = browser.plot_series("/table", column="y", max_points=1000)
+        assert filtered["n"] == 50
+        assert filtered["method"] == "reduce"
+        assert np.isclose(np.nanmin(filtered["ymin"]), 50 * 1.5)
+        assert np.isclose(np.nanmax(filtered["ymax"]), 99 * 1.5)

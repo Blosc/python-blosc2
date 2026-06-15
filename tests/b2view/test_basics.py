@@ -119,6 +119,36 @@ def _assert_ctable_window_values(page, expected):
 # ── Tree and panel focus navigation ──────────────────────────────────────
 
 
+async def _wait_focus(pilot, expected_id: str) -> str | None:
+    """Pause until the focused widget is *expected_id* (or give up)."""
+    for _ in range(30):
+        await pilot.pause()
+        if getattr(pilot.app.focused, "id", None) == expected_id:
+            break
+    return getattr(pilot.app.focused, "id", None)
+
+
+async def test_start_panel_focus_with_path(store_path):
+    """``--panel`` focuses the right widget on startup, even with a ``--path``.
+
+    Regression: the data panel was left unfocused when both a starting path
+    and ``--panel data`` were given (a timer raced the node selection, which
+    pulled focus back to the tree).
+    """
+    # The bug case: data panel on a leaf must focus the data grid itself.
+    app = B2ViewApp(store_path, start_path="/level0/leaf1", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        assert await _wait_focus(pilot, "data-table") == "data-table"
+
+    # Other panels still land where asked.
+    for panel, expected in [("meta", "meta-scroll"), ("tree", "tree")]:
+        app = B2ViewApp(store_path, start_path="/level0/leaf1", start_panel=panel)
+        async with app.run_test(size=TERM_SIZE) as pilot:
+            await wait_for_table(pilot)
+            assert await _wait_focus(pilot, expected) == expected
+
+
 async def test_tree_and_panel_focus(store_path):
     """Tab cycles the panels; Down/Enter in the tree selects nodes."""
     app = B2ViewApp(store_path)
@@ -275,6 +305,34 @@ async def test_2d_paging(store_path):
         assert page["col_start"] == 97
         assert page["col_stop"] == LEAF2_SHAPE[1]
         np.testing.assert_allclose(page["data"]["97"], expected[page["start"] : page["stop"], 97])
+
+        # Row paging re-aligns after a dim-mode single-row scroll.  Back to the
+        # top so the row window starts on a page_size boundary.
+        await pilot.press("t")
+        await wait_for_table(pilot)
+        assert app.table_page["start"] == 0
+        page_size = app._table_page_size()
+        assert page_size < LEAF2_SHAPE[0]  # several row pages exist
+
+        # In dim mode the active (row) dim scrolls by one row, nudging the
+        # window off the page grid.
+        await pilot.press("d")
+        assert app._dim_mode
+        await pilot.press("up")
+        await wait_for_table(pilot)
+        assert app.table_page["start"] == 1  # off-grid by one row
+        await pilot.press("escape")
+        assert not app._dim_mode
+
+        # An explicit page down now snaps back onto the page grid instead of
+        # carrying the one-row offset (the bug), and page up returns to 0.
+        await pilot.press("pagedown")
+        await wait_for_table(pilot)
+        assert app.table_page["start"] == page_size
+
+        await pilot.press("pageup")
+        await wait_for_table(pilot)
+        assert app.table_page["start"] == 0
 
 
 # ── 3-D array: dim mode navigation ───────────────────────────────────────
@@ -495,6 +553,15 @@ async def test_ctable_column_paging(store_path):
         assert len(page["columns"]) < len(wide_columns)
         assert table.virtual_size.width <= table.size.width
 
+        # 'p' on a non-numeric column must not open a plot (notify only).
+        # This also passes when textual-plotext is not installed.
+        await pilot.press("s")
+        await wait_for_table(pilot)
+        table.move_cursor(column=app.table_page["columns"].index("d"))
+        await pilot.press("p")
+        await pilot.pause()
+        assert type(app.screen).__name__ != "PlotScreen"
+
 
 # ── CTable filtering ─────────────────────────────────────────────────────
 
@@ -603,3 +670,309 @@ async def test_ctable_filtering(store_path):
         await wait_for_table(pilot)
         assert app.browser.get_column_filter("/level0/ctable") is None
         assert app.table_page["ncols"] == len(expected)
+
+
+# ── Plotting ('p' key, optional textual-plotext) ─────────────────────────
+
+
+async def test_plot_column(store_path):
+    """'p' plots a min/max envelope of the whole 1-D leaf in a modal."""
+    pytest.importorskip("textual_plotext")
+    from blosc2.b2view.app import PlotScreen
+
+    app = B2ViewApp(store_path, start_path="/level0/leaf1", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        await focus_data_table(pilot)
+
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)
+        screen = app.screen
+
+        # Bucketed envelope covering the whole leaf; bracketed by true extremes
+        assert 0 < len(screen.x) <= app._PLOT_MAX_POINTS
+        leaf = leaf1_values()
+        assert min(screen.ymin) <= leaf.min() + 1e-9
+        assert max(screen.ymax) >= leaf.max() - 1e-9
+        assert "leaf1" in screen.plot_title
+        assert "envelope" in screen.plot_title
+
+        # ── Zoom / pan / reset / exact range from the plot modal ─────────
+        from blosc2.b2view.app import PlotRangeScreen
+
+        n = screen.n
+        assert (screen.row_start, screen.row_stop) == (0, n)
+
+        # '+' zooms in about the centre: the window halves and re-centres.
+        await pilot.press("plus")
+        await pilot.pause()
+        assert screen.row_stop - screen.row_start == n // 2
+        assert screen.row_start > 0
+        assert "rows" in screen.plot_title
+
+        # '-' zooms back out to the whole series.
+        await pilot.press("minus")
+        await pilot.pause()
+        assert (screen.row_start, screen.row_stop) == (0, n)
+
+        # Pan right shifts a zoomed window without changing its width.
+        await pilot.press("plus")
+        await pilot.pause()
+        width = screen.row_stop - screen.row_start
+        start_before = screen.row_start
+        await pilot.press("right")
+        await pilot.pause()
+        assert screen.row_start > start_before
+        assert screen.row_stop - screen.row_start == width
+
+        # '0' resets to the whole series.
+        await pilot.press("0")
+        await pilot.pause()
+        assert (screen.row_start, screen.row_stop) == (0, n)
+
+        # 'g' opens a range modal; an exact range zooms there and reads it exactly.
+        await pilot.press("g")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotRangeScreen)
+        app.screen.query_one("#range-input", Input).value = "1000:2000"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)
+        screen = app.screen
+        assert (screen.row_start, screen.row_stop) == (1000, 2000)
+        sub = leaf1_values()[1000:2000]
+        assert min(screen.ymin) <= sub.min() + 1e-9
+        assert max(screen.ymax) >= sub.max() - 1e-9
+        assert min(screen.x) >= 1000
+        assert max(screen.x) < 2000
+
+        # 'v' locks the 1-D array grid to the [1000:2000) window via the layout:
+        # the grid sees 1000 rows, re-indexed from 0, and logical row 0 reads
+        # absolute row 1000.  Paging cannot leave the window.
+        await pilot.press("v")
+        await wait_for_table(pilot)
+        assert not isinstance(app.screen, PlotScreen)
+        table = app.query_one("#data-table", DataTable)
+        assert app.row_window == (1000, 2000)
+        page = app.table_page
+        assert page["nrows"] == 1000
+        assert page["start"] == 0
+        assert page["data"]["value"][0] == pytest.approx(leaf1_values()[1000])
+
+        # 'b'(ottom) lands on the window's last row (absolute 1999), still inside.
+        await pilot.press("b")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["stop"] == 1000
+        assert page["data"]["value"][table.cursor_row] == pytest.approx(leaf1_values()[1999])
+
+        # 'esc' unlocks and restores the full array.
+        await pilot.press("escape")
+        await wait_for_table(pilot)
+        assert app.row_window is None
+        assert app._data_layout.row_window is None
+        assert app.table_page["nrows"] == LEAF1_LEN
+
+        # 'p' (like escape) closes the plot again
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)
+        await pilot.press("p")
+        await pilot.pause()
+        assert not isinstance(app.screen, PlotScreen)
+
+
+async def test_plot_view_locks_ctable_window(store_path):
+    """'v' on a CTable plot replaces the grid with a locked [start:stop] window."""
+    pytest.importorskip("textual_plotext")
+    from blosc2.b2view.app import PlotScreen
+
+    app = B2ViewApp(store_path, start_path="/level0/ctable", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        table = await focus_data_table(pilot)
+        assert app.table_page["nrows"] == NROWS
+
+        # Plot column 'b' (== row index), then zoom to an exact 100:110 range.
+        table.move_cursor(column=app.table_page["columns"].index("b"))
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)
+        await pilot.press("g")
+        await pilot.pause()
+        app.screen.query_one("#range-input", Input).value = "100:110"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert (app.screen.row_start, app.screen.row_stop) == (100, 110)
+
+        # 'v' locks the grid to that window: the modal closes, the grid shows
+        # exactly those 10 rows (b == 100..109), re-indexed from 0.
+        await pilot.press("v")
+        await wait_for_table(pilot)
+        assert not isinstance(app.screen, PlotScreen)
+        assert app.row_window == (100, 110)
+        page = app.table_page
+        assert page["nrows"] == 10
+        np.testing.assert_array_equal(page["data"]["b"], np.arange(100, 110))
+
+        # Paging cannot leave the window: 'b'(ottom) lands on its last row (109).
+        await pilot.press("b")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["stop"] == 10
+        assert page["data"]["b"][table.cursor_row] == 109
+
+        # 'esc' unlocks and restores the full table.
+        await pilot.press("escape")
+        await wait_for_table(pilot)
+        assert app.row_window is None
+        assert app.browser.get_row_window("/level0/ctable") is False
+        assert app.table_page["nrows"] == NROWS
+
+
+async def test_plot_hires_view(store_path):
+    """'h' opens a high-res matplotlib image over the braille plot; 'q' returns."""
+    pytest.importorskip("textual_plotext")
+    pytest.importorskip("textual_image")
+    pytest.importorskip("matplotlib")
+    from blosc2.b2view.app import HiResPlotScreen, PlotScreen
+
+    app = B2ViewApp(store_path, start_path="/level0/ctable", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        table = await focus_data_table(pilot)
+        table.move_cursor(column=app.table_page["columns"].index("b"))
+
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)
+
+        # Force a tiny cap so the un-zoomed series (300 rows) is "too large":
+        # 'h' asks the user to zoom in and stays on the braille plot.
+        app.screen._HIRES_MAX_POINTS = 50
+        await pilot.press("h")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)  # not opened
+
+        # Zoom to a small range, then 'h' opens the high-res image screen.
+        await pilot.press("g")
+        await pilot.pause()
+        app.screen.query_one("#range-input", Input).value = "100:140"
+        await pilot.press("enter")
+        await pilot.pause()
+        plot = app.screen
+        assert (plot.row_start, plot.row_stop) == (100, 140)
+
+        await pilot.press("h")
+        await pilot.pause()
+        assert isinstance(app.screen, HiResPlotScreen)
+        # The image rendered and mounted (UnicodeImage in a headless test).
+        from blosc2.b2view.app import TextualImage
+
+        assert app.screen.query_one("#hires-image", TextualImage) is not None
+
+        # 'q' returns to the braille plot with the zoom intact.
+        await pilot.press("q")
+        await pilot.pause()
+        assert app.screen is plot
+        assert (plot.row_start, plot.row_stop) == (100, 140)
+
+
+# ── Expensive (skipped) CTable cell: decode on demand with Enter ─────────
+
+
+async def test_enter_decodes_skipped_cell(tmp_path):
+    """Enter on a ``<...; skipped>`` list cell opens the decoded-cell modal."""
+    import dataclasses
+
+    from blosc2.b2view.app import CellDetailScreen
+
+    @dataclasses.dataclass
+    class TaggedRow:
+        id: int = blosc2.field(blosc2.int32())
+        tags: list[int] = blosc2.field(blosc2.list(blosc2.int64(), nullable=True))  # noqa: RUF009
+
+    path = str(tmp_path / "tagged.b2z")
+    rows = [(i, list(range(i + 1))) for i in range(6)]
+    with blosc2.TreeStore(path, mode="w") as store:
+        store["/t"] = blosc2.CTable(TaggedRow, new_data=rows)
+
+    app = B2ViewApp(path, start_path="/t", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        table = await focus_data_table(pilot)
+
+        # The list column is a placeholder in the grid.
+        assert "tags" in (app.table_buffer.get("skipped_columns") or {})
+
+        # Enter on the cheap 'id' column does nothing special (no modal).
+        table.move_cursor(row=2, column=app.table_page["columns"].index("id"))
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, CellDetailScreen)
+
+        # Enter on the skipped 'tags' cell decodes just that row into a modal.
+        table.move_cursor(row=2, column=app.table_page["columns"].index("tags"))
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, CellDetailScreen)
+        assert app.screen._value == [0, 1, 2]  # row 2 of the generator above
+        assert app.screen._row == 2
+
+        # esc returns to the table with its position intact.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, CellDetailScreen)
+        assert table.cursor_row == 2
+
+
+# ── SChunk: paged hex dump in the data grid ──────────────────────────────
+
+
+async def test_schunk_hex_dump_paging(tmp_path):
+    """An SChunk node renders a paged hex+ascii dump with byte-offset labels."""
+    path = str(tmp_path / "raw.b2z")
+    # 4 KiB of a repeating 0..255 ramp, so values at any offset are predictable.
+    payload = bytes(range(256)) * 16
+    with blosc2.TreeStore(path, mode="w") as store:
+        store["/raw"] = blosc2.SChunk(chunksize=2**16, data=payload)
+
+    app = B2ViewApp(path, start_path="/raw", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        table = await focus_data_table(pilot)
+
+        page = app.table_page
+        assert page["source_kind"] == "schunk"
+        assert page["columns"] == ["hex", "ascii"]
+        assert page["nrows"] == len(payload) // 16  # 16 bytes/row
+        assert page["start"] == 0
+        first_stop = page["stop"]
+        assert first_stop < page["nrows"]  # bigger than one viewport
+
+        # Row 0 is bytes 0x00..0x0f; the gutter shows the hex byte offset.
+        assert page["row_labels"][0] == "00000000"
+        assert page["data"]["hex"][0] == "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f"
+
+        # The header reports the dump in bytes, not "rows".
+        from textual.widgets import Static
+
+        header = app.query_one("#data-header", Static).render()
+        assert f"{len(payload)} bytes" in str(header)
+
+        # Page forward by stepping off the last visible row; offsets keep going.
+        table.move_cursor(row=first_stop - 1)
+        await pilot.press("down")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["start"] == first_stop
+        assert page["row_labels"][0] == format(first_stop * 16, "08x")
+
+        # 'b' jumps to the last row of the dump.
+        await pilot.press("b")
+        await wait_for_table(pilot)
+        page = app.table_page
+        assert page["stop"] == page["nrows"]
+        last_offset = (page["nrows"] - 1) * 16
+        assert page["row_labels"][-1] == format(last_offset, "08x")

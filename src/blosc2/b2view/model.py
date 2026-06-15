@@ -10,6 +10,106 @@ import numpy as np
 
 import blosc2
 
+# Above this uncompressed size, plot_series does not read the whole series at
+# once for an exact min/max envelope.  Local objects are instead streamed in
+# bounded spans (still exact); only remote c2arrays fall back to a strided
+# sample to avoid many network round-trips.  ~1 GB ≈ 125M float64.
+_PLOT_FULL_READ_MAX_BYTES = 1_000_000_000
+
+# Target size of a single streamed read in the exact-but-bounded envelope path.
+_PLOT_STREAM_BUFFER_BYTES = 64_000_000  # ~64 MB
+
+
+def _minmax_buckets(
+    vmin: np.ndarray, vmax: np.ndarray, positions: np.ndarray, n: int, max_points: int
+) -> dict[str, np.ndarray]:
+    """Reduce per-element (or per-block) min/max into <= *max_points* buckets.
+
+    *vmin*/*vmax* are the per-source-unit minima/maxima, *positions* the global
+    row index of each unit's start, *n* the total row count.  NaN units (already
+    NaN in *vmin*/*vmax*) are ignored within a bucket; an all-NaN bucket stays
+    NaN.  Returns ``{"x", "ymin", "ymax"}`` with bucket-center x positions.
+    """
+    nunits = vmin.shape[0]
+    if nunits == 0:
+        empty = np.empty(0)
+        return {"x": empty, "ymin": empty, "ymax": empty}
+    if nunits <= max_points:
+        starts = np.arange(nunits)
+    else:
+        group = -(-nunits // max_points)  # ceil
+        starts = np.arange(0, nunits, group)
+    # NaN-aware reduceat: +inf/-inf neutralizes NaN units, then mapped back.
+    lo = np.where(np.isnan(vmin), np.inf, vmin)
+    hi = np.where(np.isnan(vmax), -np.inf, vmax)
+    ymin = np.minimum.reduceat(lo, starts)
+    ymax = np.maximum.reduceat(hi, starts)
+    ymin = np.where(np.isinf(ymin), np.nan, ymin)
+    ymax = np.where(np.isinf(ymax), np.nan, ymax)
+    x = np.minimum(positions[starts], max(0, n - 1))
+    return {"x": x, "ymin": ymin, "ymax": ymax}
+
+
+def _reduce_envelope(vals: np.ndarray, n: int, max_points: int) -> dict[str, np.ndarray]:
+    """Per-bucket min/max envelope of an in-memory 1-D series."""
+    vals = np.asarray(vals)
+    if vals.shape[0] == 0:
+        empty = np.empty(0)
+        return {"x": empty, "ymin": empty, "ymax": empty}
+    return _minmax_buckets(vals, vals, np.arange(vals.shape[0]), n, max_points)
+
+
+def _bucket_geometry(n: int, max_points: int) -> tuple[int, int]:
+    """Return ``(group, nbuckets)`` for an *n*-row series cut into ``<= max_points``
+    contiguous buckets, matching the grouping policy of :func:`_minmax_buckets`
+    so the streamed and full-read envelopes bucket rows identically."""
+    if n <= 0:
+        return 1, 0
+    group = 1 if n <= max_points else -(-n // max_points)  # ceil
+    nbuckets = -(-n // group)  # ceil
+    return group, nbuckets
+
+
+def _minmax_buckets_streaming(read_chunk, n: int, max_points: int, *, span: int) -> dict[str, np.ndarray]:
+    """Exact per-bucket min/max envelope, read in row spans of at most *span*.
+
+    Equivalent to reading the whole series and calling :func:`_reduce_envelope`,
+    but never holds more than *span* rows in memory.  *read_chunk* is a callable
+    ``(start, stop) -> 1-D array`` for that row range.  Because min/max are
+    associative, arbitrary span boundaries (including ones that fall inside a
+    bucket) yield a result identical to the single-read path.
+    """
+    group, nbuckets = _bucket_geometry(n, max_points)
+    if nbuckets == 0:
+        empty = np.empty(0)
+        return {"x": empty, "ymin": empty, "ymax": empty}
+    ymin = np.full(nbuckets, np.inf)
+    ymax = np.full(nbuckets, -np.inf)
+    span = max(1, int(span))
+    for s in range(0, n, span):
+        e = min(s + span, n)
+        vals = np.asarray(read_chunk(s, e), dtype=float).ravel()[: e - s]
+        bidx = np.arange(s, e) // group  # global bucket per row, non-decreasing
+        seg_starts = np.concatenate(([0], np.flatnonzero(np.diff(bidx)) + 1))
+        buckets = bidx[seg_starts]  # unique within this span (contiguous runs)
+        lo = np.where(np.isnan(vals), np.inf, vals)
+        hi = np.where(np.isnan(vals), -np.inf, vals)
+        ymin[buckets] = np.minimum(ymin[buckets], np.minimum.reduceat(lo, seg_starts))
+        ymax[buckets] = np.maximum(ymax[buckets], np.maximum.reduceat(hi, seg_starts))
+    ymin = np.where(np.isinf(ymin), np.nan, ymin)
+    ymax = np.where(np.isinf(ymax), np.nan, ymax)
+    x = np.minimum(np.arange(nbuckets) * group, max(0, n - 1))
+    return {"x": x, "ymin": ymin, "ymax": ymax}
+
+
+def _stream_span(n: int, itemsize: int, chunklen: int | None) -> int:
+    """Rows per streamed read: ~``_PLOT_STREAM_BUFFER_BYTES`` worth, aligned to
+    whole native chunks when possible (chunks are the decompression unit)."""
+    budget = max(1, _PLOT_STREAM_BUFFER_BYTES // max(1, itemsize))
+    if chunklen and chunklen > 0:
+        return chunklen if chunklen >= budget else (budget // chunklen) * chunklen
+    return budget
+
 
 @dataclass(frozen=True)
 class NodeInfo:
@@ -49,6 +149,11 @@ class DataSliceLayout:
     row_stop: int = 0
     col_start: int = 0
     col_stop: int = 0
+
+    # Optional locked window (absolute [start, stop)) on the navigable row dim.
+    # When set, the grid sees a row dimension of length ``stop - start`` whose
+    # logical row 0 maps to absolute row ``start`` (see ``preview_array_from_layout``).
+    row_window: tuple[int, int] | None = None
 
     @classmethod
     def from_shape(cls, shape: tuple[int, ...]) -> DataSliceLayout:
@@ -113,7 +218,21 @@ class DataSliceLayout:
             row_stop=self.row_stop if row_stop is None else row_stop,
             col_start=self.col_start if col_start is None else col_start,
             col_stop=self.col_stop if col_stop is None else col_stop,
+            row_window=self.row_window,
         )
+
+    def row_window_bounds(self, row_dim: int | None) -> tuple[int, int]:
+        """Return the absolute [start, stop) extent of the navigable row dim.
+
+        Narrowed to ``row_window`` when one is set; otherwise the full dim.
+        """
+        full = self.shape[row_dim] if row_dim is not None else 1
+        if row_dim is None or self.row_window is None:
+            return 0, full
+        w0, w1 = self.row_window
+        w0 = max(0, min(w0, full))
+        w1 = max(w0, min(w1, full))
+        return w0, w1
 
     def total_for_dim(self, dim: int) -> int:
         """Return the total size of *dim*."""
@@ -139,6 +258,8 @@ class StoreBrowser:
         # Per-path row filters for CTable nodes (path -> expr / where() view)
         self._filters: dict[str, str] = {}
         self._filter_views: dict[str, Any] = {}
+        # Per-path locked row windows for CTable nodes (path -> slice() view)
+        self._window_views: dict[str, Any] = {}
         # Per-path column filters (path -> substring pattern / matched names)
         self._column_filters: dict[str, str] = {}
         self._column_selections: dict[str, list[str]] = {}
@@ -266,7 +387,12 @@ class StoreBrowser:
                     return preview_array_1d(obj, start=start, stop=stop)
             return preview_array(obj, slices=slices, max_rows=max_rows, max_cols=max_cols)
         if kind == "ctable":
-            obj = self._filter_views.get(path, obj)
+            # A locked row window (set by 'v') takes precedence; it is sliced
+            # from whatever was visible, so it already folds in any row filter.
+            if path in self._window_views:
+                obj = self._window_views[path]
+            else:
+                obj = self._filter_views.get(path, obj)
             if columns is None:
                 columns = self._column_selections.get(path)
             stop = min(start + max_rows, len(obj)) if stop is None else stop
@@ -274,8 +400,286 @@ class StoreBrowser:
                 obj, start=start, stop=stop, columns=columns, max_cols=max_cols, col_start=col_start
             )
         if kind == "schunk":
-            return {"message": "SChunk byte preview is not implemented yet."}
+            stop = start + max_rows if stop is None else stop
+            return preview_schunk(obj, start=start, stop=stop)
         return {"message": f"Preview is not supported for {kind!r} objects."}
+
+    def plot_series(
+        self,
+        path: str,
+        *,
+        column: str | int | None = None,
+        layout: DataSliceLayout | None = None,
+        max_points: int = 2000,
+        row_start: int = 0,
+        row_stop: int | None = None,
+    ) -> dict[str, Any]:
+        """Return a peak-preserving overview of one series for plotting.
+
+        The result is ``{"x", "ymin", "ymax", "n", "row_start", "row_stop",
+        "method"}`` with at most *max_points* buckets; ``ymin``/``ymax`` are the
+        per-bucket extremes so a plotted envelope never hides a peak or trough,
+        ``n`` is the *total* series length and ``row_start``/``row_stop`` the
+        plotted range.  Three tiers, cheapest first:
+
+        - ``"summary"``: read precomputed per-block min/max from the column's
+          SUMMARY index — no data decompression (whole series only; CTable
+          columns, no active filter, numeric).
+        - ``"reduce"``: read the (sub)series and reduce per bucket — exact,
+          O(range), streamed in bounded spans above ``_PLOT_FULL_READ_MAX_BYTES``
+          for local objects.
+        - ``"sample"``: strided sample for a remote series too large to read
+          fully; this may miss extremes, so callers should label it.
+
+        Pass *row_start*/*row_stop* to zoom into a sub-range (always read
+        exactly; ``x`` stays in absolute row coordinates).  The series is a
+        CTable column (*column* is its name; a locked row window takes
+        precedence, otherwise an active row filter is honored) or an array
+        (*column* is the global index along the column dimension of *layout*,
+        or None for 1-D arrays).
+        """
+        path = self.normalize_path(path)
+        obj = self._get_object(path)
+        kind = object_kind(obj)
+
+        if kind == "ctable":
+            # A locked row window (set by 'v') takes precedence over any row
+            # filter, mirroring preview()/read_cell(): a plot shows exactly the
+            # rows the grid is showing.  The SUMMARY fast-path spans the whole
+            # column, so it is only valid when neither narrows the series.
+            if path in self._window_views:
+                view = self._window_views[path]
+                narrowed = True
+            else:
+                view = self._filter_views.get(path, obj)
+                narrowed = path in self._filter_views
+            n = len(view)
+            start, stop = self._clamp_range(row_start, row_stop, n)
+            if start == 0 and stop == n and not narrowed:
+                env = self._column_summary_envelope(obj, column, n, max_points)
+                if env is not None:
+                    return {**env, "n": n, "row_start": start, "row_stop": stop, "method": "summary"}
+            col = view[column]
+            chunks = getattr(col, "chunks", None)
+            return self._range_envelope(
+                lambda s, e, st=1: safe_asarray(col[s:e:st]),
+                start,
+                stop,
+                n,
+                np.dtype(col.dtype).itemsize,
+                chunks[0] if chunks else None,
+                remote=False,
+                max_points=max_points,
+            )
+
+        if kind in {"ndarray", "c2array"}:
+            shape = tuple(getattr(obj, "shape", ()) or ())
+            ndim = len(shape)
+            if ndim == 0:
+                raise ValueError("Cannot plot a scalar")
+            row_dim = layout.navigable_dims[0] if layout is not None and layout.navigable_dims else 0
+            n = shape[row_dim]
+            start, stop = self._clamp_range(row_start, row_stop, n)
+
+            def _row_index(row_slice):
+                idx: list[int | slice] = []
+                for i in range(ndim):
+                    if i == row_dim:
+                        idx.append(row_slice)
+                    elif layout is not None and i in layout.fixed_values:
+                        idx.append(layout.fixed_values[i])
+                    elif (
+                        layout is not None
+                        and len(layout.navigable_dims) > 1
+                        and i == layout.navigable_dims[1]
+                    ):
+                        idx.append(int(column))
+                    else:
+                        idx.append(0)
+                return tuple(idx)
+
+            chunks = getattr(obj, "chunks", None)
+            return self._range_envelope(
+                lambda s, e, st=1: np.asarray(obj[_row_index(slice(s, e, st))]),
+                start,
+                stop,
+                n,
+                np.dtype(obj.dtype).itemsize,
+                chunks[row_dim] if chunks else None,
+                remote=(kind == "c2array"),
+                max_points=max_points,
+            )
+
+        raise ValueError(f"Cannot plot {kind!r} objects")
+
+    def read_series(
+        self,
+        path: str,
+        *,
+        column: str | int | None = None,
+        layout: DataSliceLayout | None = None,
+        row_start: int = 0,
+        row_stop: int | None = None,
+    ) -> dict[str, Any]:
+        """Return the *raw* values of one series over ``[row_start, row_stop)``.
+
+        Same series selection as :meth:`plot_series` (CTable column honoring a
+        locked row window then an active filter, or an array column via
+        *layout*) but with no bucketing —
+        every value is read exactly, for the high-res ``h`` view.  The result is
+        ``{"x", "y", "n", "row_start", "row_stop"}`` with ``x`` in absolute row
+        coordinates.  This reads exactly what is asked, so callers must bound the
+        range first (see ``B2ViewApp._HIRES_MAX_POINTS``).
+        """
+        path = self.normalize_path(path)
+        obj = self._get_object(path)
+        kind = object_kind(obj)
+
+        if kind == "ctable":
+            # Honor a locked row window first, then any row filter, matching
+            # preview()/read_cell() so the hi-res view tracks the visible grid.
+            if path in self._window_views:
+                view = self._window_views[path]
+            else:
+                view = self._filter_views.get(path, obj)
+            n = len(view)
+            start, stop = self._clamp_range(row_start, row_stop, n)
+            y = safe_asarray(view[column][start:stop])
+        elif kind in {"ndarray", "c2array"}:
+            shape = tuple(getattr(obj, "shape", ()) or ())
+            ndim = len(shape)
+            if ndim == 0:
+                raise ValueError("Cannot plot a scalar")
+            row_dim = layout.navigable_dims[0] if layout is not None and layout.navigable_dims else 0
+            n = shape[row_dim]
+            start, stop = self._clamp_range(row_start, row_stop, n)
+            # Same column/fixed-dim selection as plot_series' array branch.
+            idx: list[int | slice] = []
+            for i in range(ndim):
+                if i == row_dim:
+                    idx.append(slice(start, stop))
+                elif layout is not None and i in layout.fixed_values:
+                    idx.append(layout.fixed_values[i])
+                elif layout is not None and len(layout.navigable_dims) > 1 and i == layout.navigable_dims[1]:
+                    idx.append(int(column))
+                else:
+                    idx.append(0)
+            y = np.asarray(obj[tuple(idx)])
+        else:
+            raise ValueError(f"Cannot plot {kind!r} objects")
+
+        return {
+            "x": np.arange(start, stop),
+            "y": y,
+            "n": n,
+            "row_start": start,
+            "row_stop": stop,
+        }
+
+    def read_cell(self, path: str, column: str, row: int) -> Any:
+        """Decode a single CTable cell — the on-demand path for expensive columns.
+
+        *row* is in the same live-row space as :meth:`preview` (it mirrors the
+        window/filter view precedence), so the row the grid shows is the cell
+        that gets decoded.  Returns the native Python value (list/dict/array/…),
+        not a NumPy-wrapped one, so callers can pretty-print its structure.
+        """
+        path = self.normalize_path(path)
+        obj = self._get_object(path)
+        if object_kind(obj) == "ctable":
+            # Same precedence as preview(): a locked row window wins over a
+            # filter view, so the visible row index resolves the same cell.
+            if path in self._window_views:
+                obj = self._window_views[path]
+            else:
+                obj = self._filter_views.get(path, obj)
+        values = obj[column][row : row + 1]
+        if len(values) == 0:
+            raise IndexError(f"row {row} is out of range")
+        return values[0]
+
+    @staticmethod
+    def _clamp_range(row_start: int, row_stop: int | None, n: int) -> tuple[int, int]:
+        start = 0 if row_start is None else max(0, min(int(row_start), n))
+        stop = n if row_stop is None else max(0, min(int(row_stop), n))
+        return (stop, start) if stop < start else (start, stop)
+
+    def _range_envelope(
+        self,
+        read,
+        start: int,
+        stop: int,
+        n_total: int,
+        itemsize: int,
+        chunklen: int | None,
+        *,
+        remote: bool,
+        max_points: int,
+    ) -> dict[str, Any]:
+        """Envelope of rows ``[start, stop)`` via *read(s, e, step=1)``, with ``x``
+        in absolute row coordinates.  Reads the range exactly (reduce/stream),
+        falling back to a strided sample only for large *remote* ranges."""
+        rng = stop - start
+        base = {"n": n_total, "row_start": start, "row_stop": stop}
+        if rng <= 0:
+            empty = np.empty(0)
+            return {"x": empty, "ymin": empty, "ymax": empty, **base, "method": "reduce"}
+        if rng * itemsize > _PLOT_FULL_READ_MAX_BYTES:
+            if remote:
+                step = max(1, -(-rng // max_points))
+                y = np.asarray(read(start, stop, step))
+                x = np.arange(start, stop, step)
+                m = min(len(x), len(y))
+                return {"x": x[:m], "ymin": y[:m], "ymax": y[:m], **base, "method": "sample"}
+            span = _stream_span(rng, itemsize, chunklen)
+            env = _minmax_buckets_streaming(
+                lambda s, e: read(start + s, start + e), rng, max_points, span=span
+            )
+        else:
+            env = _reduce_envelope(np.asarray(read(start, stop)), rng, max_points)
+        env["x"] = np.asarray(env["x"]) + start
+        return {**env, **base, "method": "reduce"}
+
+    def _column_summary_envelope(
+        self, table: Any, column: str | int | None, n: int, max_points: int
+    ) -> dict[str, np.ndarray] | None:
+        """Build a min/max envelope from a column's SUMMARY index, or None.
+
+        Reads precomputed per-block ``(min, max)`` from the index — no data
+        decompression.  Returns None when there is no usable summary (non-string
+        column, no index, non-numeric, or unsupported level).
+        """
+        if not isinstance(column, str):
+            return None
+        try:
+            idx = table.index(column)
+        except Exception:
+            return None
+        if getattr(idx, "kind", None) != "summary":
+            return None
+        try:
+            desc = idx.descriptor
+            levels = desc.get("levels") or {}
+            level = "block" if "block" in levels else next(iter(levels), None)
+            if level is None or np.dtype(desc["dtype"]).kind not in "iuf":
+                return None
+            from blosc2.indexing import FLAG_ALL_NAN, _open_level_summary_handle
+
+            handle = _open_level_summary_handle(idx._target_array(), desc, level)
+            bmin = np.asarray(handle["min"][:])
+            bmax = np.asarray(handle["max"][:])
+            flags = np.asarray(handle["flags"][:])
+        except Exception:
+            return None
+        if bmin.shape[0] == 0:
+            return None
+        all_nan = (flags & FLAG_ALL_NAN) != 0
+        if all_nan.any():
+            bmin = np.where(all_nan, np.nan, bmin)
+            bmax = np.where(all_nan, np.nan, bmax)
+        block = int(desc["blocks"][0])
+        positions = np.arange(bmin.shape[0]) * block
+        return _minmax_buckets(bmin, bmax, positions, n, max_points)
 
     def column_names(self, path: str) -> list[str] | None:
         """Return the column names for a CTable path, or None for other kinds.
@@ -310,6 +714,27 @@ class StoreBrowser:
     def get_filter(self, path: str) -> str | None:
         """Return the active filter expression for *path*, if any."""
         return self._filters.get(self.normalize_path(path))
+
+    def set_row_window(self, path: str, start: int, stop: int) -> int:
+        """Lock the CTable at *path* to live rows ``[start:stop]``; return its length.
+
+        The window is a zero-copy :meth:`CTable.slice` view of whatever is
+        currently visible (so it composes over any active row filter).  Paging
+        then cannot leave the range because the view reports only its own rows.
+        """
+        path = self.normalize_path(path)
+        base = self._filter_views.get(path, self._get_object(path))
+        view = base.slice(start, stop, copy=False)
+        self._window_views[path] = view
+        return len(view)
+
+    def clear_row_window(self, path: str) -> None:
+        """Remove any locked row window from *path*."""
+        self._window_views.pop(self.normalize_path(path), None)
+
+    def get_row_window(self, path: str) -> bool:
+        """Return whether *path* currently has a locked row window."""
+        return self.normalize_path(path) in self._window_views
 
     def base_nrows(self, path: str) -> int:
         """Return the unfiltered row count of the CTable at *path*."""
@@ -458,8 +883,11 @@ def preview_array_from_layout(
     row_dim = navigable[0] if len(navigable) >= 1 else None
     col_dim = navigable[1] if len(navigable) >= 2 else None
 
-    # Page sizes
-    nrows = shape[row_dim] if row_dim is not None else 1
+    # Page sizes.  A locked row window narrows the navigable row dim to
+    # [win_lo, win_hi): the grid sees only ``nrows`` rows (so paging cannot
+    # leave it) and every read is offset by ``win_lo``.
+    win_lo, win_hi = layout.row_window_bounds(row_dim)
+    nrows = (win_hi - win_lo) if row_dim is not None else 1
     ncols = shape[col_dim] if col_dim is not None else 1
 
     # Clamp fixed values
@@ -479,9 +907,10 @@ def preview_array_from_layout(
         if i in fixed_values:
             idx.append(fixed_values[i])
         elif row_dim is not None and i == row_dim:
+            # ``layout.row_start`` is window-relative; offset into the array.
             start = max(0, min(layout.row_start, nrows))
-            stop = min(max(start, start + max_rows), nrows)
-            idx.append(slice(start, stop))
+            stop = min(start + max_rows, nrows)
+            idx.append(slice(win_lo + start, win_lo + stop))
         elif col_dim is not None and i == col_dim:
             col_start = max(0, min(layout.col_start, ncols))
             col_stop = min(col_start + max_cols, ncols)
@@ -720,6 +1149,62 @@ def preview_ctable(
         "col_start": col_start,
         "col_stop": col_stop,
         "ncols": ncols,
+    }
+
+
+def schunk_row_geometry(typesize: int) -> tuple[int, int]:
+    """Return ``(items_per_row, bytes_per_row)`` for the hex dump.
+
+    Bytes are grouped into ``typesize``-wide items (so a 4-byte typesize shows
+    32-bit words); ``items_per_row`` is chosen so a row is ~16 bytes wide, and
+    never below one whole item.
+    """
+    typesize = max(1, int(typesize or 1))
+    items_per_row = max(1, 16 // typesize)
+    return items_per_row, items_per_row * typesize
+
+
+def preview_schunk(obj: Any, *, start: int = 0, stop: int = 20) -> dict[str, Any]:
+    """Return a bounded ``xxd``-style hex dump of an SChunk's raw bytes.
+
+    Each grid row is one ``bytes_per_row`` span (a multiple of ``typesize``);
+    *start*/*stop* are in those row units, so the existing row-paging machinery
+    applies unchanged.  Only the visible byte span is read (``obj[a:b]``), so a
+    multi-GB SChunk previews instantly.  The byte offset is the row label.
+    """
+    nbytes = int(getattr(obj, "nbytes", 0) or 0)
+    typesize = max(1, int(getattr(obj, "typesize", 1) or 1))
+    items_per_row, bytes_per_row = schunk_row_geometry(typesize)
+    total_rows = (nbytes + bytes_per_row - 1) // bytes_per_row
+    start = max(0, start)
+    stop = min(max(start, stop), total_rows)
+    byte_start = start * bytes_per_row
+    byte_stop = min(stop * bytes_per_row, nbytes)
+    raw = bytes(obj[byte_start:byte_stop]) if byte_stop > byte_start else b""
+    hex_width = items_per_row * typesize * 2 + (items_per_row - 1)
+    hex_col: list[str] = []
+    ascii_col: list[str] = []
+    labels: list[str] = []
+    for r in range(stop - start):
+        chunk = raw[r * bytes_per_row : (r + 1) * bytes_per_row]
+        items = [chunk[k : k + typesize].hex() for k in range(0, len(chunk), typesize)]
+        hex_col.append(" ".join(items).ljust(hex_width))
+        ascii_col.append("".join(chr(b) if 0x20 <= b <= 0x7E else "." for b in chunk))
+        labels.append(format(byte_start + r * bytes_per_row, "08x"))
+    return {
+        "start": start,
+        "stop": stop,
+        "nrows": total_rows,
+        "columns": ["hex", "ascii"],
+        "hidden_columns": 0,
+        "row_labels": labels,
+        "data": {
+            "hex": np.array(hex_col, dtype=object),
+            "ascii": np.array(ascii_col, dtype=object),
+        },
+        "source_kind": "schunk",
+        "typesize": typesize,
+        "nbytes": nbytes,
     }
 
 

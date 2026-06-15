@@ -129,8 +129,9 @@ def test_to_string_display_index():
 
     assert "row" in lines[0]
     assert lines[1].lstrip().startswith("0")
-    assert lines[-3].lstrip().startswith("9")
-    assert lines[-2] == ""
+    # to_string() omits the dimensions footer (pandas convention), so the last
+    # line is the final data row.
+    assert lines[-1].lstrip().startswith("9")
 
 
 def test_global_printoptions_display_index():

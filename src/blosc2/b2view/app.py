@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
+import io
 from typing import TYPE_CHECKING, Any, ClassVar
 
+import numpy as np
 from rich.markup import escape as markup_escape
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.theme import Theme
 from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
+
+try:
+    from textual_plotext import PlotextPlot
+except ImportError:  # plotting is optional
+    PlotextPlot = None
+
+try:
+    # Auto-selects the best terminal image protocol (kitty/iTerm2/sixel),
+    # degrading to colored half-cells; used by the high-res 'h' plot view.
+    from textual_image.widget import Image as TextualImage
+except ImportError:  # high-res view is optional
+    TextualImage = None
 
 from blosc2.b2view.model import DataSliceLayout, StoreBrowser
 from blosc2.b2view.render import (
@@ -33,6 +48,25 @@ _KIND_ICONS = {
 
 # Source kinds whose data grid supports horizontal (column) paging.
 _COL_PAGED_KINDS = frozenset({"ndarray2d", "ndarray_slice", "ctable"})
+
+# Blosc2-branded palette layered over Textual's default dark canvas: only the
+# logo colors are overridden (background/surface/panel stay None so they derive
+# the same near-black as textual-dark).  Turquoise is used for all borders and
+# scrollbars (deep blue is too dark to read on the dark canvas), with yellow as
+# the accent for the focused pane's border.
+BLOSC2_THEME = Theme(
+    name="blosc2",
+    primary="#007a86",  # turquoise
+    secondary="#007a86",  # turquoise (deep blue reads poorly on a dark canvas)
+    accent="#df9e00",  # yellow
+    foreground="#e0e0e0",  # match textual-dark's foreground
+    dark=True,
+)
+
+
+def _accent_chip(text: str) -> str:
+    """A reverse-video status chip in the brand accent (dark text on yellow)."""
+    return f"[$background on $accent] {text} [/]"
 
 
 class B2ViewPanel(Vertical):
@@ -83,12 +117,12 @@ class BufferedDataTable(DataTable):
         super().action_cursor_left()
 
     def action_page_down(self) -> None:
-        if getattr(self.app, "page_table", lambda _: False)(1):
+        if getattr(self.app, "page_table", lambda *a, **k: False)(1, align=True):
             return
         super().action_page_down()
 
     def action_page_up(self) -> None:
-        if getattr(self.app, "page_table", lambda _: False)(-1):
+        if getattr(self.app, "page_table", lambda *a, **k: False)(-1, align=True):
             return
         super().action_page_up()
 
@@ -106,6 +140,8 @@ class BufferedDataTable(DataTable):
         app = self.app
         if getattr(app, "_dim_mode", False):
             getattr(app, "action_dim_toggle_nav", lambda: None)()
+            return
+        if getattr(app, "_inspect_cursor_cell", lambda: False)():
             return
         super().action_select_cursor()
 
@@ -202,7 +238,7 @@ class HelpScreen(ModalScreen[None]):
                 ("t / b", "first / last row"),
                 ("g", "go to row..."),
                 ("f", "filter rows (CTable)"),
-                ("escape", "clear the active filter"),
+                ("escape", "unlock a row window / clear the active filter"),
             ],
         ),
         (
@@ -212,6 +248,19 @@ class HelpScreen(ModalScreen[None]):
                 ("s / e  (home / end)", "first / last column window"),
                 ("c", "go to column index or name..."),
                 ("/", "filter visible columns by substring (CTable)"),
+                ("p", "plot a whole-column overview (needs textual-plotext)"),
+                ("enter", "decode a skipped cell (list/struct/object column)"),
+            ],
+        ),
+        (
+            "Plot modal (after 'p')",
+            [
+                ("+ / -", "zoom in / out about the centre"),
+                ("left / right", "pan the zoomed window"),
+                ("0", "reset to the whole series"),
+                ("g", "type an exact start:stop row range"),
+                ("v", "lock the data grid to the current range (esc unlocks)"),
+                ("h", "high-res matplotlib image of the current range"),
             ],
         ),
         (
@@ -425,6 +474,445 @@ class FilterScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+def _plot_view(series: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
+    """Turn a ``plot_series`` result into drawable arrays + a method label.
+
+    Drops all-NaN buckets (no finite extremes) and maps the read method to a
+    human description shown in the title.
+    """
+    x = np.asarray(series["x"])
+    ymin = np.asarray(series["ymin"], dtype=np.float64)
+    ymax = np.asarray(series["ymax"], dtype=np.float64)
+    finite = np.isfinite(ymin) & np.isfinite(ymax)
+    x, ymin, ymax = x[finite], ymin[finite], ymax[finite]
+    method = series.get("method")
+    descr = {"summary": "min/max envelope", "reduce": "min/max envelope"}.get(
+        method, "sampled — may miss extremes"
+    )
+    return x, ymin, ymax, descr
+
+
+class PlotRangeScreen(ModalScreen["tuple[int, int] | None"]):
+    """Small modal asking for an explicit ``start:stop`` row range."""
+
+    CSS = """
+    PlotRangeScreen {
+        align: center middle;
+    }
+    #range-dialog {
+        width: 50;
+        height: auto;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #range-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, *, n: int, start: int, stop: int):
+        super().__init__()
+        self.n = n
+        self.start = start
+        self.stop = stop
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="range-dialog"):
+            yield Static(
+                f"Row range start:stop within 0..{self.n} (current {self.start}:{self.stop})",
+                id="range-title",
+            )
+            yield Input(placeholder="start:stop", id="range-input")
+
+    def on_mount(self) -> None:
+        widget = self.query_one("#range-input", Input)
+        widget.value = f"{self.start}:{self.stop}"
+        widget.focus()
+
+    def _parse(self, text: str) -> tuple[int, int] | None:
+        if ":" not in text:
+            return None
+        lo, hi = text.split(":", 1)
+        try:
+            start = int(lo) if lo.strip() else 0
+            stop = int(hi) if hi.strip() else self.n
+        except ValueError:
+            return None
+        start = max(0, min(start, self.n))
+        stop = max(0, min(stop, self.n))
+        return None if stop <= start else (start, stop)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        parsed = self._parse(event.value.strip().replace("_", ""))
+        if parsed is None:
+            self.query_one("#range-title", Static).update("Enter a range as start:stop")
+            return
+        self.dismiss(parsed)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class PlotScreen(ModalScreen["tuple[int, int] | None"]):
+    """Modal plotting one numeric column; zoomable into a row sub-range.
+
+    Keys: ``+``/``-`` zoom about the view centre, ``←``/``→`` pan, ``0`` reset to
+    the whole series, ``g`` type an exact ``start:stop`` range.  Each change
+    re-fetches the envelope for the new range (exact for sub-ranges) via the
+    *fetch* closure, so zooming reveals detail the whole-series buckets hide.
+
+    ``v`` dismisses with the current ``(row_start, row_stop)`` so the caller can
+    jump the data grid to the range you navigated to; closing dismisses ``None``.
+    """
+
+    CSS = """
+    PlotScreen {
+        align: center middle;
+    }
+    #plot-dialog {
+        width: 90%;
+        height: 80%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #plot-title {
+        text-style: bold;
+        height: 1;
+    }
+    #plot-widget {
+        height: 1fr;
+    }
+    #plot-keys {
+        height: 1;
+        color: $text-muted;
+    }
+    """
+
+    _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · v view rows · h hi-res · q close"
+    _MIN_WIDTH = 16  # smallest zoom window (rows), so the envelope still reads
+    _HIRES_MAX_POINTS = 50_000  # above this, ask the user to zoom in first
+
+    BINDINGS: ClassVar = [
+        ("escape", "close", "Close"),
+        ("q", "close", "Close"),
+        ("p", "close", "Close"),
+        ("plus", "zoom_in", "Zoom in"),
+        ("equals_sign", "zoom_in", "Zoom in"),
+        ("minus", "zoom_out", "Zoom out"),
+        ("left", "pan_left", "Pan left"),
+        ("right", "pan_right", "Pan right"),
+        ("0", "reset_range", "Reset"),
+        ("g", "goto_range", "Range"),
+        ("v", "view_range", "View rows"),
+        ("h", "hires", "High-res"),
+    ]
+
+    def __init__(
+        self,
+        *,
+        title_prefix: str,
+        fetch,
+        n: int,
+        row_start: int,
+        row_stop: int,
+        series: dict,
+        raw_fetch=None,
+    ):
+        super().__init__()
+        self.title_prefix = title_prefix
+        self._fetch = fetch
+        self._raw_fetch = raw_fetch  # (start, stop) -> {"x", "y", ...} raw read
+        self.n = n
+        self.row_start = row_start
+        self.row_stop = row_stop
+        self._apply(series)
+
+    def _apply(self, series: dict) -> None:
+        x, ymin, ymax, descr = _plot_view(series)
+        self.x = list(x)
+        self.ymin = list(ymin)
+        self.ymax = list(ymax)
+        full = self.row_start == 0 and self.row_stop == self.n
+        rng = "" if full else f" · rows {self.row_start}:{self.row_stop}"
+        note = "" if self.x else " · (no finite values in range)"
+        self.plot_title = f"{self.title_prefix} · {self.n} rows{rng} · {descr}{note}"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="plot-dialog"):
+            yield Static(markup_escape(self.plot_title), id="plot-title")
+            yield PlotextPlot(id="plot-widget")
+            yield Static(self._KEYS_HINT, id="plot-keys")
+
+    def on_mount(self) -> None:
+        self._redraw()
+
+    def _redraw(self) -> None:
+        widget = self.query_one(PlotextPlot)
+        plt = widget.plt
+        plt.clear_figure()
+        if self.x:
+            # Upper (max) and lower (min) envelope; a single line when they
+            # coincide (a sampled series).
+            plt.plot(self.x, self.ymax, marker="braille")
+            if self.ymin != self.ymax:
+                plt.plot(self.x, self.ymin, marker="braille")
+        plt.xlabel("row")
+        widget.refresh()
+        self.query_one("#plot-title", Static).update(markup_escape(self.plot_title))
+
+    def _set_range(self, start: int, stop: int) -> None:
+        start = max(0, min(int(start), self.n))
+        stop = max(0, min(int(stop), self.n))
+        if stop <= start or (start, stop) == (self.row_start, self.row_stop):
+            return
+        self.row_start, self.row_stop = start, stop
+        self._apply(self._fetch(start, stop))
+        self._redraw()
+
+    def _zoom(self, factor: float) -> None:
+        width = self.row_stop - self.row_start
+        center = (self.row_start + self.row_stop) // 2
+        new_w = width // 2 if factor < 1 else width * 2
+        new_w = max(min(self._MIN_WIDTH, self.n), min(self.n, new_w))
+        start = max(0, min(center - new_w // 2, self.n - new_w))
+        self._set_range(start, start + new_w)
+
+    def _pan(self, direction: int) -> None:
+        width = self.row_stop - self.row_start
+        delta = max(1, width // 4) * direction
+        start = max(0, min(self.row_start + delta, self.n - width))
+        self._set_range(start, start + width)
+
+    def action_zoom_in(self) -> None:
+        self._zoom(0.5)
+
+    def action_zoom_out(self) -> None:
+        self._zoom(2.0)
+
+    def action_pan_left(self) -> None:
+        self._pan(-1)
+
+    def action_pan_right(self) -> None:
+        self._pan(1)
+
+    def action_reset_range(self) -> None:
+        self._set_range(0, self.n)
+
+    def action_goto_range(self) -> None:
+        def _on_range(result: tuple[int, int] | None) -> None:
+            if result is not None:
+                self._set_range(*result)
+
+        self.app.push_screen(PlotRangeScreen(n=self.n, start=self.row_start, stop=self.row_stop), _on_range)
+
+    def action_view_range(self) -> None:
+        """v key — close the plot and jump the data grid to the current range."""
+        self.dismiss((self.row_start, self.row_stop))
+
+    def action_hires(self) -> None:
+        """h key — open a high-res matplotlib image of the current raw range.
+
+        Pushed on top of this screen so ``q`` returns to the braille view with
+        the zoom intact.  The braille envelope stays the fast navigator; this is
+        the drill-down once you have zoomed to a range worth seeing in detail.
+        """
+        if self._raw_fetch is None or TextualImage is None or not _matplotlib_available():
+            self.app.notify(
+                "High-res view needs the 'textual-image' and 'matplotlib' packages",
+                severity="warning",
+            )
+            return
+        width = self.row_stop - self.row_start
+        if width > self._HIRES_MAX_POINTS:
+            self.app.notify(
+                f"Zoom in to ≤ {self._HIRES_MAX_POINTS} rows for a high-res view (now {width})",
+                severity="warning",
+            )
+            return
+        series = self._raw_fetch(self.row_start, self.row_stop)
+        self.app.push_screen(HiResPlotScreen(title=self.plot_title, x=series["x"], y=series["y"]))
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+def _matplotlib_available() -> bool:
+    """Whether matplotlib can be imported (the high-res view needs it)."""
+    try:
+        import matplotlib  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+class HiResPlotScreen(ModalScreen[None]):
+    """A high-res matplotlib image of a raw series range, over the braille plot.
+
+    Rendered with matplotlib (Agg) to a PNG and shown via ``textual-image``,
+    which auto-selects the best terminal protocol (kitty/iTerm2/sixel) and
+    degrades to colored half-cells elsewhere.  ``q``/``esc``/``h`` return to the
+    braille view underneath with its zoom intact.
+    """
+
+    CSS = """
+    HiResPlotScreen {
+        align: center middle;
+    }
+    #hires-dialog {
+        width: 95%;
+        height: 90%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #hires-title {
+        text-style: bold;
+        height: 1;
+    }
+    #hires-body {
+        height: 1fr;
+        width: 1fr;
+        align: center middle;
+    }
+    #hires-image {
+        width: 100%;
+        height: 100%;
+    }
+    #hires-keys {
+        height: 1;
+        color: $text-muted;
+    }
+    """
+
+    _KEYS_HINT = "q/esc/h · back to braille"
+
+    BINDINGS: ClassVar = [
+        ("escape", "close", "Close"),
+        ("q", "close", "Close"),
+        ("h", "close", "Close"),
+    ]
+
+    def __init__(self, *, title: str, x, y):
+        super().__init__()
+        self._title = title
+        self._x = x
+        self._y = y
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="hires-dialog"):
+            yield Static(markup_escape(self._title), id="hires-title")
+            # A VerticalScroll is focusable, so the screen's key bindings fire
+            # (the image widget itself is not focusable).
+            yield VerticalScroll(id="hires-body")
+            yield Static(self._KEYS_HINT, id="hires-keys")
+
+    def on_mount(self) -> None:
+        body = self.query_one("#hires-body", VerticalScroll)
+        body.focus()
+        try:
+            png = self._render_png()
+        except Exception as exc:  # pragma: no cover - defensive
+            body.mount(Static(f"Could not render: {exc}"))
+            return
+        body.mount(TextualImage(io.BytesIO(png), id="hires-image"))
+
+    def _render_png(self) -> bytes:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(12, 6), dpi=110)
+        ax.plot(self._x, self._y, linewidth=0.8, color="#1f77b4")
+        ax.set_xlabel("row")
+        ax.margins(x=0)
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png")
+        plt.close(fig)
+        return buf.getvalue()
+
+    def action_close(self) -> None:
+        # pop_screen (not dismiss): this screen is pushed without a result
+        # callback, so it returns to the braille PlotScreen with its zoom intact.
+        self.app.pop_screen()
+
+
+class CellDetailScreen(ModalScreen[None]):
+    """Pretty-printed view of a single decoded CTable cell.
+
+    Reached with Return on an expensive (list/struct/object/ndarray) column
+    whose grid cell shows a ``<...; skipped>`` placeholder; the value is decoded
+    on demand.  The table stays underneath with its position intact (esc/q/enter
+    return).
+    """
+
+    CSS = """
+    CellDetailScreen {
+        align: center middle;
+    }
+    #cell-dialog {
+        width: 80%;
+        height: auto;
+        max-height: 90%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #cell-title {
+        text-style: bold;
+        height: 1;
+    }
+    #cell-body {
+        height: auto;
+        max-height: 1fr;
+        margin-top: 1;
+    }
+    #cell-keys {
+        height: 1;
+        color: $text-muted;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS: ClassVar = [
+        ("escape", "close", "Close"),
+        ("q", "close", "Close"),
+        ("enter", "close", "Close"),
+    ]
+
+    def __init__(self, *, row: int, name: str, label: str, value: Any):
+        super().__init__()
+        self._row = row
+        self._name = name
+        self._label = label
+        self._value = value
+
+    def compose(self) -> ComposeResult:
+        import pprint
+
+        title = f"row {self._row} · {self._name} ({self._label})"
+        text = pprint.pformat(self._value, width=100, sort_dicts=False)
+        with Vertical(id="cell-dialog"):
+            yield Static(markup_escape(title), id="cell-title")
+            # A VerticalScroll is focusable, so the screen's key bindings fire.
+            with VerticalScroll(id="cell-body"):
+                yield Static(markup_escape(text))
+            yield Static("esc/q · close", id="cell-keys")
+
+    def on_mount(self) -> None:
+        self.query_one("#cell-body", VerticalScroll).focus()
+
+    def action_close(self) -> None:
+        self.app.pop_screen()
+
+
 class B2ViewApp(App):
     """Browse TreeStore hierarchy and preview objects."""
 
@@ -439,8 +927,8 @@ class B2ViewApp(App):
     #data-header { height: auto; padding: 0 1; }
     #data-table-row { height: 1fr; }
     #data-table { width: 1fr; height: 1fr; }
-    #row-scrollbar { width: 1; height: 1fr; color: $accent; }
-    #col-scrollbar { height: 1; width: 1fr; color: $accent; }
+    #row-scrollbar { width: 1; height: 1fr; color: $primary; }
+    #col-scrollbar { height: 1; width: 1fr; color: $primary; }
     #meta-scroll, #vlmeta-scroll, #data-scroll { height: 1fr; padding: 0 1; }
     #tree-pane:focus-within, #meta-pane:focus-within, #vlmeta-pane:focus-within, #data-pane:focus-within { border: heavy $accent; }
     B2ViewPanel.-maximized,
@@ -464,6 +952,7 @@ class B2ViewApp(App):
         Binding("c", "go_to_column", "Go to column", show=False),
         Binding("f", "filter_rows", "Filter rows", show=False),
         Binding("slash", "filter_columns", "Filter columns", show=False),
+        Binding("p", "plot_column", "Plot column", show=False),
         Binding("d", "dim_cycle", "Dim mode", show=False),
         Binding("enter", "dim_toggle_nav", "Toggle nav", show=False),
         Binding("escape", "dim_exit", "Exit dim mode", show=False),
@@ -494,6 +983,11 @@ class B2ViewApp(App):
         self._active_dim = 0
         self._dim_mode = False
         self.loading_table_page = False
+        # One-shot: apply the --panel start focus after the first update_panels,
+        # once the data panel's display/contents have settled (see update_panels).
+        self._apply_focus_on_next_update = False
+        # Absolute (start, stop) of a locked row window from the plot's 'v' key.
+        self.row_window: tuple[int, int] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -513,7 +1007,10 @@ class B2ViewApp(App):
                             yield Static("", id="vlmetadata")
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
-                    data_pane.border_subtitle = "?(help) | d(im mode) | filter: f(rows) /(cols) | rows: t/b/g(oto) | cols: s/e/c(goto)"
+                    data_pane.border_subtitle = (
+                        "?(help) | d(im mode) | filter: f(rows) /(cols) | "
+                        "rows: t/b/g(oto) | cols: s/e/c(goto) | p(lot)"
+                    )
                     yield Static("", id="data-header")
                     with Horizontal(id="data-table-row"):
                         yield BufferedDataTable(id="data-table", show_row_labels=True, zebra_stripes=True)
@@ -524,6 +1021,8 @@ class B2ViewApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.register_theme(BLOSC2_THEME)
+        self.theme = "blosc2"
         self.browser = StoreBrowser(self.urlpath)
         tree = self.query_one("#tree", Tree)
         tree.root.data = "/"
@@ -532,15 +1031,18 @@ class B2ViewApp(App):
         self.query_one("#data-table-row", Horizontal).display = False
         self.query_one("#col-scrollbar", Static).display = False
 
+        # Focus the requested start panel after the first update_panels has set
+        # up the data panel (its display and contents), so 'data' lands on the
+        # populated grid instead of racing the node selection.
+        self._apply_focus_on_next_update = True
         if self.start_path and self.start_path != "/":
             self._navigate_to_path(self.start_path)
         else:
             self.call_after_refresh(self.update_panels, "/")
-            tree.focus()
 
-        # Override focus after render settles, when starting panel is not the tree
-        if self.start_panel != "tree":
-            self.set_timer(0.05, lambda: self._focus_panel_by_name(self.start_panel))
+    def _apply_start_focus(self) -> None:
+        """Focus the panel requested on startup (the --panel option)."""
+        self._focus_panel_by_name(self.start_panel)
 
     def _focus_panel_by_name(self, name: str) -> None:
         """Focus a panel by its user-facing name."""
@@ -581,11 +1083,12 @@ class B2ViewApp(App):
             found.expand()
             node = found
 
-        # Selecting the node fires NodeSelected → on_tree_node_selected → update_panels
+        # Selecting the node fires NodeSelected → on_tree_node_selected →
+        # update_panels, which applies the one-shot start-panel focus once the
+        # data panel is populated (see _apply_focus_on_next_update).
         def _do_select():
             tree.select_node(node)
             tree.scroll_to_node(node)
-            tree.focus()
 
         self.call_after_refresh(_do_select)
 
@@ -630,6 +1133,9 @@ class B2ViewApp(App):
             self._data_layout = None
             self._active_dim = 0
             self._dim_mode = False
+            # A locked row window does not survive navigating to a node.
+            self.row_window = None
+            self.browser.clear_row_window(path)
             if info.kind == "group":
                 data_header.display = False
                 data_table_row.display = False
@@ -678,6 +1184,12 @@ class B2ViewApp(App):
             self._update_vlmeta(vlmeta_pane, vlmeta_widget, None)
             self._reset_panel_scroll()
 
+        # The data panel's display/contents are now settled; apply the one-shot
+        # startup focus (deferred one frame so the target widget is rendered).
+        if self._apply_focus_on_next_update:
+            self._apply_focus_on_next_update = False
+            self.call_after_refresh(self._apply_start_focus)
+
     @staticmethod
     def _format_vlmeta_value(value: Any) -> str:
         """Format a vlmeta value for display."""
@@ -721,8 +1233,9 @@ class B2ViewApp(App):
 
     @staticmethod
     def _uses_grid_preview(info) -> bool:
-        # 1D, 2D, 3D+ NDArray/C2Array all use grid preview
-        return info.kind == "ctable" or (
+        # 1D, 2D, 3D+ NDArray/C2Array all use grid preview; SChunk uses it for
+        # the paged hex dump (rows of 16 bytes).
+        return info.kind in {"ctable", "schunk"} or (
             info.kind in {"ndarray", "c2array"} and info.metadata.get("ndim", 0) >= 1
         )
 
@@ -919,7 +1432,10 @@ class B2ViewApp(App):
         navigable = layout.navigable_dims
         if len(navigable) >= 1:
             row_dim = navigable[0]
-            total = layout.shape[row_dim]
+            # A locked window shortens the navigable row dim; scroll is
+            # window-relative, so clamp to the window length.
+            win_lo, win_hi = layout.row_window_bounds(row_dim)
+            total = win_hi - win_lo
             layout.row_start = max(0, min(start, total))
             layout.row_stop = min(layout.row_start + self._table_page_size() * 10, total)
         if len(navigable) >= 2:
@@ -943,6 +1459,11 @@ class B2ViewApp(App):
             "columns": buffer["columns"],
             "hidden_columns": buffer["hidden_columns"],
             "data": {name: values[offset : offset + count] for name, values in buffer["data"].items()},
+            **(
+                {"row_labels": buffer["row_labels"][offset : offset + count]}
+                if "row_labels" in buffer
+                else {}
+            ),
             **{
                 key: buffer[key]
                 for key in (
@@ -954,6 +1475,8 @@ class B2ViewApp(App):
                     "slice_indices",
                     "n_slices_per_dim",
                     "viewport_width",
+                    "nbytes",
+                    "typesize",
                 )
                 if key in buffer
             },
@@ -975,13 +1498,16 @@ class B2ViewApp(App):
             source = buffer if buffer is not None and buffer["columns"] == data["columns"] else data
             decimals = {name: column_float_decimals(source["data"][name]) for name in data["columns"]}
             nrows = data["stop"] - data["start"]
+            # SChunk hex dumps carry explicit (hex byte-offset) row labels;
+            # everything else labels the gutter with the logical row number.
+            row_labels = data.get("row_labels")
             for i in range(nrows):
                 table.add_row(
                     *[
                         format_cell(data["data"][name][i], float_decimals=decimals[name])
                         for name in data["columns"]
                     ],
-                    label=str(data["start"] + i),
+                    label=row_labels[i] if row_labels is not None else str(data["start"] + i),
                 )
             nrows = data["stop"] - data["start"]
             cursor_row = min(max(0, cursor_row), max(0, nrows - 1))
@@ -996,7 +1522,7 @@ class B2ViewApp(App):
     def _finish_table_page_load(self) -> None:
         self.loading_table_page = False
 
-    def page_table(self, direction: int) -> bool:
+    def page_table(self, direction: int, *, align: bool = False) -> bool:
         if self.loading_table_page or self.table_page is None:
             return False
         page = self.table_page
@@ -1004,13 +1530,27 @@ class B2ViewApp(App):
         if direction > 0:
             if page["stop"] >= page["nrows"]:
                 return False
-            data = self._load_table_page(self.selected_path, page["stop"])
+            # An explicit page down re-aligns to the page grid: dim-mode
+            # single-row scrolls (_scroll_navigable_viewport) can leave `start`
+            # off a page_size boundary, and contiguous paging from `stop` would
+            # carry that offset forever.  Snapping to the next page_size
+            # multiple mirrors how column paging re-fits on each page.  For an
+            # already-aligned page this equals `stop`, so cursor-edge paging
+            # (align=False) is unchanged.
+            new_start = (page["start"] // page_size + 1) * page_size if align else page["stop"]
+            data = self._load_table_page(self.selected_path, new_start)
             cursor_row = 0
         else:
             if page["start"] <= 0:
                 return False
-            start = max(0, page["start"] - page_size)
-            data = self._load_table_page(self.selected_path, start)
+            if align:
+                # Previous grid line: floor for an off-grid start, start-page
+                # for an aligned one (ceil-div keeps aligned pages contiguous).
+                new_start = (-(-page["start"] // page_size) - 1) * page_size
+            else:
+                new_start = page["start"] - page_size
+            new_start = max(0, new_start)
+            data = self._load_table_page(self.selected_path, new_start)
             cursor_row = data["stop"] - data["start"] - 1
         self._update_data_table(data, cursor_row=cursor_row)
         self._update_data_header(data)
@@ -1092,28 +1632,48 @@ class B2ViewApp(App):
                 header_parts.append(part)
 
             if self._dim_mode:
-                header_parts.append("[reverse] DIM MODE [/reverse]")
+                # The whole line is accent-reversed below; this chip is a cutout
+                # (accent text on the dark canvas) so it stands out against it.
+                header_parts.append("[$accent on $background] DIM MODE [/]")
                 header_parts.append("←→dim  ↑↓val  <Enter>fix/nav  <Esc>exit")
+            elif self.row_window is not None:
+                ws, we = self.row_window
+                header_parts.append(_accent_chip(f"WINDOW {ws}:{we}"))
+                header_parts.append("<Esc>unlock")
+        elif data.get("source_kind") == "schunk":
+            # The hex dump is paged in 16-byte rows; report it in bytes.
+            header_parts.append(f"hex dump · {data.get('nbytes', 0)} bytes")
+            if data.get("typesize", 1) > 1:
+                header_parts.append(f"typesize {data['typesize']}")
         else:
             header_parts.append(f"rows {data['start']}:{data['stop']} of {data['nrows']}")
             if "col_start" in data:
                 header_parts.append(f"cols {data['col_start']}:{data['col_stop']} of {data['ncols']}")
-            if data.get("source_kind") == "ctable" and self.browser is not None:
-                flt = self.browser.get_filter(self.selected_path)
-                col_flt = self.browser.get_column_filter(self.selected_path)
-                if flt:
-                    total = self.browser.base_nrows(self.selected_path)
-                    header_parts.append(f"filter: [bold]{markup_escape(flt)}[/bold] ({total} total)")
-                if col_flt:
-                    total_cols = self.browser.base_ncols(self.selected_path)
-                    header_parts.append(f"cols: [bold]{markup_escape(col_flt)}[/bold] ({total_cols} total)")
-                if flt or col_flt:
-                    header_parts.append("<Esc>clear")
+            header_parts.extend(self._window_and_filter_chips(data))
 
         line = ", ".join(header_parts)
         if self._dim_mode and layout is not None:
-            line = f"[reverse]{line}[/reverse]"
+            line = f"[$background on $accent]{line}[/]"
         self.query_one("#data-header", Static).update(line)
+
+    def _window_and_filter_chips(self, data: dict) -> list[str]:
+        """Header chips for a locked row window and any active CTable filters."""
+        chips: list[str] = []
+        if self.row_window is not None:
+            ws, we = self.row_window
+            chips.append(_accent_chip(f"WINDOW {ws}:{we}"))
+        if data.get("source_kind") == "ctable" and self.browser is not None:
+            flt = self.browser.get_filter(self.selected_path)
+            col_flt = self.browser.get_column_filter(self.selected_path)
+            if flt:
+                total = self.browser.base_nrows(self.selected_path)
+                chips.append(f"filter: [bold]{markup_escape(flt)}[/bold] ({total} total)")
+            if col_flt:
+                total_cols = self.browser.base_ncols(self.selected_path)
+                chips.append(f"cols: [bold]{markup_escape(col_flt)}[/bold] ({total_cols} total)")
+            if flt or col_flt or self.row_window is not None:
+                chips.append("<Esc>unlock/clear")
+        return chips
 
     def _make_global_scrollbar(self, *, start: int, stop: int, total: int, size: int, track: str) -> str:
         size = max(1, size)
@@ -1217,6 +1777,165 @@ class B2ViewApp(App):
         current = self.table_page["start"] + self.query_one("#data-table", DataTable).cursor_row
         screen = GoToRowScreen(nrows=self.table_page["nrows"], current=current)
         self.push_screen(screen, self._go_to_row)
+
+    _PLOT_MAX_POINTS = 2000
+
+    def _inspect_cursor_cell(self) -> bool:
+        """Return on a skipped CTable cell: decode just that cell into a modal.
+
+        Returns True when the key was consumed (the cursor sat on an expensive
+        ``<...; skipped>`` cell), so the data-table's default select handler is
+        skipped.  Anything else (numeric/text cells, non-CTable grids) returns
+        False and falls through.
+        """
+        if not self._in_data_grid() or self.table_page is None or self.browser is None:
+            return False
+        if self.table_page.get("source_kind") != "ctable":
+            return False
+        # skipped_columns lives on the buffer; _slice_table_buffer drops it.
+        skipped = (self.table_buffer or {}).get("skipped_columns") or {}
+        if not skipped:
+            return False
+        columns = self.table_page["columns"]
+        table = self.query_one("#data-table", DataTable)
+        cursor_col = table.cursor_column
+        if not (0 <= cursor_col < len(columns)):
+            return False
+        name = columns[cursor_col]
+        if name not in skipped:
+            return False
+        row = self.table_page["start"] + table.cursor_row
+        try:
+            value = self.browser.read_cell(self.selected_path, name, row)
+        except Exception as exc:  # pragma: no cover - defensive
+            self.notify(f"Could not decode cell: {exc}", severity="error")
+            return True  # we owned the key; surface the failure
+        self.push_screen(CellDetailScreen(row=row, name=name, label=skipped[name], value=value))
+        return True
+
+    def action_plot_column(self) -> None:
+        """p key — plot a downsampled overview of the whole cursor column."""
+        if not self._in_data_grid():
+            return
+        if PlotextPlot is None:
+            self.notify("Plotting needs the 'textual-plotext' package", severity="warning")
+            return
+        buffer = self.table_buffer or self.table_page
+        columns = buffer["columns"]
+        if not columns:
+            return
+        cursor_col = self.query_one("#data-table", DataTable).cursor_column
+        name = columns[min(max(0, cursor_col), len(columns) - 1)]
+        # Cheap numeric check on the already-loaded buffer; this also rejects
+        # expensive object columns before any whole-column strided read.
+        sample = np.asarray(buffer["data"][name])
+        if sample.dtype.kind not in "iufb":
+            self.notify(f"Column {name!r} is not numeric", severity="warning")
+            return
+
+        column: str | int | None
+        if buffer.get("source_kind") == "ctable":
+            column = name
+        elif name.isdigit():  # array grids label columns with global indices
+            column = int(name)
+        else:  # 1-D arrays (single navigable dim) have one "value" column
+            column = None
+
+        layout = self._data_layout
+
+        def fetch(start: int, stop: int | None) -> dict:
+            return self.browser.plot_series(
+                self.selected_path,
+                column=column,
+                layout=layout,
+                max_points=self._PLOT_MAX_POINTS,
+                row_start=start,
+                row_stop=stop,
+            )
+
+        def raw_fetch(start: int, stop: int | None) -> dict:
+            return self.browser.read_series(
+                self.selected_path,
+                column=column,
+                layout=layout,
+                row_start=start,
+                row_stop=stop,
+            )
+
+        series = fetch(0, None)  # whole series (uses the fast SUMMARY tier if any)
+        x, _ymin, _ymax, _descr = _plot_view(series)
+        if x.size == 0:
+            self.notify(f"Column {name!r} has no finite values to plot", severity="warning")
+            return
+        self.push_screen(
+            PlotScreen(
+                title_prefix=f"{self.selected_path} · {name}",
+                fetch=fetch,
+                n=series["n"],
+                row_start=series["row_start"],
+                row_stop=series["row_stop"],
+                series=series,
+                raw_fetch=raw_fetch,
+            ),
+            self._view_plot_range,
+        )
+
+    def _view_plot_range(self, span: tuple[int, int] | None) -> None:
+        """Lock the data grid to a row range chosen with 'v' in the plot modal.
+
+        The grid is replaced in place with just the range, so paging cannot
+        leave it (``esc`` unlocks).  CTable nodes use a zero-copy ``slice`` view;
+        NDArray nodes narrow the layout's navigable row dim.  Other source kinds
+        fall back to a cursor jump.
+        """
+        if span is None or self.table_page is None:
+            return
+        start, stop = span
+        kind = self.table_page.get("source_kind")
+        if kind == "ctable" and self.browser is not None:
+            self._enter_row_window(start, stop, backend="ctable")
+        elif kind in {"ndarray_slice", "ndarray2d"} and self._data_layout is not None:
+            self._enter_row_window(start, stop, backend="ndarray")
+        else:
+            self._go_to_row(start)
+            self.notify(f"Viewing rows {start}:{stop}")
+
+    def _enter_row_window(self, start: int, stop: int, *, backend: str) -> None:
+        """Replace the grid with a locked [start:stop] window (in place)."""
+        if backend == "ctable":
+            try:
+                self.browser.set_row_window(self.selected_path, start, stop)
+            except Exception as exc:  # pragma: no cover - defensive
+                self.notify(f"Could not lock rows: {exc}", severity="error")
+                return
+        else:  # ndarray: narrow the navigable row dim, scroll back to its top
+            self._data_layout.row_window = (start, stop)
+            self._data_layout.row_start = 0
+            self._data_layout.row_stop = 0
+        self.row_window = (start, stop)
+        self._reload_row_window(0)
+        self.notify(f"Locked to rows {start}:{stop} · esc to unlock")
+
+    def _exit_row_window(self) -> None:
+        """Unlock the row window and restore the full grid."""
+        if self.row_window is None:
+            return
+        if self.browser is not None:
+            self.browser.clear_row_window(self.selected_path)
+        if self._data_layout is not None and self._data_layout.row_window is not None:
+            self._data_layout.row_window = None
+            self._data_layout.row_start = 0
+            self._data_layout.row_stop = 0
+        self.row_window = None
+        self._reload_row_window(0)
+
+    def _reload_row_window(self, start: int) -> None:
+        """Rebuild the data grid from scratch after a window change."""
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, start)
+        self._update_data_table(data, cursor_row=0, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
 
     def action_go_to_column(self) -> None:
         if not self._in_data_grid():
@@ -1525,15 +2244,18 @@ class B2ViewApp(App):
         self._dim_toggle()
 
     def action_dim_exit(self) -> None:
-        """Escape: exit dim mode, or clear an active CTable filter.
+        """Escape: exit dim mode, unlock a row window, or clear a CTable filter.
 
-        One layer per press: dim mode, then the row filter, then the
-        column filter.
+        One layer per press: dim mode, then the locked row window, then the
+        row filter, then the column filter.
         """
         if self._dim_mode:
             self._dim_mode = False
             if self.table_page is not None:
                 self._update_data_header(self.table_page)
+            return
+        if self.row_window is not None:
+            self._exit_row_window()
             return
         if (
             not self._in_data_grid()

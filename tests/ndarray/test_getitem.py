@@ -655,3 +655,110 @@ def test_getitem_integer_array_still_uses_fancy_for_boolean():
     expected = np.arange(12, dtype=np.int32).reshape(3, 4)[mask]
     result = a[mask]
     np.testing.assert_array_equal(result, expected)
+
+
+# ---------------------------------------------------------------------------
+# Strided-slice sparse-gather fast path (NDArray._try_subsample_gather)
+# ---------------------------------------------------------------------------
+
+from unittest import mock  # noqa: E402
+
+from blosc2.ndarray import _SUBSAMPLE_GATHER_MAX_COORDS, get_ndarray_start_stop  # noqa: E402
+from blosc2.utils import process_key  # noqa: E402
+
+
+def _gather_gate(a, start, stop, step):
+    """Mirror the helper's eligibility gate using the array's actual blocks."""
+    if any(s <= 0 for s in step):
+        return False
+    counts = [max(0, (sp - st - 1) // stp + 1) for st, sp, stp in zip(start, stop, step, strict=True)]
+    n = math.prod(counts)
+    if not 0 < n <= _SUBSAMPLE_GATHER_MAX_COORDS:
+        return False
+    return any(step[d] > 1 and step[d] >= a.blocks[d] for d in range(a.ndim))
+
+
+@pytest.mark.parametrize(
+    ("shape", "blocks", "key"),
+    [
+        # 1-D coarse subsample: step >= block -> fast path
+        ((100_000,), (64,), np.s_[::1000]),
+        ((100_000,), (64,), np.s_[5:90_000:777]),
+        # 1-D fine stride: step < block -> dense fallback (still correct)
+        ((100_000,), (5000,), np.s_[::3]),
+        # negative step -> dense fallback
+        ((100_000,), (64,), np.s_[::-1000]),
+        ((100_000,), (64,), np.s_[90_000:100:-321]),
+        # 2-D strided + integer axis (squeeze) and newaxis parity
+        ((200, 200), (8, 8), np.s_[::32, ::32]),
+        ((200, 200), (8, 8), np.s_[::32, 5]),
+        ((200, 200), (8, 8), np.s_[5, ::32]),
+        ((200, 200), (8, 8), np.s_[None, ::32, ::16]),
+        ((200, 200), (8, 8), np.s_[::32, :]),
+        # 3-D with a fixed leading index
+        ((8, 200, 200), (2, 8, 8), np.s_[3, ::32, ::32]),
+        ((8, 200, 200), (2, 8, 8), np.s_[::2, ::64, 7]),
+    ],
+)
+def test_getitem_strided_gather_matches_numpy(shape, blocks, key):
+    npa = np.arange(math.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa, blocks=blocks)
+    np.testing.assert_array_equal(a[key], npa[key])
+
+
+def _run_with_gather_spy(a, key):
+    """Return (result, gather_used)."""
+    orig = blosc2.NDArray._take_sparse_normalized
+    calls = []
+
+    def spy(self, indices, out=None):
+        calls.append(indices)
+        return orig(self, indices, out)
+
+    with mock.patch.object(blosc2.NDArray, "_take_sparse_normalized", spy):
+        result = a[key]
+    return result, bool(calls)
+
+
+@pytest.mark.parametrize(
+    ("shape", "blocks", "key"),
+    [
+        ((100_000,), (64,), np.s_[::1000]),  # step >= block -> gather
+        ((100_000,), (5000,), np.s_[::3]),  # step < block -> dense
+        ((100_000,), (64,), np.s_[::-1000]),  # negative -> dense
+        ((3_000_000,), (64,), np.s_[::2]),  # > 1M coords -> dense
+        ((200, 200), (8, 8), np.s_[::32, 5]),
+        ((200, 200), (8, 8), np.s_[5, ::32]),
+    ],
+)
+def test_getitem_strided_gather_dispatch(shape, blocks, key):
+    npa = np.arange(math.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa, blocks=blocks)
+    key_, _mask = process_key(key, a.shape)
+    start, stop, step, _ = get_ndarray_start_stop(a.ndim, key_, a.shape)
+    expected_gather = _gather_gate(a, start, stop, step)
+
+    result, used = _run_with_gather_spy(a, key)
+    np.testing.assert_array_equal(result, npa[key])
+    assert used == expected_gather
+
+
+def test_setitem_strided_does_not_use_gather():
+    """The fast path is read-only; strided assignment must use the dense path."""
+    npa = np.arange(100_000, dtype=np.float64)
+    a = blosc2.asarray(npa, blocks=(64,))
+    vals = np.full(a[::1000].shape, -1.0)
+
+    orig = blosc2.NDArray._take_sparse_normalized
+    calls = []
+
+    def spy(self, indices, out=None):
+        calls.append(indices)
+        return orig(self, indices, out)
+
+    with mock.patch.object(blosc2.NDArray, "_take_sparse_normalized", spy):
+        a[::1000] = vals
+    assert calls == []  # gather not used for setitem
+
+    npa[::1000] = vals
+    np.testing.assert_array_equal(a[:], npa)

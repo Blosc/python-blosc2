@@ -127,8 +127,62 @@ jobs:
             ./wheelhouse/*.tar.gz
 
 
+  build_wheels_wasm:
+    name: Build WASM/Pyodide wheels for ${{ matrix.p_ver }}
+    runs-on: ubuntu-latest
+    env:
+      CIBW_BUILD: ${{ matrix.cibw_build }}
+      # WASM/Pyodide has no SIMD/runtime CPU detection; disable optimised paths
+      CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
+      CIBW_TEST_COMMAND: "pytest {project}/tests"
+      # Pin the Pyodide version explicitly per target for reproducible builds.
+      # cp313 stays on 0.29.3 (the version wasm.yml proves good): 0.29.4, the
+      # cibuildwheel 4.1 default, regresses SChunk get_slice on WASM.
+      CIBW_PYODIDE_VERSION: ${{ matrix.pyodide_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Python 3.13 -> pyemscripten_2025_0
+          - p_ver: "3.13"
+            cibw_build: "cp313-*"
+            pyodide_version: "0.29.3"
+            artifact_name: "wasm-pyodide-cp313"
+          # Python 3.14 -> pyemscripten_2026_0
+          - p_ver: "3.14"
+            cibw_build: "cp314-*"
+            pyodide_version: "314.0.0"
+            artifact_name: "wasm-pyodide-cp314"
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake
+
+      - name: Install cibuildwheel
+        run: pip install "cibuildwheel==4.1.*"
+
+      - name: Build wheels
+        # Testing is performed automatically by cibuildwheel (via node).
+        # platform=pyodide can only be set via the CLI flag, not an env var.
+        run: cibuildwheel --platform pyodide
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ./wheelhouse/*.whl
+
+
   upload_pypi:
-    needs: [ build_wheels]
+    needs: [ build_wheels, build_wheels_wasm ]
     runs-on: ubuntu-latest
     # Only upload wheels when tagging (typically a release)
     if: startsWith(github.event.ref, 'refs/tags')

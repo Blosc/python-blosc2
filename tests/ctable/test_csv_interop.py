@@ -45,8 +45,21 @@ def table10():
 
 
 def test_to_csv_creates_file(table10, tmp_csv):
-    table10.to_csv(tmp_csv)
+    ret = table10.to_csv(tmp_csv)
+    assert ret is None  # writing to a path returns None
     assert os.path.exists(tmp_csv)
+
+
+def test_to_csv_no_path_returns_string(table10, tmp_csv):
+    # pandas-style: no path -> return the CSV text instead of writing a file.
+    text = table10.to_csv()
+    assert isinstance(text, str)
+    assert text.splitlines()[0] == "id,score,active,label"
+    assert len(text.splitlines()) == 11  # header + 10 data rows
+    # The returned string matches what gets written to a file.
+    table10.to_csv(tmp_csv)
+    with open(tmp_csv, newline="") as f:
+        assert f.read() == text
 
 
 def test_to_csv_header_row(table10, tmp_csv):

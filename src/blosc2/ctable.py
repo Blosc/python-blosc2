@@ -173,9 +173,14 @@ class NullPolicy:
 
 DEFAULT_NULL_POLICY = NullPolicy()
 _NULL_POLICY = contextvars.ContextVar("blosc2_null_policy", default=DEFAULT_NULL_POLICY)
+# Sentinel for set_printoptions params whose valid value includes ``None``
+# (so ``None`` can be set explicitly rather than meaning "leave unchanged").
+_UNSET = object()
+
 _CTABLE_PRINT_OPTIONS: dict[str, Any] = {
     "display_index": True,
     "display_rows": 60,
+    "display_width": None,
     "display_precision": 6,
     "fancy": False,
 }
@@ -193,20 +198,30 @@ def set_printoptions(
     *,
     display_index: bool | None = None,
     display_rows: int | None = None,
+    display_width: int | None = _UNSET,
     display_precision: int | None = None,
     fancy: bool | None = None,
 ) -> None:
     """Set global display options for :class:`CTable` string representations.
 
+    These options affect ``str(ctable)``/``repr(ctable)``/``print(ctable)`` (the
+    interactive, truncated view).  They do *not* affect :meth:`CTable.to_string`,
+    which renders everything by default.
+
     Parameters
     ----------
     display_index:
-        Whether ``str(ctable)`` should include a pandas-like logical row index
+        Whether the display should include a pandas-like logical row index
         column.  ``None`` leaves the current setting unchanged.
     display_rows:
-        Maximum number of rows allowed before truncating to a compact head/tail
-        view (five first and five last rows, when possible).  ``None`` leaves
-        the current setting unchanged.
+        Maximum number of rows shown before truncating to a compact head/tail
+        view (five first and five last rows, when possible).  ``-1`` shows all
+        rows, ``0`` shows none.  ``None`` leaves the current setting unchanged.
+    display_width:
+        Character budget used to decide how many columns fit before truncating
+        the middle ones with ``...``.  ``None`` (the default) auto-detects the
+        terminal width, ``-1`` shows all columns, a positive int sets a fixed
+        budget.  Omit the argument to leave the current setting unchanged.
     display_precision:
         Number of digits after the decimal point for floating-point values in
         table displays.  Trailing zeros are trimmed.  ``None`` leaves the
@@ -222,9 +237,20 @@ def set_printoptions(
             raise TypeError("display_index must be a bool or None")
         _CTABLE_PRINT_OPTIONS["display_index"] = display_index
     if display_rows is not None:
-        if not isinstance(display_rows, int) or isinstance(display_rows, bool) or display_rows < 0:
-            raise TypeError("display_rows must be a non-negative int or None")
+        if not isinstance(display_rows, int) or isinstance(display_rows, bool) or display_rows < -1:
+            raise TypeError("display_rows must be -1 (all), a non-negative int, or None")
         _CTABLE_PRINT_OPTIONS["display_rows"] = display_rows
+    if display_width is not _UNSET:
+        if not (
+            display_width is None
+            or (
+                isinstance(display_width, int)
+                and not isinstance(display_width, bool)
+                and display_width >= -1
+            )
+        ):
+            raise TypeError("display_width must be None (auto), -1 (all), or a non-negative int")
+        _CTABLE_PRINT_OPTIONS["display_width"] = display_width
     if display_precision is not None:
         if (
             not isinstance(display_precision, int)
@@ -242,6 +268,25 @@ def set_printoptions(
 def get_printoptions() -> dict[str, Any]:
     """Return a copy of the global :class:`CTable` display options."""
     return dict(_CTABLE_PRINT_OPTIONS)
+
+
+@contextlib.contextmanager
+def printoptions(**kwargs: Any):
+    """Temporarily set :class:`CTable` display options, restored on exit.
+
+    Accepts the same keyword arguments as :func:`set_printoptions`.  Handy for a
+    one-off full dump, e.g.::
+
+        with blosc2.printoptions(display_rows=-1, display_width=-1):
+            print(ctable)
+    """
+    saved = dict(_CTABLE_PRINT_OPTIONS)
+    try:
+        set_printoptions(**kwargs)
+        yield
+    finally:
+        _CTABLE_PRINT_OPTIONS.clear()
+        _CTABLE_PRINT_OPTIONS.update(saved)
 
 
 @contextlib.contextmanager
@@ -866,6 +911,23 @@ class Column:
             return slp
         return np.where(self._valid_rows[:])[0]
 
+    def _has_identity_positions(self) -> bool:
+        """True when logical row ``k`` maps to physical row ``k`` for every row.
+
+        Holds for a base table with no column mask, no sorted/filtered view, and
+        no deletions.  In that case a logical slice is a physical slice, so it
+        can be read straight from the underlying NDArray instead of resolving
+        and gathering explicit live positions.  All checks are O(1) (cached
+        counts / lengths) — no validity scan is triggered.
+        """
+        t = self._table
+        if self._mask is not None or t.base is not None:
+            return False
+        if getattr(t, "_cached_live_positions", None) is not None:
+            return False
+        n = t._known_n_rows()  # cached live-row count, may be None
+        return n is not None and n == len(t._valid_rows)
+
     def __getitem__(self, key: int | slice | list | np.ndarray):
         """Return values for the given logical index.
 
@@ -911,16 +973,28 @@ class Column:
             return self._maybe_decode_timestamp_values(self._raw_col[int(pos_true)])
 
         elif isinstance(key, slice):
+            # Identity fast path: when logical positions equal physical ones, a
+            # logical slice is a physical slice.  Read it straight from the
+            # underlying NDArray, skipping the O(nrows) live-position scan and
+            # letting NDArray's strided-gather fast path handle coarse steps.
+            # Plain stored columns only; everything else falls through to the
+            # position-gather path below.
+            if (
+                not (self.is_computed or self.is_list or self.is_varlen_scalar or self.is_dictionary)
+                and self._has_identity_positions()
+            ):
+                return self._maybe_decode_timestamp_values(np.asarray(self._raw_col[key]))
             real_pos = self._resolve_live_positions()
-            start, stop, step = key.indices(len(real_pos))
-            if start >= stop:
+            # Apply the slice straight to the physical positions so that all
+            # slice semantics (including negative steps) follow NumPy.
+            selected_pos = real_pos[key]
+            if selected_pos.size == 0:
                 if self.is_list or self.is_varlen_scalar or self.is_dictionary:
                     return []
                 if self.is_ndarray:
                     spec = self._table._schema.columns_by_name[self._col_name].spec
                     return np.empty((0, *spec.item_shape), dtype=self.dtype)
                 return np.array([], dtype=self.dtype)
-            selected_pos = real_pos[start:stop:step]  # physical row positions
             if self.is_computed:
                 lo, hi = int(selected_pos.min()), int(selected_pos.max())
                 chunk = np.asarray(self._raw_col[lo : hi + 1])
@@ -3038,10 +3112,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ----------
         create_summary_index:
             If ``True`` (default), SUMMARY indexes are automatically built for
-            all eligible scalar columns on :meth:`close`.  These indexes are
-            extremely cheap to store (< 0.1% of column size) and accelerate
-            ``where()`` queries without any user action.  Set to ``False`` to
-            disable.
+            all eligible scalar columns.  These indexes are extremely cheap to
+            store (< 0.1% of column size) and accelerate ``where()`` queries
+            without any user action.  Set to ``False`` to disable.
+
+            The build is triggered by :meth:`close`, not by table creation, so
+            *when* it happens depends on the table's lifecycle:
+
+            - **Persistent** tables (``urlpath=...``) are closed as part of
+              normal use, so they get these indexes and reopen with them.
+            - A **purely in-memory** table is never closed automatically, so it
+              is *not* indexed unless you close it explicitly or use it as a
+              context manager (``with blosc2.CTable(...) as t:``).  Otherwise
+              call :meth:`create_index` yourself.
+
+            Note that :meth:`to_b2z` and :meth:`save` write live rows through a
+            logical copy and do **not** trigger the build; index the source
+            table (or the reopened result) explicitly if you need it.
         """
         # Auto-size: if the caller didn't specify expected_size and new_data has a
         # known length, pre-allocate just enough (×2 for headroom, min 64).
@@ -3162,7 +3249,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 self._save_n_rows_to_meta()
 
     def close(self) -> None:
-        """Close any persistent backing store held by this table."""
+        """Close any persistent backing store held by this table.
+
+        On the first close of a writable root table, this also builds the
+        automatic SUMMARY indexes (unless ``create_summary_index=False``); see
+        the ``create_summary_index`` parameter of :class:`CTable` for how this
+        interacts with in-memory vs. persistent tables.
+        """
         storage = getattr(self, "_storage", None)
         # Persist row count for root tables so subsequent opens can skip
         # the _valid_rows intersection in where() for all-valid tables.
@@ -3801,7 +3894,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         else:
             valid_np = self._valid_rows[:]
             all_pos = np.where(valid_np)[0]
-        if nrows <= display_rows:
+        if display_rows < 0 or nrows <= display_rows:  # -1 (or any negative) shows all rows
             return all_pos, np.array([], dtype=all_pos.dtype), 0
 
         preview_rows = min(10, display_rows)
@@ -3827,16 +3920,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return widths
 
     def _display_columns(
-        self, *, display_index: bool = False, index_width: int = 0
+        self, *, display_index: bool = False, index_width: int = 0, max_width: int | None = None
     ) -> tuple[list[str], int]:
-        """Return terminal-width-friendly display columns and hidden count."""
+        """Return width-friendly display columns and hidden count.
+
+        *max_width* is the character budget for column fitting: ``None`` or a
+        negative value shows all columns (no truncation); a positive int caps it.
+        """
         col_names = list(self.col_names)
+        if max_width is None or max_width < 0:  # unlimited: show every column
+            return col_names, 0
         widths = self._display_widths(col_names)
         widths["..."] = 3
         total_width = sum(widths[n] + 2 for n in col_names) + 2 * max(0, len(col_names) - 1)
         if display_index:
             total_width += index_width + 2 + 2
-        term_width = shutil.get_terminal_size((120, 20)).columns
+        term_width = max_width
         if total_width <= term_width or len(col_names) <= 2:
             return col_names, 0
 
@@ -4160,11 +4259,38 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         )
         return lines
 
-    def to_string(self, *, display_index: bool | None = None, index_name: str = "") -> str:
+    def to_string(
+        self,
+        *,
+        max_rows: int | None = None,
+        max_width: int | None = None,
+        show_dimensions: bool | str = False,
+        display_index: bool | None = None,
+        index_name: str = "",
+    ) -> str:
         """Return a tabular string representation of the table.
+
+        By default (``max_rows=None``, ``max_width=None``) this renders the
+        *whole* table — every row and every column — like ``pandas``'
+        ``DataFrame.to_string()``.  This is independent of the global
+        :func:`blosc2.set_printoptions`; those only affect the truncated
+        ``str``/``repr``/``print`` view.
 
         Parameters
         ----------
+        max_rows:
+            Maximum number of rows before truncating to a compact head/tail
+            view.  ``None`` (default) shows all rows; ``-1`` also means all,
+            ``0`` shows none, a positive int caps it.
+        max_width:
+            Character budget for column fitting.  ``None`` (default) or ``-1``
+            shows all columns; a positive int truncates the middle ones with
+            ``...`` to fit.
+        show_dimensions:
+            Whether to append a ``[N rows x M columns]`` footer.  ``False``
+            (default) omits it, matching ``pandas``' ``to_string()``; ``True``
+            always shows it; ``"truncate"`` shows it only when the view is
+            truncated (the behaviour of ``str``/``repr``).
         display_index:
             Whether to include a pandas-like logical row index column.  If
             ``None`` (default), use the global value configured with
@@ -4181,21 +4307,43 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         nrows = self._n_rows
         ncols = len(self.col_names)
-        head_pos, tail_pos, hidden = self._display_positions()
+        rows_arg = -1 if max_rows is None else max_rows  # None ⇒ all rows
+        head_pos, tail_pos, hidden = self._display_positions(rows_arg)
         # Memoise per-column sparse gathers for the duration of this render so
         # the repeated (column, head_pos/tail_pos) lookups across precision,
         # width and row formatting only touch storage once.  head_pos/tail_pos
         # stay referenced below, so keying the cache on their id() is safe.
         self._display_fetch_cache = {}
         try:
-            return self._to_string_body(display_index, index_name, nrows, ncols, head_pos, tail_pos, hidden)
+            return self._to_string_body(
+                display_index,
+                index_name,
+                nrows,
+                ncols,
+                head_pos,
+                tail_pos,
+                hidden,
+                max_width,
+                show_dimensions,
+            )
         finally:
             self._display_fetch_cache = None
 
-    def _to_string_body(self, display_index, index_name, nrows, ncols, head_pos, tail_pos, hidden) -> str:
+    def _to_string_body(
+        self,
+        display_index,
+        index_name,
+        nrows,
+        ncols,
+        head_pos,
+        tail_pos,
+        hidden,
+        max_width=None,
+        show_dimensions=False,
+    ) -> str:
         index_width = self._display_index_width(nrows, hidden, index_name) if display_index else 0
         display_cols, hidden_cols = self._display_columns(
-            display_index=display_index, index_width=index_width
+            display_index=display_index, index_width=index_width, max_width=max_width
         )
         # Warm the fetch cache with a single combined head+tail gather per column.
         # head_pos/tail_pos land in different blocks, but folding them into one
@@ -4237,17 +4385,28 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             )
         if sep is not None:
             lines.append(sep)
-        lines.extend(self._display_footer(nrows, ncols, hidden, hidden_cols, fancy))
+        # pandas convention: to_string() omits the dimensions footer
+        # (show_dimensions=False); str/repr show it only when truncated.
+        truncated = hidden > 0 or hidden_cols > 0
+        if show_dimensions is True or (show_dimensions == "truncate" and truncated):
+            lines.extend(self._display_footer(nrows, ncols, hidden, hidden_cols, fancy))
         return "\n".join(lines)
 
     def __str__(self) -> str:
-        """Pandas-style tabular display with column names, dtypes, and a row count footer."""
-        return self.to_string()
+        """Pandas-style tabular display, truncated per :func:`blosc2.set_printoptions`."""
+        opts = _CTABLE_PRINT_OPTIONS
+        width = opts["display_width"]
+        if width is None:  # auto: fit to the current terminal
+            width = shutil.get_terminal_size((120, 20)).columns
+        return self.to_string(max_rows=opts["display_rows"], max_width=width, show_dimensions="truncate")
 
     def __repr__(self) -> str:
-        """Short ``CTable<cols>(N rows, X compressed)`` summary string."""
-        cols = ", ".join(self.col_names)
-        return f"CTable<{cols}>({self._n_rows:,} rows, {_fmt_bytes(self.cbytes)} compressed)"
+        """Same truncated table as ``str`` (pandas/polars convention).
+
+        The compact ``CTable<cols>(N rows, …)`` summary is available via
+        :attr:`info`.
+        """
+        return self.__str__()
 
     def __len__(self):
         """Return the number of live (non-deleted) rows."""
@@ -5107,6 +5266,45 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         result._n_rows = n
         result._last_pos = n - 1 if n > 0 else None
         return result
+
+    def slice(self, start, stop=None, /, *, copy: bool = True) -> CTable:
+        """Return a contiguous range of live (non-deleted) rows.
+
+        The range is given the way :func:`range` takes its bounds, either as a
+        single stop (``table.slice(stop)``), as start/stop integers
+        (``table.slice(start, stop)``), or as a Python ``slice``
+        (``table.slice(slice(start, stop))``).  Negative bounds count from the
+        end; ``step`` is not supported.
+
+        Parameters
+        ----------
+        start, stop:
+            Range bounds, interpreted as logical positions among the live rows.
+        copy:
+            When ``True`` (the default, mirroring :meth:`NDArray.slice`) a compact
+            copy of the range is returned.  When ``False`` a zero-copy view is
+            returned instead, sharing the parent's column data (read-only, like
+            :meth:`head`/:meth:`tail`).
+
+        Returns
+        -------
+        out: :ref:`CTable`
+            The requested rows, re-indexed from 0.
+        """
+        if isinstance(start, slice):
+            if stop is not None:
+                raise TypeError("pass either a slice or start/stop integers, not both")
+            key = start
+        else:
+            key = slice(0, start) if stop is None else slice(start, stop)
+        if key.step not in (None, 1):
+            raise ValueError("CTable.slice does not support a step")
+        lo, hi, _ = key.indices(self.nrows)
+        hi = max(lo, hi)
+        if copy:
+            return self.take(np.arange(lo, hi, dtype=np.int64))
+        positions = self._live_positions_from_valid_rows_chunks()[lo:hi]
+        return self._view_from_positions(np.asarray(positions))
 
     def head(self, N: int = 5) -> CTable:
         """Return a view of the first *N* live rows (default 5)."""
@@ -7107,8 +7305,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     # CSV interop
     # ------------------------------------------------------------------
 
-    def to_csv(self, path: str, *, header: bool = True, sep: str = ",") -> None:
-        """Write all live rows to a CSV file.
+    def to_csv(self, path: str | None = None, *, header: bool = True, sep: str = ",") -> str | None:
+        """Write all live rows to CSV.
 
         Uses Python's stdlib ``csv`` module — no extra dependency required.
         Fixed-shape ndarray column cells are serialised as JSON arrays for
@@ -7117,13 +7315,21 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         Parameters
         ----------
         path:
-            Destination file path.  Created or overwritten.
+            Destination file path (created or overwritten).  If ``None`` (the
+            default), nothing is written and the CSV is returned as a string,
+            like ``pandas``' ``DataFrame.to_csv()``.
         header:
             If ``True`` (default), write column names as the first row.
         sep:
             Field delimiter.  Defaults to ``","``; use ``"\\t"`` for TSV.
+
+        Returns
+        -------
+        str or None
+            The CSV text when *path* is ``None``, otherwise ``None``.
         """
         import csv
+        import io
 
         n = len(self)
         arrays: list = []
@@ -7142,12 +7348,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 arrays.append(col[:])
 
-        with open(path, "w", newline="") as f:
+        def _write(f) -> None:
             writer = csv.writer(f, delimiter=sep)
             if header:
                 writer.writerow(self.col_names)
             for row in zip(*arrays, strict=True):
                 writer.writerow(row)
+
+        if path is None:
+            buf = io.StringIO(newline="")
+            _write(buf)
+            return buf.getvalue()
+        with open(path, "w", newline="") as f:
+            _write(f)
+        return None
 
     @staticmethod
     def _csv_ndarray_col_to_array(raw: list[str], col) -> np.ndarray:
