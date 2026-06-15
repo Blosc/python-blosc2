@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.5.0 to 4.5.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.4.5 to 4.5.0
 
 This release teaches the `b2view` terminal viewer to **plot** — peak-preserving
