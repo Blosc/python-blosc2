@@ -1,8 +1,30 @@
 # Release notes
 
-## Changes from 4.4.5 to 4.4.6
+## Changes from 4.4.5 to 4.5.0
 
-XXX version-specific blurb XXX
+This release teaches the `b2view` terminal viewer to **plot** — peak-preserving
+envelope line plots of any series, with zoom, a row-window lock, and an optional
+high-resolution matplotlib view — and gives `CTable` a **pandas-like display and
+CSV** experience.  It also publishes **WASM/Pyodide wheels to PyPI** and adds
+faster strided reads for `NDArray` and `Column`.
+
+### b2view: plotting and data inspection
+
+- **In-terminal plots**: press `p` on a numeric series (a CTable column or an
+  array row) to draw a braille line plot.  Plots are **peak-preserving min/max
+  envelopes by default**, so no spike or trough is hidden however large the
+  series is; large local series stream their envelope *exactly* in bounded
+  spans (only remote c2arrays fall back to a labeled strided sample).
+- **Zoom and row-window lock**: zoom the plot into a row range and pan it; press
+  `v` to **lock the data grid to the plotted range** so paging stays inside it
+  (escape unlocks).  The plot and high-res views honor the locked window.
+- **High-resolution view**: `h` opens a high-res `matplotlib` image of the
+  plotted range (new optional `hires` extra: `matplotlib` + `textual-image`).
+- **On-demand cell decode**: `enter` decodes a single skipped/expensive CTable
+  cell, and SChunk nodes now preview as a paged hex dump.
+- **Fixes and polish**: row paging re-aligns to the page grid after dim-mode
+  single-row scrolls; the data panel now focuses correctly with
+  `--path ... --panel data`; status chips are branded yellow.
 
 ### CTable display
 
@@ -31,6 +53,31 @@ XXX version-specific blurb XXX
 - **`CTable.to_csv()` now accepts no path**, returning the CSV as a string like
   `pandas`' `DataFrame.to_csv()`.  Passing a path still writes the file (and
   returns `None`); the returned string is byte-for-byte the same as the file.
+
+### Performance
+
+- **Faster strided reads**: `NDArray.__getitem__` gains a sparse-gather fast
+  path for large strides, and `Column.__getitem__` short-circuits when the
+  logical positions equal the physical ones.
+- **Fix**: a negative `step` in `Column` getitem could return `[]`; it now
+  returns the reversed selection.
+
+### Indexing
+
+- **Fix**: a sidecar-handle cache collision could return the wrong SUMMARY
+  index for a compact-store column.
+- **Cross-column index pruning** is now enabled for compact CTable queries, so
+  more predicates prune blocks before any data is materialized.  The docs also
+  note when summary indexes are *not* created automatically.
+
+### Packaging
+
+- **WASM/Pyodide wheels on PyPI**: the main wheel build now also produces
+  `pyemscripten` wheels for CPython 3.13 (2025 ABI) and 3.14 (2026 ABI) and
+  uploads them to PyPI, so `blosc2` is `micropip`-installable in Pyodide.  The
+  cp313 build is pinned to Pyodide 0.29.3 (0.29.4 regresses `SChunk` slicing),
+  and `b2view` prints a clear message instead of crashing when run under WASM.
+- **cibuildwheel updated to 4.1.**
 
 ## Changes from 4.4.3 to 4.4.5
 

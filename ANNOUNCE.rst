@@ -1,46 +1,44 @@
-Announcing Python-Blosc2 4.4.5
+Announcing Python-Blosc2 4.5.0
 ==============================
 
-We are happy to announce this release, which promotes the ``b2view``
-terminal data viewer to a core feature — installed by default and with new
-interactive row and column filtering — and makes BatchArray block layouts
-(and hence compression ratios) reproducible across CPUs.
+We are happy to announce this release, which teaches the ``b2view``
+terminal data viewer to **plot**, gives ``CTable`` a **pandas-like display
+and CSV** experience, and publishes **WASM/Pyodide wheels to PyPI**.
 
 The main highlights are:
 
-- **b2view installed by default**: the terminal browser for Blosc2 stores
-  (``.b2d`` directories and ``.b2z`` files) now ships with the package —
-  no extras needed.  It shows the tree of a store and pages through
-  NDArrays of any dimensionality and CTables far larger than the screen.
+- **Plotting in b2view**: press ``p`` on a numeric series (a CTable column
+  or an array row) to draw an in-terminal line plot.  Plots are
+  peak-preserving min/max envelopes by default, so no spike or trough is
+  hidden however large the series is — large local series stream their
+  envelope *exactly*.  Zoom into a row range, press ``v`` to lock the data
+  grid to it, or ``h`` to open a high-resolution ``matplotlib`` view (new
+  optional ``hires`` extra).
 
-- **Interactive filtering**: press ``f`` on a CTable to type the same
-  string expressions ``CTable.where()`` accepts (dotted nested names,
-  ``and``/``or``) and page through just the matching rows, and ``/`` to
-  narrow the visible columns by substring.  Both filters combine, are
-  remembered per node, and escape clears them one layer at a time.
+- **pandas-like CTable display**: ``to_string()`` now renders the whole
+  table by default (with ``max_rows``/``max_width`` to truncate), ``repr``
+  shows the same truncated table as ``str``, and a new
+  ``blosc2.printoptions(...)`` context manager plus ``display_width`` /
+  ``display_rows`` options control the view.  ``to_csv()`` called without a
+  path now returns the CSV as a string.
 
-- **Friendlier mouse and navigation**: the terminal keeps the mouse by
-  default, so selecting and copying text works as usual (``--mouse`` opts
-  into capture with click-to-focus and wheel scrolling); ``?`` opens a key
-  reference, ``c`` jumps to a column by name or index, and float columns
-  align their decimal points.
+- **WASM/Pyodide wheels on PyPI**: ``blosc2`` now ships ``pyemscripten``
+  wheels for CPython 3.13 and 3.14, so it is ``micropip``-installable in
+  Pyodide straight from PyPI.
 
-- **Reproducible BatchArray layouts**: automatic variable-length block
-  sizing now uses fixed byte budgets per compression level instead of the
-  CPU cache sizes, so the layout — and the compression ratio — no longer
-  depends on the machine that created the array.
+- **Faster strided reads**: ``NDArray`` and ``Column`` getitem gain fast
+  paths for large strides and identity gathers, and compact CTable queries
+  prune more blocks via cross-column index pruning.
 
-A quick taste of ``b2view``::
+A quick taste of the new plotting — open a store and press ``p`` on a
+numeric column::
 
     $ pip install blosc2 --upgrade
     $ b2view chicago-taxi.b2z
 
-Then press ``f`` on the table node and type a filter, e.g.::
-
-    payment.tips > 100 and trip.km > 0 and trip.sec > 0
-
-and page through the 67 matching trips of the 24-million-row table —
-instantly, and without decompressing anything you do not look at.
+Zoom into a range, press ``v`` to pin the grid to it, then ``h`` for a
+high-resolution view — all without decompressing anything you do not look
+at.
 
 Install it with::
 
