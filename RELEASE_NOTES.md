@@ -74,9 +74,11 @@ faster strided reads for `NDArray` and `Column`.
 
 - **WASM/Pyodide wheels on PyPI**: the main wheel build now also produces
   `pyemscripten` wheels for CPython 3.13 (2025 ABI) and 3.14 (2026 ABI) and
-  uploads them to PyPI, so `blosc2` is `micropip`-installable in Pyodide.  The
-  cp313 build is pinned to Pyodide 0.29.3 (0.29.4 regresses `SChunk` slicing),
-  and `b2view` prints a clear message instead of crashing when run under WASM.
+  uploads them to PyPI, so `blosc2` is `micropip`-installable in Pyodide, and
+  `b2view` prints a clear message instead of crashing when run under WASM.
+  *Known limitation*: slicing an in-memory `SChunk` loaded from a frame fails on
+  the Pyodide 0.29.x Emscripten toolchain (cp313); it works on Pyodide 314
+  (cp314) and natively.  See issue #664.
 - **cibuildwheel updated to 4.1.**
 
 ## Changes from 4.4.3 to 4.4.5

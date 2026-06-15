@@ -124,6 +124,13 @@ def test_load_ndarray_returns_in_memory_copy(tmp_path):
     assert np.array_equal(loaded[:], arr[:])
 
 
+@pytest.mark.xfail(
+    blosc2.IS_WASM,
+    reason="get_slice on an in-memory SChunk (loaded from a frame) fails on the "
+    "Pyodide 0.29.x Emscripten toolchain; passes on Pyodide 314 and natively. "
+    "See https://github.com/Blosc/python-blosc2/issues/664",
+    strict=False,
+)
 def test_load_schunk_returns_in_memory_copy(tmp_path):
     urlpath = tmp_path / "schunk.b2frame"
     data = np.arange(20, dtype=np.int32)
