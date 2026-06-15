@@ -135,21 +135,23 @@ jobs:
       # WASM/Pyodide has no SIMD/runtime CPU detection; disable optimised paths
       CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
       CIBW_TEST_COMMAND: "pytest {project}/tests"
-      # cp314 targets the 2026 ABI, built against a prerelease Pyodide (314.x)
-      CIBW_ENABLE: ${{ matrix.cibw_enable }}
+      # Pin the Pyodide version explicitly per target for reproducible builds.
+      # cp313 stays on 0.29.3 (the version wasm.yml proves good): 0.29.4, the
+      # cibuildwheel 4.1 default, regresses SChunk get_slice on WASM.
+      CIBW_PYODIDE_VERSION: ${{ matrix.pyodide_version }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Python 3.13 -> pyemscripten_2025_0 (Pyodide 0.29.x, stable)
+          # Python 3.13 -> pyemscripten_2025_0
           - p_ver: "3.13"
             cibw_build: "cp313-*"
-            cibw_enable: ""
+            pyodide_version: "0.29.3"
             artifact_name: "wasm-pyodide-cp313"
-          # Python 3.14 -> pyemscripten_2026_0 (Pyodide 314.x, prerelease)
+          # Python 3.14 -> pyemscripten_2026_0
           - p_ver: "3.14"
             cibw_build: "cp314-*"
-            cibw_enable: "pyodide-prerelease"
+            pyodide_version: "314.0.0"
             artifact_name: "wasm-pyodide-cp314"
     steps:
       - name: Checkout repo
