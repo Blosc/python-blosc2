@@ -4,6 +4,24 @@
 
 XXX version-specific blurb XXX
 
+### CTable display
+
+- **`CTable.to_string()` now renders the whole table by default** (every row and
+  every column), like `pandas`' `DataFrame.to_string()`.  New `max_rows` and
+  `max_width` parameters truncate on demand.  *Behaviour change*: previously
+  `to_string()` returned the truncated view; code that relied on that should
+  pass `max_rows=`/`max_width=` (or use `str()`).
+- **`repr(ctable)` now shows the same truncated table as `str(ctable)`**
+  (pandas/polars convention), instead of the one-line `CTable<…>` summary.  The
+  compact summary remains available via `ctable.info`.
+- **New display options** in `set_printoptions`: `display_width` controls the
+  column-fitting width budget (`None` = auto-detect terminal, `-1` = show all
+  columns, positive int = fixed budget), and `display_rows` now accepts `-1` to
+  show all rows (`0` still shows none).
+- **New `blosc2.printoptions(...)` context manager** temporarily sets the display
+  options and restores them on exit, e.g.
+  `with blosc2.printoptions(display_rows=-1, display_width=-1): print(t)`.
+
 ## Changes from 4.4.3 to 4.4.5
 
 Note: 4.4.4 was skipped due to a failure during the release process.

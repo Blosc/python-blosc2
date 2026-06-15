@@ -642,6 +642,7 @@ from .ctable import (
     get_null_policy,
     get_printoptions,
     null_policy,
+    printoptions,
     set_printoptions,
 )
 from .groupby import CTableGroupBy, group_reduce
@@ -1075,5 +1076,6 @@ __all__ = [  # noqa : RUF022
     "get_null_policy",
     "get_printoptions",
     "null_policy",
+    "printoptions",
     "set_printoptions",
 ]

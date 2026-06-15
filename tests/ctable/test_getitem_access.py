@@ -99,6 +99,85 @@ def test_display_precision_printoption_formats_float_values():
         )
 
 
+def _wide_table(nrows=200):
+    @dataclass
+    class WideRow:
+        c00: int = blosc2.field(blosc2.int64())
+        c01: int = blosc2.field(blosc2.int64())
+        c02: int = blosc2.field(blosc2.int64())
+        c03: int = blosc2.field(blosc2.int64())
+        c04: int = blosc2.field(blosc2.int64())
+        c05: int = blosc2.field(blosc2.int64())
+        c06: int = blosc2.field(blosc2.int64())
+        c07: int = blosc2.field(blosc2.int64())
+
+    return CTable(WideRow, new_data=[tuple(range(i, i + 8)) for i in range(nrows)])
+
+
+def test_to_string_is_full_by_default():
+    """Bare to_string() shows every row and column, ignoring the global options."""
+    t = _wide_table(nrows=200)
+    blosc2.set_printoptions(display_rows=20, display_width=40)  # would truncate str()
+    try:
+        full = t.to_string()
+        # All 200 rows present (header + 200 + footer), no row/col ellipsis.
+        assert "...; rows hidden" not in full
+        assert full.splitlines()[-1].strip().startswith("[200 rows")
+        assert "c00" in full  # first column shown
+        assert "c07" in full  # last column shown
+        # str() still truncates per the options.
+        assert str(t).count("\n") < full.count("\n")
+    finally:
+        blosc2.set_printoptions(display_rows=60, display_width=None)
+
+
+def test_to_string_max_rows_and_max_width_truncate():
+    t = _wide_table(nrows=200)
+    truncated = t.to_string(max_rows=10, max_width=40)
+    assert truncated.count("\n") < t.to_string().count("\n")
+    # A narrow width budget drops middle columns with an ellipsis column.
+    assert any(line.strip().startswith("...") or " ... " in line for line in truncated.splitlines())
+
+
+def test_display_rows_minus_one_shows_all():
+    t = _wide_table(nrows=120)
+    with blosc2.printoptions(display_rows=-1):
+        assert str(t).count("\n") >= 120  # all rows, no head/tail collapse
+
+
+def test_display_width_minus_one_shows_all_columns():
+    t = _wide_table(nrows=5)
+    with blosc2.printoptions(display_width=-1):
+        header = str(t).splitlines()[0]
+    assert "c00" in header  # every column shown, regardless of terminal
+    assert "c07" in header
+
+
+def test_printoptions_context_manager_restores():
+    before = blosc2.get_printoptions()
+    with blosc2.printoptions(display_rows=-1, display_width=-1, display_precision=2):
+        inside = blosc2.get_printoptions()
+        assert inside["display_rows"] == -1
+        assert inside["display_width"] == -1
+    assert blosc2.get_printoptions() == before
+
+
+def test_set_printoptions_validates_new_options():
+    with pytest.raises(TypeError):
+        blosc2.set_printoptions(display_rows=-2)
+    with pytest.raises(TypeError):
+        blosc2.set_printoptions(display_width=-2)
+    with pytest.raises(TypeError):
+        blosc2.set_printoptions(display_width=1.5)
+    # display_width=None (auto) is settable and round-trips.
+    blosc2.set_printoptions(display_width=-1)
+    try:
+        blosc2.set_printoptions(display_width=None)
+        assert blosc2.get_printoptions()["display_width"] is None
+    finally:
+        blosc2.set_printoptions(display_width=None)
+
+
 def test_getitem_string_column():
     t = CTable(AccessRow, new_data=DATA)
     col = t["id"]

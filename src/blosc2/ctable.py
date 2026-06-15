@@ -173,9 +173,14 @@ class NullPolicy:
 
 DEFAULT_NULL_POLICY = NullPolicy()
 _NULL_POLICY = contextvars.ContextVar("blosc2_null_policy", default=DEFAULT_NULL_POLICY)
+# Sentinel for set_printoptions params whose valid value includes ``None``
+# (so ``None`` can be set explicitly rather than meaning "leave unchanged").
+_UNSET = object()
+
 _CTABLE_PRINT_OPTIONS: dict[str, Any] = {
     "display_index": True,
     "display_rows": 60,
+    "display_width": None,
     "display_precision": 6,
     "fancy": False,
 }
@@ -193,20 +198,30 @@ def set_printoptions(
     *,
     display_index: bool | None = None,
     display_rows: int | None = None,
+    display_width: int | None = _UNSET,
     display_precision: int | None = None,
     fancy: bool | None = None,
 ) -> None:
     """Set global display options for :class:`CTable` string representations.
 
+    These options affect ``str(ctable)``/``repr(ctable)``/``print(ctable)`` (the
+    interactive, truncated view).  They do *not* affect :meth:`CTable.to_string`,
+    which renders everything by default.
+
     Parameters
     ----------
     display_index:
-        Whether ``str(ctable)`` should include a pandas-like logical row index
+        Whether the display should include a pandas-like logical row index
         column.  ``None`` leaves the current setting unchanged.
     display_rows:
-        Maximum number of rows allowed before truncating to a compact head/tail
-        view (five first and five last rows, when possible).  ``None`` leaves
-        the current setting unchanged.
+        Maximum number of rows shown before truncating to a compact head/tail
+        view (five first and five last rows, when possible).  ``-1`` shows all
+        rows, ``0`` shows none.  ``None`` leaves the current setting unchanged.
+    display_width:
+        Character budget used to decide how many columns fit before truncating
+        the middle ones with ``...``.  ``None`` (the default) auto-detects the
+        terminal width, ``-1`` shows all columns, a positive int sets a fixed
+        budget.  Omit the argument to leave the current setting unchanged.
     display_precision:
         Number of digits after the decimal point for floating-point values in
         table displays.  Trailing zeros are trimmed.  ``None`` leaves the
@@ -222,9 +237,20 @@ def set_printoptions(
             raise TypeError("display_index must be a bool or None")
         _CTABLE_PRINT_OPTIONS["display_index"] = display_index
     if display_rows is not None:
-        if not isinstance(display_rows, int) or isinstance(display_rows, bool) or display_rows < 0:
-            raise TypeError("display_rows must be a non-negative int or None")
+        if not isinstance(display_rows, int) or isinstance(display_rows, bool) or display_rows < -1:
+            raise TypeError("display_rows must be -1 (all), a non-negative int, or None")
         _CTABLE_PRINT_OPTIONS["display_rows"] = display_rows
+    if display_width is not _UNSET:
+        if not (
+            display_width is None
+            or (
+                isinstance(display_width, int)
+                and not isinstance(display_width, bool)
+                and display_width >= -1
+            )
+        ):
+            raise TypeError("display_width must be None (auto), -1 (all), or a non-negative int")
+        _CTABLE_PRINT_OPTIONS["display_width"] = display_width
     if display_precision is not None:
         if (
             not isinstance(display_precision, int)
@@ -242,6 +268,25 @@ def set_printoptions(
 def get_printoptions() -> dict[str, Any]:
     """Return a copy of the global :class:`CTable` display options."""
     return dict(_CTABLE_PRINT_OPTIONS)
+
+
+@contextlib.contextmanager
+def printoptions(**kwargs: Any):
+    """Temporarily set :class:`CTable` display options, restored on exit.
+
+    Accepts the same keyword arguments as :func:`set_printoptions`.  Handy for a
+    one-off full dump, e.g.::
+
+        with blosc2.printoptions(display_rows=-1, display_width=-1):
+            print(ctable)
+    """
+    saved = dict(_CTABLE_PRINT_OPTIONS)
+    try:
+        set_printoptions(**kwargs)
+        yield
+    finally:
+        _CTABLE_PRINT_OPTIONS.clear()
+        _CTABLE_PRINT_OPTIONS.update(saved)
 
 
 @contextlib.contextmanager
@@ -3849,7 +3894,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         else:
             valid_np = self._valid_rows[:]
             all_pos = np.where(valid_np)[0]
-        if nrows <= display_rows:
+        if display_rows < 0 or nrows <= display_rows:  # -1 (or any negative) shows all rows
             return all_pos, np.array([], dtype=all_pos.dtype), 0
 
         preview_rows = min(10, display_rows)
@@ -3875,16 +3920,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return widths
 
     def _display_columns(
-        self, *, display_index: bool = False, index_width: int = 0
+        self, *, display_index: bool = False, index_width: int = 0, max_width: int | None = None
     ) -> tuple[list[str], int]:
-        """Return terminal-width-friendly display columns and hidden count."""
+        """Return width-friendly display columns and hidden count.
+
+        *max_width* is the character budget for column fitting: ``None`` or a
+        negative value shows all columns (no truncation); a positive int caps it.
+        """
         col_names = list(self.col_names)
+        if max_width is None or max_width < 0:  # unlimited: show every column
+            return col_names, 0
         widths = self._display_widths(col_names)
         widths["..."] = 3
         total_width = sum(widths[n] + 2 for n in col_names) + 2 * max(0, len(col_names) - 1)
         if display_index:
             total_width += index_width + 2 + 2
-        term_width = shutil.get_terminal_size((120, 20)).columns
+        term_width = max_width
         if total_width <= term_width or len(col_names) <= 2:
             return col_names, 0
 
@@ -4208,11 +4259,32 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         )
         return lines
 
-    def to_string(self, *, display_index: bool | None = None, index_name: str = "") -> str:
+    def to_string(
+        self,
+        *,
+        max_rows: int | None = None,
+        max_width: int | None = None,
+        display_index: bool | None = None,
+        index_name: str = "",
+    ) -> str:
         """Return a tabular string representation of the table.
+
+        By default (``max_rows=None``, ``max_width=None``) this renders the
+        *whole* table — every row and every column — like ``pandas``'
+        ``DataFrame.to_string()``.  This is independent of the global
+        :func:`blosc2.set_printoptions`; those only affect the truncated
+        ``str``/``repr``/``print`` view.
 
         Parameters
         ----------
+        max_rows:
+            Maximum number of rows before truncating to a compact head/tail
+            view.  ``None`` (default) shows all rows; ``-1`` also means all,
+            ``0`` shows none, a positive int caps it.
+        max_width:
+            Character budget for column fitting.  ``None`` (default) or ``-1``
+            shows all columns; a positive int truncates the middle ones with
+            ``...`` to fit.
         display_index:
             Whether to include a pandas-like logical row index column.  If
             ``None`` (default), use the global value configured with
@@ -4229,21 +4301,26 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         nrows = self._n_rows
         ncols = len(self.col_names)
-        head_pos, tail_pos, hidden = self._display_positions()
+        rows_arg = -1 if max_rows is None else max_rows  # None ⇒ all rows
+        head_pos, tail_pos, hidden = self._display_positions(rows_arg)
         # Memoise per-column sparse gathers for the duration of this render so
         # the repeated (column, head_pos/tail_pos) lookups across precision,
         # width and row formatting only touch storage once.  head_pos/tail_pos
         # stay referenced below, so keying the cache on their id() is safe.
         self._display_fetch_cache = {}
         try:
-            return self._to_string_body(display_index, index_name, nrows, ncols, head_pos, tail_pos, hidden)
+            return self._to_string_body(
+                display_index, index_name, nrows, ncols, head_pos, tail_pos, hidden, max_width
+            )
         finally:
             self._display_fetch_cache = None
 
-    def _to_string_body(self, display_index, index_name, nrows, ncols, head_pos, tail_pos, hidden) -> str:
+    def _to_string_body(
+        self, display_index, index_name, nrows, ncols, head_pos, tail_pos, hidden, max_width=None
+    ) -> str:
         index_width = self._display_index_width(nrows, hidden, index_name) if display_index else 0
         display_cols, hidden_cols = self._display_columns(
-            display_index=display_index, index_width=index_width
+            display_index=display_index, index_width=index_width, max_width=max_width
         )
         # Warm the fetch cache with a single combined head+tail gather per column.
         # head_pos/tail_pos land in different blocks, but folding them into one
@@ -4289,13 +4366,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return "\n".join(lines)
 
     def __str__(self) -> str:
-        """Pandas-style tabular display with column names, dtypes, and a row count footer."""
-        return self.to_string()
+        """Pandas-style tabular display, truncated per :func:`blosc2.set_printoptions`."""
+        opts = _CTABLE_PRINT_OPTIONS
+        width = opts["display_width"]
+        if width is None:  # auto: fit to the current terminal
+            width = shutil.get_terminal_size((120, 20)).columns
+        return self.to_string(max_rows=opts["display_rows"], max_width=width)
 
     def __repr__(self) -> str:
-        """Short ``CTable<cols>(N rows, X compressed)`` summary string."""
-        cols = ", ".join(self.col_names)
-        return f"CTable<{cols}>({self._n_rows:,} rows, {_fmt_bytes(self.cbytes)} compressed)"
+        """Same truncated table as ``str`` (pandas/polars convention).
+
+        The compact ``CTable<cols>(N rows, …)`` summary is available via
+        :attr:`info`.
+        """
+        return self.__str__()
 
     def __len__(self):
         """Return the number of live (non-deleted) rows."""

@@ -783,9 +783,12 @@ def test_repr_contains_col_names_and_row_count():
     assert "20" in r
 
 
-def test_repr_is_single_line():
+def test_repr_matches_str_tabular():
+    # repr mirrors str: the truncated table (pandas/polars convention), not a
+    # one-line summary.  The compact summary lives on `info`.
     t = CTable(Row, new_data=DATA20)
-    assert "\n" not in repr(t)
+    assert repr(t) == str(t)
+    assert "\n" in repr(t)
 
 
 def test_column_repr_shows_preview_values():
