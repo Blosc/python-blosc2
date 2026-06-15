@@ -560,6 +560,28 @@ class StoreBrowser:
             "row_stop": stop,
         }
 
+    def read_cell(self, path: str, column: str, row: int) -> Any:
+        """Decode a single CTable cell — the on-demand path for expensive columns.
+
+        *row* is in the same live-row space as :meth:`preview` (it mirrors the
+        window/filter view precedence), so the row the grid shows is the cell
+        that gets decoded.  Returns the native Python value (list/dict/array/…),
+        not a NumPy-wrapped one, so callers can pretty-print its structure.
+        """
+        path = self.normalize_path(path)
+        obj = self._get_object(path)
+        if object_kind(obj) == "ctable":
+            # Same precedence as preview(): a locked row window wins over a
+            # filter view, so the visible row index resolves the same cell.
+            if path in self._window_views:
+                obj = self._window_views[path]
+            else:
+                obj = self._filter_views.get(path, obj)
+        values = obj[column][row : row + 1]
+        if len(values) == 0:
+            raise IndexError(f"row {row} is out of range")
+        return values[0]
+
     @staticmethod
     def _clamp_range(row_start: int, row_stop: int | None, n: int) -> tuple[int, int]:
         start = 0 if row_start is None else max(0, min(int(row_start), n))

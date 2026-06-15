@@ -847,3 +847,51 @@ async def test_plot_hires_view(store_path):
         await pilot.pause()
         assert app.screen is plot
         assert (plot.row_start, plot.row_stop) == (100, 140)
+
+
+# ── Expensive (skipped) CTable cell: decode on demand with Enter ─────────
+
+
+async def test_enter_decodes_skipped_cell(tmp_path):
+    """Enter on a ``<...; skipped>`` list cell opens the decoded-cell modal."""
+    import dataclasses
+
+    from blosc2.b2view.app import CellDetailScreen
+
+    @dataclasses.dataclass
+    class TaggedRow:
+        id: int = blosc2.field(blosc2.int32())
+        tags: list[int] = blosc2.field(blosc2.list(blosc2.int64(), nullable=True))  # noqa: RUF009
+
+    path = str(tmp_path / "tagged.b2z")
+    rows = [(i, list(range(i + 1))) for i in range(6)]
+    with blosc2.TreeStore(path, mode="w") as store:
+        store["/t"] = blosc2.CTable(TaggedRow, new_data=rows)
+
+    app = B2ViewApp(path, start_path="/t", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        table = await focus_data_table(pilot)
+
+        # The list column is a placeholder in the grid.
+        assert "tags" in (app.table_buffer.get("skipped_columns") or {})
+
+        # Enter on the cheap 'id' column does nothing special (no modal).
+        table.move_cursor(row=2, column=app.table_page["columns"].index("id"))
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, CellDetailScreen)
+
+        # Enter on the skipped 'tags' cell decodes just that row into a modal.
+        table.move_cursor(row=2, column=app.table_page["columns"].index("tags"))
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, CellDetailScreen)
+        assert app.screen._value == [0, 1, 2]  # row 2 of the generator above
+        assert app.screen._row == 2
+
+        # esc returns to the table with its position intact.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, CellDetailScreen)
+        assert table.cursor_row == 2

@@ -176,6 +176,41 @@ def test_preview_ctable_skips_expensive_nested_columns_by_default():
     assert preview["data"]["path"].tolist() == ["<list[struct]; skipped>"] * 3
 
 
+@dataclasses.dataclass
+class TaggedRow:
+    id: int = blosc2.field(blosc2.int32())
+    tags: list[int] = blosc2.field(blosc2.list(blosc2.int64(), nullable=True))  # noqa: RUF009
+
+
+def test_read_cell_decodes_expensive_column_on_demand(tmp_path):
+    path = tmp_path / "tagged.b2z"
+    rows = [(0, [0]), (1, [1, 10]), (2, [2, 20, 200]), (3, None)]
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/t"] = blosc2.CTable(TaggedRow, new_data=rows)
+
+    with StoreBrowser(str(path)) as browser:
+        # The expensive list column is a placeholder in the preview, ...
+        preview = browser.preview("/t", max_cols=2)
+        assert "tags" in preview["skipped_columns"]
+        # ... but read_cell decodes the exact cell the grid row points at.
+        assert browser.read_cell("/t", "tags", 2) == [2, 20, 200]
+        assert browser.read_cell("/t", "tags", 0) == [0]
+        assert browser.read_cell("/t", "tags", 3) is None
+
+
+def test_read_cell_honors_filter_view_row_space(tmp_path):
+    path = tmp_path / "tagged_filter.b2z"
+    rows = [(0, [0]), (1, [1, 10]), (2, [2, 20]), (3, [3, 30])]
+    with blosc2.TreeStore(str(path), mode="w") as store:
+        store["/t"] = blosc2.CTable(TaggedRow, new_data=rows)
+
+    with StoreBrowser(str(path)) as browser:
+        browser.set_filter("/t", "id >= 2")  # live view is rows [2, 3]
+        # read_cell row 0 must resolve to the first *visible* row (id == 2).
+        assert browser.read_cell("/t", "tags", 0) == [2, 20]
+        assert browser.read_cell("/t", "tags", 1) == [3, 30]
+
+
 def test_ctable_preview_preserves_ragged_nested_values():
     class Column:
         def __init__(self, values):

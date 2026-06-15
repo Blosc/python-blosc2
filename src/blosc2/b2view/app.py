@@ -121,6 +121,8 @@ class BufferedDataTable(DataTable):
         if getattr(app, "_dim_mode", False):
             getattr(app, "action_dim_toggle_nav", lambda: None)()
             return
+        if getattr(app, "_inspect_cursor_cell", lambda: False)():
+            return
         super().action_select_cursor()
 
     def _wheel_step(self) -> int:
@@ -227,6 +229,7 @@ class HelpScreen(ModalScreen[None]):
                 ("c", "go to column index or name..."),
                 ("/", "filter visible columns by substring (CTable)"),
                 ("p", "plot a whole-column overview (needs textual-plotext)"),
+                ("enter", "decode a skipped cell (list/struct/object column)"),
             ],
         ),
         (
@@ -818,6 +821,75 @@ class HiResPlotScreen(ModalScreen[None]):
     def action_close(self) -> None:
         # pop_screen (not dismiss): this screen is pushed without a result
         # callback, so it returns to the braille PlotScreen with its zoom intact.
+        self.app.pop_screen()
+
+
+class CellDetailScreen(ModalScreen[None]):
+    """Pretty-printed view of a single decoded CTable cell.
+
+    Reached with Return on an expensive (list/struct/object/ndarray) column
+    whose grid cell shows a ``<...; skipped>`` placeholder; the value is decoded
+    on demand.  The table stays underneath with its position intact (esc/q/enter
+    return).
+    """
+
+    CSS = """
+    CellDetailScreen {
+        align: center middle;
+    }
+    #cell-dialog {
+        width: 80%;
+        height: auto;
+        max-height: 90%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #cell-title {
+        text-style: bold;
+        height: 1;
+    }
+    #cell-body {
+        height: auto;
+        max-height: 1fr;
+        margin-top: 1;
+    }
+    #cell-keys {
+        height: 1;
+        color: $text-muted;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS: ClassVar = [
+        ("escape", "close", "Close"),
+        ("q", "close", "Close"),
+        ("enter", "close", "Close"),
+    ]
+
+    def __init__(self, *, row: int, name: str, label: str, value: Any):
+        super().__init__()
+        self._row = row
+        self._name = name
+        self._label = label
+        self._value = value
+
+    def compose(self) -> ComposeResult:
+        import pprint
+
+        title = f"row {self._row} · {self._name} ({self._label})"
+        text = pprint.pformat(self._value, width=100, sort_dicts=False)
+        with Vertical(id="cell-dialog"):
+            yield Static(markup_escape(title), id="cell-title")
+            # A VerticalScroll is focusable, so the screen's key bindings fire.
+            with VerticalScroll(id="cell-body"):
+                yield Static(markup_escape(text))
+            yield Static("esc/q · close", id="cell-keys")
+
+    def on_mount(self) -> None:
+        self.query_one("#cell-body", VerticalScroll).focus()
+
+    def action_close(self) -> None:
         self.app.pop_screen()
 
 
@@ -1654,6 +1726,39 @@ class B2ViewApp(App):
         self.push_screen(screen, self._go_to_row)
 
     _PLOT_MAX_POINTS = 2000
+
+    def _inspect_cursor_cell(self) -> bool:
+        """Return on a skipped CTable cell: decode just that cell into a modal.
+
+        Returns True when the key was consumed (the cursor sat on an expensive
+        ``<...; skipped>`` cell), so the data-table's default select handler is
+        skipped.  Anything else (numeric/text cells, non-CTable grids) returns
+        False and falls through.
+        """
+        if not self._in_data_grid() or self.table_page is None or self.browser is None:
+            return False
+        if self.table_page.get("source_kind") != "ctable":
+            return False
+        # skipped_columns lives on the buffer; _slice_table_buffer drops it.
+        skipped = (self.table_buffer or {}).get("skipped_columns") or {}
+        if not skipped:
+            return False
+        columns = self.table_page["columns"]
+        table = self.query_one("#data-table", DataTable)
+        cursor_col = table.cursor_column
+        if not (0 <= cursor_col < len(columns)):
+            return False
+        name = columns[cursor_col]
+        if name not in skipped:
+            return False
+        row = self.table_page["start"] + table.cursor_row
+        try:
+            value = self.browser.read_cell(self.selected_path, name, row)
+        except Exception as exc:  # pragma: no cover - defensive
+            self.notify(f"Could not decode cell: {exc}", severity="error")
+            return True  # we owned the key; surface the failure
+        self.push_screen(CellDetailScreen(row=row, name=name, label=skipped[name], value=value))
+        return True
 
     def action_plot_column(self) -> None:
         """p key — plot a downsampled overview of the whole cursor column."""

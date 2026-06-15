@@ -11,15 +11,7 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ### Data panel
 
-- [ ] CTable expensive columns (list/struct/object) show a `<...; skipped>`
-      placeholder; offer on-demand decoding (e.g. a key to materialize the
-      column, or decode just the cursor row).
 - [ ] SChunk preview is not implemented (`model.preview` returns a message).
-- [ ] Live mini-plot in the data panel that follows paging: a small,
-      always-visible braille plot of the current row window (or cursor column),
-      redrawn on paging — a sparkline companion to the table, vs. the one-shot
-      `p` modal.  Reuses `plot_series`; the work is layout (find room in the
-      data panel) and wiring the redraw to the paging events.
 ### Testing
 
 - [ ] Visual regressions: consider `pytest-textual-snapshot` (SVG snapshots)
@@ -27,6 +19,18 @@ Tests live in `tests/b2view/` (marker `tui`); see the note at the top of
 
 ## Done
 
+- 2026-06-15: Expensive CTable cells (list/struct/object/ndarray columns) show a
+  `<...; skipped>` placeholder; **Enter** on such a cell now decodes just that
+  one cell on demand into a `CellDetailScreen` modal (pretty-printed, scrollable,
+  esc/q/enter to return — the table keeps its position).  Backed by
+  `StoreBrowser.read_cell(path, column, row)`, which mirrors `preview`'s
+  window/filter view precedence so the visible row resolves the same cell.
+  `BufferedDataTable.action_select_cursor` falls through to
+  `B2ViewApp._inspect_cursor_cell` when not in dim mode (skipped cells only,
+  else the default select); `skipped_columns` is read from `table_buffer` (it is
+  dropped by `_slice_table_buffer`).  Tests: `read_cell` cases in
+  `test_b2view_model.py` (decode + filter-view row space) and the Pilot
+  `test_enter_decodes_skipped_cell`.
 - 2026-06-14: `h` in the plot modal opens a high-res matplotlib image of the
   current raw range, over the braille plot (`q`/`esc`/`h` return with the zoom
   intact).  `model.read_series` reads the exact values for `[row_start, row_stop)`
