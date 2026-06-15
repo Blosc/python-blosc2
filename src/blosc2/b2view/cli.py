@@ -28,6 +28,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    import blosc2
+
+    if blosc2.IS_WASM:
+        print(
+            "b2view is an interactive terminal UI and is not supported in the "
+            "Pyodide/WebAssembly build of blosc2:\nthere is no terminal driver "
+            "(termios) available in this environment.\n"
+            "Run b2view from a native (CPython) install instead.",
+            file=sys.stderr,
+        )
+        return 1
+
     try:
         from blosc2.b2view.app import B2ViewApp
     except ImportError as exc:
