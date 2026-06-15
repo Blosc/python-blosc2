@@ -433,20 +433,29 @@ class StoreBrowser:
 
         Pass *row_start*/*row_stop* to zoom into a sub-range (always read
         exactly; ``x`` stays in absolute row coordinates).  The series is a
-        CTable column (*column* is its name; an active row filter is honored) or
-        an array (*column* is the global index along the column dimension of
-        *layout*, or None for 1-D arrays).
+        CTable column (*column* is its name; a locked row window takes
+        precedence, otherwise an active row filter is honored) or an array
+        (*column* is the global index along the column dimension of *layout*,
+        or None for 1-D arrays).
         """
         path = self.normalize_path(path)
         obj = self._get_object(path)
         kind = object_kind(obj)
 
         if kind == "ctable":
-            filtered = path in self._filter_views
-            view = self._filter_views.get(path, obj)
+            # A locked row window (set by 'v') takes precedence over any row
+            # filter, mirroring preview()/read_cell(): a plot shows exactly the
+            # rows the grid is showing.  The SUMMARY fast-path spans the whole
+            # column, so it is only valid when neither narrows the series.
+            if path in self._window_views:
+                view = self._window_views[path]
+                narrowed = True
+            else:
+                view = self._filter_views.get(path, obj)
+                narrowed = path in self._filter_views
             n = len(view)
             start, stop = self._clamp_range(row_start, row_stop, n)
-            if start == 0 and stop == n and not filtered:
+            if start == 0 and stop == n and not narrowed:
                 env = self._column_summary_envelope(obj, column, n, max_points)
                 if env is not None:
                     return {**env, "n": n, "row_start": start, "row_stop": stop, "method": "summary"}
@@ -514,8 +523,9 @@ class StoreBrowser:
     ) -> dict[str, Any]:
         """Return the *raw* values of one series over ``[row_start, row_stop)``.
 
-        Same series selection as :meth:`plot_series` (CTable column honoring an
-        active filter, or an array column via *layout*) but with no bucketing —
+        Same series selection as :meth:`plot_series` (CTable column honoring a
+        locked row window then an active filter, or an array column via
+        *layout*) but with no bucketing —
         every value is read exactly, for the high-res ``h`` view.  The result is
         ``{"x", "y", "n", "row_start", "row_stop"}`` with ``x`` in absolute row
         coordinates.  This reads exactly what is asked, so callers must bound the
@@ -526,7 +536,12 @@ class StoreBrowser:
         kind = object_kind(obj)
 
         if kind == "ctable":
-            view = self._filter_views.get(path, obj)
+            # Honor a locked row window first, then any row filter, matching
+            # preview()/read_cell() so the hi-res view tracks the visible grid.
+            if path in self._window_views:
+                view = self._window_views[path]
+            else:
+                view = self._filter_views.get(path, obj)
             n = len(view)
             start, stop = self._clamp_range(row_start, row_stop, n)
             y = safe_asarray(view[column][start:stop])

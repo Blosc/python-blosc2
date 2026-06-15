@@ -193,6 +193,27 @@ def test_read_series_clamps_range(plot_store):
     assert clamped["y"].shape == (N,)
 
 
+def test_locked_row_window_confines_plot_and_read_series(plot_store):
+    """A locked row window (the 'v' action) takes precedence over the full
+    series in both plot_series and read_series, matching preview()/read_cell()
+    (PR #663 review): a plot/hi-res of a windowed CTable shows only its rows."""
+    path, vals = plot_store
+    lo, hi = 1000, 1500
+    with StoreBrowser(path) as browser:
+        browser.set_row_window("/ctable", lo, hi)
+
+        env = browser.plot_series("/ctable", column="x", max_points=MAX_POINTS)
+        assert env["n"] == hi - lo  # window length, not the full series
+        assert env["method"] != "summary"  # whole-column fast-path disabled
+        expected = _reduce_envelope(vals[lo:hi], hi - lo, MAX_POINTS)
+        np.testing.assert_allclose(env["ymin"], expected["ymin"], equal_nan=True)
+        np.testing.assert_allclose(env["ymax"], expected["ymax"], equal_nan=True)
+
+        raw = browser.read_series("/ctable", column="x")
+        assert raw["n"] == hi - lo
+        np.testing.assert_array_equal(raw["y"], vals[lo:hi])
+
+
 def test_streaming_reducer_integer_dtype():
     vals = np.arange(1000, dtype=np.int64)
     env = _minmax_buckets_streaming(lambda s, e: vals[s:e], 1000, 100, span=33)
