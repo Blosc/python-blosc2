@@ -813,36 +813,39 @@ class StoreBrowser:
         """Return the unfiltered row count of the CTable at *path*."""
         return len(self._get_object(path))
 
-    def set_column_filter(self, path: str, pattern: str | None) -> int:
-        """Set or clear the column filter of a CTable path; return the match count.
+    def set_column_selection(self, path: str, names: list[str] | None) -> int:
+        """Restrict a CTable path to an explicit ordered set of *names*.
 
-        Columns are matched by case-insensitive substring, keeping the table
-        order.  An empty (or None) *pattern* clears the filter.  A pattern
-        matching no column raises ValueError and leaves any previous filter
-        untouched.
+        Keeps an arbitrary chosen subset, in table order.  Unknown names are
+        dropped; an empty (or None) selection — or one naming every column —
+        clears the filter (all columns visible).  Returns the number of columns
+        now visible.  A status-chip descriptor is stored in ``_column_filters``
+        so :meth:`get_column_filter` stays truthy while a selection is active.
         """
         path = self.normalize_path(path)
-        pattern = (pattern or "").strip()
         all_names = list(getattr(self._get_object(path), "col_names", []) or [])
-        if not pattern:
+        chosen = set(names or [])
+        selection = [name for name in all_names if name in chosen]
+        if not selection or len(selection) == len(all_names):
+            # Nothing chosen, or everything chosen -> no narrowing; clear.
             self._column_filters.pop(path, None)
             self._column_selections.pop(path, None)
             return len(all_names)
-        needle = pattern.lower()
-        selection = [name for name in all_names if needle in name.lower()]
-        if not selection:
-            raise ValueError(f"no column matches {pattern!r}")
-        self._column_filters[path] = pattern
+        self._column_filters[path] = f"{len(selection)} of {len(all_names)}"
         self._column_selections[path] = selection
         return len(selection)
 
     def get_column_filter(self, path: str) -> str | None:
-        """Return the active column filter pattern for *path*, if any."""
+        """Return the active column filter descriptor for *path*, if any."""
         return self._column_filters.get(self.normalize_path(path))
 
     def base_ncols(self, path: str) -> int:
         """Return the unfiltered column count of the CTable at *path*."""
         return len(list(getattr(self._get_object(path), "col_names", []) or []))
+
+    def base_column_names(self, path: str) -> list[str]:
+        """Return all column names of the CTable at *path*, ignoring any filter."""
+        return list(getattr(self._get_object(path), "col_names", []) or [])
 
     def _get_object(self, path: str) -> Any:
         """Return the object represented by *path*."""

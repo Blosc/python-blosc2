@@ -46,9 +46,16 @@ if blosc2.IS_WASM:
     pytest.skip("Textual apps need a terminal driver (termios)", allow_module_level=True)
 
 import tree_store_gen as gen
-from textual.widgets import DataTable, Input, Tree
+from textual.widgets import DataTable, Input, SelectionList, Tree
 
-from blosc2.b2view.app import B2ViewApp, FilterScreen, GoToColumnScreen, GoToRowScreen, HelpScreen
+from blosc2.b2view.app import (
+    B2ViewApp,
+    ColumnFilterScreen,
+    FilterScreen,
+    GoToColumnScreen,
+    GoToRowScreen,
+    HelpScreen,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.tui]
 
@@ -623,55 +630,77 @@ async def test_ctable_filtering(store_path):
         assert app.browser.get_filter("/level0/ctable") is None
         assert app.table_page["nrows"] == NROWS
 
-        # ── Column filtering ('/' modal) ─────────────────────────────────
+        # ── Column picking ('/' searchable multi-select) ─────────────────
 
-        async def submit_column_filter(pattern: str) -> None:
-            await pilot.press("slash")
-            await pilot.pause()
-            assert isinstance(app.screen, FilterScreen)
-            app.screen.query_one("#filter-input", Input).value = pattern
-            await pilot.press("enter")
-            await wait_for_table(pilot)
+        ncols = len(expected)  # a, b, c, d, v04..v19
 
-        # 'v1' matches v10..v19; paging universe shrinks to those 10 columns
-        await submit_column_filter("v1")
+        # '/' opens the picker with the currently-shown columns pre-checked.
+        await pilot.press("slash")
+        await pilot.pause()
+        assert isinstance(app.screen, ColumnFilterScreen)
+        sel = app.screen.query_one("#colfilter-list", SelectionList)
+        assert sel.option_count == ncols
+        assert len(sel.selected) == ncols  # all checked initially
+
+        # Typing narrows the candidate list (substring, case-insensitive).
+        app.screen.query_one("#colfilter-input", Input).value = "v1"
+        await pilot.pause()
+        assert sel.option_count == 10  # v10..v19
+        # Clear the filter again so the first column ('a') is reachable.
+        app.screen.query_one("#colfilter-input", Input).value = ""
+        await pilot.pause()
+
+        # ↓ moves focus into the list; Space unchecks the highlighted ('a');
+        # Enter applies the remaining set.
+        await pilot.press("down")
+        await pilot.pause()
+        assert sel.has_focus
+        await pilot.press("space")
+        await pilot.pause()
+        await pilot.press("enter")
+        await wait_for_table(pilot)
         page = app.table_page
-        assert page["ncols"] == 10
-        assert page["columns"][0] == "v10"
-        assert all(name.startswith("v1") for name in page["columns"])
+        assert page["ncols"] == ncols - 1
+        assert "a" not in page["columns"]
+        assert page["columns"][0] == "b"
+        assert app.browser.get_column_filter("/level0/ctable") == f"{ncols - 1} of {ncols}"
 
-        # The goto-column modal resolves names within the filtered set
+        # The goto-column modal resolves names within the visible set.
         await pilot.press("c")
         await pilot.pause()
         app.screen.query_one("#gotocol-input", Input).value = "v15"
         await pilot.press("enter")
         await wait_for_table(pilot)
         assert app.table_page["columns"][0] == "v15"
-
-        # Row and column filters combine (back at the first column window)
-        await pilot.press("s")
+        await pilot.press("s")  # back to the first column window
         await wait_for_table(pilot)
+
+        # Row and column filters combine.
         await submit_filter("b >= 100 and b < 110")
         page = app.table_page
         assert page["nrows"] == 10
-        assert page["ncols"] == 10
-        np.testing.assert_array_equal(page["data"]["v10"], expected["v10"][100:110])
+        assert page["ncols"] == ncols - 1
+        np.testing.assert_array_equal(page["data"]["b"], expected["b"][100:110])
 
-        # A pattern matching nothing notifies and keeps the selection
-        await submit_column_filter("nosuchcol")
-        assert app.browser.get_column_filter("/level0/ctable") == "v1"
-        assert app.table_page["ncols"] == 10
+        # Re-opening pre-checks the visible set; Escape cancels (no change).
+        await pilot.press("slash")
+        await pilot.pause()
+        assert isinstance(app.screen, ColumnFilterScreen)
+        assert len(app.screen.query_one("#colfilter-list", SelectionList).selected) == ncols - 1
+        await pilot.press("escape")
+        await wait_for_table(pilot)
+        assert app.table_page["ncols"] == ncols - 1
 
-        # Escape clears one layer at a time: row filter first, then columns
+        # Escape clears one layer at a time: row filter first, then columns.
         await pilot.press("escape")
         await wait_for_table(pilot)
         assert app.browser.get_filter("/level0/ctable") is None
         assert app.table_page["nrows"] == NROWS
-        assert app.table_page["ncols"] == 10
+        assert app.table_page["ncols"] == ncols - 1
         await pilot.press("escape")
         await wait_for_table(pilot)
         assert app.browser.get_column_filter("/level0/ctable") is None
-        assert app.table_page["ncols"] == len(expected)
+        assert app.table_page["ncols"] == ncols
 
 
 # ── Plotting ('p' key, optional textual-plotext) ─────────────────────────

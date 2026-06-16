@@ -12,8 +12,9 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.theme import Theme
-from textual.widgets import DataTable, Footer, Header, Input, OptionList, Static, Tree
+from textual.widgets import DataTable, Footer, Header, Input, OptionList, SelectionList, Static, Tree
 from textual.widgets.option_list import Option
+from textual.widgets.selection_list import Selection
 
 try:
     from textual_plotext import PlotextPlot
@@ -248,7 +249,7 @@ class HelpScreen(ModalScreen[None]):
                 ("left / right", "move cursor; pages at the edges"),
                 ("s / e  (home / end)", "first / last column window"),
                 ("c", "go to column index or name..."),
-                ("/", "filter visible columns by substring (CTable)"),
+                ("/", "pick which columns to show (searchable multi-select; CTable)"),
                 ("p", "plot a whole-column overview (needs textual-plotext)"),
                 ("enter", "decode a skipped cell (list/struct/object column)"),
             ],
@@ -512,6 +513,123 @@ class ColumnSelectScreen(ModalScreen["int | None"]):
             option_list = self.query_one("#colselect-list", OptionList)
             (option_list.action_cursor_down if event.key == "down" else option_list.action_cursor_up)()
             event.stop()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class _ApplySelectionList(SelectionList):
+    """A SelectionList whose Enter *applies* (dismisses) instead of toggling.
+
+    SelectionList toggles the highlighted row on Space; Enter is inherited from
+    OptionList as another toggle.  Here Enter is rebound so it bubbles up as
+    "apply the chosen set", matching the Enter-applies convention of the other
+    b2view modals (Space still toggles).
+    """
+
+    BINDINGS: ClassVar = [Binding("enter", "apply", "Apply", show=False)]
+
+    def action_apply(self) -> None:
+        self.screen.action_apply_filter()
+
+
+class ColumnFilterScreen(ModalScreen["list[str] | None"]):
+    """Searchable multi-select for which CTable columns to show.
+
+    Type in the filter box to narrow the candidate list; Tab (or ↓) moves into
+    the checkbox list where Space toggles a column; Enter applies the checked
+    set and Escape cancels.  Opens with the currently-visible columns checked;
+    applying an empty set (or all of them) shows every column.
+
+    Dismisses with the chosen column names in table order, or ``None`` on cancel.
+    """
+
+    CSS = """
+    ColumnFilterScreen {
+        align: center middle;
+    }
+    #colfilter-dialog {
+        width: 60;
+        height: auto;
+        max-height: 90%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #colfilter-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #colfilter-list {
+        height: auto;
+        max-height: 18;
+    }
+    """
+
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, *, names: list[str], selected: list[str]):
+        super().__init__()
+        self.names = names
+        self._checked: set[str] = {n for n in selected if n in set(names)}
+        self._visible: list[str] = list(names)
+        self._populating = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="colfilter-dialog"):
+            yield Static(
+                "Show columns — type to filter · Tab/↓ to list · Space toggles · Enter applies",
+                id="colfilter-title",
+            )
+            yield Input(placeholder="type to filter…", id="colfilter-input")
+            yield _ApplySelectionList(id="colfilter-list")
+
+    def on_mount(self) -> None:
+        self._populate("")
+        self.query_one("#colfilter-input", Input).focus()
+
+    def _populate(self, query: str) -> None:
+        """Refill the checkbox list with names matching *query*, preserving checks.
+
+        ``_checked`` is the source of truth across re-filters (a checked column
+        that scrolls out of the filtered view stays checked); each option's box
+        is seeded from it.
+        """
+        q = query.strip().lower()
+        sel = self.query_one("#colfilter-list", SelectionList)
+        self._visible = [name for name in self.names if q in name.lower()]
+        self._populating = True
+        try:
+            sel.clear_options()
+            sel.add_options([Selection(name, name, name in self._checked) for name in self._visible])
+            if self._visible:
+                sel.highlighted = 0
+        finally:
+            self._populating = False
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._populate(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.action_apply_filter()
+
+    def on_selection_list_selected_changed(self, event: SelectionList.SelectedChanged) -> None:
+        # Merge the visible options' checkbox states into _checked, leaving any
+        # checked-but-filtered-out columns untouched.  Skipped while _populate
+        # is rebuilding the list (those toggles are not user actions).
+        if self._populating:
+            return
+        selected = set(event.selection_list.selected)
+        self._checked = (self._checked - set(self._visible)) | selected
+
+    def on_key(self, event: events.Key) -> None:
+        # ↓ from the filter box drops focus into the checkbox list (Tab also works).
+        if event.key == "down" and self.query_one("#colfilter-input", Input).has_focus:
+            self.query_one("#colfilter-list", SelectionList).focus()
+            event.stop()
+
+    def action_apply_filter(self) -> None:
+        self.dismiss([name for name in self.names if name in self._checked])
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -2027,8 +2145,7 @@ class B2ViewApp(App):
                 total = self.browser.base_nrows(self.selected_path)
                 chips.append(f"filter: [bold]{markup_escape(flt)}[/bold] ({total} total)")
             if col_flt:
-                total_cols = self.browser.base_ncols(self.selected_path)
-                chips.append(f"cols: [bold]{markup_escape(col_flt)}[/bold] ({total_cols} total)")
+                chips.append(f"cols: [bold]{markup_escape(col_flt)}[/bold]")
             if flt or col_flt or self.row_window is not None:
                 chips.append("<Esc>unlock/clear")
         return chips
@@ -2362,23 +2479,22 @@ class B2ViewApp(App):
         if self.table_page.get("source_kind") != "ctable":
             self.notify("Column filtering is only supported for CTable nodes", severity="warning")
             return
-        screen = FilterScreen(
-            current=self.browser.get_column_filter(self.selected_path),
-            title="Filter columns by substring (empty clears)",
-            placeholder="e.g. payment",
+        # Preselect the currently-shown columns (column_names honors any active
+        # selection); the picker universe is the full, unfiltered column set.
+        screen = ColumnFilterScreen(
+            names=self.browser.base_column_names(self.selected_path),
+            selected=self.browser.column_names(self.selected_path) or [],
         )
-        self.push_screen(screen, self._apply_column_filter)
+        self.push_screen(screen, self._apply_column_selection)
 
-    def _apply_column_filter(self, pattern: str | None) -> None:
-        if pattern is None or self.browser is None or self.table_page is None:
-            return
-        if pattern == (self.browser.get_column_filter(self.selected_path) or ""):
-            return
-        try:
-            self.browser.set_column_filter(self.selected_path, pattern)
-        except Exception as exc:
-            self.notify(f"Invalid column filter: {exc}", severity="error")
-            return
+    def _apply_column_selection(self, names: list[str] | None) -> None:
+        if names is None or self.browser is None or self.table_page is None:
+            return  # cancelled
+        self.browser.set_column_selection(self.selected_path, names)
+        self._reload_columns()
+
+    def _reload_columns(self) -> None:
+        """Reload the grid after the visible-column set changed."""
         self.grid_col_start = 0
         self.table_buffer = None
         data = self._load_table_page(self.selected_path, self.table_page["start"])
@@ -2649,7 +2765,8 @@ class B2ViewApp(App):
         if self.browser.get_filter(self.selected_path):
             self._apply_filter("")
         elif self.browser.get_column_filter(self.selected_path):
-            self._apply_column_filter("")
+            self.browser.set_column_selection(self.selected_path, None)
+            self._reload_columns()
 
     def action_grid_row_top(self) -> None:
         """Jump to the first row of the table."""
