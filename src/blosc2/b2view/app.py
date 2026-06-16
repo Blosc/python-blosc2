@@ -12,6 +12,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.theme import Theme
 from textual.widgets import (
@@ -1524,6 +1525,81 @@ class DownloadScreen(ModalScreen["bool | str"]):
         self.app.call_from_thread(self.dismiss, True)
 
 
+class B2ViewHeader(Header):
+    """App header that also shows the open bundle's filename, docked left.
+
+    Adds a left-docked filename label next to the stock icon plus a right-docked
+    spacer of the *same* width, so the title ("b2view — Python-Blosc2 X") stays
+    centered across the full header.  The two widths are recomputed on resize so
+    the title's full text is reserved first and the filename only takes what is
+    left over (truncating, then hiding, as the terminal narrows) — the title
+    keeps its room as long as possible.  Set the name with :meth:`set_filename`.
+    """
+
+    _ICON_WIDTH = 8  # HeaderIcon dock width
+    _CLOCK_WIDTH = 10  # HeaderClockSpace dock width
+
+    _GAP = 2  # cells kept between the filename and the centered title
+
+    DEFAULT_CSS = """
+    B2ViewHeader #header-filename, B2ViewHeader #header-spacer {
+        dock: left;
+        text-opacity: 85%;
+        text-style: italic;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+        content-align: left middle;
+    }
+    B2ViewHeader #header-spacer {
+        dock: right;
+    }
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._label = ""
+
+    def compose(self) -> ComposeResult:
+        yield from super().compose()
+        yield Static(id="header-filename")
+        yield Static(id="header-spacer")  # mirrors the filename width to keep the title centered
+
+    def set_filename(self, label: str) -> None:
+        self._label = label
+        self._relayout()
+
+    def on_resize(self) -> None:
+        self._relayout()
+
+    def _relayout(self) -> None:
+        """Size the filename + mirror spacer, reserving the title's width first.
+
+        No CSS padding (the width math stays in exact cells): a leading space on
+        the label provides the gap from the icon.
+        """
+        try:
+            fname = self.query_one("#header-filename", Static)
+            spacer = self.query_one("#header-spacer", Static)
+        except NoMatches:
+            return  # not composed yet
+        text = f" {self._label}" if self._label else ""
+        fname.update(text)
+        title = self.app.title or ""
+        sub = self.app.sub_title or ""
+        title_len = len(title) + (len(sub) + 3 if sub else 0)  # "title — sub"
+        # Reserve the icon, clock, the full title and a gap; split the rest
+        # symmetrically so the title stays centered and fully visible — the
+        # filename takes only the leftover, truncating then hiding as it tightens.
+        budget = self.size.width - self._ICON_WIDTH - self._CLOCK_WIDTH - title_len - self._GAP
+        each = max(0, budget // 2)
+        fname_w = min(len(text), each) if text else 0
+        show = fname_w >= 2  # below this there is not even room for " x"
+        for widget in (fname, spacer):
+            widget.display = show
+            if show:
+                widget.styles.width = fname_w
+
+
 class B2ViewApp(App):
     """Browse TreeStore hierarchy and preview objects."""
 
@@ -1587,6 +1663,9 @@ class B2ViewApp(App):
         self.urlpath = urlpath
         self.download_url = download_url  # when set, fetch urlpath before browsing
         self.info_url = info_url  # optional: metadata endpoint giving the size
+        # Header label: the path as given on the CLI, or the @public-relative
+        # path for a download (set in on_mount once that is known).
+        self._header_label = urlpath
         self.start_path = start_path
         self.start_panel = start_panel
         self.preview_rows = preview_rows
@@ -1608,7 +1687,7 @@ class B2ViewApp(App):
         self.row_window: tuple[int, int] | None = None
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield B2ViewHeader()
         with Horizontal(id="main"):
             with B2ViewPanel(id="tree-pane") as tree_pane:
                 tree_pane.border_title = "tree"
@@ -1648,6 +1727,7 @@ class B2ViewApp(App):
             name = os.path.basename(self.urlpath)
             if "/@public/" in self.download_url:
                 name = self.download_url.split("/@public/", 1)[1]
+            self._header_label = name  # @public-relative path for the header
             # A browsable URL for the source root, so the user can see where the
             # file comes from: e.g. https://cat2.cloud/demo/?roots=@public
             source_url = None
@@ -1676,6 +1756,7 @@ class B2ViewApp(App):
     def _start_browsing(self) -> None:
         """Open the bundle and populate the tree (the normal startup path)."""
         self.browser = StoreBrowser(self.urlpath)
+        self.query_one(B2ViewHeader).set_filename(self._header_label)
         tree = self.query_one("#tree", Tree)
         tree.root.data = "/"
         self.load_children(tree.root)

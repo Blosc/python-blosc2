@@ -1118,10 +1118,11 @@ async def test_download_then_browse(store_path, tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "_http_download", fake_download)
     monkeypatch.setattr(app_module, "_fetch_remote_size", lambda info_url: size)
 
+    download_url = "https://cat2.cloud/demo/api/download/@public/large/fetched.b2z"
     app = B2ViewApp(
         dest,
-        download_url="http://example.test/fetched.b2z",
-        info_url="http://example.test/info/fetched.b2z",
+        download_url=download_url,
+        info_url="https://cat2.cloud/demo/api/info/@public/large/fetched.b2z",
     )
     async with app.run_test(size=TERM_SIZE) as pilot:
         await pilot.pause()
@@ -1137,7 +1138,11 @@ async def test_download_then_browse(store_path, tmp_path, monkeypatch):
             if app.browser is not None:
                 break
         # Download finished -> screen dismissed and normal browsing resumed.
-        assert calls == [("http://example.test/fetched.b2z", dest)]
+        assert calls == [(download_url, dest)]
         assert not isinstance(app.screen, DownloadScreen)
         assert app.browser is not None
         assert len(app.query_one("#tree", Tree).root.children) > 0
+        # The header shows the @public-relative path, docked left of the title.
+        from textual.widgets import Static
+
+        assert str(app.query_one("#header-filename", Static).render()).strip() == "large/fetched.b2z"
