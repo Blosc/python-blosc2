@@ -1544,6 +1544,14 @@ class B2ViewHeader(Header):
     _GAP = 2  # cells kept between the filename and the centered title
 
     DEFAULT_CSS = """
+    B2ViewHeader {
+        background: $primary;  /* Blosc2 turquoise brand bar */
+        color: $foreground;
+    }
+    B2ViewHeader HeaderIcon {
+        color: $accent;  /* yellow command-palette glyph */
+        width: 4;  /* tighten the gap to the filename (stock is 8) */
+    }
     B2ViewHeader HeaderTitle {
         content-align: left middle;  /* we place the title ourselves */
     }
