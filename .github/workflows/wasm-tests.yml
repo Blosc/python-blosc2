@@ -1,0 +1,33 @@
+name: Tests (WASM)
+
+on:                         # same cadence as build.yml ("same as other tests")
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+env:
+  CIBW_BUILD_VERBOSITY: 1
+
+jobs:
+  test_wasm:
+    name: Build & test WASM/Pyodide wheel (Python 3.14)
+    runs-on: ubuntu-latest
+    env:
+      CIBW_BUILD: "cp314-*"
+      CIBW_PYODIDE_VERSION: "314.0.0"
+      # WASM/Pyodide has no SIMD/runtime CPU detection; disable optimised paths
+      CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
+      # cibuildwheel runs the suite automatically in the node/pyodide runtime
+      CIBW_TEST_COMMAND: "pytest {project}/tests"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake
+      - name: Install cibuildwheel
+        run: pip install "cibuildwheel==4.1.*"
+      - name: Build and test wheel
+        run: cibuildwheel --platform pyodide   # platform=pyodide is CLI-only
