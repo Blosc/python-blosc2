@@ -28,6 +28,7 @@ try:
 except ImportError:  # high-res view is optional
     TextualImage = None
 
+import blosc2
 from blosc2.b2view.model import DataSliceLayout, StoreBrowser
 from blosc2.b2view.render import (
     column_float_decimals,
@@ -1392,6 +1393,8 @@ class CellDetailScreen(ModalScreen[None]):
 class B2ViewApp(App):
     """Browse TreeStore hierarchy and preview objects."""
 
+    TITLE = "b2view"  # header title (defaults to the class name otherwise)
+
     CSS = """
     #main { height: 1fr; }
     #tree-pane { width: 35%; border: solid $primary; }
@@ -1444,6 +1447,7 @@ class B2ViewApp(App):
         preview_cols: int = 10,
     ):
         super().__init__()
+        self.sub_title = f"Python-Blosc2 {blosc2.__version__}"  # shown beside the title in the header
         self.urlpath = urlpath
         self.start_path = start_path
         self.start_panel = start_panel
