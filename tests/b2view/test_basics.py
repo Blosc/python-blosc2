@@ -1140,7 +1140,7 @@ async def test_download_then_browse(store_path, tmp_path, monkeypatch):
         assert not isinstance(app.screen, DownloadScreen)
         assert app.browser is not None
         assert len(app.query_one("#tree", Tree).root.children) > 0
-        # The header shows the @public-relative path, docked left of the title.
-        from textual.widgets import Static
+        # The header shows the @public-relative path to the left of the title.
+        from textual.widgets._header import HeaderTitle
 
-        assert str(app.query_one("#header-filename", Static).render()).strip() == "large/fetched.b2z"
+        assert "large/fetched.b2z" in app.query_one(HeaderTitle).render().plain

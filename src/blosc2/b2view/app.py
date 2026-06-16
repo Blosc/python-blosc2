@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -12,6 +13,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.theme import Theme
@@ -26,6 +28,7 @@ from textual.widgets import (
     Static,
     Tree,
 )
+from textual.widgets._header import HeaderTitle
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
 
@@ -1526,32 +1529,23 @@ class DownloadScreen(ModalScreen["bool | str"]):
 
 
 class B2ViewHeader(Header):
-    """App header that also shows the open bundle's filename, docked left.
+    """App header that also shows the open bundle's filename, left of the title.
 
-    Adds a left-docked filename label next to the stock icon plus a right-docked
-    spacer of the *same* width, so the title ("b2view — Python-Blosc2 X") stays
-    centered across the full header.  The two widths are recomputed on resize so
-    the title's full text is reserved first and the filename only takes what is
-    left over (truncating, then hiding, as the terminal narrows) — the title
-    keeps its room as long as possible.  Set the name with :meth:`set_filename`.
+    The filename is rendered *into the stock ``HeaderTitle`` widget* (in the
+    space left of the centered "b2view — Python-Blosc2 X" title) rather than as
+    extra docked child widgets.  Adding docked children to the Header was found
+    to break Tab focus cycling between the panels under the Windows test driver,
+    so this keeps the Header's widget tree exactly as Textual builds it and only
+    overrides what the title renders.  The filename takes only the room left over
+    once the centered title is reserved, truncating (with an ellipsis) as the
+    terminal narrows.  Set the name with :meth:`set_filename`.
     """
-
-    _ICON_WIDTH = 8  # HeaderIcon dock width
-    _CLOCK_WIDTH = 10  # HeaderClockSpace dock width
 
     _GAP = 2  # cells kept between the filename and the centered title
 
     DEFAULT_CSS = """
-    B2ViewHeader #header-filename, B2ViewHeader #header-spacer {
-        dock: left;
-        text-opacity: 85%;
-        text-style: italic;
-        text-wrap: nowrap;
-        text-overflow: ellipsis;
-        content-align: left middle;
-    }
-    B2ViewHeader #header-spacer {
-        dock: right;
+    B2ViewHeader HeaderTitle {
+        content-align: left middle;  /* we place the title ourselves */
     }
     """
 
@@ -1559,45 +1553,44 @@ class B2ViewHeader(Header):
         super().__init__(*args, **kwargs)
         self._label = ""
 
-    def compose(self) -> ComposeResult:
-        yield from super().compose()
-        yield Static(id="header-filename")
-        yield Static(id="header-spacer")  # mirrors the filename width to keep the title centered
-
     def set_filename(self, label: str) -> None:
         self._label = label
-        self._relayout()
+        self._refresh_title()
 
     def on_resize(self) -> None:
-        self._relayout()
+        self._refresh_title()
 
-    def _relayout(self) -> None:
-        """Size the filename + mirror spacer, reserving the title's width first.
+    def _refresh_title(self) -> None:
+        with contextlib.suppress(NoMatches):  # HeaderTitle may not be composed yet
+            self.query_one(HeaderTitle).update(self.format_title())
 
-        No CSS padding (the width math stays in exact cells): a leading space on
-        the label provides the gap from the icon.
+    def format_title(self) -> Content:
+        """Render the centered title with the filename in the left gutter.
+
+        With no filename (or no room for one) this is just the stock centered
+        title.  Otherwise the title is left-padded so it stays centered across
+        the ``HeaderTitle`` region, and the filename fills the left gutter.
         """
+        base = super().format_title()
+        if not self._label:
+            return base
         try:
-            fname = self.query_one("#header-filename", Static)
-            spacer = self.query_one("#header-spacer", Static)
+            width = self.query_one(HeaderTitle).content_size.width
         except NoMatches:
-            return  # not composed yet
-        text = f" {self._label}" if self._label else ""
-        fname.update(text)
-        title = self.app.title or ""
-        sub = self.app.sub_title or ""
-        title_len = len(title) + (len(sub) + 3 if sub else 0)  # "title — sub"
-        # Reserve the icon, clock, the full title and a gap; split the rest
-        # symmetrically so the title stays centered and fully visible — the
-        # filename takes only the leftover, truncating then hiding as it tightens.
-        budget = self.size.width - self._ICON_WIDTH - self._CLOCK_WIDTH - title_len - self._GAP
-        each = max(0, budget // 2)
-        fname_w = min(len(text), each) if text else 0
-        show = fname_w >= 2  # below this there is not even room for " x"
-        for widget in (fname, spacer):
-            widget.display = show
-            if show:
-                widget.styles.width = fname_w
+            return base
+        title_len = base.cell_length
+        if width <= 0 or title_len >= width:
+            return base  # not even room for the title alone
+        # Left padding that centers the title across the full HeaderTitle width.
+        left_pad = (width - title_len) // 2
+        avail = left_pad - self._GAP  # cells the filename may use
+        if avail < 2:  # below this there is not even room for " x"
+            return base
+        label = f" {self._label}"
+        if len(label) > avail:
+            label = label[: avail - 1] + "…"
+        gutter = " " * (left_pad - len(label))
+        return Content.assemble((label, "italic dim"), gutter, base)
 
 
 class B2ViewApp(App):
