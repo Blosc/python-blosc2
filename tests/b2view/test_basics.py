@@ -168,9 +168,7 @@ async def test_tree_and_panel_focus(store_path):
         # Tab: tree -> meta -> vlmeta -> data and wraps back to the tree
         for expected in ["meta-scroll", "vlmeta-scroll", "data-scroll", "tree"]:
             await pilot.press("tab")
-            await pilot.pause()
-            assert app.focused is not None
-            assert app.focused.id == expected
+            assert await _wait_focus(pilot, expected) == expected
 
         await pilot.press("down", "enter")  # root -> level0, select + expand
         await pilot.pause()
