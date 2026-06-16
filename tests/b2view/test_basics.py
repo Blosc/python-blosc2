@@ -1088,3 +1088,56 @@ async def test_schunk_hex_dump_paging(tmp_path):
         assert page["stop"] == page["nrows"]
         last_offset = (page["nrows"] - 1) * 16
         assert page["row_labels"][-1] == format(last_offset, "08x")
+
+
+# ── Download-then-browse (--download option) ─────────────────────────────
+
+
+async def test_download_then_browse(store_path, tmp_path, monkeypatch):
+    """--download shows a progress screen, fetches the bundle, then browses it."""
+    import shutil
+    import threading
+
+    from textual.widgets import ProgressBar
+
+    from blosc2.b2view import app as app_module
+    from blosc2.b2view.app import DownloadScreen
+
+    dest = str(tmp_path / "fetched.b2z")
+    size = 987_654  # the info endpoint's reported cbytes
+    release = threading.Event()  # let the test observe DownloadScreen before the copy
+    calls: list[tuple[str, str]] = []
+
+    def fake_download(url, dst, on_progress):
+        on_progress(0, None)  # download stream sends no Content-Length
+        assert release.wait(timeout=5)
+        shutil.copyfile(store_path, dst)  # stand in for the network fetch
+        on_progress(size, None)
+        calls.append((url, dst))
+
+    monkeypatch.setattr(app_module, "_http_download", fake_download)
+    monkeypatch.setattr(app_module, "_fetch_remote_size", lambda info_url: size)
+
+    app = B2ViewApp(
+        dest,
+        download_url="http://example.test/fetched.b2z",
+        info_url="http://example.test/info/fetched.b2z",
+    )
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await pilot.pause()
+        # The bundle is not opened yet: the download screen is up, and the info
+        # endpoint's size made the progress bar determinate.
+        assert isinstance(app.screen, DownloadScreen)
+        assert app.browser is None
+        assert app.screen.query_one("#download-bar", ProgressBar).total == size
+
+        release.set()  # let the (faked) download complete
+        for _ in range(100):
+            await pilot.pause()
+            if app.browser is not None:
+                break
+        # Download finished -> screen dismissed and normal browsing resumed.
+        assert calls == [("http://example.test/fetched.b2z", dest)]
+        assert not isinstance(app.screen, DownloadScreen)
+        assert app.browser is not None
+        assert len(app.query_one("#tree", Tree).root.children) > 0

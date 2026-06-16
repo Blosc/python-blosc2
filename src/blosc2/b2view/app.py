@@ -3,16 +3,28 @@
 from __future__ import annotations
 
 import io
+import os
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 from rich.markup import escape as markup_escape
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.theme import Theme
-from textual.widgets import DataTable, Footer, Header, Input, OptionList, SelectionList, Static, Tree
+from textual.widgets import (
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    OptionList,
+    ProgressBar,
+    SelectionList,
+    Static,
+    Tree,
+)
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
 
@@ -1390,6 +1402,128 @@ class CellDetailScreen(ModalScreen[None]):
         self.app.pop_screen()
 
 
+def _http_download(url: str, dest: str, on_progress) -> None:
+    """Stream *url* to *dest*, reporting ``on_progress(downloaded, total)``.
+
+    Module-level (and free of Textual) so it can be monkeypatched in tests.
+    Writes to a temp file beside *dest* and atomically renames on success, so an
+    interrupted download never leaves a corrupt file at the final name.  *total*
+    is ``None`` when the server sends no ``Content-Length``.
+    """
+    import requests
+
+    tmp = dest + ".part"
+    with requests.get(url, stream=True, timeout=30) as resp:
+        resp.raise_for_status()
+        length = resp.headers.get("Content-Length")
+        total = int(length) if length is not None else None
+        downloaded = 0
+        on_progress(0, total)
+        with open(tmp, "wb") as fh:
+            for chunk in resp.iter_content(chunk_size=1 << 16):
+                if not chunk:
+                    continue
+                fh.write(chunk)
+                downloaded += len(chunk)
+                on_progress(downloaded, total)
+    os.replace(tmp, dest)
+
+
+def _fetch_remote_size(info_url: str) -> int | None:
+    """Return the stored size (``cbytes``) from the bundle's info endpoint, or None.
+
+    The download stream itself sends no ``Content-Length``, so this companion
+    metadata call is what makes the progress bar determinate.  Any failure
+    (network, missing key) just yields None -> an indeterminate bar.
+    """
+    import requests
+
+    try:
+        with requests.get(info_url, timeout=15) as resp:
+            resp.raise_for_status()
+            return int(resp.json()["cbytes"])
+    except Exception:
+        return None
+
+
+class DownloadScreen(ModalScreen["bool | str"]):
+    """Centered "Downloading … Please wait…" message with a progress bar.
+
+    Pushed at startup when ``--download`` needs to fetch the bundle.  Runs the
+    download on a worker thread and dismisses with ``True`` on success or the
+    error string on failure; the app opens the file (or exits) from there.
+    """
+
+    CSS = """
+    DownloadScreen {
+        align: center middle;
+    }
+    #download-dialog {
+        width: auto;
+        height: auto;
+        border: thick $accent;
+        background: $surface;
+        padding: 2 4;
+    }
+    #download-message {
+        text-style: bold;
+        margin-bottom: 1;
+        width: 100%;
+        content-align: center middle;
+    }
+    """
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        dest: str,
+        name: str,
+        info_url: str | None = None,
+        source_url: str | None = None,
+    ):
+        super().__init__()
+        self._url = url
+        self._dest = dest
+        self._name = name
+        self._info_url = info_url
+        self._source_url = source_url
+
+    def compose(self) -> ComposeResult:
+        message = f"Downloading {self._name} file"
+        if self._source_url:
+            message += f"\nfrom {self._source_url}"
+        with Vertical(id="download-dialog"):
+            yield Static(message, id="download-message")
+            yield ProgressBar(id="download-bar", show_eta=True)
+
+    def on_mount(self) -> None:
+        self._run_download()
+
+    @work(thread=True)
+    def _run_download(self) -> None:
+        bar = self.query_one("#download-bar", ProgressBar)
+        # Prefer the info endpoint's size (the download stream omits
+        # Content-Length); fall back to it if info is unavailable.
+        size = _fetch_remote_size(self._info_url) if self._info_url else None
+
+        def on_progress(downloaded: int, content_total: int | None) -> None:
+            total = size or content_total
+            # An unknown total leaves the bar indeterminate (pulsing).  Marshal
+            # the update onto the UI thread.
+            if total:
+                self.app.call_from_thread(bar.update, total=total, progress=downloaded)
+            else:
+                self.app.call_from_thread(bar.update, progress=downloaded)
+
+        try:
+            _http_download(self._url, self._dest, on_progress)
+        except Exception as exc:  # network/IO failure -> surface to the app
+            self.app.call_from_thread(self.dismiss, str(exc))
+            return
+        self.app.call_from_thread(self.dismiss, True)
+
+
 class B2ViewApp(App):
     """Browse TreeStore hierarchy and preview objects."""
 
@@ -1445,10 +1579,14 @@ class B2ViewApp(App):
         start_panel: str = "tree",
         preview_rows: int = 20,
         preview_cols: int = 10,
+        download_url: str | None = None,
+        info_url: str | None = None,
     ):
         super().__init__()
         self.sub_title = f"Python-Blosc2 {blosc2.__version__}"  # shown beside the title in the header
         self.urlpath = urlpath
+        self.download_url = download_url  # when set, fetch urlpath before browsing
+        self.info_url = info_url  # optional: metadata endpoint giving the size
         self.start_path = start_path
         self.start_panel = start_panel
         self.preview_rows = preview_rows
@@ -1503,6 +1641,40 @@ class B2ViewApp(App):
     def on_mount(self) -> None:
         self.register_theme(BLOSC2_THEME)
         self.theme = "blosc2"
+        if self.download_url:
+            # Fetch the bundle first, then open it from _after_download.  The
+            # message shows the @public-relative path (e.g. "large/foo.b2z"),
+            # falling back to the local basename for any other URL shape.
+            name = os.path.basename(self.urlpath)
+            if "/@public/" in self.download_url:
+                name = self.download_url.split("/@public/", 1)[1]
+            # A browsable URL for the source root, so the user can see where the
+            # file comes from: e.g. https://cat2.cloud/demo/?roots=@public
+            source_url = None
+            if "/api/" in self.download_url:
+                source_url = self.download_url.split("/api/", 1)[0] + "/?roots=@public"
+            self.push_screen(
+                DownloadScreen(
+                    self.download_url,
+                    dest=self.urlpath,
+                    name=name,
+                    info_url=self.info_url,
+                    source_url=source_url,
+                ),
+                self._after_download,
+            )
+        else:
+            self._start_browsing()
+
+    def _after_download(self, result: bool | str) -> None:
+        """Resume browsing once DownloadScreen finishes (True ok, else error)."""
+        if result is True:
+            self._start_browsing()
+        else:
+            self.exit(message=f"Download failed: {result}")
+
+    def _start_browsing(self) -> None:
+        """Open the bundle and populate the tree (the normal startup path)."""
         self.browser = StoreBrowser(self.urlpath)
         tree = self.query_one("#tree", Tree)
         tree.root.data = "/"
