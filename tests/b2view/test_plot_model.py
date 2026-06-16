@@ -185,6 +185,35 @@ def test_read_series_returns_exact_raw_values(plot_store, node, column):
     np.testing.assert_array_equal(raw["y"], vals[s:e])  # NaNs compare equal by position
 
 
+@pytest.mark.parametrize(("node", "column"), [("/leaf", None), ("/ctable", "x")])
+def test_read_series_exact_when_within_max_points(plot_store, node, column):
+    """max_points is a cap: a range within it is still read exactly (stride 1)."""
+    path, vals = plot_store
+    s, e = 4000, 9000
+    with StoreBrowser(path) as browser:
+        raw = browser.read_series(node, column=column, row_start=s, row_stop=e, max_points=N)
+    assert raw["stride"] == 1
+    assert raw["sampled"] is False
+    assert raw["shown"] == e - s
+    np.testing.assert_array_equal(raw["x"], np.arange(s, e))
+    np.testing.assert_array_equal(raw["y"], vals[s:e])
+
+
+@pytest.mark.parametrize(("node", "column"), [("/leaf", None), ("/ctable", "x")])
+def test_read_series_strides_when_too_wide(plot_store, node, column):
+    """A range wider than max_points is strided-sampled (the hi-res 'r' view)."""
+    path, vals = plot_store
+    max_points = 2000
+    with StoreBrowser(path) as browser:
+        raw = browser.read_series(node, column=column, max_points=max_points)
+    stride = max(1, -(-N // max_points))
+    assert raw["sampled"] is True
+    assert raw["stride"] == stride
+    assert raw["shown"] == len(vals[0:N:stride]) <= max_points
+    np.testing.assert_array_equal(raw["x"], np.arange(0, N, stride))
+    np.testing.assert_array_equal(raw["y"], vals[0:N:stride])  # NaNs equal by position
+
+
 def test_read_series_clamps_range(plot_store):
     path, vals = plot_store
     with StoreBrowser(path) as browser:

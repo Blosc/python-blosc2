@@ -689,7 +689,7 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
 
     _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · v view rows · h hi-res · s scatter · q close"
     _MIN_WIDTH = 16  # smallest zoom window (rows), so the envelope still reads
-    _HIRES_MAX_POINTS = 50_000  # above this, ask the user to zoom in first
+    _HIRES_MAX_POINTS = 50_000  # above this, the hi-res raw view is strided-sampled
     _SCATTER_MAX_POINTS = 50_000  # above this, the col-vs-col scatter is strided-sampled
 
     BINDINGS: ClassVar = [
@@ -817,11 +817,12 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
         self.dismiss((self.row_start, self.row_stop))
 
     def action_hires(self) -> None:
-        """h key — open a high-res matplotlib image of the current raw range.
+        """h key — open a high-res matplotlib min/max envelope of the current range.
 
         Pushed on top of this screen so ``q`` returns to the braille view with
-        the zoom intact.  The braille envelope stays the fast navigator; this is
-        the drill-down once you have zoomed to a range worth seeing in detail.
+        the zoom intact.  It reuses the on-screen envelope data (so it always
+        renders, no zoom gate); inside it ``r`` toggles to raw values, sampled
+        when the range is wide (see ``read_series``' ``max_points``).
         """
         if self._raw_fetch is None or TextualImage is None or not _matplotlib_available():
             self.app.notify(
@@ -829,20 +830,20 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
                 severity="warning",
             )
             return
-        width = self.row_stop - self.row_start
-        if width > self._HIRES_MAX_POINTS:
-            self.app.notify(
-                f"Zoom in to ≤ {self._HIRES_MAX_POINTS} rows for a high-res view (now {width})",
-                severity="warning",
-            )
+        if not self.x:
+            self.app.notify("No finite values in range", severity="warning")
             return
-        series = self._raw_fetch(self.row_start, self.row_stop)
-        # The hi-res view shows exact raw values, not the braille min/max
-        # envelope, so build its own title without the envelope descriptor.
-        full = self.row_start == 0 and self.row_stop == self.n
-        rng = "" if full else f" · rows {self.row_start}:{self.row_stop}"
-        title = f"{self.title_prefix} · {self.n} rows{rng} · raw values"
-        self.app.push_screen(HiResPlotScreen(title=title, x=series["x"], y=series["y"]))
+        self.app.push_screen(
+            HiResPlotScreen(
+                mode="envelope",
+                title_prefix=self.title_prefix,
+                n=self.n,
+                row_start=self.row_start,
+                row_stop=self.row_stop,
+                envelope={"x": self.x, "ymin": self.ymin, "ymax": self.ymax},
+                raw_fetch=self._raw_fetch,
+            )
+        )
 
     def action_scatter(self) -> None:
         """s key — scatter the current X column against a chosen Y column.
@@ -984,10 +985,9 @@ class ScatterPlotScreen(ModalScreen[None]):
             return
         self.app.push_screen(
             HiResPlotScreen(
+                mode="scatter",
                 title=self.plot_title,
-                x=self.x,
-                y=self.y,
-                scatter=True,
+                scatter_xy=(self.x, self.y),
                 xlabel=self.xcol,
                 ylabel=self.ycol,
             )
@@ -1009,12 +1009,22 @@ def _matplotlib_available() -> bool:
 
 
 class HiResPlotScreen(ModalScreen[None]):
-    """A high-res matplotlib image of a raw series range, over the braille plot.
+    """A high-res matplotlib image over the braille plot, in one of three modes.
 
     Rendered with matplotlib (Agg) to a PNG and shown via ``textual-image``,
     which auto-selects the best terminal protocol (kitty/iTerm2/sixel) and
     degrades to colored half-cells elsewhere.  ``q``/``esc``/``h`` return to the
     braille view underneath with its zoom intact.
+
+    Modes:
+
+    - ``"scatter"`` — a static col-vs-col scatter (from ``ScatterPlotScreen``).
+    - ``"envelope"`` — the min/max envelope of a column (from ``PlotScreen``'s
+      ``h``), reusing the on-screen braille envelope data.
+    - ``"raw"`` — the column's raw values, reached by toggling with ``r`` from
+      envelope mode; fetched lazily (and strided-sampled when wide).
+
+    Envelope and raw share one screen: ``r`` toggles between them in place.
     """
 
     CSS = """
@@ -1047,42 +1057,91 @@ class HiResPlotScreen(ModalScreen[None]):
     }
     """
 
-    _KEYS_HINT = "q/esc/h · back to braille"
-
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
         ("q", "close", "Close"),
         ("h", "close", "Close"),
+        ("r", "toggle_raw", "Raw/envelope"),
     ]
 
     def __init__(
-        self, *, title: str, x, y, scatter: bool = False, xlabel: str = "row", ylabel: str | None = None
+        self,
+        *,
+        mode: str = "raw",
+        xlabel: str = "row",
+        ylabel: str | None = None,
+        # scatter mode:
+        title: str | None = None,
+        scatter_xy: tuple | None = None,
+        # column (envelope/raw) modes:
+        title_prefix: str | None = None,
+        n: int | None = None,
+        row_start: int | None = None,
+        row_stop: int | None = None,
+        envelope: dict | None = None,
+        raw_fetch=None,
     ):
         super().__init__()
-        self._title = title
-        self._x = x
-        self._y = y
-        self._scatter = scatter
+        self._mode = mode
         self._xlabel = xlabel
         self._ylabel = ylabel
+        self._static_title = title
+        self._scatter_xy = scatter_xy
+        self._title_prefix = title_prefix
+        self._n = n
+        self._row_start = row_start
+        self._row_stop = row_stop
+        self._envelope = envelope
+        self._raw_fetch = raw_fetch
+        self._raw_series: dict | None = None  # lazily fetched on first 'r'
+        # Toggling is offered only for the column path (envelope + a raw fetch).
+        self._can_toggle = envelope is not None and raw_fetch is not None
+
+    @property
+    def _keys_hint(self) -> str:
+        if self._can_toggle:
+            return "r raw/envelope · q/esc/h back to braille"
+        return "q/esc/h · back to braille"
+
+    def _current_title(self) -> str:
+        if self._mode == "scatter":
+            return self._static_title or ""
+        full = self._row_start == 0 and self._row_stop == self._n
+        rng = "" if full else f" · rows {self._row_start}:{self._row_stop}"
+        base = f"{self._title_prefix} · {self._n} rows{rng}"
+        if self._mode == "envelope":
+            return f"{base} · min/max envelope"
+        s = self._raw_series
+        if s is not None and s.get("sampled"):
+            width = s["row_stop"] - s["row_start"]
+            return f"{base} · raw values · sampled {s['shown']}/{width} (stride {s['stride']})"
+        return f"{base} · raw values"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="hires-dialog"):
-            yield Static(markup_escape(self._title), id="hires-title")
+            yield Static(markup_escape(self._current_title()), id="hires-title")
             # A VerticalScroll is focusable, so the screen's key bindings fire
             # (the image widget itself is not focusable).
             yield VerticalScroll(id="hires-body")
-            yield Static(self._KEYS_HINT, id="hires-keys")
+            yield Static(self._keys_hint, id="hires-keys")
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
+        self.query_one("#hires-body", VerticalScroll).focus()
+        await self._show()
+
+    async def _show(self) -> None:
+        """(Re)render the current mode into the image body and refresh the title."""
         body = self.query_one("#hires-body", VerticalScroll)
-        body.focus()
+        # Await the removal so a re-render (the 'r' toggle) doesn't collide with
+        # the still-present image widget on its #hires-image id.
+        await body.remove_children()
+        self.query_one("#hires-title", Static).update(markup_escape(self._current_title()))
         try:
             png = self._render_png()
         except Exception as exc:  # pragma: no cover - defensive
-            body.mount(Static(f"Could not render: {exc}"))
+            await body.mount(Static(f"Could not render: {exc}"))
             return
-        body.mount(TextualImage(io.BytesIO(png), id="hires-image"))
+        await body.mount(TextualImage(io.BytesIO(png), id="hires-image"))
 
     def _render_png(self) -> bytes:
         import matplotlib
@@ -1091,22 +1150,51 @@ class HiResPlotScreen(ModalScreen[None]):
         import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots(figsize=(12, 6), dpi=110)
-        if self._scatter:
-            ax.scatter(self._x, self._y, s=6, color="#1f77b4", alpha=0.6)
-        else:
-            ax.plot(self._x, self._y, linewidth=0.8, color="#1f77b4")
-        ax.set_title(self._title, fontsize=10)
+        if self._mode == "scatter":
+            x, y = self._scatter_xy
+            ax.scatter(x, y, s=6, color="#1f77b4", alpha=0.6)
+        elif self._mode == "envelope":
+            env = self._envelope
+            x, ymin, ymax = env["x"], env["ymin"], env["ymax"]
+            ax.fill_between(x, ymin, ymax, color="#1f77b4", alpha=0.3)
+            ax.plot(x, ymax, linewidth=0.6, color="#1f77b4")
+            if list(ymin) != list(ymax):  # a single line when the band collapses
+                ax.plot(x, ymin, linewidth=0.6, color="#1f77b4")
+            ax.margins(x=0)
+        else:  # raw
+            s = self._raw_series
+            ax.plot(s["x"], s["y"], linewidth=0.8, color="#1f77b4")
+            ax.margins(x=0)
+        ax.set_title(self._current_title(), fontsize=10)
         ax.set_xlabel(self._xlabel)
         if self._ylabel is not None:
             ax.set_ylabel(self._ylabel)
-        if not self._scatter:
-            ax.margins(x=0)  # lines hug the row axis; scatter keeps default margins
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
         buf = io.BytesIO()
         fig.savefig(buf, format="png")
         plt.close(fig)
         return buf.getvalue()
+
+    async def action_toggle_raw(self) -> None:
+        """r key — toggle the column view between min/max envelope and raw values.
+
+        No-op in scatter mode.  The raw series is fetched lazily on the first
+        switch (and strided-sampled when wide, see read_series' max_points).
+        """
+        if not self._can_toggle:
+            return
+        if self._mode == "envelope":
+            if self._raw_series is None:
+                try:
+                    self._raw_series = self._raw_fetch(self._row_start, self._row_stop)
+                except Exception as exc:  # pragma: no cover - defensive
+                    self.app.notify(f"Could not read raw values: {exc}", severity="warning")
+                    return
+            self._mode = "raw"
+        else:
+            self._mode = "envelope"
+        await self._show()
 
     def action_close(self) -> None:
         # pop_screen (not dismiss): this screen is pushed without a result
@@ -2124,12 +2212,15 @@ class B2ViewApp(App):
             )
 
         def raw_fetch(start: int, stop: int | None) -> dict:
+            # max_points caps the raw read: a wide range is strided-sampled
+            # rather than refused, for the hi-res 'r' (raw values) view.
             return self.browser.read_series(
                 self.selected_path,
                 column=column,
                 layout=layout,
                 row_start=start,
                 row_stop=stop,
+                max_points=PlotScreen._HIRES_MAX_POINTS,
             )
 
         # Col-vs-col scatter ('s' key) is CTable-only; build the read closure and

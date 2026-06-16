@@ -520,16 +520,21 @@ class StoreBrowser:
         layout: DataSliceLayout | None = None,
         row_start: int = 0,
         row_stop: int | None = None,
+        max_points: int | None = None,
     ) -> dict[str, Any]:
         """Return the *raw* values of one series over ``[row_start, row_stop)``.
 
         Same series selection as :meth:`plot_series` (CTable column honoring a
         locked row window then an active filter, or an array column via
         *layout*) but with no bucketing —
-        every value is read exactly, for the high-res ``h`` view.  The result is
-        ``{"x", "y", "n", "row_start", "row_stop"}`` with ``x`` in absolute row
-        coordinates.  This reads exactly what is asked, so callers must bound the
-        range first (see ``B2ViewApp._HIRES_MAX_POINTS``).
+        every value is read exactly, for the high-res ``h``/``r`` view.  The
+        result is ``{"x", "y", "n", "row_start", "row_stop", "stride", "shown",
+        "sampled"}`` with ``x`` in absolute row coordinates.
+
+        When *max_points* is given and the range is wider, the read is
+        strided-sampled (``stride = ceil(width / max_points)``, like
+        :meth:`read_xy`) so a wide raw range stays bounded; otherwise it is read
+        exactly (``stride=1``, ``sampled=False``).
         """
         path = self.normalize_path(path)
         obj = self._get_object(path)
@@ -544,7 +549,8 @@ class StoreBrowser:
                 view = self._filter_views.get(path, obj)
             n = len(view)
             start, stop = self._clamp_range(row_start, row_stop, n)
-            y = safe_asarray(view[column][start:stop])
+            stride = self._series_stride(stop - start, max_points)
+            y = safe_asarray(view[column][start:stop:stride])
         elif kind in {"ndarray", "c2array"}:
             shape = tuple(getattr(obj, "shape", ()) or ())
             ndim = len(shape)
@@ -553,11 +559,12 @@ class StoreBrowser:
             row_dim = layout.navigable_dims[0] if layout is not None and layout.navigable_dims else 0
             n = shape[row_dim]
             start, stop = self._clamp_range(row_start, row_stop, n)
+            stride = self._series_stride(stop - start, max_points)
             # Same column/fixed-dim selection as plot_series' array branch.
             idx: list[int | slice] = []
             for i in range(ndim):
                 if i == row_dim:
-                    idx.append(slice(start, stop))
+                    idx.append(slice(start, stop, stride))
                 elif layout is not None and i in layout.fixed_values:
                     idx.append(layout.fixed_values[i])
                 elif layout is not None and len(layout.navigable_dims) > 1 and i == layout.navigable_dims[1]:
@@ -569,12 +576,22 @@ class StoreBrowser:
             raise ValueError(f"Cannot plot {kind!r} objects")
 
         return {
-            "x": np.arange(start, stop),
+            "x": np.arange(start, stop, stride),
             "y": y,
             "n": n,
             "row_start": start,
             "row_stop": stop,
+            "stride": stride,
+            "shown": len(y),
+            "sampled": stride > 1,
         }
+
+    @staticmethod
+    def _series_stride(width: int, max_points: int | None) -> int:
+        """Stride to keep a raw read within *max_points* (1 == exact)."""
+        if max_points is None or width <= max_points:
+            return 1
+        return max(1, -(-width // max_points))
 
     def read_xy(
         self,

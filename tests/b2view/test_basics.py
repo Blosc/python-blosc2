@@ -834,11 +834,11 @@ async def test_plot_view_locks_ctable_window(store_path):
 
 
 async def test_plot_hires_view(store_path):
-    """'h' opens a high-res matplotlib image over the braille plot; 'q' returns."""
+    """'h' opens a hi-res envelope; 'r' toggles raw values; 'q' returns."""
     pytest.importorskip("textual_plotext")
     pytest.importorskip("textual_image")
     pytest.importorskip("matplotlib")
-    from blosc2.b2view.app import HiResPlotScreen, PlotScreen
+    from blosc2.b2view.app import HiResPlotScreen, PlotScreen, TextualImage
 
     app = B2ViewApp(store_path, start_path="/level0/ctable", start_panel="data")
     async with app.run_test(size=TERM_SIZE) as pilot:
@@ -849,36 +849,42 @@ async def test_plot_hires_view(store_path):
         await pilot.press("p")
         await pilot.pause()
         assert isinstance(app.screen, PlotScreen)
-
-        # Force a tiny cap so the un-zoomed series (300 rows) is "too large":
-        # 'h' asks the user to zoom in and stays on the braille plot.
-        app.screen._HIRES_MAX_POINTS = 50
-        await pilot.press("h")
-        await pilot.pause()
-        assert isinstance(app.screen, PlotScreen)  # not opened
-
-        # Zoom to a small range, then 'h' opens the high-res image screen.
-        await pilot.press("g")
-        await pilot.pause()
-        app.screen.query_one("#range-input", Input).value = "100:140"
-        await pilot.press("enter")
-        await pilot.pause()
         plot = app.screen
-        assert (plot.row_start, plot.row_stop) == (100, 140)
 
+        # 'h' opens the hi-res view in envelope mode over the whole range — no
+        # zoom gate; it reuses the on-screen envelope, so it always renders.
         await pilot.press("h")
         await pilot.pause()
         assert isinstance(app.screen, HiResPlotScreen)
-        # The image rendered and mounted (UnicodeImage in a headless test).
-        from blosc2.b2view.app import TextualImage
+        hires = app.screen
+        assert hires._mode == "envelope"
+        assert "min/max envelope" in hires._current_title()
+        assert hires.query_one("#hires-image", TextualImage) is not None
 
-        assert app.screen.query_one("#hires-image", TextualImage) is not None
+        # Force a tiny raw cap so the full 300-row range is strided-sampled,
+        # then 'r' toggles to the raw view (no refusal — it samples instead).
+        hires._raw_fetch = lambda s, e: app.browser.read_series(
+            "/level0/ctable", column="b", row_start=s, row_stop=e, max_points=50
+        )
+        await pilot.press("r")
+        await pilot.pause()
+        assert hires._mode == "raw"
+        title = hires._current_title()
+        assert "raw values" in title
+        assert "sampled" in title
+        assert hires.query_one("#hires-image", TextualImage) is not None
+
+        # 'r' again toggles back to the envelope.
+        await pilot.press("r")
+        await pilot.pause()
+        assert hires._mode == "envelope"
+        assert "min/max envelope" in hires._current_title()
 
         # 'q' returns to the braille plot with the zoom intact.
         await pilot.press("q")
         await pilot.pause()
         assert app.screen is plot
-        assert (plot.row_start, plot.row_stop) == (100, 140)
+        assert (plot.row_start, plot.row_stop) == (0, plot.n)
 
 
 async def test_plot_scatter_col_vs_col(store_path):
