@@ -30,6 +30,8 @@ Deselect the whole TUI suite with ``pytest -m "not tui"``.
 
 from __future__ import annotations
 
+import importlib.util
+
 import numpy as np
 import pytest
 
@@ -871,6 +873,81 @@ async def test_plot_hires_view(store_path):
         from blosc2.b2view.app import TextualImage
 
         assert app.screen.query_one("#hires-image", TextualImage) is not None
+
+        # 'q' returns to the braille plot with the zoom intact.
+        await pilot.press("q")
+        await pilot.pause()
+        assert app.screen is plot
+        assert (plot.row_start, plot.row_stop) == (100, 140)
+
+
+async def test_plot_scatter_col_vs_col(store_path):
+    """'s' on a CTable plot scatters the X column against a chosen Y column."""
+    pytest.importorskip("textual_plotext")
+    from blosc2.b2view.app import ColumnSelectScreen, PlotScreen, ScatterPlotScreen
+
+    app = B2ViewApp(store_path, start_path="/level0/ctable", start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await wait_for_table(pilot)
+        table = await focus_data_table(pilot)
+        # Plot column 'b' (== row index), then zoom to a small range.
+        table.move_cursor(column=app.table_page["columns"].index("b"))
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, PlotScreen)
+        plot = app.screen
+        await pilot.press("g")
+        await pilot.pause()
+        app.screen.query_one("#range-input", Input).value = "100:140"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert (plot.row_start, plot.row_stop) == (100, 140)
+
+        # 's' opens the searchable Y-column picker over all visible columns.
+        await pilot.press("s")
+        await pilot.pause()
+        assert isinstance(app.screen, ColumnSelectScreen)
+        from textual.widgets import OptionList
+
+        picker = app.screen
+        option_list = picker.query_one("#colselect-list", OptionList)
+        # The picker spans the full visible-column universe, not the paged window.
+        all_cols = app.browser.column_names("/level0/ctable")
+        assert option_list.option_count == len(all_cols)
+
+        # Typing live-filters the list (substring, case-insensitive): only the
+        # 'v0X' columns survive, with the first match highlighted.
+        picker.query_one("#colselect-input", Input).value = "v0"
+        await pilot.pause()
+        assert 0 < option_list.option_count < len(all_cols)
+        assert option_list.highlighted == 0
+
+        # Clear the filter and pick 'c' (a second numeric column) by name + Enter.
+        picker.query_one("#colselect-input", Input).value = "c"
+        await pilot.pause()  # let the live filter repopulate the list
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, ScatterPlotScreen)
+        scatter = app.screen
+        # Row-aligned over the framed range: b == row index, c == row * 1.5.
+        assert scatter.xcol == "b"
+        assert scatter.ycol == "c"
+        assert len(scatter.x) == len(scatter.y) == 40
+        np.testing.assert_allclose(scatter.x, np.arange(100, 140))
+        np.testing.assert_allclose(scatter.y, np.arange(100, 140) * 1.5)
+
+        # 'h' opens a high-res matplotlib scatter over the braille scatter, when
+        # textual-image + matplotlib are available; 'h' again returns to it.
+        if importlib.util.find_spec("textual_image") and importlib.util.find_spec("matplotlib"):
+            from blosc2.b2view.app import HiResPlotScreen, TextualImage
+
+            await pilot.press("h")
+            await pilot.pause()
+            assert isinstance(app.screen, HiResPlotScreen)
+            assert app.screen.query_one("#hires-image", TextualImage) is not None
+            await pilot.press("h")
+            await pilot.pause()
+            assert app.screen is scatter
 
         # 'q' returns to the braille plot with the zoom intact.
         await pilot.press("q")

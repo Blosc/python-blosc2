@@ -220,3 +220,98 @@ def test_streaming_reducer_integer_dtype():
     expected = _reduce_envelope(vals, 1000, 100)
     np.testing.assert_array_equal(env["ymin"], expected["ymin"])
     np.testing.assert_array_equal(env["ymax"], expected["ymax"])
+
+
+# --- read_xy: col-vs-col scatter source (the 's' key) ----------------------
+
+XY_N = 10_000
+
+
+@pytest.fixture(scope="module")
+def xy_store(tmp_path_factory):
+    """A CTable with two numeric columns and one string (non-numeric) column."""
+    rng = np.random.default_rng(1)
+    a = (rng.standard_normal(XY_N) * 5).astype(np.float64)
+    b = np.arange(XY_N, dtype=np.int64)
+    labels = np.array([f"r{i % 7}" for i in range(XY_N)], dtype="U4")
+    path = str(tmp_path_factory.mktemp("xy") / "xy.b2z")
+
+    @dataclasses.dataclass
+    class Row:
+        a: float = blosc2.field(blosc2.float64())
+        b: int = blosc2.field(blosc2.int64())
+        label: str = blosc2.field(blosc2.string(max_length=4))
+
+    tstore = blosc2.TreeStore(path, mode="w")
+    try:
+        t = blosc2.CTable(Row, expected_size=XY_N, validate=False)
+        t.extend({"a": a, "b": b, "label": labels}, validate=False)
+        tstore["/ctable"] = t
+        tstore["/leaf"] = blosc2.asarray(a)
+    finally:
+        tstore.close()
+    return path, a, b
+
+
+def test_read_xy_basic_alignment(xy_store):
+    path, a, b = xy_store
+    s, e = 2000, 6000
+    with StoreBrowser(path) as browser:
+        res = browser.read_xy("/ctable", xcol="a", ycol="b", row_start=s, row_stop=e)
+    assert res["n"] == XY_N
+    assert (res["row_start"], res["row_stop"]) == (s, e)
+    assert res["stride"] == 1
+    assert res["sampled"] is False
+    assert res["shown"] == e - s == len(res["x"]) == len(res["y"])
+    np.testing.assert_array_equal(res["x"], a[s:e])
+    np.testing.assert_array_equal(res["y"], b[s:e])
+
+
+def test_read_xy_numeric_guard(xy_store):
+    path, _, _ = xy_store
+    with StoreBrowser(path) as browser:
+        with pytest.raises(ValueError, match="not numeric"):
+            browser.read_xy("/ctable", xcol="a", ycol="label")
+
+
+def test_read_xy_rejects_non_ctable(xy_store):
+    path, _, _ = xy_store
+    with StoreBrowser(path) as browser:
+        with pytest.raises(ValueError, match="CTable"):
+            browser.read_xy("/leaf", xcol="a", ycol="a")
+
+
+def test_read_xy_strides_when_too_wide(xy_store):
+    path, a, b = xy_store
+    max_points = 1000
+    with StoreBrowser(path) as browser:
+        res = browser.read_xy("/ctable", xcol="a", ycol="b", max_points=max_points)
+    assert res["sampled"] is True
+    stride = max(1, -(-XY_N // max_points))
+    assert res["stride"] == stride
+    assert res["shown"] == len(a[0:XY_N:stride])
+    assert res["shown"] <= max_points
+    np.testing.assert_array_equal(res["x"], a[0:XY_N:stride])
+    np.testing.assert_array_equal(res["y"], b[0:XY_N:stride])
+
+
+def test_read_xy_honors_filter(xy_store):
+    path, a, b = xy_store
+    with StoreBrowser(path) as browser:
+        live = browser.set_filter("/ctable", "a > 0")
+        res = browser.read_xy("/ctable", xcol="a", ycol="b")
+    assert res["n"] == live
+    assert res["shown"] == live
+    assert (res["x"] > 0).all()
+
+
+def test_read_xy_honors_row_window(xy_store):
+    path, a, b = xy_store
+    lo, hi = 1000, 1500
+    with StoreBrowser(path) as browser:
+        browser.set_row_window("/ctable", lo, hi)
+        res = browser.read_xy("/ctable", xcol="a", ycol="b")
+    assert res["n"] == hi - lo
+    assert res["shown"] == hi - lo
+    np.testing.assert_array_equal(res["x"], a[lo:hi])
+    np.testing.assert_array_equal(res["y"], b[lo:hi])

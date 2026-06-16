@@ -12,7 +12,8 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.theme import Theme
-from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
+from textual.widgets import DataTable, Footer, Header, Input, OptionList, Static, Tree
+from textual.widgets.option_list import Option
 
 try:
     from textual_plotext import PlotextPlot
@@ -423,6 +424,99 @@ class GoToColumnScreen(ModalScreen[int | None]):
         self.dismiss(None)
 
 
+class ColumnSelectScreen(ModalScreen["int | None"]):
+    """Searchable column picker: type to filter, ↑/↓ to move, Enter to choose.
+
+    Dismisses with the chosen column's index into *names* (or None on cancel),
+    a drop-in for :class:`GoToColumnScreen`'s result contract.  Used by the
+    scatter ``s`` key to pick the Y column from the visible-column universe.
+    """
+
+    CSS = """
+    ColumnSelectScreen {
+        align: center middle;
+    }
+    #colselect-dialog {
+        width: 50;
+        height: auto;
+        max-height: 80%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #colselect-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #colselect-list {
+        height: auto;
+        max-height: 16;
+    }
+    """
+
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, *, names: list[str], title: str = "Select column"):
+        super().__init__()
+        self.names = names
+        self._title = title
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="colselect-dialog"):
+            yield Static(self._title, id="colselect-title")
+            yield Input(placeholder="type to filter…", id="colselect-input")
+            yield OptionList(id="colselect-list")
+
+    def on_mount(self) -> None:
+        self._populate("")
+        self.query_one("#colselect-input", Input).focus()
+
+    def _populate(self, query: str) -> None:
+        """Refill the list with names matching *query* (case-insensitive substring).
+
+        Each option's id is the column's original index into *names*, so a match
+        resolves to the right column regardless of the current filtering.
+        """
+        q = query.strip().lower()
+        option_list = self.query_one("#colselect-list", OptionList)
+        option_list.clear_options()
+        matches = [Option(name, id=str(i)) for i, name in enumerate(self.names) if q in name.lower()]
+        option_list.add_options(matches)
+        if matches:
+            option_list.highlighted = 0
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._populate(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Enter from the filter input accepts the currently highlighted match.
+        self._accept_highlighted()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option.id is not None:
+            self.dismiss(int(event.option.id))
+
+    def _accept_highlighted(self) -> None:
+        option_list = self.query_one("#colselect-list", OptionList)
+        idx = option_list.highlighted
+        if idx is None:
+            return
+        option = option_list.get_option_at_index(idx)
+        if option.id is not None:
+            self.dismiss(int(option.id))
+
+    def on_key(self, event: events.Key) -> None:
+        # Focus stays in the filter Input; ↑/↓ drive the list highlight so the
+        # user can type then arrow to a match without leaving the keyboard home.
+        if event.key in ("down", "up"):
+            option_list = self.query_one("#colselect-list", OptionList)
+            (option_list.action_cursor_down if event.key == "down" else option_list.action_cursor_up)()
+            event.stop()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class FilterScreen(ModalScreen[str | None]):
     """Small modal asking for a CTable filter (row expression or column pattern)."""
 
@@ -593,9 +687,10 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
     }
     """
 
-    _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · v view rows · h hi-res · q close"
+    _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · v view rows · h hi-res · s scatter · q close"
     _MIN_WIDTH = 16  # smallest zoom window (rows), so the envelope still reads
     _HIRES_MAX_POINTS = 50_000  # above this, ask the user to zoom in first
+    _SCATTER_MAX_POINTS = 50_000  # above this, the col-vs-col scatter is strided-sampled
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
@@ -610,6 +705,7 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
         ("g", "goto_range", "Range"),
         ("v", "view_range", "View rows"),
         ("h", "hires", "High-res"),
+        ("s", "scatter", "Scatter"),
     ]
 
     def __init__(
@@ -622,11 +718,17 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
         row_stop: int,
         series: dict,
         raw_fetch=None,
+        xcol: str | None = None,
+        scatter_fetch=None,
+        scatter_columns: list[str] | None = None,
     ):
         super().__init__()
         self.title_prefix = title_prefix
         self._fetch = fetch
         self._raw_fetch = raw_fetch  # (start, stop) -> {"x", "y", ...} raw read
+        self._xcol = xcol  # X column name, for scatter labels
+        self._scatter_fetch = scatter_fetch  # (ycol, start, stop) -> series, or None
+        self._scatter_columns = scatter_columns or []
         self.n = n
         self.row_start = row_start
         self.row_stop = row_stop
@@ -735,10 +837,166 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
             )
             return
         series = self._raw_fetch(self.row_start, self.row_stop)
-        self.app.push_screen(HiResPlotScreen(title=self.plot_title, x=series["x"], y=series["y"]))
+        # The hi-res view shows exact raw values, not the braille min/max
+        # envelope, so build its own title without the envelope descriptor.
+        full = self.row_start == 0 and self.row_stop == self.n
+        rng = "" if full else f" · rows {self.row_start}:{self.row_stop}"
+        title = f"{self.title_prefix} · {self.n} rows{rng} · raw values"
+        self.app.push_screen(HiResPlotScreen(title=title, x=series["x"], y=series["y"]))
+
+    def action_scatter(self) -> None:
+        """s key — scatter the current X column against a chosen Y column.
+
+        The current zoom/position fixes the row range first, so the scatter read
+        is bounded; only CTable sources (which carry a *scatter_fetch* closure)
+        support it.  The Y column is picked from the visible-column universe.
+        """
+        if self._scatter_fetch is None or not self._scatter_columns:
+            self.app.notify("Scatter needs a CTable column", severity="warning")
+            return
+
+        def _on_ycol(index: int | None) -> None:
+            if index is None:
+                return
+            ycol = self._scatter_columns[index]
+            try:
+                series = self._scatter_fetch(ycol, self.row_start, self.row_stop)
+            except ValueError as exc:
+                self.app.notify(str(exc), severity="warning")
+                return
+            x = np.asarray(series["x"], dtype=np.float64)
+            y = np.asarray(series["y"], dtype=np.float64)
+            finite = np.isfinite(x) & np.isfinite(y)
+            if not finite.any():
+                self.app.notify("No finite points in range", severity="warning")
+                return
+            if series["sampled"]:
+                self.app.notify(
+                    f"Sampled {series['shown']} of "
+                    f"{series['row_stop'] - series['row_start']} rows (stride {series['stride']})",
+                    severity="warning",
+                )
+            self.app.push_screen(
+                ScatterPlotScreen(
+                    xcol=self._xcol or "x",
+                    ycol=ycol,
+                    series=series,
+                )
+            )
+
+        self.app.push_screen(
+            ColumnSelectScreen(names=self._scatter_columns, title="Scatter Y column"),
+            _on_ycol,
+        )
 
     def action_close(self) -> None:
         self.dismiss(None)
+
+
+class ScatterPlotScreen(ModalScreen[None]):
+    """A col-vs-col scatter (X column vs a chosen Y column) over a row range.
+
+    Pushed on top of :class:`PlotScreen` by the ``s`` key once the user has
+    framed a row range; both columns are read row-aligned over that range (see
+    :meth:`B2View.read_xy`).  ``q``/``esc`` return to the braille plot
+    underneath.  No zoom in v1.
+    """
+
+    CSS = """
+    ScatterPlotScreen {
+        align: center middle;
+    }
+    #scatter-dialog {
+        width: 90%;
+        height: 80%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #scatter-title {
+        text-style: bold;
+        height: 1;
+    }
+    #scatter-widget {
+        height: 1fr;
+    }
+    #scatter-keys {
+        height: 1;
+        color: $text-muted;
+    }
+    """
+
+    _KEYS_HINT = "h hi-res · q/esc back to plot"
+
+    BINDINGS: ClassVar = [
+        ("escape", "close", "Close"),
+        ("q", "close", "Close"),
+        ("h", "hires", "High-res"),
+    ]
+
+    def __init__(self, *, xcol: str, ycol: str, series: dict):
+        super().__init__()
+        self.xcol = xcol
+        self.ycol = ycol
+        x = np.asarray(series["x"], dtype=np.float64)
+        y = np.asarray(series["y"], dtype=np.float64)
+        finite = np.isfinite(x) & np.isfinite(y)
+        self.x = list(x[finite])
+        self.y = list(y[finite])
+        title = f"{xcol} vs {ycol} · rows {series['row_start']}:{series['row_stop']}"
+        if series["sampled"]:
+            width = series["row_stop"] - series["row_start"]
+            title += f" · sampled {series['shown']}/{width} (stride {series['stride']})"
+        self.plot_title = title
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="scatter-dialog"):
+            yield Static(markup_escape(self.plot_title), id="scatter-title")
+            yield PlotextPlot(id="scatter-widget")
+            yield Static(self._KEYS_HINT, id="scatter-keys")
+
+    def on_mount(self) -> None:
+        widget = self.query_one(PlotextPlot)
+        plt = widget.plt
+        plt.clear_figure()
+        if self.x:
+            # braille gives 2x4 sub-cell resolution, matching PlotScreen's lines
+            # (the default scatter marker is one full cell per point).
+            plt.scatter(self.x, self.y, marker="braille")
+        plt.xlabel(self.xcol)
+        plt.ylabel(self.ycol)
+        widget.refresh()
+
+    def action_hires(self) -> None:
+        """h key — open a high-res matplotlib scatter over the braille scatter.
+
+        The point set is already bounded (read_xy strided it to fit), so no zoom
+        gate is needed here, unlike PlotScreen's hi-res line view.
+        """
+        if TextualImage is None or not _matplotlib_available():
+            self.app.notify(
+                "High-res view needs the 'textual-image' and 'matplotlib' packages",
+                severity="warning",
+            )
+            return
+        if not self.x:
+            self.app.notify("No finite points to plot", severity="warning")
+            return
+        self.app.push_screen(
+            HiResPlotScreen(
+                title=self.plot_title,
+                x=self.x,
+                y=self.y,
+                scatter=True,
+                xlabel=self.xcol,
+                ylabel=self.ycol,
+            )
+        )
+
+    def action_close(self) -> None:
+        # pop_screen (not dismiss): pushed without a result callback, so this
+        # returns to the braille PlotScreen with its zoom intact.
+        self.app.pop_screen()
 
 
 def _matplotlib_available() -> bool:
@@ -797,11 +1055,16 @@ class HiResPlotScreen(ModalScreen[None]):
         ("h", "close", "Close"),
     ]
 
-    def __init__(self, *, title: str, x, y):
+    def __init__(
+        self, *, title: str, x, y, scatter: bool = False, xlabel: str = "row", ylabel: str | None = None
+    ):
         super().__init__()
         self._title = title
         self._x = x
         self._y = y
+        self._scatter = scatter
+        self._xlabel = xlabel
+        self._ylabel = ylabel
 
     def compose(self) -> ComposeResult:
         with Vertical(id="hires-dialog"):
@@ -828,9 +1091,16 @@ class HiResPlotScreen(ModalScreen[None]):
         import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots(figsize=(12, 6), dpi=110)
-        ax.plot(self._x, self._y, linewidth=0.8, color="#1f77b4")
-        ax.set_xlabel("row")
-        ax.margins(x=0)
+        if self._scatter:
+            ax.scatter(self._x, self._y, s=6, color="#1f77b4", alpha=0.6)
+        else:
+            ax.plot(self._x, self._y, linewidth=0.8, color="#1f77b4")
+        ax.set_title(self._title, fontsize=10)
+        ax.set_xlabel(self._xlabel)
+        if self._ylabel is not None:
+            ax.set_ylabel(self._ylabel)
+        if not self._scatter:
+            ax.margins(x=0)  # lines hug the row axis; scatter keeps default margins
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
         buf = io.BytesIO()
@@ -1862,6 +2132,25 @@ class B2ViewApp(App):
                 row_stop=stop,
             )
 
+        # Col-vs-col scatter ('s' key) is CTable-only; build the read closure and
+        # the visible-column universe for the Y picker just for that source kind.
+        scatter_fetch = None
+        scatter_columns = None
+        if buffer.get("source_kind") == "ctable":
+
+            def scatter_fetch(ycol: str, start: int, stop: int) -> dict:
+                return self.browser.read_xy(
+                    self.selected_path,
+                    xcol=name,
+                    ycol=ycol,
+                    layout=layout,
+                    row_start=start,
+                    row_stop=stop,
+                    max_points=PlotScreen._SCATTER_MAX_POINTS,
+                )
+
+            scatter_columns = self.browser.column_names(self.selected_path) or columns
+
         series = fetch(0, None)  # whole series (uses the fast SUMMARY tier if any)
         x, _ymin, _ymax, _descr = _plot_view(series)
         if x.size == 0:
@@ -1876,6 +2165,9 @@ class B2ViewApp(App):
                 row_stop=series["row_stop"],
                 series=series,
                 raw_fetch=raw_fetch,
+                xcol=name,
+                scatter_fetch=scatter_fetch,
+                scatter_columns=scatter_columns,
             ),
             self._view_plot_range,
         )

@@ -576,6 +576,62 @@ class StoreBrowser:
             "row_stop": stop,
         }
 
+    def read_xy(
+        self,
+        path: str,
+        *,
+        xcol: str,
+        ycol: str,
+        layout: DataSliceLayout | None = None,
+        row_start: int = 0,
+        row_stop: int | None = None,
+        max_points: int = 50_000,
+    ) -> dict[str, Any]:
+        """Return two row-aligned CTable columns over ``[row_start, row_stop)``.
+
+        For the col-vs-col scatter (``s`` in the plot panel): *xcol* and *ycol*
+        are read over the **same** live-row range, using the same window→filter
+        precedence as :meth:`read_series`, so the points are row-aligned for
+        free.  When the range is wider than *max_points*, both columns are
+        strided-sampled (same stride) and ``sampled`` is set.  Both columns must
+        be numeric; otherwise a ``ValueError`` is raised.  Result keys:
+        ``{"x", "y", "n", "row_start", "row_stop", "stride", "shown",
+        "sampled"}``.
+        """
+        path = self.normalize_path(path)
+        obj = self._get_object(path)
+        kind = object_kind(obj)
+        if kind != "ctable":
+            raise ValueError("Scatter requires a CTable source")
+
+        # Honor a locked row window first, then any row filter, matching
+        # read_series() so the scatter tracks exactly the visible rows.
+        if path in self._window_views:
+            view = self._window_views[path]
+        else:
+            view = self._filter_views.get(path, obj)
+        n = len(view)
+        start, stop = self._clamp_range(row_start, row_stop, n)
+        width = stop - start
+        stride = max(1, -(-width // max_points)) if width > max_points else 1
+
+        x = safe_asarray(view[xcol][start:stop:stride])
+        y = safe_asarray(view[ycol][start:stop:stride])
+        for nm, arr in ((xcol, x), (ycol, y)):
+            if arr.dtype.kind not in "iufb":
+                raise ValueError(f"Column {nm!r} is not numeric")
+
+        return {
+            "x": x,
+            "y": y,
+            "n": n,
+            "row_start": start,
+            "row_stop": stop,
+            "stride": stride,
+            "shown": len(x),
+            "sampled": stride > 1,
+        }
+
     def read_cell(self, path: str, column: str, row: int) -> Any:
         """Decode a single CTable cell — the on-demand path for expensive columns.
 
