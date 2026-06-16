@@ -156,9 +156,12 @@ Other packaging
   otherwise, it is best to wait until the new C-blosc2 version makes its way to
   conda-forge.
 
-* If you want to package Blosc2 for Pyodide, you can use the repo at:
-  https://github.com/Blosc/pyodide-recipes
-  and update the recipe for the new version.  Then, issue a pull request to upstream.
+* We are already creating WASM wheels for Pyodide straight to PyPI, so no extra
+  work is needed to make the package available in Pyodide.  However, if you want
+  to test the package in Pyodide, you can do it with micropip in a Jupyter
+  notebook running in Pyodide (e.g., in https://cat2.cloud/demo) with::
 
+    import micropip
+    await micropip.install("blosc2")
 
 That's all folks!
