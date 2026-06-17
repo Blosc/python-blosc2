@@ -1126,8 +1126,8 @@ def os_release_pretty_name():
 def print_versions():
     """Print all the versions of software that python-blosc2 relies on."""
     print("-=" * 38)
-    print(f"python-blosc2 version: {blosc2.__version__}")
-    print(f"Blosc version: {blosc2.blosclib_version}")
+    print(f"Python-Blosc2 version: {blosc2.__version__}")
+    print(f"C-Blosc2 version: {blosc2.blosclib_version}")
     print(f"Codecs available (including plugins): {', '.join([codec.name for codec in codecs])}")
     print("Main codec library versions:")
     for clib in sorted(clib_versions.keys()):
