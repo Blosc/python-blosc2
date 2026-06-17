@@ -171,7 +171,7 @@ def test_preview_ctable_skips_expensive_nested_columns_by_default():
 
         @property
         def info_items(self):
-            return [("schema", {"path": "list[struct]"})]
+            return [("columns", {"path": "list[struct]"})]
 
     preview = preview_ctable(Table(), max_cols=1)
     assert preview["skipped_columns"] == {"path": "list[struct]"}

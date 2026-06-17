@@ -924,7 +924,7 @@ def object_metadata(obj: Any) -> dict[str, Any]:
             return {
                 "nrows": getattr(obj, "nrows", len(obj)),
                 "ncols": getattr(obj, "ncols", len(getattr(obj, "col_names", []))),
-                "schema": {
+                "columns": {
                     name: str(getattr(obj[name], "dtype", None)) for name in getattr(obj, "col_names", [])
                 },
             }
@@ -1300,10 +1300,11 @@ def is_expensive_ctable_column(obj: Any, name: str) -> bool:
 def ctable_column_label(obj: Any, name: str) -> str:
     """Return a compact schema label for *name*."""
     try:
-        schema = dict(obj.info_items).get("schema", {})
-        label = schema.get(name)
+        columns = dict(obj.info_items).get("columns", {})
+        label = columns.get(name)
         if label is not None:
-            return str(label)
+            # Strip the trailing size annotation, e.g. "list[struct] (cbytes: ...)".
+            return str(label).split(" (", 1)[0]
     except Exception:
         pass
     try:

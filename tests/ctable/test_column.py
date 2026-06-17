@@ -818,7 +818,7 @@ def test_info_shows_open_mode_for_persistent_table(tmp_path):
     info = repr(opened.info)
     assert "capacity" not in info
     assert "read_only" not in info
-    assert "open_mode : r" in info
+    assert re.search(r"open_mode\s+: r", info)
     opened.close()
 
 
@@ -840,16 +840,18 @@ def test_info_indexes_only_report_cbytes(tmp_path):
     t.create_index("id", kind=blosc2.IndexKind.FULL)
 
     info = repr(t.info)
-    index_block = info.split("indexes   :", 1)[1]
-    assert "cbytes=" in index_block
-    assert "nbytes=" not in index_block
-    assert "cratio=" not in index_block
+    index_block = re.split(r"\nindexes\s+:", info, maxsplit=1)[1]
+    # Indexes report only their (compressed) on-disk size, no nbytes/cratio.
+    assert "[full]" in index_block
+    assert re.search(r"\[full\] \([\d.]+ (?:B|KiB|MiB|GiB)\)", index_block)
+    assert "nbytes" not in index_block
+    assert "cratio" not in index_block
 
 
 def test_info_cratio_uses_two_decimals_with_suffix():
     t = CTable(Row, new_data=DATA20)
     info = repr(t.info)
-    assert "cratio  :" in info
+    assert re.search(r"cratio\s+:", info)
     cratio_line = next(line for line in info.splitlines() if line.startswith("cratio"))
     assert re.search(r"cratio\s+:\s+\d+\.\d{2}x", cratio_line)
 

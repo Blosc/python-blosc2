@@ -343,14 +343,23 @@ def test_nested_column_namespace_info():
 
     assert len(info) == len(t.trip.info_items)
     items = dict(t.trip.info_items)
-    assert list(items) == ["type", "storage", "nrows", "nbytes", "cbytes", "cratio", "schema"]
+    assert list(items) == [
+        "type",
+        "storage",
+        "nrows",
+        "nbytes",
+        "cbytes",
+        "cratio",
+        "columns",
+        "indexes",
+    ]
     assert items["nrows"] == 2
     assert t.trip.col_names == ["begin.lon", "begin.lat"]
 
     text = repr(info)
     assert "NestedColumn" in text
     assert "storage" in text
-    assert "schema" in text
+    assert "columns" in text
     assert "begin.lon" in text
     assert "payment.fare" not in text
 
@@ -375,7 +384,8 @@ def test_nested_column_namespace_nested_info():
         "nbytes",
         "cbytes",
         "cratio",
-        "schema",
+        "columns",
+        "indexes",
     ]
     assert t.trip.begin.col_names == ["lon", "lat"]
     assert "lon" in repr(t.trip.begin.info)

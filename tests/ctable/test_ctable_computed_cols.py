@@ -295,9 +295,9 @@ def test_computed_column_info():
     t = _make_invoice_table(3)
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
     items = dict(t.info_items)
-    schema = items["schema"]
-    assert "total" in schema
-    total_label = str(schema["total"])
+    columns = items["columns"]
+    assert "total" in columns
+    total_label = str(columns["total"])
     assert "computed" in total_label
 
 

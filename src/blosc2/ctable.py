@@ -39,7 +39,7 @@ from blosc2.ctable_storage import (
     join_field_path,
     split_field_path,
 )
-from blosc2.info import InfoReporter, format_nbytes_info
+from blosc2.info import InfoReporter, format_nbytes_human, format_nbytes_info
 from blosc2.list_array import ListArray, coerce_list_cell
 from blosc2.scalar_array import _ScalarVarLenArray
 
@@ -2745,21 +2745,43 @@ class NestedColumn:
         """Structured summary items used by :attr:`info`."""
         table = self._table
         storage_type = "persistent" if isinstance(table._storage, FileTableStorage) else "in-memory"
-        schema_summary = {}
+        column_summary = {}
         for name in self._descendant_col_names():
             rel_name = self._relative_col_name(name)
             if name in table._computed_cols:
                 cc = table._computed_cols[name]
-                schema_summary[rel_name] = _InfoLiteral(
+                column_summary[rel_name] = _InfoLiteral(
                     f"{cc['dtype']} (computed: {table._readable_computed_expr(cc)})"
                 )
             else:
                 col_meta = table._schema.columns_by_name.get(name)
-                schema_summary[rel_name] = _InfoLiteral(
-                    table._dtype_info_label(
-                        getattr(table._cols[name], "dtype", None), col_meta.spec if col_meta else None
-                    )
+                dtype_label = table._dtype_info_label(
+                    getattr(table._cols[name], "dtype", None), col_meta.spec if col_meta else None
                 )
+                cbytes = getattr(table._cols[name], "cbytes", None)
+                if cbytes is not None:
+                    nbytes = getattr(table._cols[name], "nbytes", None)
+                    detail = f"cbytes: {format_nbytes_human(cbytes)}"
+                    if nbytes is not None and cbytes:
+                        detail += f", cratio: {nbytes / cbytes:.2f}x"
+                    column_summary[rel_name] = _InfoLiteral(f"{dtype_label} ({detail})")
+                else:
+                    column_summary[rel_name] = _InfoLiteral(dtype_label)
+
+        descendant = set(self._descendant_col_names())
+        index_summary = {}
+        for idx in table.indexes:
+            if idx.col_name not in descendant:
+                continue
+            stale = " stale" if idx.stale else ""
+            label = f" name={idx.name!r}" if idx.name and idx.name != "__self__" else ""
+            stats = idx.storage_stats()
+            if stats is None:
+                suffix = "(size=n/a, sidecars not directly addressable)"
+            else:
+                _, cbytes, _ = stats
+                suffix = f"({format_nbytes_human(cbytes)})"
+            index_summary[self._relative_col_name(idx.col_name)] = f"[{idx.kind}{stale}{label}] {suffix}"
 
         return [
             ("type", self.__class__.__name__),
@@ -2768,7 +2790,8 @@ class NestedColumn:
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),
             ("cratio", f"{self.cratio:.2f}x"),
-            ("schema", schema_summary),
+            ("columns", column_summary),
+            ("indexes", index_summary if index_summary else "none"),
         ]
 
     @property
@@ -10609,20 +10632,27 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """Structured summary items used by :meth:`info`."""
         storage_type = "persistent" if isinstance(self._storage, FileTableStorage) else "in-memory"
         urlpath = self._storage._root if isinstance(self._storage, FileTableStorage) else None
-        schema_summary = {}
+        column_summary = {}
         for name in self.col_names:
             if name in self._computed_cols:
                 cc = self._computed_cols[name]
-                schema_summary[name] = _InfoLiteral(
+                column_summary[name] = _InfoLiteral(
                     f"{cc['dtype']} (computed: {self._readable_computed_expr(cc)})"
                 )
             else:
                 col_meta = self._schema.columns_by_name.get(name)
-                schema_summary[name] = _InfoLiteral(
-                    self._dtype_info_label(
-                        getattr(self._cols[name], "dtype", None), col_meta.spec if col_meta else None
-                    )
+                dtype_label = self._dtype_info_label(
+                    getattr(self._cols[name], "dtype", None), col_meta.spec if col_meta else None
                 )
+                cbytes = getattr(self._cols[name], "cbytes", None)
+                if cbytes is not None:
+                    nbytes = getattr(self._cols[name], "nbytes", None)
+                    detail = f"cbytes: {format_nbytes_human(cbytes)}"
+                    if nbytes is not None and cbytes:
+                        detail += f", cratio: {nbytes / cbytes:.2f}x"
+                    column_summary[name] = _InfoLiteral(f"{dtype_label} ({detail})")
+                else:
+                    column_summary[name] = _InfoLiteral(dtype_label)
 
         index_summary = {}
         for idx in self.indexes:
@@ -10630,10 +10660,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             label = f" name={idx.name!r}" if idx.name and idx.name != "__self__" else ""
             stats = idx.storage_stats()
             if stats is None:
-                suffix = "size=n/a (sidecars not directly addressable)"
+                suffix = "(size=n/a, sidecars not directly addressable)"
             else:
                 _, cbytes, _ = stats
-                suffix = f"cbytes={format_nbytes_info(cbytes)}"
+                suffix = f"({format_nbytes_human(cbytes)})"
             index_summary[idx.col_name] = f"[{idx.kind}{stale}{label}] {suffix}"
 
         items = [
@@ -10647,15 +10677,37 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),
             ("cratio", f"{self.cratio:.2f}x"),
-            ("schema", schema_summary),
+            ("columns", column_summary),
             ("indexes", index_summary if index_summary else "none"),
         ]
+        # Only surface the validity-mask overhead when the table carries
+        # uncompacted tombstones, i.e. the physical extent exceeds the number
+        # of live rows (mid-table deletions not yet reclaimed by compact()).
+        if self.base is None:
+            live_rows = int(blosc2.count_nonzero(self._valid_rows))
+            if self._resolve_last_pos() > live_rows:
+                items.insert(
+                    items.index(("columns", column_summary)), ("valid_rows", self._valid_rows_info_label())
+                )
         if urlpath is not None:
             items.insert(2, ("urlpath", urlpath))
             open_mode = self._storage.open_mode()
             if open_mode is not None:
                 items.insert(3, ("open_mode", open_mode))
         return items
+
+    def _valid_rows_info_label(self) -> str:
+        """Storage label for the validity mask (deletion/selection overhead)."""
+        vr = self._valid_rows
+        dtype_label = str(getattr(vr, "dtype", "bool"))
+        cbytes = getattr(vr, "cbytes", None)
+        if cbytes is None:
+            return dtype_label
+        detail = f"cbytes: {format_nbytes_human(cbytes)}"
+        nbytes = getattr(vr, "nbytes", None)
+        if nbytes is not None and cbytes:
+            detail += f", cratio: {nbytes / cbytes:.2f}x"
+        return f"{dtype_label} ({detail})"
 
     @staticmethod
     def _dtype_info_label(dtype: np.dtype | None, spec: SchemaSpec | None = None) -> str:
