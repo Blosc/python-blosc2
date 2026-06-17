@@ -839,6 +839,14 @@ async def test_plot_view_locks_ctable_window(store_path):
         table = await focus_data_table(pilot)
         assert app.table_page["nrows"] == NROWS
 
+        # Maximize the data panel before plotting.  Textual's default
+        # escape-to-minimize would otherwise shadow our layered exit; with
+        # ESCAPE_TO_MINIMIZE=False the escape below must unlock the locked
+        # window (not restore the panel), and restore stays on the 'r' key.
+        await pilot.press("m")
+        await wait_for_table(pilot)
+        assert app.screen.maximized is not None
+
         # Plot column 'b' (== row index), then zoom to an exact 100:110 range.
         table.move_cursor(column=app.table_page["columns"].index("b"))
         await pilot.press("p")
@@ -857,6 +865,7 @@ async def test_plot_view_locks_ctable_window(store_path):
         await wait_for_table(pilot)
         assert not isinstance(app.screen, PlotScreen)
         assert app.row_window == (100, 110)
+        assert app.screen.maximized is not None  # locking keeps the panel maximized
         page = app.table_page
         assert page["nrows"] == 10
         np.testing.assert_array_equal(page["data"]["b"], np.arange(100, 110))
@@ -868,12 +877,19 @@ async def test_plot_view_locks_ctable_window(store_path):
         assert page["stop"] == 10
         assert page["data"]["b"][table.cursor_row] == 109
 
-        # 'esc' unlocks and restores the full table.
+        # 'esc' unlocks the window even while maximized (the panel stays
+        # maximized — escape did not get hijacked into a restore).
         await pilot.press("escape")
         await wait_for_table(pilot)
         assert app.row_window is None
         assert app.browser.get_row_window("/level0/ctable") is False
         assert app.table_page["nrows"] == NROWS
+        assert app.screen.maximized is not None
+
+        # 'r' is the way to restore a maximized panel.
+        await pilot.press("r")
+        await wait_for_table(pilot)
+        assert app.screen.maximized is None
 
 
 async def test_plot_hires_view(store_path):

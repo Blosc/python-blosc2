@@ -1613,6 +1613,13 @@ class B2ViewApp(App):
 
     TITLE = "b2view"  # header title (defaults to the class name otherwise)
 
+    # Keep escape on our own layered exit (action_dim_exit: dim mode -> locked
+    # row window -> row filter -> column filter).  Textual's default would have
+    # escape *restore* a maximized panel first, silently shadowing that ladder
+    # (e.g. escape after a plot's `v` would un-maximize instead of unlocking the
+    # window).  Restoring a maximized panel stays on its dedicated `r` key.
+    ESCAPE_TO_MINIMIZE = False
+
     CSS = """
     #main { height: 1fr; }
     #tree-pane { width: 35%; border: solid $primary; }
