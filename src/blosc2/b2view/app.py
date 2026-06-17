@@ -265,7 +265,7 @@ class HelpScreen(ModalScreen[None]):
             [
                 ("left / right", "move cursor; pages at the edges"),
                 ("s / e  (home / end)", "first / last column window"),
-                ("c", "go to column index or name..."),
+                ("c", "go to column (searchable name list; CTable, else index)"),
                 ("/", "pick which columns to show (searchable multi-select; CTable)"),
                 ("p", "plot a whole-column overview (needs textual-plotext)"),
                 ("enter", "decode a skipped cell (list/struct/object column)"),
@@ -453,6 +453,7 @@ class ColumnSelectScreen(ModalScreen["int | None"]):
 
     Dismisses with the chosen column's index into *names* (or None on cancel),
     a drop-in for :class:`GoToColumnScreen`'s result contract.  Used by the
+    ``c`` go-to-column key (CTables, where columns have names) and by the
     scatter ``s`` key to pick the Y column from the visible-column universe.
     """
 
@@ -2707,9 +2708,16 @@ class B2ViewApp(App):
         page = self.table_page
         if page.get("source_kind") not in _COL_PAGED_KINDS:
             return
-        current = page["col_start"] + self.query_one("#data-table", DataTable).cursor_column
-        names = self.browser.column_names(self.selected_path) if page["source_kind"] == "ctable" else None
-        screen = GoToColumnScreen(ncols=page["ncols"], current=current, names=names)
+        if page["source_kind"] == "ctable":
+            # Named columns -> pick from a searchable list (type to filter, ↑/↓,
+            # Enter); the option ids index into the visible-column universe, which
+            # is exactly what _go_to_column expects.
+            names = self.browser.column_names(self.selected_path)
+            screen: ModalScreen[int | None] = ColumnSelectScreen(names=names, title="Go to column")
+        else:
+            # N-D arrays have no column names; fall back to a numeric index entry.
+            current = page["col_start"] + self.query_one("#data-table", DataTable).cursor_column
+            screen = GoToColumnScreen(ncols=page["ncols"], current=current, names=None)
         self.push_screen(screen, self._go_to_column)
 
     def action_filter_rows(self) -> None:

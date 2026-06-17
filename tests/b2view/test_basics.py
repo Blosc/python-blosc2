@@ -51,6 +51,7 @@ from textual.widgets import DataTable, Input, SelectionList, Tree
 from blosc2.b2view.app import (
     B2ViewApp,
     ColumnFilterScreen,
+    ColumnSelectScreen,
     FilterScreen,
     GoToColumnScreen,
     GoToRowScreen,
@@ -301,11 +302,17 @@ async def test_2d_paging(store_path):
         await wait_for_table(pilot)
         assert app.table_page["col_start"] == 0
 
-        # 'c' jumps to a column by index (arrays have no column names)
+        # 'c' jumps to a column by index (arrays have no column names).  The
+        # modal pre-fills the current index and pre-selects it, so typing a new
+        # index replaces it (not appends, e.g. "0" + "97" -> "097").
         await pilot.press("c")
         await pilot.pause()
         assert isinstance(app.screen, GoToColumnScreen)
-        app.screen.query_one("#gotocol-input", Input).value = "97"
+        gotocol_input = app.screen.query_one("#gotocol-input", Input)
+        assert gotocol_input.value == "0"  # pre-filled with current column
+        for ch in "97":
+            await pilot.press(ch)
+        assert gotocol_input.value == "97"  # replaced, not "097"
         await pilot.press("enter")
         await wait_for_table(pilot)
         page = app.table_page
@@ -515,11 +522,14 @@ async def test_ctable_column_paging(store_path):
         assert page["start"] + table.cursor_row == 150
         _assert_ctable_window_values(page, expected)
 
-        # 'c' goes to a column by name; the row position is kept
+        # 'c' opens a searchable column picker (type to filter, ↑/↓, Enter);
+        # the row position is kept.  Pick v12 by typing its name.
         await pilot.press("c")
         await pilot.pause()
-        assert isinstance(app.screen, GoToColumnScreen)
-        app.screen.query_one("#gotocol-input", Input).value = "v12"
+        assert isinstance(app.screen, ColumnSelectScreen)
+        for ch in "v12":
+            await pilot.press(ch)
+        await pilot.pause()
         await pilot.press("enter")
         await wait_for_table(pilot)
         page = app.table_page
@@ -529,39 +539,27 @@ async def test_ctable_column_paging(store_path):
         assert page["start"] + table.cursor_row == 150
         _assert_ctable_window_values(page, expected)
 
-        # Typing a name replaces the pre-filled current index (not appends): the
-        # modal opens with the current column index selected, so the first
-        # keystroke overwrites it instead of producing e.g. "0v12".
+        # ↑/↓ drive the highlight: filter to the v1x family, then arrow to v12
         await pilot.press("c")
         await pilot.pause()
-        gotocol_input = app.screen.query_one("#gotocol-input", Input)
-        assert gotocol_input.value == str(app.table_page["col_start"])  # pre-filled
-        for ch in "v12":
+        assert isinstance(app.screen, ColumnSelectScreen)
+        for ch in "v1":  # matches v10, v11, ..., v19 in column order
             await pilot.press(ch)
-        assert gotocol_input.value == "v12"  # replaced, not "<index>v12"
+        await pilot.pause()
+        await pilot.press("down")  # v10 -> v11
+        await pilot.press("down")  # v11 -> v12
         await pilot.press("enter")
         await wait_for_table(pilot)
         assert app.table_page["col_start"] == all_names.index("v12")
         assert app.table_page["columns"][0] == "v12"
 
-        # An ambiguous name prefix keeps the modal open; escape cancels
+        # escape cancels the picker without moving
         await pilot.press("c")
         await pilot.pause()
-        app.screen.query_one("#gotocol-input", Input).value = "v1"
-        await pilot.press("enter")
-        await pilot.pause()
-        assert isinstance(app.screen, GoToColumnScreen)
+        assert isinstance(app.screen, ColumnSelectScreen)
         await pilot.press("escape")
         await wait_for_table(pilot)
         assert app.table_page["col_start"] == all_names.index("v12")
-
-        # ...and a numeric index works as well
-        await pilot.press("c")
-        await pilot.pause()
-        app.screen.query_one("#gotocol-input", Input).value = "0"
-        await pilot.press("enter")
-        await wait_for_table(pilot)
-        assert app.table_page["col_start"] == 0
 
         # Shrinking the terminal re-fits the column window to the new width
         wide_columns = list(app.table_page["columns"])
@@ -678,10 +676,13 @@ async def test_ctable_filtering(store_path):
         assert page["columns"][0] == "b"
         assert app.browser.get_column_filter("/level0/ctable") == f"{ncols - 1} of {ncols}"
 
-        # The goto-column modal resolves names within the visible set.
+        # The goto-column picker lists names within the visible set.
         await pilot.press("c")
         await pilot.pause()
-        app.screen.query_one("#gotocol-input", Input).value = "v15"
+        assert isinstance(app.screen, ColumnSelectScreen)
+        for ch in "v15":
+            await pilot.press(ch)
+        await pilot.pause()
         await pilot.press("enter")
         await wait_for_table(pilot)
         assert app.table_page["columns"][0] == "v15"
