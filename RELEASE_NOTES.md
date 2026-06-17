@@ -2,7 +2,48 @@
 
 ## Changes from 4.5.0 to 4.5.1
 
-XXX version-specific blurb XXX
+This follow-up release builds the `b2view` terminal viewer into a richer
+data-exploration tool — a **scatter plot**, a **searchable column picker**, a
+**one-shot demo download**, refreshed chrome, and several interaction fixes — and
+upgrades the bundled **C-Blosc2 to 3.1.4**.  WASM/Pyodide is now a **fully
+supported platform**, and `CTable.info` reports **per-column compressed sizes**.
+
+### b2view: richer exploration
+
+- **Scatter plots**: from a column plot, press `s` to scatter the current column
+  (X) against another column (Y) chosen from a list, over the current (zoomed)
+  row range; `h` then opens a high-resolution `matplotlib` scatter.
+- **High-res for 1-D series is now an envelope plot** (matching the in-terminal
+  view), and a new `r` key toggles between the min/max envelope and the raw
+  values (strided-sampled when the range is wide).
+- **Searchable column picker**: the `c` go-to-column key now opens a searchable,
+  selectable list (type to filter, ↑/↓, Enter) for CTables, instead of a text
+  field; N-D arrays still go by numeric index.
+- **Show/hide columns**: `/` opens a searchable multi-select to pick which CTable
+  columns are displayed.
+- **Demo download**: `b2view --download` fetches a demo bundle
+  (`chicago-taxi-flat.b2z` by default) into the current directory if it is not
+  already there, then opens it.
+- **Refreshed chrome**: a branded header, a left-docked filename label in the
+  title, and clearer status chips.
+
+### b2view: interaction fixes
+
+- **Go-to-row/column pre-fill is now pre-selected**, so the first keystroke
+  replaces the current index instead of appending to it (typing a column name no
+  longer produced e.g. `0payment.fare`).
+- **Escape keeps its layered exit while a panel is maximized**: with the data
+  panel maximized, escape now unlocks a plot's locked row window (and clears
+  filters) as documented, instead of being hijacked into restoring the panel —
+  use `r` to restore (`ESCAPE_TO_MINIMIZE = False`).
+- Test-suite robustness fixes (a timing flake and a Windows rendering glitch).
+
+### Other
+
+- **C-Blosc2 upgraded to 3.1.4.**
+- **WASM/Pyodide is now a fully supported platform**, with more frequent CI runs.
+- **`CTable.info` shows per-column compressed sizes** (`cbytes` and `cratio`),
+  and `print_versions()` uses clearer `Python-Blosc2` / `C-Blosc2` labels.
 
 ## Changes from 4.4.5 to 4.5.0
 

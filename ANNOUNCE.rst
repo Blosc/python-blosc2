@@ -1,43 +1,40 @@
-Announcing Python-Blosc2 4.5.0
+Announcing Python-Blosc2 4.5.1
 ==============================
 
-We are happy to announce this release, which teaches the ``b2view``
-terminal data viewer to **plot**, gives ``CTable`` a **pandas-like display
-and CSV** experience, and publishes **WASM/Pyodide wheels to PyPI**.
+We are happy to announce this release, which builds the ``b2view`` terminal
+data viewer into a richer **data-exploration** tool, upgrades the bundled
+**C-Blosc2 to 3.1.4**, and promotes **WASM/Pyodide to a fully supported
+platform**.
 
 The main highlights are:
 
-- **Plotting in b2view**: press ``p`` on a numeric series (a CTable column
-  or an array row) to draw an in-terminal line plot.  Plots are
-  peak-preserving min/max envelopes by default, so no spike or trough is
-  hidden however large the series is — large local series stream their
-  envelope *exactly*.  Zoom into a row range, press ``v`` to lock the data
-  grid to it, or ``h`` to open a high-resolution ``matplotlib`` view (new
-  optional ``hires`` extra).
+- **Scatter plots in b2view**: from a column plot, press ``s`` to scatter the
+  current column against another column you pick from a list — column-vs-column
+  over the current (zoomed) row range — and ``h`` for a high-resolution
+  ``matplotlib`` scatter.  The high-res view of a 1-D series is now a min/max
+  envelope too, with a new ``r`` key to toggle the raw values.
 
-- **pandas-like CTable display**: ``to_string()`` now renders the whole
-  table by default (with ``max_rows``/``max_width`` to truncate), ``repr``
-  shows the same truncated table as ``str``, and a new
-  ``blosc2.printoptions(...)`` context manager plus ``display_width`` /
-  ``display_rows`` options control the view.  ``to_csv()`` called without a
-  path now returns the CSV as a string.
+- **Searchable pickers**: the ``c`` go-to-column key now opens a searchable,
+  selectable column list (type to filter, arrows, Enter) for CTables, and ``/``
+  opens a searchable multi-select to choose which columns are shown.
 
-- **WASM/Pyodide wheels on PyPI**: ``blosc2`` now ships ``pyemscripten``
-  wheels for CPython 3.13 and 3.14, so it is ``micropip``-installable in
-  Pyodide straight from PyPI.
+- **One-shot demo download**: ``b2view --download`` fetches a demo bundle
+  (``chicago-taxi-flat.b2z`` by default) into the current directory if it is not
+  already there, then opens it — a zero-setup way to try the viewer.
 
-- **Faster strided reads**: ``NDArray`` and ``Column`` getitem gain fast
-  paths for large strides and identity gathers, and compact CTable queries
-  prune more blocks via cross-column index pruning.
+- **Interaction fixes**: go-to-row/column pre-fills are now pre-selected (the
+  first keystroke replaces them), and ``escape`` keeps its documented layered
+  exit even while a panel is maximized (use ``r`` to restore).  Plus a refreshed
+  header, a filename label in the title, and ``CTable.info`` now showing
+  per-column compressed sizes.
 
-A quick taste of the new plotting — open a store and press ``p`` on a
-numeric column::
+A quick taste — grab the demo and start exploring::
 
     $ pip install blosc2 --upgrade
-    $ b2view chicago-taxi.b2z
+    $ b2view --download --panel data
 
-Zoom into a range, press ``v`` to pin the grid to it, then ``h`` for a
-high-resolution view — all without decompressing anything you do not look
+Press ``p`` to plot a column, ``s`` to scatter it against another, and ``h``
+for a high-resolution view — all without decompressing anything you do not look
 at.
 
 Install it with::
