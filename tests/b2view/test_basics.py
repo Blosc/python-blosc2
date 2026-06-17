@@ -529,6 +529,21 @@ async def test_ctable_column_paging(store_path):
         assert page["start"] + table.cursor_row == 150
         _assert_ctable_window_values(page, expected)
 
+        # Typing a name replaces the pre-filled current index (not appends): the
+        # modal opens with the current column index selected, so the first
+        # keystroke overwrites it instead of producing e.g. "0v12".
+        await pilot.press("c")
+        await pilot.pause()
+        gotocol_input = app.screen.query_one("#gotocol-input", Input)
+        assert gotocol_input.value == str(app.table_page["col_start"])  # pre-filled
+        for ch in "v12":
+            await pilot.press(ch)
+        assert gotocol_input.value == "v12"  # replaced, not "<index>v12"
+        await pilot.press("enter")
+        await wait_for_table(pilot)
+        assert app.table_page["col_start"] == all_names.index("v12")
+        assert app.table_page["columns"][0] == "v12"
+
         # An ambiguous name prefix keeps the modal open; escape cancels
         await pilot.press("c")
         await pilot.pause()

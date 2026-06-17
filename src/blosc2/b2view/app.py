@@ -351,6 +351,9 @@ class GoToRowScreen(ModalScreen[int | None]):
         input_widget = self.query_one("#goto-input", Input)
         input_widget.value = str(self.current)
         input_widget.focus()
+        # Pre-select the current value so the first keystroke replaces it (typing
+        # a fresh number is the common case); arrows/edits still work as usual.
+        input_widget.select_all()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         value = event.value.strip().replace("_", "")
@@ -408,6 +411,9 @@ class GoToColumnScreen(ModalScreen[int | None]):
         input_widget = self.query_one("#gotocol-input", Input)
         input_widget.value = str(self.current)
         input_widget.focus()
+        # Pre-select the current index so typing a column name (or a new index)
+        # replaces it instead of appending (e.g. "0" + "payment.fare").
+        input_widget.select_all()
 
     def _fail(self, message: str) -> None:
         self.query_one("#gotocol-title", Static).update(message)
