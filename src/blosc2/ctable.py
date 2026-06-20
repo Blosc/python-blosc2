@@ -3341,6 +3341,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _is_dictionary_column(col: CompiledColumn) -> bool:
         return isinstance(col.spec, DictionarySpec)
 
+    def _dict_rank_index_stale(self, name: str, dict_rank_meta: dict) -> bool:
+        """True if a dict-rank FULL index no longer matches the live dictionary.
+
+        The index encodes alphabetical ranks frozen at build time; if the
+        dictionary gained/changed entries the ranks are wrong, so callers must
+        fall back to lexsort until the index is rebuilt.
+        """
+        from blosc2.ctable_indexing import _dict_rank_hash
+
+        col = self._root_table._cols.get(name)
+        if col is None:
+            return True
+        dictionary = list(col.dictionary)
+        if len(dictionary) != dict_rank_meta.get("dict_len"):
+            return True
+        return _dict_rank_hash(dictionary) != dict_rank_meta.get("dict_hash")
+
     @staticmethod
     def _is_ndarray_column(col: CompiledColumn) -> bool:
         return isinstance(col.spec, NDArraySpec)
@@ -9911,9 +9928,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     raise TypeError(
                         f"Column {name!r} is a varlen scalar column and does not support sort ordering."
                     )
-                raise TypeError(
-                    f"Column {name!r} is a list column and does not support sort ordering in V1."
-                )
+                if cc is not None and self._is_dictionary_column(cc):
+                    pass  # dictionary columns: sorting supported (decoded strings)
+                else:
+                    raise TypeError(
+                        f"Column {name!r} is a list column and does not support sort ordering in V1."
+                    )
             if np.issubdtype(dtype, np.complexfloating):
                 raise TypeError(
                     f"Column {name!r} has complex dtype {dtype} which does not support ordering."
@@ -9932,13 +9952,24 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         descriptor = None
 
         null_value = None
+        null_code = None
+        is_dict_rank = False
         if name in root._cols:
             col_info = root._schema.columns_by_name.get(name)
             if col_info is not None:
                 null_value = getattr(col_info.spec, "null_value", None)
+                if isinstance(col_info.spec, DictionarySpec):
+                    null_code = col_info.spec.null_code
             descriptor = catalog.get(name)
             if descriptor is None or descriptor.get("kind") != "full" or descriptor.get("stale", False):
                 descriptor = None
+            else:
+                dict_rank_meta = descriptor.get("full", {}).get("dict_rank")
+                if dict_rank_meta is not None:
+                    if self._dict_rank_index_stale(name, dict_rank_meta):
+                        descriptor = None  # ranks no longer match dictionary → lexsort
+                    else:
+                        is_dict_rank = True
         elif name in root._computed_cols:
             cc = root._computed_cols[name]
             for _lookup_key, candidate in catalog.items():
@@ -9998,7 +10029,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             current_valid = self._valid_rows[:]
             positions = positions[current_valid[positions]]
 
-        if null_value is not None:
+        if is_dict_rank:
+            # Dict-rank index: positions sorted by rank (int32), nulls have sentinel null_rank.
+            # Partition null rows using codes (int32), not decoded strings.
+            codes = np.asarray(root._cols[name].codes[:], dtype=np.int32)
+            null_phys = codes == null_code
+            del codes
+            if null_phys.any():
+                is_null = null_phys[positions]
+                del null_phys
+                nulls = positions[is_null]
+                nonnull = positions[~is_null]
+                del is_null, positions
+                if not ascending:
+                    nonnull = nonnull[::-1]
+                return np.concatenate([nonnull, nulls])
+            # No nulls: fall through to simple reverse
+        elif null_value is not None:
             # The index sorts by raw value, but sort_by's contract is nulls-last.
             # Partition explicitly so it holds for any sentinel (NaN sorts last,
             # an integer sentinel like INT64_MIN sorts first) and either order.
@@ -10040,23 +10087,27 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         lex_keys = []
         for name, asc in zip(reversed(cols), reversed(ascending), strict=True):
             cc = self._computed_cols.get(name)
+            col_info = self._schema.columns_by_name.get(name)
+            is_dict_col = False
             if cc is not None:
                 # Materialise computed column values at live positions
                 raw = np.asarray(self._build_computed_lazy(cc)[:])[live_pos]
             else:
-                col_info = self._schema.columns_by_name.get(name)
-                if col_info is not None and self._is_dictionary_column(col_info):
+                is_dict_col = col_info is not None and self._is_dictionary_column(col_info)
+                if is_dict_col:
                     # Sort dictionary columns by decoded string values.
                     decoded = self._cols[name][live_pos]
                     raw = np.array(decoded, dtype=object)
+                    # Replace None with placeholder so lexsort never compares None.
+                    # Null indicator key (below) already places nulls last.
+                    raw[raw == None] = ""  # noqa: E711
                 else:
                     raw = self._cols[name][live_pos]
-            col_info = self._schema.columns_by_name.get(name)
             nv = getattr(col_info.spec, "null_value", None) if col_info else None
 
             # Value key
             if not asc:
-                if raw.dtype.kind in "US":
+                if raw.dtype.kind in "USO":
                     # strings can't be negated — invert via rank
                     rank = np.argsort(np.argsort(raw, kind="stable"), kind="stable")
                     lex_keys.append((n - 1 - rank).astype(np.intp))
@@ -10069,7 +10120,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             # Null indicator key — more significant than the value key above,
             # so nulls always sort last (0 before 1 → non-null before null).
-            if nv is not None:
+            if is_dict_col and col_info.spec.nullable:
+                null_code = col_info.spec.null_code
+                codes_at_pos = np.asarray(self._cols[name].codes[live_pos], dtype=np.int32)
+                null_ind = (codes_at_pos == null_code).astype(np.intp)
+                lex_keys.append(null_ind)
+            elif nv is not None:
                 if isinstance(nv, float) and np.isnan(nv):
                     null_ind = np.isnan(raw).astype(np.intp)
                 else:
@@ -10226,9 +10282,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         col_info = self._schema.columns_by_name.get(name)
         null_value = getattr(col_info.spec, "null_value", None) if col_info is not None else None
-        # Numeric / NaN sentinels keep the null rows in one contiguous block once
-        # sorted; non-numeric sentinels (e.g. "") would need a different locator.
-        if null_value is not None and not isinstance(null_value, (int, float)):
+        # Dict-rank index: use null_rank (int32) as sentinel for null-block location.
+        dict_rank = full.get("dict_rank")
+        if dict_rank is not None:
+            if self._dict_rank_index_stale(name, dict_rank):
+                return None  # ranks no longer match dictionary → lexsort
+            null_value = dict_rank["null_rank"]
+        # Numeric / NaN / string sentinels keep the null rows in one contiguous block
+        # once sorted; other non-numeric sentinels (e.g. object) would need a
+        # different locator.
+        if null_value is not None and not isinstance(null_value, (int, float, str, bytes)):
             return None
 
         from blosc2.indexing import _open_sidecar_file
@@ -10332,8 +10395,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         lex_keys = []
         for name, asc in zip(reversed(cols), reversed(ascending), strict=True):
             col_info = self._schema.columns_by_name.get(name)
-            if col_info is not None and self._is_dictionary_column(col_info):
+            is_dict_col = col_info is not None and self._is_dictionary_column(col_info)
+            if is_dict_col:
                 raw = np.array(self._cols[name][live_pos], dtype=object)
+                # Replace None with placeholder so lexsort never compares None.
+                raw[raw == None] = ""  # noqa: E711
             else:
                 raw = gathered[name]
 
@@ -10348,13 +10414,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 lex_keys.append(raw)
 
-            nv = getattr(col_info.spec, "null_value", None) if col_info else None
-            if nv is not None:
-                if isinstance(nv, float) and np.isnan(nv):
-                    null_ind = np.isnan(raw).astype(np.intp)
-                else:
-                    null_ind = (raw == nv).astype(np.intp)
+            if is_dict_col and col_info.spec.nullable:
+                null_code = col_info.spec.null_code
+                codes_at_pos = np.asarray(self._cols[name].codes[live_pos], dtype=np.int32)
+                null_ind = (codes_at_pos == null_code).astype(np.intp)
                 lex_keys.append(null_ind)
+            else:
+                nv = getattr(col_info.spec, "null_value", None) if col_info else None
+                if nv is not None:
+                    if isinstance(nv, float) and np.isnan(nv):
+                        null_ind = np.isnan(raw).astype(np.intp)
+                    else:
+                        null_ind = (raw == nv).astype(np.intp)
+                    lex_keys.append(null_ind)
 
         order = np.lexsort(lex_keys)
         result = self._empty_copy(capacity=n)

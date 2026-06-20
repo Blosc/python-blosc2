@@ -56,6 +56,66 @@ class _FakeSchunk:
         self.vlmeta = _FakeVlMeta()
 
 
+def _dict_rank_hash(dictionary) -> str:
+    """Stable hash of a dictionary's entries (code position + value).
+
+    Used to detect when a rank-based FULL index has gone stale (the alphabetical
+    ranks it encodes no longer match the live dictionary).  Must be stable across
+    processes — the hash is persisted in the index descriptor and recomputed on a
+    fresh open; ``hash()`` is PYTHONHASHSEED-salted and would spuriously mismatch,
+    making the persistent index always fall back.
+    """
+    import hashlib
+
+    h = hashlib.sha1(usedforsecurity=False)
+    for i, value in enumerate(dictionary):
+        h.update(repr((i, value)).encode("utf-8"))
+    return h.hexdigest()
+
+
+class _DictRankWrapper:
+    """Wrap a dictionary column's codes NDArray, translating codes to alphabetical ranks on read.
+
+    Mirrors the NDArray interface enough for the index builder (dtype, shape, ndim,
+    chunks, blocks, __getitem__).  The rank for code *c* is its position in an
+    alphabetically-sorted dictionary, so sorting by rank == sorting by decoded string.
+    Null codes map to a sentinel rank ``null_rank = len(dictionary)`` (largest, so
+    nulls sort last).
+    """
+
+    def __init__(
+        self,
+        codes,
+        code_to_rank: np.ndarray,
+        null_rank: np.int32,
+        null_code: int,
+        nullable: bool,
+        n_live: int,
+    ):
+        self._codes = codes  # int32 NDArray
+        self._code_to_rank = code_to_rank  # int32 array mapping code -> rank
+        self._null_rank = null_rank
+        self._null_code = null_code
+        self._nullable = nullable
+        self.dtype = np.dtype(np.int32)
+        # The codes array carries capacity padding beyond the live rows; expose only
+        # the live range so the index sidecars match n_rows (no padding → the
+        # zero-permutation window read engages instead of falling back).
+        self.shape = (n_live,)
+        self.ndim = 1
+        chunk0 = codes.chunks[0] if codes.chunks else n_live
+        block0 = codes.blocks[0] if codes.blocks else n_live
+        self.chunks = (min(chunk0, n_live),)
+        self.blocks = (min(block0, n_live),)
+
+    def __getitem__(self, key):
+        codes_slice = np.asarray(self._codes[key], dtype=np.int32)
+        ranks = self._code_to_rank[codes_slice]
+        if self._nullable:
+            ranks[codes_slice == self._null_code] = self._null_rank
+        return ranks
+
+
 class _CTableBuildProxy:
     """Minimal shim that lets the ``indexing`` module build sidecars for a
     CTable column without touching the column's own ``schunk.vlmeta``.
@@ -696,10 +756,25 @@ class _CTableIndexingMixin:
                 f"Cannot create an index on variable-length scalar column {col_name!r}: "
                 "indexing for vlstring/vlbytes/struct/object columns is not supported yet."
             )
-        # Dictionary columns: index the underlying int32 codes array.
+        # Dictionary columns: index by alphabetical rank instead of insertion-order codes.
         is_dictionary = isinstance(self._schema.columns_by_name[col_name].spec, DictionarySpec)
+        dict_rank_meta = None
         if is_dictionary:
-            col_arr = col_arr.codes  # index the int32 codes NDArray
+            dict_col = col_arr
+            n_live = self._n_rows if self._n_rows is not None else len(self._valid_rows)
+            dictionary = list(dict_col.dictionary)
+            n_entries = len(dictionary)
+            order = np.argsort(dictionary, kind="stable")
+            code_to_rank = np.empty(n_entries, dtype=np.int32)
+            code_to_rank[order] = np.arange(n_entries, dtype=np.int32)
+            null_code = dict_col.spec.null_code
+            null_rank = np.int32(n_entries)
+            # Hash for staleness detection.
+            dict_hash = _dict_rank_hash(dictionary)
+            dict_rank_meta = {"null_rank": int(null_rank), "dict_hash": dict_hash, "dict_len": n_entries}
+            col_arr = _DictRankWrapper(
+                dict_col.codes, code_to_rank, null_rank, null_code, dict_col.spec.nullable, n_live
+            )
         is_persistent = self._storage.index_anchor_path(col_name) is not None
 
         if is_persistent:
@@ -718,6 +793,13 @@ class _CTableIndexingMixin:
                 precomputed_summaries=precomputed_summaries if kind_str == "summary" else None,
             )
         else:
+            # In-memory path: materialise ranks as a proper NDArray (small tables only).
+            if is_dictionary:
+                codes = np.asarray(dict_col.codes[:n_live], dtype=np.int32)
+                ranks_arr = code_to_rank[codes]
+                if dict_col.spec.nullable:
+                    ranks_arr[codes == null_code] = null_rank
+                col_arr = blosc2.asarray(ranks_arr)
             _ix_create_index(
                 col_arr,
                 field=None,
@@ -734,6 +816,11 @@ class _CTableIndexingMixin:
             )
             store = _IN_MEMORY_INDEXES[id(col_arr)]
             descriptor = _copy_descriptor(store["indexes"]["__self__"])
+        if dict_rank_meta is not None:
+            full = descriptor.setdefault("full", {})
+            if full is None:
+                full = descriptor["full"] = {}
+            full["dict_rank"] = dict_rank_meta
 
         value_epoch, _ = self._storage.get_epoch_counters()
         descriptor["built_value_epoch"] = value_epoch

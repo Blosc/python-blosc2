@@ -758,7 +758,7 @@ def store_cached_coords(
 
 
 def _supported_index_dtype(dtype: np.dtype) -> bool:
-    return np.dtype(dtype).kind in {"b", "i", "u", "f", "m", "M"}
+    return np.dtype(dtype).kind in {"b", "i", "u", "f", "m", "M", "S", "U"}
 
 
 def _field_target_descriptor(field: str | None) -> dict:
@@ -1064,6 +1064,16 @@ def _segment_summary(segment: np.ndarray, dtype: np.dtype):
             zero = np.zeros((), dtype=dtype)[()]
             return zero, zero, flags
         segment = segment[valid]
+    if dtype.kind in "US":
+        # String dtypes: ufunc 'minimum'/'maximum' lack a loop.
+        mn = segment[0]
+        mx = segment[0]
+        for v in segment[1:]:
+            if v < mn:
+                mn = v
+            if v > mx:
+                mx = v
+        return mn, mx, flags
     return segment.min(), segment.max(), flags
 
 
@@ -1106,8 +1116,25 @@ def _fill_summaries_from_2d(
         mins = np.where(all_nan, zero, mins).astype(dtype)
         maxs = np.where(all_nan, zero, maxs).astype(dtype)
     else:
-        mins = data_2d.min(axis=1)
-        maxs = data_2d.max(axis=1)
+        if dtype.kind in "US":
+            # String dtypes: numpy ufunc 'minimum'/'maximum' lack a loop for <U/S.
+            # Use manual per-row comparison (cheap for small segment_len).
+            mins = np.empty(n, dtype=dtype)
+            maxs = np.empty(n, dtype=dtype)
+            for i in range(n):
+                row = data_2d[i]
+                mn = row[0]
+                mx = row[0]
+                for v in row[1:]:
+                    if v < mn:
+                        mn = v
+                    if v > mx:
+                        mx = v
+                mins[i] = mn
+                maxs[i] = mx
+        else:
+            mins = data_2d.min(axis=1)
+            maxs = data_2d.max(axis=1)
         flags = np.zeros(n, dtype=np.uint8)
     summaries_arr["min"][offset : offset + n] = mins
     summaries_arr["max"][offset : offset + n] = maxs
@@ -3081,13 +3108,24 @@ def _merge_run_pair(
             )
             right_cut = right_values.size
 
-        merged_values, merged_positions = indexing_ext.intra_chunk_merge_sorted_slices(
-            left_values[:left_cut],
-            left_positions[:left_cut],
-            right_values[:right_cut],
-            right_positions[:right_cut],
-            np.int64,
-        )
+        try:
+            merged_values, merged_positions = indexing_ext.intra_chunk_merge_sorted_slices(
+                left_values[:left_cut],
+                left_positions[:left_cut],
+                right_values[:right_cut],
+                right_positions[:right_cut],
+                np.int64,
+            )
+        except (TypeError, AttributeError):
+            # ponytail: fallback for non-numeric dtypes (strings, etc.) that the
+            # Cython merge doesn't support.  _merge_sorted_slices uses np.lexsort.
+            merged_values, merged_positions = _merge_sorted_slices(
+                left_values[:left_cut],
+                left_positions[:left_cut],
+                right_values[:right_cut],
+                right_positions[:right_cut],
+                dtype,
+            )
         take = merged_values.size
         try:
             _write_ndarray_linear_span(out_values, out_cursor, merged_values)
