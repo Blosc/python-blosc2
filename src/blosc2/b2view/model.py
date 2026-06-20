@@ -260,6 +260,9 @@ class StoreBrowser:
         self._filter_views: dict[str, Any] = {}
         # Per-path locked row windows for CTable nodes (path -> slice() view)
         self._window_views: dict[str, Any] = {}
+        # Per-path sort order for CTable nodes (path -> (column, reverse) / view)
+        self._sorts: dict[str, tuple[str, bool]] = {}
+        self._sort_views: dict[str, Any] = {}
         # Per-path column filters (path -> substring pattern / matched names)
         self._column_filters: dict[str, str] = {}
         self._column_selections: dict[str, list[str]] = {}
@@ -387,12 +390,9 @@ class StoreBrowser:
                     return preview_array_1d(obj, start=start, stop=stop)
             return preview_array(obj, slices=slices, max_rows=max_rows, max_cols=max_cols)
         if kind == "ctable":
-            # A locked row window (set by 'v') takes precedence; it is sliced
-            # from whatever was visible, so it already folds in any row filter.
-            if path in self._window_views:
-                obj = self._window_views[path]
-            else:
-                obj = self._filter_views.get(path, obj)
+            # Read precedence: a locked row window (set by 'v') wins, then a row
+            # filter, then a sort view; all already fold in their predecessors.
+            obj = self._ordered_object(path, obj)
             if columns is None:
                 columns = self._column_selections.get(path)
             stop = min(start + max_rows, len(obj)) if stop is None else stop
@@ -443,16 +443,12 @@ class StoreBrowser:
         kind = object_kind(obj)
 
         if kind == "ctable":
-            # A locked row window (set by 'v') takes precedence over any row
-            # filter, mirroring preview()/read_cell(): a plot shows exactly the
-            # rows the grid is showing.  The SUMMARY fast-path spans the whole
-            # column, so it is only valid when neither narrows the series.
-            if path in self._window_views:
-                view = self._window_views[path]
-                narrowed = True
-            else:
-                view = self._filter_views.get(path, obj)
-                narrowed = path in self._filter_views
+            # Window/filter/sort precedence mirrors preview()/read_cell(): a plot
+            # shows exactly the rows (and order) the grid is showing.  The SUMMARY
+            # fast-path spans the whole column in original order, so it is only
+            # valid when nothing narrows *or reorders* the series.
+            view = self._ordered_object(path, obj)
+            narrowed = view is not obj
             n = len(view)
             start, stop = self._clamp_range(row_start, row_stop, n)
             if start == 0 and stop == n and not narrowed:
@@ -541,12 +537,9 @@ class StoreBrowser:
         kind = object_kind(obj)
 
         if kind == "ctable":
-            # Honor a locked row window first, then any row filter, matching
-            # preview()/read_cell() so the hi-res view tracks the visible grid.
-            if path in self._window_views:
-                view = self._window_views[path]
-            else:
-                view = self._filter_views.get(path, obj)
+            # Window > filter > sort, matching preview()/read_cell() so the
+            # hi-res view tracks the visible grid (rows and order).
+            view = self._ordered_object(path, obj)
             n = len(view)
             start, stop = self._clamp_range(row_start, row_stop, n)
             stride = self._series_stride(stop - start, max_points)
@@ -621,12 +614,9 @@ class StoreBrowser:
         if kind != "ctable":
             raise ValueError("Scatter requires a CTable source")
 
-        # Honor a locked row window first, then any row filter, matching
-        # read_series() so the scatter tracks exactly the visible rows.
-        if path in self._window_views:
-            view = self._window_views[path]
-        else:
-            view = self._filter_views.get(path, obj)
+        # Window > filter > sort, matching read_series() so the scatter tracks
+        # exactly the visible rows (and order).
+        view = self._ordered_object(path, obj)
         n = len(view)
         start, stop = self._clamp_range(row_start, row_stop, n)
         width = stop - start
@@ -660,12 +650,9 @@ class StoreBrowser:
         path = self.normalize_path(path)
         obj = self._get_object(path)
         if object_kind(obj) == "ctable":
-            # Same precedence as preview(): a locked row window wins over a
-            # filter view, so the visible row index resolves the same cell.
-            if path in self._window_views:
-                obj = self._window_views[path]
-            else:
-                obj = self._filter_views.get(path, obj)
+            # Same precedence as preview() (window > filter > sort) so the
+            # visible row index resolves the same cell.
+            obj = self._ordered_object(path, obj)
         values = obj[column][row : row + 1]
         if len(values) == 0:
             raise IndexError(f"row {row} is out of range")
@@ -779,6 +766,7 @@ class StoreBrowser:
             self._filters.pop(path, None)
             self._filter_views.pop(path, None)
             return len(self._get_object(path))
+        self.clear_sort(path)  # filter and sort are mutually exclusive
         view = self._get_object(path).where(expr)
         self._filters[path] = expr
         self._filter_views[path] = view
@@ -788,6 +776,43 @@ class StoreBrowser:
         """Return the active filter expression for *path*, if any."""
         return self._filters.get(self.normalize_path(path))
 
+    def full_index_columns(self, path: str) -> list[str]:
+        """Names of CTable columns at *path* that carry a FULL index (sortable)."""
+        obj = self._get_object(path)
+        return [ix.col_name for ix in getattr(obj, "indexes", []) if getattr(ix, "kind", None) == "full"]
+
+    def set_sort(self, path: str, column: str, reverse: bool) -> None:
+        """Order the CTable at *path* by *column* using its FULL index (zero-copy view).
+
+        The view streams from the sorted index, so the full table is never
+        materialised.  Sorting replaces any active row filter/window for *path*.
+        """
+        path = self.normalize_path(path)
+        self._window_views.pop(path, None)
+        self._filters.pop(path, None)
+        self._filter_views.pop(path, None)
+        view = self._get_object(path).sort_by(column, ascending=not reverse, view=True)
+        self._sorts[path] = (column, reverse)
+        self._sort_views[path] = view
+
+    def clear_sort(self, path: str) -> None:
+        """Drop any sort order from *path*, restoring the original row order."""
+        path = self.normalize_path(path)
+        self._sorts.pop(path, None)
+        self._sort_views.pop(path, None)
+
+    def get_sort(self, path: str) -> tuple[str, bool] | None:
+        """Return the active ``(column, reverse)`` sort for *path*, if any."""
+        return self._sorts.get(self.normalize_path(path))
+
+    def _ordered_object(self, path: str, obj: Any) -> Any:
+        """CTable read precedence for *path*: window > filter > sort > base *obj*."""
+        if path in self._window_views:
+            return self._window_views[path]
+        if path in self._filter_views:
+            return self._filter_views[path]
+        return self._sort_views.get(path, obj)
+
     def set_row_window(self, path: str, start: int, stop: int) -> int:
         """Lock the CTable at *path* to live rows ``[start:stop]``; return its length.
 
@@ -796,7 +821,10 @@ class StoreBrowser:
         then cannot leave the range because the view reports only its own rows.
         """
         path = self.normalize_path(path)
-        base = self._filter_views.get(path, self._get_object(path))
+        if path in self._filter_views:
+            base = self._filter_views[path]
+        else:
+            base = self._sort_views.get(path, self._get_object(path))
         view = base.slice(start, stop, copy=False)
         self._window_views[path] = view
         return len(view)

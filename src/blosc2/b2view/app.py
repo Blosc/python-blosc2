@@ -18,6 +18,7 @@ from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.theme import Theme
 from textual.widgets import (
+    Checkbox,
     DataTable,
     Footer,
     Header,
@@ -257,7 +258,9 @@ class HelpScreen(ModalScreen[None]):
                 ("t / b", "first / last row"),
                 ("g", "go to row..."),
                 ("f", "filter rows (CTable)"),
-                ("escape", "unlock a row window / clear the active filter"),
+                ("S", "sort by an indexed column (CTable; R reverses)"),
+                ("R", "reverse the current sort order (when sorted)"),
+                ("escape", "unlock a row window / clear the active filter or sort"),
             ],
         ),
         (
@@ -705,6 +708,70 @@ class FilterScreen(ModalScreen[str | None]):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value.strip())
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class SortByScreen(ModalScreen["tuple[str, bool] | None"]):
+    """Dropdown to sort a CTable by one of its FULL-indexed columns.
+
+    ↑/↓ to pick a column, ``r`` (or click) toggles reverse/descending, Enter
+    applies.  Dismisses with ``(column, reverse)`` or None on cancel.
+    """
+
+    CSS = """
+    SortByScreen {
+        align: center middle;
+    }
+    #sortby-dialog {
+        width: 60;
+        height: auto;
+        max-height: 80%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #sortby-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #sortby-list {
+        height: auto;
+        max-height: 16;
+    }
+    """
+
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel"), ("R", "toggle_reverse", "Reverse")]
+
+    def __init__(self, *, columns: list[str], current: tuple[str, bool] | None = None):
+        super().__init__()
+        self.columns = columns
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        cur_col, cur_rev = self._current or (None, False)
+        with Vertical(id="sortby-dialog"):
+            yield Static("Sort by indexed column (Enter applies, R reverses)", id="sortby-title")
+            yield OptionList(
+                *(Option(name, id=str(i)) for i, name in enumerate(self.columns)), id="sortby-list"
+            )
+            yield Checkbox("Reverse (descending)", value=cur_rev, id="sortby-reverse")
+
+    def on_mount(self) -> None:
+        option_list = self.query_one("#sortby-list", OptionList)
+        cur_col = (self._current or (None, False))[0]
+        option_list.highlighted = self.columns.index(cur_col) if cur_col in self.columns else 0
+        option_list.focus()
+
+    def action_toggle_reverse(self) -> None:
+        checkbox = self.query_one("#sortby-reverse", Checkbox)
+        checkbox.value = not checkbox.value
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option.id is not None:
+            reverse = self.query_one("#sortby-reverse", Checkbox).value
+            self.dismiss((self.columns[int(event.option.id)], reverse))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -1655,6 +1722,8 @@ class B2ViewApp(App):
         Binding("e", "grid_col_end", "Row end", show=False),
         Binding("c", "go_to_column", "Go to column", show=False),
         Binding("f", "filter_rows", "Filter rows", show=False),
+        Binding("S", "sort_rows", "Sort by", show=False),
+        Binding("R", "reverse_sort", "Reverse sort", show=False),
         Binding("slash", "filter_columns", "Filter columns", show=False),
         Binding("p", "plot_column", "Plot column", show=False),
         Binding("d", "dim_cycle", "Dim mode", show=False),
@@ -1720,7 +1789,7 @@ class B2ViewApp(App):
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
                     data_pane.border_subtitle = (
-                        "?(help) | d(im mode) | filter: f(rows) /(cols) | "
+                        "?(help) | d(im mode) | filter: f(rows) /(cols) | S(ort) | "
                         "rows: t/b/g(oto) | cols: s/e/c(goto) | p(lot)"
                     )
                     yield Static("", id="data-header")
@@ -2413,12 +2482,19 @@ class B2ViewApp(App):
         if data.get("source_kind") == "ctable" and self.browser is not None:
             flt = self.browser.get_filter(self.selected_path)
             col_flt = self.browser.get_column_filter(self.selected_path)
+            sort = self.browser.get_sort(self.selected_path)
             if flt:
                 total = self.browser.base_nrows(self.selected_path)
                 chips.append(f"filter: [bold]{markup_escape(flt)}[/bold] ({total} total)")
+            if sort:
+                col, reverse = sort
+                arrow = "▼" if reverse else "▲"
+                chips.append(_accent_chip(f"SORTED {arrow} {markup_escape(col)}"))
             if col_flt:
                 chips.append(f"cols: [bold]{markup_escape(col_flt)}[/bold]")
-            if flt or col_flt or self.row_window is not None:
+            if sort:
+                chips.append("<R>everse")
+            if flt or col_flt or sort or self.row_window is not None:
                 chips.append("<Esc>unlock/clear")
         return chips
 
@@ -2736,6 +2812,58 @@ class B2ViewApp(App):
         screen = FilterScreen(current=self.browser.get_filter(self.selected_path))
         self.push_screen(screen, self._apply_filter)
 
+    def action_sort_rows(self) -> None:
+        if not self._in_data_grid():
+            return
+        if self.table_page.get("source_kind") != "ctable":
+            self.notify("Sorting is only supported for CTable nodes", severity="warning")
+            return
+        columns = self.browser.full_index_columns(self.selected_path)
+        if not columns:
+            self.notify("No FULL-indexed columns to sort by", severity="warning")
+            return
+        screen = SortByScreen(columns=columns, current=self.browser.get_sort(self.selected_path))
+        self.push_screen(screen, self._apply_sort)
+
+    def _apply_sort(self, choice: tuple[str, bool] | None) -> None:
+        if choice is None or self.browser is None or self.table_page is None:
+            return  # cancelled
+        column, reverse = choice
+        try:
+            self.browser.set_sort(self.selected_path, column, reverse)
+        except Exception as exc:
+            self.notify(f"Cannot sort: {exc}", severity="error")
+            return
+        self.row_window = None  # set_sort drops any window/filter; keep the chip in sync
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, 0)
+        self._update_data_table(data, cursor_row=0, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
+    def action_reverse_sort(self) -> None:
+        """Flip ascending/descending on the currently sorted column."""
+        if (
+            not self._in_data_grid()
+            or self.table_page.get("source_kind") != "ctable"
+            or self.browser is None
+        ):
+            return
+        sort = self.browser.get_sort(self.selected_path)
+        if sort is None:
+            return
+        column, reverse = sort
+        self._apply_sort((column, not reverse))
+
+    def _clear_sort(self) -> None:
+        """Escape out of a sort view, restoring original row order."""
+        self.browser.clear_sort(self.selected_path)
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, 0)
+        self._update_data_table(data, cursor_row=0, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
     def _apply_filter(self, expr: str | None) -> None:
         if expr is None or self.browser is None or self.table_page is None:
             return
@@ -3043,6 +3171,8 @@ class B2ViewApp(App):
             return
         if self.browser.get_filter(self.selected_path):
             self._apply_filter("")
+        elif self.browser.get_sort(self.selected_path):
+            self._clear_sort()
         elif self.browser.get_column_filter(self.selected_path):
             self.browser.set_column_selection(self.selected_path, None)
             self._reload_columns()
