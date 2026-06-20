@@ -9920,7 +9920,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 )
         return cols, ascending
 
-    def _sorted_positions_from_full_index(self, name: str, ascending: bool) -> np.ndarray | None:
+    def _sorted_positions_from_full_index(self, name: str, ascending: bool) -> np.ndarray | None:  # noqa: C901
         """Return live physical positions from a matching FULL index, if available.
 
         Reads the pre-sorted positions sidecar directly rather than going through
@@ -9931,10 +9931,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         catalog = root._get_index_catalog()
         descriptor = None
 
+        null_value = None
         if name in root._cols:
             col_info = root._schema.columns_by_name.get(name)
-            if col_info is not None and getattr(col_info.spec, "null_value", None) is not None:
-                return None
+            if col_info is not None:
+                null_value = getattr(col_info.spec, "null_value", None)
             descriptor = catalog.get(name)
             if descriptor is None or descriptor.get("kind") != "full" or descriptor.get("stale", False):
                 descriptor = None
@@ -9960,8 +9961,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # machinery which is built for selective range queries and is ~70x slower
         # for full-table streaming.
         if positions_path is not None:
-            # Persistent table: positions live in a sidecar .b2nd file.
-            positions_nd = blosc2.open(positions_path, mode="r")
+            # Persistent table: positions live in a sidecar .b2nd file.  Use the
+            # sidecar opener so .b2z (zip) stores are read at their zip offset —
+            # blosc2.open() would look for a standalone file that isn't there.
+            from blosc2.indexing import _open_sidecar_file
+
+            positions_nd = _open_sidecar_file(positions_path)
         else:
             # In-memory table: positions live in the sidecar handle cache.
             from blosc2.indexing import _SIDECAR_HANDLE_CACHE, _sidecar_handle_cache_key
@@ -9976,13 +9981,45 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 return None
 
         positions = np.asarray(positions_nd[:], dtype=np.int64)
-        valid = root._valid_rows[:]
-        positions = np.asarray(positions, dtype=np.int64)
-        positions = positions[(positions >= 0) & (positions < len(valid))]
-        positions = positions[valid[positions]]
+        total = len(root._valid_rows)
+        # Index sidecars can carry padding positions beyond the live range, so
+        # the bounds clip always runs — but the ``.all()`` check skips the copy
+        # (and a 24M-element temporary) when there is nothing to clip.
+        in_bounds = (positions >= 0) & (positions < total)
+        if not bool(in_bounds.all()):
+            positions = positions[in_bounds]
+        del in_bounds
+        # Validity filtering only matters when the table has gaps (deleted rows);
+        # for a compact table every clipped position is already live.
+        if root._n_rows is None or root._n_rows != total:
+            valid = root._valid_rows[:]
+            positions = positions[valid[positions]]
         if self is not root:
             current_valid = self._valid_rows[:]
             positions = positions[current_valid[positions]]
+
+        if null_value is not None:
+            # The index sorts by raw value, but sort_by's contract is nulls-last.
+            # Partition explicitly so it holds for any sentinel (NaN sorts last,
+            # an integer sentinel like INT64_MIN sorts first) and either order.
+            # Free each 24M-element temporary as soon as it is consumed to keep
+            # peak memory near the size of the permutation itself.
+            raw = np.asarray(root._cols[name][:])
+            if isinstance(null_value, float) and np.isnan(null_value):
+                null_phys = np.isnan(raw)
+            else:
+                null_phys = raw == null_value
+            del raw
+            if null_phys.any():
+                is_null = null_phys[positions]
+                del null_phys
+                nulls = positions[is_null]
+                nonnull = positions[~is_null]
+                del is_null, positions
+                if not ascending:
+                    nonnull = nonnull[::-1]
+                return np.concatenate([nonnull, nulls])
+
         if not ascending:
             positions = positions[::-1]
         return positions
@@ -10047,8 +10084,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ascending: bool | list[bool] = True,
         *,
         inplace: bool = False,
+        view: bool = False,
     ) -> CTable:
-        """Return a copy of the table sorted by one or more columns.
+        """Return the table sorted by one or more columns.
+
+        By default this materialises a new in-memory copy of the sorted rows.
+        Pass ``view=True`` to instead get a lightweight **sorted view** that
+        shares the parent's column data and gathers rows on demand in sorted
+        order — no whole-table copy.  This is ideal for reading a sorted slice
+        of a large persistent table (e.g. ``t.sort_by("col", view=True)[:10]``).
 
         Parameters
         ----------
@@ -10069,17 +10113,31 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             ``self`` (like :meth:`compact` but sorted).  If ``False``
             (default), return a new in-memory CTable leaving this one
             untouched.
+        view:
+            If ``True``, return a zero-copy sorted **view** over this table
+            instead of materialising a copy: it shares the parent's columns and
+            stores only the sort permutation, gathering rows on demand in sorted
+            order.  Slicing the view (``sv[start:stop:step]``) keeps the sorted
+            order and touches only the rows read.  A single-column sort backed by
+            a non-stale ``FULL`` index reuses its pre-sorted positions (no sort at
+            read time); otherwise only the sort-key column(s) are materialised to
+            build the permutation — never the whole table.  Mutually exclusive
+            with ``inplace``.  Sorting an existing view is always lazy regardless
+            of this flag.
 
         Raises
         ------
         ValueError
-            If called on a view or a read-only table when ``inplace=True``.
+            If called on a view or a read-only table when ``inplace=True``, or if
+            both ``inplace`` and ``view`` are ``True``.
         KeyError
             If any column name is not found.
         TypeError
             If a column used as a sort key does not support ordering
             (e.g. complex numbers).
         """
+        if inplace and view:
+            raise ValueError("inplace=True and view=True are mutually exclusive.")
         if self.base is not None and inplace:
             raise ValueError(
                 "Cannot sort a view inplace (would modify shared column data). Use sort_by(inplace=False) to get a sorted copy."
@@ -10120,7 +10178,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # use those positions directly, so columns are fetched on demand and in
         # the correct sorted order — identical performance to pre-projecting
         # with columns= before calling sort_by.
-        if self.base is not None:
+        if self.base is not None or view:
             result = CTable._make_view(self, self._valid_rows)
             result._cached_live_positions = sorted_pos
             result._n_rows = n
@@ -11331,6 +11389,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             ind = list(ind)
 
         mant_pos = true_pos[ind]
+
+        # For an ordered view (sorted view or position view), preserve the row
+        # order and any duplicates by carrying the positions forward.  A boolean
+        # mask is physical-order and set-like, so it would silently drop both.
+        if getattr(self, "_cached_live_positions", None) is not None:
+            return self._view_from_positions(np.asarray(mant_pos))
 
         new_mask_np = np.zeros(len(self._valid_rows), dtype=bool)
         new_mask_np[mant_pos] = True
