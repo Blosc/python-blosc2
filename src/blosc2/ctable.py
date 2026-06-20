@@ -10186,6 +10186,137 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         return self._sorted_copy_from_positions(sorted_pos, n)
 
+    def sorted_slice(self, col: str, key: slice, *, ascending: bool = True) -> CTable:
+        """Return rows ``key`` in ``col``-sorted order, reading only the slice window.
+
+        Like ``sort_by(col, ascending=ascending, view=True)[key]`` but, when ``col``
+        has a usable FULL index, it reads just the needed window of the index's
+        position sidecar instead of materialising the whole 24M-row permutation —
+        ideal for small slices (top/bottom *k*).  Falls back to the full sorted
+        view (same result) whenever the window path does not apply.
+        """
+        if not isinstance(key, slice):
+            raise TypeError("sorted_slice expects a slice")
+        pos = self._sorted_slice_positions(col, ascending, key)
+        if pos is None:
+            return self.sort_by(col, ascending=ascending, view=True)[key]
+        return self._view_from_positions(pos)
+
+    def _sorted_slice_positions(self, name: str, ascending: bool, key: slice) -> np.ndarray | None:
+        """Physical positions for the sorted slice ``key``, reading only the window.
+
+        Returns ``None`` (so the caller falls back to the full path) unless this is
+        a base table with a non-stale, persistent FULL index over a compact,
+        unpadded column indexed by a numeric (or null) sentinel.
+        """
+        if self.base is not None:
+            return None
+        descriptor = self._get_index_catalog().get(name)
+        if not descriptor or descriptor.get("kind") != "full" or descriptor.get("stale", False):
+            return None
+        full = descriptor.get("full") or {}
+        positions_path = full.get("positions_path")
+        if positions_path is None:  # in-memory sidecar: not worth a partial-read path
+            return None
+
+        n = self._n_rows
+        total = len(self._valid_rows)
+        if n is None or n != total:  # deletions → positions are not a clean permutation
+            return None
+
+        col_info = self._schema.columns_by_name.get(name)
+        null_value = getattr(col_info.spec, "null_value", None) if col_info is not None else None
+        # Numeric / NaN sentinels keep the null rows in one contiguous block once
+        # sorted; non-numeric sentinels (e.g. "") would need a different locator.
+        if null_value is not None and not isinstance(null_value, (int, float)):
+            return None
+
+        from blosc2.indexing import _open_sidecar_file
+
+        pnd = _open_sidecar_file(positions_path)
+        if len(pnd) != total:  # capacity padding → window read would be wrong
+            return None
+
+        result_idx = np.arange(*key.indices(n), dtype=np.int64)
+        if result_idx.size == 0:
+            return np.empty(0, dtype=np.int64)
+
+        # Locate the (contiguous) null block [null_lo, null_hi) in the sorted order.
+        null_lo, null_hi = self._null_block_bounds(full, null_value, n)
+
+        # Map each requested result index to its index in the sorted sidecar.  The
+        # nulls-last order is the non-null rows (forward or reversed) followed by
+        # the null block, where the non-null rows are everything outside the block.
+        sidecar_idx = np.empty_like(result_idx)
+        if ascending:
+            len_below = null_lo  # non-null rows sorted below the null block
+            len_above = n - null_hi  # non-null rows sorted above it
+            below = result_idx < len_below
+            above = (result_idx >= len_below) & (result_idx < len_below + len_above)
+            nulls = result_idx >= len_below + len_above
+            sidecar_idx[below] = result_idx[below]
+            sidecar_idx[above] = null_hi + (result_idx[above] - len_below)
+            sidecar_idx[nulls] = null_lo + (result_idx[nulls] - len_below - len_above)
+        else:
+            len_above = n - null_hi  # largest non-null rows come first
+            len_below = null_lo
+            above = result_idx < len_above
+            below = (result_idx >= len_above) & (result_idx < len_above + len_below)
+            nulls = result_idx >= len_above + len_below
+            sidecar_idx[above] = (n - 1) - result_idx[above]
+            sidecar_idx[below] = (null_lo - 1) - (result_idx[below] - len_above)
+            sidecar_idx[nulls] = null_lo + (result_idx[nulls] - len_above - len_below)
+
+        lo = int(sidecar_idx.min())
+        hi = int(sidecar_idx.max()) + 1
+        window = np.asarray(pnd[lo:hi], dtype=np.int64)
+        return window[sidecar_idx - lo]
+
+    def _null_block_bounds(self, full: dict, null_value, n: int) -> tuple[int, int]:
+        """Return ``[null_lo, null_hi)``: the null rows' span in the sorted sidecar.
+
+        Empty (``null_lo == null_hi``) when the column is non-nullable or has no
+        null rows.  Reads only a handful of sidecar blocks, never the whole array.
+        """
+        if null_value is None:
+            return n, n
+        from blosc2.indexing import _open_sidecar_file
+
+        vnd = _open_sidecar_file(full["values_path"])
+        if isinstance(null_value, float) and np.isnan(null_value):
+            # NaN sorts last and breaks ordered comparisons, so count the trailing
+            # block directly, one chunk at a time (peak memory = a single chunk).
+            chunk = int(vnd.chunks[0]) if vnd.chunks else len(vnd)
+            count = 0
+            hi = len(vnd)
+            while hi > 0:
+                lo = max(0, hi - chunk)
+                block = np.isnan(np.asarray(vnd[lo:hi]))
+                count += int(block.sum())
+                if not block.all():  # reached the non-null region
+                    break
+                hi = lo
+            return n - count, n
+        # Ordinary value: the block is wherever the sentinel sorts.  Bisect the
+        # sorted values, reading one block per probe.
+        return (
+            self._sidecar_bisect(vnd, null_value, "left"),
+            self._sidecar_bisect(vnd, null_value, "right"),
+        )
+
+    @staticmethod
+    def _sidecar_bisect(vnd: blosc2.NDArray, value, side: str) -> int:
+        """``np.searchsorted`` over an ascending sidecar, reading one element/probe."""
+        lo, hi = 0, len(vnd)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            v = vnd[mid : mid + 1][0]
+            if (v < value) if side == "left" else (v <= value):
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+
     def _sorted_small_copy_from_live_positions(
         self, cols: list[str], ascending: list[bool], live_pos: np.ndarray, n: int
     ) -> CTable:

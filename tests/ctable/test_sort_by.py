@@ -474,6 +474,65 @@ def test_sort_view_full_index_nullable_persistent(tmp_path, ascending):
         t.close()
 
 
+@pytest.mark.parametrize("ascending", [True, False])
+@pytest.mark.parametrize("sentinel", ["nan_back", "intmin_front", "mid_middle", "no_nulls"])
+def test_sorted_slice_window_matches_full_view(tmp_path, ascending, sentinel):
+    """sorted_slice reads only the index window yet matches the full sorted view,
+    for a null block at the back (NaN), front (INT64_MIN), middle (-999), or absent."""
+    intmin = np.iinfo(np.int64).min
+    rng = np.random.default_rng(2)
+    n = 5000
+
+    if sentinel == "intmin_front" or sentinel == "no_nulls":
+
+        @dataclass
+        class R:
+            key: int = blosc2.field(blosc2.int64(ge=0))
+            val: int = blosc2.field(blosc2.int64(null_value=intmin), default=intmin)
+
+        val = rng.integers(0, 1000, n).astype(np.int64)
+        if sentinel == "intmin_front":
+            val[rng.choice(n, 50, replace=False)] = intmin
+    else:
+        null_value = float("nan") if sentinel == "nan_back" else -999.0
+
+        @dataclass
+        class R:
+            key: int = blosc2.field(blosc2.int64(ge=0))
+            val: float = blosc2.field(blosc2.float64(null_value=null_value), default=null_value)
+
+        lo = 0 if sentinel == "nan_back" else -500  # -999 lands in the middle of [-500, 500)
+        val = rng.integers(lo, 1000 if sentinel == "nan_back" else 500, n).astype(np.float64)
+        val[rng.choice(n, 50, replace=False)] = null_value
+
+    data = list(zip(range(n), val.tolist(), strict=True))
+    urlpath = str(tmp_path / "ss.b2z")
+    # expected_size=n leaves no capacity padding in the index sidecar, so the
+    # partial-read window path engages (rather than falling back).
+    t = CTable(R, new_data=data, urlpath=urlpath, mode="w", expected_size=n)
+    t.create_index("val", kind=blosc2.IndexKind.FULL)
+    t.close()
+
+    t = blosc2.CTable.open(urlpath, mode="r")
+    try:
+        full = t.sort_by("val", ascending=ascending, view=True)
+        for sl in [slice(0, 10), slice(n - 10, n), slice(2400, 2600), slice(5, 80, 7), slice(-12, None)]:
+            assert t._sorted_slice_positions("val", ascending, sl) is not None  # window path, not fallback
+            got = np.asarray(t.sorted_slice("val", sl, ascending=ascending)["val"][:])
+            ref = np.asarray(full[sl]["val"][:])
+            np.testing.assert_array_equal(got, ref)
+    finally:
+        t.close()
+
+
+def test_sorted_slice_falls_back_for_unindexed_column():
+    """Without a FULL index, sorted_slice still returns the correct sorted slice."""
+    t = CTable(Row, new_data=DATA)
+    got = np.asarray(t.sorted_slice("score", slice(0, 3))["score"][:])
+    ref = np.asarray(t.sort_by("score")[0:3]["score"][:])
+    np.testing.assert_array_equal(got, ref)
+
+
 def test_sort_view_false_returns_copy():
     """The default (view=False) still returns an independent in-memory copy."""
     t = CTable(Row, new_data=DATA)
