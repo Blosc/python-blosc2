@@ -229,8 +229,7 @@ class HelpScreen(ModalScreen[None]):
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
-        ("question_mark", "close", "Close"),
-        ("q", "close", "Close"),
+        ("q", "app.quit", "Quit b2view"),
     ]
 
     _SECTIONS: ClassVar = [
@@ -283,6 +282,7 @@ class HelpScreen(ModalScreen[None]):
                 ("g", "type an exact start:stop row range"),
                 ("v", "lock the data grid to the current range (esc unlocks)"),
                 ("h", "high-res matplotlib image of the current range"),
+                ("escape", "close the plot (q quits b2view)"),
             ],
         ),
         (
@@ -898,15 +898,14 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
     }
     """
 
-    _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · v view rows · h hi-res · s scatter · q close"
+    _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · v view rows · h hi-res · s scatter · esc close"
     _MIN_WIDTH = 16  # smallest zoom window (rows), so the envelope still reads
     _HIRES_MAX_POINTS = 50_000  # above this, the hi-res raw view is strided-sampled
     _SCATTER_MAX_POINTS = 50_000  # above this, the col-vs-col scatter is strided-sampled
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
-        ("q", "close", "Close"),
-        ("p", "close", "Close"),
+        ("q", "app.quit", "Quit b2view"),
         ("plus", "zoom_in", "Zoom in"),
         ("equals_sign", "zoom_in", "Zoom in"),
         ("minus", "zoom_out", "Zoom out"),
@@ -1138,11 +1137,11 @@ class ScatterPlotScreen(ModalScreen[None]):
     }
     """
 
-    _KEYS_HINT = "h hi-res · q/esc back to plot"
+    _KEYS_HINT = "h hi-res · esc back to plot"
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
-        ("q", "close", "Close"),
+        ("q", "app.quit", "Quit b2view"),
         ("h", "hires", "High-res"),
     ]
 
@@ -1270,8 +1269,7 @@ class HiResPlotScreen(ModalScreen[None]):
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
-        ("q", "close", "Close"),
-        ("h", "close", "Close"),
+        ("q", "app.quit", "Quit b2view"),
         ("r", "toggle_raw", "Raw/envelope"),
     ]
 
@@ -1311,8 +1309,8 @@ class HiResPlotScreen(ModalScreen[None]):
     @property
     def _keys_hint(self) -> str:
         if self._can_toggle:
-            return "r raw/envelope · q/esc/h back to braille"
-        return "q/esc/h · back to braille"
+            return "r raw/envelope · esc back to braille"
+        return "esc · back to braille"
 
     def _current_title(self) -> str:
         if self._mode == "scatter":
@@ -1418,8 +1416,8 @@ class CellDetailScreen(ModalScreen[None]):
 
     Reached with Return on an expensive (list/struct/object/ndarray) column
     whose grid cell shows a ``<...; skipped>`` placeholder; the value is decoded
-    on demand.  The table stays underneath with its position intact (esc/q/enter
-    return).
+    on demand.  The table stays underneath with its position intact (esc
+    returns).
     """
 
     CSS = """
@@ -1452,8 +1450,7 @@ class CellDetailScreen(ModalScreen[None]):
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
-        ("q", "close", "Close"),
-        ("enter", "close", "Close"),
+        ("q", "app.quit", "Quit b2view"),
     ]
 
     def __init__(self, *, row: int, name: str, label: str, value: Any):
@@ -1473,7 +1470,7 @@ class CellDetailScreen(ModalScreen[None]):
             # A VerticalScroll is focusable, so the screen's key bindings fire.
             with VerticalScroll(id="cell-body"):
                 yield Static(markup_escape(text))
-            yield Static("esc/q · close", id="cell-keys")
+            yield Static("esc · close", id="cell-keys")
 
     def on_mount(self) -> None:
         self.query_one("#cell-body", VerticalScroll).focus()
