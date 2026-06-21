@@ -706,11 +706,11 @@ class StoreBrowser:
         """Build a min/max envelope from a column's index summaries, or None.
 
         Reads precomputed per-block ``(min, max)`` from the index — no data
-        decompression.  Works for a SUMMARY index and for a FULL index too: a
-        FULL index persists the same block-level ``(min, max, flags)`` sidecar
-        (its ``levels`` descriptor), so a full-indexed column plots instantly
-        without a separate summary index.  Returns None when there is no usable
-        summary (non-string column, no index, non-numeric, or unsupported level).
+        decompression.  Every index kind (SUMMARY, FULL, PARTIAL, BUCKET, OPSI)
+        persists the same block-level ``(min, max, flags)`` sidecars in its
+        ``levels`` descriptor, so any indexed numeric column plots instantly
+        without a dedicated summary index.  Returns None when there is no usable
+        summary (non-string column, no index, non-numeric, or no block level).
         """
         if not isinstance(column, str):
             return None
@@ -718,11 +718,10 @@ class StoreBrowser:
             idx = table.index(column)
         except Exception:
             return None
-        if getattr(idx, "kind", None) not in ("summary", "full"):
-            return None
         try:
             desc = idx.descriptor
             levels = desc.get("levels") or {}
+            # Prefer the finest whole-column level available (block), else any.
             level = "block" if "block" in levels else next(iter(levels), None)
             if level is None or np.dtype(desc["dtype"]).kind not in "iuf":
                 return None

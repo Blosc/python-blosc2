@@ -81,16 +81,30 @@ def test_sort_numeric_ascending_and_reverse(sort_store):
         assert _head(browser, "b", 5) == expected[::-1][:5]
 
 
-def test_full_index_column_plots_from_summary(sort_store):
-    """A FULL-indexed numeric column plots from its embedded block summaries
-    (method 'summary') — no separate SUMMARY index needed, no data decompression."""
-    path, bvals, _ = sort_store
+@pytest.mark.parametrize("kind", ["SUMMARY", "FULL", "PARTIAL", "BUCKET", "OPSI"])
+def test_indexed_column_plots_from_summary(tmp_path, kind):
+    """Any index kind exposes block-level (min, max) summaries, so a numeric
+    indexed column plots via method 'summary' — no data decompression."""
+
+    @dataclasses.dataclass
+    class Row:
+        v: float = blosc2.field(blosc2.float64())
+
+    rng = np.random.default_rng(0)
+    n = 20000
+    vals = rng.standard_normal(n)
+    path = str(tmp_path / f"{kind}.b2z")
+    t = blosc2.CTable(Row, urlpath=path, mode="w", expected_size=n)
+    t.extend([(float(x),) for x in vals])
+    t.create_index("v", kind=getattr(blosc2.IndexKind, kind))
+    t.close()
+
     with StoreBrowser(path) as browser:
-        env = browser.plot_series("/", column="b", max_points=64)
+        env = browser.plot_series("/", column="v", max_points=64)
         assert env["method"] == "summary"
         # The block-summary envelope bounds the true data range exactly.
-        assert np.nanmin(env["ymin"]) == float(bvals.min())
-        assert np.nanmax(env["ymax"]) == float(bvals.max())
+        assert np.nanmin(env["ymin"]) == pytest.approx(vals.min())
+        assert np.nanmax(env["ymax"]) == pytest.approx(vals.max())
 
 
 def test_sort_dictionary_by_decoded_string(sort_store):
