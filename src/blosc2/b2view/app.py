@@ -1736,6 +1736,7 @@ class B2ViewApp(App):
         *,
         start_path: str = "/",
         start_panel: str = "tree",
+        start_maximized: bool = False,
         preview_rows: int = 20,
         preview_cols: int = 10,
         download_url: str | None = None,
@@ -1751,6 +1752,7 @@ class B2ViewApp(App):
         self._header_label = urlpath
         self.start_path = start_path
         self.start_panel = start_panel
+        self.start_maximized = start_maximized
         self.preview_rows = preview_rows
         self.preview_cols = preview_cols
         self.browser: StoreBrowser | None = None
@@ -1860,8 +1862,13 @@ class B2ViewApp(App):
             self.call_after_refresh(self.update_panels, "/")
 
     def _apply_start_focus(self) -> None:
-        """Focus the panel requested on startup (the --panel option)."""
+        """Focus the panel requested on startup (the --panel option), and
+        maximize it too when --max was given."""
         self._focus_panel_by_name(self.start_panel)
+        if self.start_maximized:
+            # Defer a frame: .focus() above is scheduled, so the new focus (which
+            # action_maximize_panel reads) isn't applied yet this tick.
+            self.call_after_refresh(self.action_maximize_panel)
 
     def _focus_panel_by_name(self, name: str) -> None:
         """Focus a panel by its user-facing name."""
