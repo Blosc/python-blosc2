@@ -119,6 +119,38 @@ def test_group_clears_active_filter(group_store):
         assert browser.get_filter("/ctable") is None  # filter dropped (exclusive)
 
 
+def test_group_sort_orders_result_by_column(group_store):
+    path, _ = group_store
+    with StoreBrowser(path) as browser:
+        browser.set_group("/ctable", "region", "mean", "amount")
+        browser.set_group_sort("/ctable", "amount_mean", reverse=True)
+        assert browser.get_group_sort("/ctable") == ("amount_mean", True)
+        page = browser.preview("/ctable", max_rows=100)
+    vals = np.asarray(page["data"]["amount_mean"])
+    assert list(vals) == sorted(vals, reverse=True)  # descending
+
+
+def test_group_sort_cleared_by_regroup_and_clear(group_store):
+    path, _ = group_store
+    with StoreBrowser(path) as browser:
+        browser.set_group("/ctable", "region", "mean", "amount")
+        browser.set_group_sort("/ctable", "amount_mean", reverse=False)
+        # Re-grouping drops the stale sort...
+        browser.set_group("/ctable", "vendor", "size", None)
+        assert browser.get_group_sort("/ctable") is None
+        # ...as does clearing the group.
+        browser.set_group_sort("/ctable", "size", reverse=True)
+        browser.clear_group("/ctable")
+        assert browser.get_group_sort("/ctable") is None
+
+
+def test_group_sort_noop_when_not_grouped(group_store):
+    path, _ = group_store
+    with StoreBrowser(path) as browser:
+        browser.set_group_sort("/ctable", "region", reverse=True)  # no group active
+        assert browser.get_group_sort("/ctable") is None
+
+
 def test_group_bars_sorted_desc_and_capped(group_store):
     path, _ = group_store
     with StoreBrowser(path) as browser:
@@ -141,7 +173,7 @@ if blosc2.IS_WASM:
 
 from textual.widgets import DataTable  # noqa: E402
 
-from blosc2.b2view.app import B2ViewApp, GroupByScreen  # noqa: E402
+from blosc2.b2view.app import B2ViewApp, GroupByScreen, SortByScreen  # noqa: E402
 
 TERM_SIZE = (120, 40)
 
@@ -177,6 +209,19 @@ async def test_group_key_applies_and_escape_clears(group_store):
         table = pilot.app.query_one("#data-table", DataTable)
         cols = [str(c.label) for c in table.columns.values()]
         assert any("size" in c for c in cols)
+
+        # Sort the grouped result by one of its columns via 'S'.
+        await pilot.press("S")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, SortByScreen)
+        await pilot.press("enter")  # apply the highlighted column
+        await _wait_table(pilot)
+        assert pilot.app.browser.get_group_sort("/ctable") is not None
+
+        await pilot.press("escape")  # clear the group sort, keep the group
+        await _wait_table(pilot)
+        assert pilot.app.browser.get_group_sort("/ctable") is None
+        assert pilot.app.browser.get_group("/ctable") is not None
 
         await pilot.press("escape")  # ungroup
         await _wait_table(pilot)

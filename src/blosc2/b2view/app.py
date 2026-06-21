@@ -257,7 +257,7 @@ class HelpScreen(ModalScreen[None]):
                 ("t / b", "first / last row"),
                 ("g", "go to row..."),
                 ("f", "filter rows (CTable)"),
-                ("S", "sort by an indexed column (CTable; R reverses)"),
+                ("S", "sort by an indexed column, or the grouped result (CTable; R reverses)"),
                 ("R", "reverse the current sort order (when sorted)"),
                 ("G", "group by a dictionary/integer column (CTable; p shows a bar chart)"),
                 ("escape", "unlock a row window / clear the active filter, sort or group"),
@@ -745,15 +745,22 @@ class SortByScreen(ModalScreen["tuple[str, bool] | None"]):
 
     BINDINGS: ClassVar = [("escape", "cancel", "Cancel"), ("R", "toggle_reverse", "Reverse")]
 
-    def __init__(self, *, columns: list[str], current: tuple[str, bool] | None = None):
+    def __init__(
+        self,
+        *,
+        columns: list[str],
+        current: tuple[str, bool] | None = None,
+        title: str = "Sort by indexed column (Enter applies, R reverses)",
+    ):
         super().__init__()
         self.columns = columns
         self._current = current
+        self._title = title
 
     def compose(self) -> ComposeResult:
         cur_col, cur_rev = self._current or (None, False)
         with Vertical(id="sortby-dialog"):
-            yield Static("Sort by indexed column (Enter applies, R reverses)", id="sortby-title")
+            yield Static(self._title, id="sortby-title")
             yield OptionList(
                 *(Option(name, id=str(i)) for i, name in enumerate(self.columns)), id="sortby-list"
             )
@@ -2691,10 +2698,15 @@ class B2ViewApp(App):
             col_flt = self.browser.get_column_filter(self.selected_path)
             sort = self.browser.get_sort(self.selected_path)
             group = self.browser.get_group(self.selected_path)
+            gsort = self.browser.get_group_sort(self.selected_path)
             if group:
                 key, op, value_col = group
                 label = "count" if op == "size" else f"{op}({markup_escape(value_col)})"
                 chips.append(_accent_chip(f"GROUPED {markup_escape(key)} · {label}"))
+                if gsort:
+                    col, reverse = gsort
+                    arrow = "▼" if reverse else "▲"
+                    chips.append(_accent_chip(f"SORTED {arrow} {markup_escape(col)}"))
             if flt:
                 total = self.browser.base_nrows(self.selected_path)
                 chips.append(f"filter: [bold]{markup_escape(flt)}[/bold] ({total} total)")
@@ -2705,7 +2717,9 @@ class B2ViewApp(App):
             if col_flt:
                 chips.append(f"cols: [bold]{markup_escape(col_flt)}[/bold]")
             if group:
-                chips.append("<Esc>ungroup")
+                if gsort:
+                    chips.append("<R>everse")
+                chips.append("<Esc>ungroup" if not gsort else "<Esc>unsort")
             else:
                 if sort:
                     chips.append("<R>everse")
@@ -3045,7 +3059,14 @@ class B2ViewApp(App):
             self.notify("Sorting is only supported for CTable nodes", severity="warning")
             return
         if self.browser.get_group(self.selected_path):
-            self.notify("Ungroup (Esc) before sorting", severity="warning")
+            # Sort the (tiny) grouped result by any of its columns — key or aggregate.
+            columns = self.browser.column_names(self.selected_path) or []
+            screen = SortByScreen(
+                columns=columns,
+                current=self.browser.get_group_sort(self.selected_path),
+                title="Sort grouped result (Enter applies, R reverses)",
+            )
+            self.push_screen(screen, self._apply_group_sort)
             return
         columns = self.browser.full_index_columns(self.selected_path)
         if not columns:
@@ -3118,6 +3139,23 @@ class B2ViewApp(App):
         self._update_data_header(data)
         self.query_one("#data-table", DataTable).focus()
 
+    def _apply_group_sort(self, choice: tuple[str, bool] | None) -> None:
+        if choice is None or self.browser is None or self.table_page is None:
+            return  # cancelled
+        column, reverse = choice
+        try:
+            self.browser.set_group_sort(self.selected_path, column, reverse)
+        except Exception as exc:
+            self.notify(f"Cannot sort: {exc}", severity="error")
+            return
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, 0)
+        cols = data.get("columns", [])
+        cursor_col = cols.index(column) if column in cols else 0
+        self._update_data_table(data, cursor_row=0, cursor_col=cursor_col)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
     def action_reverse_sort(self) -> None:
         """Flip ascending/descending on the currently sorted column."""
         if (
@@ -3125,6 +3163,12 @@ class B2ViewApp(App):
             or self.table_page.get("source_kind") != "ctable"
             or self.browser is None
         ):
+            return
+        # While grouped, 'R' flips the sort on the grouped result.
+        gsort = self.browser.get_group_sort(self.selected_path)
+        if self.browser.get_group(self.selected_path) is not None:
+            if gsort is not None:
+                self._apply_group_sort((gsort[0], not gsort[1]))
             return
         sort = self.browser.get_sort(self.selected_path)
         if sort is None:
@@ -3146,6 +3190,15 @@ class B2ViewApp(App):
         self.browser.clear_group(self.selected_path)
         self.table_buffer = None
         self.grid_col_start = 0
+        data = self._load_table_page(self.selected_path, 0)
+        self._update_data_table(data, cursor_row=0, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
+    def _clear_group_sort(self) -> None:
+        """Drop the sort on a grouped result, keeping the group itself."""
+        self.browser.clear_group_sort(self.selected_path)
+        self.table_buffer = None
         data = self._load_table_page(self.selected_path, 0)
         self._update_data_table(data, cursor_row=0, cursor_col=0)
         self._update_data_header(data)
@@ -3459,7 +3512,9 @@ class B2ViewApp(App):
             or self.browser is None
         ):
             return
-        if self.browser.get_group(self.selected_path):
+        if self.browser.get_group_sort(self.selected_path):
+            self._clear_group_sort()
+        elif self.browser.get_group(self.selected_path):
             self._clear_group()
         elif self.browser.get_filter(self.selected_path):
             self._apply_filter("")

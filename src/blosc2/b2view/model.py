@@ -267,6 +267,10 @@ class StoreBrowser:
         # materialized result CTable).  Exclusive with filter/window/column-sel.
         self._groups: dict[str, tuple[str, str, str | None]] = {}
         self._group_views: dict[str, Any] = {}
+        # Optional sort applied on top of a grouped result (path -> (col, reverse)
+        # / sorted view of the small result).  Lives only while grouped.
+        self._group_sorts: dict[str, tuple[str, bool]] = {}
+        self._group_sort_views: dict[str, Any] = {}
         # Per-path column filters (path -> substring pattern / matched names)
         self._column_filters: dict[str, str] = {}
         self._column_selections: dict[str, list[str]] = {}
@@ -873,6 +877,8 @@ class StoreBrowser:
         A group-by is exclusive (it clears the others), so when present it is the
         whole story; the remaining tiers compose as before.
         """
+        if path in self._group_sort_views:
+            return self._group_sort_views[path]
         if path in self._group_views:
             return self._group_views[path]
         if path in self._window_views:
@@ -946,6 +952,8 @@ class StoreBrowser:
         self._sort_views.pop(path, None)
         self._column_filters.pop(path, None)
         self._column_selections.pop(path, None)
+        self._group_sorts.pop(path, None)  # a fresh result invalidates any group sort
+        self._group_sort_views.pop(path, None)
         self._groups[path] = (key, op, value_col)
         self._group_views[path] = result
         return len(result)
@@ -955,10 +963,35 @@ class StoreBrowser:
         return self._groups.get(self.normalize_path(path))
 
     def clear_group(self, path: str) -> None:
-        """Drop any group-by from *path*, restoring the base table."""
+        """Drop any group-by (and its sort) from *path*, restoring the base table."""
         path = self.normalize_path(path)
         self._groups.pop(path, None)
         self._group_views.pop(path, None)
+        self._group_sorts.pop(path, None)
+        self._group_sort_views.pop(path, None)
+
+    def set_group_sort(self, path: str, column: str, reverse: bool) -> None:
+        """Sort the (already grouped) result at *path* by one of its columns.
+
+        The grouped result is tiny and carries no index, so this lexsorts it as a
+        zero-copy view.  No-op if *path* is not grouped.
+        """
+        path = self.normalize_path(path)
+        result = self._group_views.get(path)
+        if result is None:
+            return
+        self._group_sorts[path] = (column, reverse)
+        self._group_sort_views[path] = result.sort_by(column, ascending=not reverse, view=True)
+
+    def get_group_sort(self, path: str) -> tuple[str, bool] | None:
+        """Return the active ``(column, reverse)`` sort on the grouped result, if any."""
+        return self._group_sorts.get(self.normalize_path(path))
+
+    def clear_group_sort(self, path: str) -> None:
+        """Drop any sort on the grouped result, keeping the group itself."""
+        path = self.normalize_path(path)
+        self._group_sorts.pop(path, None)
+        self._group_sort_views.pop(path, None)
 
     def group_agg_column(self, path: str) -> str | None:
         """Name of the aggregate column in the grouped result for *path*, if grouped."""
