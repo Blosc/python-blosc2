@@ -277,7 +277,7 @@ class HelpScreen(ModalScreen[None]):
         (
             "Plot modal (after 'p')",
             [
-                ("+ / -", "zoom in / out about the centre"),
+                ("+ / -", "zoom in / out about the left edge"),
                 ("left / right", "pan the zoomed window"),
                 ("0", "reset to the whole series"),
                 ("g", "type an exact start:stop row range"),
@@ -863,7 +863,7 @@ class PlotRangeScreen(ModalScreen["tuple[int, int] | None"]):
 class PlotScreen(ModalScreen["tuple[int, int] | None"]):
     """Modal plotting one numeric column; zoomable into a row sub-range.
 
-    Keys: ``+``/``-`` zoom about the view centre, ``←``/``→`` pan, ``0`` reset to
+    Keys: ``+``/``-`` zoom about the view's left edge, ``←``/``→`` pan, ``0`` reset to
     the whole series, ``g`` type an exact ``start:stop`` range.  Each change
     re-fetches the envelope for the new range (exact for sub-ranges) via the
     *fetch* closure, so zooming reveals detail the whole-series buckets hide.
@@ -987,10 +987,10 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
 
     def _zoom(self, factor: float) -> None:
         width = self.row_stop - self.row_start
-        center = (self.row_start + self.row_stop) // 2
         new_w = width // 2 if factor < 1 else width * 2
         new_w = max(min(self._MIN_WIDTH, self.n), min(self.n, new_w))
-        start = max(0, min(center - new_w // 2, self.n - new_w))
+        # Anchor on the left edge so the zoomed plot starts where it did before.
+        start = max(0, min(self.row_start, self.n - new_w))
         self._set_range(start, start + new_w)
 
     def _pan(self, direction: int) -> None:
