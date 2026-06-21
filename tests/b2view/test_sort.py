@@ -81,6 +81,18 @@ def test_sort_numeric_ascending_and_reverse(sort_store):
         assert _head(browser, "b", 5) == expected[::-1][:5]
 
 
+def test_full_index_column_plots_from_summary(sort_store):
+    """A FULL-indexed numeric column plots from its embedded block summaries
+    (method 'summary') — no separate SUMMARY index needed, no data decompression."""
+    path, bvals, _ = sort_store
+    with StoreBrowser(path) as browser:
+        env = browser.plot_series("/", column="b", max_points=64)
+        assert env["method"] == "summary"
+        # The block-summary envelope bounds the true data range exactly.
+        assert np.nanmin(env["ymin"]) == float(bvals.min())
+        assert np.nanmax(env["ymax"]) == float(bvals.max())
+
+
 def test_sort_dictionary_by_decoded_string(sort_store):
     path, _, labels = sort_store
     with StoreBrowser(path) as browser:
