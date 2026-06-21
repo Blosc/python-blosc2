@@ -512,6 +512,109 @@ def test_max_complex_raises():
 
 
 # -------------------------------------------------------------------
+# min / max accelerated from index block summaries
+#
+# Any index kind persists per-block (min, max, flags); reducing those is exact
+# and decompression-free when nulls are already excluded by the summary
+# (non-nullable, or a NaN-sentinel float).  Other null encodings fall back to
+# the full scan but must still return the correct live, non-null result.
+# -------------------------------------------------------------------
+
+MINMAX_N = 50000
+INT_MIN = np.iinfo(np.int64).min
+
+
+@dataclass
+class MinMaxRow:
+    i: int = blosc2.field(blosc2.int64())  # non-nullable int → fast path
+    f: float = blosc2.field(blosc2.float64(null_value=float("nan")))  # NaN float → fast path
+    k: int = blosc2.field(blosc2.int64(null_value=INT_MIN))  # INT64_MIN sentinel → fallback
+    s: str = blosc2.field(blosc2.string(max_length=8))  # non-nullable string → fast path
+
+
+@pytest.fixture(scope="module")
+def indexed_minmax(tmp_path_factory):
+    rng = np.random.default_rng(0)
+    ivals = rng.integers(-1000, 1000, MINMAX_N).astype(np.int64)
+    fvals = rng.standard_normal(MINMAX_N)
+    fvals[rng.choice(MINMAX_N, 500, replace=False)] = np.nan
+    kvals = rng.integers(0, 1000, MINMAX_N).astype(np.int64)
+    kvals[rng.choice(MINMAX_N, 500, replace=False)] = INT_MIN
+    svals = np.array([f"s{x:05d}" for x in rng.integers(0, 99999, MINMAX_N)])
+
+    path = str(tmp_path_factory.mktemp("mm") / "t.b2z")
+    t = blosc2.CTable(MinMaxRow, urlpath=path, mode="w", expected_size=MINMAX_N)
+    t.extend(list(zip(ivals.tolist(), fvals.tolist(), kvals.tolist(), svals.tolist(), strict=True)))
+    for c in ("i", "f", "k", "s"):
+        t.create_index(c, kind=blosc2.IndexKind.FULL)
+    t.close()
+
+    fv = fvals[~np.isnan(fvals)]
+    kv = kvals[kvals != INT_MIN]
+    refs = {
+        "i": (ivals.min(), ivals.max()),
+        "f": (fv.min(), fv.max()),
+        "k": (kv.min(), kv.max()),
+        "s": (min(svals), max(svals)),
+    }
+    return path, refs
+
+
+@pytest.mark.parametrize(("col", "fast"), [("i", True), ("f", True), ("s", True), ("k", False)])
+def test_minmax_matches_reference(indexed_minmax, col, fast):
+    """min()/max() equal the live non-null reference, whether or not the
+    summary fast path is used."""
+    path, refs = indexed_minmax
+    t = blosc2.open(path, mode="r")
+    try:
+        assert (t[col]._index_summary_minmax("min") is not NotImplemented) is fast
+        exp_min, exp_max = refs[col]
+        got_min, got_max = t[col].min(), t[col].max()
+        if isinstance(exp_min, float):
+            assert np.isclose(got_min, exp_min)
+            assert np.isclose(got_max, exp_max)
+        else:
+            assert got_min == exp_min
+            assert got_max == exp_max
+    finally:
+        t.close()
+
+
+def test_minmax_no_index_falls_back():
+    """With no index summary, min()/max() fall back and stay correct.
+
+    (Persistent numeric columns auto-build a SUMMARY index; an in-memory table
+    has none, so it exercises the no-summary fallback branch.)"""
+    t = blosc2.CTable(MinMaxRow, expected_size=10)  # in-memory: no auto index
+    t.extend([(3, 1.5, 7, "b"), (1, 2.5, 8, "a"), (2, 0.5, 9, "c")])
+    assert t["i"]._index_summary_minmax("min") is NotImplemented
+    assert t["i"].min() == 1
+    assert t["i"].max() == 3
+
+
+def test_minmax_stale_index_falls_back(tmp_path):
+    """An append marks the index stale → fall back, still correct; rebuild
+    restores the fast path."""
+    path = str(tmp_path / "stale.b2d")
+    t = blosc2.CTable(MinMaxRow, urlpath=path, mode="w", expected_size=110)
+    t.extend([(x, float(x), x, f"s{x:05d}") for x in range(100)])
+    t.create_index("i", kind=blosc2.IndexKind.FULL)
+    t.close()
+
+    t = blosc2.open(path, mode="a")
+    try:
+        assert t["i"]._index_summary_minmax("min") is not NotImplemented  # fresh
+        t.append({"i": -5, "f": 0.0, "k": 0, "s": "z"})
+        assert t["i"]._index_summary_minmax("min") is NotImplemented  # stale → fallback
+        assert t["i"].min() == -5  # still correct via full scan
+        t.rebuild_index("i")
+        assert t["i"]._index_summary_minmax("min") is not NotImplemented  # restored
+        assert t["i"].min() == -5
+    finally:
+        t.close()
+
+
+# -------------------------------------------------------------------
 # Aggregates: argmin / argmax
 # -------------------------------------------------------------------
 
