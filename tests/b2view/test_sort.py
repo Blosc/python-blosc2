@@ -146,11 +146,122 @@ async def test_sort_key_opens_screen_applies_and_escape_clears(sort_store):
         assert app.browser.get_sort("/") in {("b", False), ("label", False)}
         col = app.browser.get_sort("/")[0]
         assert app.table_page["data"][col][0] == min(app.table_page["data"][col])
+        # Cursor parks on the sorted column, first row.
+        table = app.query_one("#data-table")
+        cur_row, cur_col = table.cursor_coordinate
+        assert cur_row == 0
+        assert app.table_page["columns"][cur_col] == col
 
         # Escape clears the sort, restoring original order.
         await pilot.press("escape")
         await pilot.pause()
         assert app.browser.get_sort("/") is None
+
+
+@pytest.fixture(scope="module")
+def wide_store(tmp_path_factory):
+    """A CTable wider than the viewport, FULL index only on the LAST column."""
+    path = str(tmp_path_factory.mktemp("wide") / "wide.b2z")
+    ncols = 25
+    cols = [f"c{i:02d}" for i in range(ncols)]
+    Row = dataclasses.make_dataclass(
+        "WideRow",
+        [(name, int, blosc2.field(blosc2.int64())) for name in cols],
+    )
+    rng = np.random.default_rng(1)
+    data = rng.integers(0, 100000, size=(N, ncols)).astype(np.int64)
+    t = blosc2.CTable(Row, urlpath=path, mode="w", expected_size=N)
+    t.extend([tuple(int(v) for v in row) for row in data])
+    t.create_index(cols[-1], kind=blosc2.IndexKind.FULL)  # only the last column
+    t.close()
+    return path, cols
+
+
+@pytest.mark.asyncio
+@pytest.mark.tui
+async def test_sort_last_column_keeps_full_window(wide_store):
+    path, cols = wide_store
+    last = cols[-1]
+    app = B2ViewApp(path, start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await _wait_for_table(pilot)
+        app.query_one("#data-table").focus()
+        await pilot.pause()
+
+        await pilot.press("S")
+        await pilot.pause()
+        await pilot.press("enter")  # only indexed column is the last one
+        await pilot.pause()
+        assert app.browser.get_sort("/") == (last, False)
+
+        page = app.table_page
+        # The tail window holds several columns ending at the last one — not a
+        # lone column — and they keep their natural left-to-right order.
+        assert page["col_stop"] == page["ncols"]
+        assert len(page["columns"]) > 1
+        assert page["columns"] == cols[page["col_start"] : page["col_stop"]]
+
+        # Cursor sits on the sorted (last) column, first row.
+        table = app.query_one("#data-table")
+        cur_row, cur_col = table.cursor_coordinate
+        assert cur_row == 0
+        assert page["columns"][cur_col] == last
+
+        # 'R' reverses in place: the horizontal window (same columns, same start)
+        # stays put, the cursor stays on the sorted column, and the order flips.
+        cols_before = list(page["columns"])
+        col_start_before = page["col_start"]
+        await pilot.press("R")
+        await pilot.pause()
+        page = app.table_page
+        assert app.browser.get_sort("/") == (last, True)
+        assert page["col_start"] == col_start_before  # window did not re-scroll
+        assert list(page["columns"]) == cols_before  # same columns, none dropped
+        cur_row, cur_col = app.query_one("#data-table").cursor_coordinate
+        assert page["columns"][cur_col] == last
+        assert page["data"][last][0] == max(page["data"][last])
+
+
+@pytest.mark.asyncio
+@pytest.mark.tui
+async def test_columns_stable_across_vertical_scroll(wide_store):
+    """Scrolling down (across buffer reloads) keeps the same visible columns —
+    the width re-fit is sticky, so a wider lower row block can't drop a column."""
+    path, _ = wide_store
+    app = B2ViewApp(path, start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await _wait_for_table(pilot)
+        app.query_one("#data-table").focus()
+        await pilot.pause()
+
+        key_top = app._col_fit_key()
+        cols_top = list(app.table_page["columns"])
+
+        await pilot.press("b")  # jump to the last row → buffer reloads far down
+        await pilot.pause()
+        assert app._col_fit_key() == key_top  # vertical move does not change the fit key
+        assert list(app.table_page["columns"]) == cols_top  # columns unchanged
+
+
+def test_take_n_columns_pins_count():
+    """_take_n_columns keeps exactly the first n columns (clamped to range)."""
+    cols = [f"c{i}" for i in range(5)]
+    data = {
+        "source_kind": "ctable",
+        "nrows": 3,
+        "ncols": 5,
+        "col_start": 0,
+        "hidden_columns": 0,
+        "columns": cols,
+        "data": {name: ["x"] * 3 for name in cols},
+    }
+    app = B2ViewApp.__new__(B2ViewApp)  # no event loop needed for this pure helper
+    three = app._take_n_columns({**data, "data": dict(data["data"])}, 3)
+    assert three["columns"] == cols[:3]
+    assert three["col_stop"] == 3
+    assert three["hidden_columns"] == 2
+    allcols = app._take_n_columns({**data, "data": dict(data["data"])}, 99)
+    assert allcols["columns"] == cols  # clamped to available
 
 
 @pytest.mark.asyncio

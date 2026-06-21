@@ -1760,6 +1760,9 @@ class B2ViewApp(App):
         self.table_page: dict | None = None
         self.table_buffer: dict | None = None
         self.grid_col_start = 0
+        # Sticky visible-column count: (layout key, count).  Keeps the column
+        # set stable across vertical scroll / sort reverse (see _load_table_page).
+        self._col_fit: tuple[tuple, int] | None = None
         self._data_layout: DataSliceLayout | None = None
         self._active_dim = 0
         self._dim_mode = False
@@ -2125,6 +2128,19 @@ class B2ViewApp(App):
                 break
             total += width
             keep += 1
+        return self._take_n_columns(data, keep)
+
+    def _take_n_columns(self, data: dict, n: int) -> dict:
+        """Keep the first *n* columns of a paged *data* window (clamped to range).
+
+        Width-based fitting (:meth:`_trim_columns_to_fit`) is recomputed from the
+        currently visible rows, so it can vary as you scroll or reverse a sort.
+        Pinning the count keeps the visible column set stable across those
+        re-renders (the sticky fit in :meth:`_load_table_page`).
+        """
+        if data.get("source_kind") not in _COL_PAGED_KINDS:
+            return data
+        keep = max(1, min(n, len(data["columns"])))
         if keep >= len(data["columns"]):
             return data
         kept = data["columns"][:keep]
@@ -2177,6 +2193,25 @@ class B2ViewApp(App):
         if height <= 1:
             height = self.query_one("#data-pane", Vertical).size.height - 2
         return max(1, height - 1) if height > 1 else max(1, self.preview_rows)
+
+    def _col_fit_key(self) -> tuple:
+        """Identity of the current column layout for the sticky column-count fit.
+
+        Changes (forcing a width re-fit) on a new node, a horizontal scroll, an
+        ndarray dim/fixed-value change, a column filter, or a terminal resize —
+        but not on vertical scroll, sort reverse or row filter, which keep the
+        same columns.
+        """
+        layout = self._data_layout
+        layout_sig = None
+        if layout is not None:
+            layout_sig = (
+                tuple(layout.navigable_dims),
+                tuple(sorted(layout.fixed_values.items())),
+                tuple(layout.shape),
+            )
+        col_filter = self.browser.get_column_filter(self.selected_path) if self.browser else None
+        return (self.selected_path, self.grid_col_start, layout_sig, col_filter, self._data_table_width())
 
     def _load_table_page(self, path: str, start: int) -> dict:
         if self.browser is None:
@@ -2235,7 +2270,21 @@ class B2ViewApp(App):
                 max_cols=self._candidate_max_cols(),
                 col_start=self.grid_col_start,
             )
-        data = self._trim_columns_to_fit(data)
+        # The visible column count is sticky for a given column layout: recompute
+        # the width-based fit only when the layout key changes (node, horizontal
+        # position, ndarray dims, column filter).  Vertical scrolling, reversing a
+        # sort and row filtering keep the same columns instead of dropping one
+        # when the freshly visible rows happen to measure wider.
+        fit_key = self._col_fit_key()
+        if self._col_fit is not None and self._col_fit[0] == fit_key:
+            data = self._take_n_columns(data, self._col_fit[1])
+        else:
+            data = self._trim_columns_to_fit(data)
+            # Only remember the count once the layout has settled (a real
+            # width-based fit); before that the trim is a no-op and would pin a
+            # bloated count that overflows the table on later renders.
+            if data.get("source_kind") in _COL_PAGED_KINDS and self._data_table_width() > 1:
+                self._col_fit = (fit_key, len(data["columns"]))
         data["viewport_width"] = self._data_table_width()
         self.table_buffer = data
         data = self._slice_table_buffer(start, page_size)
@@ -2825,7 +2874,7 @@ class B2ViewApp(App):
         screen = SortByScreen(columns=columns, current=self.browser.get_sort(self.selected_path))
         self.push_screen(screen, self._apply_sort)
 
-    def _apply_sort(self, choice: tuple[str, bool] | None) -> None:
+    def _apply_sort(self, choice: tuple[str, bool] | None, *, reposition: bool = True) -> None:
         if choice is None or self.browser is None or self.table_page is None:
             return  # cancelled
         column, reverse = choice
@@ -2836,8 +2885,18 @@ class B2ViewApp(App):
             return
         self.row_window = None  # set_sort drops any window/filter; keep the chip in sync
         self.table_buffer = None
+        # Park the cursor on the sorted column's first row.  On the initial sort
+        # ('S') bring the column into view, clamping the window start to the tail
+        # ('End') position so the natural left-to-right column order is preserved
+        # and the last column shows a full window, not a lone column.  On reverse
+        # ('R') leave the horizontal scroll where it is — only the order flips.
+        names = self.browser.column_names(self.selected_path) or []
+        col_idx = names.index(column) if column in names else 0
+        if reposition:
+            self.grid_col_start = min(col_idx, self._fit_col_start_backward(self.table_page["ncols"]))
         data = self._load_table_page(self.selected_path, 0)
-        self._update_data_table(data, cursor_row=0, cursor_col=0)
+        cursor_col = max(0, col_idx - data.get("col_start", 0))
+        self._update_data_table(data, cursor_row=0, cursor_col=cursor_col)
         self._update_data_header(data)
         self.query_one("#data-table", DataTable).focus()
 
@@ -2853,7 +2912,7 @@ class B2ViewApp(App):
         if sort is None:
             return
         column, reverse = sort
-        self._apply_sort((column, not reverse))
+        self._apply_sort((column, not reverse), reposition=False)
 
     def _clear_sort(self) -> None:
         """Escape out of a sort view, restoring original row order."""
