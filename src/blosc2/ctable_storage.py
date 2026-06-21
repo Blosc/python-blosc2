@@ -19,6 +19,7 @@ Two concrete backends:
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import os
@@ -731,6 +732,7 @@ class FileTableStorage(TableStorage):
 
     def close(self) -> None:
         self._unregister_sidecar_zip_paths()
+        self._evict_cached_index_handles()
         if self._store is not None:
             self._store.close()
             self._store = None
@@ -739,10 +741,19 @@ class FileTableStorage(TableStorage):
     def discard(self) -> None:
         """Clean up without repacking the .b2z archive."""
         self._unregister_sidecar_zip_paths()
+        self._evict_cached_index_handles()
         if self._store is not None:
             self._store.discard()
             self._store = None
         self._meta = None
+
+    def _evict_cached_index_handles(self) -> None:
+        """Release process-global index handle/data caches for this table's
+        files, so closing it does not leak a file descriptor per table."""
+        from blosc2.indexing import evict_cached_index_handles
+
+        with contextlib.suppress(Exception):
+            evict_cached_index_handles(self._root)
 
     def _unregister_sidecar_zip_paths(self) -> None:
         if not self._registered_sidecar_paths:
@@ -966,6 +977,7 @@ class TreeStoreTableStorage(TableStorage):
 
     def close(self) -> None:
         self._unregister_sidecar_zip_paths()
+        self._evict_cached_index_handles()
         if self._owns_store and self._store is not None:
             self._store.close()
             self._store = None
@@ -973,10 +985,20 @@ class TreeStoreTableStorage(TableStorage):
 
     def discard(self) -> None:
         self._unregister_sidecar_zip_paths()
+        self._evict_cached_index_handles()
         if self._owns_store and self._store is not None:
             self._store.discard()
             self._store = None
         self._meta = None
+
+    def _evict_cached_index_handles(self) -> None:
+        """Release process-global index handle/data caches for this table's
+        subtree, so closing it does not leak a file descriptor per table."""
+        from blosc2.indexing import evict_cached_index_handles
+
+        with contextlib.suppress(Exception):
+            root = os.path.join(self._store.working_dir, self._root_key.lstrip("/"))
+            evict_cached_index_handles(root)
 
     def _unregister_sidecar_zip_paths(self) -> None:
         if not self._registered_sidecar_paths:

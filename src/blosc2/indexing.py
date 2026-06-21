@@ -199,6 +199,45 @@ def _purge_stale_persistent_caches() -> None:
         _hot_cache_clear(scope=scope)
 
 
+def evict_cached_index_handles(root: str | None) -> None:
+    """Drop cached sidecar handles/data for the persistent store at *root*.
+
+    Index reads cache file-backed handles in process-global dicts for query
+    reuse; they are normally only purged once their files are deleted, so a
+    table closed but left on disk keeps its descriptors open — one per table,
+    which exhausts the file-descriptor limit over a large session.  Closing a
+    table calls this to pop (and thereby release) the handles it owns; the
+    caches simply repopulate on the next query.
+    """
+    if not root:
+        return
+    try:
+        resolved = str(Path(root).resolve())
+    except Exception:
+        return
+    prefix = resolved + os.sep
+
+    def _owned_scope(scope) -> bool:
+        # scope is an _array_key: ("persistent", path) or ("memory", id).
+        return (
+            isinstance(scope, tuple)
+            and len(scope) == 2
+            and scope[0] == "persistent"
+            and isinstance(scope[1], str)
+            and (scope[1] == resolved or scope[1].startswith(prefix))
+        )
+
+    def _owned_path(path) -> bool:
+        return isinstance(path, str) and (path == resolved or path.startswith(prefix))
+
+    for cache in (_SIDECAR_HANDLE_CACHE, _DATA_CACHE, _HOT_CACHE):
+        for key in [k for k in tuple(cache) if _owned_scope(k[0])]:
+            cache.pop(key, None)
+    for handles in (_QUERY_CACHE_STORE_HANDLES, _GATHER_MMAP_HANDLES):
+        for path in [p for p in tuple(handles) if _owned_path(p)]:
+            handles.pop(path, None)
+
+
 def _open_sidecar_file(path: str, mmap_mode=None) -> blosc2.NDArray:
     """Open an index sidecar file, using zip-offset access when registered."""
     reg = _SIDECAR_ZIP_REGISTRY.get(path)
