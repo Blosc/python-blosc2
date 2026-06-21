@@ -263,6 +263,10 @@ class StoreBrowser:
         # Per-path sort order for CTable nodes (path -> (column, reverse) / view)
         self._sorts: dict[str, tuple[str, bool]] = {}
         self._sort_views: dict[str, Any] = {}
+        # Per-path group-by for CTable nodes (path -> (key, op, value_col|None) /
+        # materialized result CTable).  Exclusive with filter/window/column-sel.
+        self._groups: dict[str, tuple[str, str, str | None]] = {}
+        self._group_views: dict[str, Any] = {}
         # Per-path column filters (path -> substring pattern / matched names)
         self._column_filters: dict[str, str] = {}
         self._column_selections: dict[str, list[str]] = {}
@@ -390,8 +394,9 @@ class StoreBrowser:
                     return preview_array_1d(obj, start=start, stop=stop)
             return preview_array(obj, slices=slices, max_rows=max_rows, max_cols=max_cols)
         if kind == "ctable":
-            # Read precedence: a locked row window (set by 'v') wins, then a row
-            # filter, then a sort view; all already fold in their predecessors.
+            # Read precedence: a group-by (smaller aggregated result) wins, then
+            # a locked row window (set by 'v'), then a row filter, then a sort
+            # view; all already fold in their predecessors.
             obj = self._ordered_object(path, obj)
             if columns is None:
                 columns = self._column_selections.get(path)
@@ -803,6 +808,8 @@ class StoreBrowser:
         (navigation operates on the filtered universe).
         """
         path = self.normalize_path(path)
+        if path in self._group_views:
+            return list(getattr(self._group_views[path], "col_names", []) or []) or None
         selection = self._column_selections.get(path)
         if selection is not None:
             return list(selection)
@@ -861,7 +868,13 @@ class StoreBrowser:
         return self._sorts.get(self.normalize_path(path))
 
     def _ordered_object(self, path: str, obj: Any) -> Any:
-        """CTable read precedence for *path*: window > filter > sort > base *obj*."""
+        """CTable read precedence for *path*: group > window > filter > sort > base.
+
+        A group-by is exclusive (it clears the others), so when present it is the
+        whole story; the remaining tiers compose as before.
+        """
+        if path in self._group_views:
+            return self._group_views[path]
         if path in self._window_views:
             return self._window_views[path]
         if path in self._filter_views:
@@ -891,6 +904,89 @@ class StoreBrowser:
     def get_row_window(self, path: str) -> bool:
         """Return whether *path* currently has a locked row window."""
         return self.normalize_path(path) in self._window_views
+
+    def group_key_columns(self, path: str) -> list[str]:
+        """CTable columns at *path* usable as group-by keys (dictionary or integer)."""
+        obj = self._get_object(path)
+        out = []
+        for name in getattr(obj, "col_names", []) or []:
+            col = obj[name]
+            dt = getattr(col, "dtype", None)
+            if getattr(col, "is_dictionary", False) or (dt is not None and dt.kind in "iu"):
+                out.append(name)
+        return out
+
+    def group_value_columns(self, path: str) -> list[str]:
+        """CTable columns at *path* usable as aggregation value columns (numeric scalar)."""
+        obj = self._get_object(path)
+        out = []
+        for name in getattr(obj, "col_names", []) or []:
+            col = obj[name]
+            if getattr(col, "is_dictionary", False) or getattr(col, "is_ndarray", False):
+                continue
+            dt = getattr(col, "dtype", None)
+            if dt is not None and dt.kind in "iuf":
+                out.append(name)
+        return out
+
+    def set_group(self, path: str, key: str, op: str, value_col: str | None) -> int:
+        """Group the CTable at *path* by *key*, aggregating with *op*; return group count.
+
+        Builds a materialized result CTable (one row per group, columns = key +
+        aggregate).  Group-by is exclusive: it drops any active filter, window,
+        sort, and column selection for *path*.  Errors from ``group_by`` propagate.
+        """
+        path = self.normalize_path(path)
+        gb = self._get_object(path).group_by(key)
+        result = gb.size() if op == "size" else gb.agg({value_col: op})
+        self._filters.pop(path, None)
+        self._filter_views.pop(path, None)
+        self._window_views.pop(path, None)
+        self._sorts.pop(path, None)
+        self._sort_views.pop(path, None)
+        self._column_filters.pop(path, None)
+        self._column_selections.pop(path, None)
+        self._groups[path] = (key, op, value_col)
+        self._group_views[path] = result
+        return len(result)
+
+    def get_group(self, path: str) -> tuple[str, str, str | None] | None:
+        """Return the active ``(key, op, value_col)`` group-by for *path*, if any."""
+        return self._groups.get(self.normalize_path(path))
+
+    def clear_group(self, path: str) -> None:
+        """Drop any group-by from *path*, restoring the base table."""
+        path = self.normalize_path(path)
+        self._groups.pop(path, None)
+        self._group_views.pop(path, None)
+
+    def group_agg_column(self, path: str) -> str | None:
+        """Name of the aggregate column in the grouped result for *path*, if grouped."""
+        group = self._groups.get(self.normalize_path(path))
+        if group is None:
+            return None
+        key, op, value_col = group
+        return "size" if op == "size" else f"{value_col}_{op}"
+
+    def group_bars(self, path: str, top_n: int = 50) -> dict[str, Any]:
+        """Top-*top_n* groups (by aggregate value) as bar-chart labels + values."""
+        path = self.normalize_path(path)
+        result = self._group_views.get(path)
+        group = self._groups.get(path)
+        if result is None or group is None:
+            return {"labels": [], "values": [], "total": 0, "key": "", "agg": ""}
+        key = group[0]
+        agg = self.group_agg_column(path)
+        keys = safe_asarray(result[key][:])
+        vals = np.asarray(result[agg][:], dtype=float)
+        order = np.argsort(vals)[::-1][:top_n]
+        return {
+            "labels": [str(keys[i]) for i in order],
+            "values": [float(vals[i]) for i in order],
+            "total": len(vals),
+            "key": key,
+            "agg": agg,
+        }
 
     def base_nrows(self, path: str) -> int:
         """Return the unfiltered row count of the CTable at *path*."""

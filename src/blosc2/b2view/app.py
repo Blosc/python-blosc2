@@ -259,7 +259,8 @@ class HelpScreen(ModalScreen[None]):
                 ("f", "filter rows (CTable)"),
                 ("S", "sort by an indexed column (CTable; R reverses)"),
                 ("R", "reverse the current sort order (when sorted)"),
-                ("escape", "unlock a row window / clear the active filter or sort"),
+                ("G", "group by a dictionary/integer column (CTable; p shows a bar chart)"),
+                ("escape", "unlock a row window / clear the active filter, sort or group"),
             ],
         ),
         (
@@ -774,6 +775,156 @@ class SortByScreen(ModalScreen["tuple[str, bool] | None"]):
             self.dismiss((self.columns[int(event.option.id)], reverse))
 
     def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class GroupByScreen(ModalScreen["tuple[str, str, str | None] | None"]):
+    """Group a CTable by a key column and one aggregation.
+
+    Two lists: pick the key (↑/↓), Tab to the aggregation list, Enter applies.
+    Each aggregation entry encodes ``(op, value_col)`` — ``count rows`` is the
+    keyless ``size`` aggregation; the rest are ``op(value_col)``.  Dismisses with
+    ``(key, op, value_col|None)`` or None on cancel.
+    """
+
+    CSS = """
+    GroupByScreen {
+        align: center middle;
+    }
+    #groupby-dialog {
+        width: 64;
+        height: auto;
+        max-height: 80%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #groupby-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    .groupby-label {
+        color: $text-muted;
+    }
+    #groupby-key, #groupby-agg {
+        height: auto;
+        max-height: 10;
+    }
+    """
+
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+
+    _OPS: ClassVar = ["sum", "mean", "min", "max"]
+
+    def __init__(
+        self,
+        *,
+        keys: list[str],
+        values: list[str],
+        current: tuple[str, str, str | None] | None = None,
+    ):
+        super().__init__()
+        self.keys = keys
+        # (op, value_col) per aggregation row; "count rows" is size (no column).
+        self.aggs: list[tuple[str, str | None]] = [("size", None)]
+        for v in values:
+            self.aggs.extend((op, v) for op in self._OPS)
+        self._current = current
+
+    def _agg_label(self, op: str, value_col: str | None) -> str:
+        return "count rows" if op == "size" else f"{op}({value_col})"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="groupby-dialog"):
+            yield Static("Group by (Tab to aggregation, Enter applies)", id="groupby-title")
+            yield Static("Key column", classes="groupby-label")
+            yield OptionList(
+                *(Option(name, id=str(i)) for i, name in enumerate(self.keys)), id="groupby-key"
+            )
+            yield Static("Aggregation", classes="groupby-label")
+            yield OptionList(
+                *(Option(self._agg_label(op, v), id=str(i)) for i, (op, v) in enumerate(self.aggs)),
+                id="groupby-agg",
+            )
+
+    def on_mount(self) -> None:
+        key_list = self.query_one("#groupby-key", OptionList)
+        agg_list = self.query_one("#groupby-agg", OptionList)
+        cur_key, cur_op, cur_val = self._current or (None, None, None)
+        key_list.highlighted = self.keys.index(cur_key) if cur_key in self.keys else 0
+        agg_list.highlighted = self.aggs.index((cur_op, cur_val)) if (cur_op, cur_val) in self.aggs else 0
+        key_list.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        # Enter on the key list advances to the aggregation list; Enter there
+        # applies, reading the key list's current highlight.
+        if event.option_list.id == "groupby-key":
+            self.query_one("#groupby-agg", OptionList).focus()
+            return
+        key_idx = self.query_one("#groupby-key", OptionList).highlighted
+        if key_idx is None:
+            return
+        op, value_col = self.aggs[int(event.option.id)]
+        self.dismiss((self.keys[key_idx], op, value_col))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class GroupBarScreen(ModalScreen[None]):
+    """Bar chart of a grouped view: one bar per group, capped to the top groups."""
+
+    CSS = """
+    GroupBarScreen {
+        align: center middle;
+    }
+    #groupbar-dialog {
+        width: 90%;
+        height: 80%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #groupbar-title {
+        text-style: bold;
+        height: 1;
+    }
+    #groupbar-widget {
+        height: 1fr;
+    }
+    #groupbar-keys {
+        height: 1;
+        color: $text-muted;
+    }
+    """
+
+    BINDINGS: ClassVar = [("escape", "close", "Close"), ("q", "app.quit", "Quit b2view")]
+
+    def __init__(self, *, title_prefix: str, bars: dict):
+        super().__init__()
+        self.title_prefix = title_prefix
+        self.labels = [str(label) for label in bars.get("labels", [])]
+        self.values = list(bars.get("values", []))
+        total = bars.get("total", len(self.labels))
+        shown = len(self.labels)
+        cap = f" · top {shown} of {total} groups" if shown < total else f" · {total} groups"
+        self.plot_title = f"{title_prefix}{cap}"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="groupbar-dialog"):
+            yield Static(markup_escape(self.plot_title), id="groupbar-title")
+            yield PlotextPlot(id="groupbar-widget")
+            yield Static("esc close", id="groupbar-keys")
+
+    def on_mount(self) -> None:
+        widget = self.query_one(PlotextPlot)
+        plt = widget.plt
+        plt.clear_figure()
+        if self.labels:
+            plt.bar(self.labels, self.values)
+        widget.refresh()
+
+    def action_close(self) -> None:
         self.dismiss(None)
 
 
@@ -1723,6 +1874,7 @@ class B2ViewApp(App):
         Binding("f", "filter_rows", "Filter rows", show=False),
         Binding("S", "sort_rows", "Sort by", show=False),
         Binding("R", "reverse_sort", "Reverse sort", show=False),
+        Binding("G", "group_rows", "Group by", show=False),
         Binding("slash", "filter_columns", "Filter columns", show=False),
         Binding("p", "plot_column", "Plot column", show=False),
         Binding("d", "dim_cycle", "Dim mode", show=False),
@@ -2538,6 +2690,11 @@ class B2ViewApp(App):
             flt = self.browser.get_filter(self.selected_path)
             col_flt = self.browser.get_column_filter(self.selected_path)
             sort = self.browser.get_sort(self.selected_path)
+            group = self.browser.get_group(self.selected_path)
+            if group:
+                key, op, value_col = group
+                label = "count" if op == "size" else f"{op}({markup_escape(value_col)})"
+                chips.append(_accent_chip(f"GROUPED {markup_escape(key)} · {label}"))
             if flt:
                 total = self.browser.base_nrows(self.selected_path)
                 chips.append(f"filter: [bold]{markup_escape(flt)}[/bold] ({total} total)")
@@ -2547,10 +2704,13 @@ class B2ViewApp(App):
                 chips.append(_accent_chip(f"SORTED {arrow} {markup_escape(col)}"))
             if col_flt:
                 chips.append(f"cols: [bold]{markup_escape(col_flt)}[/bold]")
-            if sort:
-                chips.append("<R>everse")
-            if flt or col_flt or sort or self.row_window is not None:
-                chips.append("<Esc>unlock/clear")
+            if group:
+                chips.append("<Esc>ungroup")
+            else:
+                if sort:
+                    chips.append("<R>everse")
+                if flt or col_flt or sort or self.row_window is not None:
+                    chips.append("<Esc>unlock/clear")
         return chips
 
     def _make_global_scrollbar(self, *, start: int, stop: int, total: int, size: int, track: str) -> str:
@@ -2697,6 +2857,14 @@ class B2ViewApp(App):
             return
         if PlotextPlot is None:
             self.notify("Plotting needs the 'textual-plotext' package", severity="warning")
+            return
+        if self.browser is not None and self.browser.get_group(self.selected_path):
+            bars = self.browser.group_bars(self.selected_path)
+            if not bars["labels"]:
+                self.notify("Nothing to plot for this group-by", severity="warning")
+                return
+            title = f"{self.selected_path} · {bars['agg']} by {bars['key']}"
+            self.push_screen(GroupBarScreen(title_prefix=title, bars=bars))
             return
         buffer = self.table_buffer or self.table_page
         columns = buffer["columns"]
@@ -2864,6 +3032,9 @@ class B2ViewApp(App):
         if self.table_page.get("source_kind") != "ctable":
             self.notify("Filtering is only supported for CTable nodes", severity="warning")
             return
+        if self.browser.get_group(self.selected_path):
+            self.notify("Ungroup (Esc) before filtering", severity="warning")
+            return
         screen = FilterScreen(current=self.browser.get_filter(self.selected_path))
         self.push_screen(screen, self._apply_filter)
 
@@ -2872,6 +3043,9 @@ class B2ViewApp(App):
             return
         if self.table_page.get("source_kind") != "ctable":
             self.notify("Sorting is only supported for CTable nodes", severity="warning")
+            return
+        if self.browser.get_group(self.selected_path):
+            self.notify("Ungroup (Esc) before sorting", severity="warning")
             return
         columns = self.browser.full_index_columns(self.selected_path)
         if not columns:
@@ -2906,6 +3080,44 @@ class B2ViewApp(App):
         self._update_data_header(data)
         self.query_one("#data-table", DataTable).focus()
 
+    def action_group_rows(self) -> None:
+        if not self._in_data_grid():
+            return
+        if self.table_page.get("source_kind") != "ctable":
+            self.notify("Grouping is only supported for CTable nodes", severity="warning")
+            return
+        keys = self.browser.group_key_columns(self.selected_path)
+        if not keys:
+            self.notify("No dictionary/integer columns to group by", severity="warning")
+            return
+        screen = GroupByScreen(
+            keys=keys,
+            values=self.browser.group_value_columns(self.selected_path),
+            current=self.browser.get_group(self.selected_path),
+        )
+        self.push_screen(screen, self._apply_group)
+
+    def _apply_group(self, choice: tuple[str, str, str | None] | None) -> None:
+        if choice is None or self.browser is None or self.table_page is None:
+            return
+        key, op, value_col = choice
+        try:
+            self.browser.set_group(self.selected_path, key, op, value_col)
+        except Exception as exc:
+            self.notify(f"Cannot group: {exc}", severity="error")
+            return
+        self.row_window = None  # set_group drops any window/filter; keep chips in sync
+        self.table_buffer = None
+        self.grid_col_start = 0
+        data = self._load_table_page(self.selected_path, 0)
+        # Park the cursor on the aggregate column (last column of the result).
+        agg = self.browser.group_agg_column(self.selected_path)
+        cols = data.get("columns", [])
+        cursor_col = cols.index(agg) if agg in cols else 0
+        self._update_data_table(data, cursor_row=0, cursor_col=cursor_col)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
     def action_reverse_sort(self) -> None:
         """Flip ascending/descending on the currently sorted column."""
         if (
@@ -2924,6 +3136,16 @@ class B2ViewApp(App):
         """Escape out of a sort view, restoring original row order."""
         self.browser.clear_sort(self.selected_path)
         self.table_buffer = None
+        data = self._load_table_page(self.selected_path, 0)
+        self._update_data_table(data, cursor_row=0, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
+    def _clear_group(self) -> None:
+        """Escape out of a group-by view, restoring the base table."""
+        self.browser.clear_group(self.selected_path)
+        self.table_buffer = None
+        self.grid_col_start = 0
         data = self._load_table_page(self.selected_path, 0)
         self._update_data_table(data, cursor_row=0, cursor_col=0)
         self._update_data_header(data)
@@ -2950,6 +3172,9 @@ class B2ViewApp(App):
             return
         if self.table_page.get("source_kind") != "ctable":
             self.notify("Column filtering is only supported for CTable nodes", severity="warning")
+            return
+        if self.browser.get_group(self.selected_path):
+            self.notify("Ungroup (Esc) before filtering columns", severity="warning")
             return
         # Preselect the currently-shown columns (column_names honors any active
         # selection); the picker universe is the full, unfiltered column set.
@@ -3234,7 +3459,9 @@ class B2ViewApp(App):
             or self.browser is None
         ):
             return
-        if self.browser.get_filter(self.selected_path):
+        if self.browser.get_group(self.selected_path):
+            self._clear_group()
+        elif self.browser.get_filter(self.selected_path):
             self._apply_filter("")
         elif self.browser.get_sort(self.selected_path):
             self._clear_sort()
