@@ -749,11 +749,11 @@ async def test_plot_column(store_path):
         n = screen.n
         assert (screen.row_start, screen.row_stop) == (0, n)
 
-        # '+' zooms in about the centre: the window halves and re-centres.
+        # '+' zooms in about the left edge: the window halves, start unchanged.
         await pilot.press("plus")
         await pilot.pause()
         assert screen.row_stop - screen.row_start == n // 2
-        assert screen.row_start > 0
+        assert screen.row_start == 0
         assert "rows" in screen.plot_title
 
         # '-' zooms back out to the whole series.

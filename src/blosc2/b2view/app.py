@@ -789,9 +789,11 @@ def _plot_view(series: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
     finite = np.isfinite(ymin) & np.isfinite(ymax)
     x, ymin, ymax = x[finite], ymin[finite], ymax[finite]
     method = series.get("method")
-    descr = {"summary": "min/max envelope", "reduce": "min/max envelope"}.get(
-        method, "sampled — may miss extremes"
-    )
+    descr = {
+        "summary": "min/max envelope",
+        "reduce": "min/max envelope",
+        "sorted": "min/max envelope",
+    }.get(method, "sampled — may miss extremes")
     return x, ymin, ymax, descr
 
 
