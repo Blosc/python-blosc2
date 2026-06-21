@@ -18,6 +18,7 @@ from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.theme import Theme
 from textual.widgets import (
+    Checkbox,
     DataTable,
     Footer,
     Header,
@@ -228,8 +229,7 @@ class HelpScreen(ModalScreen[None]):
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
-        ("question_mark", "close", "Close"),
-        ("q", "close", "Close"),
+        ("q", "app.quit", "Quit b2view"),
     ]
 
     _SECTIONS: ClassVar = [
@@ -257,7 +257,9 @@ class HelpScreen(ModalScreen[None]):
                 ("t / b", "first / last row"),
                 ("g", "go to row..."),
                 ("f", "filter rows (CTable)"),
-                ("escape", "unlock a row window / clear the active filter"),
+                ("S", "sort by an indexed column (CTable; R reverses)"),
+                ("R", "reverse the current sort order (when sorted)"),
+                ("escape", "unlock a row window / clear the active filter or sort"),
             ],
         ),
         (
@@ -274,12 +276,13 @@ class HelpScreen(ModalScreen[None]):
         (
             "Plot modal (after 'p')",
             [
-                ("+ / -", "zoom in / out about the centre"),
+                ("+ / -", "zoom in / out about the left edge"),
                 ("left / right", "pan the zoomed window"),
                 ("0", "reset to the whole series"),
                 ("g", "type an exact start:stop row range"),
                 ("v", "lock the data grid to the current range (esc unlocks)"),
                 ("h", "high-res matplotlib image of the current range"),
+                ("escape", "close the plot (q quits b2view)"),
             ],
         ),
         (
@@ -710,6 +713,70 @@ class FilterScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class SortByScreen(ModalScreen["tuple[str, bool] | None"]):
+    """Dropdown to sort a CTable by one of its FULL-indexed columns.
+
+    ↑/↓ to pick a column, ``r`` (or click) toggles reverse/descending, Enter
+    applies.  Dismisses with ``(column, reverse)`` or None on cancel.
+    """
+
+    CSS = """
+    SortByScreen {
+        align: center middle;
+    }
+    #sortby-dialog {
+        width: 60;
+        height: auto;
+        max-height: 80%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #sortby-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #sortby-list {
+        height: auto;
+        max-height: 16;
+    }
+    """
+
+    BINDINGS: ClassVar = [("escape", "cancel", "Cancel"), ("R", "toggle_reverse", "Reverse")]
+
+    def __init__(self, *, columns: list[str], current: tuple[str, bool] | None = None):
+        super().__init__()
+        self.columns = columns
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        cur_col, cur_rev = self._current or (None, False)
+        with Vertical(id="sortby-dialog"):
+            yield Static("Sort by indexed column (Enter applies, R reverses)", id="sortby-title")
+            yield OptionList(
+                *(Option(name, id=str(i)) for i, name in enumerate(self.columns)), id="sortby-list"
+            )
+            yield Checkbox("Reverse (descending)", value=cur_rev, id="sortby-reverse")
+
+    def on_mount(self) -> None:
+        option_list = self.query_one("#sortby-list", OptionList)
+        cur_col = (self._current or (None, False))[0]
+        option_list.highlighted = self.columns.index(cur_col) if cur_col in self.columns else 0
+        option_list.focus()
+
+    def action_toggle_reverse(self) -> None:
+        checkbox = self.query_one("#sortby-reverse", Checkbox)
+        checkbox.value = not checkbox.value
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option.id is not None:
+            reverse = self.query_one("#sortby-reverse", Checkbox).value
+            self.dismiss((self.columns[int(event.option.id)], reverse))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 def _plot_view(series: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
     """Turn a ``plot_series`` result into drawable arrays + a method label.
 
@@ -722,9 +789,11 @@ def _plot_view(series: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
     finite = np.isfinite(ymin) & np.isfinite(ymax)
     x, ymin, ymax = x[finite], ymin[finite], ymax[finite]
     method = series.get("method")
-    descr = {"summary": "min/max envelope", "reduce": "min/max envelope"}.get(
-        method, "sampled — may miss extremes"
-    )
+    descr = {
+        "summary": "min/max envelope",
+        "reduce": "min/max envelope",
+        "sorted": "min/max envelope",
+    }.get(method, "sampled — may miss extremes")
     return x, ymin, ymax, descr
 
 
@@ -796,7 +865,7 @@ class PlotRangeScreen(ModalScreen["tuple[int, int] | None"]):
 class PlotScreen(ModalScreen["tuple[int, int] | None"]):
     """Modal plotting one numeric column; zoomable into a row sub-range.
 
-    Keys: ``+``/``-`` zoom about the view centre, ``←``/``→`` pan, ``0`` reset to
+    Keys: ``+``/``-`` zoom about the view's left edge, ``←``/``→`` pan, ``0`` reset to
     the whole series, ``g`` type an exact ``start:stop`` range.  Each change
     re-fetches the envelope for the new range (exact for sub-ranges) via the
     *fetch* closure, so zooming reveals detail the whole-series buckets hide.
@@ -829,15 +898,14 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
     }
     """
 
-    _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · v view rows · h hi-res · s scatter · q close"
+    _KEYS_HINT = "+/- zoom · ←/→ pan · 0 reset · g range · v view rows · h hi-res · s scatter · esc close"
     _MIN_WIDTH = 16  # smallest zoom window (rows), so the envelope still reads
     _HIRES_MAX_POINTS = 50_000  # above this, the hi-res raw view is strided-sampled
     _SCATTER_MAX_POINTS = 50_000  # above this, the col-vs-col scatter is strided-sampled
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
-        ("q", "close", "Close"),
-        ("p", "close", "Close"),
+        ("q", "app.quit", "Quit b2view"),
         ("plus", "zoom_in", "Zoom in"),
         ("equals_sign", "zoom_in", "Zoom in"),
         ("minus", "zoom_out", "Zoom out"),
@@ -920,10 +988,10 @@ class PlotScreen(ModalScreen["tuple[int, int] | None"]):
 
     def _zoom(self, factor: float) -> None:
         width = self.row_stop - self.row_start
-        center = (self.row_start + self.row_stop) // 2
         new_w = width // 2 if factor < 1 else width * 2
         new_w = max(min(self._MIN_WIDTH, self.n), min(self.n, new_w))
-        start = max(0, min(center - new_w // 2, self.n - new_w))
+        # Anchor on the left edge so the zoomed plot starts where it did before.
+        start = max(0, min(self.row_start, self.n - new_w))
         self._set_range(start, start + new_w)
 
     def _pan(self, direction: int) -> None:
@@ -1069,11 +1137,11 @@ class ScatterPlotScreen(ModalScreen[None]):
     }
     """
 
-    _KEYS_HINT = "h hi-res · q/esc back to plot"
+    _KEYS_HINT = "h hi-res · esc back to plot"
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
-        ("q", "close", "Close"),
+        ("q", "app.quit", "Quit b2view"),
         ("h", "hires", "High-res"),
     ]
 
@@ -1201,8 +1269,7 @@ class HiResPlotScreen(ModalScreen[None]):
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
-        ("q", "close", "Close"),
-        ("h", "close", "Close"),
+        ("q", "app.quit", "Quit b2view"),
         ("r", "toggle_raw", "Raw/envelope"),
     ]
 
@@ -1242,8 +1309,8 @@ class HiResPlotScreen(ModalScreen[None]):
     @property
     def _keys_hint(self) -> str:
         if self._can_toggle:
-            return "r raw/envelope · q/esc/h back to braille"
-        return "q/esc/h · back to braille"
+            return "r raw/envelope · esc back to braille"
+        return "esc · back to braille"
 
     def _current_title(self) -> str:
         if self._mode == "scatter":
@@ -1349,8 +1416,8 @@ class CellDetailScreen(ModalScreen[None]):
 
     Reached with Return on an expensive (list/struct/object/ndarray) column
     whose grid cell shows a ``<...; skipped>`` placeholder; the value is decoded
-    on demand.  The table stays underneath with its position intact (esc/q/enter
-    return).
+    on demand.  The table stays underneath with its position intact (esc
+    returns).
     """
 
     CSS = """
@@ -1383,8 +1450,7 @@ class CellDetailScreen(ModalScreen[None]):
 
     BINDINGS: ClassVar = [
         ("escape", "close", "Close"),
-        ("q", "close", "Close"),
-        ("enter", "close", "Close"),
+        ("q", "app.quit", "Quit b2view"),
     ]
 
     def __init__(self, *, row: int, name: str, label: str, value: Any):
@@ -1404,7 +1470,7 @@ class CellDetailScreen(ModalScreen[None]):
             # A VerticalScroll is focusable, so the screen's key bindings fire.
             with VerticalScroll(id="cell-body"):
                 yield Static(markup_escape(text))
-            yield Static("esc/q · close", id="cell-keys")
+            yield Static("esc · close", id="cell-keys")
 
     def on_mount(self) -> None:
         self.query_one("#cell-body", VerticalScroll).focus()
@@ -1655,6 +1721,8 @@ class B2ViewApp(App):
         Binding("e", "grid_col_end", "Row end", show=False),
         Binding("c", "go_to_column", "Go to column", show=False),
         Binding("f", "filter_rows", "Filter rows", show=False),
+        Binding("S", "sort_rows", "Sort by", show=False),
+        Binding("R", "reverse_sort", "Reverse sort", show=False),
         Binding("slash", "filter_columns", "Filter columns", show=False),
         Binding("p", "plot_column", "Plot column", show=False),
         Binding("d", "dim_cycle", "Dim mode", show=False),
@@ -1668,6 +1736,7 @@ class B2ViewApp(App):
         *,
         start_path: str = "/",
         start_panel: str = "tree",
+        start_maximized: bool = False,
         preview_rows: int = 20,
         preview_cols: int = 10,
         download_url: str | None = None,
@@ -1683,6 +1752,7 @@ class B2ViewApp(App):
         self._header_label = urlpath
         self.start_path = start_path
         self.start_panel = start_panel
+        self.start_maximized = start_maximized
         self.preview_rows = preview_rows
         self.preview_cols = preview_cols
         self.browser: StoreBrowser | None = None
@@ -1691,6 +1761,9 @@ class B2ViewApp(App):
         self.table_page: dict | None = None
         self.table_buffer: dict | None = None
         self.grid_col_start = 0
+        # Sticky visible-column count: (layout key, count).  Keeps the column
+        # set stable across vertical scroll / sort reverse (see _load_table_page).
+        self._col_fit: tuple[tuple, int] | None = None
         self._data_layout: DataSliceLayout | None = None
         self._active_dim = 0
         self._dim_mode = False
@@ -1720,7 +1793,7 @@ class B2ViewApp(App):
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
                     data_pane.border_subtitle = (
-                        "?(help) | d(im mode) | filter: f(rows) /(cols) | "
+                        "?(help) | d(im mode) | filter: f(rows) /(cols) | S(ort) | "
                         "rows: t/b/g(oto) | cols: s/e/c(goto) | p(lot)"
                     )
                     yield Static("", id="data-header")
@@ -1789,8 +1862,13 @@ class B2ViewApp(App):
             self.call_after_refresh(self.update_panels, "/")
 
     def _apply_start_focus(self) -> None:
-        """Focus the panel requested on startup (the --panel option)."""
+        """Focus the panel requested on startup (the --panel option), and
+        maximize it too when --max was given."""
         self._focus_panel_by_name(self.start_panel)
+        if self.start_maximized:
+            # Defer a frame: .focus() above is scheduled, so the new focus (which
+            # action_maximize_panel reads) isn't applied yet this tick.
+            self.call_after_refresh(self.action_maximize_panel)
 
     def _focus_panel_by_name(self, name: str) -> None:
         """Focus a panel by its user-facing name."""
@@ -2056,6 +2134,19 @@ class B2ViewApp(App):
                 break
             total += width
             keep += 1
+        return self._take_n_columns(data, keep)
+
+    def _take_n_columns(self, data: dict, n: int) -> dict:
+        """Keep the first *n* columns of a paged *data* window (clamped to range).
+
+        Width-based fitting (:meth:`_trim_columns_to_fit`) is recomputed from the
+        currently visible rows, so it can vary as you scroll or reverse a sort.
+        Pinning the count keeps the visible column set stable across those
+        re-renders (the sticky fit in :meth:`_load_table_page`).
+        """
+        if data.get("source_kind") not in _COL_PAGED_KINDS:
+            return data
+        keep = max(1, min(n, len(data["columns"])))
         if keep >= len(data["columns"]):
             return data
         kept = data["columns"][:keep]
@@ -2108,6 +2199,25 @@ class B2ViewApp(App):
         if height <= 1:
             height = self.query_one("#data-pane", Vertical).size.height - 2
         return max(1, height - 1) if height > 1 else max(1, self.preview_rows)
+
+    def _col_fit_key(self) -> tuple:
+        """Identity of the current column layout for the sticky column-count fit.
+
+        Changes (forcing a width re-fit) on a new node, a horizontal scroll, an
+        ndarray dim/fixed-value change, a column filter, or a terminal resize —
+        but not on vertical scroll, sort reverse or row filter, which keep the
+        same columns.
+        """
+        layout = self._data_layout
+        layout_sig = None
+        if layout is not None:
+            layout_sig = (
+                tuple(layout.navigable_dims),
+                tuple(sorted(layout.fixed_values.items())),
+                tuple(layout.shape),
+            )
+        col_filter = self.browser.get_column_filter(self.selected_path) if self.browser else None
+        return (self.selected_path, self.grid_col_start, layout_sig, col_filter, self._data_table_width())
 
     def _load_table_page(self, path: str, start: int) -> dict:
         if self.browser is None:
@@ -2166,7 +2276,21 @@ class B2ViewApp(App):
                 max_cols=self._candidate_max_cols(),
                 col_start=self.grid_col_start,
             )
-        data = self._trim_columns_to_fit(data)
+        # The visible column count is sticky for a given column layout: recompute
+        # the width-based fit only when the layout key changes (node, horizontal
+        # position, ndarray dims, column filter).  Vertical scrolling, reversing a
+        # sort and row filtering keep the same columns instead of dropping one
+        # when the freshly visible rows happen to measure wider.
+        fit_key = self._col_fit_key()
+        if self._col_fit is not None and self._col_fit[0] == fit_key:
+            data = self._take_n_columns(data, self._col_fit[1])
+        else:
+            data = self._trim_columns_to_fit(data)
+            # Only remember the count once the layout has settled (a real
+            # width-based fit); before that the trim is a no-op and would pin a
+            # bloated count that overflows the table on later renders.
+            if data.get("source_kind") in _COL_PAGED_KINDS and self._data_table_width() > 1:
+                self._col_fit = (fit_key, len(data["columns"]))
         data["viewport_width"] = self._data_table_width()
         self.table_buffer = data
         data = self._slice_table_buffer(start, page_size)
@@ -2413,12 +2537,19 @@ class B2ViewApp(App):
         if data.get("source_kind") == "ctable" and self.browser is not None:
             flt = self.browser.get_filter(self.selected_path)
             col_flt = self.browser.get_column_filter(self.selected_path)
+            sort = self.browser.get_sort(self.selected_path)
             if flt:
                 total = self.browser.base_nrows(self.selected_path)
                 chips.append(f"filter: [bold]{markup_escape(flt)}[/bold] ({total} total)")
+            if sort:
+                col, reverse = sort
+                arrow = "▼" if reverse else "▲"
+                chips.append(_accent_chip(f"SORTED {arrow} {markup_escape(col)}"))
             if col_flt:
                 chips.append(f"cols: [bold]{markup_escape(col_flt)}[/bold]")
-            if flt or col_flt or self.row_window is not None:
+            if sort:
+                chips.append("<R>everse")
+            if flt or col_flt or sort or self.row_window is not None:
                 chips.append("<Esc>unlock/clear")
         return chips
 
@@ -2736,6 +2867,68 @@ class B2ViewApp(App):
         screen = FilterScreen(current=self.browser.get_filter(self.selected_path))
         self.push_screen(screen, self._apply_filter)
 
+    def action_sort_rows(self) -> None:
+        if not self._in_data_grid():
+            return
+        if self.table_page.get("source_kind") != "ctable":
+            self.notify("Sorting is only supported for CTable nodes", severity="warning")
+            return
+        columns = self.browser.full_index_columns(self.selected_path)
+        if not columns:
+            self.notify("No FULL-indexed columns to sort by", severity="warning")
+            return
+        screen = SortByScreen(columns=columns, current=self.browser.get_sort(self.selected_path))
+        self.push_screen(screen, self._apply_sort)
+
+    def _apply_sort(self, choice: tuple[str, bool] | None, *, reposition: bool = True) -> None:
+        if choice is None or self.browser is None or self.table_page is None:
+            return  # cancelled
+        column, reverse = choice
+        try:
+            self.browser.set_sort(self.selected_path, column, reverse)
+        except Exception as exc:
+            self.notify(f"Cannot sort: {exc}", severity="error")
+            return
+        self.row_window = None  # set_sort drops any window/filter; keep the chip in sync
+        self.table_buffer = None
+        # Park the cursor on the sorted column's first row.  On the initial sort
+        # ('S') bring the column into view, clamping the window start to the tail
+        # ('End') position so the natural left-to-right column order is preserved
+        # and the last column shows a full window, not a lone column.  On reverse
+        # ('R') leave the horizontal scroll where it is — only the order flips.
+        names = self.browser.column_names(self.selected_path) or []
+        col_idx = names.index(column) if column in names else 0
+        if reposition:
+            self.grid_col_start = min(col_idx, self._fit_col_start_backward(self.table_page["ncols"]))
+        data = self._load_table_page(self.selected_path, 0)
+        cursor_col = max(0, col_idx - data.get("col_start", 0))
+        self._update_data_table(data, cursor_row=0, cursor_col=cursor_col)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
+    def action_reverse_sort(self) -> None:
+        """Flip ascending/descending on the currently sorted column."""
+        if (
+            not self._in_data_grid()
+            or self.table_page.get("source_kind") != "ctable"
+            or self.browser is None
+        ):
+            return
+        sort = self.browser.get_sort(self.selected_path)
+        if sort is None:
+            return
+        column, reverse = sort
+        self._apply_sort((column, not reverse), reposition=False)
+
+    def _clear_sort(self) -> None:
+        """Escape out of a sort view, restoring original row order."""
+        self.browser.clear_sort(self.selected_path)
+        self.table_buffer = None
+        data = self._load_table_page(self.selected_path, 0)
+        self._update_data_table(data, cursor_row=0, cursor_col=0)
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
     def _apply_filter(self, expr: str | None) -> None:
         if expr is None or self.browser is None or self.table_page is None:
             return
@@ -3043,6 +3236,8 @@ class B2ViewApp(App):
             return
         if self.browser.get_filter(self.selected_path):
             self._apply_filter("")
+        elif self.browser.get_sort(self.selected_path):
+            self._clear_sort()
         elif self.browser.get_column_filter(self.selected_path):
             self.browser.set_column_selection(self.selected_path, None)
             self._reload_columns()

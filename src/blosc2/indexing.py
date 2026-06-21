@@ -199,6 +199,45 @@ def _purge_stale_persistent_caches() -> None:
         _hot_cache_clear(scope=scope)
 
 
+def evict_cached_index_handles(root: str | None) -> None:
+    """Drop cached sidecar handles/data for the persistent store at *root*.
+
+    Index reads cache file-backed handles in process-global dicts for query
+    reuse; they are normally only purged once their files are deleted, so a
+    table closed but left on disk keeps its descriptors open — one per table,
+    which exhausts the file-descriptor limit over a large session.  Closing a
+    table calls this to pop (and thereby release) the handles it owns; the
+    caches simply repopulate on the next query.
+    """
+    if not root:
+        return
+    try:
+        resolved = str(Path(root).resolve())
+    except Exception:
+        return
+    prefix = resolved + os.sep
+
+    def _owned_scope(scope) -> bool:
+        # scope is an _array_key: ("persistent", path) or ("memory", id).
+        return (
+            isinstance(scope, tuple)
+            and len(scope) == 2
+            and scope[0] == "persistent"
+            and isinstance(scope[1], str)
+            and (scope[1] == resolved or scope[1].startswith(prefix))
+        )
+
+    def _owned_path(path) -> bool:
+        return isinstance(path, str) and (path == resolved or path.startswith(prefix))
+
+    for cache in (_SIDECAR_HANDLE_CACHE, _DATA_CACHE, _HOT_CACHE):
+        for key in [k for k in tuple(cache) if _owned_scope(k[0])]:
+            cache.pop(key, None)
+    for handles in (_QUERY_CACHE_STORE_HANDLES, _GATHER_MMAP_HANDLES):
+        for path in [p for p in tuple(handles) if _owned_path(p)]:
+            handles.pop(path, None)
+
+
 def _open_sidecar_file(path: str, mmap_mode=None) -> blosc2.NDArray:
     """Open an index sidecar file, using zip-offset access when registered."""
     reg = _SIDECAR_ZIP_REGISTRY.get(path)
@@ -758,7 +797,7 @@ def store_cached_coords(
 
 
 def _supported_index_dtype(dtype: np.dtype) -> bool:
-    return np.dtype(dtype).kind in {"b", "i", "u", "f", "m", "M"}
+    return np.dtype(dtype).kind in {"b", "i", "u", "f", "m", "M", "S", "U"}
 
 
 def _field_target_descriptor(field: str | None) -> dict:
@@ -1064,6 +1103,16 @@ def _segment_summary(segment: np.ndarray, dtype: np.dtype):
             zero = np.zeros((), dtype=dtype)[()]
             return zero, zero, flags
         segment = segment[valid]
+    if dtype.kind in "US":
+        # String dtypes: ufunc 'minimum'/'maximum' lack a loop.
+        mn = segment[0]
+        mx = segment[0]
+        for v in segment[1:]:
+            if v < mn:
+                mn = v
+            if v > mx:
+                mx = v
+        return mn, mx, flags
     return segment.min(), segment.max(), flags
 
 
@@ -1106,8 +1155,25 @@ def _fill_summaries_from_2d(
         mins = np.where(all_nan, zero, mins).astype(dtype)
         maxs = np.where(all_nan, zero, maxs).astype(dtype)
     else:
-        mins = data_2d.min(axis=1)
-        maxs = data_2d.max(axis=1)
+        if dtype.kind in "US":
+            # String dtypes: numpy ufunc 'minimum'/'maximum' lack a loop for <U/S.
+            # Use manual per-row comparison (cheap for small segment_len).
+            mins = np.empty(n, dtype=dtype)
+            maxs = np.empty(n, dtype=dtype)
+            for i in range(n):
+                row = data_2d[i]
+                mn = row[0]
+                mx = row[0]
+                for v in row[1:]:
+                    if v < mn:
+                        mn = v
+                    if v > mx:
+                        mx = v
+                mins[i] = mn
+                maxs[i] = mx
+        else:
+            mins = data_2d.min(axis=1)
+            maxs = data_2d.max(axis=1)
         flags = np.zeros(n, dtype=np.uint8)
     summaries_arr["min"][offset : offset + n] = mins
     summaries_arr["max"][offset : offset + n] = maxs
@@ -3081,13 +3147,24 @@ def _merge_run_pair(
             )
             right_cut = right_values.size
 
-        merged_values, merged_positions = indexing_ext.intra_chunk_merge_sorted_slices(
-            left_values[:left_cut],
-            left_positions[:left_cut],
-            right_values[:right_cut],
-            right_positions[:right_cut],
-            np.int64,
-        )
+        try:
+            merged_values, merged_positions = indexing_ext.intra_chunk_merge_sorted_slices(
+                left_values[:left_cut],
+                left_positions[:left_cut],
+                right_values[:right_cut],
+                right_positions[:right_cut],
+                np.int64,
+            )
+        except (TypeError, AttributeError):
+            # ponytail: fallback for non-numeric dtypes (strings, etc.) that the
+            # Cython merge doesn't support.  _merge_sorted_slices uses np.lexsort.
+            merged_values, merged_positions = _merge_sorted_slices(
+                left_values[:left_cut],
+                left_positions[:left_cut],
+                right_values[:right_cut],
+                right_positions[:right_cut],
+                dtype,
+            )
         take = merged_values.size
         try:
             _write_ndarray_linear_span(out_values, out_cursor, merged_values)

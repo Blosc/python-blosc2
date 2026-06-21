@@ -749,11 +749,11 @@ async def test_plot_column(store_path):
         n = screen.n
         assert (screen.row_start, screen.row_stop) == (0, n)
 
-        # '+' zooms in about the centre: the window halves and re-centres.
+        # '+' zooms in about the left edge: the window halves, start unchanged.
         await pilot.press("plus")
         await pilot.pause()
         assert screen.row_stop - screen.row_start == n // 2
-        assert screen.row_start > 0
+        assert screen.row_start == 0
         assert "rows" in screen.plot_title
 
         # '-' zooms back out to the whole series.
@@ -819,11 +819,11 @@ async def test_plot_column(store_path):
         assert app._data_layout.row_window is None
         assert app.table_page["nrows"] == LEAF1_LEN
 
-        # 'p' (like escape) closes the plot again
+        # 'p' re-opens the plot; 'escape' is the only way to close it
         await pilot.press("p")
         await pilot.pause()
         assert isinstance(app.screen, PlotScreen)
-        await pilot.press("p")
+        await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, PlotScreen)
 
@@ -939,8 +939,8 @@ async def test_plot_hires_view(store_path):
         assert hires._mode == "envelope"
         assert "min/max envelope" in hires._current_title()
 
-        # 'q' returns to the braille plot with the zoom intact.
-        await pilot.press("q")
+        # 'escape' returns to the braille plot with the zoom intact.
+        await pilot.press("escape")
         await pilot.pause()
         assert app.screen is plot
         assert (plot.row_start, plot.row_stop) == (0, plot.n)
@@ -1002,7 +1002,7 @@ async def test_plot_scatter_col_vs_col(store_path):
         np.testing.assert_allclose(scatter.y, np.arange(100, 140) * 1.5)
 
         # 'h' opens a high-res matplotlib scatter over the braille scatter, when
-        # textual-image + matplotlib are available; 'h' again returns to it.
+        # textual-image + matplotlib are available; 'escape' returns to it.
         if importlib.util.find_spec("textual_image") and importlib.util.find_spec("matplotlib"):
             from blosc2.b2view.app import HiResPlotScreen, TextualImage
 
@@ -1010,12 +1010,12 @@ async def test_plot_scatter_col_vs_col(store_path):
             await pilot.pause()
             assert isinstance(app.screen, HiResPlotScreen)
             assert app.screen.query_one("#hires-image", TextualImage) is not None
-            await pilot.press("h")
+            await pilot.press("escape")
             await pilot.pause()
             assert app.screen is scatter
 
-        # 'q' returns to the braille plot with the zoom intact.
-        await pilot.press("q")
+        # 'escape' returns to the braille plot with the zoom intact.
+        await pilot.press("escape")
         await pilot.pause()
         assert app.screen is plot
         assert (plot.row_start, plot.row_stop) == (100, 140)

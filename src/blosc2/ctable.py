@@ -2314,6 +2314,91 @@ class Column:
             return NotImplemented
         return NotImplemented
 
+    def _summary_minmax_source(self):
+        """Return ``(sidecar_path, dtype, nullable)`` for a summary-readable
+        ``min``/``max``, or ``None`` when the index shortcut is not provably
+        correct.
+
+        Excluded: a view (its summary describes the base table); a column kind
+        without numeric/string block extrema; a leaky null sentinel (only a
+        non-nullable column, or a NaN-sentinel float — whose NaNs the summary
+        drops — match the nulls-skipped contract of ``min()``); and a stale,
+        absent, or in-memory-only index.  Deletions/appends are covered by the
+        stale flag (every mutation marks the index stale; a rebuild re-summarises
+        only the live rows, and capacity padding never enters the summaries).
+        """
+        table = self._table
+        if table.base is not None:
+            return None
+        if (
+            self.is_computed
+            or self.is_ndarray
+            or self.is_list
+            or self.is_varlen_scalar
+            or self.is_dictionary
+        ):
+            return None
+        dtype = self.dtype
+        if dtype is None or dtype.kind not in "biufUS":
+            return None
+        col = table._schema.columns_by_name.get(self._col_name)
+        spec = col.spec if col is not None else None
+        nullable = getattr(spec, "nullable", False)
+        null_value = getattr(spec, "null_value", None)
+        is_nan_float = dtype.kind == "f" and isinstance(null_value, float) and np.isnan(null_value)
+        if nullable and not is_nan_float:
+            return None  # non-NaN sentinel leaks into the block extrema
+        desc = table._root_table._get_index_catalog().get(self._col_name)
+        if not desc or desc.get("stale", False):
+            return None
+        levels = desc.get("levels") or {}
+        level = "block" if "block" in levels else next(iter(levels), None)
+        if level is None:
+            return None
+        path = levels[level].get("path")
+        if path is None:
+            return None  # in-memory sidecar: the scan is already fast
+        return path, dtype, nullable
+
+    def _index_summary_minmax(self, op: str):
+        """Exact ``min``/``max`` from the column index's block summaries, or
+        ``NotImplemented`` when that shortcut is not applicable (see
+        :meth:`_summary_minmax_source`).
+
+        Every index kind (SUMMARY/FULL/PARTIAL/BUCKET/OPSI) persists per-block
+        ``(min, max, flags)``, so reducing those is decompression-free (~240x
+        faster than scanning tens of millions of rows).
+        """
+        source = self._summary_minmax_source()
+        if source is None:
+            return NotImplemented
+        path, dtype, nullable = source
+        try:
+            from blosc2.indexing import _INDEX_MMAP_MODE, FLAG_ALL_NAN, FLAG_HAS_NAN, _open_sidecar_file
+
+            # Read the tiny (min, max, flags) arrays and drop the handle: unlike
+            # the cached _open_level_summary_handle, this releases the file
+            # descriptor immediately (min()/max() must not leak one per table).
+            handle = _open_sidecar_file(path, _INDEX_MMAP_MODE)
+            flags = np.asarray(handle["flags"][:])
+            vals = np.asarray(handle[op][:])
+            del handle
+        except Exception:
+            return NotImplemented
+        if vals.shape[0] == 0:
+            return NotImplemented
+        # A non-nullable float with NaN *data* makes numpy min/max return NaN,
+        # but the summary dropped those NaNs — they would disagree, so bail.
+        if dtype.kind == "f" and not nullable and bool((flags & (FLAG_HAS_NAN | FLAG_ALL_NAN)).any()):
+            return NotImplemented
+        valid = (flags & FLAG_ALL_NAN) == 0
+        if not valid.any():
+            return NotImplemented  # whole column null → let the scan raise
+        vals = vals[valid]
+        if dtype.kind in "US":
+            return min(vals) if op == "min" else max(vals)
+        return vals.min() if op == "min" else vals.max()
+
     def min(self, axis=None, *, where=None):
         """Minimum live, non-null value.
 
@@ -2330,6 +2415,12 @@ class Column:
         self._require_kind("biufUS", "min")
         where = self._normalize_sum_where(where)
         if where is None:
+            # Try the index-summary shortcut first: it returns NotImplemented for
+            # an empty/all-null column, so the emptiness check (which counts live
+            # rows — expensive on a nullable column) only runs on the fallback.
+            fast_idx = self._index_summary_minmax("min")
+            if fast_idx is not NotImplemented:
+                return fast_idx
             self._require_nonempty("min")
         fast = self._lazy_aggregate_fastpath("min", where=where)
         if fast is not NotImplemented:
@@ -2364,6 +2455,10 @@ class Column:
         self._require_kind("biufUS", "max")
         where = self._normalize_sum_where(where)
         if where is None:
+            # See min(): shortcut before the live-row count.
+            fast_idx = self._index_summary_minmax("max")
+            if fast_idx is not NotImplemented:
+                return fast_idx
             self._require_nonempty("max")
         fast = self._lazy_aggregate_fastpath("max", where=where)
         if fast is not NotImplemented:
@@ -3340,6 +3435,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     @staticmethod
     def _is_dictionary_column(col: CompiledColumn) -> bool:
         return isinstance(col.spec, DictionarySpec)
+
+    def _dict_rank_index_stale(self, name: str, dict_rank_meta: dict) -> bool:
+        """True if a dict-rank FULL index no longer matches the live dictionary.
+
+        The index encodes alphabetical ranks frozen at build time; if the
+        dictionary gained/changed entries the ranks are wrong, so callers must
+        fall back to lexsort until the index is rebuilt.
+        """
+        from blosc2.ctable_indexing import _dict_rank_hash
+
+        col = self._root_table._cols.get(name)
+        if col is None:
+            return True
+        dictionary = list(col.dictionary)
+        if len(dictionary) != dict_rank_meta.get("dict_len"):
+            return True
+        return _dict_rank_hash(dictionary) != dict_rank_meta.get("dict_hash")
 
     @staticmethod
     def _is_ndarray_column(col: CompiledColumn) -> bool:
@@ -9911,16 +10023,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     raise TypeError(
                         f"Column {name!r} is a varlen scalar column and does not support sort ordering."
                     )
-                raise TypeError(
-                    f"Column {name!r} is a list column and does not support sort ordering in V1."
-                )
+                if cc is not None and self._is_dictionary_column(cc):
+                    pass  # dictionary columns: sorting supported (decoded strings)
+                else:
+                    raise TypeError(
+                        f"Column {name!r} is a list column and does not support sort ordering in V1."
+                    )
             if np.issubdtype(dtype, np.complexfloating):
                 raise TypeError(
                     f"Column {name!r} has complex dtype {dtype} which does not support ordering."
                 )
         return cols, ascending
 
-    def _sorted_positions_from_full_index(self, name: str, ascending: bool) -> np.ndarray | None:
+    def _sorted_positions_from_full_index(self, name: str, ascending: bool) -> np.ndarray | None:  # noqa: C901
         """Return live physical positions from a matching FULL index, if available.
 
         Reads the pre-sorted positions sidecar directly rather than going through
@@ -9931,13 +10046,25 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         catalog = root._get_index_catalog()
         descriptor = None
 
+        null_value = None
+        null_code = None
+        is_dict_rank = False
         if name in root._cols:
             col_info = root._schema.columns_by_name.get(name)
-            if col_info is not None and getattr(col_info.spec, "null_value", None) is not None:
-                return None
+            if col_info is not None:
+                null_value = getattr(col_info.spec, "null_value", None)
+                if isinstance(col_info.spec, DictionarySpec):
+                    null_code = col_info.spec.null_code
             descriptor = catalog.get(name)
             if descriptor is None or descriptor.get("kind") != "full" or descriptor.get("stale", False):
                 descriptor = None
+            else:
+                dict_rank_meta = descriptor.get("full", {}).get("dict_rank")
+                if dict_rank_meta is not None:
+                    if self._dict_rank_index_stale(name, dict_rank_meta):
+                        descriptor = None  # ranks no longer match dictionary → lexsort
+                    else:
+                        is_dict_rank = True
         elif name in root._computed_cols:
             cc = root._computed_cols[name]
             for _lookup_key, candidate in catalog.items():
@@ -9960,8 +10087,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # machinery which is built for selective range queries and is ~70x slower
         # for full-table streaming.
         if positions_path is not None:
-            # Persistent table: positions live in a sidecar .b2nd file.
-            positions_nd = blosc2.open(positions_path, mode="r")
+            # Persistent table: positions live in a sidecar .b2nd file.  Use the
+            # sidecar opener so .b2z (zip) stores are read at their zip offset —
+            # blosc2.open() would look for a standalone file that isn't there.
+            from blosc2.indexing import _open_sidecar_file
+
+            positions_nd = _open_sidecar_file(positions_path)
         else:
             # In-memory table: positions live in the sidecar handle cache.
             from blosc2.indexing import _SIDECAR_HANDLE_CACHE, _sidecar_handle_cache_key
@@ -9976,13 +10107,61 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 return None
 
         positions = np.asarray(positions_nd[:], dtype=np.int64)
-        valid = root._valid_rows[:]
-        positions = np.asarray(positions, dtype=np.int64)
-        positions = positions[(positions >= 0) & (positions < len(valid))]
-        positions = positions[valid[positions]]
+        total = len(root._valid_rows)
+        # Index sidecars can carry padding positions beyond the live range, so
+        # the bounds clip always runs — but the ``.all()`` check skips the copy
+        # (and a 24M-element temporary) when there is nothing to clip.
+        in_bounds = (positions >= 0) & (positions < total)
+        if not bool(in_bounds.all()):
+            positions = positions[in_bounds]
+        del in_bounds
+        # Validity filtering only matters when the table has gaps (deleted rows);
+        # for a compact table every clipped position is already live.
+        if root._n_rows is None or root._n_rows != total:
+            valid = root._valid_rows[:]
+            positions = positions[valid[positions]]
         if self is not root:
             current_valid = self._valid_rows[:]
             positions = positions[current_valid[positions]]
+
+        if is_dict_rank:
+            # Dict-rank index: positions sorted by rank (int32), nulls have sentinel null_rank.
+            # Partition null rows using codes (int32), not decoded strings.
+            codes = np.asarray(root._cols[name].codes[:], dtype=np.int32)
+            null_phys = codes == null_code
+            del codes
+            if null_phys.any():
+                is_null = null_phys[positions]
+                del null_phys
+                nulls = positions[is_null]
+                nonnull = positions[~is_null]
+                del is_null, positions
+                if not ascending:
+                    nonnull = nonnull[::-1]
+                return np.concatenate([nonnull, nulls])
+            # No nulls: fall through to simple reverse
+        elif null_value is not None:
+            # The index sorts by raw value, but sort_by's contract is nulls-last.
+            # Partition explicitly so it holds for any sentinel (NaN sorts last,
+            # an integer sentinel like INT64_MIN sorts first) and either order.
+            # Free each 24M-element temporary as soon as it is consumed to keep
+            # peak memory near the size of the permutation itself.
+            raw = np.asarray(root._cols[name][:])
+            if isinstance(null_value, float) and np.isnan(null_value):
+                null_phys = np.isnan(raw)
+            else:
+                null_phys = raw == null_value
+            del raw
+            if null_phys.any():
+                is_null = null_phys[positions]
+                del null_phys
+                nulls = positions[is_null]
+                nonnull = positions[~is_null]
+                del is_null, positions
+                if not ascending:
+                    nonnull = nonnull[::-1]
+                return np.concatenate([nonnull, nulls])
+
         if not ascending:
             positions = positions[::-1]
         return positions
@@ -10003,23 +10182,27 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         lex_keys = []
         for name, asc in zip(reversed(cols), reversed(ascending), strict=True):
             cc = self._computed_cols.get(name)
+            col_info = self._schema.columns_by_name.get(name)
+            is_dict_col = False
             if cc is not None:
                 # Materialise computed column values at live positions
                 raw = np.asarray(self._build_computed_lazy(cc)[:])[live_pos]
             else:
-                col_info = self._schema.columns_by_name.get(name)
-                if col_info is not None and self._is_dictionary_column(col_info):
+                is_dict_col = col_info is not None and self._is_dictionary_column(col_info)
+                if is_dict_col:
                     # Sort dictionary columns by decoded string values.
                     decoded = self._cols[name][live_pos]
                     raw = np.array(decoded, dtype=object)
+                    # Replace None with placeholder so lexsort never compares None.
+                    # Null indicator key (below) already places nulls last.
+                    raw[raw == None] = ""  # noqa: E711
                 else:
                     raw = self._cols[name][live_pos]
-            col_info = self._schema.columns_by_name.get(name)
             nv = getattr(col_info.spec, "null_value", None) if col_info else None
 
             # Value key
             if not asc:
-                if raw.dtype.kind in "US":
+                if raw.dtype.kind in "USO":
                     # strings can't be negated — invert via rank
                     rank = np.argsort(np.argsort(raw, kind="stable"), kind="stable")
                     lex_keys.append((n - 1 - rank).astype(np.intp))
@@ -10032,7 +10215,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             # Null indicator key — more significant than the value key above,
             # so nulls always sort last (0 before 1 → non-null before null).
-            if nv is not None:
+            if is_dict_col and col_info.spec.nullable:
+                null_code = col_info.spec.null_code
+                codes_at_pos = np.asarray(self._cols[name].codes[live_pos], dtype=np.int32)
+                null_ind = (codes_at_pos == null_code).astype(np.intp)
+                lex_keys.append(null_ind)
+            elif nv is not None:
                 if isinstance(nv, float) and np.isnan(nv):
                     null_ind = np.isnan(raw).astype(np.intp)
                 else:
@@ -10047,8 +10235,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ascending: bool | list[bool] = True,
         *,
         inplace: bool = False,
+        view: bool = False,
     ) -> CTable:
-        """Return a copy of the table sorted by one or more columns.
+        """Return the table sorted by one or more columns.
+
+        By default this materialises a new in-memory copy of the sorted rows.
+        Pass ``view=True`` to instead get a lightweight **sorted view** that
+        shares the parent's column data and gathers rows on demand in sorted
+        order — no whole-table copy.  This is ideal for reading a sorted slice
+        of a large persistent table (e.g. ``t.sort_by("col", view=True)[:10]``).
 
         Parameters
         ----------
@@ -10069,17 +10264,31 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             ``self`` (like :meth:`compact` but sorted).  If ``False``
             (default), return a new in-memory CTable leaving this one
             untouched.
+        view:
+            If ``True``, return a zero-copy sorted **view** over this table
+            instead of materialising a copy: it shares the parent's columns and
+            stores only the sort permutation, gathering rows on demand in sorted
+            order.  Slicing the view (``sv[start:stop:step]``) keeps the sorted
+            order and touches only the rows read.  A single-column sort backed by
+            a non-stale ``FULL`` index reuses its pre-sorted positions (no sort at
+            read time); otherwise only the sort-key column(s) are materialised to
+            build the permutation — never the whole table.  Mutually exclusive
+            with ``inplace``.  Sorting an existing view is always lazy regardless
+            of this flag.
 
         Raises
         ------
         ValueError
-            If called on a view or a read-only table when ``inplace=True``.
+            If called on a view or a read-only table when ``inplace=True``, or if
+            both ``inplace`` and ``view`` are ``True``.
         KeyError
             If any column name is not found.
         TypeError
             If a column used as a sort key does not support ordering
             (e.g. complex numbers).
         """
+        if inplace and view:
+            raise ValueError("inplace=True and view=True are mutually exclusive.")
         if self.base is not None and inplace:
             raise ValueError(
                 "Cannot sort a view inplace (would modify shared column data). Use sort_by(inplace=False) to get a sorted copy."
@@ -10120,13 +10329,151 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # use those positions directly, so columns are fetched on demand and in
         # the correct sorted order — identical performance to pre-projecting
         # with columns= before calling sort_by.
-        if self.base is not None:
+        if self.base is not None or view:
             result = CTable._make_view(self, self._valid_rows)
             result._cached_live_positions = sorted_pos
             result._n_rows = n
             return result
 
         return self._sorted_copy_from_positions(sorted_pos, n)
+
+    def sorted_slice(self, col: str, key: slice, *, ascending: bool = True) -> CTable:
+        """Return rows ``key`` in ``col``-sorted order, reading only the slice window.
+
+        Like ``sort_by(col, ascending=ascending, view=True)[key]`` but, when ``col``
+        has a usable FULL index, it reads just the needed window of the index's
+        position sidecar instead of materialising the whole 24M-row permutation —
+        ideal for small slices (top/bottom *k*).  Falls back to the full sorted
+        view (same result) whenever the window path does not apply.
+        """
+        if not isinstance(key, slice):
+            raise TypeError("sorted_slice expects a slice")
+        pos = self._sorted_slice_positions(col, ascending, key)
+        if pos is None:
+            return self.sort_by(col, ascending=ascending, view=True)[key]
+        return self._view_from_positions(pos)
+
+    def _sorted_slice_positions(self, name: str, ascending: bool, key: slice) -> np.ndarray | None:
+        """Physical positions for the sorted slice ``key``, reading only the window.
+
+        Returns ``None`` (so the caller falls back to the full path) unless this is
+        a base table with a non-stale, persistent FULL index over a compact,
+        unpadded column indexed by a numeric (or null) sentinel.
+        """
+        if self.base is not None:
+            return None
+        descriptor = self._get_index_catalog().get(name)
+        if not descriptor or descriptor.get("kind") != "full" or descriptor.get("stale", False):
+            return None
+        full = descriptor.get("full") or {}
+        positions_path = full.get("positions_path")
+        if positions_path is None:  # in-memory sidecar: not worth a partial-read path
+            return None
+
+        n = self._n_rows
+        total = len(self._valid_rows)
+        if n is None or n != total:  # deletions → positions are not a clean permutation
+            return None
+
+        col_info = self._schema.columns_by_name.get(name)
+        null_value = getattr(col_info.spec, "null_value", None) if col_info is not None else None
+        # Dict-rank index: use null_rank (int32) as sentinel for null-block location.
+        dict_rank = full.get("dict_rank")
+        if dict_rank is not None:
+            if self._dict_rank_index_stale(name, dict_rank):
+                return None  # ranks no longer match dictionary → lexsort
+            null_value = dict_rank["null_rank"]
+        # Numeric / NaN / string sentinels keep the null rows in one contiguous block
+        # once sorted; other non-numeric sentinels (e.g. object) would need a
+        # different locator.
+        if null_value is not None and not isinstance(null_value, (int, float, str, bytes)):
+            return None
+
+        from blosc2.indexing import _open_sidecar_file
+
+        pnd = _open_sidecar_file(positions_path)
+        if len(pnd) != total:  # capacity padding → window read would be wrong
+            return None
+
+        result_idx = np.arange(*key.indices(n), dtype=np.int64)
+        if result_idx.size == 0:
+            return np.empty(0, dtype=np.int64)
+
+        # Locate the (contiguous) null block [null_lo, null_hi) in the sorted order.
+        null_lo, null_hi = self._null_block_bounds(full, null_value, n)
+
+        # Map each requested result index to its index in the sorted sidecar.  The
+        # nulls-last order is the non-null rows (forward or reversed) followed by
+        # the null block, where the non-null rows are everything outside the block.
+        sidecar_idx = np.empty_like(result_idx)
+        if ascending:
+            len_below = null_lo  # non-null rows sorted below the null block
+            len_above = n - null_hi  # non-null rows sorted above it
+            below = result_idx < len_below
+            above = (result_idx >= len_below) & (result_idx < len_below + len_above)
+            nulls = result_idx >= len_below + len_above
+            sidecar_idx[below] = result_idx[below]
+            sidecar_idx[above] = null_hi + (result_idx[above] - len_below)
+            sidecar_idx[nulls] = null_lo + (result_idx[nulls] - len_below - len_above)
+        else:
+            len_above = n - null_hi  # largest non-null rows come first
+            len_below = null_lo
+            above = result_idx < len_above
+            below = (result_idx >= len_above) & (result_idx < len_above + len_below)
+            nulls = result_idx >= len_above + len_below
+            sidecar_idx[above] = (n - 1) - result_idx[above]
+            sidecar_idx[below] = (null_lo - 1) - (result_idx[below] - len_above)
+            sidecar_idx[nulls] = null_lo + (result_idx[nulls] - len_above - len_below)
+
+        lo = int(sidecar_idx.min())
+        hi = int(sidecar_idx.max()) + 1
+        window = np.asarray(pnd[lo:hi], dtype=np.int64)
+        return window[sidecar_idx - lo]
+
+    def _null_block_bounds(self, full: dict, null_value, n: int) -> tuple[int, int]:
+        """Return ``[null_lo, null_hi)``: the null rows' span in the sorted sidecar.
+
+        Empty (``null_lo == null_hi``) when the column is non-nullable or has no
+        null rows.  Reads only a handful of sidecar blocks, never the whole array.
+        """
+        if null_value is None:
+            return n, n
+        from blosc2.indexing import _open_sidecar_file
+
+        vnd = _open_sidecar_file(full["values_path"])
+        if isinstance(null_value, float) and np.isnan(null_value):
+            # NaN sorts last and breaks ordered comparisons, so count the trailing
+            # block directly, one chunk at a time (peak memory = a single chunk).
+            chunk = int(vnd.chunks[0]) if vnd.chunks else len(vnd)
+            count = 0
+            hi = len(vnd)
+            while hi > 0:
+                lo = max(0, hi - chunk)
+                block = np.isnan(np.asarray(vnd[lo:hi]))
+                count += int(block.sum())
+                if not block.all():  # reached the non-null region
+                    break
+                hi = lo
+            return n - count, n
+        # Ordinary value: the block is wherever the sentinel sorts.  Bisect the
+        # sorted values, reading one block per probe.
+        return (
+            self._sidecar_bisect(vnd, null_value, "left"),
+            self._sidecar_bisect(vnd, null_value, "right"),
+        )
+
+    @staticmethod
+    def _sidecar_bisect(vnd: blosc2.NDArray, value, side: str) -> int:
+        """``np.searchsorted`` over an ascending sidecar, reading one element/probe."""
+        lo, hi = 0, len(vnd)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            v = vnd[mid : mid + 1][0]
+            if (v < value) if side == "left" else (v <= value):
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
 
     def _sorted_small_copy_from_live_positions(
         self, cols: list[str], ascending: list[bool], live_pos: np.ndarray, n: int
@@ -10143,8 +10490,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         lex_keys = []
         for name, asc in zip(reversed(cols), reversed(ascending), strict=True):
             col_info = self._schema.columns_by_name.get(name)
-            if col_info is not None and self._is_dictionary_column(col_info):
+            is_dict_col = col_info is not None and self._is_dictionary_column(col_info)
+            if is_dict_col:
                 raw = np.array(self._cols[name][live_pos], dtype=object)
+                # Replace None with placeholder so lexsort never compares None.
+                raw[raw == None] = ""  # noqa: E711
             else:
                 raw = gathered[name]
 
@@ -10159,13 +10509,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 lex_keys.append(raw)
 
-            nv = getattr(col_info.spec, "null_value", None) if col_info else None
-            if nv is not None:
-                if isinstance(nv, float) and np.isnan(nv):
-                    null_ind = np.isnan(raw).astype(np.intp)
-                else:
-                    null_ind = (raw == nv).astype(np.intp)
+            if is_dict_col and col_info.spec.nullable:
+                null_code = col_info.spec.null_code
+                codes_at_pos = np.asarray(self._cols[name].codes[live_pos], dtype=np.int32)
+                null_ind = (codes_at_pos == null_code).astype(np.intp)
                 lex_keys.append(null_ind)
+            else:
+                nv = getattr(col_info.spec, "null_value", None) if col_info else None
+                if nv is not None:
+                    if isinstance(nv, float) and np.isnan(nv):
+                        null_ind = np.isnan(raw).astype(np.intp)
+                    else:
+                        null_ind = (raw == nv).astype(np.intp)
+                    lex_keys.append(null_ind)
 
         order = np.lexsort(lex_keys)
         result = self._empty_copy(capacity=n)
@@ -11331,6 +11687,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             ind = list(ind)
 
         mant_pos = true_pos[ind]
+
+        # For an ordered view (sorted view or position view), preserve the row
+        # order and any duplicates by carrying the positions forward.  A boolean
+        # mask is physical-order and set-like, so it would silently drop both.
+        if getattr(self, "_cached_live_positions", None) is not None:
+            return self._view_from_positions(np.asarray(mant_pos))
 
         new_mask_np = np.zeros(len(self._valid_rows), dtype=bool)
         new_mask_np[mant_pos] = True

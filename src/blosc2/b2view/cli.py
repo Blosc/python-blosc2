@@ -66,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Capture the mouse for clicking and scrolling (disables the terminal's native text selection)",
     )
+    parser.add_argument(
+        "--max",
+        dest="maximized",
+        action="store_true",
+        help="Maximize the focused panel on startup (same as pressing 'm')",
+    )
     return parser
 
 
@@ -103,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         urlpath,
         start_path=args.path,
         start_panel=args.panel,
+        start_maximized=args.maximized,
         preview_rows=args.preview_rows,
         preview_cols=args.preview_cols,
         download_url=download_url,

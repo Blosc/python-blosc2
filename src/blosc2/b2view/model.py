@@ -260,6 +260,9 @@ class StoreBrowser:
         self._filter_views: dict[str, Any] = {}
         # Per-path locked row windows for CTable nodes (path -> slice() view)
         self._window_views: dict[str, Any] = {}
+        # Per-path sort order for CTable nodes (path -> (column, reverse) / view)
+        self._sorts: dict[str, tuple[str, bool]] = {}
+        self._sort_views: dict[str, Any] = {}
         # Per-path column filters (path -> substring pattern / matched names)
         self._column_filters: dict[str, str] = {}
         self._column_selections: dict[str, list[str]] = {}
@@ -387,12 +390,9 @@ class StoreBrowser:
                     return preview_array_1d(obj, start=start, stop=stop)
             return preview_array(obj, slices=slices, max_rows=max_rows, max_cols=max_cols)
         if kind == "ctable":
-            # A locked row window (set by 'v') takes precedence; it is sliced
-            # from whatever was visible, so it already folds in any row filter.
-            if path in self._window_views:
-                obj = self._window_views[path]
-            else:
-                obj = self._filter_views.get(path, obj)
+            # Read precedence: a locked row window (set by 'v') wins, then a row
+            # filter, then a sort view; all already fold in their predecessors.
+            obj = self._ordered_object(path, obj)
             if columns is None:
                 columns = self._column_selections.get(path)
             stop = min(start + max_rows, len(obj)) if stop is None else stop
@@ -443,22 +443,27 @@ class StoreBrowser:
         kind = object_kind(obj)
 
         if kind == "ctable":
-            # A locked row window (set by 'v') takes precedence over any row
-            # filter, mirroring preview()/read_cell(): a plot shows exactly the
-            # rows the grid is showing.  The SUMMARY fast-path spans the whole
-            # column, so it is only valid when neither narrows the series.
-            if path in self._window_views:
-                view = self._window_views[path]
-                narrowed = True
-            else:
-                view = self._filter_views.get(path, obj)
-                narrowed = path in self._filter_views
+            # Window/filter/sort precedence mirrors preview()/read_cell(): a plot
+            # shows exactly the rows (and order) the grid is showing.  The SUMMARY
+            # fast-path spans the whole column in original order, so it is only
+            # valid when nothing narrows *or reorders* the series.
+            view = self._ordered_object(path, obj)
+            narrowed = view is not obj
             n = len(view)
             start, stop = self._clamp_range(row_start, row_stop, n)
             if start == 0 and stop == n and not narrowed:
                 env = self._column_summary_envelope(obj, column, n, max_points)
                 if env is not None:
                     return {**env, "n": n, "row_start": start, "row_stop": stop, "method": "summary"}
+            # Range ordered purely by the very column we're plotting: the sort
+            # view is monotonic over any contiguous range, so we can read just
+            # the bucket boundaries instead of gathering every value (this also
+            # accelerates zooming, where start/stop is a sub-range).
+            sort = self._sorts.get(path)
+            sorted_only = path not in self._window_views and path not in self._filter_views
+            if sorted_only and sort is not None and sort[0] == column:
+                env = self._sorted_column_envelope(view[column], start, stop, n, max_points)
+                return {**env, "n": n, "row_start": start, "row_stop": stop, "method": "sorted"}
             col = view[column]
             chunks = getattr(col, "chunks", None)
             return self._range_envelope(
@@ -541,12 +546,9 @@ class StoreBrowser:
         kind = object_kind(obj)
 
         if kind == "ctable":
-            # Honor a locked row window first, then any row filter, matching
-            # preview()/read_cell() so the hi-res view tracks the visible grid.
-            if path in self._window_views:
-                view = self._window_views[path]
-            else:
-                view = self._filter_views.get(path, obj)
+            # Window > filter > sort, matching preview()/read_cell() so the
+            # hi-res view tracks the visible grid (rows and order).
+            view = self._ordered_object(path, obj)
             n = len(view)
             start, stop = self._clamp_range(row_start, row_stop, n)
             stride = self._series_stride(stop - start, max_points)
@@ -621,12 +623,9 @@ class StoreBrowser:
         if kind != "ctable":
             raise ValueError("Scatter requires a CTable source")
 
-        # Honor a locked row window first, then any row filter, matching
-        # read_series() so the scatter tracks exactly the visible rows.
-        if path in self._window_views:
-            view = self._window_views[path]
-        else:
-            view = self._filter_views.get(path, obj)
+        # Window > filter > sort, matching read_series() so the scatter tracks
+        # exactly the visible rows (and order).
+        view = self._ordered_object(path, obj)
         n = len(view)
         start, stop = self._clamp_range(row_start, row_stop, n)
         width = stop - start
@@ -660,12 +659,9 @@ class StoreBrowser:
         path = self.normalize_path(path)
         obj = self._get_object(path)
         if object_kind(obj) == "ctable":
-            # Same precedence as preview(): a locked row window wins over a
-            # filter view, so the visible row index resolves the same cell.
-            if path in self._window_views:
-                obj = self._window_views[path]
-            else:
-                obj = self._filter_views.get(path, obj)
+            # Same precedence as preview() (window > filter > sort) so the
+            # visible row index resolves the same cell.
+            obj = self._ordered_object(path, obj)
         values = obj[column][row : row + 1]
         if len(values) == 0:
             raise IndexError(f"row {row} is out of range")
@@ -713,14 +709,54 @@ class StoreBrowser:
         env["x"] = np.asarray(env["x"]) + start
         return {**env, **base, "method": "reduce"}
 
+    def _sorted_column_envelope(
+        self, col: Any, start: int, stop: int, n: int, max_points: int
+    ) -> dict[str, np.ndarray]:
+        """Exact min/max envelope of rows ``[start, stop)`` of a column read
+        through its own sort view, with ``x`` in absolute row coordinates.
+
+        When the plotted column *is* the column the view is sorted by, the values
+        are monotonic over any contiguous range (NaNs land in a contiguous block
+        at the very end), so each bucket's min/max are just its two endpoints —
+        no need to gather every value.  We read only the ~2*nbuckets boundary
+        values plus, for the lone finite/NaN transition bucket, that one bucket
+        in full.  Bit-identical to the full-read reduce path, but ~50x cheaper.
+
+        ponytail: relies on the sort view being monotonic; only call it when the
+        plotted column equals the sort column (see :meth:`plot_series`).
+        """
+        rng = stop - start
+        group, nbuckets = _bucket_geometry(rng, max_points)
+        if nbuckets == 0:
+            empty = np.empty(0)
+            return {"x": empty, "ymin": empty, "ymax": empty}
+        offs = np.arange(nbuckets) * group  # bucket starts, relative to *start*
+        ends = start + np.minimum(offs + group - 1, rng - 1)
+        vstart = np.asarray(col[start:stop:group], dtype=float)[:nbuckets]
+        vend = np.asarray(col[ends], dtype=float)
+        ymin = np.fmin(vstart, vend)
+        ymax = np.fmax(vstart, vend)
+        # A bucket straddling the finite/NaN boundary has one NaN endpoint; its
+        # interior extreme is hidden, so read that one bucket exactly.
+        for i in np.flatnonzero(np.isnan(vstart) != np.isnan(vend)):
+            s = start + int(offs[i])
+            seg = np.asarray(col[s : min(s + group, stop)], dtype=float)
+            ymin[i] = np.nanmin(seg)
+            ymax[i] = np.nanmax(seg)
+        x = start + np.minimum(offs, max(0, rng - 1))
+        return {"x": x, "ymin": ymin, "ymax": ymax}
+
     def _column_summary_envelope(
         self, table: Any, column: str | int | None, n: int, max_points: int
     ) -> dict[str, np.ndarray] | None:
-        """Build a min/max envelope from a column's SUMMARY index, or None.
+        """Build a min/max envelope from a column's index summaries, or None.
 
         Reads precomputed per-block ``(min, max)`` from the index — no data
-        decompression.  Returns None when there is no usable summary (non-string
-        column, no index, non-numeric, or unsupported level).
+        decompression.  Every index kind (SUMMARY, FULL, PARTIAL, BUCKET, OPSI)
+        persists the same block-level ``(min, max, flags)`` sidecars in its
+        ``levels`` descriptor, so any indexed numeric column plots instantly
+        without a dedicated summary index.  Returns None when there is no usable
+        summary (non-string column, no index, non-numeric, or no block level).
         """
         if not isinstance(column, str):
             return None
@@ -728,20 +764,26 @@ class StoreBrowser:
             idx = table.index(column)
         except Exception:
             return None
-        if getattr(idx, "kind", None) != "summary":
-            return None
         try:
             desc = idx.descriptor
             levels = desc.get("levels") or {}
+            # Prefer the finest whole-column level available (block), else any.
             level = "block" if "block" in levels else next(iter(levels), None)
             if level is None or np.dtype(desc["dtype"]).kind not in "iuf":
                 return None
-            from blosc2.indexing import FLAG_ALL_NAN, _open_level_summary_handle
+            path = levels[level].get("path")
+            if path is None:
+                return None  # in-memory sidecar: nothing to fast-read
+            from blosc2.indexing import _INDEX_MMAP_MODE, FLAG_ALL_NAN, _open_sidecar_file
 
-            handle = _open_level_summary_handle(idx._target_array(), desc, level)
+            # Drop the handle after reading: the cached _open_level_summary_handle
+            # would hold a file descriptor open for the whole session (one per
+            # plotted column), exhausting the FD limit on large test runs.
+            handle = _open_sidecar_file(path, _INDEX_MMAP_MODE)
             bmin = np.asarray(handle["min"][:])
             bmax = np.asarray(handle["max"][:])
             flags = np.asarray(handle["flags"][:])
+            del handle
         except Exception:
             return None
         if bmin.shape[0] == 0:
@@ -779,6 +821,7 @@ class StoreBrowser:
             self._filters.pop(path, None)
             self._filter_views.pop(path, None)
             return len(self._get_object(path))
+        self.clear_sort(path)  # filter and sort are mutually exclusive
         view = self._get_object(path).where(expr)
         self._filters[path] = expr
         self._filter_views[path] = view
@@ -788,6 +831,43 @@ class StoreBrowser:
         """Return the active filter expression for *path*, if any."""
         return self._filters.get(self.normalize_path(path))
 
+    def full_index_columns(self, path: str) -> list[str]:
+        """Names of CTable columns at *path* that carry a FULL index (sortable)."""
+        obj = self._get_object(path)
+        return [ix.col_name for ix in getattr(obj, "indexes", []) if getattr(ix, "kind", None) == "full"]
+
+    def set_sort(self, path: str, column: str, reverse: bool) -> None:
+        """Order the CTable at *path* by *column* using its FULL index (zero-copy view).
+
+        The view streams from the sorted index, so the full table is never
+        materialised.  Sorting replaces any active row filter/window for *path*.
+        """
+        path = self.normalize_path(path)
+        self._window_views.pop(path, None)
+        self._filters.pop(path, None)
+        self._filter_views.pop(path, None)
+        view = self._get_object(path).sort_by(column, ascending=not reverse, view=True)
+        self._sorts[path] = (column, reverse)
+        self._sort_views[path] = view
+
+    def clear_sort(self, path: str) -> None:
+        """Drop any sort order from *path*, restoring the original row order."""
+        path = self.normalize_path(path)
+        self._sorts.pop(path, None)
+        self._sort_views.pop(path, None)
+
+    def get_sort(self, path: str) -> tuple[str, bool] | None:
+        """Return the active ``(column, reverse)`` sort for *path*, if any."""
+        return self._sorts.get(self.normalize_path(path))
+
+    def _ordered_object(self, path: str, obj: Any) -> Any:
+        """CTable read precedence for *path*: window > filter > sort > base *obj*."""
+        if path in self._window_views:
+            return self._window_views[path]
+        if path in self._filter_views:
+            return self._filter_views[path]
+        return self._sort_views.get(path, obj)
+
     def set_row_window(self, path: str, start: int, stop: int) -> int:
         """Lock the CTable at *path* to live rows ``[start:stop]``; return its length.
 
@@ -796,7 +876,10 @@ class StoreBrowser:
         then cannot leave the range because the view reports only its own rows.
         """
         path = self.normalize_path(path)
-        base = self._filter_views.get(path, self._get_object(path))
+        if path in self._filter_views:
+            base = self._filter_views[path]
+        else:
+            base = self._sort_views.get(path, self._get_object(path))
         view = base.slice(start, stop, copy=False)
         self._window_views[path] = view
         return len(view)
