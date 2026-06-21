@@ -2314,6 +2314,91 @@ class Column:
             return NotImplemented
         return NotImplemented
 
+    def _summary_minmax_source(self):
+        """Return ``(sidecar_path, dtype, nullable)`` for a summary-readable
+        ``min``/``max``, or ``None`` when the index shortcut is not provably
+        correct.
+
+        Excluded: a view (its summary describes the base table); a column kind
+        without numeric/string block extrema; a leaky null sentinel (only a
+        non-nullable column, or a NaN-sentinel float — whose NaNs the summary
+        drops — match the nulls-skipped contract of ``min()``); and a stale,
+        absent, or in-memory-only index.  Deletions/appends are covered by the
+        stale flag (every mutation marks the index stale; a rebuild re-summarises
+        only the live rows, and capacity padding never enters the summaries).
+        """
+        table = self._table
+        if table.base is not None:
+            return None
+        if (
+            self.is_computed
+            or self.is_ndarray
+            or self.is_list
+            or self.is_varlen_scalar
+            or self.is_dictionary
+        ):
+            return None
+        dtype = self.dtype
+        if dtype is None or dtype.kind not in "biufUS":
+            return None
+        col = table._schema.columns_by_name.get(self._col_name)
+        spec = col.spec if col is not None else None
+        nullable = getattr(spec, "nullable", False)
+        null_value = getattr(spec, "null_value", None)
+        is_nan_float = dtype.kind == "f" and isinstance(null_value, float) and np.isnan(null_value)
+        if nullable and not is_nan_float:
+            return None  # non-NaN sentinel leaks into the block extrema
+        desc = table._root_table._get_index_catalog().get(self._col_name)
+        if not desc or desc.get("stale", False):
+            return None
+        levels = desc.get("levels") or {}
+        level = "block" if "block" in levels else next(iter(levels), None)
+        if level is None:
+            return None
+        path = levels[level].get("path")
+        if path is None:
+            return None  # in-memory sidecar: the scan is already fast
+        return path, dtype, nullable
+
+    def _index_summary_minmax(self, op: str):
+        """Exact ``min``/``max`` from the column index's block summaries, or
+        ``NotImplemented`` when that shortcut is not applicable (see
+        :meth:`_summary_minmax_source`).
+
+        Every index kind (SUMMARY/FULL/PARTIAL/BUCKET/OPSI) persists per-block
+        ``(min, max, flags)``, so reducing those is decompression-free (~240x
+        faster than scanning tens of millions of rows).
+        """
+        source = self._summary_minmax_source()
+        if source is None:
+            return NotImplemented
+        path, dtype, nullable = source
+        try:
+            from blosc2.indexing import _INDEX_MMAP_MODE, FLAG_ALL_NAN, FLAG_HAS_NAN, _open_sidecar_file
+
+            # Read the tiny (min, max, flags) arrays and drop the handle: unlike
+            # the cached _open_level_summary_handle, this releases the file
+            # descriptor immediately (min()/max() must not leak one per table).
+            handle = _open_sidecar_file(path, _INDEX_MMAP_MODE)
+            flags = np.asarray(handle["flags"][:])
+            vals = np.asarray(handle[op][:])
+            del handle
+        except Exception:
+            return NotImplemented
+        if vals.shape[0] == 0:
+            return NotImplemented
+        # A non-nullable float with NaN *data* makes numpy min/max return NaN,
+        # but the summary dropped those NaNs — they would disagree, so bail.
+        if dtype.kind == "f" and not nullable and bool((flags & (FLAG_HAS_NAN | FLAG_ALL_NAN)).any()):
+            return NotImplemented
+        valid = (flags & FLAG_ALL_NAN) == 0
+        if not valid.any():
+            return NotImplemented  # whole column null → let the scan raise
+        vals = vals[valid]
+        if dtype.kind in "US":
+            return min(vals) if op == "min" else max(vals)
+        return vals.min() if op == "min" else vals.max()
+
     def min(self, axis=None, *, where=None):
         """Minimum live, non-null value.
 
@@ -2330,6 +2415,12 @@ class Column:
         self._require_kind("biufUS", "min")
         where = self._normalize_sum_where(where)
         if where is None:
+            # Try the index-summary shortcut first: it returns NotImplemented for
+            # an empty/all-null column, so the emptiness check (which counts live
+            # rows — expensive on a nullable column) only runs on the fallback.
+            fast_idx = self._index_summary_minmax("min")
+            if fast_idx is not NotImplemented:
+                return fast_idx
             self._require_nonempty("min")
         fast = self._lazy_aggregate_fastpath("min", where=where)
         if fast is not NotImplemented:
@@ -2364,6 +2455,10 @@ class Column:
         self._require_kind("biufUS", "max")
         where = self._normalize_sum_where(where)
         if where is None:
+            # See min(): shortcut before the live-row count.
+            fast_idx = self._index_summary_minmax("max")
+            if fast_idx is not NotImplemented:
+                return fast_idx
             self._require_nonempty("max")
         fast = self._lazy_aggregate_fastpath("max", where=where)
         if fast is not NotImplemented:

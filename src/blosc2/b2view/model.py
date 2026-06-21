@@ -725,12 +725,19 @@ class StoreBrowser:
             level = "block" if "block" in levels else next(iter(levels), None)
             if level is None or np.dtype(desc["dtype"]).kind not in "iuf":
                 return None
-            from blosc2.indexing import FLAG_ALL_NAN, _open_level_summary_handle
+            path = levels[level].get("path")
+            if path is None:
+                return None  # in-memory sidecar: nothing to fast-read
+            from blosc2.indexing import _INDEX_MMAP_MODE, FLAG_ALL_NAN, _open_sidecar_file
 
-            handle = _open_level_summary_handle(idx._target_array(), desc, level)
+            # Drop the handle after reading: the cached _open_level_summary_handle
+            # would hold a file descriptor open for the whole session (one per
+            # plotted column), exhausting the FD limit on large test runs.
+            handle = _open_sidecar_file(path, _INDEX_MMAP_MODE)
             bmin = np.asarray(handle["min"][:])
             bmax = np.asarray(handle["max"][:])
             flags = np.asarray(handle["flags"][:])
+            del handle
         except Exception:
             return None
         if bmin.shape[0] == 0:
