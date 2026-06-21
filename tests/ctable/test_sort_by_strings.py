@@ -174,6 +174,7 @@ _XPROC_SCRIPT = textwrap.dedent(
 )
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="emscripten does not support subprocesses")
 def test_dict_rank_hash_stable_across_processes(tmp_path):
     """The persisted dict-rank index must engage in a *fresh* process with a
     different PYTHONHASHSEED — i.e. the staleness hash is not hash()-salted."""
