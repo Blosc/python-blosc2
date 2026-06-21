@@ -1952,7 +1952,7 @@ class B2ViewApp(App):
                 with B2ViewPanel(id="data-pane") as data_pane:
                     data_pane.border_title = "data"
                     data_pane.border_subtitle = (
-                        "?(help) | d(im mode) | filter: f(rows) /(cols) | S(ort) | "
+                        "?(help) | d(im mode) | filter: f(rows) /(cols) | S(ort) | G(roup) | "
                         "rows: t/b/g(oto) | cols: s/e/c(goto) | p(lot)"
                     )
                     yield Static("", id="data-header")
