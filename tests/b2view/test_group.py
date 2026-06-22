@@ -144,6 +144,18 @@ def test_group_sort_cleared_by_regroup_and_clear(group_store):
         assert browser.get_group_sort("/ctable") is None
 
 
+def test_group_result_is_cached(group_store):
+    path, _ = group_store
+    with StoreBrowser(path) as browser:
+        browser.set_group("/ctable", "region", "mean", "amount")
+        first = browser._group_views["/ctable"]
+        browser.clear_group("/ctable")  # cache must survive ungrouping
+        browser.set_group("/ctable", "region", "mean", "amount")
+        assert browser._group_views["/ctable"] is first  # reused, not recomputed
+        browser.set_group("/ctable", "region", "max", "amount")  # different config
+        assert browser._group_views["/ctable"] is not first
+
+
 def test_group_sort_noop_when_not_grouped(group_store):
     path, _ = group_store
     with StoreBrowser(path) as browser:
@@ -239,3 +251,77 @@ async def test_group_key_applies_and_escape_clears(group_store):
         await pilot.press("escape")  # ungroup
         await _wait_table(pilot)
         assert pilot.app.browser.get_group("/ctable") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.tui
+async def test_argmin_cell_jumps_to_base_row(group_store):
+    path, _ = group_store
+    app = B2ViewApp(path)
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await pilot.press("down", "enter")  # select + show the /ctable node
+        await _wait_table(pilot)
+        pilot.app.query_one("#data-table", DataTable).focus()
+        await pilot.pause()
+
+        # Group region -> argmin(amount).  Ops: count rows, count, sum, mean,
+        # min, max, argmin(6), argmax.  Values: region(0), amount(1).
+        await pilot.press("G")
+        await pilot.pause()
+        await pilot.press("down", "enter")  # key: region -> operation list
+        await pilot.press("down", "down", "down", "down", "down", "down", "enter")  # argmin -> value
+        await pilot.press("down", "enter")  # value: amount -> apply
+        await _wait_table(pilot)
+        assert pilot.app.browser.get_group("/ctable") == ("region", "argmin", "amount")
+
+        # The cursor parks on the amount_argmin column; its cell is a row position.
+        table = pilot.app.query_one("#data-table", DataTable)
+        agg_col = pilot.app.table_page["columns"][table.cursor_column]
+        assert agg_col == "amount_argmin"
+        pos = int(pilot.app.table_page["data"]["amount_argmin"][table.cursor_row])
+
+        await pilot.press("enter")  # drill down to that base row
+        await _wait_table(pilot)
+        assert pilot.app.browser.get_group("/ctable") is None  # ungrouped
+        table = pilot.app.query_one("#data-table", DataTable)
+        landed_row = pilot.app.table_page["start"] + table.cursor_row
+        landed_col = pilot.app.table_page["columns"][table.cursor_column]
+        assert landed_row == pos
+        assert landed_col == "amount"
+
+
+@pytest.mark.asyncio
+@pytest.mark.tui
+async def test_group_config_cached_and_reused(group_store):
+    path, _ = group_store
+    app = B2ViewApp(path)
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await pilot.press("down", "enter")  # select + show the /ctable node
+        await _wait_table(pilot)
+        pilot.app.query_one("#data-table", DataTable).focus()
+        await pilot.pause()
+
+        # Group region -> mean(amount).
+        await pilot.press("G")
+        await pilot.pause()
+        await pilot.press("down", "enter")  # key: region -> operation list
+        await pilot.press("down", "down", "down", "enter")  # mean -> value list
+        await pilot.press("down", "enter")  # value: amount -> apply
+        await _wait_table(pilot)
+        assert pilot.app._last_group == ("region", "mean", "amount")
+
+        # Ungroup, then reselect the node (mimics navigating away and back).
+        await pilot.press("escape")
+        await _wait_table(pilot)
+        assert pilot.app.browser.get_group("/ctable") is None
+        pilot.app.update_panels("/ctable")
+        await _wait_table(pilot)
+        assert pilot.app._last_group == ("region", "mean", "amount")  # cache survives
+
+        # 'G' now pre-fills the modal from the cached config.
+        pilot.app.query_one("#data-table", DataTable).focus()
+        await pilot.pause()
+        await pilot.press("G")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, GroupByScreen)
+        assert pilot.app.screen._current == ("region", "mean", "amount")

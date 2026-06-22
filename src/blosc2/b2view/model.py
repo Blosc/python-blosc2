@@ -271,6 +271,9 @@ class StoreBrowser:
         # / sorted view of the small result).  Lives only while grouped.
         self._group_sorts: dict[str, tuple[str, bool]] = {}
         self._group_sort_views: dict[str, Any] = {}
+        # Memoized grouped results, keyed by (path, key, op, value_col).  Survives
+        # ungrouping so re-running a prior group-by is instant (store is read-only).
+        self._group_result_cache: dict[tuple[str, str, str, str | None], Any] = {}
         # Per-path column filters (path -> substring pattern / matched names)
         self._column_filters: dict[str, str] = {}
         self._column_selections: dict[str, list[str]] = {}
@@ -943,8 +946,17 @@ class StoreBrowser:
         sort, and column selection for *path*.  Errors from ``group_by`` propagate.
         """
         path = self.normalize_path(path)
-        gb = self._get_object(path).group_by(key)
-        result = gb.size() if op == "size" else gb.agg({value_col: op})
+        # Memoize the materialized result: the store is read-only, so a given
+        # (path, key, op, value_col) always aggregates to the same tiny CTable.
+        # ponytail: unbounded dict, but results are one-row-per-group and a
+        # session tries only a handful of configs — add an LRU cap if that ever
+        # stops being true.
+        cache_key = (path, key, op, value_col)
+        result = self._group_result_cache.get(cache_key)
+        if result is None:
+            gb = self._get_object(path).group_by(key)
+            result = gb.size() if op == "size" else gb.agg({value_col: op})
+            self._group_result_cache[cache_key] = result
         self._filters.pop(path, None)
         self._filter_views.pop(path, None)
         self._window_views.pop(path, None)

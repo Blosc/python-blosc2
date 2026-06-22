@@ -161,6 +161,8 @@ class BufferedDataTable(DataTable):
         if getattr(app, "_dim_mode", False):
             getattr(app, "action_dim_toggle_nav", lambda: None)()
             return
+        if getattr(app, "_drilldown_arg_cell", lambda: False)():
+            return
         if getattr(app, "_inspect_cursor_cell", lambda: False)():
             return
         super().action_select_cursor()
@@ -271,7 +273,7 @@ class HelpScreen(ModalScreen[None]):
                 ("c", "go to column (searchable name list; CTable, else index)"),
                 ("/", "pick which columns to show (searchable multi-select; CTable)"),
                 ("p", "plot a whole-column overview (needs textual-plotext)"),
-                ("enter", "decode a skipped cell (list/struct/object column)"),
+                ("enter", "decode a skipped cell; or jump to an argmin/argmax row (grouped)"),
             ],
         ),
         (
@@ -1976,6 +1978,9 @@ class B2ViewApp(App):
         self._apply_focus_on_next_update = False
         # Absolute (start, stop) of a locked row window from the plot's 'v' key.
         self.row_window: tuple[int, int] | None = None
+        # Last applied group-by config (key, op, value_col), reused to pre-fill
+        # the 'G' modal on any table — survives navigating to other nodes.
+        self._last_group: tuple[str, str, str | None] | None = None
 
     def compose(self) -> ComposeResult:
         yield B2ViewHeader()
@@ -2763,6 +2768,8 @@ class B2ViewApp(App):
             if group:
                 if gsort:
                     chips.append("<R>everse")
+                if group[1] in ("argmin", "argmax"):
+                    chips.append("<Enter>go to row")
                 chips.append("<Esc>ungroup" if not gsort else "<Esc>unsort")
             else:
                 if sort:
@@ -2907,6 +2914,38 @@ class B2ViewApp(App):
             self.notify(f"Could not decode cell: {exc}", severity="error")
             return True  # we owned the key; surface the failure
         self.push_screen(CellDetailScreen(row=row, name=name, label=skipped[name], value=value))
+        return True
+
+    def _drilldown_arg_cell(self) -> bool:
+        """On an argmin/argmax cell of a grouped view, jump to that base-table row.
+
+        The cell holds the logical row position of the group's extreme value, so
+        we ungroup and land the cursor on that row, on the column the extreme was
+        computed over.  Returns True when the key was consumed.
+        """
+        if not self._in_data_grid() or self.table_page is None or self.browser is None:
+            return False
+        group = self.browser.get_group(self.selected_path)
+        if group is None:
+            return False
+        _key, op, value_col = group
+        if op not in ("argmin", "argmax"):
+            return False
+        agg_col = self.browser.group_agg_column(self.selected_path)
+        columns = self.table_page["columns"]
+        table = self.query_one("#data-table", DataTable)
+        cursor_col = table.cursor_column
+        if not (0 <= cursor_col < len(columns)) or columns[cursor_col] != agg_col:
+            return False
+        cells = self.table_page["data"][agg_col]
+        if not (0 <= table.cursor_row < len(cells)):
+            return False
+        pos = int(cells[table.cursor_row])
+        if pos < 0:
+            self.notify(f"No {op} row for this group (no non-null values)", severity="warning")
+            return True
+        self._clear_group()  # back to the base table...
+        self._go_to_row_col(pos, value_col)  # ...landing on the extreme row/column
         return True
 
     def action_plot_column(self) -> None:
@@ -3155,10 +3194,12 @@ class B2ViewApp(App):
         if not keys:
             self.notify("No dictionary/integer columns to group by", severity="warning")
             return
+        # Pre-fill with this table's active group, else the last one used
+        # anywhere; GroupByScreen ignores any field whose column is absent here.
         screen = GroupByScreen(
             keys=keys,
             values=self.browser.group_value_columns(self.selected_path),
-            current=self.browser.get_group(self.selected_path),
+            current=self.browser.get_group(self.selected_path) or self._last_group,
         )
         self.push_screen(screen, self._apply_group)
 
@@ -3171,6 +3212,7 @@ class B2ViewApp(App):
         except Exception as exc:
             self.notify(f"Cannot group: {exc}", severity="error")
             return
+        self._last_group = (key, op, value_col)  # remember for the next 'G' anywhere
         self.row_window = None  # set_group drops any window/filter; keep chips in sync
         self.table_buffer = None
         self.grid_col_start = 0
@@ -3376,6 +3418,21 @@ class B2ViewApp(App):
         start = (row // page_size) * page_size
         data = self._load_table_page(self.selected_path, start)
         self._update_data_table(data, cursor_row=row - data["start"])
+        self._update_data_header(data)
+        self.query_one("#data-table", DataTable).focus()
+
+    def _go_to_row_col(self, row: int, column: str) -> None:
+        """Jump to *row* with the cursor on *column*, scrolling it into view."""
+        if self.table_page is None:
+            return
+        names = self.browser.column_names(self.selected_path) or []
+        col_idx = names.index(column) if column in names else 0
+        self.grid_col_start = min(col_idx, self._fit_col_start_backward(self.table_page["ncols"]))
+        page_size = self._table_page_size()
+        start = (row // page_size) * page_size
+        data = self._load_table_page(self.selected_path, start)
+        cursor_col = max(0, col_idx - data.get("col_start", 0))
+        self._update_data_table(data, cursor_row=row - data["start"], cursor_col=cursor_col)
         self._update_data_header(data)
         self.query_one("#data-table", DataTable).focus()
 
