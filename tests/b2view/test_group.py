@@ -201,14 +201,27 @@ async def test_group_key_applies_and_escape_clears(group_store):
         await pilot.press("G")
         await pilot.pause()
         assert isinstance(pilot.app.screen, GroupByScreen)
-        await pilot.press("enter")  # key list -> aggregation list
-        await pilot.press("enter")  # apply first aggregation (count rows / size)
+        await pilot.press("enter")  # key list -> operation list
+        await pilot.press("enter")  # "count rows" (first op) applies, no value col
         await _wait_table(pilot)
 
         assert pilot.app.browser.get_group("/ctable") is not None
         table = pilot.app.query_one("#data-table", DataTable)
         cols = [str(c.label) for c in table.columns.values()]
         assert any("size" in c for c in cols)
+
+        # Re-group via the operation + value-column path: pick a numeric op.
+        await pilot.press("G")
+        await pilot.pause()
+        await pilot.press("enter")  # key list -> operation list
+        await pilot.press("down", "down", "enter")  # -> "sum" -> value list
+        await pilot.press("enter")  # apply sum(<first value column>)
+        await _wait_table(pilot)
+        key, op, value_col = pilot.app.browser.get_group("/ctable")
+        assert op == "sum"
+        assert value_col is not None
+        cols = [str(c.label) for c in pilot.app.query_one("#data-table", DataTable).columns.values()]
+        assert any(f"{value_col}_sum" == c for c in cols)
 
         # Sort the grouped result by one of its columns via 'S'.
         await pilot.press("S")

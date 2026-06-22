@@ -788,10 +788,10 @@ class SortByScreen(ModalScreen["tuple[str, bool] | None"]):
 class GroupByScreen(ModalScreen["tuple[str, str, str | None] | None"]):
     """Group a CTable by a key column and one aggregation.
 
-    Two lists: pick the key (↑/↓), Tab to the aggregation list, Enter applies.
-    Each aggregation entry encodes ``(op, value_col)`` — ``count rows`` is the
-    keyless ``size`` aggregation; the rest are ``op(value_col)``.  Dismisses with
-    ``(key, op, value_col|None)`` or None on cancel.
+    Three lists, Enter advances then applies: pick the key, the operation, and —
+    for every operation but ``count rows`` — the value column.  ``count rows``
+    (the keyless ``size`` aggregation) applies straight from the operation list.
+    Dismisses with ``(key, op, value_col|None)`` or None on cancel.
     """
 
     CSS = """
@@ -799,7 +799,7 @@ class GroupByScreen(ModalScreen["tuple[str, str, str | None] | None"]):
         align: center middle;
     }
     #groupby-dialog {
-        width: 64;
+        width: 80;
         height: auto;
         max-height: 80%;
         border: thick $accent;
@@ -813,15 +813,39 @@ class GroupByScreen(ModalScreen["tuple[str, str, str | None] | None"]):
     .groupby-label {
         color: $text-muted;
     }
-    #groupby-key, #groupby-agg {
+    #groupby-cols {
+        height: auto;
+    }
+    .groupby-col {
+        width: 1fr;
+        height: auto;
+    }
+    #groupby-col-left {
+        margin-right: 2;
+    }
+    #groupby-key, #groupby-op {
         height: auto;
         max-height: 10;
+    }
+    #groupby-value {
+        height: auto;
+        max-height: 20;
     }
     """
 
     BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
 
-    _OPS: ClassVar = ["sum", "mean", "min", "max"]
+    # (label, library op); "count rows" is size (no value column needed).
+    _ALL_OPS: ClassVar = [
+        ("count rows", "size"),
+        ("count (non-null)", "count"),
+        ("sum", "sum"),
+        ("mean", "mean"),
+        ("min", "min"),
+        ("max", "max"),
+        ("argmin", "argmin"),
+        ("argmax", "argmax"),
+    ]
 
     def __init__(
         self,
@@ -832,46 +856,66 @@ class GroupByScreen(ModalScreen["tuple[str, str, str | None] | None"]):
     ):
         super().__init__()
         self.keys = keys
-        # (op, value_col) per aggregation row; "count rows" is size (no column).
-        self.aggs: list[tuple[str, str | None]] = [("size", None)]
-        for v in values:
-            self.aggs.extend((op, v) for op in self._OPS)
+        self.values = values
+        # Every op but "count rows" needs a value column; offer only it if none.
+        self.ops = self._ALL_OPS if values else self._ALL_OPS[:1]
         self._current = current
-
-    def _agg_label(self, op: str, value_col: str | None) -> str:
-        return "count rows" if op == "size" else f"{op}({value_col})"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="groupby-dialog"):
-            yield Static("Group by (Tab to aggregation, Enter applies)", id="groupby-title")
-            yield Static("Key column", classes="groupby-label")
-            yield OptionList(
-                *(Option(name, id=str(i)) for i, name in enumerate(self.keys)), id="groupby-key"
-            )
-            yield Static("Aggregation", classes="groupby-label")
-            yield OptionList(
-                *(Option(self._agg_label(op, v), id=str(i)) for i, (op, v) in enumerate(self.aggs)),
-                id="groupby-agg",
-            )
+            yield Static("Group by (Enter advances / applies)", id="groupby-title")
+            with Horizontal(id="groupby-cols"):
+                with Vertical(id="groupby-col-left", classes="groupby-col"):
+                    yield Static("Key column", classes="groupby-label")
+                    yield OptionList(
+                        *(Option(name, id=str(i)) for i, name in enumerate(self.keys)),
+                        id="groupby-key",
+                    )
+                    yield Static("Operation", classes="groupby-label")
+                    yield OptionList(
+                        *(Option(label, id=str(i)) for i, (label, _op) in enumerate(self.ops)),
+                        id="groupby-op",
+                    )
+                with Vertical(classes="groupby-col"):
+                    yield Static("Value column", classes="groupby-label")
+                    yield OptionList(
+                        *(Option(name, id=str(i)) for i, name in enumerate(self.values)),
+                        id="groupby-value",
+                    )
 
     def on_mount(self) -> None:
         key_list = self.query_one("#groupby-key", OptionList)
-        agg_list = self.query_one("#groupby-agg", OptionList)
+        op_list = self.query_one("#groupby-op", OptionList)
+        value_list = self.query_one("#groupby-value", OptionList)
         cur_key, cur_op, cur_val = self._current or (None, None, None)
         key_list.highlighted = self.keys.index(cur_key) if cur_key in self.keys else 0
-        agg_list.highlighted = self.aggs.index((cur_op, cur_val)) if (cur_op, cur_val) in self.aggs else 0
+        op_labels = [op for _label, op in self.ops]
+        op_idx = op_labels.index(cur_op) if cur_op in op_labels else 0
+        op_list.highlighted = op_idx
+        value_list.highlighted = self.values.index(cur_val) if cur_val in self.values else 0
         key_list.focus()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        # Enter on the key list advances to the aggregation list; Enter there
-        # applies, reading the key list's current highlight.
-        if event.option_list.id == "groupby-key":
-            self.query_one("#groupby-agg", OptionList).focus()
+        # Enter advances key -> operation -> value; "count rows" applies straight
+        # from the operation list (no value column needed).
+        list_id = event.option_list.id
+        if list_id == "groupby-key":
+            self.query_one("#groupby-op", OptionList).focus()
             return
+        if list_id == "groupby-op":
+            op = self.ops[int(event.option.id)][1]
+            if op == "size":
+                self._apply(op, None)
+            else:
+                self.query_one("#groupby-value", OptionList).focus()
+            return
+        op = self.ops[self.query_one("#groupby-op", OptionList).highlighted or 0][1]
+        self._apply(op, self.values[int(event.option.id)])
+
+    def _apply(self, op: str, value_col: str | None) -> None:
         key_idx = self.query_one("#groupby-key", OptionList).highlighted
         if key_idx is None:
             return
-        op, value_col = self.aggs[int(event.option.id)]
         self.dismiss((self.keys[key_idx], op, value_col))
 
     def action_cancel(self) -> None:
