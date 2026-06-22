@@ -197,6 +197,23 @@ class TestCTableBehavior:
         # Absent literal -> no match (no crash).
         assert ct.where('vendor == "Waymo"').nrows == 0
 
+    def test_string_where_substring_in_dictionary_column(self):
+        # '"needle" in dictcol' is a substring filter over the dictionary values.
+        @dataclass
+        class Row:
+            company: str = blosc2.field(blosc2.dictionary())
+            amount: float = blosc2.field(blosc2.float64())
+
+        ct = CTable(Row)
+        ct.extend([("Acme Inc", 7.0), ("Santamaria Cabs", 15.0), ("Beta", 5.0), ("Acme LLC", 9.0)])
+
+        assert ct.where('"Acme" in company')["amount"][:].tolist() == [7.0, 9.0]
+        assert ct.where('"acme" in company').nrows == 0  # case-sensitive
+        assert ct.where('"zzz" in company').nrows == 0  # no match -> empty
+        # Combines with other predicates and operators.
+        assert ct.where('"Acme" in company and amount > 8')["amount"][:].tolist() == [9.0]
+        assert ct.where('"Acme" in company or "Beta" in company').nrows == 3
+
     def test_string_where_dictionary_literal_with_special_chars(self):
         # Literals with commas/spaces/dashes (e.g. chicago-taxi company names).
         @dataclass
