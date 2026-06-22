@@ -951,13 +951,21 @@ class GroupBarScreen(ModalScreen[None]):
     }
     """
 
-    BINDINGS: ClassVar = [("escape", "close", "Close"), ("q", "app.quit", "Quit b2view")]
+    _KEYS_HINT = "h hi-res · esc close"
+
+    BINDINGS: ClassVar = [
+        ("escape", "close", "Close"),
+        ("q", "app.quit", "Quit b2view"),
+        ("h", "hires", "High-res"),
+    ]
 
     def __init__(self, *, title_prefix: str, bars: dict):
         super().__init__()
         self.title_prefix = title_prefix
         self.labels = [str(label) for label in bars.get("labels", [])]
         self.values = list(bars.get("values", []))
+        self.key = bars.get("key", "")
+        self.agg = bars.get("agg", "")
         total = bars.get("total", len(self.labels))
         shown = len(self.labels)
         cap = f" · top {shown} of {total} groups" if shown < total else f" · {total} groups"
@@ -967,7 +975,7 @@ class GroupBarScreen(ModalScreen[None]):
         with Vertical(id="groupbar-dialog"):
             yield Static(markup_escape(self.plot_title), id="groupbar-title")
             yield PlotextPlot(id="groupbar-widget")
-            yield Static("esc close", id="groupbar-keys")
+            yield Static(self._KEYS_HINT, id="groupbar-keys")
 
     def on_mount(self) -> None:
         widget = self.query_one(PlotextPlot)
@@ -976,6 +984,27 @@ class GroupBarScreen(ModalScreen[None]):
         if self.labels:
             plt.bar(self.labels, self.values)
         widget.refresh()
+
+    def action_hires(self) -> None:
+        """h key — open a high-res matplotlib bar chart over the plotext bars."""
+        if TextualImage is None or not _matplotlib_available():
+            self.app.notify(
+                "High-res view needs the 'textual-image' and 'matplotlib' packages",
+                severity="warning",
+            )
+            return
+        if not self.labels:
+            self.app.notify("No groups to plot", severity="warning")
+            return
+        self.app.push_screen(
+            HiResPlotScreen(
+                mode="bar",
+                title=self.plot_title,
+                bar_data=(self.labels, self.values),
+                xlabel=self.key,
+                ylabel=self.agg,
+            )
+        )
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -1483,9 +1512,10 @@ class HiResPlotScreen(ModalScreen[None]):
         mode: str = "raw",
         xlabel: str = "row",
         ylabel: str | None = None,
-        # scatter mode:
+        # scatter / bar modes:
         title: str | None = None,
         scatter_xy: tuple | None = None,
+        bar_data: tuple | None = None,
         # column (envelope/raw) modes:
         title_prefix: str | None = None,
         n: int | None = None,
@@ -1500,6 +1530,7 @@ class HiResPlotScreen(ModalScreen[None]):
         self._ylabel = ylabel
         self._static_title = title
         self._scatter_xy = scatter_xy
+        self._bar_data = bar_data
         self._title_prefix = title_prefix
         self._n = n
         self._row_start = row_start
@@ -1514,10 +1545,12 @@ class HiResPlotScreen(ModalScreen[None]):
     def _keys_hint(self) -> str:
         if self._can_toggle:
             return "r raw/envelope · esc back to braille"
+        if self._mode == "bar":
+            return "esc · back to bar chart"
         return "esc · back to braille"
 
     def _current_title(self) -> str:
-        if self._mode == "scatter":
+        if self._mode in ("scatter", "bar"):
             return self._static_title or ""
         full = self._row_start == 0 and self._row_stop == self._n
         rng = "" if full else f" · rows {self._row_start}:{self._row_stop}"
@@ -1566,6 +1599,12 @@ class HiResPlotScreen(ModalScreen[None]):
         if self._mode == "scatter":
             x, y = self._scatter_xy
             ax.scatter(x, y, s=6, color="#1f77b4", alpha=0.6)
+        elif self._mode == "bar":
+            labels, values = self._bar_data
+            positions = range(len(labels))
+            ax.bar(positions, values, color="#1f77b4")
+            ax.set_xticks(list(positions))
+            ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
         elif self._mode == "envelope":
             env = self._envelope
             x, ymin, ymax = env["x"], env["ymin"], env["ymax"]

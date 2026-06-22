@@ -185,7 +185,15 @@ if blosc2.IS_WASM:
 
 from textual.widgets import DataTable  # noqa: E402
 
-from blosc2.b2view.app import B2ViewApp, GroupByScreen, SortByScreen  # noqa: E402
+from blosc2.b2view.app import (  # noqa: E402
+    B2ViewApp,
+    GroupBarScreen,
+    GroupByScreen,
+    HiResPlotScreen,
+    SortByScreen,
+    TextualImage,
+    _matplotlib_available,
+)
 
 TERM_SIZE = (120, 40)
 
@@ -325,3 +333,38 @@ async def test_group_config_cached_and_reused(group_store):
         await pilot.pause()
         assert isinstance(pilot.app.screen, GroupByScreen)
         assert pilot.app.screen._current == ("region", "mean", "amount")
+
+
+@pytest.mark.asyncio
+@pytest.mark.tui
+async def test_group_bar_chart_and_hires(group_store):
+    if TextualImage is None or not _matplotlib_available():
+        pytest.skip("hi-res bar view needs textual-image + matplotlib")
+    path, _ = group_store
+    app = B2ViewApp(path)
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await pilot.press("down", "enter")  # select + show the /ctable node
+        await _wait_table(pilot)
+        pilot.app.query_one("#data-table", DataTable).focus()
+        await pilot.pause()
+
+        # Group region -> mean(amount), then plot it as a bar chart.
+        await pilot.press("G")
+        await pilot.pause()
+        await pilot.press("down", "enter")  # key: region -> operation list
+        await pilot.press("down", "down", "down", "enter")  # mean -> value list
+        await pilot.press("down", "enter")  # value: amount -> apply
+        await _wait_table(pilot)
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, GroupBarScreen)
+
+        # 'h' opens the hi-res matplotlib bar chart; esc returns to the plotext bars.
+        await pilot.press("h")
+        await pilot.pause()
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, HiResPlotScreen)
+        assert pilot.app.screen._mode == "bar"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, GroupBarScreen)
