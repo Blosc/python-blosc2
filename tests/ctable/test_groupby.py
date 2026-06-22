@@ -96,6 +96,22 @@ def test_groupby_argmin_argmax_convenience_methods_and_view_positions():
     assert rows(argmin) == [("Berlin", -1), ("Paris", 1), ("Rome", 0)]
 
 
+def test_groupby_argmin_argmax_ties_keep_first_row():
+    # Two rows tie for the group's extreme; the earliest logical row wins, even
+    # when the tie straddles a chunk boundary (locks the vectorized path).
+    TieRow = make_dataclass(
+        "TieRow",
+        [("g", int, blosc2.field(blosc2.int32())), ("v", float, blosc2.field(blosc2.float64()))],
+    )
+    data = [(0, 5.0), (0, 9.0), (0, 9.0), (0, 5.0)]  # rows 0..3
+    t = CTable(TieRow, new_data=data)
+
+    out = t.group_by("g", sort=True, chunk_size=2).agg({"v": ["argmin", "argmax"]})
+
+    # min 5.0 first at row 0; max 9.0 first at row 1 (tie with row 2 ignored).
+    assert rows(out) == [(0, 0, 1)]
+
+
 def test_groupby_multi_key_size():
     t = CTable(SalesRow, new_data=DATA)
 
@@ -151,6 +167,18 @@ def test_groupby_dictionary_key_groups_by_decoded_value():
 
     assert out.col_names == ["city", "sales_sum"]
     assert rows(out) == [("Paris", 40), ("Rome", 20)]
+
+
+def test_groupby_dictionary_key_argmin_argmax_positions():
+    # Dictionary key drives the dense-position fast path; verify it returns the
+    # logical row positions of the extremes (chicago-taxi "company" shape).
+    t = CTable(DictRow, new_data=[("Paris", 10), ("Rome", 50), ("Paris", 30), ("Rome", 20)])
+
+    out = t.group_by("city", sort=True).agg({"sales": ["argmin", "argmax"]})
+
+    assert out.col_names == ["city", "sales_argmin", "sales_argmax"]
+    # Paris rows 0,2 (10,30) -> argmin row0, argmax row2; Rome rows 1,3 (50,20).
+    assert rows(out) == [("Paris", 0, 2), ("Rome", 3, 1)]
 
 
 def test_groupby_dictionary_key_beyond_default_code_capacity():
