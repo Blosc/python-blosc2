@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import contextvars
 import copy
@@ -11455,6 +11456,67 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 operands[name] = self._build_computed_lazy(cc)
         return operands
 
+    def _rewrite_dictionary_equalities(
+        self, expr: str, operands: dict[str, blosc2.NDArray | blosc2.LazyExpr]
+    ) -> tuple[str, dict[str, blosc2.NDArray | blosc2.LazyExpr]]:
+        """Rewrite ``dictcol == "literal"`` / ``!=`` into integer-code comparisons.
+
+        Dictionary columns are excluded from the plain operand namespace because
+        the expression engine would compare raw int32 codes against the string
+        literal (never matching).  Here each equality/inequality against a string
+        literal is resolved to that value's dictionary code, the literal is
+        replaced by the code, and the column's codes array is supplied as the
+        operand -- so the comparison becomes an ordinary numeric one that combines
+        with the rest of the expression (``and``/``or``, precedence) natively.  A
+        literal absent from the dictionary maps to a sentinel code no row carries,
+        so ``==`` matches nothing and ``!=`` matches everything.  Other uses of a
+        dictionary column are left untouched and still raise ``Unknown symbol``.
+        """
+        absent_code = int(np.iinfo(np.int32).min)  # a code no live row carries
+        rewritten = expr
+        new_operands = dict(operands)
+        for col in self._schema.columns:
+            if not self._is_dictionary_column(col) or not self._expression_references_name(expr, col.name):
+                continue
+            dc = self._cols[col.name]  # DictionaryColumn
+            # name (==|!=) "..."/'...'  (quoted literal may contain commas/spaces).
+            pattern = (
+                r"(?<![\w.])"
+                + re.escape(col.name)
+                + r"\s*(==|!=)\s*"
+                + r"""(\"(?:[^"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')"""
+            )
+
+            def repl(match: re.Match, _dc=dc, _name=col.name) -> str:
+                value = ast.literal_eval(match.group(2))
+                try:
+                    code = int(_dc.value_to_code(value))
+                except KeyError:
+                    code = absent_code
+                return f"{_name} {match.group(1)} {code}"
+
+            new_expr = re.sub(pattern, repl, rewritten)
+            if new_expr != rewritten:
+                # numexpr needs all operands chunked alike; the codes array uses a
+                # different chunkshape than the regular columns, so when mixed with
+                # one (e.g. ``dictcol == "x" and other > y``) re-chunk it to match.
+                codes = dc.codes
+                target = next(
+                    (
+                        v
+                        for v in operands.values()
+                        if isinstance(v, blosc2.NDArray)
+                        and v.shape == codes.shape
+                        and v.chunks != codes.chunks
+                    ),
+                    None,
+                )
+                if target is not None:
+                    codes = blosc2.asarray(codes[:], chunks=target.chunks, blocks=target.blocks)
+                new_operands[col.name] = codes
+                rewritten = new_expr
+        return rewritten, new_operands
+
     def _rewrite_nested_expression(
         self, expr: str, operands: dict[str, blosc2.NDArray | blosc2.LazyExpr]
     ) -> tuple[str, dict[str, blosc2.NDArray | blosc2.LazyExpr]]:
@@ -11601,6 +11663,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if isinstance(expr_result, str):
             self._guard_varlen_scalar_expression(expr_result)
             operands = self._where_expression_operands(expr_result)
+            expr_result, operands = self._rewrite_dictionary_equalities(expr_result, operands)
             expr_result, operands = self._rewrite_nested_expression(expr_result, operands)
             expr_result = blosc2.lazyexpr(expr_result, operands)
         if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:
