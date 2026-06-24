@@ -61,6 +61,30 @@ def _column_name(value: Any) -> str:
     return name
 
 
+_OP_ALIAS_CACHE: dict | None = None
+
+
+def _op_alias_map() -> dict:
+    """Map blosc2 reduction *function objects* to group-by op names, by identity.
+
+    Built lazily (and cached) to avoid importing the top-level package at module
+    load time.  Only the functions that have a matching group-by op are included;
+    matching is by object identity, so a user function merely named ``sum`` does
+    not collide with :func:`blosc2.sum`.
+    """
+    global _OP_ALIAS_CACHE
+    if _OP_ALIAS_CACHE is None:
+        import blosc2
+
+        mapping = {}
+        for op in ("sum", "mean", "min", "max", "argmin", "argmax"):
+            fn = getattr(blosc2, op, None)
+            if fn is not None:
+                mapping[fn] = op
+        _OP_ALIAS_CACHE = mapping
+    return _OP_ALIAS_CACHE
+
+
 class CTableGroupBy:
     """Deferred group-by operation returned by :meth:`CTable.group_by`.
 
@@ -174,46 +198,164 @@ class CTableGroupBy:
         """
         return self.agg({_column_name(column): "argmax"}, urlpath=urlpath)
 
-    def agg(self, aggregations: Mapping[str, str | Sequence[str]], *, urlpath: str | None = None):
+    def agg(
+        self,
+        aggregations: Mapping[str, str | Sequence[str]]
+        | Sequence[tuple[Any, str | Sequence[str]]]
+        | None = None,
+        *,
+        urlpath: str | None = None,
+        **named: tuple[str, str],
+    ):
         """Aggregate value columns per group.
+
+        Three ways to specify aggregations and name the output columns, which may
+        be combined:
+
+        * **Auto-named mapping** -- pass *aggregations* as a mapping from input
+          column name to an aggregation name (or list of names).  Each result
+          column is named ``"<column>_<op>"`` (e.g. ``price_sum``).  Compact and
+          collision-safe when a column is aggregated several ways.
+        * **Auto-named list of pairs** -- pass *aggregations* as a list of
+          ``(column, op-or-ops)`` pairs.  Same ``"<column>_<op>"`` naming, but
+          unlike the mapping form it accepts :class:`~blosc2.ctable.Column`
+          objects (e.g. ``t.price``), which cannot be dict keys.
+        * **Explicitly named** -- pass ``output_name=(column, op)`` keyword
+          arguments (pandas-style named aggregation), giving the result column
+          exactly the name you want.
 
         Parameters
         ----------
         aggregations:
-            Mapping from input column name to an aggregation name or list of
-            names.  Supported operations in Phase 1 are ``"count"``, ``"sum"``,
-            ``"mean"``, ``"min"``, ``"max"``, ``"argmin"``, ``"argmax"`` and
-            the special row-count spelling ``{"*": "size"``}.
+            Either a mapping ``{column: op-or-ops}`` or a list of
+            ``(column, op-or-ops)`` pairs.  Columns may be name strings or
+            :class:`~blosc2.ctable.Column` objects (list/named forms only).
+            Supported operations are ``"count"``, ``"sum"``, ``"mean"``,
+            ``"min"``, ``"max"``, ``"argmin"``, ``"argmax"`` and the special
+            row-count spelling ``"*": "size"``.  An op may also be given as the
+            corresponding blosc2 reduction *function* (``blosc2.sum``, ``mean``,
+            ``min``, ``max``, ``argmin``, ``argmax``), matched by identity; this
+            is a naming shorthand, not a UDF mechanism (custom functions are
+            rejected).  Result columns are named ``"<column>_<op>"``.
+        urlpath:
+            If given, write the result as a persistent CTable at that path.
+        **named:
+            Named aggregations as ``output_name=(column, op)`` pairs.  Use
+            ``("*", "size")`` for a row count.
+
+        Examples
+        --------
+        >>> g = t.group_by("city")  # doctest: +SKIP
+        >>> # Auto-named mapping: columns become sales_sum / sales_mean.
+        >>> g.agg({"sales": ["sum", "mean"]})  # doctest: +SKIP
+        >>> # Auto-named list of pairs: same names, but accepts Column objects
+        >>> # and blosc2 reduction functions as ops.
+        >>> g.agg([(t.sales, [blosc2.sum, "mean"])])  # doctest: +SKIP
+        >>> # Explicitly named: columns become revenue / avg_sale.
+        >>> g.agg(revenue=("sales", "sum"), avg_sale=("sales", "mean"))  # doctest: +SKIP
+        >>> # Forms combine, e.g. a list of pairs plus a named row count.
+        >>> g.agg([(t.sales, "sum")], n=("*", "size"))  # doctest: +SKIP
         """
-        specs = self._normalize_aggs(aggregations)
+        specs = self._normalize_aggs(aggregations, named)
         return self._execute(specs, urlpath=urlpath)
 
-    def _normalize_aggs(self, aggregations: Mapping[str, str | Sequence[str]]) -> list[_AggSpec]:
-        if not isinstance(aggregations, Mapping) or not aggregations:
-            raise ValueError("agg() requires a non-empty mapping")
+    def _resolve_op(self, op):
+        """Resolve an aggregation *op* to its name string.
+
+        Accepts a name string, or one of blosc2's own reduction *functions*
+        (:func:`blosc2.sum`, ``mean``, ``min``, ``max``, ``argmin``, ``argmax``)
+        matched **by identity** -- so a user function that merely shares a name
+        (e.g. a UDF called ``sum``) is *not* silently accepted, and custom UDF
+        aggregations are rejected rather than misinterpreted.
+        """
+        if isinstance(op, str):
+            return op
+        if callable(op):
+            alias = _op_alias_map().get(op)
+            if alias is not None:
+                return alias
+            raise ValueError(
+                f"Unsupported aggregation function {getattr(op, '__name__', op)!r}.  Pass a "
+                f"string op name (e.g. 'sum') or a blosc2 reduction function "
+                f"(blosc2.sum/mean/min/max/argmin/argmax).  Custom UDF aggregations are "
+                f"not supported."
+            )
+        raise ValueError(f"Aggregation op must be a string or a blosc2 reduction function, got {op!r}")
+
+    def _build_agg_spec(self, col_name, op, output_col: str | None = None) -> _AggSpec:
+        """Validate a single (column, op) pair and build its :class:`_AggSpec`.
+
+        ``output_col`` overrides the default ``"<column>_<op>"`` name; ``"*"`` as
+        *col_name* (only with ``op="size"``) yields a row count.  *col_name* may
+        be a column name string or a :class:`~blosc2.ctable.Column` object; *op*
+        may be an op name string or a blosc2 reduction function (see
+        :meth:`_resolve_op`).
+        """
+        op = self._resolve_op(op)
+        # Guard the "*" check with isinstance: a Column object overloads __eq__
+        # to build an expression, so a bare ``col_name == "*"`` would not return
+        # a bool.  Only the literal string "*" is the row-count sentinel.
+        if isinstance(col_name, str) and col_name == "*":
+            if op != "size":
+                raise ValueError("Only the 'size' aggregation is supported for '*' input")
+            return _AggSpec(None, "size", output_col or "size")
+        physical = self.table._logical_to_physical_name(_column_name(col_name))
+        self._validate_value_column(physical)
+        if op not in {"count", "sum", "mean", "min", "max", "argmin", "argmax"}:
+            raise ValueError(f"Unsupported aggregation {op!r}")
+        self._validate_agg_for_column(physical, op)
+        return _AggSpec(physical, op, output_col or f"{physical}_{op}")
+
+    def _expand_ops(self, col_name, ops) -> list[_AggSpec]:
+        """Expand a (column, op-or-ops) entry into one auto-named spec per op."""
+        # A single op may be a string or a reduction function (both non-iterable
+        # in the sense we want); only a real sequence of ops is expanded.
+        op_list = [ops] if isinstance(ops, str) or callable(ops) else list(ops)
+        if not op_list:
+            raise ValueError(f"No aggregations specified for column {col_name!r}")
+        return [self._build_agg_spec(col_name, op) for op in op_list]
+
+    def _normalize_aggs(
+        self,
+        aggregations: Mapping[str, str | Sequence[str]] | Sequence[tuple[Any, str | Sequence[str]]] | None,
+        named: Mapping[str, tuple[str, str]] | None = None,
+    ) -> list[_AggSpec]:
+        if not aggregations and not named:
+            raise ValueError("agg() requires a mapping/list of pairs and/or named aggregations")
         specs: list[_AggSpec] = []
-        for col_name, ops in aggregations.items():
-            if isinstance(ops, str):
-                op_list = [ops]
+        if aggregations:
+            if isinstance(aggregations, Mapping):
+                entries = list(aggregations.items())
+            elif isinstance(aggregations, Sequence) and not isinstance(aggregations, (str, bytes)):
+                # List of (column, ops) pairs -- lets you use Column objects,
+                # which cannot be dict keys (Column is unhashable).
+                entries = []
+                for pair in aggregations:
+                    if not (isinstance(pair, (tuple, list)) and len(pair) == 2):
+                        raise ValueError(
+                            f"agg() positional list must contain (column, ops) pairs, got {pair!r}"
+                        )
+                    entries.append(pair)
             else:
-                op_list = list(ops)
-            if not op_list:
-                raise ValueError(f"No aggregations specified for column {col_name!r}")
-
-            if col_name == "*":
-                for op in op_list:
-                    if op != "size":
-                        raise ValueError("Only the 'size' aggregation is supported for '*' input")
-                    specs.append(_AggSpec(None, "size", "size"))
-                continue
-
-            physical = self.table._logical_to_physical_name(_column_name(col_name))
-            self._validate_value_column(physical)
-            for op in op_list:
-                if op not in {"count", "sum", "mean", "min", "max", "argmin", "argmax"}:
-                    raise ValueError(f"Unsupported aggregation {op!r}")
-                self._validate_agg_for_column(physical, op)
-                specs.append(_AggSpec(physical, op, f"{physical}_{op}"))
+                raise ValueError(
+                    "agg() positional argument must be a mapping or a list of (column, ops) pairs"
+                )
+            for col_name, ops in entries:
+                specs.extend(self._expand_ops(col_name, ops))
+        for out_name, value in (named or {}).items():
+            if not (isinstance(value, (tuple, list)) and len(value) == 2):
+                raise ValueError(
+                    f"Named aggregation {out_name!r} must be a (column, op) pair, got {value!r}"
+                )
+            col_name, op = value
+            if isinstance(op, (tuple, list, set)):
+                raise ValueError(
+                    f"Named aggregation {out_name!r} takes a single op, got {op!r}.  "
+                    f"Each named output maps to one (column, op); use the mapping "
+                    f"form agg({{column: [...]}}) for several ops, or give each its "
+                    f"own name (e.g. {out_name}_sum=(col, 'sum'))."
+                )
+            specs.append(self._build_agg_spec(col_name, op, output_col=out_name))
         output_names = [s.output_col for s in specs]
         if len(output_names) != len(set(output_names)):
             raise ValueError("Aggregation output column names must be unique")

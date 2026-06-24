@@ -4,6 +4,27 @@
 
 XXX version-specific blurb XXX
 
+### `group_by`: flexible aggregation naming
+
+- `CTable.group_by(...).agg()` now accepts a **list of `(column, ops)` pairs**
+  and **explicit output names** (pandas-style keyword arguments), alongside the
+  existing auto-suffixed mapping; the forms can be combined::
+
+      g.agg({"sales": ["sum", "mean"]})              # auto: sales_sum, sales_mean
+      g.agg([(t.sales, ["sum", "mean"])])            # auto, but accepts Column objects
+      g.agg(revenue=("sales", "sum"))                # explicit: revenue
+      g.agg({"sales": "sum"}, n=("*", "size"))       # combined, with a named row count
+
+  The list-of-pairs and named forms accept `Column` objects (`t.sales`), which
+  the mapping form cannot because `Column` is unhashable and so cannot be a dict
+  key.
+- Aggregation ops may also be given as the matching blosc2 reduction *functions*
+  (`blosc2.sum`, `mean`, `min`, `max`, `argmin`, `argmax`), matched **by
+  identity** -- e.g. `g.agg([(t.sales, [blosc2.sum, "mean"])])`.  This is a
+  naming shorthand only; arbitrary/UDF callables (and look-alikes such as
+  `np.sum` or a user function named `sum`) are rejected rather than silently
+  misinterpreted.
+
 ### `group_by` / `group_reduce`: tri-state `sort=`
 
 - **Vectorized dictionary group ordering**: `group_by()` result building now

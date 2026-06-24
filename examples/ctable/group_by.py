@@ -57,6 +57,41 @@ print(by_city.mean("price"))
 print("\n=== Multiple aggregations in one call ===================================")
 print(by_city.agg({"price": ["sum", "mean", "min", "max"], "qty": "sum"}))
 
+# -- Naming the output columns ----------------------------------------------
+#
+# agg() offers three interchangeable (and combinable) ways to name results:
+#
+#   1. Auto-named mapping     {column: op-or-ops}      -> "<column>_<op>"
+#   2. Auto-named list pairs  [(column, op-or-ops)]    -> "<column>_<op>"
+#                             (accepts Column objects, which can't be dict keys)
+#   3. Explicitly named       output_name=(column, op) -> exactly that name
+
+print("\n=== Output column naming ================================================")
+
+# 1) Auto-named mapping (string column names): price_sum / price_mean.
+print(by_city.agg({"price": ["sum", "mean"]}))
+
+# 2) Auto-named list of pairs: same names, but lets you pass Column objects
+#    (t.price) instead of strings -- handy for editor autocomplete / refactors.
+#    Ops may also be blosc2 reduction functions (blosc2.sum), matched by identity
+#    -- a naming shorthand only, not a UDF mechanism.
+print(by_city.agg([(t.price, [blosc2.sum, blosc2.mean])]))
+
+# 3) Explicitly named: choose the result column names yourself.
+print(by_city.agg(revenue=(t.price, "sum"), avg_price=(t.price, "mean")))
+
+# Forms combine -- e.g. a list of pairs plus a named row count via ("*", "size").
+print(by_city.agg([(t.price, "sum")], n=("*", "size")))
+
+# -- Sorting by an aggregated value -----------------------------------------
+#
+# group_by() sorts by the *key*, never by the aggregation.  To rank groups by an
+# aggregated value, sort the resulting CTable with sort_by().
+
+print("\n=== Top cities by total price ===========================================")
+totals = by_city.agg(revenue=(t.price, "sum"))
+print(totals.sort_by("revenue", ascending=False).head(3))
+
 # -- Multi-key grouping -----------------------------------------------------
 
 print("\n=== Group by city + product =============================================")

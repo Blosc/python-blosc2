@@ -666,3 +666,142 @@ def test_group_reduce_tristate_sort():
     assert list(g_auto) == [1, 2, 3]
     g_false, _ = blosc2.group_reduce(keys, values, op="sum", sort=False)
     assert sorted(g_false) == [1, 2, 3]  # order unspecified, same groups
+
+
+# ----------------------------------------------------------------------
+# agg() output column naming: auto suffix vs explicit named aggregation
+# ----------------------------------------------------------------------
+
+
+def test_agg_auto_suffix_names():
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg({"sales": ["sum", "mean"]})
+    assert out.col_names == ["city", "sales_sum", "sales_mean"]
+
+
+def test_agg_explicit_named_kwargs():
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg(revenue=("sales", "sum"), avg_sale=("sales", "mean"))
+    assert out.col_names == ["city", "revenue", "avg_sale"]
+    got = rows(out)
+    assert got[1][0] == "Paris"
+    assert got[1][1] == 40.0  # revenue == sales_sum
+    assert got[1][2] == 20.0  # avg_sale == sales_mean
+
+
+def test_agg_combines_mapping_and_named():
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg({"sales": "sum"}, n=("*", "size"))
+    assert out.col_names == ["city", "sales_sum", "n"]
+    got = rows(out)
+    assert got[0][0] == "Berlin"
+    assert np.isnan(got[0][1])
+    assert got[0][2] == 1
+    assert got[1] == ("Paris", 40.0, 3)
+    assert got[2] == ("Rome", 60.0, 2)
+
+
+def test_agg_list_of_pairs_auto_named():
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg([("sales", ["sum", "mean"])])
+    assert out.col_names == ["city", "sales_sum", "sales_mean"]
+
+
+def test_agg_list_of_pairs_accepts_column_objects():
+    # The list form's whole point: use Column objects, which can't be dict keys.
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg([(t.sales, ["sum", "mean"])])
+    assert out.col_names == ["city", "sales_sum", "sales_mean"]
+    got = rows(out)
+    assert got[1] == ("Paris", 40.0, 20.0)
+
+
+def test_agg_list_of_pairs_combines_with_named():
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg([(t.sales, "sum")], n=("*", "size"))
+    assert out.col_names == ["city", "sales_sum", "n"]
+
+
+def test_agg_positional_must_be_mapping_or_pairs():
+    t = CTable(SalesRow, new_data=DATA)
+    with pytest.raises(ValueError, match="mapping or a list of"):
+        t.group_by("city").agg("sales")
+    with pytest.raises(ValueError, match=r"must contain \(column, ops\) pairs"):
+        t.group_by("city").agg([("sales",)])
+
+
+def test_agg_named_accepts_column_objects():
+    # A Column object can't be a dict key (unhashable: __eq__ is overloaded for
+    # expressions), but it works as a named-agg value, like group_by() args.
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city", sort=True)
+    with pytest.raises(TypeError, match="unhashable"):
+        _ = {t.sales: ["sum"]}  # fails at dict construction, before agg() runs
+    out = g.agg(total=(t.sales, "sum"), avg=(t.sales, "mean"))
+    assert out.col_names == ["city", "total", "avg"]
+
+
+def test_agg_accepts_blosc2_reduction_functions():
+    # blosc2 reduction functions are accepted as ops (matched by identity),
+    # interchangeably with strings, in both the list and named forms.
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city", sort=True)
+    by_func = g.agg([(t.sales, [blosc2.sum, blosc2.mean])])
+    by_str = g.agg([(t.sales, ["sum", "mean"])])
+    assert by_func.col_names == by_str.col_names == ["city", "sales_sum", "sales_mean"]
+    assert col(by_func, "city") == col(by_str, "city")
+    np.testing.assert_array_equal(  # NaN-safe (Berlin has no non-null sales)
+        col(by_func, "sales_sum"), col(by_str, "sales_sum")
+    )
+    named = g.agg(revenue=(t.sales, blosc2.sum))
+    assert named.col_names == ["city", "revenue"]
+
+
+def test_agg_rejects_non_blosc2_callables_by_identity():
+    # A UDF that merely shares a builtin op name must NOT be silently accepted;
+    # np.sum / builtin sum are likewise rejected (only blosc2.* by identity).
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city")
+
+    def sum(values):
+        return -1
+
+    for fn in (sum, np.sum):
+        with pytest.raises(ValueError, match="Unsupported aggregation function"):
+            g.agg([(t.sales, fn)])
+    # blosc2.std is a real function but not a supported group-by op.
+    with pytest.raises(ValueError, match="Unsupported aggregation function"):
+        g.agg([(t.sales, blosc2.std)])
+
+
+def test_agg_named_star_size():
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg(total=("*", "size"))
+    assert out.col_names == ["city", "total"]
+    assert rows(out) == [("Berlin", 1), ("Paris", 3), ("Rome", 2)]
+
+
+def test_agg_requires_some_aggregation():
+    t = CTable(SalesRow, new_data=DATA)
+    with pytest.raises(ValueError, match="requires a mapping"):
+        t.group_by("city").agg()
+
+
+def test_agg_named_must_be_column_op_pair():
+    t = CTable(SalesRow, new_data=DATA)
+    with pytest.raises(ValueError, match=r"must be a \(column, op\) pair"):
+        t.group_by("city").agg(x=("sales",))
+
+
+def test_agg_named_rejects_multiple_ops_with_guidance():
+    # A named output maps to a single op; multiple ops need the mapping form or
+    # one name each. The error should say so, not "unsupported aggregation".
+    t = CTable(SalesRow, new_data=DATA)
+    with pytest.raises(ValueError, match="takes a single op"):
+        t.group_by("city").agg(total=("sales", ("sum", "mean")))
+
+
+def test_agg_duplicate_output_names_rejected():
+    t = CTable(SalesRow, new_data=DATA)
+    with pytest.raises(ValueError, match="must be unique"):
+        t.group_by("city").agg({"sales": "sum"}, sales_sum=("sales", "sum"))

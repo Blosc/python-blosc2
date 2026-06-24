@@ -299,6 +299,46 @@ one row per group::
     min_rows = by_city.argmin("sales")       # logical row position of min sales
     max_rows = by_city.argmax("sales")       # logical row position of max sales
 
+:meth:`~blosc2.CTableGroupBy.agg` applies several aggregations at once and offers
+three ways to name the result columns, which can be combined::
+
+    # Auto-named mapping: result columns are "<column>_<op>", e.g. sales_sum.
+    by_city.agg({"sales": ["sum", "mean"]})
+
+    # Auto-named list of pairs: same naming, but accepts Column objects
+    # (t.sales), which cannot be dict keys because Column is unhashable.  Ops
+    # may also be blosc2 reduction functions (blosc2.sum), matched by identity.
+    by_city.agg([(t.sales, [blosc2.sum, "mean"])])
+
+    # Explicitly named (pandas-style): output_name=(column, op).
+    by_city.agg(revenue=("sales", "sum"), avg_sale=("sales", "mean"))
+
+    # Forms combine, e.g. a list of pairs with a named row count via ("*", "size").
+    by_city.agg([(t.sales, "sum")], n=("*", "size"))
+
+The auto-suffix naming is compact and collision-safe when a column is aggregated
+several ways; the list-of-pairs form additionally lets you pass ``Column``
+objects (``t.sales``) instead of name strings; use explicit names when you want a
+specific (and easily addressable) output column name.
+
+**Output ordering.**  ``sort`` controls how groups are ordered, and is *always
+by the group key(s), never by the aggregated value*:
+
+* ``sort=True`` -- always sorted by key.
+* ``sort=False`` -- unsorted (deterministic but unspecified order).
+* ``sort=None`` (default) -- *auto*: integer and dictionary/string keys are
+  sorted (free or vectorized); float and multi-key results are left unsorted, as
+  their only ordering is an O(*G* log *G*) Python sort that can rival the grouping
+  cost on high-cardinality data.  This differs from pandas, which defaults to
+  ``sort=True``.
+
+To order a result **by an aggregated value** (e.g. top spenders), sort the output
+table afterwards with :meth:`CTable.sort_by`, referencing the result column name::
+
+    top = by_city.agg(revenue=("sales", "sum")).sort_by("revenue", ascending=False)
+    # or, with the auto-suffix name:
+    top = by_city.sum("sales").sort_by("sales_sum", ascending=False)
+
 Grouped results are in-memory by default.  Pass ``urlpath=`` to a terminal
 method to write the result as a persistent :class:`CTable`::
 
