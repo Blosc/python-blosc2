@@ -111,12 +111,18 @@ def test_get_and_clear_group_roundtrip(group_store):
     assert page["nrows"] == NROWS  # base table restored
 
 
-def test_group_clears_active_filter(group_store):
-    path, _ = group_store
+def test_group_composes_over_active_filter(group_store):
+    """Group-by aggregates the filtered rows and keeps the filter active."""
+    path, cols = group_store
+    region = np.asarray(cols["region"])
     with StoreBrowser(path) as browser:
         browser.set_filter("/ctable", "region == 0")
-        browser.set_group("/ctable", "vendor", "size", None)
-        assert browser.get_filter("/ctable") is None  # filter dropped (exclusive)
+        ngroups = browser.set_group("/ctable", "vendor", "size", None)
+        assert browser.get_filter("/ctable") == "region == 0"  # filter persists
+        page = browser.preview("/ctable", max_rows=100)
+    # Counts cover only the filtered rows, not the whole table.
+    assert int(np.asarray(page["data"]["size"]).sum()) == int((region == 0).sum())
+    assert ngroups == len(page["data"]["size"])
 
 
 def test_group_sort_orders_result_by_column(group_store):

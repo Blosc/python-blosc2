@@ -835,7 +835,9 @@ class StoreBrowser:
             self._filters.pop(path, None)
             self._filter_views.pop(path, None)
             return len(self._get_object(path))
-        self.clear_sort(path)  # filter and sort are mutually exclusive
+        # A filter redefines the row set, so any existing sort over the old rows
+        # is dropped; the user re-sorts the filtered rows on top if they want.
+        self.clear_sort(path)
         view = self._get_object(path).where(expr)
         self._filters[path] = expr
         self._filter_views[path] = view
@@ -850,17 +852,22 @@ class StoreBrowser:
         obj = self._get_object(path)
         return [ix.col_name for ix in getattr(obj, "indexes", []) if getattr(ix, "kind", None) == "full"]
 
-    def set_sort(self, path: str, column: str, reverse: bool) -> None:
-        """Order the CTable at *path* by *column* using its FULL index (zero-copy view).
+    def _row_source(self, path: str) -> Any:
+        """Base rows that sort/group build on: the active row filter view if any,
+        else the underlying table.  This is what makes a filter compose — sort
+        and group operate on the filtered rows, not the whole table."""
+        return self._filter_views.get(path, self._get_object(path))
 
-        The view streams from the sorted index, so the full table is never
-        materialised.  Sorting replaces any active row filter/window for *path*.
+    def set_sort(self, path: str, column: str, reverse: bool) -> None:
+        """Order the CTable at *path* by *column* as a zero-copy sorted view.
+
+        Composes over any active row filter (sorts the filtered rows); replaces
+        any locked window.  With no filter and a FULL index on *column*, the view
+        streams from the index, so the full table is never materialised.
         """
         path = self.normalize_path(path)
         self._window_views.pop(path, None)
-        self._filters.pop(path, None)
-        self._filter_views.pop(path, None)
-        view = self._get_object(path).sort_by(column, ascending=not reverse, view=True)
+        view = self._row_source(path).sort_by(column, ascending=not reverse, view=True)
         self._sorts[path] = (column, reverse)
         self._sort_views[path] = view
 
@@ -875,10 +882,11 @@ class StoreBrowser:
         return self._sorts.get(self.normalize_path(path))
 
     def _ordered_object(self, path: str, obj: Any) -> Any:
-        """CTable read precedence for *path*: group > window > filter > sort > base.
+        """CTable read precedence for *path*: group > window > sort > filter > base.
 
-        A group-by is exclusive (it clears the others), so when present it is the
-        whole story; the remaining tiers compose as before.
+        Sort and group build on the filtered rows (see :meth:`_row_source`), so a
+        sort view already incorporates the filter and ranks above the bare filter
+        view; the bare filter view is read only when no sort is active.
         """
         if path in self._group_sort_views:
             return self._group_sort_views[path]
@@ -886,9 +894,9 @@ class StoreBrowser:
             return self._group_views[path]
         if path in self._window_views:
             return self._window_views[path]
-        if path in self._filter_views:
-            return self._filter_views[path]
-        return self._sort_views.get(path, obj)
+        if path in self._sort_views:
+            return self._sort_views[path]
+        return self._filter_views.get(path, obj)
 
     def set_row_window(self, path: str, start: int, stop: int) -> int:
         """Lock the CTable at *path* to live rows ``[start:stop]``; return its length.
@@ -898,10 +906,14 @@ class StoreBrowser:
         then cannot leave the range because the view reports only its own rows.
         """
         path = self.normalize_path(path)
-        if path in self._filter_views:
+        # The sort view already incorporates any filter, so prefer it; fall back
+        # to the bare filter view, then the base table.
+        if path in self._sort_views:
+            base = self._sort_views[path]
+        elif path in self._filter_views:
             base = self._filter_views[path]
         else:
-            base = self._sort_views.get(path, self._get_object(path))
+            base = self._get_object(path)
         view = base.slice(start, stop, copy=False)
         self._window_views[path] = view
         return len(view)
@@ -948,23 +960,24 @@ class StoreBrowser:
         """Group the CTable at *path* by *key*, aggregating with *op*; return group count.
 
         Builds a materialized result CTable (one row per group, columns = key +
-        aggregate).  Group-by is exclusive: it drops any active filter, window,
-        sort, and column selection for *path*.  Errors from ``group_by`` propagate.
+        aggregate).  Composes over any active row filter (groups the filtered
+        rows); drops any window, sort, and column selection.  Errors from
+        ``group_by`` propagate.
         """
         path = self.normalize_path(path)
         # Memoize the materialized result: the store is read-only, so a given
-        # (path, key, op, value_col) always aggregates to the same tiny CTable.
+        # (path, filter, key, op, value_col) always aggregates to the same tiny
+        # CTable.  The active filter expr is part of the key so a filtered group
+        # never collides with the unfiltered one.
         # ponytail: unbounded dict, but results are one-row-per-group and a
         # session tries only a handful of configs — add an LRU cap if that ever
         # stops being true.
-        cache_key = (path, key, op, value_col)
+        cache_key = (path, self._filters.get(path), key, op, value_col)
         result = self._group_result_cache.get(cache_key)
         if result is None:
-            gb = self._get_object(path).group_by(key)
+            gb = self._row_source(path).group_by(key)
             result = gb.size() if op == "size" else gb.agg({value_col: op})
             self._group_result_cache[cache_key] = result
-        self._filters.pop(path, None)
-        self._filter_views.pop(path, None)
         self._window_views.pop(path, None)
         self._sorts.pop(path, None)
         self._sort_views.pop(path, None)

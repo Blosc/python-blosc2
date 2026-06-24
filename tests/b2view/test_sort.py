@@ -157,7 +157,19 @@ def test_filter_clears_sort(sort_store):
     with StoreBrowser(path) as browser:
         browser.set_sort("/", "b", reverse=False)
         browser.set_filter("/", "b > 500")
-        assert browser.get_sort("/") is None  # mutually exclusive
+        assert browser.get_sort("/") is None  # re-filtering drops the old sort
+
+
+def test_sort_composes_over_active_filter(sort_store):
+    """Sort applied after a filter orders only the filtered rows, keeping both."""
+    path, bvals, _ = sort_store
+    expected = sorted(int(v) for v in bvals if v > 500)
+    with StoreBrowser(path) as browser:
+        browser.set_filter("/", "b > 500")
+        browser.set_sort("/", "b", reverse=False)
+        assert browser.get_filter("/") == "b > 500"  # filter persists under the sort
+        assert browser.get_sort("/") == ("b", False)
+        assert _head(browser, "b", 5) == expected[:5]  # sorted, and all > 500
 
 
 # ── End-to-end TUI flow (Pilot) ───────────────────────────────────────────

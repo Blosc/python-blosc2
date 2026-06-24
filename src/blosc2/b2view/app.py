@@ -3246,8 +3246,10 @@ class B2ViewApp(App):
         # A FULL-indexed column reuses its pre-sorted positions instantly; a
         # non-indexed column must materialise the key and lexsort, which can take
         # a while on a big table — run that off the UI thread with a spinner so
-        # the app stays responsive.
-        if column in set(self.browser.full_index_columns(self.selected_path)):
+        # the app stays responsive.  An active filter forces the scan path too:
+        # the index can't be reused over a filtered (where) view.
+        indexed = column in set(self.browser.full_index_columns(self.selected_path))
+        if indexed and not self.browser.get_filter(self.selected_path):
             try:
                 self.browser.set_sort(self.selected_path, column, reverse)
             except Exception as exc:
@@ -3702,8 +3704,9 @@ class B2ViewApp(App):
     def action_dim_exit(self) -> None:
         """Escape: exit dim mode, unlock a row window, or clear a CTable filter.
 
-        One layer per press: dim mode, then the locked row window, then the
-        row filter, then the column filter.
+        One layer per press, peeling derived views before their base: dim mode,
+        then the locked row window, group-sort, group, then the sort (built on
+        the filter), then the row filter, then the column filter.
         """
         if self._dim_mode:
             self._dim_mode = False
@@ -3723,10 +3726,10 @@ class B2ViewApp(App):
             self._clear_group_sort()
         elif self.browser.get_group(self.selected_path):
             self._clear_group()
-        elif self.browser.get_filter(self.selected_path):
-            self._apply_filter("")
         elif self.browser.get_sort(self.selected_path):
             self._clear_sort()
+        elif self.browser.get_filter(self.selected_path):
+            self._apply_filter("")
         elif self.browser.get_column_filter(self.selected_path):
             self.browser.set_column_selection(self.selected_path, None)
             self._reload_columns()
