@@ -163,16 +163,42 @@ def test_group_sort_noop_when_not_grouped(group_store):
         assert browser.get_group_sort("/ctable") is None
 
 
-def test_group_bars_sorted_desc_and_capped(group_store):
+def test_group_bars_categorical_is_bar_sorted_desc_and_capped(group_store):
+    """A dictionary key yields capped bars ranked by the aggregate descending."""
+    path, _ = group_store
+    with StoreBrowser(path) as browser:
+        browser.set_group("/ctable", "vendor", "mean", "amount")
+        bars = browser.group_bars("/ctable", top_n=2)
+    assert bars["numeric"] is False
+    assert len(bars["values"]) == 2  # capped to top_n
+    assert bars["values"][0] >= bars["values"][1]  # descending
+    assert bars["agg"] == "amount_mean"
+    assert bars["key"] == "vendor"
+
+
+def test_group_bars_numeric_is_line_pareto_by_default(group_store):
+    """A numeric key with no sort yields a full line curve ranked by value (Pareto)."""
     path, _ = group_store
     with StoreBrowser(path) as browser:
         browser.set_group("/ctable", "region", "mean", "amount")
         bars = browser.group_bars("/ctable", top_n=2)
-    assert bars["total"] == 4
-    assert len(bars["values"]) == 2
-    assert bars["values"][0] >= bars["values"][1]  # descending
-    assert bars["agg"] == "amount_mean"
-    assert bars["key"] == "region"
+    assert bars["numeric"] is True
+    assert len(bars["values"]) == 4  # no top-N cap on the curve
+    assert bars["values"] == sorted(bars["values"], reverse=True)  # Pareto
+    assert bars["x"] == [0, 1, 2, 3]  # rank index on X
+    assert "rank" in bars["xlabel"]
+
+
+def test_group_bars_numeric_sorted_by_key_uses_key_on_x(group_store):
+    """Sorting a numeric-key result by the key puts key values on X in that order."""
+    path, _ = group_store
+    with StoreBrowser(path) as browser:
+        browser.set_group("/ctable", "region", "mean", "amount")
+        browser.set_group_sort("/ctable", "region", reverse=False)
+        bars = browser.group_bars("/ctable")
+    assert bars["numeric"] is True
+    assert bars["x"] == [0.0, 1.0, 2.0, 3.0]  # actual key values, ascending
+    assert bars["xlabel"] == "region"
 
 
 # ── TUI journey ────────────────────────────────────────────────────────────
@@ -348,16 +374,17 @@ async def test_group_bar_chart_and_hires(group_store):
         pilot.app.query_one("#data-table", DataTable).focus()
         await pilot.pause()
 
-        # Group region -> mean(amount), then plot it as a bar chart.
+        # Group vendor (categorical) -> mean(amount), then plot it as a bar chart.
         await pilot.press("G")
         await pilot.pause()
-        await pilot.press("down", "enter")  # key: region -> operation list
+        await pilot.press("enter")  # key: vendor (first) -> operation list
         await pilot.press("down", "down", "down", "enter")  # mean -> value list
         await pilot.press("down", "enter")  # value: amount -> apply
         await _wait_table(pilot)
         await pilot.press("p")
         await pilot.pause()
         assert isinstance(pilot.app.screen, GroupBarScreen)
+        assert pilot.app.screen.numeric is False
 
         # 'h' opens the hi-res matplotlib bar chart; esc returns to the plotext bars.
         await pilot.press("h")
@@ -368,3 +395,35 @@ async def test_group_bar_chart_and_hires(group_store):
         await pilot.press("escape")
         await pilot.pause()
         assert isinstance(pilot.app.screen, GroupBarScreen)
+
+
+@pytest.mark.asyncio
+@pytest.mark.tui
+async def test_group_numeric_key_plots_as_line(group_store):
+    if TextualImage is None or not _matplotlib_available():
+        pytest.skip("hi-res line view needs textual-image + matplotlib")
+    path, _ = group_store
+    app = B2ViewApp(path)
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await pilot.press("down", "enter")  # select + show the /ctable node
+        await _wait_table(pilot)
+        pilot.app.query_one("#data-table", DataTable).focus()
+        await pilot.pause()
+
+        # Group region (numeric) -> mean(amount): plots as a line curve, not bars.
+        await pilot.press("G")
+        await pilot.pause()
+        await pilot.press("down", "enter")  # key: region -> operation list
+        await pilot.press("down", "down", "down", "enter")  # mean -> value list
+        await pilot.press("down", "enter")  # value: amount -> apply
+        await _wait_table(pilot)
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, GroupBarScreen)
+        assert pilot.app.screen.numeric is True
+
+        await pilot.press("h")  # hi-res is a line, not a bar
+        await pilot.pause()
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, HiResPlotScreen)
+        assert pilot.app.screen._mode == "line"

@@ -929,7 +929,8 @@ class GroupByScreen(ModalScreen["tuple[str, str, str | None] | None"]):
 
 
 class GroupBarScreen(ModalScreen[None]):
-    """Bar chart of a grouped view: one bar per group, capped to the top groups."""
+    """Plot of a grouped view: bars for a categorical key (capped to the top
+    groups), or a line curve over all groups for a numeric key."""
 
     CSS = """
     GroupBarScreen {
@@ -966,12 +967,15 @@ class GroupBarScreen(ModalScreen[None]):
     def __init__(self, *, title_prefix: str, bars: dict):
         super().__init__()
         self.title_prefix = title_prefix
+        self.numeric = bars.get("numeric", False)
         self.labels = [str(label) for label in bars.get("labels", [])]
+        self.x = list(bars.get("x", []))
         self.values = list(bars.get("values", []))
         self.key = bars.get("key", "")
         self.agg = bars.get("agg", "")
-        total = bars.get("total", len(self.labels))
-        shown = len(self.labels)
+        self.xlabel = bars.get("xlabel", self.key)
+        total = bars.get("total", len(self.values))
+        shown = len(self.values)
         cap = f" · top {shown} of {total} groups" if shown < total else f" · {total} groups"
         self.plot_title = f"{title_prefix}{cap}"
 
@@ -985,30 +989,43 @@ class GroupBarScreen(ModalScreen[None]):
         widget = self.query_one(PlotextPlot)
         plt = widget.plt
         plt.clear_figure()
-        if self.labels:
+        if self.numeric:
+            if self.values:
+                plt.plot(self.x, self.values)
+                plt.xlabel(self.xlabel)
+                plt.ylabel(self.agg)
+        elif self.labels:
             plt.bar(self.labels, self.values)
         widget.refresh()
 
     def action_hires(self) -> None:
-        """h key — open a high-res matplotlib bar chart over the plotext bars."""
+        """h key — open a high-res matplotlib plot over the plotext braille one."""
         if TextualImage is None or not _matplotlib_available():
             self.app.notify(
                 "High-res view needs the 'textual-image' and 'matplotlib' packages",
                 severity="warning",
             )
             return
-        if not self.labels:
+        if not self.values:
             self.app.notify("No groups to plot", severity="warning")
             return
-        self.app.push_screen(
-            HiResPlotScreen(
+        if self.numeric:
+            screen = HiResPlotScreen(
+                mode="line",
+                title=self.plot_title,
+                line_data=(self.x, self.values),
+                xlabel=self.xlabel,
+                ylabel=self.agg,
+            )
+        else:
+            screen = HiResPlotScreen(
                 mode="bar",
                 title=self.plot_title,
                 bar_data=(self.labels, self.values),
                 xlabel=self.key,
                 ylabel=self.agg,
             )
-        )
+        self.app.push_screen(screen)
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -1516,10 +1533,11 @@ class HiResPlotScreen(ModalScreen[None]):
         mode: str = "raw",
         xlabel: str = "row",
         ylabel: str | None = None,
-        # scatter / bar modes:
+        # scatter / bar / line modes:
         title: str | None = None,
         scatter_xy: tuple | None = None,
         bar_data: tuple | None = None,
+        line_data: tuple | None = None,
         # column (envelope/raw) modes:
         title_prefix: str | None = None,
         n: int | None = None,
@@ -1535,6 +1553,7 @@ class HiResPlotScreen(ModalScreen[None]):
         self._static_title = title
         self._scatter_xy = scatter_xy
         self._bar_data = bar_data
+        self._line_data = line_data
         self._title_prefix = title_prefix
         self._n = n
         self._row_start = row_start
@@ -1549,12 +1568,12 @@ class HiResPlotScreen(ModalScreen[None]):
     def _keys_hint(self) -> str:
         if self._can_toggle:
             return "r raw/envelope · esc back to braille"
-        if self._mode == "bar":
-            return "esc · back to bar chart"
+        if self._mode in ("bar", "line"):
+            return "esc · back to chart"
         return "esc · back to braille"
 
     def _current_title(self) -> str:
-        if self._mode in ("scatter", "bar"):
+        if self._mode in ("scatter", "bar", "line"):
             return self._static_title or ""
         full = self._row_start == 0 and self._row_stop == self._n
         rng = "" if full else f" · rows {self._row_start}:{self._row_stop}"
@@ -1609,6 +1628,10 @@ class HiResPlotScreen(ModalScreen[None]):
             ax.bar(positions, values, color="#1f77b4")
             ax.set_xticks(list(positions))
             ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+        elif self._mode == "line":
+            x, y = self._line_data
+            ax.plot(x, y, linewidth=0.8, color="#1f77b4")
+            ax.margins(x=0)
         elif self._mode == "envelope":
             env = self._envelope
             x, ymin, ymax = env["x"], env["ymin"], env["ymax"]
@@ -3000,7 +3023,7 @@ class B2ViewApp(App):
             return
         if self.browser is not None and self.browser.get_group(self.selected_path):
             bars = self.browser.group_bars(self.selected_path)
-            if not bars["labels"]:
+            if not bars["values"]:
                 self.notify("Nothing to plot for this group-by", severity="warning")
                 return
             title = f"{self.selected_path} · {bars['agg']} by {bars['key']}"

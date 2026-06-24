@@ -1020,24 +1020,91 @@ class StoreBrowser:
         return "size" if op == "size" else f"{value_col}_{op}"
 
     def group_bars(self, path: str, top_n: int = 50) -> dict[str, Any]:
-        """Top-*top_n* groups (by aggregate value) as bar-chart labels + values."""
+        """Grouped result as plot data, chosen by key dtype.
+
+        Follows the grid's active sort on the grouped result (so the plot matches
+        what the user sees — Pareto when sorted by the aggregate, key-order when
+        sorted by the key); with no sort, ranks by the aggregate descending.
+
+        A **categorical** key (dictionary/string) yields a *bar* chart: the first
+        ``top_n`` groups as ``labels`` + ``values``.  A **numeric** key yields a
+        *line* curve over **all** groups (``x`` + ``values``): ``x`` is the key
+        value when sorted by the key (a spacing-honest distribution), else the
+        rank index (a Pareto curve).  ``numeric`` says which.
+        """
         path = self.normalize_path(path)
         result = self._group_views.get(path)
         group = self._groups.get(path)
+        empty = {
+            "numeric": False,
+            "labels": [],
+            "x": [],
+            "values": [],
+            "total": 0,
+            "key": "",
+            "agg": "",
+            "xlabel": "",
+        }
         if result is None or group is None:
-            return {"labels": [], "values": [], "total": 0, "key": "", "agg": ""}
+            return empty
         key = group[0]
         agg = self.group_agg_column(path)
-        keys = safe_asarray(result[key][:])
-        vals = np.asarray(result[agg][:], dtype=float)
-        order = np.argsort(vals)[::-1][:top_n]
+        total = len(result)
+        sorted_result = self._group_sort_views.get(path)
+        sort = self._group_sorts.get(path)
+        source = sorted_result if sorted_result is not None else result
+
+        if self._is_numeric_key(result, key):
+            # Full curve, no top-N cap.  Honour the active sort; default to
+            # aggregate-descending (a Pareto curve) when none is set.
+            keys = np.asarray(source[key][:], dtype=float)
+            vals = np.asarray(source[agg][:], dtype=float)
+            if sorted_result is None:
+                order = np.argsort(vals)[::-1]
+                keys, vals = keys[order], vals[order]
+            if sort is not None and sort[0] == key:  # sorted by the key → key on X
+                x, xlabel = keys.tolist(), key
+            else:  # ranked by the aggregate → rank on X (Pareto)
+                x, xlabel = list(range(len(vals))), f"rank (by {agg})"
+            return {
+                "numeric": True,
+                "labels": [],
+                "x": [float(v) for v in x],
+                "values": [float(v) for v in vals],
+                "total": total,
+                "key": key,
+                "agg": agg,
+                "xlabel": xlabel,
+            }
+
+        # Categorical key → top-N bars.
+        if sorted_result is not None:
+            keys = safe_asarray(sorted_result[key][:top_n])
+            vals = np.asarray(sorted_result[agg][:top_n], dtype=float)
+            order = range(len(vals))
+        else:
+            keys = safe_asarray(result[key][:])
+            vals = np.asarray(result[agg][:], dtype=float)
+            order = np.argsort(vals)[::-1][:top_n]
         return {
+            "numeric": False,
+            "x": [],
             "labels": [str(keys[i]) for i in order],
             "values": [float(vals[i]) for i in order],
-            "total": len(vals),
+            "total": total,
             "key": key,
             "agg": agg,
+            "xlabel": key,
         }
+
+    @staticmethod
+    def _is_numeric_key(result: Any, key: str) -> bool:
+        """True when the grouped key column is numeric (not a decoded dictionary)."""
+        col = result[key]
+        if getattr(col, "is_dictionary", False):
+            return False
+        dt = getattr(col, "dtype", None)
+        return dt is not None and dt.kind in "iuf"
 
     def base_nrows(self, path: str) -> int:
         """Return the unfiltered row count of the CTable at *path*."""
