@@ -428,8 +428,8 @@ async def test_group_numeric_key_plots_as_line(group_store):
         assert isinstance(pilot.app.screen, GroupBarScreen)
         assert pilot.app.screen.numeric is True
 
-        await pilot.press("h")  # hi-res is a line, not a bar
+        await pilot.press("h")  # hi-res is a stem/impulse plot, not bars
         await pilot.pause()
         await pilot.pause()
         assert isinstance(pilot.app.screen, HiResPlotScreen)
-        assert pilot.app.screen._mode == "line"
+        assert pilot.app.screen._mode == "stem"

@@ -930,7 +930,8 @@ class GroupByScreen(ModalScreen["tuple[str, str, str | None] | None"]):
 
 class GroupBarScreen(ModalScreen[None]):
     """Plot of a grouped view: bars for a categorical key (capped to the top
-    groups), or a line curve over all groups for a numeric key."""
+    groups), or a stem/impulse plot over all groups for a numeric key (discrete
+    groups, so no connecting line between adjacent key values)."""
 
     CSS = """
     GroupBarScreen {
@@ -990,8 +991,12 @@ class GroupBarScreen(ModalScreen[None]):
         plt = widget.plt
         plt.clear_figure()
         if self.numeric:
+            # Stem/impulse, not a connected line: groups are discrete points, so
+            # bars-to-baseline show each group's magnitude without inventing a
+            # curve between adjacent key values (which, on spiky/quantised data,
+            # reads as a phantom baseline).
             if self.values:
-                plt.plot(self.x, self.values)
+                plt.bar(self.x, self.values)
                 plt.xlabel(self.xlabel)
                 plt.ylabel(self.agg)
         elif self.labels:
@@ -1011,9 +1016,9 @@ class GroupBarScreen(ModalScreen[None]):
             return
         if self.numeric:
             screen = HiResPlotScreen(
-                mode="line",
+                mode="stem",
                 title=self.plot_title,
-                line_data=(self.x, self.values),
+                stem_data=(self.x, self.values),
                 xlabel=self.xlabel,
                 ylabel=self.agg,
             )
@@ -1483,6 +1488,8 @@ class HiResPlotScreen(ModalScreen[None]):
     Modes:
 
     - ``"scatter"`` — a static col-vs-col scatter (from ``ScatterPlotScreen``).
+    - ``"bar"`` / ``"stem"`` — a grouped result: bars for a categorical key,
+      impulses (vertical lines to a 0 baseline) for a numeric key.
     - ``"envelope"`` — the min/max envelope of a column (from ``PlotScreen``'s
       ``h``), reusing the on-screen braille envelope data.
     - ``"raw"`` — the column's raw values, reached by toggling with ``r`` from
@@ -1533,11 +1540,11 @@ class HiResPlotScreen(ModalScreen[None]):
         mode: str = "raw",
         xlabel: str = "row",
         ylabel: str | None = None,
-        # scatter / bar / line modes:
+        # scatter / bar / stem modes:
         title: str | None = None,
         scatter_xy: tuple | None = None,
         bar_data: tuple | None = None,
-        line_data: tuple | None = None,
+        stem_data: tuple | None = None,
         # column (envelope/raw) modes:
         title_prefix: str | None = None,
         n: int | None = None,
@@ -1553,7 +1560,7 @@ class HiResPlotScreen(ModalScreen[None]):
         self._static_title = title
         self._scatter_xy = scatter_xy
         self._bar_data = bar_data
-        self._line_data = line_data
+        self._stem_data = stem_data
         self._title_prefix = title_prefix
         self._n = n
         self._row_start = row_start
@@ -1568,12 +1575,12 @@ class HiResPlotScreen(ModalScreen[None]):
     def _keys_hint(self) -> str:
         if self._can_toggle:
             return "r raw/envelope · esc back to braille"
-        if self._mode in ("bar", "line"):
+        if self._mode in ("bar", "stem"):
             return "esc · back to chart"
         return "esc · back to braille"
 
     def _current_title(self) -> str:
-        if self._mode in ("scatter", "bar", "line"):
+        if self._mode in ("scatter", "bar", "stem"):
             return self._static_title or ""
         full = self._row_start == 0 and self._row_stop == self._n
         rng = "" if full else f" · rows {self._row_start}:{self._row_stop}"
@@ -1628,9 +1635,11 @@ class HiResPlotScreen(ModalScreen[None]):
             ax.bar(positions, values, color="#1f77b4")
             ax.set_xticks(list(positions))
             ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
-        elif self._mode == "line":
-            x, y = self._line_data
-            ax.plot(x, y, linewidth=0.8, color="#1f77b4")
+        elif self._mode == "stem":
+            # Impulses from a 0 baseline — discrete groups, not a continuous line.
+            x, y = self._stem_data
+            ax.vlines(x, 0, y, linewidth=0.8, color="#1f77b4")
+            ax.set_ylim(bottom=0)
             ax.margins(x=0)
         elif self._mode == "envelope":
             env = self._envelope
