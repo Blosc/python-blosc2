@@ -110,6 +110,26 @@ class DictionaryColumn:
         self._ensure_cache()
         return self._dict_store[int(code)]
 
+    def decode_batch(self, codes) -> list[str | None]:
+        """Decode an array of int32 *codes* to a list of strings (``None`` for null codes).
+
+        Reads the whole dictionary store once (cardinality ``D``, not the ``N``
+        rows) instead of indexing the backing var-length array per code, which
+        decompresses a whole msgpack batch on every call.  For many codes this
+        is dramatically cheaper than looping over :meth:`decode`.
+        """
+        codes = np.asarray(codes)
+        self._dict_store.flush()
+        all_strings = np.asarray(self._dict_store[:])  # D unique values, no nulls
+        null_code = int(self._spec.null_code)
+        result: list[str | None] = [None] * len(codes)
+        non_null_idx = np.nonzero(codes != null_code)[0]
+        if non_null_idx.size:
+            picked = all_strings[codes[non_null_idx].astype(np.intp)].tolist()
+            for pos, value in zip(non_null_idx.tolist(), picked, strict=True):
+                result[pos] = value
+        return result
+
     def encode_batch(self, values) -> np.ndarray:
         """Encode a sequence of str/None to a numpy ``int32`` array of codes."""
         result = np.empty(len(values), dtype=np.int32)

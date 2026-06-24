@@ -1232,8 +1232,17 @@ class Column:
         root._mark_all_indexes_stale()
 
     def __iter__(self):
-        """Iterate over live column values in insertion order, skipping deleted rows."""
+        """Iterate over live column values in row order, skipping deleted rows.
+
+        For an ordered view (sorted view, position view, or a reordering slice
+        such as ``t[::-1]``), rows are yielded in the view's order rather than
+        physical-ascending order.  Physical-order iteration below stays chunked.
+        """
         self._ensure_not_stale()
+        slp = getattr(self._table, "_cached_live_positions", None)
+        if slp is not None and self._table.base is not None:
+            yield from self._values_from_key(slice(None), check_stale=False)
+            return
         if self.is_computed:
             yield from self._iter_chunks_computed(size=None)
             return
@@ -1276,7 +1285,13 @@ class Column:
             )
             preview_values = [f"<{label}>"] * min(len(self), preview_len)
         else:
-            preview_pos = np.where(self._valid_rows[:])[0][:preview_len]
+            # Honor an ordered view (sorted/position view, reordering slice) so
+            # the preview shows the view's leading rows, not physical-first ones.
+            slp = getattr(self._table, "_cached_live_positions", None)
+            if slp is not None and self._table.base is not None:
+                preview_pos = np.asarray(slp[:preview_len])
+            else:
+                preview_pos = np.where(self._valid_rows[:])[0][:preview_len]
             if self.is_dictionary or self.is_varlen_scalar:
                 preview_values = self._raw_col[preview_pos]
             elif len(preview_pos) == 0:
@@ -5602,7 +5617,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self,
         keys: str | Sequence[str],
         *,
-        sort: bool = False,
+        sort: bool | None = None,
         dropna: bool = True,
         engine: str = "auto",
         chunk_size: int | None = None,
@@ -5614,9 +5629,55 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         keys:
             Column name or sequence of column names to group by.
         sort:
-            If ``True``, sort the result by the group keys.  The default
-            ``False`` preserves the hash aggregation order and is usually
-            faster.
+            Controls the ordering of the output groups:
+
+            * ``True`` -- always return groups sorted by key.
+            * ``False`` -- do not sort; groups come out in a deterministic but
+              unspecified order (integer/dense keys are still ascending, as that
+              order is free).
+            * ``None`` (default) -- *auto*: sort only when the path can do so
+              cheaply.  Integer and dictionary (string) keys are sorted (free or
+              vectorized); float and multi-key results, whose only ordering is a
+              Python sort over every distinct group, are left unsorted.  This
+              avoids paying an O(G log G) Python sort that can rival the grouping
+              cost itself on high-cardinality data.
+
+            .. list-table::
+               :header-rows: 1
+
+               * - key kind
+                 - ``sort=False``
+                 - ``sort=None`` (auto)
+                 - ``sort=True``
+               * - int / dense
+                 - ascending\\ :sup:`*`
+                 - ascending
+                 - ascending
+               * - dictionary / string
+                 - first-seen code order
+                 - sorted by string
+                 - sorted by string
+               * - float
+                 - unspecified\\ :sup:`**`
+                 - unspecified\\ :sup:`**`
+                 - sorted
+               * - multi-key / generic
+                 - unspecified\\ :sup:`**`
+                 - unspecified\\ :sup:`**`
+                 - sorted
+
+            :sup:`*` integer dense is always ascending, so ``False`` means "no
+            ordering promise", not "guaranteed unsorted".
+
+            :sup:`**` deterministic for a given table, but order is an
+            implementation detail (hash-bucket or first-appearance depending on
+            the path); do not rely on it -- pass ``sort=True`` if you need order.
+
+            .. note::
+               This differs from pandas, whose ``groupby`` defaults to
+               ``sort=True``.  blosc2 targets large, potentially on-disk data
+               where an unconditional group sort is not always cheap relative to
+               the scan, hence the ``None`` auto-default.
         dropna:
             If ``True`` (default), rows with null/NaN group keys are skipped.
             If ``False``, null/NaN keys form their own group.
@@ -11759,16 +11820,24 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _run_row_logic(self, ind: int | slice | str | Iterable) -> CTable:
         true_pos = self._live_positions_from_valid_rows_chunks()
 
+        # A boolean mask is set-like: it selects rows in physical-ascending order
+        # and cannot represent duplicates.  Every other selector — a slice (incl.
+        # negative-step reverse), an integer array, or a list of positions —
+        # carries an explicit order and may repeat rows.  Detect the mask before
+        # any list() coercion so we keep its dtype.
+        is_bool_mask = isinstance(ind, np.ndarray) and ind.dtype == np.bool_
+
         if isinstance(ind, Iterable) and not isinstance(ind, (str, bytes)):
             ind = list(ind)
 
-        mant_pos = true_pos[ind]
+        mant_pos = np.asarray(true_pos[ind])
 
-        # For an ordered view (sorted view or position view), preserve the row
-        # order and any duplicates by carrying the positions forward.  A boolean
-        # mask is physical-order and set-like, so it would silently drop both.
-        if getattr(self, "_cached_live_positions", None) is not None:
-            return self._view_from_positions(np.asarray(mant_pos))
+        # Carry the positions forward whenever order matters: for an ordered view
+        # (sorted view or position view), or for any order-carrying selector.  A
+        # boolean mask is physical-order and set-like, so going through it would
+        # silently drop both the requested order and any duplicates.
+        if getattr(self, "_cached_live_positions", None) is not None or not is_bool_mask:
+            return self._view_from_positions(mant_pos)
 
         new_mask_np = np.zeros(len(self._valid_rows), dtype=bool)
         new_mask_np[mant_pos] = True

@@ -169,6 +169,42 @@ def test_groupby_dictionary_key_groups_by_decoded_value():
     assert rows(out) == [("Paris", 40), ("Rome", 20)]
 
 
+def test_groupby_dictionary_key_sorted_by_string_not_code_order():
+    """Dict groups come out alphabetical even when codes are assigned otherwise.
+
+    Regression for the always-sorted contract: with "Rome" seen before "Paris"
+    (codes Rome=0, Paris=1), the result must still be Paris-then-Rome.  The old
+    code emitted code-assignment order unless ``sort=True``, and even then only
+    happened to look right when first-seen order matched alphabetical.
+    """
+    t = CTable(DictRow, new_data=[("Rome", 20), ("Paris", 10), ("Rome", 5), ("Paris", 30)])
+
+    # No sort= argument: ordering is now guaranteed.
+    assert rows(t.group_by("city").agg({"sales": "sum"})) == [("Paris", 40), ("Rome", 25)]
+    # argmin/argmax drive the dense-position path; it must sort the same way.
+    out = t.group_by("city").agg({"sales": ["argmin", "argmax"]})
+    # Paris rows 1,3 (10,30) -> argmin 1, argmax 3; Rome rows 0,2 (20,5).
+    assert rows(out) == [("Paris", 1, 3), ("Rome", 2, 0)]
+
+
+def test_groupby_dictionary_key_sorted_matches_python_sorted():
+    """Vectorized dict-key ordering matches a Python sorted() reference."""
+    rng = np.random.default_rng(0)
+    labels = [f"city_{i:03d}" for i in range(200)]
+    data = [(labels[int(rng.integers(len(labels)))], int(rng.integers(100))) for _ in range(5000)]
+    t = CTable(DictRow, new_data=data)
+
+    got = [r[0] for r in rows(t.group_by("city").size())]
+    assert got == sorted({label for label, _ in data})
+
+
+def test_groupby_string_key_sorted_without_sort_flag():
+    """Fixed-width string keys (generic path) are also always sorted by key."""
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city").size()
+    assert [r[0] for r in rows(out)] == ["Berlin", "Paris", "Rome"]
+
+
 def test_groupby_dictionary_key_argmin_argmax_positions():
     # Dictionary key drives the dense-position fast path; verify it returns the
     # logical row positions of the extremes (chicago-taxi "company" shape).
@@ -262,7 +298,9 @@ class DictFloatRow:
         (
             DictFloatRow,
             [("a", 1.5), ("c", 10.0), ("b", 2.5), ("c", 3.0), ("a", 4.0)],
-            [("a", 5.5), ("c", 13.0), ("b", 2.5)],
+            # Groups come out sorted by decoded string, not code-assignment order
+            # ("c" was seen before "b").
+            [("a", 5.5), ("b", 2.5), ("c", 13.0)],
         ),
     ],
 )
@@ -277,7 +315,9 @@ def test_groupby_fast_path_sum_variants(row_type, data, expected):
 def test_groupby_float_integral_fast_path_falls_back_for_non_integral_keys():
     t = CTable(Float64KeyRow, new_data=[(0.5, 1.0), (1.5, 2.0), (0.5, 3.0)])
 
-    out = t.group_by("key").agg({"value": "sum"})
+    # Float keys are not key-sorted by default (sort=None); request sort=True to
+    # assert a specific order.
+    out = t.group_by("key", sort=True).agg({"value": "sum"})
 
     assert rows(out) == [(0.5, 4.0), (1.5, 2.0)]
 
@@ -448,7 +488,9 @@ def test_groupby_cython_arbitrary_float_key_aggs():
         new_data=[(0.5, 1.0), (1.25, 10.0), (0.5, 3.0), (-2.5, 4.0), (1.25, 2.0)],
     )
 
-    out = t.group_by("key").agg({"value": ["count", "sum", "mean", "min", "max"]})
+    # Float keys are not key-sorted by default (sort=None); request sort=True to
+    # assert a specific order.
+    out = t.group_by("key", sort=True).agg({"value": ["count", "sum", "mean", "min", "max"]})
 
     assert rows(out) == [
         (-2.5, 1, 4.0, 4.0, 4.0, 4.0),
@@ -547,3 +589,80 @@ def test_groupby_persistent_output_urlpath_on_convenience_method(tmp_path):
 
     reopened = CTable.open(str(path), mode="r")
     assert rows(reopened) == [("Berlin", 6.0), ("Paris", 7 / 3), ("Rome", 4.0)]
+
+
+# ----------------------------------------------------------------------
+# Tri-state sort= (True / False / None-auto)
+# ----------------------------------------------------------------------
+
+# First-seen order is deliberately non-alphabetical / non-ascending so that a
+# real reorder is observable.
+_DICT_SORT_DATA = [("zeta", 1.0), ("alpha", 2.0), ("mike", 3.0), ("alpha", 4.0), ("zeta", 5.0)]
+_INT_SORT_DATA = [(30, 1.0), (10, 2.0), (20, 3.0), (10, 4.0)]
+_FLOAT_SORT_DATA = [(3.5, 1.0), (1.5, 2.0), (2.5, 3.0), (1.5, 4.0)]
+
+
+def _keys(out):
+    return [out._cols[out.col_names[0]][i] for i in range(out.nrows)]
+
+
+def test_groupby_int_key_always_ascending_regardless_of_sort():
+    # Integer/dense keys come out ascending under every sort= value -- nonzero
+    # ordering is free and unavoidable.
+    t = CTable(Int32FloatRow, new_data=_INT_SORT_DATA)
+    for sort in (None, True, False):
+        assert _keys(t.group_by("key", sort=sort).sum("value")) == [10, 20, 30]
+
+
+def test_groupby_dict_key_sorted_under_auto_and_true():
+    # Dictionary keys are cheap to sort, so None (auto) and True both sort by
+    # string; False keeps first-seen code order.
+    t = CTable(DictFloatRow, new_data=_DICT_SORT_DATA)
+    assert _keys(t.group_by("key").sum("value")) == ["alpha", "mike", "zeta"]  # default None
+    assert _keys(t.group_by("key", sort=True).sum("value")) == ["alpha", "mike", "zeta"]
+    assert _keys(t.group_by("key", sort=False).sum("value")) == ["zeta", "alpha", "mike"]
+
+
+def test_groupby_float_key_unsorted_under_auto_sorted_under_true():
+    # Float keys only sort via a Python list.sort, so None (auto) leaves them
+    # unsorted; True sorts. The unsorted order must be deterministic across runs.
+    t = CTable(Float64KeyRow, new_data=_FLOAT_SORT_DATA)
+    assert _keys(t.group_by("key", sort=True).sum("value")) == [1.5, 2.5, 3.5]
+    auto1 = _keys(t.group_by("key").sum("value"))
+    auto2 = _keys(t.group_by("key").sum("value"))
+    assert auto1 == auto2  # deterministic
+    assert sorted(auto1) == [1.5, 2.5, 3.5]  # same groups, order unspecified
+
+
+def test_groupby_multikey_unsorted_under_auto_sorted_under_true():
+    # Multi-key results only sort via a Python list.sort, so None (auto) leaves
+    # them unsorted (deterministic but unspecified order); True sorts.
+    data = [("z", 2, 1.0), ("a", 1, 2.0), ("z", 1, 3.0), ("a", 1, 4.0)]
+    t = CTable(DictIntKeyFloatRow, new_data=data)
+
+    def keypairs(out):
+        return [(str(r[0]), int(r[1])) for r in rows(out)]
+
+    expected = {("a", 1), ("z", 1), ("z", 2)}
+    assert keypairs(t.group_by(["key0", "key1"], sort=True).sum("value")) == [
+        ("a", 1),
+        ("z", 1),
+        ("z", 2),
+    ]
+    auto1 = keypairs(t.group_by(["key0", "key1"]).sum("value"))
+    auto2 = keypairs(t.group_by(["key0", "key1"]).sum("value"))
+    assert auto1 == auto2  # deterministic
+    assert set(auto1) == expected  # same groups, order unspecified
+
+
+def test_group_reduce_tristate_sort():
+    # group_reduce mirrors the tri-state. Its float path is vectorized
+    # (np.argsort), so unlike CTable's float-hash it *does* sort under None.
+    keys = blosc2.array([3, 1, 2, 1])
+    values = blosc2.array([1.0, 2.0, 3.0, 4.0])
+    g_true, _ = blosc2.group_reduce(keys, values, op="sum", sort=True)
+    assert list(g_true) == [1, 2, 3]
+    g_auto, _ = blosc2.group_reduce(keys, values, op="sum")  # default None, cheap -> sorted
+    assert list(g_auto) == [1, 2, 3]
+    g_false, _ = blosc2.group_reduce(keys, values, op="sum", sort=False)
+    assert sorted(g_false) == [1, 2, 3]  # order unspecified, same groups

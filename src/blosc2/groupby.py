@@ -75,7 +75,7 @@ class CTableGroupBy:
         table: CTable,
         keys: str | Sequence[str],
         *,
-        sort: bool = False,
+        sort: bool | None = None,
         dropna: bool = True,
         engine: str = "auto",
         chunk_size: int | None = None,
@@ -89,7 +89,10 @@ class CTableGroupBy:
 
         self.table = table
         self.keys = [table._logical_to_physical_name(k) for k in keys]
-        self.sort = bool(sort)
+        # Tri-state ordering request resolved per execution path by
+        # _resolve_sort(): True forces a key sort, False emits first-appearance
+        # order, None (the default) sorts only when the path can do so cheaply.
+        self.sort = sort
         self.dropna = bool(dropna)
         self.engine = engine
         self.chunk_size = chunk_size
@@ -713,19 +716,21 @@ class CTableGroupBy:
                     if not call_checked(desc["kernel"], *args):
                         return None
 
+        # For integer keys np.nonzero already yields ascending key order.  When
+        # sorting is requested (sort=True, or sort=None since the dict lexsort is
+        # cheap) dictionary keys are reordered by decoded string; otherwise they
+        # stay in first-appearance (code-assignment) order.
         group_codes = np.nonzero(keys_present)[0]
-        if self.sort and key_is_dict:
-            group_codes = np.array(
-                sorted(
-                    group_codes,
-                    key=lambda code: _sortable_key_part(self.table._cols[key_name].decode(int(code))),
-                ),
-                dtype=group_codes.dtype,
-            )
+        if key_is_dict and self._resolve_sort(cheap=True):
+            group_codes = self._sort_dict_group_codes(key_name, group_codes)
 
+        key_values = (
+            self.table._cols[key_name].decode_batch(group_codes)
+            if key_is_dict
+            else [_python_scalar(code) for code in group_codes]
+        )
         rows = []
-        for code in group_codes:
-            key_value = self.table._cols[key_name].decode(int(code)) if key_is_dict else _python_scalar(code)
+        for code, key_value in zip(group_codes, key_values, strict=True):
             row = {key_name: key_value}
             for desc in descriptors:
                 spec = desc["spec"]
@@ -756,7 +761,7 @@ class CTableGroupBy:
 
     def _try_execute_cython_i32_f64_sum(self, specs: list[_AggSpec]):  # noqa: C901
         """Cython fast path for one int32 key and one non-null float64 sum."""
-        if len(self.keys) != 1 or len(specs) != 1 or specs[0].op != "sum" or self.sort:
+        if len(self.keys) != 1 or len(specs) != 1 or specs[0].op != "sum":
             return None
         spec = specs[0]
         if spec.input_col is None:
@@ -823,10 +828,22 @@ class CTableGroupBy:
                 if status != 0:
                     return None
 
-        rows = []
-        for code in np.nonzero(present)[0]:
-            key_value = self.table._cols[key_name].decode(int(code)) if key_is_dict else int(code)
-            rows.append({key_name: key_value, spec.output_col: float(sums[code])})
+        # np.nonzero gives ascending integer-key order; dict keys (which can
+        # reach this path when the broader dense_int_key path declined) are
+        # reordered by decoded string when a cheap sort is requested, matching
+        # the other dense paths.
+        present_codes = np.nonzero(present)[0]
+        if key_is_dict and self._resolve_sort(cheap=True):
+            present_codes = self._sort_dict_group_codes(key_name, present_codes)
+        key_values = (
+            self.table._cols[key_name].decode_batch(present_codes)
+            if key_is_dict
+            else [int(code) for code in present_codes]
+        )
+        rows = [
+            {key_name: key_value, spec.output_col: float(sums[code])}
+            for code, key_value in zip(present_codes, key_values, strict=True)
+        ]
         return self._build_result(rows, specs)
 
     def _try_execute_cython_float_hash(self, specs: list[_AggSpec]):  # noqa: C901
@@ -934,15 +951,18 @@ class CTableGroupBy:
                             state.value = value
                         state.count += 1
 
-        # Hash-table iteration order is intentionally not exposed.  Emit float
-        # hash groups in key order for deterministic results and compatibility
-        # with the previous NumPy fallback behavior for these cases.
+        # list(acc) follows the Cython kernel's emission order (hash-bucket
+        # order) -- deterministic for a given table but unspecified.  Key-sorting
+        # it is a Python list.sort over all groups, so it only runs when
+        # requested (sort=True; sort=None leaves it unsorted since this path is
+        # not cheap to sort).
         ordered_keys = list(acc)
-        ordered_keys.sort(
-            key=lambda k: tuple(
-                (1, "") if isinstance(v, float) and math.isnan(v) else (0, v) for v in key_values[k]
+        if self._resolve_sort(cheap=False):
+            ordered_keys.sort(
+                key=lambda k: tuple(
+                    (1, "") if isinstance(v, float) and math.isnan(v) else (0, v) for v in key_values[k]
+                )
             )
-        )
         rows = []
         for norm_key in ordered_keys:
             row = dict(zip(self.keys, key_values[norm_key], strict=True))
@@ -960,7 +980,7 @@ class CTableGroupBy:
 
     def _try_execute_cython_float_integral_key_f64_sum(self, specs: list[_AggSpec]):  # noqa: C901
         """Cython fast path for integral float32/float64 keys and one non-null float64 sum."""
-        if len(self.keys) != 1 or len(specs) != 1 or specs[0].op != "sum" or self.sort:
+        if len(self.keys) != 1 or len(specs) != 1 or specs[0].op != "sum":
             return None
         spec = specs[0]
         if spec.input_col is None:
@@ -1238,15 +1258,21 @@ class CTableGroupBy:
                     pos_state[better] = chunk_pos[better]
                     has_state |= chunk_has
 
+        # np.nonzero gives ascending integer-key order.  When sorting is
+        # requested (sort=True, or sort=None since the dict lexsort is cheap)
+        # dictionary keys are reordered by decoded string; otherwise they stay in
+        # first-appearance (code-assignment) order.
         group_codes = np.nonzero(present)[0]
+        if key_is_dict and self._resolve_sort(cheap=True):
+            group_codes = self._sort_dict_group_codes(key_name, group_codes)
+        if key_is_dict:
+            key_values = self.table._cols[key_name].decode_batch(group_codes)
+        elif key_is_integral_float:
+            key_values = [float(code) for code in group_codes]
+        else:
+            key_values = [_python_scalar(code) for code in group_codes]
         rows = []
-        for code in group_codes:
-            if key_is_dict:
-                key_value = self.table._cols[key_name].decode(int(code))
-            elif key_is_integral_float:
-                key_value = float(code)
-            else:
-                key_value = _python_scalar(code)
+        for code, key_value in zip(group_codes, key_values, strict=True):
             row = {key_name: key_value}
             for spec in specs:
                 state = states[spec.output_col]
@@ -1311,17 +1337,47 @@ class CTableGroupBy:
         unique, inverse = np.unique(packed, return_inverse=True)
         return unique, inverse
 
+    def _resolve_sort(self, *, cheap: bool) -> bool:
+        """Resolve the tri-state ``self.sort`` request for the current path.
+
+        ``cheap`` is declared by the call site: ``True`` for vectorized/free
+        ordering (``np.nonzero`` ascending or the vectorized
+        :meth:`_sort_dict_group_codes` lexsort), ``False`` for a Python
+        ``list.sort`` over all groups.  ``None`` (auto) sorts only cheap paths.
+        """
+        return _resolve_sort(self.sort, cheap=cheap)
+
+    def _sort_dict_group_codes(self, key_name: str, group_codes: np.ndarray) -> np.ndarray:
+        """Reorder dictionary *group_codes* so groups come out sorted by string.
+
+        Vectorized: the dictionary store holds only the unique category values
+        (cardinality ``D``, not the ``N`` rows), so decompressing it whole into a
+        NumPy array and ``np.lexsort``-ing the present codes is cheap — far
+        cheaper than a Python ``sorted`` with a per-code ``decode`` call.  Null
+        groups (``null_code``) sort first, matching ``_sortable_key_part``'s
+        ordering of ``None`` before real values.
+        """
+        col = self.table._cols[key_name]
+        null_code = int(col._spec.null_code)
+        all_strings = np.asarray(col._dict_store[:])  # D unique values, no nulls
+        is_non_null = group_codes != null_code
+        decoded = np.empty(len(group_codes), dtype=all_strings.dtype if all_strings.size else "<U1")
+        # Null groups keep a placeholder; the primary lexsort key sorts them
+        # first regardless, so their string value is never compared.
+        decoded[is_non_null] = all_strings[group_codes[is_non_null]]
+        decoded[~is_non_null] = ""
+        order = np.lexsort((decoded, is_non_null.astype(np.int8)))
+        return group_codes[order]
+
     def _display_keys(self, unique_keys: np.ndarray | list[np.ndarray]) -> list[tuple[Any, ...]]:
         if len(self.keys) == 1:
             name = self.keys[0]
             col_info = self.table._schema.columns_by_name[name]
-            values = []
-            for value in np.asarray(unique_keys):
-                if self.table._is_dictionary_column(col_info):
-                    values.append((self.table._cols[name].decode(int(value)),))
-                else:
-                    values.append((_python_scalar(value),))
-            return values
+            unique_arr = np.asarray(unique_keys)
+            if self.table._is_dictionary_column(col_info):
+                decoded = self.table._cols[name].decode_batch(unique_arr)
+                return [(value,) for value in decoded]
+            return [(_python_scalar(value),) for value in unique_arr]
 
         result = []
         assert isinstance(unique_keys, np.ndarray)
@@ -1494,8 +1550,13 @@ class CTableGroupBy:
         key_values: dict[Any, tuple[Any, ...]],
         specs: list[_AggSpec],
     ) -> list[dict[str, Any]]:
+        # This path handles keys that miss the vectorized fast paths (fixed-width
+        # strings, multi-key, exotic dtypes); ordering is a Python list.sort over
+        # all groups, so it only runs when requested.  list(acc) is deterministic
+        # first-appearance order (sort=False, or sort=None since this path is not
+        # cheap to sort).
         keys = list(acc)
-        if self.sort:
+        if self._resolve_sort(cheap=False):
             keys.sort(key=lambda k: tuple(_sortable_key_part(v) for v in key_values[k]))
 
         rows = []
@@ -1689,7 +1750,7 @@ def _null_output_value(spec: SchemaSpec):
 # ----------------------------------------------------------------------
 
 
-def group_reduce(keys, values=None, op: AggName = "size", *, sort: bool = False, dropna: bool = True):
+def group_reduce(keys, values=None, op: AggName = "size", *, sort: bool | None = None, dropna: bool = True):
     """Group *keys* and reduce *values* with *op*.
 
     This is a lower-level, array-oriented grouped reduction primitive.  It exposes
@@ -1707,9 +1768,13 @@ def group_reduce(keys, values=None, op: AggName = "size", *, sort: bool = False,
     op : {"size", "count", "sum", "mean", "min", "max"}, default: "size"
         Reduction operation.  ``"size"`` counts rows per group, while
         ``"count"`` counts non-NaN values per group.
-    sort : bool, default: False
-        If true, sort output groups by key.  With ``sort=False`` output order is
-        implementation dependent.
+    sort : bool or None, default: None
+        Output group ordering.  ``True`` always sorts groups by key; ``False``
+        never sorts (order is implementation dependent but deterministic for a
+        given input); ``None`` (the default) sorts only when cheap -- the
+        vectorized integer and float kernels sort (``np.argsort``), while the
+        generic Python fallback is left unsorted to avoid an O(G log G) Python
+        sort that can rival the grouping cost on high-cardinality keys.
     dropna : bool, default: True
         If true, skip NaN float keys.  If false, all NaN keys form one group.
 
@@ -1750,15 +1815,20 @@ def group_reduce(keys, values=None, op: AggName = "size", *, sort: bool = False,
     if len(keys_arr) == 0:
         return keys_arr.copy(), np.empty(0, dtype=_result_dtype(values_arr, op))
 
-    fast = _try_dense_integer(keys_arr, values_arr, op, sort=sort)
+    # The dense integer and float-hash kernels sort via vectorized np.argsort
+    # (cheap); the generic Python fallback sorts via list.sort (expensive).
+    # Resolve the tri-state per path's cost so None auto-sorts only the cheap ones.
+    fast = _try_dense_integer(keys_arr, values_arr, op, sort=_resolve_sort(sort, cheap=True))
     if fast is not None:
         return fast
 
-    fast = _try_float_hash(keys_arr, values_arr, op, sort=sort, dropna=dropna)
+    fast = _try_float_hash(keys_arr, values_arr, op, sort=_resolve_sort(sort, cheap=True), dropna=dropna)
     if fast is not None:
         return fast
 
-    return _group_reduce_numpy(keys_arr, values_arr, op, sort=sort, dropna=dropna)
+    return _group_reduce_numpy(
+        keys_arr, values_arr, op, sort=_resolve_sort(sort, cheap=False), dropna=dropna
+    )
 
 
 def _try_dense_integer(keys: np.ndarray, values: np.ndarray | None, op: str, *, sort: bool):  # noqa: C901
@@ -1968,6 +2038,20 @@ def _group_reduce_sort_key(value: Any) -> tuple[int, Any]:
     if isinstance(value, float) and math.isnan(value):
         return (2, "")
     return (1, value)
+
+
+def _resolve_sort(sort: bool | None, *, cheap: bool) -> bool:
+    """Resolve a tri-state ``sort`` request for a given execution path.
+
+    ``sort`` is ``True`` (always sort), ``False`` (never sort), or ``None``
+    (auto: sort only when this path can do so cheaply).  ``cheap`` is declared
+    by the call site: ``True`` for vectorized/free ordering (``np.nonzero``
+    ascending or a vectorized lexsort/argsort), ``False`` for a Python
+    ``list.sort`` over all groups.
+    """
+    if sort is None:
+        return cheap
+    return sort
 
 
 def _maybe_sort(groups: np.ndarray, result: np.ndarray, sort: bool):
