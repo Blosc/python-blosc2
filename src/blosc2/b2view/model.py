@@ -915,13 +915,19 @@ class StoreBrowser:
         return self.normalize_path(path) in self._window_views
 
     def group_key_columns(self, path: str) -> list[str]:
-        """CTable columns at *path* usable as group-by keys (dictionary or integer)."""
+        """CTable columns at *path* usable as group-by keys (dictionary or numeric).
+
+        Includes floats: grouping by a numeric column (e.g. trip duration/distance
+        or a timestamp) buckets rows by exact value — handy for spotting rush
+        hours or best-profit windows.  Cardinality is the user's call; we don't
+        bin.  Non-dictionary text and nested/ndarray columns are excluded.
+        """
         obj = self._get_object(path)
         out = []
         for name in getattr(obj, "col_names", []) or []:
             col = obj[name]
             dt = getattr(col, "dtype", None)
-            if getattr(col, "is_dictionary", False) or (dt is not None and dt.kind in "iu"):
+            if getattr(col, "is_dictionary", False) or (dt is not None and dt.kind in "iuf"):
                 out.append(name)
         return out
 

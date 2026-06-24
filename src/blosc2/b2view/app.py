@@ -261,7 +261,7 @@ class HelpScreen(ModalScreen[None]):
                 ("f", "filter rows (CTable)"),
                 ("S", "sort by an indexed column, or the grouped result (CTable; R reverses)"),
                 ("R", "reverse the current sort order (when sorted)"),
-                ("G", "group by a dictionary/integer column (CTable; p shows a bar chart)"),
+                ("G", "group by a dictionary/numeric column (CTable; p shows a bar chart)"),
                 ("escape", "unlock a row window / clear the active filter, sort or group"),
             ],
         ),
@@ -3275,7 +3275,7 @@ class B2ViewApp(App):
             return
         keys = self.browser.group_key_columns(self.selected_path)
         if not keys:
-            self.notify("No dictionary/integer columns to group by", severity="warning")
+            self.notify("No dictionary/numeric columns to group by", severity="warning")
             return
         # Pre-fill with this table's active group, else the last one used
         # anywhere; GroupByScreen ignores any field whose column is absent here.

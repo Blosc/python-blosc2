@@ -61,11 +61,11 @@ def group_store(tmp_path_factory):
 from blosc2.b2view.model import StoreBrowser  # noqa: E402
 
 
-def test_group_key_columns_are_dict_and_int(group_store):
+def test_group_key_columns_are_dict_and_numeric(group_store):
     path, _ = group_store
     with StoreBrowser(path) as browser:
         keys = browser.group_key_columns("/ctable")
-    assert set(keys) == {"vendor", "region"}  # float 'amount' excluded
+    assert set(keys) == {"vendor", "region", "amount"}  # dict + int + float
 
 
 def test_group_value_columns_are_numeric_scalars(group_store):
