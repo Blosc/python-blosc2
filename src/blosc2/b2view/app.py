@@ -717,10 +717,12 @@ class FilterScreen(ModalScreen[str | None]):
 
 
 class SortByScreen(ModalScreen["tuple[str, bool] | None"]):
-    """Dropdown to sort a CTable by one of its FULL-indexed columns.
+    """Dropdown to sort a CTable by one of its columns.
 
     ↑/↓ to pick a column, ``r`` (or click) toggles reverse/descending, Enter
-    applies.  Dismisses with ``(column, reverse)`` or None on cancel.
+    applies.  ``labels`` may decorate the displayed names (e.g. mark indexed
+    columns) while ``columns`` carries the real names returned on selection.
+    Dismisses with ``(column, reverse)`` or None on cancel.
     """
 
     CSS = """
@@ -751,11 +753,13 @@ class SortByScreen(ModalScreen["tuple[str, bool] | None"]):
         self,
         *,
         columns: list[str],
+        labels: list[str] | None = None,
         current: tuple[str, bool] | None = None,
-        title: str = "Sort by indexed column (Enter applies, R reverses)",
+        title: str = "Sort by column (Enter applies, R reverses)",
     ):
         super().__init__()
         self.columns = columns
+        self._labels = labels or columns
         self._current = current
         self._title = title
 
@@ -764,7 +768,7 @@ class SortByScreen(ModalScreen["tuple[str, bool] | None"]):
         with Vertical(id="sortby-dialog"):
             yield Static(self._title, id="sortby-title")
             yield OptionList(
-                *(Option(name, id=str(i)) for i, name in enumerate(self.columns)), id="sortby-list"
+                *(Option(name, id=str(i)) for i, name in enumerate(self._labels)), id="sortby-list"
             )
             yield Checkbox("Reverse (descending)", value=cur_rev, id="sortby-reverse")
 
@@ -3190,22 +3194,62 @@ class B2ViewApp(App):
             )
             self.push_screen(screen, self._apply_group_sort)
             return
-        columns = self.browser.full_index_columns(self.selected_path)
+        # Offer every column. FULL-indexed columns reuse their pre-sorted
+        # positions (instant); the rest materialise the sort key and lexsort on
+        # demand — slower on a big table, but no whole-table copy.
+        columns = self.browser.column_names(self.selected_path) or []
         if not columns:
-            self.notify("No FULL-indexed columns to sort by", severity="warning")
+            self.notify("No columns to sort by", severity="warning")
             return
-        screen = SortByScreen(columns=columns, current=self.browser.get_sort(self.selected_path))
+        indexed = set(self.browser.full_index_columns(self.selected_path))
+        title = (
+            "Sort by column (Enter applies, R reverses)\n◆ = indexed (fast)"
+            if indexed
+            else "Sort by column (Enter applies, R reverses)\nnon-indexed columns are scanned"
+        )
+        labels = [f"◆ {c}" if c in indexed else c for c in columns]
+        screen = SortByScreen(
+            columns=columns,
+            labels=labels,
+            current=self.browser.get_sort(self.selected_path),
+            title=title,
+        )
         self.push_screen(screen, self._apply_sort)
 
     def _apply_sort(self, choice: tuple[str, bool] | None, *, reposition: bool = True) -> None:
         if choice is None or self.browser is None or self.table_page is None:
             return  # cancelled
         column, reverse = choice
+        # A FULL-indexed column reuses its pre-sorted positions instantly; a
+        # non-indexed column must materialise the key and lexsort, which can take
+        # a while on a big table — run that off the UI thread with a spinner so
+        # the app stays responsive.
+        if column in set(self.browser.full_index_columns(self.selected_path)):
+            try:
+                self.browser.set_sort(self.selected_path, column, reverse)
+            except Exception as exc:
+                self.notify(f"Cannot sort: {exc}", severity="error")
+                return
+            self._finish_sort(column, reverse, reposition)
+        else:
+            self._sort_in_background(column, reverse, reposition)
+
+    @work(thread=True, exclusive=True)
+    def _sort_in_background(self, column: str, reverse: bool, reposition: bool) -> None:
+        """Build the sort permutation off the UI thread, with a loading spinner."""
+        table = self.query_one("#data-table", DataTable)
+        self.app.call_from_thread(setattr, table, "loading", True)
         try:
             self.browser.set_sort(self.selected_path, column, reverse)
         except Exception as exc:
-            self.notify(f"Cannot sort: {exc}", severity="error")
+            self.app.call_from_thread(setattr, table, "loading", False)
+            self.app.call_from_thread(self.notify, f"Cannot sort: {exc}", severity="error")
             return
+        self.app.call_from_thread(self._finish_sort, column, reverse, reposition)
+
+    def _finish_sort(self, column: str, reverse: bool, reposition: bool) -> None:
+        """Repaint the grid after the sort view is in place (UI thread)."""
+        self.query_one("#data-table", DataTable).loading = False
         self.row_window = None  # set_sort drops any window/filter; keep the chip in sync
         self.table_buffer = None
         # Park the cursor on the sorted column's first row.  On the initial sort

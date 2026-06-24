@@ -107,6 +107,26 @@ def test_indexed_column_plots_from_summary(tmp_path, kind):
         assert np.nanmax(env["ymax"]) == pytest.approx(vals.max())
 
 
+def test_sort_non_indexed_column(tmp_path):
+    """A column with no FULL index still sorts (materialise key + lexsort)."""
+
+    @dataclasses.dataclass
+    class Row:
+        v: int = blosc2.field(blosc2.int64())
+
+    path = str(tmp_path / "noidx.b2z")
+    rng = np.random.default_rng(0)
+    vals = rng.integers(0, 1000, N).astype(np.int64)
+    t = blosc2.CTable(Row, urlpath=path, mode="w", expected_size=N)
+    t.extend([(int(x),) for x in vals])
+    t.close()  # no create_index
+
+    with StoreBrowser(path) as browser:
+        assert browser.full_index_columns("/") == []  # nothing indexed
+        browser.set_sort("/", "v", reverse=False)
+        assert _head(browser, "v", 5) == sorted(vals.tolist())[:5]
+
+
 def test_sort_dictionary_by_decoded_string(sort_store):
     path, _, labels = sort_store
     with StoreBrowser(path) as browser:
@@ -216,7 +236,9 @@ async def test_sort_last_column_keeps_full_window(wide_store):
 
         await pilot.press("S")
         await pilot.pause()
-        await pilot.press("enter")  # only indexed column is the last one
+        # Every column is now offered; jump to the last one (the indexed one).
+        app.screen.query_one("#sortby-list").highlighted = len(cols) - 1
+        await pilot.press("enter")
         await pilot.pause()
         assert app.browser.get_sort("/") == (last, False)
 
@@ -246,6 +268,31 @@ async def test_sort_last_column_keeps_full_window(wide_store):
         cur_row, cur_col = app.query_one("#data-table").cursor_coordinate
         assert page["columns"][cur_col] == last
         assert page["data"][last][0] == max(page["data"][last])
+
+
+@pytest.mark.asyncio
+@pytest.mark.tui
+async def test_sort_non_indexed_column_async(wide_store):
+    """Sorting a non-indexed column runs in the background and still applies."""
+    path, cols = wide_store
+    app = B2ViewApp(path, start_panel="data")
+    async with app.run_test(size=TERM_SIZE) as pilot:
+        await _wait_for_table(pilot)
+        app.query_one("#data-table").focus()
+        await pilot.pause()
+
+        await pilot.press("S")
+        await pilot.pause()
+        app.screen.query_one("#sortby-list").highlighted = 0  # c00 — not indexed
+        await pilot.press("enter")
+        # Wait for the background sort worker to finish and repaint.
+        for _ in range(100):
+            await pilot.pause()
+            if app.browser.get_sort("/") == (cols[0], False):
+                break
+        assert app.browser.get_sort("/") == (cols[0], False)
+        col = cols[0]
+        assert app.table_page["data"][col][0] == min(app.table_page["data"][col])
 
 
 @pytest.mark.asyncio
