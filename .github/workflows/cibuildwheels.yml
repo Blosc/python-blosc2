@@ -65,7 +65,7 @@ jobs:
             artifact_name: "macos-universal2"
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -156,7 +156,7 @@ jobs:
             artifact_name: "wasm-pyodide-cp314"
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
