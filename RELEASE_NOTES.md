@@ -4,6 +4,16 @@
 
 XXX version-specific blurb XXX
 
+### `b2view` is now an opt-in extra
+
+- The `b2view` terminal browser and its TUI stack (`textual`,
+  `textual-plotext`) are no longer core dependencies: a plain
+  `pip install blosc2` no longer pulls them, keeping the compression library
+  lean (and dropping deps that are unusable under wasm32, which has no TTY).
+  Install the viewer with `pip install "blosc2[tui]"`, or
+  `pip install "blosc2[hires]"` to also get the high-res `h` view.  The
+  `b2view` command prints this hint if the dependencies are missing.
+
 ### `group_by`: flexible aggregation naming
 
 - `CTable.group_by(...).agg()` now accepts a **list of `(column, ops)` pairs**

@@ -29,6 +29,29 @@ def expected_nthreads(nthreads: int) -> int:
     return 1 if blosc2.IS_WASM else nthreads
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _fast_textual_idle():
+    """Speed up the b2view (tui) tests by shrinking Textual's idle poll.
+
+    Every ``pilot.pause()``/``pilot.press()`` ends in Textual's ``wait_for_idle``,
+    which sleeps a fixed ``SLEEP_GRANULARITY`` (20 ms) per call; with hundreds of
+    pauses that floor dominates the tui suite.  8 ms is the reliable minimum (a
+    few tests assert on the rendered column-fit layout, which needs one real
+    render cycle; <6 ms fails those).  Lives here, not in a tests/b2view/
+    conftest.py, because a second conftest module would shadow this one for the
+    bare ``from conftest import ...`` imports other tests rely on.
+    """
+    try:
+        import textual._wait as textual_wait  # opt-in [tui] extra; absent otherwise
+    except ImportError:
+        yield
+        return
+    saved = textual_wait.SLEEP_GRANULARITY
+    textual_wait.SLEEP_GRANULARITY = 0.008  # 20 ms -> 8 ms
+    yield
+    textual_wait.SLEEP_GRANULARITY = saved
+
+
 def pytest_configure(config):
     blosc2.print_versions()
     if sys.platform != "emscripten":

@@ -7,11 +7,11 @@ zip-backed files (``.b2z``).  It shows the tree of groups and nodes, the
 metadata and vlmeta of the selected node, and a paged view of the data
 itself — NDArrays of any dimensionality as well as CTables.
 
-``b2view`` is installed with python-blosc2; no extra dependencies are
-needed, including the in-terminal braille plot (the ``p`` key).  Only the
-high-resolution image view (the ``h`` key) needs the ``hires`` extra —
-``pip install "blosc2[hires]"``.  See :doc:`installation` for the list of
-extras.
+``b2view`` is opt-in: install it with the ``tui`` extra —
+``pip install "blosc2[tui]"`` — which also covers the in-terminal braille
+plot (the ``p`` key).  The high-resolution image view (the ``h`` key) needs
+the ``hires`` extra instead — ``pip install "blosc2[hires]"`` (it includes
+``tui``).  See :doc:`installation` for the full list of extras.
 
 Step 1 — Create a sample store
 ------------------------------

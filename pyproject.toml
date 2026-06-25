@@ -39,8 +39,6 @@ dependencies = [
     "pydantic",
     "requests",
     "rich",
-    "textual",
-    "textual-plotext",
     "threadpoolctl; platform_machine != 'wasm32'",
 ]
 version = "4.5.2.dev0"
@@ -53,11 +51,14 @@ documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [project.optional-dependencies]
 parquet = ["pyarrow"]
-# The b2view TUI and its in-terminal braille plot (the 'p' key) are core deps,
-# so they work out of the box.  This extra only adds the high-res 'h' view,
-# which renders a real matplotlib image (kitty/iTerm2/sixel, or half-cells
-# elsewhere) — matplotlib is the heavy part, hence the opt-in.
-hires = ["textual-image", "matplotlib"]
+# The b2view terminal viewer (the `b2view` script) is opt-in: most users want
+# blosc2 only as a compression library, and the TUI stack has no use under
+# wasm32 (no TTY).  Install with `pip install "blosc2[tui]"`.  This also pulls
+# textual-plotext for the in-terminal braille plot (the 'p' key).
+tui = ["textual", "textual-plotext"]
+# Adds the high-res 'h' view on top of [tui], rendering a real matplotlib image
+# (kitty/iTerm2/sixel, or half-cells elsewhere) — matplotlib is the heavy part.
+hires = ["blosc2[tui]", "textual-image", "matplotlib"]
 
 [project.scripts]
 parquet-to-blosc2 = "blosc2.cli.parquet_to_blosc2:main"
@@ -81,8 +82,10 @@ dev = [
 ]
 test = [
     "pytest",
-    # for the b2view Pilot tests
+    # for the b2view Pilot tests (run with `-m tui`; textual is otherwise opt-in)
     "pytest-asyncio",
+    "textual; platform_machine != 'wasm32'",
+    "textual-plotext; platform_machine != 'wasm32'",
     "psutil; platform_machine != 'wasm32'",
     # torch is optional because it is quite large (but will still be used if found)
     # "torch; platform_machine != 'wasm32'",

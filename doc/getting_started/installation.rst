@@ -19,10 +19,9 @@ Conda
 Optional features (extras)
 ++++++++++++++++++++++++++
 
-The base install already includes everything needed for compression, the
-array machinery, and the :doc:`b2view <b2view>` terminal browser.  A few
-heavier, feature-specific dependencies are kept out of it and grouped
-into *extras* that you opt into with the ``blosc2[extra]`` syntax:
+The base install includes everything needed for compression and the array
+machinery.  Heavier, feature-specific dependencies are kept out of it and
+grouped into *extras* that you opt into with the ``blosc2[extra]`` syntax:
 
 .. list-table::
    :header-rows: 1
@@ -30,11 +29,14 @@ into *extras* that you opt into with the ``blosc2[extra]`` syntax:
 
    * - Extra
      - Adds
+   * - ``tui``
+     - The :doc:`b2view <b2view>` terminal browser (``textual``,
+       ``textual-plotext``), including its in-terminal braille plot (the
+       ``p`` key).  Required by the ``b2view`` command.
    * - ``hires``
      - The high-resolution image view in b2view (the ``h`` key), which
        renders a real ``matplotlib`` image in the terminal
-       (``textual-image``, ``matplotlib``).  The lightweight braille plot
-       (the ``p`` key) is built in and needs no extra.
+       (``textual-image``, ``matplotlib``).  Includes ``tui``.
    * - ``parquet``
      - The ``parquet-to-blosc2`` converter (``pyarrow``); see
        :doc:`parquet_to_blosc2`.
@@ -44,9 +46,10 @@ argument in shells like ``zsh`` that treat brackets specially):
 
 .. code-block:: console
 
-    pip install "blosc2[hires]"           # b2view high-res view (h key)
+    pip install "blosc2[tui]"             # the b2view terminal browser
+    pip install "blosc2[hires]"           # b2view + its high-res view (h key)
     pip install "blosc2[parquet]"         # the Parquet converter
-    pip install "blosc2[hires,parquet]"   # both at once
+    pip install "blosc2[tui,parquet]"     # several at once
 
 Source code
 +++++++++++
