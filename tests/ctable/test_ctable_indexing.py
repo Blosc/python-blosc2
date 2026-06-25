@@ -37,8 +37,9 @@ def _make_table(n=100, persistent_path=None):
         t = blosc2.CTable(Row, urlpath=persistent_path, mode="w")
     else:
         t = blosc2.CTable(Row)
-    for i in range(n):
-        t.append([i, float(i) * 1.5, i % 5])
+    # Bulk extend instead of n single appends (same data, ~100x faster to build).
+    ids = np.arange(n, dtype=np.int32)
+    t.extend({"id": ids, "value": ids * 1.5, "category": (ids % 5).astype(np.int32)})
     return t
 
 

@@ -1132,8 +1132,8 @@ class _RowStr:
 
 def _make_ctable(n=5):
     t = blosc2.CTable(_Row)
-    for i in range(n):
-        t.append(_Row(x=i, y=i * 1.5))
+    # Bulk extend instead of n single appends (same data, ~100x faster to build).
+    t.extend({"x": np.arange(n), "y": np.arange(n) * 1.5})
     return t
 
 

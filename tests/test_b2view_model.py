@@ -26,8 +26,8 @@ class Row:
 
 def make_ctable(n=5):
     table = blosc2.CTable(Row)
-    for i in range(n):
-        table.append(Row(x=i, y=i * 1.5))
+    # Bulk extend instead of n single appends (same data, ~100x faster to build).
+    table.extend({"x": np.arange(n), "y": np.arange(n) * 1.5})
     return table
 
 
@@ -134,8 +134,7 @@ def test_ctable_preview_buffer_reuses_loaded_rows(tmp_path):
         pytest.skip("instantiating a Textual app needs a terminal driver (termios)")
     path = tmp_path / "table.b2z"
     persistent = blosc2.CTable(Row, urlpath=str(path), mode="w")
-    for i in range(100):
-        persistent.append(Row(x=i, y=float(i)))
+    persistent.extend({"x": np.arange(100), "y": np.arange(100, dtype=np.float64)})
     persistent.close()
 
     from blosc2.b2view.app import B2ViewApp
