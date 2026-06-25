@@ -61,6 +61,30 @@ def _column_name(value: Any) -> str:
     return name
 
 
+_OP_ALIAS_CACHE: dict | None = None
+
+
+def _op_alias_map() -> dict:
+    """Map blosc2 reduction *function objects* to group-by op names, by identity.
+
+    Built lazily (and cached) to avoid importing the top-level package at module
+    load time.  Only the functions that have a matching group-by op are included;
+    matching is by object identity, so a user function merely named ``sum`` does
+    not collide with :func:`blosc2.sum`.
+    """
+    global _OP_ALIAS_CACHE
+    if _OP_ALIAS_CACHE is None:
+        import blosc2
+
+        mapping = {}
+        for op in ("sum", "mean", "min", "max", "argmin", "argmax"):
+            fn = getattr(blosc2, op, None)
+            if fn is not None:
+                mapping[fn] = op
+        _OP_ALIAS_CACHE = mapping
+    return _OP_ALIAS_CACHE
+
+
 class CTableGroupBy:
     """Deferred group-by operation returned by :meth:`CTable.group_by`.
 
@@ -75,7 +99,7 @@ class CTableGroupBy:
         table: CTable,
         keys: str | Sequence[str],
         *,
-        sort: bool = False,
+        sort: bool | None = None,
         dropna: bool = True,
         engine: str = "auto",
         chunk_size: int | None = None,
@@ -89,7 +113,10 @@ class CTableGroupBy:
 
         self.table = table
         self.keys = [table._logical_to_physical_name(k) for k in keys]
-        self.sort = bool(sort)
+        # Tri-state ordering request resolved per execution path by
+        # _resolve_sort(): True forces a key sort, False emits first-appearance
+        # order, None (the default) sorts only when the path can do so cheaply.
+        self.sort = sort
         self.dropna = bool(dropna)
         self.engine = engine
         self.chunk_size = chunk_size
@@ -171,46 +198,164 @@ class CTableGroupBy:
         """
         return self.agg({_column_name(column): "argmax"}, urlpath=urlpath)
 
-    def agg(self, aggregations: Mapping[str, str | Sequence[str]], *, urlpath: str | None = None):
+    def agg(
+        self,
+        aggregations: Mapping[str, str | Sequence[str]]
+        | Sequence[tuple[Any, str | Sequence[str]]]
+        | None = None,
+        *,
+        urlpath: str | None = None,
+        **named: tuple[str, str],
+    ):
         """Aggregate value columns per group.
+
+        Three ways to specify aggregations and name the output columns, which may
+        be combined:
+
+        * **Auto-named mapping** -- pass *aggregations* as a mapping from input
+          column name to an aggregation name (or list of names).  Each result
+          column is named ``"<column>_<op>"`` (e.g. ``price_sum``).  Compact and
+          collision-safe when a column is aggregated several ways.
+        * **Auto-named list of pairs** -- pass *aggregations* as a list of
+          ``(column, op-or-ops)`` pairs.  Same ``"<column>_<op>"`` naming, but
+          unlike the mapping form it accepts :class:`~blosc2.ctable.Column`
+          objects (e.g. ``t.price``), which cannot be dict keys.
+        * **Explicitly named** -- pass ``output_name=(column, op)`` keyword
+          arguments (pandas-style named aggregation), giving the result column
+          exactly the name you want.
 
         Parameters
         ----------
         aggregations:
-            Mapping from input column name to an aggregation name or list of
-            names.  Supported operations in Phase 1 are ``"count"``, ``"sum"``,
-            ``"mean"``, ``"min"``, ``"max"``, ``"argmin"``, ``"argmax"`` and
-            the special row-count spelling ``{"*": "size"``}.
+            Either a mapping ``{column: op-or-ops}`` or a list of
+            ``(column, op-or-ops)`` pairs.  Columns may be name strings or
+            :class:`~blosc2.ctable.Column` objects (list/named forms only).
+            Supported operations are ``"count"``, ``"sum"``, ``"mean"``,
+            ``"min"``, ``"max"``, ``"argmin"``, ``"argmax"`` and the special
+            row-count spelling ``"*": "size"``.  An op may also be given as the
+            corresponding blosc2 reduction *function* (``blosc2.sum``, ``mean``,
+            ``min``, ``max``, ``argmin``, ``argmax``), matched by identity; this
+            is a naming shorthand, not a UDF mechanism (custom functions are
+            rejected).  Result columns are named ``"<column>_<op>"``.
+        urlpath:
+            If given, write the result as a persistent CTable at that path.
+        **named:
+            Named aggregations as ``output_name=(column, op)`` pairs.  Use
+            ``("*", "size")`` for a row count.
+
+        Examples
+        --------
+        >>> g = t.group_by("city")  # doctest: +SKIP
+        >>> # Auto-named mapping: columns become sales_sum / sales_mean.
+        >>> g.agg({"sales": ["sum", "mean"]})  # doctest: +SKIP
+        >>> # Auto-named list of pairs: same names, but accepts Column objects
+        >>> # and blosc2 reduction functions as ops.
+        >>> g.agg([(t.sales, [blosc2.sum, "mean"])])  # doctest: +SKIP
+        >>> # Explicitly named: columns become revenue / avg_sale.
+        >>> g.agg(revenue=("sales", "sum"), avg_sale=("sales", "mean"))  # doctest: +SKIP
+        >>> # Forms combine, e.g. a list of pairs plus a named row count.
+        >>> g.agg([(t.sales, "sum")], n=("*", "size"))  # doctest: +SKIP
         """
-        specs = self._normalize_aggs(aggregations)
+        specs = self._normalize_aggs(aggregations, named)
         return self._execute(specs, urlpath=urlpath)
 
-    def _normalize_aggs(self, aggregations: Mapping[str, str | Sequence[str]]) -> list[_AggSpec]:
-        if not isinstance(aggregations, Mapping) or not aggregations:
-            raise ValueError("agg() requires a non-empty mapping")
+    def _resolve_op(self, op):
+        """Resolve an aggregation *op* to its name string.
+
+        Accepts a name string, or one of blosc2's own reduction *functions*
+        (:func:`blosc2.sum`, ``mean``, ``min``, ``max``, ``argmin``, ``argmax``)
+        matched **by identity** -- so a user function that merely shares a name
+        (e.g. a UDF called ``sum``) is *not* silently accepted, and custom UDF
+        aggregations are rejected rather than misinterpreted.
+        """
+        if isinstance(op, str):
+            return op
+        if callable(op):
+            alias = _op_alias_map().get(op)
+            if alias is not None:
+                return alias
+            raise ValueError(
+                f"Unsupported aggregation function {getattr(op, '__name__', op)!r}.  Pass a "
+                f"string op name (e.g. 'sum') or a blosc2 reduction function "
+                f"(blosc2.sum/mean/min/max/argmin/argmax).  Custom UDF aggregations are "
+                f"not supported."
+            )
+        raise ValueError(f"Aggregation op must be a string or a blosc2 reduction function, got {op!r}")
+
+    def _build_agg_spec(self, col_name, op, output_col: str | None = None) -> _AggSpec:
+        """Validate a single (column, op) pair and build its :class:`_AggSpec`.
+
+        ``output_col`` overrides the default ``"<column>_<op>"`` name; ``"*"`` as
+        *col_name* (only with ``op="size"``) yields a row count.  *col_name* may
+        be a column name string or a :class:`~blosc2.ctable.Column` object; *op*
+        may be an op name string or a blosc2 reduction function (see
+        :meth:`_resolve_op`).
+        """
+        op = self._resolve_op(op)
+        # Guard the "*" check with isinstance: a Column object overloads __eq__
+        # to build an expression, so a bare ``col_name == "*"`` would not return
+        # a bool.  Only the literal string "*" is the row-count sentinel.
+        if isinstance(col_name, str) and col_name == "*":
+            if op != "size":
+                raise ValueError("Only the 'size' aggregation is supported for '*' input")
+            return _AggSpec(None, "size", output_col or "size")
+        physical = self.table._logical_to_physical_name(_column_name(col_name))
+        self._validate_value_column(physical)
+        if op not in {"count", "sum", "mean", "min", "max", "argmin", "argmax"}:
+            raise ValueError(f"Unsupported aggregation {op!r}")
+        self._validate_agg_for_column(physical, op)
+        return _AggSpec(physical, op, output_col or f"{physical}_{op}")
+
+    def _expand_ops(self, col_name, ops) -> list[_AggSpec]:
+        """Expand a (column, op-or-ops) entry into one auto-named spec per op."""
+        # A single op may be a string or a reduction function (both non-iterable
+        # in the sense we want); only a real sequence of ops is expanded.
+        op_list = [ops] if isinstance(ops, str) or callable(ops) else list(ops)
+        if not op_list:
+            raise ValueError(f"No aggregations specified for column {col_name!r}")
+        return [self._build_agg_spec(col_name, op) for op in op_list]
+
+    def _normalize_aggs(
+        self,
+        aggregations: Mapping[str, str | Sequence[str]] | Sequence[tuple[Any, str | Sequence[str]]] | None,
+        named: Mapping[str, tuple[str, str]] | None = None,
+    ) -> list[_AggSpec]:
+        if not aggregations and not named:
+            raise ValueError("agg() requires a mapping/list of pairs and/or named aggregations")
         specs: list[_AggSpec] = []
-        for col_name, ops in aggregations.items():
-            if isinstance(ops, str):
-                op_list = [ops]
+        if aggregations:
+            if isinstance(aggregations, Mapping):
+                entries = list(aggregations.items())
+            elif isinstance(aggregations, Sequence) and not isinstance(aggregations, (str, bytes)):
+                # List of (column, ops) pairs -- lets you use Column objects,
+                # which cannot be dict keys (Column is unhashable).
+                entries = []
+                for pair in aggregations:
+                    if not (isinstance(pair, (tuple, list)) and len(pair) == 2):
+                        raise ValueError(
+                            f"agg() positional list must contain (column, ops) pairs, got {pair!r}"
+                        )
+                    entries.append(pair)
             else:
-                op_list = list(ops)
-            if not op_list:
-                raise ValueError(f"No aggregations specified for column {col_name!r}")
-
-            if col_name == "*":
-                for op in op_list:
-                    if op != "size":
-                        raise ValueError("Only the 'size' aggregation is supported for '*' input")
-                    specs.append(_AggSpec(None, "size", "size"))
-                continue
-
-            physical = self.table._logical_to_physical_name(_column_name(col_name))
-            self._validate_value_column(physical)
-            for op in op_list:
-                if op not in {"count", "sum", "mean", "min", "max", "argmin", "argmax"}:
-                    raise ValueError(f"Unsupported aggregation {op!r}")
-                self._validate_agg_for_column(physical, op)
-                specs.append(_AggSpec(physical, op, f"{physical}_{op}"))
+                raise ValueError(
+                    "agg() positional argument must be a mapping or a list of (column, ops) pairs"
+                )
+            for col_name, ops in entries:
+                specs.extend(self._expand_ops(col_name, ops))
+        for out_name, value in (named or {}).items():
+            if not (isinstance(value, (tuple, list)) and len(value) == 2):
+                raise ValueError(
+                    f"Named aggregation {out_name!r} must be a (column, op) pair, got {value!r}"
+                )
+            col_name, op = value
+            if isinstance(op, (tuple, list, set)):
+                raise ValueError(
+                    f"Named aggregation {out_name!r} takes a single op, got {op!r}.  "
+                    f"Each named output maps to one (column, op); use the mapping "
+                    f"form agg({{column: [...]}}) for several ops, or give each its "
+                    f"own name (e.g. {out_name}_sum=(col, 'sum'))."
+                )
+            specs.append(self._build_agg_spec(col_name, op, output_col=out_name))
         output_names = [s.output_col for s in specs]
         if len(output_names) != len(set(output_names)):
             raise ValueError("Aggregation output column names must be unique")
@@ -249,30 +394,39 @@ class CTableGroupBy:
         finally:
             self._result_urlpath = old_result_urlpath
 
+    def _try_fast_paths(self, specs: list[_AggSpec], use_arg_positions: bool):
+        """Dispatch to the available fast paths; return a result CTable or None.
+
+        argmin/argmax can only use the dense single-key path (it tracks row
+        positions); the Cython kernels do not, so they are skipped for them.
+        """
+        if not use_arg_positions:
+            for attempt in (
+                self._try_execute_cython_dense_int_key,
+                self._try_execute_cython_two_int_key_hash,
+                self._try_execute_cython_i32_f64_sum,
+                self._try_execute_cython_float_integral_key_f64_sum,
+            ):
+                fast = attempt(specs)
+                if fast is not None:
+                    return fast
+        # Dense single-key path also covers integral-valued float keys with a
+        # compact non-negative range (e.g. float32 second/id columns), so try it
+        # before the generic float hash path, which is markedly slower.  Unlike
+        # the Cython kernels above, it tracks row positions, so it also serves
+        # argmin/argmax — keeping them off the slow generic hash+merge path.
+        fast = self._try_execute_dense_single_int_key(specs)
+        if fast is not None:
+            return fast
+        if not use_arg_positions:
+            return self._try_execute_cython_float_hash(specs)
+        return None
+
     def _execute_with_result_target(self, specs: list[_AggSpec]):
         use_arg_positions = any(s.op in {"argmin", "argmax"} for s in specs)
-        if not use_arg_positions:
-            fast = self._try_execute_cython_dense_int_key(specs)
-            if fast is not None:
-                return fast
-            fast = self._try_execute_cython_two_int_key_hash(specs)
-            if fast is not None:
-                return fast
-            fast = self._try_execute_cython_i32_f64_sum(specs)
-            if fast is not None:
-                return fast
-            fast = self._try_execute_cython_float_integral_key_f64_sum(specs)
-            if fast is not None:
-                return fast
-            # Dense single-key path also covers integral-valued float keys with a
-            # compact non-negative range (e.g. float32 second/id columns), so try
-            # it before the generic float hash path, which is markedly slower.
-            fast = self._try_execute_dense_single_int_key(specs)
-            if fast is not None:
-                return fast
-            fast = self._try_execute_cython_float_hash(specs)
-            if fast is not None:
-                return fast
+        fast = self._try_fast_paths(specs, use_arg_positions)
+        if fast is not None:
+            return fast
 
         acc: dict[Any, dict[str, _AggState]] = {}
         key_values: dict[Any, tuple[Any, ...]] = {}
@@ -704,19 +858,21 @@ class CTableGroupBy:
                     if not call_checked(desc["kernel"], *args):
                         return None
 
+        # For integer keys np.nonzero already yields ascending key order.  When
+        # sorting is requested (sort=True, or sort=None since the dict lexsort is
+        # cheap) dictionary keys are reordered by decoded string; otherwise they
+        # stay in first-appearance (code-assignment) order.
         group_codes = np.nonzero(keys_present)[0]
-        if self.sort and key_is_dict:
-            group_codes = np.array(
-                sorted(
-                    group_codes,
-                    key=lambda code: _sortable_key_part(self.table._cols[key_name].decode(int(code))),
-                ),
-                dtype=group_codes.dtype,
-            )
+        if key_is_dict and self._resolve_sort(cheap=True):
+            group_codes = self._sort_dict_group_codes(key_name, group_codes)
 
+        key_values = (
+            self.table._cols[key_name].decode_batch(group_codes)
+            if key_is_dict
+            else [_python_scalar(code) for code in group_codes]
+        )
         rows = []
-        for code in group_codes:
-            key_value = self.table._cols[key_name].decode(int(code)) if key_is_dict else _python_scalar(code)
+        for code, key_value in zip(group_codes, key_values, strict=True):
             row = {key_name: key_value}
             for desc in descriptors:
                 spec = desc["spec"]
@@ -747,7 +903,7 @@ class CTableGroupBy:
 
     def _try_execute_cython_i32_f64_sum(self, specs: list[_AggSpec]):  # noqa: C901
         """Cython fast path for one int32 key and one non-null float64 sum."""
-        if len(self.keys) != 1 or len(specs) != 1 or specs[0].op != "sum" or self.sort:
+        if len(self.keys) != 1 or len(specs) != 1 or specs[0].op != "sum":
             return None
         spec = specs[0]
         if spec.input_col is None:
@@ -814,10 +970,22 @@ class CTableGroupBy:
                 if status != 0:
                     return None
 
-        rows = []
-        for code in np.nonzero(present)[0]:
-            key_value = self.table._cols[key_name].decode(int(code)) if key_is_dict else int(code)
-            rows.append({key_name: key_value, spec.output_col: float(sums[code])})
+        # np.nonzero gives ascending integer-key order; dict keys (which can
+        # reach this path when the broader dense_int_key path declined) are
+        # reordered by decoded string when a cheap sort is requested, matching
+        # the other dense paths.
+        present_codes = np.nonzero(present)[0]
+        if key_is_dict and self._resolve_sort(cheap=True):
+            present_codes = self._sort_dict_group_codes(key_name, present_codes)
+        key_values = (
+            self.table._cols[key_name].decode_batch(present_codes)
+            if key_is_dict
+            else [int(code) for code in present_codes]
+        )
+        rows = [
+            {key_name: key_value, spec.output_col: float(sums[code])}
+            for code, key_value in zip(present_codes, key_values, strict=True)
+        ]
         return self._build_result(rows, specs)
 
     def _try_execute_cython_float_hash(self, specs: list[_AggSpec]):  # noqa: C901
@@ -925,15 +1093,18 @@ class CTableGroupBy:
                             state.value = value
                         state.count += 1
 
-        # Hash-table iteration order is intentionally not exposed.  Emit float
-        # hash groups in key order for deterministic results and compatibility
-        # with the previous NumPy fallback behavior for these cases.
+        # list(acc) follows the Cython kernel's emission order (hash-bucket
+        # order) -- deterministic for a given table but unspecified.  Key-sorting
+        # it is a Python list.sort over all groups, so it only runs when
+        # requested (sort=True; sort=None leaves it unsorted since this path is
+        # not cheap to sort).
         ordered_keys = list(acc)
-        ordered_keys.sort(
-            key=lambda k: tuple(
-                (1, "") if isinstance(v, float) and math.isnan(v) else (0, v) for v in key_values[k]
+        if self._resolve_sort(cheap=False):
+            ordered_keys.sort(
+                key=lambda k: tuple(
+                    (1, "") if isinstance(v, float) and math.isnan(v) else (0, v) for v in key_values[k]
+                )
             )
-        )
         rows = []
         for norm_key in ordered_keys:
             row = dict(zip(self.keys, key_values[norm_key], strict=True))
@@ -951,7 +1122,7 @@ class CTableGroupBy:
 
     def _try_execute_cython_float_integral_key_f64_sum(self, specs: list[_AggSpec]):  # noqa: C901
         """Cython fast path for integral float32/float64 keys and one non-null float64 sum."""
-        if len(self.keys) != 1 or len(specs) != 1 or specs[0].op != "sum" or self.sort:
+        if len(self.keys) != 1 or len(specs) != 1 or specs[0].op != "sum":
             return None
         spec = specs[0]
         if spec.input_col is None:
@@ -1042,12 +1213,14 @@ class CTableGroupBy:
         # compact non-negative range; per-chunk casting verifies integrality and
         # bails (falling back to the hash path) on the first fractional value.
         key_is_integral_float = (not key_is_dict) and key_dtype.kind == "f"
-        if any(spec.op in {"min", "max"} and spec.input_col is not None for spec in specs):
+        extreme_ops = {"min", "max", "argmin", "argmax"}
+        if any(spec.op in extreme_ops and spec.input_col is not None for spec in specs):
             for spec in specs:
-                if spec.op in {"min", "max"} and spec.input_col is not None:
+                if spec.op in extreme_ops and spec.input_col is not None:
                     dtype = getattr(self.table._schema.columns_by_name[spec.input_col].spec, "dtype", None)
                     if dtype is None or np.dtype(dtype).kind not in "biufmM":
                         return None
+        need_positions = any(spec.op in {"argmin", "argmax"} for spec in specs)
 
         compact_limit = 10_000_000
         present = np.zeros(0, dtype=bool)
@@ -1068,6 +1241,15 @@ class CTableGroupBy:
                 dtype = np.dtype(self.table._schema.columns_by_name[spec.input_col].spec.dtype)
                 identity = _max_identity(dtype) if spec.op == "min" else _min_identity(dtype)
                 states[spec.output_col] = (np.full(0, identity, dtype=dtype), np.zeros(0, dtype=bool))
+            elif spec.op in {"argmin", "argmax"}:
+                assert spec.input_col is not None
+                dtype = np.dtype(self.table._schema.columns_by_name[spec.input_col].spec.dtype)
+                identity = _max_identity(dtype) if spec.op == "argmin" else _min_identity(dtype)
+                states[spec.output_col] = (
+                    np.full(0, identity, dtype=dtype),  # best value seen per group
+                    np.full(0, -1, dtype=np.int64),  # first row position attaining it
+                    np.zeros(0, dtype=bool),  # group has any non-null value
+                )
 
         def ensure_size(size: int) -> bool:
             nonlocal present, states
@@ -1095,14 +1277,27 @@ class CTableGroupBy:
                         np.pad(values, (0, size - old), constant_values=identity),
                         np.pad(has, (0, size - old), constant_values=False),
                     )
+                elif spec.op in {"argmin", "argmax"}:
+                    values, positions, has = state
+                    dtype = values.dtype
+                    identity = _max_identity(dtype) if spec.op == "argmin" else _min_identity(dtype)
+                    states[spec.output_col] = (
+                        np.pad(values, (0, size - old), constant_values=identity),
+                        np.pad(positions, (0, size - old), constant_values=-1),
+                        np.pad(has, (0, size - old), constant_values=False),
+                    )
             return True
 
         phys_len = len(self.table._valid_rows)
         chunk_size = self._chunk_size()
         value_cols = sorted({s.input_col for s in specs if s.input_col is not None})
+        logical_seen = 0  # running count of live rows, for argmin/argmax positions
         for start in range(0, phys_len, chunk_size):
             stop = min(start + chunk_size, phys_len)
             valid = np.asarray(self.table._valid_rows[start:stop], dtype=bool)
+            if need_positions:
+                logical_chunk = logical_seen + np.cumsum(valid, dtype=np.int64) - 1
+                logical_seen += int(np.count_nonzero(valid))
             if not np.any(valid):
                 continue
             raw_keys = self._read_key_chunk(key_name, start, stop)
@@ -1136,6 +1331,7 @@ class CTableGroupBy:
             value_chunks = {
                 name: np.asarray(self.table._cols[name][start:stop])[live_mask] for name in value_cols
             }
+            row_positions = logical_chunk[live_mask] if need_positions else None
 
             for spec in specs:
                 if spec.op == "size":
@@ -1172,16 +1368,53 @@ class CTableGroupBy:
                     else:
                         np.maximum.at(values_state, keys[non_null], values[non_null])
                     has_state[keys[non_null]] = True
+                elif spec.op in {"argmin", "argmax"}:
+                    best_state, pos_state, has_state = states[spec.output_col]
+                    nstates = len(present)
+                    k_nn = keys[non_null]
+                    v_nn = values[non_null]
+                    p_nn = row_positions[non_null]
+                    # This chunk's per-group extreme and the first position attaining it.
+                    if spec.op == "argmin":
+                        chunk_best = np.full(
+                            nstates, _max_identity(best_state.dtype), dtype=best_state.dtype
+                        )
+                        np.minimum.at(chunk_best, k_nn, v_nn)
+                    else:
+                        chunk_best = np.full(
+                            nstates, _min_identity(best_state.dtype), dtype=best_state.dtype
+                        )
+                        np.maximum.at(chunk_best, k_nn, v_nn)
+                    chunk_has = np.zeros(nstates, dtype=bool)
+                    chunk_has[k_nn] = True
+                    attains = v_nn == chunk_best[k_nn]
+                    chunk_pos = np.full(nstates, np.iinfo(np.int64).max, dtype=np.int64)
+                    np.minimum.at(chunk_pos, k_nn[attains], p_nn[attains])
+                    # Merge: a strictly better value replaces the position; an equal
+                    # value keeps the earlier (lower) position, so ties keep the first row.
+                    if spec.op == "argmin":
+                        better = chunk_has & (~has_state | (chunk_best < best_state))
+                    else:
+                        better = chunk_has & (~has_state | (chunk_best > best_state))
+                    best_state[better] = chunk_best[better]
+                    pos_state[better] = chunk_pos[better]
+                    has_state |= chunk_has
 
+        # np.nonzero gives ascending integer-key order.  When sorting is
+        # requested (sort=True, or sort=None since the dict lexsort is cheap)
+        # dictionary keys are reordered by decoded string; otherwise they stay in
+        # first-appearance (code-assignment) order.
         group_codes = np.nonzero(present)[0]
+        if key_is_dict and self._resolve_sort(cheap=True):
+            group_codes = self._sort_dict_group_codes(key_name, group_codes)
+        if key_is_dict:
+            key_values = self.table._cols[key_name].decode_batch(group_codes)
+        elif key_is_integral_float:
+            key_values = [float(code) for code in group_codes]
+        else:
+            key_values = [_python_scalar(code) for code in group_codes]
         rows = []
-        for code in group_codes:
-            if key_is_dict:
-                key_value = self.table._cols[key_name].decode(int(code))
-            elif key_is_integral_float:
-                key_value = float(code)
-            else:
-                key_value = _python_scalar(code)
+        for code, key_value in zip(group_codes, key_values, strict=True):
             row = {key_name: key_value}
             for spec in specs:
                 state = states[spec.output_col]
@@ -1201,6 +1434,13 @@ class CTableGroupBy:
                     values_state, has_state = state
                     row[spec.output_col] = (
                         _python_scalar(values_state[code])
+                        if has_state[code]
+                        else _null_output_value(self._result_spec_for_agg(spec))
+                    )
+                elif spec.op in {"argmin", "argmax"}:
+                    _best_state, pos_state, has_state = state
+                    row[spec.output_col] = (
+                        int(pos_state[code])
                         if has_state[code]
                         else _null_output_value(self._result_spec_for_agg(spec))
                     )
@@ -1239,17 +1479,47 @@ class CTableGroupBy:
         unique, inverse = np.unique(packed, return_inverse=True)
         return unique, inverse
 
+    def _resolve_sort(self, *, cheap: bool) -> bool:
+        """Resolve the tri-state ``self.sort`` request for the current path.
+
+        ``cheap`` is declared by the call site: ``True`` for vectorized/free
+        ordering (``np.nonzero`` ascending or the vectorized
+        :meth:`_sort_dict_group_codes` lexsort), ``False`` for a Python
+        ``list.sort`` over all groups.  ``None`` (auto) sorts only cheap paths.
+        """
+        return _resolve_sort(self.sort, cheap=cheap)
+
+    def _sort_dict_group_codes(self, key_name: str, group_codes: np.ndarray) -> np.ndarray:
+        """Reorder dictionary *group_codes* so groups come out sorted by string.
+
+        Vectorized: the dictionary store holds only the unique category values
+        (cardinality ``D``, not the ``N`` rows), so decompressing it whole into a
+        NumPy array and ``np.lexsort``-ing the present codes is cheap — far
+        cheaper than a Python ``sorted`` with a per-code ``decode`` call.  Null
+        groups (``null_code``) sort first, matching ``_sortable_key_part``'s
+        ordering of ``None`` before real values.
+        """
+        col = self.table._cols[key_name]
+        null_code = int(col._spec.null_code)
+        all_strings = np.asarray(col._dict_store[:])  # D unique values, no nulls
+        is_non_null = group_codes != null_code
+        decoded = np.empty(len(group_codes), dtype=all_strings.dtype if all_strings.size else "<U1")
+        # Null groups keep a placeholder; the primary lexsort key sorts them
+        # first regardless, so their string value is never compared.
+        decoded[is_non_null] = all_strings[group_codes[is_non_null]]
+        decoded[~is_non_null] = ""
+        order = np.lexsort((decoded, is_non_null.astype(np.int8)))
+        return group_codes[order]
+
     def _display_keys(self, unique_keys: np.ndarray | list[np.ndarray]) -> list[tuple[Any, ...]]:
         if len(self.keys) == 1:
             name = self.keys[0]
             col_info = self.table._schema.columns_by_name[name]
-            values = []
-            for value in np.asarray(unique_keys):
-                if self.table._is_dictionary_column(col_info):
-                    values.append((self.table._cols[name].decode(int(value)),))
-                else:
-                    values.append((_python_scalar(value),))
-            return values
+            unique_arr = np.asarray(unique_keys)
+            if self.table._is_dictionary_column(col_info):
+                decoded = self.table._cols[name].decode_batch(unique_arr)
+                return [(value,) for value in decoded]
+            return [(_python_scalar(value),) for value in unique_arr]
 
         result = []
         assert isinstance(unique_keys, np.ndarray)
@@ -1350,17 +1620,20 @@ class CTableGroupBy:
         row_positions: np.ndarray,
         n_groups: int,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        best_values = np.empty(n_groups, dtype=values.dtype)
+        # Reduce the per-group extreme value with the (vectorized) min/max path,
+        # then pick the *first* row position that attains it — vectorized, instead
+        # of the former per-row Python loop (~30x faster on millions of rows).
+        mm_op = "min" if op == "argmin" else "max"
+        best_values, has_value = self._minmax_partials(mm_op, inverse, values, non_null, n_groups)
         best_positions = np.full(n_groups, -1, dtype=np.int64)
-        has_value = np.zeros(n_groups, dtype=bool)
-        for group, value, ok, pos in zip(inverse, values, non_null, row_positions, strict=True):
-            if not ok:
-                continue
-            better = value < best_values[group] if op == "argmin" else value > best_values[group]
-            if not has_value[group] or better:
-                best_values[group] = value
-                best_positions[group] = int(pos)
-                has_value[group] = True
+        # Rows in a value-bearing group whose value equals their group's extreme.
+        # On ties np.minimum.at keeps the smallest position, matching "first row".
+        attains = non_null & has_value[inverse] & (values == best_values[inverse])
+        if np.any(attains):
+            int_max = np.iinfo(np.int64).max
+            pos_best = np.full(n_groups, int_max, dtype=np.int64)
+            np.minimum.at(pos_best, inverse[attains], np.asarray(row_positions)[attains])
+            best_positions = np.where(pos_best != int_max, pos_best, -1)
         return best_values, best_positions, has_value
 
     def _merge_partials(
@@ -1419,8 +1692,13 @@ class CTableGroupBy:
         key_values: dict[Any, tuple[Any, ...]],
         specs: list[_AggSpec],
     ) -> list[dict[str, Any]]:
+        # This path handles keys that miss the vectorized fast paths (fixed-width
+        # strings, multi-key, exotic dtypes); ordering is a Python list.sort over
+        # all groups, so it only runs when requested.  list(acc) is deterministic
+        # first-appearance order (sort=False, or sort=None since this path is not
+        # cheap to sort).
         keys = list(acc)
-        if self.sort:
+        if self._resolve_sort(cheap=False):
             keys.sort(key=lambda k: tuple(_sortable_key_part(v) for v in key_values[k]))
 
         rows = []
@@ -1614,7 +1892,7 @@ def _null_output_value(spec: SchemaSpec):
 # ----------------------------------------------------------------------
 
 
-def group_reduce(keys, values=None, op: AggName = "size", *, sort: bool = False, dropna: bool = True):
+def group_reduce(keys, values=None, op: AggName = "size", *, sort: bool | None = None, dropna: bool = True):
     """Group *keys* and reduce *values* with *op*.
 
     This is a lower-level, array-oriented grouped reduction primitive.  It exposes
@@ -1632,9 +1910,13 @@ def group_reduce(keys, values=None, op: AggName = "size", *, sort: bool = False,
     op : {"size", "count", "sum", "mean", "min", "max"}, default: "size"
         Reduction operation.  ``"size"`` counts rows per group, while
         ``"count"`` counts non-NaN values per group.
-    sort : bool, default: False
-        If true, sort output groups by key.  With ``sort=False`` output order is
-        implementation dependent.
+    sort : bool or None, default: None
+        Output group ordering.  ``True`` always sorts groups by key; ``False``
+        never sorts (order is implementation dependent but deterministic for a
+        given input); ``None`` (the default) sorts only when cheap -- the
+        vectorized integer and float kernels sort (``np.argsort``), while the
+        generic Python fallback is left unsorted to avoid an O(G log G) Python
+        sort that can rival the grouping cost on high-cardinality keys.
     dropna : bool, default: True
         If true, skip NaN float keys.  If false, all NaN keys form one group.
 
@@ -1675,15 +1957,20 @@ def group_reduce(keys, values=None, op: AggName = "size", *, sort: bool = False,
     if len(keys_arr) == 0:
         return keys_arr.copy(), np.empty(0, dtype=_result_dtype(values_arr, op))
 
-    fast = _try_dense_integer(keys_arr, values_arr, op, sort=sort)
+    # The dense integer and float-hash kernels sort via vectorized np.argsort
+    # (cheap); the generic Python fallback sorts via list.sort (expensive).
+    # Resolve the tri-state per path's cost so None auto-sorts only the cheap ones.
+    fast = _try_dense_integer(keys_arr, values_arr, op, sort=_resolve_sort(sort, cheap=True))
     if fast is not None:
         return fast
 
-    fast = _try_float_hash(keys_arr, values_arr, op, sort=sort, dropna=dropna)
+    fast = _try_float_hash(keys_arr, values_arr, op, sort=_resolve_sort(sort, cheap=True), dropna=dropna)
     if fast is not None:
         return fast
 
-    return _group_reduce_numpy(keys_arr, values_arr, op, sort=sort, dropna=dropna)
+    return _group_reduce_numpy(
+        keys_arr, values_arr, op, sort=_resolve_sort(sort, cheap=False), dropna=dropna
+    )
 
 
 def _try_dense_integer(keys: np.ndarray, values: np.ndarray | None, op: str, *, sort: bool):  # noqa: C901
@@ -1893,6 +2180,20 @@ def _group_reduce_sort_key(value: Any) -> tuple[int, Any]:
     if isinstance(value, float) and math.isnan(value):
         return (2, "")
     return (1, value)
+
+
+def _resolve_sort(sort: bool | None, *, cheap: bool) -> bool:
+    """Resolve a tri-state ``sort`` request for a given execution path.
+
+    ``sort`` is ``True`` (always sort), ``False`` (never sort), or ``None``
+    (auto: sort only when this path can do so cheaply).  ``cheap`` is declared
+    by the call site: ``True`` for vectorized/free ordering (``np.nonzero``
+    ascending or a vectorized lexsort/argsort), ``False`` for a Python
+    ``list.sort`` over all groups.
+    """
+    if sort is None:
+        return cheap
+    return sort
 
 
 def _maybe_sort(groups: np.ndarray, result: np.ndarray, sort: bool):

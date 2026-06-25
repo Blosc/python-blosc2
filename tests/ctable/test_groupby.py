@@ -96,6 +96,22 @@ def test_groupby_argmin_argmax_convenience_methods_and_view_positions():
     assert rows(argmin) == [("Berlin", -1), ("Paris", 1), ("Rome", 0)]
 
 
+def test_groupby_argmin_argmax_ties_keep_first_row():
+    # Two rows tie for the group's extreme; the earliest logical row wins, even
+    # when the tie straddles a chunk boundary (locks the vectorized path).
+    TieRow = make_dataclass(
+        "TieRow",
+        [("g", int, blosc2.field(blosc2.int32())), ("v", float, blosc2.field(blosc2.float64()))],
+    )
+    data = [(0, 5.0), (0, 9.0), (0, 9.0), (0, 5.0)]  # rows 0..3
+    t = CTable(TieRow, new_data=data)
+
+    out = t.group_by("g", sort=True, chunk_size=2).agg({"v": ["argmin", "argmax"]})
+
+    # min 5.0 first at row 0; max 9.0 first at row 1 (tie with row 2 ignored).
+    assert rows(out) == [(0, 0, 1)]
+
+
 def test_groupby_multi_key_size():
     t = CTable(SalesRow, new_data=DATA)
 
@@ -151,6 +167,54 @@ def test_groupby_dictionary_key_groups_by_decoded_value():
 
     assert out.col_names == ["city", "sales_sum"]
     assert rows(out) == [("Paris", 40), ("Rome", 20)]
+
+
+def test_groupby_dictionary_key_sorted_by_string_not_code_order():
+    """Dict groups come out alphabetical even when codes are assigned otherwise.
+
+    Regression for the always-sorted contract: with "Rome" seen before "Paris"
+    (codes Rome=0, Paris=1), the result must still be Paris-then-Rome.  The old
+    code emitted code-assignment order unless ``sort=True``, and even then only
+    happened to look right when first-seen order matched alphabetical.
+    """
+    t = CTable(DictRow, new_data=[("Rome", 20), ("Paris", 10), ("Rome", 5), ("Paris", 30)])
+
+    # No sort= argument: ordering is now guaranteed.
+    assert rows(t.group_by("city").agg({"sales": "sum"})) == [("Paris", 40), ("Rome", 25)]
+    # argmin/argmax drive the dense-position path; it must sort the same way.
+    out = t.group_by("city").agg({"sales": ["argmin", "argmax"]})
+    # Paris rows 1,3 (10,30) -> argmin 1, argmax 3; Rome rows 0,2 (20,5).
+    assert rows(out) == [("Paris", 1, 3), ("Rome", 2, 0)]
+
+
+def test_groupby_dictionary_key_sorted_matches_python_sorted():
+    """Vectorized dict-key ordering matches a Python sorted() reference."""
+    rng = np.random.default_rng(0)
+    labels = [f"city_{i:03d}" for i in range(200)]
+    data = [(labels[int(rng.integers(len(labels)))], int(rng.integers(100))) for _ in range(5000)]
+    t = CTable(DictRow, new_data=data)
+
+    got = [r[0] for r in rows(t.group_by("city").size())]
+    assert got == sorted({label for label, _ in data})
+
+
+def test_groupby_string_key_sorted_without_sort_flag():
+    """Fixed-width string keys (generic path) are also always sorted by key."""
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city").size()
+    assert [r[0] for r in rows(out)] == ["Berlin", "Paris", "Rome"]
+
+
+def test_groupby_dictionary_key_argmin_argmax_positions():
+    # Dictionary key drives the dense-position fast path; verify it returns the
+    # logical row positions of the extremes (chicago-taxi "company" shape).
+    t = CTable(DictRow, new_data=[("Paris", 10), ("Rome", 50), ("Paris", 30), ("Rome", 20)])
+
+    out = t.group_by("city", sort=True).agg({"sales": ["argmin", "argmax"]})
+
+    assert out.col_names == ["city", "sales_argmin", "sales_argmax"]
+    # Paris rows 0,2 (10,30) -> argmin row0, argmax row2; Rome rows 1,3 (50,20).
+    assert rows(out) == [("Paris", 0, 2), ("Rome", 3, 1)]
 
 
 def test_groupby_dictionary_key_beyond_default_code_capacity():
@@ -234,7 +298,9 @@ class DictFloatRow:
         (
             DictFloatRow,
             [("a", 1.5), ("c", 10.0), ("b", 2.5), ("c", 3.0), ("a", 4.0)],
-            [("a", 5.5), ("c", 13.0), ("b", 2.5)],
+            # Groups come out sorted by decoded string, not code-assignment order
+            # ("c" was seen before "b").
+            [("a", 5.5), ("b", 2.5), ("c", 13.0)],
         ),
     ],
 )
@@ -249,7 +315,9 @@ def test_groupby_fast_path_sum_variants(row_type, data, expected):
 def test_groupby_float_integral_fast_path_falls_back_for_non_integral_keys():
     t = CTable(Float64KeyRow, new_data=[(0.5, 1.0), (1.5, 2.0), (0.5, 3.0)])
 
-    out = t.group_by("key").agg({"value": "sum"})
+    # Float keys are not key-sorted by default (sort=None); request sort=True to
+    # assert a specific order.
+    out = t.group_by("key", sort=True).agg({"value": "sum"})
 
     assert rows(out) == [(0.5, 4.0), (1.5, 2.0)]
 
@@ -420,7 +488,9 @@ def test_groupby_cython_arbitrary_float_key_aggs():
         new_data=[(0.5, 1.0), (1.25, 10.0), (0.5, 3.0), (-2.5, 4.0), (1.25, 2.0)],
     )
 
-    out = t.group_by("key").agg({"value": ["count", "sum", "mean", "min", "max"]})
+    # Float keys are not key-sorted by default (sort=None); request sort=True to
+    # assert a specific order.
+    out = t.group_by("key", sort=True).agg({"value": ["count", "sum", "mean", "min", "max"]})
 
     assert rows(out) == [
         (-2.5, 1, 4.0, 4.0, 4.0, 4.0),
@@ -519,3 +589,219 @@ def test_groupby_persistent_output_urlpath_on_convenience_method(tmp_path):
 
     reopened = CTable.open(str(path), mode="r")
     assert rows(reopened) == [("Berlin", 6.0), ("Paris", 7 / 3), ("Rome", 4.0)]
+
+
+# ----------------------------------------------------------------------
+# Tri-state sort= (True / False / None-auto)
+# ----------------------------------------------------------------------
+
+# First-seen order is deliberately non-alphabetical / non-ascending so that a
+# real reorder is observable.
+_DICT_SORT_DATA = [("zeta", 1.0), ("alpha", 2.0), ("mike", 3.0), ("alpha", 4.0), ("zeta", 5.0)]
+_INT_SORT_DATA = [(30, 1.0), (10, 2.0), (20, 3.0), (10, 4.0)]
+_FLOAT_SORT_DATA = [(3.5, 1.0), (1.5, 2.0), (2.5, 3.0), (1.5, 4.0)]
+
+
+def _keys(out):
+    return [out._cols[out.col_names[0]][i] for i in range(out.nrows)]
+
+
+def test_groupby_int_key_always_ascending_regardless_of_sort():
+    # Integer/dense keys come out ascending under every sort= value -- nonzero
+    # ordering is free and unavoidable.
+    t = CTable(Int32FloatRow, new_data=_INT_SORT_DATA)
+    for sort in (None, True, False):
+        assert _keys(t.group_by("key", sort=sort).sum("value")) == [10, 20, 30]
+
+
+def test_groupby_dict_key_sorted_under_auto_and_true():
+    # Dictionary keys are cheap to sort, so None (auto) and True both sort by
+    # string; False keeps first-seen code order.
+    t = CTable(DictFloatRow, new_data=_DICT_SORT_DATA)
+    assert _keys(t.group_by("key").sum("value")) == ["alpha", "mike", "zeta"]  # default None
+    assert _keys(t.group_by("key", sort=True).sum("value")) == ["alpha", "mike", "zeta"]
+    assert _keys(t.group_by("key", sort=False).sum("value")) == ["zeta", "alpha", "mike"]
+
+
+def test_groupby_float_key_unsorted_under_auto_sorted_under_true():
+    # Float keys only sort via a Python list.sort, so None (auto) leaves them
+    # unsorted; True sorts. The unsorted order must be deterministic across runs.
+    t = CTable(Float64KeyRow, new_data=_FLOAT_SORT_DATA)
+    assert _keys(t.group_by("key", sort=True).sum("value")) == [1.5, 2.5, 3.5]
+    auto1 = _keys(t.group_by("key").sum("value"))
+    auto2 = _keys(t.group_by("key").sum("value"))
+    assert auto1 == auto2  # deterministic
+    assert sorted(auto1) == [1.5, 2.5, 3.5]  # same groups, order unspecified
+
+
+def test_groupby_multikey_unsorted_under_auto_sorted_under_true():
+    # Multi-key results only sort via a Python list.sort, so None (auto) leaves
+    # them unsorted (deterministic but unspecified order); True sorts.
+    data = [("z", 2, 1.0), ("a", 1, 2.0), ("z", 1, 3.0), ("a", 1, 4.0)]
+    t = CTable(DictIntKeyFloatRow, new_data=data)
+
+    def keypairs(out):
+        return [(str(r[0]), int(r[1])) for r in rows(out)]
+
+    expected = {("a", 1), ("z", 1), ("z", 2)}
+    assert keypairs(t.group_by(["key0", "key1"], sort=True).sum("value")) == [
+        ("a", 1),
+        ("z", 1),
+        ("z", 2),
+    ]
+    auto1 = keypairs(t.group_by(["key0", "key1"]).sum("value"))
+    auto2 = keypairs(t.group_by(["key0", "key1"]).sum("value"))
+    assert auto1 == auto2  # deterministic
+    assert set(auto1) == expected  # same groups, order unspecified
+
+
+def test_group_reduce_tristate_sort():
+    # group_reduce mirrors the tri-state. Its float path is vectorized
+    # (np.argsort), so unlike CTable's float-hash it *does* sort under None.
+    keys = blosc2.array([3, 1, 2, 1])
+    values = blosc2.array([1.0, 2.0, 3.0, 4.0])
+    g_true, _ = blosc2.group_reduce(keys, values, op="sum", sort=True)
+    assert list(g_true) == [1, 2, 3]
+    g_auto, _ = blosc2.group_reduce(keys, values, op="sum")  # default None, cheap -> sorted
+    assert list(g_auto) == [1, 2, 3]
+    g_false, _ = blosc2.group_reduce(keys, values, op="sum", sort=False)
+    assert sorted(g_false) == [1, 2, 3]  # order unspecified, same groups
+
+
+# ----------------------------------------------------------------------
+# agg() output column naming: auto suffix vs explicit named aggregation
+# ----------------------------------------------------------------------
+
+
+def test_agg_auto_suffix_names():
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg({"sales": ["sum", "mean"]})
+    assert out.col_names == ["city", "sales_sum", "sales_mean"]
+
+
+def test_agg_explicit_named_kwargs():
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg(revenue=("sales", "sum"), avg_sale=("sales", "mean"))
+    assert out.col_names == ["city", "revenue", "avg_sale"]
+    got = rows(out)
+    assert got[1][0] == "Paris"
+    assert got[1][1] == 40.0  # revenue == sales_sum
+    assert got[1][2] == 20.0  # avg_sale == sales_mean
+
+
+def test_agg_combines_mapping_and_named():
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg({"sales": "sum"}, n=("*", "size"))
+    assert out.col_names == ["city", "sales_sum", "n"]
+    got = rows(out)
+    assert got[0][0] == "Berlin"
+    assert np.isnan(got[0][1])
+    assert got[0][2] == 1
+    assert got[1] == ("Paris", 40.0, 3)
+    assert got[2] == ("Rome", 60.0, 2)
+
+
+def test_agg_list_of_pairs_auto_named():
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg([("sales", ["sum", "mean"])])
+    assert out.col_names == ["city", "sales_sum", "sales_mean"]
+
+
+def test_agg_list_of_pairs_accepts_column_objects():
+    # The list form's whole point: use Column objects, which can't be dict keys.
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg([(t.sales, ["sum", "mean"])])
+    assert out.col_names == ["city", "sales_sum", "sales_mean"]
+    got = rows(out)
+    assert got[1] == ("Paris", 40.0, 20.0)
+
+
+def test_agg_list_of_pairs_combines_with_named():
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg([(t.sales, "sum")], n=("*", "size"))
+    assert out.col_names == ["city", "sales_sum", "n"]
+
+
+def test_agg_positional_must_be_mapping_or_pairs():
+    t = CTable(SalesRow, new_data=DATA)
+    with pytest.raises(ValueError, match="mapping or a list of"):
+        t.group_by("city").agg("sales")
+    with pytest.raises(ValueError, match=r"must contain \(column, ops\) pairs"):
+        t.group_by("city").agg([("sales",)])
+
+
+def test_agg_named_accepts_column_objects():
+    # A Column object can't be a dict key (unhashable: __eq__ is overloaded for
+    # expressions), but it works as a named-agg value, like group_by() args.
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city", sort=True)
+    with pytest.raises(TypeError, match="unhashable"):
+        _ = {t.sales: ["sum"]}  # fails at dict construction, before agg() runs
+    out = g.agg(total=(t.sales, "sum"), avg=(t.sales, "mean"))
+    assert out.col_names == ["city", "total", "avg"]
+
+
+def test_agg_accepts_blosc2_reduction_functions():
+    # blosc2 reduction functions are accepted as ops (matched by identity),
+    # interchangeably with strings, in both the list and named forms.
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city", sort=True)
+    by_func = g.agg([(t.sales, [blosc2.sum, blosc2.mean])])
+    by_str = g.agg([(t.sales, ["sum", "mean"])])
+    assert by_func.col_names == by_str.col_names == ["city", "sales_sum", "sales_mean"]
+    assert col(by_func, "city") == col(by_str, "city")
+    np.testing.assert_array_equal(  # NaN-safe (Berlin has no non-null sales)
+        col(by_func, "sales_sum"), col(by_str, "sales_sum")
+    )
+    named = g.agg(revenue=(t.sales, blosc2.sum))
+    assert named.col_names == ["city", "revenue"]
+
+
+def test_agg_rejects_non_blosc2_callables_by_identity():
+    # A UDF that merely shares a builtin op name must NOT be silently accepted;
+    # np.sum / builtin sum are likewise rejected (only blosc2.* by identity).
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city")
+
+    def sum(values):
+        return -1
+
+    for fn in (sum, np.sum):
+        with pytest.raises(ValueError, match="Unsupported aggregation function"):
+            g.agg([(t.sales, fn)])
+    # blosc2.std is a real function but not a supported group-by op.
+    with pytest.raises(ValueError, match="Unsupported aggregation function"):
+        g.agg([(t.sales, blosc2.std)])
+
+
+def test_agg_named_star_size():
+    t = CTable(SalesRow, new_data=DATA)
+    out = t.group_by("city", sort=True).agg(total=("*", "size"))
+    assert out.col_names == ["city", "total"]
+    assert rows(out) == [("Berlin", 1), ("Paris", 3), ("Rome", 2)]
+
+
+def test_agg_requires_some_aggregation():
+    t = CTable(SalesRow, new_data=DATA)
+    with pytest.raises(ValueError, match="requires a mapping"):
+        t.group_by("city").agg()
+
+
+def test_agg_named_must_be_column_op_pair():
+    t = CTable(SalesRow, new_data=DATA)
+    with pytest.raises(ValueError, match=r"must be a \(column, op\) pair"):
+        t.group_by("city").agg(x=("sales",))
+
+
+def test_agg_named_rejects_multiple_ops_with_guidance():
+    # A named output maps to a single op; multiple ops need the mapping form or
+    # one name each. The error should say so, not "unsupported aggregation".
+    t = CTable(SalesRow, new_data=DATA)
+    with pytest.raises(ValueError, match="takes a single op"):
+        t.group_by("city").agg(total=("sales", ("sum", "mean")))
+
+
+def test_agg_duplicate_output_names_rejected():
+    t = CTable(SalesRow, new_data=DATA)
+    with pytest.raises(ValueError, match="must be unique"):
+        t.group_by("city").agg({"sales": "sum"}, sales_sum=("sales", "sum"))

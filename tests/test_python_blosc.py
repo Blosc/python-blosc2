@@ -7,7 +7,6 @@
 
 # Test the python-blosc API
 
-import ctypes
 import gc
 import os
 import unittest
@@ -199,9 +198,11 @@ class TestCodec(unittest.TestCase):
     def test_no_leaks(self):
         num_elements = 10000000
         typesize = 8
-        data = [float(i) for i in range(num_elements)]  # ~76MB
-        Array = ctypes.c_double * num_elements
-        array = Array(*data)
+        # ~76MB ctypes buffer, big enough that a per-call leak dwarfs RSS noise.
+        # Build it from a numpy buffer (O(1) view) instead of Array(*data),
+        # whose 10M-arg unpack dominated the test's runtime.
+        np_data = np.arange(num_elements, dtype=np.float64)
+        array = np.ctypeslib.as_ctypes(np_data)
 
         def leaks(operation, repeats=3):
             gc.collect()
@@ -220,6 +221,12 @@ class TestCodec(unittest.TestCase):
         def decompress():
             cx = blosc2.compress(array, typesize, clevel=1)
             blosc2.decompress(cx)
+
+        # Warm up the allocator: the first compress grows the heap arena by
+        # one output buffer (a one-time cost, not a leak).  The old test paid
+        # this implicitly while building its ~360MB input list; with the cheap
+        # numpy buffer we must prime it so the RSS baseline is stable.
+        decompress()
 
         assert not leaks(compress), "compress leaks memory"
         assert not leaks(decompress), "decompress leaks memory"

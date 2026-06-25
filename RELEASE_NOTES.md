@@ -4,6 +4,56 @@
 
 XXX version-specific blurb XXX
 
+### `group_by`: flexible aggregation naming
+
+- `CTable.group_by(...).agg()` now accepts a **list of `(column, ops)` pairs**
+  and **explicit output names** (pandas-style keyword arguments), alongside the
+  existing auto-suffixed mapping; the forms can be combined::
+
+      g.agg({"sales": ["sum", "mean"]})              # auto: sales_sum, sales_mean
+      g.agg([(t.sales, ["sum", "mean"])])            # auto, but accepts Column objects
+      g.agg(revenue=("sales", "sum"))                # explicit: revenue
+      g.agg({"sales": "sum"}, n=("*", "size"))       # combined, with a named row count
+
+  The list-of-pairs and named forms accept `Column` objects (`t.sales`), which
+  the mapping form cannot because `Column` is unhashable and so cannot be a dict
+  key.
+- Aggregation ops may also be given as the matching blosc2 reduction *functions*
+  (`blosc2.sum`, `mean`, `min`, `max`, `argmin`, `argmax`), matched **by
+  identity** -- e.g. `g.agg([(t.sales, [blosc2.sum, "mean"])])`.  This is a
+  naming shorthand only; arbitrary/UDF callables (and look-alikes such as
+  `np.sum` or a user function named `sum`) are rejected rather than silently
+  misinterpreted.
+
+### `group_by` / `group_reduce`: tri-state `sort=`
+
+- **Vectorized dictionary group ordering**: `group_by()` result building now
+  batch-decodes dictionary (string) keys in one pass (`decode_batch`) instead of
+  one `decode()` per group, making high-cardinality string group-bys dramatically
+  faster (end-to-end `group_by().size()` dropped from seconds to milliseconds on
+  ~100k-group workloads).
+- **`sort=` is now a tri-state** (`None` / `True` / `False`) on both
+  `CTable.group_by()` and `blosc2.group_reduce()`:
+  - `True` — always return groups sorted by key.
+  - `False` — never sort; deterministic but unspecified order.
+  - `None` (the **new default**) — *auto*: sort only when cheap. Integer and
+    dictionary keys are sorted (free / vectorized); float and multi-key results,
+    whose only ordering is an O(G log G) Python sort over every distinct group,
+    are left unsorted to avoid a cost that can rival the grouping itself on
+    high-cardinality data.
+- **Behavior changes** (the two APIs had different prior defaults, so they move
+  in opposite directions):
+  - `CTable.group_by()` previously returned results *always* sorted. Under the
+    new `None` default, **float-key and multi-key group-bys are no longer
+    key-sorted by default** — pass `sort=True` to restore sorted output. This is
+    a deliberate divergence from pandas (which defaults to `sort=True`), suited
+    to blosc2's large / on-disk datasets.
+  - `blosc2.group_reduce()` previously defaulted to `sort=False` (unsorted).
+    Under the new `None` default its **cheap kernels now sort by default** —
+    most visibly float keys, which previously came out in hash order. Integer
+    keys were already ascending; the generic Python fallback stays unsorted.
+    Pass `sort=False` to opt out.
+
 ## Changes from 4.5.0 to 4.5.1
 
 This follow-up release builds the `b2view` terminal viewer into a richer

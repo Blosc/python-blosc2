@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import contextvars
 import copy
@@ -1231,8 +1232,17 @@ class Column:
         root._mark_all_indexes_stale()
 
     def __iter__(self):
-        """Iterate over live column values in insertion order, skipping deleted rows."""
+        """Iterate over live column values in row order, skipping deleted rows.
+
+        For an ordered view (sorted view, position view, or a reordering slice
+        such as ``t[::-1]``), rows are yielded in the view's order rather than
+        physical-ascending order.  Physical-order iteration below stays chunked.
+        """
         self._ensure_not_stale()
+        slp = getattr(self._table, "_cached_live_positions", None)
+        if slp is not None and self._table.base is not None:
+            yield from self._values_from_key(slice(None), check_stale=False)
+            return
         if self.is_computed:
             yield from self._iter_chunks_computed(size=None)
             return
@@ -1275,7 +1285,13 @@ class Column:
             )
             preview_values = [f"<{label}>"] * min(len(self), preview_len)
         else:
-            preview_pos = np.where(self._valid_rows[:])[0][:preview_len]
+            # Honor an ordered view (sorted/position view, reordering slice) so
+            # the preview shows the view's leading rows, not physical-first ones.
+            slp = getattr(self._table, "_cached_live_positions", None)
+            if slp is not None and self._table.base is not None:
+                preview_pos = np.asarray(slp[:preview_len])
+            else:
+                preview_pos = np.where(self._valid_rows[:])[0][:preview_len]
             if self.is_dictionary or self.is_varlen_scalar:
                 preview_values = self._raw_col[preview_pos]
             elif len(preview_pos) == 0:
@@ -5601,7 +5617,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self,
         keys: str | Sequence[str],
         *,
-        sort: bool = False,
+        sort: bool | None = None,
         dropna: bool = True,
         engine: str = "auto",
         chunk_size: int | None = None,
@@ -5613,9 +5629,55 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         keys:
             Column name or sequence of column names to group by.
         sort:
-            If ``True``, sort the result by the group keys.  The default
-            ``False`` preserves the hash aggregation order and is usually
-            faster.
+            Controls the ordering of the output groups:
+
+            * ``True`` -- always return groups sorted by key.
+            * ``False`` -- do not sort; groups come out in a deterministic but
+              unspecified order (integer/dense keys are still ascending, as that
+              order is free).
+            * ``None`` (default) -- *auto*: sort only when the path can do so
+              cheaply.  Integer and dictionary (string) keys are sorted (free or
+              vectorized); float and multi-key results, whose only ordering is a
+              Python sort over every distinct group, are left unsorted.  This
+              avoids paying an O(G log G) Python sort that can rival the grouping
+              cost itself on high-cardinality data.
+
+            .. list-table::
+               :header-rows: 1
+
+               * - key kind
+                 - ``sort=False``
+                 - ``sort=None`` (auto)
+                 - ``sort=True``
+               * - int / dense
+                 - ascending\\ :sup:`*`
+                 - ascending
+                 - ascending
+               * - dictionary / string
+                 - first-seen code order
+                 - sorted by string
+                 - sorted by string
+               * - float
+                 - unspecified\\ :sup:`**`
+                 - unspecified\\ :sup:`**`
+                 - sorted
+               * - multi-key / generic
+                 - unspecified\\ :sup:`**`
+                 - unspecified\\ :sup:`**`
+                 - sorted
+
+            :sup:`*` integer dense is always ascending, so ``False`` means "no
+            ordering promise", not "guaranteed unsorted".
+
+            :sup:`**` deterministic for a given table, but order is an
+            implementation detail (hash-bucket or first-appearance depending on
+            the path); do not rely on it -- pass ``sort=True`` if you need order.
+
+            .. note::
+               This differs from pandas, whose ``groupby`` defaults to
+               ``sort=True``.  blosc2 targets large, potentially on-disk data
+               where an unconditional group sort is not always cheap relative to
+               the scan, hence the ``None`` auto-default.
         dropna:
             If ``True`` (default), rows with null/NaN group keys are skipped.
             If ``False``, null/NaN keys form their own group.
@@ -11455,6 +11517,80 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 operands[name] = self._build_computed_lazy(cc)
         return operands
 
+    # Quoted string literal (may contain commas/spaces/escapes), single or double.
+    _STR_LITERAL = r"""(\"(?:[^"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')"""
+
+    def _rewrite_dictionary_predicates(
+        self, expr: str, operands: dict[str, blosc2.NDArray | blosc2.LazyExpr]
+    ) -> tuple[str, dict[str, blosc2.NDArray | blosc2.LazyExpr]]:
+        """Rewrite dictionary-column string predicates into integer-code comparisons.
+
+        Dictionary columns are excluded from the plain operand namespace because
+        the expression engine would compare raw int32 codes against the string
+        literal (never matching).  Two predicate forms are resolved here, against
+        the dictionary's codes:
+
+        - ``dictcol == "literal"`` / ``!=`` -> ``dictcol ==/!= <code>``; an absent
+          literal maps to a sentinel code no row carries (``==`` matches nothing,
+          ``!=`` everything).
+        - ``"literal" in dictcol`` -> substring search: an ``OR`` of ``==`` over
+          every dictionary value containing *literal* (none -> matches nothing).
+
+        The column's codes array is then supplied as the operand, so the result is
+        an ordinary numeric expression that combines with the rest (``and``/``or``,
+        precedence) natively.  Other uses of a dictionary column are left untouched
+        and still raise ``Unknown symbol``.
+        """
+        absent_code = int(np.iinfo(np.int32).min)  # a code no live row carries
+        rewritten = expr
+        new_operands = dict(operands)
+        for col in self._schema.columns:
+            if not self._is_dictionary_column(col) or not self._expression_references_name(expr, col.name):
+                continue
+            dc = self._cols[col.name]  # DictionaryColumn
+            name = col.name
+
+            def eq_repl(match: re.Match, _dc=dc, _name=name) -> str:
+                value = ast.literal_eval(match.group(2))
+                try:
+                    code = int(_dc.value_to_code(value))
+                except KeyError:
+                    code = absent_code
+                return f"{_name} {match.group(1)} {code}"
+
+            def in_repl(match: re.Match, _dc=dc, _name=name) -> str:
+                needle = ast.literal_eval(match.group(1))
+                codes = [c for c, value in enumerate(_dc.dictionary) if needle in value]
+                if not codes:
+                    return f"({_name} == {absent_code})"
+                # Per-term parens: bitwise ``|`` binds tighter than ``==``.
+                return "(" + " | ".join(f"({_name} == {c})" for c in codes) + ")"
+
+            eq_pattern = r"(?<![\w.])" + re.escape(name) + r"\s*(==|!=)\s*" + self._STR_LITERAL
+            in_pattern = self._STR_LITERAL + r"\s+in\s+(?<![\w.])" + re.escape(name) + r"(?![\w.])"
+            new_expr = re.sub(eq_pattern, eq_repl, rewritten)
+            new_expr = re.sub(in_pattern, in_repl, new_expr)
+            if new_expr != rewritten:
+                # numexpr needs all operands chunked alike; the codes array uses a
+                # different chunkshape than the regular columns, so when mixed with
+                # one (e.g. ``dictcol == "x" and other > y``) re-chunk it to match.
+                codes = dc.codes
+                target = next(
+                    (
+                        v
+                        for v in operands.values()
+                        if isinstance(v, blosc2.NDArray)
+                        and v.shape == codes.shape
+                        and v.chunks != codes.chunks
+                    ),
+                    None,
+                )
+                if target is not None:
+                    codes = blosc2.asarray(codes[:], chunks=target.chunks, blocks=target.blocks)
+                new_operands[name] = codes
+                rewritten = new_expr
+        return rewritten, new_operands
+
     def _rewrite_nested_expression(
         self, expr: str, operands: dict[str, blosc2.NDArray | blosc2.LazyExpr]
     ) -> tuple[str, dict[str, blosc2.NDArray | blosc2.LazyExpr]]:
@@ -11601,6 +11737,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if isinstance(expr_result, str):
             self._guard_varlen_scalar_expression(expr_result)
             operands = self._where_expression_operands(expr_result)
+            expr_result, operands = self._rewrite_dictionary_predicates(expr_result, operands)
             expr_result, operands = self._rewrite_nested_expression(expr_result, operands)
             expr_result = blosc2.lazyexpr(expr_result, operands)
         if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:
@@ -11683,16 +11820,24 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _run_row_logic(self, ind: int | slice | str | Iterable) -> CTable:
         true_pos = self._live_positions_from_valid_rows_chunks()
 
+        # A boolean mask is set-like: it selects rows in physical-ascending order
+        # and cannot represent duplicates.  Every other selector — a slice (incl.
+        # negative-step reverse), an integer array, or a list of positions —
+        # carries an explicit order and may repeat rows.  Detect the mask before
+        # any list() coercion so we keep its dtype.
+        is_bool_mask = isinstance(ind, np.ndarray) and ind.dtype == np.bool_
+
         if isinstance(ind, Iterable) and not isinstance(ind, (str, bytes)):
             ind = list(ind)
 
-        mant_pos = true_pos[ind]
+        mant_pos = np.asarray(true_pos[ind])
 
-        # For an ordered view (sorted view or position view), preserve the row
-        # order and any duplicates by carrying the positions forward.  A boolean
-        # mask is physical-order and set-like, so it would silently drop both.
-        if getattr(self, "_cached_live_positions", None) is not None:
-            return self._view_from_positions(np.asarray(mant_pos))
+        # Carry the positions forward whenever order matters: for an ordered view
+        # (sorted view or position view), or for any order-carrying selector.  A
+        # boolean mask is physical-order and set-like, so going through it would
+        # silently drop both the requested order and any duplicates.
+        if getattr(self, "_cached_live_positions", None) is not None or not is_bool_mask:
+            return self._view_from_positions(mant_pos)
 
         new_mask_np = np.zeros(len(self._valid_rows), dtype=bool)
         new_mask_np[mant_pos] = True

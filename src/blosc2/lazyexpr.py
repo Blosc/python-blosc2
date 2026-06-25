@@ -4073,8 +4073,9 @@ class LazyExpr(LazyArray):
                     return out
                 arr = lazy_expr[key]
                 if builtins.sum(mask) > 0:
-                    # Correct shape to adjust to NumPy convention
-                    arr.shape = tuple(arr.shape[i] for i in range(len(mask)) if not mask[i])
+                    # Correct shape to adjust to NumPy convention.
+                    new_shape = tuple(arr.shape[i] for i in range(len(mask)) if not mask[i])
+                    arr = np.reshape(arr, new_shape)
                 return arr
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)

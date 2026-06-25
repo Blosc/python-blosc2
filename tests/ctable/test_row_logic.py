@@ -103,30 +103,31 @@ def test_row_list_indexing():
     """List indexing: no holes, with holes, out-of-range, edge cases."""
     data = generate_test_data(20)
 
-    # No holes
+    # No holes: a list gather is order-carrying -> rows come back in the
+    # requested order (not physical-ascending).
     t = CTable(Row, new_data=data)
     r = t[[0, 5, 10, 15]]
     assert isinstance(r, CTable)
     assert len(r) == 4
-    assert set(r.id) == {0, 5, 10, 15}
-    assert set(t[[19, 0, 10]].id) == {0, 10, 19}
+    assert list(r.id) == [0, 5, 10, 15]
+    assert list(t[[19, 0, 10]].id) == [19, 0, 10]
 
     # With holes: delete [1,3,5,7,9] -> logical 0->id0, 1->id2, 2->id4...
     t.delete([1, 3, 5, 7, 9])
-    assert set(t[[0, 2, 4]].id) == {0, 4, 8}
-    assert set(t[[5, 3, 1]].id) == {2, 6, 10}
+    assert list(t[[0, 2, 4]].id) == [0, 4, 8]
+    assert list(t[[5, 3, 1]].id) == [10, 6, 2]
 
     # Negative indices in list
     t2 = CTable(Row, new_data=generate_test_data(10))
-    assert set(t2[[0, -1, 5]].id) == {0, 5, 9}
+    assert list(t2[[0, -1, 5]].id) == [0, 9, 5]
 
     # Single element
     assert t2[[5]].id[0] == 5
 
-    # Duplicate indices -> deduplicated
+    # Duplicate indices -> preserved (a gather can repeat rows)
     r_dup = t2[[5, 5, 5]]
-    assert len(r_dup) == 1
-    assert r_dup.id[0] == 5
+    assert len(r_dup) == 3
+    assert list(r_dup.id) == [5, 5, 5]
 
     # Empty list
     assert len(t2[[]]) == 0
@@ -135,6 +136,47 @@ def test_row_list_indexing():
     for bad in [[0, 5, 100], [0, 1, -11]]:
         with pytest.raises(IndexError):
             _ = t2[bad]
+
+
+def test_row_selector_preserves_order_and_duplicates():
+    """Order-carrying selectors on a plain (unordered) table keep order + dups.
+
+    Regression: a negative-step slice and an integer/list gather used to be
+    collapsed into a set-like boolean mask, which silently returned rows in
+    physical-ascending order and dropped duplicates.  This is exactly the shape
+    of a freshly built group-by result, where ``res[::-1]`` looked like a no-op.
+    """
+    t = CTable(Row, new_data=generate_test_data(10))
+
+    # Reverse via negative-step slice.
+    assert list(t[::-1].id) == list(range(9, -1, -1))
+    assert list(t[::-1].score) == [float(i * 10) for i in range(9, -1, -1)]
+
+    # Strided negative slice.
+    assert list(t[8:2:-2].id) == [8, 6, 4]
+
+    # Integer-array reorder (NumPy fancy index).
+    order = np.array([3, 1, 2, 0])
+    assert list(t[order].id) == [3, 1, 2, 0]
+
+    # Duplicate positions are preserved, in order.
+    assert list(t[[7, 7, 1]].id) == [7, 7, 1]
+
+    # A boolean mask stays set-like: physical-ascending order, no duplicates.
+    mask = np.zeros(10, dtype=bool)
+    mask[[5, 1, 8]] = True
+    assert list(t[mask].id) == [1, 5, 8]
+
+
+def test_reverse_slice_roundtrip_matches_numpy():
+    """``t[::-1]`` matches reversing the materialized structured array."""
+    t = CTable(Row, new_data=generate_test_data(25))
+    arr = np.asarray(t)
+    rev = t[::-1]
+    assert list(rev.id) == list(arr["id"][::-1])
+    assert list(rev.score) == list(arr["score"][::-1])
+    # Reversing twice is the identity.
+    assert list(t[::-1][::-1].id) == list(range(25))
 
 
 def test_row_view_properties():

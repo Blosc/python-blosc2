@@ -184,6 +184,50 @@ class TestCTableBehavior:
         mask = ct["vendor"] == None  # noqa: E711
         assert _logical_mask_values(ct, mask) == [False, False, False, False, True]
 
+    def test_string_where_expression_on_dictionary_column(self):
+        # A string where() referencing a dictionary column must resolve the
+        # literal to its code instead of failing with "Unknown symbol".
+        ct = CTable(TripRow)
+        ct.extend(DATA_TUPLES)
+
+        assert ct.where('vendor == "Uber"')["fare"][:].tolist() == [10.5, 15.0]
+        assert ct.where('vendor != "Uber"')["fare"][:].tolist() == [7.2, 5.0]
+        # Combined with a regular-column predicate.
+        assert ct.where('vendor == "Uber" and fare > 12')["fare"][:].tolist() == [15.0]
+        # Absent literal -> no match (no crash).
+        assert ct.where('vendor == "Waymo"').nrows == 0
+
+    def test_string_where_substring_in_dictionary_column(self):
+        # '"needle" in dictcol' is a substring filter over the dictionary values.
+        @dataclass
+        class Row:
+            company: str = blosc2.field(blosc2.dictionary())
+            amount: float = blosc2.field(blosc2.float64())
+
+        ct = CTable(Row)
+        ct.extend([("Acme Inc", 7.0), ("Santamaria Cabs", 15.0), ("Beta", 5.0), ("Acme LLC", 9.0)])
+
+        assert ct.where('"Acme" in company')["amount"][:].tolist() == [7.0, 9.0]
+        assert ct.where('"acme" in company').nrows == 0  # case-sensitive
+        assert ct.where('"zzz" in company').nrows == 0  # no match -> empty
+        # Combines with other predicates and operators.
+        assert ct.where('"Acme" in company and amount > 8')["amount"][:].tolist() == [9.0]
+        assert ct.where('"Acme" in company or "Beta" in company').nrows == 3
+
+    def test_string_where_dictionary_literal_with_special_chars(self):
+        # Literals with commas/spaces/dashes (e.g. chicago-taxi company names).
+        @dataclass
+        class Row:
+            company: str = blosc2.field(blosc2.dictionary())
+            n: int = blosc2.field(blosc2.int64())
+
+        name = "3721 - Santamaria Express, Alvaro Santamaria"
+        ct = CTable(Row)
+        ct.extend([(name, 1), ("Acme", 2), (name, 3)])
+
+        assert ct.where(f'company == "{name}"')["n"][:].tolist() == [1, 3]
+        assert ct.where(f"company == '{name}'")["n"][:].tolist() == [1, 3]  # single quotes too
+
     def test_dictionary_predicate_combines_with_regular_predicate_in_aggregate(self):
         ct = CTable(TripRow)
         ct.extend(DATA_TUPLES)

@@ -263,6 +263,17 @@ class StoreBrowser:
         # Per-path sort order for CTable nodes (path -> (column, reverse) / view)
         self._sorts: dict[str, tuple[str, bool]] = {}
         self._sort_views: dict[str, Any] = {}
+        # Per-path group-by for CTable nodes (path -> (key, op, value_col|None) /
+        # materialized result CTable).  Exclusive with filter/window/column-sel.
+        self._groups: dict[str, tuple[str, str, str | None]] = {}
+        self._group_views: dict[str, Any] = {}
+        # Optional sort applied on top of a grouped result (path -> (col, reverse)
+        # / sorted view of the small result).  Lives only while grouped.
+        self._group_sorts: dict[str, tuple[str, bool]] = {}
+        self._group_sort_views: dict[str, Any] = {}
+        # Memoized grouped results, keyed by (path, key, op, value_col).  Survives
+        # ungrouping so re-running a prior group-by is instant (store is read-only).
+        self._group_result_cache: dict[tuple[str, str, str, str | None], Any] = {}
         # Per-path column filters (path -> substring pattern / matched names)
         self._column_filters: dict[str, str] = {}
         self._column_selections: dict[str, list[str]] = {}
@@ -390,8 +401,9 @@ class StoreBrowser:
                     return preview_array_1d(obj, start=start, stop=stop)
             return preview_array(obj, slices=slices, max_rows=max_rows, max_cols=max_cols)
         if kind == "ctable":
-            # Read precedence: a locked row window (set by 'v') wins, then a row
-            # filter, then a sort view; all already fold in their predecessors.
+            # Read precedence: a group-by (smaller aggregated result) wins, then
+            # a locked row window (set by 'v'), then a row filter, then a sort
+            # view; all already fold in their predecessors.
             obj = self._ordered_object(path, obj)
             if columns is None:
                 columns = self._column_selections.get(path)
@@ -803,6 +815,8 @@ class StoreBrowser:
         (navigation operates on the filtered universe).
         """
         path = self.normalize_path(path)
+        if path in self._group_views:
+            return list(getattr(self._group_views[path], "col_names", []) or []) or None
         selection = self._column_selections.get(path)
         if selection is not None:
             return list(selection)
@@ -821,7 +835,9 @@ class StoreBrowser:
             self._filters.pop(path, None)
             self._filter_views.pop(path, None)
             return len(self._get_object(path))
-        self.clear_sort(path)  # filter and sort are mutually exclusive
+        # A filter redefines the row set, so any existing sort over the old rows
+        # is dropped; the user re-sorts the filtered rows on top if they want.
+        self.clear_sort(path)
         view = self._get_object(path).where(expr)
         self._filters[path] = expr
         self._filter_views[path] = view
@@ -836,17 +852,22 @@ class StoreBrowser:
         obj = self._get_object(path)
         return [ix.col_name for ix in getattr(obj, "indexes", []) if getattr(ix, "kind", None) == "full"]
 
-    def set_sort(self, path: str, column: str, reverse: bool) -> None:
-        """Order the CTable at *path* by *column* using its FULL index (zero-copy view).
+    def _row_source(self, path: str) -> Any:
+        """Base rows that sort/group build on: the active row filter view if any,
+        else the underlying table.  This is what makes a filter compose — sort
+        and group operate on the filtered rows, not the whole table."""
+        return self._filter_views.get(path, self._get_object(path))
 
-        The view streams from the sorted index, so the full table is never
-        materialised.  Sorting replaces any active row filter/window for *path*.
+    def set_sort(self, path: str, column: str, reverse: bool) -> None:
+        """Order the CTable at *path* by *column* as a zero-copy sorted view.
+
+        Composes over any active row filter (sorts the filtered rows); replaces
+        any locked window.  With no filter and a FULL index on *column*, the view
+        streams from the index, so the full table is never materialised.
         """
         path = self.normalize_path(path)
         self._window_views.pop(path, None)
-        self._filters.pop(path, None)
-        self._filter_views.pop(path, None)
-        view = self._get_object(path).sort_by(column, ascending=not reverse, view=True)
+        view = self._row_source(path).sort_by(column, ascending=not reverse, view=True)
         self._sorts[path] = (column, reverse)
         self._sort_views[path] = view
 
@@ -861,12 +882,21 @@ class StoreBrowser:
         return self._sorts.get(self.normalize_path(path))
 
     def _ordered_object(self, path: str, obj: Any) -> Any:
-        """CTable read precedence for *path*: window > filter > sort > base *obj*."""
+        """CTable read precedence for *path*: group > window > sort > filter > base.
+
+        Sort and group build on the filtered rows (see :meth:`_row_source`), so a
+        sort view already incorporates the filter and ranks above the bare filter
+        view; the bare filter view is read only when no sort is active.
+        """
+        if path in self._group_sort_views:
+            return self._group_sort_views[path]
+        if path in self._group_views:
+            return self._group_views[path]
         if path in self._window_views:
             return self._window_views[path]
-        if path in self._filter_views:
-            return self._filter_views[path]
-        return self._sort_views.get(path, obj)
+        if path in self._sort_views:
+            return self._sort_views[path]
+        return self._filter_views.get(path, obj)
 
     def set_row_window(self, path: str, start: int, stop: int) -> int:
         """Lock the CTable at *path* to live rows ``[start:stop]``; return its length.
@@ -876,10 +906,14 @@ class StoreBrowser:
         then cannot leave the range because the view reports only its own rows.
         """
         path = self.normalize_path(path)
-        if path in self._filter_views:
+        # The sort view already incorporates any filter, so prefer it; fall back
+        # to the bare filter view, then the base table.
+        if path in self._sort_views:
+            base = self._sort_views[path]
+        elif path in self._filter_views:
             base = self._filter_views[path]
         else:
-            base = self._sort_views.get(path, self._get_object(path))
+            base = self._get_object(path)
         view = base.slice(start, stop, copy=False)
         self._window_views[path] = view
         return len(view)
@@ -891,6 +925,199 @@ class StoreBrowser:
     def get_row_window(self, path: str) -> bool:
         """Return whether *path* currently has a locked row window."""
         return self.normalize_path(path) in self._window_views
+
+    def group_key_columns(self, path: str) -> list[str]:
+        """CTable columns at *path* usable as group-by keys (dictionary or numeric).
+
+        Includes floats: grouping by a numeric column (e.g. trip duration/distance
+        or a timestamp) buckets rows by exact value — handy for spotting rush
+        hours or best-profit windows.  Cardinality is the user's call; we don't
+        bin.  Non-dictionary text and nested/ndarray columns are excluded.
+        """
+        obj = self._get_object(path)
+        out = []
+        for name in getattr(obj, "col_names", []) or []:
+            col = obj[name]
+            dt = getattr(col, "dtype", None)
+            if getattr(col, "is_dictionary", False) or (dt is not None and dt.kind in "iuf"):
+                out.append(name)
+        return out
+
+    def group_value_columns(self, path: str) -> list[str]:
+        """CTable columns at *path* usable as aggregation value columns (numeric scalar)."""
+        obj = self._get_object(path)
+        out = []
+        for name in getattr(obj, "col_names", []) or []:
+            col = obj[name]
+            if getattr(col, "is_dictionary", False) or getattr(col, "is_ndarray", False):
+                continue
+            dt = getattr(col, "dtype", None)
+            if dt is not None and dt.kind in "iuf":
+                out.append(name)
+        return out
+
+    def set_group(self, path: str, key: str, op: str, value_col: str | None) -> int:
+        """Group the CTable at *path* by *key*, aggregating with *op*; return group count.
+
+        Builds a materialized result CTable (one row per group, columns = key +
+        aggregate).  Composes over any active row filter (groups the filtered
+        rows); drops any window, sort, and column selection.  Errors from
+        ``group_by`` propagate.
+        """
+        path = self.normalize_path(path)
+        # Memoize the materialized result: the store is read-only, so a given
+        # (path, filter, key, op, value_col) always aggregates to the same tiny
+        # CTable.  The active filter expr is part of the key so a filtered group
+        # never collides with the unfiltered one.
+        # ponytail: unbounded dict, but results are one-row-per-group and a
+        # session tries only a handful of configs — add an LRU cap if that ever
+        # stops being true.
+        cache_key = (path, self._filters.get(path), key, op, value_col)
+        result = self._group_result_cache.get(cache_key)
+        if result is None:
+            gb = self._row_source(path).group_by(key)
+            result = gb.size() if op == "size" else gb.agg({value_col: op})
+            self._group_result_cache[cache_key] = result
+        self._window_views.pop(path, None)
+        self._sorts.pop(path, None)
+        self._sort_views.pop(path, None)
+        self._column_filters.pop(path, None)
+        self._column_selections.pop(path, None)
+        self._group_sorts.pop(path, None)  # a fresh result invalidates any group sort
+        self._group_sort_views.pop(path, None)
+        self._groups[path] = (key, op, value_col)
+        self._group_views[path] = result
+        return len(result)
+
+    def get_group(self, path: str) -> tuple[str, str, str | None] | None:
+        """Return the active ``(key, op, value_col)`` group-by for *path*, if any."""
+        return self._groups.get(self.normalize_path(path))
+
+    def clear_group(self, path: str) -> None:
+        """Drop any group-by (and its sort) from *path*, restoring the base table."""
+        path = self.normalize_path(path)
+        self._groups.pop(path, None)
+        self._group_views.pop(path, None)
+        self._group_sorts.pop(path, None)
+        self._group_sort_views.pop(path, None)
+
+    def set_group_sort(self, path: str, column: str, reverse: bool) -> None:
+        """Sort the (already grouped) result at *path* by one of its columns.
+
+        The grouped result is tiny and carries no index, so this lexsorts it as a
+        zero-copy view.  No-op if *path* is not grouped.
+        """
+        path = self.normalize_path(path)
+        result = self._group_views.get(path)
+        if result is None:
+            return
+        self._group_sorts[path] = (column, reverse)
+        self._group_sort_views[path] = result.sort_by(column, ascending=not reverse, view=True)
+
+    def get_group_sort(self, path: str) -> tuple[str, bool] | None:
+        """Return the active ``(column, reverse)`` sort on the grouped result, if any."""
+        return self._group_sorts.get(self.normalize_path(path))
+
+    def clear_group_sort(self, path: str) -> None:
+        """Drop any sort on the grouped result, keeping the group itself."""
+        path = self.normalize_path(path)
+        self._group_sorts.pop(path, None)
+        self._group_sort_views.pop(path, None)
+
+    def group_agg_column(self, path: str) -> str | None:
+        """Name of the aggregate column in the grouped result for *path*, if grouped."""
+        group = self._groups.get(self.normalize_path(path))
+        if group is None:
+            return None
+        key, op, value_col = group
+        return "size" if op == "size" else f"{value_col}_{op}"
+
+    def group_bars(self, path: str, top_n: int = 50) -> dict[str, Any]:
+        """Grouped result as plot data, chosen by key dtype.
+
+        Follows the grid's active sort on the grouped result (so the plot matches
+        what the user sees — Pareto when sorted by the aggregate, key-order when
+        sorted by the key); with no sort, ranks by the aggregate descending.
+
+        A **categorical** key (dictionary/string) yields a *bar* chart: the first
+        ``top_n`` groups as ``labels`` + ``values``.  A **numeric** key yields a
+        *line* curve over **all** groups (``x`` + ``values``): ``x`` is the key
+        value when sorted by the key (a spacing-honest distribution), else the
+        rank index (a Pareto curve).  ``numeric`` says which.
+        """
+        path = self.normalize_path(path)
+        result = self._group_views.get(path)
+        group = self._groups.get(path)
+        empty = {
+            "numeric": False,
+            "labels": [],
+            "x": [],
+            "values": [],
+            "total": 0,
+            "key": "",
+            "agg": "",
+            "xlabel": "",
+        }
+        if result is None or group is None:
+            return empty
+        key = group[0]
+        agg = self.group_agg_column(path)
+        total = len(result)
+        sorted_result = self._group_sort_views.get(path)
+        sort = self._group_sorts.get(path)
+        source = sorted_result if sorted_result is not None else result
+
+        if self._is_numeric_key(result, key):
+            # Full curve, no top-N cap.  Honour the active sort; default to
+            # aggregate-descending (a Pareto curve) when none is set.
+            keys = np.asarray(source[key][:], dtype=float)
+            vals = np.asarray(source[agg][:], dtype=float)
+            if sorted_result is None:
+                order = np.argsort(vals)[::-1]
+                keys, vals = keys[order], vals[order]
+            if sort is not None and sort[0] == key:  # sorted by the key → key on X
+                x, xlabel = keys.tolist(), key
+            else:  # ranked by the aggregate → rank on X (Pareto)
+                x, xlabel = list(range(len(vals))), f"rank (by {agg})"
+            return {
+                "numeric": True,
+                "labels": [],
+                "x": [float(v) for v in x],
+                "values": [float(v) for v in vals],
+                "total": total,
+                "key": key,
+                "agg": agg,
+                "xlabel": xlabel,
+            }
+
+        # Categorical key → top-N bars.
+        if sorted_result is not None:
+            keys = safe_asarray(sorted_result[key][:top_n])
+            vals = np.asarray(sorted_result[agg][:top_n], dtype=float)
+            order = range(len(vals))
+        else:
+            keys = safe_asarray(result[key][:])
+            vals = np.asarray(result[agg][:], dtype=float)
+            order = np.argsort(vals)[::-1][:top_n]
+        return {
+            "numeric": False,
+            "x": [],
+            "labels": [str(keys[i]) for i in order],
+            "values": [float(vals[i]) for i in order],
+            "total": total,
+            "key": key,
+            "agg": agg,
+            "xlabel": key,
+        }
+
+    @staticmethod
+    def _is_numeric_key(result: Any, key: str) -> bool:
+        """True when the grouped key column is numeric (not a decoded dictionary)."""
+        col = result[key]
+        if getattr(col, "is_dictionary", False):
+            return False
+        dt = getattr(col, "dtype", None)
+        return dt is not None and dt.kind in "iuf"
 
     def base_nrows(self, path: str) -> int:
         """Return the unfiltered row count of the CTable at *path*."""
