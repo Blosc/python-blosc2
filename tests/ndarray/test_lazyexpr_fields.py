@@ -681,3 +681,41 @@ def test_fields_indexing():
 
     # Remove file
     blosc2.remove_urlpath("sa-1M.b2nd")
+
+
+@pytest.mark.parametrize("same_filter", [True, False])
+def test_query_cache_overwrite(tmp_path, same_filter):
+    # Query-result handles (gather mmaps, cached coordinates) are keyed by urlpath and
+    # were historically only dropped when the file was *deleted*. A file overwritten in
+    # place (same path, new contents) must not be served from the stale caches of the
+    # previous file -- the cached handles have to be validated against the file's
+    # mtime/size, not just its existence. See the Caterva2 lazyexpr-cache regression.
+    urlpath = str(tmp_path / "sa.b2nd")
+    dtype = [("A", np.int32), ("B", np.float32)]
+
+    # First version: 1000 rows, A = 0..999
+    na = np.empty(1000, dtype=dtype)
+    na["A"] = np.arange(1000)
+    na["B"] = np.arange(1000, dtype=np.float32)
+    blosc2.asarray(na, urlpath=urlpath, mode="w")
+
+    flt1 = "A < 100"
+    arr = blosc2.open(urlpath)
+    res = arr[flt1].sort(None).compute()[:]
+    np.testing.assert_array_equal(np.sort(res["A"].copy()), np.arange(100))
+    del arr  # drop the Python handle; the process-global caches survive
+
+    # Overwrite in place with different size *and* contents: 5000 rows, A = 5000..9999
+    nb = np.empty(5000, dtype=dtype)
+    nb["A"] = np.arange(5000, 10000)
+    nb["B"] = np.arange(5000, dtype=np.float32)
+    blosc2.asarray(nb, urlpath=urlpath, mode="w")
+
+    arr = blosc2.open(urlpath)
+    # Reuse the same filter (same query digest -> exercises the coordinate cache) or a
+    # new one (exercises the gather-mmap handle); both must read the *new* file.
+    flt2 = flt1 if same_filter else "A < 6000"
+    res = arr[flt2].sort(None).compute()[:]
+
+    expected = nb[nb["A"] < (100 if same_filter else 6000)]
+    np.testing.assert_array_equal(np.sort(res["A"].copy()), np.sort(expected["A"].copy()))

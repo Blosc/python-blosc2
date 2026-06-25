@@ -114,6 +114,10 @@ _HOT_CACHE_BYTES: int = 0
 _QUERY_CACHE_STORE_HANDLES: dict[str, object] = {}
 # Cached mmap handles for data arrays used in full-query gather: urlpath -> NDArray.
 _GATHER_MMAP_HANDLES: dict[str, object] = {}
+# Last-seen on-disk fingerprint (mtime_ns, size) for persistent paths whose query
+# handles/coordinates are cached above. Lets an in-place overwrite (same path, new
+# contents) be detected and invalidated, not just an outright deletion.
+_PERSISTENT_FINGERPRINTS: dict[str, tuple[int, int]] = {}
 # Registry for index sidecar files stored inside a .b2z bundle.
 # Maps absolute sidecar path -> (b2z_path, data_offset_in_zip).
 # Populated by the storage layer so indexing code can open sidecars without
@@ -195,8 +199,63 @@ def _purge_stale_persistent_caches() -> None:
     for path in stale_gather_paths:
         _GATHER_MMAP_HANDLES.pop(path, None)
 
+    stale_fingerprints = [path for path in tuple(_PERSISTENT_FINGERPRINTS) if not Path(path).exists()]
+    for path in stale_fingerprints:
+        _PERSISTENT_FINGERPRINTS.pop(path, None)
+
     for scope in stale_scopes:
         _hot_cache_clear(scope=scope)
+
+
+def _file_fingerprint(path: str) -> tuple[int, int] | None:
+    """Return a cheap change-detection fingerprint ``(mtime_ns, size)`` for *path*."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _drop_persistent_path_caches(raw_path: str, resolved: str) -> None:
+    """Drop every process-global cache entry keyed by the persistent file *path*."""
+    scope = ("persistent", resolved)
+    _PERSISTENT_INDEXES.pop(scope, None)
+    for cache in (_DATA_CACHE, _SIDECAR_HANDLE_CACHE):
+        for key in [k for k in tuple(cache) if k[0] == scope]:
+            cache.pop(key, None)
+    _hot_cache_clear(scope=scope)
+    for handles in (_QUERY_CACHE_STORE_HANDLES, _GATHER_MMAP_HANDLES):
+        handles.pop(raw_path, None)
+        handles.pop(resolved, None)
+
+
+def _refresh_persistent_caches(path: str | None) -> None:
+    """Invalidate cached handles/coordinates for *path* if its file changed on disk.
+
+    Reuse of the process-global query caches is keyed by urlpath, and the entries are
+    otherwise only dropped once their file is *deleted* (see
+    :func:`_purge_stale_persistent_caches`).  A file that is overwritten in place (for
+    instance re-uploaded with new contents at the same path) would therefore still be
+    served from the stale mmap handle and coordinate cache of the previous file.
+
+    Comparing the current ``(mtime_ns, size)`` against the fingerprint recorded when the
+    caches were populated lets us detect that and drop the affected entries; they simply
+    repopulate on the next query.
+    """
+    if not path:
+        return
+    raw_path = str(path)
+    try:
+        resolved = str(Path(raw_path).resolve())
+    except OSError:
+        return
+    fingerprint = _file_fingerprint(resolved)
+    if fingerprint is None:
+        return
+    previous = _PERSISTENT_FINGERPRINTS.get(resolved)
+    if previous is not None and previous != fingerprint:
+        _drop_persistent_path_caches(raw_path, resolved)
+    _PERSISTENT_FINGERPRINTS[resolved] = fingerprint
 
 
 def evict_cached_index_handles(root: str | None) -> None:
@@ -776,6 +835,9 @@ def get_cached_coords(
     """Return cached coordinates for *expression*/*tokens*/*order*, or ``None``."""
     owner = _query_cache_owner(array)
     scope = _query_cache_scope(owner)
+    # Drop stale coordinates if the underlying file was overwritten in place.
+    if _is_persistent_array(owner):
+        _refresh_persistent_caches(getattr(owner, "urlpath", None))
     descriptor = _normalize_query_descriptor(expression, tokens, order)
     digest = _query_cache_digest(descriptor)
     return _hot_cache_get(digest, scope=scope)
@@ -6139,6 +6201,8 @@ def _gather_mmap_source(where_x):
         return where_x
     _purge_stale_persistent_caches()
     urlpath = str(urlpath)
+    # Drop the cached mapping if the file was overwritten in place since we mapped it.
+    _refresh_persistent_caches(urlpath)
     handle = _GATHER_MMAP_HANDLES.get(urlpath)
     if handle is None:
         handle = blosc2.open(urlpath, mode="r", mmap_mode=_INDEX_MMAP_MODE)
