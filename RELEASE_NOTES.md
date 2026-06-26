@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.6.0 to 4.6.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.5.1 to 4.6.0
 
 ### `CTable.sort_by(view=True)`: zero-copy sorted views
