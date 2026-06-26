@@ -1,8 +1,26 @@
 # Release notes
 
-## Changes from 4.5.1 to 4.5.2
+## Changes from 4.5.1 to 4.6.0
 
-XXX version-specific blurb XXX
+### `CTable.sort_by(view=True)`: zero-copy sorted views
+
+- `CTable.sort_by()` now accepts **`view=True`**, returning a lightweight
+  **sorted view** that shares the parent's column data and gathers rows on
+  demand in sorted order — no whole-table copy.  This is ideal for reading a
+  sorted slice of a large (possibly on-disk) table::
+
+      t.sort_by("col", view=True)[:10]      # top-10 without materialising
+
+  Sorting on a **fully indexed** column streams directly from the index, so the
+  table is never materialised.  Multi-column sorts and dotted (nested) leaf
+  names are supported (e.g. `t.sort_by(["trip.begin.lon", "payment.fare"],
+  ascending=[True, False])`).
+
+### `where` on dictionary (string) columns
+
+- `where` expressions now work over **dictionary-encoded (string) columns**,
+  including membership tests such as `'"Acme" in company'`, so categorical
+  text columns can be filtered without decoding the whole column.
 
 ### `b2view` is now an opt-in extra
 
@@ -63,6 +81,49 @@ XXX version-specific blurb XXX
     most visibly float keys, which previously came out in hash order. Integer
     keys were already ascending; the generic Python fallback stays unsorted.
     Pass `sort=False` to opt out.
+
+### Accelerated reductions from index summaries
+
+- `min`/`max` on indexed `Column`s, and `argmin`/`argmax` inside `group_by`, are
+  now **accelerated using the index's per-block min/max summaries**: when an
+  index is available these reductions run from the precomputed summaries instead
+  of decompressing the underlying data, which is dramatically faster on large
+  columns.  A fast path also builds **min/max envelope plots** from any index.
+- The **last `group_by` operation is memoized** and reused when the same
+  grouping is requested again, avoiding recomputation in interactive / repeated
+  workflows (e.g. `b2view`).
+
+### b2view: group-by, sort, and richer plots
+
+- **Interactive group-by (`G`)**: group a `CTable` by a column (integer, string,
+  or now **float** keys) directly in the viewer, with a three-list / two-column
+  menu; while grouped, `S`/`R` operate on the grouped result and the data
+  panel's subtitle shows a `G(roup)` chip.  The last grouping is memoized for
+  instant reuse.
+- **Sort by column (`S`)**: sort a `CTable` by a **fully indexed** column via a
+  dropdown (`R` toggles reverse) as a zero-copy `sort_by(view=True)` that streams
+  from the index — the table is never materialised, `Esc` restores the original
+  order, and a `SORTED` chip shows in the status bar.  Non-indexed columns can
+  now be sorted too.  Sort and filter are mutually exclusive; a row window
+  composes over a sort, and an `f`ilter is preserved across `S`ort / `G`roup.
+- **Better plots of grouped/sorted views**: a grouped view plots **bars for a
+  categorical key** and **lines for a numeric key**; numeric-key group plots
+  render as **stem/impulse charts** rather than misleading connected lines.  Bar
+  plots gain an `h`i-res counterpart mirroring the line/scatter plots, and `+`/`-`
+  zoom about the view's left edge.
+- **`--max`** maximizes the current panel, and `escape` is now the single,
+  consistent way to back out of every modal.
+
+### Other / bug fixes
+
+- **C-Blosc2 upgraded to 3.1.5.**
+- **Open-file cache correctness**: cached open handles are now validated against
+  the file's fingerprint (`st_mtime_ns`, `st_size`) and cached index handles are
+  released when a table closes, so a file changed underneath an open handle is no
+  longer served stale.
+- **NumPy 2.5 compatibility**: adjusted for deprecations in NumPy 2.5.
+- Substantially **reduced test-suite runtime**, and emscripten builds no longer
+  attempt to spawn subprocesses (unsupported there).
 
 ## Changes from 4.5.0 to 4.5.1
 
