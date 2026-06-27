@@ -1069,3 +1069,42 @@ def test_dsl_kernel_variable_named_out_compiles(monkeypatch):
     assert any(line.strip().startswith("out =") for line in captured["expr"].splitlines())
     expected = blosc2.lazyudf(k, (a2, a2, 32), dtype=np.float64, jit=False)[:]
     np.testing.assert_allclose(res, expected)
+
+
+def test_validate_dsl_jit_reports_compile_and_fallback(monkeypatch):
+    @blosc2.dsl_kernel
+    def simple(a, b):
+        return a * a + b * b
+
+    st = blosc2.validate_dsl_jit(simple, [np.float64, np.float64], np.float64)
+    assert st["valid"]
+    assert st["compiled"]
+    assert st["jit"]
+    assert st["status"] == "ME_COMPILE_SUCCESS"
+
+    # A scalar param is inlined (passed as a value); a variable named 'out' (the
+    # former silent-fallback collision) now JIT-compiles through to miniexpr.  Built
+    # from source so the linter does not rewrite the deliberate 'out' variable.
+    with_out = kernel_from_source(
+        "def withk(a, b, niter):\n    out = a + b * float(niter)\n    return out\n", "withk"
+    )
+    st = blosc2.validate_dsl_jit(with_out, {"a": np.float64, "b": np.float64, "niter": 3}, np.float64)
+    assert st["jit"]
+
+    # Invalid syntax -> not valid, nothing compiled.
+    invalid = kernel_from_source("def k(a, b):\n    a = a - b\n    return a\n", "k")
+    st = blosc2.validate_dsl_jit(invalid, [np.float64, np.float64], np.float64)
+    assert not st["valid"]
+    assert not st["jit"]
+    assert "input parameter 'a'" in st["error"]
+
+    # JIT disabled in the environment -> compiles but falls back to the interpreter.
+    monkeypatch.setenv("ME_DSL_JIT", "0")
+
+    @blosc2.dsl_kernel
+    def other(a, b):
+        return a - b * 0.5
+
+    st = blosc2.validate_dsl_jit(other, [np.float64, np.float64], np.float64)
+    assert st["compiled"]
+    assert not st["jit"]

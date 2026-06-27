@@ -573,7 +573,7 @@ from .b2objects import open_b2object
 
 from .c2array import c2context, C2Array, URLPath
 
-from .dsl_kernel import DSLSyntaxError, DSLKernel, dsl_kernel, validate_dsl
+from .dsl_kernel import DSLSyntaxError, DSLKernel, dsl_kernel, validate_dsl, validate_dsl_jit
 from .lazyexpr import (
     LazyExpr,
     lazyudf,
@@ -976,6 +976,7 @@ __all__ = [  # noqa : RUF022
     "lazyexpr",
     "dsl_kernel",
     "validate_dsl",
+    "validate_dsl_jit",
     "lazyudf",
     "lazywhere",
     "less",

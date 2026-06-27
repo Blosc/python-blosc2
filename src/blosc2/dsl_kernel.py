@@ -635,6 +635,31 @@ def validate_dsl(func):
         - ``dsl_source`` (str | None): extracted DSL source when valid
         - ``input_names`` (list[str] | None): input signature names when valid
         - ``error`` (str | None): user-facing error message when invalid
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> @blosc2.dsl_kernel
+    ... def k(a, b):
+    ...     return a * a + b * b
+    >>> info = blosc2.validate_dsl(k)
+    >>> info["valid"]
+    True
+    >>> info["input_names"]
+    ['a', 'b']
+
+    An unsupported construct is reported instead of raising:
+
+    >>> @blosc2.dsl_kernel
+    ... def bad(a):
+    ...     return 1 if a > 0 else 0
+    >>> blosc2.validate_dsl(bad)["valid"]
+    False
+
+    See Also
+    --------
+    validate_dsl_jit : Additionally probe whether the kernel JIT-compiles (vs falls
+        back to the interpreter) for given operand/output dtypes.
     """
 
     kernel = func if isinstance(func, DSLKernel) else DSLKernel(func)
@@ -645,6 +670,115 @@ def validate_dsl(func):
         "input_names": kernel.input_names,
         "error": None if err is None else str(err),
     }
+
+
+def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blocks=None):
+    """Report whether a DSL kernel JIT-compiles (vs. interpreter fallback).
+
+    Compiles a tiny probe of the kernel for the given operand/output dtypes and
+    queries miniexpr for whether it produced a runtime JIT kernel.  The kernel is
+    *not* run on real data, but compilation is dtype-specialized, so the operand and
+    output dtypes must be supplied.
+
+    Parameters
+    ----------
+    func
+        A Python callable or :class:`DSLKernel`.
+    operands
+        One spec per kernel input.  A NumPy dtype (e.g. ``np.float64``, ``"f8"``)
+        marks an *array* operand; a Python ``int``/``float``/``bool`` marks a *scalar*
+        parameter inlined as a constant (as happens at run time).  Either a dict
+        mapping input name -> spec, or a sequence matched positionally to the inputs.
+    out_dtype
+        Output dtype to specialize the codegen for.
+    shape
+        Probe shape; ``len(shape)`` sets the kernel dimensionality (kernels using
+        ``_i1`` etc. need a matching ndim).  Defaults to ``(64,)``.
+
+    Returns
+    -------
+    dict
+        - ``valid`` (bool): DSL syntax is valid
+        - ``jit`` (bool): a runtime JIT kernel was produced (vs interpreter fallback)
+        - ``compiled`` (bool): miniexpr accepted the kernel
+        - ``status`` (str | None): miniexpr compile-status name
+        - ``error`` (str | None): syntax error message when ``valid`` is False
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> @blosc2.dsl_kernel
+    ... def k(a, b):
+    ...     return a * a + b * b
+    >>> status = blosc2.validate_dsl_jit(k, [np.float64, np.float64], np.float64)
+    >>> status["jit"]
+    True
+    >>> status["status"]
+    'ME_COMPILE_SUCCESS'
+
+    Pass array operands as dtypes and scalar parameters as values (the scalar is
+    inlined as a constant, as at run time):
+
+    >>> @blosc2.dsl_kernel
+    ... def scaled(a, n):
+    ...     return a * float(n)
+    >>> blosc2.validate_dsl_jit(scaled, {"a": np.float64, "n": 3}, np.float64)["jit"]
+    True
+
+    See Also
+    --------
+    validate_dsl : Static DSL-syntax check only (no compilation; no dtypes needed).
+    """
+    import numpy as np
+
+    import blosc2
+
+    kernel = func if isinstance(func, DSLKernel) else DSLKernel(func)
+    if kernel.dsl_error is not None:
+        return {
+            "valid": False,
+            "jit": False,
+            "compiled": False,
+            "status": None,
+            "error": str(kernel.dsl_error),
+        }
+
+    names = list(kernel.input_names or [])
+    if isinstance(operands, dict):
+        specs = dict(operands)
+    else:
+        operands = list(operands)
+        if len(operands) != len(names):
+            raise ValueError(f"expected {len(names)} operand specs for inputs {names}, got {len(operands)}")
+        specs = dict(zip(names, operands, strict=True))
+
+    scalars: dict = {}
+    arrays: dict = {}
+    for name in names:
+        if name not in specs:
+            raise ValueError(f"missing operand spec for input '{name}'")
+        spec = specs[name]
+        if isinstance(spec, bool | int | float):
+            scalars[name] = spec
+        else:
+            arrays[name] = np.dtype(spec)
+
+    source = kernel.dsl_source
+    if scalars:
+        source, _ = specialize_miniexpr_inputs(source, scalars)
+    if not arrays:
+        raise ValueError(
+            "validate_dsl_jit needs at least one array operand (pass a dtype spec); "
+            "all-scalar probes are not supported"
+        )
+
+    out = blosc2.empty(shape, dtype=np.dtype(out_dtype), chunks=chunks, blocks=blocks)
+    probe_inputs = {name: np.empty(1, dtype=dt) for name, dt in arrays.items()}
+    status = out._dsl_jit_status(source, probe_inputs)
+    status["valid"] = True
+    status["error"] = None
+    return status
 
 
 def kernel_from_source(source: str, name: str | None = None) -> DSLKernel:

@@ -735,6 +735,8 @@ cdef extern from "miniexpr.h":
     void me_print(const me_expr *n) nogil
     void me_free(me_expr *n) nogil
 
+    bint me_expr_has_jit_kernel(const me_expr *expr) nogil
+
     ctypedef int (*me_wasm_jit_instantiate_helper)(
         const unsigned char *wasm_bytes,
         int wasm_len,
@@ -4070,6 +4072,74 @@ cdef class NDArray:
         # Return the anchored bitmap buffer (or None) so the caller keeps it
         # alive for the duration of the prefilter-driven update_data loop.
         return cb
+
+    def _dsl_jit_status(self, expression, inputs):
+        """Compile *expression* with JIT against this array's grid and report whether
+        miniexpr produced a runtime JIT kernel (vs an interpreter fallback).
+
+        Compiles and immediately frees the program; it does not set a prefilter or
+        run the kernel.  Returns a dict with ``compiled`` (bool), ``jit`` (bool) and
+        ``status`` (miniexpr compile-status name).  ``inputs`` is a name -> NDArray
+        mapping; all operands must share this array's shape/chunks/blocks.
+        """
+        cdef Py_ssize_t n = len(inputs)
+        cdef me_variable* variables = NULL
+        if n > 0:
+            variables = <me_variable *> malloc(sizeof(me_variable) * n)
+            if variables == NULL:
+                raise MemoryError()
+        cdef me_variable *var
+        cdef np.dtype out_np_dtype = np.dtype(self.dtype)
+        cdef me_dtype me_output_dtype = _me_dtype_from_numpy_dtype(out_np_dtype)
+        if <int>me_output_dtype < 0:
+            free(variables)
+            raise TypeError(f"miniexpr does not support output dtype: {out_np_dtype}")
+
+        cdef np.dtype operand_dtype
+        cdef bytes var_name
+        for i, (k, v) in enumerate(inputs.items()):
+            var = &variables[i]
+            var_name = k.encode("utf-8") if isinstance(k, str) else k
+            var.name = <char *> malloc(strlen(var_name) + 1)
+            strcpy(var.name, var_name)
+            operand_dtype = np.dtype(v.dtype)
+            var.dtype = _me_dtype_from_numpy_dtype(operand_dtype)
+            if <int>var.dtype < 0:
+                for j in range(i + 1):
+                    free(variables[j].name)
+                free(variables)
+                raise TypeError(f"miniexpr does not support operand dtype '{operand_dtype}' for input '{k}'")
+            var.address = NULL
+            var.type = 0
+            var.context = NULL
+            var.itemsize = v.dtype.itemsize if v.dtype.num == 19 else 0
+
+        cdef bytes expression_bytes = (
+            (<str>expression).encode("utf-8") if isinstance(expression, str) else expression
+        )
+        cdef int error = 0
+        cdef me_expr *out_expr = NULL
+        cdef int ndims = self.array.ndim
+        cdef int64_t* shape = &self.array.shape[0]
+        cdef int32_t* chunkshape = &self.array.chunkshape[0]
+        cdef int32_t* blockshape = &self.array.blockshape[0]
+        cdef int rc = me_compile_nd_jit(expression_bytes, variables, n, me_output_dtype, ndims,
+                                        shape, chunkshape, blockshape, ME_JIT_ON,
+                                        &error, &out_expr)
+        for i in range(n):
+            free(variables[i].name)
+        free(variables)
+
+        cdef bint jit = False
+        if rc == ME_COMPILE_SUCCESS and out_expr != NULL:
+            jit = me_expr_has_jit_kernel(out_expr)
+        if out_expr != NULL:
+            me_free(out_expr)
+        return {
+            "compiled": rc == ME_COMPILE_SUCCESS,
+            "jit": bool(jit),
+            "status": _me_compile_status_name(rc),
+        }
 
     def _set_pref_matmul(self, inputs, fp_accuracy):
         # Set prefilter for miniexpr
