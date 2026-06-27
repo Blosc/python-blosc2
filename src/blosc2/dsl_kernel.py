@@ -286,16 +286,30 @@ class DSLValidator:
         ast.GtE: ">=",
     }
 
-    def __init__(self, source: str, line_base: int = 0):
+    def __init__(self, source: str, line_base: int = 0, input_names: list[str] | None = None):
         self._source = source
         self._line_base = line_base
+        self._inputs = set(input_names or ())
 
     def validate(self, func_node: ast.FunctionDef):
         self._args(func_node)
         if not func_node.body:
             self._err(func_node, "DSL kernel must have a body")
+        self._one_per_line(func_node.body)
         for stmt in func_node.body:
             self._stmt(stmt)
+
+    def _one_per_line(self, body: list[ast.stmt]):
+        # G1: miniexpr parses one statement per line; `;`-joined siblings share a lineno.
+        prev = None
+        for stmt in body:
+            if prev is not None and stmt.lineno == prev:
+                self._err(
+                    stmt,
+                    "Only one statement per line is supported in DSL kernels; "
+                    "split ';'-joined statements onto separate lines",
+                )
+            prev = stmt.lineno
 
     def _err(self, node: ast.AST, msg: str, *, line: int | None = None, col: int | None = None):
         if line is None:
@@ -327,15 +341,26 @@ class DSLValidator:
         if args.defaults or args.kw_defaults:
             self._err(args, "DSL kernel does not support default arguments")
 
+    def _check_input_assign(self, target: ast.Name):
+        # G2: miniexpr forbids reassigning an input parameter (inputs alias operand buffers).
+        if target.id in self._inputs:
+            self._err(
+                target,
+                f"Cannot assign to input parameter '{target.id}'; "
+                f"copy it into a local variable first (e.g. 'tmp = {target.id}')",
+            )
+
     def _stmt(self, node: ast.stmt):  # noqa: C901
         if isinstance(node, ast.Assign):
             if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
                 self._err(node, "Only simple assignments are supported in DSL kernels")
+            self._check_input_assign(node.targets[0])
             self._expr(node.value)
             return
         if isinstance(node, ast.AugAssign):
             if not isinstance(node.target, ast.Name):
                 self._err(node, "Only simple augmented assignments are supported")
+            self._check_input_assign(node.target)
             self._binop(node.op)
             self._expr(node.value)
             return
@@ -351,6 +376,8 @@ class DSLValidator:
             self._expr(node.test)
             if not node.body:
                 self._err(node, "Empty if blocks are not supported in DSL kernels")
+            self._one_per_line(node.body)
+            self._one_per_line(node.orelse)
             for stmt in node.body:
                 self._stmt(stmt)
             for stmt in node.orelse:
@@ -372,6 +399,7 @@ class DSLValidator:
                 self._expr(arg)
             if not node.body:
                 self._err(node, "Empty for-loop bodies are not supported in DSL kernels")
+            self._one_per_line(node.body)
             for stmt in node.body:
                 self._stmt(stmt)
             return
@@ -381,6 +409,7 @@ class DSLValidator:
             self._expr(node.test)
             if not node.body:
                 self._err(node, "Empty while-loop bodies are not supported in DSL kernels")
+            self._one_per_line(node.body)
             for stmt in node.body:
                 self._stmt(stmt)
             return
@@ -530,9 +559,9 @@ class DSLKernel:
         dsl_func = next((node for node in dsl_tree.body if isinstance(node, ast.FunctionDef)), None)
         if dsl_func is None:
             raise ValueError("No function definition found in sliced DSL source")
-        if validate:
-            DSLValidator(dsl_source).validate(dsl_func)
         input_names = self._input_names_from_signature(dsl_func)
+        if validate:
+            DSLValidator(dsl_source, input_names=input_names).validate(dsl_func)
         if _PRINT_DSL_KERNEL:
             func_name = getattr(func, "__name__", "<dsl_kernel>")
             print(f"[DSLKernel:{func_name}] dsl_source (full):")
