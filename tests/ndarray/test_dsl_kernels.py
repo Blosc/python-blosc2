@@ -318,6 +318,10 @@ def test_dsl_kernel_index_symbols_float_cast_uses_miniexpr_fast_path(monkeypatch
     assert "float(_i0)" in captured["expr"]
     assert "_n1" in captured["expr"]
     assert "_i1" in captured["expr"]
+    # ...and it JIT-compiles rather than silently running on the interpreter.
+    assert blosc2.validate_dsl_jit(kernel_index_ramp_float_cast, {"x": np.float32}, np.float32, shape=shape)[
+        "jit"
+    ]
 
 
 def test_dsl_kernel_index_symbols_int_cast_matches_expected_ramp():
@@ -447,6 +451,10 @@ def test_dsl_kernel_scalar_param_keeps_miniexpr_fast_path(monkeypatch):
         assert "# loop count comes from scalar niter" in captured["expr"]
         assert "range(niter)" not in captured["expr"]
         assert "float(niter)" not in captured["expr"]
+        # ...and the loop+scalar kernel JIT-compiles (the original G3 fallback shape).
+        assert blosc2.validate_dsl_jit(
+            kernel_loop_param, {"x": a2.dtype, "y": b2.dtype, "niter": niter}, a2.dtype, shape=(32, 32)
+        )["jit"]
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
