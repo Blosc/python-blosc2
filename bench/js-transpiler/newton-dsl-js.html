@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>blosc2 DSL → JavaScript transpiler (Pyodide)</title>
+<script src="https://cdn.jsdelivr.net/pyodide/v314.0.0/full/pyodide.js"></script>
+<style>
+  body{font:14px system-ui,sans-serif;margin:2rem;color:#0f172a}
+  h1{font-size:1.2rem}
+  pre{background:#0b1020;color:#86efac;padding:.8rem;white-space:pre-wrap;border-radius:6px;max-height:16rem;overflow:auto}
+  canvas{border:1px solid #1f2937;background:#0b1020;border-radius:4px;margin-top:1rem}
+  button{font:inherit;padding:.35rem .8rem;cursor:pointer}
+  .muted{color:#475569}
+</style>
+
+<h1>blosc2 DSL → JavaScript transpiler</h1>
+<p class="muted">Takes a real <code>@blosc2.dsl_kernel</code>, transpiles it to JS with
+<code>dsl_js.build_js_module()</code>, and runs the emitted JS in the browser. Correctness:
+checked against a numpy reference on the <em>same</em> input arrays. Speed: a fair, warmed,
+best-of-N comparison against a hand-written JS kernel over the full 24-frame <code>relax</code>
+sweep (a total, to clear the browser timer-resolution floor) — the ratio should sit near 1.00,
+i.e. the transpiler reaches hand-written-JS speed. See plans/dsl-js.md.</p>
+
+<button id="run" disabled>Run</button> <span id="status" class="muted">loading Pyodide…</span>
+<pre id="log"></pre>
+<canvas id="canvas" width="320" height="213"></canvas>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = s => { $("log").textContent += s + "\n"; };
+
+const PY = String.raw`
+import base64, json
+import numpy as np
+import blosc2
+
+WIDTH, HEIGHT, MAXITER, RELAX = 320, 213, 48, 1.37
+NFRAMES, RELAX_MIN, RELAX_MAX = 24, 1.0, 1.85   # same sweep as the original demo
+SPANX = 3.4
+ASPECT = HEIGHT / WIDTH
+
+@blosc2.dsl_kernel
+def newton_dsl(a, b, max_iter, relax):
+    za = a
+    zb = b
+    mif = float(max_iter)
+    it = mif
+    for k in range(max_iter):
+        a2 = za * za
+        b2 = zb * zb
+        fr = za * a2 - 3.0 * za * b2 - 1.0
+        fi = 3.0 * a2 * zb - zb * b2
+        dr = 3.0 * (a2 - b2)
+        di = 6.0 * za * zb
+        den = dr * dr + di * di + 0.000000000001
+        qr = relax * (fr * dr + fi * di) / den
+        qi = relax * (fi * dr - fr * di) / den
+        za = za - qr
+        zb = zb - qi
+        if qr * qr + qi * qi < 0.000001:
+            it = float(k)
+            break
+    d0 = (za - 1.0) * (za - 1.0) + zb * zb
+    d1 = (za + 0.5) * (za + 0.5) + (zb - 0.8660254) * (zb - 0.8660254)
+    d2 = (za + 0.5) * (za + 0.5) + (zb + 0.8660254) * (zb + 0.8660254)
+    root = 0.0
+    md = d0
+    if d1 < md:
+        md = d1
+        root = 1.0
+    if d2 < md:
+        root = 2.0
+    return root + 0.9 * (it / mif)
+
+# numpy reference (vectorized) of the exact same kernel, for an in-browser correctness check.
+def newton_numpy(a, b, max_iter, relax):
+    za = a.copy(); zb = b.copy()
+    mif = float(max_iter)
+    it = np.full(a.shape, mif)
+    alive = np.ones(a.shape, dtype=bool)
+    for k in range(max_iter):
+        a2 = za * za; b2 = zb * zb
+        fr = za * a2 - 3.0 * za * b2 - 1.0; fi = 3.0 * a2 * zb - zb * b2
+        dr = 3.0 * (a2 - b2); di = 6.0 * za * zb; den = dr * dr + di * di + 1e-12
+        qr = relax * (fr * dr + fi * di) / den; qi = relax * (fi * dr - fr * di) / den
+        za = za - qr; zb = zb - qi
+        c = alive & ((qr * qr + qi * qi) < 1e-6); it[c] = k; alive &= ~c
+        if not alive.any():
+            break
+    d0 = (za - 1.0) ** 2 + zb ** 2
+    d1 = (za + 0.5) ** 2 + (zb - 0.8660254) ** 2
+    d2 = (za + 0.5) ** 2 + (zb + 0.8660254) ** 2
+    root = np.zeros(a.shape); md = d0.copy()
+    m = d1 < md; md = np.where(m, d1, md); root = np.where(m, 1.0, root)
+    m = d2 < md; root = np.where(m, 2.0, root)
+    return root + 0.9 * (it / mif)
+
+_x = np.linspace(-SPANX / 2, SPANX / 2, WIDTH)
+_y = np.linspace(-SPANX * ASPECT / 2, SPANX * ASPECT / 2, HEIGHT)
+A, B = np.meshgrid(_x, _y)
+
+def b64(arr):
+    return base64.b64encode(np.ascontiguousarray(arr, dtype=np.float64).tobytes()).decode("ascii")
+
+def payload():
+    import dsl_js
+    ref = newton_numpy(A, B, MAXITER, RELAX)
+    return json.dumps({
+        "module": dsl_js.build_js_module(newton_dsl),
+        "A": b64(A), "B": b64(B), "ref": b64(ref),
+        "W": WIDTH, "H": HEIGHT, "maxiter": MAXITER, "relax": RELAX,
+        "nframes": NFRAMES, "relax_min": RELAX_MIN, "relax_max": RELAX_MAX,
+    })
+`;
+
+// Server-root-absolute: serve the repo root (python3 -m http.server) and open this page at
+// /bench/js-transpiler/newton-dsl-js.html. Local transpiler, newer than the PyPI wheel.
+const DSL_JS_URL = "/src/blosc2/dsl_js.py";
+
+const f64 = b64 => {
+  const bin = atob(b64), u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Float64Array(u8.buffer);
+};
+
+const ROOT_COLORS = [[230, 80, 80], [80, 200, 120], [90, 130, 240]];
+function render(val, W, H) {
+  const N = val.length, frac = new Float64Array(N);
+  for (let i = 0; i < N; i++) { const v = val[i]; frac[i] = (v - Math.floor(v)) / 0.9; }
+  const order = Array.from({ length: N }, (_, i) => i).sort((p, q) => frac[p] - frac[q]);
+  const rank = new Float64Array(N);
+  for (let r = 0; r < N; r++) rank[order[r]] = N > 1 ? r / (N - 1) : 0;
+  const out = new Uint8ClampedArray(N * 4);
+  for (let i = 0; i < N; i++) {
+    const c = ROOT_COLORS[Math.min(2, Math.floor(val[i]))], shade = 0.30 + 0.70 * (1 - rank[i]), o = i * 4;
+    out[o] = c[0] * shade; out[o + 1] = c[1] * shade; out[o + 2] = c[2] * shade; out[o + 3] = 255;
+  }
+  return new ImageData(out, W, H);
+}
+
+// Hand-written Newton kernel: same element loop over the SAME A/B arrays as the
+// transpiled one — the apples-to-apples baseline for "generated vs hand-written".
+function newtonRef(A, B, maxIter, relax, out, N) {
+  for (let i = 0; i < N; i++) {
+    let za = A[i], zb = B[i], it = maxIter;
+    for (let k = 0; k < maxIter; k++) {
+      const a2 = za * za, b2 = zb * zb;
+      const fr = za * a2 - 3.0 * za * b2 - 1.0, fi = 3.0 * a2 * zb - zb * b2;
+      const dr = 3.0 * (a2 - b2), di = 6.0 * za * zb, den = dr * dr + di * di + 1e-12;
+      const qr = relax * (fr * dr + fi * di) / den, qi = relax * (fi * dr - fr * di) / den;
+      za -= qr; zb -= qi;
+      if (qr * qr + qi * qi < 1e-6) { it = k; break; }
+    }
+    const d0 = (za - 1.0) * (za - 1.0) + zb * zb;
+    const d1 = (za + 0.5) * (za + 0.5) + (zb - 0.8660254) * (zb - 0.8660254);
+    const d2 = (za + 0.5) * (za + 0.5) + (zb + 0.8660254) * (zb + 0.8660254);
+    let root = 0.0, md = d0;
+    if (d1 < md) { md = d1; root = 1.0; }
+    if (d2 < md) { root = 2.0; }
+    out[i] = root + 0.9 * (it / maxIter);
+  }
+}
+
+const maxAbsDiff = (a, b, N) => {
+  let m = 0;
+  for (let i = 0; i < N; i++) m = Math.max(m, Math.abs(a[i] - b[i]));
+  return m;
+};
+
+// Warm V8 first, then take the best of several runs (min discards cold-JIT/jitter).
+function timeBest(fn, runs) {
+  for (let w = 0; w < 3; w++) fn();
+  let best = Infinity;
+  for (let r = 0; r < runs; r++) {
+    const t = performance.now(); fn(); best = Math.min(best, performance.now() - t);
+  }
+  return best;
+}
+
+let py;
+(async () => {
+  py = await loadPyodide();
+  $("status").textContent = "installing blosc2…";
+  await py.loadPackage("micropip");
+  await py.runPythonAsync(`import micropip; await micropip.install("blosc2>=4.5.1")`);
+  const dslSrc = await (await fetch(DSL_JS_URL)).text();
+  py.FS.writeFile("/dsl_js.py", new TextEncoder().encode(dslSrc));
+  // Write the kernel to a file and import it: @blosc2.dsl_kernel runs inspect.getsource(),
+  // which only works when the function is backed by a real file (not exec'd from a string).
+  py.FS.writeFile("/newton_kernel.py", new TextEncoder().encode(PY));
+  await py.runPythonAsync(`import sys\nif "/" not in sys.path: sys.path.insert(0, "/")\nimport blosc2, newton_kernel`);
+  log(`blosc2 ${await py.runPythonAsync("blosc2.__version__")} • Pyodide ${py.version}`);
+  $("status").textContent = "ready.";
+  $("run").disabled = false;
+  $("run").onclick = runDemo;
+})().catch(e => { $("status").textContent = "ERROR: " + e; throw e; });
+
+async function runDemo() {
+  $("run").disabled = true;
+  try {
+  const p = JSON.parse(py.runPython("newton_kernel.payload()"));
+  const W = p.W, H = p.H, N = W * H, MI = p.maxiter, RX = p.relax;
+  const NF = p.nframes, RMIN = p.relax_min, RMAX = p.relax_max;
+  const A = f64(p.A), B = f64(p.B), ref = f64(p.ref);
+
+  const __run = new Function(p.module)();   // emitted JS -> the element driver
+  const outT = new Float64Array(N), outR = new Float64Array(N);
+  const runT = rx => __run([A, B, MI, rx], [true, true, false, false], outT, N);
+  const runR = rx => newtonRef(A, B, MI, rx, outR, N);
+
+  // Correctness vs the numpy reference (single frame at relax=RX), then render that frame.
+  runT(RX); runR(RX);
+  const diffT = maxAbsDiff(outT, ref, N), diffR = maxAbsDiff(outR, ref, N);
+  log(`correctness vs numpy: transpiled maxdiff=${diffT.toExponential(2)}, `
+      + `hand-written maxdiff=${diffR.toExponential(2)}`);
+  log((diffT < 1e-9 && diffR < 1e-9) ? "✓ both correct" : "✗ MISMATCH");
+  $("canvas").getContext("2d").putImageData(render(outT, W, H), 0, 0);
+
+  // Fair timing: full NF-frame relax sweep (clears the timer-resolution floor), same as
+  // the original demo's methodology. Warmed, best-of so cold-JIT/GC runs are discarded.
+  const relaxes = Array.from({ length: NF }, (_, i) => RMIN + (RMAX - RMIN) * i / (NF - 1));
+  const sweepT = () => { for (const rx of relaxes) runT(rx); };
+  const sweepR = () => { for (const rx of relaxes) runR(rx); };
+  const totT = timeBest(sweepT, 5), totR = timeBest(sweepR, 5);
+  log(`\nfair compare — ${NF}-frame relax sweep ${RMIN}..${RMAX} (${W}x${H}, `
+      + `max_iter=${MI}), warmed, best of 5:`);
+  log(`  transpiled-JS total : ${totT.toFixed(1)} ms  (${(totT / NF).toFixed(2)} ms/frame)`);
+  log(`  hand-written  total : ${totR.toFixed(1)} ms  (${(totR / NF).toFixed(2)} ms/frame)`);
+  log(`  ratio (transpiled/hand) : ${(totT / totR).toFixed(2)}x   (1.00 = identical)`);
+  log("\nemitted JS module:\n" + p.module);
+  } catch (e) {
+    log("RUN ERROR:\n" + (e && e.message ? e.message : e));
+  }
+  $("run").disabled = false;
+}
+</script>

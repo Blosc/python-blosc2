@@ -1432,6 +1432,28 @@ def _is_dsl_kernel_expression(expression) -> bool:
     return isinstance(expression, DSLKernel) and expression.dsl_source is not None
 
 
+def _as_js_udf(expression):
+    """For jit_backend="js": transpile a DSL kernel to JS and return a plain per-block
+    callable (so the normal UDF path runs it). Browser/Pyodide only."""
+    if not _is_dsl_kernel_expression(expression):
+        raise ValueError('jit_backend="js" requires a blosc2.dsl_kernel-decorated kernel')
+    if not blosc2.IS_WASM:
+        raise RuntimeError('jit_backend="js" is only available under WebAssembly/Pyodide')
+    from .dsl_js import js_kernel
+
+    return js_kernel(expression)
+
+
+def _maybe_js_backend(expression, jit, jit_backend, reduce_args):
+    """For jit_backend="js", swap the DSL kernel for its JS bridge (a plain per-block
+    callable) and disable miniexpr/backend-pragma. Otherwise a no-op passthrough."""
+    if jit_backend != "js":
+        return expression, jit, jit_backend
+    if reduce_args:
+        raise ValueError('jit_backend="js" does not support reductions')
+    return _as_js_udf(expression), None, None
+
+
 def _format_dsl_parse_error_hint(expr_text: str, backend_msg: str):
     marker = "parse_error_pos="
     pos0 = backend_msg.find(marker)
@@ -2961,6 +2983,9 @@ def chunked_eval(
             operands = {**operands, **where}
 
         reduce_args = kwargs.pop("_reduce_args", {})
+        # jit_backend="js": swap the DSL kernel for its JS bridge (a plain per-block callable).
+        expression, jit, jit_backend = _maybe_js_backend(expression, jit, jit_backend, reduce_args)
+
         fast_path = _validate_chunked_eval_inputs(operands, out, shape, reduce_args)
 
         # Activate last read cache for NDField instances
