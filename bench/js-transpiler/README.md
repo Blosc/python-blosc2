@@ -17,19 +17,36 @@ then benches a 24-frame `relax` sweep.
 
 ```sh
 npm i                                         # pulls pyodide@314 (see package.json)
-node bench/js-transpiler/dsl-js-node.mjs       # correctness + 24-frame bench
-node bench/js-transpiler/dsl-js-node.mjs 48    # N frames
+node bench/js-transpiler/dsl-js-node.mjs       # correctness + kernel sweep, 12 reps
+node bench/js-transpiler/dsl-js-node.mjs 24    # N reps
 ```
 
 Needs network on first run (PyPI wheel via micropip). Exits non-zero on a correctness
-mismatch, so it works as a smoke test. Typical output (Apple M-series, blosc2 4.6.0):
+mismatch, so it works as a smoke test. It benches four kernel shapes so the js-vs-JIT ratio
+can be read against the kernel, not generalized from one. Representative (Apple M2, 4.6.0):
 
 ```
-correctness vs numpy:  js maxdiff=0.00e+0  jit maxdiff=0.00e+0  OK
-  jit_backend="js" : ~16 ms/frame
-  jit (miniexpr)   : ~31 ms/frame      -> js ~2x faster
-  no-JIT           : ~130 ms/frame     -> js ~8x faster
+  kernel    js     jit    nojit   js/jit  js/nojit
+  newton    12.1   26.1   114.6   2.15x    9.44x     arithmetic + branches + early-exit
+  deepar    22.5   50.2    53.1   2.23x    2.36x     deep pure-arithmetic loop
+  deep     120.1  143.1   104.4   1.19x    0.87x     deep loop, libm sin every iter
+  trans      5.0    5.0     6.8   1.00x    1.34x     transcendental-heavy
+  poly       3.4    3.0     3.6   0.87x    1.05x     light, branch-free
 ```
+
+**The takeaway: there is no single "js is N× the JIT" number — it depends on what the kernel
+is bottlenecked on.**
+
+- **Arithmetic / control-flow bound** (newton, deepar) → V8's optimizing JIT beats blosc2's
+  miniexpr WASM codegen by **~2×**. This is the sweet spot.
+- **Transcendental bound** (trans, deep) → **~1×**: time is spent in `sin`/`exp`/`log` (libm),
+  which costs about the same whoever runs the loop — `nojit` even edges `js` on `deep`.
+- **Light / trivial** (poly) → **<1×**: the kernel does almost no compute, so the blosc2
+  pipeline + per-call JS marshaling dominate, and `js` can be *slightly slower* than the JIT.
+
+So the honest generalization is qualitative: transpiling to JS wins (~2×, single-threaded)
+for **compute-bound float kernels dominated by arithmetic and control flow**, and is roughly
+a wash for transcendental-bound or trivial kernels.
 
 > The overlay pins `blosc2==4.6.0` to keep the compiled `blosc2_ext` ABI in step with the
 > pure-Python we drop on top. Once these changes ship in a Pyodide-installable wheel, the

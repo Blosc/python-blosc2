@@ -142,6 +142,13 @@ Measured on Apple M-series, blosc2 4.6.0 under Pyodide 314, Newton 320×213 / ma
 
 Correctness exact: `js` and JIT both `maxdiff=0.00` vs numpy.
 
+**The ~2× is kernel-dependent, not a flat rule** (kernel sweep in `dsl-js-node.mjs`, see
+`bench/js-transpiler/README.md`). The js-vs-JIT win tracks what the kernel is bottlenecked on:
+**arithmetic / control-flow** bound → ~2× (newton 2.15×, a deep pure-arithmetic loop 2.23×);
+**transcendental** bound (`sin`/`exp`/`log`) → ~1× (libm cost is engine-independent; `nojit`
+can even edge `js`); **light / trivial** → <1× (blosc2 pipeline + marshaling dominate, `js`
+slightly loses). So JS helps for compute-bound float kernels heavy on arithmetic and branches.
+
 **The PyProxy gotcha (the one real bug the headless harness caught).** The bridge must pass
 the per-call operands to the JS driver as real **JS `Array`s**, not Python lists. A Python
 list arrives in JS as a `PyProxy`, so every `ops[k][i]` in the hot inner loop crosses the
