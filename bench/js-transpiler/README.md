@@ -50,3 +50,37 @@ python3 -m http.server          # from the repo root
 
 Serve from the repo root (not `file://`): the page fetches `/src/blosc2/dsl_js.py` (the
 local transpiler, newer than the PyPI wheel) at a server-root-absolute path.
+
+## Multithreading ceiling — `worker-pool-bench.mjs`
+
+Throwaway exploration of *how fast the transpiled kernel could go* with real JS
+multithreading: pure Node (`worker_threads` + `SharedArrayBuffer`), **no Pyodide, no
+blosc2**. Same Newton kernel, partitioned across a persistent worker pool with an Atomics
+barrier; reports speedup vs single-thread for 1/2/4/N workers.
+
+```sh
+node bench/js-transpiler/worker-pool-bench.mjs
+```
+
+Findings (Apple M2, 4 performance + 4 efficiency cores; laptop numbers vary ±10–15% with
+thermal/P-vs-E scheduling, so treat these as representative, not exact):
+
+| workers | ms/frame | speedup |
+|---|---|---|
+| single-thread | ~11.3 | 1.0× |
+| ×2 | ~5.9 | ~1.9× (~94% eff) |
+| ×4 | ~3.1 | ~3.5× (~88% eff) |
+| ×8 | ~2.3 | ~4.8× (~60% eff — E-cores) |
+
+- The worker mechanism is ~free (×1 ≈ 1.0×); scaling is near-linear up to the performance
+  core count. The ×8 drop-off is the M2's efficiency cores, not overhead.
+- **Load balancing is essential.** Contiguous row-bands regress badly (×4 fell to 1.48×)
+  because the per-pixel early-`break` makes some bands all-max-iter and others trivial.
+  **Striped** rows (worker `i` → rows `i, i+nw, …`) fix it — that's what the bench uses.
+
+Why this stays a *headroom* result, not a shipped feature: it measures **pure compute**.
+The real `jit_backend="js"` path also pays ~8 ms/frame of blosc2 decompress/compress that
+does not parallelize this way, plus Pyodide orchestration is single-threaded — so realistic
+end-to-end gain is a fraction of 5×. And a browser integration needs pure-JS workers (not the
+Pyodide bridge), a SharedArrayBuffer, COOP/COEP cross-origin isolation, and a path to get
+decompressed chunks into shared memory. See "Deferred" in [`plans/dsl-js.md`](../../plans/dsl-js.md).
