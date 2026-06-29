@@ -96,6 +96,20 @@ async def wait_for_table(pilot) -> None:
     raise AssertionError("data table never finished loading")
 
 
+async def wait_until(pilot, predicate, *, message="condition not met in time") -> None:
+    """Pump the event loop until *predicate* holds.
+
+    Setting ``Input.value`` posts an ``Input.Changed`` that rebuilds dependent widgets
+    asynchronously; a single ``pilot.pause()`` is not always enough on slower/loaded CI
+    (e.g. Windows), so poll until the resulting state settles.
+    """
+    for _ in range(100):
+        await pilot.pause()
+        if predicate():
+            return
+    raise AssertionError(message)
+
+
 async def focus_data_table(pilot) -> DataTable:
     table = pilot.app.query_one("#data-table", DataTable)
     table.focus()
@@ -655,11 +669,11 @@ async def test_ctable_filtering(store_path):
 
         # Typing narrows the candidate list (substring, case-insensitive).
         app.screen.query_one("#colfilter-input", Input).value = "v1"
-        await pilot.pause()
+        await wait_until(pilot, lambda: sel.option_count == 10, message="list did not narrow")
         assert sel.option_count == 10  # v10..v19
         # Clear the filter again so the first column ('a') is reachable.
         app.screen.query_one("#colfilter-input", Input).value = ""
-        await pilot.pause()
+        await wait_until(pilot, lambda: sel.option_count == ncols, message="list did not reset")
 
         # ↓ moves focus into the list; Space unchecks the highlighted ('a');
         # Enter applies the remaining set.
