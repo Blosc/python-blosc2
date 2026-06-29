@@ -132,6 +132,7 @@ def test_index_symbol_rejected():
         dsl_to_js(uses_index)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="emscripten cannot spawn the node subprocess")
 def test_newton_matches_python():
     w, h, max_iter, relax = 40, 30, 48, 1.37
     pts = [[-1.7 + 3.4 * c / (w - 1), -1.1 + 2.2 * r / (h - 1)] for r in range(h) for c in range(w)]
@@ -141,6 +142,7 @@ def test_newton_matches_python():
     assert maxdiff < 1e-9, f"newton py-vs-js mismatch: maxdiff={maxdiff}"
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="emscripten cannot spawn the node subprocess")
 def test_misc_matches_python():
     pts = [[3.5, 16.0], [1.2, 9.0], [-4.3, 25.0], [8.0, 4.0], [0.0, 100.0]]
     ref = []
@@ -208,6 +210,7 @@ def test_prefer_js_falls_back_on_untranspilable(monkeypatch):
     assert expr is _idx
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="this test asserts off-WASM behavior")
 def test_explicit_js_off_wasm_raises():
     # jit_backend="js" is an explicit choice -> hard error off-WASM (not a silent fallback).
     assert not blosc2.IS_WASM  # this test runs on a native build
