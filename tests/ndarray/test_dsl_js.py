@@ -183,6 +183,7 @@ def _run_node_index(module, gshape, off, cshape, ncols=1):
     return json.loads(res.stdout)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="emscripten cannot spawn the node subprocess")
 def test_index_ramp_matches_numpy():
     def ramp(a):
         return float(_i0) * _n1 + _i1  # noqa: F821
@@ -196,6 +197,7 @@ def test_index_ramp_matches_numpy():
     np.testing.assert_array_equal(got, expected[8:16, :])
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="emscripten cannot spawn the node subprocess")
 def test_flat_idx_matches_numpy():
     def flat(a):
         return float(_flat_idx) * 2.0  # noqa: F821
