@@ -2,7 +2,17 @@
 
 ## Changes from 4.6.0 to 4.6.1
 
-XXX version-specific blurb XXX
+### DSL → JavaScript backend for WebAssembly (`jit_backend="js"`)
+
+- Under WebAssembly/Pyodide, `@blosc2.dsl_kernel` kernels can now be transpiled
+  to JavaScript and run via the browser's JIT.  It is the **default** there for
+  transpilable floating-point kernels (silently falling back to miniexpr for
+  anything it can't handle), and beats the WASM TinyCC JIT on compute-heavy
+  kernels (e.g. ~2.8x on a Newton-fractal kernel).  Request it explicitly with
+  `compute(jit_backend="js")`; outside WebAssembly that raises.
+- Supports index/shape symbols (`_i0`/`_n0`/`_ndim`/`_flat_idx`) and integer inputs
+  with a floating-point output.  Integer/complex *output*, reductions, and
+  unsupported constructs stay on miniexpr.  Native builds are unaffected.
 
 ## Changes from 4.5.1 to 4.6.0
 

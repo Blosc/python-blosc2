@@ -6,7 +6,7 @@ miniexpr + WASM-JIT backend. Everything listed below as *unsupported* currently 
 
 ## Implemented
 
-- **P1 — Index / shape symbols** (`_i0`/`_n0`/`_flat_idx`, ...). The transpiler emits them
+- **P1 — Index / shape symbols** (`_i0`/`_n0`/`_ndim`/`_flat_idx`, ...). The transpiler emits them
   as trailing kernel params and the runtime driver reconstructs per-block global coordinates
   from `(off, gshape, cshape)`; see `_module_with_index` in `src/blosc2/dsl_js.py`. The
   whole-array shape is threaded `chunked_eval → _maybe_js_backend → _as_js_udf → js_kernel`.

@@ -28,7 +28,7 @@ import textwrap
 # plain per-block callable. Browser/Pyodide only (js_kernel imports `js` at call time).
 
 # Canonical signature order for index/shape symbols passed to the transpiled kernel.
-_INDEX_SYMBOL_ORDER = ("_i0", "_i1", "_i2", "_n0", "_n1", "_n2", "_flat_idx")
+_INDEX_SYMBOL_ORDER = ("_i0", "_i1", "_i2", "_n0", "_n1", "_n2", "_ndim", "_flat_idx")
 _INDEX_SYMBOLS = set(_INDEX_SYMBOL_ORDER)
 
 # numpy/math function name -> JS Math.* name (numpy aliases included).
@@ -345,8 +345,8 @@ def dsl_to_js(kernel):
 
 
 def _max_index_dim(used_index) -> int:
-    """Highest axis referenced by `_iK`/`_nK` symbols (-1 if only `_flat_idx`/none)."""
-    dims = [int(s[2:]) for s in used_index if s != "_flat_idx"]
+    """Highest axis referenced by `_iK`/`_nK` symbols (-1 if only `_ndim`/`_flat_idx`/none)."""
+    dims = [int(s[2:]) for s in used_index if s[:2] in ("_i", "_n") and s[2:].isdigit()]
     return max(dims) if dims else -1
 
 
@@ -363,11 +363,13 @@ def _module_with_index(kernel_js, fname, params, used_index) -> str:
     then the referenced symbols are derived and passed as trailing kernel args."""
     decls = []
     for s in used_index:
-        if s == "_flat_idx":
+        if s in ("_flat_idx", "_ndim"):
             continue
         k = int(s[2:])
         rhs = f"off[{k}] + loc[{k}]" if s.startswith("_i") else f"gshape[{k}]"
         decls.append(f"    const {s} = {rhs};")
+    if "_ndim" in used_index:
+        decls.append("    const _ndim = d;")
     if "_flat_idx" in used_index:
         decls.append("    let _flat_idx = 0;")
         decls.append(

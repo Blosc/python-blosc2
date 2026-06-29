@@ -145,6 +145,14 @@ def test_index_symbols_transpile():
     flat_mod = build_js_module(flat, ndim=2)
     assert "_flat_idx = _flat_idx * gshape[k]" in flat_mod
 
+    # _ndim resolves to the runtime block rank (cshape.length).
+    def ndim_k(a):
+        return float(_ndim)  # noqa: F821
+
+    ndim_mod = build_js_module(ndim_k, ndim=3)
+    assert "function ndim_k(a, _ndim)" in ndim_mod
+    assert "const _ndim = d;" in ndim_mod
+
 
 def test_index_symbols_need_ndim_and_valid_axis():
     def ramp(a):
