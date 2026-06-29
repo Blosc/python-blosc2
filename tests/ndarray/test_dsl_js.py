@@ -12,9 +12,11 @@ run the emitted JS and check it matches the Python kernel semantics element-by-e
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 import numpy as np
 import pytest
@@ -91,7 +93,13 @@ const out = new Float64Array(pts.length);
 {cols}__run([{ops}], [{isarr}], out, pts.length);
 console.log(JSON.stringify(Array.from(out)));
 """
-    res = subprocess.run([node, "-e", prog], capture_output=True, text=True)
+    # Write to a temp file rather than `node -e <prog>`: a big inlined program (the points
+    # are JSON-embedded) overflows the Windows command-line length limit (WinError 206).
+    with tempfile.TemporaryDirectory() as d:
+        script = os.path.join(d, "dsl_js_check.js")
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write(prog)
+        res = subprocess.run([node, script], capture_output=True, text=True)
     if res.returncode != 0:
         raise AssertionError(f"node failed:\n{res.stderr}")
     return json.loads(res.stdout)
