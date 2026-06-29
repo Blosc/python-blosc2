@@ -1,0 +1,1 @@
+blosc2-4.7.0-cp313-cp313-pyemscripten_2025_0_wasm32.whl
