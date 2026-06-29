@@ -1,49 +1,40 @@
-Announcing Python-Blosc2 4.6.0
+Announcing Python-Blosc2 4.7.0
 ==============================
 
-We are happy to announce this release, which sharpens the **columnar / query
-side** of blosc2: zero-copy sorted views, queries over string (dictionary)
-columns, a more flexible and faster ``group_by``, and an ``b2view`` terminal
-browser that can now group, sort, and plot interactively.
+We are happy to announce this release, which brings a **DSL → JavaScript JIT
+backend** for running compute kernels under WebAssembly/Pyodide, a new helper to
+check whether your DSL kernels actually JIT-compile, and a batch of miniexpr
+fixes.
 
 The main highlights are:
 
-- **Zero-copy sorted views**: ``CTable.sort_by(..., view=True)`` returns a
-  lightweight sorted view that shares the parent's column data and gathers rows
-  on demand — no whole-table copy.  Sorting on a fully indexed column streams
-  straight from the index, so reading a sorted slice of a huge (on-disk) table
-  is as easy as ``t.sort_by("col", view=True)[:10]``.
+- **DSL → JavaScript backend (``jit_backend="js"``)**: under WebAssembly/Pyodide,
+  ``@blosc2.dsl_kernel`` kernels can now be transpiled to JavaScript and run via
+  the browser's JIT.  It is the **default there** for transpilable floating-point
+  kernels (silently falling back to miniexpr for anything it can't handle), and
+  beats the WASM TinyCC JIT on compute-heavy kernels (e.g. ~2.8x on a Newton
+  fractal).  It supports index/shape symbols (``_i0``/``_n0``/``_ndim``/
+  ``_flat_idx``) and integer inputs with a floating-point output.  Request it
+  explicitly with ``compute(jit_backend="js")``; outside WebAssembly that raises.
+  Native builds are unaffected.
 
-- **Queries over string columns**: ``where`` expressions now work on
-  dictionary-encoded (string) columns, including membership tests such as
-  ``'"Acme" in company'``, filtering categorical text without decoding the whole
-  column.
+- **New ``blosc2.validate_dsl_jit()``**: an introspection helper that reports
+  whether a DSL kernel actually JIT-compiles (vs. silently falling back to the
+  interpreter) for given operand/output dtypes — without running it on real
+  data.
 
-- **Smarter, faster group_by**: ``group_by(...).agg()`` accepts flexible
-  aggregation specs and explicit output names (pandas-style), a new tri-state
-  ``sort=`` (``None``/``True``/``False``) sorts only when cheap, the last
-  grouping is memoized, and ``min``/``max``/``argmin``/``argmax`` are
-  accelerated from per-block index summaries instead of decompressing data.
+- **miniexpr fixes**: clearer errors for ``;``-joined statements and for
+  assigning to an input parameter, and a fix for a name collision where DSL
+  variables named ``out``/``idx``/``nitems``/``inputs``/``output`` clashed with
+  codegen-internal identifiers and silently fell back to the interpreter.
 
-- **b2view grows up**: interactive **group-by** (``G``, including float keys),
-  **sort-by-column** (``S``, zero-copy via the index), and much **better plots**
-  — bars for categorical keys, lines/stems for numeric keys, hi-res variants for
-  every plot type, and ``--max`` to maximize a panel.  ``b2view`` is now an
-  **opt-in extra** (``pip install "blosc2[tui]"``), so a plain
-  ``pip install blosc2`` stays lean.
+A quick taste — run a DSL kernel on the JS backend under Pyodide::
 
-- **Fixes & maintenance**: the bundled **C-Blosc2 is upgraded to 3.1.5**, the
-  open-file cache now validates cached handles against the file's fingerprint (so
-  a file changed underneath an open handle is never served stale), plus
-  compatibility with **NumPy 2.5**.
+    @blosc2.dsl_kernel
+    def k(a, b):
+        return a * a + b * b
 
-A quick taste — grab a table and explore it::
-
-    $ pip install "blosc2[tui]" --upgrade
-    $ b2view --download --panel data
-
-Press ``G`` to group, ``S`` to sort, and ``p`` to plot a column — all without
-decompressing anything you do not look at.
+    out = k.compute(operands, jit_backend="js")   # JS JIT under WebAssembly
 
 Install it with::
 

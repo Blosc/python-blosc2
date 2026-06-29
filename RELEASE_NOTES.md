@@ -1,6 +1,6 @@
 # Release notes
 
-## Changes from 4.6.0 to 4.6.1
+## Changes from 4.6.0 to 4.7.0
 
 ### DSL → JavaScript backend for WebAssembly (`jit_backend="js"`)
 
@@ -13,6 +13,25 @@
 - Supports index/shape symbols (`_i0`/`_n0`/`_ndim`/`_flat_idx`) and integer inputs
   with a floating-point output.  Integer/complex *output*, reductions, and
   unsupported constructs stay on miniexpr.  Native builds are unaffected.
+
+### New `blosc2.validate_dsl_jit()`
+
+- A new introspection helper reports whether a DSL kernel actually JIT-compiles
+  (vs. silently falling back to the interpreter) for a given set of operand and
+  output dtypes, without running it on real data::
+
+      status = blosc2.validate_dsl_jit(kernel, [np.float64, np.float64], np.float64)
+      status["jit"]  # True if a runtime JIT kernel was produced
+
+### miniexpr fixes
+
+- `DSLValidator` now rejects `;`-joined sibling statements with a clear
+  "one statement per line" error, and assigning to an input parameter raises a
+  targeted error naming the param.
+- Fixed (in miniexpr) a name collision where DSL variables named `out`, `idx`,
+  `nitems`, `inputs` or `output` clashed with codegen-internal identifiers,
+  causing the generated C to fail to compile and silently fall back to the
+  interpreter.  Codegen identifiers are now namespaced under `__me`.
 
 ## Changes from 4.5.1 to 4.6.0
 
