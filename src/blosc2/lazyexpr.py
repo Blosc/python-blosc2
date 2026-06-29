@@ -479,7 +479,8 @@ class LazyArray(ABC, blosc2.Operand):
 
             - ``strict_miniexpr`` (bool): controls whether miniexpr compilation/execution
               failures are raised instead of silently falling back to regular chunked eval
-              for non-DSL expressions.
+              for non-DSL expressions.  Setting it ``True`` also opts a DSL kernel out of the
+              WebAssembly prefer-js default, keeping it on miniexpr.
 
             - ``jit`` (bool | None): enable (``True``) or disable (``False``) JIT compilation
               of the expression via miniexpr.  When ``None`` (default), JIT is only used
@@ -488,9 +489,21 @@ class LazyArray(ABC, blosc2.Operand):
               kernels.
 
             - ``jit_backend`` (str | None): select the JIT compiler backend.  Valid
-              values are ``"tcc"`` (bundled Tiny C Compiler) and ``"cc"`` (system C
-              compiler, e.g. gcc or clang).  ``None`` (default) defers to the miniexpr
-              default (``"tcc"``).
+              values are ``"tcc"`` (bundled Tiny C Compiler), ``"cc"`` (system C
+              compiler, e.g. gcc or clang), and ``"js"`` (transpile the DSL kernel to
+              JavaScript; browser/Pyodide only — see below).  ``None`` (default) defers
+              to the miniexpr default (``"tcc"``), except under WebAssembly where — unless
+              ``jit=False`` — it *prefers* ``"js"`` for transpilable float DSL kernels and
+              falls back to miniexpr otherwise.  Since ``"js"`` is itself JIT-compiled by
+              the JS engine, ``jit=True`` prefers it too; force miniexpr with
+              ``jit_backend="tcc"``/``"cc"``.
+
+            - ``"js"`` backend (WebAssembly/Pyodide only): transpiles a
+              :func:`blosc2.dsl_kernel` to JavaScript so it runs at the browser engine's
+              optimized native speed.  It tends to beat the WASM miniexpr JIT (~2x) for
+              float kernels dominated by arithmetic and control flow, and is roughly a
+              wash for transcendental-heavy or trivial kernels.  Outside WebAssembly,
+              ``jit_backend="js"`` raises.  Forcing ``"tcc"``/``"cc"`` always uses miniexpr.
 
             - ``BLOSC_ME_JIT`` environment variable: when set to ``"1"``, ``"true"``,
               ``"on"``, ``"tcc"``, or ``"cc"``, it forces ``jit=True`` and overrides
@@ -1407,8 +1420,11 @@ def fill_chunk_operands(
 def _apply_jit_backend_pragma(expression: str, inputs: dict, jit_backend: str | None) -> str:
     if jit_backend is None:
         return expression
+    if jit_backend == "js":
+        # "js" is handled earlier (DSL kernels -> JS bridge); it never carries a C pragma.
+        return expression
     if jit_backend not in ("tcc", "cc"):
-        raise ValueError("jit_backend must be one of: None, 'tcc', 'cc'")
+        raise ValueError("jit_backend must be one of: None, 'tcc', 'cc', 'js'")
 
     pragma = f"# me:compiler={jit_backend}\n"
     stripped = expression.lstrip()
@@ -1444,14 +1460,52 @@ def _as_js_udf(expression):
     return js_kernel(expression)
 
 
-def _maybe_js_backend(expression, jit, jit_backend, reduce_args):
-    """For jit_backend="js", swap the DSL kernel for its JS bridge (a plain per-block
-    callable) and disable miniexpr/backend-pragma. Otherwise a no-op passthrough."""
-    if jit_backend != "js":
+def _js_dtypes_ok(operands, kwargs) -> bool:
+    """True only if the JS bridge (which computes in float64) is safe for these operands:
+    floating-point NDArray inputs and a floating/inferred output dtype. Integer/complex go
+    to miniexpr instead (float64 can't represent int64 exactly)."""
+    dt = kwargs.get("dtype")
+    if dt is not None and not np.issubdtype(np.dtype(dt), np.floating):
+        return False
+    return all(
+        np.issubdtype(op.dtype, np.floating) for op in operands.values() if isinstance(op, blosc2.NDArray)
+    )
+
+
+def _maybe_js_backend(expression, jit, jit_backend, reduce_args, operands, kwargs):
+    """Resolve the JS backend for a DSL kernel.
+
+    - ``jit_backend="js"`` (explicit): transpile to the JS bridge, or raise if it can't.
+    - ``jit_backend=None`` under WebAssembly, unless ``jit=False``: *prefer* JS (it is a
+      JIT too, and the fastest one here) for transpilable float DSL kernels, silently
+      falling back to miniexpr for anything it can't do (non-float dtypes, reductions, or
+      unsupported DSL constructs).  ``jit=True`` and ``jit=None`` both prefer JS; only
+      ``jit=False`` (interpreter), ``strict_miniexpr=True``, or an explicit ``jit_backend``
+      opts out.
+
+    Returns ``(expression, jit, jit_backend)`` — expression becomes a plain per-block
+    callable when JS is chosen, else everything passes through unchanged.
+    """
+    if jit_backend == "js":
+        if reduce_args:
+            raise ValueError('jit_backend="js" does not support reductions')
+        return _as_js_udf(expression), None, None
+    prefer_js = (
+        jit is not False  # jit=True/None prefer the best JIT (js); only jit=False forces interpreter
+        and jit_backend is None
+        and not kwargs.get("strict_miniexpr")  # explicit strict_miniexpr=True keeps miniexpr
+        and blosc2.IS_WASM
+        and _is_dsl_kernel_expression(expression)
+        and not reduce_args
+        and _js_dtypes_ok(operands, kwargs)
+    )
+    if not prefer_js:
         return expression, jit, jit_backend
-    if reduce_args:
-        raise ValueError('jit_backend="js" does not support reductions')
-    return _as_js_udf(expression), None, None
+    try:
+        bridge = _as_js_udf(expression)  # transpiles; raises on any unsupported construct
+    except Exception:
+        return expression, jit, jit_backend  # fall back to miniexpr, no regression
+    return bridge, None, None
 
 
 def _format_dsl_parse_error_hint(expr_text: str, backend_msg: str):
@@ -2983,8 +3037,11 @@ def chunked_eval(
             operands = {**operands, **where}
 
         reduce_args = kwargs.pop("_reduce_args", {})
-        # jit_backend="js": swap the DSL kernel for its JS bridge (a plain per-block callable).
-        expression, jit, jit_backend = _maybe_js_backend(expression, jit, jit_backend, reduce_args)
+        # Resolve the JS backend: explicit jit_backend="js", or prefer-js-with-fallback under
+        # WebAssembly when the user left jit_backend unset (see _maybe_js_backend).
+        expression, jit, jit_backend = _maybe_js_backend(
+            expression, jit, jit_backend, reduce_args, operands, kwargs
+        )
 
         fast_path = _validate_chunked_eval_inputs(operands, out, shape, reduce_args)
 
@@ -4839,9 +4896,13 @@ def lazyudf(
     jit: bool or None, optional
         JIT policy for miniexpr-backed execution:
         ``None`` uses default behavior (currently, JIT is tried out), ``True`` prefers JIT, ``False`` disables JIT.
-    jit_backend: {"tcc", "cc"} or None, optional
-        JIT backend selection for miniexpr-backed execution:
-        ``None`` uses backend defaults (currently "tcc"), ``"tcc"`` forces libtcc, ``"cc"`` forces C compiler backend.
+    jit_backend: {"tcc", "cc", "js"} or None, optional
+        JIT backend selection. ``None`` uses backend defaults (miniexpr "tcc"), except under
+        WebAssembly where — unless ``jit=False`` — it *prefers* ``"js"`` for transpilable
+        float DSL kernels and falls back to miniexpr otherwise (``jit=True`` prefers ``"js"``
+        too, since it is JIT-compiled by the JS engine). ``"tcc"`` forces libtcc, ``"cc"``
+        forces the C compiler backend, and ``"js"`` transpiles a :func:`blosc2.dsl_kernel`
+        to JavaScript (browser/Pyodide only; raises elsewhere).
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
         These arguments will be used by the :meth:`LazyArray.__getitem__` and

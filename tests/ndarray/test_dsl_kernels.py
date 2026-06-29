@@ -23,6 +23,17 @@ where = np.where
 clip = np.clip
 
 
+@pytest.fixture(autouse=True)
+def _no_auto_js_backend(monkeypatch):
+    """Keep this module on the miniexpr/DSL path. Under WebAssembly the default prefers the
+    JS backend for float kernels, which would bypass ``_set_pref_expr`` and break the
+    miniexpr-specific assertions here. Stubbing the dtype gate to ``False`` disables only the
+    *auto* prefer-js (explicit ``jit_backend="js"`` still works, and is covered by
+    test_dsl_js.py / test_wasm_dsl_jit.py). No-op off WebAssembly (prefer-js never engages)."""
+    # `blosc2.lazyexpr` the attribute is the re-exported function; patch the actual module.
+    monkeypatch.setattr(sys.modules["blosc2.lazyexpr"], "_js_dtypes_ok", lambda *a, **k: False)
+
+
 def _make_arrays(shape=(8, 8), chunks=(4, 4), blocks=(2, 2)):
     a = np.linspace(0, 1, num=np.prod(shape), dtype=np.float32).reshape(shape)
     b = np.linspace(1, 2, num=np.prod(shape), dtype=np.float32).reshape(shape)

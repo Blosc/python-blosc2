@@ -93,6 +93,15 @@ def deepar_dsl(a, b):
         acc = acc * 0.5 + t * 0.25 + 0.1
     return acc + t
 
+# Fallback-path kernels (used only by fallback_check, not the float sweep):
+@blosc2.dsl_kernel  # int output/operands -> default must fall back to miniexpr (float64 bridge unsafe)
+def int_dsl(a, b):
+    return a * 2 + b * 3
+
+@blosc2.dsl_kernel  # index symbol -> transpiler rejects -> default must fall back to miniexpr
+def idx_dsl(a):
+    return a + float(_i0)  # noqa: F821
+
 _x = np.linspace(-SPANX / 2, SPANX / 2, WIDTH, dtype=DTYPE)
 _y = np.linspace(-SPANX * ASPECT / 2, SPANX * ASPECT / 2, HEIGHT, dtype=DTYPE)
 A_NP, B_NP = np.meshgrid(_x, _y)
@@ -111,14 +120,16 @@ KERNELS = [
     ("deepar", deepar_dsl, (A_B2, B_B2)),
 ]
 
-def run(func, ops, backend):
-    kw = {"dtype": DTYPE, "cparams": _cp}
+def run(func, ops, backend, dtype=DTYPE):
+    kw = {"dtype": dtype, "cparams": _cp}
     if backend == "js":
         kw["jit_backend"] = "js"
-    elif backend == "jit":
+    elif backend == "tcc":
         kw["jit"] = True
-    else:
+        kw["jit_backend"] = "tcc"   # miniexpr JIT, TinyCC backend (explicit)
+    elif backend == "nojit":
         kw["jit"] = False
+    # "default": pass nothing -> under WASM this prefers js, falling back to miniexpr.
     return blosc2.lazyudf(func, ops, **kw)[:]
 
 def bench(func, ops, backend, reps):
@@ -142,17 +153,33 @@ def debug_bridge():
         t = time.perf_counter(); bridge(inp, out, 0); best = min(best, (time.perf_counter() - t) * 1000)
     return {"first_ms": first, "warm_ms": best}
 
+def fallback_check():
+    # Default backend must transparently fall back to miniexpr where js can't go, with no
+    # error and the same result. int dtype -> dtype-gated; index symbol -> transpiler rejects.
+    Ai = blosc2.asarray((A_NP * 10).astype(np.int64), chunks=_chunks, blocks=_blocks, cparams=_cp)
+    Bi = blosc2.asarray((B_NP * 10).astype(np.int64), chunks=_chunks, blocks=_blocks, cparams=_cp)
+    int_def = run(int_dsl, (Ai, Bi), "default", dtype=np.int64)
+    int_tcc = run(int_dsl, (Ai, Bi), "tcc", dtype=np.int64)
+    idx_def = run(idx_dsl, (A_B2,), "default")
+    idx_tcc = run(idx_dsl, (A_B2,), "tcc")
+    return {
+        "int_ok": bool(np.array_equal(int_def, int_tcc)),
+        "idx_ok": bool(np.allclose(idx_def, idx_tcc)),
+    }
+
 def result(reps):
     import math
     kernels = []
     for name, func, ops in KERNELS:
         rj = run(func, ops, "js")
-        rjit = run(func, ops, "jit")
-        diff = float(np.max(np.abs(rj - rjit)))
+        rtcc = run(func, ops, "tcc")
+        diff = float(np.max(np.abs(rj - rtcc)))
         diff = diff if math.isfinite(diff) else 1e30   # keep JSON valid; flags as mismatch
-        ms = {b: bench(func, ops, b, reps) for b in ("js", "jit", "nojit")}
+        ms = {b: bench(func, ops, b, reps) for b in ("default", "js", "tcc", "nojit")}
         kernels.append({"name": name, "ms": ms, "diff": diff})
-    return json.dumps({"kernels": kernels, "bridge": debug_bridge(), "reps": reps})
+    return json.dumps({
+        "kernels": kernels, "bridge": debug_bridge(), "fallback": fallback_check(), "reps": reps,
+    })
 `;
 
 const py = await loadPyodide();
@@ -186,15 +213,19 @@ kernel_bench.result(${NFRAMES})
 const r = JSON.parse(out);
 const fmt = (x, w) => String(x).padStart(w);
 const bad = r.kernels.filter((k) => k.diff > 1e-5);
-console.log(`\ncorrectness (js vs JIT maxdiff): ${bad.length ? "MISMATCH " + bad.map((k) => k.name) : "OK"}`);
-console.log("\nper-kernel bench (ms/frame, lower is better):");
-console.log("  kernel    js     jit    nojit   js/jit  js/nojit  diff");
+console.log(`\ncorrectness (js vs tcc maxdiff): ${bad.length ? "MISMATCH " + bad.map((k) => k.name) : "OK"}`);
+const fb = r.fallback;
+const fbOk = fb.int_ok && fb.idx_ok;
+console.log(`default fallback (no jit_backend): int=${fb.int_ok ? "ok" : "FAIL"} ` +
+            `index-symbol=${fb.idx_ok ? "ok" : "FAIL"}  -> ${fbOk ? "falls back cleanly" : "BROKEN"}`);
+console.log("\nper-kernel bench (ms/frame, lower is better; 'default' = prefer-js w/ fallback,");
+console.log("'tcc' = miniexpr JIT, 'nojit' = miniexpr interpreter):");
+const cols = ["default", "js", "tcc", "nojit", "js/tcc"];
+console.log("  " + "kernel".padEnd(8) + cols.map((c) => fmt(c, 8)).join(""));
 for (const k of r.kernels) {
-  const { js, jit, nojit } = k.ms;
-  console.log(
-    `  ${k.name.padEnd(7)} ${fmt(js.toFixed(1), 6)} ${fmt(jit.toFixed(1), 6)} ${fmt(nojit.toFixed(1), 7)}` +
-    `  ${fmt((jit / js).toFixed(2) + "x", 6)} ${fmt((nojit / js).toFixed(2) + "x", 8)}  ${k.diff.toExponential(1)}`,
-  );
+  const { default: def, js, tcc, nojit } = k.ms;
+  const cells = [def, js, tcc, nojit].map((v) => v.toFixed(1)).concat((tcc / js).toFixed(2) + "x");
+  console.log("  " + k.name.padEnd(8) + cells.map((c) => fmt(c, 8)).join(""));
 }
 console.log(`\nnewton bridge probe (no blosc2 machinery): first=${r.bridge.first_ms.toFixed(1)} ms  warm=${r.bridge.warm_ms.toFixed(1)} ms`);
-if (bad.length) process.exit(1);
+if (bad.length || !fbOk) process.exit(1);

@@ -14,10 +14,16 @@ run the emitted JS and check it matches the Python kernel semantics element-by-e
 import json
 import shutil
 import subprocess
+import sys
 
+import numpy as np
 import pytest
 
+import blosc2
 from blosc2.dsl_js import build_js_module, dsl_to_js
+
+# `blosc2.lazyexpr` (attribute) is the re-exported function, not the module; grab the module.
+lx = sys.modules["blosc2.lazyexpr"]
 
 
 # Same Newton kernel as the demo (scalar semantics), as a plain function.
@@ -140,3 +146,62 @@ def test_misc_matches_python():
     js_vals = _run_node(build_js_module(misc_dsl), pts, [])
     mdiff = max(abs(p - j) for p, j in zip(ref, js_vals, strict=True))
     assert mdiff < 1e-9, f"misc py-vs-js mismatch: maxdiff={mdiff}"
+
+
+# --- prefer-js-with-fallback backend selection (logic only; the bridge isn't *run* here, so
+# no real WASM is needed -- IS_WASM is monkeypatched and js_kernel only transpiles) ----------
+@blosc2.dsl_kernel
+def _add(a, b):
+    return a + b
+
+
+@blosc2.dsl_kernel
+def _idx(a):
+    return a + float(_i0)  # noqa: F821  index symbol -> transpiler rejects
+
+
+def test_prefer_js_selection(monkeypatch):
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+    af = blosc2.asarray(np.ones((4, 4), dtype=np.float64))
+    ai = blosc2.asarray(np.ones((4, 4), dtype=np.int64))
+
+    def sel(jit, jit_backend, operands, kwargs, reduce_args=None):
+        return lx._maybe_js_backend(_add, jit, jit_backend, reduce_args or {}, operands, kwargs)
+
+    # jit=None and jit=True both prefer js (js is a JIT) -> swapped to a plain callable
+    for jit in (None, True):
+        expr, _, jb = sel(jit, None, {"a": af, "b": af}, {"dtype": np.float64})
+        assert callable(expr)
+        assert not lx._is_dsl_kernel_expression(expr)
+        assert jb is None
+
+    # jit=False (interpreter) opts out -> stays the DSL kernel for miniexpr
+    assert sel(False, None, {"a": af, "b": af}, {"dtype": np.float64})[0] is _add
+
+    # explicit jit_backend opts out too (here tcc would force miniexpr)
+    assert sel(True, "tcc", {"a": af, "b": af}, {"dtype": np.float64})[0] is _add
+
+    # explicit strict_miniexpr=True opts out (keep miniexpr); =False/absent does not
+    assert sel(None, None, {"a": af, "b": af}, {"dtype": np.float64, "strict_miniexpr": True})[0] is _add
+    expr, *_ = sel(None, None, {"a": af, "b": af}, {"dtype": np.float64, "strict_miniexpr": False})
+    assert callable(expr)
+    assert not lx._is_dsl_kernel_expression(expr)
+
+    # integer dtype, reductions -> fall back to miniexpr
+    assert sel(None, None, {"a": ai, "b": ai}, {"dtype": np.int64})[0] is _add
+    assert sel(None, None, {"a": af}, {}, reduce_args={"op": "sum"})[0] is _add
+
+
+def test_prefer_js_falls_back_on_untranspilable(monkeypatch):
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+    af = blosc2.asarray(np.ones((4, 4), dtype=np.float64))
+    # _idx uses an index symbol the transpiler rejects -> default must fall back, not raise.
+    expr, _, _ = lx._maybe_js_backend(_idx, None, None, {}, {"a": af}, {"dtype": np.float64})
+    assert expr is _idx
+
+
+def test_explicit_js_off_wasm_raises():
+    # jit_backend="js" is an explicit choice -> hard error off-WASM (not a silent fallback).
+    assert not blosc2.IS_WASM  # this test runs on a native build
+    with pytest.raises(RuntimeError, match="WebAssembly"):
+        lx._maybe_js_backend(_add, None, "js", {}, {}, {})

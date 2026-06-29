@@ -27,9 +27,17 @@ the user rewriting the kernel. This is browser/Pyodide-only by nature.
   (tiling driver, COOP/COEP headers, Atomics join) mostly *outside* blosc2. Single-threaded
   JS already beats the JIT 3.3×; parallelism is deferred until measured need. Generalizing
   the per-block bridge to **per-chunk** is the natural next rung.
-- **Shipped as `src/blosc2/dsl_js.py`** behind `jit_backend="js"` (a new backend alongside
-  no-JIT and miniexpr-JIT). Wiring is one swap in `chunked_eval`; no compiled-code changes.
-  Started as a repo-root prototype, graduated once benches confirmed the ~2× win.
+- **Shipped as `src/blosc2/dsl_js.py`**, a new `jit_backend="js"` alongside no-JIT and
+  miniexpr-JIT. Wiring is one swap in `chunked_eval`; no compiled-code changes. Started as a
+  repo-root prototype, graduated once benches confirmed the ~2× win.
+- **Default under WebAssembly is prefer-js-with-fallback.** Unless `jit=False`, a float,
+  transpilable, non-reduction DSL kernel auto-routes to js; anything js can't do
+  (integer/complex dtypes, reductions, unsupported DSL constructs) *silently falls back to
+  miniexpr*, so there is no regression. Because js is itself a JIT (the JS engine compiles
+  it), `jit=True` prefers it too — only `jit=False` (interpreter) or an explicit
+  `jit_backend` opts out; force miniexpr with `jit_backend="tcc"`/`"cc"` (see
+  `_maybe_js_backend`, `_js_dtypes_ok`). Off-WASM, `jit_backend="js"` raises; the default is
+  unchanged (miniexpr).
 
 ## Feasibility summary
 
@@ -143,7 +151,7 @@ Measured on Apple M-series, blosc2 4.6.0 under Pyodide 314, Newton 320×213 / ma
 Correctness exact: `js` and JIT both `maxdiff=0.00` vs numpy.
 
 **The ~2× is kernel-dependent, not a flat rule** (kernel sweep in `dsl-js-node.mjs`, see
-`bench/js-transpiler/README.md`). The js-vs-JIT win tracks what the kernel is bottlenecked on:
+`bench/js-transpiler/README.md`). The js-vs-tcc (miniexpr JIT) win tracks what the kernel is bottlenecked on:
 **arithmetic / control-flow** bound → ~2× (newton 2.15×, a deep pure-arithmetic loop 2.23×);
 **transcendental** bound (`sin`/`exp`/`log`) → ~1× (libm cost is engine-independent; `nojit`
 can even edge `js`); **light / trivial** → <1× (blosc2 pipeline + marshaling dominate, `js`

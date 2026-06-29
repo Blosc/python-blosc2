@@ -22,17 +22,27 @@ node bench/js-transpiler/dsl-js-node.mjs 24    # N reps
 ```
 
 Needs network on first run (PyPI wheel via micropip). Exits non-zero on a correctness
-mismatch, so it works as a smoke test. It benches four kernel shapes so the js-vs-JIT ratio
-can be read against the kernel, not generalized from one. Representative (Apple M2, 4.6.0):
+mismatch *or* a broken default fallback, so it works as a smoke test. It benches five kernel
+shapes so the js-vs-tcc ratio can be read against the kernel, not generalized from one. The
+`default` column (no `jit`/`jit_backend` set) shows the prefer-js-with-fallback default, and
+it also checks that an int kernel and an index-symbol kernel fall back cleanly to miniexpr.
+Representative (Apple M2, 4.6.0):
 
 ```
-  kernel    js     jit    nojit   js/jit  js/nojit
-  newton    12.1   26.1   114.6   2.15x    9.44x     arithmetic + branches + early-exit
-  deepar    22.5   50.2    53.1   2.23x    2.36x     deep pure-arithmetic loop
-  deep     120.1  143.1   104.4   1.19x    0.87x     deep loop, libm sin every iter
-  trans      5.0    5.0     6.8   1.00x    1.34x     transcendental-heavy
-  poly       3.4    3.0     3.6   0.87x    1.05x     light, branch-free
+default fallback (no jit_backend): int=ok index-symbol=ok  -> falls back cleanly
+  kernel   default      js     tcc   nojit  js/tcc
+  newton      12.0    11.4    23.9   104.5   2.10x
+  poly         3.0     2.9     2.7     3.2   0.91x
+  trans        4.3     4.3     4.4     5.7   1.01x
+  deep       116.0   116.8   143.4   103.3   1.23x
+  deepar      22.3    22.0    50.4    52.7   2.29x
 ```
+
+Columns: `default` = prefer-js-with-fallback, `js` = forced `jit_backend="js"`, `tcc` =
+miniexpr JIT (`jit_backend="tcc"`), `nojit` = miniexpr interpreter (`jit=False`). `default ≈
+js` here (all float + transpilable) → prefer-js engaged. Note `jit=True` *also* prefers js
+(it's a JIT); to force miniexpr use `jit_backend="tcc"`/`"cc"`, and `jit=False` selects the
+interpreter — that's what the `tcc`/`nojit` columns pin.
 
 **The takeaway: there is no single "js is N× the JIT" number — it depends on what the kernel
 is bottlenecked on.**
