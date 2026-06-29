@@ -124,12 +124,88 @@ def test_transpile_structure():
         assert src.count("{") == src.count("}"), "unbalanced braces"
 
 
-def test_index_symbol_rejected():
-    def uses_index(a):
-        return a + _i0  # noqa: F821
+def test_index_symbols_transpile():
+    # Index/shape symbols become trailing kernel params; the driver gains the geometry args.
+    def ramp(a):
+        return float(_i0) * _n1 + _i1  # noqa: F821
 
-    with pytest.raises(Exception, match="index/shape symbol"):
-        dsl_to_js(uses_index)
+    js_src, params = dsl_to_js(ramp)
+    assert params == ["a"]  # only the user input is reported as a param
+    assert "function ramp(a, _i0, _i1, _n1)" in js_src
+
+    mod = build_js_module(ramp, ndim=2)
+    assert "function __run(ops, isarr, out, n, off, gshape, cshape)" in mod
+    assert "const _i0 = off[0] + loc[0];" in mod
+    assert "const _n1 = gshape[1];" in mod
+
+    # flat_idx pulls in the global-flatten loop.
+    def flat(a):
+        return float(_flat_idx)  # noqa: F821
+
+    flat_mod = build_js_module(flat, ndim=2)
+    assert "_flat_idx = _flat_idx * gshape[k]" in flat_mod
+
+
+def test_index_symbols_need_ndim_and_valid_axis():
+    def ramp(a):
+        return float(_i0) + _i1  # noqa: F821
+
+    # ndim is required to know the rank / validate the referenced axes.
+    with pytest.raises(Exception, match="ndim"):
+        build_js_module(ramp)
+    # axis 1 referenced but the output is 1-D -> rejected.
+    with pytest.raises(Exception, match="axis 1"):
+        build_js_module(ramp, ndim=1)
+
+
+def _run_node_index(module, gshape, off, cshape, ncols=1):
+    """Run an index-aware module over one block and return the (flat) output list."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not found; skipping JS numeric-equivalence check")
+    n = int(np.prod(cshape))
+    ops = ", ".join([f"new Float64Array({n})"] * ncols)
+    isarr = ", ".join(["true"] * ncols)
+    prog = (
+        f"const __run = (function() {{ {module} }})();\n"
+        f"const out = new Float64Array({n});\n"
+        f"__run([{ops}], [{isarr}], out, {n}, "
+        f"{json.dumps(list(off))}, {json.dumps(list(gshape))}, {json.dumps(list(cshape))});\n"
+        "console.log(JSON.stringify(Array.from(out)));\n"
+    )
+    with tempfile.TemporaryDirectory() as d:
+        script = os.path.join(d, "dsl_js_idx.js")
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write(prog)
+        res = subprocess.run([node, script], capture_output=True, text=True)
+    if res.returncode != 0:
+        raise AssertionError(f"node failed:\n{res.stderr}")
+    return json.loads(res.stdout)
+
+
+def test_index_ramp_matches_numpy():
+    def ramp(a):
+        return float(_i0) * _n1 + _i1  # noqa: F821
+
+    gshape = (16, 9)
+    expected = np.arange(np.prod(gshape), dtype=np.float64).reshape(gshape)
+    mod = build_js_module(ramp, ndim=2)
+    # A non-origin block exercises the offset handling.
+    off, cshape = (8, 0), (8, 9)
+    got = np.array(_run_node_index(mod, gshape, off, cshape)).reshape(cshape)
+    np.testing.assert_array_equal(got, expected[8:16, :])
+
+
+def test_flat_idx_matches_numpy():
+    def flat(a):
+        return float(_flat_idx) * 2.0  # noqa: F821
+
+    gshape = (16, 9)
+    expected = np.arange(np.prod(gshape), dtype=np.float64).reshape(gshape) * 2.0
+    mod = build_js_module(flat, ndim=2)
+    off, cshape = (4, 3), (3, 4)
+    got = np.array(_run_node_index(mod, gshape, off, cshape)).reshape(cshape)
+    np.testing.assert_array_equal(got, expected[4:7, 3:7])
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="emscripten cannot spawn the node subprocess")
@@ -167,7 +243,7 @@ def _add(a, b):
 
 @blosc2.dsl_kernel
 def _idx(a):
-    return a + float(_i0)  # noqa: F821  index symbol -> transpiler rejects
+    return a + float(_i0)  # noqa: F821  index symbol -> needs the output shape to transpile
 
 
 def test_prefer_js_selection(monkeypatch):
@@ -197,17 +273,29 @@ def test_prefer_js_selection(monkeypatch):
     assert callable(expr)
     assert not lx._is_dsl_kernel_expression(expr)
 
-    # integer dtype, reductions -> fall back to miniexpr
+    # integer *output*, reductions -> fall back to miniexpr
     assert sel(None, None, {"a": ai, "b": ai}, {"dtype": np.int64})[0] is _add
     assert sel(None, None, {"a": af}, {}, reduce_args={"op": "sum"})[0] is _add
 
+    # zero-input DSL stays on miniexpr (the zero-input fast path needs the DSL kernel)
+    assert sel(None, None, {}, {"dtype": np.float64})[0] is _add
 
-def test_prefer_js_falls_back_on_untranspilable(monkeypatch):
+    # integer *inputs* with a float output -> JS (the bridge float64-converts operands)
+    expr, *_ = sel(None, None, {"a": ai, "b": ai}, {"dtype": np.float64})
+    assert callable(expr)
+    assert not lx._is_dsl_kernel_expression(expr)
+
+
+def test_prefer_js_index_needs_shape(monkeypatch):
     monkeypatch.setattr(blosc2, "IS_WASM", True)
     af = blosc2.asarray(np.ones((4, 4), dtype=np.float64))
-    # _idx uses an index symbol the transpiler rejects -> default must fall back, not raise.
+    # Without a shape the transpiler can't size the index symbols -> fall back to miniexpr.
     expr, _, _ = lx._maybe_js_backend(_idx, None, None, {}, {"a": af}, {"dtype": np.float64})
     assert expr is _idx
+    # With the output shape supplied, the index kernel transpiles and JS is chosen.
+    expr, _, _ = lx._maybe_js_backend(_idx, None, None, {}, {"a": af}, {"dtype": np.float64}, shape=(4, 4))
+    assert callable(expr)
+    assert not lx._is_dsl_kernel_expression(expr)
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="this test asserts off-WASM behavior")

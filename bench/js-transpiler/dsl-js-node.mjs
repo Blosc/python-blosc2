@@ -93,14 +93,32 @@ def deepar_dsl(a, b):
         acc = acc * 0.5 + t * 0.25 + 0.1
     return acc + t
 
-# Fallback-path kernels (used only by fallback_check, not the float sweep):
-@blosc2.dsl_kernel  # int output/operands -> default must fall back to miniexpr (float64 bridge unsafe)
+@blosc2.dsl_kernel  # P1: index/shape symbols -> per-element global coords (radial gradient)
+def idxgrad_dsl(a):
+    dx = float(_i0) - _n0 * 0.5  # noqa: F821
+    dy = float(_i1) - _n1 * 0.5  # noqa: F821
+    return a + sqrt(dx * dx + dy * dy)  # noqa: F821
+
+@blosc2.dsl_kernel  # P2: integer inputs, float output (the bridge float64-converts the operands)
+def intmix_dsl(a, b):
+    return sqrt(a * a + b * b) * 0.25 + (a - b)  # noqa: F821
+
+# Path-coverage kernels (used only by path_check, not the float sweep):
+@blosc2.dsl_kernel  # int *output* -> default must fall back to miniexpr (float64 bridge unsafe)
 def int_dsl(a, b):
     return a * 2 + b * 3
 
-@blosc2.dsl_kernel  # index symbol -> transpiler rejects -> default must fall back to miniexpr
+@blosc2.dsl_kernel  # int *inputs*, float output -> JS is safe (bridge float64-converts operands)
+def intin_dsl(a, b):
+    return (a + b) * 0.5
+
+@blosc2.dsl_kernel  # index/shape symbols -> JS reconstructs global coords per block
 def idx_dsl(a):
     return a + float(_i0)  # noqa: F821
+
+@blosc2.dsl_kernel  # expm1() is valid DSL/miniexpr but outside the JS Math.* set -> falls back
+def unsup_dsl(a, b):
+    return expm1(a + b) * 0.5  # noqa: F821
 
 _x = np.linspace(-SPANX / 2, SPANX / 2, WIDTH, dtype=DTYPE)
 _y = np.linspace(-SPANX * ASPECT / 2, SPANX * ASPECT / 2, HEIGHT, dtype=DTYPE)
@@ -110,6 +128,11 @@ _blocks = (max(1, _chunks[0] // 4), max(1, _chunks[1] // 3))
 _cp = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=1)
 A_B2 = blosc2.asarray(A_NP, chunks=_chunks, blocks=_blocks, cparams=_cp)
 B_B2 = blosc2.asarray(B_NP, chunks=_chunks, blocks=_blocks, cparams=_cp)
+# Small-magnitude integer operands for the P2 (int in / float out) kernels.
+AI_NP = (A_NP * 10).astype(np.int64)
+BI_NP = (B_NP * 10).astype(np.int64)
+AI_B2 = blosc2.asarray(AI_NP, chunks=_chunks, blocks=_blocks, cparams=_cp)
+BI_B2 = blosc2.asarray(BI_NP, chunks=_chunks, blocks=_blocks, cparams=_cp)
 
 # (name, kernel, operand tuple). Fixed inputs -> each rep does identical work.
 KERNELS = [
@@ -118,6 +141,8 @@ KERNELS = [
     ("trans",  trans_dsl,  (A_B2, B_B2)),
     ("deep",   deep_dsl,   (A_B2, B_B2)),
     ("deepar", deepar_dsl, (A_B2, B_B2)),
+    ("idxgrad", idxgrad_dsl, (A_B2,)),         # P1: index/shape symbols (float out)
+    ("intmix",  intmix_dsl,  (AI_B2, BI_B2)),  # P2: integer inputs, float out
 ]
 
 def run(func, ops, backend, dtype=DTYPE):
@@ -153,33 +178,41 @@ def debug_bridge():
         t = time.perf_counter(); bridge(inp, out, 0); best = min(best, (time.perf_counter() - t) * 1000)
     return {"first_ms": first, "warm_ms": best}
 
-def fallback_check():
-    # Default backend must transparently fall back to miniexpr where js can't go, with no
-    # error and the same result. int dtype -> dtype-gated; index symbol -> transpiler rejects.
-    Ai = blosc2.asarray((A_NP * 10).astype(np.int64), chunks=_chunks, blocks=_blocks, cparams=_cp)
-    Bi = blosc2.asarray((B_NP * 10).astype(np.int64), chunks=_chunks, blocks=_blocks, cparams=_cp)
-    int_def = run(int_dsl, (Ai, Bi), "default", dtype=np.int64)
-    int_tcc = run(int_dsl, (Ai, Bi), "tcc", dtype=np.int64)
-    idx_def = run(idx_dsl, (A_B2,), "default")
+def path_check():
+    # The default backend must agree with miniexpr (tcc) on every kernel, whether it runs
+    # the kernel through JS (index symbols, int inputs+float out) or transparently falls back
+    # to miniexpr where JS can't go (int output, unsupported constructs) -- with no error.
+    int_def = run(int_dsl, (AI_B2, BI_B2), "default", dtype=np.int64)  # -> falls back to miniexpr
+    int_tcc = run(int_dsl, (AI_B2, BI_B2), "tcc", dtype=np.int64)
+    intin_def = run(intin_dsl, (AI_B2, BI_B2), "default")              # -> JS (int in, float out)
+    intin_tcc = run(intin_dsl, (AI_B2, BI_B2), "tcc")
+    idx_def = run(idx_dsl, (A_B2,), "default")                        # -> JS (index symbols)
     idx_tcc = run(idx_dsl, (A_B2,), "tcc")
+    unsup_def = run(unsup_dsl, (A_B2, B_B2), "default")               # -> falls back to miniexpr
+    unsup_tcc = run(unsup_dsl, (A_B2, B_B2), "tcc")
     return {
         "int_ok": bool(np.array_equal(int_def, int_tcc)),
+        "intin_ok": bool(np.allclose(intin_def, intin_tcc)),
         "idx_ok": bool(np.allclose(idx_def, idx_tcc)),
+        "unsup_ok": bool(np.allclose(unsup_def, unsup_tcc)),
     }
 
-def result(reps):
+def kernel_names():
+    return json.dumps([name for name, _f, _o in KERNELS])
+
+def bench_kernel(i, reps):
+    # One kernel at a time so the driver can print each row as soon as it is computed.
     import math
-    kernels = []
-    for name, func, ops in KERNELS:
-        rj = run(func, ops, "js")
-        rtcc = run(func, ops, "tcc")
-        diff = float(np.max(np.abs(rj - rtcc)))
-        diff = diff if math.isfinite(diff) else 1e30   # keep JSON valid; flags as mismatch
-        ms = {b: bench(func, ops, b, reps) for b in ("default", "js", "tcc", "nojit")}
-        kernels.append({"name": name, "ms": ms, "diff": diff})
-    return json.dumps({
-        "kernels": kernels, "bridge": debug_bridge(), "fallback": fallback_check(), "reps": reps,
-    })
+    name, func, ops = KERNELS[i]
+    rj = run(func, ops, "js")
+    rtcc = run(func, ops, "tcc")
+    diff = float(np.max(np.abs(rj - rtcc)))
+    diff = diff if math.isfinite(diff) else 1e30   # keep JSON valid; flags as mismatch
+    ms = {b: bench(func, ops, b, reps) for b in ("default", "js", "tcc", "nojit")}
+    return json.dumps({"name": name, "ms": ms, "diff": diff})
+
+def summary():
+    return json.dumps({"bridge": debug_bridge(), "paths": path_check()})
 `;
 
 const py = await loadPyodide();
@@ -203,29 +236,36 @@ console.log("blosc2", await py.runPythonAsync("blosc2.__version__"),
             "| Pyodide", py.version, "| reps", NFRAMES);
 
 py.FS.writeFile("/kernel_bench.py", new TextEncoder().encode(PYSRC));
-const out = await py.runPythonAsync(`
+await py.runPythonAsync(`
 import sys
 if "/" not in sys.path: sys.path.insert(0, "/")
 import kernel_bench
-kernel_bench.result(${NFRAMES})
 `);
 
-const r = JSON.parse(out);
 const fmt = (x, w) => String(x).padStart(w);
-const bad = r.kernels.filter((k) => k.diff > 1e-5);
-console.log(`\ncorrectness (js vs tcc maxdiff): ${bad.length ? "MISMATCH " + bad.map((k) => k.name) : "OK"}`);
-const fb = r.fallback;
-const fbOk = fb.int_ok && fb.idx_ok;
-console.log(`default fallback (no jit_backend): int=${fb.int_ok ? "ok" : "FAIL"} ` +
-            `index-symbol=${fb.idx_ok ? "ok" : "FAIL"}  -> ${fbOk ? "falls back cleanly" : "BROKEN"}`);
+const names = JSON.parse(await py.runPythonAsync("kernel_bench.kernel_names()"));
+
+// Stream the table: print each row as soon as its kernel finishes benchmarking.
 console.log("\nper-kernel bench (ms/frame, lower is better; 'default' = prefer-js w/ fallback,");
 console.log("'tcc' = miniexpr JIT, 'nojit' = miniexpr interpreter):");
 const cols = ["default", "js", "tcc", "nojit", "js/tcc"];
 console.log("  " + "kernel".padEnd(8) + cols.map((c) => fmt(c, 8)).join(""));
-for (const k of r.kernels) {
+const bad = [];
+for (let i = 0; i < names.length; i++) {
+  const k = JSON.parse(await py.runPythonAsync(`kernel_bench.bench_kernel(${i}, ${NFRAMES})`));
   const { default: def, js, tcc, nojit } = k.ms;
   const cells = [def, js, tcc, nojit].map((v) => v.toFixed(1)).concat((tcc / js).toFixed(2) + "x");
   console.log("  " + k.name.padEnd(8) + cells.map((c) => fmt(c, 8)).join(""));
+  if (k.diff > 1e-5) bad.push(k.name);
 }
-console.log(`\nnewton bridge probe (no blosc2 machinery): first=${r.bridge.first_ms.toFixed(1)} ms  warm=${r.bridge.warm_ms.toFixed(1)} ms`);
+
+const s = JSON.parse(await py.runPythonAsync("kernel_bench.summary()"));
+console.log(`\ncorrectness (js vs tcc maxdiff): ${bad.length ? "MISMATCH " + bad : "OK"}`);
+const fb = s.paths;
+const fbOk = fb.int_ok && fb.intin_ok && fb.idx_ok && fb.unsup_ok;
+console.log(`default backend (no jit_backend) vs miniexpr: ` +
+            `int-out=${fb.int_ok ? "ok" : "FAIL"} int-in=${fb.intin_ok ? "ok" : "FAIL"} ` +
+            `index-symbol=${fb.idx_ok ? "ok" : "FAIL"} unsupported=${fb.unsup_ok ? "ok" : "FAIL"}` +
+            `  -> ${fbOk ? "all paths agree" : "BROKEN"}`);
+console.log(`\nnewton bridge probe (no blosc2 machinery): first=${s.bridge.first_ms.toFixed(1)} ms  warm=${s.bridge.warm_ms.toFixed(1)} ms`);
 if (bad.length || !fbOk) process.exit(1);

@@ -1448,31 +1448,48 @@ def _is_dsl_kernel_expression(expression) -> bool:
     return isinstance(expression, DSLKernel) and expression.dsl_source is not None
 
 
-def _as_js_udf(expression):
+def _as_js_udf(expression, shape=None):
     """For jit_backend="js": transpile a DSL kernel to JS and return a plain per-block
-    callable (so the normal UDF path runs it). Browser/Pyodide only."""
+    callable (so the normal UDF path runs it). Browser/Pyodide only.
+
+    *shape* (the whole-array output shape) is forwarded to the transpiler so kernels using
+    index/shape symbols can reconstruct global coordinates per block."""
     if not _is_dsl_kernel_expression(expression):
         raise ValueError('jit_backend="js" requires a blosc2.dsl_kernel-decorated kernel')
     if not blosc2.IS_WASM:
         raise RuntimeError('jit_backend="js" is only available under WebAssembly/Pyodide')
     from .dsl_js import js_kernel
 
-    return js_kernel(expression)
+    return js_kernel(expression, shape=shape)
 
 
 def _js_dtypes_ok(operands, kwargs) -> bool:
-    """True only if the JS bridge (which computes in float64) is safe for these operands:
-    floating-point NDArray inputs and a floating/inferred output dtype. Integer/complex go
-    to miniexpr instead (float64 can't represent int64 exactly)."""
+    """True only if the JS bridge (which computes in float64) is safe for these operands.
+
+    The output dtype must be floating: integer/complex *output* goes to miniexpr (the bridge
+    can't reproduce integer division/overflow/truncation semantics, and float64 can't hold
+    int64 exactly).  Given a floating output, integer *inputs* are fine -- the bridge converts
+    every operand to float64, which is exactly what miniexpr does when promoting integer inputs
+    for a float result (so any values above 2**53 lose precision identically).  Complex inputs
+    are rejected (the bridge is real-only)."""
     dt = kwargs.get("dtype")
-    if dt is not None and not np.issubdtype(np.dtype(dt), np.floating):
+    if dt is None:
+        # Inferred output: only safe when all operands are float (so the output is float too).
+        return all(
+            np.issubdtype(op.dtype, np.floating)
+            for op in operands.values()
+            if isinstance(op, blosc2.NDArray)
+        )
+    if not np.issubdtype(np.dtype(dt), np.floating):
         return False
     return all(
-        np.issubdtype(op.dtype, np.floating) for op in operands.values() if isinstance(op, blosc2.NDArray)
+        np.issubdtype(op.dtype, np.floating) or np.issubdtype(op.dtype, np.integer)
+        for op in operands.values()
+        if isinstance(op, blosc2.NDArray)
     )
 
 
-def _maybe_js_backend(expression, jit, jit_backend, reduce_args, operands, kwargs):
+def _maybe_js_backend(expression, jit, jit_backend, reduce_args, operands, kwargs, shape=None):
     """Resolve the JS backend for a DSL kernel.
 
     - ``jit_backend="js"`` (explicit): transpile to the JS bridge, or raise if it can't.
@@ -1483,26 +1500,31 @@ def _maybe_js_backend(expression, jit, jit_backend, reduce_args, operands, kwarg
       ``jit=False`` (interpreter), ``strict_miniexpr=True``, or an explicit ``jit_backend``
       opts out.
 
+    *shape* is the whole-array output shape, forwarded to the transpiler for kernels that
+    use index/shape symbols (``_i0``/``_n0``/``_flat_idx``); without it such kernels fall
+    back to miniexpr.
+
     Returns ``(expression, jit, jit_backend)`` — expression becomes a plain per-block
     callable when JS is chosen, else everything passes through unchanged.
     """
     if jit_backend == "js":
         if reduce_args:
             raise ValueError('jit_backend="js" does not support reductions')
-        return _as_js_udf(expression), None, None
+        return _as_js_udf(expression, shape), None, None
     prefer_js = (
         jit is not False  # jit=True/None prefer the best JIT (js); only jit=False forces interpreter
         and jit_backend is None
         and not kwargs.get("strict_miniexpr")  # explicit strict_miniexpr=True keeps miniexpr
         and blosc2.IS_WASM
         and _is_dsl_kernel_expression(expression)
+        and operands  # at least one operand: the zero-input DSL path stays on miniexpr
         and not reduce_args
         and _js_dtypes_ok(operands, kwargs)
     )
     if not prefer_js:
         return expression, jit, jit_backend
     try:
-        bridge = _as_js_udf(expression)  # transpiles; raises on any unsupported construct
+        bridge = _as_js_udf(expression, shape)  # transpiles; raises on any unsupported construct
     except Exception:
         return expression, jit, jit_backend  # fall back to miniexpr, no regression
     return bridge, None, None
@@ -3040,7 +3062,7 @@ def chunked_eval(
         # Resolve the JS backend: explicit jit_backend="js", or prefer-js-with-fallback under
         # WebAssembly when the user left jit_backend unset (see _maybe_js_backend).
         expression, jit, jit_backend = _maybe_js_backend(
-            expression, jit, jit_backend, reduce_args, operands, kwargs
+            expression, jit, jit_backend, reduce_args, operands, kwargs, shape=shape
         )
 
         fast_path = _validate_chunked_eval_inputs(operands, out, shape, reduce_args)

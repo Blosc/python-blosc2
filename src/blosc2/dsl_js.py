@@ -5,10 +5,16 @@ code, which in the Newton-fractal demo beats blosc2's WASM JIT ~3.3x and the no-
 interpreter ~11x. See plans/dsl-js.md.
 
 Public API:
-    dsl_to_js(kernel)  -> (js_source, param_names)   # pure stdlib, runs anywhere
-    js_kernel(kernel)  -> callable for lazyudf(...)   # needs Pyodide `js` to *run*
+    dsl_to_js(kernel)         -> (js_source, param_names)  # pure stdlib, runs anywhere
+    build_js_module(k, ndim)  -> js_source string          # ndim needed for index symbols
+    js_kernel(kernel, shape)  -> callable for lazyudf(...)  # needs Pyodide `js` to *run*
 
 `kernel` may be a blosc2 DSLKernel (has .dsl_source), a plain function, or a source string.
+
+Kernels may use index/shape symbols (`_i0`/`_i1`/.., `_n0`/.., `_flat_idx`); they become
+trailing kernel parameters and the runtime driver reconstructs each element's global
+coordinate per block. That requires the output rank, so `build_js_module`/`js_kernel` need
+`ndim`/`shape`; without them, index-symbol kernels raise (and the caller falls back).
 """
 
 from __future__ import annotations
@@ -21,7 +27,9 @@ import textwrap
 # Wired into lazyexpr via jit_backend="js": a DSL kernel is transpiled here and run as a
 # plain per-block callable. Browser/Pyodide only (js_kernel imports `js` at call time).
 
-_INDEX_SYMBOLS = {"_i0", "_i1", "_i2", "_n0", "_n1", "_n2", "_flat_idx"}
+# Canonical signature order for index/shape symbols passed to the transpiled kernel.
+_INDEX_SYMBOL_ORDER = ("_i0", "_i1", "_i2", "_n0", "_n1", "_n2", "_flat_idx")
+_INDEX_SYMBOLS = set(_INDEX_SYMBOL_ORDER)
 
 # numpy/math function name -> JS Math.* name (numpy aliases included).
 _MATH = {
@@ -115,21 +123,23 @@ def _get_source(obj) -> str:
 class _Transpiler:
     def transpile(self, func: ast.FunctionDef):
         self.params = [a.arg for a in func.args.args]
-        self._reject_index_symbols(func)
+        used_index = self._collect_index_symbols(func)
         hoist = self._hoist_names(func)
         body = self._block(func.body, 1)
-        head = f"function {func.name}({', '.join(self.params)}) {{\n"
+        # Index/shape symbols (`_i0`, `_n1`, `_flat_idx`, ...) become extra trailing
+        # parameters; the runtime driver computes them per element (see _module_with_index).
+        sig = self.params + used_index
+        head = f"function {func.name}({', '.join(sig)}) {{\n"
         decl = f"  let {', '.join(sorted(hoist))};\n" if hoist else ""
-        return head + decl + body + "}", list(self.params)
+        return head + decl + body + "}", list(self.params), used_index
 
     # -- scope analysis -------------------------------------------------
-    def _reject_index_symbols(self, func):
-        for node in ast.walk(func):
-            if isinstance(node, ast.Name) and node.id in _INDEX_SYMBOLS:
-                raise _DSLToJSError(
-                    f"index/shape symbol '{node.id}' is not supported yet (MVP); "
-                    "see plans/dsl-js.md 'Deferred'"
-                )
+    def _collect_index_symbols(self, func):
+        """Return the index/shape symbols the kernel references, in canonical order."""
+        used = {
+            node.id for node in ast.walk(func) if isinstance(node, ast.Name) and node.id in _INDEX_SYMBOLS
+        }
+        return [s for s in _INDEX_SYMBOL_ORDER if s in used]
 
     def _hoist_names(self, func):
         assigned, fortargets = set(), set()
@@ -302,20 +312,101 @@ def _const(v) -> str:
     raise _DSLToJSError(f"unsupported constant: {v!r}")
 
 
-def dsl_to_js(kernel):
-    """Transpile a DSL kernel to a JS function string. Returns (js_source, param_names)."""
-    tree = ast.parse(_get_source(kernel))
+# Transpiling is a pure function of the kernel source, so memoize it: the same kernel is
+# typically re-transpiled on every lazyudf evaluation (e.g. an animation loop rebuilds the
+# expression each frame), and ast.parse + codegen is non-trivial under WASM.
+_TRANSPILE_CACHE: dict[str, tuple] = {}
+
+# module string -> the V8-compiled `__run` function (a Pyodide JsProxy). Populated only when
+# a kernel actually runs in-browser (see js_kernel's bridge); empty off-WASM.
+_RUN_CACHE: dict = {}
+
+
+def _transpile(kernel):
+    """Transpile *kernel* to JS. Returns (js_source, params, index_symbols, func_name)."""
+    src = _get_source(kernel)
+    hit = _TRANSPILE_CACHE.get(src)
+    if hit is not None:
+        return hit
+    tree = ast.parse(src)
     func = next((n for n in tree.body if isinstance(n, ast.FunctionDef)), None)
     if func is None:
         raise _DSLToJSError("no function definition found in DSL source")
-    return _Transpiler().transpile(func)
+    js_src, params, used_index = _Transpiler().transpile(func)
+    result = (js_src, params, used_index, func.name)
+    _TRANSPILE_CACHE[src] = result
+    return result
 
 
-def build_js_module(kernel) -> str:
-    """Self-contained JS: prelude + kernel + an `__run(ops, isarr, out, n)` element driver."""
-    kernel_js, params = dsl_to_js(kernel)
-    fname = ast.parse(_get_source(kernel)).body[0].name
-    call_args = ", ".join(f"(isarr[{k}] ? ops[{k}][i] : ops[{k}])" for k in range(len(params)))
+def dsl_to_js(kernel):
+    """Transpile a DSL kernel to a JS function string. Returns (js_source, param_names)."""
+    js_src, params, _used, _name = _transpile(kernel)
+    return js_src, params
+
+
+def _max_index_dim(used_index) -> int:
+    """Highest axis referenced by `_iK`/`_nK` symbols (-1 if only `_flat_idx`/none)."""
+    dims = [int(s[2:]) for s in used_index if s != "_flat_idx"]
+    return max(dims) if dims else -1
+
+
+def _op_call_args(nparams):
+    return [f"(isarr[{k}] ? ops[{k}][i] : ops[{k}])" for k in range(nparams)]
+
+
+def _module_with_index(kernel_js, fname, params, used_index) -> str:
+    """Driver for kernels that use index/shape symbols.
+
+    Signature ``__run(ops, isarr, out, n, off, gshape, cshape)``: `off` is the block's
+    global start coord, `gshape` the whole-array shape, `cshape` the block shape (all JS
+    arrays).  Each element's local coord is unravelled from its flat position (C-order),
+    then the referenced symbols are derived and passed as trailing kernel args."""
+    decls = []
+    for s in used_index:
+        if s == "_flat_idx":
+            continue
+        k = int(s[2:])
+        rhs = f"off[{k}] + loc[{k}]" if s.startswith("_i") else f"gshape[{k}]"
+        decls.append(f"    const {s} = {rhs};")
+    if "_flat_idx" in used_index:
+        decls.append("    let _flat_idx = 0;")
+        decls.append(
+            "    for (let k = 0; k < d; k++) _flat_idx = _flat_idx * gshape[k] + (off[k] + loc[k]);"
+        )
+    call = f"{fname}({', '.join(_op_call_args(len(params)) + used_index)})"
+    driver = "\n".join(
+        [
+            "function __run(ops, isarr, out, n, off, gshape, cshape) {",
+            "  const d = cshape.length;",
+            "  const loc = new Array(d);",
+            "  for (let i = 0; i < n; i++) {",
+            "    let rem = i;",
+            "    for (let k = d - 1; k >= 0; k--) { loc[k] = rem % cshape[k]; rem = (rem - loc[k]) / cshape[k]; }",
+            *decls,
+            f"    out[i] = {call};",
+            "  }",
+            "}",
+        ]
+    )
+    return f"{JS_PRELUDE}\n{kernel_js}\n{driver}\nreturn __run;"
+
+
+def build_js_module(kernel, ndim: int | None = None) -> str:
+    """Self-contained JS: prelude + kernel + a runtime element driver returning ``__run``.
+
+    Kernels without index/shape symbols get a flat ``__run(ops, isarr, out, n)`` driver.
+    Kernels that use `_i0`/`_n0`/`_flat_idx` get the index-aware driver (see
+    :func:`_module_with_index`) and require *ndim* (the output rank) so the referenced
+    axes can be validated; ``ndim=None`` raises for such kernels."""
+    kernel_js, params, used_index, fname = _transpile(kernel)
+    if used_index:
+        if ndim is None:
+            raise _DSLToJSError("kernel uses index/shape symbols; the output ndim must be supplied")
+        max_dim = _max_index_dim(used_index)
+        if max_dim >= ndim:
+            raise _DSLToJSError(f"kernel references axis {max_dim} but the output is {ndim}-D")
+        return _module_with_index(kernel_js, fname, params, used_index)
+    call_args = ", ".join(_op_call_args(len(params)))
     driver = (
         f"function __run(ops, isarr, out, n) {{ "
         f"for (let i = 0; i < n; i++) out[i] = {fname}({call_args}); }}"
@@ -323,9 +414,16 @@ def build_js_module(kernel) -> str:
     return f"{JS_PRELUDE}\n{kernel_js}\n{driver}\nreturn __run;"
 
 
-def js_kernel(kernel):
-    """Return a lazyudf-compatible callable that runs the transpiled JS (Pyodide only)."""
-    module = build_js_module(kernel)
+def js_kernel(kernel, shape=None):
+    """Return a lazyudf-compatible callable that runs the transpiled JS (Pyodide only).
+
+    *shape* is the whole-array output shape; it is required for kernels that use index/shape
+    symbols (so the driver knows the rank and global geometry) and ignored otherwise."""
+    ndim = len(shape) if shape is not None else None
+    _, _, used_index, _ = _transpile(kernel)  # cached
+    module = build_js_module(kernel, ndim=ndim)
+    uses_index = bool(used_index)
+    gshape = tuple(int(s) for s in shape) if shape is not None else None
     run = None  # lazily created in-browser
 
     def bridge(inputs, output, offset=None):
@@ -334,9 +432,15 @@ def js_kernel(kernel):
         from js import Array, Float64Array, Uint8Array  # Pyodide
 
         if run is None:
-            import js
+            # Reuse the V8-compiled function across lazyudf evaluations of the same kernel:
+            # the module is a pure function of (source, ndim), so js.eval need run only once
+            # per distinct module instead of once per frame.
+            run = _RUN_CACHE.get(module)
+            if run is None:
+                import js
 
-            run = js.eval(f"(function() {{ {module} }})()")
+                run = js.eval(f"(function() {{ {module} }})()")
+                _RUN_CACHE[module] = run
 
         n = int(output.size)
         # Pass real JS Arrays, not Python lists: a Python list arrives in JS as a PyProxy,
@@ -355,7 +459,19 @@ def js_kernel(kernel):
                 ops.push(float(x))
                 isarr.push(False)
         out_js = Float64Array.new(n)
-        run(ops, isarr, out_js, n)
+        if uses_index:
+            off = offset if offset is not None else (0,) * output.ndim
+            run(
+                ops,
+                isarr,
+                out_js,
+                n,
+                _to_jsint(off, Array),
+                _to_jsint(gshape, Array),
+                _to_jsint(output.shape, Array),
+            )
+        else:
+            run(ops, isarr, out_js, n)
         # ponytail: per-block to_js()/to_bytes() copies; swap to a zero-copy HEAPF64 view
         # onto WASM linear memory only if marshaling shows up as the bottleneck.
         res = np.frombuffer(bytes(out_js.to_bytes()), dtype=np.float64)
@@ -370,3 +486,11 @@ def _to_jsf64(xf, Float64Array, Uint8Array):
     u8 = Uint8Array.new(xf.nbytes)
     u8.assign(xf.tobytes())  # Pyodide TypedArray.assign(buffer) copies bytes in
     return Float64Array.new(u8.buffer)
+
+
+def _to_jsint(seq, Array):
+    """Small geometry vector (offset/shape) -> a real JS Array of ints (avoids PyProxy)."""
+    arr = Array.new()
+    for v in seq:
+        arr.push(int(v))
+    return arr

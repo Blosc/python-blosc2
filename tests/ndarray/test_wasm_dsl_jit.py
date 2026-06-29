@@ -16,9 +16,19 @@ def _wasm_kernel(x, y):
     return (x + y) * 1.5 - 0.25
 
 
-@blosc2.dsl_kernel  # integer kernel -> the float64 JS bridge is unsafe -> must fall back to miniexpr
+@blosc2.dsl_kernel  # integer *output* -> the float64 JS bridge is unsafe -> must fall back to miniexpr
 def _wasm_int_kernel(x, y):
     return x * 2 + y * 3
+
+
+@blosc2.dsl_kernel  # integer *inputs*, float output -> JS is safe (bridge float64-converts operands)
+def _wasm_int_input_kernel(x, y):
+    return (x + y) * 0.5
+
+
+@blosc2.dsl_kernel  # index/shape symbols -> JS reconstructs global coords per block
+def _wasm_ramp_kernel(x):
+    return float(_i0) * _n1 + _i1  # noqa: F821
 
 
 def _wasm_grids():
@@ -67,6 +77,31 @@ def test_wasm_dsl_default_falls_back_for_int():
     bi = blosc2.asarray(bi_np, chunks=(4, 4), blocks=(2, 2))
     out = blosc2.lazyudf(_wasm_int_kernel, (ai, bi), dtype=np.int64).compute()
     np.testing.assert_array_equal(out[...], ai_np * 2 + bi_np * 3)
+
+
+@pytest.mark.skipif(not blosc2.IS_WASM, reason="WASM-only integration test")
+def test_wasm_dsl_int_inputs_float_output_via_js():
+    # Integer inputs with a float output: the default must prefer js and stay correct
+    # (the bridge converts every operand to float64, matching miniexpr's promotion).
+    ai_np = np.arange(64, dtype=np.int64).reshape(8, 8)
+    bi_np = ai_np + 1
+    ai = blosc2.asarray(ai_np, chunks=(4, 4), blocks=(2, 2))
+    bi = blosc2.asarray(bi_np, chunks=(4, 4), blocks=(2, 2))
+    out = blosc2.lazyudf(_wasm_int_input_kernel, (ai, bi), dtype=np.float64).compute()
+    np.testing.assert_allclose(out[...], (ai_np + bi_np) * 0.5, rtol=1e-6, atol=1e-8)
+
+
+@pytest.mark.skipif(not blosc2.IS_WASM, reason="WASM-only integration test")
+def test_wasm_dsl_index_symbols_via_js():
+    # An index/shape-symbol ramp (multi-chunk, so per-block offsets are exercised) must
+    # transpile to JS and reproduce the global C-order ramp, both by default and explicitly.
+    shape = (8, 8)
+    x = blosc2.asarray(np.zeros(shape, dtype=np.float64), chunks=(4, 4), blocks=(2, 2))
+    expected = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    out_default = blosc2.lazyudf(_wasm_ramp_kernel, (x,), dtype=np.float64).compute()
+    np.testing.assert_array_equal(out_default[...], expected)
+    out_js = blosc2.lazyudf(_wasm_ramp_kernel, (x,), dtype=np.float64).compute(jit_backend="js")
+    np.testing.assert_array_equal(out_js[...], expected)
 
 
 @pytest.mark.skipif(not blosc2.IS_WASM, reason="WASM-only integration test")
