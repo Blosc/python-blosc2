@@ -71,7 +71,9 @@ except Exception:
 ```
 
 With an **explicit** `jit_backend="js"`, the same gaps instead **raise** rather than fall
-back (the user asked for JS specifically, so we don't second-guess them).
+back (the user asked for JS specifically, so we don't second-guess them). This includes a
+non-floating *output* dtype: `_maybe_js_backend` raises a clear `ValueError` up front rather
+than letting the float64 bridge silently compute integer/complex output (see below).
 
 The JS backend today covers *float64/float32 element-wise scalar kernels* using arithmetic,
 `where`, comparisons, `if/elif/else`, `range` loops, and whitelisted math functions.

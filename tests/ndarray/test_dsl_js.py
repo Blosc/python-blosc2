@@ -306,3 +306,13 @@ def test_explicit_js_off_wasm_raises():
     assert not blosc2.IS_WASM  # this test runs on a native build
     with pytest.raises(RuntimeError, match="WebAssembly"):
         lx._maybe_js_backend(_add, None, "js", {}, {}, {})
+
+
+def test_explicit_js_integer_output_raises():
+    # Integer/complex output is left to miniexpr; explicit jit_backend="js" must reject it
+    # (the float64 bridge can't reproduce integer semantics) rather than silently compute.
+    af = blosc2.asarray(np.ones((4, 4), dtype=np.float64))
+    with pytest.raises(ValueError, match="floating-point output"):
+        lx._maybe_js_backend(_add, None, "js", {}, {"a": af, "b": af}, {"dtype": np.int64})
+    with pytest.raises(ValueError, match="floating-point output"):
+        lx._maybe_js_backend(_add, None, "js", {}, {"a": af, "b": af}, {"dtype": np.complex128})

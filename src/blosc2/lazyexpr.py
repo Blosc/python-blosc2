@@ -1510,6 +1510,14 @@ def _maybe_js_backend(expression, jit, jit_backend, reduce_args, operands, kwarg
     if jit_backend == "js":
         if reduce_args:
             raise ValueError('jit_backend="js" does not support reductions')
+        out_dtype = kwargs.get("dtype")
+        if out_dtype is not None and not np.issubdtype(np.dtype(out_dtype), np.floating):
+            # The JS bridge computes in float64 and cannot reproduce integer/complex output
+            # semantics (division/overflow/truncation); keep those on miniexpr.
+            raise ValueError(
+                'jit_backend="js" requires a floating-point output dtype '
+                f"(got {np.dtype(out_dtype)}); drop jit_backend to use miniexpr"
+            )
         return _as_js_udf(expression, shape), None, None
     prefer_js = (
         jit is not False  # jit=True/None prefer the best JIT (js); only jit=False forces interpreter
