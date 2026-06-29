@@ -23,6 +23,46 @@ where = np.where
 clip = np.clip
 
 
+def _jit_backend_available():
+    """Whether the miniexpr runtime JIT backend is bundled in this build.
+
+    The JIT compiler is not shipped on every platform (e.g. the Windows wheels lack
+    it); there a DSL kernel still compiles and runs, but via the interpreter rather
+    than a JIT kernel.  Probe a trivial kernel once so the JIT-specific assertions can
+    be gated on the platform actually having a JIT backend."""
+    try:
+
+        @blosc2.dsl_kernel
+        def _probe(a):
+            return a + 1.0
+
+        return bool(blosc2.validate_dsl_jit(_probe, [np.float64], np.float64).get("jit"))
+    except Exception:
+        return False
+
+
+JIT_AVAILABLE = _jit_backend_available()
+
+
+def _expect_jit(status):
+    """Assert *status* compiled, and that it produced a runtime JIT kernel where the
+    platform actually has a JIT backend (see :func:`_jit_backend_available`)."""
+    assert status["compiled"]
+    if JIT_AVAILABLE:
+        assert status["jit"]
+
+
+@pytest.fixture(autouse=True)
+def _no_auto_js_backend(monkeypatch):
+    """Keep this module on the miniexpr/DSL path. Under WebAssembly the default prefers the
+    JS backend for float kernels, which would bypass ``_set_pref_expr`` and break the
+    miniexpr-specific assertions here. Stubbing the dtype gate to ``False`` disables only the
+    *auto* prefer-js (explicit ``jit_backend="js"`` still works, and is covered by
+    test_dsl_js.py / test_wasm_dsl_jit.py). No-op off WebAssembly (prefer-js never engages)."""
+    # `blosc2.lazyexpr` the attribute is the re-exported function; patch the actual module.
+    monkeypatch.setattr(sys.modules["blosc2.lazyexpr"], "_js_dtypes_ok", lambda *a, **k: False)
+
+
 def _make_arrays(shape=(8, 8), chunks=(4, 4), blocks=(2, 2)):
     a = np.linspace(0, 1, num=np.prod(shape), dtype=np.float32).reshape(shape)
     b = np.linspace(1, 2, num=np.prod(shape), dtype=np.float32).reshape(shape)
@@ -319,9 +359,9 @@ def test_dsl_kernel_index_symbols_float_cast_uses_miniexpr_fast_path(monkeypatch
     assert "_n1" in captured["expr"]
     assert "_i1" in captured["expr"]
     # ...and it JIT-compiles rather than silently running on the interpreter.
-    assert blosc2.validate_dsl_jit(kernel_index_ramp_float_cast, {"x": np.float32}, np.float32, shape=shape)[
-        "jit"
-    ]
+    _expect_jit(
+        blosc2.validate_dsl_jit(kernel_index_ramp_float_cast, {"x": np.float32}, np.float32, shape=shape)
+    )
 
 
 def test_dsl_kernel_index_symbols_int_cast_matches_expected_ramp():
@@ -452,9 +492,11 @@ def test_dsl_kernel_scalar_param_keeps_miniexpr_fast_path(monkeypatch):
         assert "range(niter)" not in captured["expr"]
         assert "float(niter)" not in captured["expr"]
         # ...and the loop+scalar kernel JIT-compiles (the original G3 fallback shape).
-        assert blosc2.validate_dsl_jit(
-            kernel_loop_param, {"x": a2.dtype, "y": b2.dtype, "niter": niter}, a2.dtype, shape=(32, 32)
-        )["jit"]
+        _expect_jit(
+            blosc2.validate_dsl_jit(
+                kernel_loop_param, {"x": a2.dtype, "y": b2.dtype, "niter": niter}, a2.dtype, shape=(32, 32)
+            )
+        )
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
@@ -1086,8 +1128,7 @@ def test_validate_dsl_jit_reports_compile_and_fallback(monkeypatch):
 
     st = blosc2.validate_dsl_jit(simple, [np.float64, np.float64], np.float64)
     assert st["valid"]
-    assert st["compiled"]
-    assert st["jit"]
+    _expect_jit(st)
     assert st["status"] == "ME_COMPILE_SUCCESS"
 
     # A scalar param is inlined (passed as a value); a variable named 'out' (the
@@ -1097,7 +1138,7 @@ def test_validate_dsl_jit_reports_compile_and_fallback(monkeypatch):
         "def withk(a, b, niter):\n    out = a + b * float(niter)\n    return out\n", "withk"
     )
     st = blosc2.validate_dsl_jit(with_out, {"a": np.float64, "b": np.float64, "niter": 3}, np.float64)
-    assert st["jit"]
+    _expect_jit(st)
 
     # Invalid syntax -> not valid, nothing compiled.
     invalid = kernel_from_source("def k(a, b):\n    a = a - b\n    return a\n", "k")

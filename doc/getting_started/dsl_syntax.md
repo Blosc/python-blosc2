@@ -228,6 +228,27 @@ Runtime error examples:
 - Missing return on executed control path
 - While-loop iteration cap exceeded
 
+## Execution backends
+
+A DSL kernel is compiled and run by one of two backends, selected per evaluation
+via the `jit` / `jit_backend` arguments to `compute()` / `__getitem__`:
+
+- **miniexpr** (default on native builds): a runtime JIT (TinyCC, `jit_backend="tcc"`)
+  with an interpreter fallback (`jit=False`). Supports the full DSL described here,
+  including integer/complex dtypes and reductions.
+- **JavaScript** (`jit_backend="js"`): transpiles the kernel to JavaScript and runs it
+  through the browser's JIT. **WebAssembly/Pyodide only** — requesting it elsewhere raises.
+  Under WebAssembly it is also the *default* for eligible kernels (set `jit=False` or
+  `strict_miniexpr=True` to opt out), and silently falls back to miniexpr for anything it
+  cannot handle.
+
+The JavaScript backend computes in float64 and covers floating-point element-wise kernels:
+arithmetic, comparisons, `where`, `if`/`elif`/`else`, `for ... in range(...)`/`while`
+loops, the index/shape symbols (`_i0`/`_n0`/`_ndim`/`_flat_idx`), and the standard math
+functions. It also accepts **integer inputs** when the output dtype is floating. It does
+**not** support integer/complex *output*, reductions, or constructs outside the transpiled
+subset; those stay on miniexpr (or, with an explicit `jit_backend="js"`, raise).
+
 ## Python syntax that is out of DSL scope
 
 These Python features are not part of this DSL:
