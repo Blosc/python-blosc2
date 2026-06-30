@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.7.0 to 4.7.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.6.0 to 4.7.0
 
 ### DSL → JavaScript backend for WebAssembly (`jit_backend="js"`)
