@@ -130,6 +130,7 @@ public objects into the appropriate reference section.
         Tuner,
         FPAccuracy,
         compute_chunks_blocks,
+        ctable_from_cframe,
         get_slice_nchunks,
         remove_urlpath,
         NDArray,

@@ -801,6 +801,168 @@ def test_save_empty_table():
     assert len(t2) == 1
 
 
+# ---------------------------------------------------------------------------
+# to_cframe / ctable_from_cframe — bytes-based round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_to_cframe_basic_roundtrip():
+    """Scalar columns survive a cframe round-trip."""
+    t = CTable(Row, new_data=[(1, 10.0, True), (2, 20.0, False), (3, 30.0, True)])
+    cframe = t.to_cframe()
+    assert isinstance(cframe, bytes)
+    assert len(cframe) > 0
+
+    t2 = blosc2.ctable_from_cframe(cframe)
+    assert len(t2) == 3
+    assert list(t2["id"][:]) == [1, 2, 3]
+    assert list(t2["score"][:]) == [10.0, 20.0, 30.0]
+    assert list(t2["active"][:]) == [True, False, True]
+
+
+def test_to_cframe_empty_table():
+    """Empty table round-trips correctly."""
+    t = CTable(Row)
+    cframe = t.to_cframe()
+    t2 = blosc2.ctable_from_cframe(cframe)
+    assert len(t2) == 0
+    assert t2.col_names == ["id", "score", "active"]
+
+
+def test_to_cframe_preserves_vlmeta():
+    """User vlmeta survives a cframe round-trip."""
+    t = CTable(Row, new_data=[(1, 10.0, True)])
+    t.vlmeta["description"] = "test table"
+    t.vlmeta["tags"] = ["a", "b", "c"]
+    t.vlmeta["count"] = 42
+
+    cframe = t.to_cframe()
+    t2 = blosc2.ctable_from_cframe(cframe)
+    assert t2.vlmeta[:]["description"] == "test table"
+    assert t2.vlmeta[:]["tags"] == ["a", "b", "c"]
+    assert t2.vlmeta[:]["count"] == 42
+    # Internal keys must not leak into user vlmeta
+    assert "kind" not in t2.vlmeta[:]
+    assert "schema" not in t2.vlmeta[:]
+
+
+def test_to_cframe_materializes_slice():
+    """A slice (which has base set) is materialized on serialization."""
+    t = CTable(Row, new_data=[(1, 10.0, True), (2, 20.0, False), (3, 30.0, True), (4, 40.0, False)])
+    sliced = t[1:3]
+    cframe = sliced.to_cframe()
+    t2 = blosc2.ctable_from_cframe(cframe)
+    assert len(t2) == 2
+    assert list(t2["id"][:]) == [2, 3]
+    assert list(t2["score"][:]) == [20.0, 30.0]
+
+
+def test_to_cframe_materializes_where_view():
+    """A where() view materializes only live matching rows."""
+    t = CTable(Row, new_data=[(1, 10.0, True), (2, 20.0, False), (3, 30.0, True)])
+    view = t.where(t["id"] > 1)
+    cframe = view.to_cframe()
+    t2 = blosc2.ctable_from_cframe(cframe)
+    assert len(t2) == 2
+    assert list(t2["id"][:]) == [2, 3]
+
+
+def test_to_cframe_compacts_deleted_rows():
+    """Only live rows are serialized; deleted rows are excluded."""
+    t = CTable(Row, new_data=[(1, 10.0, True), (2, 20.0, False), (3, 30.0, True), (4, 40.0, False)])
+    t.delete([1, 2])  # remove rows with id 2 and 3
+    assert len(t) == 2
+
+    cframe = t.to_cframe()
+    t2 = blosc2.ctable_from_cframe(cframe)
+    assert len(t2) == 2
+    assert list(t2["id"][:]) == [1, 4]
+    assert list(t2["score"][:]) == [10.0, 40.0]
+
+
+def test_to_cframe_with_dictionary_column():
+    """Dictionary columns round-trip through cframe."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class TripRow:
+        vendor: str = blosc2.field(blosc2.dictionary())
+        fare: float = blosc2.field(blosc2.float64())
+
+    t = CTable(TripRow, new_data=[("Uber", 10.5), ("Lyft", 7.2), ("Uber", 15.0), ("Via", 5.0)])
+    cframe = t.to_cframe()
+    t2 = blosc2.ctable_from_cframe(cframe)
+    assert len(t2) == 4
+    assert t2["vendor"][:] == ["Uber", "Lyft", "Uber", "Via"]
+    assert list(t2["fare"][:]) == [10.5, 7.2, 15.0, 5.0]
+
+
+def test_to_cframe_with_vlstring_vlbytes():
+    """Variable-length string and bytes columns round-trip through cframe."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class VLRow:
+        id: int = blosc2.field(blosc2.int64())
+        text: str = blosc2.field(blosc2.vlstring(nullable=True))
+        data: bytes = blosc2.field(blosc2.vlbytes())
+
+    rows = [(0, "hello", b"bin0"), (1, None, b"bin1"), (2, "world", b"")]
+    t = CTable(VLRow, new_data=rows)
+    cframe = t.to_cframe()
+    t2 = blosc2.ctable_from_cframe(cframe)
+    assert len(t2) == 3
+    assert t2["text"][:] == ["hello", None, "world"]
+    assert t2["data"][:] == [b"bin0", b"bin1", b""]
+    assert t2["text"].null_count() == 1
+
+
+def test_ctable_from_cframe_rejects_non_embedstore_cframe():
+    """Passing an NDArray cframe raises ValueError."""
+    nd = blosc2.arange(10)
+    cframe = nd.to_cframe()
+    with pytest.raises(ValueError, match="EmbedStore"):
+        blosc2.ctable_from_cframe(cframe)
+
+
+def test_ctable_from_cframe_rejects_wrong_kind():
+    """Passing an EmbedStore cframe with a non-CTable kind raises ValueError."""
+    estore = blosc2.EmbedStore()
+    sc = blosc2.SChunk()
+    sc.vlmeta["kind"] = "not_a_ctable"
+    estore["/_meta"] = sc
+    cframe = estore.to_cframe()
+    with pytest.raises(ValueError, match="CTable"):
+        blosc2.ctable_from_cframe(cframe)
+
+
+def test_ctable_from_cframe_result_is_read_only():
+    """Tables deserialized from cframe are read-only."""
+    t = CTable(Row, new_data=[(1, 10.0, True), (2, 20.0, False)])
+    cframe = t.to_cframe()
+    t2 = blosc2.ctable_from_cframe(cframe)
+
+    with pytest.raises(ValueError, match="read-only"):
+        t2.append((3, 30.0, True))
+    with pytest.raises(ValueError, match="read-only"):
+        t2.extend([(3, 30.0, True)])
+    with pytest.raises(ValueError, match="read-only"):
+        t2.delete(0)
+
+    # Reads still work
+    assert t2[0].id == 1
+    assert list(t2["score"][:]) == [10.0, 20.0]
+
+
+def test_ctable_from_cframe_copy_default():
+    """The default copy=True gives independent buffers."""
+    t = CTable(Row, new_data=[(1, 10.0, True)])
+    cframe = t.to_cframe()
+    t2 = blosc2.ctable_from_cframe(cframe)  # default copy=True
+    assert len(t2) == 1
+    assert t2["id"][0] == 1
+
+
 if __name__ == "__main__":
     import pytest
 

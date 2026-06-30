@@ -503,24 +503,28 @@ well as import/export paths for CSV, Arrow, and Parquet data.
     CTable.save
     CTable.to_b2z
     CTable.to_b2d
+    CTable.to_cframe
     CTable.to_csv
     CTable.to_arrow
     CTable.to_parquet
     CTable.from_arrow
     CTable.from_parquet
     CTable.from_csv
+    ctable_from_cframe
 
 .. automethod:: CTable.load
 .. automethod:: CTable.open
 .. automethod:: CTable.save
 .. automethod:: CTable.to_b2z
 .. automethod:: CTable.to_b2d
+.. automethod:: CTable.to_cframe
 .. automethod:: CTable.to_csv
 .. automethod:: CTable.to_arrow
 .. automethod:: CTable.to_parquet
 .. automethod:: CTable.from_arrow
 .. automethod:: CTable.from_parquet
 .. automethod:: CTable.from_csv
+.. autofunction:: ctable_from_cframe
 
 
 Inspection & statistics

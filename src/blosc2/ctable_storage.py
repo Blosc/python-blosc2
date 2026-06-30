@@ -395,6 +395,153 @@ def _column_name_to_relpath(name: str) -> str:
     return "/".join(_encode_storage_segment(part) for part in split_field_path(name))
 
 
+# Suffix used to store a dictionary column's value store alongside its codes.
+_DICT_SUFFIX = "_dict"
+
+
+class EmbedStoreTableStorage(TableStorage):
+    """Read-only :class:`CTable` storage backed by an in-memory :class:`blosc2.EmbedStore`.
+
+    This is the reconstruction side of :meth:`blosc2.CTable.to_cframe` /
+    :func:`blosc2.ctable_from_cframe`.  A cframe deserializes into an
+    :class:`blosc2.EmbedStore` (a dict of blosc2 objects keyed by ``/``-paths);
+    this storage exposes those entries through the :class:`TableStorage`
+    interface so that :meth:`CTable._open_from_storage` can build a normal
+    in-memory :class:`CTable` from them.
+
+    The layout mirrors :class:`FileTableStorage`::
+
+        /_meta            SChunk  (vlmeta: kind, version, schema)
+        /_valid_rows      NDArray (bool)
+        /_vlmeta          SChunk   (user vlmeta, optional)
+        /_cols/<name>     NDArray | ListArray | BatchArray
+        /_cols/<name>_dict  BatchArray (dictionary column value store)
+
+    The store is read-only; mutation methods raise.
+    """
+
+    def __init__(self, estore: blosc2.EmbedStore) -> None:
+        self._estore = estore
+        self._meta: blosc2.SChunk | None = None
+        self._vlmeta: blosc2.SChunk | None = None
+
+    # -- key helpers ------------------------------------------------------
+
+    @staticmethod
+    def _col_key(name: str) -> str:
+        return f"/{_COLS_DIR}/{_column_name_to_relpath(name)}"
+
+    # -- meta / schema ----------------------------------------------------
+
+    def _open_meta(self) -> blosc2.SChunk:
+        if self._meta is None:
+            opened = self._estore[_META_KEY]
+            if not isinstance(opened, blosc2.SChunk):
+                raise ValueError("CTable manifest '/_meta' must be an SChunk.")
+            self._meta = opened
+        return self._meta
+
+    def check_kind(self) -> None:
+        kind = self._open_meta().vlmeta["kind"]
+        if isinstance(kind, bytes):
+            kind = kind.decode()
+        if kind != "ctable":
+            raise ValueError(f"Object is not a CTable (kind={kind!r})")
+
+    def load_schema(self) -> dict[str, Any]:
+        raw = self._open_meta().vlmeta["schema"]
+        if isinstance(raw, bytes):
+            raw = raw.decode()
+        return json.loads(raw)
+
+    def _open_vlmeta(self) -> blosc2.SChunk | None:
+        if self._vlmeta is not None:
+            return self._vlmeta
+        if _VLMETA_KEY in self._estore:
+            opened = self._estore[_VLMETA_KEY]
+            if isinstance(opened, blosc2.SChunk):
+                self._vlmeta = opened
+                return opened
+        return None
+
+    # -- columns ----------------------------------------------------------
+
+    def open_column(self, name: str) -> blosc2.NDArray:
+        return self._estore[self._col_key(name)]
+
+    def open_list_column(self, name: str) -> ListArray:
+        return self._estore[self._col_key(name)]
+
+    def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
+        backend = self._estore[self._col_key(name)]
+        return _ScalarVarLenArray(spec, backend)
+
+    def open_dictionary_column(self, name: str, spec) -> DictionaryColumn:
+        from blosc2.schema import VLStringSpec
+
+        codes = self._estore[self._col_key(name)]
+        dict_backend = self._estore[self._col_key(name) + _DICT_SUFFIX]
+        dict_spec = VLStringSpec(nullable=False)
+        dict_store = _ScalarVarLenArray(dict_spec, dict_backend)
+        return DictionaryColumn(spec, codes, dict_store)
+
+    # -- valid rows -------------------------------------------------------
+
+    def open_valid_rows(self) -> blosc2.NDArray:
+        return self._estore[_VALID_ROWS_KEY]
+
+    # -- status -----------------------------------------------------------
+
+    def table_exists(self) -> bool:
+        return True
+
+    def is_read_only(self) -> bool:
+        return True
+
+    def open_mode(self) -> str | None:
+        return "r"
+
+    def close(self) -> None:
+        pass
+
+    # -- mutation: not supported (transport is read-only) -----------------
+
+    def _not_supported(self, *args, **kwargs):
+        raise RuntimeError("EmbedStoreTableStorage is read-only (cframe transport).")
+
+    create_column = _not_supported
+    install_column = _not_supported
+    create_list_column = _not_supported
+    install_list_column = _not_supported
+    create_varlen_scalar_column = _not_supported
+    create_dictionary_column = _not_supported
+    create_valid_rows = _not_supported
+    save_schema = _not_supported
+    save_vlmeta = _not_supported
+    delete_column = _not_supported
+    rename_column = _not_supported
+
+    # -- index catalog (in-memory defaults; indexes are not transported) ---
+
+    def load_index_catalog(self) -> dict:
+        return {}
+
+    def save_index_catalog(self, catalog: dict) -> None:
+        pass
+
+    def get_epoch_counters(self) -> tuple[int, int]:
+        return 0, 0
+
+    def bump_value_epoch(self) -> int:
+        return 0
+
+    def bump_visibility_epoch(self) -> int:
+        return 0
+
+    def index_anchor_path(self, col_name: str) -> str | None:
+        return None
+
+
 class FileTableStorage(TableStorage):
     """Arrays stored as TreeStore leaves inside *urlpath*.
 

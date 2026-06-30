@@ -639,6 +639,7 @@ from .ctable import (
     NestedColumn,
     NullPolicy,
     RowTransformer,
+    ctable_from_cframe,
     get_null_policy,
     get_printoptions,
     null_policy,
@@ -839,6 +840,7 @@ __all__ = [  # noqa : RUF022
     "CTableGroupBy",
     "NestedColumn",
     "RowTransformer",
+    "ctable_from_cframe",
     "Batch",
     "BatchArray",
     # Enums

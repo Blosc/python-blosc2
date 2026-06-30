@@ -4863,6 +4863,79 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self.save(urlpath, overwrite=overwrite)
         return os.path.abspath(urlpath)
 
+    def to_cframe(self) -> bytes:
+        """Serialize this table to a bytes buffer (a CFrame).
+
+        This is the Blosc2-bytes counterpart of :meth:`to_b2z`, mirroring
+        :meth:`blosc2.NDArray.to_cframe`.  The table is packed into an
+        in-memory :class:`blosc2.EmbedStore` (one entry per column, plus the
+        schema, the ``_valid_rows`` mask and any user vlmeta) and serialized to
+        a single ``bytes`` object.
+
+        Only live rows are serialized: for a view or slice the result is
+        materialized first.  The result is fully self-contained and can be
+        rebuilt with :func:`blosc2.ctable_from_cframe` without any temp file,
+        which makes it suitable as a transport format (e.g. Caterva2 table
+        slice fetch) including under Pyodide.
+
+        Returns
+        -------
+        bytes
+            The serialized table.
+
+        See Also
+        --------
+        :func:`blosc2.ctable_from_cframe`
+        """
+        # Materialize live rows for views/slices; for base tables use the live
+        # columns directly.  copy() is the canonical materialization path.
+        # ponytail: copy() has a pre-existing bug for varlen-scalar (vlstring/vlbytes)
+        # columns, so to_cframe() on a *lazy view* (base is not None, e.g. where()/view())
+        # of such a table will raise until copy() is fixed.  Whole tables and slice()
+        # results (which materialize with base=None) work for all column types.
+        if self.base is not None:
+            src = self.copy(compact=True)
+        else:
+            src = self
+            src._flush_varlen_columns()
+
+        from blosc2.ctable_storage import (
+            _DICT_SUFFIX,
+            _column_name_to_relpath,
+        )
+
+        estore = blosc2.EmbedStore(urlpath=None, mode="w")
+
+        # Manifest: schema + kind/version markers, mirroring FileTableStorage.save_schema
+        meta = blosc2.SChunk()
+        meta.vlmeta["kind"] = "ctable"
+        meta.vlmeta["version"] = 1
+        meta.vlmeta["schema"] = json.dumps(src._schema_dict_with_computed())
+        estore["/_meta"] = meta
+        estore["/_valid_rows"] = src._valid_rows
+
+        # User vlmeta (if any) — best-effort, mirroring FileTableStorage._open_vlmeta
+        vlmeta_schunk = getattr(src._storage, "_vlmeta", None)
+        if vlmeta_schunk is None:
+            vlmeta_schunk = getattr(src._storage, "_vlmeta_schunk", None)
+        if isinstance(vlmeta_schunk, blosc2.SChunk):
+            estore["/_vlmeta"] = vlmeta_schunk
+
+        for col in src._schema.columns:
+            name = col.name
+            key = f"/_cols/{_column_name_to_relpath(name)}"
+            arr = src._cols[name]
+            if self._is_dictionary_column(col):
+                estore[key] = arr.codes
+                estore[key + _DICT_SUFFIX] = arr._dict_store._backend
+            elif self._is_varlen_scalar_column(col):
+                estore[key] = arr._backend
+            else:
+                # Scalar NDArray or ListArray — both serialize via to_cframe().
+                estore[key] = arr
+
+        return estore.to_cframe()
+
     def _save_to_storage(  # noqa: C901
         self,
         storage: TableStorage,
@@ -11844,3 +11917,41 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         new_mask = blosc2.asarray(new_mask_np)
         return self.view(new_mask)
+
+
+def ctable_from_cframe(cframe: bytes, *, copy: bool = True) -> CTable:
+    """Deserialize a CFrame into a :class:`CTable`.
+
+    The counterpart of :meth:`CTable.to_cframe`.  The cframe is decoded into an
+    in-memory :class:`blosc2.EmbedStore` and opened through
+    :class:`~blosc2.ctable_storage.EmbedStoreTableStorage`, so the result is a
+    standalone in-memory table with no file dependency.
+
+    Parameters
+    ----------
+    cframe : bytes
+        The serialized table, as produced by :meth:`CTable.to_cframe`.
+    copy : bool, optional
+        If ``True``, copy the underlying buffers so the result does not share
+        memory with *cframe*.  Default is ``False``.
+
+    Returns
+    -------
+    CTable
+        The deserialized table.
+
+    See Also
+    --------
+    :meth:`blosc2.CTable.to_cframe`
+    """
+    from blosc2.ctable_storage import EmbedStoreTableStorage
+
+    # Probe the cframe type with a cheap non-copying open; bail early on
+    # non-EmbedStore / non-CTable frames so callers can try-fallback.
+    probe = blosc2.schunk_from_cframe(cframe, copy=False)
+    if "b2embed" not in probe.meta:
+        raise ValueError("Not an EmbedStore cframe (no b2embed marker)")
+    estore = blosc2.from_cframe(cframe, copy=copy)
+    storage = EmbedStoreTableStorage(estore)
+    storage.check_kind()  # raise if not a CTable
+    return CTable._open_from_storage(storage)
