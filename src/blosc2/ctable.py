@@ -575,10 +575,23 @@ def _make_namedtuple_row_type(col_names: tuple[str, ...]):
             if isinstance(key, str):
                 try:
                     return getattr(self, self._field_name_map[key])
-                except KeyError as exc:
-                    raise KeyError(
-                        f"No field named {key!r}. Available: {list(self._original_fields)}"
-                    ) from exc
+                except KeyError:
+                    pass
+                # Not a top-level field under its literal spelling: `key` may be
+                # an escaped/dotted logical path (e.g. "trip.sec" for a "trip"
+                # struct column with a "sec" leaf, or "trip\.info" escaping a
+                # literal dot in a top-level name), as reported by
+                # schema_dict()/col_names. Walk the path through nested dicts.
+                parts = split_field_path(key)
+                if parts and parts[0] in self._field_name_map:
+                    value = getattr(self, self._field_name_map[parts[0]])
+                    try:
+                        for part in parts[1:]:
+                            value = value[part]
+                        return value
+                    except (KeyError, TypeError, IndexError):
+                        pass
+                raise KeyError(f"No field named {key!r}. Available: {list(self._original_fields)}")
             return tuple.__getitem__(self, key)
 
         def as_dict(self) -> dict[str, Any]:

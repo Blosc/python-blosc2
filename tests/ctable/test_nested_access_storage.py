@@ -95,6 +95,17 @@ def test_from_arrow_flattens_struct_columns_to_dotted_leaves():
     assert row0.trip["begin"]["lon"] == 1.1
     assert row0.trip["begin"]["lat"] == 2.2
 
+    # The row also supports indexing by the same dotted leaf paths that
+    # col_names()/schema_dict() advertise, even though there is no such
+    # top-level field on the row itself (only "trip" is).
+    assert row0["trip.begin.lon"] == 1.1
+    assert row0["trip.begin.lat"] == 2.2
+    assert row0["trip"] == {"begin": {"lon": 1.1, "lat": 2.2}}
+    with pytest.raises(KeyError):
+        row0["trip.begin.nope"]
+    with pytest.raises(KeyError):
+        row0["nope"]
+
 
 def test_nested_field_name_escaping_for_literal_dot_and_slash(tmp_path):
     trip_type = pa.struct([pa.field("begin/point", pa.struct([pa.field("lon.deg", pa.float64())]))])
@@ -120,6 +131,11 @@ def test_nested_field_name_escaping_for_literal_dot_and_slash(tmp_path):
     assert t[leaf_name][1] == 2.0
     assert t[r"trip\.info"][0] == {"begin/point": {"lon.deg": 1.0}}
     assert t.where(r"trip\.info.begin\/point.lon\.deg > 1.5").nrows == 1
+
+    # Row-level access via the same escaped dotted path must also work.
+    row1 = t[1]
+    assert row1[leaf_name] == 2.0
+    assert row1[r"trip\.info"] == {"begin/point": {"lon.deg": 2.0}}
 
     leaf_path = path / "_cols" / "trip%2Einfo" / "begin%2Fpoint" / "lon%2Edeg.b2nd"
     assert leaf_path.exists()
