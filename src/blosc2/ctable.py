@@ -4889,10 +4889,6 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         # Materialize live rows for views/slices; for base tables use the live
         # columns directly.  copy() is the canonical materialization path.
-        # ponytail: copy() has a pre-existing bug for varlen-scalar (vlstring/vlbytes)
-        # columns, so to_cframe() on a *lazy view* (base is not None, e.g. where()/view())
-        # of such a table will raise until copy() is fixed.  Whole tables and slice()
-        # results (which materialize with base=None) work for all column types.
         if self.base is not None:
             src = self.copy(compact=True)
         else:
@@ -10850,6 +10846,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     else (arr[i] for i in range(n))
                 )
                 result._cols[col_name].extend(src, validate=False)
+                result._cols[col_name].flush()
+            elif self._is_varlen_scalar_column(col):
+                # _ScalarVarLenArray.__setitem__ only accepts a single int index
+                # (mirroring row-wise append/extend semantics), so bulk copies
+                # must go through extend(), same as list columns above.
+                src = (
+                    arr[:n_live]
+                    if is_dense
+                    else (arr[int(pos)] for pos in live_pos)
+                    if compact
+                    else (arr[i] for i in range(n))
+                )
+                result._cols[col_name].extend(src)
                 result._cols[col_name].flush()
             elif self._is_dictionary_column(col):
                 # Copy dictionary values, then copy (live) codes.

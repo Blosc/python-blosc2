@@ -917,6 +917,33 @@ def test_to_cframe_with_vlstring_vlbytes():
     assert t2["text"].null_count() == 1
 
 
+def test_to_cframe_with_vlstring_lazy_view():
+    """to_cframe() on a where()/view() of a vlstring/vlbytes table materializes correctly.
+
+    Regression test: CTable.copy() (the materialization path used for lazy
+    views, i.e. self.base is not None) used to call __setitem__ with a slice
+    or fancy index on varlen-scalar columns, but _ScalarVarLenArray only
+    supports single-int __setitem__, raising a TypeError.
+    """
+    from dataclasses import dataclass
+
+    @dataclass
+    class VLRow:
+        id: int = blosc2.field(blosc2.int64())
+        text: str = blosc2.field(blosc2.vlstring())
+        data: bytes = blosc2.field(blosc2.vlbytes())
+
+    rows = [(0, "hello", b"bin0"), (1, "world", b"bin1"), (2, "foo", b"bin2"), (3, "bar", b"bin3")]
+    t = CTable(VLRow, new_data=rows)
+
+    view = t.where(t["id"] > 1)  # base is not None -> exercises copy() in to_cframe()
+    cframe = view.to_cframe()
+    t2 = blosc2.ctable_from_cframe(cframe)
+    assert len(t2) == 2
+    assert t2["text"][:] == ["foo", "bar"]
+    assert t2["data"][:] == [b"bin2", b"bin3"]
+
+
 def test_ctable_from_cframe_rejects_non_embedstore_cframe():
     """Passing an NDArray cframe raises ValueError."""
     nd = blosc2.arange(10)

@@ -371,6 +371,45 @@ def test_ctable_vlstring_compact():
 
 
 # ---------------------------------------------------------------------------
+# CTable.copy() with varlen-scalar (vlstring/vlbytes) columns
+# ---------------------------------------------------------------------------
+
+
+def test_ctable_vlstring_copy_dense_compact():
+    ct = blosc2.CTable(VLRow, new_data=ROWS)
+    copied = ct.copy(compact=True)
+    assert len(copied) == len(ct)
+    assert list(copied.text) == [r[1] for r in ROWS]
+    assert list(copied.data) == [r[2] for r in ROWS]
+    # Independent copy: mutating the source must not affect it.
+    ct.text[0] = "mutated"
+    assert copied.text[0] == ROWS[0][1]
+
+
+def test_ctable_vlstring_copy_with_deletions_compact():
+    ct = blosc2.CTable(VLRow, new_data=ROWS)
+    ct.delete([1, 3])  # drop the non-dense live-position case
+    copied = ct.copy(compact=True)
+    expected = [r[1] for i, r in enumerate(ROWS) if i not in (1, 3)]
+    assert len(copied) == len(expected)
+    assert list(copied.text) == expected
+
+
+def test_ctable_vlstring_copy_noncompact_preserves_tombstones():
+    ct = blosc2.CTable(VLRow, new_data=ROWS)
+    ct.delete([1, 3])
+    copied = ct.copy(compact=False)
+    n = len(copied._valid_rows)  # copy(compact=False) trims to the high watermark
+    assert list(copied._valid_rows[:]) == list(ct._valid_rows[:n])
+    # Index the raw backing array directly: the row-bound column accessor
+    # (copied.text) is limited to live-row count, not physical capacity.
+    raw_text = copied._cols["text"]
+    live_texts = [raw_text[i] for i in range(n) if copied._valid_rows[i]]
+    expected = [r[1] for i, r in enumerate(ROWS) if i not in (1, 3)]
+    assert live_texts == expected
+
+
+# ---------------------------------------------------------------------------
 # CTable save / load / open (persistence)
 # ---------------------------------------------------------------------------
 
