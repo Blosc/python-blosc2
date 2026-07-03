@@ -483,7 +483,7 @@ def test_sorted_slice_window_matches_full_view(tmp_path, ascending, sentinel):
     rng = np.random.default_rng(2)
     n = 5000
 
-    if sentinel == "intmin_front" or sentinel == "no_nulls":
+    if sentinel in {"intmin_front", "no_nulls"}:
 
         @dataclass
         class R:
