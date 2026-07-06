@@ -219,12 +219,18 @@ class Proxy(blosc2.Operand):
                         value: object
                             The metalayer object that will be serialized using msgpack.
 
+            Any other keyword argument (e.g. ``contiguous``) is forwarded to the
+            cache container constructor (:func:`blosc2.empty` or :ref:`SChunk`),
+            so callers can request e.g. a sparse (non-contiguous) cache without
+            resorting to the ``_cache=`` escape hatch.
+
         """
         self.src = src
         self.urlpath = urlpath
         if kwargs is None:
             kwargs = {}
         self._cache = kwargs.pop("_cache", None)
+        vlmeta = kwargs.pop("vlmeta", None)
 
         if self._cache is None:
             meta_val = {
@@ -248,6 +254,7 @@ class Proxy(blosc2.Operand):
                     urlpath=urlpath,
                     mode=mode,
                     meta=meta,
+                    **kwargs,
                 )
             else:
                 self._cache = blosc2.SChunk(
@@ -256,12 +263,12 @@ class Proxy(blosc2.Operand):
                     urlpath=urlpath,
                     mode=mode,
                     meta=meta,
+                    **kwargs,
                 )
                 self._cache.fill_special(self.src.nbytes // self.src.typesize, blosc2.SpecialValue.UNINIT)
         self._schunk_cache = getattr(self._cache, "schunk", self._cache)
         if self.urlpath is None:
             self.urlpath = getattr(self._schunk_cache, "urlpath", None)
-        vlmeta = kwargs.get("vlmeta")
         if vlmeta:
             for key in vlmeta:
                 self._schunk_cache.vlmeta[key] = vlmeta[key]

@@ -658,6 +658,59 @@ class SChunk(blosc2_ext.SChunk):
             raise RuntimeError("Unable to fill with special values")
         return nchunks
 
+    def update_special(
+        self,
+        nchunk: int,
+        special_value: blosc2.SpecialValue,
+        value: bytes | int | float | bool | None = None,
+    ) -> int:
+        """Replace the chunk at :paramref:`nchunk` with a special value chunk.
+
+        Useful as a cache-eviction primitive: replacing a chunk with a
+        ``SpecialValue.UNINIT`` chunk reclaims its storage (on sparse/disk
+        frames) without deleting the chunk slot, so it will be treated as
+        unfetched and recomputed/refetched on next access.
+
+        Parameters
+        ----------
+        nchunk: int
+            The index of the chunk to replace.
+        special_value: SpecialValue
+            The special value to fill the chunk with.
+        value: bytes, int, float, bool (optional)
+            The value to fill the chunk with. Only supported if
+            :paramref:`special_value` is ``blosc2.SpecialValue.VALUE``.
+
+        Returns
+        -------
+        out: int
+            The number of chunks in the SChunk.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> cparams = blosc2.CParams(typesize=4)
+        >>> schunk = blosc2.SChunk(chunksize=400, cparams=cparams)
+        >>> _ = schunk.append_data(np.arange(100, dtype=np.int32))
+        >>> schunk.update_special(0, blosc2.SpecialValue.UNINIT)
+        1
+        """
+        if not isinstance(special_value, SpecialValue) or special_value == SpecialValue.NOT_SPECIAL:
+            raise TypeError("special_value must be a SpecialValue instance other than NOT_SPECIAL")
+        if special_value == SpecialValue.VALUE and value is None:
+            raise ValueError("value cannot be None when special_value is VALUE")
+        if nchunk < 0 or nchunk >= self.nchunks:
+            raise IndexError(f"nchunk must be in range [0, {self.nchunks}), got {nchunk}")
+
+        chunk_items = self.chunksize // self.typesize
+        total_items = self.nbytes // self.typesize
+        nitems = min(chunk_items, total_items - nchunk * chunk_items)
+
+        tmp = SChunk(chunksize=self.chunksize, cparams=blosc2.CParams(typesize=self.typesize))
+        tmp.fill_special(nitems, special_value, value)
+        return self.update_chunk(nchunk, tmp.get_chunk(0))
+
     def decompress_chunk(self, nchunk: int, dst: object = None) -> str | bytes:
         """Decompress the chunk given by its index :paramref:`nchunk`.
 

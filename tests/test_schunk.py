@@ -321,3 +321,29 @@ def test_schunk_cdparams(cparams, dparams, new_cparams, new_dparams):
             assert getattr(schunk.cparams, field.name) == expected
 
     assert schunk.dparams.nthreads == (1 if blosc2.IS_WASM else new_dparams.nthreads)
+
+
+def test_schunk_update_special():
+    # Full trailing chunk (100 items exactly fill chunksize)
+    cparams = blosc2.CParams(typesize=4)
+    data = np.arange(100, dtype=np.int32)
+    schunk = blosc2.SChunk(chunksize=400, cparams=cparams)
+    schunk.append_data(data)
+    orig_chunk = schunk.get_chunk(0)
+    schunk.update_special(0, blosc2.SpecialValue.UNINIT)
+    assert next(schunk.iterchunks_info()).special == blosc2.SpecialValue.UNINIT
+    # Simulate a refetch after eviction: original data comes back bit-exact
+    schunk.update_chunk(0, orig_chunk)
+    out = np.empty(data.nbytes, dtype=np.uint8)
+    schunk.decompress_chunk(0, out)
+    np.testing.assert_array_equal(out.view(np.int32), data)
+
+    # Partial trailing chunk: special chunk must be sized to the actual
+    # (smaller) chunk, not the full chunksize
+    schunk2 = blosc2.SChunk(chunksize=400, cparams=cparams)
+    schunk2.append_data(np.arange(90, dtype=np.int32))
+    schunk2.update_special(0, blosc2.SpecialValue.UNINIT)
+    assert next(schunk2.iterchunks_info()).special == blosc2.SpecialValue.UNINIT
+
+    with pytest.raises(IndexError):
+        schunk2.update_special(5, blosc2.SpecialValue.UNINIT)

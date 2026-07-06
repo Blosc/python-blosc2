@@ -203,3 +203,15 @@ def test_proxy_zeroshape():
     a1 = blosc2.Proxy(a1)
     sl = slice(100)
     np.testing.assert_allclose(a1[sl], na1[sl])
+
+
+def test_proxy_contiguous_kwarg(tmp_path):
+    # Extra kwargs (e.g. contiguous) must be forwarded to the cache
+    # container constructor, without needing the _cache= escape hatch.
+    data = np.arange(20).reshape(4, 5)
+    src = blosc2.asarray(data, chunks=[2, 5], blocks=[1, 5])
+    urlpath = tmp_path / "cache.b2nd"
+    proxy = blosc2.Proxy(src, urlpath=str(urlpath), contiguous=False)
+    assert proxy.schunk.contiguous is False
+    assert urlpath.is_dir()  # sparse frame is a directory of chunk files
+    np.testing.assert_array_equal(proxy.fetch(())[:], data)
