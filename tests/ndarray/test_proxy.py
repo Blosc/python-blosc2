@@ -5,6 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import asyncio
+
 import numpy as np
 import pytest
 
@@ -203,6 +205,62 @@ def test_proxy_zeroshape():
     a1 = blosc2.Proxy(a1)
     sl = slice(100)
     np.testing.assert_allclose(a1[sl], na1[sl])
+
+
+class _ConcurrencyTrackingSource:
+    """A ProxyNDSource whose aget_chunk reports how many calls overlapped."""
+
+    def __init__(self, array):
+        self.array = array
+        self.inflight = 0
+        self.max_inflight = 0
+
+    @property
+    def shape(self):
+        return self.array.shape
+
+    @property
+    def chunks(self):
+        return self.array.chunks
+
+    @property
+    def blocks(self):
+        return self.array.blocks
+
+    @property
+    def dtype(self):
+        return self.array.dtype
+
+    @property
+    def cparams(self):
+        return self.array.cparams
+
+    def get_chunk(self, nchunk):
+        return self.array.get_chunk(nchunk)
+
+    async def aget_chunk(self, nchunk):
+        self.inflight += 1
+        self.max_inflight = max(self.max_inflight, self.inflight)
+        await asyncio.sleep(0.01)  # simulate a network round trip
+        self.inflight -= 1
+        return self.array.get_chunk(nchunk)
+
+
+def test_proxy_afetch_max_concurrency():
+    data = np.arange(10 * 10).reshape(10, 10)
+    array = blosc2.asarray(data, chunks=(2, 10), blocks=(1, 10))  # 5 chunks
+    source = _ConcurrencyTrackingSource(array)
+    proxy = blosc2.Proxy(source)
+
+    result = asyncio.run(proxy.afetch(max_concurrency=3))
+    np.testing.assert_array_equal(result[:], data)
+    assert source.max_inflight == 3  # bounded by the semaphore, not by the 5 chunks
+
+    # Serial by default for non-remote sources
+    source2 = _ConcurrencyTrackingSource(array)
+    proxy2 = blosc2.Proxy(source2)
+    asyncio.run(proxy2.afetch())
+    assert source2.max_inflight == 1
 
 
 def test_proxy_contiguous_kwarg(tmp_path):

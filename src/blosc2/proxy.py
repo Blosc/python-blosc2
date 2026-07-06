@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
@@ -17,6 +18,10 @@ except (ImportError, AttributeError):
 import numpy as np
 
 import blosc2
+
+# Default Proxy.afetch concurrency cap for remote sources (e.g. C2Array),
+# where fetches are dominated by round-trip latency, not local CPU/IO.
+REMOTE_MAX_CONCURRENCY = 8
 
 
 class ProxyNDSource(ABC):
@@ -329,7 +334,9 @@ class Proxy(blosc2.Operand):
 
         return self._cache
 
-    async def afetch(self, item: slice | list[slice] | None = ()) -> blosc2.NDArray | blosc2.schunk.SChunk:
+    async def afetch(
+        self, item: slice | list[slice] | None = (), max_concurrency: int | None = None
+    ) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
         Retrieve the cache container with the requested data updated asynchronously.
 
@@ -338,6 +345,13 @@ class Proxy(blosc2.Operand):
         item: slice or list of slices, optional
             If provided, only the chunks intersecting with the specified slices
             will be retrieved if they have not been already.
+        max_concurrency: int, optional
+            Maximum number of `aget_chunk` calls to have in flight at once
+            (semaphore-bounded, so a slice spanning thousands of chunks doesn't
+            fire thousands of concurrent requests at the source). Defaults to 1
+            (serial, as before) for most sources, and to a higher value for
+            remote sources such as :ref:`C2Array` where concurrency turns
+            `N x round-trip` latency into roughly `1 x round-trip`.
 
         Returns
         -------
@@ -405,19 +419,29 @@ class Proxy(blosc2.Operand):
         """
         if not callable(getattr(self.src, "aget_chunk", None)):
             raise NotImplementedError("afetch is only available if the source has an aget_chunk method")
+
         if item == ():
-            # Full realization
-            for info in self._schunk_cache.iterchunks_info():
-                if info.special != blosc2.SpecialValue.NOT_SPECIAL:
-                    chunk = await self.src.aget_chunk(info.nchunk)
-                    self._schunk_cache.update_chunk(info.nchunk, chunk)
+            wanted = None  # every missing chunk
         else:
-            # Get only a slice
-            nchunks = blosc2.get_slice_nchunks(self._cache, item)
-            for info in self._schunk_cache.iterchunks_info():
-                if info.nchunk in nchunks and info.special != blosc2.SpecialValue.NOT_SPECIAL:
-                    chunk = await self.src.aget_chunk(info.nchunk)
-                    self._schunk_cache.update_chunk(info.nchunk, chunk)
+            wanted = set(blosc2.get_slice_nchunks(self._cache, item))
+        to_fetch = [
+            info.nchunk
+            for info in self._schunk_cache.iterchunks_info()
+            if info.special != blosc2.SpecialValue.NOT_SPECIAL and (wanted is None or info.nchunk in wanted)
+        ]
+
+        if max_concurrency is None:
+            max_concurrency = REMOTE_MAX_CONCURRENCY if isinstance(self.src, blosc2.C2Array) else 1
+        semaphore = asyncio.Semaphore(max(1, max_concurrency))
+
+        async def _fetch_one(nchunk):
+            async with semaphore:
+                chunk = await self.src.aget_chunk(nchunk)
+            # Runs to completion between awaits, so concurrent writers can't interleave.
+            self._schunk_cache.update_chunk(nchunk, chunk)
+
+        if to_fetch:
+            await asyncio.gather(*(_fetch_one(nchunk) for nchunk in to_fetch))
 
         return self._cache
 

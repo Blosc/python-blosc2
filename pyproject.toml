@@ -51,6 +51,10 @@ documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [project.optional-dependencies]
 parquet = ["pyarrow"]
+# C2Array.aget_chunk / Proxy.afetch need an async HTTP client; most users only
+# ever use the sync path (requests, already a hard dependency).
+# Install with `pip install "blosc2[remote]"`.
+remote = ["httpx[http2]"]
 # The b2view terminal viewer (the `b2view` script) is opt-in: most users want
 # blosc2 only as a compression library, and the TUI stack has no use under
 # wasm32 (no TTY).  Install with `pip install "blosc2[tui]"`.  This also pulls
