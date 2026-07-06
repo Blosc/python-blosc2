@@ -1137,9 +1137,9 @@ def print_versions():
         import numexpr
 
         print(f"numexpr version: {numexpr.__version__}")
-    import requests
+    import httpx
 
-    print(f"requests version: {requests.__version__}")
+    print(f"httpx version: {httpx.__version__}")
     print(f"Python version: {sys.version}")
     (sysname, _nodename, release, version, machine, processor) = platform.uname()
     print(f"Platform: {sysname}-{release}-{machine} ({version})")

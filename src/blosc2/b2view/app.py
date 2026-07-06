@@ -1766,17 +1766,17 @@ def _http_download(url: str, dest: str, on_progress) -> None:
     interrupted download never leaves a corrupt file at the final name.  *total*
     is ``None`` when the server sends no ``Content-Length``.
     """
-    import requests
+    import httpx
 
     tmp = dest + ".part"
-    with requests.get(url, stream=True, timeout=30) as resp:
+    with httpx.stream("GET", url, timeout=30) as resp:
         resp.raise_for_status()
         length = resp.headers.get("Content-Length")
         total = int(length) if length is not None else None
         downloaded = 0
         on_progress(0, total)
         with open(tmp, "wb") as fh:
-            for chunk in resp.iter_content(chunk_size=1 << 16):
+            for chunk in resp.iter_bytes(chunk_size=1 << 16):
                 if not chunk:
                     continue
                 fh.write(chunk)
@@ -1792,12 +1792,12 @@ def _fetch_remote_size(info_url: str) -> int | None:
     metadata call is what makes the progress bar determinate.  Any failure
     (network, missing key) just yields None -> an indeterminate bar.
     """
-    import requests
+    import httpx
 
     try:
-        with requests.get(info_url, timeout=15) as resp:
-            resp.raise_for_status()
-            return int(resp.json()["cbytes"])
+        resp = httpx.get(info_url, timeout=15)
+        resp.raise_for_status()
+        return int(resp.json()["cbytes"])
     except Exception:
         return None
 

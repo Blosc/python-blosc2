@@ -9,8 +9,8 @@ import gc
 import os
 import sys
 
+import httpx
 import pytest
-import requests
 
 import blosc2
 
@@ -81,7 +81,7 @@ def pytest_runtest_call(item):
         return
     try:
         item.runtest()
-    except requests.exceptions.RequestException as exc:
+    except httpx.HTTPError as exc:
         pytest.skip(f"Skipping network test due to request failure: {exc}")
 
 

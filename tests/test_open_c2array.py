@@ -8,9 +8,9 @@
 import pathlib
 import random
 
+import httpx
 import numpy as np
 import pytest
-import requests
 
 import blosc2
 
@@ -79,7 +79,7 @@ def c2sub_user():
     password = hex(rand32())
 
     for _ in range(3):
-        resp = requests.post(
+        resp = httpx.post(
             f"{urlbase}auth/register", json={"email": username, "password": password}, timeout=15
         )
         if resp.status_code != 400:

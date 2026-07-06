@@ -30,13 +30,9 @@ TIMEOUT = 15
 """Default timeout for HTTP requests."""
 
 
-def _requests():
-    import requests
-
-    return requests
-
-
 def _httpx():
+    # Lazy import: c2array.py is imported unconditionally by blosc2/__init__.py,
+    # so this keeps httpx's import cost off users who never touch C2Array/Proxy.
     import httpx
 
     return httpx
@@ -125,7 +121,7 @@ def _auth_headers(auth_token, headers=None):
 
 def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
     headers = _auth_headers(auth_token, headers)
-    response = _requests().get(url, params=params, headers=headers, timeout=timeout)
+    response = _httpx().get(url, params=params, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response
 
@@ -133,7 +129,7 @@ def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
 def _xpost(url, json=None, auth_token=None, timeout=TIMEOUT):
     auth_token = auth_token or _subscriber_data["auth_token"]
     headers = {"Cookie": auth_token} if auth_token else None
-    response = _requests().post(url, json=json, headers=headers, timeout=timeout)
+    response = _httpx().post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
@@ -148,7 +144,7 @@ def _sub_url(urlbase, path):
 def login(username, password, urlbase):
     url = _sub_url(urlbase, "auth/jwt/login")
     creds = {"username": username, "password": password}
-    resp = _requests().post(url, data=creds, timeout=TIMEOUT)
+    resp = _httpx().post(url, data=creds, timeout=TIMEOUT)
     resp.raise_for_status()
     return "=".join(list(resp.cookies.items())[0])
 
@@ -251,7 +247,10 @@ class C2Array(blosc2.Operand):
         # Try to 'open' the remote path
         try:
             self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
-        except _requests().HTTPError as err:
+        except _httpx().HTTPStatusError as err:
+            # HTTPStatusError only (not the broader HTTPError, which also covers
+            # connection-level failures): a 404 means "not found", a connection
+            # failure should propagate as-is rather than be reported as missing.
             raise FileNotFoundError(f"Remote path not found: {path}.\nError was: {err}") from err
         cparams = self.meta["schunk"]["cparams"]
         # Remove "filters, meta" from cparams; this is an artifact from the server
