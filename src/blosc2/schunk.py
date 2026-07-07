@@ -13,6 +13,7 @@ import weakref
 import zipfile
 from collections import namedtuple
 from collections.abc import Iterator, Mapping, MutableMapping
+from contextlib import contextmanager
 from dataclasses import asdict, replace
 from typing import Any, NamedTuple
 
@@ -446,6 +447,33 @@ class SChunk(blosc2_ext.SChunk):
             value = replace(value, nthreads=1)
         super().update_dparams(value)
         self._dparams = super().get_dparams()
+
+    @contextmanager
+    def holding_lock(self) -> Iterator[SChunk]:
+        """Hold the exclusive frame lock across several operations.
+
+        When file locking is enabled on this handle (the `locking` storage
+        parameter or the ``BLOSC_LOCKING`` environment variable), every
+        operation locks and unlocks the on-disk container individually, so a
+        sequence of operations is not atomic as a whole.  Operations performed
+        inside this context manager nest on the already-held lock, making the
+        whole block atomic against other handles and processes.
+
+        Everything inside the block is serialized exclusively — including
+        plain reads through other locked handles — so keep the block short.
+        When locking is not enabled on this handle, this is a no-op.
+
+        Examples
+        --------
+        >>> with schunk.holding_lock():  # doctest: +SKIP
+        ...     schunk.update_data(0, data0, copy=True)
+        ...     schunk.update_data(1, data1, copy=True)
+        """
+        super().lock()
+        try:
+            yield self
+        finally:
+            super().unlock()
 
     @property
     def meta(self) -> Meta:

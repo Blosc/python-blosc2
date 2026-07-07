@@ -8,6 +8,7 @@
 # Tests for the opt-in cross-process file locking for disk-based containers
 # (the `locking` storage parameter, backed by a `.b2lock` sidecar file).
 
+import os
 import subprocess
 import sys
 import time
@@ -178,3 +179,196 @@ def test_cross_process_hammer(tmp_path):
     assert writer.returncode == 0, f"writer process failed with exit code {writer.returncode}"
     assert nreads > 0
     blosc2.remove_urlpath(str(urlpath))
+
+
+# ---------------------------------------------------------------------------
+# EmbedStore under locking: transactional writes + key-map re-sync
+# ---------------------------------------------------------------------------
+
+
+def open_estore(path, mode):
+    storage = blosc2.Storage(contiguous=True, urlpath=str(path), mode=mode, locking=True)
+    return blosc2.EmbedStore(urlpath=str(path), mode=mode, storage=storage)
+
+
+def test_embed_store_two_handles(tmp_path):
+    # A second locked handle follows mutations made through the first one
+    path = tmp_path / "shared.b2e"
+    h1 = open_estore(path, "w")
+    h1["/one"] = np.arange(10)
+
+    h2 = open_estore(path, "a")
+    assert set(h2.keys()) == {"/one"}
+
+    h1["/two"] = np.arange(20)
+    assert set(h2.keys()) == {"/one", "/two"}
+    assert np.array_equal(h2["/two"][:], np.arange(20))
+
+    del h1["/one"]
+    assert "/one" not in h2
+    # ... and the other direction
+    h2["/three"] = np.arange(30)
+    assert np.array_equal(h1["/three"][:], np.arange(30))
+
+
+def test_embed_store_env_locking(tmp_path):
+    # BLOSC_LOCKING makes a plain EmbedStore shared, with no locking parameter
+    path = str(tmp_path / "env.b2e")
+    script = """
+import sys
+import blosc2
+import numpy as np
+
+estore = blosc2.EmbedStore(urlpath=sys.argv[1], mode="w")
+estore["/a"] = np.arange(5)
+assert estore._shared, "BLOSC_LOCKING did not mark the store as shared"
+"""
+    env = {**os.environ, "BLOSC_LOCKING": "1"}
+    subprocess.run([sys.executable, "-c", script, path], check=True, env=env)
+    # Sidecar next to the container proves the C level locked too
+    assert os.path.exists(path + ".b2lock")
+
+
+ESTORE_WRITER = """
+import sys
+import numpy as np
+import blosc2
+
+path, tag, nkeys = sys.argv[1], sys.argv[2], int(sys.argv[3])
+storage = blosc2.Storage(contiguous=True, urlpath=path, mode="a", locking=True)
+estore = blosc2.EmbedStore(urlpath=path, mode="a", storage=storage)
+for i in range(nkeys):
+    estore[f"/{tag}/{i}"] = np.arange(i, i + 10)
+"""
+
+
+def test_embed_store_cross_process_writers(tmp_path):
+    # Two writer processes adding disjoint keys concurrently, while this
+    # process keeps reading: no lost updates, every value must round-trip
+    path = tmp_path / "hammer.b2e"
+    estore = open_estore(path, "w")
+    estore["/seed"] = np.arange(10)
+
+    nkeys = 20
+    tags = ("w1", "w2")
+    writers = [
+        subprocess.Popen([sys.executable, "-c", ESTORE_WRITER, str(path), tag, str(nkeys)]) for tag in tags
+    ]
+    try:
+        nreads = 0
+        deadline = time.monotonic() + 120
+        while any(w.poll() is None for w in writers):
+            assert time.monotonic() < deadline, "writer processes did not finish in time"
+            keys = list(estore)
+            assert "/seed" in keys
+            for key in keys[-3:]:
+                node = estore.get(key)
+                if node is not None:  # a concurrent delete cannot happen here
+                    assert len(node[:]) == 10
+                    nreads += 1
+    finally:
+        for w in writers:
+            if w.poll() is None:
+                w.kill()
+            w.wait()
+
+    assert all(w.returncode == 0 for w in writers), "a writer process failed"
+    expected = {"/seed"} | {f"/{tag}/{i}" for tag in tags for i in range(nkeys)}
+    assert set(estore.keys()) == expected
+    for tag in tags:
+        for i in range(nkeys):
+            assert np.array_equal(estore[f"/{tag}/{i}"][:], np.arange(i, i + 10))
+    assert nreads > 0
+
+
+# ---------------------------------------------------------------------------
+# DictStore (.b2d) under locking: store-wide mutations + map re-sync
+# ---------------------------------------------------------------------------
+
+
+def test_dict_store_two_handles(tmp_path):
+    # A second locked handle follows keys added/removed through the first one,
+    # both for external leaves (threshold=0 default) and embedded values
+    path = str(tmp_path / "shared.b2d")
+    h1 = blosc2.DictStore(path, mode="w", locking=True)
+    h1["/ext"] = np.arange(100)  # external leaf (above default threshold)
+
+    h2 = blosc2.DictStore(path, mode="a", locking=True)
+    assert set(h2.keys()) == {"/ext"}
+
+    h1["/dir/other"] = np.arange(50)
+    assert "/dir/other" in h2
+    assert np.array_equal(h2["/dir/other"][:], np.arange(50))
+
+    del h1["/ext"]
+    assert set(h2.keys()) == {"/dir/other"}
+    # ... and the other direction
+    h2["/back"] = np.arange(7)
+    assert np.array_equal(h1["/back"][:], np.arange(7))
+    h1._closed = h2._closed = True  # skip pack-on-close for these handles
+
+
+def test_dict_store_locking_validation(tmp_path):
+    with pytest.raises(ValueError, match="zip"):
+        blosc2.DictStore(str(tmp_path / "s.b2z"), mode="w", locking=True)
+    with pytest.raises(ValueError, match="mmap_mode"):
+        blosc2.DictStore(str(tmp_path / "s.b2d"), mode="r", mmap_mode="r", locking=True)
+
+
+DSTORE_WRITER = """
+import sys
+import numpy as np
+import blosc2
+
+path, tag, nkeys = sys.argv[1], sys.argv[2], int(sys.argv[3])
+# threshold=500: the 800-byte arrays become external leaves, the 40-byte ones embedded
+dstore = blosc2.DictStore(path, mode="a", threshold=500, locking=True)
+for i in range(nkeys):
+    dstore[f"/{tag}/ext{i}"] = np.arange(i, i + 100)
+    dstore[f"/{tag}/emb{i}"] = np.arange(5)
+dstore._closed = True
+"""
+
+
+def test_dict_store_cross_process_writers(tmp_path):
+    # Two writer processes adding disjoint keys concurrently, while this
+    # process keeps reading: no lost updates, and directory + maps agree
+    path = str(tmp_path / "hammer.b2d")
+    dstore = blosc2.DictStore(path, mode="w", threshold=500, locking=True)
+    dstore["/seed"] = np.arange(100)
+
+    nkeys = 8
+    tags = ("w1", "w2")
+    writers = [
+        subprocess.Popen([sys.executable, "-c", DSTORE_WRITER, path, tag, str(nkeys)]) for tag in tags
+    ]
+    try:
+        deadline = time.monotonic() + 120
+        nreads = 0
+        while any(w.poll() is None for w in writers):
+            assert time.monotonic() < deadline, "writer processes did not finish in time"
+            keys = list(dstore.keys())
+            assert "/seed" in keys
+            for key in keys:
+                if key.endswith("ext3"):
+                    node = dstore.get(key)
+                    if node is not None:
+                        assert len(node[:]) == 100
+                        nreads += 1
+    finally:
+        for w in writers:
+            if w.poll() is None:
+                w.kill()
+            w.wait()
+
+    assert all(w.returncode == 0 for w in writers), "a writer process failed"
+    expected = {"/seed"}
+    for tag in tags:
+        expected |= {f"/{tag}/ext{i}" for i in range(nkeys)}
+        expected |= {f"/{tag}/emb{i}" for i in range(nkeys)}
+    assert set(dstore.keys()) == expected
+    for tag in tags:
+        for i in range(nkeys):
+            assert np.array_equal(dstore[f"/{tag}/ext{i}"][:], np.arange(i, i + 100))
+            assert np.array_equal(dstore[f"/{tag}/emb{i}"][:], np.arange(5))
+    dstore._closed = True

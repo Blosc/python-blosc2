@@ -8,12 +8,15 @@
 from __future__ import annotations
 
 import copy
+import os
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 import blosc2
 from blosc2.c2array import C2Array
+from blosc2.msgpack_utils import msgpack_unpackb
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, KeysView
@@ -58,13 +61,20 @@ class EmbedStore:
 
     Notes
     -----
-    EmbedStore is single-process, single-writer. The frame locking
-    (``locking=True`` in :class:`blosc2.Storage`, or the ``BLOSC_LOCKING``
-    environment variable) protects the individual operations on the backing
-    container, but not the store structure: the key map is cached in Python at
-    open time, so concurrent writers from several processes can corrupt each
-    other's entries, and a reader does not see keys added by another process
-    until it reopens the store.
+    Without file locking, EmbedStore is single-process, single-writer: the key
+    map is cached in Python, so mutations made through another handle are not
+    seen until the store is reopened, and concurrent writers can corrupt each
+    other's entries.
+
+    With file locking enabled on *every* handle (``locking=True`` in
+    :class:`blosc2.Storage`, or the ``BLOSC_LOCKING`` environment variable),
+    an on-disk EmbedStore can be shared across processes: mutations are
+    atomic (the whole data-write + map-update runs under an exclusive lock)
+    and every access re-syncs the key map, so readers follow keys added or
+    removed by other processes.  A crash between the data write and the map
+    flush can leave unreachable bytes in the container (harmless; reclaimed
+    by rewriting the store).  Not supported together with ``mmap_mode``, nor
+    on network filesystems (NFS).
 
     Examples
     --------
@@ -122,6 +132,7 @@ class EmbedStore:
                 initial_mapping_size=getattr(_from_schunk, "initial_mapping_size", None),
             )
             self.storage.meta = _from_schunk.meta
+            self._set_shared(getattr(_from_schunk, "locking", False))
             self._load_metadata()
             return
 
@@ -140,8 +151,11 @@ class EmbedStore:
             self.storage = storage
 
         if mode in ("r", "a") and urlpath:
-            self._store = blosc2.blosc2_ext.open(urlpath, mode=mode, offset=0, mmap_mode=mmap_mode)
+            self._store = blosc2.blosc2_ext.open(
+                urlpath, mode=mode, offset=0, mmap_mode=mmap_mode, locking=self.storage.locking
+            )
             self.storage.meta = self._store.meta
+            self._set_shared(self.storage.locking)
             self._load_metadata()
             return
 
@@ -167,6 +181,61 @@ class EmbedStore:
             )
         self._embed_map: dict = {}
         self._current_offset = 0
+        self._set_shared(self.storage.locking)
+        # Flush the (empty) map right away so that another handle opened on
+        # this store always finds the metadata to re-sync from
+        self._save_metadata()
+
+    @property
+    def _backing_schunk(self) -> SChunk:
+        """The SChunk under the store (the NDArray backing adds one indirection)."""
+        return self._store if self._schunk_store else self._store.schunk
+
+    def _set_shared(self, locking: bool) -> None:
+        """Decide whether this handle may share the container with other processes.
+
+        True when it is on-disk and file locking is enabled — explicitly or
+        through the BLOSC_LOCKING environment variable (which the C library
+        honors for any on-disk container opened with the default I/O).
+        """
+        env = os.environ.get("BLOSC_LOCKING", "")
+        env_locking = env not in ("", "0") and self.mmap_mode is None
+        self._shared = (bool(locking) or env_locking) and self.urlpath is not None
+
+    def _sync_metadata(self) -> None:
+        """Reload the key map if another handle changed the store.
+
+        The raw vlmeta read polls the on-disk frame and re-syncs the C-level
+        cached state (including ``change_tick``); the msgpack decode of the map
+        is skipped when nothing changed.  A no-op for non-shared stores.
+        """
+        if not self._shared:
+            return
+        sc = self._backing_schunk
+        try:
+            raw = sc.vlmeta.get_vlmeta("estore_metadata")
+        except KeyError:
+            # Nothing flushed yet (freshly created store)
+            return
+        tick = sc.change_tick
+        if tick == self._meta_tick:
+            return
+        metadata = msgpack_unpackb(raw)
+        self._embed_map = metadata["embed_map"]
+        self._current_offset = metadata["current_offset"]
+        self._meta_tick = tick
+
+    @contextmanager
+    def _write_bracket(self):
+        """Make a whole mutation atomic against other processes.
+
+        Holds the exclusive frame lock (a no-op without locking) and re-syncs
+        the key map before the mutation, so concurrent writers cannot start
+        from the same offset or clobber each other's map entries.
+        """
+        with self._backing_schunk.holding_lock():
+            self._sync_metadata()
+            yield
 
     def _validate_key(self, key: str) -> None:
         """Validate node key."""
@@ -197,27 +266,29 @@ class EmbedStore:
         """Add a node to the embed store."""
         if self.mode == "r":
             raise ValueError("Cannot set items in read-only mode.")
-        self._validate_key(key)
-        if isinstance(value, C2Array):
-            self._embed_map[key] = {"urlbase": value.urlbase, "path": value.path}
-        else:
-            if isinstance(value, np.ndarray):
-                value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
-            serialized_data = value.to_cframe()
-            data_len = len(serialized_data)
-            if not self._schunk_store:
-                self._ensure_capacity(data_len)
-            offset = self._current_offset
-            if self._schunk_store:
-                self._store[offset : offset + data_len] = serialized_data
+        with self._write_bracket():
+            self._validate_key(key)
+            if isinstance(value, C2Array):
+                self._embed_map[key] = {"urlbase": value.urlbase, "path": value.path}
             else:
-                self._store[offset : offset + data_len] = np.frombuffer(serialized_data, dtype=np.uint8)
-            self._current_offset += data_len
-            self._embed_map[key] = {"offset": offset, "length": data_len}
-        self._save_metadata()
+                if isinstance(value, np.ndarray):
+                    value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
+                serialized_data = value.to_cframe()
+                data_len = len(serialized_data)
+                if not self._schunk_store:
+                    self._ensure_capacity(data_len)
+                offset = self._current_offset
+                if self._schunk_store:
+                    self._store[offset : offset + data_len] = serialized_data
+                else:
+                    self._store[offset : offset + data_len] = np.frombuffer(serialized_data, dtype=np.uint8)
+                self._current_offset += data_len
+                self._embed_map[key] = {"offset": offset, "length": data_len}
+            self._save_metadata()
 
     def __getitem__(self, key: str) -> blosc2.NDArray | SChunk | blosc2.ObjectArray | blosc2.BatchArray:
         """Retrieve a node from the embed store."""
+        self._sync_metadata()
         if key not in self._embed_map:
             raise KeyError(f"Key '{key}' not found in the embed store.")
         node_info = self._embed_map[key]
@@ -236,33 +307,41 @@ class EmbedStore:
         self, key: str, default: Any = None
     ) -> blosc2.NDArray | SChunk | blosc2.ObjectArray | blosc2.BatchArray | Any:
         """Retrieve a node, or default if not found."""
-        return self[key] if key in self._embed_map else default
+        return self.get(key, default)
 
     def __delitem__(self, key: str) -> None:
         """Remove a node from the embed store."""
-        if key not in self._embed_map:
-            raise KeyError(f"Key '{key}' not found in the embed store.")
-        del self._embed_map[key]
-        self._save_metadata()
+        if self.mode == "r":
+            raise ValueError("Cannot delete items in read-only mode.")
+        with self._write_bracket():
+            if key not in self._embed_map:
+                raise KeyError(f"Key '{key}' not found in the embed store.")
+            del self._embed_map[key]
+            self._save_metadata()
 
     def __contains__(self, key: str) -> bool:
         """Check if a key exists."""
+        self._sync_metadata()
         return key in self._embed_map
 
     def __len__(self) -> int:
         """Return number of nodes."""
+        self._sync_metadata()
         return len(self._embed_map)
 
     def __iter__(self) -> Iterator[str]:
         """Iterate over keys."""
+        self._sync_metadata()
         return iter(self._embed_map)
 
     def keys(self) -> KeysView[str]:
         """Return all keys."""
+        self._sync_metadata()
         return self._embed_map.keys()
 
     def values(self) -> Iterator[blosc2.NDArray | SChunk | blosc2.ObjectArray | blosc2.BatchArray]:
         """Iterate over all values."""
+        self._sync_metadata()
         for key in self._embed_map:
             yield self[key]
 
@@ -270,6 +349,7 @@ class EmbedStore:
         self,
     ) -> Iterator[tuple[str, blosc2.NDArray | SChunk | blosc2.ObjectArray | blosc2.BatchArray]]:
         """Iterate over (key, value) pairs."""
+        self._sync_metadata()
         for key in self._embed_map:
             yield key, self[key]
 
@@ -277,6 +357,7 @@ class EmbedStore:
         """Save embed store map to vlmeta."""
         metadata = {"embed_map": self._embed_map, "current_offset": self._current_offset}
         self._store.vlmeta["estore_metadata"] = metadata
+        self._meta_tick = self._backing_schunk.change_tick
 
     def _load_metadata(self) -> None:
         """Load embed store map from vlmeta."""
@@ -287,6 +368,7 @@ class EmbedStore:
         else:
             self._embed_map = {}
             self._current_offset = 0
+        self._meta_tick = self._backing_schunk.change_tick
 
     def to_cframe(self) -> bytes:
         """Serialize embed store to CFrame format."""

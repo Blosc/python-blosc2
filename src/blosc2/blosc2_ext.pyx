@@ -469,6 +469,7 @@ cdef extern from "blosc2.h":
         void *tuner_params
         int8_t ndim
         int64_t *blockshape
+        int64_t change_tick
 
     blosc2_schunk *blosc2_schunk_new(blosc2_storage *storage)
     blosc2_schunk *blosc2_schunk_copy(blosc2_schunk *schunk, blosc2_storage *storage)
@@ -478,6 +479,8 @@ cdef extern from "blosc2.h":
 
     int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, c_bool* needs_free) nogil
     void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, c_bool avoid_cframe_free)
+    int blosc2_schunk_lock(blosc2_schunk *schunk) nogil
+    int blosc2_schunk_unlock(blosc2_schunk *schunk) nogil
     int64_t blosc2_schunk_to_file(blosc2_schunk* schunk, const char* urlpath)
     int64_t blosc2_schunk_free(blosc2_schunk *schunk) nogil
     int64_t blosc2_schunk_append_chunk(blosc2_schunk *schunk, uint8_t *chunk, c_bool copy)
@@ -2210,6 +2213,30 @@ cdef class SChunk:
 
     def _avoid_cframe_free(self, avoid_cframe_free):
         blosc2_schunk_avoid_cframe_free(self.schunk, avoid_cframe_free)
+
+    def lock(self):
+        """Take the exclusive frame lock and hold it across several operations.
+
+        A no-op when file locking is not enabled on this handle.  Use the
+        `holding_lock()` context manager instead of calling this directly.
+        """
+        cdef int rc
+        with nogil:  # may block waiting for other processes
+            rc = blosc2_schunk_lock(self.schunk)
+        if rc < 0:
+            raise RuntimeError("Could not lock the super-chunk frame")
+
+    def unlock(self):
+        """Release the frame lock taken with `lock()`."""
+        cdef int rc = blosc2_schunk_unlock(self.schunk)
+        if rc < 0:
+            raise RuntimeError("Could not unlock the super-chunk frame")
+
+    @property
+    def change_tick(self):
+        """Counter bumped whenever the (vl)metalayers change, locally or via a
+        re-sync after a mutation made through another handle."""
+        return self.schunk.change_tick
 
     def _massage_key(self, start, stop, nitems):
         if stop is None:

@@ -16,7 +16,7 @@ project(python-blosc2)
 
 set(BLOSC2_MIN_VERSION 3.0.0)
 # set(BLOSC2_BUNDLED_VERSION v3.1.5)
-set(BLOSC2_BUNDLED_VERSION 184f4dec944a7cfcb25106bb3b3535171a6c72f2)  # SWMR support
+set(BLOSC2_BUNDLED_VERSION fab03bda87a76e0054bcace53238b200fb42e4ff)  # SWMR support
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
