@@ -787,6 +787,7 @@ print(nreads)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="an in-use target cannot be replaced on Windows")
+@pytest.mark.skipif(blosc2.IS_WASM, reason="wasm32 does not support subprocesses")
 def test_to_b2z_atomic_replace(tmp_path):
     """Rewriting a .b2z with to_b2z() must never expose a torn file to readers.
 
