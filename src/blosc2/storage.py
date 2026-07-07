@@ -208,6 +208,20 @@ class Storage:
             When the schunk is destroyed, the file size will be truncated to the
             actual size of the schunk.
 
+    locking: bool = False
+        Serialize accesses to the on-disk container against other handles and
+        other processes, via a small sidecar lock file next to it (`.b2lock`).
+        Readers share the lock; mutating operations take it exclusively, and a
+        handle whose view became stale re-syncs automatically. Enable this when
+        several processes operate on the same container (e.g. one evicting
+        chunks while others read).
+
+        .. note::
+            The locking is advisory: it only protects the container if *every*
+            handle on it enables it too. It is not supported together with
+            `mmap_mode`, for in-memory containers, nor on network filesystems
+            (like NFS).
+
     meta: dict or None
         A dictionary with different metalayers.  Each entry represents a metalayer:
 
@@ -222,6 +236,7 @@ class Storage:
     mode: str = "a"
     mmap_mode: str = None
     initial_mapping_size: int = None
+    locking: bool = False
     meta: dict = None
 
     def __post_init__(self):

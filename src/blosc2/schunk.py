@@ -87,6 +87,14 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     def initial_mapping_size(self, value):
         self._owner.initial_mapping_size = value
 
+    @property
+    def locking(self):
+        return self._owner.locking
+
+    @locking.setter
+    def locking(self, value):
+        self._owner.locking = value
+
     def __setitem__(self, name, content):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         # If name is a slice, assume that content is a dictionary and copy all the items
@@ -326,6 +334,7 @@ class SChunk(blosc2_ext.SChunk):
             "mode",
             "mmap_mode",
             "initial_mapping_size",
+            "locking",
             "_is_view",
             "storage",
         ]
@@ -1907,6 +1916,12 @@ def open(
             to create new files.
         initial_mapping_size: int, optional
             The initial size of the memory mapping. For more info, see :class:`blosc2.Storage`.
+        locking: bool, optional
+            Serialize accesses against other handles and other processes via a
+            sidecar lock file. Enable it when several processes operate on the
+            same container. The locking is advisory (every handle on the
+            container must enable it) and cannot be combined with `mmap_mode`.
+            For more info, see :class:`blosc2.Storage`.
         cparams: dict
             A dictionary with the compression parameters, which are the same that can be
             used in the :func:`~blosc2.compress2` function.

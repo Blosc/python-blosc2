@@ -437,6 +437,9 @@ cdef extern from "blosc2.h":
 
     cdef const blosc2_stdio_mmap BLOSC2_STDIO_MMAP_DEFAULTS
 
+    ctypedef struct blosc2_stdio_params:
+        c_bool locking
+
     ctypedef struct blosc2_schunk:
         uint8_t version
         uint8_t compcode
@@ -1461,6 +1464,18 @@ def vldecompress_block(src, int32_t nblock, **kwargs):
         blosc2_free_ctx(dctx)
 
 
+# Immortal io object for the opt-in frame locking (default filesystem backend
+# with blosc2_stdio_params.locking set).  The C side only reads the flag, so a
+# single, module-lifetime instance can serve every locked schunk (and trivially
+# satisfies the "params must outlive the schunk" contract).
+cdef blosc2_stdio_params _locking_params
+_locking_params.locking = True
+cdef blosc2_io _locking_io
+_locking_io.id = BLOSC2_IO_FILESYSTEM
+_locking_io.name = "filesystem"
+_locking_io.params = &_locking_params
+
+
 cdef create_storage(blosc2_storage *storage, kwargs):
     contiguous = kwargs.get('contiguous', blosc2.storage_dflts['contiguous'])
     storage.contiguous = contiguous
@@ -1477,11 +1492,14 @@ cdef create_storage(blosc2_storage *storage, kwargs):
     cdef blosc2_stdio_mmap* mmap_file
     mmap_mode = kwargs.get("mmap_mode")
     initial_mapping_size = kwargs.get("initial_mapping_size")
+    locking = kwargs.get("locking")
     if mmap_mode is not None:
         if urlpath is None:
             raise ValueError("urlpath must be set when using mmap_mode")
         if not contiguous:
             raise ValueError("Only contiguous storage is supported for memory-mapped files")
+        if locking:
+            raise ValueError("locking is not supported together with mmap_mode")
 
         # sizeof(BLOSC2_STDIO_MMAP_DEFAULTS) yields the size of the full struct as defined in the C header
         mmap_file = <blosc2_stdio_mmap *>malloc(sizeof(BLOSC2_STDIO_MMAP_DEFAULTS))
@@ -1498,6 +1516,10 @@ cdef create_storage(blosc2_storage *storage, kwargs):
         io.id = BLOSC2_IO_FILESYSTEM_MMAP
         io.params = mmap_file
         storage.io = io
+    elif locking:
+        if urlpath is None:
+            raise ValueError("urlpath must be set when using locking")
+        storage.io = &_locking_io
     else:
         storage.io = NULL
 
@@ -1527,6 +1549,9 @@ cdef class SChunk:
         self.mode = blosc2.Storage().mode if kwargs.get("mode", None) is None else kwargs.get("mode")
         self.mmap_mode = kwargs.get("mmap_mode")
         self.initial_mapping_size = kwargs.get("initial_mapping_size")
+        self.locking = bool(kwargs.get("locking", False))
+        if self.locking and self.mmap_mode is not None:
+            raise ValueError("locking is not supported together with mmap_mode")
         if self.mmap_mode is not None:
             self.mode = mode_from_mmap_mode(self.mmap_mode)
         if self.initial_mapping_size is not None:
@@ -1571,7 +1596,8 @@ cdef class SChunk:
 
         if self.mode == "r":
             offset = 0
-            if self.mmap_mode is not None:
+            if storage.io != NULL:
+                # mmap or locking: open through the user-defined io
                 self.schunk = blosc2_schunk_open_offset_udio(storage.urlpath, offset, storage.io)
             else:
                 self.schunk = blosc2_schunk_open_offset(storage.urlpath, offset)
@@ -3103,6 +3129,9 @@ def open(urlpath, mode, offset, **kwargs):
     cdef blosc2_io* io
 
     mmap_mode = kwargs.get("mmap_mode")
+    locking = kwargs.get("locking")
+    if locking and mmap_mode is not None:
+        raise ValueError("locking is not supported together with mmap_mode")
     if mmap_mode is not None:
         if mmap_mode == "w+":
             raise ValueError("w+ mmap_mode cannot be used to open an existing file")
@@ -3118,7 +3147,10 @@ def open(urlpath, mode, offset, **kwargs):
             raise ValueError("initial_mapping_size can only be used with writing modes (r+, c)")
 
     if mmap_mode is None:
-        schunk = blosc2_schunk_open_offset(urlpath_, offset)
+        if locking:
+            schunk = blosc2_schunk_open_offset_udio(urlpath_, offset, &_locking_io)
+        else:
+            schunk = blosc2_schunk_open_offset(urlpath_, offset)
     else:
         mmap_file = <blosc2_stdio_mmap *>malloc(sizeof(BLOSC2_STDIO_MMAP_DEFAULTS))
         memcpy(mmap_file, &BLOSC2_STDIO_MMAP_DEFAULTS, sizeof(BLOSC2_STDIO_MMAP_DEFAULTS))
