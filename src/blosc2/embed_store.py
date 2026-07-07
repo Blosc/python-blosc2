@@ -307,7 +307,10 @@ class EmbedStore:
         self, key: str, default: Any = None
     ) -> blosc2.NDArray | SChunk | blosc2.ObjectArray | blosc2.BatchArray | Any:
         """Retrieve a node, or default if not found."""
-        return self.get(key, default)
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
     def __delitem__(self, key: str) -> None:
         """Remove a node from the embed store."""
