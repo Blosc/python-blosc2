@@ -7,6 +7,9 @@
 
 import os
 import shutil
+import subprocess
+import sys
+import time
 import zipfile
 
 import numpy as np
@@ -765,3 +768,56 @@ def test_b2z_double_open_append_no_corruption(tmp_path):
     # Second open — must succeed and see correct data
     with DictStore(path, mode="a") as ds2:
         assert np.array_equal(ds2["/arr"][:], np.arange(20))
+
+
+B2Z_READER_SCRIPT = """
+import sys
+import time
+import numpy as np
+from blosc2.dict_store import DictStore
+
+path, deadline = sys.argv[1], float(sys.argv[2])
+nreads = 0
+while time.time() < deadline:
+    with DictStore(path, mode="r") as dstore:
+        assert np.array_equal(dstore["/node1"][:], np.arange(1000))
+    nreads += 1
+print(nreads)
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="an in-use target cannot be replaced on Windows")
+def test_to_b2z_atomic_replace(tmp_path):
+    """Rewriting a .b2z with to_b2z() must never expose a torn file to readers.
+
+    A subprocess keeps re-opening and reading the target while the parent
+    rewrites it in a loop; zero read failures allowed (the pre-atomic-replace
+    behavior wrote the zip in place, so readers saw truncated archives).
+    """
+    b2d_path = str(tmp_path / "src.b2d")
+    b2z_path = str(tmp_path / "shared.b2z")
+
+    with DictStore(b2d_path, mode="w") as dstore:
+        dstore["/node1"] = np.arange(1000)
+        dstore.to_b2z(filename=b2z_path)
+
+    deadline = time.time() + 2.5
+    with DictStore(b2d_path, mode="r") as dstore:
+        reader = subprocess.Popen(
+            [sys.executable, "-c", B2Z_READER_SCRIPT, b2z_path, str(deadline)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        nwrites = 0
+        while time.time() < deadline:
+            dstore.to_b2z(filename=b2z_path, overwrite=True)
+            nwrites += 1
+        out, err = reader.communicate(timeout=60)
+
+    assert reader.returncode == 0, f"reader failed after {nwrites} rewrites:\n{err}"
+    assert int(out) > 0, "the reader never completed a read"
+    assert nwrites > 0
+    # No temp leftovers next to the target
+    leftovers = [f for f in os.listdir(tmp_path) if f.endswith(".b2z.tmp")]
+    assert leftovers == []

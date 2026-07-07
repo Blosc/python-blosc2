@@ -56,6 +56,16 @@ class EmbedStore:
     chunksize : int, optional
         Size of chunks for the backing storage. Default is 1 MiB.
 
+    Notes
+    -----
+    EmbedStore is single-process, single-writer. The frame locking
+    (``locking=True`` in :class:`blosc2.Storage`, or the ``BLOSC_LOCKING``
+    environment variable) protects the individual operations on the backing
+    container, but not the store structure: the key map is cached in Python at
+    open time, so concurrent writers from several processes can corrupt each
+    other's entries, and a reader does not see keys added by another process
+    until it reopens the store.
+
     Examples
     --------
     >>> estore = EmbedStore(urlpath="example_estore.b2e", mode="w")

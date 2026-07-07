@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import tempfile
@@ -74,6 +75,18 @@ class DictStore:
         in the embedded store. Default is 0, meaning all values are persisted
         as external files by default.  C2Array objects are always stored in
         the embedded store regardless of this setting.
+
+    Notes
+    -----
+    DictStore is single-process, single-writer. The frame locking
+    (``locking=True`` in :class:`blosc2.Storage`, or the ``BLOSC_LOCKING``
+    environment variable) protects the individual arrays *inside* the store,
+    but not the store structure: adding or removing keys spans several files
+    and a Python-side map, with no lock covering the ensemble. A ``.b2z``
+    file, however, is safe to share read-only across processes:
+    :meth:`to_b2z` replaces it atomically, so readers see either the old or
+    the new archive, never a torn one (this also applies to
+    :class:`blosc2.TreeStore`, which builds on DictStore).
 
     Examples
     --------
@@ -660,6 +673,13 @@ class DictStore:
         filename : str
             The absolute path to the created b2z file.
 
+        Notes
+        -----
+        The file is written to a temporary sibling and moved onto ``filename``
+        atomically: concurrent readers of an existing target see either the
+        old archive or the new one, never a partial write. On Windows, the
+        final replace fails if another process holds the target open.
+
         Examples
         --------
         Pack a directory-backed store into a zip store.  A ``.b2d`` suffix is
@@ -702,15 +722,27 @@ class DictStore:
         # Sort filepaths by file size from largest to smallest
         filepaths.sort(key=os.path.getsize, reverse=True)
 
-        with zipfile.ZipFile(b2z_path, "w", zipfile.ZIP_STORED) as zf:
-            # Write all files (except estore_path) first (sorted by size)
-            for filepath in filepaths:
-                arcname = os.path.relpath(filepath, self.working_dir)
-                zf.write(filepath, arcname)
-            # Write estore last
-            if os.path.exists(self.estore_path):
-                arcname = os.path.relpath(self.estore_path, self.working_dir)
-                zf.write(self.estore_path, arcname)
+        # Build the zip in a temporary file on the same filesystem, then move it
+        # atomically onto the target: concurrent readers of the target see either
+        # the old zip or the new one, never a torn state.  (On Windows the final
+        # replace fails if another process holds the target open.)
+        fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(b2z_path)), suffix=".b2z.tmp")
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf:
+                # Write all files (except estore_path) first (sorted by size)
+                for filepath in filepaths:
+                    arcname = os.path.relpath(filepath, self.working_dir)
+                    zf.write(filepath, arcname)
+                # Write estore last
+                if os.path.exists(self.estore_path):
+                    arcname = os.path.relpath(self.estore_path, self.working_dir)
+                    zf.write(self.estore_path, arcname)
+            os.replace(tmp_path, b2z_path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
+            raise
         return os.path.abspath(b2z_path)
 
     def to_b2d(self, dirname=None, *, overwrite: bool = False) -> os.PathLike[Any] | str:
