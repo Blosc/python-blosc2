@@ -98,6 +98,30 @@ def test_two_handles_coherent(tmp_path):
     blosc2.remove_urlpath(str(urlpath))
 
 
+def test_vlmeta_two_handles_coherent(tmp_path):
+    # Regression test for c-blosc2's blosc2_vlmeta_exists() staleness poll:
+    # a vlmetalayer added or deleted through one locked handle must be
+    # reflected in another handle without any data access in between
+    urlpath = tmp_path / "schunk-vlmeta.b2frame"
+    create_schunk(urlpath, contiguous=True, locking=True)
+
+    h1 = blosc2.open(str(urlpath), mode="a", locking=True)
+    h2 = blosc2.open(str(urlpath), mode="a", locking=True)
+    assert "foo" not in h2.vlmeta
+
+    h1.vlmeta["foo"] = "bar"
+    assert "foo" in h2.vlmeta
+    assert h2.vlmeta["foo"] == "bar"
+
+    h1.vlmeta["foo"] = "baz"  # update flows too
+    assert h2.vlmeta["foo"] == "baz"
+
+    del h1.vlmeta["foo"]
+    assert "foo" not in h2.vlmeta
+
+    blosc2.remove_urlpath(str(urlpath))
+
+
 def test_ndarray_locking(tmp_path):
     urlpath = tmp_path / "array-locked.b2nd"
     a = blosc2.full((100, 100), 3, urlpath=str(urlpath), locking=True, mode="w")
