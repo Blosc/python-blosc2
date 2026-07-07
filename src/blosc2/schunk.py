@@ -1921,6 +1921,7 @@ def open(
             sidecar lock file. Enable it when several processes operate on the
             same container. The locking is advisory (every handle on the
             container must enable it) and cannot be combined with `mmap_mode`.
+            The ``BLOSC_LOCKING`` environment variable enables it globally.
             For more info, see :class:`blosc2.Storage`.
         cparams: dict
             A dictionary with the compression parameters, which are the same that can be

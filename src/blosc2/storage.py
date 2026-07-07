@@ -222,6 +222,14 @@ class Storage:
             `mmap_mode`, for in-memory containers, nor on network filesystems
             (like NFS).
 
+        .. note::
+            The ``BLOSC_LOCKING`` environment variable enables locking globally
+            (for every on-disk container subsequently opened or created),
+            without touching the sources; handy to make a whole deployment opt
+            in at once. Set it to ``0`` or the empty string to leave it off.
+            Unlike ``locking=True``, it is silently ignored for memory-mapped
+            containers (`mmap_mode`).
+
     meta: dict or None
         A dictionary with different metalayers.  Each entry represents a metalayer:
 
