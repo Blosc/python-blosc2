@@ -4522,6 +4522,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
+        # Follow shape changes made by another handle (SWMR) before validating the key
+        self.refresh()
         # The more general case (this is quite slow)
         # If the key is a LazyExpr, decorate with ``where`` and return it
         if isinstance(key, blosc2.LazyExpr):
@@ -4632,6 +4634,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
+        # Follow shape changes made by another handle (SWMR) before validating the key
+        self.refresh()
 
         # key not iterable
         key = key[()] if isinstance(key, NDArray) else key
@@ -5150,6 +5154,29 @@ class NDArray(blosc2_ext.NDArray, Operand):
         from . import indexing
 
         return indexing.get_indexes(self)
+
+    def refresh(self) -> bool:
+        """Re-sync the cached shape and metadata of a disk-based array.
+
+        In a single-writer, multiple-readers (SWMR) workflow, a reader handle
+        follows shape changes made through another handle (e.g. a
+        :func:`resize` in another process) automatically on data access.
+        Call this to observe shape changes without reading data, e.g. when
+        polling :attr:`shape` while waiting for a writer to grow the array.
+
+        Returns
+        -------
+        out: bool
+            True if the cached state was re-synced with the on-disk state,
+            False if it was already current.  Always False for in-memory
+            arrays.
+
+        Notes
+        -----
+        Only shape changes are followed: if another handle changed the
+        number of dimensions, chunks or blocks, an exception is raised.
+        """
+        return super().refresh()
 
     def resize(self, newshape: tuple | list) -> None:
         """Change the shape of the array by growing or shrinking one or more dimensions.

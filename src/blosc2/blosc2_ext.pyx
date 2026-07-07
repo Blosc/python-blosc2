@@ -630,6 +630,7 @@ cdef extern from "b2nd.h":
     int b2nd_squeeze(b2nd_array_t *array, b2nd_array_t **view)
     int b2nd_squeeze_index(b2nd_array_t *array, b2nd_array_t **view, const c_bool *index)
     int b2nd_resize(b2nd_array_t *array, const int64_t *new_shape, const int64_t *start)
+    int b2nd_refresh(b2nd_array_t *array)
     int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
     int b2nd_concatenate(b2nd_context_t *ctx, b2nd_array_t *src1, b2nd_array_t *src2,
                          int8_t axis, c_bool copy, b2nd_array_t **array)
@@ -3852,6 +3853,11 @@ cdef class NDArray:
             new_shape_[i] = s
         _check_rc(b2nd_resize(self.array, new_shape_, NULL),
                   "Error while resizing the array")
+
+    def refresh(self):
+        cdef int rc = b2nd_refresh(self.array)
+        _check_rc(rc, "Error while refreshing the array")
+        return rc == 1
 
     def as_ffi_ptr(self):
         return PyCapsule_New(self.array, <char *> "b2nd_array_t*", NULL)
