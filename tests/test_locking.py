@@ -137,6 +137,30 @@ def test_ndarray_locking(tmp_path):
     blosc2.remove_urlpath(str(urlpath))
 
 
+def test_ndarray_holding_lock(tmp_path):
+    urlpath = tmp_path / "array-holding-lock.b2nd"
+    a = blosc2.zeros((10,), urlpath=str(urlpath), locking=True, mode="w")
+    with a.holding_lock():
+        a[0] = a[0] + 1
+        # Nests on the same lock as the underlying schunk's holding_lock();
+        # would deadlock if arr.holding_lock() acquired a separate lock.
+        with a.schunk.holding_lock():
+            a[1] = a[1] + 1
+    assert a[0] == 1
+    assert a[1] == 1
+    del a
+
+    # No-op on a handle without locking enabled, same as SChunk.holding_lock().
+    unlocked_path = tmp_path / "array-no-lock.b2nd"
+    b = blosc2.zeros((10,), urlpath=str(unlocked_path), mode="w")
+    with b.holding_lock():
+        b[0] = 5
+    assert b[0] == 5
+
+    blosc2.remove_urlpath(str(urlpath))
+    blosc2.remove_urlpath(str(unlocked_path))
+
+
 def test_locking_validation(tmp_path):
     urlpath = tmp_path / "schunk-valid.b2frame"
     # locking together with mmap_mode is rejected
@@ -354,6 +378,103 @@ def test_cross_process_multiwriter_update(tmp_path):
         data = np.frombuffer(reader.decompress_chunk(nchunk), dtype=DTYPE)
         expected = wid * 1_000_000 + (iters - 1)
         assert np.all(data == expected), f"chunk {nchunk} final value mismatch"
+
+    blosc2.remove_urlpath(str(urlpath))
+
+
+OPEN_RACE_UPDATE_WRITER_SCRIPT = """
+import sys
+import numpy as np
+import blosc2
+
+urlpath, writer_id, chunk_nitems, iters = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+schunk = blosc2.open(urlpath, mode="a", locking=True)
+nchunk = writer_id % schunk.nchunks
+rng = np.random.default_rng(writer_id)
+for i in range(iters):
+    if i % 2 == 0:
+        # Shrinks the frame (truncates the chunk to a special-value marker)
+        schunk.update_special(nchunk, blosc2.SpecialValue.UNINIT)
+    else:
+        # Random (near-incompressible) content, so the compressed size --
+        # and the resulting frame layout -- actually varies update to
+        # update, instead of settling on one compressed size that never
+        # moves anything (constant-fill data compresses to the same size
+        # every time and stops exercising the layout-shift race below)
+        data = rng.integers(0, np.iinfo(np.int64).max, size=chunk_nitems, dtype=np.int64)
+        chunk = blosc2.compress2(data, typesize=data.dtype.itemsize)
+        schunk.update_chunk(nchunk, chunk)
+sys.exit(0)
+"""
+
+OPEN_RACE_OPENER_SCRIPT = """
+import sys
+import blosc2
+
+urlpath, iters = sys.argv[1], int(sys.argv[2])
+for _ in range(iters):
+    schunk = blosc2.open(urlpath, mode="a", locking=True)
+    del schunk
+sys.exit(0)
+"""
+
+
+def test_cross_process_open_race_under_update(tmp_path):
+    # A fresh open() must never fail just because a concurrent writer is
+    # mid-update, even on a fixed-size container where nothing is growing:
+    # an in-place chunk update whose compressed size differs from before can
+    # still rewrite the on-disk frame layout, racing an opener's unlocked
+    # bootstrap read the same way a growing append does.
+    #
+    # This is a narrow, timing-dependent race: under c-blosc2 commit
+    # 87a3af7d, `blosc2_schunk_open_offset_udio()`'s retry-on-race logic
+    # (from the open-vs-growth fix, `fa742207`) only covered the *first*
+    # bootstrap read -- not the second, force_refresh re-read done under the
+    # freshly acquired lock (which fires on nearly every open of a
+    # previously-mutated frame). That gap was observed directly (a
+    # `RuntimeError` from `blosc2_schunk_open_offset` returning NULL) via
+    # ad hoc reproduction while building this test, but the exact
+    # interleaving needed is sensitive to system load/caching and does not
+    # reproduce on every run even on unfixed code -- treat this as a stress
+    # test for the concurrent open+update path in general, not a guaranteed
+    # trip wire for this one bug.
+    urlpath = tmp_path / "schunk-open-race-update.b2frame"
+    nwriters = 4
+    nopeners = 4
+    iters = 150
+    # Contiguous (single-file) frames only: frame_from_file_offset()'s
+    # file-boundary check that this test targets is gated by `if (!sframe)`
+    # in c-blosc2, so sparse (directory-based) frames never exercise it.
+    schunk = create_schunk(urlpath, contiguous=True, locking=True)
+    del schunk
+
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                OPEN_RACE_UPDATE_WRITER_SCRIPT,
+                str(urlpath),
+                str(wid),
+                str(CHUNK_NITEMS),
+                str(iters),
+            ]
+        )
+        for wid in range(nwriters)
+    ]
+    openers = [
+        subprocess.Popen([sys.executable, "-c", OPEN_RACE_OPENER_SCRIPT, str(urlpath), str(iters)])
+        for _ in range(nopeners)
+    ]
+    procs = writers + openers
+    deadline = time.monotonic() + 180
+    for p in procs:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, "writer/opener processes did not finish in time"
+        p.wait(timeout=remaining)
+    assert all(p.returncode == 0 for p in procs), (
+        f"a writer or opener process failed: {[p.returncode for p in procs]}"
+    )
 
     blosc2.remove_urlpath(str(urlpath))
 

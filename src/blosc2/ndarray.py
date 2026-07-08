@@ -13,7 +13,7 @@ import math
 import weakref
 from abc import abstractmethod
 from collections import OrderedDict, namedtuple
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from functools import reduce
 from itertools import islice, product
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
@@ -3844,6 +3844,19 @@ class NDArray(blosc2_ext.NDArray, Operand):
     def vlmeta(self) -> dict:
         """The variable-length metadata of the array."""
         return self.schunk.vlmeta
+
+    def holding_lock(self) -> Iterator[SChunk]:
+        """Hold the exclusive frame lock across several operations.
+
+        Delegates to :meth:`SChunk.holding_lock() <blosc2.SChunk.holding_lock>`
+        on the underlying schunk; see there for details.
+
+        Examples
+        --------
+        >>> with arr.holding_lock():  # doctest: +SKIP
+        ...     arr[0] = arr[0] + 1
+        """
+        return self.schunk.holding_lock()
 
     @property
     def fields(self) -> Mapping[str, NDField]:

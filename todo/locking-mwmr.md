@@ -32,6 +32,57 @@ processes fetching into one shared peercache pool) — see item 7.
 
 ---
 
+## 0. NDArray.holding_lock() convenience + open-race gap found while building an example — DONE (2026-07-08, both repos)
+
+Added `NDArray.holding_lock()` (python-blosc2 `src/blosc2/ndarray.py`), a
+one-line delegate to `self.schunk.holding_lock()`, matching the existing
+`meta`/`vlmeta`/`urlpath` proxy pattern. Test: `test_ndarray_holding_lock`
+in `tests/test_locking.py`.
+
+While building `examples/ndarray/mwmr-mode.py` to demonstrate the feature,
+hit real `RuntimeError: blosc2_schunk_open_offset(...) returned NULL`
+crashes (not the intended lost-update demo) with ~20-40% frequency across
+several from-scratch reproductions. Root cause in c-blosc2
+`blosc2_schunk_open_offset_udio()` (`blosc/schunk.c`): the bounded retry
+added by item 1's open-vs-growth fix (`fa742207`) only wrapped the
+*bootstrap* read; the second read done under `force_refresh` (which fires on
+nearly every open of a previously-mutated frame) called
+`frame_from_file_offset()` directly with no retry, so it could still hit the
+transient "frame length exceeds file boundary" race and fail hard. Fixed by
+factoring both reads through a shared `frame_from_file_offset_retrying()`
+helper. python-blosc2's bundled pin needs to move past this fix.
+
+**Reproduction is a genuine Heisenbug** — it fired 3 times organically while
+building the example (proving it's real), then stopped reproducing on the
+same machine minutes later even with the fix reverted, across dozens of
+retries with several different scripts/parameter combinations, including a
+purpose-built C fork test with confirmed several-KB frame_len churn on every
+single write (see below). Independent analysis (asked Fable 5 for a second
+opinion, see conversation) pinned the mechanical reason: `frame_update_trailer()`
+writes the trailer/truncates *before* rewriting the header's `frame_len`
+(`blosc/frame.c` ~1265-1279, confirmed by reading the code), so on-disk
+inconsistency windows here are single-digit-microsecond reader-side TOCTOU
+gaps, not the much wider multi-syscall windows append/growth produces (which
+is why the sibling append-vs-open test reproduces reliably and this one
+didn't). Deterministic solution: c-blosc2 `blosc/frame.c` gained a
+`BLOSC_TESTING`-only fault-injection hook (`blosc2_test_arm_open_race()`)
+that directly tampers with the on-disk `frame_len` between the stat() and
+header read on a chosen call, instead of relying on scheduling luck.
+`tests/test_frame_lock.c::test_open_race_deterministic` uses it and is a
+real, bisection-confirmed regression test (fails cleanly on reverted
+`schunk.c`, passes on the fix, across 5 repeat runs) — compiled only into
+the test-only `blosc_testing` static lib, verified absent from the real
+`libblosc2.a` via `nm`. The probabilistic tests
+(`test_fork_open_race_update` in c-blosc2, `test_cross_process_open_race_under_update`
+in python-blosc2) are kept as best-effort stress coverage of the concurrent
+open+update path in general, not as the regression guarantee anymore — that
+job now belongs to the deterministic test. Also note for future repro
+attempts: the target frame **must be contiguous** — `frame_from_file_offset()`'s
+file-boundary check that this race lives in is gated by `if (!sframe)`, so
+sparse/directory frames never exercise it at all (a first attempt using
+`contiguous=False` silently could not reproduce for this reason, independent
+of the timing issue).
+
 ## 1. Cross-process multi-writer hammer tests — DONE (2026-07-08, both repos)
 
 The real gap was: current frame-level multi-writer evidence was same-process
@@ -99,36 +150,58 @@ Landed as `blosc/b2nd.c` (5-line change). Tests:
   the mix reliably without the c-blosc2 fix during verification, then
   confirmed clean with it).
 
-## 3. Audit remaining mutating paths for RMW-under-stale gaps — MEDIUM (c-blosc2)
+## 3. Audit remaining mutating paths for RMW-under-stale gaps — DONE (2026-07-08, c-blosc2)
 
-Sweep every exported mutating entry point and confirm it either (a) re-syncs
-under the exclusive lock before trusting cached state, or (b) is documented
-as out of the MWMR contract:
+Swept every exported mutating entry point in `blosc/schunk.c` and `blosc/b2nd.c`.
+Findings:
 
 - vlmeta add/update/delete: locked; `blosc2_vlmeta_get`/`_exists` poll — OK.
-- Fixed metalayers: `blosc2_meta_update` from one writer is invisible to
-  other handles' `blosc2_meta_exists`/`_get` (static-inline, stale-blind —
-  known, blocked by the plugin no-link design decision; c-blosc2 todo item 6).
-  For MWMR, document: fixed-meta RMW across handles is out of contract.
-- `blosc2_schunk_fill_special`, cframe import paths, and anything else that
-  writes header/index without going through the locked chunk-op wrappers.
+- Fixed metalayers: `blosc2_meta_update`/`_add` write `frame_update_header`
+  directly with no `frame_lock` bracket at all (schunk.c:2298-2340), and are
+  invisible to other handles' `blosc2_meta_exists`/`_get` (static-inline,
+  stale-blind — known, blocked by the plugin no-link design decision;
+  c-blosc2 todo item 6). Confirmed out of contract, not a new bug — documented
+  in item 4 below (use vlmeta if cross-handle visibility matters).
+- `blosc2_schunk_fill_special` has a check-then-act on `nbytes`/`cbytes`
+  emptiness outside the lock, but the actual mutation is inside `frame_lock`;
+  two racing callers just resolve to last-writer-wins on the whole frame, the
+  same accepted semantics as any other overlapping write. Not a new gap
+  (fill_special is a single-shot creation-time op in practice).
+- `b2nd_insert`/`b2nd_append` are each two separately-locked calls
+  (`b2nd_resize` then `b2nd_set_slice_cbuffer`, or `append_buffer` then
+  `resize`) — not atomic as a composite op. This is exactly the per-operation
+  (not per-call) atomicity the design already commits to elsewhere; the
+  NDArray hammer test (item 1) already brackets `resize()`+fill in
+  `holding_lock()` for this reason. Documented in item 4, not fixed — fixing
+  would mean bracketing the whole of `b2nd_insert`/`b2nd_append` in one lock,
+  which changes the composability of resize+write as independent atomic
+  primitives; no use case has asked for it.
+- `b2nd_delete` is a single `b2nd_resize` call — already fully atomic.
+- `blosc2_schunk_from_buffer`/`b2nd_from_cframe`: construct a fresh in-memory
+  schunk from a buffer, not a shared on-disk frame — no other handle exists
+  to race against, out of scope.
 
-## 4. Documentation: promote and pin the MWMR contract — MEDIUM (python-blosc2)
+No new bugs found (unlike item 1, which found the open-race bug). Everything
+above was either already correct or is an accepted per-operation-atomicity
+limit that item 4 needed to document rather than a gap to close.
 
-Extend the locking section of `sharing_across_processes.rst` from a sentence
-to a stated contract:
+## 4. Documentation: promote and pin the MWMR contract — DONE (2026-07-08, python-blosc2)
+
+Extended `sharing_across_processes.rst`:
 
 - Multiple writers are supported with `locking=True` on **every** handle
-  (advisory; one non-locking handle voids it).
-- Atomicity is per operation; a slice write is atomic after item 2 lands.
-- Read-modify-write (`arr[i] += 1`, append-position-dependent logic) races
-  between writers unless wrapped in `holding_lock()` — show the idiom with a
-  two-process example. Per-op locks give serialization, not transactions.
-- Concurrent writes to the same region: last-writer-wins (chunk-wise today,
-  slice-wise after item 2).
-- Crash caveat from item 5, NFS/mmap caveats as already documented.
-- Stores: point at the existing EmbedStore/DictStore cross-process guarantees
-  and accepted races; `.b2z` stays snapshot-only.
+  (advisory; one non-locking handle voids it) — already stated.
+- New "Per-operation atomicity" section: `SChunk` chunk updates are atomic
+  per chunk; `NDArray` slice writes (`arr[...] = value`) are atomic for the
+  whole slice since item 2. Fixed metalayers (`schunk.meta`) called out as
+  outside the locking contract, with `schunk.vlmeta` as the alternative when
+  cross-handle visibility matters (item 3 finding).
+- `holding_lock()` section extended with the two-process `arr[i] += 1`
+  idiom via `arr.schunk.holding_lock()`, and a note that `NDArray.append()`
+  is a resize+fill composite that needs the same bracket against other
+  writers (item 3 finding on `b2nd_insert`/`b2nd_append`).
+- Crash caveat, NFS/mmap caveats, and store guarantees were already present
+  from earlier passes on this doc — no change needed there.
 
 ## 5. Crash robustness under multiple writers — LOW (document now, build later)
 
@@ -165,25 +238,35 @@ items 1–4 are its prerequisites.
 ## Release coupling
 
 All of this rides on the pending release train (c-blosc2 3.2.0 tag →
-python-blosc2 4.8.0, whose bundled pin is already at c-blosc2 `3cd3bfe5` →
-caterva2 `blosc2>=` floor bump); see item 3 of c-blosc2's
-`plans/todo-locking-swmr.md`. The minor-version bumps (3.2.0/4.8.0 rather
-than 3.1.6/4.7.1) reflect the significant API additions of this feature set
-(decided 2026-07-08). Items 1–3 above should land before the tag if
-practical, so 3.2.0/4.8.0 ship the tested multi-writer story rather than a
+python-blosc2 4.8.0 → caterva2 `blosc2>=` floor bump); see item 3 of
+c-blosc2's `plans/todo-locking-swmr.md`. The minor-version bumps (3.2.0/4.8.0
+rather than 3.1.6/4.7.1) reflect the significant API additions of this
+feature set (decided 2026-07-08). Items 1–3 above should land before the tag
+if practical, so 3.2.0/4.8.0 ship the tested multi-writer story rather than a
 half-claimed one.
+
+Item 0's `frame_from_file_offset_retrying()` fix is a local, uncommitted
+change in c-blosc2 as of this writing (built and tested locally via
+`CMAKE_ARGS="-DFETCHCONTENT_SOURCE_DIR_BLOSC2=~/blosc/c-blosc2"`) — it needs
+its own commit, and python-blosc2's `BLOSC2_BUNDLED_VERSION` needs to move
+past it before the 3.2.0/4.8.0 tag.
 
 ## Suggested order
 
 1 (hammer tests) first — it either pins the claim or finds the bugs (it found
-one: the open-race fix above); 2 (set_slice bracket, done) next; 3 (audit)
-and 4 (docs) together before the release pair; 5–6 are documentation lines
-inside 4; 7 lives in the caterva2 repo.
+one: the open-race fix above); 2 (set_slice bracket) next; 3 (audit) and 4
+(docs) together before the release pair; 5–6 are documentation lines inside
+4; 7 lives in the caterva2 repo.
 
-Item 1's open-race fix is committed upstream as `fa742207`, and
-python-blosc2's `BLOSC2_BUNDLED_VERSION` already pins to it. Item 2's
-set_slice bracket (`blosc/b2nd.c`, `tests/test_b2nd_set_slice_lock.c`) is
-still a local, uncommitted change on top of `fa742207` as of this writing —
-it needs its own commit, and the bundled pin needs to move past it before
-python-blosc2's overlapping-slice test is green against a non-local
-c-blosc2.
+Items 1–4 are all done as of 2026-07-08. c-blosc2: `fa742207` (open-race fix,
+item 1) and `87a3af7d` (set_slice bracket, item 2) are committed.
+python-blosc2's `BLOSC2_BUNDLED_VERSION` is bumped past both (`d58a2c07`,
+`24b358ac`), so the overlapping-slice test is green against a non-local
+c-blosc2. Item 3 (audit) found no new bugs. Item 4 (docs) is landed in
+`doc/getting_started/sharing_across_processes.rst`.
+
+Remaining before the release tag: nothing blocking from this list. What's
+left is the release-coupling mechanics themselves (tagging c-blosc2 3.2.0,
+cutting python-blosc2 4.8.0, bumping the caterva2 `blosc2>=` floor) and item
+7 (caterva2's asyncio-lock → `holding_lock()` port), which lives in the
+caterva2 repo, not here.

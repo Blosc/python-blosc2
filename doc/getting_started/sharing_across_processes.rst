@@ -140,6 +140,46 @@ Everything inside the block is serialized exclusively — including plain
 reads through other locked handles — so keep it short. On a handle without
 locking enabled, ``holding_lock()`` is a no-op.
 
+:meth:`NDArray.holding_lock() <blosc2.NDArray.holding_lock>` delegates to the
+same method on the underlying schunk. This is required for any
+read-modify-write across writers, since a single indexed assignment reads
+the old value and writes the new one as two separate locked operations:
+
+.. code-block:: python
+
+    # Two processes both doing `arr[i] += 1` need the increment itself
+    # locked, not just each half of it:
+    with arr.holding_lock():
+        arr[i] = arr[i] + 1
+
+The same applies to :meth:`NDArray.append() <blosc2.NDArray.append>`: it is
+internally a resize followed by a slice write, two locked operations rather
+than one. Wrap it in ``holding_lock()`` if another writer must not interleave
+between the resize and the fill — otherwise two concurrent ``append()``
+calls can both resize based on the same pre-append length and collide on the
+same target rows.
+
+Per-operation atomicity: what counts as "one operation"
+------------------------------------------------------------
+
+Without ``holding_lock()``, two writers racing on overlapping regions
+resolve last-writer-wins, at a granularity that depends on the API used:
+
+- ``SChunk`` chunk updates (:meth:`SChunk.update_data
+  <blosc2.SChunk.update_data>` and friends) are atomic per chunk — an
+  overlapping multi-chunk write from two writers can interleave chunk by
+  chunk.
+- ``NDArray`` slice writes (``arr[...] = value``) are atomic for the *whole
+  slice*, even when it spans several chunks — a locked reader never observes
+  a half-applied slice write.
+
+Fixed metalayers (``schunk.meta``) are outside the locking contract:
+``schunk.meta[name] = value`` from one handle is not visible to another
+handle's ``schunk.meta`` reads until that handle re-syncs some other way
+(e.g. a data access). Use variable-length metalayers (``schunk.vlmeta``) if
+cross-handle visibility of metadata updates matters — those poll for
+staleness on every access.
+
 The stores: cross-process guarantees
 --------------------------------------
 

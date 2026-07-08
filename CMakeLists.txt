@@ -21,7 +21,7 @@ project(python-blosc2)
 # symbol at link time instead of a clear version error.
 set(BLOSC2_MIN_VERSION 3.2.0)
 # set(BLOSC2_BUNDLED_VERSION v3.2.0)
-set(BLOSC2_BUNDLED_VERSION 87a3af7d20a224a226f093039142504b6b315e0c)  # MWMR support
+set(BLOSC2_BUNDLED_VERSION 0a7fdc9961fea6f5e40d5c8405fad06855e13e69)  # MWMR support
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
