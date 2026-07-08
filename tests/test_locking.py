@@ -206,6 +206,238 @@ def test_cross_process_hammer(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Multi-writer (MWMR) hammer tests: several writer *processes*, not just one,
+# mutating the same on-disk container concurrently under locking=True.
+# ---------------------------------------------------------------------------
+
+APPEND_WRITER_SCRIPT = """
+import sys
+import numpy as np
+import blosc2
+
+urlpath, writer_id, chunk_nitems, iters = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+schunk = blosc2.open(urlpath, mode="a", locking=True)
+for i in range(iters):
+    # Tag every appended chunk with (writer_id, i) so ownership is
+    # unambiguous no matter how the appends from different writers interleave
+    data = np.full(chunk_nitems, writer_id * 1_000_000 + i, dtype=np.int64)
+    schunk.append_data(data)
+sys.exit(0)
+"""
+
+
+def test_cross_process_multiwriter_append(tmp_path):
+    # Several writer processes append through their own locking=True handle
+    # concurrently, each with a distinguishable signature; the final schunk
+    # must contain the exact union of everyone's chunks, with each chunk's
+    # content intact (no interleaved/torn chunk, no lost append).
+    urlpath = tmp_path / "schunk-multiwriter-append.b2frame"
+    nwriters = 4
+    iters = 40
+    schunk = create_schunk(urlpath, contiguous=False, locking=True)
+    base_nchunks = schunk.nchunks
+    del schunk
+
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                APPEND_WRITER_SCRIPT,
+                str(urlpath),
+                str(wid),
+                str(CHUNK_NITEMS),
+                str(iters),
+            ]
+        )
+        for wid in range(nwriters)
+    ]
+    deadline = time.monotonic() + 180
+    for w in writers:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, "writer processes did not finish in time"
+        w.wait(timeout=remaining)
+    assert all(w.returncode == 0 for w in writers), "a writer process failed"
+
+    reader = blosc2.open(str(urlpath), locking=True)
+    assert reader.nchunks == base_nchunks + nwriters * iters
+
+    seen = {wid: set() for wid in range(nwriters)}
+    for nchunk in range(base_nchunks, reader.nchunks):
+        data = np.frombuffer(reader.decompress_chunk(nchunk), dtype=DTYPE)
+        value = int(data[0])
+        assert np.all(data == value), f"chunk {nchunk} mixes values from more than one writer"
+        wid, i = divmod(value, 1_000_000)
+        seen[wid].add(i)
+
+    for wid in range(nwriters):
+        assert seen[wid] == set(range(iters)), f"writer {wid} lost or duplicated appends"
+
+    blosc2.remove_urlpath(str(urlpath))
+
+
+UPDATE_WRITER_SCRIPT = """
+import sys
+import numpy as np
+import blosc2
+
+urlpath, writer_id, nwriters, chunk_nitems, iters = (
+    sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+)
+schunk = blosc2.open(urlpath, mode="a", locking=True)
+# Each writer owns a disjoint set of chunks, so a mixed/torn chunk can only
+# come from the update path racing itself across processes, not from two
+# writers targeting the same chunk
+owned = [nc for nc in range(schunk.nchunks) if nc % nwriters == writer_id]
+for i in range(iters):
+    for nchunk in owned:
+        data = np.full(chunk_nitems, writer_id * 1_000_000 + i, dtype=np.int64)
+        chunk = blosc2.compress2(data, typesize=data.dtype.itemsize)
+        schunk.update_chunk(nchunk, chunk)
+sys.exit(0)
+"""
+
+
+def test_cross_process_multiwriter_update(tmp_path):
+    # Several writer processes repeatedly update *disjoint* chunks of the
+    # same schunk through their own locking=True handle, while this process
+    # samples every chunk concurrently: no chunk may ever be observed
+    # torn/mixed, and after all writers exit each chunk must hold its
+    # owner's last-written value.
+    urlpath = tmp_path / "schunk-multiwriter-update.b2frame"
+    nwriters = 4
+    iters = 60
+    schunk = create_schunk(urlpath, contiguous=False, locking=True)
+    nchunks = schunk.nchunks
+    del schunk
+    assert nchunks >= nwriters  # every writer owns at least one chunk
+
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                UPDATE_WRITER_SCRIPT,
+                str(urlpath),
+                str(wid),
+                str(nwriters),
+                str(CHUNK_NITEMS),
+                str(iters),
+            ]
+        )
+        for wid in range(nwriters)
+    ]
+    try:
+        reader = blosc2.open(str(urlpath), locking=True)
+        deadline = time.monotonic() + 180
+        while any(w.poll() is None for w in writers):
+            assert time.monotonic() < deadline, "writer processes did not finish in time"
+            for nchunk in range(nchunks):
+                data = np.frombuffer(reader.decompress_chunk(nchunk), dtype=DTYPE)
+                # Before its owner's first update, a chunk still holds its
+                # original ramp from create_schunk() -- not a torn write
+                initial_ramp = np.arange(nchunk * CHUNK_NITEMS, (nchunk + 1) * CHUNK_NITEMS, dtype=DTYPE)
+                if np.array_equal(data, initial_ramp):
+                    continue
+                assert np.all(data == data[0]), (
+                    f"chunk {nchunk} observed torn/mixed under concurrent writers"
+                )
+    finally:
+        for w in writers:
+            if w.poll() is None:
+                w.kill()
+            w.wait()
+    assert all(w.returncode == 0 for w in writers), "a writer process failed"
+
+    for nchunk in range(nchunks):
+        wid = nchunk % nwriters
+        data = np.frombuffer(reader.decompress_chunk(nchunk), dtype=DTYPE)
+        expected = wid * 1_000_000 + (iters - 1)
+        assert np.all(data == expected), f"chunk {nchunk} final value mismatch"
+
+    blosc2.remove_urlpath(str(urlpath))
+
+
+NDARRAY_WRITER_SCRIPT = """
+import sys
+import numpy as np
+import blosc2
+
+urlpath, writer_id, rows_per_writer, ncols, iters = (
+    sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+)
+w = blosc2.open(urlpath, mode="a", locking=True)
+row0 = writer_id * rows_per_writer
+for i in range(iters):
+    # Bracket the resize + fill so another handle never observes a grown
+    # shape with not-yet-written (still-zero) rows in this writer's region
+    with w.schunk.holding_lock():
+        needed = row0 + rows_per_writer
+        if w.shape[0] < needed:
+            w.resize((needed, ncols))
+        value = writer_id * 1_000_000 + i
+        w[row0 : row0 + rows_per_writer, :] = np.full((rows_per_writer, ncols), value, dtype=np.int64)
+sys.exit(0)
+"""
+
+
+def test_cross_process_multiwriter_ndarray(tmp_path):
+    # N writer processes each resize() + fill a disjoint row region of the
+    # same on-disk NDArray under locking=True, exercising the b2nd metalayer
+    # path (not just raw schunk chunks). The final array must equal the
+    # union of every writer's last-written region.
+    urlpath = str(tmp_path / "array-multiwriter.b2nd")
+    nwriters = 4
+    rows_per_writer = 3
+    ncols = 10
+    iters = 20
+
+    a = blosc2.zeros(
+        (0, ncols),
+        dtype=np.int64,
+        chunks=(rows_per_writer, ncols),
+        blocks=(rows_per_writer, ncols),
+        urlpath=urlpath,
+        mode="w",
+        locking=True,
+    )
+    del a
+
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                NDARRAY_WRITER_SCRIPT,
+                urlpath,
+                str(wid),
+                str(rows_per_writer),
+                str(ncols),
+                str(iters),
+            ]
+        )
+        for wid in range(nwriters)
+    ]
+    deadline = time.monotonic() + 180
+    for w in writers:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, "writer processes did not finish in time"
+        w.wait(timeout=remaining)
+    assert all(w.returncode == 0 for w in writers), "a writer process failed"
+
+    reader = blosc2.open(urlpath, mode="r", locking=True)
+    assert reader.shape == (nwriters * rows_per_writer, ncols)
+    result = reader[:, :]
+    for wid in range(nwriters):
+        row0 = wid * rows_per_writer
+        expected = wid * 1_000_000 + (iters - 1)
+        region = result[row0 : row0 + rows_per_writer, :]
+        assert np.all(region == expected), f"writer {wid}'s region does not hold its last-written value"
+
+    blosc2.remove_urlpath(urlpath)
+
+
+# ---------------------------------------------------------------------------
 # EmbedStore under locking: transactional writes + key-map re-sync
 # ---------------------------------------------------------------------------
 
