@@ -20,13 +20,8 @@ project(python-blosc2)
 # libblosc2 would pass this check and then fail with a confusing undefined
 # symbol at link time instead of a clear version error.
 set(BLOSC2_MIN_VERSION 3.2.0)
-# set(BLOSC2_BUNDLED_VERSION v3.1.5)
-# fa742207 includes blosc2_schunk_lock (fab03bda), the stale-writer
-# append/insert counter fix (3cd3bfe5), and the open-vs-growth race fix in
-# blosc2_schunk_open_offset_udio() (fa742207, found by this repo's NDArray
-# multi-writer hammer test, tests/test_locking.py); move this to the v3.2.0
-# tag once released.
-set(BLOSC2_BUNDLED_VERSION fa742207bddd6a477c5b0cbeb8237661560d962a)  # SWMR support
+# set(BLOSC2_BUNDLED_VERSION v3.2.0)
+set(BLOSC2_BUNDLED_VERSION 87a3af7d20a224a226f093039142504b6b315e0c)  # MWMR support
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")

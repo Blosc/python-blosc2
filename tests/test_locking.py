@@ -437,6 +437,72 @@ def test_cross_process_multiwriter_ndarray(tmp_path):
     blosc2.remove_urlpath(urlpath)
 
 
+OVERLAPPING_SLICE_WRITER_SCRIPT = """
+import sys
+import numpy as np
+import blosc2
+
+urlpath, value, iters = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+w = blosc2.open(urlpath, mode="a", locking=True)
+buf = np.full(w.shape, value, dtype=np.int64)
+for i in range(iters):
+    w[:, :] = buf
+sys.exit(0)
+"""
+
+
+def test_cross_process_overlapping_slice_atomic(tmp_path):
+    # Two writer processes repeatedly overwrite the *same* (multi-chunk)
+    # NDArray region with their own distinguishable constant value via
+    # __setitem__ (b2nd_set_slice_cbuffer at the C level); a locked reader
+    # sampling the whole region under holding_lock() must only ever see one
+    # writer's complete pass, never a chunk-wise mix of both (the atomicity
+    # b2nd_set_slice_cbuffer's exclusive-lock bracket provides -- python
+    # inherits it through __setitem__ with no code changes of its own).
+    urlpath = str(tmp_path / "array-overlap.b2nd")
+    nrows, ncols = 200, 50
+    iters = 150
+
+    a = blosc2.zeros(
+        (nrows, ncols),
+        dtype=np.int64,
+        chunks=(nrows // 4, ncols),
+        blocks=(nrows // 4, ncols),
+        urlpath=urlpath,
+        mode="w",
+        locking=True,
+    )
+    del a
+
+    writers = [
+        subprocess.Popen(
+            [sys.executable, "-c", OVERLAPPING_SLICE_WRITER_SCRIPT, urlpath, str(v), str(iters)]
+        )
+        for v in (1, 2)
+    ]
+    try:
+        reader = blosc2.open(urlpath, mode="r", locking=True)
+        nreads = 0
+        deadline = time.monotonic() + 180
+        while any(w.poll() is None for w in writers):
+            assert time.monotonic() < deadline, "writer processes did not finish in time"
+            with reader.schunk.holding_lock():
+                data = reader[:, :]
+            first = data.flat[0]
+            assert first in (0, 1, 2), f"unexpected value {first} in the array"
+            assert np.all(data == first), f"observed a mixed (half-applied) slice write: {np.unique(data)}"
+            nreads += 1
+    finally:
+        for w in writers:
+            if w.poll() is None:
+                w.kill()
+            w.wait()
+
+    assert all(w.returncode == 0 for w in writers), "a writer process failed"
+    assert nreads > 0
+    blosc2.remove_urlpath(urlpath)
+
+
 # ---------------------------------------------------------------------------
 # EmbedStore under locking: transactional writes + key-map re-sync
 # ---------------------------------------------------------------------------
