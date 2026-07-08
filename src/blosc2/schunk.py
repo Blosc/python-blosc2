@@ -514,6 +514,17 @@ class SChunk(blosc2_ext.SChunk):
         return super().nchunks
 
     @property
+    def change_tick(self) -> int:
+        """Counter bumped whenever this handle re-syncs from a stale on-disk state.
+
+        Useful to detect, without re-reading data, that another handle (in
+        this process or another) has mutated the container since the last
+        access — e.g. to invalidate a cache keyed off this schunk. Always 0
+        for in-memory containers.
+        """
+        return super().change_tick
+
+    @property
     def cratio(self) -> float:
         """
         Compression ratio.

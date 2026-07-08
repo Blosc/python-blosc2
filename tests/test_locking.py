@@ -396,3 +396,100 @@ def test_dict_store_cross_process_writers(tmp_path):
             assert np.array_equal(dstore[f"/{tag}/ext{i}"][:], np.arange(i, i + 100))
             assert np.array_equal(dstore[f"/{tag}/emb{i}"][:], np.arange(5))
     dstore._closed = True
+
+
+# ---------------------------------------------------------------------------
+# Growth-SWMR: a reader handle follows a writer process resizing an on-disk
+# NDArray, both via implicit re-sync on data access and via explicit
+# refresh().  The Python twin of c-blosc2's examples/b2nd/example_growth_swmr.c,
+# but cross-process and pinning both the locking and plain (FRAME_LEN-poll)
+# SWMR contracts.
+# ---------------------------------------------------------------------------
+
+GROWTH_WRITER = """
+import sys
+import time
+import numpy as np
+import blosc2
+
+path, locking, steps, rows_per_step, ncols = (
+    sys.argv[1], sys.argv[2] == "1", int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+)
+w = blosc2.open(path, mode="a", locking=locking)
+for _ in range(steps):
+    old_rows = w.shape[0]
+    new_rows = old_rows + rows_per_step
+    w.resize((new_rows, ncols))
+    data = np.arange(old_rows * ncols, new_rows * ncols, dtype=np.int64).reshape(rows_per_step, ncols)
+    w[old_rows:new_rows, :] = data
+    time.sleep(0.05)
+"""
+
+
+@pytest.mark.parametrize("locking", [False, True])
+def test_growth_swmr_cross_process(tmp_path, locking):
+    urlpath = str(tmp_path / "growth.b2nd")
+    rows0, ncols = 5, 10
+    steps, rows_per_step = 6, 5
+    final_rows = rows0 + steps * rows_per_step
+
+    a = blosc2.zeros(
+        (rows0, ncols), dtype=np.int64, chunks=(5, ncols), blocks=(5, ncols), urlpath=urlpath, mode="w"
+    )
+    del a
+
+    # Two readers opened before the writer starts growing the array: `reader`
+    # polls via explicit refresh(), `reader2` is left untouched to prove
+    # implicit re-sync on data access (a freshly-opened handle would just
+    # read the current on-disk shape, defeating that check)
+    reader = blosc2.open(urlpath, mode="r", locking=locking)
+    reader2 = blosc2.open(urlpath, mode="r", locking=locking)
+    assert reader.shape == (rows0, ncols)
+    assert reader2.shape == (rows0, ncols)
+
+    writer = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            GROWTH_WRITER,
+            urlpath,
+            "1" if locking else "0",
+            str(steps),
+            str(rows_per_step),
+            str(ncols),
+        ]
+    )
+    try:
+        deadline = time.monotonic() + 60
+        seen_rows = [reader.shape[0]]
+        while writer.poll() is None:
+            assert time.monotonic() < deadline, "writer process did not finish in time"
+            reader.refresh()
+            seen_rows.append(reader.shape[0])
+            time.sleep(0.01)
+        writer.wait()
+    finally:
+        if writer.poll() is None:
+            writer.kill()
+            writer.wait()
+    assert writer.returncode == 0, f"writer process failed with exit code {writer.returncode}"
+
+    # Growth as observed via explicit refresh() must never go backwards
+    assert seen_rows == sorted(seen_rows)
+
+    # A final explicit refresh must catch up to the writer's final shape
+    reader.refresh()
+    assert reader.shape == (final_rows, ncols)
+    # The original rows0 rows stay zero (never overwritten); the grown rows
+    # hold the flat row-major index the writer filled them with
+    expected = np.zeros((final_rows, ncols), dtype=np.int64)
+    expected[rows0:, :] = np.arange(rows0 * ncols, final_rows * ncols).reshape(final_rows - rows0, ncols)
+    np.testing.assert_array_equal(reader[:, :], expected)
+
+    # reader2 never called refresh(): its cached shape is still stale, and
+    # only a data access (not the .shape read above) resyncs it
+    assert reader2.shape == (rows0, ncols)
+    np.testing.assert_array_equal(reader2[-1, :], expected[-1, :])
+    assert reader2.shape == (final_rows, ncols)
+
+    blosc2.remove_urlpath(urlpath)

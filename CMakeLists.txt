@@ -14,9 +14,19 @@ endif()
 
 project(python-blosc2)
 
-set(BLOSC2_MIN_VERSION 3.0.0)
+# blosc2_ext.pyx calls blosc2_schunk_lock()/unlock(), added in c-blosc2 after
+# 3.1.5 (no released c-blosc2 has it yet, hence 3.1.6 rather than an actual
+# tag): without this floor, USE_SYSTEM_BLOSC2 against an older system
+# libblosc2 would pass this check and then fail with a confusing undefined
+# symbol at link time instead of a clear version error. Bump this to the
+# actual 3.1.6 release once it is tagged.
+set(BLOSC2_MIN_VERSION 3.1.6)
 # set(BLOSC2_BUNDLED_VERSION v3.1.5)
-set(BLOSC2_BUNDLED_VERSION 488c33ecef4e10559ea88b25bc6074f549a16e3d)  # SWMR support
+# 488c33ec already includes blosc2_schunk_lock (added earlier, in fab03bda);
+# move this to the v3.1.6 tag once released, and check whether a newer commit
+# is needed first (see c-blosc2's plans/todo-locking-swmr.md item 1: the
+# stale-writer append/insert counter fix, landed after this pin).
+set(BLOSC2_BUNDLED_VERSION 3cd3bfe58947c5a827efab5c878be17aaa0e0079)  # SWMR support
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")

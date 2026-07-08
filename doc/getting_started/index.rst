@@ -10,3 +10,4 @@ Getting Started
     dsl_syntax
     parquet_to_blosc2
     b2view
+    sharing_across_processes

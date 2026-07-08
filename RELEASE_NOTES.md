@@ -2,7 +2,32 @@
 
 ## Changes from 4.7.0 to 4.7.1
 
-XXX version-specific blurb XXX
+### Sharing containers across processes
+
+- New `locking` storage parameter (and the `BLOSC_LOCKING` environment
+  variable to enable it fleet-wide) serializes accesses to an on-disk
+  `SChunk`/`NDArray`/`EmbedStore`/`DictStore` against other handles and other
+  processes, via a small sidecar lock file (`.b2lock`). Advisory: every
+  handle touching the container must opt in. Requires a c-blosc2 build with
+  `blosc2_schunk_lock()` (bundled automatically; see the minimum-version
+  notes below if linking a system c-blosc2).
+- `SChunk.holding_lock()`: a context manager to hold the exclusive lock
+  across several operations, making a multi-step mutation atomic to other
+  locked handles.
+- `EmbedStore` and `DictStore` (`.b2d`) now support cross-process writers
+  under locking: transactional writes plus key-map re-sync, so readers
+  follow keys added or removed by another process.
+- `DictStore.to_b2z()` (and `TreeStore`, built on it) now replaces the
+  target file atomically, so concurrent readers always see either the old
+  or the new archive, never a torn one. No locking needed for `.b2z` reads.
+- Growth-SWMR (single writer, multiple readers): a reader `NDArray` handle
+  opened before a `resize()` made through another handle follows the new
+  shape on its next data access, or via the new explicit
+  `NDArray.refresh()`.
+- New user guide page,
+  [Sharing containers across processes](https://www.blosc.org/python-blosc2/getting_started/sharing_across_processes.html),
+  covering all of the above plus the caveats (NFS, `mmap_mode`, Windows
+  in-use-file rename).
 
 ## Changes from 4.6.0 to 4.7.0
 
