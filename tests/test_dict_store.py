@@ -786,6 +786,7 @@ print(nreads)
 """
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(sys.platform == "win32", reason="an in-use target cannot be replaced on Windows")
 @pytest.mark.skipif(blosc2.IS_WASM, reason="wasm32 does not support subprocesses")
 def test_to_b2z_atomic_replace(tmp_path):

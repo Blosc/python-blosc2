@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 import numpy as np
+import pytest
 
 import blosc2
 import blosc2.ctable as ct
@@ -170,6 +171,7 @@ def test_single_row():
     _check("row0", tuple(rt[0]), (99, "only"))
 
 
+@pytest.mark.heavy
 def test_large_table():
     """Ensure a table with many rows round-trips without bloating or losing data."""
 
