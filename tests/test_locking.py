@@ -161,6 +161,29 @@ def test_ndarray_holding_lock(tmp_path):
     blosc2.remove_urlpath(str(unlocked_path))
 
 
+def test_schunk_holding_lock_refreshes_on_entry(tmp_path):
+    urlpath = tmp_path / "schunk-holding-lock-refresh.b2frame"
+    w = create_schunk(urlpath, contiguous=True, locking=True)
+    assert w.nchunks == NCHUNKS
+
+    r = blosc2.open(str(urlpath), mode="a", locking=True)
+    assert r.nchunks == NCHUNKS
+
+    # Writer appends a chunk behind the reader's back, with no data access
+    # through r in between -- r's cached nchunks is now stale.
+    data = np.arange(NCHUNKS * CHUNK_NITEMS, (NCHUNKS + 1) * CHUNK_NITEMS, dtype=DTYPE)
+    w.append_data(data)
+
+    # Without the auto-refresh in holding_lock(), a decision based on
+    # r.nchunks here would act on the stale value instead of the real
+    # on-disk state, e.g. wrongly deciding more chunks still need to be
+    # appended to reach a target count.
+    with r.holding_lock():
+        assert r.nchunks == NCHUNKS + 1
+
+    blosc2.remove_urlpath(str(urlpath))
+
+
 def test_locking_validation(tmp_path):
     urlpath = tmp_path / "schunk-valid.b2frame"
     # locking together with mmap_mode is rejected

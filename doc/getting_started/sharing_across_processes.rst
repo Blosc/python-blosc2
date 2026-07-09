@@ -35,9 +35,10 @@ SWMR without locking
 A reader handle opened before a writer mutates a container does **not** see
 the change through its cached view automatically — it re-syncs the next time
 it *touches* the container, whether that's reading data, checking whether a
-vlmeta key exists (``"name" in schunk.vlmeta``), or — for ``NDArray`` only —
-an explicit :meth:`NDArray.refresh() <blosc2.NDArray.refresh>` call that
-polls without reading any data:
+vlmeta key exists (``"name" in schunk.vlmeta``), or an explicit
+:meth:`NDArray.refresh() <blosc2.NDArray.refresh>` /
+:meth:`SChunk.refresh() <blosc2.SChunk.refresh>` call that polls without
+reading any data:
 
 .. code-block:: python
 
@@ -200,6 +201,12 @@ other handles:
 Everything inside the block is serialized exclusively — including plain
 reads through other locked handles — so keep it short. On a handle without
 locking enabled, ``holding_lock()`` is a no-op.
+
+``SChunk.holding_lock()`` also refreshes this handle's cached counters
+(:attr:`nchunks <blosc2.SChunk.nchunks>`, ``nbytes``, ``cbytes``) right after
+the lock is acquired, so a decision made inside the block from one of these
+(e.g. ``if schunk.nchunks <= idx: ...``) always sees the current on-disk
+state, not a stale cache from before the lock was taken.
 
 :meth:`NDArray.holding_lock() <blosc2.NDArray.holding_lock>` delegates to the
 same method on the underlying schunk for the locking itself, and additionally

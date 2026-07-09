@@ -86,6 +86,31 @@ def test_refresh_in_memory_noop():
     assert a.refresh() is False
 
 
+def test_schunk_explicit_refresh(tmp_path):
+    urlpath = tmp_path / "schunk-refresh.b2frame"
+    w = blosc2.SChunk(
+        chunksize=DTYPE.itemsize * 10,
+        cparams={"typesize": DTYPE.itemsize},
+        urlpath=str(urlpath),
+        mode="w",
+    )
+    w.append_data(np.arange(10, dtype=DTYPE))
+    r = blosc2.open(str(urlpath))
+    # A fresh handle is already current
+    assert r.refresh() is False
+
+    # refresh() observes the new chunk with no data access involved
+    w.append_data(np.arange(10, 20, dtype=DTYPE))
+    assert r.refresh() is True
+    assert r.nchunks == 2
+    assert r.refresh() is False
+
+
+def test_schunk_refresh_in_memory_noop():
+    s = blosc2.SChunk(chunksize=DTYPE.itemsize * 10, cparams={"typesize": DTYPE.itemsize})
+    assert s.refresh() is False
+
+
 def test_locking_detects_same_length_rewrite(tmp_path):
     # A shrink within the last chunk leaves the frame length unchanged (the
     # documented blind spot for unlocked handles); the locking generation

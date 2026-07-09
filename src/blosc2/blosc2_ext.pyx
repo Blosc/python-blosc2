@@ -481,6 +481,7 @@ cdef extern from "blosc2.h":
     void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, c_bool avoid_cframe_free)
     int blosc2_schunk_lock(blosc2_schunk *schunk) nogil
     int blosc2_schunk_unlock(blosc2_schunk *schunk) nogil
+    int blosc2_schunk_refresh(blosc2_schunk *schunk) nogil
     int64_t blosc2_schunk_to_file(blosc2_schunk* schunk, const char* urlpath)
     int64_t blosc2_schunk_free(blosc2_schunk *schunk) nogil
     int64_t blosc2_schunk_append_chunk(blosc2_schunk *schunk, uint8_t *chunk, c_bool copy)
@@ -2231,6 +2232,11 @@ cdef class SChunk:
         cdef int rc = blosc2_schunk_unlock(self.schunk)
         if rc < 0:
             raise RuntimeError("Could not unlock the super-chunk frame")
+
+    def refresh(self):
+        cdef int rc = blosc2_schunk_refresh(self.schunk)
+        _check_rc(rc, "Error while refreshing the schunk")
+        return rc == 1
 
     @property
     def change_tick(self):

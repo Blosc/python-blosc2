@@ -471,6 +471,7 @@ class SChunk(blosc2_ext.SChunk):
         """
         super().lock()
         try:
+            self.refresh()
             yield self
         finally:
             super().unlock()
@@ -512,6 +513,24 @@ class SChunk(blosc2_ext.SChunk):
     def nchunks(self) -> int:
         """The number of chunks."""
         return super().nchunks
+
+    def refresh(self) -> bool:
+        """Re-sync the cached counters and metadata of a disk-based super-chunk.
+
+        In a single-writer, multiple-readers (SWMR) workflow, a reader handle
+        follows changes made through another handle (e.g. an :meth:`append_data`
+        in another process) automatically on data access. Call this to observe
+        changes such as :attr:`nchunks`, :attr:`nbytes` or :attr:`cbytes`
+        without accessing data, e.g. when polling while waiting for a writer.
+
+        Returns
+        -------
+        out: bool
+            True if the cached state was re-synced with the on-disk state,
+            False if it was already current. Always False for in-memory
+            super-chunks.
+        """
+        return super().refresh()
 
     @property
     def change_tick(self) -> int:
