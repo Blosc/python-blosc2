@@ -65,7 +65,14 @@ polls without reading any data:
 This is the classic HDF5-SWMR use case: a writer grows an array (or appends
 schunk chunks) while readers keep up with the new extent. Consistency is
 per-operation, not a whole-container snapshot — the same weak ordering
-HDF5-SWMR offers.
+HDF5-SWMR offers. See ``examples/ndarray/swmr-enlarge.py`` for this pattern
+run for real across several reader processes, including how to tell a
+"settled" (safely readable) region from a just-grown-but-not-yet-filled one,
+and how to retry the occasional transient read error a reader can hit
+racing the writer. ``examples/ndarray/swmr-enlarge-bars.py`` is the same
+scenario rendered live with ``rich`` progress bars -- one per writer/reader,
+each reporting its own throughput -- so the writer-leads-readers-follow
+effect is visible instead of just asserted; run it in a real terminal.
 
 Contract and limits:
 
