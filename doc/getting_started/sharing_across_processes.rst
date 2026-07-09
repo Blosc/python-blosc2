@@ -202,9 +202,15 @@ reads through other locked handles — so keep it short. On a handle without
 locking enabled, ``holding_lock()`` is a no-op.
 
 :meth:`NDArray.holding_lock() <blosc2.NDArray.holding_lock>` delegates to the
-same method on the underlying schunk. This is required for any
-read-modify-write across writers, since a single indexed assignment reads
-the old value and writes the new one as two separate locked operations:
+same method on the underlying schunk for the locking itself, and additionally
+refreshes this handle's cached :attr:`shape <blosc2.NDArray.shape>` right
+after the lock is acquired — so code that reads ``shape`` inside the block
+(e.g. to decide a :meth:`resize` target) always sees the current on-disk
+state, not a stale cache from before the lock was taken.
+
+``holding_lock()`` is required for any read-modify-write across writers,
+since a single indexed assignment reads the old value and writes the new one
+as two separate locked operations:
 
 .. code-block:: python
 

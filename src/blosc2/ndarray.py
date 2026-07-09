@@ -14,6 +14,7 @@ import weakref
 from abc import abstractmethod
 from collections import OrderedDict, namedtuple
 from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from functools import reduce
 from itertools import islice, product
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
@@ -3851,18 +3852,34 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """The variable-length metadata of the array."""
         return self.schunk.vlmeta
 
-    def holding_lock(self) -> Iterator[SChunk]:
+    @contextmanager
+    def holding_lock(self) -> Iterator[NDArray]:
         """Hold the exclusive frame lock across several operations.
 
         Delegates to :meth:`SChunk.holding_lock() <blosc2.SChunk.holding_lock>`
-        on the underlying schunk; see there for details.
+        on the underlying schunk for the locking itself; see there for
+        details. On top of that, this also refreshes this handle's cached
+        shape right after the lock is acquired.
+
+        That refresh matters because acquiring the lock does not by itself
+        update anything cached on this handle -- :attr:`shape` is a plain
+        in-memory value, unchanged since this handle's last operation.
+        Without it, code that reads :attr:`shape` first thing inside the
+        block to decide a :meth:`resize` target can act on a stale, too-small
+        shape; since ``resize()`` treats its target as absolute, resizing to
+        a target computed that way can shrink an array another handle already
+        grew further, silently deleting its data. Refreshing first closes
+        that gap, so any :attr:`shape` read inside the block is guaranteed
+        current.
 
         Examples
         --------
         >>> with arr.holding_lock():  # doctest: +SKIP
         ...     arr[0] = arr[0] + 1
         """
-        return self.schunk.holding_lock()
+        with self.schunk.holding_lock():
+            self.refresh()
+            yield self
 
     @property
     def fields(self) -> Mapping[str, NDField]:

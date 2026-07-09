@@ -491,8 +491,14 @@ w = blosc2.open(urlpath, mode="a", locking=True)
 row0 = writer_id * rows_per_writer
 for i in range(iters):
     # Bracket the resize + fill so another handle never observes a grown
-    # shape with not-yet-written (still-zero) rows in this writer's region
-    with w.schunk.holding_lock():
+    # shape with not-yet-written (still-zero) rows in this writer's region.
+    # NDArray.holding_lock() (unlike the plain SChunk one) refreshes this
+    # handle's cached shape right after acquiring the lock -- without that,
+    # a writer that hasn't touched the array in a while could still see a
+    # stale, too-small shape below; resize() treats its target as absolute,
+    # so resizing to `needed` computed from that stale shape would shrink an
+    # already-larger array and silently delete other writers' rows.
+    with w.holding_lock():
         needed = row0 + rows_per_writer
         if w.shape[0] < needed:
             w.resize((needed, ncols))
