@@ -7,11 +7,11 @@ same process, under two complementary mechanisms:
 
 - **SWMR** (single writer, multiple readers) — always on, no configuration
   needed. One process writes, others read and follow along.
-- **Locking** (this is what enables **MWMR** — multiple writers, multiple
-  readers) — opt-in, via ``locking=True`` or the ``BLOSC_LOCKING``
+- **Locking** (this is what supports **multiple concurrent writers**, not
+  just one) — opt-in, via ``locking=True`` or the ``BLOSC_LOCKING``
   environment variable. Serializes accesses with a sidecar lock file so
-  several processes can safely write concurrently, not just one, or a
-  reader can safely observe a writer mid-mutation.
+  several processes can safely write concurrently, or a reader can safely
+  observe a writer mid-mutation.
 
 Both are advisory: they coordinate cooperating Blosc2 handles, not arbitrary
 processes touching the file. Neither works over a network filesystem (NFS).
@@ -21,8 +21,8 @@ crashing mid-mutation can leave partial state in the *data* regardless of
 whether locking is in use — see :ref:`Crash safety <SharingLocking>` below
 for what locking does and does not give you there.
 
-Two runnable, tested examples cover the common MWMR patterns end to end:
-``examples/ndarray/mwmr-mode.py`` (several processes writing disjoint
+Two runnable, tested examples cover the common multiple-writers patterns end
+to end: ``examples/ndarray/mwmr-mode.py`` (several processes writing disjoint
 regions, and a read-modify-write counter that shows why ``holding_lock()``
 is required for that case) and ``examples/ndarray/mwmr-enlarge.py``
 (several processes concurrently growing the same array with
@@ -269,9 +269,9 @@ Summary
     * - SWMR (default)
       - always on
       - single writer, readers follow shape/length growth on next access
-    * - Locking (MWMR)
+    * - Locking
       - ``locking=True`` or ``BLOSC_LOCKING``
-      - multiple writers, atomic ops, no torn reads
+      - multiple concurrent writers, atomic ops, no torn reads
     * - ``holding_lock()``
       - context manager on a locked handle
       - atomic multi-operation blocks

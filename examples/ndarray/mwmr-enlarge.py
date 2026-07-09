@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Multiple Writer, Multiple Reader (MWMR) mode: growing an array, not just
+# Multiple concurrent writers, this time growing an array, not just
 # writing into its existing extent. `mwmr-mode.py` only exercises writes
 # into a *fixed*-shape array; this one has several processes `append()` to
 # the *same* 1-D array concurrently, which is a fundamentally different

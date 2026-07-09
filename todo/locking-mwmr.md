@@ -1,16 +1,23 @@
-# MWMR (Multiple Writer, Multiple Reader) — steps to get there
+# Multiple concurrent writers — steps to get there
 
 ## Context
 
 Status as of 2026-07-08, after the locking/SWMR push landed in both repos
-(c-blosc2 `plans/todo-locking-swmr.md` has the mirror view; design details in
-`plans/file-locking.md` and c-blosc2's `plans/high-level-formats-locking.md`).
+(design details in `plans/file-locking.md` and c-blosc2's
+`plans/high-level-formats-locking.md`; c-blosc2 had its own mirror doc at
+`plans/todo-locking-swmr.md`, retired 2026-07-08 in favor of this file being
+the single source of truth for both repos).
 
 Key realization from the 2026-07-08 review: **at coarse granularity, locking
-mode already is MWMR** — and the docs quietly claim it ("so several processes
-can safely write", `doc/getting_started/sharing_across_processes.rst`). The
-naming split is: SWMR = the non-locking contract (single writer, readers
-follow); locking = the multi-writer contract. Evidence in place today:
+mode already supports multiple concurrent writers** — and the docs quietly
+claim it ("so several processes can safely write",
+`doc/getting_started/sharing_across_processes.rst`). The naming split is:
+SWMR = the non-locking contract (single writer, readers follow); locking =
+the multi-writer contract. (Note: this file used to call the multi-writer
+contract "MWMR" throughout — dropped 2026-07-09, it's not an established
+term and reads as jargon we invented; "multiple writers" / "concurrent
+writers" says the same thing plainly. `SWMR` stays, since that one really is
+borrowed from HDF5.) Evidence in place today:
 
 - Every mutating frame op takes the exclusive sidecar lock; the generation
   counter forces an exact re-sync of stale handles.
@@ -23,9 +30,10 @@ follow); locking = the multi-writer contract. Evidence in place today:
 - Store-level cross-process multi-writer support exists **and is tested**
   (`test_embed_store_cross_process_writers`, `test_dict_store_cross_process_writers`).
 
-What separates "it basically works" from "we support MWMR" is the list below.
-Items 1–4 are roughly a week of work combined; after them MWMR can be
-advertised honestly. Items 5–6 are documented limitations / non-goals.
+What separates "it basically works" from "we support multiple concurrent
+writers" is the list below. Items 1–4 are roughly a week of work combined;
+after them this can be advertised honestly. Items 5–6 are documented
+limitations / non-goals.
 
 The driving external use case is multi-worker Caterva2 (several server
 processes fetching into one shared peercache pool) — see item 7.
@@ -486,7 +494,7 @@ length" with no positional requirement; 70/70 clean runs after.
 All four C tests pass reliably (15-70 repeat runs each, per test). Full
 ctest suite (1661 tests) green.
 
-## 4. Documentation: promote and pin the MWMR contract — DONE (2026-07-08, python-blosc2)
+## 4. Documentation: promote and pin the multi-writer contract — DONE (2026-07-08, python-blosc2)
 
 Extended `sharing_across_processes.rst`:
 
@@ -504,6 +512,46 @@ Extended `sharing_across_processes.rst`:
 - Crash caveat, NFS/mmap caveats, and store guarantees were already present
   from earlier passes on this doc — no change needed there.
 
+### Follow-up polish pass — DONE (2026-07-09, python-blosc2)
+
+Named the multi-writer contract explicitly rather than leaving it implicit
+in the "Locking" bullet's description, and added pointers to two new
+runnable, tested examples (`examples/ndarray/mwmr-mode.py`,
+`examples/ndarray/mwmr-enlarge.py` — the filenames predate the terminology
+cleanup below and still say "mwmr"; not renamed, see the note there) in
+three places: a short paragraph right after the intro bullets for readers
+who want working code first, and inline next to the two matching code
+samples (the `holding_lock()` RMW idiom and the `append()` idiom) they each
+demonstrate.
+
+Caught and fixed a scoping mistake in the same pass: an initial draft put
+the "crash mid-mutation" caveat inside the Locking-specific bullet, wording
+it as if crash safety were a locking limitation. It isn't — there's no
+transaction-log/multi-step-commit protocol in the container format at all,
+so a crash mid-mutation can leave partial data regardless of whether
+locking is in use; locking only adds the (correctly, separately documented)
+fact that the OS auto-releases the lock if the holder dies. Moved the
+caveat to the shared "Both are advisory" paragraph so it reads as the
+general fact it is, not a Locking-specific one.
+
+### Terminology cleanup — DONE (2026-07-09, python-blosc2)
+
+User pushback: "MWMR" isn't an established term (the real academic one, from
+Lamport's shared-register classification, is "MRMW" — reader-first, and it's
+niche jargon even then) and reads as something we invented. Replaced it
+throughout the doc, both example scripts' header comments, and this file
+with plain "multiple writers" / "concurrent writers" phrasing — that's what
+real systems docs actually say. `SWMR` stays, since that one really is
+borrowed from HDF5 and is the accurate name for the non-locking contract.
+
+Left as-is, deliberately: the example filenames (`examples/ndarray/mwmr-mode.py`,
+`examples/ndarray/mwmr-enlarge.py`) and this file's own filename
+(`todo/locking-mwmr.md`). Renaming those would touch every cross-reference
+made throughout this whole effort (memory files, doc pointers, this file's
+own history) for a filename nobody reads as prose — lower value than the
+doc/comment wording fix. Revisit only if it starts to bother someone in
+practice.
+
 ## 5. Crash robustness under multiple writers — LOW (document now, build later)
 
 flock auto-releases when a process dies — good for liveness, but a writer
@@ -515,7 +563,7 @@ parked until a use case demands it; do not start it speculatively.
 
 ## 6. Explicit non-goals (record, do not do)
 
-- **High-concurrency MWMR** (chunk-level locking, MVCC/snapshot isolation):
+- **High-concurrency multi-writer support** (chunk-level locking, MVCC/snapshot isolation):
   one exclusive lock per frame serializes writers and excludes readers during
   writes. Correct, not concurrent. Fine for coordination workloads (peer
   caches, occasional multi-writer stores); parallel-write throughput is a
@@ -527,8 +575,8 @@ parked until a use case demands it; do not start it speculatively.
 ## 7. Downstream consumer: multi-worker Caterva2 — (caterva2 repo)
 
 The convergence point. Several gunicorn workers sharing one peercache pool is
-exactly the MWMR use case: the blosc2 layer already makes the cache frames
-safe for it (`locking=True` is on every peer-cache handle since caterva2
+exactly the multiple-concurrent-writers use case: the blosc2 layer already
+makes the cache frames safe for it (`locking=True` is on every peer-cache handle since caterva2
 `2f8eacb`), but Caterva2's fetch→read→touch critical section is an
 **asyncio** lock (process-local), and the atime sidecars + budget accounting
 are process-local too. The cross-process critical section maps naturally onto
@@ -539,35 +587,44 @@ items 1–4 are its prerequisites.
 ## Release coupling
 
 All of this rides on the pending release train (c-blosc2 3.2.0 tag →
-python-blosc2 4.8.0 → caterva2 `blosc2>=` floor bump); see item 3 of
-c-blosc2's `plans/todo-locking-swmr.md`. The minor-version bumps (3.2.0/4.8.0
-rather than 3.1.6/4.7.1) reflect the significant API additions of this
-feature set (decided 2026-07-08). Items 1–3 above should land before the tag
-if practical, so 3.2.0/4.8.0 ship the tested multi-writer story rather than a
-half-claimed one.
+python-blosc2 4.8.0 → caterva2 `blosc2>=` floor bump). The minor-version
+bumps (3.2.0/4.8.0 rather than 3.1.6/4.7.1) reflect the significant API
+additions of this feature set (decided 2026-07-08).
 
-Item 0's `frame_from_file_offset_retrying()` fix is a local, uncommitted
-change in c-blosc2 as of this writing (built and tested locally via
-`CMAKE_ARGS="-DFETCHCONTENT_SOURCE_DIR_BLOSC2=~/blosc/c-blosc2"`) — it needs
-its own commit, and python-blosc2's `BLOSC2_BUNDLED_VERSION` needs to move
-past it before the 3.2.0/4.8.0 tag.
+**c-blosc2 side is fully committed as of 2026-07-08** (all of it, through
+the `frame_refresh_if_stale()` torn-read saga): `fa742207` (open-race fix,
+item 1), `87a3af7d` (set_slice bracket, item 2), `0a7fdc99`/`e96d1231`/`224d6251`
+(second open-race + `b2nd_insert`/`b2nd_append` external-lock finding, item
+0's C-side follow-up), `c814ad24` (the 3-round `frame_refresh_if_stale()`
+fix — trailer read reorder, metalayer/vlmeta bounded retry + rollback,
+locking-mode-aware retry budget). python-blosc2's `BLOSC2_BUNDLED_VERSION`
+is bumped to `c814ad24` (the latest), so everything above is exercised
+against a non-local c-blosc2, not just the dev checkout.
 
-## Suggested order
+c-blosc2's own mirror doc, `plans/todo-locking-swmr.md`, and a second,
+unrelated stale scratch file in this repo at `todo/locking-swmr.md` (note:
+**swmr**, not **mwmr**) were both retired 2026-07-08 rather than kept
+hand-synced with this file — this doc is now the single source of truth for
+both repos. Don't recreate either.
+
+Remaining before the actual tag: nothing blocking from the code/test side.
+Cutting the `v3.2.0`/`4.8.0` tags themselves is an explicit user call, not
+something to do autonomously — still open as of this writing.
+
+## Suggested order (historical — items 0–4 are all done; see "Release coupling" above for current status)
 
 1 (hammer tests) first — it either pins the claim or finds the bugs (it found
 one: the open-race fix above); 2 (set_slice bracket) next; 3 (audit) and 4
 (docs) together before the release pair; 5–6 are documentation lines inside
 4; 7 lives in the caterva2 repo.
 
-Items 1–4 are all done as of 2026-07-08. c-blosc2: `fa742207` (open-race fix,
-item 1) and `87a3af7d` (set_slice bracket, item 2) are committed.
-python-blosc2's `BLOSC2_BUNDLED_VERSION` is bumped past both (`d58a2c07`,
-`24b358ac`), so the overlapping-slice test is green against a non-local
-c-blosc2. Item 3 (audit) found no new bugs. Item 4 (docs) is landed in
-`doc/getting_started/sharing_across_processes.rst`.
+Note on item 3: the original audit pass concluded "no new bugs" — that was
+wrong (see the `NDArray.append()` correction above, and the C-side
+`b2nd_insert`/`b2nd_append` finding). Don't trust that specific claim if
+you're skimming; the corrected findings are what's live.
 
-Remaining before the release tag: nothing blocking from this list. What's
-left is the release-coupling mechanics themselves (tagging c-blosc2 3.2.0,
-cutting python-blosc2 4.8.0, bumping the caterva2 `blosc2>=` floor) and item
-7 (caterva2's asyncio-lock → `holding_lock()` port), which lives in the
+What's actually left: the release-coupling mechanics themselves (tagging
+c-blosc2 3.2.0, cutting python-blosc2 4.8.0, bumping the caterva2
+`blosc2>=` floor — a user call, see "Release coupling" above) and item 7
+(caterva2's asyncio-lock → `holding_lock()` port), which lives in the
 caterva2 repo, not here.

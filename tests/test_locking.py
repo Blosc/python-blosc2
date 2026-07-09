@@ -230,7 +230,7 @@ def test_cross_process_hammer(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Multi-writer (MWMR) hammer tests: several writer *processes*, not just one,
+# Multi-writer hammer tests: several writer *processes*, not just one,
 # mutating the same on-disk container concurrently under locking=True.
 # ---------------------------------------------------------------------------
 
