@@ -102,6 +102,12 @@ class DictStore:
     either the old or the new archive, never a torn one.  All of this also
     applies to :class:`blosc2.TreeStore`, which builds on DictStore.
 
+    External persistence uses the following file extensions: .b2nd for
+    NDArray, .b2f for SChunk, and .b2b for BatchArray. These suffixes are a
+    naming convention for newly written leaves; when reopening an existing
+    store, leaf typing is resolved from object metadata instead of trusting
+    the suffix alone.
+
     Examples
     --------
     >>> dstore = DictStore(localpath="my_dstore.b2z", mode="w")
@@ -111,21 +117,13 @@ class DictStore:
     >>> dstore["/dir1/node3"] = arr_external  # external file in dir1 (.b2nd)
     >>> schunk = blosc2.SChunk(chunksize=32)
     >>> schunk.append_data(b"abcd")
-    4
+    1
     >>> dstore["/dir1/schunk1"] = schunk  # externalized as .b2f if above threshold
-    >>> dstore.to_b2z(filename="my_dstore.b2z")  # persist to the zip file; external files are copied in
+    >>> _ = dstore.to_b2z(filename="my_dstore.b2z")  # persist to the zip file; external files are copied in
     >>> print(sorted(dstore.keys()))
     ['/dir1/node3', '/dir1/schunk1', '/node1', '/node2']
-    >>> print(dstore["/node1"][:]))
-    array([1, 2, 3])
-
-    Notes
-    -----
-    - External persistence uses the following file extensions:
-      .b2nd for NDArray, .b2f for SChunk, and .b2b for BatchArray.
-      These suffixes are a naming convention for newly written leaves; when
-      reopening an existing store, leaf typing is resolved from object
-      metadata instead of trusting the suffix alone.
+    >>> print(dstore["/node1"][:])
+    [1 2 3]
     """
 
     def __init__(
