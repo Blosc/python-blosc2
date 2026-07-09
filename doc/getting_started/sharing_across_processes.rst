@@ -7,13 +7,27 @@ same process, under two complementary mechanisms:
 
 - **SWMR** (single writer, multiple readers) — always on, no configuration
   needed. One process writes, others read and follow along.
-- **Locking** — opt-in, via ``locking=True`` or the ``BLOSC_LOCKING``
+- **Locking** (this is what enables **MWMR** — multiple writers, multiple
+  readers) — opt-in, via ``locking=True`` or the ``BLOSC_LOCKING``
   environment variable. Serializes accesses with a sidecar lock file so
-  several processes can safely write, or a reader can safely observe a
-  writer mid-mutation.
+  several processes can safely write concurrently, not just one, or a
+  reader can safely observe a writer mid-mutation.
 
 Both are advisory: they coordinate cooperating Blosc2 handles, not arbitrary
 processes touching the file. Neither works over a network filesystem (NFS).
+Neither is a substitute for a transaction log, either: there is no
+multi-step commit protocol in the container format itself, so a process
+crashing mid-mutation can leave partial state in the *data* regardless of
+whether locking is in use — see :ref:`Crash safety <SharingLocking>` below
+for what locking does and does not give you there.
+
+Two runnable, tested examples cover the common MWMR patterns end to end:
+``examples/ndarray/mwmr-mode.py`` (several processes writing disjoint
+regions, and a read-modify-write counter that shows why ``holding_lock()``
+is required for that case) and ``examples/ndarray/mwmr-enlarge.py``
+(several processes concurrently growing the same array with
+``append()``). Start there if you just want working code; the rest of this
+page is the contract behind it.
 
 SWMR without locking
 ---------------------
@@ -152,6 +166,11 @@ the old value and writes the new one as two separate locked operations:
     with arr.holding_lock():
         arr[i] = arr[i] + 1
 
+See ``examples/ndarray/mwmr-mode.py`` for this pattern run for real across
+several processes, including a direct comparison of the wrong (unlocked)
+and right (``holding_lock()``-wrapped) versions so you can see the lost
+updates happen.
+
 The same applies to :meth:`NDArray.append() <blosc2.NDArray.append>`: it is
 internally a refresh of the current length, a resize, and a slice write —
 three steps, not one atomic operation. ``append()`` always refreshes its
@@ -169,6 +188,10 @@ any read-modify-write above.
     # concurrent grower's data can be silently discarded:
     with arr.holding_lock():
         arr.append(new_rows)
+
+See ``examples/ndarray/mwmr-enlarge.py`` for several processes appending
+concurrently to the same array, then verifying every batch landed exactly
+once with nothing lost, torn, or duplicated.
 
 Per-operation atomicity: what counts as "one operation"
 ------------------------------------------------------------
@@ -246,7 +269,7 @@ Summary
     * - SWMR (default)
       - always on
       - single writer, readers follow shape/length growth on next access
-    * - Locking
+    * - Locking (MWMR)
       - ``locking=True`` or ``BLOSC_LOCKING``
       - multiple writers, atomic ops, no torn reads
     * - ``holding_lock()``
