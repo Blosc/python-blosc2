@@ -558,6 +558,448 @@ def test_cross_process_multiwriter_ndarray(tmp_path):
     blosc2.remove_urlpath(urlpath)
 
 
+NDARRAY_APPEND_WRITER_SCRIPT = """
+import sys
+import numpy as np
+import blosc2
+
+urlpath, writer_id, appends_per_writer, items_per_append = (
+    sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+)
+w = blosc2.open(urlpath, mode="a", locking=True)
+for i in range(appends_per_writer):
+    tag = writer_id * 1_000_000 + i
+    batch = np.full(items_per_append, tag, dtype=np.int64)
+    # append() is refresh + resize + a slice write -- not one atomic
+    # operation on its own. Bracketing the whole call is required so no
+    # other writer's growth is invisible when this one computes where to
+    # place its own batch.
+    with w.holding_lock():
+        w.append(batch)
+sys.exit(0)
+"""
+
+
+def test_cross_process_multiwriter_ndarray_append(tmp_path):
+    # Regression test for a real data-loss bug (found 2026-07-08 while
+    # building examples/ndarray/mwmr-enlarge.py): NDArray.append() read its
+    # cached (unrefreshed) shape to compute the resize target. Under
+    # concurrent growth, resize()'s own internal refresh would then see a
+    # *larger* true shape than the stale target just computed, so
+    # b2nd_resize() took the shrink path and deleted the chunks other
+    # writers had just appended -- even with holding_lock() wrapping the
+    # call, since holding_lock() only serializes the operations inside the
+    # block, it does not retroactively fix a value read from a stale cache.
+    # Fixed by refreshing before reading the old size (ndarray.py, append()).
+    #
+    # N writer processes each append() several uniquely-tagged batches to
+    # the same 1-D array. Every atomic append() inserts a block of identical
+    # values, so regardless of how the writers' appends interleaved on
+    # disk, the final array must be an exact concatenation of such blocks:
+    # final length matches exactly, every block is untorn, and the multiset
+    # of tags is exactly what was appended -- nothing lost, nothing
+    # duplicated.
+    urlpath = str(tmp_path / "array-multiwriter-append.b2nd")
+    nwriters = 4
+    appends_per_writer = 30
+    items_per_append = 25
+
+    a = blosc2.zeros(
+        (0,),
+        dtype=np.int64,
+        chunks=(items_per_append * 4,),
+        blocks=(items_per_append,),
+        urlpath=urlpath,
+        mode="w",
+        locking=True,
+    )
+    del a
+
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                NDARRAY_APPEND_WRITER_SCRIPT,
+                urlpath,
+                str(wid),
+                str(appends_per_writer),
+                str(items_per_append),
+            ]
+        )
+        for wid in range(nwriters)
+    ]
+    deadline = time.monotonic() + 180
+    for w in writers:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, "writer processes did not finish in time"
+        w.wait(timeout=remaining)
+    assert all(w.returncode == 0 for w in writers), "a writer process failed"
+
+    reader = blosc2.open(urlpath, mode="r", locking=True)
+    expected_len = nwriters * appends_per_writer * items_per_append
+    assert reader.shape[0] == expected_len, (
+        f"final length {reader.shape[0]} != expected {expected_len} -- lost or duplicated an append"
+    )
+
+    blocks = reader[:].reshape(-1, items_per_append)
+    tags = []
+    for block in blocks:
+        assert np.all(block == block[0]), f"torn append: block mixes values {np.unique(block)}"
+        tags.append(int(block[0]))
+
+    expected_tags = sorted(wid * 1_000_000 + i for wid in range(nwriters) for i in range(appends_per_writer))
+    assert sorted(tags) == expected_tags, (
+        "append tags don't match: a batch was lost, duplicated, or corrupted"
+    )
+
+    blosc2.remove_urlpath(urlpath)
+
+
+def test_cross_process_multiwriter_ndarray_append_sparse_nonaligned(tmp_path):
+    # Same bug class as test_cross_process_multiwriter_ndarray_append, but
+    # on the two physical layouts that test didn't touch: sparse storage
+    # (contiguous=False, each chunk its own file, a different rewrite path
+    # than a single-file frame) and a starting length that is *not* a
+    # multiple of the chunk size (so the first append from every writer has
+    # to fill a partial chunk before any full one -- different chunk-boundary
+    # arithmetic than always starting from a clean 0).
+    urlpath = str(tmp_path / "array-multiwriter-append-sparse.b2nd")
+    nwriters = 4
+    appends_per_writer = 20
+    items_per_append = 25
+    prefix_len = 37  # not a multiple of items_per_append
+
+    a = blosc2.zeros(
+        (prefix_len,),
+        dtype=np.int64,
+        chunks=(items_per_append * 4,),
+        blocks=(items_per_append,),
+        urlpath=urlpath,
+        mode="w",
+        locking=True,
+        contiguous=False,
+    )
+    prefix = np.arange(prefix_len, dtype=np.int64)
+    a[:] = prefix
+    del a
+
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                NDARRAY_APPEND_WRITER_SCRIPT,
+                urlpath,
+                str(wid),
+                str(appends_per_writer),
+                str(items_per_append),
+            ]
+        )
+        for wid in range(nwriters)
+    ]
+    deadline = time.monotonic() + 180
+    for w in writers:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, "writer processes did not finish in time"
+        w.wait(timeout=remaining)
+    assert all(w.returncode == 0 for w in writers), "a writer process failed"
+
+    reader = blosc2.open(urlpath, mode="r", locking=True)
+    expected_len = prefix_len + nwriters * appends_per_writer * items_per_append
+    assert reader.shape[0] == expected_len, (
+        f"final length {reader.shape[0]} != expected {expected_len} -- lost or duplicated an append"
+    )
+    assert np.array_equal(reader[:prefix_len], prefix), (
+        "pre-existing prefix was corrupted by concurrent appends"
+    )
+
+    blocks = reader[prefix_len:].reshape(-1, items_per_append)
+    tags = []
+    for block in blocks:
+        assert np.all(block == block[0]), f"torn append: block mixes values {np.unique(block)}"
+        tags.append(int(block[0]))
+
+    expected_tags = sorted(wid * 1_000_000 + i for wid in range(nwriters) for i in range(appends_per_writer))
+    assert sorted(tags) == expected_tags, (
+        "append tags don't match: a batch was lost, duplicated, or corrupted"
+    )
+
+    blosc2.remove_urlpath(urlpath)
+
+
+NDARRAY_2D_GROW_WRITER_SCRIPT = """
+import sys
+import numpy as np
+import blosc2
+
+urlpath, writer_id, appends_per_writer, rows_per_append, ncols = (
+    sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+)
+w = blosc2.open(urlpath, mode="a", locking=True)
+for i in range(appends_per_writer):
+    tag = writer_id * 1_000_000 + i
+    block = np.full((rows_per_append, ncols), tag, dtype=np.int64)
+    # append() only supports 1-D arrays (ndarray.py: "append() is only
+    # supported for 1-D arrays"); growing an N-D array has no library
+    # convenience, so callers must refresh, resize, and fill by hand. This
+    # mirrors -- by hand, at the Python level -- exactly the sequence
+    # append() now does internally for 1-D since the 2026-07-08 fix.
+    with w.holding_lock():
+        w.refresh()
+        old_rows = w.shape[0]
+        new_rows = old_rows + rows_per_append
+        w.resize((new_rows, ncols))
+        w[old_rows:new_rows, :] = block
+sys.exit(0)
+"""
+
+
+def test_cross_process_multiwriter_ndarray_2d_grow(tmp_path):
+    # NDArray.append() is 1-D only, so this exercises the *general* pattern
+    # users must follow to grow an N-D array safely under concurrent
+    # writers: refresh() then resize() then fill, all inside holding_lock().
+    # Confirms the fix principle behind the append() bug (a stale read
+    # before a lock-protected composite op silently discards concurrent
+    # growth) generalizes correctly to N-D arrays and to manually-driven
+    # resize() calls, not just the library's own 1-D append() path.
+    urlpath = str(tmp_path / "array-multiwriter-2d-grow.b2nd")
+    nwriters = 4
+    appends_per_writer = 20
+    rows_per_append = 5
+    ncols = 8
+
+    a = blosc2.zeros(
+        (0, ncols),
+        dtype=np.int64,
+        chunks=(rows_per_append * 4, ncols),
+        blocks=(rows_per_append, ncols),
+        urlpath=urlpath,
+        mode="w",
+        locking=True,
+    )
+    del a
+
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                NDARRAY_2D_GROW_WRITER_SCRIPT,
+                urlpath,
+                str(wid),
+                str(appends_per_writer),
+                str(rows_per_append),
+                str(ncols),
+            ]
+        )
+        for wid in range(nwriters)
+    ]
+    deadline = time.monotonic() + 180
+    for w in writers:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, "writer processes did not finish in time"
+        w.wait(timeout=remaining)
+    assert all(w.returncode == 0 for w in writers), "a writer process failed"
+
+    reader = blosc2.open(urlpath, mode="r", locking=True)
+    expected_rows = nwriters * appends_per_writer * rows_per_append
+    assert reader.shape == (expected_rows, ncols), (
+        f"final shape {reader.shape} != expected {(expected_rows, ncols)} -- lost or duplicated a block"
+    )
+
+    blocks = reader[:, :].reshape(-1, rows_per_append, ncols)
+    tags = []
+    for block in blocks:
+        assert np.all(block == block[0, 0]), f"torn block: mixes values {np.unique(block)}"
+        tags.append(int(block[0, 0]))
+
+    expected_tags = sorted(wid * 1_000_000 + i for wid in range(nwriters) for i in range(appends_per_writer))
+    assert sorted(tags) == expected_tags, (
+        "growth tags don't match: a block was lost, duplicated, or corrupted"
+    )
+
+    blosc2.remove_urlpath(urlpath)
+
+
+NDARRAY_SHRINK_WRITER_SCRIPT = """
+import sys
+import numpy as np
+import blosc2
+
+urlpath, writer_id, appends_per_writer, items_per_append = (
+    sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+)
+w = blosc2.open(urlpath, mode="a", locking=True)
+for i in range(appends_per_writer):
+    tag = writer_id * 1_000_000 + i
+    batch = np.full(items_per_append, tag, dtype=np.int64)
+    with w.holding_lock():
+        w.append(batch)
+sys.exit(0)
+"""
+
+
+def test_cross_process_shrink_after_multiwriter_growth(tmp_path):
+    # Shrink is never exercised by any of the other multi-writer tests (they
+    # only grow). This checks the shrink path -- b2nd_resize()'s
+    # shrink_shape() -> blosc2_schunk_delete_chunk() -- correctly drops
+    # exactly the tail chunks after growth from several concurrent writers
+    # has produced many small, interleaved-order chunks, not the tidy
+    # single-writer layout shrink is usually exercised against.
+    #
+    # Growers run to completion first (sequenced, not racing the shrink) so
+    # the outcome is deterministic: whichever tags ended up in the final
+    # array's *last* items are exactly the ones a subsequent shrink must
+    # drop, and everything before that boundary must survive untouched.
+    urlpath = str(tmp_path / "array-shrink-after-growth.b2nd")
+    nwriters = 4
+    appends_per_writer = 20
+    items_per_append = 25
+
+    a = blosc2.zeros(
+        (0,),
+        dtype=np.int64,
+        chunks=(items_per_append * 4,),
+        blocks=(items_per_append,),
+        urlpath=urlpath,
+        mode="w",
+        locking=True,
+    )
+    del a
+
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                NDARRAY_SHRINK_WRITER_SCRIPT,
+                urlpath,
+                str(wid),
+                str(appends_per_writer),
+                str(items_per_append),
+            ]
+        )
+        for wid in range(nwriters)
+    ]
+    deadline = time.monotonic() + 180
+    for w in writers:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, "writer processes did not finish in time"
+        w.wait(timeout=remaining)
+    assert all(w.returncode == 0 for w in writers), "a writer process failed"
+
+    full = blosc2.open(urlpath, mode="a", locking=True)
+    full_len = full.shape[0]
+    expected_len = nwriters * appends_per_writer * items_per_append
+    assert full_len == expected_len, "growth phase itself lost or duplicated a batch"
+    before = full[:].copy()
+
+    keep = full_len - (full_len // 3)  # drop the last third
+    full.resize((keep,))
+    del full
+
+    reader = blosc2.open(urlpath, mode="r", locking=True)
+    assert reader.shape == (keep,), f"shrink left shape {reader.shape}, expected ({keep},)"
+    assert np.array_equal(reader[:], before[:keep]), (
+        "shrink corrupted the surviving prefix instead of only dropping the tail"
+    )
+
+    blosc2.remove_urlpath(urlpath)
+
+
+VLMETA_AND_GROWTH_WRITER_SCRIPT = """
+import sys
+import numpy as np
+import blosc2
+
+urlpath, writer_id, appends_per_writer, items_per_append = (
+    sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+)
+w = blosc2.open(urlpath, mode="a", locking=True)
+key = f"writer_{writer_id}"
+for i in range(appends_per_writer):
+    tag = writer_id * 1_000_000 + i
+    batch = np.full(items_per_append, tag, dtype=np.int64)
+    with w.holding_lock():
+        w.append(batch)
+        # vlmeta and the b2nd shape metalayer both go through the same
+        # frame-level metalayer reload on staleness (frame_refresh_if_stale
+        # reloads header metalayers *and* trailer vlmetalayers together) --
+        # exercise them interleaved, in the same locked block, to check
+        # neither write clobbers or desyncs the other.
+        w.schunk.vlmeta[key] = str(i).encode()
+sys.exit(0)
+"""
+
+
+def test_cross_process_vlmeta_and_growth_interleaved(tmp_path):
+    # vlmeta and the b2nd shape metalayer are reloaded together by the same
+    # staleness check (see frame_refresh_if_stale() in frame.c), but no
+    # existing test exercises a writer mutating both in the same locked
+    # block concurrently with other writers doing the same. Verifies growth
+    # data integrity (same checks as test_cross_process_multiwriter_ndarray_append)
+    # *and* that every writer's final vlmeta value survives correctly.
+    urlpath = str(tmp_path / "array-vlmeta-and-growth.b2nd")
+    nwriters = 4
+    appends_per_writer = 20
+    items_per_append = 25
+
+    a = blosc2.zeros(
+        (0,),
+        dtype=np.int64,
+        chunks=(items_per_append * 4,),
+        blocks=(items_per_append,),
+        urlpath=urlpath,
+        mode="w",
+        locking=True,
+    )
+    del a
+
+    writers = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                VLMETA_AND_GROWTH_WRITER_SCRIPT,
+                urlpath,
+                str(wid),
+                str(appends_per_writer),
+                str(items_per_append),
+            ]
+        )
+        for wid in range(nwriters)
+    ]
+    deadline = time.monotonic() + 180
+    for w in writers:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, "writer processes did not finish in time"
+        w.wait(timeout=remaining)
+    assert all(w.returncode == 0 for w in writers), "a writer process failed"
+
+    reader = blosc2.open(urlpath, mode="r", locking=True)
+    expected_len = nwriters * appends_per_writer * items_per_append
+    assert reader.shape[0] == expected_len, (
+        f"final length {reader.shape[0]} != expected {expected_len} -- lost or duplicated an append"
+    )
+
+    blocks = reader[:].reshape(-1, items_per_append)
+    tags = sorted(int(block[0]) for block in blocks)
+    for block in blocks:
+        assert np.all(block == block[0]), f"torn append: block mixes values {np.unique(block)}"
+    expected_tags = sorted(wid * 1_000_000 + i for wid in range(nwriters) for i in range(appends_per_writer))
+    assert tags == expected_tags, "growth tags don't match: a batch was lost, duplicated, or corrupted"
+
+    for wid in range(nwriters):
+        key = f"writer_{wid}"
+        assert key in reader.schunk.vlmeta, f"vlmeta key {key} missing"
+        assert reader.schunk.vlmeta[key] == str(appends_per_writer - 1).encode(), (
+            f"vlmeta {key} does not hold its writer's last-written value"
+        )
+
+    blosc2.remove_urlpath(urlpath)
+
+
 OVERLAPPING_SLICE_WRITER_SCRIPT = """
 import sys
 import numpy as np

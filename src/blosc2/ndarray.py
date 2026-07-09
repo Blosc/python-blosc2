@@ -5270,6 +5270,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         if len(appended) == 0:
             return int(self.shape[0])
 
+        self.refresh()
         old_size = int(self.shape[0])
         super().resize((old_size + len(appended),))
         super().set_slice(([old_size], [old_size + len(appended)]), appended)

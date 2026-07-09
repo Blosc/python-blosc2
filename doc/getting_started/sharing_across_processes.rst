@@ -153,11 +153,22 @@ the old value and writes the new one as two separate locked operations:
         arr[i] = arr[i] + 1
 
 The same applies to :meth:`NDArray.append() <blosc2.NDArray.append>`: it is
-internally a resize followed by a slice write, two locked operations rather
-than one. Wrap it in ``holding_lock()`` if another writer must not interleave
-between the resize and the fill — otherwise two concurrent ``append()``
-calls can both resize based on the same pre-append length and collide on the
-same target rows.
+internally a refresh of the current length, a resize, and a slice write —
+three steps, not one atomic operation. ``append()`` always refreshes its
+cached length first, so when the *whole call* runs inside
+``holding_lock()``, concurrent appends from other writers are picked up
+correctly instead of being overwritten (each writer's batch lands, in full,
+somewhere in the final array — never lost, torn, or duplicated). Without
+``holding_lock()``, the refresh does not help: another writer can still grow
+the array between the refresh and the resize, and the same race applies as
+any read-modify-write above.
+
+.. code-block:: python
+
+    # Every writer must wrap the whole append in holding_lock(), or a
+    # concurrent grower's data can be silently discarded:
+    with arr.holding_lock():
+        arr.append(new_rows)
 
 Per-operation atomicity: what counts as "one operation"
 ------------------------------------------------------------

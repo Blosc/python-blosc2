@@ -169,21 +169,322 @@ Findings:
   (fill_special is a single-shot creation-time op in practice).
 - `b2nd_insert`/`b2nd_append` are each two separately-locked calls
   (`b2nd_resize` then `b2nd_set_slice_cbuffer`, or `append_buffer` then
-  `resize`) — not atomic as a composite op. This is exactly the per-operation
-  (not per-call) atomicity the design already commits to elsewhere; the
-  NDArray hammer test (item 1) already brackets `resize()`+fill in
-  `holding_lock()` for this reason. Documented in item 4, not fixed — fixing
-  would mean bracketing the whole of `b2nd_insert`/`b2nd_append` in one lock,
-  which changes the composability of resize+write as independent atomic
-  primitives; no use case has asked for it.
+  `resize`) — not atomic as a composite op. Originally logged here as an
+  "accepted per-operation-atomicity limit, wrap in `holding_lock()`". **That
+  assessment was wrong** — see the correction below, found 2026-07-08 later
+  the same day while building `examples/ndarray/mwmr-enlarge.py`.
 - `b2nd_delete` is a single `b2nd_resize` call — already fully atomic.
 - `blosc2_schunk_from_buffer`/`b2nd_from_cframe`: construct a fresh in-memory
   schunk from a buffer, not a shared on-disk frame — no other handle exists
   to race against, out of scope.
 
-No new bugs found (unlike item 1, which found the open-race bug). Everything
-above was either already correct or is an accepted per-operation-atomicity
-limit that item 4 needed to document rather than a gap to close.
+### Correction (2026-07-08, later the same day): `NDArray.append()` was a real data-loss bug, not an accepted limit
+
+The original item 3 pass concluded `holding_lock()` alone made
+`append()`/`insert()` safe as a composite op — untested. Building
+`examples/ndarray/mwmr-enlarge.py` (several processes `append()`-ing tagged
+batches to one 1-D array, each call wrapped in `holding_lock()` per the
+existing doc advice) failed on the *first* run: final length 800 instead of
+3000, i.e. most batches vanished.
+
+Root cause (python-blosc2 `src/blosc2/ndarray.py`, `NDArray.append()`):
+`old_size = int(self.shape[0])` reads the **cached, unrefreshed** shape —
+`NDArray.shape` is a bare Cython field read (`blosc2_ext.pyx`), no
+staleness check. `super().resize((old_size + len(appended),))` then calls
+into `b2nd_resize()`, whose *own* `refresh_if_stale()` correctly updates
+`array->shape` to the true (larger, because other writers already appended
+under the same lock's earlier turns) on-disk value -- but only *after* the
+too-small `new_shape` argument was already computed from the stale
+`old_size`. `b2nd_resize()` then sees `new_shape <= (now-refreshed, larger)
+array->shape` and takes the **shrink** path, which calls
+`shrink_shape()` -> `blosc2_schunk_delete_chunk()` on the trailing chunks —
+deleting other writers' just-appended data outright. `holding_lock()`
+prevents *concurrent* interleaving but does nothing about a *stale value
+read before* the lock's protection actually mattered here, since the read
+itself was never gated on a refresh.
+
+Fix: `append()` now calls `self.refresh()` before reading `old_size`. Since
+the whole call already runs inside the caller's `holding_lock()`, this
+makes the refresh-then-resize-then-fill sequence correctly see any writes
+that landed before it and correctly build on top of them, instead of
+silently discarding them. Overhead is negligible: benchmarked 561.9 vs
+542.7 µs/append (~3.5%) over 2000 single-process appends — the same
+`refresh_if_stale()` check `resize()` already runs internally, just done
+once more, earlier. Bisected: reverting the one-line fix reproduces the
+loss reliably (3/3 trials, 750-900 of 3000 items survived); with it, 5+
+clean runs of 3000/3000. `sharing_across_processes.rst`'s `append()`
+guidance corrected to describe the fixed (refresh-then-resize-then-fill)
+contract accurately.
+
+**Regression test added**: `test_cross_process_multiwriter_ndarray_append`
+in python-blosc2 `tests/test_locking.py` (4 writer processes, 30
+`append()`s of 25 uniquely-tagged items each, `holding_lock()`-wrapped;
+verifies final length, untorn blocks, and exact tag multiset). Bisected
+same as the example: fails reliably (3/3, assert 775/800/900 == 3000) on
+reverted `ndarray.py`, passes clean (3/3 full-suite runs, 24 tests) with
+the fix.
+
+**Leftover**: `b2nd_insert()` (the general C-level resize-at-arbitrary-position
+primitive) is not exposed to Python at all — no `NDArray.insert()` exists in
+`ndarray.py`/`blosc2_ext.pyx`, so it's out of scope for python-blosc2 today,
+but any future C-level or Python binding of it should apply the same
+refresh-before-computing-position fix. Confirmed directly: `NDArray.resize()`
+(`blosc2_ext.pyx`) always calls `b2nd_resize(self.array, new_shape_, NULL)`
+— `start` is hardcoded `NULL`, so mid-array insert (`extend_shape`/
+`shrink_shape` with a non-null `start`) is unreachable from Python at all.
+Would need a C-level test if this path is ever exercised (item 3's C-side
+audit didn't fork-test it either — a genuine remaining gap on the C side).
+
+### Follow-up creative test pass (2026-07-08, later the same day, python-blosc2)
+
+Prompted by the `append()` bug: what else in the concurrent-growth space
+isn't exercised? Four new tests added to `tests/test_locking.py`, all
+bisection-relevant scenarios that don't already exist, all confirmed
+passing reliably (8/8 repeat runs each):
+
+- `test_cross_process_multiwriter_ndarray_2d_grow`: N-D growth has no
+  `append()` convenience (1-D only), so users must refresh+resize+fill by
+  hand — confirms the fix principle generalizes to N-D and to manually-driven
+  `resize()`, not just the library's own 1-D path.
+- `test_cross_process_shrink_after_multiwriter_growth`: shrink was not
+  exercised by *any* prior multi-writer test (they only grow). Runs growers
+  to completion, then shrinks and checks the surviving prefix is untouched —
+  `shrink_shape()`'s chunk deletion against the messy, interleaved-order
+  chunk layout several concurrent writers produce (not the tidy single-writer
+  layout it's usually exercised against).
+- `test_cross_process_vlmeta_and_growth_interleaved`: vlmeta and the b2nd
+  shape metalayer share the same reload point
+  (`frame_refresh_if_stale()` reloads both together, per the answer above)
+  but no test mutated both in the same locked block concurrently — checks
+  neither desyncs or clobbers the other.
+- `test_cross_process_multiwriter_ndarray_append_sparse_nonaligned`: the
+  original append() regression test only covered contiguous storage
+  starting from an empty, chunk-aligned array. This variant uses sparse
+  storage (`contiguous=False`, each chunk its own file — a different
+  rewrite path) *and* a non-chunk-aligned starting length (37 items), so
+  the first append per writer has to complete a partial chunk first.
+
+None of the four found a new bug — all pass reliably, which is itself useful
+signal that the `append()` fix's underlying principle (refresh under the
+lock before computing a position) is sound generally, not narrowly patched
+for the one reported case.
+
+**`test_growth_swmr_cross_process[False]` flake — investigated and fixed
+(2026-07-08, later still, c-blosc2)**. Originally dismissed above as
+"matches the documented SWMR-without-locking limitation, not a regression."
+That assessment was wrong in the same way the item 3 "no new bugs" call
+was wrong — it was a real, fixable gap, not an inherent limit. Root cause,
+via `BLOSC_TRACE=1`: `frame_check_stale()`'s *header* read (`frame.c`) is
+already opportunistic on a transient failure (keep the cached view, retry
+later — a deliberate, commented design choice), but `frame_refresh_if_stale()`'s
+*trailer* read, called right after once staleness is detected, was not — a
+torn trailer (a writer without locking has zero coordination preventing a
+reader from landing mid-rewrite; this can't happen under `locking=True`,
+where writers fully serialize) hard-errored via `BLOSC2_ERROR_FILE_READ`,
+propagating all the way to Python as `RuntimeError: Error while refreshing
+the array`. Same inconsistency-not-limitation pattern as the `blosc2_meta_get`
+gap fixed alongside it (see below) — the "opportunistic poll" design was
+applied to the header read and to vlmeta, but missed the trailer read in
+between.
+
+Fix (`blosc/frame.c`, `frame_refresh_if_stale()`): reordered so the trailer
+is read and validated *before* any frame state (`frame->len`, `frame->coffsets`,
+`frame->force_refresh`) is mutated, then made the three trailer-read failure
+paths (short read, bad magic byte, invalid trailer length) return `0`
+(opportunistic, unchanged) instead of erroring. The reorder matters, not
+just the return value: once `frame->len` was overwritten, bailing out
+opportunistically would have left the frame in a self-inconsistent state
+(new length, stale trailer) — the original code mutated state *before*
+validating the read that state depends on. Also fixed the same class of gap
+one level up in `blosc/b2nd.c`'s own `refresh_if_stale()`: its `blosc2_meta_get(sc,
+"b2nd"/"caterva", ...)` re-fetch (a separate read, after `frame_check_stale()`
+already succeeded) had the identical hard-error-on-transient-failure bug.
+
+First bisection: 50/50 clean runs with the fix (was failing intermittently,
+`BLOSC_TRACE=1` showed `Invalid trailer in frame.` / `Cannot read the
+trailer out of the frame.` / a genuine short-read timeout). Looked done.
+**It wasn't** — see the two follow-up rounds below, both triggered by
+pushback that turned out to be right.
+
+**Round 2 (user caught a real problem in the `b2nd.c` fix, escalated to
+Fable 5 for advice)**: the user asked directly whether the `b2nd.c`
+`blosc2_meta_get` fix might be shadowing a real issue rather than handling
+a transient one. Good catch — my original comment claimed
+`schunk->metalayers[]` was "already reloaded fresh" by that point, which is
+wrong: `blosc2_meta_get` is a pure in-memory lookup (confirmed by reading
+`include/blosc2.h`), and I'd conflated "the header read succeeded" with
+"the metalayers are populated," when the actual repopulation happens in a
+*separate*, later step. Reverted the `b2nd.c` fix to confirm: stress-testing
+with ONLY the `frame.c` trailer fix dropped the flake from ~15-20% to ~2.5%,
+not to zero — proving the `b2nd.c` fix was doing real work, just for the
+wrong stated reason. Re-investigated and found the *actual* mechanism:
+`frame_get_metalayers()` (called inside `frame_refresh_if_stale()`'s
+metalayer-reload step) does its OWN fully independent header re-read
+(fresh `get_header_info()` + fresh header bytes), a FOURTH uncoordinated
+disk read separate from the trailer read and from `frame_check_stale()`'s
+own header read. Restored the `b2nd.c` fix with the corrected reasoning.
+
+Escalated the *remaining* ~2.5% to Fable 5 (full prompt/context in this
+session's transcript) for advice on the third failure point:
+`frame_refresh_if_stale()`'s metalayer/vlmetalayer reload block itself
+still hard-erred on failure (trace: `Cannot reload the metalayers from the
+refreshed frame.` / `Invalid data`). **Fable's key finding went beyond what
+either of us had been chasing**: this wasn't just a flake, it was a
+**permanent stuck-state bug** — by the time that reload runs,
+`frame->len`/`trailer_len` are already committed and `force_refresh`
+already cleared, so if the reload fails, the *next* poll's early-out check
+(`frame_len_on_disk == frame->len`) skips retrying forever. If the writer's
+*last* mutation happened to land in that window, the reader would be stuck
+with an empty/stale metalayer set permanently, not just transiently.
+Fable also verified (by reading `get_meta_from_header()`/
+`get_vlmeta_from_trailer()` in full) that a bounded retry-in-place is
+memory-safe: both parsers `calloc` + publish each slot immediately (no
+garbage-pointer state at any early-return point), and `schunk_free_metalayers()`/
+`schunk_free_vlmetalayers()` are NULL-safe and idempotent across repeated
+attempts. Fix: capture `old_len`/`old_trailer_len` at function entry;
+bounded retry (50 attempts, 1ms backoff, matching the existing
+`frame_from_file_offset_retrying()` pattern in `schunk.c`) around the
+reload; on exhaustion, roll back `frame->len`/`trailer_len`, set
+`frame->force_refresh = true` (forces a full retry next poll instead of
+short-circuiting), return `0` (opportunistic, not an error). 200/200 clean
+runs after — up from the ~2.5% residual.
+
+**Round 3 (user asked about worst-case latency, then asked to escalate
+again)**: walking through the retry loop precisely — worst case ~50ms (49
+sleeps of 1ms, no sleep after the final attempt) with silent return-0 on
+exhaustion, no error, no warning to the caller. Escalated this design
+tradeoff to Fable 5 for a second look at the *complete* three-fix picture.
+Two more real issues found by reading the final code as a whole:
+
+- **The retry loop is the wrong shape under `locking=True`.**
+  `frame_check_stale()` (the only caller) holds the *shared* frame lock
+  across the entire `frame_refresh_if_stale()` call when locking is
+  enabled, fully excluding writers for its duration — so under locking, a
+  reload failure literally cannot be a torn read; it's genuine corruption
+  or a real I/O error. The old code would burn ~50ms of guaranteed-futile
+  retries while holding that lock (blocking any waiting writer), then
+  silently roll back and repeat forever on every subsequent poll — masking
+  real corruption from exactly the users who opted into strong guarantees
+  via `locking=True`. Verified precisely: `frame_lock()` (`frame.c:211-213`)
+  is a true no-op without `frame->locking`, a real OS lock with it.
+  Fix: `max_attempts = frame->locking ? 1 : 50`; under locking, a reload
+  failure now propagates as a hard error immediately (as it always should
+  have), matching the mode's actual guarantees. The no-locking mode keeps
+  the full bounded-retry-then-silent-rollback behavior.
+- **The rollback wasn't a true restoration.** The cached offsets index
+  (`frame->coffsets`) was being dropped *before* the retry loop, alongside
+  the `len`/`trailer_len` commit — so on rollback, `len`/`trailer_len` were
+  correctly restored but `coffsets` stayed gone, meaning the "restored" old
+  view was weaker than the trailer read's own opportunistic bail-outs a few
+  lines up (which keep `coffsets` fully intact). Verified `frame_get_metalayers()`/
+  `frame_get_vlmetalayers()` never touch `frame->coffsets` (confirmed by
+  Fable reading both functions, and independently by me via grep), so
+  deferring the drop is safe. Fix: moved the `coffsets` invalidation to
+  after the reload loop succeeds, so rollback now restores a genuinely
+  fully-consistent old view, on par with the other opportunistic paths.
+
+Also confirmed (Fable, and independently reasoned through): the metalayer
+reload exhaustion path is not actually silent in the sense that mattered —
+`BLOSC_TRACE_ERROR` fires on every exhausted cycle, printing under
+`BLOSC_TRACE=1` with no level filtering, so a chronically-wedged handle is
+distinguishable from a genuinely idle one for anyone who goes looking. No
+programmatic counter/escalating-warning API was added on top of that —
+would be a deliberate API addition (e.g. for Caterva2's peer-cache
+diagnostics) if ever needed, not something to bolt on here.
+
+Final verification after all three rounds: 100/100 clean runs for
+`locking=False`, 50/50 for `locking=True`, full `tests/test_locking.py` +
+`tests/ndarray/` (4386 tests) and c-blosc2's full ctest suite (1661 tests)
+all green. No dedicated new C-level regression test added for this whole
+area (unlike the open-race and `b2nd_insert` findings) — the existing
+Python-level test now serves as an adequate pin across all three rounds; a
+deterministic fault-injection test analogous to `test_open_race_deterministic`
+would be the natural follow-up if this area gets touched again.
+
+**Process lesson, not just a technical one**: every fix in this
+`test_growth_swmr_cross_process[False]` saga survived exactly one round of
+scrutiny before the *next* round found something real underneath it —
+first "documented limitation, not a bug" (wrong), then "the fix is
+correct and complete" (wrong, `b2nd.c` reasoning was backwards), then
+"the fix is correct and complete" again (wrong, missed the permanent
+stuck-state case), then "the fix is correct and complete" a third time
+(wrong, missed the locking-mode futility and the weakened rollback). Two
+of those four corrections came from the user asking a specific, pointed
+question rather than accepting a confident-sounding summary — asking "are
+you sure" at each layer, and escalating for a genuinely independent second
+read of the *whole* picture rather than just the newest diff, both pulled
+their weight here.
+
+### C-side follow-up test pass — DONE (2026-07-08, later the same day, c-blosc2)
+
+Extended the creative pass to the C side, targeting the one confirmed gap
+(mid-array insert, `start != NULL`, unreachable from Python) plus two more:
+
+- `tests/test_b2nd_multiwriter_lock.c` (new file): `test_fork_multiwriter_insert_middle`
+  (N processes `b2nd_insert()` at position 0 repeatedly, forcing
+  `b2nd_resize()`'s non-NULL `start` branch every call — the path
+  `NDArray.resize()`'s hardcoded `start=NULL` makes unreachable from Python),
+  `test_fork_shrink_vs_grow` (growers + a shrinker truly concurrent, not
+  sequenced like the Python version — shrink had no multi-writer coverage
+  anywhere before this), `test_fork_insert_vs_open_race` (bonus best-effort
+  attempt at the open-race bug via a wider-window operation than
+  `test_fork_open_race_update`'s same-slot update).
+- `tests/test_frame_lock.c`: `test_fork_multiwriter_insert_chunk` (raw
+  `blosc2_schunk_insert_chunk()`, not b2nd, at index 0 from N processes).
+
+**Found a real, if narrow, C-level version of the append() bug.** The first
+draft of `test_fork_multiwriter_insert_middle` called `b2nd_insert()` bare
+(no external lock), matching the — wrong — assumption from the "why does
+append() work" investigation that `b2nd_insert()`/`b2nd_append()` are
+internally safe because they call `refresh_if_stale()` before touching
+`array->shape`. That's true, but incomplete: `b2nd_insert()`'s own
+`refresh_if_stale()` takes and releases its own shared lock, then
+*separately* calls `b2nd_resize()`, which takes and releases its *own*
+exclusive lock — two independent lock cycles with a real gap between them.
+A concurrent writer growing the array in that gap makes the just-computed
+`newshape` stale relative to what `b2nd_resize()`'s own (second) refresh
+sees, so it takes the shrink path and deletes the other writer's data —
+the exact same bug class as `NDArray.append()`, just with a much narrower
+window (a couple of lock cycles apart, not a bare unrefreshed field read),
+which is why it needed real fork() concurrency to land (single-process
+sequential-handle-reuse and same-process multi-handle round-robin — both
+tried as isolating probes — never reproduced it; only true OS-level
+concurrent execution did, reliably, 100% of trials before the fix).
+
+Root-caused precisely via `lldb` register inspection (ruled out both
+`position < 0` and `ptr == NULL` in `blosc2_stdio_write` as red herrings —
+those only ever fired during harmless creation-time writes, confirmed via
+an insert-free baseline) and a same-process 4-handle round-robin probe that
+passed cleanly, isolating the bug to genuine multi-process interleaving
+rather than any simpler "handles need refreshing" explanation.
+
+Fix: bracket every `b2nd_insert()`/`b2nd_append()` call (in the test, not
+the library — this is a caller-discipline requirement, exactly like Python
+`holding_lock()`) in `blosc2_schunk_lock()`/`blosc2_schunk_unlock()`. This
+is the C equivalent of what python-blosc2's own `append()`, `insert()` (if
+it existed), and every multi-writer test already do — confirms the *whole
+call must be externally bracketed*, not just relying on the library's
+internal per-substep locking, is the general rule for any composite
+grow/shrink operation in this codebase, C or Python.
+
+By contrast, `blosc2_schunk_insert_chunk()` (raw SChunk, not b2nd) genuinely
+*is* safe bare: it takes one lock, does its stale check and the insert
+under that single continuous hold, then releases — confirmed by
+`test_fork_multiwriter_insert_chunk` passing reliably with no external
+bracket at all.
+
+Also found (and fixed) a test-design bug of my own while chasing an
+intermittent ~1/15 failure in `test_fork_shrink_vs_grow` even *after*
+correct bracketing: the verification assumed only the tail-most run could
+be legitimately short (partially shrunk). Wrong — since growers keep
+appending after a shrink, *any* block (including the initial prefix, if
+the shrinker gets ahead of the growers early) can end up truncated
+mid-array with fresh, complete blocks appended after it. Fixed the
+invariant to just "no run mixes two values, none exceeds its max possible
+length" with no positional requirement; 70/70 clean runs after.
+
+All four C tests pass reliably (15-70 repeat runs each, per test). Full
+ctest suite (1661 tests) green.
 
 ## 4. Documentation: promote and pin the MWMR contract — DONE (2026-07-08, python-blosc2)
 
