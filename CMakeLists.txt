@@ -14,10 +14,9 @@ endif()
 
 project(python-blosc2)
 
-# blosc2_ext.pyx calls blosc2_schunk_lock()/unlock(), added in c-blosc2 3.2.0
-set(BLOSC2_MIN_VERSION 3.2.0)
-# set(BLOSC2_BUNDLED_VERSION v3.2.1)
-set(BLOSC2_BUNDLED_VERSION e2b90068a4c185cf45d542dd132db381348e0f19)  # new blosc2_schunk_refresh()
+# blosc2_ext.pyx calls blosc2_schunk_lock()/unlock(), added in c-blosc2 3.2.x
+set(BLOSC2_MIN_VERSION 3.2.1)
+set(BLOSC2_BUNDLED_VERSION v3.2.1)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
