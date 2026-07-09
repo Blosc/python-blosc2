@@ -123,6 +123,46 @@ Mutating operations become atomic to other locked handles, and a handle
 whose view went stale re-syncs before its next operation completes — closing
 the read-error race SWMR-without-locking has.
 
+**SWMR vs. locking, side by side.** ``examples/ndarray/swmr-enlarge-bars.py``
+and ``examples/ndarray/locking-enlarge-bars.py`` run the identical
+one-writer/three-readers growth scenario, rendered with live throughput
+bars, one unlocked and one locked, so the trade-off is visible instead of
+just asserted:
+
+- The SWMR version's readers need a "settled vs. just-resized" trailing
+  trick to avoid reading uninitialized rows, and a retry loop around every
+  read to absorb the occasional transient error from racing the writer's
+  in-progress metadata update (see "SWMR without locking" above for why
+  even a "settled" region isn't immune — resolving *where* a chunk lives on
+  disk can itself race, independently of whether that chunk's data is
+  final). The locked version needs neither:
+  wrapping each batch's resize-plus-fill in ``holding_lock()`` makes it
+  atomic, so a locked reader's ``refresh()`` only ever shows a batch fully
+  there or not there at all — trust it immediately, no lag, no retries.
+- The two versions also disagree on how a reader knows the writer is
+  *done*. The SWMR version's readers can't infer that from shape alone:
+  reaching the final expected shape only proves the last ``resize()``
+  landed, not that its fill did — the same gap the "settled" trick guards
+  every other batch against, just with no following batch left to trail
+  behind. So it needs an explicit signal, and a variable-length metalayer
+  (``schunk.vlmeta``) is the one piece of SWMR-visible state built for
+  exactly this: unlike fixed metalayers (``schunk.meta``, outside the
+  re-sync contract entirely), a vlmeta lookup re-syncs on every access, the
+  same as a data read or ``refresh()``. The locked version needs no such
+  flag: ``holding_lock()`` already made resize-plus-fill atomic, so
+  ``shape == expected_rows`` *is* proof the last batch is safe — see the
+  ``verify_up_to`` / completion-check difference between the two example
+  readers.
+- That safety isn't free: the writer's exclusive lock and the readers'
+  shared locks now genuinely serialize against each other, where the SWMR
+  version has no coordination to wait on at all. On one dev machine, growing
+  the same ~8 GB array with the same pacing measured ~2.1 GB/s combined
+  throughput over 4.25s unlocked vs. ~1.9 GB/s over 4.63s locked — roughly a
+  10% cost here for eliminating the read-error race entirely. The exact
+  number depends heavily on read/write pacing and how many readers are
+  contending for the lock; measure your own workload rather than trusting
+  this one.
+
 **The locking is advisory**: it only protects a container if *every* handle
 that touches it enables it. A plain handle opened on a locked container
 bypasses the coordination entirely.
