@@ -1,5 +1,5 @@
 List of desired features for a 4.0 release
-------------------------------------------
+===========================================
 
 * First and foremost, we would like to have at least a basic implementation of the [array API](https://data-apis.org/array-api).  Right now, a lot of low-level work on the basic NDArray container to make indexing work as expected has been done. More work is required in implementing the rest of the API (especially in linear algebra operations).
 
