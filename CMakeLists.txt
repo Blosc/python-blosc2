@@ -14,14 +14,9 @@ endif()
 
 project(python-blosc2)
 
-# blosc2_ext.pyx calls blosc2_schunk_lock()/unlock(), added in c-blosc2 after
-# 3.1.5 (no released c-blosc2 has it yet; 3.2.0 is the planned next release):
-# without this floor, USE_SYSTEM_BLOSC2 against an older system
-# libblosc2 would pass this check and then fail with a confusing undefined
-# symbol at link time instead of a clear version error.
+# blosc2_ext.pyx calls blosc2_schunk_lock()/unlock(), added in c-blosc2 after 3.2.0
 set(BLOSC2_MIN_VERSION 3.2.0)
-# set(BLOSC2_BUNDLED_VERSION v3.2.0)
-set(BLOSC2_BUNDLED_VERSION c814ad24d8aed60131498d15b7b79b69b0902fe8)  # MWMR support
+set(BLOSC2_BUNDLED_VERSION v3.2.0)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
