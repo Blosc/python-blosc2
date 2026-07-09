@@ -25,6 +25,16 @@ argvalues = [
     ((10, 100, 300), (5, 25, 50), (1, 5, 10), (slice(10, 40), slice(25, 75), slice(100, 200)), np.int32),
     ((10, 100, 300), (5, 25, 50), (1, 5, 10), (slice(20, 35), slice(50, 75), slice(100, 300)), np.int32),
     ((10, 100, 300), (5, 25, 50), (1, 5, 10), (slice(20, 25), slice(25, 50), slice(50, 100)), np.int32),
+    # Aligned slices on shapes NOT an exact multiple of chunks in some dim
+    # (regression: detect_aligned_chunks used floor division to count chunks
+    # per dimension, undercounting a dim with a trailing partial chunk; this
+    # corrupted the flat chunk-index math for any aligned slice with a
+    # nonzero start in an earlier dimension, silently returning a different
+    # chunk's data).
+    ((2, 100_003), (1, 40_000), (1, 10_000), (slice(1, 2), slice(0, 40_000)), np.float64),
+    ((2, 100_003), (1, 40_000), (1, 10_000), (slice(1, 2), slice(40_000, 80_000)), np.float64),
+    ((2, 100_003), (1, 40_000), (1, 10_000), (slice(1, 2), slice(80_000, 100_003)), np.float64),
+    ((6, 100_003), (1, 40_000), (1, 10_000), (slice(3, 5), slice(0, 40_000)), np.float64),
     # Non-consecutive slices
     ((10, 100, 300), (5, 25, 50), (1, 5, 10), (slice(0, 10), slice(0, 100), slice(0, 300 - 1)), np.int32),
     ((10, 100, 300), (5, 25, 50), (1, 5, 10), (slice(0, 5), slice(0, 100 - 1), slice(0, 300)), np.int32),

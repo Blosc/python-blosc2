@@ -3704,7 +3704,13 @@ def detect_aligned_chunks(
         end_idx = stop // chunk_size
         start_indices.append(start_idx)
         end_indices.append(end_idx)
-        n_chunks.append(shape[i] // chunk_size)
+        # Total chunk count along this dim: ceil, not floor -- a trailing
+        # partial chunk (shape[i] not a multiple of chunk_size) still counts
+        # as one chunk. Floor division here undercounts it, which corrupts
+        # the flat chunk-index math below for any aligned slice with a
+        # nonzero start in an earlier dimension (silently returns a
+        # different chunk's data instead of the requested one).
+        n_chunks.append(math.ceil(shape[i] / chunk_size))
 
     # Get all chunk combinations in the slice
     indices = [range(start, end) for start, end in zip(start_indices, end_indices, strict=False)]
