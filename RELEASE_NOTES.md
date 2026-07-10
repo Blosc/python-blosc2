@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.8.0 to 4.8.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.7.0 to 4.8.0
 
 ### Sharing containers across processes
