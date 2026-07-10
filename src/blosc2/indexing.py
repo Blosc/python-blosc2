@@ -4377,7 +4377,7 @@ class Index(Mapping):
         try:
             nbytes = self.nbytes
             cbytes = self.cbytes
-        except (FileNotFoundError, OSError, RuntimeError, KeyError, ValueError):
+        except (OSError, RuntimeError, KeyError, ValueError):
             if self._table is None:
                 return None
             root = self._table._root_table
@@ -4398,7 +4398,7 @@ class Index(Mapping):
                     obj = store[key]
                     nbytes += int(obj.nbytes)
                     cbytes += int(obj.cbytes)
-            except (FileNotFoundError, OSError, RuntimeError, KeyError, ValueError):
+            except (OSError, RuntimeError, KeyError, ValueError):
                 return None
         cratio = math.inf if cbytes == 0 else nbytes / cbytes
         return nbytes, cbytes, cratio
