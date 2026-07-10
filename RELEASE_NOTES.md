@@ -8,26 +8,36 @@
   variable to enable it fleet-wide) serializes accesses to an on-disk
   `SChunk`/`NDArray`/`EmbedStore`/`DictStore` against other handles and other
   processes, via a small sidecar lock file (`.b2lock`). Advisory: every
-  handle touching the container must opt in. Requires a c-blosc2 build with
-  `blosc2_schunk_lock()` (bundled automatically; see the minimum-version
-  notes below if linking a system c-blosc2).
-- `SChunk.holding_lock()`: a context manager to hold the exclusive lock
-  across several operations, making a multi-step mutation atomic to other
-  locked handles.
+  handle touching the container must opt in.
+- `SChunk.holding_lock()` / `NDArray.holding_lock()`: a context manager to
+  hold the exclusive lock across several operations, making a multi-step
+  mutation atomic to other locked handles.
+- New `SChunk.refresh()`, mirroring the existing `NDArray.refresh()`.
+- Fixed a data-loss bug in `NDArray.append()`: it read the cached,
+  unrefreshed shape before computing the resize target, so under
+  concurrent growth/shrink — even inside `holding_lock()` — another writer's
+  just-appended data could be silently deleted.
 - `EmbedStore` and `DictStore` (`.b2d`) now support cross-process writers
   under locking: transactional writes plus key-map re-sync, so readers
   follow keys added or removed by another process.
-- `DictStore.to_b2z()` (and `TreeStore`, built on it) now replaces the
-  target file atomically, so concurrent readers always see either the old
-  or the new archive, never a torn one. No locking needed for `.b2z` reads.
+- `DictStore.to_b2z()` (and `TreeStore`, which inherits from it) now replaces
+  the target file atomically, so concurrent readers always see either the old
+  or the new archive, never a torn one.
 - Growth-SWMR (single writer, multiple readers): a reader `NDArray` handle
   opened before a `resize()` made through another handle follows the new
-  shape on its next data access, or via the new explicit
-  `NDArray.refresh()`.
+  shape on its next data access, or via the new explicit `NDArray.refresh()`.
 - New user guide page,
   [Sharing containers across processes](https://www.blosc.org/python-blosc2/getting_started/sharing_across_processes.html),
   covering all of the above plus the caveats (NFS, `mmap_mode`, Windows
   in-use-file rename).
+
+### Bug fixes
+
+- Fixed `detect_aligned_chunks()` (used internally to fast-path aligned
+  slice reads/writes): a floor-division undercounted the chunk grid for
+  arrays whose shape isn't a multiple of the chunk shape, which could
+  silently return the wrong chunk's data for an otherwise-aligned slice
+  with a nonzero start in an earlier dimension.
 
 ## Changes from 4.6.0 to 4.7.0
 

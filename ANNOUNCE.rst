@@ -1,40 +1,55 @@
-Announcing Python-Blosc2 4.7.0
+Announcing Python-Blosc2 4.8.0
 ==============================
 
-We are happy to announce this release, which brings a **DSL → JavaScript JIT
-backend** for running compute kernels under WebAssembly/Pyodide, a new helper to
-check whether your DSL kernels actually JIT-compile, and a batch of miniexpr
-fixes.
+We are happy to announce this release, which brings support for
+**sharing containers safely across processes** — opt-in file locking for
+``SChunk``/``NDArray``/``EmbedStore``/``DictStore``, atomic archive
+replacement, and readers that follow another process's writes — plus a
+couple of data-loss and data-correctness bug fixes worth upgrading for even
+if you don't touch any of the new locking API.
 
 The main highlights are:
 
-- **DSL → JavaScript backend (``jit_backend="js"``)**: under WebAssembly/Pyodide,
-  ``@blosc2.dsl_kernel`` kernels can now be transpiled to JavaScript and run via
-  the browser's JIT.  It is the **default there** for transpilable floating-point
-  kernels (silently falling back to miniexpr for anything it can't handle), and
-  beats the WASM TinyCC JIT on compute-heavy kernels (e.g. ~2.8x on a Newton
-  fractal).  It supports index/shape symbols (``_i0``/``_n0``/``_ndim``/
-  ``_flat_idx``) and integer inputs with a floating-point output.  Request it
-  explicitly with ``compute(jit_backend="js")``; outside WebAssembly that raises.
-  Native builds are unaffected.
+- **Cross-process locking**: a new ``locking`` storage parameter (and the
+  ``BLOSC_LOCKING`` env var to enable it fleet-wide) serializes accesses to an
+  on-disk ``SChunk``/``NDArray``/``EmbedStore``/``DictStore`` against other
+  handles and processes via a small sidecar lock file. ``holding_lock()``
+  holds the exclusive lock across several operations and now auto-refreshes
+  the handle right after acquiring it, so a decision made inside the block
+  never acts on a stale in-memory read.
 
-- **New ``blosc2.validate_dsl_jit()``**: an introspection helper that reports
-  whether a DSL kernel actually JIT-compiles (vs. silently falling back to the
-  interpreter) for given operand/output dtypes — without running it on real
-  data.
+- **Cross-process writes for ``EmbedStore``/``DictStore``** (``.b2d``): under
+  locking, one process can add or remove keys while another has the store
+  open, and the other side's next lookup sees the change — no need to
+  reopen the store.
 
-- **miniexpr fixes**: clearer errors for ``;``-joined statements and for
-  assigning to an input parameter, and a fix for a name collision where DSL
-  variables named ``out``/``idx``/``nitems``/``inputs``/``output`` clashed with
-  codegen-internal identifiers and silently fell back to the interpreter.
+- **Atomic ``.b2z`` archives**: writing a ``DictStore.to_b2z()`` file (which
+  ``TreeStore`` also uses) now swaps the new file in atomically. A process
+  reading the archive concurrently always gets either the complete old
+  version or the complete new one — never a partially-written file from a
+  save that's still in progress. This needs no locking on the reader's side.
 
-A quick taste — run a DSL kernel on the JS backend under Pyodide::
+- **Growth-SWMR**: a reader ``NDArray`` handle opened before a ``resize()``
+  made through another handle follows the new shape on its next data access,
+  or via the new explicit ``NDArray.refresh()`` / ``SChunk.refresh()``.
 
-    @blosc2.dsl_kernel
-    def k(a, b):
-        return a * a + b * b
+- **Two bug fixes worth knowing about**: ``NDArray.append()`` could silently
+  delete another writer's just-appended data under concurrent growth (fixed
+  by refreshing the cached shape before computing the resize target); and
+  ``detect_aligned_chunks()`` could silently return the wrong chunk's data
+  for an aligned slice on arrays whose shape isn't a multiple of the chunk
+  shape (a floor-division bug that undercounted the chunk grid).
 
-    out = k.compute(operands, jit_backend="js")   # JS JIT under WebAssembly
+- New user guide page,
+  `Sharing containers across processes
+  <https://www.blosc.org/python-blosc2/getting_started/sharing_across_processes.html>`_,
+  covering all of the above plus the caveats (NFS, ``mmap_mode``, Windows
+  in-use-file rename).
+
+A quick taste — hold the lock across a read-modify-write from two processes::
+
+    with ndarr.holding_lock():
+        ndarr[:] = ndarr[:] + 1   # atomic w.r.t. other locked handles
 
 Install it with::
 
