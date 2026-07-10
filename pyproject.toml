@@ -112,8 +112,8 @@ test-requires = "pytest"
 # Use a simpler command here, and let the workflow .yml file to set the command
 test-command = "python -c \"import blosc2; blosc2.print_versions()\""
 # Manylinux 2014 will be the default for x86_64 and aarch64
-manylinux-x86_64-image = "manylinux2014"
-manylinux-aarch64-image = "manylinux2014"
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
 
 [tool.scikit-build.sdist]
 exclude = ["bench*", ".github*"]

@@ -39,6 +39,12 @@
   silently return the wrong chunk's data for an otherwise-aligned slice
   with a nonzero start in an earlier dimension.
 
+### Others
+
+- Raised the manylinux wheel baseline from `manylinux2014` (CentOS 7, glibc
+  2.17, GCC 10.2) to `manylinux_2_28` (AlmaLinux 8, glibc 2.28, GCC 12),
+  fixing a build failure with NumPy >=2.5 which requires GCC >=10.3.
+
 ## Changes from 4.6.0 to 4.7.0
 
 ### DSL → JavaScript backend for WebAssembly (`jit_backend="js"`)
