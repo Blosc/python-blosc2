@@ -54,7 +54,7 @@ def test_schunk_reorder_offsets_invalid_order(order):
     for payload in (b"a" * 16, b"b" * 16, b"c" * 16):
         schunk.append_data(payload)
 
-    if order == [[0, 1]] or order == [0, 1]:
+    if order in ([[0, 1]], [0, 1]):
         with pytest.raises(ValueError):
             schunk.reorder_offsets(order)
     else:
