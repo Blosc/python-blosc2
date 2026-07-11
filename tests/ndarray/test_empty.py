@@ -139,3 +139,11 @@ def test_toolarge_itemsize():
     # blocksize cannot be larger that MAX_BLOCKSIZE
     with pytest.raises(ValueError):
         a = blosc2.empty(shape=10, dtype=f"S{blosc2.MAX_BLOCKSIZE}", blocks=(2,))
+
+
+def test_explicit_none_cparams_dparams():
+    # cparams=None passed explicitly must mean "defaults", same as omitting it
+    # (it used to leave a CParams instance in kwargs, crashing on the
+    # typesize assignment in create_b2nd_context).
+    a = blosc2.empty((100,), dtype=np.int32, chunks=(10,), cparams=None, dparams=None)
+    assert a.chunks == (10,)

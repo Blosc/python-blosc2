@@ -1866,9 +1866,9 @@ def schunk_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.SChunk
     cframe: bytes or str
         The bytes object containing the in-memory cframe.
     copy: bool
-        Whether to internally make a copy. If `False`,
-        the user is responsible for keeping a reference to `cframe`.
-        Default is `False`.
+        Whether to internally make a copy. If `False` (the default), the
+        returned SChunk points into `cframe`'s buffer and keeps a reference
+        to it, so the buffer lives for as long as the SChunk does.
 
     Returns
     -------
@@ -1902,7 +1902,13 @@ def schunk_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.SChunk
     >>> print("Expected slice:", expected_slice)
     Expected slice: [1000 1001 1002 1003 1004]
     """
-    return blosc2_ext.schunk_from_cframe(cframe, copy)
+    schunk = blosc2_ext.schunk_from_cframe(cframe, copy)
+    if not copy:
+        # Zero-copy: the C schunk's data points INTO `cframe`'s buffer
+        # (avoid_cframe_free only prevents the double-free); pin the buffer
+        # so a temporary cframe can't be reclaimed under a live SChunk.
+        schunk._cframe = cframe
+    return schunk
 
 
 def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArray:
@@ -1913,9 +1919,9 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
     cframe: bytes or str
         The bytes object containing the in-memory cframe.
     copy: bool
-        Whether to internally make a copy. If `False`,
-        the user is responsible for keeping a reference to `cframe`.
-        Default is `False`.
+        Whether to internally make a copy. If `False` (the default), the
+        returned NDArray points into `cframe`'s buffer and keeps a reference
+        to it, so the buffer lives for as long as the NDArray does.
 
     Returns
     -------
@@ -1926,7 +1932,12 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
     --------
     :func:`~blosc2.NDArray.to_cframe`
     """
-    return blosc2_ext.ndarray_from_cframe(cframe, copy)
+    arr = blosc2_ext.ndarray_from_cframe(cframe, copy)
+    if not copy:
+        # Same zero-copy pin as schunk_from_cframe; on the inner SChunk so
+        # both `arr` and a handed-out `arr.schunk` reach it.
+        arr._schunk._cframe = cframe
+    return arr
 
 
 def from_cframe(
@@ -1949,12 +1960,10 @@ def from_cframe(
     cframe: bytes or str
         The bytes object containing the in-memory cframe.
     copy: bool
-        Whether to internally make a copy. If `False`,
-        the user is responsible for keeping a reference to `cframe`.
-        Default is `True`, which is safer.  If you need to save
-        time/memory, you can set it to `False`, but then you must
-        ensure that the `cframe` is not garbage collected while the
-        returned object is still in use.
+        Whether to internally make a copy. Default is `True`. With `False`
+        the returned object points into `cframe`'s buffer and keeps a
+        reference to it (the buffer lives for as long as the object does),
+        saving time/memory at the cost of the buffer staying pinned.
 
     Returns
     -------

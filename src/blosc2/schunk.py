@@ -110,6 +110,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
         super().set_vlmeta(name, content, **cparams)
 
     def __getitem__(self, name):
+        _ = self._owner  # dead-owner check: the raw C schunk pointer below dangles otherwise
         if isinstance(name, slice):
             if name.start is None and name.stop is None:
                 # Return all the vlmetalayers
@@ -122,9 +123,11 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
         super().del_vlmeta(name)
 
     def __len__(self):
+        _ = self._owner  # dead-owner check (see __getitem__)
         return super().nvlmetalayers()
 
     def __iter__(self):
+        _ = self._owner  # dead-owner check (see __getitem__)
         yield from super().get_names()
 
     def getall(self):

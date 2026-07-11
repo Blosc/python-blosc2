@@ -3980,6 +3980,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
         All the attributes from the :ref:`SChunk <SChunk>` can be accessed through
         this instance as `self.schunk`.
 
+        .. warning::
+            The returned SChunk is a *view* over C memory owned by this
+            NDArray: keep the NDArray alive while using it. A schunk that
+            outlives its array reads freed memory — e.g.
+            ``blosc2.asarray(...).schunk.get_chunk(0)`` nondeterministically
+            returns ``b""`` or raises. (A keep-alive back-reference was
+            tried and reverted: the NDArray<->SChunk cycle defers
+            finalization from refcount time to GC time, exhausting file
+            descriptors and breaking the indexing machinery's
+            dropped-on-gc caches.)
+
         See Also
         --------
         :ref:`SChunk Attributes <SChunkAttributes>`
@@ -6885,7 +6896,9 @@ def _check_ndarray_kwargs(**kwargs):  # noqa: C901
     if "cparams" in kwargs:
         cparams = kwargs["cparams"]
         if cparams is None:
-            kwargs["cparams"] = blosc2.CParams()
+            # As a dict, like every other branch: blosc2_ext.create_b2nd_context
+            # assigns into cparams by key, so a CParams instance here crashes.
+            kwargs["cparams"] = asdict(blosc2.CParams())
         elif isinstance(cparams, blosc2.CParams):
             kwargs["cparams"] = asdict(kwargs["cparams"])
         else:
@@ -6894,8 +6907,11 @@ def _check_ndarray_kwargs(**kwargs):  # noqa: C901
             if "blocks" in kwargs["cparams"]:
                 raise ValueError("You cannot pass chunks in cparams, use `blocks` argument instead")
             kwargs["cparams"] = cparams.copy()
-    if "dparams" in kwargs and isinstance(kwargs["dparams"], blosc2.DParams):
-        kwargs["dparams"] = asdict(kwargs["dparams"])
+    if "dparams" in kwargs:
+        if kwargs["dparams"] is None:
+            kwargs["dparams"] = asdict(blosc2.DParams())  # explicit None means defaults
+        elif isinstance(kwargs["dparams"], blosc2.DParams):
+            kwargs["dparams"] = asdict(kwargs["dparams"])
     if blosc2.IS_WASM:
         cparams = kwargs.get("cparams")
         if isinstance(cparams, dict) and cparams.get("nthreads", 1) != 1:
