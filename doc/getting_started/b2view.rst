@@ -101,6 +101,24 @@ paging and the ``c`` goto-column modal then operate on that subset.  Row
 and column filters combine freely; ``escape`` clears them one layer at a
 time (row filter first, then columns).
 
+Step 5 — Sort and group CTable rows
+-----------------------------------
+
+Press ``S`` on a CTable node to sort the rows by a column: a picker lists
+every column, marking FULL-indexed ones with ``◆`` — those reuse their
+pre-sorted positions and apply instantly, while the rest are scanned on
+demand (slower on a big table, but no whole-table copy).  ``R`` flips
+between ascending and descending; ``escape`` restores the original order.
+
+Press ``G`` to group by a dictionary or numeric column, choosing an
+aggregation (count, sum, mean, …) and, where the aggregation needs one, a
+value column.  The data panel then shows the small grouped result — one row
+per group — with the cursor parked on the aggregate column, and ``p`` plots
+it as a bar chart.  While grouped, ``S`` sorts the grouped result by any of
+its columns (key or aggregate), ``R`` reverses it, and ``enter`` on an
+``argmin``/``argmax`` cell jumps to the matching row of the base table.
+``escape`` leaves the grouped view.
+
 CLI options
 -----------
 
