@@ -8,7 +8,7 @@
 # Multiple concurrent writers: several processes can write to the same
 # on-disk NDArray, not just read it, as long as every handle opens it with
 # `locking=True`. See
-# doc/getting_started/sharing_across_processes.rst for the full contract.
+# doc/guides/sharing_across_processes.rst for the full contract.
 # This example shows the two things that matter in practice:
 #
 # - Writers touching *disjoint* regions never need to coordinate beyond

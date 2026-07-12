@@ -13,7 +13,7 @@
 # read error `swmr-enlarge-bars.py` has to retry around, and its reader
 # code is visibly simpler because of it -- no "settled vs. just-resized"
 # trailing trick, no retry loop. See
-# doc/getting_started/sharing_across_processes.rst, "Locking" and
+# doc/guides/sharing_across_processes.rst, "Locking" and
 # "Atomic multi-operation blocks with holding_lock()", for the contract
 # this relies on.
 #

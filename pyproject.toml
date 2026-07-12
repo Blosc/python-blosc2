@@ -96,6 +96,7 @@ doc = [
     "numpydoc",
     "myst-parser",
     "sphinx-paramlinks",
+    "sphinx-reredirects",
     "nbsphinx",
     "ipykernel",
     "sphinx-design",

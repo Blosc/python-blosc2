@@ -185,6 +185,7 @@
     :hidden:
 
     Getting Started <getting_started/index>
+    Guides <guides/index>
     API Reference <reference/index>
     Development <development/index>
     Release Notes <release_notes/index>

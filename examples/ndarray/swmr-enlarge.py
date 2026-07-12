@@ -9,7 +9,7 @@
 # is always on, `locking=True` plays no role here. One process grows a
 # disk-based array batch by batch; several reader processes, opened
 # *before* the writer starts, follow the new shape and data live, with
-# no reopen. See doc/getting_started/sharing_across_processes.rst,
+# no reopen. See doc/guides/sharing_across_processes.rst,
 # "SWMR without locking", for the contract this relies on:
 #
 # - A reader's cached shape re-syncs the next time it *touches* the

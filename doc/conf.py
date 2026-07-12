@@ -34,11 +34,20 @@ extensions = [
     "sphinx_paramlinks",
     "sphinx_design",
     "nbsphinx",
+    "sphinx_reredirects",
     # For some reason, the following extensions are not working
     # "IPython.sphinxext.ipython_directive",
     # "IPython.sphinxext.ipython_console_highlighting",
 ]
 source_suffix = [".rst", ".md"]
+# Redirect stubs for pages that moved out of getting_started/ (their old URLs
+# are linked from released READMEs on PyPI and from blog posts).
+redirects = {
+    "getting_started/b2view": "../guides/b2view.html",
+    "getting_started/parquet_to_blosc2": "../guides/parquet_to_blosc2.html",
+    "getting_started/sharing_across_processes": "../guides/sharing_across_processes.html",
+    "getting_started/dsl_syntax": "../reference/dsl_syntax.html",
+}
 html_theme = "furo"
 html_static_path = ["_static"]
 html_css_files = [

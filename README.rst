@@ -56,11 +56,11 @@ Two CLI tools are installed along with the package:
 - ``b2view``: an interactive terminal browser (TUI) for TreeStore bundles
   (``.b2d`` directories or ``.b2z`` files), with paged views of NDArray and
   CTable data of any size
-  (`walkthrough <https://www.blosc.org/python-blosc2/getting_started/b2view.html>`_;
+  (`walkthrough <https://www.blosc.org/python-blosc2/guides/b2view.html>`_;
   requires ``pip install "blosc2[tui]"``).
 - ``parquet-to-blosc2``: converts Parquet files to Blosc2 columnar table
   stores, and back
-  (`walkthrough <https://www.blosc.org/python-blosc2/getting_started/parquet_to_blosc2.html>`_;
+  (`walkthrough <https://www.blosc.org/python-blosc2/guides/parquet_to_blosc2.html>`_;
   requires ``pip install "blosc2[parquet]"``).
 
 Documentation

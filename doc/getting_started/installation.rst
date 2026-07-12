@@ -30,7 +30,7 @@ grouped into *extras* that you opt into with the ``blosc2[extra]`` syntax:
    * - Extra
      - Adds
    * - ``tui``
-     - The :doc:`b2view <b2view>` terminal browser (``textual``,
+     - The :doc:`b2view <../guides/b2view>` terminal browser (``textual``,
        ``textual-plotext``), including its in-terminal braille plot (the
        ``p`` key).  Required by the ``b2view`` command.
    * - ``hires``
@@ -39,7 +39,7 @@ grouped into *extras* that you opt into with the ``blosc2[extra]`` syntax:
        (``textual-image``, ``matplotlib``).  Includes ``tui``.
    * - ``parquet``
      - The ``parquet-to-blosc2`` converter (``pyarrow``); see
-       :doc:`parquet_to_blosc2`.
+       :doc:`../guides/parquet_to_blosc2`.
 
 Install one or more extras by listing them in brackets (quote the
 argument in shells like ``zsh`` that treat brackets specially):

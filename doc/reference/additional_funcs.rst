@@ -12,6 +12,7 @@ Their result is typically a :ref:`LazyExpr` instance, which can be evaluated (wi
 
 .. autosummary::
 
+    broadcast_to
     clip
     contains
     endswith
@@ -25,6 +26,7 @@ Their result is typically a :ref:`LazyExpr` instance, which can be evaluated (wi
 
 
 
+.. autofunction:: blosc2.broadcast_to
 .. autofunction:: blosc2.clip
 .. autofunction:: blosc2.contains
 .. autofunction:: blosc2.endswith

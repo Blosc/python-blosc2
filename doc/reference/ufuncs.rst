@@ -5,7 +5,7 @@ The following elementwise functions can be used for computing with any of :ref:`
 
 Their result is always a :ref:`LazyExpr` instance, which can be evaluated (with ``compute`` or ``__getitem__``) to get the actual values of the computation.
 
-For elementwise helpers that are not technically ufuncs (``real``, ``imag``, ``contains``, ``where``...), see :doc:`additional_funcs`; for ``matmul``, ``vecdot`` and friends, see :doc:`linalg`.
+Note: The functions ``real``, ``imag``, ``contains``, ``where`` are not technically ufuncs.
 
 .. currentmodule:: blosc2
 
@@ -61,6 +61,7 @@ For elementwise helpers that are not technically ufuncs (``real``, ``imag``, ``c
     logical_not
     logical_or
     logical_xor
+    matmul
     maximum
     minimum
     multiply
@@ -81,6 +82,7 @@ For elementwise helpers that are not technically ufuncs (``real``, ``imag``, ``c
     tan
     tanh
     trunc
+    vecdot
 
 
 
@@ -134,6 +136,7 @@ For elementwise helpers that are not technically ufuncs (``real``, ``imag``, ``c
 .. autofunction:: blosc2.logical_not
 .. autofunction:: blosc2.logical_or
 .. autofunction:: blosc2.logical_xor
+.. autofunction:: blosc2.matmul
 .. autofunction:: blosc2.maximum
 .. autofunction:: blosc2.minimum
 .. autofunction:: blosc2.multiply
@@ -154,3 +157,4 @@ For elementwise helpers that are not technically ufuncs (``real``, ``imag``, ``c
 .. autofunction:: blosc2.tan
 .. autofunction:: blosc2.tanh
 .. autofunction:: blosc2.trunc
+.. autofunction:: blosc2.vecdot

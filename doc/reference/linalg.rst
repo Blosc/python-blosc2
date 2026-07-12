@@ -1,7 +1,6 @@
 Linear Algebra
 -----------------
 The following functions can be used for computing linear algebra operations with :ref:`NDArray <NDArray>`.
-They are also re-exported at the top level of the package (e.g. ``blosc2.matmul`` is the same function as ``blosc2.linalg.matmul``).
 
 .. currentmodule:: blosc2.linalg
 

@@ -11,3 +11,4 @@ API Reference
     storage
     save_load
     utilities
+    dsl_syntax

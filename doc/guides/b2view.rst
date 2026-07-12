@@ -11,7 +11,7 @@ itself — NDArrays of any dimensionality as well as CTables.
 ``pip install "blosc2[tui]"`` — which also covers the in-terminal braille
 plot (the ``p`` key).  The high-resolution image view (the ``h`` key) needs
 the ``hires`` extra instead — ``pip install "blosc2[hires]"`` (it includes
-``tui``).  See :doc:`installation` for the full list of extras.
+``tui``).  See :doc:`../getting_started/installation` for the full list of extras.
 
 Step 1 — Create a sample store
 ------------------------------
