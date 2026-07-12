@@ -138,6 +138,8 @@ _skbuild/
 
 # sphinx
 doc/_build/
+# autosummary stubs, regenerated on every build (autosummary_generate = True)
+doc/reference/autofiles/
 
 
 .*.swp
