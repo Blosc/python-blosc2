@@ -7,7 +7,7 @@ This is an API interface for computing an expression or a Python user defined fu
 
 You can get an object following the LazyArray API with any of the following ways:
 
-* Any expression that involves one or more NDArray objects. e.g. ``a + b``, where ``a`` and ``b`` are NDArray objects (see  `the lazyarray expressions tutorial <../getting_started/tutorials/03.lazyarray-expressions.html>`_).
+* Any expression that involves one or more NDArray objects. e.g. ``a + b``, where ``a`` and ``b`` are NDArray objects (see  `the lazyarray expressions tutorial <../getting_started/tutorials/02.lazyarray-expressions.html>`_).
 * Using the ``lazyexpr`` constructor.
 * Using the ``lazyudf`` constructor (see `a tutorial <../getting_started/tutorials/03.lazyarray-udf.html>`_).
 * Using ``@dsl_kernel`` and ``lazyudf`` for miniexpr-backed DSL kernels (see `the DSL kernels tutorial <../getting_started/tutorials/03.lazyarray-udf-kernels.html>`_).
@@ -47,7 +47,7 @@ See the `LazyExpr`_ and `LazyUDF`_ sections for more information.
 LazyExpr
 --------
 
-An expression like ``a + sum(b)``, where there is at least one NDArray object in operands ``a`` and ``b``, `returns a LazyExpr object <../getting_started/tutorials/03.lazyarray-expressions.html>`_. You can also get a LazyExpr object using the ``lazyexpr`` constructor (see below).
+An expression like ``a + sum(b)``, where there is at least one NDArray object in operands ``a`` and ``b``, `returns a LazyExpr object <../getting_started/tutorials/02.lazyarray-expressions.html>`_. You can also get a LazyExpr object using the ``lazyexpr`` constructor (see below).
 
 This object follows the `LazyArray`_ API for computation and storage.
 

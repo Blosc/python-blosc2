@@ -102,7 +102,7 @@ Social feeds
 Stay informed about the latest developments by following us in
 `Mastodon <https://fosstodon.org/@Blosc2>`_,
 `Bluesky <https://bsky.app/profile/blosc.org>`_ or
-`LinkedIn <https://www.linkedin.com/company/88381936/admin/dashboard/>`_.
+`LinkedIn <https://www.linkedin.com/company/88381936/>`_.
 
 Thanks
 ======

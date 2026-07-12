@@ -1,6 +1,6 @@
 # Containers Tutorial Assets
 
-V1 of `13.containers.ipynb` intentionally keeps the asset set small.
+V1 of `11.containers.ipynb` intentionally keeps the asset set small.
 
 Current assets:
 

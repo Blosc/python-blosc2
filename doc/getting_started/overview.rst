@@ -143,7 +143,7 @@ NDArray: an N-Dimensional store
 -------------------------------
 
 A recent feature in Python-Blosc2 is the
-`NDArray <https://www.blosc.org/python-blosc2/reference/ndarray_api.html>`_
+`NDArray <https://www.blosc.org/python-blosc2/reference/ndarray.html>`_
 object.  It rests atop the ``SChunk`` object, offering a NumPy-like API
 for compressed n-dimensional data, with the same chunked storage.
 
@@ -237,6 +237,8 @@ compute a single value from an array, such as the sum or mean.
 Example:
 
 .. code-block:: python
+
+    import numpy as np
 
     import blosc2
 
