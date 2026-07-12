@@ -1,6 +1,6 @@
 Installation
 ============
-You can install Python-Blosc2 wheels via PyPI using Pip, Conda or clone the GitHub repository.
+You can install binary Python-Blosc2 wheels from PyPI with pip, from conda-forge with conda, or build from a clone of the GitHub repository.
 
 Pip
 +++
@@ -60,12 +60,13 @@ Source code
     cd python-blosc2
     pip install . --group test   # install with test dependencies
 
-That's all. You can proceed with testing section now.
+(the ``--group`` flag needs pip >= 25.1). That's all. You can proceed
+with the testing section now.
 
 Testing
 -------
 
-After compiling, you can quickly check that the package is sane by
+After installing, you can quickly check that the package is sane by
 running the tests:
 
 .. code-block:: console

@@ -33,7 +33,7 @@ Quick example
 
     import blosc2
 
-    oarr = blosc2.ObjectArray(urlpath="example.b2z", mode="w", contiguous=True)
+    oarr = blosc2.ObjectArray(urlpath="example.b2frame", mode="w", contiguous=True)
     oarr.append({"x": 1, "y": 2})
     oarr.append([3, 4, 5])
     oarr.append("hello")
@@ -42,7 +42,7 @@ Quick example
     print(oarr[1])  # [3, 4, 5]
     print(len(oarr))  # 3
 
-    reopened = blosc2.open("example.b2z", mode="r")
+    reopened = blosc2.open("example.b2frame", mode="r")
     print(type(reopened).__name__)
     print(reopened.info)
 

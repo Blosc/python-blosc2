@@ -1,6 +1,7 @@
 # miniexpr DSL Syntax (Canonical Reference)
 
-This is the practical reference for the DSL accepted by `me_compile()`.
+This is the practical reference for the DSL used by `@blosc2.dsl_kernel`
+functions (and checked by `blosc2.validate_dsl()`).
 It focuses on what works today and the most common gotchas.
 For usage walkthroughs and end-to-end examples, see the
 [LazyArray UDF DSL kernels tutorial](tutorials/03.lazyarray-udf-kernels.ipynb).
