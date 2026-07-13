@@ -11543,9 +11543,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     raw = raw_columns[name]
                     if isinstance(raw, blosc2.NDArray):
                         # Keep as-is; written chunk-by-chunk in the write loop below.
-                        # Note: if do_validate=True, validate_column_batch() above will
-                        # have already decompressed this column transiently for constraint
-                        # checking.  Pass validate=False to avoid that peak-memory spike.
+                        # validate_column_batch() above also scans NDArray columns
+                        # chunk-by-chunk, so validation never fully decompresses them.
                         scalar_processed_cols[name] = raw
                     else:
                         scalar_processed_cols[name] = np.ascontiguousarray(raw, dtype=target_dtype)
