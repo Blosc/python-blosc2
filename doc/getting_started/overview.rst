@@ -9,7 +9,7 @@ C-Blosc2 library.
 `C-Blosc2 <https://github.com/Blosc/c-blosc2>`_ is the next generation of
 Blosc, an `award-winning <https://www.blosc.org/posts/prize-push-Blosc2/>`_
 library that has been around for more than a decade, and that is being used
-by many projects, including `PyTables <https://www.pytables.org/>`_ or
+by many projects, including `PyTables <https://www.pytables.org/>`_ and
 `Zarr <https://zarr.readthedocs.io/en/stable/>`_.
 
 Python-Blosc2's bespoke compute engine allows for complex computations on
@@ -26,7 +26,7 @@ Python-Blosc2 is designed to integrate seamlessly with existing libraries
 and tools in the Python ecosystem, including:
 
 * Support for NumPy's `universal functions
-  mechanism <https://numpy.org/doc/2.1/reference/ufuncs.html>`_, enabling
+  mechanism <https://numpy.org/doc/stable/reference/ufuncs.html>`_, enabling
   the combination of the NumPy and Blosc2 computation engines.
 * Excellent integration with Numba and Cython via
   `User Defined
@@ -95,7 +95,7 @@ of the super-chunk (a new chunk may be inserted anywhere there is space
 available, and the super-chunk can be extended with a reference to the
 location of the new chunk).
 
-However, since it may be advantageous (for e.g. faster file transfer) to
+However, since it may be advantageous (e.g. for faster file transfer) to
 convert a SChunk into a contiguous, serialized buffer (aka `cframe
 <https://github.com/Blosc/c-blosc2/blob/main/README_CFRAME_FORMAT.rst>`_),
 such functionality is supported; likewise one may convert a cframe into a
@@ -121,30 +121,15 @@ while reaching excellent compression ratios:
    :align: center
    :alt: Compression ratio for different codecs
 
-Also, if you are a Mac Silicon owner you may make use of its native arm64
-arch, since we distribute Mac arm64 wheels too:
-
-.. |pack_arm| image:: https://github.com/Blosc/python-blosc2/blob/main/images/M1-i386-vs-arm64-pack.png?raw=true
-   :width: 100%
-   :alt: Compression speed for different codecs on Apple M1
-
-.. |unpack_arm| image:: https://github.com/Blosc/python-blosc2/blob/main/images/M1-i386-vs-arm64-unpack.png?raw=true
-   :width: 100%
-   :alt: Decompression speed for different codecs on Apple M1
-
-+------------+--------------+
-| |pack_arm| | |unpack_arm| |
-+------------+--------------+
-
 Read more about ``SChunk`` features in our blog entry at:
 https://www.blosc.org/posts/python-blosc2-improvements
 
 NDArray: an N-Dimensional store
 -------------------------------
 
-A recent feature in Python-Blosc2 is the
-`NDArray <https://www.blosc.org/python-blosc2/reference/ndarray.html>`_
-object.  It rests atop the ``SChunk`` object, offering a NumPy-like API
+The `NDArray <https://www.blosc.org/python-blosc2/reference/ndarray.html>`_
+object is the workhorse of Python-Blosc2.  It rests atop the ``SChunk``
+object, offering a NumPy-like API
 for compressed n-dimensional data, with the same chunked storage.
 
 It efficiently reads/writes n-dimensional datasets using an n-dimensional
@@ -190,7 +175,7 @@ by this example, which closely mirrors the very familiar NumPy syntax:
     out = expr.compute()
     print(out.info)
 
-``NDArray`` instances resemble NumPy arrays, since one may expose their shape,
+``NDArray`` instances resemble NumPy arrays, since they expose their shape,
 dtype etc. via attributes (try ``a.shape`` in the example above), but store
 compressed data, processed efficiently by Python-Blosc2's engine. This means
 that you can work with datasets larger than would be feasible with e.g. NumPy.
@@ -228,8 +213,8 @@ Reductions and disk-based computations
 Of course, it may be the case that, even compressed, data is still too large
 to fit in memory. Python-Blosc2's compute engine is perfectly capable of
 working with data stored on disk, loading the chunked data efficiently to
-minimise latency, optimizing calculations on datasets too large for memory.
-Computation results may also be stored on disk if necessary We can see this
+minimize latency, optimizing calculations on datasets too large for memory.
+Computation results may also be stored on disk if necessary. We can see this
 at work for reductions, which are 1) computationally demanding, and 2) an
 important class of operations in data analysis, where we often wish to
 compute a single value from an array, such as the sum or mean.
@@ -246,7 +231,7 @@ Example:
     # N = 100_000 # for large scenario
     a = blosc2.linspace(0, 1, N * N, shape=(N, N), urlpath="a.b2nd", mode="w")
     b = blosc2.linspace(1, 2, N * N, shape=(N, N), urlpath="b.b2nd", mode="w")
-    c = blosc2.linspace(-10, 10, N * N, shape=(N, N))  # small and in-memory
+    c = blosc2.linspace(-10, 10, N * N, shape=(N, N))  # compressed and in-memory
     # Expression
     expr = np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
 
@@ -255,7 +240,7 @@ Example:
     print(out.info)
 
 This example computes the sum of a boolean array resulting from an
-expression, where the operands are on disk, with the result being a
+expression, where two of the operands are on disk, with the result being a
 1D array stored in memory (or optionally on disk via the ``out=``
 parameter in ``compute()`` or ``sum()`` functions). For a more in-depth look at
 this example, with performance comparisons, see this
