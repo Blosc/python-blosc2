@@ -112,8 +112,31 @@ def validate_column_values(col: CompiledColumn, values: Any) -> None:  # noqa: C
             )
         return
 
-    arr = np.asarray(values)
+    if not any(
+        getattr(spec, attr, None) is not None
+        for attr in ("ge", "gt", "le", "lt", "max_length", "min_length")
+    ):
+        # No declared constraints -> nothing can fail; in particular, don't
+        # decompress a blosc2.NDArray column just to check nothing.
+        return
 
+    import blosc2
+
+    if isinstance(values, blosc2.NDArray):
+        # Validate one chunk at a time so a compressed column is never fully
+        # decompressed here (the checks are all elementwise, and chunks are
+        # scanned in order, so the first violation reported is unchanged).
+        n = values.shape[0]
+        chunk_len = values.chunks[0] if values.chunks else 65536
+        for c in range(0, n, chunk_len):
+            _validate_scalar_array(col, spec, np.asarray(values[c : min(c + chunk_len, n)]))
+        return
+
+    _validate_scalar_array(col, spec, np.asarray(values))
+
+
+def _validate_scalar_array(col: CompiledColumn, spec, arr: np.ndarray) -> None:
+    """Run the elementwise constraint checks on one in-memory array (or chunk)."""
     # Compute null mask so sentinels bypass constraint checks
     null_mask = _null_mask_for_spec(arr, spec)
     if null_mask is not None:

@@ -11,6 +11,7 @@ Topics
 .. toctree::
     :maxdepth: 1
 
+    optimization_tips
     sharing_across_processes
 
 Command line tools
