@@ -5,10 +5,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Tip 7: CTable.extend() writes an NDArray column value chunk-by-chunk
-# without decompressing it upfront -- except that by default it still does
-# one transient full decompression to run constraint/nullability checks.
-# validate=False skips that check for a column you already know is valid.
+# Tip 7: CTable.extend() writes an NDArray column value chunk-by-chunk,
+# and constraint validation is also chunk-wise (never a full decompress).
+# On a column with declared constraints, validation still costs the
+# decompress+check time; validate=False skips it for known-good data.
+# (Columns with no declared constraints skip validation automatically.)
 
 from dataclasses import dataclass
 
@@ -20,7 +21,7 @@ N = 20_000_000
 
 @dataclass
 class Row:
-    val: float = blosc2.field(blosc2.float64())
+    val: float = blosc2.field(blosc2.float64(ge=0.0))
 
 
 _src = blosc2.linspace(0, 1, N)
@@ -28,7 +29,7 @@ _src = blosc2.linspace(0, 1, N)
 
 def naive():
     t = blosc2.CTable(Row, expected_size=N)
-    t.extend({"val": _src})  # default validate=None -> transient full decompress
+    t.extend({"val": _src})  # default: chunk-wise decompress + constraint check
     return t
 
 

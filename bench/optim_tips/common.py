@@ -42,7 +42,8 @@ MUTED = "#898781"
 GRID = "#e1e0d9"
 
 _DRIVER = """\
-import gc, importlib.util, json, platform, resource, sys, time, tracemalloc
+import gc, importlib.util, json, os, platform, resource, sys, time, tracemalloc
+sys.path.insert(0, os.path.dirname(sys.argv[1]))  # so the script's own `from common import ...` resolves
 spec = importlib.util.spec_from_file_location("_bench_mod", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)  # runs the script's module-level setup once
