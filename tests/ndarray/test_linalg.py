@@ -1266,3 +1266,19 @@ def test_linalgproxy(xp, dtype):
             foreign_matrix = np.asarray(foreign_matrix)
             res = npfunc(foreign_matrix, 0) if name == "expand_dims" else npfunc(foreign_matrix)
         np.testing.assert_array_equal(res, lexpr[()])
+
+
+def test_matmul_broadcast_batch_chunks():
+    # Regression: the chunked matmul path indexed broadcast (size-1) operand
+    # batch dims with result-chunk coords, producing empty slices when the
+    # broadcast dim spans several result chunks.
+    a = np.arange(4, dtype=np.float64).reshape(1, 2, 2)
+    b = np.arange(12, dtype=np.float64).reshape(3, 2, 2)
+    res = blosc2.matmul(
+        blosc2.asarray(a, chunks=(1, 2, 2)), blosc2.asarray(b, chunks=(1, 2, 2)), chunks=(1, 2, 2)
+    )
+    np.testing.assert_allclose(res[:], np.matmul(a, b))
+    res = blosc2.matmul(
+        blosc2.asarray(b, chunks=(1, 2, 2)), blosc2.asarray(a, chunks=(1, 2, 2)), chunks=(1, 2, 2)
+    )
+    np.testing.assert_allclose(res[:], np.matmul(b, a))

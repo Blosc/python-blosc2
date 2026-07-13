@@ -400,6 +400,8 @@ def linalg_shape(func_name, args, kwargs):  # noqa: C901
             axis = args[1]
         if axis is None:
             axis = 0
+        if axis < 0:
+            axis += len(elems[0]) + 1
         return elems[0][:axis] + (len(elems),) + elems[0][axis:]
 
     # --- tensordot ---
@@ -431,8 +433,8 @@ def linalg_shape(func_name, args, kwargs):  # noqa: C901
             axis = -1
         if b is None:
             return None
-        a_axis = axis + len(a)
-        b_axis = axis + len(b)
+        a_axis = axis + len(a) if axis < 0 else axis
+        b_axis = axis + len(b) if axis < 0 else axis
         a_rem = tuple(d for i, d in enumerate(a) if i != a_axis)
         b_rem = tuple(d for i, d in enumerate(b) if i != b_axis)
         return broadcast_shapes(a_rem, b_rem)

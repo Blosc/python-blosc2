@@ -2109,6 +2109,12 @@ def test_lazylinalg():
     npres = np.stack((npx, npy), axis=0)
     assert out.shape == npres.shape
     np.testing.assert_array_almost_equal(out[()], npres)
+    # --- stack with negative axis ---
+    # Regression: inferred shape used to insert the new dim one position too early.
+    out = blosc2.lazyexpr("stack((x, y), axis=-1)")
+    npres = np.stack((npx, npy), axis=-1)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- tensordot ---
     out = blosc2.lazyexpr("tensordot(A, B, axes=1)")  # test with int axes

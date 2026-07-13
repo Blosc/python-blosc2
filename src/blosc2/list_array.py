@@ -408,6 +408,9 @@ class ListArray:
             values = arrow_array.to_pylist() if hasattr(arrow_array, "to_pylist") else list(arrow_array)
             self.extend(values, validate=False)
             return
+        # Persist pending rows first: chunks are appended straight to the
+        # backend, which would otherwise reorder them ahead of pending cells.
+        self.flush()
         for chunk in chunks:
             if len(chunk) == 0:
                 continue
