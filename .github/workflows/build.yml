@@ -58,7 +58,7 @@ jobs:
           pip-${{ runner.os }}-
 
     - name: Install Ninja
-      uses: seanmiddleditch/gha-setup-ninja@master
+      run: pip install ninja
 
     - name: Add LLVM to PATH (Windows)
       if: runner.os == 'Windows'
