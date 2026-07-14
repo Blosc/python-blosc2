@@ -2,7 +2,62 @@
 
 ## Changes from 4.8.0 to 4.8.1
 
-XXX version-specific blurb XXX
+### Improvements
+
+- Read-only memory mapping for `CTable` stores: `CTable.open()` (and
+  `FileTableStorage`) gain an `mmap_mode="r"` parameter, mirroring
+  `blosc2.open()`. All members of a read-only store — scalar, list, varlen
+  and dictionary columns alike — are then read from mapped pages; for `.b2z`
+  archives, in place at their offsets inside the single mapped container
+  file. With several concurrent readers on one file this pays off quickly:
+  2.5x/4.4x/4.5x faster wall time for 1/4/8 readers in our benchmark
+  (`bench/optim_tips/tip_10_mmap_many_readers.py`).
+- Reduced memory consumption in `CTable.extend()` when passed an `NDArray`.
+
+### Bug fixes
+
+- Fixed lifetime/use-after-free hazards around zero-copy cframes and
+  `vlmeta`: `schunk_from_cframe()`/`ndarray_from_cframe()` with `copy=False`
+  (the default) returned objects pointing into the caller's bytes buffer
+  without keeping it alive, so a temporary cframe (e.g.
+  `ndarray_from_cframe(response.content)`) could be reclaimed under the live
+  object, corrupting reads. The buffer is now pinned on the returned object.
+  Also, `vlmeta` read paths (`__getitem__`/`__len__`/`__iter__`) now raise
+  `ReferenceError` on an orphaned owner instead of segfaulting, matching the
+  write paths.
+- `BatchArray.delete()` / `ObjectArray.delete()`: negative-step slices
+  (e.g. `del arr[3:0:-1]`) deleted chunks in ascending order, shifting the
+  indices of chunks still to be deleted and removing the wrong ones (or
+  raising `RuntimeError`).
+- `ListArray.extend_arrow()`: Arrow chunks were appended to the backend
+  without flushing pending cells first, reordering unflushed rows after the
+  new ones.
+- Shape inference: `stack()` with a negative axis inserted the new dimension
+  one position too early, so a lazyexpr's reported `.shape` disagreed with
+  its computed result; `vecdot()` also normalized positive axes as if they
+  were negative.
+- Chunked `matmul()`: broadcast (size-1) operand batch dims were sliced with
+  the result-chunk coordinates, producing empty slices when the broadcast
+  dim spans several result chunks.
+- `DictStore.__setitem__()`: overwrite semantics depended on value size —
+  embedded keys refused overwrite ("already exists"), while an
+  embedded-to-external overwrite double-stored the key and resurrected the
+  stale embedded value after a delete. Assignments now behave uniformly
+  dict-like, dropping any previous value.
+- Explicitly passing `cparams=None` or `dparams=None` to NDArray
+  constructors crashed; both now mean "defaults".
+- Fixed a builtin-shadowing bug that made store detection in
+  `blosc2.open()` recurse ~250 times (silently swallowed) on every
+  `.b2z`/`.b2d` open; opening a `.b2z` is now ~10x faster under allocation
+  tracing.
+
+### Documentation
+
+- Restructured docs (#674), with a new
+  [Optimization tips](https://www.blosc.org/python-blosc2/guides/optimization_tips.html)
+  section, including new tips on grouping related data into a single
+  memory-mapped `.b2z` file and on using `mmap_mode="r"` with many
+  concurrent readers.
 
 ## Changes from 4.7.0 to 4.8.0
 

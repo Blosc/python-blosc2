@@ -1,55 +1,43 @@
-Announcing Python-Blosc2 4.8.0
+Announcing Python-Blosc2 4.8.1
 ==============================
 
-We are happy to announce this release, which brings support for
-**sharing containers safely across processes** — opt-in file locking for
-``SChunk``/``NDArray``/``EmbedStore``/``DictStore``, atomic archive
-replacement, and readers that follow another process's writes — plus a
-couple of data-loss and data-correctness bug fixes worth upgrading for even
-if you don't touch any of the new locking API.
+This is a maintenance release with a solid batch of bug fixes — including
+use-after-free hazards around zero-copy cframes, wrong-chunk deletion with
+negative-step slices, and inconsistent ``DictStore`` overwrite semantics —
+plus read-only memory mapping for ``CTable`` stores and a documentation
+restructuring with a new Optimization Tips section.
 
 The main highlights are:
 
-- **Cross-process locking**: a new ``locking`` storage parameter (and the
-  ``BLOSC_LOCKING`` env var to enable it fleet-wide) serializes accesses to an
-  on-disk ``SChunk``/``NDArray``/``EmbedStore``/``DictStore`` against other
-  handles and processes via a small sidecar lock file. ``holding_lock()``
-  holds the exclusive lock across several operations and now auto-refreshes
-  the handle right after acquiring it, so a decision made inside the block
-  never acts on a stale in-memory read.
+- **Read-only mmap for ``CTable`` stores**: ``CTable.open()`` gains an
+  ``mmap_mode="r"`` parameter, mirroring ``blosc2.open()``. All members of a
+  read-only store — scalar, list, varlen and dictionary columns alike — are
+  read from mapped pages; for ``.b2z`` archives, in place inside the single
+  mapped container file. With several concurrent readers on one file this
+  pays off quickly: 2.5x/4.4x/4.5x faster wall time for 1/4/8 readers in
+  our benchmark.
 
-- **Cross-process writes for ``EmbedStore``/``DictStore``** (``.b2d``): under
-  locking, one process can add or remove keys while another has the store
-  open, and the other side's next lookup sees the change — no need to
-  reopen the store.
+- **Zero-copy cframe fix**: ``schunk_from_cframe()`` /
+  ``ndarray_from_cframe()`` with ``copy=False`` (the default) returned
+  objects pointing into the caller's bytes buffer without keeping it alive,
+  so a temporary cframe could be reclaimed under the live object, corrupting
+  reads. The buffer is now pinned on the returned object.
 
-- **Atomic ``.b2z`` archives**: writing a ``DictStore.to_b2z()`` file (which
-  ``TreeStore`` also uses) now swaps the new file in atomically. A process
-  reading the archive concurrently always gets either the complete old
-  version or the complete new one — never a partially-written file from a
-  save that's still in progress. This needs no locking on the reader's side.
+- **More correctness fixes**: negative-step slice deletion in
+  ``BatchArray``/``ObjectArray`` removed the wrong chunks; ``DictStore``
+  overwrite semantics depended on value size (now uniformly dict-like);
+  ``stack()``/``vecdot()`` shape inference was off for negative axes;
+  chunked ``matmul()`` mishandled broadcast batch dims; and
+  ``ListArray.extend_arrow()`` could reorder unflushed rows.
 
-- **Growth-SWMR**: a reader ``NDArray`` handle opened before a ``resize()``
-  made through another handle follows the new shape on its next data access,
-  or via the new explicit ``NDArray.refresh()`` / ``SChunk.refresh()``.
+- **Faster ``.b2z``/``.b2d`` opens**: a builtin-shadowing bug made store
+  detection in ``blosc2.open()`` silently recurse ~250 times on every open.
 
-- **Two bug fixes worth knowing about**: ``NDArray.append()`` could silently
-  delete another writer's just-appended data under concurrent growth (fixed
-  by refreshing the cached shape before computing the resize target); and
-  ``detect_aligned_chunks()`` could silently return the wrong chunk's data
-  for an aligned slice on arrays whose shape isn't a multiple of the chunk
-  shape (a floor-division bug that undercounted the chunk grid).
-
-- New user guide page,
-  `Sharing containers across processes
-  <https://www.blosc.org/python-blosc2/guides/sharing_across_processes.html>`_,
-  covering all of the above plus the caveats (NFS, ``mmap_mode``, Windows
-  in-use-file rename).
-
-A quick taste — hold the lock across a read-modify-write from two processes::
-
-    with ndarr.holding_lock():
-        ndarr[:] = ndarr[:] + 1   # atomic w.r.t. other locked handles
+- **Docs restructuring**, with a new `Optimization tips
+  <https://www.blosc.org/python-blosc2/guides/optimization_tips.html>`_
+  section, including tips on grouping related data into a single
+  memory-mapped ``.b2z`` file and on using ``mmap_mode="r"`` with many
+  concurrent readers.
 
 Install it with::
 
