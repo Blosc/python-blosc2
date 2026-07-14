@@ -4739,7 +4739,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return cls._open_from_storage(storage)
 
     @classmethod
-    def open(cls, urlpath: str, *, mode: str = "r") -> CTable:
+    def open(cls, urlpath: str, *, mode: str = "r", mmap_mode: str | None = None) -> CTable:
         """Open a persistent CTable from *urlpath*.
 
         Parameters
@@ -4750,15 +4750,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         mode:
             ``'r'`` (default) — read-only.
             ``'a'`` — read/write.
+        mmap_mode:
+            ``'r'`` to memory-map the backing store instead of using regular
+            file I/O (requires ``mode='r'``).  For a ``.b2z`` container this
+            maps the single file once and reads every member — columns and
+            index sidecars alike — in place at its offset, with mapped pages
+            shared across reader processes.
 
         Raises
         ------
         FileNotFoundError
             If *urlpath* does not contain a CTable.
         ValueError
-            If the metadata at *urlpath* does not identify a CTable.
+            If the metadata at *urlpath* does not identify a CTable, or if
+            ``mmap_mode`` is used with a writable ``mode``.
         """
-        storage = FileTableStorage(urlpath, mode)
+        storage = FileTableStorage(urlpath, mode, mmap_mode=mmap_mode)
         if not storage.table_exists():
             raise FileNotFoundError(f"No CTable found at {urlpath!r}")
         return cls._open_from_storage(storage)

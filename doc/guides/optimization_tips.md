@@ -21,6 +21,8 @@ a = blosc2.linspace(0, 1, N)
 
 At 200M float64 elements, the two are comparable in speed, but the real win is memory: **~25x less peak memory**, and the gap widens with array size — the naive path's memory is O(N), while the constructor's stays roughly O(chunk size) for compressible enough data. The same applies to `arange()` and `fromiter()`.
 
+*Benchmark for this tip: [`tip_01_constructors.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_01_constructors.py)*
+
 ## Align slices with the chunk grid
 
 `NDArray.slice()` has a fast path when a slice's boundaries land exactly on chunk boundaries: whole chunks are copied as-is, with no decompress/recompress. A slice that starts or ends mid-chunk falls back to the general path.
@@ -40,6 +42,8 @@ arr.slice((slice(4000, 16000), slice(None)))
 The aligned slice was **~45x faster** on a 16000x2000 float64 array. (Ignore the memory panel for this one: the fast path's footprint — just the compressed chunks passing through — happens to be visible to our measurement, while the general path's much larger decompression scratch lives in C buffers the measurement cannot see. The aligned path actually moves *less* memory around, not more.)
 
 If you control chunk sizes, pick slice boundaries — or a `chunks=` shape — that line up with how you plan to read the array.
+
+*Benchmark for this tip: [`tip_02_chunk_aligned_slicing.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_02_chunk_aligned_slicing.py)*
 
 ## Sorted top-k via `sort_by(view=True)`
 
@@ -61,6 +65,8 @@ On a 2M-row table, the view form took **~45x less time** — while also using ab
 
 Views are also available for `group_by()` and `where()` queries, so use them whenever you don't need a materialized copy.
 
+*Benchmark for this tip: [`tip_03_sort_by_view.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_03_sort_by_view.py)*
+
 ## Let SUMMARY indexes answer `min()`/`max()` directly
 
 When closing a `CTable`, Blosc2 automatically builds `SUMMARY` indexes (per-block min/max) for its eligible scalar columns — this is on by default (`create_summary_index=True`). `Column.min()`/`max()` (and `argmin()`/`argmax()` inside `group_by()`) then answer from those precomputed summaries instead of decompressing the column at all.
@@ -70,7 +76,7 @@ When closing a `CTable`, Blosc2 automatically builds `SUMMARY` indexes (per-bloc
 with blosc2.CTable(Row, urlpath="t.b2d", mode="w") as t:
     t.extend(data)
 
-t = blosc2.CTable.open("t.b2d")
+t = blosc2.open("t.b2d")
 hottest = t["temperature"].max()  # answered from the SUMMARY index
 ```
 
@@ -79,6 +85,8 @@ hottest = t["temperature"].max()  # answered from the SUMMARY index
 On a 10M-row column, the indexed `max()` took ~4x less time than without an index, and needed essentially no extra memory — it never touches the compressed column data at all.
 
 The same SUMMARY indexes can also let a selective `where()` query skip whole blocks, but only when the column's values are ordered or clustered enough that a block's min/max range can exclude the predicate entirely. With independently random data every block spans nearly the full value range and there is nothing to skip — so the `min()`/`max()` speedup is the one you can always count on.
+
+*Benchmark for this tip: [`tip_04_summary_index_where.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_04_summary_index_where.py)*
 
 ## Reduce columns directly — don't slice them first
 
@@ -96,6 +104,8 @@ total = t["val"].sum()
 
 On a 50M-row column, `col.sum()` was 1.7x faster, but more importantly it used **~12x less peak memory**. For large tables the memory savings alone can be the deciding factor.
 
+*Benchmark for this tip: [`tip_05_column_reduce.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_05_column_reduce.py)*
+
 ## Filtered reductions: push the predicate down with `where=`
 
 The previous tip extends to filtered aggregates. The NumPy-style idiom — materialize the value column *and* the predicate column, build a boolean mask, then reduce — decompresses both columns in full just to keep a fraction of the rows. Column reductions accept a `where=` predicate instead, which is pushed down into the same chunk-wise scan: no intermediate arrays, no filtered view.
@@ -112,7 +122,9 @@ total = t["temperature"].sum(where=t.region == 3)
 
 ![col.sum(where=...) vs NumPy-style masking](optim_tips/tip_08_where_pushdown.png)
 
-On a 20M-row table, the pushed-down form was **~2x faster** and used **~7x less peak memory**. Predicates can combine several columns too: `t["amount"].sum(where=(t.price < 300) & (t.qty > 0))`.
+On a 20M-row table, the pushed-down form was **~1.9x faster** and used **~7x less peak memory**. Predicates can combine several columns too: `t["amount"].sum(where=(t.price < 300) & (t.qty > 0))`.
+
+*Benchmark for this tip: [`tip_08_where_pushdown.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_08_where_pushdown.py)*
 
 ## Memory-map read-only opens
 
@@ -128,9 +140,41 @@ arr = blosc2.open(path, mmap_mode="r")
 
 ![open(mmap_mode='r') vs plain open()](optim_tips/tip_06_mmap_read.png)
 
-Across 8,000 scattered slice reads, `mmap_mode="r"` was **~1.2x faster**; peak memory was essentially identical for this single-process, single-open workload.
+Across 8,000 scattered slice reads, `mmap_mode="r"` was **~1.1x faster**; peak memory was essentially identical for this single-process, single-open workload.
 
 The bigger real-world payoff shows up with cold OS caches and with multiple readers/processes sharing one file, where mapped pages are shared rather than each reader paying its own I/O and buffer-copy cost — a single warm-cache process, as benchmarked here, is the worst case for showing it off. See the [Sharing containers across processes](sharing_across_processes.rst) guide for the multi-reader/NFS/Windows caveats.
+
+*Benchmark for this tip: [`tip_06_mmap_read.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_06_mmap_read.py)*
+
+## Use `.b2z` to group related data into one memory-mapped file
+
+`.b2z` packs related data — a `CTable`'s columns and indexes, hierarchies of arrays, or both — into a single-file container that blosc2 reads *in place*: opened read-only, nothing is ever unpacked, and with `mmap_mode="r"` every member is memory-mapped at its offset inside the container. Beyond the convenience of one file to copy or archive, this buys you:
+
+- **mmap out of the box** — one mapping of one file covers the whole dataset, and the OS shares its pages across every reader process.
+- **One file open instead of hundreds** — a wide `.b2d` directory can hold 100+ leaf files, each costing an open/stat metadata round-trip; on network filesystems or with cold caches, that latency dominates.
+- **Atomic replacement** — `to_b2z()` swaps the file atomically, so readers always see the complete old dataset or the complete new one, never a mix; a directory of files can't guarantee that.
+- **No per-file allocation slack** — many small leaves each round up to a filesystem block in a `.b2d`; packed members don't, which can shrink wide datasets considerably.
+- **Layout locality** — members sit contiguously in one file, so full scans read sequentially instead of seeking across scattered files.
+
+Don't treat it as an archive to extract before use:
+
+```python
+# Avoid: unpacking first — extra time and a second copy on disk
+with zipfile.ZipFile("data.b2z") as z:
+    z.extractall("data.b2d")
+t = blosc2.open("data.b2d")
+
+# Prefer: one open, one mapping, straight from the container
+t = blosc2.open("data.b2z", mmap_mode="r")
+```
+
+![Reading a .b2z in place vs extracting it first](optim_tips/tip_09_b2z_read_in_place.png)
+
+On a 10M-row table, opening in place and summing a column was **~2x faster** than extract-then-open (identical peak memory), and it leaves no unpacked copy behind. The multi-reader advantages are the same as in the [memory-map tip above](#memory-map-read-only-opens), only with a single mapping serving the whole dataset.
+
+One asymmetry to keep in mind: `.b2z` is optimized for reading, while a *writable* `.b2z` is staged in a temporary directory and rezipped on close — for write-heavy workloads, build the table as `.b2d` and pack it with `to_b2z()` when it's ready to publish.
+
+*Benchmark for this tip: [`tip_09_b2z_read_in_place.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_09_b2z_read_in_place.py)*
 
 ## Skip constraint checks in `extend()` with `validate=False`
 
@@ -149,3 +193,5 @@ t.extend({"val": src}, validate=False)
 ![CTable.extend(validate=False)](optim_tips/tip_07_chunked_writes.png)
 
 Extending a table with a 20M-row `NDArray` column carrying a `ge=0` constraint, `validate=False` was **~1.4x faster**; peak memory was similar, since validation is chunk-wise anyway.
+
+*Benchmark for this tip: [`tip_07_chunked_writes.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_07_chunked_writes.py)*

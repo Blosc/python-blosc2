@@ -553,13 +553,26 @@ class FileTableStorage(TableStorage):
         ``'w'`` — create (overwrite existing files).
         ``'a'`` — open existing or create new.
         ``'r'`` — open existing read-only.
+    mmap_mode:
+        ``'r'`` to memory-map the backing store (requires ``mode='r'``);
+        members are then read from mapped pages — for ``.b2z``, in place at
+        their offsets inside the single mapped container file.
     """
 
-    def __init__(self, urlpath: str, mode: str, store: blosc2.TreeStore | None = None) -> None:
+    def __init__(
+        self,
+        urlpath: str,
+        mode: str,
+        store: blosc2.TreeStore | None = None,
+        mmap_mode: str | None = None,
+    ) -> None:
         if mode not in ("r", "a", "w"):
             raise ValueError(f"mode must be 'r', 'a', or 'w'; got {mode!r}")
+        if mmap_mode is not None and mode != "r":
+            raise ValueError("mmap_mode requires mode='r'")
         self._root = urlpath
         self._mode = mode
+        self._mmap_mode = mmap_mode
         self._meta: blosc2.SChunk | None = None
         self._vlmeta: blosc2.SChunk | None = None
         # CTable internals must always use external-file storage (never the
@@ -618,6 +631,11 @@ class FileTableStorage(TableStorage):
                 # Force table internals to be stored as proper external leaves so
                 # reopened arrays stay live and mutable through the TreeStore.
                 kwargs["threshold"] = 0
+            elif self._mmap_mode is not None:
+                # Memory-map the read-only store: members are read straight
+                # from mapped pages (for .b2z, at their offsets inside the
+                # single mapped container file, shared across readers).
+                kwargs["mmap_mode"] = self._mmap_mode
             self._store = blosc2.TreeStore(self._root, **kwargs)
         return self._store
 
@@ -681,7 +699,9 @@ class FileTableStorage(TableStorage):
             rel = self._col_key(name).lstrip("/") + ".b2b"
             if rel not in store.offsets:
                 raise KeyError(f"List column {name!r} not found in {self._root!r}")
-            opened = blosc2.blosc2_ext.open(store.b2z_path, mode="r", offset=store.offsets[rel]["offset"])
+            opened = blosc2.blosc2_ext.open(
+                store.b2z_path, mode="r", offset=store.offsets[rel]["offset"], mmap_mode=store.mmap_mode
+            )
             return process_opened_object(opened)
         return blosc2.open(self._list_col_path(name), mode=self._mode)
 
@@ -699,7 +719,7 @@ class FileTableStorage(TableStorage):
                 raise KeyError(f"Varlen scalar column {name!r} not found in {self._root!r}")
             backend = BatchArray(
                 _from_schunk=blosc2.blosc2_ext.open(
-                    store.b2z_path, mode="r", offset=store.offsets[rel]["offset"]
+                    store.b2z_path, mode="r", offset=store.offsets[rel]["offset"], mmap_mode=store.mmap_mode
                 )
             )
         else:
@@ -750,7 +770,7 @@ class FileTableStorage(TableStorage):
                 raise KeyError(f"Dictionary column dict store {name!r} not found in {self._root!r}")
             dict_backend = BatchArray(
                 _from_schunk=blosc2.blosc2_ext.open(
-                    store.b2z_path, mode="r", offset=store.offsets[rel]["offset"]
+                    store.b2z_path, mode="r", offset=store.offsets[rel]["offset"], mmap_mode=store.mmap_mode
                 )
             )
         else:
@@ -1233,6 +1253,7 @@ class TreeStoreTableStorage(TableStorage):
                 self._store.b2z_path,
                 mode="r",
                 offset=self._store.offsets[rel]["offset"],
+                mmap_mode=self._store.mmap_mode,
             )
             return process_opened_object(opened)
         return blosc2.open(self._list_col_path(name), mode=self._mode)
@@ -1259,6 +1280,7 @@ class TreeStoreTableStorage(TableStorage):
                     self._store.b2z_path,
                     mode="r",
                     offset=self._store.offsets[rel]["offset"],
+                    mmap_mode=self._store.mmap_mode,
                 )
             )
         else:
@@ -1315,6 +1337,7 @@ class TreeStoreTableStorage(TableStorage):
                     self._store.b2z_path,
                     mode="r",
                     offset=self._store.offsets[rel]["offset"],
+                    mmap_mode=self._store.mmap_mode,
                 )
             )
         else:

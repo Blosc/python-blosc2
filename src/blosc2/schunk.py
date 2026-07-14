@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import builtins
 import os
 import pathlib
 import weakref
@@ -1738,7 +1739,9 @@ def _meta_from_store(urlpath, offset):
             return _open_meta(embed_path)
     if os.path.isfile(urlpath) and not urlpath.endswith(".b2e"):
         try:
-            with open(urlpath, "rb") as f, zipfile.ZipFile(f) as zf:
+            # NB: io.open is the *builtin* open — the module-level blosc2.open
+            # shadows the builtin here, and calling it would recurse.
+            with builtins.open(urlpath, "rb") as f, zipfile.ZipFile(f) as zf:
                 for info in zf.infolist():
                     if info.filename == "embed.b2e":
                         f.seek(info.header_offset)
@@ -2054,7 +2057,7 @@ def open(
 
     To open the same schunk memory-mapped, we simply need to pass the `mmap_mode` parameter:
 
-    >>> sc_open_mmap = blosc2.open(urlpath=urlpath, mode="r", mmap_mode="r")
+    >>> sc_open_mmap = blosc2.open(urlpath=urlpath, mmap_mode="r")
     >>> sc_open.nchunks == sc_open_mmap.nchunks
     True
     >>> all(sc_open.decompress_chunk(i, dest1) == sc_open_mmap.decompress_chunk(i, dest1) for i in range(nchunks))

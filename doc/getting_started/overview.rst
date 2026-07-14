@@ -307,7 +307,9 @@ Beyond filtering and sorting, ``CTable`` offers:
   Arrow with a single call, making it easy to interoperate with the broader
   data ecosystem.
 * **Persistent storage** — open and save tables to disk (``CTable.open()``,
-  ``CTable.save()``); in-memory and on-disk tables share the same API.
+  ``CTable.save()``); in-memory and on-disk tables share the same API. Saving
+  to a single-file ``.b2z`` container adds atomic updates and in-place,
+  memory-mappable reads.
 
 .. code-block:: python
 

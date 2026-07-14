@@ -10,7 +10,7 @@ Overview
 DictStore lets you store and retrieve arrays by string keys (paths like ``"/dir/node"``), similar to a Python dict, while transparently handling efficient Blosc2 compression and persistence. It supports two on‑disk representations:
 
 - ``.b2d``: a directory layout (B2DIR) where each external array is a separate file: ``.b2nd`` for NDArray and ``.b2f`` for SChunk; an embedded store file (``embed.b2e``) keeps small/in‑memory arrays.
-- ``.b2z``: a single zip file (B2ZIP) that mirrors the directory structure above. You can zip up a ``.b2d`` layout or write directly and later reopen it for reading.
+- ``.b2z``: a single-file container (B2ZIP) that mirrors the directory structure above. You can pack a ``.b2d`` layout or write directly and later reopen it for reading. Besides being one file to ship, it is read (and memory-mapped) in place at member offsets, avoids per-file allocation slack, and updates via ``to_b2z()`` replace the file atomically — see :doc:`the optimization tips guide <../guides/optimization_tips>` for details.
 
 Supported values include ``blosc2.NDArray``, ``blosc2.SChunk`` and ``blosc2.C2Array`` (as well as ``numpy.ndarray``, which is converted to NDArray). Small arrays (below a configurable compression‑size threshold) and in‑memory objects are kept inside the embedded store; larger or explicitly external arrays live as regular ``.b2nd`` (NDArray) or ``.b2f`` (SChunk) files. ``C2Array`` objects are always stored in the embedded store. You can mix all types seamlessly and use the usual mapping methods (``__getitem__``, ``__setitem__``, ``keys()``, ``items()``...).
 
@@ -39,7 +39,7 @@ Quick example
        print(dstore["/node1"][:])  # [1 2 3]
 
    # Reopen in read-only mmap mode
-   with blosc2.open("my_dstore.b2z", mode="r", mmap_mode="r") as dstore_mmap:
+   with blosc2.open("my_dstore.b2z", mmap_mode="r") as dstore_mmap:
        print(dstore_mmap["/dir1/node3"][1:3])
 
 .. note::

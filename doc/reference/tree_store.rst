@@ -16,7 +16,7 @@ nodes and are created implicitly as you assign arrays to leaves.
 Like DictStore, TreeStore supports two on‑disk representations:
 
 - ``.b2d``: a directory layout (B2DIR) where external arrays are regular ``.b2nd`` files and a small embedded store (``embed.b2e``) holds small/in‑memory arrays.
-- ``.b2z``: a single zip file (B2ZIP) that mirrors the above directory structure. You can create it directly or convert from a ``.b2d`` layout.
+- ``.b2z``: a single-file container (B2ZIP) that mirrors the above directory structure. You can create it directly or convert from a ``.b2d`` layout. Besides being one file to ship, it is read (and memory-mapped) in place at member offsets, avoids per-file allocation slack, and updates via ``to_b2z()`` replace the file atomically — see :doc:`the optimization tips guide <../guides/optimization_tips>` for details.
 
 Small arrays (below a size threshold) and in‑memory objects go to the embedded
 store, while larger arrays or explicitly external arrays are stored as separate
@@ -55,7 +55,7 @@ Quick example
        print(sorted(tstore.keys()))
 
    # Reopen in read-only mmap mode
-   with blosc2.open("my_tree.b2z", mode="r", mmap_mode="r") as tstore_mmap:
+   with blosc2.open("my_tree.b2z", mmap_mode="r") as tstore_mmap:
        print(tstore_mmap["/child0/leaf1"][0:2])
 
 .. note::

@@ -55,7 +55,7 @@ show("from_cframe type", type(restored).__name__)
 show("from_cframe entries", list(restored))
 
 # Reopen from disk; tagged stores come back as ObjectArray.
-reopened = blosc2.open(urlpath, mode="r", mmap_mode="r")
+reopened = blosc2.open(urlpath, mmap_mode="r")
 show("Reopened type", type(reopened).__name__)
 show("Reopened entries", list(reopened))
 

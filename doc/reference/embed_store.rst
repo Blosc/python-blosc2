@@ -49,7 +49,7 @@ Quickstart
     print(list(estore.keys()))
 
     # Reopen in read-only mmap mode
-    estore_mmap = blosc2.open("example_estore.b2e", mode="r", mmap_mode="r")
+    estore_mmap = blosc2.open("example_estore.b2e", mmap_mode="r")
     print(estore_mmap["/node2"][:])
 
 .. note::

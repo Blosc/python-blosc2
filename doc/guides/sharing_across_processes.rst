@@ -304,7 +304,9 @@ built on ``DictStore``) replaces the target atomically — a temporary sibling
 file is written and then moved onto the final path, so concurrent readers
 always see either the old archive or the complete new one, never a torn
 write. On Windows, the final replace fails if another process holds the
-target file open.
+target file open. Opening the archive with ``mmap_mode="r"`` compounds the
+benefit: all readers share a single set of mapped pages for the one file,
+instead of each paying its own I/O and buffer copies.
 
 Detecting mutation without re-reading data
 ---------------------------------------------
