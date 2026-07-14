@@ -142,9 +142,27 @@ arr = blosc2.open(path, mmap_mode="r")
 
 Across 8,000 scattered slice reads, `mmap_mode="r"` was **~1.1x faster**; peak memory was essentially identical for this single-process, single-open workload.
 
-The bigger real-world payoff shows up with cold OS caches and with multiple readers/processes sharing one file, where mapped pages are shared rather than each reader paying its own I/O and buffer-copy cost — a single warm-cache process, as benchmarked here, is the worst case for showing it off. See the [Sharing containers across processes](sharing_across_processes.rst) guide for the multi-reader/NFS/Windows caveats.
+A single warm-cache process, as benchmarked here, is actually the *worst* case for showing mmap off — the payoff multiplies with several readers on the same file, which is the next tip.
 
 *Benchmark for this tip: [`tip_06_mmap_read.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_06_mmap_read.py)*
+
+## Many readers on one file? mmap in every one of them
+
+When several processes read the same blosc2 file concurrently, open it with `mmap_mode="r"` in *each* reader. Every regular-I/O access pays a syscall plus a copy from the OS page cache into private buffers, and that per-access overhead compounds under kernel contention — while mmap readers all go straight to a single, shared set of mapped pages. So the speedup *grows* with the number of readers, and physical memory stays at roughly one copy of the file no matter how many readers attach.
+
+```python
+# Avoid: each reader process pays syscalls + private buffer copies
+arr = blosc2.open(path)  # reader 1..N
+
+# Prefer: all readers share one set of mapped pages
+arr = blosc2.open(path, mmap_mode="r")  # reader 1..N
+```
+
+![Concurrent readers: regular I/O vs mmap](optim_tips/tip_10_mmap_many_readers.png)
+
+With 8 concurrent readers doing random slice reads over a 269 MB array, mmap was **~4.5x faster** in wall time (2.5x for a single reader) and used less than half the total CPU. Don't be alarmed if mmap readers *look* heavier in RSS — each process charges the shared mapped pages it touched, but they exist once physically; per-process private memory is identical in both modes. The full discussion, including the measurement table, is in the [Sharing containers across processes](sharing_across_processes.md) guide's colophon; see that guide too for the multi-reader/NFS/Windows caveats.
+
+*Benchmark for this tip: [`tip_10_mmap_many_readers.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_10_mmap_many_readers.py)*
 
 ## Use `.b2z` to group related data into one memory-mapped file
 

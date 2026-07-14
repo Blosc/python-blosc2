@@ -11,7 +11,7 @@
 # the *same* 1-D array concurrently, which is a fundamentally different
 # path -- each append is a resize (grows the shape metadata) followed by a
 # slice write, i.e. two separate locked operations rather than one. See
-# doc/guides/sharing_across_processes.rst.
+# doc/guides/sharing_across_processes.md.
 #
 # Each writer's batches carry a unique tag (writer_id, batch_index) baked
 # into their values, so at the end we can verify -- purely from the data,
