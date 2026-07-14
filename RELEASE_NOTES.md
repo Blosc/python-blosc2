@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.8.1 to 4.8.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.8.0 to 4.8.1
 
 ### Improvements
