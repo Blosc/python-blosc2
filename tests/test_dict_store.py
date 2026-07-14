@@ -823,3 +823,32 @@ def test_to_b2z_atomic_replace(tmp_path):
     # No temp leftovers next to the target
     leftovers = [f for f in os.listdir(tmp_path) if f.endswith(".b2z.tmp")]
     assert leftovers == []
+
+
+def test_dict_store_overwrite_key_across_tiers(tmp_path):
+    # Regression: overwrite semantics used to depend on value size.  Embedded
+    # keys refused overwrite ("already exists"), and an embed->external
+    # overwrite kept the stale embedded value, double-counting the key and
+    # resurrecting the old value after a delete.
+    # embed -> embed
+    with DictStore(str(tmp_path / "d1.b2z"), mode="w", threshold=10**9) as dstore:
+        dstore["/a"] = np.array([1, 2, 3])
+        dstore["/a"] = np.array([4, 5, 6])
+        assert dstore["/a"][:].tolist() == [4, 5, 6]
+        assert len(dstore) == 1
+
+    # embed -> external, then delete
+    with DictStore(str(tmp_path / "d2.b2z"), mode="w", threshold=100) as dstore:
+        dstore["/k"] = np.array([1, 2, 3], dtype=np.int8)  # embedded
+        dstore["/k"] = np.arange(1000)  # external overwrite
+        assert len(dstore) == 1
+        assert dstore["/k"][:5].tolist() == [0, 1, 2, 3, 4]
+        del dstore["/k"]
+        assert "/k" not in dstore
+
+    # external -> embed
+    with DictStore(str(tmp_path / "d3.b2z"), mode="w", threshold=100) as dstore:
+        dstore["/k"] = np.arange(1000)  # external
+        dstore["/k"] = np.array([9], dtype=np.int8)  # embedded overwrite
+        assert len(dstore) == 1
+        assert dstore["/k"][:].tolist() == [9]

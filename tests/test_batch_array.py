@@ -805,3 +805,19 @@ def test_batcharray_chunk_copy_batch_lengths_roundtrip(tmp_path):
     assert isinstance(reopened, blosc2.BatchArray)
     assert reopened._batch_lengths is not None
     assert sum(reopened._batch_lengths) == sum(src._load_or_compute_batch_lengths())
+
+
+def test_batcharray_delete_negative_step_slice():
+    # Regression: negative-step slices used to delete in ascending order,
+    # shifting indices and deleting the wrong chunks (or raising).
+    ba = blosc2.BatchArray()
+    for i in range(5):
+        ba.append([i])
+    del ba[3:0:-1]
+    assert [batch[:] for batch in ba] == [[0], [4]]
+
+    ba2 = blosc2.BatchArray()
+    for i in range(5):
+        ba2.append([i])
+    del ba2[::-1]
+    assert len(ba2) == 0

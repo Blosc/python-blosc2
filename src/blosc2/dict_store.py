@@ -517,6 +517,18 @@ class DictStore:
         if isinstance(value, np.ndarray):
             value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
         with self._mutation_bracket():
+            # Dict-like overwrite: drop any previous value under this key, in
+            # either tier.  Otherwise behavior depends on the *size* of old and
+            # new values: embedded keys refused overwrite while external ones
+            # accepted it, and an embed->external overwrite left a stale
+            # embedded value that resurrected after a delete.
+            if key in self.map_tree:
+                old_filepath = self.map_tree.pop(key)
+                old_full_path = os.path.join(self.working_dir, old_filepath)
+                if os.path.exists(old_full_path):
+                    os.remove(old_full_path)
+            if key in self._estore:
+                del self._estore[key]
             # C2Array should always go to embed store; let estore handle it directly
             if isinstance(value, C2Array):
                 self._estore[key] = value
@@ -566,13 +578,6 @@ class DictStore:
                 self.map_tree[key] = rel_path
                 self._bump_store_tick()
             else:
-                # Remove any old external file so it doesn't shadow the embed-stored
-                # value on read (map_tree is checked first in __getitem__).
-                if key in self.map_tree:
-                    old_filepath = self.map_tree.pop(key)
-                    old_full_path = os.path.join(self.working_dir, old_filepath)
-                    if os.path.exists(old_full_path):
-                        os.remove(old_full_path)
                 if external_file:
                     # Embed a copy by using cframe
                     value = blosc2.from_cframe(value.to_cframe())

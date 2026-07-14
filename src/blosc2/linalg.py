@@ -38,6 +38,12 @@ def _matmul_chunked(
     p, q = result.chunks[-2:]
     r = x2.chunks[-1]
 
+    def _op_batch_selection(op, chunk):
+        # Map the result-chunk batch coords onto the operand, clamping
+        # broadcast (size-1) operand dims which the result chunk may overrun.
+        batch = chunk[len(chunk) - (op.ndim - 2) :]
+        return tuple(slice(0, 1) if op.shape[i] == 1 else s for i, s in enumerate(batch))
+
     intersecting_chunks = get_intersecting_chunks((), result.shape[:-2], result.chunks[:-2])
     for chunk in intersecting_chunks:
         chunk = chunk.raw
@@ -48,12 +54,12 @@ def _matmul_chunked(
                 for aux in range(0, k, r):
                     aux_end = builtins.min(aux + r, k)
                     bx1 = (
-                        x1[chunk[-x1.ndim + 2 :] + (slice(row, row_end), slice(aux, aux_end))]
+                        x1[_op_batch_selection(x1, chunk) + (slice(row, row_end), slice(aux, aux_end))]
                         if x1.ndim > 2
                         else x1[row:row_end, aux:aux_end]
                     )
                     bx2 = (
-                        x2[chunk[-x2.ndim + 2 :] + (slice(aux, aux_end), slice(col, col_end))]
+                        x2[_op_batch_selection(x2, chunk) + (slice(aux, aux_end), slice(col, col_end))]
                         if x2.ndim > 2
                         else x2[aux:aux_end, col:col_end]
                     )

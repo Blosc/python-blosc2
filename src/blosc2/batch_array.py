@@ -746,7 +746,10 @@ class BatchArray:
         """Delete the batch at ``index`` and return the new number of batches."""
         self._check_writable()
         if isinstance(index, slice):
-            for idx in reversed(self._slice_indices(index)):
+            # Delete in descending order so earlier deletions don't shift
+            # the indices of chunks yet to be deleted (negative-step slices
+            # produce ascending indices when merely reversed).
+            for idx in sorted(self._slice_indices(index), reverse=True):
                 self.schunk.delete_chunk(idx)
                 if self._batch_lengths is not None:
                     del self._batch_lengths[idx]

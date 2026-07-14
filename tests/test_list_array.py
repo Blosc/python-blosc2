@@ -228,3 +228,16 @@ def test_ctable_copy_with_list_column_correctness(tmp_path):
 
     assert copied.nrows == len(rows)
     assert copied.tags[:] == [r[0] for r in rows]
+
+
+def test_listarray_extend_arrow_flushes_pending_rows():
+    # Regression: extend_arrow appended chunks straight to the backend,
+    # reordering them ahead of unflushed pending cells.
+    pa = pytest.importorskip("pyarrow")
+    arr = blosc2.ListArray(
+        item_spec=blosc2.schema.int64(), storage="batch", serializer="arrow", batch_rows=100
+    )
+    arr.append([1, 2])  # pending, not yet flushed
+    arr.extend_arrow(pa.array([[3, 4], [5, 6]], type=pa.list_(pa.int64())))
+    arr.flush()
+    assert arr[:] == [[1, 2], [3, 4], [5, 6]]

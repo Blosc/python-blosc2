@@ -236,7 +236,10 @@ class ObjectArray:
         """Delete the value at ``index`` and return the new number of entries."""
         self._check_writable()
         if isinstance(index, slice):
-            for idx in reversed(self._slice_indices(index)):
+            # Delete in descending order so earlier deletions don't shift
+            # the indices of chunks yet to be deleted (negative-step slices
+            # produce ascending indices when merely reversed).
+            for idx in sorted(self._slice_indices(index), reverse=True):
                 self.schunk.delete_chunk(idx)
             return len(self)
         index = self._normalize_index(index)

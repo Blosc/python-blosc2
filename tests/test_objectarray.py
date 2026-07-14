@@ -521,3 +521,17 @@ def test_objectarray_insert_delete_errors():
         blosc2.ObjectArray().pop()
     with pytest.raises(NotImplementedError):
         oarr.pop(slice(0, 1))
+
+
+def test_objectarray_delete_negative_step_slice():
+    # Regression: negative-step slices used to delete in ascending order,
+    # shifting indices and deleting the wrong chunks (or raising).
+    oarr = blosc2.ObjectArray()
+    oarr.extend(range(5))
+    del oarr[3:0:-1]
+    assert list(oarr) == [0, 4]
+
+    oarr2 = blosc2.ObjectArray()
+    oarr2.extend(range(5))
+    del oarr2[::-1]
+    assert len(oarr2) == 0

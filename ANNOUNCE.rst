@@ -42,7 +42,7 @@ The main highlights are:
 
 - New user guide page,
   `Sharing containers across processes
-  <https://www.blosc.org/python-blosc2/getting_started/sharing_across_processes.html>`_,
+  <https://www.blosc.org/python-blosc2/guides/sharing_across_processes.html>`_,
   covering all of the above plus the caveats (NFS, ``mmap_mode``, Windows
   in-use-file rename).
 
