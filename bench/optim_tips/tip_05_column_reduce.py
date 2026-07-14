@@ -6,10 +6,9 @@
 #######################################################################
 
 # Tip 5: Column.__getitem__ always materializes a full NumPy array (with
-# null-sentinel processing). For a whole-column reduction, Column.raw gives
-# the underlying compressed NDArray directly, whose own reduction methods
-# (sum/mean/...) work chunk-by-chunk without ever holding the whole column
-# decompressed in one block.
+# null-sentinel processing). Column's own reduction methods (sum/mean/...)
+# work chunk-by-chunk without ever holding the whole column decompressed
+# in one block -- so reduce the Column directly instead of slicing first.
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,22 +48,22 @@ def naive():
 
 def tip():
     t = blosc2.CTable.open(URLPATH)
-    return t["val"].raw.sum()  # chunk-wise reduction, no full materialization
+    return t["val"].sum()  # chunk-wise reduction, no full materialization
 
 
 if __name__ == "__main__":
     naive_t, naive_m = measure(__file__, "naive")
     tip_t, tip_m = measure(__file__, "tip")
 
-    print(f"naive  col[:].sum()   : {naive_t:.4f}s  peak {fmt_bytes(naive_m)}")
-    print(f"tip    col.raw.sum()  : {tip_t:.4f}s  peak {fmt_bytes(tip_m)}")
+    print(f"naive  col[:].sum() : {naive_t:.4f}s  peak {fmt_bytes(naive_m)}")
+    print(f"tip    col.sum()    : {tip_t:.4f}s  peak {fmt_bytes(tip_m)}")
     print(f"speedup: {naive_t / tip_t:.1f}x   memory: {naive_m / tip_m:.1f}x less")
 
     save_plot(
-        "tip_05_column_raw.png",
-        f"Column.raw.sum() vs col[:].sum() — {N:,}-row column",
+        "tip_05_column_reduce.png",
+        f"col.sum() vs col[:].sum() — {N:,}-row column",
         "col[:].sum()",
-        "col.raw.sum()",
+        "col.sum()",
         naive_t,
         tip_t,
         naive_m,
