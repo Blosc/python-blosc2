@@ -6202,6 +6202,21 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         schema = self._arrow_schema_for_columns()
         return pa.Table.from_batches(batches, schema=schema)
 
+    def __arrow_c_stream__(self, requested_schema=None):
+        """Arrow PyCapsule protocol: export live rows as a stream of record batches.
+
+        Lets Arrow-native consumers (pyarrow, DuckDB, Polars, pandas) read this
+        table directly, pulling decompressed batches lazily with bounded memory.
+        Strict zero-copy is impossible here (the data is compressed on disk;
+        decompression *is* the copy), but there is zero intermediate
+        materialization: only one batch is decompressed at a time.
+        """
+        pa = self._require_pyarrow("__arrow_c_stream__")
+        reader = pa.RecordBatchReader.from_batches(
+            self._arrow_schema_for_columns(), self.iter_arrow_batches()
+        )
+        return reader.__arrow_c_stream__(requested_schema)
+
     @staticmethod
     def _auto_null_sentinel(pa, pa_type, *, null_policy: NullPolicy):
         return null_policy.sentinel_for_arrow_type(pa, pa_type)
@@ -7038,7 +7053,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def from_arrow(  # noqa: C901
         cls,
         schema,
-        batches,
+        batches=None,
         *,
         urlpath: str | None = None,
         mode: str = "w",
@@ -7109,8 +7124,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ``column_cparams`` optionally maps column names to per-column compression
         parameters. These override the table-level ``cparams`` for fixed-width
         columns imported from Arrow.
+
+        *schema* may also be any object implementing the Arrow PyCapsule
+        interchange protocol (``__arrow_c_stream__``) — a pyarrow
+        ``Table``/``RecordBatchReader``, a Polars ``DataFrame``, a DuckDB
+        result, or another :class:`CTable` — in which case *batches* must be
+        omitted and the schema/batches are pulled from the stream::
+
+            t = blosc2.CTable.from_arrow(polars_df)
+            t = blosc2.CTable.from_arrow(duckdb_result, urlpath="out.b2z")
         """
         pa = cls._require_pyarrow("from_arrow()")
+        if hasattr(schema, "__arrow_c_stream__") and batches is None:
+            if not hasattr(pa.RecordBatchReader, "from_stream"):
+                raise RuntimeError("Importing from an Arrow PyCapsule stream requires pyarrow >= 14.0.")
+            reader = pa.RecordBatchReader.from_stream(schema)
+            schema, batches = reader.schema, reader
         if blosc2_batch_size is not None and blosc2_batch_size <= 0:
             raise ValueError("blosc2_batch_size must be a positive integer or None")
         if blosc2_items_per_block is not None and blosc2_items_per_block <= 0:

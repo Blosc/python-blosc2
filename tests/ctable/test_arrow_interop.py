@@ -459,5 +459,72 @@ def test_from_arrow_variable_batches_roundtrip():
     assert int(blosc2.count_nonzero(t._valid_rows[:n])) == n
 
 
+# ===========================================================================
+# __arrow_c_stream__ (Arrow PyCapsule protocol)
+# ===========================================================================
+
+
+@dataclass
+class MixedRow:
+    id: int = blosc2.field(blosc2.int64(null_value=np.iinfo(np.int64).min))
+    value: float = blosc2.field(blosc2.float64(null_value=float("nan")))
+    label: str = blosc2.field(blosc2.string(max_length=8))
+    active: bool = blosc2.field(blosc2.bool())
+    kind: str = blosc2.field(blosc2.dictionary())
+
+
+def _mixed_table():
+    null_id = np.iinfo(np.int64).min
+    data = [
+        (0, 0.0, "r0", True, "a"),
+        (null_id, 1.5, "r1", False, "b"),
+        (2, float("nan"), "r2", True, "a"),
+        (3, 3.5, "r3", False, "c"),
+    ]
+    return CTable(MixedRow, new_data=data)
+
+
+def test_arrow_c_stream_matches_to_arrow():
+    t = _mixed_table()
+    via_capsule = pa.table(t)
+    assert via_capsule.equals(t.to_arrow())
+
+
+def test_arrow_c_stream_filtered_view():
+    t = _mixed_table()
+    view = t[t.id != t["id"].null_value]
+    assert pa.table(view).equals(view.to_arrow())
+
+
+def test_arrow_c_stream_nulls_survive():
+    t = _mixed_table()
+    at = pa.table(t)
+    assert at["id"][1].as_py() is None
+    assert at["value"][2].as_py() is None
+
+
+def test_from_arrow_accepts_capsule_producer():
+    t = CTable(Row, new_data=DATA10)
+    at = t.to_arrow()
+    via_capsule = CTable.from_arrow(at)
+    via_batches = CTable.from_arrow(at.schema, at.to_batches())
+    assert via_capsule.to_arrow().equals(via_batches.to_arrow())
+
+
+def test_duckdb_reads_ctable_directly():
+    duckdb = pytest.importorskip("duckdb")
+    t = CTable(Row, new_data=DATA10)
+    result = duckdb.sql("SELECT count(*) AS n FROM t").fetchone()
+    assert result[0] == len(DATA10)
+
+
+def test_polars_reads_ctable_directly():
+    pl = pytest.importorskip("polars")
+    t = CTable(Row, new_data=DATA10)
+    df = pl.DataFrame(t)
+    assert df.shape == (len(DATA10), 4)
+    assert df.columns == ["id", "score", "active", "label"]
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
