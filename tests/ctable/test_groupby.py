@@ -906,6 +906,34 @@ def test_agg_udf_unsupported_result_dtype_raises_clear_error():
         g.agg(x=("sales", lambda a: "always-a-string"))
 
 
+def test_agg_udf_never_called_raises_clear_error():
+    # Every group has zero non-null "sales" values, so the UDF is never
+    # called for any of them -- there is nothing to infer a dtype from.
+    t = CTable(SalesRow, new_data=[("Paris", 1, np.nan, 0), ("Rome", 1, np.nan, 0)])
+    g = t.group_by("city")
+
+    with pytest.raises(ValueError, match="it was never called"):
+        g.agg(x=("sales", lambda a: a.max() - a.min()))
+
+
+def test_agg_udf_result_not_wrapped_in_zero_d_array(monkeypatch):
+    # Regression test: the UDF result must reach _python_scalar() directly,
+    # not pre-wrapped in np.asarray() -- a plain Python/NumPy scalar wrapped
+    # in np.asarray() becomes a 0-D ndarray, which _python_scalar() (only
+    # unwraps np.generic) then fails to turn back into a plain scalar.
+    import blosc2.groupby as gb_module
+
+    seen_types = []
+    original = gb_module._python_scalar
+    monkeypatch.setattr(gb_module, "_python_scalar", lambda v: (seen_types.append(type(v)), original(v))[1])
+
+    t = CTable(SalesRow, new_data=[("Paris", 1, 10.0, 0), ("Rome", 1, 20.0, 0)])
+    g = t.group_by("city")
+    g.agg(x=("sales", lambda a: float(a.sum())))
+
+    assert np.ndarray not in seen_types
+
+
 def test_agg_udf_error_names_the_group_key():
     t = CTable(SalesRow, new_data=DATA)
     g = t.group_by("city")

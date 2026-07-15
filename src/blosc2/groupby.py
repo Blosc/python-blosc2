@@ -1800,7 +1800,7 @@ class CTableGroupBy:
                     else:
                         group_values = np.concatenate(chunks)
                         try:
-                            result = _python_scalar(np.asarray(spec.udf(group_values)))
+                            result = _python_scalar(spec.udf(group_values))
                         except Exception as exc:
                             raise RuntimeError(
                                 f"UDF aggregation {spec.output_col!r} raised for group "
@@ -1835,6 +1835,16 @@ class CTableGroupBy:
         another) is caught here with a clear error, rather than surfacing as
         an opaque failure while building the result table.
         """
+        if not results:
+            # No group ever produced a value (e.g. an empty table, or every
+            # group is all-null so the UDF was never called) -- there is
+            # nothing to infer a dtype from.
+            raise ValueError(
+                f"Cannot infer a CTable dtype for UDF aggregation {name!r}: it was never "
+                f"called (empty table, or every group had no non-null values). Pass an "
+                f"explicit dtype in the named-agg tuple, e.g. "
+                f"g.agg({name}=(col, fn, blosc2.float64()))."
+            )
         try:
             arr = np.asarray(results)
         except ValueError as exc:
