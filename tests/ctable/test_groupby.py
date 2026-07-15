@@ -8,6 +8,7 @@
 from dataclasses import dataclass, make_dataclass
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import blosc2
@@ -416,6 +417,19 @@ def test_groupby_rejects_bad_engine():
         t.group_by("city", engine="cython")
 
 
+def test_groupby_engine_numpy_matches_auto():
+    t = CTable(SalesRow, new_data=DATA)
+    auto_result = t.group_by("city", engine="auto").sum("sales")
+    numpy_result = t.group_by("city", engine="numpy").sum("sales")
+    assert auto_result.to_pandas().equals(numpy_result.to_pandas())
+
+
+def test_groupby_engine_jit_not_implemented():
+    t = CTable(SalesRow, new_data=DATA)
+    with pytest.raises(NotImplementedError):
+        t.group_by("city", engine="jit")
+
+
 @pytest.mark.parametrize(
     ("schema_factory", "values"),
     [
@@ -789,7 +803,7 @@ def test_agg_requires_some_aggregation():
 
 def test_agg_named_must_be_column_op_pair():
     t = CTable(SalesRow, new_data=DATA)
-    with pytest.raises(ValueError, match=r"must be a \(column, op\) pair"):
+    with pytest.raises(ValueError, match=r"must be a \(column, op\) or \(column, op, dtype\) tuple"):
         t.group_by("city").agg(x=("sales",))
 
 
@@ -805,3 +819,108 @@ def test_agg_duplicate_output_names_rejected():
     t = CTable(SalesRow, new_data=DATA)
     with pytest.raises(ValueError, match="must be unique"):
         t.group_by("city").agg({"sales": "sum"}, sales_sum=("sales", "sum"))
+
+
+# ===========================================================================
+# UDF aggregations (Gap D2) -- named form only
+# ===========================================================================
+
+
+def test_agg_udf_matches_pandas_reference():
+    t = CTable(SalesRow, new_data=DATA)
+    result = t.group_by("city", sort=True).agg(rng=("sales", lambda a: a.max() - a.min()))
+
+    df = pd.DataFrame(DATA, columns=["city", "category", "sales", "qty"])
+    # Berlin's only row has NaN sales, so unlike df.dropna()-then-groupby (which
+    # would drop the row and the whole group with it), blosc2 keeps Berlin as a
+    # group -- its key is not null -- with a null (NaN) result, the same
+    # convention built-in sum/min/max already use for an all-null group.
+    expected = (
+        df.groupby("city")["sales"]
+        .apply(lambda a: (a.dropna().max() - a.dropna().min()) if a.notna().any() else float("nan"))
+        .sort_index()
+    )
+    np.testing.assert_allclose(col(result, "rng"), expected.to_numpy())
+    assert col(result, "city") == list(expected.index)
+
+
+def test_agg_udf_receives_only_live_nonnull_values():
+    seen = []
+
+    def probe(values):
+        seen.append(np.sort(values).tolist())
+        return float(values.sum())
+
+    t = CTable(SalesRow, new_data=DATA)
+    t.group_by("city", sort=True).agg(total=("sales", probe))
+    # Berlin's only row has NaN sales -> the UDF is never called for it (an
+    # empty group produces a null result directly, like sum/min/max do);
+    # Paris/Rome nulls are dropped before the UDF sees their values.
+    assert seen == [[10.0, 30.0], [20.0, 40.0]]
+
+
+def test_agg_udf_requires_named_form():
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city")
+    with pytest.raises(ValueError, match="Unsupported aggregation function"):
+        g.agg({"sales": lambda a: a.sum()})
+    with pytest.raises(ValueError, match="Unsupported aggregation function"):
+        g.agg([(t.sales, lambda a: a.sum())])
+
+
+def test_agg_udf_infers_dtype_from_all_groups():
+    t = CTable(SalesRow, new_data=DATA)
+    result = t.group_by("city").agg(rng=("sales", lambda a: a.max() - a.min() if len(a) else 0.0))
+    assert result["rng"].dtype == np.float64
+
+
+def test_agg_udf_explicit_dtype():
+    t = CTable(SalesRow, new_data=DATA)
+    result = t.group_by("city").agg(
+        rng=("sales", lambda a: a.max() - a.min() if len(a) else 0.0, blosc2.float32())
+    )
+    assert result["rng"].dtype == np.float32
+
+
+def test_agg_udf_inconsistent_types_raise_clear_error():
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city")
+    calls = {"n": 0}
+
+    def inconsistent(values):
+        # A shape-inconsistent return (list vs. scalar) forces NumPy to fall
+        # back to an object array when collecting results across groups.
+        calls["n"] += 1
+        return [1, 2, 3] if calls["n"] == 1 else float(values.sum())
+
+    with pytest.raises(ValueError, match="inconsistent or unsupported types"):
+        g.agg(x=("sales", inconsistent))
+
+
+def test_agg_udf_unsupported_result_dtype_raises_clear_error():
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city")
+
+    with pytest.raises(ValueError, match="Cannot infer a CTable dtype"):
+        g.agg(x=("sales", lambda a: "always-a-string"))
+
+
+def test_agg_udf_error_names_the_group_key():
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city")
+
+    def boom(values):
+        raise KeyError("nope")
+
+    with pytest.raises(RuntimeError, match=r"raised for group \('(Paris|Rome|Berlin)',\)"):
+        g.agg(x=("sales", boom))
+
+
+def test_agg_udf_combines_with_builtin_ops():
+    t = CTable(SalesRow, new_data=DATA)
+    result = t.group_by("city", sort=True).agg(
+        total=("sales", "sum"), rng=("sales", lambda a: a.max() - a.min())
+    )
+    assert result.col_names == ["city", "total", "rng"]
+    # Berlin's sum is NaN too (all-null group) -- the existing sum() convention.
+    np.testing.assert_allclose(col(result, "total"), [np.nan, 40.0, 60.0])

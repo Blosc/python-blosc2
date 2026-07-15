@@ -17,7 +17,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
@@ -31,7 +31,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from blosc2.ctable import CTable
 
 
-AggName = Literal["size", "count", "sum", "mean", "min", "max", "argmin", "argmax"]
+AggName = Literal["size", "count", "sum", "mean", "min", "max", "argmin", "argmax", "udf"]
 
 _NAN_KEY = ("__blosc2_groupby_nan__",)
 
@@ -41,6 +41,8 @@ class _AggSpec:
     input_col: str | None
     op: AggName
     output_col: str
+    udf: Callable | None = None
+    explicit_dtype: SchemaSpec | None = None
 
 
 @dataclasses.dataclass
@@ -222,7 +224,11 @@ class CTableGroupBy:
           objects (e.g. ``t.price``), which cannot be dict keys.
         * **Explicitly named** -- pass ``output_name=(column, op)`` keyword
           arguments (pandas-style named aggregation), giving the result column
-          exactly the name you want.
+          exactly the name you want.  This is also the only form that accepts a
+          **custom UDF aggregation**: ``output_name=(column, callable)``, or
+          ``output_name=(column, callable, dtype)`` to give the output column's
+          schema spec explicitly instead of inferring it from the callable's
+          results.
 
         Parameters
         ----------
@@ -235,13 +241,24 @@ class CTableGroupBy:
             row-count spelling ``"*": "size"``.  An op may also be given as the
             corresponding blosc2 reduction *function* (``blosc2.sum``, ``mean``,
             ``min``, ``max``, ``argmin``, ``argmax``), matched by identity; this
-            is a naming shorthand, not a UDF mechanism (custom functions are
-            rejected).  Result columns are named ``"<column>_<op>"``.
+            is a naming shorthand, not a UDF mechanism.  Result columns are
+            named ``"<column>_<op>"``.  Custom callables are only accepted via
+            the named-aggregation form (see below).
         urlpath:
             If given, write the result as a persistent CTable at that path.
         **named:
-            Named aggregations as ``output_name=(column, op)`` pairs.  Use
-            ``("*", "size")`` for a row count.
+            Named aggregations as ``output_name=(column, op)`` pairs, or
+            ``output_name=(column, callable[, dtype])`` for a custom UDF
+            aggregation.  Use ``("*", "size")`` for a row count.
+
+            A UDF callable receives a 1-D NumPy array of the group's live,
+            non-null values (nulls are pre-filtered, same as the built-in
+            aggregations) and returns a scalar.  It is called once per group
+            with a plain Python loop -- there is no acceleration yet, this is
+            the "slow but correct" baseline and semantics oracle for any
+            future JIT path.  The output dtype is inferred from the results
+            across *every* group (raising a clear error if they disagree) unless
+            *dtype* is given explicitly as a blosc2 schema spec.
 
         Examples
         --------
@@ -255,6 +272,8 @@ class CTableGroupBy:
         >>> g.agg(revenue=("sales", "sum"), avg_sale=("sales", "mean"))  # doctest: +SKIP
         >>> # Forms combine, e.g. a list of pairs plus a named row count.
         >>> g.agg([(t.sales, "sum")], n=("*", "size"))  # doctest: +SKIP
+        >>> # Custom UDF aggregation (named form only).
+        >>> g.agg(sales_range=("sales", lambda a: a.max() - a.min()))  # doctest: +SKIP
         """
         specs = self._normalize_aggs(aggregations, named)
         return self._execute(specs, urlpath=urlpath)
@@ -265,8 +284,11 @@ class CTableGroupBy:
         Accepts a name string, or one of blosc2's own reduction *functions*
         (:func:`blosc2.sum`, ``mean``, ``min``, ``max``, ``argmin``, ``argmax``)
         matched **by identity** -- so a user function that merely shares a name
-        (e.g. a UDF called ``sum``) is *not* silently accepted, and custom UDF
-        aggregations are rejected rather than misinterpreted.
+        (e.g. a UDF called ``sum``) is *not* silently accepted here.  Custom UDF
+        aggregations are only accepted via the named form (``output_name=(col,
+        callable)``, see :meth:`agg`); this method only ever sees a callable
+        when it fell through that path (auto-named mapping/list forms, which
+        cannot derive an output column name for an arbitrary callable).
         """
         if isinstance(op, str):
             return op
@@ -278,19 +300,33 @@ class CTableGroupBy:
                 f"Unsupported aggregation function {getattr(op, '__name__', op)!r}.  Pass a "
                 f"string op name (e.g. 'sum') or a blosc2 reduction function "
                 f"(blosc2.sum/mean/min/max/argmin/argmax).  Custom UDF aggregations are "
-                f"not supported."
+                f"supported only via the named form, e.g. "
+                f"g.agg(my_range=(col, {getattr(op, '__name__', 'my_func')}))."
             )
         raise ValueError(f"Aggregation op must be a string or a blosc2 reduction function, got {op!r}")
 
-    def _build_agg_spec(self, col_name, op, output_col: str | None = None) -> _AggSpec:
+    def _build_agg_spec(
+        self, col_name, op, output_col: str | None = None, *, dtype: SchemaSpec | None = None
+    ) -> _AggSpec:
         """Validate a single (column, op) pair and build its :class:`_AggSpec`.
 
         ``output_col`` overrides the default ``"<column>_<op>"`` name; ``"*"`` as
         *col_name* (only with ``op="size"``) yields a row count.  *col_name* may
         be a column name string or a :class:`~blosc2.ctable.Column` object; *op*
-        may be an op name string or a blosc2 reduction function (see
-        :meth:`_resolve_op`).
+        may be an op name string, a blosc2 reduction function (see
+        :meth:`_resolve_op`), or an arbitrary callable UDF aggregation (see
+        :meth:`agg`), in which case *dtype* optionally gives the output
+        column's schema spec (e.g. ``blosc2.float64()``) instead of inferring
+        it from the UDF's first result.
         """
+        if output_col is not None and callable(op) and op not in _op_alias_map():
+            # Only the named form (output_col given) may carry a custom UDF;
+            # the auto-named mapping/list forms cannot derive a column name
+            # for an arbitrary callable, so they fall through to _resolve_op()
+            # below and get its "unsupported aggregation function" error.
+            physical = self.table._logical_to_physical_name(_column_name(col_name))
+            self._validate_value_column(physical)
+            return _AggSpec(physical, "udf", output_col, udf=op, explicit_dtype=dtype)
         op = self._resolve_op(op)
         # Guard the "*" check with isinstance: a Column object overloads __eq__
         # to build an expression, so a bare ``col_name == "*"`` would not return
@@ -343,11 +379,18 @@ class CTableGroupBy:
             for col_name, ops in entries:
                 specs.extend(self._expand_ops(col_name, ops))
         for out_name, value in (named or {}).items():
-            if not (isinstance(value, (tuple, list)) and len(value) == 2):
+            if not (isinstance(value, (tuple, list)) and len(value) in (2, 3)):
                 raise ValueError(
-                    f"Named aggregation {out_name!r} must be a (column, op) pair, got {value!r}"
+                    f"Named aggregation {out_name!r} must be a (column, op) or "
+                    f"(column, op, dtype) tuple, got {value!r}"
                 )
-            col_name, op = value
+            col_name, op, *rest = value
+            dtype = rest[0] if rest else None
+            if dtype is not None and not (callable(op) and op not in _op_alias_map()):
+                raise ValueError(
+                    f"Named aggregation {out_name!r}: an explicit dtype is only supported "
+                    "for callable UDF aggregations"
+                )
             if isinstance(op, (tuple, list, set)):
                 raise ValueError(
                     f"Named aggregation {out_name!r} takes a single op, got {op!r}.  "
@@ -355,7 +398,7 @@ class CTableGroupBy:
                     f"form agg({{column: [...]}}) for several ops, or give each its "
                     f"own name (e.g. {out_name}_sum=(col, 'sum'))."
                 )
-            specs.append(self._build_agg_spec(col_name, op, output_col=out_name))
+            specs.append(self._build_agg_spec(col_name, op, output_col=out_name, dtype=dtype))
         output_names = [s.output_col for s in specs]
         if len(output_names) != len(set(output_names)):
             raise ValueError("Aggregation output column names must be unique")
@@ -399,7 +442,12 @@ class CTableGroupBy:
 
         argmin/argmax can only use the dense single-key path (it tracks row
         positions); the Cython kernels do not, so they are skipped for them.
+        UDF aggregations (see Gap D2) always fall through to the generic
+        chunked path below, which is the only one that accumulates raw
+        per-group values instead of a mergeable scalar state.
         """
+        if any(s.op == "udf" for s in specs):
+            return None
         if not use_arg_positions:
             for attempt in (
                 self._try_execute_cython_dense_int_key,
@@ -1584,7 +1632,28 @@ class CTableGroupBy:
                 partials[spec.output_col] = self._argminmax_partials(
                     spec.op, inverse, values, non_null, row_positions, n_groups
                 )
+            elif spec.op == "udf":
+                partials[spec.output_col] = self._udf_value_partials(inverse, values, non_null, n_groups)
         return partials
+
+    def _udf_value_partials(
+        self, inverse: np.ndarray, values: np.ndarray, non_null: np.ndarray, n_groups: int
+    ) -> list[np.ndarray]:
+        """Split this chunk's non-null values by group, for UDF aggregations.
+
+        Unlike the built-in ops, an arbitrary Python callable cannot be
+        incrementally merged across chunks, so each chunk instead contributes
+        its raw per-group values; :meth:`_merge_partials` collects these into
+        a growing list per group, and :meth:`_final_rows` concatenates and
+        calls the UDF once, after all chunks have been read.
+        """
+        groups = inverse[non_null]
+        vals = values[non_null]
+        order = np.argsort(groups, kind="stable")
+        sorted_groups = groups[order]
+        sorted_vals = vals[order]
+        boundaries = np.searchsorted(sorted_groups, np.arange(n_groups + 1))
+        return [sorted_vals[boundaries[g] : boundaries[g + 1]] for g in range(n_groups)]
 
     def _minmax_partials(
         self, op: AggName, inverse: np.ndarray, values: np.ndarray, non_null: np.ndarray, n_groups: int
@@ -1636,7 +1705,7 @@ class CTableGroupBy:
             best_positions = np.where(pos_best != int_max, pos_best, -1)
         return best_values, best_positions, has_value
 
-    def _merge_partials(
+    def _merge_partials(  # noqa: C901
         self,
         acc: dict[Any, dict[str, _AggState]],
         key_values: dict[Any, tuple[Any, ...]],
@@ -1685,8 +1754,14 @@ class CTableGroupBy:
                         ):
                             state.value = (value, int(positions[i]))
                         state.count += 1
+                elif spec.op == "udf":
+                    chunk_values = partial[i]
+                    if state.value is None:
+                        state.value = []
+                    if len(chunk_values):
+                        state.value.append(chunk_values)
 
-    def _final_rows(
+    def _final_rows(  # noqa: C901
         self,
         acc: dict[Any, dict[str, _AggState]],
         key_values: dict[Any, tuple[Any, ...]],
@@ -1701,6 +1776,12 @@ class CTableGroupBy:
         if self._resolve_sort(cheap=False):
             keys.sort(key=lambda k: tuple(_sortable_key_part(v) for v in key_values[k]))
 
+        # Sentinel distinguishing "group had zero non-null values, UDF was
+        # never called" from a UDF legitimately returning None; patched to a
+        # real null value once the output dtype is known, below.
+        _empty_udf_group = object()
+
+        udf_results: dict[str, list] = {spec.output_col: [] for spec in specs if spec.op == "udf"}
         rows = []
         for norm_key in keys:
             row = dict(zip(self.keys, key_values[norm_key], strict=True))
@@ -1709,6 +1790,24 @@ class CTableGroupBy:
                 state = states[spec.output_col]
                 if spec.op == "mean":
                     row[spec.output_col] = math.nan if state.count == 0 else state.value / state.count
+                elif spec.op == "udf":
+                    chunks = state.value
+                    if not chunks:
+                        # No non-null values for this group/column; matches
+                        # the sum/min/max convention of a null result rather
+                        # than calling the UDF with an empty array.
+                        row[spec.output_col] = _empty_udf_group
+                    else:
+                        group_values = np.concatenate(chunks)
+                        try:
+                            result = _python_scalar(np.asarray(spec.udf(group_values)))
+                        except Exception as exc:
+                            raise RuntimeError(
+                                f"UDF aggregation {spec.output_col!r} raised for group "
+                                f"{key_values[norm_key]!r}: {exc}"
+                            ) from exc
+                        row[spec.output_col] = result
+                        udf_results[spec.output_col].append(result)
                 elif spec.op in {"sum", "min", "max", "argmin", "argmax"} and state.count == 0:
                     row[spec.output_col] = _null_output_value(self._result_spec_for_agg(spec))
                 elif spec.op in {"argmin", "argmax"}:
@@ -1716,7 +1815,54 @@ class CTableGroupBy:
                 else:
                     row[spec.output_col] = 0 if state.value is None else state.value
             rows.append(row)
+        for spec in specs:
+            if spec.op != "udf":
+                continue
+            if spec.explicit_dtype is None:
+                spec.explicit_dtype = self._infer_udf_spec(udf_results[spec.output_col], spec.output_col)
+            null_value = _null_output_value(spec.explicit_dtype)
+            for row in rows:
+                if row[spec.output_col] is _empty_udf_group:
+                    row[spec.output_col] = null_value
         return rows
+
+    @staticmethod
+    def _infer_udf_spec(results: list, name: str) -> SchemaSpec:
+        """Infer a CTable schema spec from a UDF aggregation's collected results.
+
+        Probing every group's result (not just the first) means a UDF that
+        returns inconsistent types (e.g. int for one group, a string for
+        another) is caught here with a clear error, rather than surfacing as
+        an opaque failure while building the result table.
+        """
+        try:
+            arr = np.asarray(results)
+        except ValueError as exc:
+            # Ragged/inhomogeneous results (e.g. a UDF returning a list for
+            # one group and a scalar for another) raise here rather than
+            # producing an object array.
+            raise ValueError(
+                f"UDF aggregation {name!r} produced inconsistent or unsupported types "
+                f"across groups: {results!r} ({exc}). Pass an explicit dtype in the "
+                f"named-agg tuple, e.g. g.agg({name}=(col, fn, blosc2.float64()))."
+            ) from exc
+        if arr.dtype == object:
+            raise ValueError(
+                f"UDF aggregation {name!r} produced inconsistent or unsupported types "
+                f"across groups: {results!r}. Pass an explicit dtype in the named-agg "
+                f"tuple, e.g. g.agg({name}=(col, fn, blosc2.float64()))."
+            )
+        if arr.dtype.kind == "b":
+            return b2_bool()
+        if arr.dtype.kind in "iu":
+            return int64()
+        if arr.dtype.kind == "f":
+            return float64()
+        raise ValueError(
+            f"Cannot infer a CTable dtype for UDF aggregation {name!r} result dtype "
+            f"{arr.dtype!r}. Pass an explicit dtype in the named-agg tuple, e.g. "
+            f"g.agg({name}=(col, fn, blosc2.string(max_length=32)))."
+        )
 
     def _build_result(self, rows: list[dict[str, Any]], specs: list[_AggSpec]):
         from blosc2.ctable import CTable
@@ -1778,6 +1924,11 @@ class CTableGroupBy:
             return int64(null_value=-1)
         if spec.op == "mean":
             return float64()
+        if spec.op == "udf":
+            # _final_rows() always sets this (inferred, unless the user gave
+            # an explicit dtype) before _build_result() reads it.
+            assert spec.explicit_dtype is not None
+            return spec.explicit_dtype
         assert spec.input_col is not None
         input_spec = self.table._schema.columns_by_name[spec.input_col].spec
         dtype = getattr(input_spec, "dtype", None)

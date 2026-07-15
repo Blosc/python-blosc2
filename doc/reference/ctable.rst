@@ -373,6 +373,32 @@ several ways; the list-of-pairs form additionally lets you pass ``Column``
 objects (``t.sales``) instead of name strings; use explicit names when you want a
 specific (and easily addressable) output column name.
 
+**Custom UDF aggregations** are accepted only via the named form --
+``output_name=(column, callable)``, optionally with an explicit output dtype as
+a third element::
+
+    by_city.agg(sales_range=(t.sales, lambda a: a.max() - a.min()))
+    # explicit dtype instead of inferring it from the callable's results:
+    by_city.agg(sales_range=(t.sales, lambda a: a.max() - a.min(), blosc2.float32()))
+
+The callable receives a 1-D NumPy array of the group's live, non-null values
+(same null semantics as the built-in aggregations) and returns a scalar; it is
+called once per group with a plain Python loop -- there is no JIT
+acceleration for arbitrary UDFs yet.  A group with no non-null values for that
+column never calls the callable, producing a null result instead (the same
+convention ``sum``/``min``/``max`` already use).  The mapping and
+list-of-pairs auto-named forms cannot derive an output column name for an
+arbitrary callable, so they only accept the string/blosc2-reduction-function
+ops described above.
+
+**Execution engine.**  :meth:`CTable.group_by` takes an ``engine=`` parameter
+for the *built-in* aggregations (``size``/``count``/``sum``/``mean``/``min``/
+``max``/``argmin``/``argmax``): ``"auto"`` (default) and ``"numpy"`` both use
+the NumPy/Cython chunked implementation; ``"jit"`` is reserved for a future
+miniexpr-JIT path and currently raises :class:`NotImplementedError`. UDF
+aggregations always run the plain Python per-group loop regardless of
+``engine``.
+
 **Output ordering.**  ``sort`` controls how groups are ordered, and is *always
 by the group key(s), never by the aggregated value*:
 
@@ -466,6 +492,7 @@ in place.
     CTable.drop_computed_column
     CTable.drop_column
     CTable.rename_column
+    CTable.apply
 
 .. automethod:: CTable.delete
 .. automethod:: CTable.compact
@@ -475,6 +502,7 @@ in place.
 .. automethod:: CTable.drop_computed_column
 .. automethod:: CTable.drop_column
 .. automethod:: CTable.rename_column
+.. automethod:: CTable.apply
 
 
 Indexes

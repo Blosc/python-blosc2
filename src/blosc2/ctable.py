@@ -5858,8 +5858,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             If ``True`` (default), rows with null/NaN group keys are skipped.
             If ``False``, null/NaN keys form their own group.
         engine:
-            Execution engine.  Phase 1 accepts ``"auto"`` and uses the NumPy
-            chunked implementation.
+            Execution engine for built-in aggregations (``size``, ``count``,
+            ``sum``, ``mean``, ``min``, ``max``, ``argmin``, ``argmax``):
+
+            * ``"auto"`` (default) -- currently always the NumPy/Cython
+              chunked implementation; may choose automatically in the future.
+            * ``"numpy"`` -- explicitly request the NumPy/Cython chunked
+              implementation.
+            * ``"jit"`` -- reserved for a miniexpr-JIT execution path; not
+              implemented yet (raises :class:`NotImplementedError`).
         chunk_size:
             Optional number of physical rows processed per chunk.
 
@@ -5870,8 +5877,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             ``.size()``, ``.count(column)`` or ``.agg({...})`` to materialize a
             grouped result as a new :class:`CTable`.
         """
-        if engine != "auto":
-            raise ValueError("Only engine='auto' is supported for group_by() in Phase 1")
+        if engine not in ("auto", "numpy", "jit"):
+            raise ValueError(f"engine must be 'auto', 'numpy', or 'jit', got {engine!r}")
+        if engine == "jit":
+            raise NotImplementedError(
+                "engine='jit' is reserved for a future miniexpr-JIT execution path; "
+                "use 'auto' or 'numpy' for now."
+            )
         from blosc2.groupby import CTableGroupBy
 
         return CTableGroupBy(self, keys, sort=sort, dropna=dropna, engine=engine, chunk_size=chunk_size)
@@ -9429,6 +9441,70 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         for name in list(self._materialized_cols):
             if affected is None or name in affected:
                 self.refresh_generated_column(name)
+
+    def apply(
+        self,
+        func,
+        *,
+        columns: list[str] | None = None,
+        dtype=None,
+        engine: str = "auto",
+    ) -> blosc2.NDArray:
+        """Run a row-batch UDF over live column values and materialize the result.
+
+        Sugar over :func:`blosc2.lazyudf` using this table's columns as
+        inputs: ``blosc2.lazyudf(func, tuple(t[c] for c in columns),
+        dtype=dtype, jit=...).compute()``. There is no separate execution
+        path — this reuses exactly the machinery :meth:`add_computed_column`
+        and :meth:`add_generated_column` already use for DSL/UDF columns.
+
+        Parameters
+        ----------
+        func:
+            UDF passed straight to :func:`blosc2.lazyudf`; see that function
+            for the expected signature (``func(inputs_tuple, output,
+            offset)``) and for how a :func:`blosc2.dsl_kernel`-decorated
+            kernel is transpiled instead of run as plain Python.
+        columns:
+            Column names to bind as *func*'s inputs, in order. Defaults to
+            every stored column, in schema order.
+        dtype:
+            Result dtype. Required unless *func* is a
+            :func:`blosc2.dsl_kernel` kernel, whose dtype can be inferred by
+            NumPy type promotion of the input dtypes -- same rule as
+            :func:`blosc2.lazyudf`.
+        engine:
+            Forwarded to :func:`blosc2.lazyudf` as its ``jit`` policy:
+            ``"auto"`` (default) lets it choose, ``"jit"`` forces JIT
+            (only effective for a transpilable :func:`blosc2.dsl_kernel`),
+            ``"numpy"`` disables JIT.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> from dataclasses import dataclass
+        >>> @dataclass
+        ... class Row:
+        ...     price: float = blosc2.field(blosc2.float64())
+        ...     qty: float = blosc2.field(blosc2.float64())
+        >>> t = blosc2.CTable(Row, new_data=[(10.0, 2.0), (5.0, 3.0)])
+        >>> def revenue(inputs, output, offset):
+        ...     price, qty = inputs
+        ...     output[:] = price * qty
+        >>> t.apply(revenue, columns=["price", "qty"], dtype=blosc2.float64().dtype)[:]
+        array([20., 15.])
+        """
+        if engine not in ("auto", "numpy", "jit"):
+            raise ValueError(f"engine must be 'auto', 'numpy', or 'jit', got {engine!r}")
+        jit = {"auto": None, "numpy": False, "jit": True}[engine]
+        names = columns if columns is not None else list(self.col_names)
+        # Operands are the raw (full-capacity) storage arrays -- the same
+        # inputs add_computed_column()/add_generated_column() pass to
+        # lazyudf() for DSL/UDF columns -- so the live-row mask is applied
+        # once, here, to the result rather than to every operand.
+        operands = tuple(self._cols[self._logical_to_physical_name(name)] for name in names)
+        result = blosc2.lazyudf(func, operands, dtype=dtype, jit=jit).compute()
+        return result[self._valid_rows]
 
     def add_generated_column(  # noqa: C901
         self,
