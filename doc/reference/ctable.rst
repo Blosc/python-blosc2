@@ -164,6 +164,56 @@ Sentinels are resolved in this order: explicit ``null_value`` in the schema,
 .. autofunction:: get_null_policy
 
 
+Nulls in expressions
+---------------------
+
+Arithmetic and comparisons built from :class:`Column` objects (``t.x + 1``,
+``t.x > 0``, ...) propagate nulls on nullable int/timestamp/bool columns
+without touching storage or the on-disk format — a sentinel is a validity
+bitmap encoded in-band, so propagation is purely a rewrite of the lazy
+expression:
+
+- **Arithmetic** (``+ - * / // % **``): the result is null (NaN) wherever
+  any nullable operand is null, promoting integer/timestamp results to
+  ``float64`` — the same promotion pandas' legacy (pre-nullable-dtype)
+  integer-null arithmetic performs. Non-nullable columns are unaffected and
+  pay no overhead::
+
+      (t.price + 1)          # NaN where price is null; float64 either way
+      (t.price + t.tax)      # NaN where either operand is null
+
+- **Comparisons** (``< <= > >= == !=``): SQL ``WHERE`` semantics — a null
+  never satisfies any comparison, including ``==``/``!=`` against the raw
+  sentinel value itself. Only :meth:`Column.is_null` /
+  :meth:`Column.notnull` test for nullness::
+
+      t[t.price < 0]         # excludes rows where price is null
+      t[t.price == -1]       # False for a null row even if -1 is the sentinel
+      t[t.price.is_null()]   # the only way to select null rows
+
+- **Boolean combinators** (``& | ~``) need no special handling: their
+  inputs are already-resolved comparison results with null-ness folded to
+  ``False``.
+
+Kleene three-valued logic (where ``null > 0`` evaluates to null rather than
+``False``) is intentionally out of scope — it needs a validity channel on
+boolean intermediates, i.e. masks, which CTable does not use.
+
+One limitation to be aware of: reductions called directly on a *derived*
+expression built from Column arithmetic (e.g. ``(t.price + 1).sum()``) do
+**not** skip the promoted NaNs — that expression is a plain
+:class:`~blosc2.LazyExpr` with no memory of which table column it came from,
+so its own ``.sum()``/``.mean()`` follow ordinary NumPy semantics (a NaN
+poisons the reduction). :meth:`Column.sum`/:meth:`~Column.mean` *do* skip
+nulls, because they always operate on a real, named column. To reduce a
+derived expression while skipping nulls, filter or mask first::
+
+      t.price.sum()                              # skips nulls (real Column)
+      (t.price + 1).sum()                         # NaN if any null present
+      values = t.price[:]
+      (values[t.price.notnull()] + 1).sum()       # skips nulls, via NumPy
+
+
 Attributes
 ----------
 
@@ -257,6 +307,7 @@ When a NumPy structured array is needed, materialize explicitly::
 .. autosummary::
 
     CTable.where
+    CTable.dropna
     CTable.view
     CTable.take
     CTable.select
@@ -268,6 +319,7 @@ When a NumPy structured array is needed, materialize explicitly::
     CTable.group_by
 
 .. automethod:: CTable.where
+.. automethod:: CTable.dropna
 .. automethod:: CTable.view
 .. automethod:: CTable.take
 .. automethod:: CTable.select
@@ -666,10 +718,12 @@ Nullable helpers
     Column.is_null
     Column.notnull
     Column.null_count
+    Column.fillna
 
 .. automethod:: Column.is_null
 .. automethod:: Column.notnull
 .. automethod:: Column.null_count
+.. automethod:: Column.fillna
 
 
 Unique values

@@ -1581,6 +1581,60 @@ class Column:
             return other.astype(f"datetime64[{spec.unit}]").astype(np.int64)
         return other
 
+    def _raw_null_pred(self):
+        """Boolean lazy predicate over the raw physical array, True where the
+        value is this column's null sentinel.
+
+        Returns ``None`` when there is nothing to propagate: no ``null_value``
+        configured, or a fixed-shape ndarray column (whose per-item sentinel
+        mask does not align 1:1 with the row-level predicates built here;
+        see ``Column.is_null()`` for those instead). Dictionary and
+        variable-length scalar columns never reach here because
+        ``_ensure_queryable`` already rejects them for arithmetic/comparisons.
+        """
+        if self.is_ndarray:
+            return None
+        nv = self.null_value
+        if nv is None:
+            return None
+        if isinstance(nv, (float, np.floating)) and np.isnan(nv):
+            return blosc2.isnan(self._raw_col)
+        return self._raw_col == nv
+
+    def _combined_null_pred(self, other):
+        """OR of self's and other's raw null predicates; ``None`` if neither
+        operand is nullable (the zero-overhead case)."""
+        self_pred = self._raw_null_pred()
+        other_pred = other._raw_null_pred() if isinstance(other, Column) else None
+        if self_pred is None:
+            return other_pred
+        if other_pred is None:
+            return self_pred
+        return self_pred | other_pred
+
+    def _null_aware_arith(self, other, raw_result):
+        """Sentinel-based null propagation for arithmetic (see Gap C2b of
+        plans/enhancing-ctable.md): rows where any nullable operand is null
+        become NaN in the result, promoting integer/timestamp results to
+        float64 the same way pandas' legacy int-null arithmetic does. Costs
+        nothing when neither operand is nullable — *raw_result* is returned
+        unchanged.
+        """
+        null_pred = self._combined_null_pred(other)
+        if null_pred is None:
+            return raw_result
+        return blosc2.where(null_pred, np.nan, raw_result)
+
+    def _null_aware_compare(self, other, raw_result):
+        """SQL ``WHERE`` semantics for comparisons (see Gap C2b): a null
+        operand never satisfies any comparison, so null rows are forced to
+        False. Costs nothing when neither operand is nullable.
+        """
+        null_pred = self._combined_null_pred(other)
+        if null_pred is None:
+            return raw_result
+        return raw_result & ~null_pred
+
     def __neg__(self):
         self._ensure_queryable()
         return -self._raw_col
@@ -1595,59 +1649,59 @@ class Column:
 
     def __add__(self, other):
         self._ensure_queryable()
-        return self._raw_col + self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col + self._unwrap_operand(other))
 
     def __radd__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) + self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) + self._raw_col)
 
     def __sub__(self, other):
         self._ensure_queryable()
-        return self._raw_col - self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col - self._unwrap_operand(other))
 
     def __rsub__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) - self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) - self._raw_col)
 
     def __mul__(self, other):
         self._ensure_queryable()
-        return self._raw_col * self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col * self._unwrap_operand(other))
 
     def __rmul__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) * self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) * self._raw_col)
 
     def __truediv__(self, other):
         self._ensure_queryable()
-        return self._raw_col / self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col / self._unwrap_operand(other))
 
     def __rtruediv__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) / self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) / self._raw_col)
 
     def __floordiv__(self, other):
         self._ensure_queryable()
-        return self._raw_col // self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col // self._unwrap_operand(other))
 
     def __rfloordiv__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) // self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) // self._raw_col)
 
     def __mod__(self, other):
         self._ensure_queryable()
-        return self._raw_col % self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col % self._unwrap_operand(other))
 
     def __rmod__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) % self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) % self._raw_col)
 
     def __pow__(self, other):
         self._ensure_queryable()
-        return self._raw_col ** self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col ** self._unwrap_operand(other))
 
     def __rpow__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) ** self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) ** self._raw_col)
 
     def __and__(self, other):
         self._ensure_queryable()
@@ -1681,19 +1735,19 @@ class Column:
 
     def __lt__(self, other):
         self._ensure_comparable()
-        return self._raw_col < self._coerce_timestamp_operand(other)
+        return self._null_aware_compare(other, self._raw_col < self._coerce_timestamp_operand(other))
 
     def __le__(self, other):
         self._ensure_comparable()
-        return self._raw_col <= self._coerce_timestamp_operand(other)
+        return self._null_aware_compare(other, self._raw_col <= self._coerce_timestamp_operand(other))
 
     def __eq__(self, other):
         if self.is_dictionary:
             return self._dictionary_eq(other)
         self._ensure_comparable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
-            return self._raw_col == int(other)
-        return self._raw_col == self._coerce_timestamp_operand(other)
+            return self._null_aware_compare(other, self._raw_col == int(other))
+        return self._null_aware_compare(other, self._raw_col == self._coerce_timestamp_operand(other))
 
     def __ne__(self, other):
         if self.is_dictionary:
@@ -1703,8 +1757,8 @@ class Column:
             return ~np.asarray(result, dtype=bool)
         self._ensure_comparable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
-            return self._raw_col == int(not other)
-        return self._raw_col != self._coerce_timestamp_operand(other)
+            return self._null_aware_compare(other, self._raw_col == int(not other))
+        return self._null_aware_compare(other, self._raw_col != self._coerce_timestamp_operand(other))
 
     def _dictionary_eq(self, other):
         """Return a physical-slot boolean predicate for dictionary equality.
@@ -1781,11 +1835,11 @@ class Column:
 
     def __gt__(self, other):
         self._ensure_comparable()
-        return self._raw_col > self._coerce_timestamp_operand(other)
+        return self._null_aware_compare(other, self._raw_col > self._coerce_timestamp_operand(other))
 
     def __ge__(self, other):
         self._ensure_comparable()
-        return self._raw_col >= self._coerce_timestamp_operand(other)
+        return self._null_aware_compare(other, self._raw_col >= self._coerce_timestamp_operand(other))
 
     @property
     def dtype(self):
