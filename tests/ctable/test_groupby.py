@@ -8,7 +8,6 @@
 from dataclasses import dataclass, make_dataclass
 
 import numpy as np
-import pandas as pd
 import pytest
 
 import blosc2
@@ -421,7 +420,8 @@ def test_groupby_engine_numpy_matches_auto():
     t = CTable(SalesRow, new_data=DATA)
     auto_result = t.group_by("city", engine="auto").sum("sales")
     numpy_result = t.group_by("city", engine="numpy").sum("sales")
-    assert auto_result.to_pandas().equals(numpy_result.to_pandas())
+    assert col(auto_result, "city") == col(numpy_result, "city")
+    np.testing.assert_array_equal(col(auto_result, "sales_sum"), col(numpy_result, "sales_sum"))
 
 
 def test_groupby_engine_jit_not_implemented():
@@ -827,6 +827,7 @@ def test_agg_duplicate_output_names_rejected():
 
 
 def test_agg_udf_matches_pandas_reference():
+    pd = pytest.importorskip("pandas")
     t = CTable(SalesRow, new_data=DATA)
     result = t.group_by("city", sort=True).agg(rng=("sales", lambda a: a.max() - a.min()))
 
