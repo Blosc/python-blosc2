@@ -23,25 +23,53 @@ At 200M float64 elements, the two are comparable in speed, but the real win is m
 
 *Benchmark for this tip: [`tip_01_constructors.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_01_constructors.py)*
 
-## Align slices with the chunk grid
+## Align your reads with the double partition
 
-`NDArray.slice()` has a fast path when a slice's boundaries land exactly on chunk boundaries: whole chunks are copied as-is, with no decompress/recompress. A slice that starts or ends mid-chunk falls back to the general path.
+blosc2 arrays are partitioned twice: the array is split into **chunks** (the unit of storage and compression), and each chunk is subdivided into **blocks** (the unit of decompression, sized to fit CPU caches). A read that lands exactly on a partition boundary decompresses only the chunk or block it needs, while the same-sized read shifted off-grid straddles (and decompresses) extra ones.
+
+You don't have to pick the partitions yourself: let blosc2 choose them, then read them back from `arr.chunks` and `arr.blocks` to place your slice boundaries.
+
+### At the chunk level
+
+`NDArray.slice()` has a fast path when *both* boundaries land on chunk boundaries: whole chunks are copied as-is, compressed, with no decompression at all. Regular reads also benefit — an aligned chunk-sized read decompresses one chunk instead of two.
 
 ```python
-arr = blosc2.asarray(data, chunks=(4000, 2000))
+arr = blosc2.asarray(data)  # let blosc2 pick the partitions
+ch = arr.chunks[0]  # e.g. 1000 for a 16000×2000 float64 array
 
-# Avoid: mid-chunk boundaries force decompress + recompress
-arr.slice((slice(500, 12500), slice(None)))
+# Avoid: a chunk-sized read straddling two chunks → decompresses both
+arr[ch // 2 : ch // 2 + ch, :]
 
-# Prefer: boundaries match the chunk grid -> whole chunks copied as-is
-arr.slice((slice(4000, 16000), slice(None)))
+# Aligned read: on the chunk grid → decompresses exactly one chunk
+arr[ch : 2 * ch, :]
+
+# Even better: slice() on chunk boundaries → copies chunks as-is, no decompress
+arr.slice((slice(ch, 2 * ch), slice(None)))
 ```
 
-![NDArray.slice(): chunk-aligned vs unaligned](optim_tips/tip_02_chunk_aligned_slicing.png)
+### At the block level
 
-The aligned slice was **~45x faster** on a 16000x2000 float64 array. (Ignore the memory panel for this one: the fast path's footprint — just the compressed chunks passing through — happens to be visible to our measurement, while the general path's much larger decompression scratch lives in C buffers the measurement cannot see. The aligned path actually moves *less* memory around, not more.)
+The same alignment principle applies at the block level: a block-aligned read decompresses exactly the blocks it needs. With auto-chosen blocks this effect is small — blocks are tiny by design — but if you configure larger blocks (say, for better compression ratios), keeping reads on the block grid pays off.
 
-If you control chunk sizes, pick slice boundaries — or a `chunks=` shape — that line up with how you plan to read the array.
+The `slice()` fast path, however, does *not* apply here: it only works at chunk boundaries, so `slice()` of a block-sized region still decompresses and recompresses:
+
+```python
+big = blosc2.asarray(data, chunks=(4000, 2000), blocks=(100, 2000))
+bl = big.blocks[0]
+
+# Avoid: a block-sized read straddling two blocks → decompresses both
+big[bl // 2 : bl // 2 + bl, :]
+
+# Aligned read: on the block grid → decompresses exactly one block
+big[bl : 2 * bl, :]
+
+# slice() at block granularity → still decompresses + recompresses the chunk
+big.slice((slice(bl, 2 * bl), slice(None)))
+```
+
+![Aligned vs unaligned reads, chunk and block level](optim_tips/tip_02_chunk_aligned_slicing.png)
+
+On a 16000×2000 float64 array, 400 chunk-sized reads aligned with the chunk grid were **~2.2× faster** than the same reads shifted half a chunk off-grid, and a chunk-aligned `slice()` was **~4.9× faster** still (no decompression). At the block level (with larger 1.6 MB blocks), 400 block-sized reads aligned with the block grid were **~1.7× faster**. However, `slice()` at block granularity was no faster at all — `slice()` has to produce a valid compressed array with its own chunk layout, so it can only skip decompression when both boundaries land on *chunk* boundaries; at block granularity it still decompresses and recompresses.
 
 *Benchmark for this tip: [`tip_02_chunk_aligned_slicing.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_02_chunk_aligned_slicing.py)*
 
