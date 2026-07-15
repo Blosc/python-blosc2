@@ -6,7 +6,7 @@
 #######################################################################
 
 """Tests for add_column, drop_column, rename_column, Column.assign,
-and the corrected view mutability model."""
+and the read-only view mutability model."""
 
 import os
 import pathlib
@@ -47,29 +47,88 @@ def table_path(name):
 
 
 # ===========================================================================
-# View mutability — value writes allowed, structural changes blocked
+# View mutability — views are read-only: value writes and structural
+# changes are both blocked.
 # ===========================================================================
 
 
-def test_view_allows_column_setitem():
-    """Writing values through a view modifies the parent table."""
+def test_view_blocks_column_setitem():
+    """Writing values through a view raises; the base table is untouched."""
     t = CTable(Row, new_data=DATA10)
     view = t.where(t["id"] > 4)  # rows 5-9
-    # double scores of those rows using __setitem__
     indices = list(range(len(view)))
     new_scores = view["score"][:] * 2
-    view["score"][indices] = new_scores
-    # check parent was modified
-    assert t["score"][5] == pytest.approx(100.0)  # was 50.0
+    with pytest.raises(ValueError, match="view"):
+        view["score"][indices] = new_scores
+    assert t["score"][5] == pytest.approx(50.0)  # unchanged
 
 
-def test_view_allows_assign():
-    """assign() through a view modifies the parent table."""
+def test_view_blocks_column_setitem_slice():
+    t = CTable(Row, new_data=DATA10)
+    view = t[2:5]
+    with pytest.raises(ValueError, match="view"):
+        view["score"][0] = 99.0
+    assert t["score"][2] == pytest.approx(20.0)
+
+
+def test_view_blocks_column_setitem_gathered_rows():
+    t = CTable(Row, new_data=DATA10)
+    view = t[[1, 3, 5]]
+    with pytest.raises(ValueError, match="view"):
+        view["score"][0] = 99.0
+    assert t["score"][1] == pytest.approx(10.0)
+
+
+def test_view_blocks_column_setitem_sorted():
+    t = CTable(Row, new_data=DATA10)
+    view = t.sort_by("score", ascending=False, view=True)
+    with pytest.raises(ValueError, match="view"):
+        view["score"][0] = 99.0
+    assert t["score"][9] == pytest.approx(90.0)
+
+
+def test_view_blocks_column_setitem_projection():
+    t = CTable(Row, new_data=DATA10)
+    view = t[["id", "score"]]
+    with pytest.raises(ValueError, match="view"):
+        view["score"][0] = 99.0
+    assert t["score"][0] == pytest.approx(0.0)
+
+
+def test_view_blocks_column_setitem_boolean_mask():
     t = CTable(Row, new_data=DATA10)
     view = t.where(t["id"] > 4)
-    view["score"].assign(np.zeros(len(view)))
-    assert t["score"][5] == pytest.approx(0.0)
-    assert t["score"][4] == pytest.approx(40.0)  # untouched
+    mask = np.zeros(len(view), dtype=bool)
+    mask[0] = True
+    with pytest.raises(ValueError, match="view"):
+        view["score"][mask] = np.array([99.0])
+    assert t["score"][5] == pytest.approx(50.0)
+
+
+def test_view_blocks_assign():
+    """assign() through a view raises; the base table is untouched."""
+    t = CTable(Row, new_data=DATA10)
+    view = t.where(t["id"] > 4)
+    with pytest.raises(ValueError, match="view"):
+        view["score"].assign(np.zeros(len(view)))
+    assert t["score"][5] == pytest.approx(50.0)
+
+
+def test_take_from_view_yields_independent_writable_table():
+    t = CTable(Row, new_data=DATA10)
+    view = t.where(t["id"] > 4)
+    independent = view.take([0, 1])
+    independent["score"][0] = 99.0
+    assert independent["score"][0] == pytest.approx(99.0)
+    # base and view unaffected
+    assert t["score"][5] == pytest.approx(50.0)
+
+
+def test_writes_on_base_still_work_while_view_exists():
+    t = CTable(Row, new_data=DATA10)
+    view = t.where(t["id"] > 4)
+    t["score"][0] = 999.0
+    assert t["score"][0] == pytest.approx(999.0)
 
 
 def test_view_blocks_append():
@@ -178,14 +237,13 @@ def test_assign_wrong_length_raises():
         t["score"].assign([1.0, 2.0])
 
 
-def test_assign_through_view_touches_only_matching_rows():
+def test_assign_through_view_raises():
     t = CTable(Row, new_data=DATA10)
     view = t.where(t["id"] < 5)  # rows 0-4
-    view["score"].assign([0.0] * 5)
-    # rows 0-4 → 0, rows 5-9 unchanged
-    scores = t["score"][:]
-    np.testing.assert_array_equal(scores[:5], np.zeros(5))
-    np.testing.assert_array_equal(scores[5:], np.arange(5, 10, dtype=np.float64) * 10)
+    with pytest.raises(ValueError, match="view"):
+        view["score"].assign([0.0] * 5)
+    # base table untouched
+    np.testing.assert_array_equal(t["score"][:], np.arange(10, dtype=np.float64) * 10)
 
 
 def test_assign_respects_deleted_rows():
@@ -442,17 +500,17 @@ def test_bool_mask_wrong_length_raises():
         _ = t["score"][bad_mask]
 
 
-def test_bool_mask_through_view():
-    """Boolean mask indexing works on views too."""
+def test_bool_mask_setitem_through_view_raises():
+    """Boolean-mask reads still work on views; writes through a view raise."""
     t = CTable(Row, new_data=DATA10)
     view = t.where(t["id"] < 6)  # rows 0-5
     mask = view["id"][:] % 2 == 0
-    view["score"][mask] *= 10
-    # rows 0,2,4 in view → ids 0,2,4 in parent → scores 0,20,40 * 10
+    with pytest.raises(ValueError, match="view"):
+        view["score"][mask] *= 10
+    # base untouched
     assert t["score"][0] == pytest.approx(0.0)
-    assert t["score"][2] == pytest.approx(200.0)
-    assert t["score"][4] == pytest.approx(400.0)
-    assert t["score"][1] == pytest.approx(10.0)  # untouched
+    assert t["score"][2] == pytest.approx(20.0)
+    assert t["score"][4] == pytest.approx(40.0)
 
 
 if __name__ == "__main__":

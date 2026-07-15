@@ -1121,9 +1121,19 @@ class Column:
         return table_view.take(indices)[self._col_name]
 
     def __setitem__(self, key: int | slice | list | np.ndarray, value):  # noqa: C901
-        """Set one or more live column values; accepts the same index forms as :meth:`__getitem__`."""
+        """Set one or more live column values; accepts the same index forms as :meth:`__getitem__`.
+
+        Raises ``ValueError`` if the table is read-only or is a view; use
+        :meth:`CTable.take` or :meth:`CTable.copy` to get an independent,
+        writable table first.
+        """
         if self._table._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
+        if self._table.base is not None:
+            raise ValueError(
+                "Cannot assign values through a view. Use .take(indices) or .copy() "
+                "to get an independent, writable table first."
+            )
         if self.is_computed:
             raise ValueError(f"Column {self._col_name!r} is a computed column and cannot be written to.")
         # In-place column mutation invalidates any incremental summary accumulator
@@ -1901,9 +1911,6 @@ class Column:
     def assign(self, data) -> None:
         """Replace all live values in this column with *data*.
 
-        Works on both full tables and views — on a view, only the rows
-        visible through the view's mask are overwritten.
-
         Parameters
         ----------
         data:
@@ -1914,13 +1921,20 @@ class Column:
         Raises
         ------
         ValueError
-            If ``len(data)`` does not match the number of live rows, or the
-            table is opened read-only.
+            If ``len(data)`` does not match the number of live rows, the
+            table is opened read-only, or the table is a view (use
+            :meth:`CTable.take` or :meth:`CTable.copy` to get an
+            independent, writable table first).
         TypeError
             If values cannot be coerced to the column's dtype.
         """
         if self._table._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
+        if self._table.base is not None:
+            raise ValueError(
+                "Cannot assign values through a view. Use .take(indices) or .copy() "
+                "to get an independent, writable table first."
+            )
         if self.is_computed:
             raise ValueError(f"Column {self._col_name!r} is a computed column and cannot be written to.")
         if self.is_list:
@@ -9985,6 +9999,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             col = t["where"]             # column named "where"
             method = t.where             # CTable.where method
+
+        Row-range, gathered-row, boolean-mask, sorted (:meth:`sort_by`), and
+        column-projection results are all lightweight **views**: they share
+        physical storage with the base table instead of copying it. Views
+        are read-only — assigning into a value returned by indexing a view
+        raises ``ValueError``; use :meth:`take` or :meth:`copy` to obtain an
+        independent, writable table. Mutating the base table while a view
+        exists leaves the view's row mask frozen at the time the view was
+        created, so the view may go stale (it will not see rows appended to
+        the base afterwards, and may still reference rows later deleted from
+        the base).
         """
         if isinstance(key, str):
             physical = self._logical_to_physical_name(key)
