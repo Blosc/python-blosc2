@@ -229,6 +229,21 @@ def test_is_null_no_null_value():
     assert list(mask) == [False, False]
 
 
+def test_is_null_timestamp_sentinel():
+    """Timestamp sentinels materialize as np.datetime64('NaT') (same bit
+    pattern as INT64_MIN), so is_null() must special-case datetime64 arrays
+    instead of comparing against the raw int sentinel."""
+
+    @dataclass
+    class TsRow:
+        ts: int = blosc2.field(blosc2.timestamp(null_value=np.iinfo(np.int64).min))
+
+    null_ts = np.iinfo(np.int64).min
+    t = CTable(TsRow, new_data=[(1000,), (null_ts,), (2000,)])
+    assert list(t["ts"].is_null()) == [False, True, False]
+    assert t["ts"].null_count() == 1
+
+
 def test_null_count_after_delete():
     t = CTable(IntRow, new_data=[(1, 10), (2, -1), (3, -1), (4, 5)])
     t.delete([1])  # delete the row with score=-1 at physical index 1
@@ -643,6 +658,86 @@ def test_schema_null_value_in_metadata():
     cols = {c["name"]: c for c in d["columns"]}
     assert cols["x"]["null_value"] == -999
     assert cols["label"]["null_value"] == "N/A"
+
+
+# ===========================================================================
+# fillna / dropna
+# ===========================================================================
+
+
+def test_fillna_int_sentinel():
+    t = CTable(IntRow, new_data=[(1, 10), (2, -1), (3, 20)])
+    filled = t["score"].fillna(0)
+    np.testing.assert_array_equal(filled, [10, 0, 20])
+
+
+def test_fillna_nan_float():
+    t = CTable(FloatRow, new_data=[("a", 1.0), ("b", float("nan")), ("c", 3.0)])
+    filled = t["value"].fillna(-1.0)
+    np.testing.assert_array_equal(filled, [1.0, -1.0, 3.0])
+
+
+def test_fillna_timestamp_sentinel():
+    @dataclass
+    class TsRow:
+        ts: int = blosc2.field(blosc2.timestamp(null_value=np.iinfo(np.int64).min))
+
+    null_ts = np.iinfo(np.int64).min
+    t = CTable(TsRow, new_data=[(1000,), (null_ts,), (2000,)])
+    filled = t["ts"].fillna(np.datetime64(0, "us"))
+    np.testing.assert_array_equal(filled, np.array([1000, 0, 2000], dtype="datetime64[us]"))
+
+
+def test_fillna_dictionary_column():
+    @dataclass
+    class DictRow:
+        vendor: str = blosc2.field(blosc2.dictionary())
+
+    t = CTable(DictRow, new_data=[("Uber",), (None,), ("Lyft",)])
+    assert t["vendor"].fillna("unknown") == ["Uber", "unknown", "Lyft"]
+
+
+def test_fillna_varlen_string_column():
+    @dataclass
+    class VLRow:
+        text: str = blosc2.field(blosc2.vlstring(nullable=True))
+
+    t = CTable(VLRow, new_data=[("hello",), (None,), ("world",)])
+    assert t["text"].fillna("N/A") == ["hello", "N/A", "world"]
+
+
+def test_dropna_default_subset():
+    t = CTable(IntRow, new_data=[(1, 10), (2, -1), (3, 20), (4, -1)])
+    result = t.dropna()
+    assert result.nrows == 2
+    np.testing.assert_array_equal(result["score"][:], [10, 20])
+    assert result.base is t
+
+
+def test_dropna_explicit_subset():
+    @dataclass
+    class TwoNullableRow:
+        a: int = blosc2.field(blosc2.int64(null_value=-1))
+        b: int = blosc2.field(blosc2.int64(null_value=-1))
+
+    t = CTable(TwoNullableRow, new_data=[(1, -1), (-1, 2), (3, 4)])
+    # only checking "a": row 1 (a=-1) is dropped, row 0 (b=-1) survives
+    result = t.dropna(subset=["a"])
+    np.testing.assert_array_equal(result["a"][:], [1, 3])
+    np.testing.assert_array_equal(result["b"][:], [-1, 4])
+
+
+def test_dropna_row_count_correct():
+    t = CTable(IntRow, new_data=[(i, -1 if i % 3 == 0 else i) for i in range(10)])
+    result = t.dropna(subset=["score"])
+    assert result.nrows == sum(1 for i in range(10) if i % 3 != 0)
+
+
+def test_dropna_of_a_filtered_view():
+    t = CTable(IntRow, new_data=[(1, 10), (2, -1), (3, 20), (4, -1), (5, 30)])
+    view = t.where(t["id"] > 1)  # rows with id 2,3,4,5 -> scores -1,20,-1,30
+    result = view.dropna(subset=["score"])
+    np.testing.assert_array_equal(result["score"][:], [20, 30])
 
 
 if __name__ == "__main__":

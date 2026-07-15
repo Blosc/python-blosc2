@@ -1993,6 +1993,11 @@ class Column:
                 elem_mask = arr == nv
             inner_axes = tuple(range(1, elem_mask.ndim))
             return elem_mask.all(axis=inner_axes) if inner_axes else elem_mask.astype(np.bool_)
+        if np.issubdtype(arr.dtype, np.datetime64):
+            # Timestamp columns materialize with the int64 sentinel already
+            # decoded into np.datetime64('NaT') (they share the same bit
+            # pattern), so the sentinel value itself never appears in arr.
+            return np.isnat(arr)
         if isinstance(nv, (float, np.floating)) and np.isnan(nv):
             return np.isnan(arr)
         return arr == nv
@@ -2028,6 +2033,20 @@ class Column:
         if self.null_value is None:
             return 0
         return int(self.is_null().sum())
+
+    def fillna(self, value):
+        """Return live values with null sentinels replaced by *value*.
+
+        Dictionary and variable-length scalar columns (whose nulls are
+        native ``None`` cells) return a list; other columns return a NumPy
+        array.
+        """
+        if self.is_dictionary or self.is_varlen_scalar:
+            return [value if v is None else v for v in self[:]]
+        arr = np.array(self[:], copy=True)
+        if self.null_value is not None:
+            arr[self._null_mask_for(arr)] = value
+        return arr
 
     def _nonnull_chunks(self):
         """Yield chunks of live, non-null values.
@@ -11798,6 +11817,30 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     def _guard_varlen_scalar_expression(self, expr: str) -> None:
         self._guard_scalar_expression(expr)
+
+    def _is_nullable_column(self, name: str) -> bool:
+        col = self[name]
+        return col.null_value is not None or col.is_dictionary or col.is_varlen_scalar
+
+    def dropna(self, subset: list[str] | None = None) -> CTable:
+        """Return a view excluding rows where any column in *subset* is null.
+
+        Parameters
+        ----------
+        subset:
+            Column names to check for nulls. Defaults to every nullable
+            column (sentinel-backed, dictionary, or variable-length scalar).
+
+        Returns
+        -------
+        CTable
+            A read-only view over the live, non-null rows (see :meth:`where`).
+        """
+        names = subset if subset is not None else [n for n in self.col_names if self._is_nullable_column(n)]
+        mask = np.ones(self.nrows, dtype=np.bool_)
+        for name in names:
+            mask &= self[name].notnull()
+        return self.where(mask)
 
     def where(  # noqa: C901
         self,
