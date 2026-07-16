@@ -4,6 +4,17 @@
 
 XXX version-specific blurb XXX
 
+### Bug fixes
+
+- Fixed `engine=blosc2.jit` for `DataFrame.apply` against pandas 3.0.3: with
+  the default `raw=False`, the engine returned a raw NumPy array instead of
+  a properly indexed `DataFrame`/`Series`, so results only matched plain
+  `apply()` by value, never by type. `Series.map(func, engine=blosc2.jit)`
+  is now implemented (it previously always raised `NotImplementedError`).
+  Non-numeric columns now raise a clear `ValueError` instead of a deep
+  `numexpr` error. See the new guide "Using Blosc2 as a pandas engine" and
+  `bench/bench_pandas_engine.py`.
+
 ## Changes from 4.8.0 to 4.8.1
 
 ### Improvements

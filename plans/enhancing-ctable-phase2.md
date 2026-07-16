@@ -196,6 +196,48 @@ the adapter directly; ADD end-to-end tests that go through real pandas
 Acceptance: the P1.3 tests green against pandas 3.0.3; no pandas version
 pin added to any requirements file.
 
+### Implementation notes (landed)
+
+Empirically the crash described at the top of this section did not
+reproduce verbatim against the installed pandas 3.0.3 — `_ensure_numpy_data`
+already existed and handled the `.values` fallback. What *did* reproduce,
+reading `pandas/core/frame.py`'s `DataFrame.apply` engine dispatch directly:
+
+- `raw` defaults to `False`, in which case pandas hands the engine the
+  **DataFrame itself** (not `.values`) and, unlike the `raw=True` path,
+  does NOT reconstruct a `DataFrame`/`Series` from the result — it returns
+  whatever the engine gives back verbatim. `PandasUdfEngine.apply` was
+  returning a raw `ndarray` in this (default!) case, so
+  `df.apply(f, engine=blosc2.jit)` produced the right values with the wrong
+  type — silently broken for any code chaining further DataFrame methods
+  on the result. Fixed by reconstructing the `DataFrame`/`Series` ourselves
+  (mirroring pandas' own `raw=True` reconstruction code) whenever the input
+  we received was the original pandas object rather than a raw array.
+- `DataFrame.map(func, engine=...)` does not forward `engine` to any
+  dispatch mechanism at all in pandas 3.0.3 (`DataFrame.map`'s signature
+  doesn't accept it; it silently becomes a keyword arg forwarded to `func`,
+  raising `TypeError`). `Series.apply(func, engine=...)` similarly never
+  reaches `__pandas_udf__` — only `DataFrame.apply` and `Series.map` do.
+  Documented as pandas-side limitations, not tested as if they were ours.
+- `Series.map(engine=blosc2.jit)` now implemented (P1.2): pandas wraps a
+  raw array result back into a `Series` itself for `map`, so no
+  reconstruction is needed on our side.
+- Fixed a latent bug in `_ensure_numpy_data`'s error message (missing `f`
+  prefix, wrong attribute — `data.__name__` instead of
+  `type(data).__name__`) while adding the new numeric-dtype check.
+- Benchmark (`bench/bench_pandas_engine.py`, Apple M4): the "point of the
+  engine" claim in this section's original framing (skip the per-row Python
+  loop, `axis=1`) does not hold — `axis=1` still calls the function once per
+  row either way, and for a handful of columns the per-call proxy-wrapping
+  overhead makes `engine=blosc2.jit` *slower* than plain `apply(axis=1)`.
+  The real, verified win is on `axis=0` (the default): 4.3x on a
+  1,000,000-row/8-column frame with a multi-op elementwise expression
+  (numexpr operator fusion + threading beating plain NumPy on one large 1D
+  array per column). Documented this correction in the new guide page.
+- Commit: see `git log` for the commit landing this section (message
+  references P1 by PR title, not inside code/docs, per the cross-cutting
+  rules).
+
 ---
 
 ## P2 — `CTable.assign()` chaining + unbound `blosc2.col()`
