@@ -706,6 +706,18 @@ def test_fillna_varlen_string_column():
     assert t["text"].fillna("N/A") == ["hello", "N/A", "world"]
 
 
+def test_fillna_on_view_returns_view_rows_only():
+    t = CTable(IntRow, new_data=[(1, 10), (2, -1), (3, 20), (4, -1)])
+    view = t.where(t["id"] > 1)
+    np.testing.assert_array_equal(view["score"].fillna(0), [0, 20, 0])
+    np.testing.assert_array_equal(t["score"][:], [10, -1, 20, -1])  # base untouched
+
+
+def test_fillna_on_non_nullable_column_is_identity():
+    t = CTable(IntRow, new_data=[(1, 10), (2, 20)])
+    np.testing.assert_array_equal(t["id"].fillna(0), [1, 2])
+
+
 def test_dropna_default_subset():
     t = CTable(IntRow, new_data=[(1, 10), (2, -1), (3, 20), (4, -1)])
     result = t.dropna()

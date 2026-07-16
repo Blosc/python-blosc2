@@ -979,3 +979,56 @@ def test_agg_udf_combines_with_builtin_ops():
     assert result.col_names == ["city", "total", "rng"]
     # Berlin's sum is NaN too (all-null group) -- the existing sum() convention.
     np.testing.assert_allclose(col(result, "total"), [np.nan, 40.0, 60.0])
+
+
+def test_agg_udf_groups_straddle_chunk_boundaries():
+    """chunk_size=2 splits every group across chunks, exercising the raw
+    per-group value accumulation in _udf_value_partials/_merge_partials and
+    the concatenate-then-call-once path in _final_rows."""
+    t = CTable(SalesRow, new_data=DATA)
+    rng = ("sales", lambda a: a.max() - a.min())
+    chunked = t.group_by("city", sort=True, chunk_size=2).agg(rng=rng)
+    unchunked = t.group_by("city", sort=True).agg(rng=rng)
+    np.testing.assert_allclose(col(chunked, "rng"), [np.nan, 20.0, 20.0])
+    np.testing.assert_allclose(col(chunked, "rng"), col(unchunked, "rng"))
+    assert col(chunked, "city") == col(unchunked, "city")
+
+
+def test_agg_udf_sees_all_chunks_of_a_group():
+    """The UDF must be called exactly once per group, with every chunk's
+    values concatenated -- not once per chunk."""
+    seen = []
+
+    def probe(values):
+        seen.append(np.sort(values).tolist())
+        return float(len(values))
+
+    t = CTable(SalesRow, new_data=DATA)
+    t.group_by("city", sort=True, chunk_size=2).agg(n=("sales", probe))
+    assert seen == [[10.0, 30.0], [20.0, 40.0]]  # Paris, Rome; Berlin never called
+
+
+def test_agg_udf_on_filtered_view():
+    t = CTable(SalesRow, new_data=DATA)
+    view = t[t.qty > 1]  # drops the first Paris row (sales=10.0)
+    result = view.group_by("city", sort=True).agg(rng=("sales", lambda a: a.max() - a.min()))
+    # Paris keeps only sales=30.0 (its NaN row is in the view but pre-filtered
+    # for the UDF); Rome keeps 20.0 and 40.0; Berlin is all-null.
+    np.testing.assert_allclose(col(result, "rng"), [np.nan, 0.0, 20.0])
+    assert col(result, "city") == ["Berlin", "Paris", "Rome"]
+
+
+def test_agg_udf_empty_table_with_explicit_dtype():
+    t = CTable(SalesRow)
+    result = t.group_by("city").agg(rng=("sales", lambda a: a.max() - a.min(), blosc2.float32()))
+    assert result.nrows == 0
+    assert result["rng"].dtype == np.float32
+
+
+def test_agg_udf_groupby_object_is_reusable():
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city", sort=True)
+    rng = ("sales", lambda a: a.max() - a.min())
+    first = g.agg(rng=rng)
+    second = g.agg(rng=rng)
+    np.testing.assert_allclose(col(first, "rng"), col(second, "rng"))

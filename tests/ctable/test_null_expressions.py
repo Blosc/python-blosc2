@@ -35,6 +35,12 @@ class TsRow:
     ts: int = blosc2.field(blosc2.timestamp(null_value=NULL_I64))
 
 
+@dataclass
+class FloatRow:
+    id: int = blosc2.field(blosc2.int64())
+    f: float = blosc2.field(blosc2.float64(nullable=True))
+
+
 # ===========================================================================
 # Comparisons: nulls never satisfy any comparison (SQL WHERE semantics)
 # ===========================================================================
@@ -87,6 +93,36 @@ def test_ge_le_also_exclude_nulls():
     assert t[t.score <= -20]["id"][:].tolist() == [3]
 
 
+def test_ne_on_nullable_float_excludes_nan_null():
+    """The one comparison where IEEE and SQL disagree for NaN sentinels:
+    raw ``NaN != x`` is True, but a null must not satisfy ``!=`` either."""
+    t = CTable(FloatRow, new_data=[(1, 5.0), (2, np.nan), (3, 7.0)])
+    assert t[t.f != 5.0]["id"][:].tolist() == [3]
+
+
+def test_lt_gt_on_nullable_float_exclude_nulls():
+    t = CTable(FloatRow, new_data=[(1, 5.0), (2, np.nan), (3, -7.0)])
+    assert t[t.f > 0]["id"][:].tolist() == [1]
+    assert t[t.f < 0]["id"][:].tolist() == [3]
+
+
+def test_timestamp_comparisons_exclude_nulls():
+    """Pre-C2b bug shape: the INT64_MIN sentinel satisfied every less-than."""
+    t = CTable(TsRow, new_data=[(1, 1000), (2, NULL_I64), (3, 2000)])
+    assert t[t.ts < 5000]["id"][:].tolist() == [1, 3]
+    assert t[t.ts > 1500]["id"][:].tolist() == [3]
+
+
+def test_inverted_comparison_selects_null_rows():
+    """Documented consequence of SQL False-semantics (not Kleene): a null
+    compares False, so negating a comparison *selects* null rows. The
+    escape hatch is the complementary comparison, which never matches
+    nulls."""
+    t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0), (3, -20, 0)])
+    assert t[~(t.score > 0)]["id"][:].tolist() == [2, 3]
+    assert t[t.score <= 0]["id"][:].tolist() == [3]
+
+
 # ===========================================================================
 # Arithmetic: null propagates, output promoted to float64/NaN
 # ===========================================================================
@@ -120,6 +156,31 @@ def test_arith_mixed_nullable_and_non_nullable_column():
     t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0)])
     result = (t.id + t.score).compute()[:2]
     assert result[0] == 11.0
+    assert np.isnan(result[1])
+
+
+def test_reverse_operators_propagate_null():
+    t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0)])
+    for expr in (100 - t.score, 3 * t.score, 100 / t.score):
+        result = expr.compute()[:2]
+        assert np.isnan(result[1]), expr
+    np.testing.assert_array_equal((100 - t.score).compute()[:1], [90.0])
+
+
+def test_floordiv_mod_pow_propagate_null():
+    t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0)])
+    for expr, live in ((t.score // 3, 3.0), (t.score % 3, 1.0), (t.score**2, 100.0)):
+        result = expr.compute()[:2]
+        assert result[0] == live
+        assert np.isnan(result[1])
+
+
+def test_pow_zero_exponent_keeps_null():
+    """IEEE says ``nan ** 0 == 1.0``, which would silently resurrect a null
+    as a real value; the rewrite patches null rows back to NaN."""
+    t = CTable(FloatRow, new_data=[(1, 5.0), (2, np.nan), (3, 7.0)])
+    result = (t.f**0).compute()[:3]
+    np.testing.assert_array_equal(result[[0, 2]], [1.0, 1.0])
     assert np.isnan(result[1])
 
 

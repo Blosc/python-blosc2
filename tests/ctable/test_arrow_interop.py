@@ -511,6 +511,26 @@ def test_from_arrow_accepts_capsule_producer():
     assert via_capsule.to_arrow().equals(via_batches.to_arrow())
 
 
+def test_arrow_c_stream_empty_table():
+    t = CTable(MixedRow)
+    at = pa.table(t)
+    assert at.num_rows == 0
+    assert at.schema.equals(t.to_arrow().schema)
+
+
+def test_from_arrow_accepts_another_ctable():
+    # A CTable is itself a capsule producer, so it can be ingested directly.
+    t = _mixed_table()
+    roundtripped = CTable.from_arrow(t)
+    assert roundtripped.to_arrow().equals(t.to_arrow())
+
+
+def test_from_arrow_streams_filtered_view():
+    t = _mixed_table()
+    view = t[t.id != t["id"].null_value]
+    assert CTable.from_arrow(view).to_arrow().equals(view.to_arrow())
+
+
 def test_from_arrow_rejects_capsule_plus_batches():
     at = pa.table({"id": [1, 2]})
     with pytest.raises(TypeError, match="not both"):
