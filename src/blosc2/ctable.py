@@ -807,10 +807,9 @@ class RowTransformer:
 class NullableExpr:
     """Lazy result of arithmetic involving nullable columns.
 
-    After the Gap C2b rewrite, arithmetic on nullable int/timestamp columns
-    promotes to float64 with NaN marking the null rows (nullable float
-    columns already use NaN), so NaN is the single null representation for
-    every derived expression.  This wrapper carries that fact plus the
+    Arithmetic on nullable int/timestamp columns promotes to float64 with
+    NaN marking the null rows (nullable float columns already use NaN), so
+    NaN is the single null representation for every derived expression.  This wrapper carries that fact plus the
     owning table, so reductions (``sum``/``mean``/``min``/``max``/``std``)
     skip nulls and dead physical rows exactly like the corresponding
     :class:`Column` reductions — instead of NaN-poisoning the way a plain
@@ -1823,8 +1822,8 @@ class Column:
         return self_pred | other_pred
 
     def _null_aware_arith(self, other, raw_result):
-        """Sentinel-based null propagation for arithmetic (see Gap C2b of
-        plans/enhancing-ctable.md): rows where any nullable operand is null
+        """Sentinel-based null propagation for arithmetic: rows where any
+        nullable operand is null
         become NaN in the result, promoting integer/timestamp results to
         float64 the same way pandas' legacy int-null arithmetic does. The
         result is a :class:`NullableExpr`, so reductions on it skip nulls
@@ -1837,7 +1836,7 @@ class Column:
         return NullableExpr(blosc2.where(null_pred, np.nan, raw_result), self._table, null_pred)
 
     def _null_aware_compare(self, other, raw_result):
-        """SQL ``WHERE`` semantics for comparisons (see Gap C2b): a null
+        """SQL ``WHERE`` semantics for comparisons: a null
         operand never satisfies any comparison, so null rows are forced to
         False. Costs nothing when neither operand is nullable.
         """

@@ -442,7 +442,7 @@ class CTableGroupBy:
 
         argmin/argmax can only use the dense single-key path (it tracks row
         positions); the Cython kernels do not, so they are skipped for them.
-        UDF aggregations (see Gap D2) always fall through to the generic
+        UDF aggregations always fall through to the generic
         chunked path below, which is the only one that accumulates raw
         per-group values instead of a mergeable scalar state.
         """

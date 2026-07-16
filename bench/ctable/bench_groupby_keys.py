@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""Group-by aggregation speed by key type (the Gap D1 gate case: 1e7 rows,
-low-cardinality keys).  String keys are the case to watch: they miss every
+"""Group-by aggregation speed by key type (1e7 rows, low-cardinality keys).
+String keys are the case to watch: they miss every
 Cython fast path and go through hash-based factorization in
 ``_factorize_fixed_width_str``."""
 

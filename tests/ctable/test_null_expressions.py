@@ -6,7 +6,7 @@
 #######################################################################
 
 """Tests for sentinel-based null propagation through Column expressions
-(arithmetic and comparisons), per Gap C2/C2b of plans/enhancing-ctable.md.
+(arithmetic and comparisons).
 """
 
 from __future__ import annotations

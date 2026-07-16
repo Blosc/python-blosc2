@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-"""Tests for CTable.apply() (Gap D3): sugar over blosc2.lazyudf()."""
+"""Tests for CTable.apply(): sugar over blosc2.lazyudf()."""
 
 from __future__ import annotations
 

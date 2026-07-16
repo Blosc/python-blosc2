@@ -823,7 +823,7 @@ def test_agg_duplicate_output_names_rejected():
 
 
 # ===========================================================================
-# UDF aggregations (Gap D2) -- named form only
+# UDF aggregations -- named form only
 # ===========================================================================
 
 
