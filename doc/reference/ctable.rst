@@ -202,19 +202,21 @@ Kleene three-valued logic (where ``null > 0`` evaluates to null rather than
 ``False``) is intentionally out of scope — it needs a validity channel on
 boolean intermediates, i.e. masks, which CTable does not use.
 
-One limitation to be aware of: reductions called directly on a *derived*
-expression built from Column arithmetic (e.g. ``(t.price + 1).sum()``) do
-**not** skip the promoted NaNs — that expression is a plain
-:class:`~blosc2.LazyExpr` with no memory of which table column it came from,
-so its own ``.sum()``/``.mean()`` follow ordinary NumPy semantics (a NaN
-poisons the reduction). :meth:`Column.sum`/:meth:`~Column.mean` *do* skip
-nulls, because they always operate on a real, named column. To reduce a
-derived expression while skipping nulls, filter or mask first::
+Reductions on derived expressions skip nulls too: arithmetic involving a
+nullable column returns a ``NullableExpr`` — a thin wrapper that remembers
+which rows are null — so ``sum``/``mean``/``min``/``max``/``std`` on it skip
+nulls (and deleted rows) exactly like the corresponding :meth:`Column.sum`
+etc. do on a real column::
 
-      t.price.sum()                              # skips nulls (real Column)
-      (t.price + 1).sum()                         # NaN if any null present
-      values = t.price[:]
-      (values[t.price.notnull()] + 1).sum()       # skips nulls, via NumPy
+      t.price.sum()          # skips nulls (real Column)
+      (t.price + 1).sum()    # skips nulls too (NullableExpr)
+      ((t.price + 1) * 2).mean()  # chaining keeps the null channel
+
+Only *nulls* are skipped: a NaN produced by the arithmetic itself (e.g.
+``0/0`` on non-null values) is a value, not a null, and poisons the
+reduction as usual. ``min()``/``max()`` raise ``ValueError`` when every
+value is null; ``sum()`` returns ``0.0`` and ``mean()``/``std()`` return
+NaN — the same conventions as the Column reductions.
 
 
 Attributes

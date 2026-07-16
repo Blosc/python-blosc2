@@ -804,6 +804,209 @@ class RowTransformer:
         return self.evaluate_batch({self.source: table[self.source][:]})
 
 
+class NullableExpr:
+    """Lazy result of arithmetic involving nullable columns.
+
+    After the Gap C2b rewrite, arithmetic on nullable int/timestamp columns
+    promotes to float64 with NaN marking the null rows (nullable float
+    columns already use NaN), so NaN is the single null representation for
+    every derived expression.  This wrapper carries that fact plus the
+    owning table, so reductions (``sum``/``mean``/``min``/``max``/``std``)
+    skip nulls and dead physical rows exactly like the corresponding
+    :class:`Column` reductions — instead of NaN-poisoning the way a plain
+    :class:`blosc2.LazyExpr` reduction would.
+
+    Everything else (``compute()``, slicing, use as an operand) behaves like
+    the wrapped expression; further arithmetic keeps the wrapper, since NaN
+    propagates through it.
+
+    ``null_pred`` is the boolean lazy predicate (over the raw physical
+    columns) marking the null rows. It is carried along instead of being
+    re-derived as ``isnan(expr)`` because applying further lazy operations
+    on top of a ``where()``-carrying expression is unreliable, and because
+    it keeps nulls distinct from NaNs the arithmetic itself may produce
+    (e.g. ``0/0``): those are values, not nulls, and are not skipped.
+    """
+
+    def __init__(self, expr, table, null_pred):
+        self._expr = expr
+        self._table = table
+        self._null_pred = null_pred
+
+    def __getattr__(self, name):
+        return getattr(self._expr, name)
+
+    def __getitem__(self, key):
+        return self._expr[key]
+
+    def __repr__(self):
+        return f"NullableExpr({self._expr!r})"
+
+    def compute(self, **kwargs):
+        return self._expr.compute(**kwargs)
+
+    # ---- chaining: arithmetic keeps the NaN-null channel ----
+
+    def _wrap(self, expr, other=None):
+        pred = self._null_pred
+        if isinstance(other, NullableExpr):
+            pred = pred | other._null_pred
+        return NullableExpr(expr, self._table, pred)
+
+    @staticmethod
+    def _operand(other):
+        return other._expr if isinstance(other, NullableExpr) else other
+
+    @staticmethod
+    def _defer(other) -> bool:
+        # Column operands re-enter through Column.__r<op>__, which applies
+        # the column's own sentinel-null rewrite (operating on its raw
+        # storage here would leak sentinel values into the result).
+        return isinstance(other, Column)
+
+    def __add__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._wrap(self._expr + self._operand(other), other)
+
+    def __radd__(self, other):
+        return self._wrap(other + self._expr)
+
+    def __sub__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._wrap(self._expr - self._operand(other), other)
+
+    def __rsub__(self, other):
+        return self._wrap(other - self._expr)
+
+    def __mul__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._wrap(self._expr * self._operand(other), other)
+
+    def __rmul__(self, other):
+        return self._wrap(other * self._expr)
+
+    def __truediv__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._wrap(self._expr / self._operand(other), other)
+
+    def __rtruediv__(self, other):
+        return self._wrap(other / self._expr)
+
+    def __floordiv__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._wrap(self._expr // self._operand(other), other)
+
+    def __rfloordiv__(self, other):
+        return self._wrap(other // self._expr)
+
+    def __mod__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._wrap(self._expr % self._operand(other), other)
+
+    def __rmod__(self, other):
+        return self._wrap(other % self._expr)
+
+    def __pow__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        # nan ** 0 == 1.0 would silently resurrect a null as a real value.
+        pred = self._null_pred
+        if isinstance(other, NullableExpr):
+            pred = pred | other._null_pred
+        return self._wrap(blosc2.where(pred, np.nan, self._expr ** self._operand(other)), other)
+
+    def __rpow__(self, other):
+        # 1 ** nan == 1.0, same hazard as __pow__.
+        return self._wrap(blosc2.where(self._null_pred, np.nan, other**self._expr))
+
+    def __neg__(self):
+        return self._wrap(-self._expr)
+
+    # ---- comparisons: IEEE NaN already gives SQL False, except for != ----
+
+    def __lt__(self, other):
+        return NotImplemented if self._defer(other) else self._expr < self._operand(other)
+
+    def __le__(self, other):
+        return NotImplemented if self._defer(other) else self._expr <= self._operand(other)
+
+    def __gt__(self, other):
+        return NotImplemented if self._defer(other) else self._expr > self._operand(other)
+
+    def __ge__(self, other):
+        return NotImplemented if self._defer(other) else self._expr >= self._operand(other)
+
+    def __eq__(self, other):
+        return NotImplemented if self._defer(other) else self._expr == self._operand(other)
+
+    def __ne__(self, other):
+        # IEEE says nan != x is True; SQL null semantics say a null satisfies
+        # no comparison. Guard both sides (Column and NullableExpr operands
+        # carry their own null predicates).
+        result = (self._expr != Column._unwrap_operand(other)) & ~self._null_pred
+        other_pred = None
+        if isinstance(other, Column):
+            other_pred = other._raw_null_pred()
+        elif isinstance(other, NullableExpr):
+            other_pred = other._null_pred
+        if other_pred is not None:
+            result = result & ~other_pred
+        return result
+
+    # ---- reductions: skip nulls and dead physical rows ----
+
+    def _reduction_mask(self, where=None):
+        """Live, non-null rows in physical coordinates — the same recipe as
+        ``Column._lazy_nonnull_mask``, with the carried null predicate in
+        place of the per-column sentinel check."""
+        t = self._table
+        n_rows = t._known_n_rows()
+        mask = None if (n_rows is not None and n_rows == len(t._valid_rows)) else t._valid_rows
+        if where is not None:
+            mask = where if mask is None else mask & where
+        nonnull = ~self._null_pred
+        return nonnull if mask is None else mask & nonnull
+
+    def sum(self, dtype=None, *, where=None):
+        """Sum of live, non-null values; zero when every value is null."""
+        return float(self._expr.sum(where=self._reduction_mask(where), dtype=dtype or np.float64))
+
+    def mean(self, *, where=None):
+        """Mean of live, non-null values; NaN when every value is null."""
+        try:
+            return float(self._expr.mean(where=self._reduction_mask(where), dtype=np.float64))
+        except ValueError:
+            return float("nan")
+
+    def std(self, ddof: int = 0, *, where=None):
+        """Standard deviation of live, non-null values; NaN when every value is null."""
+        try:
+            return float(self._expr.std(where=self._reduction_mask(where), dtype=np.float64, ddof=ddof))
+        except ValueError:
+            return float("nan")
+
+    def _minmax(self, op: str, where):
+        mask = self._reduction_mask(where)
+        count = int(mask.where(blosc2.ones(self._expr.shape, dtype=np.int64), 0).sum(dtype=np.int64))
+        if count == 0:
+            raise ValueError(f"{op}() called on an expression where all values are null.")
+        return getattr(self._expr, op)(where=mask)
+
+    def min(self, *, where=None):
+        """Minimum of live, non-null values; raises ``ValueError`` if all are null."""
+        return self._minmax("min", where)
+
+    def max(self, *, where=None):
+        """Maximum of live, non-null values; raises ``ValueError`` if all are null."""
+        return self._minmax("max", where)
+
+
 class Column:
     """Column view for a :class:`CTable`, with vectorized operations and reductions."""
 
@@ -1540,6 +1743,8 @@ class Column:
         if isinstance(other, Column):
             other._ensure_queryable()
             return other._raw_col
+        if isinstance(other, NullableExpr):
+            return other._expr
         return other
 
     @property
@@ -1605,7 +1810,12 @@ class Column:
         """OR of self's and other's raw null predicates; ``None`` if neither
         operand is nullable (the zero-overhead case)."""
         self_pred = self._raw_null_pred()
-        other_pred = other._raw_null_pred() if isinstance(other, Column) else None
+        if isinstance(other, Column):
+            other_pred = other._raw_null_pred()
+        elif isinstance(other, NullableExpr):
+            other_pred = other._null_pred
+        else:
+            other_pred = None
         if self_pred is None:
             return other_pred
         if other_pred is None:
@@ -1616,14 +1826,15 @@ class Column:
         """Sentinel-based null propagation for arithmetic (see Gap C2b of
         plans/enhancing-ctable.md): rows where any nullable operand is null
         become NaN in the result, promoting integer/timestamp results to
-        float64 the same way pandas' legacy int-null arithmetic does. Costs
-        nothing when neither operand is nullable — *raw_result* is returned
-        unchanged.
+        float64 the same way pandas' legacy int-null arithmetic does. The
+        result is a :class:`NullableExpr`, so reductions on it skip nulls
+        like the corresponding Column reductions. Costs nothing when neither
+        operand is nullable — *raw_result* is returned unchanged.
         """
         null_pred = self._combined_null_pred(other)
         if null_pred is None:
             return raw_result
-        return blosc2.where(null_pred, np.nan, raw_result)
+        return NullableExpr(blosc2.where(null_pred, np.nan, raw_result), self._table, null_pred)
 
     def _null_aware_compare(self, other, raw_result):
         """SQL ``WHERE`` semantics for comparisons (see Gap C2b): a null

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -218,23 +219,65 @@ def test_non_nullable_column_comparison_unchanged():
 
 
 # ===========================================================================
-# Reductions on a *derived* (unregistered) expression: documented limitation.
+# Reductions on derived expressions skip nulls (NullableExpr wrapper)
 # ===========================================================================
 
 
-def test_reduction_on_derived_expression_is_nan_poisoned_not_null_skipping():
-    """`t.score.sum()` (a real Column) skips nulls; `(t.score + 1)` is a
-    plain LazyExpr with no memory of nullability, so its own `.sum()` follows
-    ordinary NumPy semantics (NaN poisons the reduction) rather than pandas'
-    skip-null default. Materialize and mask with NumPy for a skip-null total.
-    """
+def test_reduction_on_derived_expression_skips_nulls():
+    """`t.score + 1` returns a NullableExpr carrying the null predicate, so
+    its reductions skip nulls exactly like `t.score.sum()` does — instead of
+    NaN-poisoning the way a plain LazyExpr reduction would."""
     t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0), (3, -20, 0)])
-    assert t.score.sum() == -10  # Column.sum() already skips nulls today
-    assert np.isnan((t.score + 1).sum())  # derived expression: NaN poisons it
-    # Workaround: mask with notnull() on materialized values, then reduce with NumPy.
-    values = t.score[:]
-    total = (values[t.score.notnull()] + 1).sum()
-    assert total == pytest.approx(-8.0)
+    assert t.score.sum() == -10  # Column.sum() skips nulls
+    assert (t.score + 1).sum() == pytest.approx(-8.0)
+    assert (t.score + 1).mean() == pytest.approx(-4.0)
+    assert (t.score + 1).min() == pytest.approx(-19.0)
+    assert (t.score + 1).max() == pytest.approx(11.0)
+    assert (t.score + 1).std() == pytest.approx(15.0)
+
+
+def test_reduction_on_chained_and_mixed_expressions_skips_nulls():
+    t = CTable(IntRow, new_data=[(1, 10, 5), (2, NULL_I64, 5), (3, -20, NULL_I64)])
+    assert ((t.score + 1) * 2).sum() == pytest.approx(2 * (11 - 19))
+    # nullable + nullable: null wherever either operand is null -> only row 1 live
+    assert (t.score + t.other).sum() == pytest.approx(15.0)
+    # non-nullable + NullableExpr keeps the wrapper and its null predicate
+    assert (t.id + (t.score + 1)).sum() == pytest.approx((1 + 11) + (3 - 19))
+    # scalar-reflected and exotic ops keep the null channel too
+    assert (100 - t.score).sum() == pytest.approx(90 + 120)
+    assert (t.score**0).sum() == pytest.approx(2.0)  # nan**0 must not resurrect the null
+
+
+def test_reduction_on_derived_expression_matches_pandas():
+    pd = pytest.importorskip("pandas")
+    t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0), (3, -20, 0), (4, 7, 0)])
+    s = pd.Series([10, None, -20, 7], dtype="Int64")
+    assert (t.score + 1).sum() == pytest.approx(float((s + 1).sum()))
+    assert (t.score + 1).mean() == pytest.approx(float((s + 1).mean()))
+
+
+def test_derived_expression_reductions_respect_deleted_rows_and_views():
+    t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0), (3, -20, 0), (4, 7, 0)])
+    t.delete([0])  # drop score=10
+    assert (t.score + 1).sum() == pytest.approx(-19 + 8)
+    view = t[t.id > 3]  # only score=7 remains visible
+    assert (view.score + 1).sum() == pytest.approx(8.0)
+
+
+def test_derived_expression_all_null_reduction_semantics():
+    t = CTable(IntRow, new_data=[(1, NULL_I64, 0), (2, NULL_I64, 0)])
+    assert (t.score + 1).sum() == 0.0  # same convention as Column.sum()
+    assert math.isnan((t.score + 1).mean())
+    with pytest.raises(ValueError, match="all values are null"):
+        (t.score + 1).min()
+    with pytest.raises(ValueError, match="all values are null"):
+        (t.score + 1).max()
+
+
+def test_derived_expression_ne_comparison_excludes_nulls():
+    t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0), (3, -20, 0)])
+    assert t[(t.score + 1) != 11]["id"][:].tolist() == [3]
+    assert t[(t.score + 1) > 0]["id"][:].tolist() == [1]
 
 
 if __name__ == "__main__":

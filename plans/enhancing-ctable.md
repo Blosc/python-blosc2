@@ -474,21 +474,35 @@ overloads exactly as specified: arithmetic promotes nullable int/timestamp
 results to float64/NaN, comparisons AND with `notnull()` (SQL semantics),
 zero overhead for non-nullable columns, chained arithmetic doesn't
 double-wrap. The headline bug (`t[t.x < 0]` wrongly including nulls) is
-fixed and tested. **Deviation:** the plan's C2b test #3 wanted
-`(t.x + 1).sum()` to skip nulls "exactly like `t.x.sum()`". This turned out
-to be unreachable without a new abstraction: `t.x + 1` returns a plain
-`blosc2.LazyExpr`/`NDArray` (via `blosc2.where(...)`), which has no memory of
-which table column it came from and whose own `.sum()` is the generic
-reduction (no null-skip logic at all — confirmed empirically, it returns
-NaN for a NaN-containing array). Making `(t.x + 1).sum()` skip nulls would
-require wrapping the rewritten expression in a new Column-like object
-carrying `null_value` metadata outside the schema, which is a real new
-abstraction, not "one design-decided medium piece". Kept it lazy instead:
-documented the limitation (with the `values[t.score.notnull()] + 1` NumPy
-workaround) in a "Nulls in expressions" doc section and pinned it as a test
-(`test_reduction_on_derived_expression_is_nan_poisoned_not_null_skipping`)
-rather than silently claiming pandas parity. Flagging this explicitly in
-case a future pass decides the abstraction is worth building.
+fixed and tested. **Deviation (since resolved, see below):** the plan's
+C2b test #3 wanted `(t.x + 1).sum()` to skip nulls "exactly like
+`t.x.sum()`". This was initially documented as a limitation because
+`t.x + 1` returned a plain `blosc2.LazyExpr` with no memory of
+nullability, whose generic `.sum()` NaN-poisons.
+
+**C2b follow-up (2026-07-16): the deviation was closed by building the
+abstraction after all** — `NullableExpr` in `ctable.py`, the "Column-like
+object carrying null metadata" the notes above sketched. Key design
+points: (a) `_null_aware_arith` returns `NullableExpr(where(pred, nan,
+raw), table, pred)` — the wrapper carries the **null predicate itself**
+(over raw physical columns), not just a "nulls are NaN" convention,
+because `blosc2.isnan()` applied on top of a `where()`-carrying LazyExpr
+silently returns wrong results (pre-existing lazyexpr quirk: further lazy
+ops on `_where_args` expressions are unreliable) and because it keeps
+nulls distinct from NaNs the arithmetic itself produces (`0/0`). (b)
+Reductions reuse the same lazy masked-reduction engine Column uses
+(`expr.sum(where=~pred & valid_rows)`), so they also exclude dead
+physical slots — which plain LazyExpr reductions on raw column
+expressions never did. (c) Chaining keeps the wrapper and ORs predicates;
+Column operands re-enter via `Column.__r<op>__` (`NotImplemented`) so
+their own sentinel rewrite applies; `**` re-patches nulls (`nan**0 == 1`
+would resurrect them); `!=` guards both operands' predicates. All-null
+conventions match Column: `sum()` → 0.0, `mean()`/`std()` → NaN,
+`min()`/`max()` → `ValueError`. The old limitation-pinning test was
+replaced by `test_reduction_on_derived_expression_skips_nulls` and
+friends (pandas-parity, chained/mixed operands, deleted rows, views,
+all-null) in `tests/ctable/test_null_expressions.py`; the docs section
+now documents the new semantics.
 
 **C3 skipped**, per the plan's own escape valve: `sum`/`mean`/`min`/`max`/
 `std` each have a "lazy fastpath" (with JIT backend dispatch) plus a
