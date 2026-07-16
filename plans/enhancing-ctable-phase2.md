@@ -415,6 +415,41 @@ Acceptance: all green; `assign` copies no column data (assert via storage
 identity: the assigned table's `_cols` is the parent's `_cols` object —
 skip this assertion if the escape valve was taken).
 
+### Implementation notes (landed)
+
+Landed as designed, no escape valve needed: `assign()` builds one
+`CTable._make_view(self, self._valid_rows)` and gives it its own
+`_computed_cols`/`col_names`/`_col_widths` copies (the only three structures
+`add_computed_column` mutates), then registers each new column directly on
+the view's copies — bypassing `add_computed_column`'s own
+"cannot add to a view" guard, which is correct for the base table but not
+for this internal, view-only registration path.
+
+`ColExpr` values, plus `Column`/`NullableExpr` values, are bound/unwrapped
+against `self` (not the new view) **before** any of the call's new columns
+are registered, so a later keyword genuinely cannot see an earlier one in
+the same `assign()` call — it fails with the normal unknown-column error,
+matching the plan's documented restriction (not accidentally, by construction).
+
+While testing the Goal section's exact chain end-to-end, found and fixed a
+**pre-existing, unrelated bug**: `CTable.head()`/`tail()` build a boolean
+mask from `_valid_rows` and ignore `_cached_live_positions`, so calling
+`.head(N)` after a lazy `sort_by()` view (`self.base is not None`, always
+lazy per that method's own docstring) silently discarded the sort order and
+returned rows in physical order instead. Reproduced with plain
+`add_computed_column`/`Column` filtering, no `col()`/`assign()` involved —
+confirms it predates this item. Fixed by taking `_cached_live_positions[:N]`
+/ `[-N:]` through `_view_from_positions` (the same pattern already used by
+`_materialize_row` and `_display_positions`) whenever that attribute is set,
+before falling back to the existing mask-based fast path. Without this fix,
+the plan's own headline example
+(`t.assign(...)[...].sort_by(...).head(10)`) silently returned rows in the
+wrong order.
+
+All 11 new tests in `tests/ctable/test_col_expr.py` pass; full
+`tests/ctable` (1319 tests) and `tests/ndarray` (4385 tests) suites pass
+with no regressions from the `head`/`tail` fix.
+
 ---
 
 ## P3 — First-class variable-length string columns (the real project)

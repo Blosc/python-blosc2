@@ -4,8 +4,23 @@
 
 XXX version-specific blurb XXX
 
+### New features
+
+- `CTable.assign(**named_exprs)`: return a view with additional computed
+  columns, without mutating the table or copying column data. Pairs with
+  the new `blosc2.col(name)` — an unbound column expression that defers
+  operator replay until it's bound to a table (`assign()`, `t[...]`,
+  `where()`) — to write pandas-3-style chains:
+  `t.assign(profit=col("revenue") - col("cost"))[col("profit") > 0].sort_by("profit", ascending=False).head(10)`.
+
 ### Bug fixes
 
+- Fixed `CTable.head()`/`tail()` silently discarding row order when called
+  on a lazily-sorted view (e.g. `t.sort_by("col", ascending=False)` on a
+  view, or any `.sort_by()` result chained off a prior filter): they
+  ignored `_cached_live_positions` and built a plain physical-order mask
+  instead, so `t.where(...).sort_by("x", ascending=False).head(10)` came
+  back in the wrong order.
 - Fixed `engine=blosc2.jit` for `DataFrame.apply` against pandas 3.0.3: with
   the default `raw=False`, the engine returned a raw NumPy array instead of
   a properly indexed `DataFrame`/`Series`, so results only matched plain
