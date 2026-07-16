@@ -20,8 +20,7 @@
 #   2. Series.map(f, engine=blosc2.jit).
 #   3. The clear error raised for non-numeric columns instead of a deep
 #      numexpr failure.
-#   4. Timings for axis=0 (real speedup) vs axis=1 (no speedup) on a large
-#      DataFrame, so the difference is not just asserted but measured.
+#   4. Measured timings for axis=0 on a large DataFrame — the actual win.
 
 try:
     import pandas as pd
@@ -69,7 +68,7 @@ pd.testing.assert_frame_equal(result_axis1, df.apply(transform, axis=1))
 print("\ndf.apply(transform, engine=blosc2.jit, axis=1) also matches (just not faster).")
 
 # ---------------------------------------------------------------------------
-# 1b. Timings: axis=0 is a real win, axis=1 is not — measured, not asserted
+# 1b. Timings: axis=0 is a real, measured win
 # ---------------------------------------------------------------------------
 
 N_ROWS, N_COLS = 1_000_000, 8
@@ -95,21 +94,9 @@ print(f"\nTimings on a {N_ROWS:,}-row, {N_COLS}-column DataFrame (min of 3 runs)
 
 t_plain0 = timeit(lambda: big_df.apply(heavier_transform))
 t_engine0 = timeit(lambda: big_df.apply(heavier_transform, engine=blosc2.jit))
-print(f"  axis=0  plain df.apply(f):            {t_plain0 * 1000:8.1f} ms")
+print(f"  {'plain df.apply(f):':<34s} {t_plain0 * 1000:7.1f} ms")
 print(
-    f"  axis=0  df.apply(f, engine=blosc2.jit): {t_engine0 * 1000:7.1f} ms   speedup: {t_plain0 / t_engine0:.1f}x"
-)
-
-# axis=1 still calls the function once per *row* even with the engine, so
-# it does not scale to 1e6 rows in a demo — a much smaller frame is enough
-# to show the (lack of) speedup.
-small_df = big_df.iloc[:20_000]
-t_plain1 = timeit(lambda: small_df.apply(heavier_transform, axis=1))
-t_engine1 = timeit(lambda: small_df.apply(heavier_transform, engine=blosc2.jit, axis=1))
-print(f"\nSame comparison on axis=1, {len(small_df):,} rows (axis=1 doesn't scale to 1e6 in a demo):")
-print(f"  axis=1  plain df.apply(f, axis=1):            {t_plain1 * 1000:8.1f} ms")
-print(
-    f"  axis=1  df.apply(f, engine=blosc2.jit, axis=1): {t_engine1 * 1000:7.1f} ms   speedup: {t_plain1 / t_engine1:.2f}x"
+    f"  {'df.apply(f, engine=blosc2.jit):':<34s} {t_engine0 * 1000:7.1f} ms   speedup: {t_plain0 / t_engine0:.1f}x"
 )
 
 # ---------------------------------------------------------------------------
