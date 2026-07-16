@@ -9724,12 +9724,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if engine not in ("auto", "numpy", "jit"):
             raise ValueError(f"engine must be 'auto', 'numpy', or 'jit', got {engine!r}")
         jit = {"auto": None, "numpy": False, "jit": True}[engine]
-        names = columns if columns is not None else list(self.col_names)
+        names = columns if columns is not None else list(self._stored_col_names)
         missing = [n for n in names if self._logical_to_physical_name(n) not in self._cols]
         if missing:
             raise ValueError(
                 f"apply() only accepts stored columns, got {missing!r}. "
-                f"Stored columns: {list(self.col_names)!r}."
+                f"Stored columns: {list(self._stored_col_names)!r}."
             )
         # Operands are the raw (full-capacity) storage arrays -- the same
         # inputs add_computed_column()/add_generated_column() pass to
