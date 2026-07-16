@@ -6959,6 +6959,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
             if string_max_length is None:
+                from blosc2.utf8_array import have_string_dtype
+
+                if not have_string_dtype():
+                    # utf8 columns need numpy.dtypes.StringDType (NumPy >= 2.0).
+                    # On older NumPy, keep the historical import behavior:
+                    # variable-length msgpack strings with native-None nulls.
+                    return b2s.vlstring(nullable=nullable)
                 # No fixed-width threshold given: store as a variable-length
                 # utf8 column (offsets + bytes, StringDType reads).
                 return b2s.utf8(nullable=nullable, null_value=null_value)
@@ -7021,12 +7028,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             # Scalar strings without a fixed-width threshold import as utf8
             # columns, which use null sentinels like other scalar columns;
             # only binary columns keep the native-None varlen treatment.
+            # On NumPy < 2.0 (no StringDType) utf8 columns are unavailable and
+            # scalar strings keep the historical vlstring treatment instead.
+            from blosc2.utf8_array import have_string_dtype
+
             field_is_varlen_scalar = (
                 not field_is_list
                 and not field_is_struct
                 and not field_is_dictionary
                 and column_string_max_length is None
-                and (pa.types.is_binary(field.type) or pa.types.is_large_binary(field.type))
+                and (
+                    pa.types.is_binary(field.type)
+                    or pa.types.is_large_binary(field.type)
+                    or (
+                        not have_string_dtype()
+                        and (pa.types.is_string(field.type) or pa.types.is_large_string(field.type))
+                    )
+                )
             )
             field_needs_object_fallback = cls._arrow_type_needs_object_fallback(pa, field.type)
             if field_needs_object_fallback and not object_fallback:
@@ -7042,7 +7060,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 )
             if has_null_value_override and field_is_varlen_scalar:
                 raise TypeError(
-                    f"column_null_values is not supported for vlbytes column {name!r}; "
+                    f"column_null_values is not supported for vlbytes/vlstring column {name!r}; "
                     "these columns represent nulls as native None."
                 )
             if has_null_value_override:

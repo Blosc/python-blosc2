@@ -18,6 +18,10 @@ import blosc2
 from blosc2 import CTable
 from blosc2.schema import ObjectSpec, StructSpec
 
+# Scalar Arrow strings import as utf8 on NumPy >= 2.0 (StringDType available)
+# and fall back to vlstring (native-None nulls) on older NumPy.
+HAVE_STRING_DTYPE = hasattr(np.dtypes, "StringDType")
+
 pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
 
@@ -423,12 +427,17 @@ class TestParquetRoundTrip:
         at = pa.table({"txt": pa.array(["short", long_str, None, "end"], type=pa.string())})
         t = CTable.from_arrow(at.schema, at.to_batches())
         assert t["txt"].is_varlen_scalar
-        assert t["txt"].is_utf8
-        nv = t["txt"].null_value
-        assert list(t["txt"][:]) == ["short", long_str, nv, "end"]
-        # Export back to Arrow → still a scalar string column, not list<string>
         out = t.to_arrow()
-        assert pa.types.is_large_string(out.schema.field("txt").type)
+        if HAVE_STRING_DTYPE:
+            assert t["txt"].is_utf8
+            nv = t["txt"].null_value
+            assert list(t["txt"][:]) == ["short", long_str, nv, "end"]
+            # Export back to Arrow → still a scalar string column, not list<string>
+            assert pa.types.is_large_string(out.schema.field("txt").type)
+        else:
+            assert not t["txt"].is_utf8  # vlstring fallback, native-None nulls
+            assert list(t["txt"][:]) == ["short", long_str, None, "end"]
+            assert pa.types.is_string(out.schema.field("txt").type)
         assert out.column("txt").to_pylist() == ["short", long_str, None, "end"]
 
     def test_vlbytes_arrow_roundtrip_no_singleton_list(self):
@@ -456,14 +465,21 @@ class TestParquetRoundTrip:
 
         t = CTable.from_parquet(path)
         assert t["txt"].is_varlen_scalar
-        assert t["txt"].is_utf8
-        nv = t["txt"].null_value
-        assert list(t["txt"][:]) == ["short", long_str, nv, "end"]
+        if HAVE_STRING_DTYPE:
+            assert t["txt"].is_utf8
+            nv = t["txt"].null_value
+            assert list(t["txt"][:]) == ["short", long_str, nv, "end"]
+        else:
+            assert not t["txt"].is_utf8  # vlstring fallback, native-None nulls
+            assert list(t["txt"][:]) == ["short", long_str, None, "end"]
 
         out = tmp_path / "utf8_out.parquet"
         t.to_parquet(out)
         rt = pq.read_table(out)
-        assert pa.types.is_large_string(rt.schema.field("txt").type)
+        if HAVE_STRING_DTYPE:
+            assert pa.types.is_large_string(rt.schema.field("txt").type)
+        else:
+            assert pa.types.is_string(rt.schema.field("txt").type)
         assert rt.column("txt").to_pylist() == ["short", long_str, None, "end"]
 
 
@@ -534,8 +550,14 @@ class TestNullHandling:
         out = tmp_path / "nullable_scalars_out.parquet"
         t.to_parquet(out)
         rt = pq.read_table(out)
-        # "s" round-trips as utf8 -> large_string, unlike the other columns.
-        assert rt.schema == at.schema.set(at.schema.get_field_index("s"), pa.field("s", pa.large_string()))
+        # "s" round-trips as utf8 -> large_string, unlike the other columns
+        # (on NumPy < 2.0 it stays vlstring and exports as plain string).
+        expected_schema = (
+            at.schema.set(at.schema.get_field_index("s"), pa.field("s", pa.large_string()))
+            if HAVE_STRING_DTYPE
+            else at.schema
+        )
+        assert rt.schema == expected_schema
         assert rt.to_pylist() == at.to_pylist()
 
     def test_null_policy_controls_default_sentinels(self):
@@ -599,9 +621,17 @@ class TestNullHandling:
             CTable.from_arrow(at.schema, at.to_batches())
 
     def test_null_policy_column_null_values_applies_to_utf8(self):
-        """Passing column_null_values for a utf8 (scalar string) column sets its sentinel."""
+        """Passing column_null_values for a utf8 (scalar string) column sets its sentinel.
+
+        On NumPy < 2.0 utf8 columns are unavailable, strings import as
+        vlstring, and the override is rejected like any varlen column.
+        """
         at = pa.table({"s": pa.array(["a", None, "c"], type=pa.string())})
         policy = blosc2.NullPolicy(column_null_values={"s": "NA"})
+        if not HAVE_STRING_DTYPE:
+            with blosc2.null_policy(policy), pytest.raises(TypeError, match="native None"):
+                CTable.from_arrow(at.schema, at.to_batches())
+            return
         with blosc2.null_policy(policy):
             t = CTable.from_arrow(at.schema, at.to_batches())
         assert t["s"].null_value == "NA"

@@ -307,12 +307,19 @@ def test_from_arrow_all_numeric_types():
 
 
 def test_from_arrow_string_default_is_utf8():
-    """Without string_max_length, scalar string columns become utf8 (variable-length)."""
+    """Without string_max_length, scalar string columns become utf8 (variable-length).
+
+    On NumPy < 2.0 (no StringDType) they fall back to vlstring instead.
+    """
     at = pa.table({"name": pa.array(["hi", "hello world", "!"], type=pa.string())})
     t = CTable.from_arrow(at.schema, at.to_batches())
     assert t["name"].is_varlen_scalar
-    assert t["name"].is_utf8
-    assert t["name"].dtype == np.dtypes.StringDType()
+    if hasattr(np.dtypes, "StringDType"):
+        assert t["name"].is_utf8
+        assert t["name"].dtype == np.dtypes.StringDType()
+    else:
+        assert not t["name"].is_utf8
+        assert t["name"].dtype is None
     assert list(t["name"][:]) == ["hi", "hello world", "!"]
 
 

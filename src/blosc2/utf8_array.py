@@ -82,6 +82,11 @@ def _factorize_byte_rows(mat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return rep_rows, inverse
 
 
+def have_string_dtype() -> bool:
+    """True when the installed NumPy provides ``StringDType`` (NumPy >= 2.0)."""
+    return hasattr(np.dtypes, "StringDType")
+
+
 def string_dtype():
     """Return a ``numpy.dtypes.StringDType`` instance, or raise if unavailable."""
     try:

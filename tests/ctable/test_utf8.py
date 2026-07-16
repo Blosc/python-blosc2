@@ -18,6 +18,9 @@ import pytest
 import blosc2
 from blosc2 import CTable
 
+if not hasattr(np.dtypes, "StringDType"):
+    pytest.skip("utf8 columns require NumPy >= 2.0 (StringDType)", allow_module_level=True)
+
 STRING_DTYPE = np.dtypes.StringDType()
 
 
