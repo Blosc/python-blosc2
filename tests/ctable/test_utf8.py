@@ -480,6 +480,95 @@ def test_ctable_utf8_startswith_endswith():
 # ---------------------------------------------------------------------------
 
 
+def test_utf8_factorize_span_matches_np_unique_contract():
+    """The raw-bytes factorization keeps the np.unique contract: uniques
+    sorted ascending, codes indexing them.  Ground truth is Python's set —
+    numpy's np.unique on StringDType merges strings differing only after an
+    embedded NUL (numpy bug), which the byte-exact factorization does not.
+    """
+    from blosc2.utf8_array import Utf8Array
+
+    rng = np.random.default_rng(7)
+    pool = ["", "a", "ab", "café", "日本語", "x" * 3000, "nul\x00in", "nul\x00IN", "Wien", "wien"]
+    values = [pool[i] for i in rng.integers(0, len(pool), 5000)]
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend(values)
+    codes, uniques = arr.factorize_span(0, len(values))
+    assert list(uniques) == sorted(set(values))
+    assert all(uniques[c] == v for c, v in zip(codes, values, strict=True))
+
+
+def test_utf8_factorizer_cross_span_codes_are_global():
+    from blosc2.utf8_array import Utf8Array
+
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend(["b", "a", "b", "c", "a", "d"])
+    fact = arr.factorizer()
+    c1 = fact.codes_for_span(0, 3)  # b, a, b
+    c2 = fact.codes_for_span(3, 6)  # c, a, d
+    uniques = fact.uniques()
+    assert [uniques[c] for c in c1] == ["b", "a", "b"]
+    assert [uniques[c] for c in c2] == ["c", "a", "d"]
+    # "a" keeps the code it was assigned in the first span
+    assert c1[1] == c2[1]
+
+
+def test_ctable_utf8_groupby_many_byte_lengths_and_non_ascii():
+    rng = np.random.default_rng(3)
+    pool = ["", "a", "bb", "café", "日本語のテキスト", "x" * 2000, "münchen"]
+    names = [pool[i] for i in rng.integers(0, len(pool), 3000)]
+    t = make_table(names)
+    t.x[:] = np.ones(3000)
+    g = t.group_by("name").sum("x")
+    got = dict(zip(g["name"][:].tolist(), g["x_sum"][:].tolist(), strict=True))
+    exp: dict[str, int] = {}
+    for v in names:
+        exp[v] = exp.get(v, 0) + 1
+    assert got == exp
+
+
+def test_ctable_utf8_groupby_multi_key_negative_int():
+    """Composite-int key packing must survive negative integer keys."""
+
+    @dataclass
+    class NegRow:
+        ikey: int = blosc2.field(blosc2.int64())
+        ukey: str = blosc2.field(blosc2.utf8())
+        val: float = blosc2.field(blosc2.float64())
+
+    ik = [-5, -5, 3, 3, -5, 3]
+    uk = ["a", "b", "a", "b", "a", "a"]
+    t = CTable(NegRow, new_data={"ikey": ik, "ukey": uk, "val": [1.0] * 6})
+    g = t.group_by(["ikey", "ukey"]).sum("val")
+    got = {
+        (int(i), u): v
+        for i, u, v in zip(g["ikey"][:], g["ukey"][:].tolist(), g["val_sum"][:].tolist(), strict=True)
+    }
+    assert got == {(-5, "a"): 2.0, (-5, "b"): 1.0, (3, "a"): 2.0, (3, "b"): 1.0}
+
+
+def test_ctable_utf8_groupby_multi_key_float_fallback():
+    """A float co-key forces the structured-dtype packing path with utf8 codes."""
+
+    @dataclass
+    class FloatRow:
+        fkey: float = blosc2.field(blosc2.float64())
+        ukey: str = blosc2.field(blosc2.utf8())
+        val: float = blosc2.field(blosc2.float64())
+
+    fk = [0.5, 0.5, 1.5, 1.5, 0.5]
+    uk = ["a", "b", "a", "a", "a"]
+    t = CTable(FloatRow, new_data={"fkey": fk, "ukey": uk, "val": [1.0] * 5})
+    g = t.group_by(["fkey", "ukey"]).sum("val")
+    got = {
+        (f, u): v
+        for f, u, v in zip(
+            g["fkey"][:].tolist(), g["ukey"][:].tolist(), g["val_sum"][:].tolist(), strict=True
+        )
+    }
+    assert got == {(0.5, "a"): 2.0, (0.5, "b"): 1.0, (1.5, "a"): 2.0}
+
+
 def test_ctable_utf8_groupby_sum():
     t = make_table(["a", "b", "a", "b", "a"])
     t.x[:] = [1.0, 2.0, 3.0, 4.0, 5.0]

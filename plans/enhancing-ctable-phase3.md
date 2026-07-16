@@ -399,6 +399,62 @@ proves hard, the honest fallback is `np.unique` on the StringDType chunk
   rejected (only utf8 was carved out). Full `tests/ctable` (1379) and
   `tests/ndarray` (4385) suites pass.
 
+**P3.d follow-up: fast factorization path (unparked and landed 2026-07-16,
+after the post-review fixes below). Benchmark gate now PASSES.**
+
+- What landed — essentially the algorithm sketched above, plus two pipeline
+  fixes the profiling surfaced along the way:
+  1. `Utf8Array.factorize_span(a, b)` / incremental `Utf8Factorizer`
+     (`utf8_array.py`): rows are grouped by raw byte length (vectorized
+     `bincount`), each length group is gathered column-wise into a `(k, L)`
+     byte matrix (column-wise gather with one reused index vector — ~2x
+     faster than a 2-D fancy-index, which materializes a `(k, L)` int64
+     index matrix), hashed with the same `_HASH_MIX` mixer + verify pass as
+     `_factorize_fixed_width_str`, and **only the D distinct values are ever
+     decoded**.  The factorizer keeps a cross-chunk vocabulary (sorted
+     hashes + representative bytes per length): rows carrying already-seen
+     values are `searchsorted`-matched and byte-verified; only new values
+     pay a sort.  This is the "cross-chunk vocabulary cache" the ponytail
+     note in `_factorize_fixed_width_str` predicted.
+  2. `groupby.py`: utf8 key chunks now flow through the pipeline as
+     `_Utf8KeyChunk` (chunk-local int64 rank codes + sorted uniques), so
+     null masks, live-row masking, and per-chunk dedup all run on integers.
+     Single-key dedup is an O(n) `bincount` (codes are dense ranks — no
+     sort).  Multi-key packing uses a **composite int64 key** (Horner over
+     zero-based fields) when every key is integral and the range product
+     fits — `np.unique` over a *structured* dtype does field-wise void
+     comparisons and was the dominant two-key cost; non-integral co-keys
+     fall back to the structured path with utf8 codes as int fields.
+  3. `_chunk_size()` now scales the generic-loop batch up to ~1 Mi rows
+     (chunk-aligned): in-memory tables created small and grown by resize
+     keep their initial 64-row validity chunk shape, and batching the loop
+     at that granularity spent more time in per-batch bookkeeping than in
+     work.  This was a pre-existing pathology exposed while profiling; it
+     benefits every generic-path key type (fixed-width strings included).
+- Measured (same bench, same box, same 3x target vs. dictionary keys):
+
+  | key type              | before      | after     | vs. dict key |
+  |-----------------------|-------------|-----------|--------------|
+  | dict key, sum         | 196.0 ms    | 197.2 ms  | 1.0x         |
+  | **utf8 key, sum**     | 3304.2 ms   | **557.6 ms** | **2.83x ✓** |
+  | two keys (int+dict)   | 236.8 ms    | 237.9 ms  | 1.0x         |
+  | **two keys (int+utf8)** | 11825.3 ms | **877.8 ms** | **3.69x**  |
+
+  Single-key meets the ≤3x gate (2.83x, 5.9x faster than the fallback) and
+  is now *faster* than fixed-width `string` keys (535 ms).  Two-key misses
+  the letter of 3x (3.69x) but is 13.5x faster than the recorded gap; the
+  remainder is the shared display/normalize/merge Python bookkeeping, not
+  utf8-specific.
+- **Correctness bonus found while testing**: NumPy's `np.unique` on
+  `StringDType` merges strings that differ only after an embedded NUL
+  (`"nul\x00in"` vs `"nul\x00IN"` collapse to one group — a NumPy bug).
+  The byte-exact factorization does not, so utf8 groupby keys now handle
+  NUL-bearing strings *more* correctly than the `np.unique` fallback did.
+- Tests added: factorize_span vs. ground-truth set semantics (incl. NUL,
+  non-ASCII, multi-KB values), cross-span global-code consistency, groupby
+  over many byte lengths + non-ASCII keys, multi-key with negative int
+  co-key (composite packing), multi-key with float co-key (structured
+  fallback).  Full `tests/` (7,489) passes.
 
 **P3.e Sort.** Lift the sort rejection (grep the `sort_by` varlen guard in
 `ctable.py`): `sort_by` on utf8 uses `np.argsort` on the StringDType array
@@ -518,7 +574,10 @@ branch):**
   as is. Also left as recorded: the `is_varlen_scalar`-includes-utf8
   predicate design (deliberate, documented in the P3.a notes) and the
   `_read_persisted_span` per-row decode loop (root cause of the P3.d
-  benchmark gap, already documented above as its own follow-up).
+  benchmark gap; **since addressed for groupby keys** by the P3.d follow-up
+  above — the loop still runs for plain bulk reads, i.e. comparisons and
+  sort-key materialization, where a StringDType array genuinely has to be
+  built).
 - Full `tests/` suite (7,484) passes after the fixes.
 
 **Out of scope for P3:** making `utf8` the `str`-field default; `.str`

@@ -53,6 +53,34 @@ _DATA_CHUNKS = (2**21,)  # 2 MiB chunks of UTF-8 bytes
 # when the gap between consecutive row indices exceeds this many rows.
 _GATHER_GAP = 1024
 
+# Multiplier for the byte-hash in factorize_span (same mixer as
+# groupby._factorize_fixed_width_str).
+_HASH_MIX = np.uint64(0x9E3779B97F4A7C15)
+
+
+def _factorize_byte_rows(mat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Exact factorization of the rows of a ``(k, L)`` uint8 matrix.
+
+    Returns ``(rep_rows, inverse)`` where ``rep_rows`` holds one representative
+    row index per distinct byte string (in unspecified group order — the
+    caller re-sorts groups) and ``inverse`` maps each row to its group.
+    Hashes each row into one uint64 and factorizes the integers, with a
+    vectorized verify pass; on a hash collision, falls back to an exact sort
+    of the raw rows.
+    """
+    h = mat[:, 0].astype(np.uint64)
+    for i in range(1, mat.shape[1]):
+        h = (h * _HASH_MIX) ^ mat[:, i]
+    hash_uniques, inverse = np.unique(h, return_inverse=True)
+    rep_rows = np.empty(len(hash_uniques), dtype=np.int64)
+    rep_rows[inverse] = np.arange(len(mat))
+    if not (mat == mat[rep_rows][inverse]).all():  # collision: exact fallback
+        as_void = np.ascontiguousarray(mat).view([("", np.uint8, mat.shape[1])]).ravel()
+        void_uniques, inverse = np.unique(as_void, return_inverse=True)
+        rep_rows = np.empty(len(void_uniques), dtype=np.int64)
+        rep_rows[inverse] = np.arange(len(mat))
+    return rep_rows, inverse
+
 
 def string_dtype():
     """Return a ``numpy.dtypes.StringDType`` instance, or raise if unavailable."""
@@ -423,6 +451,28 @@ class Utf8Array:
             return float("inf")
         return self.nbytes / cb
 
+    def factorizer(self) -> Utf8Factorizer:
+        """Return a fresh incremental factorizer over this column's rows."""
+        return Utf8Factorizer(self)
+
+    def factorize_span(self, a: int, b: int) -> tuple[np.ndarray, np.ndarray]:
+        """Factorize rows ``[a, b)`` without decoding them.
+
+        Returns ``(codes, uniques)`` where ``uniques`` is a ``StringDType``
+        array of the distinct values sorted ascending and ``codes`` (int64,
+        length ``b - a``) maps each row to its value — the same contract as
+        ``np.unique(values, return_inverse=True)``, but computed from the raw
+        offsets/bytes buffers via :class:`Utf8Factorizer`: only the distinct
+        values are ever decoded to ``str``.  Pending rows are flushed first.
+        """
+        fact = self.factorizer()
+        codes = fact.codes_for_span(a, b)
+        uniques = fact.uniques()
+        order = np.argsort(uniques, kind="stable")
+        rank = np.empty(len(order), dtype=np.int64)
+        rank[order] = np.arange(len(order))
+        return rank[codes], uniques[order]
+
     def arrow_slice(self, pa, a: int, b: int, null_value: str | None = None):
         """Persisted rows ``[a, b)`` as a ``pyarrow.LargeStringArray``.
 
@@ -466,3 +516,100 @@ class Utf8Array:
         out.extend(self)
         out.flush()
         return out
+
+
+class Utf8Factorizer:
+    """Incremental factorizer over a :class:`Utf8Array`'s rows.
+
+    Successive :meth:`codes_for_span` calls share a vocabulary: each row is
+    hashed from its raw bytes and matched against the known values of its
+    byte length (``np.searchsorted`` on sorted hashes plus a vectorized
+    byte-equality verify), so only rows carrying *new* values pay a sort
+    (via :func:`_factorize_byte_rows`).  Codes are global across spans, in
+    first-appearance order; :meth:`uniques` returns the decoded vocabulary in
+    that same order.  No row is ever decoded — only the distinct values.
+
+    A hash collision between a new value and a known one is not resolved
+    (the new value gets a fresh code); the resulting duplicate vocabulary
+    entry is benign because callers merge groups by decoded value, and with
+    64-bit hashes the case is vanishingly rare anyway.
+    """
+
+    def __init__(self, arr: Utf8Array) -> None:
+        arr.flush()
+        self._arr = arr
+        self._values: list[str] = []
+        self._empty_code: int | None = None
+        # byte length -> (sorted hashes, codes aligned to them, (D, L) rep bytes)
+        self._by_len: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+
+    def uniques(self) -> np.ndarray:
+        """The vocabulary so far, decoded, in global code order."""
+        return np.array(self._values, dtype=self._arr._dtype)
+
+    def codes_for_span(self, a: int, b: int) -> np.ndarray:
+        """Global codes (int64) for persisted rows ``[a, b)``."""
+        n = b - a
+        codes = np.empty(max(n, 0), dtype=np.int64)
+        if n <= 0:
+            return codes
+        offs = np.asarray(self._arr._offsets[a : b + 1], dtype=np.int64)
+        start, end = int(offs[0]), int(offs[-1])
+        rel = offs - start
+        data = np.asarray(self._arr._data[start:end]) if end > start else np.empty(0, dtype=np.uint8)
+        lengths = np.diff(rel)
+        if int(lengths.max()) <= 65536:
+            distinct_lengths = np.flatnonzero(np.bincount(lengths))
+        else:
+            distinct_lengths = np.unique(lengths)
+        for length in distinct_lengths:
+            length = int(length)
+            rows = np.flatnonzero(lengths == length)
+            if length == 0:
+                if self._empty_code is None:
+                    self._empty_code = len(self._values)
+                    self._values.append("")
+                codes[rows] = self._empty_code
+                continue
+            # Column-wise gather: reusing one index vector is ~2x faster than
+            # materializing the (k, L) int64 index matrix of a 2-D gather.
+            mat = np.empty((len(rows), length), dtype=np.uint8)
+            idx = rel[rows]
+            for i in range(length):
+                mat[:, i] = data[idx]
+                idx += 1
+            h = mat[:, 0].astype(np.uint64)
+            for i in range(1, length):
+                h = (h * _HASH_MIX) ^ mat[:, i]
+            miss = np.ones(len(rows), dtype=np.bool_)
+            entry = self._by_len.get(length)
+            if entry is not None:
+                sorted_h, code_at, rep_mat = entry
+                pos = np.searchsorted(sorted_h, h)
+                pos[pos == len(sorted_h)] = 0  # equality check below rejects
+                hit = sorted_h[pos] == h
+                if hit.any():
+                    # One full-row compare beats gathering the hit rows out of
+                    # mat first (hits are usually nearly all rows).
+                    good = np.flatnonzero(hit & (mat == rep_mat[pos]).all(axis=1))
+                    codes[rows[good]] = code_at[pos[good]]
+                    miss[good] = False
+            if miss.any():
+                miss_mat = mat[miss]
+                rep_rows, inverse = _factorize_byte_rows(miss_mat)
+                base = len(self._values)
+                self._values.extend(bytes(miss_mat[j]).decode("utf-8") for j in rep_rows)
+                codes[rows[miss]] = base + inverse
+                new_h = np.empty(len(rep_rows), dtype=np.uint64)
+                new_rep = miss_mat[rep_rows]
+                new_h[:] = new_rep[:, 0]
+                for i in range(1, length):
+                    new_h = (new_h * _HASH_MIX) ^ new_rep[:, i]
+                new_codes = np.arange(base, base + len(rep_rows), dtype=np.int64)
+                if entry is not None:
+                    new_h = np.concatenate([entry[0], new_h])
+                    new_codes = np.concatenate([entry[1], new_codes])
+                    new_rep = np.concatenate([entry[2], new_rep])
+                order = np.argsort(new_h, kind="stable")
+                self._by_len[length] = (new_h[order], new_codes[order], new_rep[order])
+        return codes
