@@ -72,9 +72,19 @@ On a 16000×2000 float64 array, 400 chunk-sized reads aligned with the chunk gri
 
 *Benchmark for this tip: [`tip_02_chunk_aligned_slicing.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_02_chunk_aligned_slicing.py)*
 
-## Sorted top-k via `sort_by(view=True)`
+## Sorted top-k: stream from FULL indexes
 
-`CTable.sort_by(view=True)` returns a lightweight sorted *view* that gathers rows from the parent table on demand, instead of materializing a whole sorted copy. On a column with a `FULL` index it streams straight from the index, so the table is never actually sorted at all.
+A `FULL` index stores rows in sorted order. When all you need is the top (or
+bottom) *k* rows, you can stream just that slice directly from the index
+sidecar instead of materialising the full sorted permutation. Both
+:class:`~blosc2.CTable` and :class:`~blosc2.NDArray` expose this.
+
+### CTable: ``sort_by(view=True)``
+
+:meth:`CTable.sort_by(view=True) <blosc2.CTable.sort_by>` returns a
+lightweight sorted *view* that gathers rows from the parent table on demand.
+On a FULL-indexed column it streams straight from the index — the table is
+never actually sorted at all:
 
 ```python
 t.create_index("temperature", kind=blosc2.IndexKind.FULL)
@@ -88,11 +98,48 @@ top10 = t.sort_by("temperature", view=True)[:10]
 
 ![CTable.sort_by(view=True) top-10](optim_tips/tip_03_sort_by_view.png)
 
-On a 2M-row table, the view form took **~45x less time** — while also using about 25% less peak memory. The larger the table relative to *k*, the bigger this gap gets, since the naive path's cost is dominated by sorting rows you're about to discard.
+On a 20M-row table, the view form took **~74× less time** and about 25% less
+peak memory than a full ``sort_by()``.  The larger the table relative to
+*k*, the bigger the gap, since the naive path's cost is dominated by sorting
+rows you're about to discard.
 
-Views are also available for `group_by()` and `where()` queries, so use them whenever you don't need a materialized copy.
+*Benchmark: [`tip_03_sort_by_view.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_03_sort_by_view.py)*
 
-*Benchmark for this tip: [`tip_03_sort_by_view.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_03_sort_by_view.py)*
+### NDArray: ``iter_sorted(start=-k)``
+
+For 1-D :class:`~blosc2.NDArray` objects, :meth:`NDArray.iter_sorted(start=-k)
+<blosc2.NDArray.iter_sorted>` reads just the tail of the index sidecar,
+avoiding the full permutation that :func:`argsort() <blosc2.argsort>`
+would materialise:
+
+```python
+arr.create_index(kind=blosc2.IndexKind.FULL)
+
+# Avoid: materialises all 20M positions just to keep 10
+top10 = arr[arr.argsort()[-10:]]
+
+# Prefer: reads only the last 10 entries from the sidecar
+from blosc2 import asarray
+
+top10 = asarray(list(arr.iter_sorted(start=-10)))
+```
+
+Descending and bottom-k work via ``step=-1``:
+
+```python
+list(arr.iter_sorted(start=-1, stop=-11, step=-1))  # top-10 descending
+list(arr.iter_sorted(stop=10))  # bottom-10 ascending
+list(arr.iter_sorted(start=9, stop=None, step=-1))  # bottom-10 descending
+```
+
+![NDArray.iter_sorted(start=-10) top-10](optim_tips/tip_03b_ndarray_iter_sorted.png)
+
+On a 20M-element float64 array, ``iter_sorted(start=-10)`` was **~52× faster**
+and used **~193× less peak memory** than ``argsort()[-10:]`` — the latter
+still materialises the full 20M-element positions array even when backed by a
+FULL index.
+
+*Benchmark: [`tip_03b_ndarray_iter_sorted.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_03b_ndarray_iter_sorted.py)*
 
 ## Let SUMMARY indexes answer `min()`/`max()` directly
 

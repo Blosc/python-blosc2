@@ -15,7 +15,7 @@ from pathlib import Path
 import blosc2
 from common import fmt_bytes, make_table, measure, save_plot
 
-N = 2_000_000
+N = 20_000_000
 URLPATH = str(Path(__file__).parent / "tip_03.b2d")
 TOPK = 10
 

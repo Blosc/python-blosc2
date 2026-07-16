@@ -7514,6 +7514,69 @@ def _ordered_positions_from_exact_positions(
     return selected_positions
 
 
+def _shortcut_ordered_indices(
+    array: blosc2.NDArray,
+    descriptor: dict,
+    total_rows: int,
+    start: int | None,
+    stop: int | None,
+    step: int | None,
+    order_fields: list[str | None],
+) -> np.ndarray | None:
+    """Fast path: read head or tail of a FULL index directly.
+
+    Returns positions array, or ``None`` if the shortcut does not apply
+    (multi-field order, expression index, strided or mid-array slice).
+    """
+    if len(order_fields) > 1:
+        return None  # secondary refinement needed, fall back
+    full = descriptor.get("full")
+    if full is None:
+        return None
+
+    step = 1 if step is None else step
+    if abs(step) != 1:
+        return None  # strided slice, fall back
+
+    # Use Python range slicing (O(1) len + indexing) to determine the exact
+    # set of indices the slice covers, without materializing them.
+    actual = range(total_rows)[start:stop:step]
+    k = len(actual)
+    if k == 0:
+        return np.empty(0, dtype=np.int64)
+    first = actual[0]
+    last = actual[-1]
+
+    if step > 0:
+        sidecar_start, sidecar_stop = first, last + 1
+    else:
+        sidecar_start, sidecar_stop = last, first + 1
+
+    return _read_sidecar_range(array, descriptor, sidecar_start, sidecar_stop, step)
+
+
+def _read_sidecar_range(
+    array: blosc2.NDArray, descriptor: dict, sidecar_start: int, sidecar_stop: int, step: int
+) -> np.ndarray:
+    """Read positions [*sidecar_start*:*sidecar_stop*] from the FULL index."""
+    full = descriptor["full"]
+    streams = [_load_full_sidecar_handles(array, descriptor)]
+    for run in full.get("runs", ()):
+        streams.append(_load_full_run_sidecar_handles(array, descriptor, run))
+
+    if len(streams) != 1:
+        # Multi-run index (after append + rebuild): not worth the complexity.
+        # Fall back to the normal path, which is correct just slower.
+        return None
+
+    # Single run: any contiguous slice is a direct read.
+    _, pos_handle = streams[0]
+    chunk = pos_handle[sidecar_start:sidecar_stop][:]
+    if step < 0:
+        chunk = chunk[::-1].copy()
+    return np.asarray(chunk, dtype=np.int64)
+
+
 def ordered_indices(
     array: blosc2.NDArray,
     order: str | list[str] | None = None,
@@ -7530,8 +7593,14 @@ def ordered_indices(
         return None
     order_fields = ordered_plan.order_fields
     descriptor = ordered_plan.descriptor
+    total_rows = int(array.shape[0])
+
+    shortcut = _shortcut_ordered_indices(array, descriptor, total_rows, start, stop, step, order_fields)
+    if shortcut is not None:
+        return shortcut
+
     positions = _ordered_positions_from_exact_positions(
-        array, descriptor, np.arange(int(array.shape[0]), dtype=np.int64), order_fields
+        array, descriptor, np.arange(total_rows, dtype=np.int64), order_fields
     )
     return _positions_in_input_order(positions, start, stop, step)
 
