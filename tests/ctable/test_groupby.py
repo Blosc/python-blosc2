@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import math
 from dataclasses import dataclass, make_dataclass
 
 import numpy as np
@@ -416,6 +417,20 @@ def test_groupby_rejects_bad_engine():
         t.group_by("city", engine="cython")
 
 
+def test_groupby_engine_numpy_matches_auto():
+    t = CTable(SalesRow, new_data=DATA)
+    auto_result = t.group_by("city", engine="auto").sum("sales")
+    numpy_result = t.group_by("city", engine="numpy").sum("sales")
+    assert col(auto_result, "city") == col(numpy_result, "city")
+    np.testing.assert_array_equal(col(auto_result, "sales_sum"), col(numpy_result, "sales_sum"))
+
+
+def test_groupby_engine_jit_not_implemented():
+    t = CTable(SalesRow, new_data=DATA)
+    with pytest.raises(NotImplementedError):
+        t.group_by("city", engine="jit")
+
+
 @pytest.mark.parametrize(
     ("schema_factory", "values"),
     [
@@ -789,7 +804,7 @@ def test_agg_requires_some_aggregation():
 
 def test_agg_named_must_be_column_op_pair():
     t = CTable(SalesRow, new_data=DATA)
-    with pytest.raises(ValueError, match=r"must be a \(column, op\) pair"):
+    with pytest.raises(ValueError, match=r"must be a \(column, op\) or \(column, op, dtype\) tuple"):
         t.group_by("city").agg(x=("sales",))
 
 
@@ -805,3 +820,274 @@ def test_agg_duplicate_output_names_rejected():
     t = CTable(SalesRow, new_data=DATA)
     with pytest.raises(ValueError, match="must be unique"):
         t.group_by("city").agg({"sales": "sum"}, sales_sum=("sales", "sum"))
+
+
+# ===========================================================================
+# UDF aggregations -- named form only
+# ===========================================================================
+
+
+def test_agg_udf_matches_pandas_reference():
+    pd = pytest.importorskip("pandas")
+    t = CTable(SalesRow, new_data=DATA)
+    result = t.group_by("city", sort=True).agg(rng=("sales", lambda a: a.max() - a.min()))
+
+    df = pd.DataFrame(DATA, columns=["city", "category", "sales", "qty"])
+    # Berlin's only row has NaN sales, so unlike df.dropna()-then-groupby (which
+    # would drop the row and the whole group with it), blosc2 keeps Berlin as a
+    # group -- its key is not null -- with a null (NaN) result, the same
+    # convention built-in sum/min/max already use for an all-null group.
+    expected = (
+        df.groupby("city")["sales"]
+        .apply(lambda a: (a.dropna().max() - a.dropna().min()) if a.notna().any() else float("nan"))
+        .sort_index()
+    )
+    np.testing.assert_allclose(col(result, "rng"), expected.to_numpy())
+    assert col(result, "city") == list(expected.index)
+
+
+def test_agg_udf_receives_only_live_nonnull_values():
+    seen = []
+
+    def probe(values):
+        seen.append(np.sort(values).tolist())
+        return float(values.sum())
+
+    t = CTable(SalesRow, new_data=DATA)
+    t.group_by("city", sort=True).agg(total=("sales", probe))
+    # Berlin's only row has NaN sales -> the UDF is never called for it (an
+    # empty group produces a null result directly, like sum/min/max do);
+    # Paris/Rome nulls are dropped before the UDF sees their values.
+    assert seen == [[10.0, 30.0], [20.0, 40.0]]
+
+
+def test_agg_udf_requires_named_form():
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city")
+    with pytest.raises(ValueError, match="Unsupported aggregation function"):
+        g.agg({"sales": lambda a: a.sum()})
+    with pytest.raises(ValueError, match="Unsupported aggregation function"):
+        g.agg([(t.sales, lambda a: a.sum())])
+
+
+def test_agg_udf_infers_dtype_from_all_groups():
+    t = CTable(SalesRow, new_data=DATA)
+    result = t.group_by("city").agg(rng=("sales", lambda a: a.max() - a.min() if len(a) else 0.0))
+    assert result["rng"].dtype == np.float64
+
+
+def test_agg_udf_explicit_dtype():
+    t = CTable(SalesRow, new_data=DATA)
+    result = t.group_by("city").agg(
+        rng=("sales", lambda a: a.max() - a.min() if len(a) else 0.0, blosc2.float32())
+    )
+    assert result["rng"].dtype == np.float32
+
+
+def test_agg_udf_inconsistent_types_raise_clear_error():
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city")
+    calls = {"n": 0}
+
+    def inconsistent(values):
+        # A shape-inconsistent return (list vs. scalar) forces NumPy to fall
+        # back to an object array when collecting results across groups.
+        calls["n"] += 1
+        return [1, 2, 3] if calls["n"] == 1 else float(values.sum())
+
+    with pytest.raises(ValueError, match="inconsistent or unsupported types"):
+        g.agg(x=("sales", inconsistent))
+
+
+def test_agg_udf_unsupported_result_dtype_raises_clear_error():
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city")
+
+    with pytest.raises(ValueError, match="Cannot infer a CTable dtype"):
+        g.agg(x=("sales", lambda a: "always-a-string"))
+
+
+def test_agg_udf_never_called_raises_clear_error():
+    # Every group has zero non-null "sales" values, so the UDF is never
+    # called for any of them -- there is nothing to infer a dtype from.
+    t = CTable(SalesRow, new_data=[("Paris", 1, np.nan, 0), ("Rome", 1, np.nan, 0)])
+    g = t.group_by("city")
+
+    with pytest.raises(ValueError, match="it was never called"):
+        g.agg(x=("sales", lambda a: a.max() - a.min()))
+
+
+def test_agg_udf_none_result_becomes_output_null_value():
+    # A UDF returning None for some (but not all) groups is treated like an
+    # empty group: patched to the output dtype's null value, and excluded
+    # from dtype inference rather than poisoning it with a mixed-type list.
+    t = CTable(SalesRow, new_data=[("Paris", 1, 10.0, 0), ("Paris", 1, 30.0, 0), ("Rome", 1, 5.0, 0)])
+    g = t.group_by("city", sort=True)
+
+    def maybe_none(a):
+        return None if a.sum() > 20 else float(a.sum())
+
+    result = g.agg(x=("sales", maybe_none))
+    assert col(result, "city") == ["Paris", "Rome"]
+    assert math.isnan(result["x"][0])  # Paris: sum is 40, UDF returned None
+    assert result["x"][1] == pytest.approx(5.0)  # Rome: sum is 5, UDF returned it
+    assert result["x"].dtype == np.float64
+
+
+def test_agg_udf_all_none_raises_like_never_called():
+    t = CTable(SalesRow, new_data=[("Paris", 1, 10.0, 0), ("Rome", 1, 5.0, 0)])
+    g = t.group_by("city")
+
+    with pytest.raises(ValueError, match="it was never called"):
+        g.agg(x=("sales", lambda a: None))
+
+
+def test_agg_udf_result_not_wrapped_in_zero_d_array(monkeypatch):
+    # Regression test: the UDF result must reach _python_scalar() directly,
+    # not pre-wrapped in np.asarray() -- a plain Python/NumPy scalar wrapped
+    # in np.asarray() becomes a 0-D ndarray, which _python_scalar() (only
+    # unwraps np.generic) then fails to turn back into a plain scalar.
+    import blosc2.groupby as gb_module
+
+    seen_types = []
+    original = gb_module._python_scalar
+    monkeypatch.setattr(gb_module, "_python_scalar", lambda v: (seen_types.append(type(v)), original(v))[1])
+
+    t = CTable(SalesRow, new_data=[("Paris", 1, 10.0, 0), ("Rome", 1, 20.0, 0)])
+    g = t.group_by("city")
+    g.agg(x=("sales", lambda a: float(a.sum())))
+
+    assert np.ndarray not in seen_types
+
+
+def test_agg_udf_error_names_the_group_key():
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city")
+
+    def boom(values):
+        raise KeyError("nope")
+
+    with pytest.raises(RuntimeError, match=r"raised for group \('(Paris|Rome|Berlin)',\)"):
+        g.agg(x=("sales", boom))
+
+
+def test_agg_udf_combines_with_builtin_ops():
+    t = CTable(SalesRow, new_data=DATA)
+    result = t.group_by("city", sort=True).agg(
+        total=("sales", "sum"), rng=("sales", lambda a: a.max() - a.min())
+    )
+    assert result.col_names == ["city", "total", "rng"]
+    # Berlin's sum is NaN too (all-null group) -- the existing sum() convention.
+    np.testing.assert_allclose(col(result, "total"), [np.nan, 40.0, 60.0])
+
+
+def test_agg_udf_groups_straddle_chunk_boundaries():
+    """chunk_size=2 splits every group across chunks, exercising the raw
+    per-group value accumulation in _udf_value_partials/_merge_partials and
+    the concatenate-then-call-once path in _final_rows."""
+    t = CTable(SalesRow, new_data=DATA)
+    rng = ("sales", lambda a: a.max() - a.min())
+    chunked = t.group_by("city", sort=True, chunk_size=2).agg(rng=rng)
+    unchunked = t.group_by("city", sort=True).agg(rng=rng)
+    np.testing.assert_allclose(col(chunked, "rng"), [np.nan, 20.0, 20.0])
+    np.testing.assert_allclose(col(chunked, "rng"), col(unchunked, "rng"))
+    assert col(chunked, "city") == col(unchunked, "city")
+
+
+def test_agg_udf_sees_all_chunks_of_a_group():
+    """The UDF must be called exactly once per group, with every chunk's
+    values concatenated -- not once per chunk."""
+    seen = []
+
+    def probe(values):
+        seen.append(np.sort(values).tolist())
+        return float(len(values))
+
+    t = CTable(SalesRow, new_data=DATA)
+    t.group_by("city", sort=True, chunk_size=2).agg(n=("sales", probe))
+    assert seen == [[10.0, 30.0], [20.0, 40.0]]  # Paris, Rome; Berlin never called
+
+
+def test_agg_udf_on_filtered_view():
+    t = CTable(SalesRow, new_data=DATA)
+    view = t[t.qty > 1]  # drops the first Paris row (sales=10.0)
+    result = view.group_by("city", sort=True).agg(rng=("sales", lambda a: a.max() - a.min()))
+    # Paris keeps only sales=30.0 (its NaN row is in the view but pre-filtered
+    # for the UDF); Rome keeps 20.0 and 40.0; Berlin is all-null.
+    np.testing.assert_allclose(col(result, "rng"), [np.nan, 0.0, 20.0])
+    assert col(result, "city") == ["Berlin", "Paris", "Rome"]
+
+
+def test_agg_udf_empty_table_with_explicit_dtype():
+    t = CTable(SalesRow)
+    result = t.group_by("city").agg(rng=("sales", lambda a: a.max() - a.min(), blosc2.float32()))
+    assert result.nrows == 0
+    assert result["rng"].dtype == np.float32
+
+
+def test_factorize_fixed_width_str_matches_np_unique():
+    """The hash-based string-key factorizer must be indistinguishable from
+    np.unique(return_inverse=True), including sort order of the uniques."""
+    from blosc2.groupby import _factorize_fixed_width_str
+
+    rng = np.random.default_rng(0)
+    cases = [
+        np.array([], dtype="U8"),
+        np.array(["a", "a", "a"], dtype="U8"),
+        np.array(["b", "a", "c", "a", "b"], dtype="U8"),
+        np.array(["", "x", "", "y"], dtype="U8"),
+        np.array(["Zürich", "Ōsaka", "münich", "Zürich"], dtype="U8"),
+        rng.choice([f"k{i}" for i in range(500)], 20_000).astype("U8"),
+        rng.choice(["x", "y", "z"], 5_000).astype("U1"),
+        np.array([b"ab", b"cd", b"ab"], dtype="S4"),
+        rng.choice([f"key{i}" for i in range(50)], 20_000).astype("U16"),
+    ]
+    for arr in cases:
+        ref_u, ref_inv = np.unique(arr, return_inverse=True)
+        got_u, got_inv = _factorize_fixed_width_str(arr)
+        np.testing.assert_array_equal(got_u, ref_u)
+        np.testing.assert_array_equal(got_inv, ref_inv)
+
+
+def test_factorize_fixed_width_str_collision_falls_back(monkeypatch):
+    """With the mix constant forced to 0, the row hash degenerates to the last
+    uint32 word, so strings differing only in earlier characters collide --
+    the verify pass must detect it and fall back to exact np.unique."""
+    import blosc2.groupby as gb
+
+    monkeypatch.setattr(gb, "_HASH_MIX", np.uint64(0))
+    arr = np.array(["ax", "bx", "ax", "cx"], dtype="U2")  # all hash to "x"'s word
+    ref_u, ref_inv = np.unique(arr, return_inverse=True)
+    got_u, got_inv = gb._factorize_fixed_width_str(arr)
+    np.testing.assert_array_equal(got_u, ref_u)
+    np.testing.assert_array_equal(got_inv, ref_inv)
+
+
+def test_groupby_string_key_end_to_end_matches_pandas():
+    pd = pytest.importorskip("pandas")
+    rng = np.random.default_rng(7)
+    cities = np.array(["Paris", "Rome", "Berlin", "Madrid", "Lisbon"])
+    keys = cities[rng.integers(0, 5, 10_000)]
+    vals = rng.random(10_000)
+
+    @dataclass
+    class SRow:
+        skey: str = blosc2.field(blosc2.string(max_length=8))
+        val: float = blosc2.field(blosc2.float64())
+
+    t = CTable(SRow)
+    t.extend({"skey": keys, "val": vals}, validate=False)
+    out = t.group_by("skey", sort=True, chunk_size=999).sum("val")  # odd chunk size on purpose
+
+    expected = pd.DataFrame({"skey": keys, "val": vals}).groupby("skey")["val"].sum().sort_index()
+    assert col(out, "skey") == list(expected.index)
+    np.testing.assert_allclose(col(out, "val_sum"), expected.to_numpy())
+
+
+def test_agg_udf_groupby_object_is_reusable():
+    t = CTable(SalesRow, new_data=DATA)
+    g = t.group_by("city", sort=True)
+    rng = ("sales", lambda a: a.max() - a.min())
+    first = g.agg(rng=rng)
+    second = g.agg(rng=rng)
+    np.testing.assert_allclose(col(first, "rng"), col(second, "rng"))

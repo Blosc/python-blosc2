@@ -266,7 +266,7 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
 # Use numpy eval when running in WebAssembly.  Keep this intentionally small:
 # scanning every callable in numpy triggers lazy imports such as numpy.f2py and
 # numpy.testing during ``import blosc2``.
-safe_numpy_globals = {"np": np, **_NUMPY_ALIASES}
+safe_numpy_globals = {"np": np, "nan": np.nan, "inf": np.inf, **_NUMPY_ALIASES}
 for _name in set(elementwise_funcs + linalg_funcs + reducers + constructors):
     if _name not in safe_numpy_globals and not _name.startswith("_"):
         with contextlib.suppress(AttributeError):
@@ -519,6 +519,8 @@ class ShapeInferencer(ast.NodeVisitor):
 
     def visit_Name(self, node):
         if node.id not in self.shapes:
+            if node.id in ("nan", "inf"):  # non-finite float literals: scalars
+                return ()
             raise ValueError(f"Unknown symbol: {node.id}")
         s = self.shapes[node.id]
         if isinstance(s, tuple):

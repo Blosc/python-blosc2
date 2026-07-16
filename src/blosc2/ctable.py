@@ -804,6 +804,208 @@ class RowTransformer:
         return self.evaluate_batch({self.source: table[self.source][:]})
 
 
+class NullableExpr:
+    """Lazy result of arithmetic involving nullable columns.
+
+    Arithmetic on nullable int/timestamp columns promotes to float64 with
+    NaN marking the null rows (nullable float columns already use NaN), so
+    NaN is the single null representation for every derived expression.  This wrapper carries that fact plus the
+    owning table, so reductions (``sum``/``mean``/``min``/``max``/``std``)
+    skip nulls and dead physical rows exactly like the corresponding
+    :class:`Column` reductions — instead of NaN-poisoning the way a plain
+    :class:`blosc2.LazyExpr` reduction would.
+
+    Everything else (``compute()``, slicing, use as an operand) behaves like
+    the wrapped expression; further arithmetic keeps the wrapper, since NaN
+    propagates through it.
+
+    ``null_pred`` is the boolean lazy predicate (over the raw physical
+    columns) marking the null rows. It is carried along instead of being
+    re-derived as ``isnan(expr)`` because applying further lazy operations
+    on top of a ``where()``-carrying expression is unreliable, and because
+    it keeps nulls distinct from NaNs the arithmetic itself may produce
+    (e.g. ``0/0``): those are values, not nulls, and are not skipped.
+    """
+
+    def __init__(self, expr, table, null_pred):
+        self._expr = expr
+        self._table = table
+        self._null_pred = null_pred
+
+    def __getattr__(self, name):
+        return getattr(self._expr, name)
+
+    def __getitem__(self, key):
+        return self._expr[key]
+
+    def __repr__(self):
+        return f"NullableExpr({self._expr!r})"
+
+    def compute(self, **kwargs):
+        return self._expr.compute(**kwargs)
+
+    # ---- chaining: arithmetic keeps the NaN-null channel ----
+
+    def _wrap(self, expr, other=None):
+        pred = self._null_pred
+        if isinstance(other, NullableExpr):
+            pred = pred | other._null_pred
+        return NullableExpr(expr, self._table, pred)
+
+    @staticmethod
+    def _operand(other):
+        return other._expr if isinstance(other, NullableExpr) else other
+
+    @staticmethod
+    def _defer(other) -> bool:
+        # Column operands re-enter through Column.__r<op>__, which applies
+        # the column's own sentinel-null rewrite (operating on its raw
+        # storage here would leak sentinel values into the result).
+        return isinstance(other, Column)
+
+    def __add__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._wrap(self._expr + self._operand(other), other)
+
+    def __radd__(self, other):
+        return self._wrap(other + self._expr)
+
+    def __sub__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._wrap(self._expr - self._operand(other), other)
+
+    def __rsub__(self, other):
+        return self._wrap(other - self._expr)
+
+    def __mul__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._wrap(self._expr * self._operand(other), other)
+
+    def __rmul__(self, other):
+        return self._wrap(other * self._expr)
+
+    def __truediv__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._wrap(self._expr / self._operand(other), other)
+
+    def __rtruediv__(self, other):
+        return self._wrap(other / self._expr)
+
+    def __floordiv__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._wrap(self._expr // self._operand(other), other)
+
+    def __rfloordiv__(self, other):
+        return self._wrap(other // self._expr)
+
+    def __mod__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._wrap(self._expr % self._operand(other), other)
+
+    def __rmod__(self, other):
+        return self._wrap(other % self._expr)
+
+    def __pow__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        # nan ** 0 == 1.0 would silently resurrect a null as a real value.
+        pred = self._null_pred
+        if isinstance(other, NullableExpr):
+            pred = pred | other._null_pred
+        return self._wrap(blosc2.where(pred, np.nan, self._expr ** self._operand(other)), other)
+
+    def __rpow__(self, other):
+        # 1 ** nan == 1.0, same hazard as __pow__.
+        return self._wrap(blosc2.where(self._null_pred, np.nan, other**self._expr))
+
+    def __neg__(self):
+        return self._wrap(-self._expr)
+
+    # ---- comparisons: IEEE NaN already gives SQL False, except for != ----
+
+    def __lt__(self, other):
+        return NotImplemented if self._defer(other) else self._expr < self._operand(other)
+
+    def __le__(self, other):
+        return NotImplemented if self._defer(other) else self._expr <= self._operand(other)
+
+    def __gt__(self, other):
+        return NotImplemented if self._defer(other) else self._expr > self._operand(other)
+
+    def __ge__(self, other):
+        return NotImplemented if self._defer(other) else self._expr >= self._operand(other)
+
+    def __eq__(self, other):
+        return NotImplemented if self._defer(other) else self._expr == self._operand(other)
+
+    def __ne__(self, other):
+        # IEEE says nan != x is True; SQL null semantics say a null satisfies
+        # no comparison. Guard both sides (Column and NullableExpr operands
+        # carry their own null predicates).
+        result = (self._expr != Column._unwrap_operand(other)) & ~self._null_pred
+        other_pred = None
+        if isinstance(other, Column):
+            other_pred = other._raw_null_pred()
+        elif isinstance(other, NullableExpr):
+            other_pred = other._null_pred
+        if other_pred is not None:
+            result = result & ~other_pred
+        return result
+
+    # ---- reductions: skip nulls and dead physical rows ----
+
+    def _reduction_mask(self, where=None):
+        """Live, non-null rows in physical coordinates — the same recipe as
+        ``Column._lazy_nonnull_mask``, with the carried null predicate in
+        place of the per-column sentinel check."""
+        t = self._table
+        n_rows = t._known_n_rows()
+        mask = None if (n_rows is not None and n_rows == len(t._valid_rows)) else t._valid_rows
+        if where is not None:
+            mask = where if mask is None else mask & where
+        nonnull = ~self._null_pred
+        return nonnull if mask is None else mask & nonnull
+
+    def sum(self, dtype=None, *, where=None):
+        """Sum of live, non-null values; zero when every value is null."""
+        return float(self._expr.sum(where=self._reduction_mask(where), dtype=dtype or np.float64))
+
+    def mean(self, *, where=None):
+        """Mean of live, non-null values; NaN when every value is null."""
+        try:
+            return float(self._expr.mean(where=self._reduction_mask(where), dtype=np.float64))
+        except ValueError:
+            return float("nan")
+
+    def std(self, ddof: int = 0, *, where=None):
+        """Standard deviation of live, non-null values; NaN when every value is null."""
+        try:
+            return float(self._expr.std(where=self._reduction_mask(where), dtype=np.float64, ddof=ddof))
+        except ValueError:
+            return float("nan")
+
+    def _minmax(self, op: str, where):
+        mask = self._reduction_mask(where)
+        count = int(mask.where(blosc2.ones(self._expr.shape, dtype=np.int64), 0).sum(dtype=np.int64))
+        if count == 0:
+            raise ValueError(f"{op}() called on an expression where all values are null.")
+        return getattr(self._expr, op)(where=mask)
+
+    def min(self, *, where=None):
+        """Minimum of live, non-null values; raises ``ValueError`` if all are null."""
+        return self._minmax("min", where)
+
+    def max(self, *, where=None):
+        """Maximum of live, non-null values; raises ``ValueError`` if all are null."""
+        return self._minmax("max", where)
+
+
 class Column:
     """Column view for a :class:`CTable`, with vectorized operations and reductions."""
 
@@ -1121,9 +1323,19 @@ class Column:
         return table_view.take(indices)[self._col_name]
 
     def __setitem__(self, key: int | slice | list | np.ndarray, value):  # noqa: C901
-        """Set one or more live column values; accepts the same index forms as :meth:`__getitem__`."""
+        """Set one or more live column values; accepts the same index forms as :meth:`__getitem__`.
+
+        Raises ``ValueError`` if the table is read-only or is a view; use
+        :meth:`CTable.take` or :meth:`CTable.copy` to get an independent,
+        writable table first.
+        """
         if self._table._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
+        if self._table.base is not None:
+            raise ValueError(
+                "Cannot assign values through a view. Use .take(indices) or .copy() "
+                "to get an independent, writable table first."
+            )
         if self.is_computed:
             raise ValueError(f"Column {self._col_name!r} is a computed column and cannot be written to.")
         # In-place column mutation invalidates any incremental summary accumulator
@@ -1530,6 +1742,8 @@ class Column:
         if isinstance(other, Column):
             other._ensure_queryable()
             return other._raw_col
+        if isinstance(other, NullableExpr):
+            return other._expr
         return other
 
     @property
@@ -1571,6 +1785,66 @@ class Column:
             return other.astype(f"datetime64[{spec.unit}]").astype(np.int64)
         return other
 
+    def _raw_null_pred(self):
+        """Boolean lazy predicate over the raw physical array, True where the
+        value is this column's null sentinel.
+
+        Returns ``None`` when there is nothing to propagate: no ``null_value``
+        configured, or a fixed-shape ndarray column (whose per-item sentinel
+        mask does not align 1:1 with the row-level predicates built here;
+        see ``Column.is_null()`` for those instead). Dictionary and
+        variable-length scalar columns never reach here because
+        ``_ensure_queryable`` already rejects them for arithmetic/comparisons.
+        """
+        if self.is_ndarray:
+            return None
+        nv = self.null_value
+        if nv is None:
+            return None
+        if isinstance(nv, (float, np.floating)) and np.isnan(nv):
+            return blosc2.isnan(self._raw_col)
+        return self._raw_col == nv
+
+    def _combined_null_pred(self, other):
+        """OR of self's and other's raw null predicates; ``None`` if neither
+        operand is nullable (the zero-overhead case)."""
+        self_pred = self._raw_null_pred()
+        if isinstance(other, Column):
+            other_pred = other._raw_null_pred()
+        elif isinstance(other, NullableExpr):
+            other_pred = other._null_pred
+        else:
+            other_pred = None
+        if self_pred is None:
+            return other_pred
+        if other_pred is None:
+            return self_pred
+        return self_pred | other_pred
+
+    def _null_aware_arith(self, other, raw_result):
+        """Sentinel-based null propagation for arithmetic: rows where any
+        nullable operand is null
+        become NaN in the result, promoting integer/timestamp results to
+        float64 the same way pandas' legacy int-null arithmetic does. The
+        result is a :class:`NullableExpr`, so reductions on it skip nulls
+        like the corresponding Column reductions. Costs nothing when neither
+        operand is nullable — *raw_result* is returned unchanged.
+        """
+        null_pred = self._combined_null_pred(other)
+        if null_pred is None:
+            return raw_result
+        return NullableExpr(blosc2.where(null_pred, np.nan, raw_result), self._table, null_pred)
+
+    def _null_aware_compare(self, other, raw_result):
+        """SQL ``WHERE`` semantics for comparisons: a null
+        operand never satisfies any comparison, so null rows are forced to
+        False. Costs nothing when neither operand is nullable.
+        """
+        null_pred = self._combined_null_pred(other)
+        if null_pred is None:
+            return raw_result
+        return raw_result & ~null_pred
+
     def __neg__(self):
         self._ensure_queryable()
         return -self._raw_col
@@ -1585,59 +1859,59 @@ class Column:
 
     def __add__(self, other):
         self._ensure_queryable()
-        return self._raw_col + self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col + self._unwrap_operand(other))
 
     def __radd__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) + self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) + self._raw_col)
 
     def __sub__(self, other):
         self._ensure_queryable()
-        return self._raw_col - self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col - self._unwrap_operand(other))
 
     def __rsub__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) - self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) - self._raw_col)
 
     def __mul__(self, other):
         self._ensure_queryable()
-        return self._raw_col * self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col * self._unwrap_operand(other))
 
     def __rmul__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) * self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) * self._raw_col)
 
     def __truediv__(self, other):
         self._ensure_queryable()
-        return self._raw_col / self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col / self._unwrap_operand(other))
 
     def __rtruediv__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) / self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) / self._raw_col)
 
     def __floordiv__(self, other):
         self._ensure_queryable()
-        return self._raw_col // self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col // self._unwrap_operand(other))
 
     def __rfloordiv__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) // self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) // self._raw_col)
 
     def __mod__(self, other):
         self._ensure_queryable()
-        return self._raw_col % self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col % self._unwrap_operand(other))
 
     def __rmod__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) % self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) % self._raw_col)
 
     def __pow__(self, other):
         self._ensure_queryable()
-        return self._raw_col ** self._unwrap_operand(other)
+        return self._null_aware_arith(other, self._raw_col ** self._unwrap_operand(other))
 
     def __rpow__(self, other):
         self._ensure_queryable()
-        return self._unwrap_operand(other) ** self._raw_col
+        return self._null_aware_arith(other, self._unwrap_operand(other) ** self._raw_col)
 
     def __and__(self, other):
         self._ensure_queryable()
@@ -1671,19 +1945,19 @@ class Column:
 
     def __lt__(self, other):
         self._ensure_comparable()
-        return self._raw_col < self._coerce_timestamp_operand(other)
+        return self._null_aware_compare(other, self._raw_col < self._coerce_timestamp_operand(other))
 
     def __le__(self, other):
         self._ensure_comparable()
-        return self._raw_col <= self._coerce_timestamp_operand(other)
+        return self._null_aware_compare(other, self._raw_col <= self._coerce_timestamp_operand(other))
 
     def __eq__(self, other):
         if self.is_dictionary:
             return self._dictionary_eq(other)
         self._ensure_comparable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
-            return self._raw_col == int(other)
-        return self._raw_col == self._coerce_timestamp_operand(other)
+            return self._null_aware_compare(other, self._raw_col == int(other))
+        return self._null_aware_compare(other, self._raw_col == self._coerce_timestamp_operand(other))
 
     def __ne__(self, other):
         if self.is_dictionary:
@@ -1693,8 +1967,8 @@ class Column:
             return ~np.asarray(result, dtype=bool)
         self._ensure_comparable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
-            return self._raw_col == int(not other)
-        return self._raw_col != self._coerce_timestamp_operand(other)
+            return self._null_aware_compare(other, self._raw_col == int(not other))
+        return self._null_aware_compare(other, self._raw_col != self._coerce_timestamp_operand(other))
 
     def _dictionary_eq(self, other):
         """Return a physical-slot boolean predicate for dictionary equality.
@@ -1771,11 +2045,11 @@ class Column:
 
     def __gt__(self, other):
         self._ensure_comparable()
-        return self._raw_col > self._coerce_timestamp_operand(other)
+        return self._null_aware_compare(other, self._raw_col > self._coerce_timestamp_operand(other))
 
     def __ge__(self, other):
         self._ensure_comparable()
-        return self._raw_col >= self._coerce_timestamp_operand(other)
+        return self._null_aware_compare(other, self._raw_col >= self._coerce_timestamp_operand(other))
 
     @property
     def dtype(self):
@@ -1901,9 +2175,6 @@ class Column:
     def assign(self, data) -> None:
         """Replace all live values in this column with *data*.
 
-        Works on both full tables and views — on a view, only the rows
-        visible through the view's mask are overwritten.
-
         Parameters
         ----------
         data:
@@ -1914,13 +2185,20 @@ class Column:
         Raises
         ------
         ValueError
-            If ``len(data)`` does not match the number of live rows, or the
-            table is opened read-only.
+            If ``len(data)`` does not match the number of live rows, the
+            table is opened read-only, or the table is a view (use
+            :meth:`CTable.take` or :meth:`CTable.copy` to get an
+            independent, writable table first).
         TypeError
             If values cannot be coerced to the column's dtype.
         """
         if self._table._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
+        if self._table.base is not None:
+            raise ValueError(
+                "Cannot assign values through a view. Use .take(indices) or .copy() "
+                "to get an independent, writable table first."
+            )
         if self.is_computed:
             raise ValueError(f"Column {self._col_name!r} is a computed column and cannot be written to.")
         if self.is_list:
@@ -1979,6 +2257,11 @@ class Column:
                 elem_mask = arr == nv
             inner_axes = tuple(range(1, elem_mask.ndim))
             return elem_mask.all(axis=inner_axes) if inner_axes else elem_mask.astype(np.bool_)
+        if np.issubdtype(arr.dtype, np.datetime64):
+            # Timestamp columns materialize with the int64 sentinel already
+            # decoded into np.datetime64('NaT') (they share the same bit
+            # pattern), so the sentinel value itself never appears in arr.
+            return np.isnat(arr)
         if isinstance(nv, (float, np.floating)) and np.isnan(nv):
             return np.isnan(arr)
         return arr == nv
@@ -2014,6 +2297,20 @@ class Column:
         if self.null_value is None:
             return 0
         return int(self.is_null().sum())
+
+    def fillna(self, value):
+        """Return live values with null sentinels replaced by *value*.
+
+        Dictionary and variable-length scalar columns (whose nulls are
+        native ``None`` cells) return a list; other columns return a NumPy
+        array.
+        """
+        if self.is_dictionary or self.is_varlen_scalar:
+            return [value if v is None else v for v in self[:]]
+        arr = np.array(self[:], copy=True)
+        if self.null_value is not None:
+            arr[self._null_mask_for(arr)] = value
+        return arr
 
     def _nonnull_chunks(self):
         """Yield chunks of live, non-null values.
@@ -5771,8 +6068,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             If ``True`` (default), rows with null/NaN group keys are skipped.
             If ``False``, null/NaN keys form their own group.
         engine:
-            Execution engine.  Phase 1 accepts ``"auto"`` and uses the NumPy
-            chunked implementation.
+            Execution engine for built-in aggregations (``size``, ``count``,
+            ``sum``, ``mean``, ``min``, ``max``, ``argmin``, ``argmax``):
+
+            * ``"auto"`` (default) -- currently always the NumPy/Cython
+              chunked implementation; may choose automatically in the future.
+            * ``"numpy"`` -- explicitly request the NumPy/Cython chunked
+              implementation.
+            * ``"jit"`` -- reserved for a miniexpr-JIT execution path; not
+              implemented yet (raises :class:`NotImplementedError`).
         chunk_size:
             Optional number of physical rows processed per chunk.
 
@@ -5783,8 +6087,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             ``.size()``, ``.count(column)`` or ``.agg({...})`` to materialize a
             grouped result as a new :class:`CTable`.
         """
-        if engine != "auto":
-            raise ValueError("Only engine='auto' is supported for group_by() in Phase 1")
+        if engine not in ("auto", "numpy", "jit"):
+            raise ValueError(f"engine must be 'auto', 'numpy', or 'jit', got {engine!r}")
+        if engine == "jit":
+            raise NotImplementedError(
+                "engine='jit' is reserved for a future miniexpr-JIT execution path; "
+                "use 'auto' or 'numpy' for now."
+            )
         from blosc2.groupby import CTableGroupBy
 
         return CTableGroupBy(self, keys, sort=sort, dropna=dropna, engine=engine, chunk_size=chunk_size)
@@ -6201,6 +6510,21 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         batches = list(self.iter_arrow_batches())
         schema = self._arrow_schema_for_columns()
         return pa.Table.from_batches(batches, schema=schema)
+
+    def __arrow_c_stream__(self, requested_schema=None):
+        """Arrow PyCapsule protocol: export live rows as a stream of record batches.
+
+        Lets Arrow-native consumers (pyarrow, DuckDB, Polars, pandas) read this
+        table directly, pulling decompressed batches lazily with bounded memory.
+        Strict zero-copy is impossible here (the data is compressed on disk;
+        decompression *is* the copy), but there is zero intermediate
+        materialization: only one batch is decompressed at a time.
+        """
+        pa = self._require_pyarrow("__arrow_c_stream__")
+        reader = pa.RecordBatchReader.from_batches(
+            self._arrow_schema_for_columns(), self.iter_arrow_batches()
+        )
+        return reader.__arrow_c_stream__(requested_schema)
 
     @staticmethod
     def _auto_null_sentinel(pa, pa_type, *, null_policy: NullPolicy):
@@ -7038,7 +7362,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def from_arrow(  # noqa: C901
         cls,
         schema,
-        batches,
+        batches=None,
         *,
         urlpath: str | None = None,
         mode: str = "w",
@@ -7109,8 +7433,32 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ``column_cparams`` optionally maps column names to per-column compression
         parameters. These override the table-level ``cparams`` for fixed-width
         columns imported from Arrow.
+
+        *schema* may also be any object implementing the Arrow PyCapsule
+        interchange protocol (``__arrow_c_stream__``) — a pyarrow
+        ``Table``/``RecordBatchReader``, a Polars ``DataFrame``, a DuckDB
+        result, or another :class:`CTable` — in which case *batches* must be
+        omitted and the schema/batches are pulled from the stream::
+
+            t = blosc2.CTable.from_arrow(polars_df)
+            t = blosc2.CTable.from_arrow(duckdb_result, urlpath="out.b2z")
         """
         pa = cls._require_pyarrow("from_arrow()")
+        if hasattr(schema, "__arrow_c_stream__"):
+            if batches is not None:
+                raise TypeError(
+                    "from_arrow() takes either a single Arrow-stream object "
+                    "(implementing __arrow_c_stream__) or a (schema, batches) pair, not both."
+                )
+            if not hasattr(pa.RecordBatchReader, "from_stream"):
+                raise RuntimeError("Importing from an Arrow PyCapsule stream requires pyarrow >= 14.0.")
+            reader = pa.RecordBatchReader.from_stream(schema)
+            schema, batches = reader.schema, reader
+        elif batches is None:
+            raise TypeError(
+                "from_arrow() requires batches unless the first argument is an "
+                "Arrow-stream object implementing __arrow_c_stream__."
+            )
         if blosc2_batch_size is not None and blosc2_batch_size <= 0:
             raise ValueError("blosc2_batch_size must be a positive integer or None")
         if blosc2_items_per_block is not None and blosc2_items_per_block <= 0:
@@ -9314,6 +9662,83 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if affected is None or name in affected:
                 self.refresh_generated_column(name)
 
+    def apply(
+        self,
+        func,
+        *,
+        columns: list[str] | None = None,
+        dtype=None,
+        engine: str = "auto",
+    ) -> np.ndarray:
+        """Run a row-batch UDF over live column values and materialize the result.
+
+        Sugar over :func:`blosc2.lazyudf` using this table's columns as
+        inputs: ``blosc2.lazyudf(func, tuple(t[c] for c in columns),
+        dtype=dtype, jit=...).compute()``. There is no separate execution
+        path — this reuses exactly the machinery :meth:`add_computed_column`
+        and :meth:`add_generated_column` already use for DSL/UDF columns.
+
+        Parameters
+        ----------
+        func:
+            UDF passed straight to :func:`blosc2.lazyudf`; see that function
+            for the expected signature (``func(inputs_tuple, output,
+            offset)``) and for how a :func:`blosc2.dsl_kernel`-decorated
+            kernel is transpiled instead of run as plain Python.
+        columns:
+            Names of *stored* columns to bind as *func*'s inputs, in order
+            (computed/generated columns are not supported). Defaults to
+            every stored column, in schema order.
+        dtype:
+            Result dtype. Required unless *func* is a
+            :func:`blosc2.dsl_kernel` kernel, whose dtype can be inferred by
+            NumPy type promotion of the input dtypes -- same rule as
+            :func:`blosc2.lazyudf`.
+        engine:
+            Forwarded to :func:`blosc2.lazyudf` as its ``jit`` policy:
+            ``"auto"`` (default) lets it choose, ``"jit"`` forces JIT
+            (only effective for a transpilable :func:`blosc2.dsl_kernel`),
+            ``"numpy"`` disables JIT.
+
+        Returns
+        -------
+        numpy.ndarray
+            The UDF's result for the live rows only (on a view, the rows
+            visible through the view).
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> from dataclasses import dataclass
+        >>> @dataclass
+        ... class Row:
+        ...     price: float = blosc2.field(blosc2.float64())
+        ...     qty: float = blosc2.field(blosc2.float64())
+        >>> t = blosc2.CTable(Row, new_data=[(10.0, 2.0), (5.0, 3.0)])
+        >>> def revenue(inputs, output, offset):
+        ...     price, qty = inputs
+        ...     output[:] = price * qty
+        >>> t.apply(revenue, columns=["price", "qty"], dtype=blosc2.float64().dtype)[:]
+        array([20., 15.])
+        """
+        if engine not in ("auto", "numpy", "jit"):
+            raise ValueError(f"engine must be 'auto', 'numpy', or 'jit', got {engine!r}")
+        jit = {"auto": None, "numpy": False, "jit": True}[engine]
+        names = columns if columns is not None else list(self._stored_col_names)
+        missing = [n for n in names if self._logical_to_physical_name(n) not in self._cols]
+        if missing:
+            raise ValueError(
+                f"apply() only accepts stored columns, got {missing!r}. "
+                f"Stored columns: {list(self._stored_col_names)!r}."
+            )
+        # Operands are the raw (full-capacity) storage arrays -- the same
+        # inputs add_computed_column()/add_generated_column() pass to
+        # lazyudf() for DSL/UDF columns -- so the live-row mask is applied
+        # once, here, to the result rather than to every operand.
+        operands = tuple(self._cols[self._logical_to_physical_name(name)] for name in names)
+        result = blosc2.lazyudf(func, operands, dtype=dtype, jit=jit).compute()
+        return result[self._valid_rows]
+
     def add_generated_column(  # noqa: C901
         self,
         name: str,
@@ -9956,6 +10381,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             col = t["where"]             # column named "where"
             method = t.where             # CTable.where method
+
+        Row-range, gathered-row, boolean-mask, sorted (:meth:`sort_by`), and
+        column-projection results are all lightweight **views**: they share
+        physical storage with the base table instead of copying it. Views
+        are read-only — assigning into a value returned by indexing a view
+        raises ``ValueError``; use :meth:`take` or :meth:`copy` to obtain an
+        independent, writable table. Mutating the base table while a view
+        exists leaves the view's row mask frozen at the time the view was
+        created, so the view may go stale (it will not see rows appended to
+        the base afterwards, and may still reference rows later deleted from
+        the base).
         """
         if isinstance(key, str):
             physical = self._logical_to_physical_name(key)
@@ -11744,6 +12180,30 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     def _guard_varlen_scalar_expression(self, expr: str) -> None:
         self._guard_scalar_expression(expr)
+
+    def _is_nullable_column(self, name: str) -> bool:
+        col = self[name]
+        return col.null_value is not None or col.is_dictionary or col.is_varlen_scalar
+
+    def dropna(self, subset: list[str] | None = None) -> CTable:
+        """Return a view excluding rows where any column in *subset* is null.
+
+        Parameters
+        ----------
+        subset:
+            Column names to check for nulls. Defaults to every nullable
+            column (sentinel-backed, dictionary, or variable-length scalar).
+
+        Returns
+        -------
+        CTable
+            A read-only view over the live, non-null rows (see :meth:`where`).
+        """
+        names = subset if subset is not None else [n for n in self.col_names if self._is_nullable_column(n)]
+        mask = np.ones(self.nrows, dtype=np.bool_)
+        for name in names:
+            mask &= self[name].notnull()
+        return self.where(mask)
 
     def where(  # noqa: C901
         self,

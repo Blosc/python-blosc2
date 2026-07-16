@@ -164,6 +164,61 @@ Sentinels are resolved in this order: explicit ``null_value`` in the schema,
 .. autofunction:: get_null_policy
 
 
+Nulls in expressions
+---------------------
+
+Arithmetic and comparisons built from :class:`Column` objects (``t.x + 1``,
+``t.x > 0``, ...) propagate nulls on nullable int/timestamp/bool columns
+without touching storage or the on-disk format — a sentinel is a validity
+bitmap encoded in-band, so propagation is purely a rewrite of the lazy
+expression:
+
+- **Arithmetic** (``+ - * / // % **``): the result is null (NaN) wherever
+  any nullable operand is null, promoting integer/timestamp results to
+  ``float64`` — the same promotion pandas' legacy (pre-nullable-dtype)
+  integer-null arithmetic performs. Non-nullable columns are unaffected and
+  pay no overhead::
+
+      (t.price + 1)          # NaN where price is null; float64 either way
+      (t.price + t.tax)      # NaN where either operand is null
+
+- **Comparisons** (``< <= > >= == !=``): SQL ``WHERE`` semantics — a null
+  never satisfies any comparison, including ``==``/``!=`` against the raw
+  sentinel value itself. Only :meth:`Column.is_null` /
+  :meth:`Column.notnull` test for nullness::
+
+      t[t.price < 0]         # excludes rows where price is null
+      t[t.price == -1]       # False for a null row even if -1 is the sentinel
+      t[t.price.is_null()]   # the only way to select null rows
+
+- **Boolean combinators** (``& | ~``) need no special handling: their
+  inputs are already-resolved comparison results with null-ness folded to
+  ``False``. Mind the consequence for negation: since a null compares
+  ``False``, ``~(t.price > 0)`` *selects* null rows (they are "not > 0").
+  To exclude them, write the complementary comparison instead
+  (``t.price <= 0``), which never matches nulls.
+
+Kleene three-valued logic (where ``null > 0`` evaluates to null rather than
+``False``) is intentionally out of scope — it needs a validity channel on
+boolean intermediates, i.e. masks, which CTable does not use.
+
+Reductions on derived expressions skip nulls too: arithmetic involving a
+nullable column returns a ``NullableExpr`` — a thin wrapper that remembers
+which rows are null — so ``sum``/``mean``/``min``/``max``/``std`` on it skip
+nulls (and deleted rows) exactly like the corresponding :meth:`Column.sum`
+etc. do on a real column::
+
+      t.price.sum()          # skips nulls (real Column)
+      (t.price + 1).sum()    # skips nulls too (NullableExpr)
+      ((t.price + 1) * 2).mean()  # chaining keeps the null channel
+
+Only *nulls* are skipped: a NaN produced by the arithmetic itself (e.g.
+``0/0`` on non-null values) is a value, not a null, and poisons the
+reduction as usual. ``min()``/``max()`` raise ``ValueError`` when every
+value is null; ``sum()`` returns ``0.0`` and ``mean()``/``std()`` return
+NaN — the same conventions as the Column reductions.
+
+
 Attributes
 ----------
 
@@ -257,6 +312,7 @@ When a NumPy structured array is needed, materialize explicitly::
 .. autosummary::
 
     CTable.where
+    CTable.dropna
     CTable.view
     CTable.take
     CTable.select
@@ -268,6 +324,7 @@ When a NumPy structured array is needed, materialize explicitly::
     CTable.group_by
 
 .. automethod:: CTable.where
+.. automethod:: CTable.dropna
 .. automethod:: CTable.view
 .. automethod:: CTable.take
 .. automethod:: CTable.select
@@ -320,6 +377,32 @@ The auto-suffix naming is compact and collision-safe when a column is aggregated
 several ways; the list-of-pairs form additionally lets you pass ``Column``
 objects (``t.sales``) instead of name strings; use explicit names when you want a
 specific (and easily addressable) output column name.
+
+**Custom UDF aggregations** are accepted only via the named form --
+``output_name=(column, callable)``, optionally with an explicit output dtype as
+a third element::
+
+    by_city.agg(sales_range=(t.sales, lambda a: a.max() - a.min()))
+    # explicit dtype instead of inferring it from the callable's results:
+    by_city.agg(sales_range=(t.sales, lambda a: a.max() - a.min(), blosc2.float32()))
+
+The callable receives a 1-D NumPy array of the group's live, non-null values
+(same null semantics as the built-in aggregations) and returns a scalar; it is
+called once per group with a plain Python loop -- there is no JIT
+acceleration for arbitrary UDFs yet.  A group with no non-null values for that
+column never calls the callable, producing a null result instead (the same
+convention ``sum``/``min``/``max`` already use).  The mapping and
+list-of-pairs auto-named forms cannot derive an output column name for an
+arbitrary callable, so they only accept the string/blosc2-reduction-function
+ops described above.
+
+**Execution engine.**  :meth:`CTable.group_by` takes an ``engine=`` parameter
+for the *built-in* aggregations (``size``/``count``/``sum``/``mean``/``min``/
+``max``/``argmin``/``argmax``): ``"auto"`` (default) and ``"numpy"`` both use
+the NumPy/Cython chunked implementation; ``"jit"`` is reserved for a future
+miniexpr-JIT path and currently raises :class:`NotImplementedError`. UDF
+aggregations always run the plain Python per-group loop regardless of
+``engine``.
 
 **Output ordering.**  ``sort`` controls how groups are ordered, and is *always
 by the group key(s), never by the aggregated value*:
@@ -414,6 +497,7 @@ in place.
     CTable.drop_computed_column
     CTable.drop_column
     CTable.rename_column
+    CTable.apply
 
 .. automethod:: CTable.delete
 .. automethod:: CTable.compact
@@ -423,6 +507,7 @@ in place.
 .. automethod:: CTable.drop_computed_column
 .. automethod:: CTable.drop_column
 .. automethod:: CTable.rename_column
+.. automethod:: CTable.apply
 
 
 Indexes
@@ -506,11 +591,23 @@ well as import/export paths for CSV, Arrow, and Parquet data.
     CTable.to_cframe
     CTable.to_csv
     CTable.to_arrow
+    CTable.__arrow_c_stream__
     CTable.to_parquet
     CTable.from_arrow
     CTable.from_parquet
     CTable.from_csv
     ctable_from_cframe
+
+CTable also implements the `Arrow PyCapsule interchange protocol
+<https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html>`_
+via :meth:`~blosc2.CTable.__arrow_c_stream__`, so pyarrow, DuckDB, Polars, and
+pandas >= 2.2 can consume a CTable directly as a stream of record batches
+(``pa.table(ct)``, ``duckdb.sql("SELECT ... FROM ct")``, ``pl.DataFrame(ct)``),
+and :meth:`~blosc2.CTable.from_arrow` accepts any object implementing that
+protocol on ingest. Strict zero-copy is not possible — the underlying data is
+compressed, so decompression is unavoidably a copy — but there is no
+intermediate materialization: batches are decompressed and handed to the
+consumer one at a time, so memory use stays bounded regardless of table size.
 
 .. automethod:: CTable.load
 .. automethod:: CTable.open
@@ -520,6 +617,7 @@ well as import/export paths for CSV, Arrow, and Parquet data.
 .. automethod:: CTable.to_cframe
 .. automethod:: CTable.to_csv
 .. automethod:: CTable.to_arrow
+.. automethod:: CTable.__arrow_c_stream__
 .. automethod:: CTable.to_parquet
 .. automethod:: CTable.from_arrow
 .. automethod:: CTable.from_parquet
@@ -653,10 +751,12 @@ Nullable helpers
     Column.is_null
     Column.notnull
     Column.null_count
+    Column.fillna
 
 .. automethod:: Column.is_null
 .. automethod:: Column.notnull
 .. automethod:: Column.null_count
+.. automethod:: Column.fillna
 
 
 Unique values
