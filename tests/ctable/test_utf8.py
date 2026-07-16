@@ -560,6 +560,89 @@ def test_ctable_utf8_groupby_still_rejects_vlstring():
 
 
 # ---------------------------------------------------------------------------
+# Sort
+# ---------------------------------------------------------------------------
+
+
+def test_ctable_utf8_sort_ascending():
+    t = make_table(["banana", "apple", "cherry"])
+    s = t.sort_by("name")
+    assert list(s["name"][:]) == ["apple", "banana", "cherry"]
+    # row alignment: the "x" companion column follows its row, not its old position
+    assert list(s["x"][:]) == [1, 0, 2]
+
+
+def test_ctable_utf8_sort_descending():
+    t = make_table(["banana", "apple", "cherry"])
+    s = t.sort_by("name", ascending=False)
+    assert list(s["name"][:]) == ["cherry", "banana", "apple"]
+
+
+def test_ctable_utf8_sort_nulls_last_both_directions():
+    t = CTable(NullableRow, new_data={"name": ["banana", None, "apple", "cherry"], "x": [1, 2, 3, 4]})
+    nv = t["name"].null_value
+    asc = t.sort_by("name")
+    assert list(asc["name"][:]) == ["apple", "banana", "cherry", nv]
+    desc = t.sort_by("name", ascending=False)
+    assert list(desc["name"][:]) == ["cherry", "banana", "apple", nv]
+
+
+def test_ctable_utf8_sort_view():
+    t = make_table(["banana", "apple", "cherry"])
+    view = t.sort_by("name", view=True)
+    assert list(view["name"][:]) == ["apple", "banana", "cherry"]
+    assert view.base is not None
+
+
+def test_ctable_utf8_sort_inplace():
+    t = make_table(["b", "a", "c"])
+    result = t.sort_by("name", inplace=True)
+    assert result is t
+    assert list(t["name"][:]) == ["a", "b", "c"]
+
+
+def test_ctable_utf8_sort_multi_key_with_bystander_utf8_column():
+    """A non-key utf8 column in the same table must be reordered along with
+    the sort, not just the sort key itself."""
+
+    @dataclass
+    class MultiRow:
+        grp: int = blosc2.field(blosc2.int32())
+        name: str = blosc2.field(blosc2.utf8())
+        note: str = blosc2.field(blosc2.utf8())
+
+    t = CTable(
+        MultiRow,
+        new_data={
+            "grp": [1, 1, 2, 2],
+            "name": ["b", "a", "d", "c"],
+            "note": ["n-b", "n-a", "n-d", "n-c"],
+        },
+    )
+    s = t.sort_by(["grp", "name"])
+    rows = list(zip(s["grp"][:].tolist(), s["name"][:].tolist(), s["note"][:].tolist(), strict=True))
+    assert rows == [(1, "a", "n-a"), (1, "b", "n-b"), (2, "c", "n-c"), (2, "d", "n-d")]
+
+
+def test_ctable_utf8_sort_inplace_bystander_column():
+    @dataclass
+    class TwoCols:
+        name: str = blosc2.field(blosc2.utf8())
+        note: str = blosc2.field(blosc2.utf8())
+
+    t = CTable(TwoCols, new_data={"name": ["b", "a", "c"], "note": ["n-b", "n-a", "n-c"]})
+    t.sort_by("name", inplace=True)
+    assert list(t["name"][:]) == ["a", "b", "c"]
+    assert list(t["note"][:]) == ["n-a", "n-b", "n-c"]
+
+
+def test_ctable_utf8_sort_non_ascii():
+    t = make_table(["café", "日本語のテキスト", "banana"])
+    s = t.sort_by("name")
+    assert list(s["name"][:]) == sorted(["café", "日本語のテキスト", "banana"])
+
+
+# ---------------------------------------------------------------------------
 # Unsupported operations fail clearly (lifted by later work)
 # ---------------------------------------------------------------------------
 
@@ -568,12 +651,6 @@ def test_ctable_utf8_where_expression_raises_clearly():
     t = make_table()
     with pytest.raises(NotImplementedError, match="utf8"):
         t.where("name == 'hello'")
-
-
-def test_ctable_utf8_sort_raises_clearly():
-    t = make_table()
-    with pytest.raises(TypeError, match="utf8"):
-        t.sort_by("name")
 
 
 def test_ctable_utf8_arrow_export_large_string():

@@ -10990,20 +10990,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     f"Cannot sort by ndarray column {name!r} with per-row shape {col_info.spec.item_shape}. "
                     "Materialize a scalar generated column first, e.g. embedding_norm or embedding_max."
                 )
-            cc = self._schema.columns_by_name.get(name)
-            if cc is not None and self._is_utf8_column(cc):
-                raise TypeError(
-                    f"Column {name!r} is a variable-length utf8 column; sorting by it is not supported yet."
-                )
             dtype = self._col_dtype(name)
             if dtype is None:
-                if cc is not None and isinstance(
-                    cc.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)
+                if col_info is not None and isinstance(
+                    col_info.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)
                 ):
                     raise TypeError(
                         f"Column {name!r} is a varlen scalar column and does not support sort ordering."
                     )
-                if cc is not None and self._is_dictionary_column(cc):
+                if col_info is not None and self._is_dictionary_column(col_info):
                     pass  # dictionary columns: sorting supported (decoded strings)
                 else:
                     raise TypeError(
@@ -11182,7 +11177,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             # Value key
             if not asc:
-                if raw.dtype.kind in "USO":
+                if raw.dtype.kind in "USOT":
                     # strings can't be negated — invert via rank
                     rank = np.argsort(np.argsort(raw, kind="stable"), kind="stable")
                     lex_keys.append((n - 1 - rank).astype(np.intp))
@@ -11530,6 +11525,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             elif self._is_dictionary_column(col):
                 sorted_codes = arr.codes[sorted_pos]
                 arr.codes[:n] = sorted_codes
+            elif self._is_utf8_column(col):
+                # Utf8Array has no bulk slice-assignment; rebuild it in sorted order.
+                new_arr = Utf8Array(col.spec)
+                new_arr.extend(arr[sorted_pos])
+                new_arr.flush()
+                self._cols[col.name] = new_arr
             else:
                 arr[:n] = arr[sorted_pos]
         self._valid_rows[:n] = True
@@ -11553,6 +11554,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     result._cols[col_name].encode(v)
                 sorted_codes = arr.codes[sorted_pos]
                 result._cols[col_name].codes[:n] = sorted_codes
+            elif self._is_utf8_column(col):
+                result._cols[col_name].extend(arr[sorted_pos])
+                result._cols[col_name].flush()
             else:
                 result._cols[col_name][:n] = arr[sorted_pos]
         result._valid_rows[:n] = True

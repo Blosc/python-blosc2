@@ -1,6 +1,8 @@
 # Enhancing CTable, phase 3: variable-length strings and the null-mask question
 
-**Status:** NOT STARTED (plan written 2026-07-16). Successor to
+**Status:** P3 (P3.a–P3.e) landed 2026-07-16 on branch `enhancing-ctable3`;
+see each sub-item's implementation notes below. P5 remains parked (no unpark
+criterion fired). Successor to
 `plans/enhancing-ctable-phase2.md` (phase 2, landed on branch
 `enhancing-ctable2`: the pandas `engine=blosc2.jit` fix + `Series.map`,
 `CTable.assign()` + unbound `blosc2.col()`, the lazily-sorted-view
@@ -402,6 +404,70 @@ proves hard, the honest fallback is `np.unique` on the StringDType chunk
 (chunked merge if the existing sort machinery is chunked — study
 `sort_by`'s path first). Null ordering must match the existing convention
 (nulls last; grep `test_sort_nulls_last`).
+
+**P3.e implementation notes (landed 2026-07-16, branch `enhancing-ctable3`):**
+
+- What landed: `sort_by` now accepts utf8 sort keys. Three changes in
+  `ctable.py`:
+  1. Removed the utf8-specific rejection from `_normalise_sort_keys`
+     (introduced defensively in P3.a). It turned out to be unnecessary
+     rather than merely lifted: `_col_dtype()` for a utf8 column already
+     returns `numpy.dtypes.StringDType()` (not `None`, because
+     `Utf8Array.dtype` reports it — a P3.a design choice), so the existing
+     `dtype is None` branch that rejects list/vlstring/vlbytes columns
+     already skips utf8 columns for free, and
+     `np.issubdtype(StringDType(), np.complexfloating)` returns `False`
+     cleanly (verified empirically) rather than raising. Removing the guard
+     did require restoring a `cc`/`col_info` reference the guard's insertion
+     had shadowed in P3.a — fixed by reusing the already-in-scope `col_info`.
+  2. `_build_lex_keys`'s descending-sort rank-inversion check
+     (`raw.dtype.kind in "USO"`, used because strings can't be negated with
+     unary minus) widened to `"USOT"` — `StringDType`'s `.kind` is `"T"`.
+     Ascending sort needed no change: `np.lexsort`/`np.argsort` already
+     accept `StringDType` arrays directly (verified empirically), and the
+     null-indicator-key logic (`raw == nv` for a non-float sentinel) was
+     already dtype-generic.
+  3. `_sort_by_inplace` and `_sorted_copy_from_positions` gained a utf8
+     branch that rebuilds the column via `Utf8Array.extend()` instead of
+     bulk slice-assignment (`arr[:n] = arr[sorted_pos]`), mirroring the
+     existing list-column branch's `ListArray.extend()` pattern.
+- **Found and worked around a pre-existing, unrelated bug while verifying
+  this**: `arr[:n] = arr[sorted_pos]` — the generic fallback both sort-copy
+  methods used for every column that isn't `list`/`dictionary` — silently
+  assumed every such column supports NumPy-style bulk slice assignment.
+  `_ScalarVarLenArray.__setitem__` (`vlstring`/`vlbytes`/`struct`/`object`,
+  unrelated to this phase) only accepts a single `int` index, so
+  `sort_by()` on *any* table containing a vlstring/vlbytes/struct/object
+  column — even sorted by an unrelated int/float key — already raised
+  `TypeError: Expected str for vlstring column, got 'list'` before this
+  change, confirmed on the pre-P3 codebase. **Not fixed here** — out of
+  scope for a utf8-only phase, and the acceptance criterion is
+  "`vlstring`/`string` behavior byte-for-byte unchanged," not "fixed." Only
+  `Utf8Array` got the same treatment `ListArray` already has, since utf8
+  sortability is what this item asks for; every utf8 column in a sorted
+  table — key or bystander — must survive the rewrite, not only the one
+  named in `sort_by(...)`. (Also found and left alone:
+  `_sorted_small_copy_from_live_positions` has the identical bug pattern
+  but zero callers anywhere in the repo — genuinely dead code, not worth
+  touching.)
+- Tests: `tests/ctable/test_utf8.py` gained a "Sort" section — ascending,
+  descending, nulls-last in both directions, `view=True`, `inplace=True`, a
+  multi-key `[int, utf8]` sort with a non-key utf8 "bystander" column
+  verifying it's reordered too (row alignment, not just the key), the same
+  bystander check under `inplace=True`, and a non-ASCII ordering case.
+  Manually verified beyond the automated suite: the exact three Goal-section
+  code lines from the top of this plan file run correctly end-to-end
+  (`t[t.name == "Paris"]`, `t.group_by("name").sum("x")`, `t.sort_by("name")`)
+  — this is the P3 acceptance criterion, confirmed directly, not inferred
+  from passing unit tests. Full `tests/` (7477 tests, whole repo, not just
+  `tests/ctable`/`tests/ndarray`) passes.
+- **P3 acceptance for the item overall, checked against the plan's own
+  criteria**: the three Goal-section lines work (confirmed above); the P3.d
+  groupby benchmark number is recorded (16.9x/49.9x vs. the 3x target, gap
+  documented with root cause); `vlstring`/`string` behavior is byte-for-byte
+  unchanged (no code path touched by P3 alters their behavior; the one
+  pre-existing vlstring sort bug found above predates this phase and was
+  left as found, not touched).
 
 **Out of scope for P3:** making `utf8` the `str`-field default; `.str`
 accessor namespaces; regex operations beyond what `np.strings` gives;
