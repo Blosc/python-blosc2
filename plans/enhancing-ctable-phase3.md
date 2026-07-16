@@ -141,6 +141,51 @@ a utf8 column should work but the docstring must state the cost. Tests:
 roundtrip (ASCII, non-ASCII, empty strings, 1-char, multi-KB values),
 append/extend, setitem, persistence, repr.
 
+**P3.a implementation notes (landed 2026-07-16, commit e5bbd559, branch
+`enhancing-ctable3`):**
+
+- What landed: `Utf8Spec`/`blosc2.utf8()` in `schema.py` (kind `"utf8"`,
+  registered in `schema_compiler._KIND_TO_SPEC`); new `src/blosc2/utf8_array.py`
+  with the `Utf8Array` adapter; storage dispatch in all four `TableStorage`
+  backends; sentinel-null wiring; guards for the not-yet-supported operations;
+  37 tests in `tests/ctable/test_utf8.py`.
+- **Key deviation from the plan text**: rather than a new column category
+  with its own ~50 dispatch sites (the `DictionaryColumn` route), `Utf8Spec`
+  joins the `_is_varlen_scalar_column` predicate and `Utf8Array` implements
+  the `_ScalarVarLenArray` row interface (`append`/`extend`/`flush`/getitem/
+  setitem). That made create/open/save/load/copy/take/cframe/TreeStore paths
+  work unmodified; utf8-specific branches exist only where semantics differ:
+  null handling (sentinel, not native `None` — `is_null`/`null_count`/
+  `fillna`), empty reads and `iter_chunks` (StringDType arrays, not lists),
+  `compact()`, `to_cframe()`, `rename_column` reopen, and the guard messages.
+  A dedicated `Column.is_utf8` / `CTable._is_utf8_column` predicate marks
+  those spots — P3.c–P3.e should branch on it the same way.
+- Storage layout: offsets NDArray at the plain column key; byte blob at
+  column key + `".utf8"` (`_UTF8_DATA_SUFFIX` in `ctable_storage.py`). The
+  literal dot cannot collide with user column names (dots in logical names
+  are path separators or percent-encoded). Both arrays are *logically* sized
+  (length = rows appended, like vlstring), NOT capacity-slotted — that keeps
+  the persisted-row count recoverable on open as `len(offsets) - 1` with no
+  extra metadata. Arrays are created shape-(1,) with large fixed chunkshapes
+  (offsets 2^17 rows, data 2^21 bytes) and grown by resize.
+- Reads: contiguous spans are two slice reads + per-row byte-slice decode;
+  sparse gathers cluster sorted indices (gap > 1024 starts a new cluster) so
+  display head+tail fetches don't read the whole column. Writes buffer in
+  memory and flush every 4096 rows / ~4 Mi chars. `__setitem__` on a
+  persisted row rewrites the tail (documented O(n - i)).
+- Null sentinel reads surface the sentinel string verbatim (consistent with
+  fixed-width `string`), unlike vlstring's native `None`. Nullable specs
+  resolve their sentinel from `NullPolicy.string_value`.
+- Measured (Apple-silicon dev box, smoke run): 200k rows of random 0–40 char
+  ASCII + a couple of multibyte values → column nbytes 6.29 MB, cbytes
+  2.65 MB (2.37x; random text, so most of the win is the offsets array).
+  Full `tests/ctable` (1357) and `tests/ndarray` (4385) suites pass.
+- Known limits left for later sub-items (all raise clear errors): Arrow
+  export (`_pa_type_from_spec` raises → P3.b), comparisons/`where()`
+  (P3.c), groupby keys (P3.d), `sort_by` (P3.e). `iter_arrow_batches` hits
+  the varlen branch and raises through `_pa_type_from_spec`; `to_pandas`
+  of a table with utf8 columns therefore also raises until P3.b.
+
 **P3.b Arrow interop.** `iter_arrow_batches` exports utf8 columns as
 `pa.large_string()` (always large — no int32-offset special-casing);
 `from_arrow` maps incoming `string`/`large_string` columns to `utf8` specs
