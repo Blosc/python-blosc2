@@ -476,6 +476,90 @@ def test_ctable_utf8_startswith_endswith():
 
 
 # ---------------------------------------------------------------------------
+# Groupby keys
+# ---------------------------------------------------------------------------
+
+
+def test_ctable_utf8_groupby_sum():
+    t = make_table(["a", "b", "a", "b", "a"])
+    t.x[:] = [1.0, 2.0, 3.0, 4.0, 5.0]
+    g = t.group_by("name").sum("x")
+    rows = dict(zip(g["name"][:].tolist(), g["x_sum"][:].tolist(), strict=False))
+    assert rows == {"a": 9.0, "b": 6.0}
+
+
+def test_ctable_utf8_groupby_size_and_dropna():
+    t = CTable(NullableRow, new_data={"name": ["a", "b", "a", None, "b", "a"], "x": range(6)})
+    g = t.group_by("name").size()  # dropna=True by default
+    counts = dict(zip(g["name"][:].tolist(), g["size"][:].tolist(), strict=False))
+    assert counts == {"a": 3, "b": 2}
+
+    g_all = t.group_by("name", dropna=False).size()
+    nv = t["name"].null_value
+    counts_all = dict(zip(g_all["name"][:].tolist(), g_all["size"][:].tolist(), strict=False))
+    assert counts_all == {"a": 3, "b": 2, nv: 1}
+
+
+def test_ctable_utf8_groupby_sort():
+    t = make_table(["gamma", "alpha", "beta", "alpha"])
+    g = t.group_by("name", sort=True).size()
+    assert list(g["name"][:]) == ["alpha", "beta", "gamma"]
+
+
+def test_ctable_utf8_groupby_result_is_utf8_column():
+    t = make_table(["a", "b", "a"])
+    g = t.group_by("name").size()
+    assert g["name"].is_utf8
+
+
+def test_ctable_utf8_groupby_multi_key_with_int():
+    @dataclass
+    class MultiRow:
+        cat: str = blosc2.field(blosc2.utf8())
+        grp: int = blosc2.field(blosc2.int32())
+        x: float = blosc2.field(blosc2.float64())
+
+    t = CTable(
+        MultiRow,
+        new_data={
+            "cat": ["a", "b", "a", "b", "a"],
+            "grp": [1, 1, 1, 2, 2],
+            "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+        },
+    )
+    g = t.group_by(["cat", "grp"]).sum("x")
+    rows = sorted(zip(g["cat"][:].tolist(), g["grp"][:].tolist(), g["x_sum"][:].tolist(), strict=False))
+    assert rows == [("a", 1, 4.0), ("a", 2, 5.0), ("b", 1, 2.0), ("b", 2, 4.0)]
+
+
+def test_ctable_utf8_groupby_multi_chunk_merge():
+    """A key set spanning many physical chunks exercises the merge path, not
+    just a single-chunk factorization."""
+    import random
+
+    rng = random.Random(0)
+    words = ["alpha", "beta", "gamma", "delta", "epsilon"]
+    n = 200_000
+    names = [rng.choice(words) for _ in range(n)]
+    xs = [float(i % 7) for i in range(n)]
+    t = CTable(Row, new_data={"name": names, "x": xs}, expected_size=n)
+    g = t.group_by("name").sum("x")
+    assert g.nrows == len(words)
+    assert abs(sum(g["x_sum"][:].tolist()) - sum(xs)) < 1e-6
+
+
+def test_ctable_utf8_groupby_still_rejects_vlstring():
+    @dataclass
+    class VlRow:
+        name: str = blosc2.field(blosc2.vlstring())
+        x: int = blosc2.field(blosc2.int64())
+
+    t = CTable(VlRow, new_data={"name": ["a", "b"], "x": [1, 2]})
+    with pytest.raises(TypeError, match="variable-length"):
+        t.group_by("name").sum("x")
+
+
+# ---------------------------------------------------------------------------
 # Unsupported operations fail clearly (lifted by later work)
 # ---------------------------------------------------------------------------
 
@@ -484,12 +568,6 @@ def test_ctable_utf8_where_expression_raises_clearly():
     t = make_table()
     with pytest.raises(NotImplementedError, match="utf8"):
         t.where("name == 'hello'")
-
-
-def test_ctable_utf8_groupby_raises_clearly():
-    t = make_table(["a", "b", "a"])
-    with pytest.raises(TypeError, match="variable-length"):
-        t.group_by("name").sum("x")
 
 
 def test_ctable_utf8_sort_raises_clearly():

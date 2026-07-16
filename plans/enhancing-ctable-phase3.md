@@ -312,6 +312,91 @@ the dictionary path for 1e7 rows/low cardinality. If the vectorized hash
 proves hard, the honest fallback is `np.unique` on the StringDType chunk
 (correct, slower) — land correctness first, speed second.
 
+**P3.d implementation notes (landed 2026-07-16, branch `enhancing-ctable3`):**
+
+- What landed: **correctness only, on the honest `np.unique` fallback** — the
+  benchmark gate below rejected the vectorized-hash path, so it was not
+  built. Three small changes in `groupby.py`:
+  1. `CTableGroupBy.__init__`'s rejection now excludes utf8 columns (`table
+     ._is_list_column(col_info) or (table._is_varlen_scalar_column(col_info)
+     and not table._is_utf8_column(col_info))`) — vlstring/vlbytes/struct/
+     object/list keys are still rejected.
+  2. `_read_key_chunk` gained a utf8 branch that pads a chunk read past the
+     column's logical length with `""`, mirroring the P3.a `iter_chunks` fix
+     — `Utf8Array` is sized to the logical row count, not the physical
+     `valid_rows` capacity, and a chunk boundary can run past it; those rows
+     are provably never live (a row can't be marked valid without every
+     column, including this one, having been written), so the pad value is
+     never read as a live group.
+  3. `_factorize_keys`'s multi-key branch casts any `StringDType` key array to
+     `object` dtype before packing into the structured array used for
+     `np.unique` — NumPy's structured dtypes reject `StringDType` fields
+     outright (`TypeError: StringDType is not currently supported for
+     structured dtype fields`, confirmed empirically), so this is required
+     for correctness, not an optimization.
+- **Nothing else needed changing.** This was verified empirically before
+  writing code, not assumed: `numpy.dtypes.StringDType`'s `.kind` is `"T"`
+  (not `"U"`/`"S"`), so it never matches `_factorize_fixed_width_str`'s
+  fixed-width dispatch and the single-key path already falls through to the
+  correct `np.unique(arr, return_inverse=True)` for free. `_null_mask` already
+  worked unmodified (`values == null_value` on a `StringDType` array is
+  correct). `_result_spec_for_key` deep-copies the source `Utf8Spec`
+  unmodified, so a groupby result's key column is itself a utf8 column
+  (`Column.is_utf8` true). `_python_type_for_spec`/`_python_scalar` already
+  produce plain `str` for utf8 (indexing a `StringDType` array yields
+  `isinstance(x, str)`, not `np.generic`). The Python-level `_final_rows` sort
+  (`_sortable_key_part`) and all Cython fast paths (which all bail via
+  `key_dtype is None -> return None`) needed no changes either. Verified with
+  a manual smoke test covering: single-key sum, `dropna=False` with a null
+  sentinel group, `sort=True` (relies on `np.unique`'s inherently sorted
+  output for the fast single-chunk case and the generic Python sort
+  otherwise), a two-key `[utf8, int32]` composite groupby, and a 300k-row
+  multi-chunk merge — all correct.
+- **Benchmark gate: FAILED, and per the plan's explicit instruction the fast
+  path was not built.** Extended `bench/ctable/bench_groupby_keys.py` with a
+  `ukey` (utf8) column alongside the existing `dkey` (dictionary) column,
+  1e7 rows, 5-city low-cardinality keys, Apple-silicon dev box:
+
+  | key type            | time      | vs. dict key |
+  |----------------------|-----------|--------------|
+  | dict key, sum        | 196.0 ms  | 1.0x         |
+  | **utf8 key, sum**    | **3304.2 ms** | **16.9x** |
+  | two keys (int+dict)  | 236.8 ms  | 1.0x         |
+  | **two keys (int+utf8)** | **11825.3 ms** | **49.9x** |
+
+  Target was ≤3x; actual is ~17x (single key) / ~50x (two keys) — nowhere
+  close. **Root cause, isolated with `cProfile`** (not guessed): 62% of
+  single-key wall time is `Utf8Array._read_persisted_span`, specifically its
+  per-row Python loop (`for i in range(n): out[i] = blob[...].decode("utf-8")`)
+  — 1,998,848 individual `bytes.decode()` calls at 2e6 rows in the profile
+  run. This is a P3.a artifact, not something specific to groupby: every bulk
+  utf8 read pays this cost (comparisons, iteration, sort will too). A
+  micro-benchmark of alternative row-decode strategies (list-comprehension
+  instead of indexed assignment; decode the whole chunk blob once and slice
+  by vectorized UTF-8-continuation-byte character offsets instead of
+  redecoding per row) found only ~10% improvement — the per-row **Python loop
+  overhead** dominates, not the decode call itself, so no drop-in fix closes
+  the gap. A real fix needs a genuinely vectorized/C-level factorization that
+  never decodes N rows: group physical rows by raw byte length first (cheap,
+  vectorized), gather each length-group's fixed-width byte span with one
+  fancy-index gather (`data[start[:,None] + arange(L)]`), hash those raw
+  bytes with the same collision-checked trick `_factorize_fixed_width_str`
+  already uses for fixed-width Unicode, and decode to `StringDType` **only
+  the D unique group values**, never the N rows. This is a legitimate,
+  bounded idea (matching the plan's "vectorized loop over the (few) distinct
+  byte-lengths" suggestion) but is a substantial new algorithm — cross-length-
+  group code merging, a byte-hash variant of the existing mixer, and the
+  usual collision/verify pass — sized like its own follow-up item, not a
+  drop-in fix. **Deliberately not attempted here**, per the cross-cutting
+  rule against merging a "fast" path the recorded benchmark shows is not
+  fast; land correctness, record the gap, stop.
+- Tests: `tests/ctable/test_utf8.py` gained a "Groupby keys" section — sum,
+  size with and without `dropna`, `sort=True`, confirming the result's key
+  column is itself utf8, a multi-key `[utf8, int]` composite, a 200k-row
+  multi-chunk-merge case, and a regression test that vlstring keys are still
+  rejected (only utf8 was carved out). Full `tests/ctable` (1379) and
+  `tests/ndarray` (4385) suites pass.
+
 **P3.e Sort.** Lift the sort rejection (grep the `sort_by` varlen guard in
 `ctable.py`): `sort_by` on utf8 uses `np.argsort` on the StringDType array
 (chunked merge if the existing sort machinery is chunked — study

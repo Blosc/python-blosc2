@@ -136,7 +136,9 @@ class CTableGroupBy:
                     f"Cannot group by ndarray column {name!r} with per-row shape {col_info.spec.item_shape}. "
                     "Materialize a scalar generated column first, e.g. embedding_norm or embedding_max."
                 )
-            if table._is_list_column(col_info) or table._is_varlen_scalar_column(col_info):
+            if table._is_list_column(col_info) or (
+                table._is_varlen_scalar_column(col_info) and not table._is_utf8_column(col_info)
+            ):
                 raise TypeError(f"Cannot group by variable-length/list column {name!r} in Phase 1")
 
     def size(self, *, urlpath: str | None = None):
@@ -1512,6 +1514,17 @@ class CTableGroupBy:
         col_info = self.table._schema.columns_by_name[name]
         if self.table._is_dictionary_column(col_info):
             return np.asarray(self.table._cols[name].codes[start:stop], dtype=np.int32)
+        if self.table._is_utf8_column(col_info):
+            # Utf8Array is sized to the logical row count, not the physical
+            # valid_rows capacity, so a chunk boundary can run past its end.
+            # Rows beyond it are never live (the row can't have been written
+            # without this column), so the padding value is never read live.
+            col = self.table._cols[name]
+            n = len(col)
+            values = np.asarray(col[start : min(stop, n)])
+            if stop > n:
+                values = np.concatenate([values, np.full(stop - max(start, n), "", dtype=values.dtype)])
+            return values
         return np.asarray(self.table._cols[name][start:stop])
 
     def _factorize_keys(
@@ -1524,9 +1537,13 @@ class CTableGroupBy:
             unique, inverse = np.unique(arr, return_inverse=True)
             return unique, inverse
 
-        dtype = [(f"k{i}", arr.dtype) for i, arr in enumerate(keys_live)]
-        packed = np.empty(len(keys_live[0]), dtype=dtype)
-        for i, arr in enumerate(keys_live):
+        # StringDType (utf8 columns) cannot be a structured-array field, so pack
+        # those columns as plain Python-object arrays instead; np.unique still
+        # dedupes them correctly by str equality.
+        pack_arrs = [arr.astype(object) if arr.dtype.kind == "T" else arr for arr in keys_live]
+        dtype = [(f"k{i}", arr.dtype) for i, arr in enumerate(pack_arrs)]
+        packed = np.empty(len(pack_arrs[0]), dtype=dtype)
+        for i, arr in enumerate(pack_arrs):
             packed[f"k{i}"] = arr
         unique, inverse = np.unique(packed, return_inverse=True)
         return unique, inverse
