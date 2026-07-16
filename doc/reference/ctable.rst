@@ -193,7 +193,9 @@ expression:
 
 - **Boolean combinators** (``& | ~``) need no special handling: their
   inputs are already-resolved comparison results with null-ness folded to
-  ``False``.
+  ``False``. Mind the consequence for negation: since a null compares
+  ``False``, ``~(t.price > 0)`` *selects* null rows (they are "not > 0").
+  Add ``& t.price.notnull()`` to exclude them.
 
 Kleene three-valued logic (where ``null > 0`` evaluates to null rather than
 ``False``) is intentionally out of scope — it needs a validity channel on

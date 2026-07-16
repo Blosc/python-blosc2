@@ -56,6 +56,26 @@ def test_apply_excludes_deleted_rows():
     np.testing.assert_array_equal(result[:], [20.0, 1.0, 16.0])
 
 
+def test_apply_returns_numpy_array():
+    t = CTable(Row, new_data=DATA)
+    assert isinstance(t.apply(_revenue, dtype=np.float64), np.ndarray)
+
+
+def test_apply_on_filtered_view_returns_only_view_rows():
+    t = CTable(Row, new_data=DATA)
+    v = t[t.price > 4.0]
+    np.testing.assert_array_equal(v.apply(_revenue, dtype=np.float64), [20.0, 15.0])
+
+
+def test_apply_rejects_unknown_or_computed_columns():
+    t = CTable(Row, new_data=DATA)
+    t.add_computed_column("rev", "price * qty")
+    with pytest.raises(ValueError, match="stored columns"):
+        t.apply(_revenue, columns=["price", "nope"], dtype=np.float64)
+    with pytest.raises(ValueError, match="stored columns"):
+        t.apply(_revenue, columns=["price", "rev"], dtype=np.float64)
+
+
 def test_apply_rejects_bad_engine():
     t = CTable(Row, new_data=DATA)
     with pytest.raises(ValueError, match="engine must be"):

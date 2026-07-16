@@ -7234,11 +7234,21 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             t = blosc2.CTable.from_arrow(duckdb_result, urlpath="out.b2z")
         """
         pa = cls._require_pyarrow("from_arrow()")
-        if hasattr(schema, "__arrow_c_stream__") and batches is None:
+        if hasattr(schema, "__arrow_c_stream__"):
+            if batches is not None:
+                raise TypeError(
+                    "from_arrow() takes either a single Arrow-stream object "
+                    "(implementing __arrow_c_stream__) or a (schema, batches) pair, not both."
+                )
             if not hasattr(pa.RecordBatchReader, "from_stream"):
                 raise RuntimeError("Importing from an Arrow PyCapsule stream requires pyarrow >= 14.0.")
             reader = pa.RecordBatchReader.from_stream(schema)
             schema, batches = reader.schema, reader
+        elif batches is None:
+            raise TypeError(
+                "from_arrow() requires batches unless the first argument is an "
+                "Arrow-stream object implementing __arrow_c_stream__."
+            )
         if blosc2_batch_size is not None and blosc2_batch_size <= 0:
             raise ValueError("blosc2_batch_size must be a positive integer or None")
         if blosc2_items_per_block is not None and blosc2_items_per_block <= 0:
@@ -9449,7 +9459,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         columns: list[str] | None = None,
         dtype=None,
         engine: str = "auto",
-    ) -> blosc2.NDArray:
+    ) -> np.ndarray:
         """Run a row-batch UDF over live column values and materialize the result.
 
         Sugar over :func:`blosc2.lazyudf` using this table's columns as
@@ -9466,7 +9476,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             offset)``) and for how a :func:`blosc2.dsl_kernel`-decorated
             kernel is transpiled instead of run as plain Python.
         columns:
-            Column names to bind as *func*'s inputs, in order. Defaults to
+            Names of *stored* columns to bind as *func*'s inputs, in order
+            (computed/generated columns are not supported). Defaults to
             every stored column, in schema order.
         dtype:
             Result dtype. Required unless *func* is a
@@ -9478,6 +9489,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             ``"auto"`` (default) lets it choose, ``"jit"`` forces JIT
             (only effective for a transpilable :func:`blosc2.dsl_kernel`),
             ``"numpy"`` disables JIT.
+
+        Returns
+        -------
+        numpy.ndarray
+            The UDF's result for the live rows only (on a view, the rows
+            visible through the view).
 
         Examples
         --------
@@ -9498,6 +9515,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise ValueError(f"engine must be 'auto', 'numpy', or 'jit', got {engine!r}")
         jit = {"auto": None, "numpy": False, "jit": True}[engine]
         names = columns if columns is not None else list(self.col_names)
+        missing = [n for n in names if self._logical_to_physical_name(n) not in self._cols]
+        if missing:
+            raise ValueError(
+                f"apply() only accepts stored columns, got {missing!r}. "
+                f"Stored columns: {list(self.col_names)!r}."
+            )
         # Operands are the raw (full-capacity) storage arrays -- the same
         # inputs add_computed_column()/add_generated_column() pass to
         # lazyudf() for DSL/UDF columns -- so the live-row mask is applied

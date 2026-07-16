@@ -511,6 +511,18 @@ def test_from_arrow_accepts_capsule_producer():
     assert via_capsule.to_arrow().equals(via_batches.to_arrow())
 
 
+def test_from_arrow_rejects_capsule_plus_batches():
+    at = pa.table({"id": [1, 2]})
+    with pytest.raises(TypeError, match="not both"):
+        CTable.from_arrow(at, at.to_batches())
+
+
+def test_from_arrow_requires_batches_for_plain_schema():
+    at = pa.table({"id": [1, 2]})
+    with pytest.raises(TypeError, match="requires batches"):
+        CTable.from_arrow(at.schema)
+
+
 def test_duckdb_reads_ctable_directly():
     duckdb = pytest.importorskip("duckdb")
     t = CTable(Row, new_data=DATA10)
