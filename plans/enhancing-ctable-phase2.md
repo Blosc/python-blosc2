@@ -659,6 +659,55 @@ segmented numpy — no per-group Python.
 3. High-cardinality smoke test: 10k groups, values equal between paths.
 4. The benchmark script, recorded but not part of CI.
 
+### Implementation notes (benchmark gate failed — NOT merged)
+
+Built the full segmented path as specified: `ast`-based recognition of the
+whitelisted pattern (`_segmented_udf_plan`/`_SegmentedUDFTransformer` in
+`groupby.py`, since deleted), replacing each whitelisted reduction call with
+a placeholder bound to a `np.ufunc.reduceat` result and re-evaluating the
+surrounding scalar arithmetic via a compiled expression: correct results,
+verified against the loop path for every whitelisted reduction, the two
+named composites, nulls, `chunk_size=2` chunk-straddling, and a 10k-group
+smoke test.
+
+**Benchmark gate (plan's own spec: 1e6 rows, 100k groups, `a.max()-a.min()`)
+measured 1.2x, not the required ≥5x** — checked at 5e6/500k and 1e6/500k
+groups too (1.1x–1.4x, never close). Per the plan's own cross-cutting rule
+4, **this means the segmented dispatch is not merged**; the code was
+reverted rather than left in place disabled.
+
+Root cause (confirmed by `cProfile`, not guessed): the "1e5 Python calls to
+a cheap UDF" cost the plan's estimate was built on is real but small next to
+the *rest* of the group-by pipeline that both the loop path and the
+segmented path pay identically and which this phase-1 architecture cannot
+skip for exotic/multi-key group-by (`_factorize_keys`, `_compute_partials`,
+and especially `_merge_partials`'s per-chunk-per-group Python-level
+list-append bookkeeping that builds `_AggState.value`). Segmenting only
+replaces the last step (call-the-UDF-per-group) with vectorized `reduceat`;
+it does not and structurally cannot touch the bookkeeping steps before it,
+which dominate wall time at every cardinality tested. A genuine 5x would
+need bypassing that dict-of-Python-objects accumulator entirely (e.g. a
+global vectorized sort-by-group-id across all chunks) — a materially larger
+rewrite than "intercept in `_final_rows`," out of scope for this item as
+specified.
+
+**What was kept**, because it is an independent, verified correctness fix
+with no performance claim attached: a `@blosc2.dsl_kernel`-decorated
+function passed as a groupby UDF aggregation (`g.agg(name=(col,
+dsl_kernel_fn))`) previously crashed unconditionally — `DSLKernel.__call__`
+uses the `(inputs_tuple, output, offset)` array-kernel convention, not the
+"one array in, one scalar out" convention this call site uses, so
+`spec.udf(group_values)` raised `TypeError: __call__() missing 1 required
+positional argument: 'output'` wrapped in a `RuntimeError`, for *every*
+group, regardless of what the kernel's body did. Fixed by calling
+`spec.udf.func` (the plain wrapped function) when `spec.udf` is a
+`DSLKernel` instance. Test:
+`test_agg_udf_accepts_dsl_kernel_decorated_function` in
+`tests/ctable/test_groupby.py`. This means a user who writes a groupby UDF
+and later decorates it with `@blosc2.dsl_kernel` (e.g. to also use it
+elsewhere as an elementwise kernel) no longer gets a crash — it just runs at
+loop-path speed, same as an undecorated callable.
+
 ---
 
 ## P5 — Mask-based nullable columns: PARKED (design recorded, do not build yet)

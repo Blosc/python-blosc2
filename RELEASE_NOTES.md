@@ -15,6 +15,9 @@ XXX version-specific blurb XXX
 
 ### Bug fixes
 
+- Fixed a `@blosc2.dsl_kernel`-decorated function crashing unconditionally
+  when passed as a groupby UDF aggregation (`g.agg(name=(col,
+  dsl_kernel_fn))`): it now runs like the equivalent undecorated callable.
 - Fixed `CTable.head()`/`tail()` silently discarding row order when called
   on a lazily-sorted view (e.g. `t.sort_by("col", ascending=False)` on a
   view, or any `.sort_by()` result chained off a prior filter): they
