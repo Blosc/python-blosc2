@@ -422,8 +422,75 @@ def test_ctable_utf8_sort_raises_clearly():
         t.sort_by("name")
 
 
-def test_ctable_utf8_arrow_export_raises_clearly():
-    pytest.importorskip("pyarrow")
+def test_ctable_utf8_arrow_export_large_string():
+    pa = pytest.importorskip("pyarrow")
     t = make_table()
-    with pytest.raises(NotImplementedError, match="utf8"):
-        t.to_arrow()
+    at = t.to_arrow()
+    assert at.schema.field("name").type == pa.large_string()
+    assert at.column("name").to_pylist() == SAMPLE
+
+
+# ---------------------------------------------------------------------------
+# Arrow interop (P3.b)
+# ---------------------------------------------------------------------------
+
+
+def test_utf8_pa_table_roundtrip():
+    pa = pytest.importorskip("pyarrow")
+    t = make_table()
+    at = pa.table(t)
+    assert at.column("name").to_pylist() == SAMPLE
+
+
+def test_utf8_pa_table_roundtrip_with_nulls():
+    pa = pytest.importorskip("pyarrow")
+    t = CTable(NullableRow, new_data={"name": ["a", None, "c"], "x": [1, 2, 3]})
+    at = pa.table(t)
+    assert at.schema.field("name").type == pa.large_string()
+    assert at.column("name").to_pylist() == ["a", None, "c"]
+    assert at.column("name").null_count == 1
+
+
+def test_utf8_from_arrow_default_ingest():
+    pa = pytest.importorskip("pyarrow")
+    at = pa.table({"name": pa.array(SAMPLE, type=pa.string()), "x": pa.array(range(len(SAMPLE)))})
+    t = CTable.from_arrow(at.schema, at.to_batches())
+    assert t["name"].is_utf8
+    assert list(t["name"][:]) == SAMPLE
+
+
+def test_utf8_from_arrow_large_string_ingest():
+    pa = pytest.importorskip("pyarrow")
+    at = pa.table({"name": pa.array(SAMPLE, type=pa.large_string())})
+    t = CTable.from_arrow(at.schema, at.to_batches())
+    assert t["name"].is_utf8
+    assert list(t["name"][:]) == SAMPLE
+
+
+def test_utf8_from_arrow_nulls_use_sentinel():
+    pa = pytest.importorskip("pyarrow")
+    at = pa.table({"name": pa.array(["a", None, "c"], type=pa.string())})
+    t = CTable.from_arrow(at.schema, at.to_batches())
+    nv = t["name"].null_value
+    assert nv is not None
+    assert list(t["name"][:]) == ["a", nv, "c"]
+    assert t["name"].null_count() == 1
+
+
+def test_utf8_from_arrow_fixed_width_when_max_length_given():
+    pa = pytest.importorskip("pyarrow")
+    at = pa.table({"name": pa.array(["hi", "there"], type=pa.string())})
+    t = CTable.from_arrow(at.schema, at.to_batches(), string_max_length=32)
+    assert not t["name"].is_utf8
+    assert t["name"].dtype.kind == "U"
+
+
+def test_utf8_duckdb_query():
+    duckdb = pytest.importorskip("duckdb")
+    pytest.importorskip("pyarrow")
+    t = make_table(["paris", "london", "paris", "tokyo"])
+    arrow_tbl = t.to_arrow()
+    result = duckdb.sql(
+        "SELECT name, count(*) AS n FROM arrow_tbl WHERE name = 'paris' GROUP BY name"
+    ).fetchall()
+    assert result == [("paris", 2)]

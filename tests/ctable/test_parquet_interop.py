@@ -417,16 +417,18 @@ class TestParquetRoundTrip:
         with pytest.raises(ValueError, match="blosc2_batch_size"):
             CTable.from_arrow(at.schema, at.to_batches(), blosc2_batch_size=0)
 
-    def test_vlstring_arrow_roundtrip_no_singleton_list(self):
-        """Scalar string columns import as vlstring (not list<string>) without singleton wrapping."""
+    def test_utf8_arrow_roundtrip_no_singleton_list(self):
+        """Scalar string columns import as utf8 (not list<string>) without singleton wrapping."""
         long_str = "x" * 500
         at = pa.table({"txt": pa.array(["short", long_str, None, "end"], type=pa.string())})
         t = CTable.from_arrow(at.schema, at.to_batches())
         assert t["txt"].is_varlen_scalar
-        assert list(t["txt"][:]) == ["short", long_str, None, "end"]
+        assert t["txt"].is_utf8
+        nv = t["txt"].null_value
+        assert list(t["txt"][:]) == ["short", long_str, nv, "end"]
         # Export back to Arrow → still a scalar string column, not list<string>
         out = t.to_arrow()
-        assert pa.types.is_string(out.schema.field("txt").type)
+        assert pa.types.is_large_string(out.schema.field("txt").type)
         assert out.column("txt").to_pylist() == ["short", long_str, None, "end"]
 
     def test_vlbytes_arrow_roundtrip_no_singleton_list(self):
@@ -440,7 +442,7 @@ class TestParquetRoundTrip:
         assert pa.types.is_large_binary(out.schema.field("bin").type)
         assert out.column("bin").to_pylist() == [b"short", long_bin, None, b"end"]
 
-    def test_vlstring_parquet_roundtrip(self, tmp_path):
+    def test_utf8_parquet_roundtrip(self, tmp_path):
         """Parquet import/export round-trips long scalar strings without singleton-list wrapping."""
         long_str = "y" * 1000
         at = pa.table(
@@ -449,17 +451,19 @@ class TestParquetRoundTrip:
                 "txt": pa.array(["short", long_str, None, "end"], type=pa.string()),
             }
         )
-        path = tmp_path / "vlstring.parquet"
+        path = tmp_path / "utf8.parquet"
         pq.write_table(at, path)
 
         t = CTable.from_parquet(path)
         assert t["txt"].is_varlen_scalar
-        assert list(t["txt"][:]) == ["short", long_str, None, "end"]
+        assert t["txt"].is_utf8
+        nv = t["txt"].null_value
+        assert list(t["txt"][:]) == ["short", long_str, nv, "end"]
 
-        out = tmp_path / "vlstring_out.parquet"
+        out = tmp_path / "utf8_out.parquet"
         t.to_parquet(out)
         rt = pq.read_table(out)
-        assert pa.types.is_string(rt.schema.field("txt").type)
+        assert pa.types.is_large_string(rt.schema.field("txt").type)
         assert rt.column("txt").to_pylist() == ["short", long_str, None, "end"]
 
 
@@ -530,7 +534,8 @@ class TestNullHandling:
         out = tmp_path / "nullable_scalars_out.parquet"
         t.to_parquet(out)
         rt = pq.read_table(out)
-        assert rt.schema == at.schema
+        # "s" round-trips as utf8 -> large_string, unlike the other columns.
+        assert rt.schema == at.schema.set(at.schema.get_field_index("s"), pa.field("s", pa.large_string()))
         assert rt.to_pylist() == at.to_pylist()
 
     def test_null_policy_controls_default_sentinels(self):
@@ -586,12 +591,21 @@ class TestNullHandling:
             t2 = CTable.from_parquet(path, auto_null_sentinels=False)
         assert t2._schema.columns_by_name["i"].spec.null_value == -1
 
-    def test_null_policy_rejects_vlstring_column_null_values(self):
-        """Passing column_null_values for a vlstring column raises TypeError."""
+    def test_null_policy_rejects_vlbytes_column_null_values(self):
+        """Passing column_null_values for a vlbytes column raises TypeError."""
+        at = pa.table({"b": pa.array([b"a", None, b"c"], type=pa.large_binary())})
+        policy = blosc2.NullPolicy(column_null_values={"b": b"NA"})
+        with blosc2.null_policy(policy), pytest.raises(TypeError, match="vlbytes"):
+            CTable.from_arrow(at.schema, at.to_batches())
+
+    def test_null_policy_column_null_values_applies_to_utf8(self):
+        """Passing column_null_values for a utf8 (scalar string) column sets its sentinel."""
         at = pa.table({"s": pa.array(["a", None, "c"], type=pa.string())})
         policy = blosc2.NullPolicy(column_null_values={"s": "NA"})
-        with blosc2.null_policy(policy), pytest.raises(TypeError, match="vlstring"):
-            CTable.from_arrow(at.schema, at.to_batches())
+        with blosc2.null_policy(policy):
+            t = CTable.from_arrow(at.schema, at.to_batches())
+        assert t["s"].null_value == "NA"
+        assert list(t["s"][:]) == ["a", "NA", "c"]
 
     def test_null_policy_unknown_column_raises(self):
         at = pa.table({"i": pa.array([1, None], type=pa.int32())})

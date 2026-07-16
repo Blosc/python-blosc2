@@ -494,7 +494,7 @@ def test_cli_preserves_dict_by_default(tmp_path):
 
 def test_cli_decode_dictionaries_flag(tmp_path):
     from blosc2.cli.parquet_to_blosc2 import main
-    from blosc2.schema import VLStringSpec
+    from blosc2.schema import Utf8Spec
 
     path = tmp_path / "dict.parquet"
     out = tmp_path / "dict_decoded.b2d"
@@ -506,8 +506,8 @@ def test_cli_decode_dictionaries_flag(tmp_path):
     assert main(["--decode-dictionaries", str(path), str(out)]) == 0
 
     ct = CTable.open(str(out), mode="r")
-    assert isinstance(ct._schema.columns_by_name["vendor"].spec, VLStringSpec)
-    assert ct["vendor"][:] == ["Uber", "Lyft", "Uber"]
+    assert isinstance(ct._schema.columns_by_name["vendor"].spec, Utf8Spec)
+    assert list(ct["vendor"][:]) == ["Uber", "Lyft", "Uber"]
     ct.close()
 
 

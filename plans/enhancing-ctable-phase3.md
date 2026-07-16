@@ -196,6 +196,52 @@ sentinel↔validity like every other dtype — **this is the sentinel-vs-mask
 checkpoint from decision 4**. Tests: `pa.table(ct)` roundtrip, duckdb query
 on a utf8 column, `from_arrow(pa_table)` ingest.
 
+**P3.b implementation notes (landed 2026-07-16, branch `enhancing-ctable3`):**
+
+- What landed: `_pa_type_from_spec` maps `Utf8Spec` → `pa.large_string()`
+  (always large, per the plan); `iter_arrow_batches` builds a null mask from
+  the sentinel and exports proper Arrow nulls; `_arrow_type_to_spec` now maps
+  incoming Arrow `string`/`large_string` (when `string_max_length` is not
+  given) to `blosc2.utf8()` instead of `blosc2.vlstring()` — this is the
+  **sentinel checkpoint from decision 4, resolved as sentinel**: nullable
+  utf8 columns imported from Arrow get a sentinel from the active
+  `NullPolicy` (default `"__BLOSC2_NULL__"`) exactly like every other
+  nullable scalar dtype, and `column_null_values` overrides now work for
+  utf8 columns (previously rejected for vlstring, since vlstring nulls are
+  native `None`). No lossiness was observed in the tests exercised here
+  (synthetic Arrow tables, DuckDB round trips); **P5 was not unparked** —
+  revisit only if a real free-text corpus collides with the sentinel.
+- `binary`/`large_binary` Arrow columns are unaffected — they still import as
+  `vlbytes` (native-`None` nulls); only the scalar-*string* default moved.
+- **Deviation**: the plan's "keep the old mapping available via the existing
+  import options if one exists" — no such option exists (`string_max_length`
+  only toggles fixed-width vs variable-length, not which variable-length
+  representation to use), so none was added; this matches the cross-cutting
+  rule against building unrequested options.
+- Ripple effects fixed to keep the suite honest, not just green: `Column.dtype`
+  now documents that utf8 columns report `numpy.dtypes.StringDType()` (its
+  docstring previously said variable-length columns always return `None`);
+  several `tests/ctable/test_arrow_interop.py` /
+  `tests/ctable/test_parquet_interop.py` tests asserted the old
+  vlstring-default/native-None-null behavior and were updated to assert the
+  new utf8/sentinel behavior instead of being loosened. The
+  `parquet_to_blosc2` CLI (`src/blosc2/cli/parquet_to_blosc2.py`) computes its
+  own "will this become vlstring?" labels purely for its progress report
+  (independent of the real dispatch in `ctable.py`), so those labels
+  (`"vlstring"`/`"vlstring_nullable"`/`"dictionary_decoded_to_vlstring"`, the
+  `--decode-dictionaries` help text, and the module docstring) were renamed to
+  `"utf8"`/`"utf8_nullable"`/`"dictionary_decoded_to_utf8"` to stay accurate;
+  its export-side Arrow-type-cast logic needed no behavior change (large_string
+  casts back to the original field type the same way string did).
+- Tests: `tests/ctable/test_utf8.py` gained a dedicated Arrow-interop section
+  (`pa.table(ct)` roundtrip with and without nulls, `from_arrow` ingest from
+  both `string` and `large_string`, sentinel-null ingest, `string_max_length`
+  still yields fixed-width, and a DuckDB `SELECT ... WHERE` query run directly
+  against a CTable with a utf8 column via the Arrow C-stream protocol —
+  verified working end-to-end, including DuckDB querying the CTable object
+  itself, not just an exported `pa.Table`). Full `tests/ctable` (1365) and the
+  rest of `tests/` (1706) pass.
+
 **P3.c Filters and expressions.** Carve utf8 out of the
 `_ensure_queryable` rejection for comparisons only; implement `==`, `!=`,
 `<`, `<=`, `>`, `>=` against scalars and other utf8 columns via the

@@ -2071,9 +2071,13 @@ class Column:
 
     @property
     def dtype(self):
-        """NumPy dtype of the underlying storage, or ``None`` for
-        variable-length columns (:func:`~blosc2.vlstring`,
-        :func:`~blosc2.vlbytes`, :func:`~blosc2.list`)."""
+        """NumPy dtype of the underlying storage.
+
+        ``None`` for variable-length columns with no fixed element dtype
+        (:func:`~blosc2.vlstring`, :func:`~blosc2.vlbytes`,
+        :func:`~blosc2.list`).  :func:`~blosc2.utf8` columns report
+        ``numpy.dtypes.StringDType()``, the dtype of their materialized reads.
+        """
         return getattr(self._raw_col, "dtype", None)
 
     def iter_chunks(self, size: int = 65536):
@@ -6473,10 +6477,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if isinstance(spec, DictionarySpec):
             return pa.dictionary(pa.int32(), pa.string(), ordered=spec.ordered)
         if isinstance(spec, Utf8Spec):
-            raise NotImplementedError(
-                "Arrow export of variable-length utf8 columns is not supported yet; "
-                "exclude the column via the columns= argument."
-            )
+            # Always large_string: 64-bit offsets match the int64 offsets array,
+            # so multi-GB string columns export without int32-offset overflow.
+            return pa.large_string()
         if isinstance(spec, VLStringSpec):
             return pa.string()
         if isinstance(spec, VLBytesSpec):
@@ -6568,6 +6571,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if col.is_list:
                     spec = self._schema.columns_by_name[name].spec
                     arrays.append(pa.array(col[start:stop], type=self._pa_type_from_spec(pa, spec)))
+                    continue
+                if col.is_utf8:
+                    spec = self._schema.columns_by_name[name].spec
+                    values = col[start:stop]  # StringDType array with sentinel nulls
+                    nv = getattr(spec, "null_value", None)
+                    null_mask = values == nv if nv is not None else None
+                    arrays.append(
+                        pa.array(
+                            values.tolist(),
+                            type=pa.large_string(),
+                            mask=null_mask if null_mask is not None and null_mask.any() else None,
+                        )
+                    )
                     continue
                 if col.is_varlen_scalar:
                     spec = self._schema.columns_by_name[name].spec
@@ -6866,8 +6882,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
             if string_max_length is None:
-                # No fixed-width threshold given: store as variable-length scalar string.
-                return b2s.vlstring(nullable=nullable)
+                # No fixed-width threshold given: store as a variable-length
+                # utf8 column (offsets + bytes, StringDType reads).
+                return b2s.utf8(nullable=nullable, null_value=null_value)
             max_length = max(string_max_length, len(null_value) if null_value is not None else 1, 1)
             return b2s.string(max_length=max_length, null_value=null_value)
 
@@ -6924,17 +6941,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             field_is_struct = pa.types.is_struct(field.type)
             field_is_dictionary = pa.types.is_dictionary(field.type)
             column_string_max_length = cls._string_max_length_for_column(string_max_length, name)
+            # Scalar strings without a fixed-width threshold import as utf8
+            # columns, which use null sentinels like other scalar columns;
+            # only binary columns keep the native-None varlen treatment.
             field_is_varlen_scalar = (
                 not field_is_list
                 and not field_is_struct
                 and not field_is_dictionary
                 and column_string_max_length is None
-                and (
-                    pa.types.is_string(field.type)
-                    or pa.types.is_large_string(field.type)
-                    or pa.types.is_binary(field.type)
-                    or pa.types.is_large_binary(field.type)
-                )
+                and (pa.types.is_binary(field.type) or pa.types.is_large_binary(field.type))
             )
             field_needs_object_fallback = cls._arrow_type_needs_object_fallback(pa, field.type)
             if field_needs_object_fallback and not object_fallback:
@@ -6950,7 +6965,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 )
             if has_null_value_override and field_is_varlen_scalar:
                 raise TypeError(
-                    f"column_null_values is not supported for vlstring/vlbytes column {name!r}; "
+                    f"column_null_values is not supported for vlbytes column {name!r}; "
                     "these columns represent nulls as native None."
                 )
             if has_null_value_override:
@@ -7553,12 +7568,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             t.trip.begin.lon.max()
 
         When *string_max_length* is ``None`` (the default), scalar Arrow
-        ``string`` / ``large_string`` columns are imported as
-        :func:`~blosc2.vlstring` columns and ``binary`` / ``large_binary``
-        columns are imported as :func:`~blosc2.vlbytes` columns.  Non-struct
-        ``struct`` columns (not containing only scalar leaves) are imported as
+        ``string`` / ``large_string`` columns are imported as variable-length
+        :func:`~blosc2.utf8` columns (offsets + bytes storage; nullable
+        columns get a null sentinel string from the active
+        :class:`NullPolicy`) and ``binary`` / ``large_binary`` columns are
+        imported as :func:`~blosc2.vlbytes` columns.  Non-struct ``struct``
+        columns (not containing only scalar leaves) are imported as
         :func:`~blosc2.struct` columns backed by batched variable-length
-        storage.  Null values for these variable-length scalar columns are
+        storage.  Null values for ``vlbytes``/``struct`` columns are
         represented as native ``None`` with no sentinel needed.
 
         When *string_max_length* is set to a positive integer, scalar string
@@ -7566,7 +7583,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         :func:`~blosc2.string` / :func:`~blosc2.bytes` columns whose dtype is
         sized to *string_max_length* characters/bytes. It may also be a mapping
         from column name to max length; omitted string/binary columns remain
-        :func:`~blosc2.vlstring` / :func:`~blosc2.vlbytes` columns.
+        :func:`~blosc2.utf8` / :func:`~blosc2.vlbytes` columns.
 
         ``blosc2_batch_size`` controls how many rows are buffered before
         BatchArray-backed imported columns (list columns and variable-length

@@ -306,12 +306,13 @@ def test_from_arrow_all_numeric_types():
     assert t.col_names == list(at.column_names)
 
 
-def test_from_arrow_string_default_is_vlstring():
-    """Without string_max_length, scalar string columns become vlstring (variable-length)."""
+def test_from_arrow_string_default_is_utf8():
+    """Without string_max_length, scalar string columns become utf8 (variable-length)."""
     at = pa.table({"name": pa.array(["hi", "hello world", "!"], type=pa.string())})
     t = CTable.from_arrow(at.schema, at.to_batches())
     assert t["name"].is_varlen_scalar
-    assert t["name"].dtype is None
+    assert t["name"].is_utf8
+    assert t["name"].dtype == np.dtypes.StringDType()
     assert list(t["name"][:]) == ["hi", "hello world", "!"]
 
 
@@ -520,15 +521,22 @@ def test_arrow_c_stream_empty_table():
 
 def test_from_arrow_accepts_another_ctable():
     # A CTable is itself a capsule producer, so it can be ingested directly.
+    # The fixed-width "label" column re-imports as utf8 (large_string), so
+    # compare column values rather than the exact Arrow schema.
     t = _mixed_table()
     roundtripped = CTable.from_arrow(t)
-    assert roundtripped.to_arrow().equals(t.to_arrow())
+    left, right = roundtripped.to_arrow(), t.to_arrow()
+    assert left.column("label").to_pylist() == right.column("label").to_pylist()
+    assert left.drop(["label"]).equals(right.drop(["label"]))
 
 
 def test_from_arrow_streams_filtered_view():
     t = _mixed_table()
     view = t[t.id != t["id"].null_value]
-    assert CTable.from_arrow(view).to_arrow().equals(view.to_arrow())
+    left = CTable.from_arrow(view).to_arrow()
+    right = view.to_arrow()
+    assert left.column("label").to_pylist() == right.column("label").to_pylist()
+    assert left.drop(["label"]).equals(right.drop(["label"]))
 
 
 def test_from_arrow_rejects_capsule_plus_batches():
