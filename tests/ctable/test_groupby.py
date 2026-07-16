@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import math
 from dataclasses import dataclass, make_dataclass
 
 import numpy as np
@@ -914,6 +915,31 @@ def test_agg_udf_never_called_raises_clear_error():
 
     with pytest.raises(ValueError, match="it was never called"):
         g.agg(x=("sales", lambda a: a.max() - a.min()))
+
+
+def test_agg_udf_none_result_becomes_output_null_value():
+    # A UDF returning None for some (but not all) groups is treated like an
+    # empty group: patched to the output dtype's null value, and excluded
+    # from dtype inference rather than poisoning it with a mixed-type list.
+    t = CTable(SalesRow, new_data=[("Paris", 1, 10.0, 0), ("Paris", 1, 30.0, 0), ("Rome", 1, 5.0, 0)])
+    g = t.group_by("city", sort=True)
+
+    def maybe_none(a):
+        return None if a.sum() > 20 else float(a.sum())
+
+    result = g.agg(x=("sales", maybe_none))
+    assert col(result, "city") == ["Paris", "Rome"]
+    assert math.isnan(result["x"][0])  # Paris: sum is 40, UDF returned None
+    assert result["x"][1] == pytest.approx(5.0)  # Rome: sum is 5, UDF returned it
+    assert result["x"].dtype == np.float64
+
+
+def test_agg_udf_all_none_raises_like_never_called():
+    t = CTable(SalesRow, new_data=[("Paris", 1, 10.0, 0), ("Rome", 1, 5.0, 0)])
+    g = t.group_by("city")
+
+    with pytest.raises(ValueError, match="it was never called"):
+        g.agg(x=("sales", lambda a: None))
 
 
 def test_agg_udf_result_not_wrapped_in_zero_d_array(monkeypatch):

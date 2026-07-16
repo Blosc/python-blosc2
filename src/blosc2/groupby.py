@@ -1776,9 +1776,11 @@ class CTableGroupBy:
         if self._resolve_sort(cheap=False):
             keys.sort(key=lambda k: tuple(_sortable_key_part(v) for v in key_values[k]))
 
-        # Sentinel distinguishing "group had zero non-null values, UDF was
-        # never called" from a UDF legitimately returning None; patched to a
-        # real null value once the output dtype is known, below.
+        # Sentinel marking a UDF aggregation group with no real result yet --
+        # either it had zero non-null input values (the UDF was never
+        # called), or the UDF itself returned None to signal a null result.
+        # Both cases are excluded from dtype inference and patched to the
+        # output dtype's null value once it is known, below.
         _empty_udf_group = object()
 
         udf_results: dict[str, list] = {spec.output_col: [] for spec in specs if spec.op == "udf"}
@@ -1806,8 +1808,15 @@ class CTableGroupBy:
                                 f"UDF aggregation {spec.output_col!r} raised for group "
                                 f"{key_values[norm_key]!r}: {exc}"
                             ) from exc
-                        row[spec.output_col] = result
-                        udf_results[spec.output_col].append(result)
+                        if result is None:
+                            # The UDF itself signaled a null result; treat it
+                            # like an empty group rather than feeding None
+                            # into dtype inference (which would otherwise see
+                            # it as a genuinely inconsistent result type).
+                            row[spec.output_col] = _empty_udf_group
+                        else:
+                            row[spec.output_col] = result
+                            udf_results[spec.output_col].append(result)
                 elif spec.op in {"sum", "min", "max", "argmin", "argmax"} and state.count == 0:
                     row[spec.output_col] = _null_output_value(self._result_spec_for_agg(spec))
                 elif spec.op in {"argmin", "argmax"}:
