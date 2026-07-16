@@ -38,6 +38,7 @@ from blosc2.scalar_array import (
     _validate_role_metadata,
 )
 from blosc2.schunk import process_opened_object
+from blosc2.utf8_array import Utf8Array, _new_backend_arrays
 
 if TYPE_CHECKING:
     from blosc2.schema import ListSpec
@@ -249,6 +250,11 @@ class InMemoryTableStorage(TableStorage):
         raise RuntimeError("In-memory tables have no on-disk representation to open.")
 
     def create_varlen_scalar_column(self, name, *, spec, cparams=None, dparams=None):
+        from blosc2.schema import Utf8Spec
+
+        if isinstance(spec, Utf8Spec):
+            offsets, data = _new_backend_arrays(cparams, dparams)
+            return Utf8Array(spec, offsets, data)
         return _ScalarVarLenArray(spec)
 
     def open_varlen_scalar_column(self, name, spec):
@@ -398,6 +404,12 @@ def _column_name_to_relpath(name: str) -> str:
 # Suffix used to store a dictionary column's value store alongside its codes.
 _DICT_SUFFIX = "_dict"
 
+# Key suffix for the byte-blob companion of a utf8 column (its offsets array
+# lives at the plain column key).  The literal dot cannot collide with a user
+# column: unescaped dots in logical names become path separators and escaped
+# dots are percent-encoded, so no column name maps to a key containing ".".
+_UTF8_DATA_SUFFIX = ".utf8"
+
 
 class EmbedStoreTableStorage(TableStorage):
     """Read-only :class:`CTable` storage backed by an in-memory :class:`blosc2.EmbedStore`.
@@ -473,6 +485,12 @@ class EmbedStoreTableStorage(TableStorage):
         return self._estore[self._col_key(name)]
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
+        from blosc2.schema import Utf8Spec
+
+        if isinstance(spec, Utf8Spec):
+            offsets = self._estore[self._col_key(name)]
+            data = self._estore[self._col_key(name) + _UTF8_DATA_SUFFIX]
+            return Utf8Array(spec, offsets, data)
         backend = self._estore[self._col_key(name)]
         return _ScalarVarLenArray(spec, backend)
 
@@ -706,11 +724,30 @@ class FileTableStorage(TableStorage):
         return blosc2.open(self._list_col_path(name), mode=self._mode)
 
     def create_varlen_scalar_column(self, name, *, spec, cparams=None, dparams=None) -> _ScalarVarLenArray:
+        from blosc2.schema import Utf8Spec
+
+        if isinstance(spec, Utf8Spec):
+            offsets, data = _new_backend_arrays(cparams, dparams)
+            store = self._open_store()
+            store[self._col_key(name)] = offsets
+            store[self._col_key(name) + _UTF8_DATA_SUFFIX] = data
+            return Utf8Array(
+                spec,
+                store[self._col_key(name)],
+                store[self._col_key(name) + _UTF8_DATA_SUFFIX],
+            )
         urlpath = self._list_col_path(name)
         backend = _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
         return _ScalarVarLenArray(spec, backend)
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
+        from blosc2.schema import Utf8Spec
+
+        if isinstance(spec, Utf8Spec):
+            store = self._open_store()
+            offsets = store[self._col_key(name)]
+            data = store[self._col_key(name) + _UTF8_DATA_SUFFIX]
+            return Utf8Array(spec, offsets, data)
         store = self._open_store()
         path = self._list_col_path(name)
         if store.is_zip_store and self._mode == "r":
@@ -874,6 +911,9 @@ class FileTableStorage(TableStorage):
         key = self._col_key(name)
         if key in self._open_store():
             del self._open_store()[key]
+            data_key = key + _UTF8_DATA_SUFFIX
+            if data_key in self._open_store():
+                del self._open_store()[data_key]
             return
         list_path = self._list_col_path(name)
         if os.path.exists(list_path):
@@ -888,6 +928,10 @@ class FileTableStorage(TableStorage):
         if old_key in store:
             store[new_key] = store[old_key]
             del store[old_key]
+            old_data_key = old_key + _UTF8_DATA_SUFFIX
+            if old_data_key in store:
+                store[new_key + _UTF8_DATA_SUFFIX] = store[old_data_key]
+                del store[old_data_key]
             return store[new_key]
         old_path = self._list_col_path(old)
         new_path = self._list_col_path(new)
@@ -1266,11 +1310,36 @@ class TreeStoreTableStorage(TableStorage):
         cparams=None,
         dparams=None,
     ) -> _ScalarVarLenArray:
+        from blosc2.schema import Utf8Spec
+
+        if isinstance(spec, Utf8Spec):
+            logical_key = self._col_logical_key(name)
+            offsets_path = self._dest_path(logical_key, ".b2nd")
+            data_path = self._dest_path(logical_key + _UTF8_DATA_SUFFIX, ".b2nd")
+            os.makedirs(os.path.dirname(offsets_path), exist_ok=True)
+            offsets, data = _new_backend_arrays(
+                cparams, dparams, offsets_urlpath=offsets_path, data_urlpath=data_path
+            )
+            for logical, dest_path in (
+                (logical_key, offsets_path),
+                (logical_key + _UTF8_DATA_SUFFIX, data_path),
+            ):
+                rel_path = os.path.relpath(dest_path, self._working_dir()).replace(os.sep, "/")
+                self._store.map_tree[self._table_key(logical)] = rel_path
+            self._store._modified = True
+            return Utf8Array(spec, offsets, data)
         urlpath = self._list_col_path(name)
         os.makedirs(os.path.dirname(urlpath), exist_ok=True)
         return _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
+        from blosc2.schema import Utf8Spec
+
+        if isinstance(spec, Utf8Spec):
+            logical_key = self._col_logical_key(name)
+            offsets = self._open_leaf(logical_key)
+            data = self._open_leaf(logical_key + _UTF8_DATA_SUFFIX)
+            return Utf8Array(spec, offsets, data)
         if self._store.is_zip_store and self._mode == "r":
             rel = self._table_key(self._col_logical_key(name)).lstrip("/") + ".b2b"
             if rel not in self._store.offsets:
@@ -1440,10 +1509,15 @@ class TreeStoreTableStorage(TableStorage):
     def delete_column(self, name: str) -> None:
         full_key = self._table_key(self._col_logical_key(name))
         if full_key in self._store.map_tree:
-            filepath = self._store.map_tree.pop(full_key)
-            full_path = os.path.join(self._working_dir(), filepath)
-            if os.path.exists(full_path):
-                os.remove(full_path)
+            keys = [full_key]
+            data_key = self._table_key(self._col_logical_key(name) + _UTF8_DATA_SUFFIX)
+            if data_key in self._store.map_tree:
+                keys.append(data_key)
+            for key in keys:
+                filepath = self._store.map_tree.pop(key)
+                full_path = os.path.join(self._working_dir(), filepath)
+                if os.path.exists(full_path):
+                    os.remove(full_path)
             return
         list_path = self._list_col_path(name)
         if os.path.exists(list_path):
@@ -1453,16 +1527,23 @@ class TreeStoreTableStorage(TableStorage):
 
     def rename_column(self, old: str, new: str) -> blosc2.NDArray:
         old_key = self._table_key(self._col_logical_key(old))
-        new_key = self._table_key(self._col_logical_key(new))
         if old_key in self._store.map_tree:
-            new_dest = self._dest_path(self._col_logical_key(new), ".b2nd")
-            old_dest = os.path.join(self._working_dir(), self._store.map_tree[old_key])
-            os.makedirs(os.path.dirname(new_dest), exist_ok=True)
-            os.replace(old_dest, new_dest)
-            del self._store.map_tree[old_key]
-            self._store.map_tree[new_key] = os.path.relpath(new_dest, self._working_dir()).replace(
-                os.sep, "/"
-            )
+            moves = [(old_key, self._col_logical_key(new))]
+            old_data_key = self._table_key(self._col_logical_key(old) + _UTF8_DATA_SUFFIX)
+            if old_data_key in self._store.map_tree:
+                moves.append((old_data_key, self._col_logical_key(new) + _UTF8_DATA_SUFFIX))
+            new_dest = None
+            for src_key, dst_logical in moves:
+                dst_dest = self._dest_path(dst_logical, ".b2nd")
+                src_dest = os.path.join(self._working_dir(), self._store.map_tree[src_key])
+                os.makedirs(os.path.dirname(dst_dest), exist_ok=True)
+                os.replace(src_dest, dst_dest)
+                del self._store.map_tree[src_key]
+                self._store.map_tree[self._table_key(dst_logical)] = os.path.relpath(
+                    dst_dest, self._working_dir()
+                ).replace(os.sep, "/")
+                if new_dest is None:
+                    new_dest = dst_dest
             self._store._modified = True
             return blosc2.open(new_dest, mode=self._mode)
         old_path = self._list_col_path(old)

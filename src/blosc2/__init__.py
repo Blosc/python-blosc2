@@ -774,6 +774,7 @@ from .schema import (
     uint16,
     uint32,
     uint64,
+    utf8,
     vlbytes,
     vlstring,
 )
@@ -829,6 +830,7 @@ __all__ = [  # noqa : RUF022
     "uint16",
     "uint32",
     "uint64",
+    "utf8",
     "vlbytes",
     "vlstring",
     # Grouped reductions
