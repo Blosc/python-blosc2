@@ -252,6 +252,53 @@ work — add tests pinning them. Tests: filter correctness incl. null rows,
 `t[t.name == "x"]` on views, comparison with non-string scalar raises
 clearly.
 
+**P3.c implementation notes (landed 2026-07-16, branch `enhancing-ctable3`):**
+
+- What landed: `Column.__eq__`/`__ne__`/`__lt__`/`__le__`/`__gt__`/`__ge__`
+  special-case `is_utf8` (mirroring the existing `is_dictionary` special-case
+  in `__eq__`/`__ne__`) and dispatch to a new `Column._utf8_compare(op,
+  other)`, bypassing `_ensure_comparable()`/`_ensure_queryable()` entirely for
+  these six operators. `_ensure_queryable()`'s utf8 rejection message was
+  narrowed to say arithmetic/bitwise ops are unsupported (comparisons are
+  no longer rejected there). Arithmetic (`+`, `-`, …) and bitwise ops on
+  utf8 columns still raise, unchanged.
+- `_utf8_compare` reads the column chunk-by-chunk via a new
+  `Column._utf8_chunked_bool` helper (StringDType comparisons run natively
+  in NumPy — `np.equal`/`np.less`/etc. all work directly on
+  `numpy.dtypes.StringDType` arrays, verified empirically before writing
+  this), and returns a physical-length (`_valid_rows`-length) boolean
+  `blosc2.NDArray`, intersected with the column's live-row mask exactly like
+  `_dictionary_eq` — so the result is usable directly as `t[t.name == "x"]`,
+  `t.where(...)`, or combined with `&`/`|`/`~` against other predicates.
+  Supports scalar `str` operands and column-vs-column comparison between two
+  utf8 `Column`s (both must be utf8; comparing against any other type raises
+  `TypeError` naming the column and expected types).
+- **Null handling implements the phase-1 SQL `WHERE` rule**: a null value on
+  either side never satisfies any comparison (`==`, `!=`, `<`, …), via a new
+  `Column._utf8_null_pred()` (parallel to `_raw_null_pred()` for sentinel
+  columns) OR'd across both operands and subtracted from the raw predicate —
+  same shape as `_null_aware_compare`, just utf8-specific because the
+  sentinel lives in `StringDType` values, not a fixed-width NumPy dtype.
+- `blosc2.startswith`/`blosc2.endswith` (and other `np.strings`-backed
+  `LazyExpr` function ops) were verified to already work unmodified against a
+  utf8 `Column` operand — no changes needed, per the plan's expectation; a
+  pinning test was added (`test_ctable_utf8_startswith_endswith`).
+- String-expression predicates (`t.where("name == 'hello'")`) still raise
+  `NotImplementedError` via the existing `_guard_scalar_expression` guard —
+  intentionally out of scope (decision 3: numexpr/miniexpr cannot evaluate
+  `StringDType`; only the direct Python-operator comparison path is
+  implemented).
+- Tests: `tests/ctable/test_utf8.py` gained a "Comparisons and filtering"
+  section — `==`/`!=` row filtering, all four ordering comparisons, null-row
+  exclusion (including a dedicated column-vs-column-with-nulls case),
+  filtering on a view (`t.head(N)[...]`), non-string-scalar and
+  mismatched-column-type `TypeError`s, and the `startswith`/`endswith`
+  pinning test. Manually verified end-to-end beyond the automated suite:
+  physical-length predicate padding for a logically-shorter utf8 array,
+  view-of-view filtering (filter on a filtered view), and that the SQL null
+  rule holds for `<`/`>=` in addition to `==`/`!=`. Full `tests/ctable`
+  (1373) and `tests/ndarray` (4385) suites pass.
+
 **P3.d Groupby keys.** Replace the groupby rejection for utf8 keys
 (grep `Cannot group by variable-length` in `groupby.py`). Factorization:
 read the chunk as offsets+bytes and hash rows vectorized — same trick as

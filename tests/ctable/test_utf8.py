@@ -394,14 +394,90 @@ def test_ctable_utf8_rename_column_persistent(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Unsupported operations fail clearly (lifted by later work)
+# Comparisons and filtering
 # ---------------------------------------------------------------------------
 
 
-def test_ctable_utf8_comparison_raises_clearly():
+def test_ctable_utf8_eq_filters_rows():
+    t = make_table(["paris", "london", "paris", "tokyo"])
+    view = t[t.name == "paris"]
+    assert list(view["name"][:]) == ["paris", "paris"]
+    assert list(view["x"][:]) == [0, 2]
+
+
+def test_ctable_utf8_ne_filters_rows():
+    t = make_table(["paris", "london", "paris", "tokyo"])
+    view = t[t.name != "paris"]
+    assert list(view["name"][:]) == ["london", "tokyo"]
+
+
+def test_ctable_utf8_ordering_comparisons():
+    t = make_table(["paris", "london", "tokyo"])
+    assert list(t[t.name < "paris"]["name"][:]) == ["london"]
+    assert list(t[t.name <= "paris"]["name"][:]) == ["paris", "london"]
+    assert list(t[t.name > "paris"]["name"][:]) == ["tokyo"]
+    assert list(t[t.name >= "paris"]["name"][:]) == ["paris", "tokyo"]
+
+
+def test_ctable_utf8_comparison_excludes_null_rows():
+    """SQL WHERE semantics: a null value never satisfies any comparison."""
+    t = CTable(NullableRow, new_data={"name": ["paris", None, "london"], "x": [1, 2, 3]})
+    assert list(t[t.name == t["name"].null_value]["name"][:]) == []
+    assert list(t[t.name != "paris"]["name"][:]) == ["london"]
+    assert list(t[t.name < "z"]["name"][:]) == ["paris", "london"]
+
+
+def test_ctable_utf8_column_vs_column_comparison():
+    @dataclass
+    class TwoCols:
+        a: str = blosc2.field(blosc2.utf8(nullable=True))
+        b: str = blosc2.field(blosc2.utf8(nullable=True))
+
+    t = CTable(TwoCols, new_data={"a": ["x", "y", None, "z"], "b": ["x", "z", "q", None]})
+    eq = t[t.a == t.b]
+    assert list(eq["a"][:]) == ["x"]
+    ne = t[t.a != t.b]
+    # rows with a null on either side never satisfy != either (SQL semantics)
+    assert list(ne["a"][:]) == ["y"]
+
+
+def test_ctable_utf8_comparison_on_view():
+    t = make_table(["paris", "london", "paris", "tokyo", "berlin"])
+    head_view = t.head(3)
+    filtered = head_view[head_view.name == "paris"]
+    assert list(filtered["name"][:]) == ["paris", "paris"]
+
+
+def test_ctable_utf8_comparison_with_non_string_scalar_raises():
     t = make_table()
-    with pytest.raises(NotImplementedError, match="utf8"):
-        t.name == "hello"  # noqa: B015
+    with pytest.raises(TypeError, match="utf8"):
+        t.name == 42  # noqa: B015
+    with pytest.raises(TypeError, match="utf8"):
+        t.name < 3.14  # noqa: B015
+
+
+def test_ctable_utf8_comparison_with_mismatched_column_type_raises():
+    @dataclass
+    class Mixed:
+        name: str = blosc2.field(blosc2.utf8())
+        other: str = blosc2.field(blosc2.vlstring())
+
+    t = CTable(Mixed, new_data={"name": ["a"], "other": ["b"]})
+    with pytest.raises(TypeError, match="utf8"):
+        t.name == t.other  # noqa: B015
+
+
+def test_ctable_utf8_startswith_endswith():
+    t = make_table(["hello", "help", "world"])
+    started = blosc2.startswith(t.name, "hel").compute()
+    assert list(np.asarray(started)[:]) == [True, True, False]
+    ended = blosc2.endswith(t.name, "lo").compute()
+    assert list(np.asarray(ended)[:]) == [True, False, False]
+
+
+# ---------------------------------------------------------------------------
+# Unsupported operations fail clearly (lifted by later work)
+# ---------------------------------------------------------------------------
 
 
 def test_ctable_utf8_where_expression_raises_clearly():

@@ -191,6 +191,14 @@ _CTABLE_PRINT_OPTIONS: dict[str, Any] = {
 _SMALL_NROWS_LIMIT = 10_000_000
 _SMALL_SORT_MATERIALIZE_LIMIT = _SMALL_NROWS_LIMIT
 _MAX_GROWTH_ROWS = 1_048_576
+_UTF8_COMPARE_OPS = {
+    "eq": np.equal,
+    "ne": np.not_equal,
+    "lt": np.less,
+    "le": np.less_equal,
+    "gt": np.greater,
+    "ge": np.greater_equal,
+}
 
 
 def get_null_policy() -> NullPolicy:
@@ -1730,7 +1738,8 @@ class Column:
         if self.is_utf8:
             raise NotImplementedError(
                 f"Column {self._col_name!r} is a variable-length utf8 column; "
-                "vectorized comparisons on utf8 columns are not supported yet."
+                "only comparisons (==, !=, <, <=, >, >=) are supported, not arithmetic "
+                "or bitwise operations."
             )
         if self.is_varlen_scalar:
             raise NotImplementedError(
@@ -1962,16 +1971,22 @@ class Column:
         return ~self._raw_col
 
     def __lt__(self, other):
+        if self.is_utf8:
+            return self._utf8_compare("lt", other)
         self._ensure_comparable()
         return self._null_aware_compare(other, self._raw_col < self._coerce_timestamp_operand(other))
 
     def __le__(self, other):
+        if self.is_utf8:
+            return self._utf8_compare("le", other)
         self._ensure_comparable()
         return self._null_aware_compare(other, self._raw_col <= self._coerce_timestamp_operand(other))
 
     def __eq__(self, other):
         if self.is_dictionary:
             return self._dictionary_eq(other)
+        if self.is_utf8:
+            return self._utf8_compare("eq", other)
         self._ensure_comparable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._null_aware_compare(other, self._raw_col == int(other))
@@ -1983,10 +1998,86 @@ class Column:
             if isinstance(result, np.ndarray):
                 return ~result
             return ~np.asarray(result, dtype=bool)
+        if self.is_utf8:
+            return self._utf8_compare("ne", other)
         self._ensure_comparable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._null_aware_compare(other, self._raw_col == int(not other))
         return self._null_aware_compare(other, self._raw_col != self._coerce_timestamp_operand(other))
+
+    def _utf8_chunked_bool(self, fn, *, chunk_size: int = 65536) -> np.ndarray:
+        """Apply ``fn(chunk, start, stop)`` over this utf8 column's logical rows.
+
+        *fn* returns a boolean array for each ``StringDType`` chunk read from
+        the underlying :class:`~blosc2.utf8_array.Utf8Array`.  Returns a
+        physical-length (``_valid_rows``-length) boolean NumPy array; rows
+        beyond the column's logical length are left ``False``.
+        """
+        arr = self._raw_col
+        n_phys = len(self._table._valid_rows)
+        n_logical = len(arr)
+        result = np.zeros(n_phys, dtype=np.bool_)
+        for start in range(0, n_logical, chunk_size):
+            stop = min(start + chunk_size, n_logical)
+            result[start:stop] = fn(arr[start:stop], start, stop)
+        return result
+
+    def _utf8_null_pred(self):
+        """Physical-length blosc2.NDArray, True where the utf8 value is the
+        null sentinel; ``None`` when the column is not nullable."""
+        spec = self._table._schema.columns_by_name[self._col_name].spec
+        nv = getattr(spec, "null_value", None)
+        if nv is None:
+            return None
+        raw = self._utf8_chunked_bool(lambda chunk, start, stop: chunk == nv)
+        return blosc2.asarray(raw)
+
+    def _utf8_compare(self, op: str, other):
+        """Chunked-numpy comparison predicate for a utf8 column.
+
+        Compares against a Python ``str`` scalar or another utf8
+        :class:`Column` (element-wise), evaluating chunk by chunk since
+        numexpr/miniexpr cannot operate on ``StringDType`` arrays.  Returns a
+        physical-length boolean ``blosc2.NDArray``, already intersected with
+        this column's live-row mask.  A null value on either side never
+        satisfies any comparison (SQL ``WHERE`` semantics), matching
+        :meth:`_null_aware_compare` for every other column kind.
+        """
+        if isinstance(other, Column):
+            if not other.is_utf8:
+                raise TypeError(
+                    f"Column {self._col_name!r} is a utf8 column; it can only be compared with a "
+                    f"str or another utf8 Column, got Column {other._col_name!r}."
+                )
+            other_arr = other._raw_col
+        elif isinstance(other, str):
+            other_arr = None
+        else:
+            raise TypeError(
+                f"Column {self._col_name!r} is a utf8 column; it can only be compared with a str "
+                f"or another utf8 Column, got {type(other).__name__!r}."
+            )
+
+        numpy_op = _UTF8_COMPARE_OPS[op]
+        if other_arr is None:
+            raw = self._utf8_chunked_bool(lambda chunk, start, stop: numpy_op(chunk, other))
+        else:
+            raw = self._utf8_chunked_bool(lambda chunk, start, stop: numpy_op(chunk, other_arr[start:stop]))
+        pred = blosc2.asarray(raw) & self._lazy_valid_rows()
+
+        null_pred = self._utf8_null_pred()
+        if isinstance(other, Column):
+            other_null_pred = other._utf8_null_pred()
+            null_pred = (
+                other_null_pred
+                if null_pred is None
+                else null_pred
+                if other_null_pred is None
+                else null_pred | other_null_pred
+            )
+        if null_pred is not None:
+            pred = pred & ~null_pred
+        return pred
 
     def _dictionary_eq(self, other):
         """Return a physical-slot boolean predicate for dictionary equality.
@@ -2062,10 +2153,14 @@ class Column:
         return mask
 
     def __gt__(self, other):
+        if self.is_utf8:
+            return self._utf8_compare("gt", other)
         self._ensure_comparable()
         return self._null_aware_compare(other, self._raw_col > self._coerce_timestamp_operand(other))
 
     def __ge__(self, other):
+        if self.is_utf8:
+            return self._utf8_compare("ge", other)
         self._ensure_comparable()
         return self._null_aware_compare(other, self._raw_col >= self._coerce_timestamp_operand(other))
 
