@@ -636,6 +636,64 @@ def test_ctable_utf8_sort_inplace_bystander_column():
     assert list(t["note"][:]) == ["n-a", "n-b", "n-c"]
 
 
+@pytest.mark.parametrize("ext", [".b2z", ".b2d"])
+def test_ctable_utf8_sort_inplace_persists_after_reopen(tmp_path, ext):
+    """Regression: sort_by(inplace=True) on a file-backed table must write the
+    sorted utf8 rows through to the store, keeping them aligned with the other
+    (on-disk-sorted) columns after close/reopen."""
+    urlpath = str(tmp_path / f"utf8_sort{ext}")
+    t = make_table(["banana", "apple", "cherry"], urlpath=urlpath, mode="w")
+    t.sort_by("name", inplace=True)
+    assert list(t["name"][:]) == ["apple", "banana", "cherry"]
+    t.close()
+
+    t2 = CTable.open(urlpath, mode="r")
+    try:
+        assert list(t2["name"][:]) == ["apple", "banana", "cherry"]
+        assert list(t2["x"][:]) == [1, 0, 2]  # row alignment survives the reopen
+    finally:
+        t2.close()
+
+
+@pytest.mark.parametrize("ext", [".b2z", ".b2d"])
+def test_ctable_utf8_compact_persists_after_reopen(tmp_path, ext):
+    """Regression: compact() on a file-backed table must rewrite the utf8
+    column in the store, not in a detached in-memory replacement."""
+    urlpath = str(tmp_path / f"utf8_compact{ext}")
+    t = make_table(["a", "bb", "ccc", "dddd"], urlpath=urlpath, mode="w")
+    t.delete([1])
+    t.compact()
+    assert list(t["name"][:]) == ["a", "ccc", "dddd"]
+    t.close()
+
+    t2 = CTable.open(urlpath, mode="r")
+    try:
+        assert list(t2["name"][:]) == ["a", "ccc", "dddd"]
+        assert list(t2["x"][:]) == [0, 2, 3]
+    finally:
+        t2.close()
+
+
+def test_ctable_utf8_setitem_persisted_shifts_survive_reopen(tmp_path):
+    """__setitem__ on persisted rows shifts the byte blob in place; longer,
+    shorter, equal-length, and empty replacements must all round-trip."""
+    urlpath = str(tmp_path / "utf8_setitem.b2d")
+    t = make_table(["aa", "bb", "cc", "dd"], urlpath=urlpath, mode="w")
+    t["name"][1] = "a much longer replacement"  # grow
+    t["name"][2] = "c"  # shrink
+    t["name"][0] = "xx"  # equal length
+    t["name"][3] = ""  # empty
+    expected = ["xx", "a much longer replacement", "c", ""]
+    assert list(t["name"][:]) == expected
+    t.close()
+
+    t2 = CTable.open(urlpath, mode="r")
+    try:
+        assert list(t2["name"][:]) == expected
+    finally:
+        t2.close()
+
+
 def test_ctable_utf8_sort_non_ascii():
     t = make_table(["café", "日本語のテキスト", "banana"])
     s = t.sort_by("name")
@@ -680,6 +738,31 @@ def test_utf8_pa_table_roundtrip_with_nulls():
     assert at.schema.field("name").type == pa.large_string()
     assert at.column("name").to_pylist() == ["a", None, "c"]
     assert at.column("name").null_count == 1
+
+
+def test_utf8_arrow_export_from_view_and_after_delete():
+    """Arrow export of non-dense tables (views, deleted rows) takes the
+    materializing fallback path; values and nulls must match the fast path."""
+    pa = pytest.importorskip("pyarrow")
+    t = CTable(NullableRow, new_data={"name": ["a", None, "c", "d"], "x": [1, 2, 3, 4]})
+    view = t[t.x > 1]
+    at = pa.table(view)
+    assert at.schema.field("name").type == pa.large_string()
+    assert at.column("name").to_pylist() == [None, "c", "d"]
+
+    t.delete([0])  # dense-table fast path no longer applies
+    at2 = t.to_arrow()
+    assert at2.column("name").to_pylist() == [None, "c", "d"]
+    assert at2.column("name").null_count == 1
+
+
+def test_utf8_arrow_export_pending_rows():
+    """Rows still buffered in memory (not yet flushed) must export correctly."""
+    pa = pytest.importorskip("pyarrow")
+    t = make_table(["x", "y"])
+    t.append(("pending", 99))
+    at = pa.table(t)
+    assert at.column("name").to_pylist() == ["x", "y", "pending"]
 
 
 def test_utf8_from_arrow_default_ingest():

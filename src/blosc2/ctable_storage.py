@@ -37,6 +37,7 @@ from blosc2.scalar_array import (
     _ScalarVarLenArray,
     _validate_role_metadata,
 )
+from blosc2.schema import Utf8Spec
 from blosc2.schunk import process_opened_object
 from blosc2.utf8_array import Utf8Array, _new_backend_arrays
 
@@ -250,8 +251,6 @@ class InMemoryTableStorage(TableStorage):
         raise RuntimeError("In-memory tables have no on-disk representation to open.")
 
     def create_varlen_scalar_column(self, name, *, spec, cparams=None, dparams=None):
-        from blosc2.schema import Utf8Spec
-
         if isinstance(spec, Utf8Spec):
             offsets, data = _new_backend_arrays(cparams, dparams)
             return Utf8Array(spec, offsets, data)
@@ -485,8 +484,6 @@ class EmbedStoreTableStorage(TableStorage):
         return self._estore[self._col_key(name)]
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
-        from blosc2.schema import Utf8Spec
-
         if isinstance(spec, Utf8Spec):
             offsets = self._estore[self._col_key(name)]
             data = self._estore[self._col_key(name) + _UTF8_DATA_SUFFIX]
@@ -724,25 +721,19 @@ class FileTableStorage(TableStorage):
         return blosc2.open(self._list_col_path(name), mode=self._mode)
 
     def create_varlen_scalar_column(self, name, *, spec, cparams=None, dparams=None) -> _ScalarVarLenArray:
-        from blosc2.schema import Utf8Spec
-
         if isinstance(spec, Utf8Spec):
             offsets, data = _new_backend_arrays(cparams, dparams)
             store = self._open_store()
-            store[self._col_key(name)] = offsets
-            store[self._col_key(name) + _UTF8_DATA_SUFFIX] = data
-            return Utf8Array(
-                spec,
-                store[self._col_key(name)],
-                store[self._col_key(name) + _UTF8_DATA_SUFFIX],
-            )
+            key = self._col_key(name)
+            data_key = key + _UTF8_DATA_SUFFIX
+            store[key] = offsets
+            store[data_key] = data
+            return Utf8Array(spec, store[key], store[data_key])
         urlpath = self._list_col_path(name)
         backend = _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
         return _ScalarVarLenArray(spec, backend)
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
-        from blosc2.schema import Utf8Spec
-
         if isinstance(spec, Utf8Spec):
             store = self._open_store()
             offsets = store[self._col_key(name)]
@@ -1310,8 +1301,6 @@ class TreeStoreTableStorage(TableStorage):
         cparams=None,
         dparams=None,
     ) -> _ScalarVarLenArray:
-        from blosc2.schema import Utf8Spec
-
         if isinstance(spec, Utf8Spec):
             logical_key = self._col_logical_key(name)
             offsets_path = self._dest_path(logical_key, ".b2nd")
@@ -1333,8 +1322,6 @@ class TreeStoreTableStorage(TableStorage):
         return _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
 
     def open_varlen_scalar_column(self, name: str, spec) -> _ScalarVarLenArray:
-        from blosc2.schema import Utf8Spec
-
         if isinstance(spec, Utf8Spec):
             logical_key = self._col_logical_key(name)
             offsets = self._open_leaf(logical_key)

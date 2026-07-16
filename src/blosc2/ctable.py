@@ -44,7 +44,6 @@ from blosc2.ctable_storage import (
 from blosc2.info import InfoReporter, format_nbytes_human, format_nbytes_info
 from blosc2.list_array import ListArray, coerce_list_cell
 from blosc2.scalar_array import _ScalarVarLenArray
-from blosc2.utf8_array import Utf8Array
 
 if TYPE_CHECKING:
     from blosc2.dictionary_column import DictionaryColumn
@@ -191,14 +190,6 @@ _CTABLE_PRINT_OPTIONS: dict[str, Any] = {
 _SMALL_NROWS_LIMIT = 10_000_000
 _SMALL_SORT_MATERIALIZE_LIMIT = _SMALL_NROWS_LIMIT
 _MAX_GROWTH_ROWS = 1_048_576
-_UTF8_COMPARE_OPS = {
-    "eq": np.equal,
-    "ne": np.not_equal,
-    "lt": np.less,
-    "le": np.less_equal,
-    "gt": np.greater,
-    "ge": np.greater_equal,
-}
 
 
 def get_null_policy() -> NullPolicy:
@@ -1972,13 +1963,13 @@ class Column:
 
     def __lt__(self, other):
         if self.is_utf8:
-            return self._utf8_compare("lt", other)
+            return self._utf8_compare(np.less, other)
         self._ensure_comparable()
         return self._null_aware_compare(other, self._raw_col < self._coerce_timestamp_operand(other))
 
     def __le__(self, other):
         if self.is_utf8:
-            return self._utf8_compare("le", other)
+            return self._utf8_compare(np.less_equal, other)
         self._ensure_comparable()
         return self._null_aware_compare(other, self._raw_col <= self._coerce_timestamp_operand(other))
 
@@ -1986,7 +1977,7 @@ class Column:
         if self.is_dictionary:
             return self._dictionary_eq(other)
         if self.is_utf8:
-            return self._utf8_compare("eq", other)
+            return self._utf8_compare(np.equal, other)
         self._ensure_comparable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._null_aware_compare(other, self._raw_col == int(other))
@@ -1999,7 +1990,7 @@ class Column:
                 return ~result
             return ~np.asarray(result, dtype=bool)
         if self.is_utf8:
-            return self._utf8_compare("ne", other)
+            return self._utf8_compare(np.not_equal, other)
         self._ensure_comparable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._null_aware_compare(other, self._raw_col == int(not other))
@@ -2022,17 +2013,7 @@ class Column:
             result[start:stop] = fn(arr[start:stop], start, stop)
         return result
 
-    def _utf8_null_pred(self):
-        """Physical-length blosc2.NDArray, True where the utf8 value is the
-        null sentinel; ``None`` when the column is not nullable."""
-        spec = self._table._schema.columns_by_name[self._col_name].spec
-        nv = getattr(spec, "null_value", None)
-        if nv is None:
-            return None
-        raw = self._utf8_chunked_bool(lambda chunk, start, stop: chunk == nv)
-        return blosc2.asarray(raw)
-
-    def _utf8_compare(self, op: str, other):
+    def _utf8_compare(self, numpy_op, other):
         """Chunked-numpy comparison predicate for a utf8 column.
 
         Compares against a Python ``str`` scalar or another utf8
@@ -2058,26 +2039,20 @@ class Column:
                 f"or another utf8 Column, got {type(other).__name__!r}."
             )
 
-        numpy_op = _UTF8_COMPARE_OPS[op]
-        if other_arr is None:
-            raw = self._utf8_chunked_bool(lambda chunk, start, stop: numpy_op(chunk, other))
-        else:
-            raw = self._utf8_chunked_bool(lambda chunk, start, stop: numpy_op(chunk, other_arr[start:stop]))
-        pred = blosc2.asarray(raw) & self._lazy_valid_rows()
+        nv = self.null_value
+        other_nv = other.null_value if isinstance(other, Column) else None
 
-        null_pred = self._utf8_null_pred()
-        if isinstance(other, Column):
-            other_null_pred = other._utf8_null_pred()
-            null_pred = (
-                other_null_pred
-                if null_pred is None
-                else null_pred
-                if other_null_pred is None
-                else null_pred | other_null_pred
-            )
-        if null_pred is not None:
-            pred = pred & ~null_pred
-        return pred
+        def fn(chunk, start, stop):
+            rhs = other if other_arr is None else other_arr[start:stop]
+            res = numpy_op(chunk, rhs)
+            if nv is not None:
+                res &= chunk != nv
+            if other_nv is not None:
+                res &= rhs != other_nv
+            return res
+
+        raw = self._utf8_chunked_bool(fn)
+        return blosc2.asarray(raw) & self._lazy_valid_rows()
 
     def _dictionary_eq(self, other):
         """Return a physical-slot boolean predicate for dictionary equality.
@@ -2154,13 +2129,13 @@ class Column:
 
     def __gt__(self, other):
         if self.is_utf8:
-            return self._utf8_compare("gt", other)
+            return self._utf8_compare(np.greater, other)
         self._ensure_comparable()
         return self._null_aware_compare(other, self._raw_col > self._coerce_timestamp_operand(other))
 
     def __ge__(self, other):
         if self.is_utf8:
-            return self._utf8_compare("ge", other)
+            return self._utf8_compare(np.greater_equal, other)
         self._ensure_comparable()
         return self._null_aware_compare(other, self._raw_col >= self._coerce_timestamp_operand(other))
 
@@ -6669,13 +6644,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     continue
                 if col.is_utf8:
                     spec = self._schema.columns_by_name[name].spec
+                    arr8 = self._cols[name]
+                    nv = col.null_value
+                    if self.base is None and self._last_pos == self._n_rows and stop <= arr8._persisted_rows:
+                        # Dense root table: logical rows == persisted rows, so
+                        # export straight from the offsets/bytes buffers with
+                        # no per-row decode (storage is already Arrow layout).
+                        arrays.append(arr8.arrow_slice(pa, start, stop, nv))
+                        continue
                     values = col[start:stop]  # StringDType array with sentinel nulls
-                    nv = getattr(spec, "null_value", None)
-                    null_mask = values == nv if nv is not None else None
+                    null_mask = col._null_mask_for(values) if nv is not None else None
                     arrays.append(
                         pa.array(
-                            values.tolist(),
-                            type=pa.large_string(),
+                            values.astype(object),
+                            type=self._pa_type_from_spec(pa, spec),
                             mask=null_mask if null_mask is not None and null_mask.any() else None,
                         )
                     )
@@ -10919,11 +10901,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 replacement.flush()
                 self._cols[name] = replacement
                 continue
+            if self._is_utf8_column(col):
+                # Clustered fancy-index gather, then a bulk rewrite through the
+                # existing backing arrays so a store-backed column stays
+                # persistent on disk.
+                v.set_all(v[real_poss[: self._n_rows]])
+                continue
             if self._is_varlen_scalar_column(col):
                 compacted = [v[int(pos)] for pos in real_poss[: self._n_rows]]
-                replacement = (
-                    Utf8Array(col.spec) if self._is_utf8_column(col) else _ScalarVarLenArray(col.spec)
-                )
+                replacement = _ScalarVarLenArray(col.spec)
                 replacement.extend(compacted)
                 replacement.flush()
                 self._cols[name] = replacement
@@ -11526,11 +11512,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 sorted_codes = arr.codes[sorted_pos]
                 arr.codes[:n] = sorted_codes
             elif self._is_utf8_column(col):
-                # Utf8Array has no bulk slice-assignment; rebuild it in sorted order.
-                new_arr = Utf8Array(col.spec)
-                new_arr.extend(arr[sorted_pos])
-                new_arr.flush()
-                self._cols[col.name] = new_arr
+                # Bulk-rewrite through the existing backing arrays so a
+                # store-backed column stays persistent on disk.
+                arr.set_all(arr[sorted_pos])
             else:
                 arr[:n] = arr[sorted_pos]
         self._valid_rows[:n] = True
@@ -11555,8 +11539,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 sorted_codes = arr.codes[sorted_pos]
                 result._cols[col_name].codes[:n] = sorted_codes
             elif self._is_utf8_column(col):
-                result._cols[col_name].extend(arr[sorted_pos])
-                result._cols[col_name].flush()
+                result._cols[col_name].set_all(arr[sorted_pos])
             else:
                 result._cols[col_name][:n] = arr[sorted_pos]
         result._valid_rows[:n] = True

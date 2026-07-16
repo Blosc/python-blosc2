@@ -399,6 +399,7 @@ proves hard, the honest fallback is `np.unique` on the StringDType chunk
   rejected (only utf8 was carved out). Full `tests/ctable` (1379) and
   `tests/ndarray` (4385) suites pass.
 
+
 **P3.e Sort.** Lift the sort rejection (grep the `sort_by` varlen guard in
 `ctable.py`): `sort_by` on utf8 uses `np.argsort` on the StringDType array
 (chunked merge if the existing sort machinery is chunked — study
@@ -468,6 +469,57 @@ proves hard, the honest fallback is `np.unique` on the StringDType chunk
   unchanged (no code path touched by P3 alters their behavior; the one
   pre-existing vlstring sort bug found above predates this phase and was
   left as found, not touched).
+
+**Post-review fixes (landed 2026-07-16, after a code review of the P3
+branch):**
+
+- **Correctness (data corruption, found by review, missed by the suite):**
+  `sort_by(inplace=True)` and `compact()` on a *file-backed* table rebuilt
+  utf8 columns as fresh in-memory `Utf8Array`s and only rebound
+  `self._cols[name]` — the store never saw the rewritten rows, so after
+  close/reopen the utf8 column was corrupted/misaligned with its
+  on-disk-sorted siblings (reproduced: reopen raised `IndexError` on read).
+  All utf8 sort/compact tests were in-memory only, which is why the suite
+  was green. Fix: new `Utf8Array.set_all(values)` bulk-rewrites through the
+  *existing* backing offsets/data NDArrays (persistence preserved), used by
+  both call sites; `compact()` also now gathers via the clustered
+  fancy-index read instead of one scalar `__getitem__` (two chunk reads) per
+  row. Regression tests: `test_ctable_utf8_sort_inplace_persists_after_reopen`
+  and `test_ctable_utf8_compact_persists_after_reopen`, both parametrized
+  over `.b2z`/`.b2d`, verified to fail on the pre-fix code.
+- **Comparison predicates:** the sentinel-null mask is now computed inside
+  the same chunk pass as the comparison (was: a second full
+  decompress+decode pass per operand via `_utf8_null_pred`, i.e. 2x–4x the
+  I/O per nullable filter); the `_UTF8_COMPARE_OPS` string-tag dict is gone
+  (dunders pass the numpy ufunc directly). ~2x measured on a 1M-row
+  nullable filter (419 → 203 ms).
+- **Arrow export:** dense root tables now export utf8 batches straight from
+  the offsets/bytes buffers via `Utf8Array.arrow_slice()`
+  (`pa.LargeStringArray.from_buffers`, sentinel-null mask matched on raw
+  bytes) — no per-row decode, no `.tolist()`, no re-encode. Views/deleted
+  tables use the materializing fallback, which now reuses
+  `col.null_value`/`col._null_mask_for`/`_pa_type_from_spec` instead of
+  inlining them. ~1.75x measured on a 1M-row export (3030 → 1730 ms; the
+  rest is the pre-existing 2048-row `iter_arrow_batches` batching, which
+  re-decompresses each storage chunk many times — pre-existing, not
+  utf8-specific). Tests: view/deleted-rows export and pending-rows export.
+- **`Utf8Array.__setitem__`:** the O(n−i) tail move now shifts raw bytes and
+  adds a scalar delta to the tail offsets instead of decoding and
+  re-encoding every following row (21 ms to overwrite row 100 of 1M).
+  Test: grow/shrink/equal/empty replacements persisted across reopen.
+- **Cleanup:** `Utf8Spec` imported once at `ctable_storage.py` module top
+  (was: six local imports); `FileTableStorage.create_varlen_scalar_column`
+  hoists the column key.
+- **Review finding rejected on inspection:** removing `Utf8Spec.__init__`'s
+  inline `null_value must be str` check (flagged as duplicating
+  `_validate_null_value_for_spec`) would open a validation hole —
+  `_resolve_nullable_specs` *skips* specs whose `null_value` is already set,
+  so the inline check is the only validation for explicit sentinels. Left
+  as is. Also left as recorded: the `is_varlen_scalar`-includes-utf8
+  predicate design (deliberate, documented in the P3.a notes) and the
+  `_read_persisted_span` per-row decode loop (root cause of the P3.d
+  benchmark gap, already documented above as its own follow-up).
+- Full `tests/` suite (7,484) passes after the fixes.
 
 **Out of scope for P3:** making `utf8` the `str`-field default; `.str`
 accessor namespaces; regex operations beyond what `np.strings` gives;

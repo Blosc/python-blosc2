@@ -281,6 +281,19 @@ class Utf8Array:
         self._pending_chars = 0
         self._rewrite_from(self._persisted_rows, values)
 
+    def set_all(self, values: Iterable[Any]) -> None:
+        """Replace the whole column content in one bulk write.
+
+        Writes through the existing backing offsets/data NDArrays, so a
+        store-backed column stays persistent (unlike building a fresh
+        in-memory ``Utf8Array``).  Used by ``sort_by(inplace=True)`` and
+        ``compact()`` to rewrite a column in a new row order.
+        """
+        coerced = [self._coerce(v) for v in values]
+        self._pending = []
+        self._pending_chars = 0
+        self._rewrite_from(0, coerced)
+
     # ------------------------------------------------------------------
     # Public read interface
     # ------------------------------------------------------------------
@@ -338,8 +351,31 @@ class Utf8Array:
         if index >= self._persisted_rows:
             self._pending[index - self._persisted_rows] = value
             return
-        tail = self._read_persisted_span(index + 1, self._persisted_rows)
-        self._rewrite_from(index, [value, *tail.tolist()])
+        # The tail bytes themselves are unchanged; only their position moves
+        # by the length delta of the replaced value, so shift raw bytes and
+        # add the delta to the tail offsets instead of decoding/re-encoding
+        # every following row.
+        encoded = value.encode("utf-8")
+        bounds = np.asarray(self._offsets[index : index + 2], dtype=np.int64)
+        old_start, old_end = int(bounds[0]), int(bounds[1])
+        delta = len(encoded) - (old_end - old_start)
+        old_used = self._bytes_used
+        new_used = old_used + delta
+        tail = np.asarray(self._data[old_end:old_used]).copy() if delta != 0 and old_used > old_end else None
+        if delta > 0 and int(self._data.shape[0]) < new_used:
+            self._data.resize((new_used,))
+        if encoded:
+            self._data[old_start : old_start + len(encoded)] = np.frombuffer(encoded, dtype=np.uint8)
+        if tail is not None:
+            self._data[old_end + delta : new_used] = tail
+        if delta < 0 and int(self._data.shape[0]) != max(new_used, 1):
+            self._data.resize((max(new_used, 1),))
+        if delta != 0:
+            n = self._persisted_rows
+            self._offsets[index + 1 : n + 1] = (
+                np.asarray(self._offsets[index + 1 : n + 1], dtype=np.int64) + delta
+            )
+            self._bytes_used_cache = new_used
 
     # ------------------------------------------------------------------
     # Properties mirroring the interface expected by CTable
@@ -386,6 +422,41 @@ class Utf8Array:
         if cb == 0:
             return float("inf")
         return self.nbytes / cb
+
+    def arrow_slice(self, pa, a: int, b: int, null_value: str | None = None):
+        """Persisted rows ``[a, b)`` as a ``pyarrow.LargeStringArray``.
+
+        The storage layout (int64 offsets + UTF-8 byte blob) is exactly
+        Arrow's ``large_string`` layout, so the array is built directly from
+        the raw buffers with no per-row decode or Python string objects.
+        When *null_value* is given, rows equal to the sentinel become Arrow
+        nulls (matched on raw bytes, still without decoding).
+        """
+        n = b - a
+        offs = np.ascontiguousarray(self._offsets[a : b + 1], dtype=np.int64)
+        start, end = int(offs[0]), int(offs[-1])
+        rel = offs - start
+        data = np.ascontiguousarray(self._data[start:end]) if end > start else np.empty(0, dtype=np.uint8)
+        validity = None
+        null_count = 0
+        if null_value is not None and n > 0:
+            nv_enc = null_value.encode("utf-8")
+            lengths = np.diff(rel)
+            if nv_enc:
+                mask = np.zeros(n, dtype=np.bool_)
+                cand = np.flatnonzero(lengths == len(nv_enc))
+                if len(cand):
+                    spans = data[rel[cand][:, None] + np.arange(len(nv_enc))]
+                    hits = (spans == np.frombuffer(nv_enc, dtype=np.uint8)).all(axis=1)
+                    mask[cand[hits]] = True
+            else:
+                mask = lengths == 0
+            null_count = int(mask.sum())
+            if null_count:
+                validity = pa.array(~mask).buffers()[1]
+        return pa.LargeStringArray.from_buffers(
+            n, pa.py_buffer(rel), pa.py_buffer(data), validity, null_count
+        )
 
     def copy(self, spec=None, **kwargs: Any) -> Utf8Array:
         """Return an in-memory copy."""
