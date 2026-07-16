@@ -1517,7 +1517,10 @@ class CTableGroupBy:
         self, keys_live: list[np.ndarray]
     ) -> tuple[np.ndarray | list[np.ndarray], np.ndarray]:
         if len(keys_live) == 1:
-            unique, inverse = np.unique(keys_live[0], return_inverse=True)
+            arr = keys_live[0]
+            if arr.dtype.kind in ("U", "S") and arr.dtype.itemsize % 4 == 0 and arr.dtype.itemsize:
+                return _factorize_fixed_width_str(arr)
+            unique, inverse = np.unique(arr, return_inverse=True)
             return unique, inverse
 
         dtype = [(f"k{i}", arr.dtype) for i, arr in enumerate(keys_live)]
@@ -1977,6 +1980,43 @@ class CTableGroupBy:
         if null_value is not None and not (isinstance(null_value, float) and math.isnan(null_value)):
             mask |= values == null_value
         return mask
+
+
+_HASH_MIX = np.uint64(0x9E3779B97F4A7C15)
+
+
+def _factorize_fixed_width_str(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Exact ``np.unique(arr, return_inverse=True)`` for fixed-width string
+    keys, ~2x faster.
+
+    Argsorting N strings is the string-key groupby bottleneck (a ``U8`` key
+    compares 32 bytes of UTF-32 per element), so instead: hash each row's raw
+    bytes into one uint64, factorize the *integers*, and recover the string
+    for each group from one representative row.  A vectorized verify pass
+    keeps it exact — on a hash collision (different strings, same hash) fall
+    back to plain ``np.unique``.  Output contract (uniques sorted ascending,
+    inverse indices into them) is identical to ``np.unique``, so callers
+    cannot tell the difference.
+
+    ponytail: per-chunk cost is now the int64 unique-argsort; a cross-chunk
+    vocabulary cache (searchsorted against known hashes) could roughly halve
+    it again if string-key groupby speed ever matters more.
+    """
+    words = arr.view(np.uint32).reshape(len(arr), arr.dtype.itemsize // 4)
+    h = words[:, 0].astype(np.uint64)
+    for i in range(1, words.shape[1]):
+        h = (h * _HASH_MIX) ^ words[:, i]
+    hash_uniques, inverse = np.unique(h, return_inverse=True)
+    representative = np.empty(len(hash_uniques), dtype=np.int64)
+    representative[inverse] = np.arange(len(arr))  # any row of the group will do
+    reps = arr[representative]
+    if not (arr == reps[inverse]).all():
+        return np.unique(arr, return_inverse=True)  # collision: exact fallback
+    # np.unique contract: uniques ascending by *string*, not by hash.
+    order = np.argsort(reps, kind="stable")
+    rank = np.empty(len(order), dtype=inverse.dtype)
+    rank[order] = np.arange(len(order), dtype=inverse.dtype)
+    return reps[order], rank[inverse]
 
 
 def _normalize_key_part(value: Any) -> Any:

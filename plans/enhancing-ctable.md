@@ -607,6 +607,30 @@ i32/f64 sum, etc.) is a multi-day project in its own right and the plan
 explicitly gates merging it on a benchmark against `engine="numpy"`; that
 work was not attempted this session.
 
+**D1 follow-up (2026-07-16): the JIT engine was re-evaluated and rejected;
+the effort was redirected to the gap the benchmark actually showed.**
+Running the plan's own gate case (1e7 rows, low-cardinality keys,
+`bench/ctable/bench_groupby_keys.py`) settled it: the existing engine
+already *beats pandas* on int keys (50 ms vs 61 ms; raw `np.bincount` is
+16 ms, so decompression included we sit ~3x off speed-of-light) — no
+generic JIT can measurably win there, so per the plan's merge gate it must
+not be built. Also, miniexpr/lazyudf is an *elementwise* engine with no
+grouped-scatter primitive; `engine="jit"` would mean new C-codegen
+machinery, not wiring. The real hole was **string keys: 1157 ms vs
+pandas' 149 ms (7.8x)** — profiling showed 0.94 s of it was `np.unique`
+argsorting fixed-width unicode keys (32 bytes of UTF-32 per comparison
+for a `U8` key) in `_factorize_keys`. Fixed with exact hash-based
+factorization (`_factorize_fixed_width_str` in `groupby.py`): hash each
+row's raw bytes into one uint64, factorize the integers, recover strings
+from one representative row per group, and verify vectorized — falling
+back to `np.unique` on collision, so the output contract is bit-identical.
+Result: **string-key sum 1157 → 737 ms** (~1.6x; the remainder is the
+per-chunk int64 argsort plus ~230 ms of fixed pipeline cost — a
+cross-chunk vocabulary cache could roughly halve it again and is noted as
+the upgrade path in the code). This benefits the default engine — every
+caller, no `engine=` switch. `engine="jit"` stays `NotImplementedError`
+until a case is found that a compiled kernel can actually win.
+
 **D2 done, including the empty-group edge case the plan didn't call out.**
 `agg()`'s named form now accepts `output_name=(column, callable[, dtype])`.
 Because an arbitrary Python callable can't be incrementally merged across

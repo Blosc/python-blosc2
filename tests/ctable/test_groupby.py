@@ -1025,6 +1025,65 @@ def test_agg_udf_empty_table_with_explicit_dtype():
     assert result["rng"].dtype == np.float32
 
 
+def test_factorize_fixed_width_str_matches_np_unique():
+    """The hash-based string-key factorizer must be indistinguishable from
+    np.unique(return_inverse=True), including sort order of the uniques."""
+    from blosc2.groupby import _factorize_fixed_width_str
+
+    rng = np.random.default_rng(0)
+    cases = [
+        np.array([], dtype="U8"),
+        np.array(["a", "a", "a"], dtype="U8"),
+        np.array(["b", "a", "c", "a", "b"], dtype="U8"),
+        np.array(["", "x", "", "y"], dtype="U8"),
+        np.array(["Zürich", "Ōsaka", "münich", "Zürich"], dtype="U8"),
+        rng.choice([f"k{i}" for i in range(500)], 20_000).astype("U8"),
+        rng.choice(["x", "y", "z"], 5_000).astype("U1"),
+        np.array([b"ab", b"cd", b"ab"], dtype="S4"),
+        rng.choice([f"key{i}" for i in range(50)], 20_000).astype("U16"),
+    ]
+    for arr in cases:
+        ref_u, ref_inv = np.unique(arr, return_inverse=True)
+        got_u, got_inv = _factorize_fixed_width_str(arr)
+        np.testing.assert_array_equal(got_u, ref_u)
+        np.testing.assert_array_equal(got_inv, ref_inv)
+
+
+def test_factorize_fixed_width_str_collision_falls_back(monkeypatch):
+    """With the mix constant forced to 0, the row hash degenerates to the last
+    uint32 word, so strings differing only in earlier characters collide --
+    the verify pass must detect it and fall back to exact np.unique."""
+    import blosc2.groupby as gb
+
+    monkeypatch.setattr(gb, "_HASH_MIX", np.uint64(0))
+    arr = np.array(["ax", "bx", "ax", "cx"], dtype="U2")  # all hash to "x"'s word
+    ref_u, ref_inv = np.unique(arr, return_inverse=True)
+    got_u, got_inv = gb._factorize_fixed_width_str(arr)
+    np.testing.assert_array_equal(got_u, ref_u)
+    np.testing.assert_array_equal(got_inv, ref_inv)
+
+
+def test_groupby_string_key_end_to_end_matches_pandas():
+    pd = pytest.importorskip("pandas")
+    rng = np.random.default_rng(7)
+    cities = np.array(["Paris", "Rome", "Berlin", "Madrid", "Lisbon"])
+    keys = cities[rng.integers(0, 5, 10_000)]
+    vals = rng.random(10_000)
+
+    @dataclass
+    class SRow:
+        skey: str = blosc2.field(blosc2.string(max_length=8))
+        val: float = blosc2.field(blosc2.float64())
+
+    t = CTable(SRow)
+    t.extend({"skey": keys, "val": vals}, validate=False)
+    out = t.group_by("skey", sort=True, chunk_size=999).sum("val")  # odd chunk size on purpose
+
+    expected = pd.DataFrame({"skey": keys, "val": vals}).groupby("skey")["val"].sum().sort_index()
+    assert col(out, "skey") == list(expected.index)
+    np.testing.assert_allclose(col(out, "val_sum"), expected.to_numpy())
+
+
 def test_agg_udf_groupby_object_is_reusable():
     t = CTable(SalesRow, new_data=DATA)
     g = t.group_by("city", sort=True)
