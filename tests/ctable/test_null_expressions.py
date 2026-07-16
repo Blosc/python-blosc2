@@ -93,6 +93,16 @@ def test_ge_le_also_exclude_nulls():
     assert t[t.score <= -20]["id"][:].tolist() == [3]
 
 
+def test_comparison_against_nan_scalar_does_not_crash_and_matches_nothing():
+    """Regression: ``t.f == np.nan`` used to crash with NameError inside the
+    lazyexpr evaluator (the scalar was embedded as the bare literal ``nan``).
+    Now it evaluates -- and matches nothing, since a null satisfies no
+    comparison and NaN equals nothing in IEEE anyway."""
+    t = CTable(FloatRow, new_data=[(1, 5.0), (2, np.nan), (3, 7.0)])
+    assert t[t.f == np.nan]["id"][:].tolist() == []
+    assert t[t.f != np.nan]["id"][:].tolist() == [1, 3]
+
+
 def test_ne_on_nullable_float_excludes_nan_null():
     """The one comparison where IEEE and SQL disagree for NaN sentinels:
     raw ``NaN != x`` is True, but a null must not satisfy ``!=`` either."""

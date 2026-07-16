@@ -2263,3 +2263,30 @@ def test_miniexpr_candidate_block_skip(chunk_len, block_len):
 
     # Without a bitmap every row is evaluated (predicate always True).
     assert int(expr.compute()[:].sum()) == n
+
+
+def test_nonfinite_scalar_operands():
+    """nan/inf scalars have no expression-string literal (numexpr defines no
+    such constants), so they must ride as typed named operands; string
+    expressions may still spell them as bare names."""
+    a = blosc2.asarray(np.array([1.0, 2.0, 3.0]))
+
+    # Operator paths: scalar on either side.
+    np.testing.assert_array_equal((a == np.nan).compute()[:], [False] * 3)
+    np.testing.assert_array_equal((a != np.nan).compute()[:], [True] * 3)
+    assert np.all(np.isnan((a + np.nan).compute()[:]))
+    np.testing.assert_array_equal((np.nan > a).compute()[:], [False] * 3)
+    np.testing.assert_array_equal((a < np.inf).compute()[:], [True] * 3)
+    np.testing.assert_array_equal((a > -np.inf).compute()[:], [True] * 3)
+
+    # Chained expression (update_expr path).
+    np.testing.assert_array_equal(((a + 1) == np.nan).compute()[:], [False] * 3)
+    assert np.all(np.isnan(((a + 1) + np.nan).compute()[:]))
+
+    # Two-arg function path.
+    assert np.all(np.isnan(blosc2.maximum(a, np.nan).compute()[:]))
+    np.testing.assert_array_equal(blosc2.minimum(a, np.inf).compute()[:], a[:])
+
+    # String expressions with bare nan/inf names.
+    assert np.all(np.isnan(blosc2.lazyexpr("a + nan", {"a": a}).compute()[:]))
+    np.testing.assert_array_equal(blosc2.lazyexpr("a < inf", {"a": a}).compute()[:], [True] * 3)

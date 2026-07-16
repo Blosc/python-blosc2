@@ -132,6 +132,10 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
                 if callable(getattr(blosc2, name)) and not name.startswith("_")
             }
         )
+        # Expression strings can carry non-finite float literals ("nan",
+        # "inf" — the repr of such scalars, or typed by the user); numexpr
+        # has no such constants, so this python-eval fallback must.
+        safe_blosc2_globals.update({"nan": math.nan, "inf": math.inf})
     res = eval(expression, safe_blosc2_globals, local_dict)
     if "out" in kwargs:
         out = kwargs.pop("out")
@@ -255,7 +259,7 @@ funcs_2args = (
 
 def get_expr_globals(expression):
     """Build a dictionary of functions needed for evaluating the expression."""
-    _globals = {"np": np, "blosc2": blosc2}
+    _globals = {"np": np, "blosc2": blosc2, "nan": math.nan, "inf": math.inf}
     # Only check for functions that actually appear in the expression.
     for func in functions:
         if func in expression:
@@ -985,6 +989,8 @@ def conserve_functions(  # noqa: C901
             if node.id in self.function_names:  # Skip function names
                 return
             elif node.id not in dtype_symbols:
+                if node.id in ("nan", "inf") and node.id not in operands_old:
+                    return  # non-finite float literal, not an operand
                 localop = operands_old[node.id]
                 if isinstance(localop, blosc2.LazyExpr):
                     newexpr = localop.expression
@@ -3362,6 +3368,18 @@ class LazyExpr(LazyArray):
 
         value2 = _to_native_if_safe(value2)
 
+        # Non-finite Python floats repr as bare names ("nan", "inf") that no
+        # expression evaluator defines; retype them so they take the
+        # typed-scalar branches below and ride as named operands instead of
+        # expression text.
+        def _retype_nonfinite(v):
+            if isinstance(v, float) and not math.isfinite(v):
+                return np.float64(v)
+            return v
+
+        value1 = _retype_nonfinite(value1)
+        value2 = _retype_nonfinite(value2)
+
         if isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
             if isinstance(value1, LazyExpr):
                 newexpr = value1.update_expr(new_op)
@@ -3378,11 +3396,20 @@ class LazyExpr(LazyArray):
                 svalue2 = format_expr_scalar(value2)
                 self.operands = {"o0": ne_evaluate(f"{op}({svalue1}, {svalue2})")}  # eager evaluation
             elif np.isscalar(value2):
-                self.operands = {"o0": value1}
-                self.expression = f"{op}(o0, {format_expr_scalar(value2)})"
+                if isinstance(value2, np.floating) and not math.isfinite(value2):
+                    # nan/inf have no expression literal — keep as named operand
+                    self.operands = {"o0": value1, "o1": value2}
+                    self.expression = f"{op}(o0, o1)"
+                else:
+                    self.operands = {"o0": value1}
+                    self.expression = f"{op}(o0, {format_expr_scalar(value2)})"
             elif np.isscalar(value1):
-                self.operands = {"o0": value2}
-                self.expression = f"{op}({format_expr_scalar(value1)}, o0)"
+                if isinstance(value1, np.floating) and not math.isfinite(value1):
+                    self.operands = {"o0": value2, "o1": value1}
+                    self.expression = f"{op}(o1, o0)"
+                else:
+                    self.operands = {"o0": value2}
+                    self.expression = f"{op}({format_expr_scalar(value1)}, o0)"
             else:
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"{op}(o0, o1)"
