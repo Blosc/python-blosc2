@@ -456,6 +456,57 @@ after the post-review fixes below). Benchmark gate now PASSES.**
   co-key (composite packing), multi-key with float co-key (structured
   fallback).  Full `tests/` (7,489) passes.
 
+**Measured comparison: utf8() vs string() vs vlstring() (2026-07-16,
+`bench/ctable/bench_string_kinds.py`, Apple-silicon dev box).** Two
+workloads: the real Chicago-taxi `company` column (1e7 rows, ~60 distinct
+values, ≤44 chars) and synthetic high-cardinality free text (2e6 rows,
+~1e6 distinct, 0–129 chars, multi-byte).
+
+| taxi company, 1e7 rows | utf8() | string(44) | vlstring() |
+|------------------------|--------|------------|------------|
+| ingest                 | 3477 ms | 491 ms    | 1167 ms    |
+| storage, uncompressed  | 259 MB  | 1760 MB   | 191 MB     |
+| storage, compressed    | 1.3 MB  | 1.1 MB    | 0.4 MB     |
+| full column read       | 2368 ms | 293 ms    | 1238 ms    |
+| filter `s == value`    | 1819 ms | 75 ms     | unsupported |
+| groupby key, sum       | **963 ms** | 2477 ms | unsupported |
+| sort_by (copy)         | 7712 ms | 2395 ms   | unsupported |
+| to_arrow()             | 39.3 s  | 83.5 s    | 79.9 s     |
+
+| synthetic free text, 2e6 rows | utf8() | string(129) | vlstring() |
+|-------------------------------|--------|-------------|------------|
+| ingest                        | 2017 ms | 388 ms     | 949 ms     |
+| storage, uncompressed         | 78 MB   | 1032 MB    | 64 MB      |
+| storage, compressed           | 12.0 MB | 19.2 MB    | 11.3 MB    |
+| full column read              | 712 ms  | 108 ms     | 366 ms     |
+| filter `s == value`           | 538 ms  | 45 ms      | unsupported |
+| groupby key, sum              | **4408 ms** | 4962 ms | unsupported |
+| sort_by (copy)                | 3526 ms | 2584 ms    | unsupported |
+| to_arrow()                    | 1962 ms | 3995 ms    | 3767 ms    |
+
+Reading of the numbers, recorded so the positioning is evidence-backed:
+
+- vs `vlstring()`: comparable storage, but utf8 is *capable* — filters,
+  groupby keys, and sort are supported at all; vlstring rejects them.
+- vs `string(max_length)`: utf8 is 7–13x smaller uncompressed (fixed-width
+  pays 4 bytes/char × max length on every row), smaller compressed on
+  high-cardinality text, faster as a groupby key (the factorization above),
+  and ~2x faster to Arrow.  Fixed-width keeps winning raw reads, filters,
+  and sorts because those stay on the vectorized numexpr/numpy fast paths.
+- The utf8 read/filter gap is the documented `_read_persisted_span`
+  per-row decode loop: ~1.8 s of the 1e7-row filter is decoding, not
+  comparing.  **Natural follow-up (not started):** route comparisons
+  through the `Utf8Factorizer` the way groupby keys go — compare the D
+  distinct values against the operand, then map codes → boolean mask —
+  which should make low-cardinality utf8 filters competitive with
+  fixed-width.  Same idea would speed sort-key materialization.
+- `to_arrow()` at 1e7 rows is slow for *all three* kinds (39–84 s): that
+  is the pre-existing 2048-row `iter_arrow_batches` batching re-reading
+  storage chunks per batch, not a string-representation issue.
+- Guidance the numbers support: `dictionary()` for low-cardinality,
+  `string(max_length)` for short bounded strings where filter speed rules,
+  `utf8()` for long/variable/high-cardinality text.
+
 **P3.e Sort.** Lift the sort rejection (grep the `sort_by` varlen guard in
 `ctable.py`): `sort_by` on utf8 uses `np.argsort` on the StringDType array
 (chunked merge if the existing sort machinery is chunked — study
