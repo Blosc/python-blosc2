@@ -518,9 +518,9 @@ class ShapeInferencer(ast.NodeVisitor):
         self.shapes = shapes
 
     def visit_Name(self, node):
-        if node.id in ("nan", "inf"):  # non-finite float literals: scalars
-            return ()
         if node.id not in self.shapes:
+            if node.id in ("nan", "inf"):  # non-finite float literals: scalars
+                return ()
             raise ValueError(f"Unknown symbol: {node.id}")
         s = self.shapes[node.id]
         if isinstance(s, tuple):
