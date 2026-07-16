@@ -309,6 +309,23 @@ When a NumPy structured array is needed, materialize explicitly::
 
     np.asarray(t[:10])
 
+Chained pipelines
+~~~~~~~~~~~~~~~~~
+
+:meth:`CTable.assign` returns a view with additional computed columns —
+never mutating the table, never copying column data — and :func:`blosc2.col`
+builds an unbound column expression that resolves against a table only when
+bound (in ``assign()``, ``t[...]``, or :meth:`CTable.where`).  Together they
+enable pandas-3 style method chains::
+
+    from blosc2 import col
+
+    result = (
+        t.assign(profit=col("revenue") - col("cost"))[col("profit") > 0]
+        .sort_by("profit", ascending=False)
+        .head(10)
+    )
+
 .. autosummary::
 
     CTable.where
@@ -316,24 +333,28 @@ When a NumPy structured array is needed, materialize explicitly::
     CTable.view
     CTable.take
     CTable.select
+    CTable.assign
     CTable.head
     CTable.tail
     CTable.sample
     CTable.sort_by
     CTable.iter_sorted
     CTable.group_by
+    col
 
 .. automethod:: CTable.where
 .. automethod:: CTable.dropna
 .. automethod:: CTable.view
 .. automethod:: CTable.take
 .. automethod:: CTable.select
+.. automethod:: CTable.assign
 .. automethod:: CTable.head
 .. automethod:: CTable.tail
 .. automethod:: CTable.sample
 .. automethod:: CTable.sort_by
 .. automethod:: CTable.iter_sorted
 .. automethod:: CTable.group_by
+.. autofunction:: col
 
 
 Group-by reductions

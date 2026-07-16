@@ -1,6 +1,10 @@
 # Enhancing CTable, phase 2: finishing the pandas-3 story
 
-**Status:** NOT STARTED (plan written 2026-07-16). Successor to
+**Status:** CLOSED (2026-07-16, branch `enhancing-ctable2`). P1 and P2
+landed; P4 was built, failed its own benchmark gate (1.2x vs required ≥5x)
+and was deliberately not merged (its groupby-UDF crash fix was kept) — see
+each item's "Implementation notes". P3 and P5 were deferred, carried
+forward to `plans/enhancing-ctable-phase3.md`. Successor to
 `plans/enhancing-ctable.md` (phase 1, fully landed on branch
 `enhancing-ctable`: Arrow PyCapsule interchange, read-only views, the
 sentinel-null story including null propagation and `NullableExpr`
@@ -196,6 +200,48 @@ the adapter directly; ADD end-to-end tests that go through real pandas
 Acceptance: the P1.3 tests green against pandas 3.0.3; no pandas version
 pin added to any requirements file.
 
+### Implementation notes (landed)
+
+Empirically the crash described at the top of this section did not
+reproduce verbatim against the installed pandas 3.0.3 — `_ensure_numpy_data`
+already existed and handled the `.values` fallback. What *did* reproduce,
+reading `pandas/core/frame.py`'s `DataFrame.apply` engine dispatch directly:
+
+- `raw` defaults to `False`, in which case pandas hands the engine the
+  **DataFrame itself** (not `.values`) and, unlike the `raw=True` path,
+  does NOT reconstruct a `DataFrame`/`Series` from the result — it returns
+  whatever the engine gives back verbatim. `PandasUdfEngine.apply` was
+  returning a raw `ndarray` in this (default!) case, so
+  `df.apply(f, engine=blosc2.jit)` produced the right values with the wrong
+  type — silently broken for any code chaining further DataFrame methods
+  on the result. Fixed by reconstructing the `DataFrame`/`Series` ourselves
+  (mirroring pandas' own `raw=True` reconstruction code) whenever the input
+  we received was the original pandas object rather than a raw array.
+- `DataFrame.map(func, engine=...)` does not forward `engine` to any
+  dispatch mechanism at all in pandas 3.0.3 (`DataFrame.map`'s signature
+  doesn't accept it; it silently becomes a keyword arg forwarded to `func`,
+  raising `TypeError`). `Series.apply(func, engine=...)` similarly never
+  reaches `__pandas_udf__` — only `DataFrame.apply` and `Series.map` do.
+  Documented as pandas-side limitations, not tested as if they were ours.
+- `Series.map(engine=blosc2.jit)` now implemented (P1.2): pandas wraps a
+  raw array result back into a `Series` itself for `map`, so no
+  reconstruction is needed on our side.
+- Fixed a latent bug in `_ensure_numpy_data`'s error message (missing `f`
+  prefix, wrong attribute — `data.__name__` instead of
+  `type(data).__name__`) while adding the new numeric-dtype check.
+- Benchmark (`bench/bench_pandas_engine.py`, Apple M4): the "point of the
+  engine" claim in this section's original framing (skip the per-row Python
+  loop, `axis=1`) does not hold — `axis=1` still calls the function once per
+  row either way, and for a handful of columns the per-call proxy-wrapping
+  overhead makes `engine=blosc2.jit` *slower* than plain `apply(axis=1)`.
+  The real, verified win is on `axis=0` (the default): 4.3x on a
+  1,000,000-row/8-column frame with a multi-op elementwise expression
+  (numexpr operator fusion + threading beating plain NumPy on one large 1D
+  array per column). Documented this correction in the new guide page.
+- Commit: see `git log` for the commit landing this section (message
+  references P1 by PR title, not inside code/docs, per the cross-cutting
+  rules).
+
 ---
 
 ## P2 — `CTable.assign()` chaining + unbound `blosc2.col()`
@@ -372,6 +418,41 @@ implementation notes so a later pass can revisit.
 Acceptance: all green; `assign` copies no column data (assert via storage
 identity: the assigned table's `_cols` is the parent's `_cols` object —
 skip this assertion if the escape valve was taken).
+
+### Implementation notes (landed)
+
+Landed as designed, no escape valve needed: `assign()` builds one
+`CTable._make_view(self, self._valid_rows)` and gives it its own
+`_computed_cols`/`col_names`/`_col_widths` copies (the only three structures
+`add_computed_column` mutates), then registers each new column directly on
+the view's copies — bypassing `add_computed_column`'s own
+"cannot add to a view" guard, which is correct for the base table but not
+for this internal, view-only registration path.
+
+`ColExpr` values, plus `Column`/`NullableExpr` values, are bound/unwrapped
+against `self` (not the new view) **before** any of the call's new columns
+are registered, so a later keyword genuinely cannot see an earlier one in
+the same `assign()` call — it fails with the normal unknown-column error,
+matching the plan's documented restriction (not accidentally, by construction).
+
+While testing the Goal section's exact chain end-to-end, found and fixed a
+**pre-existing, unrelated bug**: `CTable.head()`/`tail()` build a boolean
+mask from `_valid_rows` and ignore `_cached_live_positions`, so calling
+`.head(N)` after a lazy `sort_by()` view (`self.base is not None`, always
+lazy per that method's own docstring) silently discarded the sort order and
+returned rows in physical order instead. Reproduced with plain
+`add_computed_column`/`Column` filtering, no `col()`/`assign()` involved —
+confirms it predates this item. Fixed by taking `_cached_live_positions[:N]`
+/ `[-N:]` through `_view_from_positions` (the same pattern already used by
+`_materialize_row` and `_display_positions`) whenever that attribute is set,
+before falling back to the existing mask-based fast path. Without this fix,
+the plan's own headline example
+(`t.assign(...)[...].sort_by(...).head(10)`) silently returned rows in the
+wrong order.
+
+All 11 new tests in `tests/ctable/test_col_expr.py` pass; full
+`tests/ctable` (1319 tests) and `tests/ndarray` (4385 tests) suites pass
+with no regressions from the `head`/`tail` fix.
 
 ---
 
@@ -581,6 +662,55 @@ segmented numpy — no per-group Python.
    a counter on the loop path — keep it simple).
 3. High-cardinality smoke test: 10k groups, values equal between paths.
 4. The benchmark script, recorded but not part of CI.
+
+### Implementation notes (benchmark gate failed — NOT merged)
+
+Built the full segmented path as specified: `ast`-based recognition of the
+whitelisted pattern (`_segmented_udf_plan`/`_SegmentedUDFTransformer` in
+`groupby.py`, since deleted), replacing each whitelisted reduction call with
+a placeholder bound to a `np.ufunc.reduceat` result and re-evaluating the
+surrounding scalar arithmetic via a compiled expression: correct results,
+verified against the loop path for every whitelisted reduction, the two
+named composites, nulls, `chunk_size=2` chunk-straddling, and a 10k-group
+smoke test.
+
+**Benchmark gate (plan's own spec: 1e6 rows, 100k groups, `a.max()-a.min()`)
+measured 1.2x, not the required ≥5x** — checked at 5e6/500k and 1e6/500k
+groups too (1.1x–1.4x, never close). Per the plan's own cross-cutting rule
+4, **this means the segmented dispatch is not merged**; the code was
+reverted rather than left in place disabled.
+
+Root cause (confirmed by `cProfile`, not guessed): the "1e5 Python calls to
+a cheap UDF" cost the plan's estimate was built on is real but small next to
+the *rest* of the group-by pipeline that both the loop path and the
+segmented path pay identically and which this phase-1 architecture cannot
+skip for exotic/multi-key group-by (`_factorize_keys`, `_compute_partials`,
+and especially `_merge_partials`'s per-chunk-per-group Python-level
+list-append bookkeeping that builds `_AggState.value`). Segmenting only
+replaces the last step (call-the-UDF-per-group) with vectorized `reduceat`;
+it does not and structurally cannot touch the bookkeeping steps before it,
+which dominate wall time at every cardinality tested. A genuine 5x would
+need bypassing that dict-of-Python-objects accumulator entirely (e.g. a
+global vectorized sort-by-group-id across all chunks) — a materially larger
+rewrite than "intercept in `_final_rows`," out of scope for this item as
+specified.
+
+**What was kept**, because it is an independent, verified correctness fix
+with no performance claim attached: a `@blosc2.dsl_kernel`-decorated
+function passed as a groupby UDF aggregation (`g.agg(name=(col,
+dsl_kernel_fn))`) previously crashed unconditionally — `DSLKernel.__call__`
+uses the `(inputs_tuple, output, offset)` array-kernel convention, not the
+"one array in, one scalar out" convention this call site uses, so
+`spec.udf(group_values)` raised `TypeError: __call__() missing 1 required
+positional argument: 'output'` wrapped in a `RuntimeError`, for *every*
+group, regardless of what the kernel's body did. Fixed by calling
+`spec.udf.func` (the plain wrapped function) when `spec.udf` is a
+`DSLKernel` instance. Test:
+`test_agg_udf_accepts_dsl_kernel_decorated_function` in
+`tests/ctable/test_groupby.py`. This means a user who writes a groupby UDF
+and later decorates it with `@blosc2.dsl_kernel` (e.g. to also use it
+elsewhere as an elementwise kernel) no longer gets a crash — it just runs at
+loop-path speed, same as an undecorated callable.
 
 ---
 

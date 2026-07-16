@@ -16,6 +16,7 @@ import contextvars
 import copy
 import dataclasses
 import json
+import operator
 import os
 import pprint
 import re
@@ -3477,6 +3478,111 @@ class _ColumnSummaryAccumulator:
         return np.concatenate(parts)
 
 
+class ColExpr:
+    """Unbound column expression: a recipe that, given a table, evaluates
+    against that table's columns.
+
+    ``blosc2.col("x") + 1`` builds a deferred computation; passing it to
+    :meth:`CTable.assign` or using it to index/filter a table binds it,
+    replaying the operators on ``table["x"]`` — so all :class:`Column`
+    semantics (null propagation, SQL comparison rules, dictionary/timestamp
+    handling) apply identically to the bound form ``t.x + 1``.
+
+    Only operators are supported; method calls such as ``col("x").sum()``
+    are not, since there is no table to evaluate against yet. Use the bound
+    form (``t.x.sum()``) for those.
+    """
+
+    def __init__(self, bind, repr_str):
+        self._bind = bind  # callable: CTable -> Column/LazyExpr/NullableExpr/scalar
+        self._repr = repr_str
+
+    def __repr__(self):
+        return self._repr
+
+    def __getattr__(self, name):
+        raise AttributeError(
+            f"{name!r} is not supported on an unbound column expression (only operators are). "
+            f"Bind it to a table first, e.g. use t.{self._repr}.{name}(...) instead of "
+            f"{self._repr}.{name}(...)."
+        )
+
+
+def _colexpr_binop(op, symbol, reflected=False):
+    def bind(self, other, t):
+        left = self._bind(t)
+        right = other._bind(t) if isinstance(other, ColExpr) else other
+        return op(right, left) if reflected else op(left, right)
+
+    def method(self, other):
+        other_repr = other._repr if isinstance(other, ColExpr) else repr(other)
+        if reflected:
+            repr_str = f"({other_repr} {symbol} {self._repr})"
+        else:
+            repr_str = f"({self._repr} {symbol} {other_repr})"
+        return ColExpr(lambda t: bind(self, other, t), repr_str)
+
+    return method
+
+
+def _colexpr_unary(op, symbol):
+    def method(self):
+        return ColExpr(lambda t: op(self._bind(t)), f"({symbol}{self._repr})")
+
+    return method
+
+
+_COLEXPR_BINOPS = [
+    ("__add__", operator.add, "+", False),
+    ("__radd__", operator.add, "+", True),
+    ("__sub__", operator.sub, "-", False),
+    ("__rsub__", operator.sub, "-", True),
+    ("__mul__", operator.mul, "*", False),
+    ("__rmul__", operator.mul, "*", True),
+    ("__truediv__", operator.truediv, "/", False),
+    ("__rtruediv__", operator.truediv, "/", True),
+    ("__floordiv__", operator.floordiv, "//", False),
+    ("__rfloordiv__", operator.floordiv, "//", True),
+    ("__mod__", operator.mod, "%", False),
+    ("__rmod__", operator.mod, "%", True),
+    ("__pow__", operator.pow, "**", False),
+    ("__rpow__", operator.pow, "**", True),
+    ("__and__", operator.and_, "&", False),
+    ("__rand__", operator.and_, "&", True),
+    ("__or__", operator.or_, "|", False),
+    ("__ror__", operator.or_, "|", True),
+    ("__lt__", operator.lt, "<", False),
+    ("__le__", operator.le, "<=", False),
+    ("__gt__", operator.gt, ">", False),
+    ("__ge__", operator.ge, ">=", False),
+    ("__eq__", operator.eq, "==", False),
+    ("__ne__", operator.ne, "!=", False),
+]
+for _dunder, _op, _symbol, _reflected in _COLEXPR_BINOPS:
+    setattr(ColExpr, _dunder, _colexpr_binop(_op, _symbol, _reflected))
+ColExpr.__neg__ = _colexpr_unary(operator.neg, "-")
+ColExpr.__invert__ = _colexpr_unary(operator.invert, "~")
+del _dunder, _op, _symbol, _reflected
+
+
+def col(name: str) -> ColExpr:
+    """Build an unbound column expression referencing a column by name.
+
+    The name is resolved against a table's columns only when the expression
+    is bound — passed to :meth:`CTable.assign`, or used to index/filter a
+    table (``t[col("x") > 0]``, ``t.where(col("x") > 0)``). An unknown name
+    therefore fails at bind time with the table's normal unknown-column
+    error, not when ``col()`` is called.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> from blosc2 import col
+    >>> t.assign(profit=col("revenue") - col("cost"))  # doctest: +SKIP
+    """
+    return ColExpr(lambda t: t[name], name)
+
+
 class CTable(_CTableIndexingMixin, Generic[RowT]):
     """Columnar compressed table with typed columns and row-oriented access."""
 
@@ -5847,6 +5953,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """Return a view of the first *N* live rows (default 5)."""
         if N <= 0:
             return self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
+        _slp = getattr(self, "_cached_live_positions", None)
+        if _slp is not None and self.base is not None:
+            # A lazily-sorted view: physical row order is not row order, so the
+            # first N *logical* rows are the first N entries of the stored
+            # permutation, not the first N physical positions.
+            return self._view_from_positions(_slp[:N])
         if self._n_rows <= N:
             return self.view(self._valid_rows)
 
@@ -5868,6 +5980,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """Return a view of the last *N* live rows (default 5)."""
         if N <= 0:
             return self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
+        _slp = getattr(self, "_cached_live_positions", None)
+        if _slp is not None and self.base is not None:
+            # See head(): physical order is not row order for a sorted view.
+            return self._view_from_positions(_slp[-N:] if len(_slp) > N else _slp)
         if self._n_rows <= N:
             return self.view(self._valid_rows)
 
@@ -10221,6 +10337,115 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if isinstance(self._storage, FileTableStorage):
             self._storage.save_schema(self._schema_dict_with_computed())
 
+    @staticmethod
+    def _coerce_assign_operand(value):
+        """Reduce an assign() value to a form add_computed_column's transformer
+        machinery accepts: a LazyExpr, DSLKernel, callable, or string."""
+        if isinstance(value, NullableExpr):
+            return value._expr
+        if isinstance(value, Column):
+            value._ensure_queryable()
+            raw = value._raw_col
+            return raw if isinstance(raw, blosc2.LazyExpr) else blosc2.lazyexpr(raw)
+        return value
+
+    def assign(self, **named_exprs) -> CTable:
+        """Return a view with additional computed columns, without copying data.
+
+        Each keyword argument names a new computed column; the value defines
+        it, in any of the forms :meth:`add_computed_column` accepts (a string
+        expression, a :class:`blosc2.LazyExpr`), plus a :class:`Column`,
+        :class:`NullableExpr`, or an unbound :func:`col` expression.
+
+        Unlike :meth:`add_computed_column`, which mutates the table in place
+        and cannot be called on a view, ``assign()`` never mutates ``self``:
+        it returns a new view sharing this table's column storage, with its
+        own computed-column metadata. This makes it composable in a chain::
+
+            result = (
+                t.assign(profit=col("revenue") - col("cost"))[col("profit") > 0]
+                .sort_by("profit", ascending=False)
+                .head(10)
+            )
+
+        Values are bound against ``self``, before any of this call's new
+        columns exist — so a later keyword cannot reference an earlier one
+        from the same ``assign()`` call (that raises the usual unknown-column
+        error). Chain two ``assign()`` calls for that::
+
+            t2 = t.assign(profit=col("revenue") - col("cost"))
+            t3 = t2.assign(margin=col("profit") / col("revenue"))
+
+        Parameters
+        ----------
+        **named_exprs:
+            One computed-column definition per keyword.
+
+        Returns
+        -------
+        CTable
+            A read-only view (see :meth:`select`) with the additional
+            computed columns.
+
+        Raises
+        ------
+        ValueError
+            If a name collides with an existing stored or computed column.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> from blosc2 import col
+        >>> from dataclasses import dataclass
+        >>> @dataclass
+        ... class Row:
+        ...     revenue: float = blosc2.field(blosc2.float64())
+        ...     cost: float = blosc2.field(blosc2.float64())
+        >>> t = blosc2.CTable(Row, new_data=[(100.0, 40.0), (50.0, 60.0)])
+        >>> t2 = t.assign(profit=col("revenue") - col("cost"))
+        >>> t2.profit[:]
+        array([ 60., -10.])
+        """
+        bound = {}
+        for name, expr in named_exprs.items():
+            _validate_column_name(name)
+            if name in self._cols:
+                raise ValueError(f"A stored column named {name!r} already exists.")
+            if name in self._computed_cols or name in bound:
+                raise ValueError(f"A computed column named {name!r} already exists.")
+            value = expr._bind(self) if isinstance(expr, ColExpr) else expr
+            bound[name] = self._coerce_assign_operand(value)
+
+        view = CTable._make_view(self, self._valid_rows)
+        view._computed_cols = dict(self._computed_cols)
+        view.col_names = list(self.col_names)
+        view._col_widths = dict(self._col_widths)
+        for name, value in bound.items():
+            desc = view._normalize_transformer(value)
+            if desc["kind"] == "dsl":
+                kernel = desc["kernel"]
+                col_deps = desc["col_deps"]
+                view._computed_cols[name] = {
+                    "kind": "dsl",
+                    "dsl_source": kernel.dsl_source,
+                    "kernel": kernel,
+                    "col_deps": col_deps,
+                    "dtype": view._dsl_result_dtype(kernel, col_deps, None),
+                    "jit_backend": desc.get("jit_backend"),
+                }
+            else:
+                lazy = desc["lazy"]
+                view._computed_cols[name] = {
+                    "kind": "expression",
+                    "expression": lazy.expression,
+                    "col_deps": desc["col_deps"],
+                    "lazy": lazy,
+                    "dtype": lazy.dtype,
+                }
+            view.col_names.append(name)
+            view._col_widths[name] = max(len(name), 15)
+        return view
+
     # ------------------------------------------------------------------
     # Column / row access
     # ------------------------------------------------------------------
@@ -10393,6 +10618,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         the base afterwards, and may still reference rows later deleted from
         the base).
         """
+        if isinstance(key, ColExpr):
+            key = key._bind(self)
         if isinstance(key, str):
             physical = self._logical_to_physical_name(key)
             if physical in self._cols or physical in self._computed_cols:
@@ -12207,7 +12434,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     def where(  # noqa: C901
         self,
-        expr_result: str | np.ndarray | blosc2.NDArray | blosc2.LazyExpr | blosc2.LazyUDF | Column,
+        expr_result: str | np.ndarray | blosc2.NDArray | blosc2.LazyExpr | blosc2.LazyUDF | Column | ColExpr,
         *,
         columns: list[str] | tuple[str, ...] | None = None,
     ) -> CTable:
@@ -12219,10 +12446,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         The predicate can be supplied as a boolean :class:`blosc2.LazyExpr`,
         a boolean :class:`blosc2.NDArray`, a boolean NumPy array, a boolean
-        ``Column``, a :class:`blosc2.LazyUDF` (including those backed by a
-        :func:`blosc2.dsl_kernel`), or a string expression evaluated against
-        this table's columns.  String expressions can reference stored and
-        computed columns directly by name.
+        ``Column``, an unbound :func:`col` expression, a :class:`blosc2.LazyUDF`
+        (including those backed by a :func:`blosc2.dsl_kernel`), or a string
+        expression evaluated against this table's columns.  String expressions
+        can reference stored and computed columns directly by name.
 
         The returned object is a :class:`CTable` view sharing the original
         column data.  The row-selection mask is evaluated immediately and
@@ -12295,6 +12522,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             t.where((t.x > 0) and (t.y < 10))
             t.where(not t.returned)
         """
+        if isinstance(expr_result, ColExpr):
+            expr_result = expr_result._bind(self)
         if isinstance(expr_result, str):
             self._guard_varlen_scalar_expression(expr_result)
             operands = self._where_expression_operands(expr_result)

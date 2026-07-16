@@ -864,9 +864,15 @@ class PandasUdfEngine:
                 data = data.values
             except AttributeError as err:
                 raise ValueError(
-                    "blosc2.jit received an object of type {data.__name__}, which is not supported. "
-                    "Try casting your Series or DataFrame to a NumPy dtype."
+                    f"blosc2.jit received an object of type {type(data).__name__}, which is not "
+                    "supported. Try casting your Series or DataFrame to a NumPy dtype."
                 ) from err
+        if data.dtype.kind not in "biufc":
+            raise ValueError(
+                f"blosc2.jit requires a numeric dtype, got {data.dtype!r}. The Blosc2 engine only "
+                "supports vectorized numeric computations; cast non-numeric columns before using "
+                "engine=blosc2.jit."
+            )
         return data
 
     @classmethod
@@ -874,10 +880,14 @@ class PandasUdfEngine:
         """
         JIT a NumPy array element-wise. In the case of Blosc2, functions are
         expected to be vectorized NumPy operations, so the function is called
-        with the NumPy array as the function parameter, instead of calling the
-        function once for each element.
+        once with the whole NumPy array, instead of calling the function once
+        for each element.
         """
-        raise NotImplementedError("The Blosc2 engine does not support map. Use apply instead.")
+        if skip_na:
+            raise NotImplementedError("The Blosc2 engine does not support na_action='ignore' in map.")
+        values = cls._ensure_numpy_data(data)
+        func = decorator(func)
+        return func(values, *args, **kwargs)
 
     @classmethod
     def apply(cls, data, func, args, kwargs, decorator, axis):
@@ -887,21 +897,34 @@ class PandasUdfEngine:
         with the NumPy array as the function parameter, instead of calling the
         function once for each column or row.
         """
-        data = cls._ensure_numpy_data(data)
+        orig = data
+        values = cls._ensure_numpy_data(data)
         func = decorator(func)
-        if data.ndim == 1 or axis is None:
+        if values.ndim == 1 or axis is None:
             # pandas Series.apply or pipe
-            return func(data, *args, **kwargs)
+            result = func(values, *args, **kwargs)
         elif axis in (0, "index"):
             # pandas apply(axis=0) column-wise
-            result = [func(data[:, row_idx], *args, **kwargs) for row_idx in range(data.shape[1])]
-            return np.vstack(result).transpose()
+            result = [func(values[:, col_idx], *args, **kwargs) for col_idx in range(values.shape[1])]
+            result = np.vstack(result).transpose()
         elif axis in (1, "columns"):
             # pandas apply(axis=1) row-wise
-            result = [func(data[col_idx, :], *args, **kwargs) for col_idx in range(data.shape[0])]
-            return np.vstack(result)
+            result = [func(values[row_idx, :], *args, **kwargs) for row_idx in range(values.shape[0])]
+            result = np.vstack(result)
         else:
             raise NotImplementedError(f"Unknown axis '{axis}'. Use one of 0, 1 or None.")
+
+        # pandas only reconstructs a DataFrame/Series for us when it called us
+        # with `raw=True` data (a plain ndarray); when it handed us the
+        # original DataFrame (`raw=False`, the default), we must return a
+        # properly indexed pandas object ourselves, mirroring what pandas'
+        # own raw=True code path does.
+        if isinstance(result, np.ndarray) and hasattr(orig, "columns"):
+            if result.ndim == 2:
+                return orig.__class__(result, index=orig.index, columns=orig.columns)
+            agg_axis = orig._get_agg_axis(orig._get_axis_number(axis))
+            return orig._constructor_sliced(result, index=agg_axis)
+        return result
 
 
 jit.__pandas_udf__ = PandasUdfEngine

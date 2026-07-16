@@ -846,6 +846,22 @@ def test_agg_udf_matches_pandas_reference():
     assert col(result, "city") == list(expected.index)
 
 
+def test_agg_udf_accepts_dsl_kernel_decorated_function():
+    """A @blosc2.dsl_kernel-decorated function is a DSLKernel instance whose
+    __call__ uses the array-kernel calling convention, not the "one array
+    in, one scalar out" convention this aggregation path calls with -- the
+    underlying plain function must be used instead."""
+
+    @blosc2.dsl_kernel
+    def udf_range(a):
+        return a.max() - a.min()
+
+    t = CTable(SalesRow, new_data=DATA)
+    result = t.group_by("city", sort=True).agg(rng=("sales", udf_range))
+    expected = t.group_by("city", sort=True).agg(rng=("sales", lambda a: a.max() - a.min()))
+    np.testing.assert_allclose(col(result, "rng"), col(expected, "rng"))
+
+
 def test_agg_udf_receives_only_live_nonnull_values():
     seen = []
 

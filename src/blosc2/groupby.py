@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
+from blosc2.dsl_kernel import DSLKernel
 from blosc2.schema import DictionarySpec, NDArraySpec, SchemaSpec, float64, int64
 from blosc2.schema import bool as b2_bool
 from blosc2.schema import field as b2_field
@@ -1804,8 +1805,14 @@ class CTableGroupBy:
                         row[spec.output_col] = _empty_udf_group
                     else:
                         group_values = np.concatenate(chunks)
+                        # A @blosc2.dsl_kernel-decorated UDF is a DSLKernel
+                        # instance whose __call__ expects the array-kernel
+                        # calling convention (inputs_tuple, output, offset),
+                        # not this "one array in, one scalar out" aggregation
+                        # convention -- call the wrapped plain function instead.
+                        udf_callable = spec.udf.func if isinstance(spec.udf, DSLKernel) else spec.udf
                         try:
-                            result = _python_scalar(spec.udf(group_values))
+                            result = _python_scalar(udf_callable(group_values))
                         except Exception as exc:
                             raise RuntimeError(
                                 f"UDF aggregation {spec.output_col!r} raised for group "

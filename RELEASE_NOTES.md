@@ -4,6 +4,35 @@
 
 XXX version-specific blurb XXX
 
+### New features
+
+- `CTable.assign(**named_exprs)`: return a view with additional computed
+  columns, without mutating the table or copying column data. Pairs with
+  the new `blosc2.col(name)` — an unbound column expression that defers
+  operator replay until it's bound to a table (`assign()`, `t[...]`,
+  `where()`) — to write pandas-3-style chains:
+  `t.assign(profit=col("revenue") - col("cost"))[col("profit") > 0].sort_by("profit", ascending=False).head(10)`.
+
+### Bug fixes
+
+- Fixed a `@blosc2.dsl_kernel`-decorated function crashing unconditionally
+  when passed as a groupby UDF aggregation (`g.agg(name=(col,
+  dsl_kernel_fn))`): it now runs like the equivalent undecorated callable.
+- Fixed `CTable.head()`/`tail()` silently discarding row order when called
+  on a lazily-sorted view (e.g. `t.sort_by("col", ascending=False)` on a
+  view, or any `.sort_by()` result chained off a prior filter): they
+  ignored `_cached_live_positions` and built a plain physical-order mask
+  instead, so `t.where(...).sort_by("x", ascending=False).head(10)` came
+  back in the wrong order.
+- Fixed `engine=blosc2.jit` for `DataFrame.apply` against pandas 3.0.3: with
+  the default `raw=False`, the engine returned a raw NumPy array instead of
+  a properly indexed `DataFrame`/`Series`, so results only matched plain
+  `apply()` by value, never by type. `Series.map(func, engine=blosc2.jit)`
+  is now implemented (it previously always raised `NotImplementedError`).
+  Non-numeric columns now raise a clear `ValueError` instead of a deep
+  `numexpr` error. See the new guide "Using Blosc2 as a pandas engine" and
+  `bench/bench_pandas_engine.py`.
+
 ## Changes from 4.8.0 to 4.8.1
 
 ### Improvements

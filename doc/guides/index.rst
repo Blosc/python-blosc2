@@ -13,6 +13,7 @@ Topics
 
     optimization_tips
     sharing_across_processes
+    pandas_engine
 
 Command line tools
 ------------------
