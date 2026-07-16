@@ -1,6 +1,10 @@
 # Enhancing CTable, phase 2: finishing the pandas-3 story
 
-**Status:** NOT STARTED (plan written 2026-07-16). Successor to
+**Status:** CLOSED (2026-07-16, branch `enhancing-ctable2`). P1 and P2
+landed; P4 was built, failed its own benchmark gate (1.2x vs required ≥5x)
+and was deliberately not merged (its groupby-UDF crash fix was kept) — see
+each item's "Implementation notes". P3 and P5 were deferred, carried
+forward to `plans/enhancing-ctable-phase3.md`. Successor to
 `plans/enhancing-ctable.md` (phase 1, fully landed on branch
 `enhancing-ctable`: Arrow PyCapsule interchange, read-only views, the
 sentinel-null story including null propagation and `NullableExpr`

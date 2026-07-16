@@ -10368,11 +10368,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 .head(10)
             )
 
-        Values are bound against the *new view* being built, one keyword at a
-        time, but against a snapshot taken before any of this call's new
-        columns were added — so a later keyword cannot reference an earlier
-        one from the same ``assign()`` call (that raises the usual unknown-
-        column error). Chain two ``assign()`` calls for that::
+        Values are bound against ``self``, before any of this call's new
+        columns exist — so a later keyword cannot reference an earlier one
+        from the same ``assign()`` call (that raises the usual unknown-column
+        error). Chain two ``assign()`` calls for that::
 
             t2 = t.assign(profit=col("revenue") - col("cost"))
             t3 = t2.assign(margin=col("profit") / col("revenue"))

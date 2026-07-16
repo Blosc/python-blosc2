@@ -138,7 +138,7 @@ class TestPandasUDF:
 try:
     import pandas as pd
 
-    _pandas_too_old = pd.__version__ < "3"
+    _pandas_too_old = int(pd.__version__.split(".")[0]) < 3
 except ImportError:
     pd = None
     _pandas_too_old = False
