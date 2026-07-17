@@ -1,6 +1,6 @@
 # utf8 columns: closing the read/filter gap (incremental plan)
 
-**Status:** U1 (U1.a + U1.b) LANDED 2026-07-17; U2 NOT STARTED. Successor work to
+**Status:** U1 (U1.a + U1.b) and U2 LANDED 2026-07-17; U3 PARKED. Successor work to
 `plans/enhancing-ctable-phase3.md` (P3 + its P3.d follow-up + post-review
 fixes, all landed on branch `enhancing-ctable3`, commits `0cd1ca78`,
 `77bf321d`, `564180b1`). Read that plan's P3 sections first if you need
@@ -355,6 +355,67 @@ script. Record actuals here.
 fallback forced; benchmark gate met; `blosc2.utf8()` still importable and
 fully functional on a NumPy-only environment without the compiled
 extension.
+
+**LANDED 2026-07-17** (Apple-silicon Mac, `bench_string_kinds.py`):
+
+- New `src/blosc2/utf8_ext.pyx` (`pack_utf8_span`): acquires a
+  `StringDType` allocator via `NpyString_acquire_allocator` and calls
+  `NpyString_pack` per row in a plain (GIL-held) C loop — Cython treats
+  `NpyString_pack` as GIL-requiring, so `with nogil` isn't available here.
+  Needs `NPY_TARGET_VERSION=NPY_2_0_API_VERSION` as a compile definition
+  (CMakeLists.txt `target_compile_definitions`); without it NumPy's
+  `numpy/*.h` headers gate the 2.0 string-C-API macros behind
+  `NPY_FEATURE_VERSION`, which otherwise defaults to an older, source
+  -compatible value and leaves `NpyString_pack` undeclared at compile time.
+  Registered in `CMakeLists.txt` exactly like `indexing_ext`/`groupby_ext`
+  (own `add_custom_command`, `Python_add_library`, link/install rules).
+  Measured at ~9 ns/row standalone (2e6-row synthetic column), matching
+  the plan's 20-40 ns/row estimate.
+- `Utf8Array._read_persisted_span` (`utf8_array.py`) tries the kernel via
+  a new lazy `_pack_utf8_kernel()` helper (mirrors the
+  `try: from blosc2 import groupby_ext / except ImportError: return None`
+  pattern already used in `groupby.py`) and falls back to the old per-row
+  decode loop when it returns `None`. Tests force the fallback by
+  monkeypatching `blosc2.utf8_array._pack_utf8_kernel`
+  (`force_kernel_mode` fixture in `test_utf8.py`, parametrized
+  kernel/fallback).
+- **Two extra fixes were needed to actually hit the gate** — the kernel
+  alone cut `_read_persisted_span` itself to ~170 ms for the 1e7-row
+  span, but the *observed* `t["s"][:]` benchmark stayed at ~730-750 ms
+  until both landed:
+  1. `Column._values_from_key`'s slice fast-path (`ctable.py`) excluded
+     every `is_varlen_scalar` column, including utf8, from the
+     identity-position direct-slice shortcut, even though `Utf8Array`
+     slices itself efficiently. Changed the exclusion to
+     `is_varlen_scalar and not is_utf8`.
+  2. The real bottleneck: `Utf8Array._get_many` (used whenever
+     `_has_identity_positions()` is false — the common case, since a
+     table's physical capacity is normally chunk-padded past its row
+     count) always sorted the index array and did a fancy-indexed
+     `out[order[...]] = span[...]` StringDType scatter-copy, even for a
+     plain ascending contiguous range. That scatter-copy is itself a
+     full per-element StringDType copy — exactly the cost U2 exists to
+     eliminate — so it silently ate the kernel's gain. Added a
+     contiguous-ascending-run check at the top of `_get_many` that
+     shortcuts straight to `_read_span` when `indices` is
+     `arange(indices[0], indices[-1] + 1)`, skipping the sort/cluster/
+     scatter-copy machinery entirely.
+
+| operation (taxi, 1e7 rows)       | before U2 | after U2 | gate    |
+|-----------------------------------|-----------|----------|---------|
+| full column read                  | 2472.6 ms | 165.3 ms | ≤500 ms |
+| filter `s == value` (U1, unchanged)| —        | 168.6 ms | —       |
+| groupby key: sum(val)             | 969.5 ms  | 971.3 ms | no regression |
+| sort_by(s) (copy)                 | 7874.4 ms | 3930.4 ms| no regression (improved — sort keys now read via the fast path) |
+| to_arrow()                        | 40301.2 ms| 39992.2 ms| no regression |
+
+Synthetic free-text workload (2e6 rows): full column read 735.4 ms → 50.3 ms.
+
+Full `tests/` suite green with the kernel active (7506 passed) and with
+the fallback forced (7505 passed, 1 unrelated pre-existing flaky failure —
+a subprocess segfault in `test_dsl_kernel_scalar_constant_subexpr_runtime_no_segfault`,
+a DSL/JIT kernel test with no connection to utf8 code; passes standalone).
+Both gates pass.
 
 ---
 

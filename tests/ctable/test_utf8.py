@@ -163,6 +163,65 @@ def test_utf8_array_rejects_non_str():
 
 
 # ---------------------------------------------------------------------------
+# Bulk StringDType read: compiled kernel and its pure-Python fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(params=["kernel", "fallback"], ids=["kernel", "fallback"])
+def force_kernel_mode(request, monkeypatch):
+    """Exercise both the compiled bulk StringDType packer and its
+    pure-Python per-row fallback, so the fallback stays covered even on a
+    build where the compiled extension is available."""
+    if request.param == "fallback":
+        monkeypatch.setattr("blosc2.utf8_array._pack_utf8_kernel", lambda: None)
+    return request.param
+
+
+def test_utf8_array_bulk_read_kernel_and_fallback(force_kernel_mode):
+    from blosc2.utf8_array import Utf8Array
+
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend(SAMPLE)
+    arr.flush()
+    got = arr[:]
+    assert got.dtype == STRING_DTYPE
+    assert list(got) == SAMPLE
+
+
+def test_utf8_array_bulk_read_matches_python_ground_truth(force_kernel_mode):
+    """A wider mix of byte lengths and edge cases than SAMPLE: many distinct
+    ASCII/multi-byte/empty/NUL-bearing values, read back in one bulk span."""
+    from blosc2.utf8_array import Utf8Array
+
+    rng = np.random.default_rng(5)
+    pool = ["", "a", "café", "日本語", "x" * 5000, "nul\x00in", "nul\x00INSIDE", "emoji 🎉🚀"]
+    values = [pool[i] for i in rng.integers(0, len(pool), 3000)]
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend(values)
+    arr.flush()
+    assert list(arr[:]) == values
+
+
+def test_ctable_utf8_extend_and_read_kernel_and_fallback(force_kernel_mode):
+    t = make_table()
+    values = t["name"][:]
+    assert values.dtype == STRING_DTYPE
+    assert list(values) == SAMPLE
+
+
+@pytest.mark.parametrize("ext", [".b2z", ".b2d"])
+def test_ctable_utf8_persistence_roundtrip_kernel_and_fallback(tmp_path, ext, force_kernel_mode):
+    urlpath = str(tmp_path / f"utf8_kernel_mode{ext}")
+    t = make_table(urlpath=urlpath, mode="w")
+    t.close()
+    t2 = CTable.open(urlpath, mode="r")
+    try:
+        assert list(t2["name"][:]) == SAMPLE
+    finally:
+        t2.close()
+
+
+# ---------------------------------------------------------------------------
 # CTable integration: append / extend / read
 # ---------------------------------------------------------------------------
 

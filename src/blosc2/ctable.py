@@ -1204,9 +1204,16 @@ class Column:
             # underlying NDArray, skipping the O(nrows) live-position scan and
             # letting NDArray's strided-gather fast path handle coarse steps.
             # Plain stored columns only; everything else falls through to the
-            # position-gather path below.
+            # position-gather path below.  utf8 is a varlen-scalar kind but
+            # Utf8Array slices itself efficiently (offsets+bytes span read),
+            # so it takes the fast path too instead of the index-gather one.
             if (
-                not (self.is_computed or self.is_list or self.is_varlen_scalar or self.is_dictionary)
+                not (
+                    self.is_computed
+                    or self.is_list
+                    or self.is_dictionary
+                    or (self.is_varlen_scalar and not self.is_utf8)
+                )
                 and self._has_identity_positions()
             ):
                 return self._maybe_decode_timestamp_values(np.asarray(self._raw_col[key]))

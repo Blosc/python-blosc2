@@ -99,6 +99,20 @@ def string_dtype():
         ) from None
 
 
+def _pack_utf8_kernel():
+    """Return the compiled bulk StringDType packer, or ``None``.
+
+    ``None`` means the ``utf8_ext`` extension is unavailable (a source
+    install without a C toolchain, a WASM build, or a NumPy without the
+    StringDType C API); callers fall back to a pure-Python per-row loop.
+    """
+    try:
+        from blosc2 import utf8_ext
+    except ImportError:
+        return None
+    return getattr(utf8_ext, "pack_utf8_span", None)
+
+
 def _new_backend_arrays(cparams=None, dparams=None, *, offsets_urlpath=None, data_urlpath=None):
     """Create fresh (offsets, data) NDArrays for an empty utf8 column."""
     import blosc2
@@ -202,9 +216,16 @@ class Utf8Array:
             return np.empty(0, dtype=self._dtype)
         offs = np.asarray(self._offsets[a : b + 1], dtype=np.int64)
         start, end = int(offs[0]), int(offs[-1])
-        blob = np.asarray(self._data[start:end]).tobytes() if end > start else b""
         rel = offs - start
         out = np.empty(n, dtype=self._dtype)
+        kernel = _pack_utf8_kernel()
+        if kernel is not None:
+            data = (
+                np.ascontiguousarray(self._data[start:end]) if end > start else np.zeros(1, dtype=np.uint8)
+            )
+            kernel(rel, data, out)
+            return out
+        blob = np.asarray(self._data[start:end]).tobytes() if end > start else b""
         for i in range(n):
             out[i] = blob[rel[i] : rel[i + 1]].decode("utf-8")
         return out
@@ -247,9 +268,16 @@ class Utf8Array:
             indices = indices.ravel()
         n = len(self)
         indices = np.where(indices < 0, indices + n, indices).astype(np.int64, copy=False)
-        if len(indices) and (indices.min() < 0 or indices.max() >= n):
+        m = len(indices)
+        if m and (indices.min() < 0 or indices.max() >= n):
             raise IndexError("Utf8Array index out of range")
-        out = np.empty(len(indices), dtype=self._dtype)
+        if m and indices[-1] - indices[0] == m - 1 and bool((np.diff(indices) == 1).all()):
+            # A contiguous ascending run (e.g. a full-column read routed here
+            # via an index array rather than a step-1 slice) is just a span
+            # read -- skip the sort/cluster/scatter-copy gather below, which
+            # pays a full StringDType element-wise copy for no reason here.
+            return self._read_span(int(indices[0]), int(indices[-1]) + 1)
+        out = np.empty(m, dtype=self._dtype)
         np_rows = self._persisted_rows
         pending_mask = indices >= np_rows
         if pending_mask.any():
