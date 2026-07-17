@@ -1,10 +1,61 @@
 # Release notes
 
-## Changes from 4.8.1 to 4.8.2
+## Changes from 4.8.1 to 4.9.0
 
-XXX version-specific blurb XXX
+This release is about cooperation: `CTable` now speaks the tabular
+ecosystem's own protocols instead of asking it to speak blosc2's. Arrow
+tools (pyarrow, DuckDB, Polars, pandas >= 2.2) can consume or produce a
+`CTable` directly through the Arrow PyCapsule interface; a new `utf8()`
+string column stores text in Arrow's own offsets+bytes layout and reads
+back as NumPy `StringDType`; and `engine=blosc2.jit` now runs correctly
+inside pandas 3 itself. Alongside that, `CTable` gained a proper
+missing-data story (`fillna`/`dropna`, null-safe arithmetic and
+comparisons) and a pandas-3-style chaining API (`assign()`/`col()`,
+UDF aggregations, `CTable.apply()`).
 
 ### New features
+
+#### Ecosystem interop
+
+- **Arrow PyCapsule interchange**: `CTable.__arrow_c_stream__` lets
+  pyarrow, DuckDB, Polars, and pandas >= 2.2 consume a `CTable` directly
+  as a stream of record batches, with bounded memory — no
+  `to_arrow()`/copy step required. `CTable.from_arrow()` now accepts any
+  object implementing the same protocol on ingest (single-argument
+  form), in addition to the existing `(schema, batches)` form.
+- **`blosc2.utf8()`**: a new column type for high-cardinality/free-text
+  strings, storing each column as two companion NDArrays — int64 row
+  offsets plus a UTF-8 byte blob — the same layout Arrow uses for
+  `large_string`. A row costs exactly its encoded byte length (7-13x
+  smaller uncompressed than fixed-width `string()` on high-cardinality
+  text), and reads materialize as NumPy `StringDType` arrays (NumPy >=
+  2.0 required; older NumPy falls back to `vlstring` on Arrow/Parquet
+  import with a clear message). Full query surface: comparisons,
+  `where()`, `sort_by`, `group_by` keys, `fillna`, and Arrow export
+  (`large_string`, sentinel-null mask) / import (Arrow/Parquet string
+  columns now default to `utf8` instead of `vlstring`). Measured on the
+  1e7-row NYC-taxi `company` column: ingest 3622 ms -> 598.6 ms
+  (**6.05x** faster, only 1.22x slower than `string()` and 2.63x faster
+  than `vlstring()`), full-column read 2472.6 ms -> 165.3 ms (**14.96x**
+  faster), equality filter ~1900 ms -> 162 ms (**~11.7x** faster), and
+  groupby-key factorization 3304 ms -> 558 ms (**2.83x**, down from a
+  16.9x-slower initial fallback, now faster than fixed-width `string()`
+  keys). See the new "Choosing a string column type" guide in the
+  `CTable` reference and `examples/ctable/utf8_strings.py`. Known gaps:
+  string-expression filters (`t.where("name == 'x'")`) and
+  `create_index` on `utf8` columns still raise a clear
+  `NotImplementedError`; use fixed-width `string()` if you need those.
+- **pandas engine, pandas 3 compatible**: `engine=blosc2.jit` for
+  `DataFrame.apply` now returns a properly indexed `DataFrame`/`Series`
+  under pandas 3.0.3's default `raw=False` (previously a raw NumPy
+  array, so results only matched by value, never by type).
+  `Series.map(func, engine=blosc2.jit)` is now implemented (it
+  previously always raised `NotImplementedError`). Non-numeric columns
+  now raise a clear `ValueError` instead of a deep `numexpr` error. See
+  the guide "Using Blosc2 as a pandas engine" and
+  `bench/bench_pandas_engine.py`.
+
+#### pandas-style CTable API
 
 - `CTable.assign(**named_exprs)`: return a view with additional computed
   columns, without mutating the table or copying column data. Pairs with
@@ -12,6 +63,46 @@ XXX version-specific blurb XXX
   operator replay until it's bound to a table (`assign()`, `t[...]`,
   `where()`) — to write pandas-3-style chains:
   `t.assign(profit=col("revenue") - col("cost"))[col("profit") > 0].sort_by("profit", ascending=False).head(10)`.
+- **Missing data**: `Column.fillna(value)` replaces sentinel/`None`
+  values for scalar, dictionary, and varlen-scalar columns;
+  `CTable.dropna(subset=None)` returns a view excluding rows where any
+  nullable column (or a chosen subset) is null. Column arithmetic
+  (`+ - * / // % **`) and comparisons (`< <= > >= == !=`) on nullable
+  int/timestamp/bool columns now propagate nulls instead of operating on
+  the raw sentinel: arithmetic promotes to `float64`/NaN, comparisons
+  follow SQL `WHERE` semantics (a null operand never satisfies any
+  comparison) — fixing filters like `t[t.x < 0]` wrongly matching null
+  rows. Also fixes null detection for timestamp columns
+  (`is_null()`/`null_count()`/`dropna()` previously missed every
+  `NaT`).
+- **UDF aggregations**: `group_by().agg()` accepts a custom callable as
+  the op via the named form (`output_name=(column, callable[, dtype])`);
+  it receives each group's live, non-null values as a 1-D NumPy array.
+  `CTable.apply(func, columns=None, dtype=None, engine="auto")` applies
+  a UDF across the table's live rows, sugar over `blosc2.lazyudf()`.
+  `group_by(engine=...)` now accepts `"auto"`/`"numpy"` explicitly
+  alongside the existing default.
+- `CTable` views are now read-only for value writes: `Column.__setitem__`
+  and `Column.assign()` raise `ValueError` on a view, pointing at
+  `take()`/`copy()` as the escape hatch (structural mutations already
+  raised; this closes the one unguarded cell-write path).
+- `NDArray.iter_sorted()`/`argsort()` on a `FULL`-indexed array now reads
+  the sidecar range directly instead of building the full permutation —
+  ~52x faster and ~193x less memory on a 20M-element array for
+  `iter_sorted(start=-k)`-style tail queries. See the new optimization
+  tip.
+
+### Improvements
+
+- String-key `group_by()` (fixed-width `string()` keys) now factorizes
+  via an exact hash of each row's raw bytes instead of a NumPy
+  UTF-32 argsort, with a vectorized collision-checked verify pass
+  keeping the result bit-identical: 1157 ms -> 737 ms on a 1e7-row
+  benchmark. Every caller benefits automatically; no `engine=` switch
+  involved.
+- An example showing ctables and ndarrays bundled together in the same
+  `TreeStore`.
+- C-Blosc2 bumped to 3.2.3.
 
 ### Bug fixes
 
@@ -24,14 +115,9 @@ XXX version-specific blurb XXX
   ignored `_cached_live_positions` and built a plain physical-order mask
   instead, so `t.where(...).sort_by("x", ascending=False).head(10)` came
   back in the wrong order.
-- Fixed `engine=blosc2.jit` for `DataFrame.apply` against pandas 3.0.3: with
-  the default `raw=False`, the engine returned a raw NumPy array instead of
-  a properly indexed `DataFrame`/`Series`, so results only matched plain
-  `apply()` by value, never by type. `Series.map(func, engine=blosc2.jit)`
-  is now implemented (it previously always raised `NotImplementedError`).
-  Non-numeric columns now raise a clear `ValueError` instead of a deep
-  `numexpr` error. See the new guide "Using Blosc2 as a pandas engine" and
-  `bench/bench_pandas_engine.py`.
+- Fixed a `NameError` when `nan`/`inf` scalars appeared in lazy
+  expressions; `ShapeInferencer` no longer ignores user-provided shapes
+  for `nan`/`inf`.
 
 ## Changes from 4.8.0 to 4.8.1
 
@@ -46,6 +132,7 @@ XXX version-specific blurb XXX
   2.5x/4.4x/4.5x faster wall time for 1/4/8 readers in our benchmark
   (`bench/optim_tips/tip_10_mmap_many_readers.py`).
 - Reduced memory consumption in `CTable.extend()` when passed an `NDArray`.
+- C-Blosc2 bumped to 3.2.2.
 
 ### Bug fixes
 

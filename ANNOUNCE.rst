@@ -1,43 +1,55 @@
-Announcing Python-Blosc2 4.8.1
+Announcing Python-Blosc2 4.9.0
 ==============================
 
-This is a maintenance release with a solid batch of bug fixes — including
-use-after-free hazards around zero-copy cframes, wrong-chunk deletion with
-negative-step slices, and inconsistent ``DictStore`` overwrite semantics —
-plus read-only memory mapping for ``CTable`` stores and a documentation
-restructuring with a new Optimization Tips section.
+Last year's big push was making ``NDArray`` a good ecosystem citizen — array
+API compliance, protocols, interop. This release does the same for
+``CTable``: instead of asking the tabular ecosystem to learn Blosc2's ways,
+``CTable`` now speaks its protocols directly. Arrow tools can read and write
+a ``CTable`` with zero glue code, a new string column type stores text in
+Arrow's own layout, and ``engine=blosc2.jit`` runs correctly *inside*
+pandas 3 itself. Compression doesn't have to mean an island — it can just be
+a fast, compact layer underneath the tools you already use.
 
 The main highlights are:
 
-- **Read-only mmap for ``CTable`` stores**: ``CTable.open()`` gains an
-  ``mmap_mode="r"`` parameter, mirroring ``blosc2.open()``. All members of a
-  read-only store — scalar, list, varlen and dictionary columns alike — are
-  read from mapped pages; for ``.b2z`` archives, in place inside the single
-  mapped container file. With several concurrent readers on one file this
-  pays off quickly: 2.5x/4.4x/4.5x faster wall time for 1/4/8 readers in
-  our benchmark.
+- **Arrow PyCapsule interchange**: ``CTable.__arrow_c_stream__`` lets
+  pyarrow, DuckDB, Polars, and pandas >= 2.2 consume a ``CTable`` directly as
+  a stream of record batches, with bounded memory — no ``to_arrow()`` copy
+  step needed::
 
-- **Zero-copy cframe fix**: ``schunk_from_cframe()`` /
-  ``ndarray_from_cframe()`` with ``copy=False`` (the default) returned
-  objects pointing into the caller's bytes buffer without keeping it alive,
-  so a temporary cframe could be reclaimed under the live object, corrupting
-  reads. The buffer is now pinned on the returned object.
+      import duckdb, blosc2
+      t = blosc2.CTable.open("trips.b2z")
+      duckdb.sql("SELECT company, avg(fare) FROM t GROUP BY company").show()
 
-- **More correctness fixes**: negative-step slice deletion in
-  ``BatchArray``/``ObjectArray`` removed the wrong chunks; ``DictStore``
-  overwrite semantics depended on value size (now uniformly dict-like);
-  ``stack()``/``vecdot()`` shape inference was off for negative axes;
-  chunked ``matmul()`` mishandled broadcast batch dims; and
-  ``ListArray.extend_arrow()`` could reorder unflushed rows.
+  ``CTable.from_arrow()`` now accepts any object implementing the same
+  protocol on ingest too — a pyarrow Table, a Polars DataFrame, a Parquet
+  reader — in addition to the existing ``(schema, batches)`` form.
 
-- **Faster ``.b2z``/``.b2d`` opens**: a builtin-shadowing bug made store
-  detection in ``blosc2.open()`` silently recurse ~250 times on every open.
+- **``blosc2.utf8()``: string columns that speak Arrow's layout**. Instead of
+  a blosc2-specific encoding, ``utf8()`` stores text exactly as Arrow does —
+  int64 row offsets plus a UTF-8 byte blob — and reads back as NumPy
+  ``StringDType``. It's the new recommended default for free text: 7-13x
+  smaller uncompressed than fixed-width ``string()`` on high-cardinality
+  text, with a full query surface (comparisons, ``where()``, ``sort_by``,
+  ``group_by`` keys, ``fillna``, Arrow round-trip).
 
-- **Docs restructuring**, with a new `Optimization tips
-  <https://www.blosc.org/python-blosc2/guides/optimization_tips.html>`_
-  section, including tips on grouping related data into a single
-  memory-mapped ``.b2z`` file and on using ``mmap_mode="r"`` with many
-  concurrent readers.
+- **pandas engine, pandas 3 ready**: ``engine=blosc2.jit`` for
+  ``DataFrame.apply`` now returns a properly indexed ``DataFrame``/``Series``
+  under pandas 3's default ``raw=False``, and ``Series.map(func,
+  engine=blosc2.jit)`` is implemented for the first time.
+
+- **``CTable`` grows a pandas-style API**: ``CTable.assign()`` plus an
+  unbound ``blosc2.col()`` for chaining —
+  ``t.assign(profit=col("revenue") - col("cost"))[col("profit") > 0].sort_by("profit", ascending=False).head(10)``
+  — and a real missing-data story: ``Column.fillna()``, ``CTable.dropna()``,
+  and null-propagating arithmetic/comparisons on nullable columns (no more
+  ``t[t.x < 0]`` silently matching null rows). ``group_by().agg()`` accepts
+  UDF aggregations, and ``CTable.apply()`` runs a UDF across live rows.
+
+- **Faster indexed reads**: ``NDArray.iter_sorted()``/``argsort()`` on a
+  ``FULL``-indexed array reads the sidecar range directly instead of
+  building the full permutation — ~52x faster and ~193x less memory for
+  tail-style queries on a 20M-element array.
 
 Install it with::
 
