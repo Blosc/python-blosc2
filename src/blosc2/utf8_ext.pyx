@@ -24,6 +24,32 @@ from libc.stdint cimport int64_t, uint8_t
 cnp.import_array()
 
 
+# Declared here instead of relying on `cimport numpy`: the NpyString C API
+# has been part of the NumPy headers since 2.0, but its Cython declarations
+# only appear in the numpy/__init__.pxd of newer NumPy versions, and some
+# build environments (e.g. the Pyodide cross-build) pin an older one.  The
+# functions resolve through the API table populated by cnp.import_array().
+cdef extern from "numpy/ndarraytypes.h":
+    ctypedef struct npy_string_allocator:
+        pass
+    ctypedef struct npy_packed_static_string:
+        pass
+    ctypedef struct PyArray_StringDTypeObject:
+        pass
+
+cdef extern from "numpy/arrayobject.h":
+    npy_string_allocator* NpyString_acquire_allocator(
+        const PyArray_StringDTypeObject* descr
+    ) nogil
+    void NpyString_release_allocator(npy_string_allocator* allocator) nogil
+    int NpyString_pack(
+        npy_string_allocator* allocator,
+        npy_packed_static_string* packed_string,
+        const char* buf,
+        size_t size,
+    ) nogil
+
+
 def pack_utf8_span(cnp.ndarray rel not None, cnp.ndarray data not None, cnp.ndarray out not None):
     """Fill *out* in place with rows carved out of *data* using *rel*.
 
@@ -51,8 +77,8 @@ def pack_utf8_span(cnp.ndarray rel not None, cnp.ndarray data not None, cnp.ndar
     cdef const uint8_t* data_ptr = <const uint8_t*>cnp.PyArray_DATA(data)
     cdef char* out_data = <char*>cnp.PyArray_DATA(out)
     cdef cnp.npy_intp itemsize = cnp.PyArray_ITEMSIZE(out)
-    cdef cnp.npy_string_allocator* allocator = cnp.NpyString_acquire_allocator(
-        <cnp.PyArray_StringDTypeObject*>cnp.PyArray_DESCR(out)
+    cdef npy_string_allocator* allocator = NpyString_acquire_allocator(
+        <const PyArray_StringDTypeObject*>cnp.PyArray_DESCR(out)
     )
     if allocator == NULL:
         raise TypeError("out must be a StringDType array")
@@ -64,16 +90,16 @@ def pack_utf8_span(cnp.ndarray rel not None, cnp.ndarray data not None, cnp.ndar
         for i in range(n):
             start = rel_ptr[i]
             length = rel_ptr[i + 1] - start
-            ret = cnp.NpyString_pack(
+            ret = NpyString_pack(
                 allocator,
-                <cnp.npy_packed_static_string*>(out_data + i * itemsize),
+                <npy_packed_static_string*>(out_data + i * itemsize),
                 <const char*>(data_ptr + start),
                 <size_t>length,
             )
             if ret == -1:
                 break
     finally:
-        cnp.NpyString_release_allocator(allocator)
+        NpyString_release_allocator(allocator)
 
     if ret == -1:
         raise MemoryError("Failed to pack a UTF-8 row into the StringDType array")
