@@ -163,6 +163,88 @@ def test_utf8_array_rejects_non_str():
 
 
 # ---------------------------------------------------------------------------
+# Chunked bulk extend (write path)
+# ---------------------------------------------------------------------------
+
+
+def test_utf8_array_extend_empty_iterable_is_noop():
+    from blosc2.utf8_array import Utf8Array
+
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend([])
+    assert len(arr) == 0
+    arr.extend(iter([]))
+    assert len(arr) == 0
+    arr.flush()
+    assert list(arr[:]) == []
+
+
+def test_utf8_array_extend_many_rows_no_dropped_rows():
+    """Regression for the flush-rebind pitfall: `flush()` rebinds
+    `self._pending` to a fresh list rather than mutating it, so an
+    `extend()` spanning several internal flushes must re-read
+    `self._pending` after each one instead of caching a reference."""
+    from blosc2.utf8_array import _FLUSH_ROWS, Utf8Array
+
+    n = _FLUSH_ROWS * 3 + 7
+    values = [f"row{i}" for i in range(n)]
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend(values)
+    assert len(arr) == n
+    arr.flush()
+    assert len(arr) == n
+    assert list(arr[:]) == values
+
+
+def test_utf8_array_extend_none_straddles_chunk_boundary():
+    from blosc2.utf8_array import _FLUSH_ROWS, Utf8Array
+
+    values = [f"v{i}" for i in range(_FLUSH_ROWS + 2)]
+    values[_FLUSH_ROWS - 1] = None  # last row of first chunk
+    values[_FLUSH_ROWS + 1] = None  # second row of second chunk
+    arr = Utf8Array(blosc2.utf8(null_value="<NA>"))
+    arr.extend(values)
+    expected = [v if v is not None else "<NA>" for v in values]
+    assert list(arr[:]) == expected
+
+
+def test_utf8_array_extend_append_interleaved_before_flush():
+    from blosc2.utf8_array import Utf8Array
+
+    arr = Utf8Array(blosc2.utf8())
+    arr.append("first")
+    arr.extend(["second", "third"])
+    arr.append("fourth")
+    arr.extend(["fifth"])
+    assert list(arr[:]) == ["first", "second", "third", "fourth", "fifth"]
+
+
+def test_utf8_array_extend_ascii_nul_byte_preserved():
+    from blosc2.utf8_array import Utf8Array
+
+    values = ["nul\x00in", "plain", "\x00leading", "trailing\x00"]
+    assert all(v.isascii() for v in values)
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend(values)
+    arr.flush()
+    assert list(arr[:]) == values
+
+
+def test_utf8_array_extend_multi_mb_strings_bounded_flush():
+    """~20 multi-MB ASCII strings: char-count flush bound is checked once
+    per _FLUSH_ROWS-sized chunk (not per row), so this overshoots
+    _FLUSH_CHARS by at most one chunk before flushing -- confirm read-back
+    is still correct despite the coarser check."""
+    from blosc2.utf8_array import Utf8Array
+
+    values = [f"{i:06d}" + "x" * (2 * 1024 * 1024) for i in range(20)]
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend(values)
+    arr.flush()
+    assert list(arr[:]) == values
+
+
+# ---------------------------------------------------------------------------
 # Bulk StringDType read: compiled kernel and its pure-Python fallback
 # ---------------------------------------------------------------------------
 

@@ -32,6 +32,7 @@ which support vectorized comparison, ordering, and ``np.strings`` functions.
 
 from __future__ import annotations
 
+import itertools
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -40,7 +41,14 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
 # Pending rows are flushed to the backing arrays once either bound is hit.
-_FLUSH_ROWS = 4096
+# _FLUSH_ROWS is set well above what per-row overhead would suggest: each
+# flush pays a fixed NDArray resize + slice-write cost, so fewer, larger
+# flushes amortize that cost over more rows -- a taxi-like ASCII workload
+# (1e7 rows, ~26-char average) measured a monotonic ingest speedup from
+# 4096 (~3.6s) up to 65536 (~0.9s) with essentially no peak-memory increase,
+# then diminishing returns beyond that (largely because _FLUSH_CHARS starts
+# binding before _FLUSH_ROWS does).
+_FLUSH_ROWS = 65536
 _FLUSH_CHARS = 1 << 22  # ~4 Mi characters (>= 4 MiB encoded)
 
 # Storage grids for freshly created backing arrays.  Both arrays are created
@@ -293,8 +301,13 @@ class Utf8Array:
         ``pos + len(values)`` becomes the new persisted row count; the byte
         blob and offsets after ``pos`` are rewritten.
         """
-        encoded = [v.encode("utf-8") for v in values]
-        blob = b"".join(encoded)
+        if values and all(v.isascii() for v in values):
+            blob = "".join(values).encode("ascii")
+            lengths = np.fromiter(map(len, values), dtype=np.int64, count=len(values))
+        else:
+            encoded = [v.encode("utf-8") for v in values]
+            blob = b"".join(encoded)
+            lengths = np.fromiter((len(e) for e in encoded), dtype=np.int64, count=len(encoded))
         if pos == 0:
             start = 0
         elif pos == self._persisted_rows:
@@ -302,15 +315,14 @@ class Utf8Array:
         else:
             start = int(self._offsets[pos])
         new_used = start + len(blob)
-        new_rows = pos + len(encoded)
+        new_rows = pos + len(values)
         if int(self._data.shape[0]) != max(new_used, 1):
             self._data.resize((max(new_used, 1),))
         if blob:
             self._data[start:new_used] = np.frombuffer(blob, dtype=np.uint8)
         if int(self._offsets.shape[0]) != new_rows + 1:
             self._offsets.resize((new_rows + 1,))
-        if encoded:
-            lengths = np.fromiter((len(e) for e in encoded), dtype=np.int64, count=len(encoded))
+        if values:
             self._offsets[pos + 1 : new_rows + 1] = start + np.cumsum(lengths)
         self._persisted_rows = new_rows
         self._bytes_used_cache = new_used
@@ -327,11 +339,26 @@ class Utf8Array:
         self._flush_if_needed()
 
     def extend(self, values: Iterable[Any]) -> None:
-        """Append many string rows."""
-        for v in values:
-            v = self._coerce(v)
-            self._pending.append(v)
-            self._pending_chars += len(v)
+        """Append many string rows.
+
+        Processed in ``_FLUSH_ROWS``-sized chunks so the char-count flush
+        bound is only checked once per chunk rather than once per row; an
+        unusual batch of many multi-MB strings can therefore overshoot
+        ``_FLUSH_CHARS`` by up to one chunk before a flush is triggered.
+        """
+        it = iter(values)
+        while True:
+            chunk = list(itertools.islice(it, _FLUSH_ROWS))
+            if not chunk:
+                break
+            if all(type(v) is str for v in chunk):
+                self._pending.extend(chunk)
+                self._pending_chars += sum(map(len, chunk))
+            else:
+                for v in chunk:
+                    v = self._coerce(v)
+                    self._pending.append(v)
+                    self._pending_chars += len(v)
             self._flush_if_needed()
 
     def flush(self) -> None:
