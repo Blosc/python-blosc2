@@ -669,10 +669,14 @@ class Utf8Factorizer:
     first-appearance order; :meth:`uniques` returns the decoded vocabulary in
     that same order.  No row is ever decoded — only the distinct values.
 
-    A hash collision between a new value and a known one is not resolved
-    (the new value gets a fresh code); the resulting duplicate vocabulary
-    entry is benign because callers merge groups by decoded value, and with
-    64-bit hashes the case is vanishingly rare anyway.
+    A hash collision between a new value and an already-known value of the
+    same byte length is not resolved: the new value always gets a fresh
+    code, even in the (unhandled) case where its decoded string equals an
+    existing vocabulary entry's. No downstream consumer merges groups by
+    decoded value, so such a collision would silently split what should be
+    one group into two rather than being caught -- an accepted, unmitigated
+    risk given how vanishingly rare it is with 64-bit hashes, not a
+    guarantee that it is otherwise resolved.
     """
 
     def __init__(self, arr: Utf8Array) -> None:

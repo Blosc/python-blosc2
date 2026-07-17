@@ -80,6 +80,15 @@ def pack_utf8_span(cnp.ndarray rel not None, cnp.ndarray data not None, cnp.ndar
         raise ValueError("rel, data and out must be C-contiguous")
     if n == 0:
         return
+    # Cheap, vectorized well-formedness checks: a malformed rel (decreasing,
+    # negative, or reaching past the end of data) would otherwise drive the
+    # unchecked pointer arithmetic below out of bounds.
+    if int(rel[0]) != 0:
+        raise ValueError("rel[0] must be 0")
+    if bool((np.diff(rel) < 0).any()):
+        raise ValueError("rel must be non-decreasing")
+    if int(rel[n]) > data.shape[0]:
+        raise ValueError("rel values must not exceed len(data)")
 
     cdef const int64_t* rel_ptr = <const int64_t*>cnp.PyArray_DATA(rel)
     cdef const uint8_t* data_ptr = <const uint8_t*>cnp.PyArray_DATA(data)

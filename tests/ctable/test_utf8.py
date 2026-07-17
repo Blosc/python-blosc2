@@ -259,6 +259,28 @@ def force_kernel_mode(request, monkeypatch):
     return request.param
 
 
+def test_pack_utf8_span_rejects_malformed_rel():
+    """pack_utf8_span trusts its caller's rel/data invariants for speed, but
+    still validates them cheaply up front so a malformed rel fails with a
+    clear ValueError instead of driving the unchecked C loop out of bounds."""
+    pytest.importorskip("blosc2.utf8_ext")
+    from blosc2 import utf8_ext
+
+    data = np.array([1, 2, 3], dtype=np.uint8)
+    out = np.empty(2, dtype=STRING_DTYPE)
+
+    with pytest.raises(ValueError, match="rel\\[0\\] must be 0"):
+        utf8_ext.pack_utf8_span(np.array([1, 2, 3], dtype=np.int64), data, out)
+    with pytest.raises(ValueError, match="non-decreasing"):
+        utf8_ext.pack_utf8_span(np.array([0, 2, 1], dtype=np.int64), data, out)
+    with pytest.raises(ValueError, match="must not exceed len\\(data\\)"):
+        utf8_ext.pack_utf8_span(np.array([0, 2, 10], dtype=np.int64), data, out)
+
+    # a well-formed rel still works after the added checks
+    utf8_ext.pack_utf8_span(np.array([0, 1, 3], dtype=np.int64), data, out)
+    assert list(out) == ["\x01", "\x02\x03"]
+
+
 def test_utf8_array_bulk_read_kernel_and_fallback(force_kernel_mode):
     from blosc2.utf8_array import Utf8Array
 
@@ -874,7 +896,7 @@ def test_ctable_utf8_groupby_many_byte_lengths_and_non_ascii():
     pool = ["", "a", "bb", "café", "日本語のテキスト", "x" * 2000, "münchen"]
     names = [pool[i] for i in rng.integers(0, len(pool), 3000)]
     t = make_table(names)
-    t.x[:] = np.ones(3000)
+    t.x[:] = np.ones(3000, dtype=np.int64)
     g = t.group_by("name").sum("x")
     got = dict(zip(g["name"][:].tolist(), g["x_sum"][:].tolist(), strict=True))
     exp: dict[str, int] = {}
@@ -927,10 +949,10 @@ def test_ctable_utf8_groupby_multi_key_float_fallback():
 
 def test_ctable_utf8_groupby_sum():
     t = make_table(["a", "b", "a", "b", "a"])
-    t.x[:] = [1.0, 2.0, 3.0, 4.0, 5.0]
+    t.x[:] = [1, 2, 3, 4, 5]
     g = t.group_by("name").sum("x")
     rows = dict(zip(g["name"][:].tolist(), g["x_sum"][:].tolist(), strict=False))
-    assert rows == {"a": 9.0, "b": 6.0}
+    assert rows == {"a": 9, "b": 6}
 
 
 def test_ctable_utf8_groupby_size_and_dropna():
