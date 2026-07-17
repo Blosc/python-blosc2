@@ -6,7 +6,7 @@
 #######################################################################
 # cython: boundscheck=False, wraparound=False, initializedcheck=False
 
-"""Bulk StringDType construction for utf8 columns.
+"""Bulk StringDType construction and bulk UTF-8 encoding for utf8 columns.
 
 NumPy provides no bulk constructor for a ``StringDType`` array from an
 offsets+bytes buffer pair -- the only Python-level ways in are per-element
@@ -14,12 +14,20 @@ assignment or conversion from another array.  This kernel uses NumPy's C
 API for ``StringDType`` (``NpyString_pack``) to fill every element of a
 preallocated ``StringDType`` array directly from the raw offsets/bytes
 representation, in a single C loop with no per-row Python object churn.
+
+A second kernel (``encode_utf8_span``) goes the other direction: it turns a
+list of ``str`` into the concatenated UTF-8 bytes plus per-row lengths
+needed to write a utf8 column, using each string's cached UTF-8
+representation instead of allocating one ``bytes`` object per row.
 """
 
 import numpy as np
 cimport numpy as cnp
 
+from cpython.unicode cimport PyUnicode_AsUTF8AndSize
 from libc.stdint cimport int64_t, uint8_t
+from libc.stdlib cimport free, malloc
+from libc.string cimport memcpy
 
 cnp.import_array()
 
@@ -103,3 +111,49 @@ def pack_utf8_span(cnp.ndarray rel not None, cnp.ndarray data not None, cnp.ndar
 
     if ret == -1:
         raise MemoryError("Failed to pack a UTF-8 row into the StringDType array")
+
+
+def encode_utf8_span(list values not None):
+    """Return ``(data, lengths)`` for *values*, a list of ``str``.
+
+    *data* is a ``uint8`` NDArray holding the concatenated UTF-8 encoding of
+    every value, in order.  *lengths* is an ``int64`` NDArray of length
+    ``len(values)`` giving each value's UTF-8 byte length.  Each value's
+    UTF-8 bytes are taken from its cached representation
+    (``PyUnicode_AsUTF8AndSize``) rather than allocating a new ``bytes``
+    object per row.
+    """
+    cdef Py_ssize_t n = len(values)
+    if n == 0:
+        return np.empty(0, dtype=np.uint8), np.empty(0, dtype=np.int64)
+
+    cdef cnp.ndarray lengths = np.empty(n, dtype=np.int64)
+    cdef int64_t* lengths_ptr = <int64_t*>cnp.PyArray_DATA(lengths)
+    cdef const char** ptrs = <const char**>malloc(<size_t>n * sizeof(char*))
+    if ptrs == NULL:
+        raise MemoryError("Failed to allocate temporary pointer buffer")
+
+    cdef Py_ssize_t i
+    cdef Py_ssize_t size
+    cdef int64_t total = 0
+    cdef int64_t offset
+    cdef cnp.ndarray data
+    cdef uint8_t* data_ptr
+    try:
+        for i in range(n):
+            ptrs[i] = PyUnicode_AsUTF8AndSize(values[i], &size)
+            lengths_ptr[i] = <int64_t>size
+            total += size
+
+        data = np.empty(total if total > 0 else 1, dtype=np.uint8)
+        data_ptr = <uint8_t*>cnp.PyArray_DATA(data)
+        offset = 0
+        for i in range(n):
+            size = <Py_ssize_t>lengths_ptr[i]
+            if size:
+                memcpy(data_ptr + offset, ptrs[i], <size_t>size)
+            offset += size
+    finally:
+        free(ptrs)
+
+    return data, lengths

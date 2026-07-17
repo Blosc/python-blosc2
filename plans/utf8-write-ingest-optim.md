@@ -1,13 +1,13 @@
 # utf8 columns: closing the write/ingest gap (incremental plan)
 
-**Status:** I1 LANDED (2026-07-17, branch `enhancing-ctable3`). I2 not yet
-started — see the updated "Honest assessment" section below: I1 alone blew
-past both its own gate and I2's provisional gate, so I2 should be
-re-evaluated before starting, not assumed. Successor work to
-`plans/utf8-reads-filter-optim.md` (U1 + U2, landed on branch
-`enhancing-ctable3`, commits `3a7d9a3d`, `45ec7906`). Read that plan first
-for background and for the exact working rebuild commands referenced below;
-this plan assumes it.
+**Status:** I1 and I2 both LANDED (2026-07-17, branch `enhancing-ctable3`).
+Taxi ingest: 3622 ms → 870.5 ms after I1 → 598.6 ms after I2, now within
+~20% of `string()` (490.4 ms) and clearly ahead of `vlstring()`
+(1292.2 ms). See "Honest assessment" below for the full before/after
+table. Successor work to `plans/utf8-reads-filter-optim.md` (U1 + U2,
+landed on branch `enhancing-ctable3`, commits `3a7d9a3d`, `45ec7906`).
+Read that plan first for background and for the exact working rebuild
+commands referenced below; this plan assumes it.
 
 **Audience:** an implementing model/developer who has NOT read the
 discussions that produced this plan. Everything needed is in this file.
@@ -403,10 +403,29 @@ ingest **≤ 1500 ms** (from ≈2695 ms after I1). If missed, profile before
 adding cleverness — ~2065 ms of the original 3622 ms is inherent NDArray
 write/compression cost outside I1/I2's scope, so there is a hard floor.
 
-**Acceptance:** full `tests/` green with the kernel active AND with both
-kernel toggles (read-side and write-side) forced off independently;
-`blosc2.utf8()` fully functional on a NumPy-only environment without the
-compiled extension (falls all the way back to I1's pure-Python path).
+**ACTUAL (2026-07-17, `enhancing-ctable3`, Apple-silicon Mac):** taxi
+ingest **598.6 ms** (from 870.5 ms after I1 alone, **-31%** further;
+**-83.5%** from the original 3622 ms) — gate passed with a large margin,
+now within ~22% of `string()` (490.4 ms) on this workload. No regression
+elsewhere in `bench_string_kinds.py` (full read, filter, groupby, sort,
+`to_arrow`, both workloads, all three column kinds) beyond ordinary
+run-to-run noise.
+
+**Acceptance:** full `tests/` green with the kernel active (7525 passed,
+22 skipped) AND with the compiled extension entirely absent from the
+environment (`utf8_ext.cpython-*.so` moved aside — simulates a
+NumPy-only/no-toolchain install; same 113/113 in `test_utf8.py` passed,
+falling all the way back to I1's pure-Python path with no import error at
+`import blosc2` time). The per-test `force_write_kernel_mode` fixture
+additionally parametrizes every new I2 test over kernel-on/kernel-off
+without needing the extension physically absent.
+
+**Build note:** built via `cmake --build build_py314 --target utf8_ext`
+(clean build, no new warnings — `CMakeLists.txt` needed zero changes, as
+predicted by design decision 6, since its custom command already
+regenerates `utf8_ext.c` from the whole `.pyx` file) and the resulting
+`.so` copied into the active env's `site-packages/blosc2/`, exactly
+mirroring U2's rebuild workflow.
 
 ---
 
@@ -433,13 +452,19 @@ text, kept for the record:
   that follow-up is even necessary before investing in it. (It was the
   right call: the sweep alone found nearly all of the remaining win.)
 
-**Recommendation:** given I1 already meets or beats every target this
-plan set, re-evaluate whether I2 (the compiled kernel, needs a rebuild)
-is still worth doing before starting it — the honest floor now measured
-is ≈777ms (the `_FLUSH_ROWS = 524288` datapoint in I1.d), so I2's
-realistic ceiling is a further ~150ms (~17%) on this workload, not the
-~1200ms (~44%) originally projected. Confirm with whoever is driving this
-plan before spending the I2 rebuild effort.
+**Update after I2 landed:** the recommendation above (re-evaluate before
+building I2, since the realistic ceiling looked like only ~150ms) turned
+out to be pessimistic — I2 delivered another **272ms** (870.5ms →
+598.6ms, -31%), more than the ~150ms estimated from the I1.d
+`_FLUSH_ROWS` sweep's asymptote. The compiled kernel avoids not just the
+per-row `.encode()` calls but also the intermediate `list` of `bytes`
+objects and the `b"".join()` allocation that I1.c's Python fast path
+still pays; those turned out to matter more than the sweep alone
+suggested. Final state: utf8 ingest 3622ms → 598.6ms (**-83.5%**),
+within ~22% of `string()` (490.4ms) and clearly ahead of `vlstring()`
+(1292.2ms). Remaining gap to `string()` (~108ms) is presumably the last
+of the inherent NDArray resize/write/compression cost referenced above —
+not investigated further; not gated by this plan.
 
 ---
 

@@ -121,6 +121,19 @@ def _pack_utf8_kernel():
     return getattr(utf8_ext, "pack_utf8_span", None)
 
 
+def _encode_utf8_kernel():
+    """Return the compiled bulk UTF-8 encoder, or ``None``.
+
+    ``None`` means the ``utf8_ext`` extension is unavailable; callers fall
+    back to the pure-Python join+encode paths in ``_rewrite_from``.
+    """
+    try:
+        from blosc2 import utf8_ext
+    except ImportError:
+        return None
+    return getattr(utf8_ext, "encode_utf8_span", None)
+
+
 def _new_backend_arrays(cparams=None, dparams=None, *, offsets_urlpath=None, data_urlpath=None):
     """Create fresh (offsets, data) NDArrays for an empty utf8 column."""
     import blosc2
@@ -301,12 +314,15 @@ class Utf8Array:
         ``pos + len(values)`` becomes the new persisted row count; the byte
         blob and offsets after ``pos`` are rewritten.
         """
-        if values and all(v.isascii() for v in values):
-            blob = "".join(values).encode("ascii")
+        kernel = _encode_utf8_kernel()
+        if kernel is not None and values:
+            data_arr, lengths = kernel(values)
+        elif values and all(v.isascii() for v in values):
+            data_arr = np.frombuffer("".join(values).encode("ascii"), dtype=np.uint8)
             lengths = np.fromiter(map(len, values), dtype=np.int64, count=len(values))
         else:
             encoded = [v.encode("utf-8") for v in values]
-            blob = b"".join(encoded)
+            data_arr = np.frombuffer(b"".join(encoded), dtype=np.uint8)
             lengths = np.fromiter((len(e) for e in encoded), dtype=np.int64, count=len(encoded))
         if pos == 0:
             start = 0
@@ -314,12 +330,12 @@ class Utf8Array:
             start = self._bytes_used
         else:
             start = int(self._offsets[pos])
-        new_used = start + len(blob)
+        new_used = start + len(data_arr)
         new_rows = pos + len(values)
         if int(self._data.shape[0]) != max(new_used, 1):
             self._data.resize((max(new_used, 1),))
-        if blob:
-            self._data[start:new_used] = np.frombuffer(blob, dtype=np.uint8)
+        if len(data_arr):
+            self._data[start:new_used] = data_arr
         if int(self._offsets.shape[0]) != new_rows + 1:
             self._offsets.resize((new_rows + 1,))
         if values:

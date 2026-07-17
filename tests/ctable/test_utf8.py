@@ -304,6 +304,89 @@ def test_ctable_utf8_persistence_roundtrip_kernel_and_fallback(tmp_path, ext, fo
 
 
 # ---------------------------------------------------------------------------
+# Bulk UTF-8 encode (write path): compiled kernel and its pure-Python fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(params=["kernel", "fallback"], ids=["kernel", "fallback"])
+def force_write_kernel_mode(request, monkeypatch):
+    """Exercise both the compiled bulk UTF-8 encoder and its pure-Python
+    join+encode fallback, so the fallback stays covered even on a build
+    where the compiled extension is available."""
+    if request.param == "fallback":
+        monkeypatch.setattr("blosc2.utf8_array._encode_utf8_kernel", lambda: None)
+    return request.param
+
+
+def test_utf8_array_extend_kernel_and_fallback(force_write_kernel_mode):
+    from blosc2.utf8_array import Utf8Array
+
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend(SAMPLE)
+    arr.flush()
+    assert list(arr[:]) == SAMPLE
+
+
+def test_utf8_array_extend_matches_python_ground_truth(force_write_kernel_mode):
+    """Same wider mix of byte lengths and edge cases as the read-side
+    ground-truth test, exercised through the write path this time."""
+    from blosc2.utf8_array import Utf8Array
+
+    rng = np.random.default_rng(7)
+    pool = ["", "a", "café", "日本語", "x" * 5000, "nul\x00in", "nul\x00INSIDE", "emoji 🎉🚀"]
+    values = [pool[i] for i in rng.integers(0, len(pool), 3000)]
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend(values)
+    arr.flush()
+    assert list(arr[:]) == values
+
+
+def test_utf8_array_extend_ascii_nul_byte_kernel_and_fallback(force_write_kernel_mode):
+    from blosc2.utf8_array import Utf8Array
+
+    values = ["nul\x00in", "plain", "\x00leading", "trailing\x00"]
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend(values)
+    arr.flush()
+    assert list(arr[:]) == values
+
+
+def test_utf8_array_extend_multi_mb_string_kernel_and_fallback(force_write_kernel_mode):
+    """A single multi-MB value alongside short ones -- sanity-checks the
+    total-length/offset accumulation in the compiled kernel's two passes."""
+    from blosc2.utf8_array import Utf8Array
+
+    values = ["head", "x" * (8 * 1024 * 1024), "tail", "café" * 100_000]
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend(values)
+    arr.flush()
+    assert list(arr[:]) == values
+
+
+def test_ctable_utf8_extend_kernel_and_fallback(force_write_kernel_mode):
+    t = make_table()
+    assert list(t["name"][:]) == SAMPLE
+
+
+def test_utf8_array_extend_lone_surrogate_raises_and_recovers(force_write_kernel_mode):
+    """A lone surrogate is invalid UTF-8: flush() must raise
+    UnicodeEncodeError, matching str.encode('utf-8')'s own behavior, and
+    the array must remain usable afterwards -- a regression test for the
+    compiled kernel's temp-buffer cleanup on the error path."""
+    from blosc2.utf8_array import Utf8Array
+
+    arr = Utf8Array(blosc2.utf8())
+    arr.extend(["first"])
+    arr.flush()
+    arr.extend(["ok", "bad\udc80value"])
+    with pytest.raises(UnicodeEncodeError):
+        arr.flush()
+    arr.extend(["second"])
+    arr.flush()
+    assert list(arr[:]) == ["first", "second"]
+
+
+# ---------------------------------------------------------------------------
 # CTable integration: append / extend / read
 # ---------------------------------------------------------------------------
 
