@@ -1,10 +1,10 @@
 # utf8 columns: closing the write/ingest gap (incremental plan)
 
 **Status:** I1 and I2 both LANDED (2026-07-17, branch `enhancing-ctable3`).
-Taxi ingest: 3622 ms → 870.5 ms after I1 → 598.6 ms after I2, now within
-~20% of `string()` (490.4 ms) and clearly ahead of `vlstring()`
-(1292.2 ms). See "Honest assessment" below for the full before/after
-table. Successor work to `plans/utf8-reads-filter-optim.md` (U1 + U2,
+Taxi ingest: 3622 ms → 870.5 ms after I1 (4.16x) → 598.6 ms after I2
+(6.05x total), now 1.22x slower than `string()` (490.4 ms) and 2.16x
+faster than `vlstring()` (1292.2 ms). See "Honest assessment" below for
+the full before/after table. Successor work to `plans/utf8-reads-filter-optim.md` (U1 + U2,
 landed on branch `enhancing-ctable3`, commits `3a7d9a3d`, `45ec7906`).
 Read that plan first for background and for the exact working rebuild
 commands referenced below; this plan assumes it.
@@ -197,7 +197,7 @@ Key properties:
   outside this loop body.
 
 **Measured** (extend-loop only, `_rewrite_from` unchanged, taxi-like ASCII
-workload, 1e7 rows): 1557ms → 943ms (**-39%**).
+workload, 1e7 rows): 1557ms → 943ms (**1.65x**).
 
 **`append()`/`_flush_if_needed()`:** leave essentially untouched — already
 minimal single-row overhead, no measurable win from rewriting them.
@@ -244,9 +244,9 @@ decision 3).
 unchanged path, ~3ms `isascii()`-scan overhead, matches expectation).
 
 **Combined I1.a + I1.c** (full extend+flush pipeline, 1e7 rows,
-Python-level cost only): 1557ms → 630ms (**-60%**). Projected onto the
+Python-level cost only): 1557ms → 630ms (**2.47x**). Projected onto the
 full 3622ms end-to-end benchmark (NDArray-side cost assumed unaffected,
-flush count unchanged): **≈2695ms** (-26%).
+flush count unchanged): **≈2695ms** (1.34x).
 
 ### I1.d — Raising `_FLUSH_ROWS` (folded into I1)
 
@@ -313,9 +313,10 @@ regression elsewhere in that script, or in `sort_by`/groupby/`to_arrow`
 (which reuse `_rewrite_from` via `set_all`/`copy`).
 
 **ACTUAL (2026-07-17, `enhancing-ctable3`, Apple-silicon Mac, I1.a + I1.c +
-I1.d combined):** taxi ingest **870.5 ms** (from 3622 ms, **-76%**) —
+I1.d combined):** taxi ingest **870.5 ms** (from 3622 ms, **4.16x**) —
 gate passed with a huge margin, and utf8 ingest is now *faster* than both
-`string()` (1011.1 ms) and `vlstring()` (1106.1 ms) on this workload. No
+`string()` (1011.1 ms, 1.16x) and `vlstring()` (1106.1 ms, 1.27x) on this
+workload. No
 regression in the rest of `bench_string_kinds.py`'s output (full read,
 filter, groupby, sort, `to_arrow`, both workloads, all three column
 kinds) beyond ordinary run-to-run noise. Full `tests/` suite: 7513
@@ -404,9 +405,9 @@ adding cleverness — ~2065 ms of the original 3622 ms is inherent NDArray
 write/compression cost outside I1/I2's scope, so there is a hard floor.
 
 **ACTUAL (2026-07-17, `enhancing-ctable3`, Apple-silicon Mac):** taxi
-ingest **598.6 ms** (from 870.5 ms after I1 alone, **-31%** further;
-**-83.5%** from the original 3622 ms) — gate passed with a large margin,
-now within ~22% of `string()` (490.4 ms) on this workload. No regression
+ingest **598.6 ms** (from 870.5 ms after I1 alone, **1.45x** further;
+**6.05x** from the original 3622 ms) — gate passed with a large margin,
+now 1.22x slower than `string()` (490.4 ms) on this workload. No regression
 elsewhere in `bench_string_kinds.py` (full read, filter, groupby, sort,
 `to_arrow`, both workloads, all three column kinds) beyond ordinary
 run-to-run noise.
@@ -455,13 +456,13 @@ text, kept for the record:
 **Update after I2 landed:** the recommendation above (re-evaluate before
 building I2, since the realistic ceiling looked like only ~150ms) turned
 out to be pessimistic — I2 delivered another **272ms** (870.5ms →
-598.6ms, -31%), more than the ~150ms estimated from the I1.d
+598.6ms, **1.45x**), more than the ~150ms estimated from the I1.d
 `_FLUSH_ROWS` sweep's asymptote. The compiled kernel avoids not just the
 per-row `.encode()` calls but also the intermediate `list` of `bytes`
 objects and the `b"".join()` allocation that I1.c's Python fast path
 still pays; those turned out to matter more than the sweep alone
-suggested. Final state: utf8 ingest 3622ms → 598.6ms (**-83.5%**),
-within ~22% of `string()` (490.4ms) and clearly ahead of `vlstring()`
+suggested. Final state: utf8 ingest 3622ms → 598.6ms (**6.05x**),
+1.22x slower than `string()` (490.4ms) and 2.16x faster than `vlstring()`
 (1292.2ms). Remaining gap to `string()` (~108ms) is presumably the last
 of the inherent NDArray resize/write/compression cost referenced above —
 not investigated further; not gated by this plan.
