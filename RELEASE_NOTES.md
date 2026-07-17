@@ -2,7 +2,33 @@
 
 ## Changes from 4.9.0 to 4.9.1
 
-XXX version-specific blurb XXX
+A small hot-fix release for the Arrow interop work in 4.9.0: a real
+performance regression in dictionary-column export, and a clearer error
+message when opening a nonexistent `CTable` in append mode.
+
+### Improvements
+
+- `CTable.iter_arrow_batches()` (and therefore `to_arrow()` and the Arrow
+  PyCapsule interchange, `__arrow_c_stream__`) no longer recomputes the
+  full live-row-position array from scratch on every batch, for every
+  dictionary column — an `O(n_rows)` scan that was repeated
+  `O(n_rows / batch_size)` times. The position array is now computed once
+  per export call instead. Measured 6-14x faster export for
+  dictionary-encoded string columns (e.g. `company`) on a 1M-row table.
+- Reminder for anyone consuming a `CTable` through the Arrow PyCapsule
+  protocol (DuckDB, pyarrow, Polars, pandas): the raw Arrow C Stream
+  interface has no column-projection pushdown, so a consumer that only
+  needs a few columns still triggers export of every column in the table.
+  Use `CTable.select([...])` to project down to the columns you actually
+  need before handing the table to the consumer, particularly if any
+  column is an expensive nested/list type.
+
+### Bug fixes
+
+- Opening a `CTable` with `mode="a"` at a path that doesn't exist yet now
+  raises a clear `FileNotFoundError` ("mode='a' opens an existing table;
+  use mode='w' to create a new one") instead of silently falling through
+  and creating a new, empty table.
 
 ## Changes from 4.8.1 to 4.9.0
 

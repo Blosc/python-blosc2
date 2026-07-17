@@ -1,59 +1,35 @@
-Announcing Python-Blosc2 4.9.0
+Announcing Python-Blosc2 4.9.1
 ==============================
 
-Last year's big push was making ``NDArray`` a good ecosystem citizen — array
-API compliance, protocols, interop. This release does the same for
-``CTable``: instead of asking the tabular ecosystem to learn Blosc2's ways,
-``CTable`` now speaks its protocols directly. Arrow tools can read and write
-a ``CTable`` with zero glue code, a new string column type stores text in
-Arrow's own layout, and ``engine=blosc2.jit`` runs correctly *inside*
-pandas 3 itself. Compression doesn't have to mean an island — it can just be
-a fast, compact layer underneath the tools you already use.
+This is a hot-fix release for the Arrow interop work introduced in 4.9.0 —
+one real performance regression and one clearer error message, both in
+``CTable``.
 
-The main highlights are:
+- **Faster dictionary-column Arrow export**: ``CTable.iter_arrow_batches()``
+  (and therefore ``to_arrow()`` and the Arrow PyCapsule interchange,
+  ``__arrow_c_stream__``) was recomputing the full live-row-position array
+  from scratch on every batch, for every dictionary-encoded string column —
+  an ``O(n_rows)`` scan repeated ``O(n_rows / batch_size)`` times. It's now
+  computed once per export call instead. 6-14x faster export for
+  dictionary columns on a 1M-row benchmark.
 
-- **Arrow PyCapsule interchange**: ``CTable.__arrow_c_stream__`` lets
-  pyarrow, DuckDB, and Polars consume a ``CTable`` directly as a stream of
-  record batches, with bounded memory — no ``to_arrow()`` copy step
-  needed::
+- **Worth knowing regardless of this fix**: the Arrow PyCapsule protocol
+  (``__arrow_c_stream__``) has no column-projection pushdown — a consumer
+  that only needs two columns (DuckDB, pyarrow, Polars, pandas) still
+  triggers export of *every* column in the table, since the raw Arrow C
+  Stream interface has no way to say "I only need these." Use
+  ``CTable.select([...])`` to project down to the columns you actually
+  need before handing the table off, especially if any column holds an
+  expensive nested/list type::
 
-      import duckdb, blosc2
-      t = blosc2.CTable.open("trips.b2z")
-      duckdb.sql("SELECT company, avg(fare) FROM t GROUP BY company").show()
+      sub = t.select(["company", "fare"])
+      duckdb.sql("SELECT company, avg(sub.fare) FROM sub GROUP BY company").show()
 
-  pandas >= 3.0 gets the same treatment via the new
-  ``pandas.DataFrame.from_arrow(t)`` classmethod (the plain ``pd.DataFrame(t)``
-  constructor doesn't use this protocol). ``CTable.from_arrow()`` now
-  accepts any object implementing the same protocol on ingest too — a
-  pyarrow Table, a Polars DataFrame, a Parquet reader — in addition to the
-  existing ``(schema, batches)`` form, including Arrow's ``string_view``
-  layout (Polars' default string export type).
-
-- **``blosc2.utf8()``: string columns that speak Arrow's layout**. Instead of
-  a blosc2-specific encoding, ``utf8()`` stores text exactly as Arrow does —
-  int64 row offsets plus a UTF-8 byte blob — and reads back as NumPy
-  ``StringDType``. It's the new recommended default for free text: 7-13x
-  smaller uncompressed than fixed-width ``string()`` on high-cardinality
-  text, with a full query surface (comparisons, ``where()``, ``sort_by``,
-  ``group_by`` keys, ``fillna``, Arrow round-trip).
-
-- **pandas engine, pandas 3 ready**: ``engine=blosc2.jit`` for
-  ``DataFrame.apply`` now returns a properly indexed ``DataFrame``/``Series``
-  under pandas 3's default ``raw=False``, and ``Series.map(func,
-  engine=blosc2.jit)`` is implemented for the first time.
-
-- **``CTable`` grows a pandas-style API**: ``CTable.assign()`` plus an
-  unbound ``blosc2.col()`` for chaining —
-  ``t.assign(profit=col("revenue") - col("cost"))[col("profit") > 0].sort_by("profit", ascending=False).head(10)``
-  — and a real missing-data story: ``Column.fillna()``, ``CTable.dropna()``,
-  and null-propagating arithmetic/comparisons on nullable columns (no more
-  ``t[t.x < 0]`` silently matching null rows). ``group_by().agg()`` accepts
-  UDF aggregations, and ``CTable.apply()`` runs a UDF across live rows.
-
-- **Faster indexed reads**: ``NDArray.iter_sorted()``/``argsort()`` on a
-  ``FULL``-indexed array reads the sidecar range directly instead of
-  building the full permutation — ~52x faster and ~193x less memory for
-  tail-style queries on a 20M-element array.
+- **Clearer error on ``mode="a"``**: opening a ``CTable`` with
+  ``mode="a"`` at a path that doesn't exist yet now raises a
+  ``FileNotFoundError`` explaining that ``mode="a"`` opens an existing
+  table (use ``mode="w"`` to create one), instead of silently creating a
+  new, empty table.
 
 Install it with::
 
