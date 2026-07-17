@@ -71,7 +71,7 @@ machine (Apple M4, conda env with pandas 3.0.3):
 
 ```
 rows=1000000, cols=8
-plain df.apply(f):              0.1114 s
+plain df.apply(f):               0.1114 s
 df.apply(f, engine=blosc2.jit):  0.0260 s
 speedup:                         4.3x
 ```
