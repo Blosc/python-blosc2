@@ -91,6 +91,28 @@ from blosc2.schema_compiler import (
 )
 
 
+def _is_arrow_string_type(pa, pa_type) -> bool:
+    """True for any Arrow string-like type, including the view-based layout.
+
+    ``string_view`` (Arrow's variable-length view layout, e.g. Polars'
+    default export type for string columns via the PyCapsule interface) is
+    not one of ``string``/``large_string``/``utf8``/``large_utf8`` but is
+    handled identically everywhere those are.
+    """
+    if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+        return True
+    is_string_view = getattr(pa.types, "is_string_view", None)
+    return bool(is_string_view is not None and is_string_view(pa_type))
+
+
+def _is_arrow_binary_type(pa, pa_type) -> bool:
+    """True for any Arrow binary-like type, including the view-based layout."""
+    if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
+        return True
+    is_binary_view = getattr(pa.types, "is_binary_view", None)
+    return bool(is_binary_view is not None and is_binary_view(pa_type))
+
+
 @dataclass(frozen=True)
 class NullPolicy:
     """Default sentinels for inferred CTable scalar nulls.
@@ -165,9 +187,9 @@ class NullPolicy:
             return self.float_value
         if pa_type == pa.bool_():
             return self.bool_value
-        if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+        if _is_arrow_string_type(pa, pa_type):
             return self.string_value
-        if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
+        if _is_arrow_binary_type(pa, pa_type):
             return self.bytes_value
         if pa.types.is_timestamp(pa_type):
             return self.timestamp_value
@@ -6844,7 +6866,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """True when *pa_type* has no typed CTable mapping."""
         if pa.types.is_dictionary(pa_type):
             vt = pa_type.value_type
-            return vt not in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8())
+            return not _is_arrow_string_type(pa, vt)
+        if _is_arrow_string_type(pa, pa_type):
+            return False
         if pa_type in (
             pa.int8(),
             pa.int16(),
@@ -6857,13 +6881,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             pa.float32(),
             pa.float64(),
             pa.bool_(),
-            pa.string(),
-            pa.large_string(),
-            pa.utf8(),
-            pa.large_utf8(),
         ):
             return False
-        if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
+        if _is_arrow_binary_type(pa, pa_type):
             return False
         if pa.types.is_timestamp(pa_type):
             return False
@@ -6915,7 +6935,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         if pa.types.is_dictionary(pa_type):
             vt = pa_type.value_type
-            if vt in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+            if _is_arrow_string_type(pa, vt):
                 index_type = pa_type.index_type
                 # Accept signed and unsigned integer index types; validate fit in int32.
                 if not (pa.types.is_integer(index_type) or pa.types.is_unsigned_integer(index_type)):
@@ -6988,7 +7008,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 item_arrow_col = None
                 nullable = True
             item_string_max_length = string_max_length
-            if pa_type.value_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+            if _is_arrow_string_type(pa, pa_type.value_type):
                 item_string_max_length = max(string_max_length or 1, 1_000_000)
             item_spec = CTable._arrow_type_to_spec(
                 pa,
@@ -7009,7 +7029,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     )
                     child_col = combined.field(field.name)
                 child_string_max_length = string_max_length
-                if field.type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+                if _is_arrow_string_type(pa, field.type):
                     child_string_max_length = max(string_max_length or 1, 1_000_000)
                 fields[field.name] = CTable._arrow_type_to_spec(
                     pa,
@@ -7021,7 +7041,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 )
             return b2s.struct(fields, nullable=nullable)
 
-        if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
+        if _is_arrow_string_type(pa, pa_type):
             if string_max_length is None:
                 from blosc2.utf8_array import have_string_dtype
 
@@ -7036,7 +7056,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             max_length = max(string_max_length, len(null_value) if null_value is not None else 1, 1)
             return b2s.string(max_length=max_length, null_value=null_value)
 
-        if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
+        if _is_arrow_binary_type(pa, pa_type):
             if string_max_length is None:
                 # No fixed-width threshold given: store as variable-length scalar bytes.
                 return b2s.vlbytes(nullable=nullable)
@@ -7102,12 +7122,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 and not field_is_dictionary
                 and column_string_max_length is None
                 and (
-                    pa.types.is_binary(field.type)
-                    or pa.types.is_large_binary(field.type)
-                    or (
-                        not have_string_dtype()
-                        and (pa.types.is_string(field.type) or pa.types.is_large_string(field.type))
-                    )
+                    _is_arrow_binary_type(pa, field.type)
+                    or (not have_string_dtype() and _is_arrow_string_type(pa, field.type))
                 )
             )
             field_needs_object_fallback = cls._arrow_type_needs_object_fallback(pa, field.type)

@@ -13,17 +13,21 @@ a fast, compact layer underneath the tools you already use.
 The main highlights are:
 
 - **Arrow PyCapsule interchange**: ``CTable.__arrow_c_stream__`` lets
-  pyarrow, DuckDB, Polars, and pandas >= 2.2 consume a ``CTable`` directly as
-  a stream of record batches, with bounded memory — no ``to_arrow()`` copy
-  step needed::
+  pyarrow, DuckDB, and Polars consume a ``CTable`` directly as a stream of
+  record batches, with bounded memory — no ``to_arrow()`` copy step
+  needed::
 
       import duckdb, blosc2
       t = blosc2.CTable.open("trips.b2z")
       duckdb.sql("SELECT company, avg(fare) FROM t GROUP BY company").show()
 
-  ``CTable.from_arrow()`` now accepts any object implementing the same
-  protocol on ingest too — a pyarrow Table, a Polars DataFrame, a Parquet
-  reader — in addition to the existing ``(schema, batches)`` form.
+  pandas >= 3.0 gets the same treatment via the new
+  ``pandas.DataFrame.from_arrow(t)`` classmethod (the plain ``pd.DataFrame(t)``
+  constructor doesn't use this protocol). ``CTable.from_arrow()`` now
+  accepts any object implementing the same protocol on ingest too — a
+  pyarrow Table, a Polars DataFrame, a Parquet reader — in addition to the
+  existing ``(schema, batches)`` form, including Arrow's ``string_view``
+  layout (Polars' default string export type).
 
 - **``blosc2.utf8()``: string columns that speak Arrow's layout**. Instead of
   a blosc2-specific encoding, ``utf8()`` stores text exactly as Arrow does —

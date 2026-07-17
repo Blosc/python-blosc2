@@ -323,6 +323,24 @@ def test_from_arrow_string_default_is_utf8():
     assert list(t["name"][:]) == ["hi", "hello world", "!"]
 
 
+def test_from_arrow_string_view_imports_as_utf8():
+    """Arrow's view-based string layout (Polars' default PyCapsule export type)
+
+    is not one of string/large_string/utf8/large_utf8, but must still import
+    like them instead of raising "No blosc2 spec for Arrow type".
+    """
+    if not hasattr(pa.types, "is_string_view"):
+        pytest.skip("this pyarrow version has no string_view type")
+    at = pa.table({"name": pa.array(["hi", None, "!"], type=pa.string())}).cast(
+        pa.schema([pa.field("name", pa.string_view(), nullable=True)])
+    )
+    assert pa.types.is_string_view(at.schema.field("name").type)
+    t = CTable.from_arrow(at.schema, at.to_batches())
+    if hasattr(np.dtypes, "StringDType"):
+        assert t["name"].is_utf8
+    assert list(t["name"].fillna("<null>")) == ["hi", "<null>", "!"]
+
+
 def test_from_arrow_string_fixed_width_with_max_length():
     """Passing string_max_length gives a fixed-width NDArray string column."""
     at = pa.table({"name": pa.array(["hi", "hello world", "!"], type=pa.string())})

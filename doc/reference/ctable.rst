@@ -621,14 +621,18 @@ well as import/export paths for CSV, Arrow, and Parquet data.
 
 CTable also implements the `Arrow PyCapsule interchange protocol
 <https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html>`_
-via :meth:`~blosc2.CTable.__arrow_c_stream__`, so pyarrow, DuckDB, Polars, and
-pandas >= 2.2 can consume a CTable directly as a stream of record batches
-(``pa.table(ct)``, ``duckdb.sql("SELECT ... FROM ct")``, ``pl.DataFrame(ct)``),
-and :meth:`~blosc2.CTable.from_arrow` accepts any object implementing that
-protocol on ingest. Strict zero-copy is not possible — the underlying data is
-compressed, so decompression is unavoidably a copy — but there is no
-intermediate materialization: batches are decompressed and handed to the
-consumer one at a time, so memory use stays bounded regardless of table size.
+via :meth:`~blosc2.CTable.__arrow_c_stream__`, so pyarrow, DuckDB, and Polars
+can consume a CTable directly as a stream of record batches
+(``pa.table(ct)``, ``duckdb.sql("SELECT ... FROM ct")``, ``pl.DataFrame(ct)``).
+pandas >= 3.0 can do the same via the new ``pandas.DataFrame.from_arrow(ct)``
+classmethod (the plain ``pd.DataFrame(ct)`` constructor does not use this
+protocol). :meth:`~blosc2.CTable.from_arrow` accepts any object implementing
+the protocol on ingest, including Arrow's ``string_view`` layout (Polars'
+default string export type). Strict zero-copy is not possible — the
+underlying data is compressed, so decompression is unavoidably a copy — but
+there is no intermediate materialization: batches are decompressed and
+handed to the consumer one at a time, so memory use stays bounded regardless
+of table size.
 
 .. automethod:: CTable.load
 .. automethod:: CTable.open

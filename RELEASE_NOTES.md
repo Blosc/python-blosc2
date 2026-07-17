@@ -4,25 +4,29 @@
 
 This release is about cooperation: `CTable` now speaks the tabular
 ecosystem's own protocols instead of asking it to speak blosc2's. Arrow
-tools (pyarrow, DuckDB, Polars, pandas >= 2.2) can consume or produce a
-`CTable` directly through the Arrow PyCapsule interface; a new `utf8()`
-string column stores text in Arrow's own offsets+bytes layout and reads
-back as NumPy `StringDType`; and `engine=blosc2.jit` now runs correctly
-inside pandas 3 itself. Alongside that, `CTable` gained a proper
-missing-data story (`fillna`/`dropna`, null-safe arithmetic and
-comparisons) and a pandas-3-style chaining API (`assign()`/`col()`,
-UDF aggregations, `CTable.apply()`).
+tools (pyarrow, DuckDB, Polars, and pandas >= 3.0 via `DataFrame.from_arrow()`)
+can consume or produce a `CTable` directly through the Arrow PyCapsule
+interface; a new `utf8()` string column stores text in Arrow's own
+offsets+bytes layout and reads back as NumPy `StringDType`; and
+`engine=blosc2.jit` now runs correctly inside pandas 3 itself. Alongside
+that, `CTable` gained a proper missing-data story (`fillna`/`dropna`,
+null-safe arithmetic and comparisons) and a pandas-3-style chaining API
+(`assign()`/`col()`, UDF aggregations, `CTable.apply()`).
 
 ### New features
 
 #### Ecosystem interop
 
 - **Arrow PyCapsule interchange**: `CTable.__arrow_c_stream__` lets
-  pyarrow, DuckDB, Polars, and pandas >= 2.2 consume a `CTable` directly
-  as a stream of record batches, with bounded memory — no
-  `to_arrow()`/copy step required. `CTable.from_arrow()` now accepts any
-  object implementing the same protocol on ingest (single-argument
-  form), in addition to the existing `(schema, batches)` form.
+  pyarrow, DuckDB, and Polars consume a `CTable` directly as a stream of
+  record batches, with bounded memory — no `to_arrow()`/copy step
+  required. pandas >= 3.0 can do the same via the new
+  `pandas.DataFrame.from_arrow()` classmethod (the plain `pd.DataFrame(t)`
+  constructor does not use this protocol). `CTable.from_arrow()` now
+  accepts any object implementing the same protocol on ingest
+  (single-argument form), in addition to the existing `(schema, batches)`
+  form — including Arrow's `string_view` layout (Polars' default string
+  export type), which raised `TypeError` before this release.
 - **`blosc2.utf8()`**: a new column type for high-cardinality/free-text
   strings, storing each column as two companion NDArrays — int64 row
   offsets plus a UTF-8 byte blob — the same layout Arrow uses for
@@ -118,6 +122,13 @@ UDF aggregations, `CTable.apply()`).
 - Fixed a `NameError` when `nan`/`inf` scalars appeared in lazy
   expressions; `ShapeInferencer` no longer ignores user-provided shapes
   for `nan`/`inf`.
+- Fixed `CTable.from_arrow()` raising `TypeError: No blosc2 spec for Arrow
+  type DataType(string_view)` on any Arrow `string_view`/`binary_view`
+  column — the layout Polars exports by default through the PyCapsule
+  protocol. `string_view`/`binary_view` now import exactly like
+  `string`/`large_string`/`binary`/`large_binary` everywhere a column's
+  Arrow type is inspected (schema inference, null-sentinel selection,
+  list/struct/dictionary value types).
 
 ## Changes from 4.8.0 to 4.8.1
 
