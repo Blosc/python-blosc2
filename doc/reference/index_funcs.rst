@@ -7,6 +7,7 @@ The following functions are useful for performing indexing and other associated 
 
 .. autosummary::
 
+    argsort
     broadcast_to
     concat
     count_nonzero
@@ -20,6 +21,7 @@ The following functions are useful for performing indexing and other associated 
 
 
 
+.. autofunction:: blosc2.argsort
 .. autofunction:: blosc2.broadcast_to
 .. autofunction:: blosc2.concat
 .. autofunction:: blosc2.count_nonzero

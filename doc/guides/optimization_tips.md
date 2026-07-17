@@ -77,11 +77,11 @@ On a 16000×2000 float64 array, 400 chunk-sized reads aligned with the chunk gri
 A `FULL` index stores rows in sorted order. When all you need is the top (or
 bottom) *k* rows, you can stream just that slice directly from the index
 sidecar instead of materialising the full sorted permutation. Both
-:class:`~blosc2.CTable` and :class:`~blosc2.NDArray` expose this.
+{class}`~blosc2.CTable` and {class}`~blosc2.NDArray` expose this.
 
 ### CTable: ``sort_by(view=True)``
 
-:meth:`CTable.sort_by(view=True) <blosc2.CTable.sort_by>` returns a
+{meth}`CTable.sort_by(view=True) <blosc2.CTable.sort_by>` returns a
 lightweight sorted *view* that gathers rows from the parent table on demand.
 On a FULL-indexed column it streams straight from the index — the table is
 never actually sorted at all:
@@ -107,9 +107,9 @@ rows you're about to discard.
 
 ### NDArray: ``iter_sorted(start=-k)``
 
-For 1-D :class:`~blosc2.NDArray` objects, :meth:`NDArray.iter_sorted(start=-k)
+For 1-D {class}`~blosc2.NDArray` objects, {meth}`NDArray.iter_sorted(start=-k)
 <blosc2.NDArray.iter_sorted>` reads just the tail of the index sidecar,
-avoiding the full permutation that :func:`argsort() <blosc2.argsort>`
+avoiding the full permutation that {func}`argsort() <blosc2.argsort>`
 would materialise:
 
 ```python
