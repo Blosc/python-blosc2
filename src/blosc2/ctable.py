@@ -2013,16 +2013,33 @@ class Column:
             result[start:stop] = fn(arr[start:stop], start, stop)
         return result
 
+    def _utf8_chunked_bytes(self, fn, *, chunk_size: int = 65536) -> np.ndarray:
+        """Apply ``fn(arr, start, stop)`` over this utf8 column's logical rows.
+
+        Like :meth:`_utf8_chunked_bool`, but *fn* operates directly on the
+        underlying :class:`~blosc2.utf8_array.Utf8Array` (raw offsets/bytes)
+        instead of a materialized ``StringDType`` chunk, so no per-row decode
+        happens.  Returns a physical-length boolean NumPy array; rows beyond
+        the column's logical length are left ``False``.
+        """
+        arr = self._raw_col
+        n_phys = len(self._table._valid_rows)
+        n_logical = len(arr)
+        result = np.zeros(n_phys, dtype=np.bool_)
+        for start in range(0, n_logical, chunk_size):
+            stop = min(start + chunk_size, n_logical)
+            result[start:stop] = fn(arr, start, stop)
+        return result
+
     def _utf8_compare(self, numpy_op, other):
-        """Chunked-numpy comparison predicate for a utf8 column.
+        """Comparison predicate for a utf8 column.
 
         Compares against a Python ``str`` scalar or another utf8
-        :class:`Column` (element-wise), evaluating chunk by chunk since
-        numexpr/miniexpr cannot operate on ``StringDType`` arrays.  Returns a
-        physical-length boolean ``blosc2.NDArray``, already intersected with
-        this column's live-row mask.  A null value on either side never
-        satisfies any comparison (SQL ``WHERE`` semantics), matching
-        :meth:`_null_aware_compare` for every other column kind.
+        :class:`Column` (element-wise).  Returns a physical-length boolean
+        ``blosc2.NDArray``, already intersected with this column's live-row
+        mask.  A null value on either side never satisfies any comparison
+        (SQL ``WHERE`` semantics), matching :meth:`_null_aware_compare` for
+        every other column kind.
         """
         if isinstance(other, Column):
             if not other.is_utf8:
@@ -2030,20 +2047,24 @@ class Column:
                     f"Column {self._col_name!r} is a utf8 column; it can only be compared with a "
                     f"str or another utf8 Column, got Column {other._col_name!r}."
                 )
-            other_arr = other._raw_col
-        elif isinstance(other, str):
-            other_arr = None
-        else:
-            raise TypeError(
-                f"Column {self._col_name!r} is a utf8 column; it can only be compared with a str "
-                f"or another utf8 Column, got {type(other).__name__!r}."
-            )
+            return self._utf8_compare_column(numpy_op, other)
+        if isinstance(other, str):
+            return self._utf8_compare_scalar(numpy_op, other)
+        raise TypeError(
+            f"Column {self._col_name!r} is a utf8 column; it can only be compared with a str "
+            f"or another utf8 Column, got {type(other).__name__!r}."
+        )
 
+    def _utf8_compare_column(self, numpy_op, other: Column):
+        """Column-vs-Column comparison, evaluated chunk by chunk on decoded
+        ``StringDType`` values since numexpr/miniexpr cannot operate on them.
+        """
+        other_arr = other._raw_col
         nv = self.null_value
-        other_nv = other.null_value if isinstance(other, Column) else None
+        other_nv = other.null_value
 
         def fn(chunk, start, stop):
-            rhs = other if other_arr is None else other_arr[start:stop]
+            rhs = other_arr[start:stop]
             res = numpy_op(chunk, rhs)
             if nv is not None:
                 res &= chunk != nv
@@ -2052,6 +2073,42 @@ class Column:
             return res
 
         raw = self._utf8_chunked_bool(fn)
+        return blosc2.asarray(raw) & self._lazy_valid_rows()
+
+    def _utf8_compare_scalar(self, numpy_op, value: str):
+        """Scalar comparison, evaluated chunk by chunk directly on raw UTF-8
+        bytes (no decode to ``StringDType``) via
+        :meth:`~blosc2.utf8_array.Utf8Array.equal_mask_span` /
+        :meth:`~blosc2.utf8_array.Utf8Array.order_masks_span`.
+        """
+        nv = self.null_value
+
+        if numpy_op in (np.equal, np.not_equal):
+
+            def fn(arr, start, stop):
+                res = arr.equal_mask_span(value, start, stop)
+                if numpy_op is np.not_equal:
+                    res = ~res
+                if nv is not None:
+                    res &= ~arr.equal_mask_span(nv, start, stop)
+                return res
+        else:
+
+            def fn(arr, start, stop):
+                lt, gt = arr.order_masks_span(value, start, stop)
+                if numpy_op is np.less:
+                    res = lt
+                elif numpy_op is np.less_equal:
+                    res = ~gt
+                elif numpy_op is np.greater:
+                    res = gt
+                else:  # np.greater_equal
+                    res = ~lt
+                if nv is not None:
+                    res = res & ~arr.equal_mask_span(nv, start, stop)
+                return res
+
+        raw = self._utf8_chunked_bytes(fn)
         return blosc2.asarray(raw) & self._lazy_valid_rows()
 
     def _dictionary_eq(self, other):

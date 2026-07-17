@@ -478,6 +478,80 @@ class Utf8Array:
         rank[order] = np.arange(len(order))
         return rank[codes], uniques[order]
 
+    def equal_mask_span(self, value: str, a: int, b: int) -> np.ndarray:
+        """Boolean mask for persisted rows ``[a, b)``: row bytes == *value*'s UTF-8 bytes.
+
+        Compares raw bytes with no decode: rows are first filtered by byte
+        length, then the surviving candidates are compared byte-by-byte with
+        whole-array gathers (one comparison per byte position of *value*).
+        """
+        self.flush()
+        enc = value.encode("utf-8")
+        length = len(enc)
+        target = np.frombuffer(enc, dtype=np.uint8)
+        offs = np.asarray(self._offsets[a : b + 1], dtype=np.int64)
+        rel = offs - int(offs[0])
+        data = np.asarray(self._data[int(offs[0]) : int(offs[-1])])
+        lengths = np.diff(rel)
+        mask = lengths == length
+        if length and mask.any():
+            cand = np.flatnonzero(mask)
+            idx = rel[cand]
+            hit = np.ones(len(idx), dtype=np.bool_)
+            for i in range(length):
+                hit &= data[idx] == target[i]
+                idx = idx + 1
+            mask[cand[~hit]] = False
+        return mask
+
+    def order_masks_span(self, value: str, a: int, b: int) -> tuple[np.ndarray, np.ndarray]:
+        """Return ``(lt, gt)`` boolean masks comparing rows ``[a, b)`` to *value*.
+
+        Byte-lexicographic comparison, which equals Unicode code-point order
+        for valid UTF-8.  A row where neither mask is True is equal to
+        *value*.  Rows are grouped by byte length (each row touched once);
+        within a group, bytes are compared position by position against
+        *value*'s bytes with whole-array gathers.
+        """
+        self.flush()
+        target = np.frombuffer(value.encode("utf-8"), dtype=np.uint8)
+        probe_len = len(target)
+        n = b - a
+        lt = np.zeros(n, dtype=np.bool_)
+        gt = np.zeros(n, dtype=np.bool_)
+        if n == 0:
+            return lt, gt
+        offs = np.asarray(self._offsets[a : b + 1], dtype=np.int64)
+        rel = offs - int(offs[0])
+        data = np.asarray(self._data[int(offs[0]) : int(offs[-1])])
+        lengths = np.diff(rel)
+        starts = rel[:-1]
+        if int(lengths.max()) <= 65536:
+            distinct_lengths = np.flatnonzero(np.bincount(lengths))
+        else:
+            distinct_lengths = np.unique(lengths)
+        for length in distinct_lengths:
+            length = int(length)
+            rows = np.flatnonzero(lengths == length)
+            m = min(length, probe_len)
+            undecided = np.ones(len(rows), dtype=np.bool_)
+            row_lt = np.zeros(len(rows), dtype=np.bool_)
+            row_gt = np.zeros(len(rows), dtype=np.bool_)
+            idx = starts[rows]
+            for i in range(m):
+                byte = data[idx]
+                row_lt |= undecided & (byte < target[i])
+                row_gt |= undecided & (byte > target[i])
+                undecided &= byte == target[i]
+                idx = idx + 1
+            if length < probe_len:
+                row_lt |= undecided  # row is a strict byte-prefix of value
+            elif length > probe_len:
+                row_gt |= undecided  # value is a strict byte-prefix of row
+            lt[rows] = row_lt
+            gt[rows] = row_gt
+        return lt, gt
+
     def arrow_slice(self, pa, a: int, b: int, null_value: str | None = None):
         """Persisted rows ``[a, b)`` as a ``pyarrow.LargeStringArray``.
 
@@ -495,17 +569,7 @@ class Utf8Array:
         validity = None
         null_count = 0
         if null_value is not None and n > 0:
-            nv_enc = null_value.encode("utf-8")
-            lengths = np.diff(rel)
-            if nv_enc:
-                mask = np.zeros(n, dtype=np.bool_)
-                cand = np.flatnonzero(lengths == len(nv_enc))
-                if len(cand):
-                    spans = data[rel[cand][:, None] + np.arange(len(nv_enc))]
-                    hits = (spans == np.frombuffer(nv_enc, dtype=np.uint8)).all(axis=1)
-                    mask[cand[hits]] = True
-            else:
-                mask = lengths == 0
+            mask = self.equal_mask_span(null_value, a, b)
             null_count = int(mask.sum())
             if null_count:
                 validity = pa.array(~mask).buffers()[1]

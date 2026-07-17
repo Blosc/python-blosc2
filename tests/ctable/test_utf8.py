@@ -470,6 +470,135 @@ def test_ctable_utf8_comparison_with_mismatched_column_type_raises():
         t.name == t.other  # noqa: B015
 
 
+def test_ctable_utf8_scalar_comparison_differential():
+    """Every scalar comparison (byte-level, no decode) must match Python
+    string semantics row-for-row, across ASCII, multi-byte, empty,
+    NUL-bearing, and multi-KB values, plus a mix of null rows.
+
+    Ground truth is computed with Python's own operators on the original
+    values (not via np.unique/StringDType helpers, which have a known bug
+    merging strings that differ only after an embedded NUL).
+    """
+    import operator
+
+    pool = [
+        "hello",
+        "",
+        "a",
+        "café",
+        "日本語のテキスト",
+        "z",
+        "é",
+        "日",
+        "Taxi",
+        "Taxi Affiliation",
+        "nul\x00in",
+        "nul\x00INSIDE",
+        "x" * 5000,
+        "y" * 5000 + "!",
+    ]
+    n = 5000
+    rng = np.random.default_rng(11)
+    values = [pool[i] for i in rng.integers(0, len(pool), n)]
+    null_positions = rng.choice(n, size=n // 20, replace=False)
+    data = list(values)
+    for i in null_positions:
+        data[i] = None
+
+    t = CTable(NullableRow, new_data={"name": data, "x": list(range(n))})
+    nv = t["name"].null_value
+
+    probes = {
+        "present": "café",
+        "absent": "not_in_pool_ZZZ",
+        "prefix": "Taxi",
+        "empty": "",
+        "sentinel": nv,
+    }
+    ops = {
+        "eq": (operator.eq, lambda c, p: c == p),
+        "ne": (operator.ne, lambda c, p: c != p),
+        "lt": (operator.lt, lambda c, p: c < p),
+        "le": (operator.le, lambda c, p: c <= p),
+        "gt": (operator.gt, lambda c, p: c > p),
+        "ge": (operator.ge, lambda c, p: c >= p),
+    }
+
+    for probe_name, probe in probes.items():
+        for op_name, (py_op, col_op) in ops.items():
+            expected = [v for v in data if v is not None and py_op(v, probe)]
+            got = list(t[col_op(t.name, probe)]["name"][:])
+            assert got == expected, f"op={op_name} probe={probe_name!r} mismatch"
+
+
+def test_ctable_utf8_ordering_prefix_edge_cases():
+    """A probe that is a strict prefix of a value, and vice versa, at
+    length-group boundaries."""
+    t = make_table(["Taxi", "Taxi Affiliation", "Taxicab", "Tax"])
+    assert list(t[t.name < "Taxi"]["name"][:]) == ["Tax"]
+    assert list(t[t.name > "Taxi"]["name"][:]) == ["Taxi Affiliation", "Taxicab"]
+    assert list(t[t.name == "Taxi"]["name"][:]) == ["Taxi"]
+    assert list(t[t.name <= "Taxi"]["name"][:]) == ["Taxi", "Tax"]
+    assert list(t[t.name >= "Taxi"]["name"][:]) == ["Taxi", "Taxi Affiliation", "Taxicab"]
+
+
+def test_ctable_utf8_ordering_empty_string_probe():
+    """Everything except "" is > the empty-string probe; "" is == it."""
+    t = make_table(["", "a", "zzz"])
+    assert list(t[t.name == ""]["name"][:]) == [""]
+    assert list(t[t.name > ""]["name"][:]) == ["a", "zzz"]
+    assert list(t[t.name < ""]["name"][:]) == []
+    assert list(t[t.name >= ""]["name"][:]) == ["", "a", "zzz"]
+
+
+def test_ctable_utf8_ordering_multibyte_byte_length_boundaries():
+    """1-, 2-, and 3-byte UTF-8 encodings must byte-compare in code-point
+    order (code points 0x7A < 0xE9 < 0x65E5)."""
+    assert "z" < "é" < "日"
+    t = make_table(["日", "z", "é"])
+    s = t.sort_by("name")
+    assert list(s["name"][:]) == ["z", "é", "日"]
+    assert list(t[t.name < "é"]["name"][:]) == ["z"]
+    # filtering preserves original row order (日, z, é), not sorted order
+    assert list(t[t.name > "z"]["name"][:]) == ["日", "é"]
+
+
+def test_ctable_utf8_ordering_nul_bearing_values():
+    # Ground truth: "nul\x00INSIDE" < "nul\x00in" < ... at the byte position
+    # right after the embedded NUL ('I' = 0x49 < 'i' = 0x69).
+    assert sorted(["nul\x00in", "nul\x00INSIDE", "nul"]) == ["nul", "nul\x00INSIDE", "nul\x00in"]
+    t = make_table(["nul\x00in", "nul\x00INSIDE", "nul"])  # original row order
+    assert list(t[t.name == "nul\x00in"]["name"][:]) == ["nul\x00in"]
+    assert list(t[t.name < "nul\x00in"]["name"][:]) == ["nul\x00INSIDE", "nul"]
+    assert list(t[t.name > "nul"]["name"][:]) == ["nul\x00in", "nul\x00INSIDE"]
+
+
+def test_ctable_utf8_ordering_probe_equals_sentinel():
+    """All four ordering ops must exclude null rows even when the probe is
+    the sentinel value itself (rows equal to the sentinel are the null
+    rows)."""
+    t = CTable(NullableRow, new_data={"name": ["alpha", None, "zeta"], "x": [1, 2, 3]})
+    nv = t["name"].null_value
+    for pred in (t.name < nv, t.name <= nv, t.name > nv, t.name >= nv):
+        got = list(t[pred]["name"][:])
+        assert nv not in got
+        assert None not in got
+
+
+def test_ctable_utf8_scalar_comparison_view_and_deleted_rows():
+    """The predicate mask is physical-length; it must stay correct through a
+    view and after rows have been deleted (live-row mask intersection)."""
+    t = make_table(["paris", "london", "paris", "tokyo", "berlin", "paris"])
+    head_view = t.head(4)
+    assert list(head_view[head_view.name == "paris"]["name"][:]) == ["paris", "paris"]
+    assert list(head_view[head_view.name < "london"]["name"][:]) == []
+
+    t.delete([0, 2])  # removes two of the three "paris" rows
+    assert list(t["name"][:]) == ["london", "tokyo", "berlin", "paris"]
+    assert list(t[t.name == "paris"]["name"][:]) == ["paris"]
+    assert list(t[t.name != "paris"]["name"][:]) == ["london", "tokyo", "berlin"]
+
+
 def test_ctable_utf8_startswith_endswith():
     t = make_table(["hello", "help", "world"])
     started = blosc2.startswith(t.name, "hel").compute()
