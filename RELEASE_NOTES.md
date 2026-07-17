@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.9.1 to 4.9.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.9.0 to 4.9.1
 
 A small hot-fix release for the Arrow interop work in 4.9.0: a real
