@@ -57,10 +57,11 @@ Use the ``.b2d`` extension to produce a directory-backed (sparse) store:
 Step 4 — Fixed-width string import
 ------------------------------------
 
-By default, string columns are stored as variable-length strings
-(``vlstring``).  Pass ``--fixed-str-maxlen`` to pre-scan strings and store
-columns whose maximum character length fits within the given limit as
-fixed-width, indexable strings:
+By default, string columns are stored as variable-length ``utf8`` columns
+(Arrow-style offsets + bytes; falls back to ``vlstring`` on NumPy < 2.0).
+Pass ``--fixed-str-maxlen`` to pre-scan strings and store columns whose
+maximum character length fits within the given limit as fixed-width,
+indexable strings:
 
 .. code-block:: console
 

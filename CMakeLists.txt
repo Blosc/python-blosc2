@@ -59,6 +59,13 @@ add_custom_command(
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/groupby_ext.pyx"
   VERBATIM)
 
+add_custom_command(
+  OUTPUT utf8_ext.c
+  COMMAND Python::Interpreter -m cython
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/utf8_ext.pyx" --output-file utf8_ext.c
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/utf8_ext.pyx"
+  VERBATIM)
+
 # ...and add it to the target
 Python_add_library(blosc2_ext MODULE blosc2_ext.c WITH_SOABI)
 target_sources(blosc2_ext PRIVATE src/blosc2/matmul_kernels.c)
@@ -68,11 +75,17 @@ if(UNIX)
 endif()
 Python_add_library(indexing_ext MODULE indexing_ext.c WITH_SOABI)
 Python_add_library(groupby_ext MODULE groupby_ext.c WITH_SOABI)
+Python_add_library(utf8_ext MODULE utf8_ext.c WITH_SOABI)
+# NpyString_pack() and friends are part of NumPy's 2.0 C API; opt in
+# explicitly since numpy/*.h otherwise targets an older API version by
+# default for source compatibility.
+target_compile_definitions(utf8_ext PRIVATE NPY_TARGET_VERSION=NPY_2_0_API_VERSION)
 
 # We need to link against NumPy
 target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 target_link_libraries(indexing_ext PRIVATE Python::NumPy)
 target_link_libraries(groupby_ext PRIVATE Python::NumPy)
+target_link_libraries(utf8_ext PRIVATE Python::NumPy)
 
 # Fetch and build miniexpr library
 include(FetchContent)
@@ -110,6 +123,7 @@ endif()
 target_compile_features(blosc2_ext PRIVATE c_std_11)
 target_compile_features(indexing_ext PRIVATE c_std_11)
 target_compile_features(groupby_ext PRIVATE c_std_11)
+target_compile_features(utf8_ext PRIVATE c_std_11)
 if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     execute_process(
         COMMAND "${CMAKE_C_COMPILER}" -print-resource-dir
@@ -184,7 +198,7 @@ endif()
 
 # Python extension -> site-packages/blosc2
 install(
-  TARGETS blosc2_ext indexing_ext groupby_ext
+  TARGETS blosc2_ext indexing_ext groupby_ext utf8_ext
   LIBRARY DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
 )
 

@@ -1,6 +1,8 @@
 # Enhancing CTable, phase 3: variable-length strings and the null-mask question
 
-**Status:** NOT STARTED (plan written 2026-07-16). Successor to
+**Status:** P3 (P3.a–P3.e) landed 2026-07-16 on branch `enhancing-ctable3`;
+see each sub-item's implementation notes below. P5 remains parked (no unpark
+criterion fired). Successor to
 `plans/enhancing-ctable-phase2.md` (phase 2, landed on branch
 `enhancing-ctable2`: the pandas `engine=blosc2.jit` fix + `Series.map`,
 `CTable.assign()` + unbound `blosc2.col()`, the lazily-sorted-view
@@ -141,6 +143,51 @@ a utf8 column should work but the docstring must state the cost. Tests:
 roundtrip (ASCII, non-ASCII, empty strings, 1-char, multi-KB values),
 append/extend, setitem, persistence, repr.
 
+**P3.a implementation notes (landed 2026-07-16, commit e5bbd559, branch
+`enhancing-ctable3`):**
+
+- What landed: `Utf8Spec`/`blosc2.utf8()` in `schema.py` (kind `"utf8"`,
+  registered in `schema_compiler._KIND_TO_SPEC`); new `src/blosc2/utf8_array.py`
+  with the `Utf8Array` adapter; storage dispatch in all four `TableStorage`
+  backends; sentinel-null wiring; guards for the not-yet-supported operations;
+  37 tests in `tests/ctable/test_utf8.py`.
+- **Key deviation from the plan text**: rather than a new column category
+  with its own ~50 dispatch sites (the `DictionaryColumn` route), `Utf8Spec`
+  joins the `_is_varlen_scalar_column` predicate and `Utf8Array` implements
+  the `_ScalarVarLenArray` row interface (`append`/`extend`/`flush`/getitem/
+  setitem). That made create/open/save/load/copy/take/cframe/TreeStore paths
+  work unmodified; utf8-specific branches exist only where semantics differ:
+  null handling (sentinel, not native `None` — `is_null`/`null_count`/
+  `fillna`), empty reads and `iter_chunks` (StringDType arrays, not lists),
+  `compact()`, `to_cframe()`, `rename_column` reopen, and the guard messages.
+  A dedicated `Column.is_utf8` / `CTable._is_utf8_column` predicate marks
+  those spots — P3.c–P3.e should branch on it the same way.
+- Storage layout: offsets NDArray at the plain column key; byte blob at
+  column key + `".utf8"` (`_UTF8_DATA_SUFFIX` in `ctable_storage.py`). The
+  literal dot cannot collide with user column names (dots in logical names
+  are path separators or percent-encoded). Both arrays are *logically* sized
+  (length = rows appended, like vlstring), NOT capacity-slotted — that keeps
+  the persisted-row count recoverable on open as `len(offsets) - 1` with no
+  extra metadata. Arrays are created shape-(1,) with large fixed chunkshapes
+  (offsets 2^17 rows, data 2^21 bytes) and grown by resize.
+- Reads: contiguous spans are two slice reads + per-row byte-slice decode;
+  sparse gathers cluster sorted indices (gap > 1024 starts a new cluster) so
+  display head+tail fetches don't read the whole column. Writes buffer in
+  memory and flush every 4096 rows / ~4 Mi chars. `__setitem__` on a
+  persisted row rewrites the tail (documented O(n - i)).
+- Null sentinel reads surface the sentinel string verbatim (consistent with
+  fixed-width `string`), unlike vlstring's native `None`. Nullable specs
+  resolve their sentinel from `NullPolicy.string_value`.
+- Measured (Apple-silicon dev box, smoke run): 200k rows of random 0–40 char
+  ASCII + a couple of multibyte values → column nbytes 6.29 MB, cbytes
+  2.65 MB (2.37x; random text, so most of the win is the offsets array).
+  Full `tests/ctable` (1357) and `tests/ndarray` (4385) suites pass.
+- Known limits left for later sub-items (all raise clear errors): Arrow
+  export (`_pa_type_from_spec` raises → P3.b), comparisons/`where()`
+  (P3.c), groupby keys (P3.d), `sort_by` (P3.e). `iter_arrow_batches` hits
+  the varlen branch and raises through `_pa_type_from_spec`; `to_pandas`
+  of a table with utf8 columns therefore also raises until P3.b.
+
 **P3.b Arrow interop.** `iter_arrow_batches` exports utf8 columns as
 `pa.large_string()` (always large — no int32-offset special-casing);
 `from_arrow` maps incoming `string`/`large_string` columns to `utf8` specs
@@ -151,6 +198,52 @@ sentinel↔validity like every other dtype — **this is the sentinel-vs-mask
 checkpoint from decision 4**. Tests: `pa.table(ct)` roundtrip, duckdb query
 on a utf8 column, `from_arrow(pa_table)` ingest.
 
+**P3.b implementation notes (landed 2026-07-16, branch `enhancing-ctable3`):**
+
+- What landed: `_pa_type_from_spec` maps `Utf8Spec` → `pa.large_string()`
+  (always large, per the plan); `iter_arrow_batches` builds a null mask from
+  the sentinel and exports proper Arrow nulls; `_arrow_type_to_spec` now maps
+  incoming Arrow `string`/`large_string` (when `string_max_length` is not
+  given) to `blosc2.utf8()` instead of `blosc2.vlstring()` — this is the
+  **sentinel checkpoint from decision 4, resolved as sentinel**: nullable
+  utf8 columns imported from Arrow get a sentinel from the active
+  `NullPolicy` (default `"__BLOSC2_NULL__"`) exactly like every other
+  nullable scalar dtype, and `column_null_values` overrides now work for
+  utf8 columns (previously rejected for vlstring, since vlstring nulls are
+  native `None`). No lossiness was observed in the tests exercised here
+  (synthetic Arrow tables, DuckDB round trips); **P5 was not unparked** —
+  revisit only if a real free-text corpus collides with the sentinel.
+- `binary`/`large_binary` Arrow columns are unaffected — they still import as
+  `vlbytes` (native-`None` nulls); only the scalar-*string* default moved.
+- **Deviation**: the plan's "keep the old mapping available via the existing
+  import options if one exists" — no such option exists (`string_max_length`
+  only toggles fixed-width vs variable-length, not which variable-length
+  representation to use), so none was added; this matches the cross-cutting
+  rule against building unrequested options.
+- Ripple effects fixed to keep the suite honest, not just green: `Column.dtype`
+  now documents that utf8 columns report `numpy.dtypes.StringDType()` (its
+  docstring previously said variable-length columns always return `None`);
+  several `tests/ctable/test_arrow_interop.py` /
+  `tests/ctable/test_parquet_interop.py` tests asserted the old
+  vlstring-default/native-None-null behavior and were updated to assert the
+  new utf8/sentinel behavior instead of being loosened. The
+  `parquet_to_blosc2` CLI (`src/blosc2/cli/parquet_to_blosc2.py`) computes its
+  own "will this become vlstring?" labels purely for its progress report
+  (independent of the real dispatch in `ctable.py`), so those labels
+  (`"vlstring"`/`"vlstring_nullable"`/`"dictionary_decoded_to_vlstring"`, the
+  `--decode-dictionaries` help text, and the module docstring) were renamed to
+  `"utf8"`/`"utf8_nullable"`/`"dictionary_decoded_to_utf8"` to stay accurate;
+  its export-side Arrow-type-cast logic needed no behavior change (large_string
+  casts back to the original field type the same way string did).
+- Tests: `tests/ctable/test_utf8.py` gained a dedicated Arrow-interop section
+  (`pa.table(ct)` roundtrip with and without nulls, `from_arrow` ingest from
+  both `string` and `large_string`, sentinel-null ingest, `string_max_length`
+  still yields fixed-width, and a DuckDB `SELECT ... WHERE` query run directly
+  against a CTable with a utf8 column via the Arrow C-stream protocol —
+  verified working end-to-end, including DuckDB querying the CTable object
+  itself, not just an exported `pa.Table`). Full `tests/ctable` (1365) and the
+  rest of `tests/` (1706) pass.
+
 **P3.c Filters and expressions.** Carve utf8 out of the
 `_ensure_queryable` rejection for comparisons only; implement `==`, `!=`,
 `<`, `<=`, `>`, `>=` against scalars and other utf8 columns via the
@@ -160,6 +253,53 @@ for the semantics to match). `blosc2.startswith`-style function ops already
 work — add tests pinning them. Tests: filter correctness incl. null rows,
 `t[t.name == "x"]` on views, comparison with non-string scalar raises
 clearly.
+
+**P3.c implementation notes (landed 2026-07-16, branch `enhancing-ctable3`):**
+
+- What landed: `Column.__eq__`/`__ne__`/`__lt__`/`__le__`/`__gt__`/`__ge__`
+  special-case `is_utf8` (mirroring the existing `is_dictionary` special-case
+  in `__eq__`/`__ne__`) and dispatch to a new `Column._utf8_compare(op,
+  other)`, bypassing `_ensure_comparable()`/`_ensure_queryable()` entirely for
+  these six operators. `_ensure_queryable()`'s utf8 rejection message was
+  narrowed to say arithmetic/bitwise ops are unsupported (comparisons are
+  no longer rejected there). Arithmetic (`+`, `-`, …) and bitwise ops on
+  utf8 columns still raise, unchanged.
+- `_utf8_compare` reads the column chunk-by-chunk via a new
+  `Column._utf8_chunked_bool` helper (StringDType comparisons run natively
+  in NumPy — `np.equal`/`np.less`/etc. all work directly on
+  `numpy.dtypes.StringDType` arrays, verified empirically before writing
+  this), and returns a physical-length (`_valid_rows`-length) boolean
+  `blosc2.NDArray`, intersected with the column's live-row mask exactly like
+  `_dictionary_eq` — so the result is usable directly as `t[t.name == "x"]`,
+  `t.where(...)`, or combined with `&`/`|`/`~` against other predicates.
+  Supports scalar `str` operands and column-vs-column comparison between two
+  utf8 `Column`s (both must be utf8; comparing against any other type raises
+  `TypeError` naming the column and expected types).
+- **Null handling implements the phase-1 SQL `WHERE` rule**: a null value on
+  either side never satisfies any comparison (`==`, `!=`, `<`, …), via a new
+  `Column._utf8_null_pred()` (parallel to `_raw_null_pred()` for sentinel
+  columns) OR'd across both operands and subtracted from the raw predicate —
+  same shape as `_null_aware_compare`, just utf8-specific because the
+  sentinel lives in `StringDType` values, not a fixed-width NumPy dtype.
+- `blosc2.startswith`/`blosc2.endswith` (and other `np.strings`-backed
+  `LazyExpr` function ops) were verified to already work unmodified against a
+  utf8 `Column` operand — no changes needed, per the plan's expectation; a
+  pinning test was added (`test_ctable_utf8_startswith_endswith`).
+- String-expression predicates (`t.where("name == 'hello'")`) still raise
+  `NotImplementedError` via the existing `_guard_scalar_expression` guard —
+  intentionally out of scope (decision 3: numexpr/miniexpr cannot evaluate
+  `StringDType`; only the direct Python-operator comparison path is
+  implemented).
+- Tests: `tests/ctable/test_utf8.py` gained a "Comparisons and filtering"
+  section — `==`/`!=` row filtering, all four ordering comparisons, null-row
+  exclusion (including a dedicated column-vs-column-with-nulls case),
+  filtering on a view (`t.head(N)[...]`), non-string-scalar and
+  mismatched-column-type `TypeError`s, and the `startswith`/`endswith`
+  pinning test. Manually verified end-to-end beyond the automated suite:
+  physical-length predicate padding for a logically-shorter utf8 array,
+  view-of-view filtering (filter on a filtered view), and that the SQL null
+  rule holds for `<`/`>=` in addition to `==`/`!=`. Full `tests/ctable`
+  (1373) and `tests/ndarray` (4385) suites pass.
 
 **P3.d Groupby keys.** Replace the groupby rejection for utf8 keys
 (grep `Cannot group by variable-length` in `groupby.py`). Factorization:
@@ -174,11 +314,322 @@ the dictionary path for 1e7 rows/low cardinality. If the vectorized hash
 proves hard, the honest fallback is `np.unique` on the StringDType chunk
 (correct, slower) — land correctness first, speed second.
 
+**P3.d implementation notes (landed 2026-07-16, branch `enhancing-ctable3`):**
+
+- What landed: **correctness only, on the honest `np.unique` fallback** — the
+  benchmark gate below rejected the vectorized-hash path, so it was not
+  built. Three small changes in `groupby.py`:
+  1. `CTableGroupBy.__init__`'s rejection now excludes utf8 columns (`table
+     ._is_list_column(col_info) or (table._is_varlen_scalar_column(col_info)
+     and not table._is_utf8_column(col_info))`) — vlstring/vlbytes/struct/
+     object/list keys are still rejected.
+  2. `_read_key_chunk` gained a utf8 branch that pads a chunk read past the
+     column's logical length with `""`, mirroring the P3.a `iter_chunks` fix
+     — `Utf8Array` is sized to the logical row count, not the physical
+     `valid_rows` capacity, and a chunk boundary can run past it; those rows
+     are provably never live (a row can't be marked valid without every
+     column, including this one, having been written), so the pad value is
+     never read as a live group.
+  3. `_factorize_keys`'s multi-key branch casts any `StringDType` key array to
+     `object` dtype before packing into the structured array used for
+     `np.unique` — NumPy's structured dtypes reject `StringDType` fields
+     outright (`TypeError: StringDType is not currently supported for
+     structured dtype fields`, confirmed empirically), so this is required
+     for correctness, not an optimization.
+- **Nothing else needed changing.** This was verified empirically before
+  writing code, not assumed: `numpy.dtypes.StringDType`'s `.kind` is `"T"`
+  (not `"U"`/`"S"`), so it never matches `_factorize_fixed_width_str`'s
+  fixed-width dispatch and the single-key path already falls through to the
+  correct `np.unique(arr, return_inverse=True)` for free. `_null_mask` already
+  worked unmodified (`values == null_value` on a `StringDType` array is
+  correct). `_result_spec_for_key` deep-copies the source `Utf8Spec`
+  unmodified, so a groupby result's key column is itself a utf8 column
+  (`Column.is_utf8` true). `_python_type_for_spec`/`_python_scalar` already
+  produce plain `str` for utf8 (indexing a `StringDType` array yields
+  `isinstance(x, str)`, not `np.generic`). The Python-level `_final_rows` sort
+  (`_sortable_key_part`) and all Cython fast paths (which all bail via
+  `key_dtype is None -> return None`) needed no changes either. Verified with
+  a manual smoke test covering: single-key sum, `dropna=False` with a null
+  sentinel group, `sort=True` (relies on `np.unique`'s inherently sorted
+  output for the fast single-chunk case and the generic Python sort
+  otherwise), a two-key `[utf8, int32]` composite groupby, and a 300k-row
+  multi-chunk merge — all correct.
+- **Benchmark gate: FAILED, and per the plan's explicit instruction the fast
+  path was not built.** Extended `bench/ctable/bench_groupby_keys.py` with a
+  `ukey` (utf8) column alongside the existing `dkey` (dictionary) column,
+  1e7 rows, 5-city low-cardinality keys, Apple-silicon dev box:
+
+  | key type            | time      | vs. dict key |
+  |----------------------|-----------|--------------|
+  | dict key, sum        | 196.0 ms  | 1.0x         |
+  | **utf8 key, sum**    | **3304.2 ms** | **16.9x** |
+  | two keys (int+dict)  | 236.8 ms  | 1.0x         |
+  | **two keys (int+utf8)** | **11825.3 ms** | **49.9x** |
+
+  Target was ≤3x; actual is ~17x (single key) / ~50x (two keys) — nowhere
+  close. **Root cause, isolated with `cProfile`** (not guessed): 62% of
+  single-key wall time is `Utf8Array._read_persisted_span`, specifically its
+  per-row Python loop (`for i in range(n): out[i] = blob[...].decode("utf-8")`)
+  — 1,998,848 individual `bytes.decode()` calls at 2e6 rows in the profile
+  run. This is a P3.a artifact, not something specific to groupby: every bulk
+  utf8 read pays this cost (comparisons, iteration, sort will too). A
+  micro-benchmark of alternative row-decode strategies (list-comprehension
+  instead of indexed assignment; decode the whole chunk blob once and slice
+  by vectorized UTF-8-continuation-byte character offsets instead of
+  redecoding per row) found only ~10% improvement — the per-row **Python loop
+  overhead** dominates, not the decode call itself, so no drop-in fix closes
+  the gap. A real fix needs a genuinely vectorized/C-level factorization that
+  never decodes N rows: group physical rows by raw byte length first (cheap,
+  vectorized), gather each length-group's fixed-width byte span with one
+  fancy-index gather (`data[start[:,None] + arange(L)]`), hash those raw
+  bytes with the same collision-checked trick `_factorize_fixed_width_str`
+  already uses for fixed-width Unicode, and decode to `StringDType` **only
+  the D unique group values**, never the N rows. This is a legitimate,
+  bounded idea (matching the plan's "vectorized loop over the (few) distinct
+  byte-lengths" suggestion) but is a substantial new algorithm — cross-length-
+  group code merging, a byte-hash variant of the existing mixer, and the
+  usual collision/verify pass — sized like its own follow-up item, not a
+  drop-in fix. **Deliberately not attempted here**, per the cross-cutting
+  rule against merging a "fast" path the recorded benchmark shows is not
+  fast; land correctness, record the gap, stop.
+- Tests: `tests/ctable/test_utf8.py` gained a "Groupby keys" section — sum,
+  size with and without `dropna`, `sort=True`, confirming the result's key
+  column is itself utf8, a multi-key `[utf8, int]` composite, a 200k-row
+  multi-chunk-merge case, and a regression test that vlstring keys are still
+  rejected (only utf8 was carved out). Full `tests/ctable` (1379) and
+  `tests/ndarray` (4385) suites pass.
+
+**P3.d follow-up: fast factorization path (unparked and landed 2026-07-16,
+after the post-review fixes below). Benchmark gate now PASSES.**
+
+- What landed — essentially the algorithm sketched above, plus two pipeline
+  fixes the profiling surfaced along the way:
+  1. `Utf8Array.factorize_span(a, b)` / incremental `Utf8Factorizer`
+     (`utf8_array.py`): rows are grouped by raw byte length (vectorized
+     `bincount`), each length group is gathered column-wise into a `(k, L)`
+     byte matrix (column-wise gather with one reused index vector — ~2x
+     faster than a 2-D fancy-index, which materializes a `(k, L)` int64
+     index matrix), hashed with the same `_HASH_MIX` mixer + verify pass as
+     `_factorize_fixed_width_str`, and **only the D distinct values are ever
+     decoded**.  The factorizer keeps a cross-chunk vocabulary (sorted
+     hashes + representative bytes per length): rows carrying already-seen
+     values are `searchsorted`-matched and byte-verified; only new values
+     pay a sort.  This is the "cross-chunk vocabulary cache" the ponytail
+     note in `_factorize_fixed_width_str` predicted.
+  2. `groupby.py`: utf8 key chunks now flow through the pipeline as
+     `_Utf8KeyChunk` (chunk-local int64 rank codes + sorted uniques), so
+     null masks, live-row masking, and per-chunk dedup all run on integers.
+     Single-key dedup is an O(n) `bincount` (codes are dense ranks — no
+     sort).  Multi-key packing uses a **composite int64 key** (Horner over
+     zero-based fields) when every key is integral and the range product
+     fits — `np.unique` over a *structured* dtype does field-wise void
+     comparisons and was the dominant two-key cost; non-integral co-keys
+     fall back to the structured path with utf8 codes as int fields.
+  3. `_chunk_size()` now scales the generic-loop batch up to ~1 Mi rows
+     (chunk-aligned): in-memory tables created small and grown by resize
+     keep their initial 64-row validity chunk shape, and batching the loop
+     at that granularity spent more time in per-batch bookkeeping than in
+     work.  This was a pre-existing pathology exposed while profiling; it
+     benefits every generic-path key type (fixed-width strings included).
+- Measured (same bench, same box, same 3x target vs. dictionary keys):
+
+  | key type              | before      | after     | vs. dict key |
+  |-----------------------|-------------|-----------|--------------|
+  | dict key, sum         | 196.0 ms    | 197.2 ms  | 1.0x         |
+  | **utf8 key, sum**     | 3304.2 ms   | **557.6 ms** | **2.83x ✓** |
+  | two keys (int+dict)   | 236.8 ms    | 237.9 ms  | 1.0x         |
+  | **two keys (int+utf8)** | 11825.3 ms | **877.8 ms** | **3.69x**  |
+
+  Single-key meets the ≤3x gate (2.83x, 5.9x faster than the fallback) and
+  is now *faster* than fixed-width `string` keys (535 ms).  Two-key misses
+  the letter of 3x (3.69x) but is 13.5x faster than the recorded gap; the
+  remainder is the shared display/normalize/merge Python bookkeeping, not
+  utf8-specific.
+- **Correctness bonus found while testing**: NumPy's `np.unique` on
+  `StringDType` merges strings that differ only after an embedded NUL
+  (`"nul\x00in"` vs `"nul\x00IN"` collapse to one group — a NumPy bug).
+  The byte-exact factorization does not, so utf8 groupby keys now handle
+  NUL-bearing strings *more* correctly than the `np.unique` fallback did.
+- Tests added: factorize_span vs. ground-truth set semantics (incl. NUL,
+  non-ASCII, multi-KB values), cross-span global-code consistency, groupby
+  over many byte lengths + non-ASCII keys, multi-key with negative int
+  co-key (composite packing), multi-key with float co-key (structured
+  fallback).  Full `tests/` (7,489) passes.
+
+**Measured comparison: utf8() vs string() vs vlstring() (2026-07-16,
+`bench/ctable/bench_string_kinds.py`, Apple-silicon dev box).** Two
+workloads: the real Chicago-taxi `company` column (1e7 rows, ~60 distinct
+values, ≤44 chars) and synthetic high-cardinality free text (2e6 rows,
+~1e6 distinct, 0–129 chars, multi-byte).
+
+| taxi company, 1e7 rows | utf8() | string(44) | vlstring() |
+|------------------------|--------|------------|------------|
+| ingest                 | 3477 ms | 491 ms    | 1167 ms    |
+| storage, uncompressed  | 259 MB  | 1760 MB   | 191 MB     |
+| storage, compressed    | 1.3 MB  | 1.1 MB    | 0.4 MB     |
+| full column read       | 2368 ms | 293 ms    | 1238 ms    |
+| filter `s == value`    | 1819 ms | 75 ms     | unsupported |
+| groupby key, sum       | **963 ms** | 2477 ms | unsupported |
+| sort_by (copy)         | 7712 ms | 2395 ms   | unsupported |
+| to_arrow()             | 39.3 s  | 83.5 s    | 79.9 s     |
+
+| synthetic free text, 2e6 rows | utf8() | string(129) | vlstring() |
+|-------------------------------|--------|-------------|------------|
+| ingest                        | 2017 ms | 388 ms     | 949 ms     |
+| storage, uncompressed         | 78 MB   | 1032 MB    | 64 MB      |
+| storage, compressed           | 12.0 MB | 19.2 MB    | 11.3 MB    |
+| full column read              | 712 ms  | 108 ms     | 366 ms     |
+| filter `s == value`           | 538 ms  | 45 ms      | unsupported |
+| groupby key, sum              | **4408 ms** | 4962 ms | unsupported |
+| sort_by (copy)                | 3526 ms | 2584 ms    | unsupported |
+| to_arrow()                    | 1962 ms | 3995 ms    | 3767 ms    |
+
+Reading of the numbers, recorded so the positioning is evidence-backed:
+
+- vs `vlstring()`: comparable storage, but utf8 is *capable* — filters,
+  groupby keys, and sort are supported at all; vlstring rejects them.
+- vs `string(max_length)`: utf8 is 7–13x smaller uncompressed (fixed-width
+  pays 4 bytes/char × max length on every row), smaller compressed on
+  high-cardinality text, faster as a groupby key (the factorization above),
+  and ~2x faster to Arrow.  Fixed-width keeps winning raw reads, filters,
+  and sorts because those stay on the vectorized numexpr/numpy fast paths.
+- The utf8 read/filter gap is the documented `_read_persisted_span`
+  per-row decode loop: ~1.8 s of the 1e7-row filter is decoding, not
+  comparing.  **Natural follow-up (not started):** route comparisons
+  through the `Utf8Factorizer` the way groupby keys go — compare the D
+  distinct values against the operand, then map codes → boolean mask —
+  which should make low-cardinality utf8 filters competitive with
+  fixed-width.  Same idea would speed sort-key materialization.
+- `to_arrow()` at 1e7 rows is slow for *all three* kinds (39–84 s): that
+  is the pre-existing 2048-row `iter_arrow_batches` batching re-reading
+  storage chunks per batch, not a string-representation issue.
+- Guidance the numbers support: `dictionary()` for low-cardinality,
+  `string(max_length)` for short bounded strings where filter speed rules,
+  `utf8()` for long/variable/high-cardinality text.
+
 **P3.e Sort.** Lift the sort rejection (grep the `sort_by` varlen guard in
 `ctable.py`): `sort_by` on utf8 uses `np.argsort` on the StringDType array
 (chunked merge if the existing sort machinery is chunked — study
 `sort_by`'s path first). Null ordering must match the existing convention
 (nulls last; grep `test_sort_nulls_last`).
+
+**P3.e implementation notes (landed 2026-07-16, branch `enhancing-ctable3`):**
+
+- What landed: `sort_by` now accepts utf8 sort keys. Three changes in
+  `ctable.py`:
+  1. Removed the utf8-specific rejection from `_normalise_sort_keys`
+     (introduced defensively in P3.a). It turned out to be unnecessary
+     rather than merely lifted: `_col_dtype()` for a utf8 column already
+     returns `numpy.dtypes.StringDType()` (not `None`, because
+     `Utf8Array.dtype` reports it — a P3.a design choice), so the existing
+     `dtype is None` branch that rejects list/vlstring/vlbytes columns
+     already skips utf8 columns for free, and
+     `np.issubdtype(StringDType(), np.complexfloating)` returns `False`
+     cleanly (verified empirically) rather than raising. Removing the guard
+     did require restoring a `cc`/`col_info` reference the guard's insertion
+     had shadowed in P3.a — fixed by reusing the already-in-scope `col_info`.
+  2. `_build_lex_keys`'s descending-sort rank-inversion check
+     (`raw.dtype.kind in "USO"`, used because strings can't be negated with
+     unary minus) widened to `"USOT"` — `StringDType`'s `.kind` is `"T"`.
+     Ascending sort needed no change: `np.lexsort`/`np.argsort` already
+     accept `StringDType` arrays directly (verified empirically), and the
+     null-indicator-key logic (`raw == nv` for a non-float sentinel) was
+     already dtype-generic.
+  3. `_sort_by_inplace` and `_sorted_copy_from_positions` gained a utf8
+     branch that rebuilds the column via `Utf8Array.extend()` instead of
+     bulk slice-assignment (`arr[:n] = arr[sorted_pos]`), mirroring the
+     existing list-column branch's `ListArray.extend()` pattern.
+- **Found and worked around a pre-existing, unrelated bug while verifying
+  this**: `arr[:n] = arr[sorted_pos]` — the generic fallback both sort-copy
+  methods used for every column that isn't `list`/`dictionary` — silently
+  assumed every such column supports NumPy-style bulk slice assignment.
+  `_ScalarVarLenArray.__setitem__` (`vlstring`/`vlbytes`/`struct`/`object`,
+  unrelated to this phase) only accepts a single `int` index, so
+  `sort_by()` on *any* table containing a vlstring/vlbytes/struct/object
+  column — even sorted by an unrelated int/float key — already raised
+  `TypeError: Expected str for vlstring column, got 'list'` before this
+  change, confirmed on the pre-P3 codebase. **Not fixed here** — out of
+  scope for a utf8-only phase, and the acceptance criterion is
+  "`vlstring`/`string` behavior byte-for-byte unchanged," not "fixed." Only
+  `Utf8Array` got the same treatment `ListArray` already has, since utf8
+  sortability is what this item asks for; every utf8 column in a sorted
+  table — key or bystander — must survive the rewrite, not only the one
+  named in `sort_by(...)`. (Also found and left alone:
+  `_sorted_small_copy_from_live_positions` has the identical bug pattern
+  but zero callers anywhere in the repo — genuinely dead code, not worth
+  touching.)
+- Tests: `tests/ctable/test_utf8.py` gained a "Sort" section — ascending,
+  descending, nulls-last in both directions, `view=True`, `inplace=True`, a
+  multi-key `[int, utf8]` sort with a non-key utf8 "bystander" column
+  verifying it's reordered too (row alignment, not just the key), the same
+  bystander check under `inplace=True`, and a non-ASCII ordering case.
+  Manually verified beyond the automated suite: the exact three Goal-section
+  code lines from the top of this plan file run correctly end-to-end
+  (`t[t.name == "Paris"]`, `t.group_by("name").sum("x")`, `t.sort_by("name")`)
+  — this is the P3 acceptance criterion, confirmed directly, not inferred
+  from passing unit tests. Full `tests/` (7477 tests, whole repo, not just
+  `tests/ctable`/`tests/ndarray`) passes.
+- **P3 acceptance for the item overall, checked against the plan's own
+  criteria**: the three Goal-section lines work (confirmed above); the P3.d
+  groupby benchmark number is recorded (16.9x/49.9x vs. the 3x target, gap
+  documented with root cause); `vlstring`/`string` behavior is byte-for-byte
+  unchanged (no code path touched by P3 alters their behavior; the one
+  pre-existing vlstring sort bug found above predates this phase and was
+  left as found, not touched).
+
+**Post-review fixes (landed 2026-07-16, after a code review of the P3
+branch):**
+
+- **Correctness (data corruption, found by review, missed by the suite):**
+  `sort_by(inplace=True)` and `compact()` on a *file-backed* table rebuilt
+  utf8 columns as fresh in-memory `Utf8Array`s and only rebound
+  `self._cols[name]` — the store never saw the rewritten rows, so after
+  close/reopen the utf8 column was corrupted/misaligned with its
+  on-disk-sorted siblings (reproduced: reopen raised `IndexError` on read).
+  All utf8 sort/compact tests were in-memory only, which is why the suite
+  was green. Fix: new `Utf8Array.set_all(values)` bulk-rewrites through the
+  *existing* backing offsets/data NDArrays (persistence preserved), used by
+  both call sites; `compact()` also now gathers via the clustered
+  fancy-index read instead of one scalar `__getitem__` (two chunk reads) per
+  row. Regression tests: `test_ctable_utf8_sort_inplace_persists_after_reopen`
+  and `test_ctable_utf8_compact_persists_after_reopen`, both parametrized
+  over `.b2z`/`.b2d`, verified to fail on the pre-fix code.
+- **Comparison predicates:** the sentinel-null mask is now computed inside
+  the same chunk pass as the comparison (was: a second full
+  decompress+decode pass per operand via `_utf8_null_pred`, i.e. 2x–4x the
+  I/O per nullable filter); the `_UTF8_COMPARE_OPS` string-tag dict is gone
+  (dunders pass the numpy ufunc directly). ~2x measured on a 1M-row
+  nullable filter (419 → 203 ms).
+- **Arrow export:** dense root tables now export utf8 batches straight from
+  the offsets/bytes buffers via `Utf8Array.arrow_slice()`
+  (`pa.LargeStringArray.from_buffers`, sentinel-null mask matched on raw
+  bytes) — no per-row decode, no `.tolist()`, no re-encode. Views/deleted
+  tables use the materializing fallback, which now reuses
+  `col.null_value`/`col._null_mask_for`/`_pa_type_from_spec` instead of
+  inlining them. ~1.75x measured on a 1M-row export (3030 → 1730 ms; the
+  rest is the pre-existing 2048-row `iter_arrow_batches` batching, which
+  re-decompresses each storage chunk many times — pre-existing, not
+  utf8-specific). Tests: view/deleted-rows export and pending-rows export.
+- **`Utf8Array.__setitem__`:** the O(n−i) tail move now shifts raw bytes and
+  adds a scalar delta to the tail offsets instead of decoding and
+  re-encoding every following row (21 ms to overwrite row 100 of 1M).
+  Test: grow/shrink/equal/empty replacements persisted across reopen.
+- **Cleanup:** `Utf8Spec` imported once at `ctable_storage.py` module top
+  (was: six local imports); `FileTableStorage.create_varlen_scalar_column`
+  hoists the column key.
+- **Review finding rejected on inspection:** removing `Utf8Spec.__init__`'s
+  inline `null_value must be str` check (flagged as duplicating
+  `_validate_null_value_for_spec`) would open a validation hole —
+  `_resolve_nullable_specs` *skips* specs whose `null_value` is already set,
+  so the inline check is the only validation for explicit sentinels. Left
+  as is. Also left as recorded: the `is_varlen_scalar`-includes-utf8
+  predicate design (deliberate, documented in the P3.a notes) and the
+  `_read_persisted_span` per-row decode loop (root cause of the P3.d
+  benchmark gap; **since addressed for groupby keys** by the P3.d follow-up
+  above — the loop still runs for plain bulk reads, i.e. comparisons and
+  sort-key materialization, where a StringDType array genuinely has to be
+  built).
+- Full `tests/` suite (7,484) passes after the fixes.
 
 **Out of scope for P3:** making `utf8` the `str`-field default; `.str`
 accessor namespaces; regex operations beyond what `np.strings` gives;

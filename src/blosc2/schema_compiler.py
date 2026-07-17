@@ -28,6 +28,7 @@ from blosc2.schema import (
     ObjectSpec,
     SchemaSpec,
     StructSpec,
+    Utf8Spec,
     VLBytesSpec,
     VLStringSpec,
     complex64,
@@ -76,6 +77,7 @@ _KIND_TO_SPEC: dict[str, type[SchemaSpec]] = {
     "bytes": b2_bytes,
     "vlstring": VLStringSpec,
     "vlbytes": VLBytesSpec,
+    "utf8": Utf8Spec,
     "object": ObjectSpec,
     "timestamp": timestamp,
     # dictionary
@@ -110,7 +112,7 @@ def compute_display_width(spec: SchemaSpec) -> int:
     """Return a reasonable terminal display width for *spec*'s column."""
     if isinstance(spec, DictionarySpec):
         return 32
-    if isinstance(spec, (VLStringSpec, VLBytesSpec, ObjectSpec)):
+    if isinstance(spec, (VLStringSpec, VLBytesSpec, ObjectSpec, Utf8Spec)):
         return 40
     if isinstance(spec, NDArraySpec):
         return max(20, len(spec.display_label()) + 4)

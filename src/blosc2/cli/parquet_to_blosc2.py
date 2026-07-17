@@ -16,9 +16,10 @@ The installed ``parquet-to-blosc2`` utility supports three modes:
 The output extension selects the storage layout: ``.b2z`` is compact/zip-backed,
 while ``.b2d`` is sparse directory-backed.
 
-Scalar string columns are stored as ``vlstring`` (variable-length, no length
-limit). Scalar binary columns are stored as ``vlbytes``. Nullable string/binary
-columns are represented with native ``None`` — no sentinel value is needed.
+Scalar string columns are stored as ``utf8`` (variable-length, no length
+limit; nullable columns get a sentinel string). Scalar binary columns are
+stored as ``vlbytes``, whose nullable columns represent nulls with native
+``None`` — no sentinel value is needed.
 
 Struct-valued columns are wrapped as ``list<struct>`` (one-element lists) so
 that they round-trip through the list-column machinery. True list columns pass
@@ -165,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Pre-scan string columns and import columns whose maximum character length is at most "
-            "this value as fixed-width, indexable strings. Other string columns remain vlstring."
+            "this value as fixed-width, indexable strings. Other string columns remain utf8."
         ),
     )
     parser.add_argument(
@@ -310,7 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--decode-dictionaries",
         action="store_true",
         help=(
-            "Decode Arrow dictionary-encoded columns to plain vlstring instead of preserving "
+            "Decode Arrow dictionary-encoded columns to plain utf8 instead of preserving "
             "the dictionary encoding.  By default, supported dictionary columns "
             "(string values with integer indices) are imported as Blosc2 dictionary columns."
         ),
@@ -434,12 +435,12 @@ def classify_columns(  # noqa: C901
             vt = t.value_type
             if vt in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
                 if decode_dictionaries:
-                    # Decode to plain vlstring.
+                    # Decode to plain utf8.
                     fixed_cols[field.name] = pa.field(
                         field.name, pa.string(), nullable=field.nullable, metadata=field.metadata
                     )
                     conversions[field.name] = {
-                        "conversion": "dictionary_decoded_to_vlstring",
+                        "conversion": "dictionary_decoded_to_utf8",
                         "ordered": bool(t.ordered),
                     }
                 else:
@@ -482,9 +483,7 @@ def classify_columns(  # noqa: C901
                     "max_length": fixed_string_lengths[field.name],
                 }
             else:
-                conversions[field.name] = {
-                    "conversion": "vlstring_nullable" if field.nullable else "vlstring"
-                }
+                conversions[field.name] = {"conversion": "utf8_nullable" if field.nullable else "utf8"}
             continue
         if pa.types.is_binary(t) or pa.types.is_large_binary(t):
             fixed_cols[field.name] = field
@@ -867,9 +866,7 @@ def print_import_plan(
     conversions,
     nullable_scalars,
 ):
-    vlstring_cols = [
-        n for n, e in conversions.items() if e.get("conversion") in {"vlstring", "vlstring_nullable"}
-    ]
+    utf8_cols = [n for n, e in conversions.items() if e.get("conversion") in {"utf8", "utf8_nullable"}]
     vlbytes_cols = [
         n for n, e in conversions.items() if e.get("conversion") in {"vlbytes", "vlbytes_nullable"}
     ]
@@ -881,7 +878,7 @@ def print_import_plan(
     ]
     dict_cols = [n for n, e in conversions.items() if e.get("conversion") == "dictionary_preserved"]
     dict_decoded_cols = [
-        n for n, e in conversions.items() if e.get("conversion") == "dictionary_decoded_to_vlstring"
+        n for n, e in conversions.items() if e.get("conversion") == "dictionary_decoded_to_utf8"
     ]
     flattened_structs = [
         n for n, e in conversions.items() if e.get("conversion") == "struct_flattened_to_columns"
@@ -897,16 +894,16 @@ def print_import_plan(
     print(f"Parquet columns:       {len(parquet_schema)}")
     print(f"Imported columns:      {len(fixed_cols) + len(struct_wrap_cols)}")
     n_fixed_non_string = (
-        len(fixed_cols) - len(vlstring_cols) - len(vlbytes_cols) - len(dict_cols) - len(dict_decoded_cols)
+        len(fixed_cols) - len(utf8_cols) - len(vlbytes_cols) - len(dict_cols) - len(dict_decoded_cols)
     )
     print(f"  Fixed-width:         {n_fixed_non_string}")
     print(f"  Fixed strings:       {len(fixed_string_cols)}")
     print(f"  Fixed bytes:         {len(fixed_bytes_cols)}")
-    print(f"  vlstring:            {len(vlstring_cols)}")
+    print(f"  utf8:                {len(utf8_cols)}")
     print(f"  vlbytes:             {len(vlbytes_cols)}")
     print(f"  Dictionary:          {len(dict_cols)}")
     if dict_decoded_cols:
-        print(f"  Dict→vlstring:       {len(dict_decoded_cols)}")
+        print(f"  Dict→utf8:           {len(dict_decoded_cols)}")
     print(f"  Struct→columns:      {len(flattened_structs)}")
     print(f"  Struct→list:         {len(wrapped_structs)}")
     print(f"  Nullable scalars:    {len(nullable_scalars)}")
@@ -1421,15 +1418,15 @@ def export_ctable_to_parquet(input_path: Path, output_path: Path, *, batch_size:
                 conversion = meta.get("conversion", "")
                 if conversion in singleton_list_conversions:
                     arr = unwrap_singleton_list(pa, arr, field.type)
-                elif conversion in {"vlstring", "vlstring_nullable", "vlbytes", "vlbytes_nullable"}:
+                elif conversion in {"utf8", "utf8_nullable", "vlbytes", "vlbytes_nullable"}:
                     if str(arr.type) != str(field.type):
                         arr = arr.cast(field.type)
                 elif conversion in {"dictionary_preserved"}:
                     # CTable emits dictionary<int32, string>; restore original type if needed.
                     if str(arr.type) != str(field.type):
                         arr = arr.cast(field.type, safe=True)
-                elif conversion in {"dictionary_decoded_to_vlstring"}:
-                    # Was decoded to vlstring on import; restore as dictionary type on export.
+                elif conversion in {"dictionary_decoded_to_utf8"}:
+                    # Was decoded to utf8 on import; restore as dictionary type on export.
                     if pa.types.is_dictionary(field.type):
                         encoded = pa.DictionaryArray.from_arrays(
                             *pa.array(arr.to_pylist())

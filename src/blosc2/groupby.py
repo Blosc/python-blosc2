@@ -53,6 +53,34 @@ class _AggState:
     count: int = 0
 
 
+@dataclasses.dataclass
+class _Utf8KeyChunk:
+    """A utf8 key-column chunk, factorized to chunk-local integer codes.
+
+    ``codes[i]`` indexes ``uniques`` (a ``StringDType`` array sorted
+    ascending), so null detection, live-row masking, and per-chunk
+    ``np.unique`` all run on int64 codes; only the (few) distinct strings are
+    ever decoded.  Produced by :meth:`CTableGroupBy._read_key_chunk` via
+    ``Utf8Array.factorizer``.
+    """
+
+    codes: np.ndarray
+    uniques: np.ndarray
+
+    def __len__(self) -> int:
+        return len(self.codes)
+
+    def take(self, mask: np.ndarray) -> _Utf8KeyChunk:
+        return _Utf8KeyChunk(self.codes[mask], self.uniques)
+
+    def code_of(self, value: str) -> int:
+        """Code of *value* in this chunk, or -1 when absent (uniques are sorted)."""
+        i = int(np.searchsorted(self.uniques, value))
+        if i < len(self.uniques) and self.uniques[i] == value:
+            return i
+        return -1
+
+
 def _is_column_like(value: Any) -> bool:
     return isinstance(getattr(value, "_col_name", None), str)
 
@@ -123,6 +151,10 @@ class CTableGroupBy:
         self.dropna = bool(dropna)
         self.engine = engine
         self.chunk_size = chunk_size
+        # Per-key incremental Utf8Factorizer instances, shared across the
+        # chunk loop so the string vocabulary is built once (see
+        # _read_key_chunk).
+        self._utf8_factorizers: dict[str, Any] = {}
 
         for name in self.keys:
             if name in table._computed_cols:
@@ -136,7 +168,9 @@ class CTableGroupBy:
                     f"Cannot group by ndarray column {name!r} with per-row shape {col_info.spec.item_shape}. "
                     "Materialize a scalar generated column first, e.g. embedding_norm or embedding_max."
                 )
-            if table._is_list_column(col_info) or table._is_varlen_scalar_column(col_info):
+            if table._is_list_column(col_info) or (
+                table._is_varlen_scalar_column(col_info) and not table._is_utf8_column(col_info)
+            ):
                 raise TypeError(f"Cannot group by variable-length/list column {name!r} in Phase 1")
 
     def size(self, *, urlpath: str | None = None):
@@ -501,7 +535,12 @@ class CTableGroupBy:
             if not np.any(live_mask):
                 continue
 
-            keys_live = [np.asarray(values)[live_mask] for values in raw_keys]
+            keys_live = [
+                values.take(live_mask)
+                if isinstance(values, _Utf8KeyChunk)
+                else np.asarray(values)[live_mask]
+                for values in raw_keys
+            ]
             n_live = len(keys_live[0])
             if n_live == 0:
                 continue
@@ -1503,15 +1542,51 @@ class CTableGroupBy:
             if self.chunk_size <= 0:
                 raise ValueError("chunk_size must be positive")
             return int(self.chunk_size)
+        target = 1 << 20
         chunks = getattr(self.table._valid_rows, "chunks", None)
-        if chunks:
-            return max(int(chunks[0]), 1)
-        return 65536
+        if not chunks:
+            return target
+        base = max(int(chunks[0]), 1)
+        if base >= target:
+            return base
+        # Batching the loop at the raw validity chunk shape can be pathological
+        # (in-memory tables created small and grown by resize keep their tiny
+        # initial chunk shape, e.g. 64 rows), and even 64 Ki-row batches leave
+        # the per-batch Python bookkeeping (group display/merge) visible for
+        # multi-key groupbys.  Scale up to ~1 Mi rows while staying
+        # chunk-aligned; per-column batch memory stays modest (8 MB per int64
+        # column).
+        return base * -(-target // base)
 
     def _read_key_chunk(self, name: str, start: int, stop: int) -> np.ndarray:
         col_info = self.table._schema.columns_by_name[name]
         if self.table._is_dictionary_column(col_info):
             return np.asarray(self.table._cols[name].codes[start:stop], dtype=np.int32)
+        if self.table._is_utf8_column(col_info):
+            # Factorize the chunk from its raw offsets/bytes buffers: no row
+            # is decoded, only the distinct values (codes flow through the
+            # rest of the pipeline).  The factorizer is shared across chunks
+            # so values seen before are hash-matched instead of re-sorted.
+            # Utf8Array is sized to the logical row count, not the physical
+            # valid_rows capacity, so a chunk boundary can run past its end;
+            # rows beyond it are never live (the row can't have been written
+            # without this column), so the padding code is never read live.
+            col = self.table._cols[name]
+            fact = self._utf8_factorizers.get(name)
+            if fact is None:
+                fact = self._utf8_factorizers[name] = col.factorizer()
+            n = len(col)
+            codes = fact.codes_for_span(start, min(stop, n)) if start < n else np.empty(0, dtype=np.int64)
+            uniques = fact.uniques()
+            # Rank-normalize so this chunk keeps the np.unique contract the
+            # pipeline expects (uniques ascending, codes = string ranks).
+            order = np.argsort(uniques, kind="stable")
+            rank = np.empty(len(order), dtype=np.int64)
+            rank[order] = np.arange(len(order))
+            codes = rank[codes] if len(order) else codes
+            if stop > n:
+                codes = np.concatenate([codes, np.zeros(stop - max(start, n), dtype=np.int64)])
+            return _Utf8KeyChunk(codes, uniques[order])
         return np.asarray(self.table._cols[name][start:stop])
 
     def _factorize_keys(
@@ -1519,17 +1594,85 @@ class CTableGroupBy:
     ) -> tuple[np.ndarray | list[np.ndarray], np.ndarray]:
         if len(keys_live) == 1:
             arr = keys_live[0]
+            if isinstance(arr, _Utf8KeyChunk):
+                # The chunk is already factorized to dense string-rank codes;
+                # dedupe them with an O(n) bincount instead of a sort.  The
+                # np.unique contract — uniques ascending by string — holds
+                # because the codes are ranks into the sorted uniques.
+                present = np.bincount(arr.codes, minlength=len(arr.uniques)) > 0
+                remap = np.cumsum(present) - 1
+                return arr.uniques[present], remap[arr.codes]
             if arr.dtype.kind in ("U", "S") and arr.dtype.itemsize % 4 == 0 and arr.dtype.itemsize:
                 return _factorize_fixed_width_str(arr)
             unique, inverse = np.unique(arr, return_inverse=True)
             return unique, inverse
 
-        dtype = [(f"k{i}", arr.dtype) for i, arr in enumerate(keys_live)]
-        packed = np.empty(len(keys_live[0]), dtype=dtype)
+        # utf8 key chunks pack as their int64 codes (codes are string-rank
+        # within the chunk, so the packed sort order matches the string sort
+        # order); the codes in the deduped rows are mapped back to strings
+        # below, into object fields (StringDType cannot be a structured-array
+        # field).
+        pack_arrs = [arr.codes if isinstance(arr, _Utf8KeyChunk) else arr for arr in keys_live]
+        composite = self._composite_int_factorize(pack_arrs)
+        if composite is not None:
+            unique_fields, inverse = composite
+        else:
+            dtype = [(f"k{i}", arr.dtype) for i, arr in enumerate(pack_arrs)]
+            packed = np.empty(len(pack_arrs[0]), dtype=dtype)
+            for i, arr in enumerate(pack_arrs):
+                packed[f"k{i}"] = arr
+            packed_unique, inverse = np.unique(packed, return_inverse=True)
+            unique_fields = [packed_unique[f"k{i}"] for i in range(len(pack_arrs))]
+        out_dtype = [
+            (f"k{i}", object if isinstance(arr, _Utf8KeyChunk) else pack_arrs[i].dtype)
+            for i, arr in enumerate(keys_live)
+        ]
+        unique = np.empty(len(unique_fields[0]), dtype=out_dtype)
         for i, arr in enumerate(keys_live):
-            packed[f"k{i}"] = arr
-        unique, inverse = np.unique(packed, return_inverse=True)
+            field = unique_fields[i]
+            unique[f"k{i}"] = arr.uniques[field] if isinstance(arr, _Utf8KeyChunk) else field
         return unique, inverse
+
+    @staticmethod
+    def _composite_int_factorize(
+        pack_arrs: list[np.ndarray],
+    ) -> tuple[list[np.ndarray], np.ndarray] | None:
+        """Dedup rows of all-integer key columns via one combined int64 key.
+
+        ``np.unique`` over a structured dtype compares rows field-by-field
+        through void comparisons and is ~an order of magnitude slower than
+        over a plain int64 array, so when every key column is integral and
+        the product of the per-column value ranges fits int64, combine the
+        columns into a single integer (Horner over the zero-based fields —
+        the combined sort order equals the structured lexicographic order)
+        and dedup that.  Returns ``(per-field unique values, inverse)``, or
+        ``None`` when the keys don't fit this scheme.
+        """
+        if not all(arr.dtype.kind in "biu" for arr in pack_arrs):
+            return None
+        if len(pack_arrs[0]) == 0:
+            return None
+        mins = [int(arr.min()) for arr in pack_arrs]
+        spans = [int(arr.max()) - mn + 1 for arr, mn in zip(pack_arrs, mins, strict=True)]
+        if math.prod(spans) >= 1 << 62:
+            return None
+        combined = np.zeros(len(pack_arrs[0]), dtype=np.int64)
+        for arr, mn, span in zip(pack_arrs, mins, spans, strict=True):
+            if arr.dtype.kind == "u":
+                # Zero-base within the unsigned dtype first: the raw values may
+                # not fit int64, but value - min always fits (span is checked).
+                zero_based = (arr - arr.dtype.type(mn)).astype(np.int64, copy=False)
+            else:
+                zero_based = arr.astype(np.int64, copy=False) - mn
+            combined *= span
+            combined += zero_based
+        unique_c, inverse = np.unique(combined, return_inverse=True)
+        unique_fields: list[np.ndarray] = [None] * len(pack_arrs)  # type: ignore[list-item]
+        rem = unique_c
+        for i in range(len(pack_arrs) - 1, -1, -1):
+            unique_fields[i] = (rem % spans[i] + mins[i]).astype(pack_arrs[i].dtype)
+            rem = rem // spans[i]
+        return unique_fields, inverse
 
     def _resolve_sort(self, *, cheap: bool) -> bool:
         """Resolve the tri-state ``self.sort`` request for the current path.
@@ -1973,6 +2116,11 @@ class CTableGroupBy:
     def _null_mask(self, name: str, values: np.ndarray, *, is_key: bool) -> np.ndarray:
         col_info = self.table._schema.columns_by_name[name]
         spec = col_info.spec
+        if isinstance(values, _Utf8KeyChunk):
+            null_value = getattr(spec, "null_value", None)
+            if null_value is None:
+                return np.zeros(len(values), dtype=bool)
+            return values.codes == values.code_of(null_value)
         if isinstance(spec, DictionarySpec):
             mask = values == np.int32(spec.null_code)
             return mask if is_key or getattr(spec, "nullable", False) else np.zeros(len(values), dtype=bool)

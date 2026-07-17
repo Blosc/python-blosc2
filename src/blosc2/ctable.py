@@ -54,6 +54,7 @@ from blosc2.schema import (
     ObjectSpec,
     SchemaSpec,
     StructSpec,
+    Utf8Spec,
     VLBytesSpec,
     VLStringSpec,
     complex64,
@@ -1066,7 +1067,15 @@ class Column:
     def is_varlen_scalar(self) -> bool:
         """True if this column holds variable-length scalar strings or bytes."""
         col = self._table._schema.columns_by_name.get(self._col_name)
-        return col is not None and isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec))
+        return col is not None and isinstance(
+            col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, Utf8Spec)
+        )
+
+    @property
+    def is_utf8(self) -> bool:
+        """True if this column stores variable-length UTF-8 strings (offsets + bytes)."""
+        col = self._table._schema.columns_by_name.get(self._col_name)
+        return col is not None and isinstance(col.spec, Utf8Spec)
 
     @property
     def is_dictionary(self) -> bool:
@@ -1195,9 +1204,16 @@ class Column:
             # underlying NDArray, skipping the O(nrows) live-position scan and
             # letting NDArray's strided-gather fast path handle coarse steps.
             # Plain stored columns only; everything else falls through to the
-            # position-gather path below.
+            # position-gather path below.  utf8 is a varlen-scalar kind but
+            # Utf8Array slices itself efficiently (offsets+bytes span read),
+            # so it takes the fast path too instead of the index-gather one.
             if (
-                not (self.is_computed or self.is_list or self.is_varlen_scalar or self.is_dictionary)
+                not (
+                    self.is_computed
+                    or self.is_list
+                    or self.is_dictionary
+                    or (self.is_varlen_scalar and not self.is_utf8)
+                )
                 and self._has_identity_positions()
             ):
                 return self._maybe_decode_timestamp_values(np.asarray(self._raw_col[key]))
@@ -1206,6 +1222,8 @@ class Column:
             # slice semantics (including negative steps) follow NumPy.
             selected_pos = real_pos[key]
             if selected_pos.size == 0:
+                if self.is_utf8:
+                    return self._raw_col[selected_pos]
                 if self.is_list or self.is_varlen_scalar or self.is_dictionary:
                     return []
                 if self.is_ndarray:
@@ -1715,6 +1733,12 @@ class Column:
 
     def _ensure_queryable(self) -> None:
         self._ensure_not_stale()
+        if self.is_utf8:
+            raise NotImplementedError(
+                f"Column {self._col_name!r} is a variable-length utf8 column; "
+                "only comparisons (==, !=, <, <=, >, >=) are supported, not arithmetic "
+                "or bitwise operations."
+            )
         if self.is_varlen_scalar:
             raise NotImplementedError(
                 f"Column {self._col_name!r} is a vlstring/vlbytes column; "
@@ -1945,16 +1969,22 @@ class Column:
         return ~self._raw_col
 
     def __lt__(self, other):
+        if self.is_utf8:
+            return self._utf8_compare(np.less, other)
         self._ensure_comparable()
         return self._null_aware_compare(other, self._raw_col < self._coerce_timestamp_operand(other))
 
     def __le__(self, other):
+        if self.is_utf8:
+            return self._utf8_compare(np.less_equal, other)
         self._ensure_comparable()
         return self._null_aware_compare(other, self._raw_col <= self._coerce_timestamp_operand(other))
 
     def __eq__(self, other):
         if self.is_dictionary:
             return self._dictionary_eq(other)
+        if self.is_utf8:
+            return self._utf8_compare(np.equal, other)
         self._ensure_comparable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._null_aware_compare(other, self._raw_col == int(other))
@@ -1966,10 +1996,127 @@ class Column:
             if isinstance(result, np.ndarray):
                 return ~result
             return ~np.asarray(result, dtype=bool)
+        if self.is_utf8:
+            return self._utf8_compare(np.not_equal, other)
         self._ensure_comparable()
         if self._is_nullable_bool and isinstance(other, (bool, np.bool_)):
             return self._null_aware_compare(other, self._raw_col == int(not other))
         return self._null_aware_compare(other, self._raw_col != self._coerce_timestamp_operand(other))
+
+    def _utf8_chunked_bool(self, fn, *, chunk_size: int = 65536) -> np.ndarray:
+        """Apply ``fn(chunk, start, stop)`` over this utf8 column's logical rows.
+
+        *fn* returns a boolean array for each ``StringDType`` chunk read from
+        the underlying :class:`~blosc2.utf8_array.Utf8Array`.  Returns a
+        physical-length (``_valid_rows``-length) boolean NumPy array; rows
+        beyond the column's logical length are left ``False``.
+        """
+        arr = self._raw_col
+        n_phys = len(self._table._valid_rows)
+        n_logical = len(arr)
+        result = np.zeros(n_phys, dtype=np.bool_)
+        for start in range(0, n_logical, chunk_size):
+            stop = min(start + chunk_size, n_logical)
+            result[start:stop] = fn(arr[start:stop], start, stop)
+        return result
+
+    def _utf8_chunked_bytes(self, fn, *, chunk_size: int = 65536) -> np.ndarray:
+        """Apply ``fn(arr, start, stop)`` over this utf8 column's logical rows.
+
+        Like :meth:`_utf8_chunked_bool`, but *fn* operates directly on the
+        underlying :class:`~blosc2.utf8_array.Utf8Array` (raw offsets/bytes)
+        instead of a materialized ``StringDType`` chunk, so no per-row decode
+        happens.  Returns a physical-length boolean NumPy array; rows beyond
+        the column's logical length are left ``False``.
+        """
+        arr = self._raw_col
+        n_phys = len(self._table._valid_rows)
+        n_logical = len(arr)
+        result = np.zeros(n_phys, dtype=np.bool_)
+        for start in range(0, n_logical, chunk_size):
+            stop = min(start + chunk_size, n_logical)
+            result[start:stop] = fn(arr, start, stop)
+        return result
+
+    def _utf8_compare(self, numpy_op, other):
+        """Comparison predicate for a utf8 column.
+
+        Compares against a Python ``str`` scalar or another utf8
+        :class:`Column` (element-wise).  Returns a physical-length boolean
+        ``blosc2.NDArray``, already intersected with this column's live-row
+        mask.  A null value on either side never satisfies any comparison
+        (SQL ``WHERE`` semantics), matching :meth:`_null_aware_compare` for
+        every other column kind.
+        """
+        if isinstance(other, Column):
+            if not other.is_utf8:
+                raise TypeError(
+                    f"Column {self._col_name!r} is a utf8 column; it can only be compared with a "
+                    f"str or another utf8 Column, got Column {other._col_name!r}."
+                )
+            return self._utf8_compare_column(numpy_op, other)
+        if isinstance(other, str):
+            return self._utf8_compare_scalar(numpy_op, other)
+        raise TypeError(
+            f"Column {self._col_name!r} is a utf8 column; it can only be compared with a str "
+            f"or another utf8 Column, got {type(other).__name__!r}."
+        )
+
+    def _utf8_compare_column(self, numpy_op, other: Column):
+        """Column-vs-Column comparison, evaluated chunk by chunk on decoded
+        ``StringDType`` values since numexpr/miniexpr cannot operate on them.
+        """
+        other_arr = other._raw_col
+        nv = self.null_value
+        other_nv = other.null_value
+
+        def fn(chunk, start, stop):
+            rhs = other_arr[start:stop]
+            res = numpy_op(chunk, rhs)
+            if nv is not None:
+                res &= chunk != nv
+            if other_nv is not None:
+                res &= rhs != other_nv
+            return res
+
+        raw = self._utf8_chunked_bool(fn)
+        return blosc2.asarray(raw) & self._lazy_valid_rows()
+
+    def _utf8_compare_scalar(self, numpy_op, value: str):
+        """Scalar comparison, evaluated chunk by chunk directly on raw UTF-8
+        bytes (no decode to ``StringDType``) via
+        :meth:`~blosc2.utf8_array.Utf8Array.equal_mask_span` /
+        :meth:`~blosc2.utf8_array.Utf8Array.order_masks_span`.
+        """
+        nv = self.null_value
+
+        if numpy_op in (np.equal, np.not_equal):
+
+            def fn(arr, start, stop):
+                res = arr.equal_mask_span(value, start, stop)
+                if numpy_op is np.not_equal:
+                    res = ~res
+                if nv is not None:
+                    res &= ~arr.equal_mask_span(nv, start, stop)
+                return res
+        else:
+
+            def fn(arr, start, stop):
+                lt, gt = arr.order_masks_span(value, start, stop)
+                if numpy_op is np.less:
+                    res = lt
+                elif numpy_op is np.less_equal:
+                    res = ~gt
+                elif numpy_op is np.greater:
+                    res = gt
+                else:  # np.greater_equal
+                    res = ~lt
+                if nv is not None:
+                    res = res & ~arr.equal_mask_span(nv, start, stop)
+                return res
+
+        raw = self._utf8_chunked_bytes(fn)
+        return blosc2.asarray(raw) & self._lazy_valid_rows()
 
     def _dictionary_eq(self, other):
         """Return a physical-slot boolean predicate for dictionary equality.
@@ -2045,18 +2192,26 @@ class Column:
         return mask
 
     def __gt__(self, other):
+        if self.is_utf8:
+            return self._utf8_compare(np.greater, other)
         self._ensure_comparable()
         return self._null_aware_compare(other, self._raw_col > self._coerce_timestamp_operand(other))
 
     def __ge__(self, other):
+        if self.is_utf8:
+            return self._utf8_compare(np.greater_equal, other)
         self._ensure_comparable()
         return self._null_aware_compare(other, self._raw_col >= self._coerce_timestamp_operand(other))
 
     @property
     def dtype(self):
-        """NumPy dtype of the underlying storage, or ``None`` for
-        variable-length columns (:func:`~blosc2.vlstring`,
-        :func:`~blosc2.vlbytes`, :func:`~blosc2.list`)."""
+        """NumPy dtype of the underlying storage.
+
+        ``None`` for variable-length columns with no fixed element dtype
+        (:func:`~blosc2.vlstring`, :func:`~blosc2.vlbytes`,
+        :func:`~blosc2.list`).  :func:`~blosc2.utf8` columns report
+        ``numpy.dtypes.StringDType()``, the dtype of their materialized reads.
+        """
         return getattr(self._raw_col, "dtype", None)
 
     def iter_chunks(self, size: int = 65536):
@@ -2086,7 +2241,7 @@ class Column:
             return
         if self.is_list:
             raise TypeError("Column.iter_chunks() is not supported for list columns in V1.")
-        if self.is_varlen_scalar:
+        if self.is_varlen_scalar and not self.is_utf8:
             raise TypeError("Column.iter_chunks() is not supported for varlen scalar columns.")
         valid = self._valid_rows
         raw = self._raw_col
@@ -2110,7 +2265,13 @@ class Column:
                 segment = raw[start : start + actual]
             else:
                 mask = valid[start : start + actual]
-                segment = raw[start : start + actual][mask]
+                data_part = raw[start : start + actual]
+                if len(data_part) < actual:
+                    # Logically-sized storage (utf8) is shorter than the
+                    # capacity-sized validity mask; rows past its end are
+                    # never live, so the extra mask tail is all False.
+                    mask = mask[: len(data_part)]
+                segment = data_part[mask]
 
             if len(segment) == 0:
                 continue
@@ -2277,7 +2438,7 @@ class Column:
         """
         if self.is_dictionary:
             return self._dictionary_eq(None)
-        if self.is_varlen_scalar:
+        if self.is_varlen_scalar and not self.is_utf8:
             return np.array([v is None for v in self], dtype=np.bool_)
         return self._null_mask_for(self[:])
 
@@ -2293,7 +2454,7 @@ class Column:
         """
         if self.is_dictionary:
             return int(self.is_null().sum())
-        if self.is_varlen_scalar:
+        if self.is_varlen_scalar and not self.is_utf8:
             return sum(1 for v in self if v is None)
         if self.null_value is None:
             return 0
@@ -2306,7 +2467,7 @@ class Column:
         native ``None`` cells) return a list; other columns return a NumPy
         array.
         """
-        if self.is_dictionary or self.is_varlen_scalar:
+        if (self.is_dictionary or self.is_varlen_scalar) and not self.is_utf8:
             return [value if v is None else v for v in self[:]]
         arr = np.array(self[:], copy=True)
         if self.null_value is not None:
@@ -3862,7 +4023,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     @staticmethod
     def _is_varlen_scalar_column(col: CompiledColumn) -> bool:
-        return isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec))
+        return isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, Utf8Spec))
+
+    @staticmethod
+    def _is_utf8_column(col: CompiledColumn) -> bool:
+        return isinstance(col.spec, Utf8Spec)
 
     @staticmethod
     def _is_dictionary_column(col: CompiledColumn) -> bool:
@@ -3968,7 +4133,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return policy.float_value
         if isinstance(spec, b2_bool):
             return policy.bool_value
-        if isinstance(spec, string):
+        if isinstance(spec, (string, Utf8Spec)):
             return policy.string_value
         if isinstance(spec, b2_bytes):
             return policy.bytes_value
@@ -4018,7 +4183,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if null_value != 255:
                 raise ValueError(f"Null sentinel for nullable bool column {name!r} must be 255")
             return
-        if isinstance(spec, string):
+        if isinstance(spec, (string, Utf8Spec)):
             if not isinstance(null_value, str):
                 raise TypeError(f"Null sentinel for string column {name!r} must be str")
             return
@@ -5320,6 +5485,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         from blosc2.ctable_storage import (
             _DICT_SUFFIX,
+            _UTF8_DATA_SUFFIX,
             _column_name_to_relpath,
         )
 
@@ -5347,6 +5513,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if self._is_dictionary_column(col):
                 estore[key] = arr.codes
                 estore[key + _DICT_SUFFIX] = arr._dict_store._backend
+            elif self._is_utf8_column(col):
+                estore[key] = arr.offsets
+                estore[key + _UTF8_DATA_SUFFIX] = arr.data
             elif self._is_varlen_scalar_column(col):
                 estore[key] = arr._backend
             else:
@@ -6441,6 +6610,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _pa_type_from_spec(pa, spec):
         if isinstance(spec, DictionarySpec):
             return pa.dictionary(pa.int32(), pa.string(), ordered=spec.ordered)
+        if isinstance(spec, Utf8Spec):
+            # Always large_string: 64-bit offsets match the int64 offsets array,
+            # so multi-GB string columns export without int32-offset overflow.
+            return pa.large_string()
         if isinstance(spec, VLStringSpec):
             return pa.string()
         if isinstance(spec, VLBytesSpec):
@@ -6532,6 +6705,26 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if col.is_list:
                     spec = self._schema.columns_by_name[name].spec
                     arrays.append(pa.array(col[start:stop], type=self._pa_type_from_spec(pa, spec)))
+                    continue
+                if col.is_utf8:
+                    spec = self._schema.columns_by_name[name].spec
+                    arr8 = self._cols[name]
+                    nv = col.null_value
+                    if self.base is None and self._last_pos == self._n_rows and stop <= arr8._persisted_rows:
+                        # Dense root table: logical rows == persisted rows, so
+                        # export straight from the offsets/bytes buffers with
+                        # no per-row decode (storage is already Arrow layout).
+                        arrays.append(arr8.arrow_slice(pa, start, stop, nv))
+                        continue
+                    values = col[start:stop]  # StringDType array with sentinel nulls
+                    null_mask = col._null_mask_for(values) if nv is not None else None
+                    arrays.append(
+                        pa.array(
+                            values.astype(object),
+                            type=self._pa_type_from_spec(pa, spec),
+                            mask=null_mask if null_mask is not None and null_mask.any() else None,
+                        )
+                    )
                     continue
                 if col.is_varlen_scalar:
                     spec = self._schema.columns_by_name[name].spec
@@ -6830,8 +7023,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         if pa_type in (pa.string(), pa.large_string(), pa.utf8(), pa.large_utf8()):
             if string_max_length is None:
-                # No fixed-width threshold given: store as variable-length scalar string.
-                return b2s.vlstring(nullable=nullable)
+                from blosc2.utf8_array import have_string_dtype
+
+                if not have_string_dtype():
+                    # utf8 columns need numpy.dtypes.StringDType (NumPy >= 2.0).
+                    # On older NumPy, keep the historical import behavior:
+                    # variable-length msgpack strings with native-None nulls.
+                    return b2s.vlstring(nullable=nullable)
+                # No fixed-width threshold given: store as a variable-length
+                # utf8 column (offsets + bytes, StringDType reads).
+                return b2s.utf8(nullable=nullable, null_value=null_value)
             max_length = max(string_max_length, len(null_value) if null_value is not None else 1, 1)
             return b2s.string(max_length=max_length, null_value=null_value)
 
@@ -6888,16 +7089,25 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             field_is_struct = pa.types.is_struct(field.type)
             field_is_dictionary = pa.types.is_dictionary(field.type)
             column_string_max_length = cls._string_max_length_for_column(string_max_length, name)
+            # Scalar strings without a fixed-width threshold import as utf8
+            # columns, which use null sentinels like other scalar columns;
+            # only binary columns keep the native-None varlen treatment.
+            # On NumPy < 2.0 (no StringDType) utf8 columns are unavailable and
+            # scalar strings keep the historical vlstring treatment instead.
+            from blosc2.utf8_array import have_string_dtype
+
             field_is_varlen_scalar = (
                 not field_is_list
                 and not field_is_struct
                 and not field_is_dictionary
                 and column_string_max_length is None
                 and (
-                    pa.types.is_string(field.type)
-                    or pa.types.is_large_string(field.type)
-                    or pa.types.is_binary(field.type)
+                    pa.types.is_binary(field.type)
                     or pa.types.is_large_binary(field.type)
+                    or (
+                        not have_string_dtype()
+                        and (pa.types.is_string(field.type) or pa.types.is_large_string(field.type))
+                    )
                 )
             )
             field_needs_object_fallback = cls._arrow_type_needs_object_fallback(pa, field.type)
@@ -6914,7 +7124,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 )
             if has_null_value_override and field_is_varlen_scalar:
                 raise TypeError(
-                    f"column_null_values is not supported for vlstring/vlbytes column {name!r}; "
+                    f"column_null_values is not supported for vlbytes/vlstring column {name!r}; "
                     "these columns represent nulls as native None."
                 )
             if has_null_value_override:
@@ -7517,12 +7727,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             t.trip.begin.lon.max()
 
         When *string_max_length* is ``None`` (the default), scalar Arrow
-        ``string`` / ``large_string`` columns are imported as
-        :func:`~blosc2.vlstring` columns and ``binary`` / ``large_binary``
-        columns are imported as :func:`~blosc2.vlbytes` columns.  Non-struct
-        ``struct`` columns (not containing only scalar leaves) are imported as
+        ``string`` / ``large_string`` columns are imported as variable-length
+        :func:`~blosc2.utf8` columns (offsets + bytes storage; nullable
+        columns get a null sentinel string from the active
+        :class:`NullPolicy`) and ``binary`` / ``large_binary`` columns are
+        imported as :func:`~blosc2.vlbytes` columns.  Non-struct ``struct``
+        columns (not containing only scalar leaves) are imported as
         :func:`~blosc2.struct` columns backed by batched variable-length
-        storage.  Null values for these variable-length scalar columns are
+        storage.  Null values for ``vlbytes``/``struct`` columns are
         represented as native ``None`` with no sentinel needed.
 
         When *string_max_length* is set to a positive integer, scalar string
@@ -7530,7 +7742,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         :func:`~blosc2.string` / :func:`~blosc2.bytes` columns whose dtype is
         sized to *string_max_length* characters/bytes. It may also be a mapping
         from column name to max length; omitted string/binary columns remain
-        :func:`~blosc2.vlstring` / :func:`~blosc2.vlbytes` columns.
+        :func:`~blosc2.utf8` / :func:`~blosc2.vlbytes` columns.
 
         ``blosc2_batch_size`` controls how many rows are buffered before
         BatchArray-backed imported columns (list columns and variable-length
@@ -8757,7 +8969,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._invalidate_index_catalog_cache()
 
         if isinstance(self._storage, FileTableStorage):
-            self._cols[new] = self._storage.rename_column(old, new)
+            self._cols[new] = self._rename_stored_column(old, new)
         else:
             self._cols[new] = self._cols[old]
         del self._cols[old]
@@ -8789,6 +9001,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._storage.save_schema(self._schema_dict_with_computed())
         if rebuild_kwargs is not None:
             self.create_index(new, **rebuild_kwargs)
+
+    def _rename_stored_column(self, old: str, new: str):
+        """Rename a stored column's persistent leaves and return the reopened column."""
+        old_compiled_col = self._schema.columns_by_name[old]
+        if hasattr(self._cols[old], "flush"):
+            self._cols[old].flush()
+        renamed_col = self._storage.rename_column(old, new)
+        if self._is_utf8_column(old_compiled_col):
+            # rename_column returns the bare offsets NDArray; reopen the
+            # offsets + bytes pair as a proper utf8 column object.
+            renamed_col = self._storage.open_varlen_scalar_column(new, old_compiled_col.spec)
+        return renamed_col
 
     # ------------------------------------------------------------------
     # Computed / virtual columns
@@ -10759,6 +10983,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 replacement.flush()
                 self._cols[name] = replacement
                 continue
+            if self._is_utf8_column(col):
+                # Clustered fancy-index gather, then a bulk rewrite through the
+                # existing backing arrays so a store-backed column stays
+                # persistent on disk.
+                v.set_all(v[real_poss[: self._n_rows]])
+                continue
             if self._is_varlen_scalar_column(col):
                 compacted = [v[int(pos)] for pos in real_poss[: self._n_rows]]
                 replacement = _ScalarVarLenArray(col.spec)
@@ -10830,14 +11060,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 )
             dtype = self._col_dtype(name)
             if dtype is None:
-                cc = self._schema.columns_by_name.get(name)
-                if cc is not None and isinstance(
-                    cc.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)
+                if col_info is not None and isinstance(
+                    col_info.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)
                 ):
                     raise TypeError(
                         f"Column {name!r} is a varlen scalar column and does not support sort ordering."
                     )
-                if cc is not None and self._is_dictionary_column(cc):
+                if col_info is not None and self._is_dictionary_column(col_info):
                     pass  # dictionary columns: sorting supported (decoded strings)
                 else:
                     raise TypeError(
@@ -11016,7 +11245,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             # Value key
             if not asc:
-                if raw.dtype.kind in "USO":
+                if raw.dtype.kind in "USOT":
                     # strings can't be negated — invert via rank
                     rank = np.argsort(np.argsort(raw, kind="stable"), kind="stable")
                     lex_keys.append((n - 1 - rank).astype(np.intp))
@@ -11364,6 +11593,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             elif self._is_dictionary_column(col):
                 sorted_codes = arr.codes[sorted_pos]
                 arr.codes[:n] = sorted_codes
+            elif self._is_utf8_column(col):
+                # Bulk-rewrite through the existing backing arrays so a
+                # store-backed column stays persistent on disk.
+                arr.set_all(arr[sorted_pos])
             else:
                 arr[:n] = arr[sorted_pos]
         self._valid_rows[:n] = True
@@ -11387,6 +11620,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     result._cols[col_name].encode(v)
                 sorted_codes = arr.codes[sorted_pos]
                 result._cols[col_name].codes[:n] = sorted_codes
+            elif self._is_utf8_column(col):
+                result._cols[col_name].set_all(arr[sorted_pos])
             else:
                 result._cols[col_name][:n] = arr[sorted_pos]
         result._valid_rows[:n] = True
@@ -11898,6 +12133,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if isinstance(spec, DictionarySpec):
             ordered_tag = ", ordered" if spec.ordered else ""
             return f"dictionary[str{ordered_tag}]"
+        if isinstance(spec, Utf8Spec):
+            return "utf8"
         if isinstance(spec, VLStringSpec):
             return "vlstring"
         if isinstance(spec, VLBytesSpec):
@@ -12398,6 +12635,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 raise TypeError(
                     f"Column {col.name!r} is a fixed-shape ndarray column. String expressions only "
                     "support scalar columns. Use an element projection or a row-wise reduction first."
+                )
+            if self._is_utf8_column(col) and self._expression_references_name(expr, col.name):
+                raise NotImplementedError(
+                    f"Column {col.name!r} is a variable-length utf8 column; "
+                    "string expressions on utf8 columns are not supported yet."
                 )
             if self._is_varlen_scalar_column(col) and self._expression_references_name(expr, col.name):
                 raise NotImplementedError(

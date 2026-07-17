@@ -938,14 +938,108 @@ Text & binary
 .. autosummary::
 
     string
+    utf8
     bytes
     vlstring
     vlbytes
 
 .. autoclass:: string
+.. autofunction:: utf8
 .. autoclass:: bytes
 .. autofunction:: vlstring
 .. autofunction:: vlbytes
+
+.. _ChoosingStringType:
+
+Choosing a string column type
+-----------------------------
+
+CTable offers four ways to store strings.  As a quick decision path:
+
+* Low-cardinality strings (categories, enumerations, repeated labels):
+  use :func:`dictionary` — repeated values are stored once as integer codes.
+* Everything else (names, free text, high-cardinality values):
+  use :func:`utf8` — the recommended default for variable-length text.
+* Short codes of near-uniform length, or columns that need
+  :meth:`CTable.create_index`: use :class:`string` (fixed-width).
+* NumPy < 2.0, or nullable columns where any string value can legally occur
+  (native ``None`` nulls, no sentinel): use :func:`vlstring`.
+
+.. list-table::
+   :header-rows: 1
+   :stub-columns: 1
+
+   * -
+     - :class:`string`
+     - :func:`utf8`
+     - :func:`dictionary`
+     - :func:`vlstring`
+   * - Storage layout
+     - fixed-width UTF-32 NDArray
+     - int64 offsets + UTF-8 bytes (Arrow-style)
+     - integer codes + unique values
+     - msgpack batches
+   * - Per-row cost (pre-compression)
+     - 4 × ``max_length`` bytes
+     - exact UTF-8 length + 8-byte offset
+     - one integer code
+     - value + msgpack framing
+   * - Length limit
+     - ``max_length`` characters
+     - none
+     - none
+     - none
+   * - Bulk read returns
+     - NumPy ``U`` array
+     - NumPy ``StringDType`` array
+     - decoded strings
+     - Python list of ``str``
+   * - Nulls
+     - sentinel
+     - sentinel
+     - native
+     - native ``None``
+   * - Filters (``==``, ``<``, …)
+     - ✓ (incl. string expressions)
+     - ✓ operators only [#utf8expr]_
+     - ``==`` / ``isin()`` only
+     - ✗
+   * - :meth:`CTable.group_by` key / :meth:`CTable.sort_by`
+     - ✓
+     - ✓
+     - ✓
+     - ✗
+   * - :meth:`CTable.create_index`
+     - ✓
+     - not yet
+     - ✓ (rank-based)
+     - ✗
+   * - Arrow / Parquet
+     - ✓
+     - ✓ (``large_string``)
+     - ✓
+     - ✓
+   * - NumPy requirement
+     - any
+     - >= 2.0
+     - any
+     - any
+   * - Best for
+     - short, near-uniform codes
+     - **general text (recommended)**
+     - low-cardinality categories
+     - NumPy < 2.0; native-``None`` nulls
+
+.. [#utf8expr] utf8 columns support the operator form ``t[t.name == "x"]``
+   (also ``!=``, ``<``, ``<=``, ``>``, ``>=``), but not the string-expression
+   form ``t.where("name == 'x'")`` yet.  :meth:`CTable.create_index` on utf8
+   columns is not supported yet either; both raise ``NotImplementedError``
+   with a clear message.
+
+Note that a plain ``str`` annotation without an explicit :func:`field` spec
+still maps to fixed-width ``string(max_length=32)`` for backward
+compatibility; opt in to variable-length storage with
+``blosc2.field(blosc2.utf8())``.
 
 Array, encoded, and compound specs
 ----------------------------------

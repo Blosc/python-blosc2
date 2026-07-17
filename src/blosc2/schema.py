@@ -308,6 +308,11 @@ class bool(SchemaSpec):
 class string(SchemaSpec):
     """Fixed-width Unicode string column.
 
+    Values longer than *max_length* are rejected at validation time (and
+    silently truncated when validation is disabled), and every row costs
+    ``4 * max_length`` bytes before compression.  For variable-length text
+    prefer :func:`utf8`; see :ref:`ChoosingStringType` for a full comparison.
+
     Parameters
     ----------
     max_length:
@@ -592,6 +597,49 @@ class VLStringSpec(SchemaSpec):
         return d
 
 
+class Utf8Spec(SchemaSpec):
+    """Variable-length UTF-8 string column stored Arrow-style as offsets + bytes.
+
+    Unlike :class:`string`, this spec does not use a fixed-width NumPy dtype:
+    each row stores exactly its UTF-8 byte length, so long or wildly
+    variable-length text does not waste space.  Unlike :func:`vlstring`
+    (msgpack cells), values are stored in two companion NDArrays — ``int64``
+    row offsets plus a ``uint8`` byte blob — and bulk reads materialize as
+    ``numpy.dtypes.StringDType`` arrays (requires NumPy >= 2.0).
+
+    Parameters
+    ----------
+    nullable:
+        If ``True`` and ``null_value`` is not set, choose a null sentinel from
+        the current CTable null policy when the schema is compiled.
+    null_value:
+        Explicit null sentinel string.  Takes precedence over ``nullable=True``.
+    """
+
+    python_type = str
+    dtype = None
+
+    def __init__(self, *, nullable: _builtin_bool = False, null_value: str | None = None):
+        if null_value is not None and not isinstance(null_value, str):
+            raise TypeError(f"utf8 null_value must be str, got {type(null_value).__name__!r}")
+        self.nullable = nullable or null_value is not None
+        self.null_value = _normalize_scalar_value(null_value)
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"kind": "utf8"}
+        if self.nullable:
+            d["nullable"] = True
+        if self.null_value is not None:
+            d["null_value"] = self.null_value
+        return d
+
+    def display_label(self) -> str:
+        return "utf8"
+
+
 class ObjectSpec(SchemaSpec):
     """Schema-less Python object column backed by batched msgpack storage.
 
@@ -768,11 +816,14 @@ def vlstring(
 ) -> VLStringSpec:
     """Build a variable-length scalar string schema descriptor.
 
-    Use this as an explicit opt-in when a CTable column holds long or
-    wildly variable-length strings that would waste space in a fixed-width
-    ``string(max_length=N)`` column.  Must be requested via
-    ``blosc2.field(blosc2.vlstring())`` — it is never inferred automatically
-    from plain ``str`` annotations.
+    For most variable-length text, prefer :func:`utf8` instead: it supports
+    vectorized filters, groupby keys, sorting, and fast bulk reads, none of
+    which vlstring supports.  vlstring remains the right choice on
+    NumPy < 2.0 (utf8 requires ``StringDType``) and for nullable columns
+    that need native ``None`` nulls with no sentinel, i.e. where any string
+    value can legally occur.  See :ref:`ChoosingStringType` for a full
+    comparison.  Must be requested via ``blosc2.field(blosc2.vlstring())`` —
+    it is never inferred automatically from plain ``str`` annotations.
     """
     return VLStringSpec(
         nullable=nullable,
@@ -780,6 +831,52 @@ def vlstring(
         batch_rows=batch_rows,
         items_per_block=items_per_block,
     )
+
+
+def utf8(*, nullable: bool = False, null_value: str | None = None) -> Utf8Spec:
+    """Build a variable-length UTF-8 string schema descriptor.
+
+    Use this for high-cardinality or free-text string columns: values are
+    stored Arrow-style (``int64`` offsets plus a UTF-8 byte blob), so each row
+    costs exactly its encoded byte length, and bulk reads materialize as
+    ``numpy.dtypes.StringDType`` arrays (requires NumPy >= 2.0).  For
+    LOW-cardinality strings (categories, enumerations) prefer
+    :func:`dictionary`, which stores repeated values once.
+
+    Must be requested via ``blosc2.field(blosc2.utf8())`` — it is never
+    inferred automatically from plain ``str`` annotations.
+
+    utf8 columns support vectorized comparisons (``==``, ``!=``, ``<``,
+    ``<=``, ``>``, ``>=``), :meth:`CTable.group_by` keys,
+    :meth:`CTable.sort_by`, and Arrow/Parquet interop.  Current limitations:
+    :meth:`CTable.create_index` is not supported yet (use a fixed-width
+    :class:`string` column if you need an index), and string-*expression*
+    filters such as ``t.where("name == 'x'")`` are not supported yet — use
+    the operator form ``t[t.name == 'x']`` instead.  See
+    :ref:`ChoosingStringType` for a full comparison with :class:`string`
+    and :func:`vlstring`.
+
+    Parameters
+    ----------
+    nullable:
+        If ``True`` and ``null_value`` is not set, choose a null sentinel from
+        the current CTable null policy when the schema is compiled.
+    null_value:
+        Explicit null sentinel string.  Takes precedence over ``nullable=True``.
+
+    Examples
+    --------
+    >>> from dataclasses import dataclass
+    >>> import blosc2 as b2
+    >>> @dataclass
+    ... class Row:
+    ...     name: str = b2.field(b2.utf8())
+    ...     note: str = b2.field(b2.utf8(nullable=True))
+    """
+    from blosc2.utf8_array import string_dtype
+
+    string_dtype()  # fail early with a clear error on NumPy < 2.0
+    return Utf8Spec(nullable=nullable, null_value=null_value)
 
 
 def object(

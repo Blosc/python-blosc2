@@ -74,6 +74,7 @@ public objects into the appropriate reference section.
         uint16,
         uint32,
         uint64,
+        utf8,
         vlbytes,
         vlstring,
         Array,

@@ -32,13 +32,20 @@ class Row:
     ikey: int = blosc2.field(blosc2.int64())
     skey: str = blosc2.field(blosc2.string(max_length=8))
     dkey: str = blosc2.field(blosc2.dictionary())
+    ukey: str = blosc2.field(blosc2.utf8())
     val: float = blosc2.field(blosc2.float64())
 
 
 print(f"building table ({N:.0e} rows)...", flush=True)
 t = CTable(Row)
 t.extend(
-    {"ikey": int_keys, "skey": str_keys, "dkey": [str(s) for s in str_keys], "val": float_vals},
+    {
+        "ikey": int_keys,
+        "skey": str_keys,
+        "dkey": [str(s) for s in str_keys],
+        "ukey": [str(s) for s in str_keys],
+        "val": float_vals,
+    },
     validate=False,
 )
 
@@ -56,7 +63,9 @@ bench("int key, sum", lambda: t.group_by("ikey").sum("val"))
 bench("int key, mean", lambda: t.group_by("ikey").agg({"val": "mean"}))
 bench("string key, sum", lambda: t.group_by("skey").sum("val"))
 bench("dict key, sum", lambda: t.group_by("dkey").sum("val"))
+bench("utf8 key, sum", lambda: t.group_by("ukey").sum("val"))
 bench("two keys (int+dict), sum", lambda: t.group_by(["ikey", "dkey"]).sum("val"))
+bench("two keys (int+utf8), sum", lambda: t.group_by(["ikey", "ukey"]).sum("val"))
 
 try:
     import pandas as pd
