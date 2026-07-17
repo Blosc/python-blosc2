@@ -454,6 +454,41 @@ def test_from_arrow_dictionary_codes_use_aligned_grid():
     assert list(t["c"][:5]) == c.to_pylist()[:5]
 
 
+def test_to_arrow_dictionary_multi_batch_with_deletions():
+    """Dictionary-column export across several batches, with holes in the
+    live-row mask from a deletion, still maps each batch to the correct
+    physical positions.
+
+    Regression test for a perf fix where the live-row-position array was
+    recomputed from scratch on every batch (and every dictionary column);
+    this exercises the same code path across a batch boundary to make sure
+    the now-precomputed-once array still slices correctly per batch.
+    """
+
+    @dataclass
+    class Row:
+        category: str = blosc2.field(blosc2.dictionary())
+        value: int = blosc2.field(blosc2.int64())
+
+    n = 5000  # several batches at the default Arrow batch size (2048)
+    categories = ["alpha", "beta", "gamma"]
+    data = {
+        "category": [categories[i % 3] for i in range(n)],
+        "value": list(range(n)),
+    }
+    t = CTable(Row, new_data=data)
+    t.delete(slice(100, 250))  # punch a hole spanning a batch boundary
+
+    expected_category = [categories[i % 3] for i in range(n) if not (100 <= i < 250)]
+    expected_value = [i for i in range(n) if not (100 <= i < 250)]
+
+    batches = list(t.iter_arrow_batches(batch_size=500))
+    assert len(batches) > 1  # actually exercises multiple batches
+    at = pa.Table.from_batches(batches)
+    assert at["category"].to_pylist() == expected_category
+    assert at["value"].to_pylist() == expected_value
+
+
 def test_from_arrow_variable_batches_roundtrip():
     """Variable-sized Arrow batches that straddle the column chunk grid import
     losslessly (exercises the chunk-aligned write buffer)."""

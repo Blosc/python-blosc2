@@ -3941,6 +3941,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             # ---- Create new table ----
             if storage.is_read_only():
                 raise FileNotFoundError(f"No CTable found at {urlpath!r}")
+            if urlpath is not None and mode == "a":
+                raise FileNotFoundError(
+                    f"No CTable found at {urlpath!r}: mode='a' opens an existing table; "
+                    "use mode='w' to create a new one."
+                )
 
             # Build compiled schema from either a dataclass or a legacy Pydantic model
             if dataclasses.is_dataclass(row_type) and isinstance(row_type, type):
@@ -6714,6 +6719,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         names = self._resolve_arrow_columns(columns, include_computed=include_computed)
         arrow_names = self._export_arrow_names(names)
 
+        # Dictionary columns need the physical positions of their live rows.
+        # This depends only on self._valid_rows (fixed for the whole call), so
+        # it is computed once here instead of once per batch per dictionary
+        # column — the previous per-batch recompute was an O(n_rows) scan
+        # repeated O(n_rows / batch_size) times.
+        dict_real_pos = None
+        if any(name in self.col_names and self[name].is_dictionary for name in names):
+            dict_real_pos = blosc2.where(self._valid_rows, _arange(len(self._valid_rows))).compute()
+
         for start in range(0, self._n_rows, batch_size):
             stop = min(start + batch_size, self._n_rows)
             arrays = []
@@ -6756,10 +6770,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if col.is_dictionary:
                     dc = self._cols[name]  # DictionaryColumn
                     spec = self._schema.columns_by_name[name].spec
-                    # Get physical positions for live rows in [start, stop)
-                    valid = self._valid_rows
-                    real_pos = blosc2.where(valid, _arange(len(valid))).compute()
-                    batch_real_pos = real_pos[start:stop]
+                    # Physical positions for live rows in [start, stop),
+                    # precomputed once above (not per batch/column).
+                    batch_real_pos = dict_real_pos[start:stop]
                     if len(batch_real_pos) == 0:
                         pa_dict = pa.array(dc.dictionary, type=pa.string())
                         pa_indices = pa.array([], type=pa.int32())
@@ -7235,6 +7248,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 shutil.rmtree(urlpath)
             else:
                 os.remove(urlpath)
+        elif mode == "a" and not os.path.exists(urlpath):
+            raise FileNotFoundError(
+                f"No CTable found at {urlpath!r}: mode='a' opens an existing table; "
+                "use mode='w' to create a new one."
+            )
         return FileTableStorage(urlpath, mode)
 
     @classmethod
