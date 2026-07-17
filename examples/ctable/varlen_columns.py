@@ -1,3 +1,6 @@
+# List-valued columns with variable-length cells.  For variable-length
+# *scalar* string columns, see utf8_strings.py (blosc2.utf8()).
+
 from __future__ import annotations
 
 from dataclasses import dataclass

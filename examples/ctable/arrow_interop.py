@@ -59,7 +59,9 @@ at2 = pa.table(
 t2 = blosc2.CTable.from_arrow(at2.schema, at2.to_batches())
 print("CTable from Arrow (inferred schema):")
 print(t2)
-print(f"  label dtype: {t2['label'].dtype}  (max_length inferred from data)")
+# Arrow string columns import as variable-length utf8() columns (StringDType
+# reads); pass string_max_length= to from_arrow() for fixed-width instead.
+print(f"  label dtype: {t2['label'].dtype}")
 
 # -- pandas round-trip ------------------------------------------------------
 try:

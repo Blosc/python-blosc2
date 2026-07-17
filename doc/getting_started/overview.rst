@@ -270,7 +270,7 @@ types including integers, floats, booleans, and strings:
         tips: float = blosc2.field(blosc2.float32())
         km: float = blosc2.field(blosc2.float32())
         lon: float = blosc2.field(blosc2.float32())
-        company: str = blosc2.field(blosc2.string(max_length=50))
+        company: str = blosc2.field(blosc2.utf8())  # variable-length text
 
 
     t = blosc2.CTable(Row, expected_size=10_000_000)

@@ -308,6 +308,11 @@ class bool(SchemaSpec):
 class string(SchemaSpec):
     """Fixed-width Unicode string column.
 
+    Values longer than *max_length* are rejected at validation time (and
+    silently truncated when validation is disabled), and every row costs
+    ``4 * max_length`` bytes before compression.  For variable-length text
+    prefer :func:`utf8`; see :ref:`ChoosingStringType` for a full comparison.
+
     Parameters
     ----------
     max_length:
@@ -811,11 +816,14 @@ def vlstring(
 ) -> VLStringSpec:
     """Build a variable-length scalar string schema descriptor.
 
-    Use this as an explicit opt-in when a CTable column holds long or
-    wildly variable-length strings that would waste space in a fixed-width
-    ``string(max_length=N)`` column.  Must be requested via
-    ``blosc2.field(blosc2.vlstring())`` — it is never inferred automatically
-    from plain ``str`` annotations.
+    For most variable-length text, prefer :func:`utf8` instead: it supports
+    vectorized filters, groupby keys, sorting, and fast bulk reads, none of
+    which vlstring supports.  vlstring remains the right choice on
+    NumPy < 2.0 (utf8 requires ``StringDType``) and for nullable columns
+    that need native ``None`` nulls with no sentinel, i.e. where any string
+    value can legally occur.  See :ref:`ChoosingStringType` for a full
+    comparison.  Must be requested via ``blosc2.field(blosc2.vlstring())`` —
+    it is never inferred automatically from plain ``str`` annotations.
     """
     return VLStringSpec(
         nullable=nullable,
@@ -837,6 +845,16 @@ def utf8(*, nullable: bool = False, null_value: str | None = None) -> Utf8Spec:
 
     Must be requested via ``blosc2.field(blosc2.utf8())`` — it is never
     inferred automatically from plain ``str`` annotations.
+
+    utf8 columns support vectorized comparisons (``==``, ``!=``, ``<``,
+    ``<=``, ``>``, ``>=``), :meth:`CTable.group_by` keys,
+    :meth:`CTable.sort_by`, and Arrow/Parquet interop.  Current limitations:
+    :meth:`CTable.create_index` is not supported yet (use a fixed-width
+    :class:`string` column if you need an index), and string-*expression*
+    filters such as ``t.where("name == 'x'")`` are not supported yet — use
+    the operator form ``t[t.name == 'x']`` instead.  See
+    :ref:`ChoosingStringType` for a full comparison with :class:`string`
+    and :func:`vlstring`.
 
     Parameters
     ----------
