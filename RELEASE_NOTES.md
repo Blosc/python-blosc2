@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.9.0 to 4.9.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.8.1 to 4.9.0
 
 This release is about cooperation: `CTable` now speaks the tabular
