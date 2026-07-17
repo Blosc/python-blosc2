@@ -991,6 +991,12 @@ def test_ctable_utf8_where_expression_raises_clearly():
         t.where("name == 'hello'")
 
 
+def test_ctable_utf8_create_index_raises_clearly():
+    t = make_table()
+    with pytest.raises(NotImplementedError, match="utf8"):
+        t.create_index(col_name="name")
+
+
 def test_ctable_utf8_arrow_export_large_string():
     pa = pytest.importorskip("pyarrow")
     t = make_table()

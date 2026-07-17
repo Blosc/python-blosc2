@@ -25,6 +25,7 @@ from blosc2.schema import (
     NDArraySpec,
     ObjectSpec,
     StructSpec,
+    Utf8Spec,
     VLBytesSpec,
     VLStringSpec,
 )
@@ -749,6 +750,12 @@ class _CTableIndexingMixin:
             )
         if isinstance(self._schema.columns_by_name[col_name].spec, ListSpec):
             raise ValueError(f"Cannot create an index on list column {col_name!r} in V1.")
+        if isinstance(self._schema.columns_by_name[col_name].spec, Utf8Spec):
+            raise NotImplementedError(
+                f"Cannot create an index on variable-length utf8 column {col_name!r}: "
+                "indexing for utf8 columns is not supported yet. "
+                "Use a fixed-width string(max_length=N) column if you need an index."
+            )
         if isinstance(
             self._schema.columns_by_name[col_name].spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)
         ):
