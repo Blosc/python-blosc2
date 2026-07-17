@@ -21,6 +21,7 @@ representation does not support are reported as such rather than skipped
 silently.
 """
 
+import argparse
 import pathlib
 import time
 from dataclasses import make_dataclass
@@ -34,6 +35,17 @@ N_TAXI = 10_000_000
 N_SYNTH = 2_000_000  # fixed-width U~130 at 1e7 rows would need a ~5 GB ingest buffer
 REPS = 3
 TAXI_PARQUET = pathlib.Path(__file__).parent.parent / "chicago-taxi" / "chicago-taxi-flat.parquet"
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument(
+    "--ingest-only",
+    action="store_true",
+    help="Only measure ingest and storage footprint; skip full read, filter, "
+    "groupby, sort, and to_arrow (the last of which alone can take over a "
+    "minute per column kind on the full taxi workload). Meant for fast "
+    "iteration when only ingest performance is under investigation.",
+)
+args = parser.parse_args()
 
 rng = np.random.default_rng(42)
 
@@ -99,6 +111,10 @@ def run_workload(title, values, filter_value):
         print(
             f"  {'storage nbytes -> cbytes':34s} {nbytes / 2**20:7.1f} MB -> {cbytes / 2**20:7.1f} MB (cratio {nbytes / cbytes:.1f}x)"
         )
+
+        if args.ingest_only:
+            del t
+            continue
 
         bench("full column read", lambda t=t: t["s"][:])
         try:
