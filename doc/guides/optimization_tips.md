@@ -6,7 +6,7 @@ Numbers below were measured on an Apple M4 Pro Mac Mini (macOS, Python 3.14); ab
 
 ## Build large arrays with blosc2's own constructors
 
-Constructors like `blosc2.arange()`, `blosc2.linspace()` and `blosc2.fromiter()` fill an `NDArray` chunk by chunk, using multiple threads. Building the same array in NumPy first and compressing it with `asarray()` means holding the whole thing uncompressed in memory at once.
+Constructors like {func}`blosc2.arange() <blosc2.arange>`, {func}`blosc2.linspace() <blosc2.linspace>` and {func}`blosc2.fromiter() <blosc2.fromiter>` fill an {class}`~blosc2.NDArray` chunk by chunk, using multiple threads. Building the same array in NumPy first and compressing it with {func}`asarray() <blosc2.asarray>` means holding the whole thing uncompressed in memory at once.
 
 ```python
 # Avoid: materializes the full array in NumPy first
@@ -18,7 +18,7 @@ a = blosc2.linspace(0, 1, N)
 
 ![blosc2.linspace() vs asarray(np.linspace())](optim_tips/tip_01_constructors.png)
 
-At 200M float64 elements, the two are comparable in speed, but the real win is memory: **~25x less peak memory**, and the gap widens with array size — the naive path's memory is O(N), while the constructor's stays roughly O(chunk size) for compressible enough data. The same applies to `arange()` and `fromiter()`.
+At 200M float64 elements, the two are comparable in speed, but the real win is memory: **~25x less peak memory**, and the gap widens with array size — the naive path's memory is O(N), while the constructor's stays roughly O(chunk size) for compressible enough data. The same applies to {func}`arange() <blosc2.arange>` and {func}`fromiter() <blosc2.fromiter>`.
 
 *Benchmark for this tip: [`tip_01_constructors.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_01_constructors.py)*
 
@@ -26,11 +26,11 @@ At 200M float64 elements, the two are comparable in speed, but the real win is m
 
 blosc2 arrays are partitioned twice: the array is split into **chunks** (the unit of storage and compression), and each chunk is subdivided into **blocks** (the unit of decompression, sized to fit CPU caches). A read that lands exactly on a partition boundary decompresses only the chunk or block it needs, while the same-sized read shifted off-grid straddles (and decompresses) extra ones.
 
-You don't have to pick the partitions yourself: let blosc2 choose them, then read them back from `arr.chunks` and `arr.blocks` to place your slice boundaries.
+You don't have to pick the partitions yourself: let blosc2 choose them, then read them back from {attr}`arr.chunks <blosc2.NDArray.chunks>` and {attr}`arr.blocks <blosc2.NDArray.blocks>` to place your slice boundaries.
 
 ### At the chunk level
 
-`NDArray.slice()` has a fast path when *both* boundaries land on chunk boundaries: whole chunks are copied as-is, compressed, with no decompression at all. Regular reads also benefit — an aligned chunk-sized read decompresses one chunk instead of two.
+{meth}`NDArray.slice() <blosc2.NDArray.slice>` has a fast path when *both* boundaries land on chunk boundaries: whole chunks are copied as-is, compressed, with no decompression at all. Regular reads also benefit — an aligned chunk-sized read decompresses one chunk instead of two.
 
 ```python
 arr = blosc2.asarray(data)  # let blosc2 pick the partitions
@@ -50,7 +50,7 @@ arr.slice((slice(ch, 2 * ch), slice(None)))
 
 The same alignment principle applies at the block level: a block-aligned read decompresses exactly the blocks it needs. With auto-chosen blocks this effect is small — blocks are tiny by design — but if you configure larger blocks (say, for better compression ratios), keeping reads on the block grid pays off.
 
-The `slice()` fast path, however, does *not* apply here: it only works at chunk boundaries, so `slice()` of a block-sized region still decompresses and recompresses:
+The {meth}`slice() <blosc2.NDArray.slice>` fast path, however, does *not* apply here: it only works at chunk boundaries, so {meth}`slice() <blosc2.NDArray.slice>` of a block-sized region still decompresses and recompresses:
 
 ```python
 big = blosc2.asarray(data, chunks=(4000, 2000), blocks=(100, 2000))
@@ -140,7 +140,7 @@ FULL index.
 
 ## Let SUMMARY indexes answer `min()`/`max()` directly
 
-When closing a `CTable`, Blosc2 automatically builds `SUMMARY` indexes (per-block min/max) for its eligible scalar columns — this is on by default (`create_summary_index=True`). `Column.min()`/`max()` (and `argmin()`/`argmax()` inside `group_by()`) then answer from those precomputed summaries instead of decompressing the column at all.
+When closing a {class}`~blosc2.CTable`, Blosc2 automatically builds `SUMMARY` indexes (per-block min/max) for its eligible scalar columns — this is on by default (`create_summary_index=True`). {meth}`Column.min() <blosc2.Column.min>`/{meth}`max() <blosc2.Column.max>` (and {meth}`argmin() <blosc2.Column.argmin>`/{meth}`argmax() <blosc2.Column.argmax>` inside {meth}`group_by() <blosc2.CTable.group_by>`) then answer from those precomputed summaries instead of decompressing the column at all.
 
 ```python
 # create_summary_index=True is the default; closing the table builds the index
@@ -153,15 +153,15 @@ hottest = t["temperature"].max()  # answered from the SUMMARY index
 
 ![Column.max() with vs without a SUMMARY index](optim_tips/tip_04_summary_index_where.png)
 
-On a 10M-row column, the indexed `max()` took ~4x less time than without an index, and needed essentially no extra memory — it never touches the compressed column data at all.
+On a 10M-row column, the indexed {meth}`max() <blosc2.Column.max>` took ~4x less time than without an index, and needed essentially no extra memory — it never touches the compressed column data at all.
 
-The same SUMMARY indexes can also let a selective `where()` query skip whole blocks, but only when the column's values are ordered or clustered enough that a block's min/max range can exclude the predicate entirely. With independently random data every block spans nearly the full value range and there is nothing to skip — so the `min()`/`max()` speedup is the one you can always count on.
+The same SUMMARY indexes can also let a selective {meth}`where() <blosc2.CTable.where>` query skip whole blocks, but only when the column's values are ordered or clustered enough that a block's min/max range can exclude the predicate entirely. With independently random data every block spans nearly the full value range and there is nothing to skip — so the `min()`/`max()` speedup is the one you can always count on.
 
 *Benchmark for this tip: [`tip_04_summary_index_where.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_04_summary_index_where.py)*
 
 ## Reduce columns directly — don't slice them first
 
-`t["col"][:]` materializes the whole column as one big NumPy array. If all you want is a reduction, call it on the `Column` itself: `sum()`, `mean()`, `min()`, ... work chunk by chunk and never hold the whole column decompressed at once — while still handling null values and deleted rows correctly.
+`t["col"][:]` materializes the whole column as one big NumPy array. If all you want is a reduction, call it on the {class}`~blosc2.Column` itself: {meth}`sum() <blosc2.Column.sum>`, {meth}`mean() <blosc2.Column.mean>`, {meth}`min() <blosc2.Column.min>`, ... work chunk by chunk and never hold the whole column decompressed at once — while still handling null values and deleted rows correctly.
 
 ```python
 # Avoid: decompresses the whole column into one NumPy array first
@@ -199,7 +199,7 @@ On a 20M-row table, the pushed-down form was **~1.9x faster** and used **~7x les
 
 ## Memory-map read-only opens
 
-`blosc2.open(path, mmap_mode="r")` memory-maps the file instead of going through regular file I/O, so chunks are read directly from the mapped pages — no per-access open/seek/read syscalls, and no intermediate buffer copy. For workloads that touch many scattered chunks, this adds up.
+{func}`blosc2.open(path, mmap_mode="r") <blosc2.open>` memory-maps the file instead of going through regular file I/O, so chunks are read directly from the mapped pages — no per-access open/seek/read syscalls, and no intermediate buffer copy. For workloads that touch many scattered chunks, this adds up.
 
 ```python
 # Avoid (for read-heavy, scattered access): regular I/O per chunk
@@ -237,11 +237,11 @@ With 8 concurrent readers doing random slice reads over a 269 MB array, mmap was
 
 ## Use `.b2z` to group related data into one memory-mapped file
 
-`.b2z` packs related data — a `CTable`'s columns and indexes, hierarchies of arrays, or both — into a single-file container that blosc2 reads *in place*: opened read-only, nothing is ever unpacked, and with `mmap_mode="r"` every member is memory-mapped at its offset inside the container. Beyond the convenience of one file to copy or archive, this buys you:
+`.b2z` packs related data — a {class}`~blosc2.CTable`'s columns and indexes, hierarchies of arrays, or both — into a single-file container that blosc2 reads *in place*: opened read-only, nothing is ever unpacked, and with `mmap_mode="r"` every member is memory-mapped at its offset inside the container. Beyond the convenience of one file to copy or archive, this buys you:
 
 - **mmap out of the box** — one mapping of one file covers the whole dataset, and the OS shares its pages across every reader process.
 - **One file open instead of hundreds** — a wide `.b2d` directory can hold 100+ leaf files, each costing an open/stat metadata round-trip; on network filesystems or with cold caches, that latency dominates.
-- **Atomic replacement** — `to_b2z()` swaps the file atomically, so readers always see the complete old dataset or the complete new one, never a mix; a directory of files can't guarantee that.
+- **Atomic replacement** — {meth}`to_b2z() <blosc2.CTable.to_b2z>` swaps the file atomically, so readers always see the complete old dataset or the complete new one, never a mix; a directory of files can't guarantee that.
 - **No per-file allocation slack** — many small leaves each round up to a filesystem block in a `.b2d`; packed members don't, which can shrink wide datasets considerably.
 - **Layout locality** — members sit contiguously in one file, so full scans read sequentially instead of seeking across scattered files.
 
@@ -261,13 +261,13 @@ t = blosc2.open("data.b2z", mmap_mode="r")
 
 On a 10M-row table, opening in place and summing a column was **~2x faster** than extract-then-open (identical peak memory), and it leaves no unpacked copy behind. The multi-reader advantages are the same as in the [memory-map tip above](#memory-map-read-only-opens), only with a single mapping serving the whole dataset.
 
-One asymmetry to keep in mind: `.b2z` is optimized for reading, while a *writable* `.b2z` is staged in a temporary directory and rezipped on close — for write-heavy workloads, build the table as `.b2d` and pack it with `to_b2z()` when it's ready to publish.
+One asymmetry to keep in mind: `.b2z` is optimized for reading, while a *writable* `.b2z` is staged in a temporary directory and rezipped on close — for write-heavy workloads, build the table as `.b2d` and pack it with {meth}`to_b2z() <blosc2.CTable.to_b2z>` when it's ready to publish.
 
 *Benchmark for this tip: [`tip_09_b2z_read_in_place.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_09_b2z_read_in_place.py)*
 
 ## Skip constraint checks in `extend()` with `validate=False`
 
-You can pass a `blosc2.NDArray` directly as a column value to `CTable.extend()`: both the write *and* the constraint validation happen chunk by chunk, so the array is never fully decompressed — it goes from compressed source to compressed column with only O(chunk) extra memory. Columns with no declared constraints skip validation automatically.
+You can pass a {class}`~blosc2.NDArray` directly as a column value to {meth}`CTable.extend() <blosc2.CTable.extend>`: both the write *and* the constraint validation happen chunk by chunk, so the array is never fully decompressed — it goes from compressed source to compressed column with only O(chunk) extra memory. Columns with no declared constraints skip validation automatically.
 
 But for a column that *does* declare constraints (`ge=`, `max_length=`, ...), validation still has to decompress and check every chunk; if you already know the data is valid, `validate=False` skips that pass.
 
@@ -281,6 +281,6 @@ t.extend({"val": src}, validate=False)
 
 ![CTable.extend(validate=False)](optim_tips/tip_07_chunked_writes.png)
 
-Extending a table with a 20M-row `NDArray` column carrying a `ge=0` constraint, `validate=False` was **~1.4x faster**; peak memory was similar, since validation is chunk-wise anyway.
+Extending a table with a 20M-row {class}`~blosc2.NDArray` column carrying a `ge=0` constraint, `validate=False` was **~1.4x faster**; peak memory was similar, since validation is chunk-wise anyway.
 
 *Benchmark for this tip: [`tip_07_chunked_writes.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_07_chunked_writes.py)*
