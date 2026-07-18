@@ -41,7 +41,7 @@ def naive():
 def tip():
     # iter_sorted reads just the last 10 entries from the index sidecar.
     arr = blosc2.open(URLPATH)
-    return list(arr.iter_sorted(start=-TOPK))
+    return np.fromiter(arr.iter_sorted(start=-TOPK), dtype=arr.dtype)
 
 
 if __name__ == "__main__":

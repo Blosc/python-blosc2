@@ -119,11 +119,8 @@ arr.create_index(kind=blosc2.IndexKind.FULL)
 top10 = arr[arr.argsort()[-10:]]
 
 # Prefer: reads only the last 10 entries from the sidecar
-from blosc2 import asarray
-
-top10 = asarray(list(arr.iter_sorted(start=-10)))
+top10 = np.fromiter(arr.iter_sorted(start=-10), dtype=arr.dtype)
 ```
-
 Descending and bottom-k work via ``step=-1``:
 
 ```python
@@ -134,8 +131,8 @@ list(arr.iter_sorted(start=9, stop=None, step=-1))  # bottom-10 descending
 
 ![NDArray.iter_sorted(start=-10) top-10](optim_tips/tip_03b_ndarray_iter_sorted.png)
 
-On a 20M-element float64 array, ``iter_sorted(start=-10)`` was **~52× faster**
-and used **~193× less peak memory** than ``argsort()[-10:]`` — the latter
+On a 20M-element float64 array, ``iter_sorted(start=-10)`` was **~70× faster**
+and used **~300× less peak memory** than ``argsort()[-10:]`` — the latter
 still materialises the full 20M-element positions array even when backed by a
 FULL index.
 
