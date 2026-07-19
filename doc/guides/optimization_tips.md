@@ -22,6 +22,42 @@ At 200M float64 elements, the two are comparable in speed, but the real win is m
 
 *Benchmark for this tip: [`tip_01_constructors.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_01_constructors.py)*
 
+## Generate arrays with DSL kernels
+
+The constructors from the previous tip are not magic: internally, {func}`blosc2.arange() <blosc2.arange>` is a one-line DSL kernel (`start + _flat_idx * step`) that blosc2 compiles to native code and evaluates chunk by chunk, using multiple threads. The same machinery — a {func}`blosc2.dsl_kernel <blosc2.dsl_kernel>`-decorated function handed to {func}`blosc2.lazyudf() <blosc2.lazyudf>` — is open to you, for any array whose value is a function of its index.
+
+For example, blosc2 has no random constructor, so let's write one: hash the element index (here with a classic integer hash), and every chunk can be filled independently, in parallel, reproducibly for a given seed.
+
+```python
+@blosc2.dsl_kernel
+def random_int32(seed):
+    x = _flat_idx ^ seed
+    x = (((x >> 16) ^ x) * 0x45D9F3B) & 0xFFFFFFFF
+    x = (((x >> 16) ^ x) * 0x45D9F3B) & 0xFFFFFFFF
+    return (x >> 16) ^ x  # full [-2^31, 2^31) range
+
+
+# Avoid: materializes the full array with NumPy first
+rng = np.random.default_rng(42)
+a = blosc2.asarray(
+    rng.integers(-(2**31), 2**31, size=N, dtype=np.int32), cparams={"clevel": 0}
+)
+
+# Prefer: the kernel fills the NDArray chunk by chunk, in parallel
+lazy = blosc2.lazyudf(random_int32, (42,), dtype=np.int32, shape=(N,))
+a = lazy.compute(cparams={"clevel": 0})
+```
+
+(`clevel=0` because random data is incompressible — don't pay the codec for nothing.)
+
+![DSL random kernel vs asarray(rng.integers())](optim_tips/tip_11_dsl_random.png)
+
+At 200M int32 elements, the DSL kernel was **~3.6x faster** and used **~2x less peak memory** than generating with NumPy and compressing via {func}`asarray() <blosc2.asarray>` — the peak is just the result itself, since the full NumPy staging array never exists.
+
+The output passes light uniformity checks against NumPy's PCG64 (the benchmark script prints them) — good enough for synthetic data, benchmarks and test fixtures, though for statistically rigorous work such as Monte Carlo methods you should stick with NumPy's generators. The benchmark source explains the hash design and the DSL integer-arithmetic rules it relies on; see also the [DSL syntax reference](../reference/dsl_syntax.md).
+
+*Benchmark for this tip: [`tip_11_dsl_random.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_11_dsl_random.py)*
+
 ## Align your reads with the double partition
 
 blosc2 arrays are partitioned twice: the array is split into **chunks** (the unit of storage and compression), and each chunk is subdivided into **blocks** (the unit of decompression, sized to fit CPU caches). A read that lands exactly on a partition boundary decompresses only the chunk or block it needs, while the same-sized read shifted off-grid straddles (and decompresses) extra ones.

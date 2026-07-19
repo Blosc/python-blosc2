@@ -204,6 +204,20 @@ When referenced, these are synthesized by DSL compiler/runtime:
 - Return dtype must be consistent across all `return` statements.
 - Non-guaranteed return paths may compile; if execution reaches a missing return path, evaluation fails at runtime.
 
+### Compute dtype and integer exactness
+
+The kernel's *output* dtype determines the compute dtype for the whole expression:
+
+- With an integer output dtype, arithmetic is exact int64. Intermediates must fit in
+  int64: products at or above 2^63 overflow and give wrong results.
+- With a float output dtype, integer inputs and temporaries are evaluated in float64,
+  where integer operations are exact only below 2^53. Keep products under that bound
+  (e.g. a 32-bit value times a multiplier below 2^21); larger products silently lose
+  low bits.
+- Values outside the output dtype's range wrap two's-complement on the final store
+  (e.g. returning a value in `[0, 2^32)` into an int32 output yields the full
+  `[-2^31, 2^31)` range).
+
 ## Compound assignment desugaring
 
 - `a += b` -> `a = a + b`
