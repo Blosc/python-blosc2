@@ -104,7 +104,7 @@ class Generator:
         # never be split across chunks (a chunk can only hold complete draws).
         if shape is None:
             raise TypeError("shape is required")
-        shape = (shape,) if isinstance(shape, int) else tuple(shape)
+        shape = (shape,) if isinstance(shape, int | np.integer) else tuple(shape)
         full_shape = shape + (k,)
         dtype = getattr(np.random.default_rng(0), method)(*args, size=1, **kwargs).dtype
 

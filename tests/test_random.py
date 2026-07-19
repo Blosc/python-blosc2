@@ -244,6 +244,11 @@ def test_vector_dist_scalar_leading_shape():
     assert a.shape == (3,)
 
 
+def test_vector_dist_numpy_integer_shape():
+    a = blosc2.random.default_rng(0).dirichlet([1.0, 2.0, 3.0], shape=np.int64(5))
+    assert a.shape == (5, 3)
+
+
 def test_permutation_int_is_a_permutation_and_reproducible():
     a = blosc2.random.default_rng(0).permutation(10)
     b = blosc2.random.default_rng(0).permutation(10)
