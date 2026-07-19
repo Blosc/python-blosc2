@@ -40,17 +40,26 @@ def _bounded_map(fn, n: int, max_workers: int):
     # ponytail: window bounds peak memory to O(workers * chunk); a plain
     # executor.map would submit all n chunks upfront and could buffer O(n).
     window = 2 * max_workers
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        pending = {ex.submit(fn, i): i for i in range(min(window, n))}
-        next_i = len(pending)
-        while pending:
-            done, _ = wait(pending, return_when=FIRST_COMPLETED)
-            for fut in done:
-                del pending[fut]
-                yield fut.result()
-                if next_i < n:
-                    pending[ex.submit(fn, next_i)] = next_i
-                    next_i += 1
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            pending = {ex.submit(fn, i): i for i in range(min(window, n))}
+            next_i = len(pending)
+            while pending:
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    del pending[fut]
+                    yield fut.result()
+                    if next_i < n:
+                        pending[ex.submit(fn, next_i)] = next_i
+                        next_i += 1
+    except RuntimeError:
+        # ponytail: some sandboxes (e.g. wasm32/Pyodide without pthreads) report a
+        # real nthreads count but can't actually start OS threads at all — submit()
+        # then raises "can't start new thread" on the very first call, before
+        # anything has been yielded. Fall back to serial generation rather than
+        # crashing; upgrade path is none needed, this is the correct behavior.
+        for i in range(n):
+            yield fn(i)
 
 
 class Generator:

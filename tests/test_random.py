@@ -96,6 +96,35 @@ def test_scheduling_independent_of_nthreads(monkeypatch):
     np.testing.assert_array_equal(serial, parallel)
 
 
+def test_falls_back_to_serial_when_threads_unavailable(monkeypatch):
+    # Some sandboxes (e.g. wasm32/Pyodide without pthreads) report a real nthreads
+    # count but can't actually start OS threads: ThreadPoolExecutor.submit() raises
+    # RuntimeError. _bounded_map must catch that and fall back to serial generation
+    # instead of propagating it (regression for the CI failure this triggered).
+    class _NoThreadsExecutor:
+        def __init__(self, max_workers=None):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def submit(self, fn, *args):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(blosc2.random, "ThreadPoolExecutor", _NoThreadsExecutor)
+    monkeypatch.setattr(blosc2, "nthreads", 8)
+    fallback = blosc2.random.default_rng(7).random((300, 300), chunks=(17, 23))[:]
+
+    # nthreads=1 takes the serial fast path directly, never touching
+    # ThreadPoolExecutor, so this is a trustworthy baseline despite the patch above.
+    monkeypatch.setattr(blosc2, "nthreads", 1)
+    serial = blosc2.random.default_rng(7).random((300, 300), chunks=(17, 23))[:]
+    np.testing.assert_array_equal(fallback, serial)
+
+
 _DIST_CASES = {
     "beta": (2.0, 5.0),
     "binomial": (10, 0.3),
