@@ -101,6 +101,143 @@ class Generator:
         """Draw samples from a uniform distribution. Mirrors :meth:`numpy.random.Generator.uniform`."""
         return self._fill("uniform", (low, high), {}, shape, **kwargs)
 
+    def beta(self, a, b, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a beta distribution. Mirrors :meth:`numpy.random.Generator.beta`."""
+        return self._fill("beta", (a, b), {}, shape, **kwargs)
+
+    def binomial(self, n, p, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a binomial distribution. Mirrors :meth:`numpy.random.Generator.binomial`."""
+        return self._fill("binomial", (n, p), {}, shape, **kwargs)
+
+    def chisquare(self, df, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a chi-square distribution. Mirrors :meth:`numpy.random.Generator.chisquare`."""
+        return self._fill("chisquare", (df,), {}, shape, **kwargs)
+
+    def exponential(self, scale=1.0, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from an exponential distribution. Mirrors :meth:`numpy.random.Generator.exponential`."""
+        return self._fill("exponential", (scale,), {}, shape, **kwargs)
+
+    def f(self, dfnum, dfden, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from an F distribution. Mirrors :meth:`numpy.random.Generator.f`."""
+        return self._fill("f", (dfnum, dfden), {}, shape, **kwargs)
+
+    def gamma(self, shape_param, /, scale=1.0, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a gamma distribution. Mirrors :meth:`numpy.random.Generator.gamma`.
+
+        ``shape_param`` is numpy's ``shape`` (the gamma distribution's shape parameter,
+        usually called *k*); renamed here, and made positional-only, to avoid colliding
+        with the array-shape ``shape`` keyword.
+        """
+        return self._fill("gamma", (shape_param, scale), {}, shape, **kwargs)
+
+    def geometric(self, p, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a geometric distribution. Mirrors :meth:`numpy.random.Generator.geometric`."""
+        return self._fill("geometric", (p,), {}, shape, **kwargs)
+
+    def gumbel(self, loc=0.0, scale=1.0, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a Gumbel distribution. Mirrors :meth:`numpy.random.Generator.gumbel`."""
+        return self._fill("gumbel", (loc, scale), {}, shape, **kwargs)
+
+    def hypergeometric(self, ngood, nbad, nsample, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a hypergeometric distribution. Mirrors :meth:`numpy.random.Generator.hypergeometric`."""
+        return self._fill("hypergeometric", (ngood, nbad, nsample), {}, shape, **kwargs)
+
+    def laplace(self, loc=0.0, scale=1.0, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a Laplace distribution. Mirrors :meth:`numpy.random.Generator.laplace`."""
+        return self._fill("laplace", (loc, scale), {}, shape, **kwargs)
+
+    def logistic(self, loc=0.0, scale=1.0, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a logistic distribution. Mirrors :meth:`numpy.random.Generator.logistic`."""
+        return self._fill("logistic", (loc, scale), {}, shape, **kwargs)
+
+    def lognormal(self, mean=0.0, sigma=1.0, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a log-normal distribution. Mirrors :meth:`numpy.random.Generator.lognormal`."""
+        return self._fill("lognormal", (mean, sigma), {}, shape, **kwargs)
+
+    def logseries(self, p, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a logarithmic series distribution. Mirrors :meth:`numpy.random.Generator.logseries`."""
+        return self._fill("logseries", (p,), {}, shape, **kwargs)
+
+    def negative_binomial(self, n, p, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a negative binomial distribution. Mirrors :meth:`numpy.random.Generator.negative_binomial`."""
+        return self._fill("negative_binomial", (n, p), {}, shape, **kwargs)
+
+    def noncentral_chisquare(self, df, nonc, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a noncentral chi-square distribution. Mirrors :meth:`numpy.random.Generator.noncentral_chisquare`."""
+        return self._fill("noncentral_chisquare", (df, nonc), {}, shape, **kwargs)
+
+    def noncentral_f(self, dfnum, dfden, nonc, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a noncentral F distribution. Mirrors :meth:`numpy.random.Generator.noncentral_f`."""
+        return self._fill("noncentral_f", (dfnum, dfden, nonc), {}, shape, **kwargs)
+
+    def pareto(self, a, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a Pareto distribution. Mirrors :meth:`numpy.random.Generator.pareto`."""
+        return self._fill("pareto", (a,), {}, shape, **kwargs)
+
+    def poisson(self, lam=1.0, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a Poisson distribution. Mirrors :meth:`numpy.random.Generator.poisson`."""
+        return self._fill("poisson", (lam,), {}, shape, **kwargs)
+
+    def power(self, a, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a power distribution. Mirrors :meth:`numpy.random.Generator.power`."""
+        return self._fill("power", (a,), {}, shape, **kwargs)
+
+    def rayleigh(self, scale=1.0, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a Rayleigh distribution. Mirrors :meth:`numpy.random.Generator.rayleigh`."""
+        return self._fill("rayleigh", (scale,), {}, shape, **kwargs)
+
+    def standard_cauchy(self, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a standard Cauchy distribution. Mirrors :meth:`numpy.random.Generator.standard_cauchy`."""
+        return self._fill("standard_cauchy", (), {}, shape, **kwargs)
+
+    def standard_exponential(
+        self, *, shape, dtype=np.float64, method="zig", **kwargs: Any
+    ) -> blosc2.NDArray:
+        """Draw samples from a standard exponential distribution.
+
+        Mirrors :meth:`numpy.random.Generator.standard_exponential`.
+        """
+        return self._fill("standard_exponential", (), {"dtype": dtype, "method": method}, shape, **kwargs)
+
+    def standard_gamma(self, shape_param, /, *, shape, dtype=np.float64, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a standard gamma distribution.
+
+        Mirrors :meth:`numpy.random.Generator.standard_gamma`; see :meth:`gamma` for why the
+        distribution's ``shape`` parameter is renamed ``shape_param`` here.
+        """
+        return self._fill("standard_gamma", (shape_param,), {"dtype": dtype}, shape, **kwargs)
+
+    def standard_normal(self, *, shape, dtype=np.float64, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a standard normal distribution.
+
+        Mirrors :meth:`numpy.random.Generator.standard_normal`.
+        """
+        return self._fill("standard_normal", (), {"dtype": dtype}, shape, **kwargs)
+
+    def standard_t(self, df, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a standard Student's t distribution. Mirrors :meth:`numpy.random.Generator.standard_t`."""
+        return self._fill("standard_t", (df,), {}, shape, **kwargs)
+
+    def triangular(self, left, mode, right, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a triangular distribution. Mirrors :meth:`numpy.random.Generator.triangular`."""
+        return self._fill("triangular", (left, mode, right), {}, shape, **kwargs)
+
+    def vonmises(self, mu, kappa, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a von Mises distribution. Mirrors :meth:`numpy.random.Generator.vonmises`."""
+        return self._fill("vonmises", (mu, kappa), {}, shape, **kwargs)
+
+    def wald(self, mean, scale, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a Wald distribution. Mirrors :meth:`numpy.random.Generator.wald`."""
+        return self._fill("wald", (mean, scale), {}, shape, **kwargs)
+
+    def weibull(self, a, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a Weibull distribution. Mirrors :meth:`numpy.random.Generator.weibull`."""
+        return self._fill("weibull", (a,), {}, shape, **kwargs)
+
+    def zipf(self, a, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a Zipf distribution. Mirrors :meth:`numpy.random.Generator.zipf`."""
+        return self._fill("zipf", (a,), {}, shape, **kwargs)
+
 
 def default_rng(seed=None) -> Generator:
     """Construct a chunk-parallel :class:`Generator`, mirroring :func:`numpy.random.default_rng`.

@@ -94,3 +94,58 @@ def test_scheduling_independent_of_nthreads(monkeypatch):
     monkeypatch.setattr(blosc2, "nthreads", 8)
     parallel = blosc2.random.default_rng(7).random((300, 300), chunks=(17, 23))[:]
     np.testing.assert_array_equal(serial, parallel)
+
+
+_DIST_CASES = {
+    "beta": (2.0, 5.0),
+    "binomial": (10, 0.3),
+    "chisquare": (3.0,),
+    "exponential": (2.0,),
+    "f": (5.0, 2.0),
+    "gamma": (2.0, 3.0),
+    "geometric": (0.3,),
+    "gumbel": (0.0, 1.0),
+    "hypergeometric": (10, 10, 5),
+    "laplace": (0.0, 1.0),
+    "logistic": (0.0, 1.0),
+    "lognormal": (0.0, 1.0),
+    "logseries": (0.5,),
+    "negative_binomial": (5, 0.5),
+    "noncentral_chisquare": (3.0, 2.0),
+    "noncentral_f": (5.0, 2.0, 1.0),
+    "pareto": (3.0,),
+    "poisson": (4.0,),
+    "power": (2.0,),
+    "rayleigh": (1.0,),
+    "standard_cauchy": (),
+    "standard_exponential": (),
+    "standard_gamma": (2.0,),
+    "standard_normal": (),
+    "standard_t": (5.0,),
+    "triangular": (0.0, 0.5, 1.0),
+    "vonmises": (0.0, 4.0),
+    "wald": (1.0, 1.0),
+    "weibull": (1.5,),
+    "zipf": (2.0,),
+}
+
+
+@pytest.mark.parametrize(("method", "args"), _DIST_CASES.items(), ids=_DIST_CASES.keys())
+def test_distribution_reproducible_and_finite(method, args):
+    def draw():
+        rng = getattr(blosc2.random.default_rng(0), method)
+        return rng(*args, shape=(200,), chunks=(37,))[:]
+
+    a, b = draw(), draw()
+    np.testing.assert_array_equal(a, b)
+    assert np.all(np.isfinite(a))
+
+
+def test_poisson_mean_sanity():
+    a = blosc2.random.default_rng(0).poisson(4.0, shape=(5000,))[:]
+    assert abs(a.mean() - 4.0) < 0.2
+
+
+def test_standard_normal_dtype():
+    a = blosc2.random.default_rng(0).standard_normal(shape=(10,), dtype=np.float32)
+    assert a.dtype == np.float32

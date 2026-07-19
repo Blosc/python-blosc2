@@ -7,7 +7,9 @@ XXX version-specific blurb XXX
 ### New features
 
 - New `blosc2.random` module: seedable, NumPy-quality random `NDArray`
-  constructors (`default_rng`, `Generator.random/integers/normal/uniform`).
+  constructors, mirroring most of `numpy.random.Generator` (`random`,
+  `integers`, `normal`, `uniform`, and 30 further distributions such as
+  `poisson`, `gamma`, `beta`, `standard_normal`, `binomial`, `exponential`...).
   Each chunk gets its own independent `SeedSequence`-spawned stream and is
   generated concurrently in a thread pool, giving full `PCG64` quality with
   genuinely parallel generation (measured ~3.2x faster than
