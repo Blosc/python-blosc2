@@ -7,16 +7,27 @@ XXX version-specific blurb XXX
 ### New features
 
 - New `blosc2.random` module: seedable, NumPy-quality random `NDArray`
-  constructors, mirroring most of `numpy.random.Generator` (`random`,
-  `integers`, `normal`, `uniform`, `choice`, 30 further scalar distributions
-  such as `poisson`/`gamma`/`beta`/`standard_normal`/`binomial`/`exponential`,
-  and the vector-valued `dirichlet`/`multinomial`/`multivariate_normal`/
-  `multivariate_hypergeometric`, whose trailing per-draw dimension is kept
-  whole within a chunk). Each chunk gets its own independent
-  `SeedSequence`-spawned stream and is generated concurrently in a thread
-  pool, giving full `PCG64` quality with genuinely parallel generation
-  (measured ~3.2x faster than
+  constructors. Each chunk gets its own independent `SeedSequence`-spawned
+  stream and is generated concurrently in a thread pool, giving full `PCG64`
+  quality with genuinely parallel generation (measured ~3x faster than
   `asarray(np.random.default_rng(...).random(...))` on a 100M-element array).
+  Covers 39 of `numpy.random.Generator`'s 43 public methods (full
+  compatibility table in `doc/reference/random.rst`):
+    - Core: `random`, `integers`, `normal`, `uniform`, `choice`
+      (`replace=True` only).
+    - 30 scalar distributions: `beta`, `binomial`, `chisquare`,
+      `exponential`, `f`, `gamma`, `geometric`, `gumbel`, `hypergeometric`,
+      `laplace`, `logistic`, `lognormal`, `logseries`, `negative_binomial`,
+      `noncentral_chisquare`, `noncentral_f`, `pareto`, `poisson`, `power`,
+      `rayleigh`, `standard_cauchy`, `standard_exponential`,
+      `standard_gamma`, `standard_normal`, `standard_t`, `triangular`,
+      `vonmises`, `wald`, `weibull`, `zipf`.
+    - 4 vector-valued distributions (output shape `shape + (k,)`, one draw
+      per trailing vector): `dirichlet`, `multinomial`,
+      `multivariate_hypergeometric`, `multivariate_normal`.
+    - Not implemented: `permutation`/`permuted`/`shuffle` (whole-array
+      shuffling needs cross-chunk coordination this module doesn't do) and
+      `bytes` (returns raw `bytes`, not an `NDArray`).
 
 ## Changes from 4.9.0 to 4.9.1
 
