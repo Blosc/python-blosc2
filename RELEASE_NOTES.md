@@ -11,7 +11,7 @@ XXX version-specific blurb XXX
   stream and is generated concurrently in a thread pool, giving full `PCG64`
   quality with genuinely parallel generation (measured ~3x faster than
   `asarray(np.random.default_rng(...).random(...))` on a 100M-element array).
-  Covers 39 of `numpy.random.Generator`'s 43 public methods (full
+  Covers 42 of `numpy.random.Generator`'s 43 public methods (full
   compatibility table in `doc/reference/random.rst`):
     - Core: `random`, `integers`, `normal`, `uniform`, `choice`
       (`replace=True` only).
@@ -25,9 +25,13 @@ XXX version-specific blurb XXX
     - 4 vector-valued distributions (output shape `shape + (k,)`, one draw
       per trailing vector): `dirichlet`, `multinomial`,
       `multivariate_hypergeometric`, `multivariate_normal`.
-    - Not implemented: `permutation`/`permuted`/`shuffle` (whole-array
-      shuffling needs cross-chunk coordination this module doesn't do) and
-      `bytes` (returns raw `bytes`, not an `NDArray`).
+    - `permutation`, `permuted`, `shuffle`: unlike the rest of the module,
+      these are not chunk-parallel — whole-array shuffling is inherently
+      sequential, so they materialize the full array and shuffle it
+      single-threaded. `shuffle` additionally requires its argument to
+      already be an `NDArray`, since it mutates in place and returns `None`,
+      matching numpy.
+    - Not implemented: `bytes` (returns raw `bytes`, not an `NDArray`).
 
 ## Changes from 4.9.0 to 4.9.1
 

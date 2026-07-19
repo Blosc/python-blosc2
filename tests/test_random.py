@@ -213,3 +213,57 @@ def test_vector_dist_chunks_mismatch_raises():
 def test_vector_dist_scalar_leading_shape():
     a = blosc2.random.default_rng(0).dirichlet([1.0, 2.0, 3.0], shape=())
     assert a.shape == (3,)
+
+
+def test_permutation_int_is_a_permutation_and_reproducible():
+    a = blosc2.random.default_rng(0).permutation(10)
+    b = blosc2.random.default_rng(0).permutation(10)
+    np.testing.assert_array_equal(a[:], b[:])
+    assert sorted(a[:].tolist()) == list(range(10))
+
+
+def test_permutation_successive_calls_differ():
+    rng = blosc2.random.default_rng(0)
+    a = rng.permutation(1000)
+    b = rng.permutation(1000)
+    assert not np.array_equal(a[:], b[:])
+
+
+def test_permutation_array_axis():
+    arr = blosc2.arange(12).reshape((3, 4))
+    p = blosc2.random.default_rng(1).permutation(arr, axis=1)
+    assert p.shape == (3, 4)
+    for row_before, row_after in zip(arr[:], p[:], strict=True):
+        assert sorted(row_after.tolist()) == sorted(row_before.tolist())
+
+
+def test_permutation_kwargs_passthrough():
+    p = blosc2.random.default_rng(0).permutation(1000, chunks=(100,), cparams={"clevel": 5})
+    assert p.chunks == (100,)
+    assert p.schunk.cparams.clevel == 5
+
+
+def test_permuted_is_a_permutation():
+    a = blosc2.random.default_rng(2).permuted(np.arange(10))
+    assert sorted(a[:].tolist()) == list(range(10))
+
+
+def test_permuted_flattens_when_axis_none():
+    a = blosc2.random.default_rng(2).permuted(blosc2.arange(12).reshape((3, 4)))
+    assert a.shape == (3, 4)
+    assert sorted(a[:].flatten().tolist()) == list(range(12))
+
+
+def test_shuffle_in_place_preserves_multiset():
+    a = blosc2.arange(10)
+    before = a[:].copy()
+    result = blosc2.random.default_rng(3).shuffle(a)
+    after = a[:]
+    assert result is None
+    assert sorted(before.tolist()) == sorted(after.tolist())
+    assert not np.array_equal(before, after)
+
+
+def test_shuffle_requires_ndarray():
+    with pytest.raises(TypeError):
+        blosc2.random.default_rng(3).shuffle(np.arange(5))

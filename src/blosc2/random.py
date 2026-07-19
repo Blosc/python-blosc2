@@ -32,6 +32,10 @@ def _chunk_slices(a: blosc2.NDArray):
         )
 
 
+def _materialize(x) -> np.ndarray:
+    return x[:] if isinstance(x, blosc2.NDArray) else np.asarray(x)
+
+
 def _bounded_map(fn, n: int, max_workers: int):
     # ponytail: window bounds peak memory to O(workers * chunk); a plain
     # executor.map would submit all n chunks upfront and could buffer O(n).
@@ -313,6 +317,42 @@ class Generator:
         ``shape + (len(mean),)``; see :meth:`dirichlet` for the trailing-dimension note.
         """
         return self._fill_vector("multivariate_normal", (mean, cov), {}, shape, len(mean), **kwargs)
+
+    def permutation(self, x, *, axis: int = 0, **kwargs: Any) -> blosc2.NDArray:
+        """Return a shuffled copy of ``x`` (or of ``arange(x)`` if ``x`` is an int).
+
+        Mirrors :meth:`numpy.random.Generator.permutation`.
+
+        Unlike the rest of this module, permuting is inherently sequential: it loads
+        ``x`` fully into memory and shuffles it single-threaded, rather than generating
+        chunks independently in parallel.
+        """
+        rng = np.random.default_rng(self._root.spawn(1)[0])
+        arr = np.arange(x) if isinstance(x, int | np.integer) else _materialize(x)
+        return blosc2.asarray(rng.permutation(arr, axis=axis), **kwargs)
+
+    def permuted(self, x, *, axis: int | None = None, **kwargs: Any) -> blosc2.NDArray:
+        """Return a copy of ``x`` with elements permuted along ``axis`` (flattened if ``None``).
+
+        Mirrors :meth:`numpy.random.Generator.permuted`. See :meth:`permutation` for the
+        single-threaded, full-materialization caveat.
+        """
+        rng = np.random.default_rng(self._root.spawn(1)[0])
+        return blosc2.asarray(rng.permuted(_materialize(x), axis=axis), **kwargs)
+
+    def shuffle(self, x: blosc2.NDArray, *, axis: int = 0) -> None:
+        """Shuffle ``x`` in place along ``axis``. Mirrors :meth:`numpy.random.Generator.shuffle`.
+
+        ``x`` must be a :class:`~blosc2.NDArray`: its full contents are read into memory,
+        shuffled single-threaded (see :meth:`permutation`), and written back. Returns
+        ``None``, matching numpy.
+        """
+        if not isinstance(x, blosc2.NDArray):
+            raise TypeError("blosc2.random.Generator.shuffle requires a blosc2.NDArray to shuffle in place")
+        rng = np.random.default_rng(self._root.spawn(1)[0])
+        arr = x[:]
+        rng.shuffle(arr, axis=axis)
+        x[:] = arr
 
 
 def default_rng(seed=None) -> Generator:

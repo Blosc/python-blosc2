@@ -43,6 +43,12 @@ consistently across the module:
   :meth:`~Generator.multivariate_normal`) draw one length-``k`` vector per element:
   output shape is ``shape + (k,)``, and that trailing dimension is always kept whole
   within a chunk.
+- :meth:`~Generator.permutation`, :meth:`~Generator.permuted`, and
+  :meth:`~Generator.shuffle` are **not** chunk-parallel: whole-array shuffling is
+  inherently sequential, so these load the full array into memory and shuffle it
+  single-threaded rather than generating chunks independently. :meth:`~Generator.shuffle`
+  additionally requires its argument to already be a :class:`~blosc2.NDArray`, since it
+  mutates it in place and returns ``None``, matching numpy.
 
 Coverage of :class:`numpy.random.Generator`'s public methods:
 
@@ -129,11 +135,11 @@ Coverage of :class:`numpy.random.Generator`'s public methods:
      - ✅
      -
    * - ``permutation``
-     - ❌
-     - whole-array shuffle is inherently sequential, not per-chunk independent
+     - ✅
+     - single-threaded, full-materialization — see above
    * - ``permuted``
-     - ❌
-     - same as ``permutation``
+     - ✅
+     - single-threaded, full-materialization — see above
    * - ``poisson``
      - ✅
      -
@@ -147,8 +153,8 @@ Coverage of :class:`numpy.random.Generator`'s public methods:
      - ✅
      -
    * - ``shuffle``
-     - ❌
-     - same as ``permutation``
+     - ✅
+     - single-threaded, full-materialization; requires an ``NDArray`` — see above
    * - ``standard_cauchy``
      - ✅
      -
