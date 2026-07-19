@@ -59,20 +59,14 @@ class Generator:
     def __init__(self, seed=None):
         self._root = seed if isinstance(seed, np.random.SeedSequence) else np.random.SeedSequence(seed)
 
-    def _fill(self, method: str, args: tuple, kwargs: dict, shape, **b2_kwargs: Any) -> blosc2.NDArray:
-        if shape is None:
-            raise TypeError("shape is required")
-        dtype = getattr(np.random.default_rng(0), method)(*args, size=1, **kwargs).dtype
-        dst = blosc2.empty(shape, dtype=dtype, **b2_kwargs)
-
+    def _fill_chunks(self, dst, method, args, kwargs, chunk_shape_of) -> blosc2.NDArray:
         slices = list(_chunk_slices(dst))
         call_ss = self._root.spawn(1)[0]
         chunk_streams = call_ss.spawn(len(slices))
 
         def gen(i):
             rng = np.random.default_rng(chunk_streams[i])
-            chunk_shape = tuple(s.stop - s.start for s in slices[i])
-            return i, getattr(rng, method)(*args, size=chunk_shape, **kwargs)
+            return i, getattr(rng, method)(*args, size=chunk_shape_of(slices[i]), **kwargs)
 
         if len(slices) <= 1 or blosc2.nthreads == 1:
             results = (gen(i) for i in range(len(slices)))
@@ -82,6 +76,38 @@ class Generator:
         for i, buf in results:
             dst[slices[i]] = buf
         return dst
+
+    def _fill(self, method: str, args: tuple, kwargs: dict, shape, **b2_kwargs: Any) -> blosc2.NDArray:
+        if shape is None:
+            raise TypeError("shape is required")
+        dtype = getattr(np.random.default_rng(0), method)(*args, size=1, **kwargs).dtype
+        dst = blosc2.empty(shape, dtype=dtype, **b2_kwargs)
+        return self._fill_chunks(dst, method, args, kwargs, lambda sl: tuple(s.stop - s.start for s in sl))
+
+    def _fill_vector(
+        self, method: str, args: tuple, kwargs: dict, shape, k: int, **b2_kwargs: Any
+    ) -> blosc2.NDArray:
+        # Each draw produces a whole length-k vector, so the trailing dimension must
+        # never be split across chunks (a chunk can only hold complete draws).
+        if shape is None:
+            raise TypeError("shape is required")
+        shape = (shape,) if isinstance(shape, int) else tuple(shape)
+        full_shape = shape + (k,)
+        dtype = getattr(np.random.default_rng(0), method)(*args, size=1, **kwargs).dtype
+
+        chunks = b2_kwargs.get("chunks")
+        if chunks is not None:
+            if tuple(chunks)[-1] != k:
+                raise ValueError(f"chunks[-1] must equal the trailing vector length {k}")
+        else:
+            # ponytail: reuse empty()'s own chunk-sizing heuristic instead of
+            # reimplementing it, then pin the non-splittable trailing dim to its full length.
+            b2_kwargs["chunks"] = blosc2.empty(full_shape, dtype=dtype).chunks[:-1] + (k,)
+
+        dst = blosc2.empty(full_shape, dtype=dtype, **b2_kwargs)
+        return self._fill_chunks(
+            dst, method, args, kwargs, lambda sl: tuple(s.stop - s.start for s in sl[:-1])
+        )
 
     def random(self, shape, dtype=np.float64, **kwargs: Any) -> blosc2.NDArray:
         """Draw uniform floats in [0, 1). Mirrors :meth:`numpy.random.Generator.random`."""
@@ -237,6 +263,56 @@ class Generator:
     def zipf(self, a, *, shape, **kwargs: Any) -> blosc2.NDArray:
         """Draw samples from a Zipf distribution. Mirrors :meth:`numpy.random.Generator.zipf`."""
         return self._fill("zipf", (a,), {}, shape, **kwargs)
+
+    def choice(self, a, *, shape, p=None, replace: bool = True, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from ``a`` with replacement. Mirrors :meth:`numpy.random.Generator.choice`.
+
+        Only ``replace=True`` (numpy's default) and 1-D or scalar-int ``a`` are
+        supported: sampling without replacement, or along an axis of a multi-dimensional
+        ``a``, needs whole-array coordination across chunks that this module doesn't do.
+        """
+        if not replace:
+            raise NotImplementedError(
+                "blosc2.random.Generator.choice only supports replace=True: sampling "
+                "without replacement needs whole-array coordination across chunks"
+            )
+        if np.ndim(a) > 1:
+            raise NotImplementedError("blosc2.random.Generator.choice only supports 1-D or scalar `a`")
+        return self._fill("choice", (a,), {"p": p, "replace": True}, shape, **kwargs)
+
+    def dirichlet(self, alpha, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a Dirichlet distribution. Mirrors :meth:`numpy.random.Generator.dirichlet`.
+
+        Output shape is ``shape + (len(alpha),)``; see :meth:`_fill_vector` — the
+        trailing dimension holds one full draw and is never split across chunks.
+        """
+        return self._fill_vector("dirichlet", (alpha,), {}, shape, len(alpha), **kwargs)
+
+    def multinomial(self, n, pvals, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a multinomial distribution. Mirrors :meth:`numpy.random.Generator.multinomial`.
+
+        Output shape is ``shape + (len(pvals),)``; see :meth:`dirichlet` for the
+        trailing-dimension note.
+        """
+        return self._fill_vector("multinomial", (n, pvals), {}, shape, len(pvals), **kwargs)
+
+    def multivariate_hypergeometric(self, colors, nsample, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a multivariate hypergeometric distribution.
+
+        Mirrors :meth:`numpy.random.Generator.multivariate_hypergeometric`. Output shape is
+        ``shape + (len(colors),)``; see :meth:`dirichlet` for the trailing-dimension note.
+        """
+        return self._fill_vector(
+            "multivariate_hypergeometric", (colors, nsample), {}, shape, len(colors), **kwargs
+        )
+
+    def multivariate_normal(self, mean, cov, *, shape, **kwargs: Any) -> blosc2.NDArray:
+        """Draw samples from a multivariate normal distribution.
+
+        Mirrors :meth:`numpy.random.Generator.multivariate_normal`. Output shape is
+        ``shape + (len(mean),)``; see :meth:`dirichlet` for the trailing-dimension note.
+        """
+        return self._fill_vector("multivariate_normal", (mean, cov), {}, shape, len(mean), **kwargs)
 
 
 def default_rng(seed=None) -> Generator:

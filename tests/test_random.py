@@ -149,3 +149,67 @@ def test_poisson_mean_sanity():
 def test_standard_normal_dtype():
     a = blosc2.random.default_rng(0).standard_normal(shape=(10,), dtype=np.float32)
     assert a.dtype == np.float32
+
+
+def test_choice_int_a_bounds_and_reproducible():
+    a = blosc2.random.default_rng(0).choice(5, shape=(1000,), chunks=(137,))
+    b = blosc2.random.default_rng(0).choice(5, shape=(1000,), chunks=(137,))
+    np.testing.assert_array_equal(a[:], b[:])
+    assert a[:].min() >= 0
+    assert a[:].max() < 5
+
+
+def test_choice_array_a():
+    a = blosc2.random.default_rng(0).choice(np.array(["x", "y", "z"]), shape=(20,))
+    assert set(a[:].tolist()) <= {"x", "y", "z"}
+
+
+def test_choice_replace_false_not_implemented():
+    with pytest.raises(NotImplementedError):
+        blosc2.random.default_rng(0).choice(5, shape=(10,), replace=False)
+
+
+def test_choice_2d_a_not_implemented():
+    with pytest.raises(NotImplementedError):
+        blosc2.random.default_rng(0).choice(np.zeros((3, 3)), shape=(10,))
+
+
+_VECTOR_DIST_CASES = {
+    "dirichlet": (([1.0, 2.0, 3.0],), 3),
+    "multinomial": ((10, [0.2, 0.3, 0.5]), 3),
+    "multivariate_hypergeometric": (([3, 4, 5], 6), 3),
+    "multivariate_normal": (([0.0, 0.0], [[1.0, 0.0], [0.0, 1.0]]), 2),
+}
+
+
+@pytest.mark.parametrize(
+    ("method", "args", "k"),
+    [(m, a, k) for m, (a, k) in _VECTOR_DIST_CASES.items()],
+    ids=_VECTOR_DIST_CASES.keys(),
+)
+def test_vector_distribution_shape_reproducible_and_finite(method, args, k):
+    def draw():
+        rng = getattr(blosc2.random.default_rng(0), method)
+        return rng(*args, shape=(40,))
+
+    a = draw()
+    assert a.shape == (40, k)
+    assert a.chunks[-1] == k
+    b = draw()
+    np.testing.assert_array_equal(a[:], b[:])
+    assert np.all(np.isfinite(a[:]))
+
+
+def test_dirichlet_sums_to_one():
+    a = blosc2.random.default_rng(0).dirichlet([1.0, 2.0, 3.0], shape=(50,), chunks=(7, 3))[:]
+    np.testing.assert_allclose(a.sum(axis=-1), 1.0)
+
+
+def test_vector_dist_chunks_mismatch_raises():
+    with pytest.raises(ValueError):
+        blosc2.random.default_rng(0).dirichlet([1.0, 2.0, 3.0], shape=(50,), chunks=(7, 2))
+
+
+def test_vector_dist_scalar_leading_shape():
+    a = blosc2.random.default_rng(0).dirichlet([1.0, 2.0, 3.0], shape=())
+    assert a.shape == (3,)

@@ -8,11 +8,14 @@ XXX version-specific blurb XXX
 
 - New `blosc2.random` module: seedable, NumPy-quality random `NDArray`
   constructors, mirroring most of `numpy.random.Generator` (`random`,
-  `integers`, `normal`, `uniform`, and 30 further distributions such as
-  `poisson`, `gamma`, `beta`, `standard_normal`, `binomial`, `exponential`...).
-  Each chunk gets its own independent `SeedSequence`-spawned stream and is
-  generated concurrently in a thread pool, giving full `PCG64` quality with
-  genuinely parallel generation (measured ~3.2x faster than
+  `integers`, `normal`, `uniform`, `choice`, 30 further scalar distributions
+  such as `poisson`/`gamma`/`beta`/`standard_normal`/`binomial`/`exponential`,
+  and the vector-valued `dirichlet`/`multinomial`/`multivariate_normal`/
+  `multivariate_hypergeometric`, whose trailing per-draw dimension is kept
+  whole within a chunk). Each chunk gets its own independent
+  `SeedSequence`-spawned stream and is generated concurrently in a thread
+  pool, giving full `PCG64` quality with genuinely parallel generation
+  (measured ~3.2x faster than
   `asarray(np.random.default_rng(...).random(...))` on a 100M-element array).
 
 ## Changes from 4.9.0 to 4.9.1
