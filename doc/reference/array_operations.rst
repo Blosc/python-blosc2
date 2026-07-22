@@ -7,5 +7,6 @@ Operations with arrays
     ufuncs
     reduction_functions
     linalg
+    random
     additional_funcs
     index_funcs

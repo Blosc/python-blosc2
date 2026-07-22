@@ -4,6 +4,35 @@
 
 XXX version-specific blurb XXX
 
+### New features
+
+- New `blosc2.random` module: seedable, NumPy-quality random `NDArray`
+  constructors. Each chunk gets its own independent `SeedSequence`-spawned
+  stream and is generated concurrently in a thread pool, giving full `PCG64`
+  quality with genuinely parallel generation (measured ~3x faster than
+  `asarray(np.random.default_rng(...).random(...))` on a 100M-element array).
+  Covers 42 of `numpy.random.Generator`'s 43 public methods (full
+  compatibility table in `doc/reference/random.rst`):
+    - Core: `random`, `integers`, `normal`, `uniform`, `choice`
+      (`replace=True` only).
+    - 30 scalar distributions: `beta`, `binomial`, `chisquare`,
+      `exponential`, `f`, `gamma`, `geometric`, `gumbel`, `hypergeometric`,
+      `laplace`, `logistic`, `lognormal`, `logseries`, `negative_binomial`,
+      `noncentral_chisquare`, `noncentral_f`, `pareto`, `poisson`, `power`,
+      `rayleigh`, `standard_cauchy`, `standard_exponential`,
+      `standard_gamma`, `standard_normal`, `standard_t`, `triangular`,
+      `vonmises`, `wald`, `weibull`, `zipf`.
+    - 4 vector-valued distributions (output shape `shape + (k,)`, one draw
+      per trailing vector): `dirichlet`, `multinomial`,
+      `multivariate_hypergeometric`, `multivariate_normal`.
+    - `permutation`, `permuted`, `shuffle`: unlike the rest of the module,
+      these are not chunk-parallel — whole-array shuffling is inherently
+      sequential, so they materialize the full array and shuffle it
+      single-threaded. `shuffle` additionally requires its argument to
+      already be an `NDArray`, since it mutates in place and returns `None`,
+      matching numpy.
+    - Not implemented: `bytes` (returns raw `bytes`, not an `NDArray`).
+
 ## Changes from 4.9.0 to 4.9.1
 
 A small hot-fix release for the Arrow interop work in 4.9.0: a real

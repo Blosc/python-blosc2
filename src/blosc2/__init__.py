@@ -595,6 +595,7 @@ from . import linalg
 from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose, diagonal, outer
 from .utils import linalg_funcs as linalg_funcs_list
 from . import fft
+from . import random
 
 # Registry for postfilters
 postfilter_funcs = {}
