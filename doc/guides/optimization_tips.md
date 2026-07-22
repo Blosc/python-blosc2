@@ -26,7 +26,7 @@ At 200M float64 elements, the two are comparable in speed, but the real win is m
 
 The constructors from the previous tip are not magic: internally, {func}`blosc2.arange() <blosc2.arange>` is a one-line DSL kernel (`start + _flat_idx * step`) that blosc2 compiles to native code and evaluates chunk by chunk, using multiple threads. The same machinery — a {func}`blosc2.dsl_kernel <blosc2.dsl_kernel>`-decorated function handed to {func}`blosc2.lazyudf() <blosc2.lazyudf>` — is open to you, for any array whose value is a function of its index.
 
-For example, blosc2 has no random constructor, so let's write one: hash the element index (here with a classic integer hash), and every chunk can be filled independently, in parallel, reproducibly for a given seed.
+As a worked example, let's build a random constructor from scratch: hash the element index (here with a classic integer hash), and every chunk can be filled independently, in parallel, reproducibly for a given seed. Blosc2 ships a proper one these days — see {doc}`Random Functions <../reference/random>` — but writing a small version by hand is the clearest way to see what the machinery does.
 
 ```python
 @blosc2.dsl_kernel
@@ -54,7 +54,7 @@ a = lazy.compute(cparams={"clevel": 0})
 
 At 200M int32 elements, the DSL kernel was **~3.6x faster** and used **~2x less peak memory** than generating with NumPy and compressing via {func}`asarray() <blosc2.asarray>` — the peak is just the result itself, since the full NumPy staging array never exists.
 
-The output passes light uniformity checks against NumPy's PCG64 (the benchmark script prints them) — good enough for synthetic data, benchmarks and test fixtures, though for statistically rigorous work such as Monte Carlo methods you should stick with NumPy's generators. The benchmark source explains the hash design and the DSL integer-arithmetic rules it relies on; see also the [DSL syntax reference](../reference/dsl_syntax.md).
+The output passes light uniformity checks against NumPy's PCG64 (the benchmark script prints them) — good enough for synthetic data, benchmarks and test fixtures, but this hand-rolled hash is *not* a substitute for a real generator. For statistically rigorous work such as Monte Carlo, use {doc}`blosc2.random <../reference/random>`, which gives you NumPy-quality streams (one independent `SeedSequence` per chunk) and keeps the chunk-parallel generation. The benchmark source explains the hash design and the DSL integer-arithmetic rules it relies on; see also the [DSL syntax reference](../reference/dsl_syntax.md).
 
 *Benchmark for this tip: [`tip_11_dsl_random.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_11_dsl_random.py)*
 

@@ -1,9 +1,14 @@
-Random
-------
+Random Functions
+----------------
 Chunk-parallel, NumPy-quality random :ref:`NDArray <NDArray>` constructors. Each chunk
 gets its own independent :class:`~numpy.random.SeedSequence`-spawned stream and is
 generated concurrently in a thread pool, so generation itself parallelizes (not just
 compression).
+
+``examples/ndarray/random-constructor.py`` is a runnable walkthrough: basic draws,
+reproducibility semantics, passing ``blosc2`` storage arguments through, a
+vector-valued distribution, and a timing comparison against
+``asarray(np.random...)``. Start there if you just want working code.
 
 .. currentmodule:: blosc2.random
 
