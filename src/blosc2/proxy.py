@@ -25,6 +25,13 @@ from blosc2.dsl_kernel import DSLKernel
 # where fetches are dominated by round-trip latency, not local CPU/IO.
 REMOTE_MAX_CONCURRENCY = 8
 
+# `jit` kwargs that tune *how* an expression is evaluated, not what container the
+# result is stored in. Unlike storage kwargs (`cparams`, `chunks`, `urlpath`, ...),
+# these must not by themselves flip the return type from a plain NumPy array to
+# an NDArray -- wanting a faster JIT backend has nothing to do with wanting a
+# compressed/persisted container back.
+_JIT_EXECUTION_TUNING_KWARGS = frozenset({"jit", "jit_backend", "fp_accuracy"})
+
 
 class ProxyNDSource(ABC):
     """
@@ -799,10 +806,16 @@ def _jit_dsl_wrapper(kernel: DSLKernel, out, decorator_kwargs: dict):
         else:
             (shape,) = array_shapes
 
-        # Build the LazyUDF bare (no storage kwargs): those are applied once, at
-        # the return step below, exactly like the tracing `wrapper` does.  Passing
-        # them here too would apply e.g. `urlpath=` twice and raise.
-        lexpr = blosc2.lazyudf(kernel, values, dtype=None, shape=shape)
+        # Execution-tuning kwargs (jit/jit_backend/fp_accuracy) are baked into the
+        # LazyUDF at construction, so they take effect on *both* the getitem
+        # (NumPy) and compute (NDArray) return paths below.  Storage kwargs
+        # (cparams, chunks, urlpath, ...) are applied once, only at the return
+        # step -- passing them here too would e.g. apply `urlpath=` twice and raise.
+        exec_kwargs = {
+            k: v for k, v in decorator_kwargs.items() if k in _JIT_EXECUTION_TUNING_KWARGS and v is not None
+        }
+        storage_kwargs = {k: v for k, v in decorator_kwargs.items() if k not in _JIT_EXECUTION_TUNING_KWARGS}
+        lexpr = blosc2.lazyudf(kernel, values, dtype=None, shape=shape, **exec_kwargs)
 
         if out is not None:
             if isinstance(out, blosc2.NDArray):
@@ -826,7 +839,7 @@ def _jit_dsl_wrapper(kernel: DSLKernel, out, decorator_kwargs: dict):
                 np.copyto(out, res[()], casting="no")
             return out
 
-        if decorator_kwargs and any(v is not None for v in decorator_kwargs.values()):
+        if storage_kwargs and any(v is not None for v in storage_kwargs.values()):
             return lexpr.compute(**decorator_kwargs)
         return lexpr[()]
 
@@ -846,10 +859,13 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
     happened to follow — see `strict` below for when `jit` instead compiles the
     function whole, so every branch and loop genuinely runs.
 
-    The returned value will be a NDArray if appropriate kwargs are provided
-    (e.g. `cparams=`). Else, the return value will be a NumPy array
-    (if the function returns a NumPy array).  If `out` is provided,
-    the result will be computed and stored in the `out` array
+    The returned value will be a NDArray if a *storage* kwarg is provided (e.g.
+    `cparams=`, `chunks=`, `urlpath=` — anything that only makes sense for a
+    compressed/persisted container). Else, the return value will be a NumPy
+    array (if the function returns a NumPy array). Execution-tuning kwargs
+    (`jit=`, `jit_backend=`, `fp_accuracy=`) do not by themselves trigger this —
+    they take effect either way, without changing the return type. If `out` is
+    provided, the result will be computed and stored in the `out` array.
 
     Parameters
     ----------
@@ -936,6 +952,11 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
                 "doc/reference/dsl_syntax.md for the DSL syntax reference."
             )
 
+        exec_kwargs = {
+            k: v for k, v in kwargs.items() if k in _JIT_EXECUTION_TUNING_KWARGS and v is not None
+        }
+        storage_kwargs = {k: v for k, v in kwargs.items() if k not in _JIT_EXECUTION_TUNING_KWARGS}
+
         def wrapper(*args, **func_kwargs):
             # Get some kwargs in decorator for SimpleProxy constructor
             proxy_kwargs = {"chunks": kwargs.get("chunks"), "blocks": kwargs.get("blocks")}
@@ -964,8 +985,8 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
             # Treat return value
             # If it is a numpy array, return it as is
             if isinstance(retval, np.ndarray):
-                if kwargs and any(kwargs[key] is not None for key in kwargs):
-                    # But if kwargs are provided, return a NDArray instead
+                if storage_kwargs and any(v is not None for v in storage_kwargs.values()):
+                    # But if storage kwargs are provided, return a NDArray instead
                     return blosc2.asarray(retval, **kwargs)
                 return retval
 
@@ -977,10 +998,11 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
             # If the return value is a LazyExpr, compute it
             if out is not None:
                 return retval.compute(out=out, **kwargs)
-            if kwargs and any(kwargs[key] is not None for key in kwargs):
+            if storage_kwargs and any(v is not None for v in storage_kwargs.values()):
                 return retval.compute(**kwargs)
-            # If no kwargs are provided, return a numpy array
-            return retval[()]
+            # No storage kwargs: return a NumPy array (like retval[()]), but still
+            # honor any execution-tuning kwargs (jit/jit_backend/fp_accuracy).
+            return retval.compute(_getitem=True, **exec_kwargs)
 
         return wrapper
 

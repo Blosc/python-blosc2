@@ -235,3 +235,24 @@ def test_jit_dsl_route_ndarray_operands_match_numpy_operands():
     res_numpy = jit_f(a, b, 3)
     res_ndarray = jit_f(na, nb, 3)
     np.testing.assert_array_equal(res_numpy, res_ndarray)
+
+
+def test_jit_dsl_route_execution_tuning_kwarg_alone_keeps_numpy_return():
+    # Same rule as the tracing route: jit/jit_backend/fp_accuracy tune execution,
+    # not the return container, so they must not force an NDArray on their own.
+    jit_f = blosc2.jit(jit=False)(_kernel_src)
+    a = np.arange(1000, dtype=np.float64)
+    b = np.arange(1000, dtype=np.float64) * 0.5
+    res = jit_f(a, b, 3)
+    assert isinstance(res, np.ndarray)
+    np.testing.assert_allclose(res, (a + b) * 3)
+
+
+def test_jit_dsl_route_execution_tuning_kwarg_with_storage_kwarg_still_returns_ndarray():
+    jit_f = blosc2.jit(jit=False, cparams=blosc2.CParams(clevel=2))(_kernel_src)
+    a = np.arange(1000, dtype=np.float64)
+    b = np.arange(1000, dtype=np.float64) * 0.5
+    res = jit_f(a, b, 3)
+    assert isinstance(res, blosc2.NDArray)
+    assert res.schunk.cparams.clevel == 2
+    np.testing.assert_allclose(res[:], (a + b) * 3)
