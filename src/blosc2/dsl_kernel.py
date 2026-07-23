@@ -16,6 +16,8 @@ import tokenize
 from io import StringIO
 from typing import ClassVar
 
+import numpy
+
 _PRINT_DSL_KERNEL = os.environ.get("PRINT_DSL_KERNEL", "").strip().lower()
 _PRINT_DSL_KERNEL = _PRINT_DSL_KERNEL not in ("", "0", "false", "no", "off")
 _DSL_USAGE_DOC_URL = "https://github.com/Blosc/python-blosc2/blob/main/doc/reference/dsl_syntax.md"
@@ -23,6 +25,44 @@ _DSL_USAGE_DOC_URL = "https://github.com/Blosc/python-blosc2/blob/main/doc/refer
 
 class DSLSyntaxError(ValueError):
     """Raised when a @dsl_kernel function uses unsupported DSL syntax."""
+
+
+# NumPy function names that the DSL grammar recognizes only under a different
+# (but semantically identical, same-arity) name.  Verified individually against
+# the NumPy function they alias -- not a general "closest match" mapping, so
+# names with subtle semantic differences (e.g. `np.mod`/`np.remainder`'s sign
+# convention vs C's `fmod`) are deliberately left out.
+_NUMPY_TO_DSL_FUNC_ALIASES = {
+    "power": "pow",
+    "maximum": "fmax",
+    "minimum": "fmin",
+    "absolute": "abs",
+}
+
+
+class _NumpyAttrCallRewriter(ast.NodeTransformer):
+    """Rewrite `alias.foo(...)` calls to the bare `foo(...)` form the DSL grammar
+    requires, for every *alias* bound to the real NumPy module.  Also applies
+    `_NUMPY_TO_DSL_FUNC_ALIASES` for the handful of functions the DSL knows
+    under a different name.
+    """
+
+    def __init__(self, aliases: set[str]):
+        self._aliases = aliases
+        self.rewrote_any = False
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id in self._aliases
+        ):
+            dsl_name = _NUMPY_TO_DSL_FUNC_ALIASES.get(func.attr, func.attr)
+            node.func = ast.copy_location(ast.Name(id=dsl_name, ctx=ast.Load()), func)
+            self.rewrote_any = True
+        return node
 
 
 def _normalize_miniexpr_scalar(value):
@@ -559,6 +599,11 @@ class DSLKernel:
         if dsl_func is None:
             raise ValueError("No function definition found in sliced DSL source")
         input_names = self._input_names_from_signature(dsl_func)
+
+        dsl_source, dsl_tree, dsl_func = self._rewrite_numpy_attr_calls(
+            func, dsl_source, dsl_tree, dsl_func, input_names
+        )
+
         if validate:
             DSLValidator(dsl_source, input_names=input_names).validate(dsl_func)
         if _PRINT_DSL_KERNEL:
@@ -566,6 +611,34 @@ class DSLKernel:
             print(f"[DSLKernel:{func_name}] dsl_source (full):")
             print(dsl_source)
         return dsl_source, input_names
+
+    @staticmethod
+    def _rewrite_numpy_attr_calls(func, dsl_source, dsl_tree, dsl_func, input_names):
+        """Rewrite `np.foo(...)` calls to bare `foo(...)`, for every name in *func*'s
+        defining scope that is bound to the real NumPy module (typically `np`, but
+        any alias, including a bare `numpy` import, is honored).  The DSL grammar
+        only accepts bare function-name calls.  No-op, returning the inputs
+        unchanged, when there is nothing to rewrite (including when the alias is
+        shadowed by one of the kernel's own parameter names).
+        """
+        aliases = {
+            name
+            for name, value in getattr(func, "__globals__", {}).items()
+            if value is numpy and name not in input_names
+        }
+        if not aliases:
+            return dsl_source, dsl_tree, dsl_func
+
+        rewriter = _NumpyAttrCallRewriter(aliases)
+        rewritten = rewriter.visit(ast.parse(dsl_source))
+        if not rewriter.rewrote_any:
+            return dsl_source, dsl_tree, dsl_func
+
+        ast.fix_missing_locations(rewritten)
+        new_source = ast.unparse(rewritten)
+        new_tree = ast.parse(new_source)
+        new_func = next((node for node in new_tree.body if isinstance(node, ast.FunctionDef)), None)
+        return new_source, new_tree, new_func
 
     @staticmethod
     def _slice_function_source(source: str, func_node: ast.FunctionDef) -> str:

@@ -1248,3 +1248,69 @@ def test_dsl_kernel_numpy_out_matches_compute_and_honors_explicit_cparams():
 
     res_explicit = lexpr.compute(cparams=blosc2.CParams(clevel=5))
     assert res_explicit.schunk.cparams.clevel == 5
+
+
+def test_dsl_kernel_numpy_attribute_calls_are_rewritten_to_bare_names():
+    @blosc2.dsl_kernel
+    def k(x, y):
+        if x >= 0:
+            return np.sin(x) + y
+        else:
+            return -np.sin(-x) + y
+
+    assert k.dsl_error is None
+    assert "np.sin" not in k.dsl_source
+    assert "sin(" in k.dsl_source
+
+    x = np.linspace(-2, 2, 1000)
+    y = np.ones_like(x)
+    res = blosc2.lazyudf(k, (x, y), dtype=None)[()]
+    expected = np.where(x >= 0, np.sin(x) + y, -np.sin(-x) + y)
+    np.testing.assert_allclose(res, expected)
+
+
+@pytest.mark.parametrize(
+    ("numpy_call", "expected_dsl_name"),
+    [
+        ("np.power(x, 2.0)", "pow"),
+        ("np.maximum(x, 0.5)", "fmax"),
+        ("np.minimum(x, -0.5)", "fmin"),
+        ("np.absolute(x)", "abs"),
+    ],
+)
+def test_dsl_kernel_numpy_func_aliases_map_to_dsl_names(numpy_call, expected_dsl_name):
+    src = f"def k(x):\n    if x >= 0:\n        return {numpy_call}\n    else:\n        return -x\n"
+    k = kernel_from_source(src)
+
+    assert k.dsl_error is None
+    assert f"{expected_dsl_name}(" in k.dsl_source
+
+    x = np.linspace(-2, 2, 1000)
+    res = blosc2.lazyudf(k, (x,), dtype=None)[()]
+    expected = np.where(x >= 0, eval(numpy_call, {"np": np, "x": x}), -x)
+    np.testing.assert_allclose(res, expected)
+
+
+def test_dsl_kernel_numpy_alias_not_rewritten_when_shadowed_by_parameter():
+    # A parameter literally named "np" shadows the module -- the rewrite must
+    # not mistake a per-call NDArray/scalar input for the NumPy module.
+    src = "def k(np, y):\n    return np * y\n"
+    k = kernel_from_source(src)
+
+    assert k.dsl_error is None
+    a = np.linspace(1, 2, 100)
+    b = np.linspace(2, 3, 100)
+    res = blosc2.lazyudf(k, (a, b), dtype=None)[()]
+    np.testing.assert_allclose(res, a * b)
+
+
+def test_dsl_kernel_numpy_call_without_alias_left_untouched():
+    # No import of numpy bound in the kernel's defining scope -- nothing to
+    # rewrite, and the plain bare-name form still works unaffected.
+    @blosc2.dsl_kernel
+    def k(x):
+        return sin(x)  # noqa: F821  # 'sin' resolved as a bare DSL function name
+
+    a = np.linspace(-2, 2, 1000)
+    res = blosc2.lazyudf(k, (a,), dtype=None)[()]
+    np.testing.assert_allclose(res, np.sin(a))

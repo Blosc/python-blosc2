@@ -135,11 +135,35 @@ explicitly if it matters:
 z = (col - col.mean()) / col.std(ddof=0)
 ```
 
-**No Python `if` on values.** The function is traced rather than executed
-statement by statement, so branching on array contents raises
-`ValueError: The truth value of an array ... is ambiguous`. Use `np.where`,
-nesting it where you would have used `elif`. (This is the same restriction
-numexpr has.) Branching on a scalar *parameter* is fine.
+**Real per-element `if`/`for`/`while` now works, for a numeric subset of
+NumPy.** `engine=blosc2.jit` auto-detects control flow: if your function
+branches or loops over column values *and* the function fits Blosc2's
+[DSL grammar](../reference/dsl_syntax.md), it is compiled and run as written —
+branches and loops behave like real Python — instead of being traced. Both
+`np.sin(x)`-style calls and bare `sin(x)`-style calls are accepted (the former
+is rewritten to the latter automatically; a handful of NumPy functions the DSL
+knows under a different name, like `np.maximum`/`np.minimum`, are translated
+too — `power`, `maximum`, `minimum` and `absolute` today). Two things to know
+before relying on this:
+
+- If the function doesn't fit the DSL grammar at all (e.g. it uses statements
+  the grammar doesn't support), it silently falls back to the original
+  behavior: the function is traced, and branching on array contents raises
+  `ValueError: The truth value of an array ... is ambiguous`. Use `np.where`
+  as before, nesting it where you would have used `elif`. Branching on a
+  scalar *parameter* has always been fine either way.
+- If the function looks DSL-shaped but calls something outside the DSL's
+  supported functions (not every NumPy function has a DSL equivalent),
+  compiling it fails at call time with a `RuntimeError` naming the problem —
+  a different error than the `ValueError` above, and one that is not silently
+  swallowed. Check the [DSL syntax reference](../reference/dsl_syntax.md) for
+  what is actually supported before depending on this path for a given
+  function.
+
+This dispatch decision is not configurable through `engine=`: pandas' engine
+protocol requires the plain `blosc2.jit` object, so `engine=` always gets the
+auto-detect (`strict=None`) behavior described above — there is currently no
+way to pass `strict=True`/`strict=False` through this entry point.
 
 **`np.where` evaluates both arms.** Unlike a real `if`, both branches are
 computed over the whole column and only then selected between, so each one runs
