@@ -338,8 +338,6 @@ class DSLValidator:
         args = func_node.args
         if args.vararg or args.kwarg or args.kwonlyargs:
             self._err(args, "DSL kernel does not support *args/**kwargs/kwonly args")
-        if args.defaults or args.kw_defaults:
-            self._err(args, "DSL kernel does not support default arguments")
 
     def _check_input_assign(self, target: ast.Name):
         # G2: miniexpr forbids reassigning an input parameter (inputs alias operand buffers).
@@ -531,9 +529,10 @@ class DSLKernel:
                 dsl_source = None
                 input_names = None
             self.dsl_error = e
-        except Exception:
+        except Exception as e:
             dsl_source = None
             input_names = None
+            self.dsl_error = e
         self.dsl_source = dsl_source
         self.input_names = input_names
 
@@ -584,8 +583,6 @@ class DSLKernel:
         args = func_node.args
         if args.vararg or args.kwarg or args.kwonlyargs:
             raise ValueError("DSL kernel does not support *args/**kwargs/kwonly args")
-        if args.defaults or args.kw_defaults:
-            raise ValueError("DSL kernel does not support default arguments")
         return [a.arg for a in (args.posonlyargs + args.args)]
 
     def __call__(self, inputs_tuple, output, offset=None):
@@ -614,7 +611,13 @@ class DSLKernel:
 
 
 def dsl_kernel(func):
-    """Decorator to wrap a function in a DSLKernel."""
+    """Decorator to wrap a function in a DSLKernel.
+
+    Default argument values in *func*'s signature are accepted as ordinary named
+    inputs, but they are honored (filled in when omitted) only through the
+    ``@blosc2.jit`` call path.  Calling a :class:`DSLKernel` directly (e.g. via
+    :func:`lazyudf`) requires every input to be passed positionally.
+    """
 
     return DSLKernel(func)
 

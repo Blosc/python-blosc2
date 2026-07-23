@@ -18,6 +18,15 @@ def kernel(x, y):
 
 Use Python-style indentation and always return a value on the paths you execute.
 
+`@blosc2.jit` auto-detects this DSL: a decorated function whose body contains an
+`if`/`for`/`while` and that compiles under this grammar is dispatched here
+automatically, so its branches and loops actually run, once per chunk, instead
+of `jit`'s normal approach of calling the function only once to record a single
+expression — which would otherwise capture just whichever branch that one call
+happened to take, silently dropping the rest. `@blosc2.dsl_kernel` remains the
+explicit form — it always requires the DSL to compile, equivalent to
+`jit(strict=True)`.
+
 ## Program shape
 
 - Exactly one top-level `def ...:` function is expected.

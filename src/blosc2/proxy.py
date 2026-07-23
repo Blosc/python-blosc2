@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import ast
 import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -18,6 +19,7 @@ except (ImportError, AttributeError):
 import numpy as np
 
 import blosc2
+from blosc2.dsl_kernel import DSLKernel
 
 # Default Proxy.afetch concurrency cap for remote sources (e.g. C2Array),
 # where fetches are dominated by round-trip latency, not local CPU/IO.
@@ -751,13 +753,98 @@ def as_simpleproxy(*arrs: Sequence[blosc2.Array]) -> tuple[SimpleProxy | blosc2.
     return out[0] if len(out) == 1 else out
 
 
-def jit(func=None, *, out=None, disable=False, **kwargs):
+def _has_control_flow(source: str | None) -> bool:
+    """Whether *source* (a DSL-extracted function source, or None) contains a
+    branch or loop that tracing cannot observe."""
+    if source is None:
+        return False
+    tree = ast.parse(source)
+    return any(isinstance(node, ast.If | ast.For | ast.While) for node in ast.walk(tree))
+
+
+def _jit_dsl_wrapper(kernel: DSLKernel, out, decorator_kwargs: dict):
+    """Build the call wrapper for the DSL (control-flow) dispatch route of `jit`.
+
+    Unlike the tracing `wrapper` (which calls `func` once to record a single
+    expression, losing any branch not taken on that one call), this calls
+    `kernel` once per invocation through `blosc2.lazyudf`, so every branch and
+    loop in the kernel body is compiled and actually runs, once per chunk.
+    """
+
+    def dsl_wrapper(*args, **func_kwargs):
+        sig = kernel._sig
+        if sig is None:
+            raise TypeError(f"@blosc2.jit: cannot introspect the signature of {kernel.__name__!r}")
+        bound = sig.bind(*args, **func_kwargs)
+        bound.apply_defaults()
+        values = tuple(bound.arguments[name] for name in kernel.input_names)
+
+        array_shapes = {
+            v.shape
+            for v in values
+            if isinstance(v, np.ndarray | blosc2.NDArray) and getattr(v, "ndim", 0) > 0
+        }
+        if not array_shapes:
+            shape = decorator_kwargs.get("shape")
+            if shape is None:
+                raise TypeError(
+                    "@blosc2.jit DSL kernels with only scalar inputs require `shape=` "
+                    "(passed to the jit decorator) to determine the result shape."
+                )
+        elif len(array_shapes) > 1:
+            raise TypeError(
+                "blosc2.jit DSL kernels do not support broadcasting; all array arguments "
+                f"must share one shape, got {sorted(array_shapes)}"
+            )
+        else:
+            (shape,) = array_shapes
+
+        # Build the LazyUDF bare (no storage kwargs): those are applied once, at
+        # the return step below, exactly like the tracing `wrapper` does.  Passing
+        # them here too would apply e.g. `urlpath=` twice and raise.
+        lexpr = blosc2.lazyudf(kernel, values, dtype=None, shape=shape)
+
+        if out is not None:
+            if isinstance(out, blosc2.NDArray):
+                raise NotImplementedError(
+                    "blosc2.jit does not support an NDArray `out` on the DSL (control-flow) "
+                    "dispatch route; use lexpr.compute(urlpath=..., mode='w') to persist a "
+                    "result chunk-by-chunk instead."
+                )
+            if not isinstance(out, np.ndarray):
+                raise TypeError(f"blosc2.jit `out` must be a NumPy array or NDArray, got {type(out)!r}")
+            if out.shape != shape:
+                raise TypeError(f"`out` shape {out.shape} does not match operand shape {shape}")
+            res = lexpr.compute(cparams=blosc2.CParams(clevel=0))
+            if out.dtype != res.dtype:
+                raise TypeError(
+                    f"`out` dtype {out.dtype} does not match the inferred result dtype {res.dtype}"
+                )
+            if out.flags.c_contiguous:
+                res.get_slice_numpy(out, (tuple(0 for _ in res.shape), tuple(res.shape)))
+            else:
+                np.copyto(out, res[()], casting="no")
+            return out
+
+        if decorator_kwargs and any(v is not None for v in decorator_kwargs.values()):
+            return lexpr.compute(**decorator_kwargs)
+        return lexpr[()]
+
+    return dsl_wrapper
+
+
+def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: C901
     """
     Prepare a function so that it can be used with the Blosc2 compute engine.
 
     The inputs of the function can be any combination of NumPy/NDArray arrays
-    and scalars.  The function will be called with the NumPy arrays replaced by
-    :ref:`SimpleProxy` objects, whereas NDArray objects will be used as is.
+    and scalars.  By default, the function is *traced*: it is called once with
+    the NumPy arrays replaced by :ref:`SimpleProxy` objects (NDArray objects are
+    used as is) to record a single expression, which is then what actually gets
+    evaluated. Because tracing only calls the function once, an ``if``/``for``/
+    ``while`` in the body only ever takes the one path that single call
+    happened to follow — see `strict` below for when `jit` instead compiles the
+    function whole, so every branch and loop genuinely runs.
 
     The returned value will be a NDArray if appropriate kwargs are provided
     (e.g. `cparams=`). Else, the return value will be a NumPy array
@@ -769,10 +856,30 @@ def jit(func=None, *, out=None, disable=False, **kwargs):
     func: callable
         The function to be prepared for the Blosc2 compute engine.
     out: np.ndarray, NDArray, optional
-        The output array where the result will be stored.
+        The output array where the result will be stored.  On the DSL
+        (control-flow) dispatch route, a NumPy `out` is filled in place
+        (directly when C-contiguous, else via a copy); an NDArray `out` is not
+        supported there — use ``compute(urlpath=..., mode="w")`` instead.
     disable: bool, optional
         If True, the decorator is disabled and the original function is returned unchanged.
         Default is False.
+    strict: bool, optional
+        Control which evaluation route is used:
+
+        - ``None`` (default): if *func*'s body contains an ``if``/``for``/``while``
+          and it compiles as a DSL kernel, dispatch to the DSL route (miniexpr
+          runs the whole function, so branches/loops behave as written); a
+          control-flow function that fails DSL extraction still falls back to
+          tracing, but a subsequent tracing failure is annotated with the DSL
+          extraction error.  Functions without control flow always trace, even
+          if they happen to be DSL-valid (tracing is faster for pure elementwise
+          expressions).
+        - ``True``: always use the DSL route, raising at decoration time if
+          *func* cannot be compiled as a DSL kernel.  Equivalent to
+          ``blosc2.dsl_kernel``.
+        - ``False``: always use the tracing route, even if *func* has control
+          flow (this only works when branches/loops depend on plain Python
+          values, not on traced arrays).
     **kwargs: dict, optional
         Additional keyword arguments supported by the :func:`empty` constructor.
 
@@ -788,6 +895,8 @@ def jit(func=None, *, out=None, disable=False, **kwargs):
       (e.g. when using a reduction as the last function).  In this case, you can
       still use the `out` parameter of the reduction function for some custom
       control over the output.
+    * DSL-route kernels do not support broadcasting: every array argument must
+      share the same shape.
 
     Examples
     --------
@@ -803,9 +912,29 @@ def jit(func=None, *, out=None, disable=False, **kwargs):
     [5 5 5 5]
     """
 
-    def decorator(func):
+    def decorator(func):  # noqa: C901
         if disable:
             return func
+
+        kernel = DSLKernel(func)
+        has_cf = _has_control_flow(kernel.dsl_source)
+        dsl_ok = kernel.dsl_source is not None and kernel.dsl_error is None
+        if strict is True and not dsl_ok:
+            raise kernel.dsl_error or TypeError(
+                f"@blosc2.jit(strict=True): could not extract a DSL kernel from {func.__name__!r}"
+            )
+        use_dsl = strict is True or (strict is None and has_cf and dsl_ok)
+
+        if use_dsl:
+            return _jit_dsl_wrapper(kernel, out, kwargs)
+
+        _trace_hint = None
+        if strict is None and has_cf and not dsl_ok:
+            _trace_hint = (
+                f"Note: {func.__name__!r} contains control flow (if/for/while) but could not be "
+                f"compiled as a DSL kernel: {kernel.dsl_error or 'source unavailable'}. See "
+                "doc/reference/dsl_syntax.md for the DSL syntax reference."
+            )
 
         def wrapper(*args, **func_kwargs):
             # Get some kwargs in decorator for SimpleProxy constructor
@@ -825,7 +954,12 @@ def jit(func=None, *, out=None, disable=False, **kwargs):
                 func_kwargs[key] = SimpleProxy(value, **proxy_kwargs)
 
             # Call function with the new arguments
-            retval = func(*new_args, **func_kwargs)
+            try:
+                retval = func(*new_args, **func_kwargs)
+            except Exception as e:
+                if _trace_hint is not None:
+                    raise type(e)(f"{e}\n{_trace_hint}") from e
+                raise
 
             # Treat return value
             # If it is a numpy array, return it as is

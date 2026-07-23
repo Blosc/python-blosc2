@@ -801,6 +801,8 @@ ctypedef struct me_input_cache_s:
 
 ctypedef struct me_udata:
     b2nd_array_t** inputs
+    uint8_t** np_data          # per-input raw base pointer; NULL entry = b2nd input
+    int32_t* np_typesizes      # per-input itemsize; valid where np_data[i] != NULL
     me_input_cache_s* input_chunk_caches
     int ninputs
     me_eval_params* eval_params
@@ -2409,6 +2411,10 @@ cdef class SChunk:
                         free(me_data.input_chunk_caches)
                     if me_data.inputs != NULL:
                         free(me_data.inputs)
+                    if me_data.np_data != NULL:
+                        free(me_data.np_data)
+                    if me_data.np_typesizes != NULL:
+                        free(me_data.np_typesizes)
                     if me_data.miniexpr_handle != NULL:  # XXX do we really need the conditional?
                         me_free(me_data.miniexpr_handle)
                     if me_data.eval_params != NULL:
@@ -2515,6 +2521,15 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef int64_t start_ndim[B2ND_MAX_DIM]
     cdef int64_t stop_ndim[B2ND_MAX_DIM]
     cdef int64_t buffershape[B2ND_MAX_DIM]
+    # Raw-NumPy-input gather (odometer copy of a block out of a C-order buffer)
+    cdef int64_t counter[B2ND_MAX_DIM]
+    cdef int64_t shape_strides[B2ND_MAX_DIM]
+    cdef int64_t blockshape_strides[B2ND_MAX_DIM]
+    cdef int32_t np_ts
+    cdef int np_ndim
+    cdef c_bool all_pad
+    cdef int64_t ext, row_items, row_bytes, src_flat, dst_flat
+    cdef int dd
 
     cdef b2nd_array_t* ndarr
     cdef int rc
@@ -2566,6 +2581,68 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             return 0
 
     for i in range(udata.ninputs):
+        if udata.np_data != NULL and udata.np_data[i] != NULL:
+            # Raw NumPy input: gather block (nchunk, nblock) from a C-order buffer.
+            # All geometry comes from the output array, valid because the Python
+            # gates guarantee every operand shares the output's shape and grid.
+            np_ts = udata.np_typesizes[i]
+            blocknitems = udata.array.blocknitems
+            block_nbytes = blocknitems * np_ts
+            if expected_blocknitems == -1:
+                expected_blocknitems = blocknitems
+            elif blocknitems != expected_blocknitems:
+                raise ValueError("miniexpr: inconsistent block element counts across inputs")
+            input_buffers[i] = malloc(block_nbytes)
+            if input_buffers[i] == NULL:
+                raise MemoryError("miniexpr: cannot allocate input block buffer")
+            memset(input_buffers[i], 0, block_nbytes)  # zero padding, matches b2nd semantics
+
+            np_ndim = udata.array.ndim
+            blosc2_unidim_to_multidim(np_ndim, udata.chunks_in_array, nchunk, chunk_ndim)
+            blosc2_unidim_to_multidim(np_ndim, udata.blocks_in_chunk, nblock, block_ndim)
+
+            all_pad = False
+            for dd in range(np_ndim):
+                start_ndim[dd] = chunk_ndim[dd] * udata.array.chunkshape[dd] + block_ndim[dd] * udata.array.blockshape[dd]
+                ext = udata.array.shape[dd] - start_ndim[dd]
+                stop_ndim[dd] = udata.array.blockshape[dd] if ext >= udata.array.blockshape[dd] else ext
+                if stop_ndim[dd] <= 0:
+                    all_pad = True  # fully-padded block: buffer stays zeroed
+
+            if not all_pad:
+                # C-order element strides for the full array shape and for the block shape.
+                shape_strides[np_ndim - 1] = 1
+                blockshape_strides[np_ndim - 1] = 1
+                for dd in range(np_ndim - 2, -1, -1):
+                    shape_strides[dd] = shape_strides[dd + 1] * udata.array.shape[dd + 1]
+                    blockshape_strides[dd] = blockshape_strides[dd + 1] * udata.array.blockshape[dd + 1]
+
+                row_items = stop_ndim[np_ndim - 1]
+                row_bytes = row_items * np_ts
+                for dd in range(np_ndim):
+                    counter[dd] = 0
+                # Odometer over the outer np_ndim-1 dims; the innermost dim is
+                # copied in bulk per row (1-D collapses to a single memcpy).
+                while True:
+                    src_flat = 0
+                    dst_flat = 0
+                    for dd in range(np_ndim):
+                        src_flat += (start_ndim[dd] + counter[dd]) * shape_strides[dd]
+                        dst_flat += counter[dd] * blockshape_strides[dd]
+                    memcpy(<uint8_t*> input_buffers[i] + dst_flat * np_ts,
+                           udata.np_data[i] + src_flat * np_ts,
+                           row_bytes)
+                    dd = np_ndim - 2
+                    while dd >= 0:
+                        counter[dd] += 1
+                        if counter[dd] < stop_ndim[dd]:
+                            break
+                        counter[dd] = 0
+                        dd -= 1
+                    else:
+                        break
+            continue
+
         ndarr = udata.inputs[i]
         if ndarr.sc.storage.urlpath == NULL:
             src = ndarr.sc.data[nchunk]
@@ -2651,11 +2728,10 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         if rc < 0:
             raise ValueError("miniexpr: error decompressing the chunk")
     # For reduction operations, we need to track which block we're processing
-    # The linear_block_index should be based on the INPUT array structure, not the output array
-    # Get the first input array's chunk and block structure
-    cdef b2nd_array_t* first_input = udata.inputs[0]
+    # The linear_block_index should be based on the same grid the output shares
+    # with every input (raw NumPy inputs have no b2nd_array_t to read ndim from).
     cdef int nblocks_per_chunk = 1
-    for i in range(first_input.ndim):
+    for i in range(udata.array.ndim):
         nblocks_per_chunk *= <int>udata.blocks_in_chunk[i]
     # Calculate the global linear block index: nchunk * blocks_per_chunk + nblock
     # This works because blocks never span chunks (chunks are padded to block boundaries)
@@ -3913,6 +3989,8 @@ cdef class NDArray:
         cdef me_udata *udata = <me_udata *> calloc(1, sizeof(me_udata))
         cdef me_eval_params* eval_params
         cdef b2nd_array_t** inputs_
+        cdef uint8_t** np_data
+        cdef int32_t* np_typesizes
         cdef me_input_cache_s* input_chunk_caches
         cdef void* aux_reduc_ptr = NULL
         cdef int i
@@ -3925,14 +4003,32 @@ cdef class NDArray:
         if udata == NULL:
             raise MemoryError("Cannot allocate miniexpr user data")
         inputs_ = NULL
+        np_data = NULL
+        np_typesizes = NULL
         if ninputs > 0:
             inputs_ = <b2nd_array_t**> malloc(ninputs * sizeof(b2nd_array_t*))
             if inputs_ == NULL:
                 free(udata)
                 raise MemoryError("Cannot allocate miniexpr input table")
+            np_data = <uint8_t**> calloc(ninputs, sizeof(uint8_t*))
+            np_typesizes = <int32_t*> calloc(ninputs, sizeof(int32_t))
+            if np_data == NULL or np_typesizes == NULL:
+                free(inputs_)
+                free(np_data)
+                free(np_typesizes)
+                free(udata)
+                raise MemoryError("Cannot allocate miniexpr raw-input tables")
         for i, operand in enumerate(operands):
-            inputs_[i] = <b2nd_array_t*><uintptr_t>operand.c_array
+            if isinstance(operand, np.ndarray):
+                # Caller (fast_eval) guarantees C-contiguous, native-endian, non-scalar.
+                inputs_[i] = NULL
+                np_data[i] = <uint8_t*> np.PyArray_DATA(<np.ndarray> operand)
+                np_typesizes[i] = <int32_t> (<np.ndarray> operand).itemsize
+            else:
+                inputs_[i] = <b2nd_array_t*><uintptr_t>operand.c_array
         udata.inputs = inputs_
+        udata.np_data = np_data
+        udata.np_typesizes = np_typesizes
         udata.ninputs = ninputs
         input_chunk_caches = NULL
         if ninputs > 0:

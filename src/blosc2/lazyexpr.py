@@ -1735,22 +1735,36 @@ def fast_eval(  # noqa: C901
             expr_string_miniexpr = _apply_jit_backend_pragma(
                 expr_string_miniexpr, operands_miniexpr, jit_backend
             )
-        all_ndarray_miniexpr = all(
-            isinstance(value, blosc2.NDArray) and value.shape != () for value in operands_miniexpr.values()
-        )
-        # Require aligned NDArray operands with identical chunk/block grid.
-        same_shape = all(hasattr(op, "shape") and op.shape == shape for op in operands_miniexpr.values())
-        same_chunks = all(hasattr(op, "chunks") and op.chunks == chunks for op in operands_miniexpr.values())
-        same_blocks = all(hasattr(op, "blocks") and op.blocks == blocks for op in operands_miniexpr.values())
-        if not (same_shape and same_chunks and same_blocks):
-            use_miniexpr = False
-            if is_dsl and dsl_disable_reason is None:
-                dsl_disable_reason = "all DSL operands must share shape/chunks/blocks."
-        if not (all_ndarray_miniexpr and out is None):
+
+        def _miniexpr_eligible_operand(op):
+            if isinstance(op, blosc2.NDArray):
+                return op.shape != () and op.shape == shape and op.chunks == chunks and op.blocks == blocks
+            if isinstance(op, np.ndarray):
+                # Raw NumPy operands are only miniexpr-eligible for DSL kernels (the
+                # jit control-flow dispatch route). Plain string expressions and traced
+                # `jit` calls keep the old NDArray-only gate, so their numeric behavior
+                # (e.g. transcendentals matching numexpr bit-for-bit) is unchanged.
+                return (
+                    is_dsl
+                    and op.ndim > 0
+                    and op.shape == shape
+                    and op.dtype.isnative
+                    and op.dtype.kind in "biufc"
+                )
+            return False
+
+        all_eligible_miniexpr = all(_miniexpr_eligible_operand(op) for op in operands_miniexpr.values())
+        if not all_eligible_miniexpr:
             use_miniexpr = False
             if is_dsl and dsl_disable_reason is None:
                 dsl_disable_reason = (
-                    "DSL kernels require NDArray inputs and do not support the `out` argument."
+                    "all DSL operands must be NDArray or NumPy inputs sharing shape/chunks/blocks."
+                )
+        if not (all_eligible_miniexpr and out is None):
+            use_miniexpr = False
+            if is_dsl and dsl_disable_reason is None:
+                dsl_disable_reason = (
+                    "DSL kernels require NDArray or NumPy inputs and do not support the `out` argument."
                 )
         has_complex = any(
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
@@ -1779,7 +1793,11 @@ def fast_eval(  # noqa: C901
         print(f"[blosc2] engine={engine} {jit_info} expr={expr_short}", flush=True)
 
     if use_miniexpr:
-        cparams = kwargs.pop("cparams", blosc2.CParams())
+        cparams = kwargs.pop("cparams", None)
+        if cparams is None:
+            # getitem output is throwaway scratch (returned as a NumPy array and
+            # discarded), so compressing it buys nothing but a round trip.
+            cparams = blosc2.CParams(clevel=0) if getitem else blosc2.CParams()
         # All values will be overwritten, so we can use an uninitialized array
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         prefilter_set = False
@@ -1787,6 +1805,11 @@ def fast_eval(  # noqa: C901
             # Fuse where(cond, x, y) into the expression for miniexpr
             _pref_expr = expr_string_miniexpr
             _pref_ops = operands_miniexpr
+            if any(isinstance(v, np.ndarray) for v in _pref_ops.values()):
+                _pref_ops = {
+                    k: (np.ascontiguousarray(v) if isinstance(v, np.ndarray) else v)
+                    for k, v in _pref_ops.items()
+                }
             if where is not None and len(where) == 2:
                 _pref_expr = f"where({_pref_expr}, _where_x, _where_y)"
             # _cb_anchor keeps the contiguous bitmap alive for the whole
@@ -1883,7 +1906,11 @@ def fast_eval(  # noqa: C901
         if callable(expression):
             if _is_dsl_kernel_expression(expression):
                 _raise_dsl_miniexpr_required(
-                    "internal fallback attempted to execute the DSL kernel directly in Python."
+                    "DSL kernels require the miniexpr fast path, and it was unavailable for this "
+                    "evaluation. Common causes: operands with mismatched chunks/blocks or "
+                    "non-contiguous/non-native-byte-order NumPy arrays, an explicit `out=` argument, "
+                    "or a `where(cond, x, y)` with cardinality-changing semantics (len(where) == 1) — "
+                    "all unsupported for DSL kernels."
                 )
             if _in_place:
                 expression(tuple(chunk_operands.values()), out, offset=offset)
@@ -2219,7 +2246,9 @@ def slices_eval(  # noqa: C901
         if callable(expression):
             if _is_dsl_kernel_expression(expression):
                 _raise_dsl_miniexpr_required(
-                    "internal sliced fallback attempted to execute the DSL kernel directly in Python."
+                    "DSL kernels only support evaluating the full array (compute() or [()]) through "
+                    "the miniexpr fast path; slicing a DSL computation (e.g. `lexpr[1:5]`) is not "
+                    "supported."
                 )
             if _in_place:  # presumably the user knows what they're doing
                 # edit out in-place
@@ -2373,7 +2402,8 @@ def slices_eval_getitem(
     if callable(expression):
         if _is_dsl_kernel_expression(expression):
             _raise_dsl_miniexpr_required(
-                "internal getitem fallback attempted to execute the DSL kernel directly in Python."
+                "DSL kernels only support evaluating the full array (compute() or [()]) through "
+                "the miniexpr fast path; sliced getitem (e.g. `lexpr[1:5]`) is not supported."
             )
         offset = tuple(0 if s is None else s.start for s in _slice_bcast)  # offset for the udf
         if _in_place:
@@ -2775,7 +2805,8 @@ def reduce_slices(  # noqa: C901
         if callable(expression):
             if _is_dsl_kernel_expression(expression):
                 _raise_dsl_miniexpr_required(
-                    "internal reduction fallback attempted to execute the DSL kernel directly in Python."
+                    "DSL kernels do not support reductions (e.g. sum()/mean() over an axis); write "
+                    "the reduction outside the kernel, over its computed result."
                 )
             # TODO: Implement the reductions for UDFs (and test them)
             result = np.empty(cslice_shape, dtype=out.dtype)
@@ -3018,7 +3049,7 @@ def _eval_zero_input_dsl_if_needed(
     return True, full_res
 
 
-def chunked_eval(
+def chunked_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=(), **kwargs
 ):
     """
@@ -3120,6 +3151,19 @@ def chunked_eval(
             return slices_eval(expression, operands, getitem=getitem, _slice=item, shape=shape, **kwargs)
 
         fast_path = full_slice and fast_path
+        if not fast_path and full_slice and _is_dsl_kernel_expression(expression) and operands:
+            # All-NumPy DSL operands: validate_inputs only sees NDinputs, so it never
+            # sets fast_path for this case; reroute it here instead.  Scalar operands
+            # (e.g. a Python int/float parameter) don't participate in the shape/grid
+            # check, mirroring validate_inputs' own raw_inputs filtering.
+            raw_ops = [v for v in operands.values() if not _isscalar(v)]
+            if (
+                raw_ops
+                and all(isinstance(v, np.ndarray) and v.ndim > 0 for v in raw_ops)
+                and len({v.shape for v in raw_ops}) == 1
+            ):
+                fast_path = True
+
         if fast_path:  # necessarily item is ()
             if getitem:
                 # When using getitem, taking the fast path is always possible

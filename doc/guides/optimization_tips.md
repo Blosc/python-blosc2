@@ -58,6 +58,27 @@ The output passes light uniformity checks against NumPy's PCG64 (the benchmark s
 
 *Benchmark for this tip: [`tip_11_dsl_random.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_11_dsl_random.py)*
 
+## Let `@blosc2.jit` compile control flow instead of tracing it
+
+{func}`@blosc2.jit <blosc2.jit>` normally works by *tracing*: it calls your function once with proxy operands to record a `LazyExpr` string, so an `if`/`for`/`while` in the body only ever sees one (traced) path — the rest is silently lost. When the body contains control flow **and** it fits the [DSL grammar](../reference/dsl_syntax.md), `jit` detects this at decoration time and instead compiles the whole function with the same miniexpr engine that powers `@blosc2.dsl_kernel`, so every branch and loop runs as written, once per chunk, on NumPy or NDArray operands directly (no conversion copy).
+
+```python
+# Without this detection, jit would call the function once, record only the
+# branch that one call happened to take, and reuse it for every pixel — not
+# a real per-pixel escape-time loop.
+@blosc2.jit
+def mandelbrot(cr, ci, max_iter):
+    zr, zi, n = 0.0, 0.0, 0
+    for _ in range(max_iter):
+        if zr * zr + zi * zi > 4.0:
+            break
+        zr, zi = zr * zr - zi * zi + cr, 2 * zr * zi + ci
+        n += 1
+    return n  # jit detects the control flow and compiles this kernel whole
+```
+
+Functions **without** control flow always trace, even when they happen to be DSL-valid: tracing plus vectorized `ne_evaluate`/miniexpr is faster than whole-kernel miniexpr for pure elementwise expressions, so `jit` only takes the DSL route when tracing would silently lose branches/loops. Use `jit(strict=True)` to force the DSL route regardless (raises at decoration time if the function can't be compiled), or `jit(strict=False)` to force tracing even with control flow (only correct when branches depend on plain Python values, not on the arrays themselves).
+
 ## Align your reads with the double partition
 
 blosc2 arrays are partitioned twice: the array is split into **chunks** (the unit of storage and compression), and each chunk is subdivided into **blocks** (the unit of decompression, sized to fit CPU caches). A read that lands exactly on a partition boundary decompresses only the chunk or block it needs, while the same-sized read shifted off-grid straddles (and decompresses) extra ones.

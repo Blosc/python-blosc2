@@ -1157,3 +1157,94 @@ def test_validate_dsl_jit_reports_compile_and_fallback(monkeypatch):
     st = blosc2.validate_dsl_jit(other, [np.float64, np.float64], np.float64)
     assert st["compiled"]
     assert not st["jit"]
+
+
+def _dsl_reference(kernel, operands, dtype=None):
+    """Evaluate *kernel* over NDArray copies of *operands* (same engine, same buffers)."""
+    nd_operands = tuple(blosc2.asarray(op) if isinstance(op, np.ndarray) else op for op in operands)
+    return blosc2.lazyudf(kernel, nd_operands, dtype=dtype)[()]
+
+
+@blosc2.dsl_kernel
+def _numpy_operand_kernel(x, y):
+    return x * 2.0 + y
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (10_007,),  # 1-D: partial last chunk and block
+        (101, 67),  # 2-D: odd shape
+        (13, 17, 19),  # 3-D: odd shape
+    ],
+)
+def test_dsl_kernel_numpy_operands_match_ndarray_reference(shape):
+    rng = np.random.default_rng(0)
+    a = rng.random(shape).astype(np.float64)
+    b = rng.random(shape).astype(np.float64)
+    res = blosc2.lazyudf(_numpy_operand_kernel, (a, b), dtype=None)[()]
+    np.testing.assert_array_equal(res, _dsl_reference(_numpy_operand_kernel, (a, b)))
+
+
+def test_dsl_kernel_numpy_operands_mixed_dtype_promotes_output():
+    rng = np.random.default_rng(1)
+    a = (rng.random(10_007) * 10).astype(np.float32)
+    b = (rng.random(10_007) * 10).astype(np.int64)
+    res = blosc2.lazyudf(_numpy_operand_kernel, (a, b), dtype=None)[()]
+    ref = _dsl_reference(_numpy_operand_kernel, (a, b))
+    assert res.dtype == ref.dtype
+    np.testing.assert_array_equal(res, ref)
+
+
+def test_dsl_kernel_mixed_ndarray_and_numpy_operand():
+    shape = (20, 10)
+    a = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    b = blosc2.asarray(np.arange(np.prod(shape), dtype=np.float64).reshape(shape) * 2)
+    res = blosc2.lazyudf(_numpy_operand_kernel, (a, b), dtype=None)[()]
+    ref = blosc2.lazyudf(_numpy_operand_kernel, (blosc2.asarray(a), b), dtype=None)[()]
+    np.testing.assert_array_equal(res, ref)
+
+
+def test_dsl_kernel_numpy_operands_f_ordered_and_strided():
+    shape = (20, 10)
+    b = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    ref = _dsl_reference(_numpy_operand_kernel, (b, b))
+
+    a_f = np.asfortranarray(b)
+    res_f = blosc2.lazyudf(_numpy_operand_kernel, (a_f, b), dtype=None)[()]
+    np.testing.assert_array_equal(res_f, ref)
+
+    a_strided = np.arange(2 * np.prod(shape), dtype=np.float64).reshape(40, 10)[::2]
+    ref_strided = _dsl_reference(_numpy_operand_kernel, (np.ascontiguousarray(a_strided), b))
+    res_strided = blosc2.lazyudf(_numpy_operand_kernel, (a_strided, b), dtype=None)[()]
+    np.testing.assert_array_equal(res_strided, ref_strided)
+
+
+def test_dsl_kernel_numpy_operand_non_native_endian_requires_miniexpr():
+    a = np.arange(100, dtype=">f8").reshape(10, 10)
+    b = np.arange(100, dtype=np.float64).reshape(10, 10)
+    with pytest.raises(RuntimeError, match="NDArray or NumPy inputs"):
+        blosc2.lazyudf(_numpy_operand_kernel, (a, b), dtype=None)[()]
+
+
+def test_dsl_kernel_zero_input_dummy_operand_injection_still_works():
+    @blosc2.dsl_kernel
+    def ramp(start, step):
+        return start + step * _i0  # noqa: F821  # DSL index symbol resolved by miniexpr
+
+    res = blosc2.lazyudf(ramp, (1.0, 2.0), dtype=np.float64, shape=(100,))[()]
+    expected = 1.0 + 2.0 * np.arange(100, dtype=np.float64)
+    np.testing.assert_allclose(res, expected)
+
+
+def test_dsl_kernel_numpy_out_matches_compute_and_honors_explicit_cparams():
+    a = np.arange(1000, dtype=np.float64)
+    b = np.arange(1000, dtype=np.float64) * 0.5
+    lexpr = blosc2.lazyudf(_numpy_operand_kernel, (a, b), dtype=None)
+
+    res_getitem = lexpr[()]
+    res_compute = lexpr.compute()[:]
+    np.testing.assert_array_equal(res_getitem, res_compute)
+
+    res_explicit = lexpr.compute(cparams=blosc2.CParams(clevel=5))
+    assert res_explicit.schunk.cparams.clevel == 5
