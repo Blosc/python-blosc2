@@ -154,7 +154,10 @@ class Meta(Mapping):
     def get(self, key: str, default: Any = None) -> Any:
         """Return the value for `key` if `key` is in the dictionary, else return `default`.
         If `default` is not given, it defaults to ``None``."""
-        return self.get(key, default)
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
     def __init__(self, schunk):
         self.schunk = schunk
