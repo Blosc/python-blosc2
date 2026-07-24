@@ -256,3 +256,12 @@ def test_jit_dsl_route_execution_tuning_kwarg_with_storage_kwarg_still_returns_n
     assert isinstance(res, blosc2.NDArray)
     assert res.schunk.cparams.clevel == 2
     np.testing.assert_allclose(res[:], (a + b) * 3)
+
+
+def test_jit_dsl_route_accepts_array_protocol_operands():
+    pd = pytest.importorskip("pandas")
+    a = np.arange(1000, dtype=np.float64)
+    b = np.arange(1000, dtype=np.float64) * 0.5
+    df = pd.DataFrame({"a": a, "b": b})
+    jit_f = blosc2.jit()(_kernel_src)
+    np.testing.assert_array_equal(jit_f(df["a"], df["b"], 3), jit_f(a, b, 3))

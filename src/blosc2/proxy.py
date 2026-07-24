@@ -7,6 +7,8 @@
 
 import ast
 import asyncio
+import inspect
+import textwrap
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
@@ -760,6 +762,93 @@ def as_simpleproxy(*arrs: Sequence[blosc2.Array]) -> tuple[SimpleProxy | blosc2.
     return out[0] if len(out) == 1 else out
 
 
+class _PandasRowProxy(blosc2.Operand):
+    """Row proxy for `PandasUdfEngine.apply`'s axis=1 route.
+
+    Stands in for "the current row" the way the textbook `axis=1` idiom
+    expects (`row["colname"]`), but is backed by whole *columns*: `row["a"]
+    + row["b"]` traces to one fused expression over the whole column set in
+    a single call, instead of looping over rows in Python. Columns are
+    extracted lazily (and cached) from the original DataFrame, not from a
+    whole-frame NumPy array, so per-column dtypes are preserved.
+    """
+
+    def __init__(self, df):
+        self._df = df
+        self._cache = {}
+
+    def __getitem__(self, key):
+        if not isinstance(key, str):
+            raise TypeError(
+                f"row[{key!r}]: axis=1 row proxies only support column access by "
+                "name (a string). Positional or iterable row access is not "
+                "supported; for row-wise computations, call your @blosc2.jit "
+                "function directly with the DataFrame columns as separate "
+                "arguments instead, e.g. func(df['a'], df['b'])."
+            )
+        if key in self._cache:
+            return self._cache[key]
+        n_matches = int((self._df.columns == key).sum())
+        if n_matches == 0:
+            raise KeyError(f"row[{key!r}]: no such column in the DataFrame")
+        if n_matches > 1:
+            raise KeyError(
+                f"row[{key!r}]: column label is duplicated ({n_matches} matches); "
+                "axis=1 row proxies require unique column labels"
+            )
+        col = self._df[key].to_numpy()
+        if col.dtype.kind not in "biufc":
+            raise ValueError(
+                f"row[{key!r}]: column has dtype {col.dtype!r}, which is not numeric. "
+                "The Blosc2 engine only supports vectorized numeric computations."
+            )
+        proxy = SimpleProxy(col)
+        self._cache[key] = proxy
+        return proxy
+
+    def __getattr__(self, name):
+        raise AttributeError(
+            f"row.{name}: axis=1 row proxies only support column access via "
+            f"row[{name!r}]; attribute access, iteration and per-row methods "
+            "(e.g. row.isna()) are not supported. For per-row computations that "
+            "need more than combining columns (e.g. per-row branching), call "
+            "your @blosc2.jit function directly with the columns as separate "
+            "array arguments instead of through df.apply(..., axis=1)."
+        )
+
+
+def _analyze_row_func(func) -> tuple[bool, bool]:
+    """Inspect *func* for the two signals `PandasUdfEngine.apply`'s axis=1
+    route needs to pick a dispatch strategy: whether it subscripts its first
+    parameter with a string literal anywhere in its body (the `row["colname"]`
+    idiom), and whether its body contains a `for`/`while` loop.
+
+    Both default to False (the historical per-row loop) if the source can't
+    be inspected, e.g. a dynamically built function.
+    """
+    try:
+        sig = inspect.signature(func)
+        params = list(sig.parameters.values())
+        if not params:
+            return False, False
+        row_name = params[0].name
+        source = textwrap.dedent(inspect.getsource(func))
+        tree = ast.parse(source)
+    except (OSError, TypeError, SyntaxError, ValueError):
+        return False, False
+    nodes = list(ast.walk(tree))
+    uses_subscript = any(
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == row_name
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, str)
+        for node in nodes
+    )
+    has_loop = any(isinstance(node, ast.For | ast.While) for node in nodes)
+    return uses_subscript, has_loop
+
+
 def _has_control_flow(source: str | None) -> bool:
     """Whether *source* (a DSL-extracted function source, or None) contains a
     branch or loop that tracing cannot observe."""
@@ -785,6 +874,17 @@ def _jit_dsl_wrapper(kernel: DSLKernel, out, decorator_kwargs: dict):
         bound = sig.bind(*args, **func_kwargs)
         bound.apply_defaults()
         values = tuple(bound.arguments[name] for name in kernel.input_names)
+        # Accept array-protocol operands (pandas Series, polars Series, ...) the
+        # same way the tracing route already does; zero-copy when the source is
+        # numpy-backed.
+        values = tuple(
+            np.asarray(v)
+            if not isinstance(v, np.ndarray | blosc2.NDArray)
+            and hasattr(v, "__array__")
+            and getattr(v, "ndim", 0) > 0
+            else v
+            for v in values
+        )
 
         array_shapes = {
             v.shape
@@ -1055,6 +1155,8 @@ class PandasUdfEngine:
         """
         orig = data
         values = cls._ensure_numpy_data(data)
+        func_name = getattr(func, "__name__", "the function")
+        uses_subscript, has_loop = _analyze_row_func(func) if hasattr(orig, "columns") else (False, False)
         func = decorator(func)
         if values.ndim == 1 or axis is None:
             # pandas Series.apply or pipe
@@ -1064,9 +1166,45 @@ class PandasUdfEngine:
             result = [func(values[:, col_idx], *args, **kwargs) for col_idx in range(values.shape[1])]
             result = np.vstack(result).transpose()
         elif axis in (1, "columns"):
-            # pandas apply(axis=1) row-wise
-            result = [func(values[row_idx, :], *args, **kwargs) for row_idx in range(values.shape[0])]
-            result = np.vstack(result)
+            if uses_subscript and has_loop:
+                # row["colname"] combined with for/while: tracing would unroll
+                # the loop eagerly at call time, growing the traced expression
+                # with every iteration (a real per-row iteration count, like a
+                # Newton-Raphson loop, blows this up well past practical). No
+                # existing dispatch route can run this well; point at the one
+                # that can instead of hanging or crashing confusingly.
+                raise TypeError(
+                    f"@blosc2.jit engine=... axis=1: {func_name!r} "
+                    'combines row["colname"] access with a for/while loop, which cannot be '
+                    "traced efficiently per-row. Call your @blosc2.jit function directly with "
+                    "the DataFrame columns as separate array arguments instead, e.g. "
+                    "kernel(df['a'], df['b']) -- see doc/guides/pandas_engine.md."
+                )
+            if uses_subscript:
+                # The `row["colname"]` idiom: replace the per-row Python loop
+                # with one call over whole per-column arrays (row-proxy, see
+                # `_PandasRowProxy`), extracted from the original DataFrame so
+                # per-column dtypes survive.
+                row_proxy = _PandasRowProxy(orig)
+                result = func(row_proxy, *args, **kwargs)
+                if not (
+                    isinstance(result, np.ndarray)
+                    and result.ndim == 1
+                    and result.shape[0] == values.shape[0]
+                ):
+                    raise TypeError(
+                        '@blosc2.jit engine=... axis=1: functions using row["colname"] must '
+                        f"return one scalar per row (shape ({values.shape[0]},)); got "
+                        f"{result!r}. Returning multiple values per row is not supported here."
+                    )
+            else:
+                # pandas apply(axis=1) row-wise: the historical per-row loop.
+                # Fine for functions treating the row as a plain array (e.g.
+                # `row + 1`); functions using row["colname"] are dispatched
+                # above instead, since this loop hands each call a positional
+                # ndarray row that does not support string subscripting.
+                result = [func(values[row_idx, :], *args, **kwargs) for row_idx in range(values.shape[0])]
+                result = np.vstack(result)
         else:
             raise NotImplementedError(f"Unknown axis '{axis}'. Use one of 0, 1 or None.")
 

@@ -25,15 +25,19 @@
 # quoted expression string, not that it wins a raw speed race. See
 # doc/guides/pandas_engine.md.
 #
-# Note: axis=1 (row-wise) is NOT a good fit for this engine. It still calls
-# the function once per row in a Python loop either way, and for a handful
-# of columns the wrapping overhead per call (building a compute-engine proxy
-# for a tiny array) is larger than the win, so engine=blosc2.jit is actually
-# *slower* than plain apply(axis=1) in that case. Use axis=0 (or restructure
-# the computation to operate on whole columns) to get the engine's benefit.
+# Row-wise (axis=1) computations that combine several columns per row are a
+# different story: engine=blosc2.jit + axis=1 still calls the function once
+# per row in a Python loop, so it is not the right tool there either. Instead,
+# write the function to take the columns as separate array parameters and
+# call it directly (no df.apply at all) -- see "Row-wise computations" in
+# doc/guides/pandas_engine.md. bench_row_wise() below measures that pattern
+# against a plain per-row apply() and vectorized NumPy on a genuine
+# per-row-convergence problem (Kepler's equation via Newton-Raphson), where a
+# real per-row `break` beats even vectorized NumPy.
 #
 # Each measurement is the minimum of NRUNS repetitions to reduce noise.
 
+import math
 from pathlib import Path
 from time import perf_counter
 
@@ -48,6 +52,10 @@ NROWS = 1_000_000
 NCOLS = 8
 
 ROW_SWEEP = (1_000, 10_000, 100_000, 1_000_000, 5_000_000)
+
+# Plain per-row apply(axis=1) is ~1000x slower than the alternatives below;
+# keep this sweep small so the benchmark finishes in a reasonable time.
+ROW_WISE_APPLY_NROWS = 2_000
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "doc" / "guides" / "pandas_engine"
 
@@ -121,6 +129,90 @@ def speedup(df, func):
     t_plain, _ = timeit(lambda: df.apply(func))
     t_engine, _ = timeit(lambda: df.apply(func, engine=blosc2.jit))
     return t_plain / t_engine, t_plain, t_engine
+
+
+# Kepler's equation, solved by Newton-Raphson: a genuine per-row-convergence
+# problem (row["colname"] combines two columns, and rows converge in a
+# different number of iterations), used to benchmark the row-wise
+# "columns as direct-call parameters" pattern from doc/guides/pandas_engine.md
+# against both a plain per-row apply(axis=1) and vectorized NumPy.
+def kepler_row_scalar(row):
+    m = row["mean_anomaly"]
+    ecc = row["eccentricity"]
+    e = m + ecc * math.sin(m)
+    for _ in range(100):
+        diff = (e - ecc * math.sin(e) - m) / (1.0 - ecc * math.cos(e))
+        e = e - diff
+        if abs(diff) < 1e-12:
+            break
+    return e
+
+
+def kepler_numpy(m, ecc):
+    e = m + ecc * np.sin(m)
+    for _ in range(100):
+        diff = (e - ecc * np.sin(e) - m) / (1.0 - ecc * np.cos(e))
+        e = e - diff
+        if np.max(np.abs(diff)) < 1e-12:
+            break
+    return e
+
+
+@blosc2.jit
+def kepler_dsl(mean_anomaly, eccentricity):
+    e = mean_anomaly + eccentricity * sin(mean_anomaly)  # noqa: F821  # 'sin' resolved as a bare DSL function name
+    for _ in range(100):
+        diff = (e - eccentricity * sin(e) - mean_anomaly) / (1.0 - eccentricity * cos(e))  # noqa: F821
+        e = e - diff
+        if abs(diff) < 1e-12:
+            break
+    return e
+
+
+def make_kepler_df(nrows):
+    rng = np.random.default_rng(1)
+    return pd.DataFrame(
+        {
+            "mean_anomaly": rng.uniform(0, 2 * np.pi, nrows),
+            "eccentricity": rng.uniform(0.0, 0.95, nrows),
+        }
+    )
+
+
+def bench_row_wise():
+    # Slice from one frame rather than calling make_kepler_df(n) twice with
+    # different n: a fresh same-seeded Generator's bulk draws are not
+    # guaranteed to share a common prefix across different requested sizes.
+    df_full = make_kepler_df(NROWS)
+    df_small = df_full.iloc[:ROW_WISE_APPLY_NROWS]
+    m = df_full["mean_anomaly"].to_numpy()
+    ecc = df_full["eccentricity"].to_numpy()
+
+    t_apply, result_apply = timeit(lambda: df_small.apply(kepler_row_scalar, axis=1))
+    t_numpy, result_numpy = timeit(lambda: kepler_numpy(m, ecc))
+    t_dsl, result_dsl = timeit(
+        lambda: np.asarray(kepler_dsl(df_full["mean_anomaly"], df_full["eccentricity"]))
+    )
+
+    # Cross-check correctness: plain apply on the small frame vs numpy on the
+    # same rows, and the direct DSL call vs numpy on the full frame.
+    np.testing.assert_allclose(
+        result_apply.to_numpy(),
+        kepler_numpy(m[:ROW_WISE_APPLY_NROWS], ecc[:ROW_WISE_APPLY_NROWS]),
+        atol=1e-9,
+    )
+    np.testing.assert_allclose(result_dsl, result_numpy, atol=1e-9)
+
+    print("\nrow-wise (axis=1), Kepler's equation via Newton-Raphson:")
+    print(f"  plain apply(axis=1),      {ROW_WISE_APPLY_NROWS:>9,} rows:  {t_apply:.4f} s")
+    print(f"  vectorized numpy,         {NROWS:>9,} rows:  {t_numpy:.4f} s")
+    print(f"  direct DSL call,          {NROWS:>9,} rows:  {t_dsl:.4f} s   {t_numpy / t_dsl:.2f}x vs numpy")
+    per_row_apply = t_apply / ROW_WISE_APPLY_NROWS
+    per_row_dsl = t_dsl / NROWS
+    print(
+        f"  per row: apply {per_row_apply * 1e6:.1f} us vs direct DSL call {per_row_dsl * 1e6:.4f} us "
+        f"(~{per_row_apply / per_row_dsl:,.0f}x)"
+    )
 
 
 def save_plot(row_speedups, ops_speedups, out_path):
@@ -199,6 +291,8 @@ def main():
     out_path = OUT_DIR / "speedup.png"
     save_plot(row_speedups, ops_speedups, out_path)
     print(f"\nplot saved to {out_path}")
+
+    bench_row_wise()
 
 
 if __name__ == "__main__":

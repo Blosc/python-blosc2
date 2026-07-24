@@ -180,3 +180,81 @@ class TestPandasEngineEndToEnd:
         df = pd.DataFrame({"a": ["x", "y"]})
         with pytest.raises(ValueError, match="numeric dtype"):
             df.apply(lambda x: x + 1, engine=blosc2.jit)
+
+    def test_apply_axis1_row_subscript_idiom_matches_default_engine(self):
+        def add_people(row):
+            return row["max_people"] + row["max_children"]
+
+        df = pd.DataFrame({"max_people": [4, 2, 8], "max_children": [1, 0, 3]})
+        expected = df.apply(add_people, axis=1)
+        result = df.apply(add_people, engine=blosc2.jit, axis=1)
+        pd.testing.assert_series_equal(result, expected)
+
+    def test_apply_axis1_row_subscript_args_kwargs_forwarded(self):
+        def combine(row, num1, num2=0):
+            return row["a"] + row["b"] + num1 + num2
+
+        df = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+        expected = df.apply(combine, axis=1, args=(10,), num2=100)
+        result = df.apply(combine, engine=blosc2.jit, axis=1, args=(10,), num2=100)
+        pd.testing.assert_series_equal(result, expected)
+
+    def test_apply_axis1_row_subscript_preserves_column_dtype(self):
+        # a mixed-dtype frame would be upcast by DataFrame.values; the row
+        # proxy must extract columns from the original frame instead.
+        def add(row):
+            return row["i"] + row["f"]
+
+        df = pd.DataFrame({"i": np.array([1, 2, 3], dtype=np.int64), "f": [0.5, 0.5, 0.5]})
+        result = df.apply(add, engine=blosc2.jit, axis=1)
+        np.testing.assert_allclose(result.to_numpy(), [1.5, 2.5, 3.5])
+
+    def test_apply_axis1_row_subscript_with_loop_raises_clear_error(self):
+        def kepler_row(row):
+            m, ecc = row["m"], row["ecc"]
+            e = m + ecc * np.sin(m)
+            for _ in range(50):
+                diff = (e - ecc * np.sin(e) - m) / (1.0 - ecc * np.cos(e))
+                e = e - diff
+            return e
+
+        df = pd.DataFrame({"m": [0.1, 0.5], "ecc": [0.1, 0.2]})
+        with pytest.raises(TypeError, match="for/while loop"):
+            df.apply(kepler_row, engine=blosc2.jit, axis=1)
+
+    def test_apply_axis1_row_subscript_duplicate_column_raises(self):
+        def add(row):
+            return row["a"] + 1
+
+        df = pd.DataFrame(np.ones((2, 2)), columns=["a", "a"])
+        with pytest.raises(KeyError, match="duplicated"):
+            df.apply(add, engine=blosc2.jit, axis=1)
+
+    def test_apply_axis1_row_subscript_attribute_access_raises(self):
+        def bad(row):
+            return row["a"] + row.b
+
+        df = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+        with pytest.raises(AttributeError, match="row\\['b'\\]"):
+            df.apply(bad, engine=blosc2.jit, axis=1)
+
+    def test_apply_axis1_row_subscript_non_numeric_column_raises(self):
+        # Whole-frame numeric-dtype validation (`_ensure_numpy_data`) already
+        # gates this ahead of row-proxy dispatch; `_PandasRowProxy` carries
+        # its own per-column check too, for callers that construct it
+        # directly.
+        def bad(row):
+            return row["a"] + len(row["b"])
+
+        df = pd.DataFrame({"a": [1.0, 2.0], "b": ["x", "y"]})
+        with pytest.raises(ValueError, match="numeric dtype"):
+            df.apply(bad, engine=blosc2.jit, axis=1)
+
+    def test_apply_axis1_positional_idiom_still_uses_per_row_loop(self):
+        # No `row["..."]` subscript: falls back to the historical per-row
+        # loop, unaffected by the row-proxy dispatch added for the subscript
+        # idiom above.
+        df = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [4.0, 5.0, 6.0]})
+        expected = df.apply(lambda row: row * 2, axis=1)
+        result = df.apply(lambda row: row * 2, engine=blosc2.jit, axis=1)
+        pd.testing.assert_frame_equal(result, expected)

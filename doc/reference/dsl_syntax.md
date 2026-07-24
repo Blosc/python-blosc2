@@ -178,6 +178,21 @@ Rules:
 - `while` condition is a regular DSL expression.
 - Runtime iteration cap is enforced by `ME_DSL_WHILE_MAX_ITERS`.
 
+### Reductions inside control flow
+
+`sum`, `max`, `min` and other block reductions collapse the whole chunk being
+evaluated to one value, not one value per element. Using one as the
+condition of `if`/`while`, or assigning one to a local that per-element code
+later reads (e.g. `y = max(x)` followed by `if x > 0: y = y + 1`), does
+**not** raise a compile-time or runtime error -- it compiles and runs, and
+produces results that are only correct for element 0 of the block; every
+other element sees a stale/zero value where the reduction result should be.
+This is a rough edge in the underlying
+[miniexpr](https://github.com/Blosc/miniexpr) compiler, not something this
+Python layer validates today. Write the per-element form instead (drop the
+reduction, e.g. `if abs(diff) < tol` rather than `if max(abs(diff)) < tol`)
+whenever the intent is a per-element, not whole-block, decision.
+
 ## `print(...)`
 
 `print` is supported as a DSL statement.
@@ -280,3 +295,6 @@ These Python features are not part of this DSL:
 - Ternary expression: `a if cond else b`
 - `for ... else` and `while ... else`
 - Keyword-argument calls and other call forms outside the supported subset
+- Docstrings (or any other bare string-literal statement) inside the kernel
+  body -- this is a compile-time parse error at the miniexpr level, not a
+  silently-ignored statement.
