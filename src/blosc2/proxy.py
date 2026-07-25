@@ -876,6 +876,34 @@ def _has_control_flow(source: str | None) -> bool:
     return any(isinstance(node, ast.If | ast.For | ast.While) for node in ast.walk(tree))
 
 
+def _wide_frame_hint(err: BaseException, func_name: str, params) -> str | None:
+    """Guidance to append when a call gets a keyword the function doesn't take.
+
+    The usual cause is the `kernel(**df)` idiom (see doc/guides/pandas_engine.md)
+    against a frame carrying more columns than the kernel has parameters. Extra
+    keywords are rejected rather than dropped, so that a keyword meant to do
+    something -- a typo, a stale argument name -- never goes silently unused.
+    """
+    if not isinstance(err, TypeError) or "unexpected keyword argument" not in str(err):
+        return None
+    params = list(params)
+    if not params:
+        return None
+    cols = ", ".join(repr(p) for p in params)
+    return (
+        f"If you are calling {func_name}(**df), subset the frame to the "
+        f"kernel's parameters: {func_name}(**df[[{cols}]])"
+    )
+
+
+def _signature_params(func) -> list:
+    """Parameter names of *func*, or an empty list if it cannot be introspected."""
+    try:
+        return list(inspect.signature(func).parameters)
+    except (TypeError, ValueError):
+        return []
+
+
 def _jit_dsl_wrapper(kernel: DSLKernel, out, decorator_kwargs: dict):
     """Build the call wrapper for the DSL (control-flow) dispatch route of `jit`.
 
@@ -889,7 +917,13 @@ def _jit_dsl_wrapper(kernel: DSLKernel, out, decorator_kwargs: dict):
         sig = kernel._sig
         if sig is None:
             raise TypeError(f"@blosc2.jit: cannot introspect the signature of {kernel.__name__!r}")
-        bound = sig.bind(*args, **func_kwargs)
+        try:
+            bound = sig.bind(*args, **func_kwargs)
+        except TypeError as e:
+            # sig.bind's message names no function; prefix it, and point at the
+            # subsetting fix when a wide DataFrame was unpacked into the call.
+            hint = _wide_frame_hint(e, kernel.__name__, kernel.input_names or sig.parameters)
+            raise TypeError(f"{kernel.__name__}() {e}" + (f"\n{hint}" if hint else "")) from None
         bound.apply_defaults()
         values = tuple(bound.arguments[name] for name in kernel.input_names)
         # Accept array-protocol operands (pandas Series, polars Series, ...) the
@@ -1137,8 +1171,18 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
             try:
                 retval = func(*new_args, **func_kwargs)
             except Exception as e:
-                if _trace_hint is not None:
-                    raise type(e)(f"{e}\n{_trace_hint}") from e
+                hints = [
+                    hint
+                    for hint in (
+                        _wide_frame_hint(
+                            e, getattr(func, "__name__", "the function"), _signature_params(func)
+                        ),
+                        _trace_hint,
+                    )
+                    if hint is not None
+                ]
+                if hints:
+                    raise type(e)("\n".join([str(e), *hints])) from e
                 raise
 
             # Treat return value

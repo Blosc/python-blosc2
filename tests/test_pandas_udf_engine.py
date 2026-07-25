@@ -325,10 +325,35 @@ class TestPandasEngineEndToEnd:
     def test_columns_by_keyword_unpacking(self):
         # doc/guides/pandas_engine.md's row-wise pattern: a DataFrame is a
         # mapping of column name to Series, so `kernel(**df)` passes each
-        # column as a keyword argument. Both jit routes must accept that.
+        # column as a keyword argument. Both jit routes must accept that, and
+        # bind by name: the columns below are in neither the parameter order
+        # nor alphabetical order, and the operations are asymmetric, so a
+        # positional binding would give a different (wrong) answer.
         @blosc2.jit
         def traced(a, b):
-            return np.sqrt(a * a + b * b)
+            return b - a * 2.0
+
+        @blosc2.jit
+        def dsl(a, b):
+            if a > b:
+                out = a - b
+            else:
+                out = b - a * 2.0
+            return out
+
+        df = pd.DataFrame({"b": [4.0, -5.0, 6.0], "a": [-2.0, 1.0, 3.0]})
+        assert list(df.columns) == ["b", "a"]
+
+        np.testing.assert_allclose(np.asarray(traced(**df)), np.asarray(traced(df["a"], df["b"])))
+        np.testing.assert_allclose(np.asarray(traced(**df)), df["b"] - df["a"] * 2.0)
+        np.testing.assert_allclose(np.asarray(dsl(**df)), np.asarray(dsl(df["a"], df["b"])))
+
+    def test_wide_frame_kwargs_error_names_the_fix(self):
+        # Extra columns are rejected, not dropped: a keyword that goes nowhere
+        # would otherwise fail silently. The message must name the subsetting fix.
+        @blosc2.jit
+        def traced(a, b):
+            return a + b
 
         @blosc2.jit
         def dsl(a, b):
@@ -338,7 +363,17 @@ class TestPandasEngineEndToEnd:
                 out = b - a
             return out
 
-        df = pd.DataFrame({"a": [-2.0, 1.0, 3.0], "b": [4.0, -5.0, 6.0]})
+        df = pd.DataFrame({"a": [1.0, 2.0], "b": [4.0, 5.0], "note": [7.0, 8.0]})
 
-        np.testing.assert_allclose(np.asarray(traced(**df)), np.hypot(df["a"], df["b"]))
-        np.testing.assert_allclose(np.asarray(dsl(**df)), np.abs(df["a"] - df["b"]))
+        # (`func.__name__` is the jit wrapper's; the message uses the kernel's)
+        for name, func in (("traced", traced), ("dsl", dsl)):
+            with pytest.raises(TypeError) as excinfo:
+                func(**df)
+            message = str(excinfo.value)
+            assert name in message
+            assert "'note'" in message
+            assert "**df[['a', 'b']]" in message
+
+        # A missing operand is a different mistake and keeps its own message
+        with pytest.raises(TypeError, match="missing a required argument"):
+            dsl(a=df["a"])

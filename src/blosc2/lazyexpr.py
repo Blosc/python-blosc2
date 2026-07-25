@@ -4665,7 +4665,16 @@ class LazyUDF(LazyArray):
             # DSL kernels are using input names that are extracted from params as a list,
             # and we need to use them for matching variables in miniexpr
             # (instead of the 'o{%d}' notation).
-            self.inputs_dict = dict(zip(self.func.input_names, self.inputs, strict=True))
+            names = self.func.input_names
+            if len(names) != len(self.inputs):
+                # Otherwise this surfaces as a bare "zip() argument 2 is longer
+                # than argument 1", which names neither the kernel nor the counts.
+                udf_name = getattr(self.func.func, "__name__", self.func.__name__)
+                raise ValueError(
+                    f"DSL kernel {udf_name!r} takes {len(names)} operand(s) "
+                    f"({', '.join(names)}), but {len(self.inputs)} were passed."
+                )
+            self.inputs_dict = dict(zip(names, self.inputs, strict=True))
         else:
             self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
 

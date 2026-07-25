@@ -110,8 +110,9 @@ orbits["E"] = kepler(**orbits)
 ```
 
 No `apply`, no `engine=`. The parameter names match the column names, so `**`
-does the wiring; each column arrives as a pandas Series, which the kernel
-accepts like any array (zero-copy for ordinary numeric dtypes). `**df` passes
+does the wiring — by name, so the column order in the frame is irrelevant.
+Each column arrives as a pandas Series, which the kernel accepts like any
+array (zero-copy for ordinary numeric dtypes). `**df` passes
 *every* column, so subset first if the frame has more:
 `kepler(**orbits[["mean_anomaly", "eccentricity"]])`.
 
