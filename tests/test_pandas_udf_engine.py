@@ -292,3 +292,32 @@ class TestPandasEngineEndToEnd:
         for func in (branch, blosc2.jit(branch)):
             result = s.map(func, engine=blosc2.jit)
             np.testing.assert_allclose(np.asarray(result), expected)
+
+    def test_apply_engine_accepts_configured_jit(self):
+        # pandas gates on hasattr(engine, "__pandas_udf__") and then uses the
+        # engine object as the decorator, so a configured blosc2.jit(...) call
+        # is a valid engine -- the only way to reach strict= through apply().
+        from blosc2.dsl_kernel import DSLSyntaxError
+
+        def branch(col):
+            if col >= 0:
+                out = col + 1.0
+            else:
+                out = col - 1.0
+            return out
+
+        def not_dsl(col):
+            return np.where(col >= 0, col.mean() + 1.0, col - 1.0)
+
+        df = pd.DataFrame({"a": [-2.0, 1.0, 3.0], "b": [4.0, -5.0, 6.0]})
+        expected = df.apply(lambda col: np.where(col >= 0, col + 1.0, col - 1.0))
+
+        result = df.apply(branch, engine=blosc2.jit(strict=True))
+        pd.testing.assert_frame_equal(result, expected)
+
+        # strict=True refuses to silently fall back to tracing
+        with pytest.raises(DSLSyntaxError):
+            df.apply(not_dsl, engine=blosc2.jit(strict=True))
+
+        # strict=False forces the tracing route instead
+        df.apply(not_dsl, engine=blosc2.jit(strict=False))

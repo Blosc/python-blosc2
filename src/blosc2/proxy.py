@@ -21,7 +21,7 @@ except (ImportError, AttributeError):
 import numpy as np
 
 import blosc2
-from blosc2.dsl_kernel import DSLKernel
+from blosc2.dsl_kernel import DSLKernel, DSLSyntaxError
 
 # Default Proxy.afetch concurrency cap for remote sources (e.g. C2Array),
 # where fetches are dominated by round-trip latency, not local CPU/IO.
@@ -1008,9 +1008,19 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
           extraction error.  Functions without control flow always trace, even
           if they happen to be DSL-valid (tracing is faster for pure elementwise
           expressions).
-        - ``True``: always use the DSL route, raising at decoration time if
-          *func* cannot be compiled as a DSL kernel.  Equivalent to
-          ``blosc2.dsl_kernel``.
+        - ``True``: always use the DSL route, raising
+          :class:`~blosc2.dsl_kernel.DSLSyntaxError` at decoration time if
+          *func*'s source cannot be **parsed** as a DSL kernel.  Note the
+          guarantee is exactly that -- parsing -- and not that the kernel will
+          compile: a function that is DSL-shaped but calls something miniexpr
+          does not implement passes here and fails later, at call time, with a
+          ``RuntimeError``.  See the DSL syntax reference for what the grammar
+          accepts.  (Unrelated to :func:`blosc2.dsl_kernel`, which builds a
+          :class:`DSLKernel` object rather than an evaluating wrapper.)
+
+          This also works as a pandas engine, which is the only way to reach
+          ``strict`` through that entry point:
+          ``df.apply(f, engine=blosc2.jit(strict=True))``.
         - ``False``: always use the tracing route, even if *func* has control
           flow (this only works when branches/loops depend on plain Python
           values, not on traced arrays).
@@ -1037,13 +1047,37 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
     >>> import numpy as np
     >>> import blosc2
     >>> @blosc2.jit
-    >>> def compute_expression(a, b, c):
-    >>>     return np.sum(((a ** 3 + np.sin(a * 2)) > 2 * c) & (b > 0), axis=1)
+    ... def compute_expression(a, b, c):
+    ...     return np.sum(((a ** 3 + np.sin(a * 2)) > 2 * c) & (b > 0), axis=1)
     >>> a = np.arange(20, dtype=np.float32).reshape(4, 5)
     >>> b = np.arange(20).reshape(4, 5)
     >>> c = np.arange(5)
     >>> compute_expression(a, b, c)
-    [5 5 5 5]
+    array([3, 5, 5, 5])
+
+    With ``strict=True`` the function is compiled as a DSL kernel, so a real
+    per-element ``if`` runs as written -- only the matching arm is evaluated:
+
+    >>> @blosc2.jit(strict=True)
+    ... def clamp(x):
+    ...     if x < 0.0:
+    ...         out = 0.0
+    ...     else:
+    ...         out = x
+    ...     return out
+    >>> clamp(np.array([-1.5, 2.0, -0.5]))
+    array([0., 2., 0.])
+
+    The guarantee is that the source *parses* as DSL, checked at decoration
+    time. A body the grammar does not accept is rejected right away, rather
+    than silently falling back to tracing:
+
+    >>> @blosc2.jit(strict=True)  # doctest: +IGNORE_EXCEPTION_DETAIL
+    ... def not_dsl(x):
+    ...     return np.where(x >= 0, x.mean(), x)
+    Traceback (most recent call last):
+        ...
+    blosc2.dsl_kernel.DSLSyntaxError: Unsupported call target in DSL ...
     """
 
     def decorator(func):  # noqa: C901
@@ -1054,8 +1088,13 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
         has_cf = _has_control_flow(kernel.dsl_source)
         dsl_ok = kernel.dsl_source is not None and kernel.dsl_error is None
         if strict is True and not dsl_ok:
-            raise kernel.dsl_error or TypeError(
-                f"@blosc2.jit(strict=True): could not extract a DSL kernel from {func.__name__!r}"
+            # One condition, one exception type: DSLSyntaxError (a ValueError)
+            # whether the source failed to parse as DSL or could not be read at
+            # all (a lambda, a C function). The message avoids naming the
+            # decorator spelling, since `strict=True` also arrives through
+            # `df.apply(..., engine=blosc2.jit(strict=True))`.
+            raise kernel.dsl_error or DSLSyntaxError(
+                f"strict=True: could not extract a DSL kernel from {func.__name__!r}"
             )
         use_dsl = strict is True or (strict is None and has_cf and dsl_ok)
 
@@ -1128,6 +1167,12 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
         # function from a plain one, so it is not decorated a second time.
         wrapper._blosc2_jit_wrapped = func
         return wrapper
+
+    # Carry the engine on the decorator too, so a configured call such as
+    # `blosc2.jit(strict=True)` is accepted by `df.apply(..., engine=...)`:
+    # pandas gates on hasattr(engine, "__pandas_udf__") and then uses the engine
+    # object itself as the decorator.
+    decorator.__pandas_udf__ = PandasUdfEngine
 
     if func is None:
         return decorator
