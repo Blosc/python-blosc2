@@ -355,3 +355,11 @@ def test_binary_funcs_torch_proxy(np_func, blosc_func, dtype, shape, chunkshape)
 @pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS_HEAVY)
 def test_binary_funcs_heavy(np_func, blosc_func, dtype, shape, chunkshape):
     _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
+
+
+@pytest.mark.parametrize("dtype", [blosc2.int64, blosc2.float64, blosc2.complex128])
+def test_sign_ufunc_dispatch(dtype):
+    # np.sign() on an operand must build a lazy expression, not raise TypeError
+    a = np.array([-2, 0, 3], dtype=dtype)
+    b = blosc2.asarray(a)
+    np.testing.assert_allclose(np.sign(b)[()], np.sign(a))

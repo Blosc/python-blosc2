@@ -116,6 +116,7 @@ ufunc_map_1param = {
     np.floor: "floor",
     np.ceil: "ceil",
     np.trunc: "trunc",
+    np.sign: "sign",
     np.signbit: "signbit",
     np.round: "round",
 }

@@ -184,9 +184,6 @@ correct, because `np.where` discards them, but the warning is noise and the work
 is wasted. That is why each arm is clamped to its own domain with `np.maximum`.
 The same caveat applies to numexpr's `where()`.
 
-**`np.sign` is not supported** on the traced expressions and raises a
-`TypeError`. Express it with `np.where` instead.
-
 **A reduction used inside per-element control flow does not mean what it
 looks like it means, in a DSL kernel.** `sum`, `max`, `min` and friends are
 *block* reductions: they collapse the whole chunk being evaluated down to one
