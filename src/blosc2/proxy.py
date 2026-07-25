@@ -1247,8 +1247,9 @@ class PandasUdfEngine:
                     f"@blosc2.jit engine=... axis=1: {func_name!r} "
                     'combines row["colname"] access with a for/while loop, which cannot be '
                     "traced efficiently per-row. Call your @blosc2.jit function directly with "
-                    "the DataFrame columns as separate array arguments instead, e.g. "
-                    "kernel(df['a'], df['b']) -- see doc/guides/pandas_engine.md."
+                    "the DataFrame columns as separate array arguments instead: name its "
+                    "parameters after the columns and call kernel(**df) -- see "
+                    "doc/guides/pandas_engine.md."
                 )
             if uses_subscript:
                 # The `row["colname"]` idiom: replace the per-row Python loop

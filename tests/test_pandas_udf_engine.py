@@ -321,3 +321,24 @@ class TestPandasEngineEndToEnd:
 
         # strict=False forces the tracing route instead
         df.apply(not_dsl, engine=blosc2.jit(strict=False))
+
+    def test_columns_by_keyword_unpacking(self):
+        # doc/guides/pandas_engine.md's row-wise pattern: a DataFrame is a
+        # mapping of column name to Series, so `kernel(**df)` passes each
+        # column as a keyword argument. Both jit routes must accept that.
+        @blosc2.jit
+        def traced(a, b):
+            return np.sqrt(a * a + b * b)
+
+        @blosc2.jit
+        def dsl(a, b):
+            if a > b:
+                out = a - b
+            else:
+                out = b - a
+            return out
+
+        df = pd.DataFrame({"a": [-2.0, 1.0, 3.0], "b": [4.0, -5.0, 6.0]})
+
+        np.testing.assert_allclose(np.asarray(traced(**df)), np.hypot(df["a"], df["b"]))
+        np.testing.assert_allclose(np.asarray(dsl(**df)), np.abs(df["a"] - df["b"]))

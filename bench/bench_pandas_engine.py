@@ -25,15 +25,15 @@
 # quoted expression string, not that it wins a raw speed race. See
 # doc/guides/pandas_engine.md.
 #
-# Row-wise (axis=1) computations that combine several columns per row are a
-# different story: engine=blosc2.jit + axis=1 still calls the function once
-# per row in a Python loop, so it is not the right tool there either. Instead,
-# write the function to take the columns as separate array parameters and
-# call it directly (no df.apply at all) -- see "Row-wise computations" in
-# doc/guides/pandas_engine.md. bench_row_wise() below measures that pattern
-# against a plain per-row apply() and vectorized NumPy on a genuine
-# per-row-convergence problem (Kepler's equation via Newton-Raphson), where a
-# real per-row `break` beats even vectorized NumPy.
+# Row-wise (axis=1) computations are a different story. apply() cannot express
+# per-row iteration at all, so the pattern to reach for is a function taking
+# the columns as separate array parameters, called directly (no df.apply) --
+# with **df, since a DataFrame unpacks into one keyword argument per column.
+# See "Row-wise computations" in doc/guides/pandas_engine.md. bench_row_wise()
+# below measures that pattern against a plain per-row apply() and vectorized
+# NumPy on a genuine per-row-convergence problem (Kepler's equation via
+# Newton-Raphson), where a real per-row `break` beats even vectorized NumPy,
+# and sweeps both what drives that win (rows, and how unevenly rows converge).
 #
 # Each measurement is the minimum of NRUNS repetitions to reduce noise.
 
@@ -56,6 +56,14 @@ ROW_SWEEP = (1_000, 10_000, 100_000, 1_000_000, 5_000_000)
 # Plain per-row apply(axis=1) is ~1000x slower than the alternatives below;
 # keep this sweep small so the benchmark finishes in a reasonable time.
 ROW_WISE_APPLY_NROWS = 2_000
+
+KEPLER_ROW_SWEEP = (10_000, 100_000, 1_000_000, 5_000_000)
+
+# Maximum orbital eccentricity: the knob controlling how *unevenly* rows
+# converge. Near-circular orbits (0.1) all converge in the same 3 iterations;
+# near-parabolic ones (0.99) leave a slow tail that vectorized NumPy must keep
+# sweeping the whole array for, while the DSL kernel's per-row break does not.
+KEPLER_ECC_SWEEP = (0.1, 0.5, 0.9, 0.99)
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "doc" / "guides" / "pandas_engine"
 
@@ -189,14 +197,38 @@ def kepler_dsl(mean_anomaly, eccentricity):
     return e
 
 
-def make_kepler_df(nrows):
+def make_kepler_df(nrows, ecc_max=0.95):
     rng = np.random.default_rng(1)
     return pd.DataFrame(
         {
             "mean_anomaly": rng.uniform(0, 2 * np.pi, nrows),
-            "eccentricity": rng.uniform(0.0, 0.95, nrows),
+            "eccentricity": rng.uniform(0.0, ecc_max, nrows),
         }
     )
+
+
+def kepler_max_iters(m, ecc):
+    """Iterations the slowest-converging row needs -- what vectorized NumPy
+    pays for every row, and what the DSL kernel's per-row break avoids."""
+    e = m + ecc * np.sin(m)
+    for k in range(100):
+        diff = (e - ecc * np.sin(e) - m) / (1.0 - ecc * np.cos(e))
+        e = e - diff
+        if np.max(np.abs(diff)) < 1e-12:
+            return k + 1
+    return 100
+
+
+def kepler_speedup(df):
+    """Vectorized NumPy vs the direct DSL call, returning (speedup, t_numpy, t_dsl)."""
+    m = df["mean_anomaly"].to_numpy()
+    ecc = df["eccentricity"].to_numpy()
+    t_numpy, result_numpy = timeit(lambda: kepler_numpy(m, ecc))
+    # Columns passed by keyword via **df: kernel parameters are named after the
+    # DataFrame columns, so no column has to be restated at the call site.
+    t_dsl, result_dsl = timeit(lambda: np.asarray(kepler_dsl(**df)))
+    np.testing.assert_allclose(result_dsl, result_numpy, atol=1e-9)
+    return t_numpy / t_dsl, t_numpy, t_dsl
 
 
 def bench_row_wise():
@@ -210,9 +242,7 @@ def bench_row_wise():
 
     t_apply, result_apply = timeit(lambda: df_small.apply(kepler_row_scalar, axis=1))
     t_numpy, result_numpy = timeit(lambda: kepler_numpy(m, ecc))
-    t_dsl, result_dsl = timeit(
-        lambda: np.asarray(kepler_dsl(df_full["mean_anomaly"], df_full["eccentricity"]))
-    )
+    t_dsl, result_dsl = timeit(lambda: np.asarray(kepler_dsl(**df_full)))
 
     # Cross-check correctness: plain apply on the small frame vs numpy on the
     # same rows, and the direct DSL call vs numpy on the full frame.
@@ -233,6 +263,45 @@ def bench_row_wise():
         f"  per row: apply {per_row_apply * 1e6:.1f} us vs direct DSL call {per_row_dsl * 1e6:.4f} us "
         f"(~{per_row_apply / per_row_dsl:,.0f}x)"
     )
+
+    print("\nkepler rows sweep (speedup of the direct DSL call vs vectorized numpy):")
+    row_speedups = []
+    for nrows in KEPLER_ROW_SWEEP:
+        sp, tn, td = kepler_speedup(make_kepler_df(nrows))
+        row_speedups.append(sp)
+        print(f"  {nrows:>9,} rows:  numpy {tn:.4f} s  DSL {td:.4f} s  {sp:.2f}x")
+
+    print("\nkepler eccentricity sweep (how unevenly rows converge):")
+    ecc_speedups, ecc_iters = [], []
+    for ecc_max in KEPLER_ECC_SWEEP:
+        df = make_kepler_df(NROWS, ecc_max=ecc_max)
+        iters = kepler_max_iters(df["mean_anomaly"].to_numpy(), df["eccentricity"].to_numpy())
+        sp, tn, td = kepler_speedup(df)
+        ecc_speedups.append(sp)
+        ecc_iters.append(iters)
+        print(
+            f"  e < {ecc_max:<5}  slowest row: {iters:>2} iters   "
+            f"numpy {tn:.4f} s  DSL {td:.4f} s  {sp:.2f}x"
+        )
+
+    out_path = OUT_DIR / "kepler.png"
+    save_kepler_plot(row_speedups, ecc_speedups, ecc_iters, out_path)
+    print(f"\nplot saved to {out_path}")
+
+
+def style_speedup_axes(ax, values):
+    """Shared look for the speedup panels: break-even line, x-suffixed ticks."""
+    # Break-even: below this line the faster-looking option is a net loss.
+    ax.axhline(1.0, color=MUTED, linestyle="--", linewidth=1)
+    ax.set_ylim(0, max(values) * 1.25)
+    ax.yaxis.set_major_formatter(lambda v, _pos: f"{v:g}x")
+    ax.yaxis.grid(True, color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color(GRID)
+    ax.spines["bottom"].set_color(GRID)
+    ax.tick_params(labelsize=9, colors=MUTED)
 
 
 def save_plot(row_speedups, ops_speedups, out_path):
@@ -256,20 +325,43 @@ def save_plot(row_speedups, ops_speedups, out_path):
     ax_ops.set_title(f"{NROWS:,} rows x {NCOLS} columns", color=MUTED, fontsize=9)
 
     for ax, values in ((ax_rows, row_speedups), (ax_ops, ops_speedups)):
-        # Break-even: below this line the engine is a net loss.
-        ax.axhline(1.0, color=MUTED, linestyle="--", linewidth=1)
-        ax.set_ylim(0, max(values) * 1.25)
-        ax.yaxis.set_major_formatter(lambda v, _pos: f"{v:g}x")
-        ax.yaxis.grid(True, color=GRID, linewidth=0.8)
-        ax.set_axisbelow(True)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.spines["left"].set_color(GRID)
-        ax.spines["bottom"].set_color(GRID)
-        ax.tick_params(labelsize=9, colors=MUTED)
+        style_speedup_axes(ax, values)
 
     fig.suptitle(
         "df.apply(f, engine=blosc2.jit): when it pays off",
+        fontsize=11,
+        color=INK,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.90])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def save_kepler_plot(row_speedups, ecc_speedups, ecc_iters, out_path):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, (ax_rows, ax_ecc) = plt.subplots(1, 2, figsize=(8, 3.2))
+
+    ax_rows.semilogx(KEPLER_ROW_SWEEP, row_speedups, "o-", color=COLOR_TIP, linewidth=2)
+    ax_rows.set_xlabel("rows (log scale)", color=INK, fontsize=9)
+    ax_rows.set_ylabel("speedup vs vectorized NumPy", color=INK, fontsize=9)
+    ax_rows.set_title("eccentricity < 0.95", color=MUTED, fontsize=9)
+
+    ax_ecc.plot(range(len(KEPLER_ECC_SWEEP)), ecc_speedups, "o-", color=COLOR_TIP, linewidth=2)
+    ax_ecc.set_xticks(range(len(KEPLER_ECC_SWEEP)))
+    ax_ecc.set_xticklabels([f"< {e}\n({n} iters)" for e, n in zip(KEPLER_ECC_SWEEP, ecc_iters, strict=True)])
+    ax_ecc.set_xlabel("eccentricity (iterations the slowest row needs)", color=INK, fontsize=9)
+    ax_ecc.set_title(f"{NROWS:,} rows", color=MUTED, fontsize=9)
+
+    for ax, values in ((ax_rows, row_speedups), (ax_ecc, ecc_speedups)):
+        style_speedup_axes(ax, values)
+
+    fig.suptitle(
+        "Kepler by Newton-Raphson: direct DSL call vs vectorized NumPy",
         fontsize=11,
         color=INK,
     )
