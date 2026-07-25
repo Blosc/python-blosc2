@@ -1495,6 +1495,15 @@ def _js_dtypes_ok(operands, kwargs) -> bool:
     )
 
 
+def _trace_js_backend(expression):
+    """BLOSC_ME_JIT_TRACE counterpart for the JS bridge, which never reaches
+    miniexpr's trace point in `fast_eval` (see there for the message format)."""
+    if os.environ.get("BLOSC_ME_JIT_TRACE", "").lower() in ("1", "true", "on"):
+        source = getattr(expression, "dsl_source", None) or expression
+        expr_short = str(source)[:120].replace("\n", " ")
+        print(f"[blosc2] engine=js expr={expr_short}", flush=True)
+
+
 def _maybe_js_backend(expression, jit, jit_backend, reduce_args, operands, kwargs, shape=None):
     """Resolve the JS backend for a DSL kernel.
 
@@ -1524,7 +1533,9 @@ def _maybe_js_backend(expression, jit, jit_backend, reduce_args, operands, kwarg
                 'jit_backend="js" requires a floating-point output dtype '
                 f"(got {np.dtype(out_dtype)}); drop jit_backend to use miniexpr"
             )
-        return _as_js_udf(expression, shape), None, None
+        bridge = _as_js_udf(expression, shape)
+        _trace_js_backend(expression)
+        return bridge, None, None
     prefer_js = (
         jit is not False  # jit=True/None prefer the best JIT (js); only jit=False forces interpreter
         and jit_backend is None
@@ -1541,6 +1552,7 @@ def _maybe_js_backend(expression, jit, jit_backend, reduce_args, operands, kwarg
         bridge = _as_js_udf(expression, shape)  # transpiles; raises on any unsupported construct
     except Exception:
         return expression, jit, jit_backend  # fall back to miniexpr, no regression
+    _trace_js_backend(expression)
     return bridge, None, None
 
 
@@ -4576,12 +4588,45 @@ class LazyExpr(LazyArray):
         return new_expr
 
 
+def _align_dsl_operand_grids(inputs):
+    """Put every NDArray operand of a DSL kernel on a single chunks/blocks grid.
+
+    Blocks are sized in bytes, so same-shaped operands of different itemsize get
+    different grids by default (float32 vs int64 over 1M elements: blocks of
+    31250 vs 15625 elements).  miniexpr needs one common grid, and a DSL kernel
+    has no slow path to fall back on, so evaluation would fail outright with a
+    confusing "slicing is not supported" error.  Copy the odd operands onto the
+    grid of the widest dtype: its blocks hold the fewest elements, so every
+    operand still fits within the cache budget the heuristic aimed at.
+
+    The copies happen once, at construction, and only when the grids actually
+    disagree -- whether they do depends on the array size and on the platform's
+    cache detection, which is why this used to fail only on some CI runners.
+    """
+    nd = [x for x in inputs if isinstance(x, blosc2.NDArray) and x.ndim > 0]
+    if len(nd) < 2 or len({(x.shape, x.chunks, x.blocks) for x in nd}) < 2:
+        return inputs
+    ref = max(nd, key=lambda x: x.dtype.itemsize)
+    aligned = []
+    for x in inputs:
+        misaligned = (
+            isinstance(x, blosc2.NDArray)
+            and x.ndim > 0
+            and x.shape == ref.shape
+            and (x.chunks, x.blocks) != (ref.chunks, ref.blocks)
+        )
+        aligned.append(x.copy(chunks=ref.chunks, blocks=ref.blocks) if misaligned else x)
+    return aligned
+
+
 class LazyUDF(LazyArray):
     def __init__(
         self, func, inputs, dtype, shape=None, chunked_eval=True, jit=None, jit_backend=None, **kwargs
     ):
         # After this, all the inputs should be np.ndarray or NDArray objects
         self.inputs = convert_inputs(inputs)
+        if isinstance(func, DSLKernel):
+            self.inputs = _align_dsl_operand_grids(self.inputs)
         # Get res shape
         if shape is None:
             self._shape = compute_broadcast_shape(self.inputs)

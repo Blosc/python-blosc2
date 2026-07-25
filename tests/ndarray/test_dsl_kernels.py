@@ -1196,6 +1196,20 @@ def test_dsl_kernel_numpy_operands_mixed_dtype_promotes_output():
     np.testing.assert_array_equal(res, ref)
 
 
+def test_dsl_kernel_ndarray_operands_with_different_itemsize():
+    # Blocks are sized in bytes, so a float32 and an int64 operand get different
+    # chunks/blocks by default; the DSL path has no slow fallback, so it used to
+    # raise "slicing is not supported" whenever the grids diverged (which depends
+    # on array size and on the platform's cache detection).
+    n = 1_000_000
+    a = (np.arange(n) % 7).astype(np.float32)
+    b = (np.arange(n) % 5).astype(np.int64)
+    A, B = blosc2.asarray(a), blosc2.asarray(b)
+    assert (A.chunks, A.blocks) != (B.chunks, B.blocks)
+    res = blosc2.lazyudf(_numpy_operand_kernel, (A, B), dtype=None)[()]
+    np.testing.assert_array_equal(res, a * 2.0 + b)
+
+
 def test_dsl_kernel_mixed_ndarray_and_numpy_operand():
     shape = (20, 10)
     a = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)

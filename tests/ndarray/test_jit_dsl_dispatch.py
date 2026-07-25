@@ -53,7 +53,9 @@ def test_jit_control_flow_dispatches_to_dsl_and_matches_numpy(monkeypatch, capsy
     monkeypatch.setenv("BLOSC_ME_JIT_TRACE", "1")
     res = mandel(cr, ci, 30)
     captured = capsys.readouterr()
-    assert "engine=miniexpr" in captured.out
+    # Under WebAssembly this kernel is transpiled to the JS bridge instead of
+    # going through miniexpr (see _maybe_js_backend); both engines trace.
+    assert f"engine={'js' if blosc2.IS_WASM else 'miniexpr'}" in captured.out
     assert "def mandel" in captured.out
     np.testing.assert_array_equal(res, _mandel_numpy(cr, ci, 30))
 
