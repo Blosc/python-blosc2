@@ -52,7 +52,6 @@ def test_metalayers(shape, chunks, blocks, urlpath, contiguous, dtype):
     assert "test" in a.schunk.meta
     assert a.schunk.meta["test"] == test_meta
 
-    # `get` should behave like `Mapping.get` (see #679)
     assert a.schunk.meta.get("numpy") == numpy_meta
     assert a.schunk.meta.get("error") is None
     assert a.schunk.meta.get("error", "default") == "default"
