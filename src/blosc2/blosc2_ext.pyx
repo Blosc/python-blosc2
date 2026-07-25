@@ -1639,11 +1639,11 @@ cdef class SChunk:
         cdef int32_t csize
         cdef uint8_t* chunk
         cdef int32_t len_chunk
-        if data is not None and len(data) > 0:
+        if data is not None:
             PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
             buf_ptr = <uint8_t *> buf.buf
             len_data = buf.len
-            nchunks = len_data // chunksize + 1 if len_data % chunksize != 0 else len_data // chunksize
+            nchunks = (len_data + chunksize - 1) // chunksize if len_data > 0 else 0
             len_chunk = chunksize
             for i in range(nchunks):
                 if i == (nchunks - 1):
