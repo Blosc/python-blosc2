@@ -52,6 +52,10 @@ def test_metalayers(shape, chunks, blocks, urlpath, contiguous, dtype):
     assert "test" in a.schunk.meta
     assert a.schunk.meta["test"] == test_meta
 
+    assert a.schunk.meta.get("numpy") == numpy_meta
+    assert a.schunk.meta.get("error") is None
+    assert a.schunk.meta.get("error", "default") == "default"
+
     test_meta = {b"lorem": 4231}
     a.schunk.meta["test"] = test_meta
     assert a.schunk.meta["test"] == test_meta
