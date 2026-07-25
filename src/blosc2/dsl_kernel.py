@@ -33,7 +33,6 @@ class DSLSyntaxError(ValueError):
 # names with subtle semantic differences (e.g. `np.mod`/`np.remainder`'s sign
 # convention vs C's `fmod`) are deliberately left out.
 _NUMPY_TO_DSL_FUNC_ALIASES = {
-    "power": "pow",
     "maximum": "fmax",
     "minimum": "fmin",
     "absolute": "abs",

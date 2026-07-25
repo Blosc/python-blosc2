@@ -1272,7 +1272,9 @@ def test_dsl_kernel_numpy_attribute_calls_are_rewritten_to_bare_names():
 @pytest.mark.parametrize(
     ("numpy_call", "expected_dsl_name"),
     [
-        ("np.power(x, 2.0)", "pow"),
+        # np.power keeps its name: the DSL accepts `power` as an alias of `pow`,
+        # so only the `np.` prefix is stripped.
+        ("np.power(x, 2.0)", "power"),
         ("np.maximum(x, 0.5)", "fmax"),
         ("np.minimum(x, -0.5)", "fmin"),
         ("np.absolute(x)", "abs"),
