@@ -86,6 +86,26 @@ def yeo_johnson(col, lam=0.5):
     return np.where(col >= 0, pos, neg)
 
 
+# The same transform written with a real per-element if/else. It compiles to a
+# DSL kernel instead of being traced, so only the matching arm runs for each
+# element and no clamping is needed. lam is inlined because apply() passes the
+# column alone. The explanation lives here rather than in a docstring: a DSL
+# kernel body cannot contain a string literal.
+def yeo_johnson_branch(col):
+    if col >= 0:
+        out = (np.power(col + 1.0, 0.5) - 1.0) / 0.5
+    else:
+        out = -(np.power(-col + 1.0, 1.5) - 1.0) / 1.5
+    return out
+
+
+def yeo_johnson_scalar(x, lam=0.5):
+    """Per-element Python, the shape you would write without any engine."""
+    if x >= 0:
+        return ((x + 1.0) ** lam - 1.0) / lam
+    return -((-x + 1.0) ** (2.0 - lam) - 1.0) / (2.0 - lam)
+
+
 # The same transform as a single numexpr expression: legal, but this is what
 # the readability argument is about.
 YEO_JOHNSON_NX = (
@@ -259,6 +279,28 @@ def save_plot(row_speedups, ops_speedups, out_path):
     plt.close(fig)
 
 
+SCALAR_ROWS = 50_000
+
+
+def bench_branch_vs_where(df, t_plain, result_plain):
+    """Real per-element if vs the traced np.where form, plus per-element Python.
+
+    The scalar version is timed on a smaller frame and extrapolated: at the full
+    size it takes over a second per run.
+    """
+    t_branch, result_branch = timeit(lambda: df.apply(yeo_johnson_branch, engine=blosc2.jit))
+    pd.testing.assert_frame_equal(result_branch, result_plain)
+
+    small = make_df(nrows=SCALAR_ROWS)
+    t_small, _ = timeit(lambda: small.apply(lambda col: col.map(yeo_johnson_scalar)))
+    t_scalar = t_small * (NROWS / SCALAR_ROWS)
+
+    print("\nreal if vs np.where (both under engine=blosc2.jit):")
+    print(f"  per-element Python, real if:   {t_scalar:.4f} s (extrapolated)  {t_plain / t_scalar:.2f}x")
+    print(f"  engine, real if (DSL kernel):  {t_branch:.4f} s   {t_plain / t_branch:.2f}x")
+    print("  (np.where form is the t_engine figure above)")
+
+
 def main():
     df = make_df()
 
@@ -273,6 +315,8 @@ def main():
     print(f"plain df.apply(f):               {t_plain:.4f} s")
     print(f"df.apply(f, engine=blosc2.jit):  {t_engine:.4f} s   {t_plain / t_engine:.2f}x")
     print(f"numexpr per column:              {t_numexpr:.4f} s   {t_plain / t_numexpr:.2f}x")
+
+    bench_branch_vs_where(df, t_plain, result_plain)
 
     print("\nrows sweep (speedup vs plain apply):")
     row_speedups = []

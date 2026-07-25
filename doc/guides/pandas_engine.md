@@ -144,7 +144,22 @@ explicitly if it matters:
 z = (col - col.mean()) / col.std(ddof=0)
 ```
 
-**Real per-element `if`/`for`/`while` now works, for a numeric subset of
+**Your function is inspected once, not run over the values.** This is worth
+understanding, because most of the surprises below follow from it. By default
+the engine calls your function a single time, passing stand-in objects in place
+of the columns. Those stand-ins compute nothing; they just record the operations
+you ask for. What comes back is a description of the whole calculation, which
+Blosc2 then evaluates over the real data in one fused pass. (The usual name for
+this is *tracing*.) Your Python code therefore runs once, at setup — never per
+row, which is exactly where the speed comes from.
+
+The catch is that a plain Python `if` has nothing to look at during that single
+call: it is handed the entire column, not one value, so it raises
+`ValueError: The truth value of an array with more than one element is
+ambiguous`. Branching on a scalar *parameter* is fine, and always was — only
+branching on column values is affected.
+
+**Real per-element `if`/`for`/`while` works too, for a numeric subset of
 NumPy.** `engine=blosc2.jit` auto-detects control flow: if your function
 branches or loops over column values *and* the function fits Blosc2's
 [DSL grammar](../reference/dsl_syntax.md), it is compiled and run as written —
@@ -152,15 +167,14 @@ branches and loops behave like real Python — instead of being traced. Both
 `np.sin(x)`-style calls and bare `sin(x)`-style calls are accepted (the former
 is rewritten to the latter automatically; a handful of NumPy functions the DSL
 knows under a different name, like `np.maximum`/`np.minimum`, are translated
-too — `power`, `maximum`, `minimum` and `absolute` today). Two things to know
+too — `maximum`, `minimum` and `absolute` today). Two things to know
 before relying on this:
 
 - If the function doesn't fit the DSL grammar at all (e.g. it uses statements
   the grammar doesn't support), it silently falls back to the original
   behavior: the function is traced, and branching on array contents raises
   `ValueError: The truth value of an array ... is ambiguous`. Use `np.where`
-  as before, nesting it where you would have used `elif`. Branching on a
-  scalar *parameter* has always been fine either way.
+  as before, nesting it where you would have used `elif`.
 - If the function looks DSL-shaped but calls something outside the DSL's
   supported functions (not every NumPy function has a DSL equivalent),
   compiling it fails at call time with a `RuntimeError` naming the problem —
@@ -173,6 +187,52 @@ This dispatch decision is not configurable through `engine=`: pandas' engine
 protocol requires the plain `blosc2.jit` object, so `engine=` always gets the
 auto-detect (`strict=None`) behavior described above — there is currently no
 way to pass `strict=True`/`strict=False` through this entry point.
+
+**So why does the example above use `np.where` rather than an `if`?** Mostly
+portability, not speed. Written with a real branch, `yeo_johnson` needs no
+clamping at all, because only the matching arm runs for each element:
+
+```python
+@blosc2.jit
+def yeo_johnson_branch(col):
+    if col >= 0:
+        out = (np.power(col + 1.0, 0.5) - 1.0) / 0.5
+    else:
+        out = -(np.power(-col + 1.0, 1.5) - 1.0) / 1.5
+    return out
+
+
+result = df.apply(yeo_johnson_branch, engine=blosc2.jit)
+```
+
+The `@blosc2.jit` decorator is optional here — `engine=blosc2.jit` compiles the
+function either way — but it is harmless, and keeping it means the same
+function also works when called directly.
+
+That is the clearer statement of the transform, and on the same 1,000,000 × 8
+frame it costs about 6%:
+
+| approach | time | vs plain apply |
+| --- | --- | --- |
+| per-element Python, real `if` | 1.66 s (measured at 50,000 rows, scaled) | 0.08x |
+| plain `df.apply(f)`, `np.where` | 0.1300 s | 1.00x |
+| `engine=blosc2.jit`, real `if` (DSL kernel) | 0.0642 s | 2.02x |
+| `engine=blosc2.jit`, `np.where` (traced) | 0.0606 s | 2.15x |
+
+Two things to read off that table. A real `if` executed **by Python**, one value
+at a time, is the slow option by a wide margin — 13x slower than a vectorized
+`np.where` and about 26x slower than either engine path. That is the version to
+avoid, and it is what people usually mean when they say branching is slow. But a
+real `if` **compiled to a DSL kernel** is a different thing entirely: it lands
+within a few percent of the traced form, because the branch's saved work
+(only one arm runs) roughly cancels against the vectorized math the traced form
+gets to use.
+
+The traced `np.where` version stays in the example because it works whatever
+your function contains, while the branch version only compiles if the whole
+function fits the DSL grammar — note it already had to inline `lam`, since
+`apply` passes the column alone. If your function does fit, prefer the branch:
+it is easier to read and needs no domain clamping.
 
 **`np.where` evaluates both arms.** Unlike a real `if`, both branches are
 computed over the whole column and only then selected between, so each one runs
