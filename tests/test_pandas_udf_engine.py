@@ -258,3 +258,37 @@ class TestPandasEngineEndToEnd:
         expected = df.apply(lambda row: row * 2, axis=1)
         result = df.apply(lambda row: row * 2, engine=blosc2.jit, axis=1)
         pd.testing.assert_frame_equal(result, expected)
+
+    def test_apply_already_jitted_function_is_not_decorated_twice(self):
+        # Decorating and passing engine= both request the same thing. Applying
+        # the decorator a second time used to wrap the array in a SimpleProxy
+        # before the inner DSL kernel saw it, which then failed asking for
+        # `shape=`. Traced functions tolerated it, so only branches broke.
+        def branch(col):
+            if col >= 0:
+                out = col + 1.0
+            else:
+                out = col - 1.0
+            return out
+
+        df = pd.DataFrame({"a": [-2.0, 1.0, 3.0], "b": [4.0, -5.0, 6.0]})
+        expected = df.apply(lambda col: np.where(col >= 0, col + 1.0, col - 1.0))
+
+        for func in (branch, blosc2.jit(branch)):
+            result = df.apply(func, engine=blosc2.jit)
+            pd.testing.assert_frame_equal(result, expected)
+
+    def test_map_already_jitted_function_is_not_decorated_twice(self):
+        def branch(col):
+            if col >= 0:
+                out = col * 2.0
+            else:
+                out = col
+            return out
+
+        s = pd.Series([-2.0, 1.0, 3.0])
+        expected = np.where(s.to_numpy() >= 0, s.to_numpy() * 2.0, s.to_numpy())
+
+        for func in (branch, blosc2.jit(branch)):
+            result = s.map(func, engine=blosc2.jit)
+            np.testing.assert_allclose(np.asarray(result), expected)

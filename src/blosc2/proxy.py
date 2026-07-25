@@ -817,6 +817,24 @@ class _PandasRowProxy(blosc2.Operand):
         )
 
 
+def _undecorated(func):
+    """The original function behind a @blosc2.jit wrapper, or *func* itself.
+
+    Source inspection has to see what the user wrote, not the wrapper.
+    """
+    return getattr(func, "_blosc2_jit_wrapped", func)
+
+
+def _decorate_once(func, decorator):
+    """Apply *decorator* unless *func* is already a @blosc2.jit wrapper.
+
+    Decorating twice used to break the DSL route: the outer (tracing) wrapper
+    replaces array arguments with SimpleProxy operands, so the inner DSL kernel
+    saw no array at all and failed asking for `shape=`.
+    """
+    return func if hasattr(func, "_blosc2_jit_wrapped") else decorator(func)
+
+
 def _analyze_row_func(func) -> tuple[bool, bool]:
     """Inspect *func* for the two signals `PandasUdfEngine.apply`'s axis=1
     route needs to pick a dispatch strategy: whether it subscripts its first
@@ -1042,7 +1060,9 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
         use_dsl = strict is True or (strict is None and has_cf and dsl_ok)
 
         if use_dsl:
-            return _jit_dsl_wrapper(kernel, out, kwargs)
+            dsl_wrapper = _jit_dsl_wrapper(kernel, out, kwargs)
+            dsl_wrapper._blosc2_jit_wrapped = func
+            return dsl_wrapper
 
         _trace_hint = None
         if strict is None and has_cf and not dsl_ok:
@@ -1104,6 +1124,9 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
             # honor any execution-tuning kwargs (jit/jit_backend/fp_accuracy).
             return retval.compute(_getitem=True, **exec_kwargs)
 
+        # Lets callers (notably the pandas engine below) tell an already-jitted
+        # function from a plain one, so it is not decorated a second time.
+        wrapper._blosc2_jit_wrapped = func
         return wrapper
 
     if func is None:
@@ -1142,7 +1165,7 @@ class PandasUdfEngine:
         if skip_na:
             raise NotImplementedError("The Blosc2 engine does not support na_action='ignore' in map.")
         values = cls._ensure_numpy_data(data)
-        func = decorator(func)
+        func = _decorate_once(func, decorator)
         return func(values, *args, **kwargs)
 
     @classmethod
@@ -1156,8 +1179,10 @@ class PandasUdfEngine:
         orig = data
         values = cls._ensure_numpy_data(data)
         func_name = getattr(func, "__name__", "the function")
-        uses_subscript, has_loop = _analyze_row_func(func) if hasattr(orig, "columns") else (False, False)
-        func = decorator(func)
+        uses_subscript, has_loop = (
+            _analyze_row_func(_undecorated(func)) if hasattr(orig, "columns") else (False, False)
+        )
+        func = _decorate_once(func, decorator)
         if values.ndim == 1 or axis is None:
             # pandas Series.apply or pipe
             result = func(values, *args, **kwargs)
