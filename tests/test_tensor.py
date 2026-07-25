@@ -138,6 +138,19 @@ def test_pack_tensor_empty():
     assert empty2.shape == empty.shape
 
 
+@pytest.mark.parametrize("dtype", ["int64", "float32"])
+def test_pack_tensor_0dim(dtype):
+    scalar = np.array(17, dtype=dtype)
+    pscalar = blosc2.pack_tensor(scalar)
+
+    scalar2 = blosc2.unpack_tensor(pscalar)
+    assert np.array_equal(scalar, scalar2)
+    assert scalar2.dtype == scalar.dtype
+    assert scalar2.shape == ()
+
+    assert np.array_equal(scalar, blosc2.unpack_array2(blosc2.pack_array2(scalar)))
+
+
 ##### save / load  #####
 
 
