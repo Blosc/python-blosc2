@@ -118,6 +118,10 @@ ufunc_map_1param = {
     np.trunc: "trunc",
     np.sign: "sign",
     np.signbit: "signbit",
+    np.square: "square",
+    np.negative: "negative",
+    np.positive: "positive",
+    np.reciprocal: "reciprocal",
     np.round: "round",
 }
 
