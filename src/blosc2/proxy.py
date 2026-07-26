@@ -762,6 +762,44 @@ def as_simpleproxy(*arrs: Sequence[blosc2.Array]) -> tuple[SimpleProxy | blosc2.
     return out[0] if len(out) == 1 else out
 
 
+def _is_pandas_string_series(col) -> bool:
+    """True for a pandas string column.
+
+    pandas 3's `str` dtype reports `kind == "O"`, so the kind is useless here
+    and `pd.api.types.is_string_dtype` is the only reliable test.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return False
+    return pd.api.types.is_string_dtype(getattr(col, "dtype", None))
+
+
+def _string_series_to_numpy(col, label=None):
+    """A pandas string column as a fixed-width `<Un` array.
+
+    `np.asarray` on a pandas 3 `str` column yields an object array of PyObject
+    pointers (the `__array__` route destroys the Arrow layout), which miniexpr
+    cannot take; going through `to_numpy(dtype=object)` and `.astype(str)` gives
+    the fixed-width array the kernels want.
+
+    Nulls are rejected rather than substituted.  A row kernel that touches a
+    null raises in pandas too (`'p=' + row['x']` -> TypeError,
+    `row['x'].lower()` -> AttributeError), so quietly turning one into `""`
+    would invent a value pandas never produces.
+    """
+    if label is None:
+        label = col.name
+    if col.isna().any():
+        raise ValueError(
+            f"blosc2.jit: string column {label!r} contains nulls, and a row-wise kernel "
+            "over a null raises in pandas too. Fill them first, e.g. "
+            f"df[{label!r}] = df[{label!r}].fillna('')."
+        )
+    values = col.to_numpy(dtype=object)
+    return values.astype(str)
+
+
 class _PandasRowProxy(blosc2.Operand):
     """Row proxy for `PandasUdfEngine.apply`'s axis=1 route.
 
@@ -776,6 +814,17 @@ class _PandasRowProxy(blosc2.Operand):
     def __init__(self, df):
         self._df = df
         self._cache = {}
+
+    def _raw_column(self, key):
+        """The column as a plain array, for the DSL route.
+
+        The tracing route wants a SimpleProxy operand; a DSL kernel wants the
+        array itself, and accepts string columns the traced one does not.
+        """
+        col = self._df[key]
+        if _is_pandas_string_series(col):
+            return _string_series_to_numpy(col, key)
+        return col.to_numpy()
 
     def __getitem__(self, key):
         if not isinstance(key, str):
@@ -796,11 +845,11 @@ class _PandasRowProxy(blosc2.Operand):
                 f"row[{key!r}]: column label is duplicated ({n_matches} matches); "
                 "axis=1 row proxies require unique column labels"
             )
-        col = self._df[key].to_numpy()
-        if col.dtype.kind not in "biufc":
+        col = self._raw_column(key)
+        if col.dtype.kind not in "biufcUS":
             raise ValueError(
-                f"row[{key!r}]: column has dtype {col.dtype!r}, which is not numeric. "
-                "The Blosc2 engine only supports vectorized numeric computations."
+                f"row[{key!r}]: column has dtype {col.dtype!r}, which the Blosc2 engine "
+                "cannot vectorize. Numeric, boolean and string columns are supported."
             )
         proxy = SimpleProxy(col)
         self._cache[key] = proxy
@@ -904,6 +953,47 @@ def _signature_params(func) -> list:
         return []
 
 
+def _row_column(row, label):
+    """The raw column array behind *label*, from a row proxy or a DataFrame."""
+    getter = getattr(row, "_raw_column", None)
+    if getter is not None:
+        return getter(label)
+    col = row[label]
+    if isinstance(col, np.ndarray | blosc2.NDArray):
+        return col
+    if _is_pandas_string_series(col):
+        return _string_series_to_numpy(col, label)
+    return np.asarray(col)
+
+
+def _dsl_operand_values(kernel: DSLKernel, sig, args, func_kwargs) -> tuple:
+    """The kernel's operands, one per DSL input name, in declaration order."""
+    if kernel.row_columns and len(args) == 1 and not func_kwargs:
+        # The `row["colname"]` kernel: its signature still says one row, but the
+        # compiled kernel takes one parameter per referenced column.
+        values = tuple(_row_column(args[0], label) for label in kernel.row_columns.values())
+    else:
+        try:
+            bound = sig.bind(*args, **func_kwargs)
+        except TypeError as e:
+            # sig.bind's message names no function; prefix it, and point at the
+            # subsetting fix when a wide DataFrame was unpacked into the call.
+            hint = _wide_frame_hint(e, kernel.__name__, kernel.input_names or sig.parameters)
+            raise TypeError(f"{kernel.__name__}() {e}" + (f"\n{hint}" if hint else "")) from None
+        bound.apply_defaults()
+        values = tuple(bound.arguments[name] for name in kernel.input_names)
+    # Accept array-protocol operands (pandas Series, polars Series, ...) the same
+    # way the tracing route already does; zero-copy when the source is numpy-backed.
+    return tuple(
+        np.asarray(v)
+        if not isinstance(v, np.ndarray | blosc2.NDArray)
+        and hasattr(v, "__array__")
+        and getattr(v, "ndim", 0) > 0
+        else v
+        for v in values
+    )
+
+
 def _jit_dsl_wrapper(kernel: DSLKernel, out, decorator_kwargs: dict):
     """Build the call wrapper for the DSL (control-flow) dispatch route of `jit`.
 
@@ -917,26 +1007,7 @@ def _jit_dsl_wrapper(kernel: DSLKernel, out, decorator_kwargs: dict):
         sig = kernel._sig
         if sig is None:
             raise TypeError(f"@blosc2.jit: cannot introspect the signature of {kernel.__name__!r}")
-        try:
-            bound = sig.bind(*args, **func_kwargs)
-        except TypeError as e:
-            # sig.bind's message names no function; prefix it, and point at the
-            # subsetting fix when a wide DataFrame was unpacked into the call.
-            hint = _wide_frame_hint(e, kernel.__name__, kernel.input_names or sig.parameters)
-            raise TypeError(f"{kernel.__name__}() {e}" + (f"\n{hint}" if hint else "")) from None
-        bound.apply_defaults()
-        values = tuple(bound.arguments[name] for name in kernel.input_names)
-        # Accept array-protocol operands (pandas Series, polars Series, ...) the
-        # same way the tracing route already does; zero-copy when the source is
-        # numpy-backed.
-        values = tuple(
-            np.asarray(v)
-            if not isinstance(v, np.ndarray | blosc2.NDArray)
-            and hasattr(v, "__array__")
-            and getattr(v, "ndim", 0) > 0
-            else v
-            for v in values
-        )
+        values = _dsl_operand_values(kernel, sig, args, func_kwargs)
 
         array_shapes = {
             v.shape
@@ -1266,13 +1337,21 @@ class PandasUdfEngine:
         function once for each column or row.
         """
         orig = data
-        values = cls._ensure_numpy_data(data)
         func_name = getattr(func, "__name__", "the function")
         uses_subscript, has_loop = (
             _analyze_row_func(_undecorated(func)) if hasattr(orig, "columns") else (False, False)
         )
+        # The row-proxy route reads columns one at a time and never needs the
+        # whole frame as one array, so a non-numeric column (a pandas string
+        # column, say) is fine there and only `nrows` is wanted.
+        if uses_subscript and axis in (1, "columns"):
+            values = None
+            nrows = len(orig)
+        else:
+            values = cls._ensure_numpy_data(data)
+            nrows = values.shape[0]
         func = _decorate_once(func, decorator)
-        if values.ndim == 1 or axis is None:
+        if values is not None and (values.ndim == 1 or axis is None):
             # pandas Series.apply or pipe
             result = func(values, *args, **kwargs)
         elif axis in (0, "index"):
@@ -1302,14 +1381,10 @@ class PandasUdfEngine:
                 # per-column dtypes survive.
                 row_proxy = _PandasRowProxy(orig)
                 result = func(row_proxy, *args, **kwargs)
-                if not (
-                    isinstance(result, np.ndarray)
-                    and result.ndim == 1
-                    and result.shape[0] == values.shape[0]
-                ):
+                if not (isinstance(result, np.ndarray) and result.ndim == 1 and result.shape[0] == nrows):
                     raise TypeError(
                         '@blosc2.jit engine=... axis=1: functions using row["colname"] must '
-                        f"return one scalar per row (shape ({values.shape[0]},)); got "
+                        f"return one scalar per row (shape ({nrows},)); got "
                         f"{result!r}. Returning multiple values per row is not supported here."
                     )
             else:

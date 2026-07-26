@@ -1761,7 +1761,7 @@ def fast_eval(  # noqa: C901
                     and op.ndim > 0
                     and op.shape == shape
                     and op.dtype.isnative
-                    and op.dtype.kind in "biufc"
+                    and op.dtype.kind in "biufcUS"
                 )
             return False
 

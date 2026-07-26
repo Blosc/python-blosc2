@@ -238,16 +238,15 @@ class TestPandasEngineEndToEnd:
         with pytest.raises(AttributeError, match="row\\['b'\\]"):
             df.apply(bad, engine=blosc2.jit, axis=1)
 
-    def test_apply_axis1_row_subscript_non_numeric_column_raises(self):
-        # Whole-frame numeric-dtype validation (`_ensure_numpy_data`) already
-        # gates this ahead of row-proxy dispatch; `_PandasRowProxy` carries
-        # its own per-column check too, for callers that construct it
-        # directly.
+    def test_apply_axis1_row_subscript_unvectorizable_column_raises(self):
+        # String columns are supported now, so the per-column check in
+        # `_PandasRowProxy` is what still rejects a dtype the engine cannot
+        # vectorize at all.
         def bad(row):
-            return row["a"] + len(row["b"])
+            return row["a"] + row["b"]
 
-        df = pd.DataFrame({"a": [1.0, 2.0], "b": ["x", "y"]})
-        with pytest.raises(ValueError, match="numeric dtype"):
+        df = pd.DataFrame({"a": [1.0, 2.0], "b": pd.to_datetime(["2020-01-01", "2020-01-02"])})
+        with pytest.raises(ValueError, match="cannot vectorize"):
             df.apply(bad, engine=blosc2.jit, axis=1)
 
     def test_apply_axis1_positional_idiom_still_uses_per_row_loop(self):
@@ -377,3 +376,88 @@ class TestPandasEngineEndToEnd:
         # A missing operand is a different mistake and keeps its own message
         with pytest.raises(TypeError, match="missing a required argument"):
             dsl(a=df["a"])
+
+
+@pytest.mark.skipif(pd is None, reason="pandas not installed")
+@pytest.mark.skipif(_pandas_too_old, reason="engine= integration targets pandas 3.x")
+class TestRowKernelsWithControlFlow:
+    """`row["colname"]` combined with an `if`.
+
+    Neither dispatch route could run these before: tracing evaluates the `if`
+    over a whole column ("truth value ... is ambiguous") and the DSL parser
+    rejected the subscript.  They are now rewritten into named parameters.
+    """
+
+    def test_numeric_row_kernel_with_branch(self):
+        def pick(row):
+            if row["a"] > 2:
+                return row["a"] + row["b"]
+            return row["a"] - row["b"]
+
+        df = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0], "b": [10.0, 20.0, 30.0, 40.0]})
+        expected = df.apply(pick, axis=1)
+        result = df.apply(pick, axis=1, engine=blosc2.jit)
+        pd.testing.assert_series_equal(result, expected)
+
+    def test_blog_kernel_matches_default_engine(self):
+        """End-to-end acceptance: the pandas-3 blog kernel, run unmodified."""
+
+        def format_room_info(row):
+            result = "property_type=" + row["property_type"]
+            desc = row["name"].lower()
+            if " with " not in desc:
+                return result + ", room_type=" + desc.removesuffix(" room")
+            before, after = desc.split(" with ", 1)
+            r2 = result + ", room_type=" + before.removesuffix(" room")
+            return r2 + ", amenity=" + after
+
+        df = pd.DataFrame(
+            {
+                "property_type": ["Entire home", "Private room", "Shared room", "Loft"] * 8,
+                "name": [
+                    "Cozy Loft With City View",
+                    "Small Single Room",
+                    "Studio with balcony",
+                    "Double Room",
+                ]
+                * 8,
+            }
+        )
+        expected = df.apply(format_room_info, axis=1)
+        result = df.apply(format_room_info, axis=1, engine=blosc2.jit)
+        pd.testing.assert_series_equal(result, expected)
+
+    def test_non_identifier_column_label(self):
+        def tag(row):
+            if row["room type"] == "loft":
+                return "L"
+            return "-"
+
+        df = pd.DataFrame({"room type": ["loft", "studio", "loft"]})
+        expected = df.apply(tag, axis=1)
+        result = df.apply(tag, axis=1, engine=blosc2.jit)
+        pd.testing.assert_series_equal(result, expected)
+
+    def test_null_string_column_is_rejected(self):
+        # pandas raises on a row kernel over a null too; substituting "" would
+        # invent a value it never produces.
+        def concat(row):
+            return "p=" + row["x"]
+
+        df = pd.DataFrame({"x": ["a", None, "c"]})
+        with pytest.raises(TypeError):
+            df.apply(concat, axis=1)
+        with pytest.raises(ValueError, match="contains nulls"):
+            df.apply(concat, axis=1, engine=blosc2.jit)
+
+    def test_positional_row_access_still_rejected(self):
+        # Only `row["literal"]` is rewritten; anything else must keep failing
+        # loudly rather than silently taking a different route.
+        def positional(row):
+            if row[0] > 1:
+                return row[0]
+            return row[1]
+
+        df = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+        with pytest.raises((TypeError, ValueError, RuntimeError)):
+            df.apply(positional, axis=1, engine=blosc2.jit)

@@ -21,6 +21,16 @@ XXX version-specific blurb XXX
   keep the width instead of growing) and ASCII-only stripping. `S` and `<U`
   operands do not mix in one expression, which is what NumPy does too.
   Variable-width `utf8()` columns still use the NumPy path.
+- **`df.apply(f, axis=1, engine=blosc2.jit)` now runs `row["colname"]`
+  kernels that contain an `if`.** Neither dispatch route could before:
+  tracing evaluated the branch over a whole column (`truth value ... is
+  ambiguous`) and the DSL parser rejected the subscript. Such references are
+  now rewritten into named parameters, so the function is compiled and every
+  branch runs. This is not string-specific — numeric row kernels with a
+  branch were equally blocked. String columns reach this route too, which
+  makes the pandas-3 "format room info" kernel run unmodified. Nulls in a
+  string column are rejected rather than substituted, since a row-wise kernel
+  over a null raises in pandas as well.
 - New `blosc2.random` module: seedable, NumPy-quality random `NDArray`
   constructors. Each chunk gets its own independent `SeedSequence`-spawned
   stream and is generated concurrently in a thread pool, giving full `PCG64`

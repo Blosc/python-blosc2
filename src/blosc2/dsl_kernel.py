@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import inspect
+import keyword
 import os
 import textwrap
 import tokenize
@@ -153,6 +154,60 @@ class _StringSyntaxRewriter(ast.NodeTransformer):
             )
             for k in range(count)
         ]
+
+
+class _RowSubscriptRewriter(ast.NodeTransformer):
+    """Turn the ``df.apply(f, axis=1)`` row idiom into named DSL parameters.
+
+    ``def f(row): ... row["a"] ...`` becomes ``def f(a): ... a ...``, so a
+    kernel written the textbook way compiles as a DSL kernel.  Without this,
+    any such kernel containing control flow has nowhere to go: the tracing
+    route evaluates the `if` on a whole column ("truth value ... is ambiguous")
+    and the DSL parser rejects the subscript.  This is not string-specific --
+    numeric row kernels with an `if` hit exactly the same wall.
+
+    Applies only when the function takes one positional parameter and *every*
+    mention of it is ``param[<string literal>]``; anything else (positional
+    indexing, iteration, attribute access) is left for the validator to reject.
+
+    ``columns`` maps the generated parameter names back to the original column
+    labels, which need not be identifiers.
+    """
+
+    def __init__(self, param: str):
+        self.param = param
+        self.columns: dict[str, str] = {}
+        self.bailed = False
+        self._names: dict[str, str] = {}
+
+    def _param_for(self, label: str) -> str:
+        if label in self._names:
+            return self._names[label]
+        candidate = label if label.isidentifier() and not keyword.iskeyword(label) else ""
+        if not candidate or candidate in self.columns or candidate == self.param:
+            candidate = f"_col{len(self._names)}"
+        self._names[label] = candidate
+        self.columns[candidate] = label
+        return candidate
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        # Match before descending: visiting `node.value` would see the bare row
+        # name and trip the bail-out below.
+        if isinstance(node.value, ast.Name) and node.value.id == self.param:
+            key = node.slice
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                self.bailed = True
+                return node
+            return ast.copy_location(ast.Name(id=self._param_for(key.value), ctx=ast.Load()), node)
+        self.generic_visit(node)
+        return node
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        # Any surviving bare mention of the row parameter is a use we cannot
+        # turn into a column reference.
+        if node.id == self.param:
+            self.bailed = True
+        return node
 
 
 class _NumpyAttrCallRewriter(ast.NodeTransformer):
@@ -674,6 +729,9 @@ class DSLKernel:
         self.dsl_source = None
         self.input_names = None
         self.dsl_error = None
+        # Set by _rewrite_row_subscripts when the kernel takes a row proxy.
+        self.row_param = None
+        self.row_columns = None
         try:
             dsl_source, input_names = self._extract_dsl(func)
         except DSLSyntaxError as e:
@@ -715,6 +773,14 @@ class DSLKernel:
             raise ValueError("No function definition found in sliced DSL source")
         input_names = self._input_names_from_signature(dsl_func)
 
+        dsl_source, dsl_tree, dsl_func, row_columns = self._rewrite_row_subscripts(
+            dsl_source, dsl_tree, dsl_func, input_names
+        )
+        if row_columns is not None:
+            self.row_param = input_names[0]
+            self.row_columns = row_columns
+            input_names = self._input_names_from_signature(dsl_func)
+
         dsl_source, dsl_tree, dsl_func = self._rewrite_numpy_attr_calls(
             func, dsl_source, dsl_tree, dsl_func, input_names
         )
@@ -728,6 +794,32 @@ class DSLKernel:
             print(f"[DSLKernel:{func_name}] dsl_source (full):")
             print(dsl_source)
         return dsl_source, input_names
+
+    @staticmethod
+    def _rewrite_row_subscripts(dsl_source, dsl_tree, dsl_func, input_names):
+        """Rewrite ``row["col"]`` into named parameters; see _RowSubscriptRewriter.
+
+        Returns ``(source, tree, func, columns)`` with *columns* mapping the new
+        parameter names to the original column labels, or None as the fourth
+        element when the rewrite does not apply and nothing was changed.
+        """
+        if len(input_names) != 1:
+            return dsl_source, dsl_tree, dsl_func, None
+        rewriter = _RowSubscriptRewriter(input_names[0])
+        rewritten = rewriter.visit(ast.parse(dsl_source))
+        if rewriter.bailed or not rewriter.columns:
+            return dsl_source, dsl_tree, dsl_func, None
+
+        new_func = next((n for n in rewritten.body if isinstance(n, ast.FunctionDef)), None)
+        if new_func is None:
+            return dsl_source, dsl_tree, dsl_func, None
+        new_func.args.args = [ast.arg(arg=name) for name in rewriter.columns]
+        new_func.args.posonlyargs = []
+        ast.fix_missing_locations(rewritten)
+        new_source = ast.unparse(rewritten)
+        new_tree = ast.parse(new_source)
+        new_func = next((n for n in new_tree.body if isinstance(n, ast.FunctionDef)), None)
+        return new_source, new_tree, new_func, dict(rewriter.columns)
 
     @staticmethod
     def _rewrite_string_syntax(dsl_source, dsl_tree, dsl_func):
