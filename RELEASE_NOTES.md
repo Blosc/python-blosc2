@@ -6,6 +6,17 @@ XXX version-specific blurb XXX
 
 ### New features
 
+- **String-valued expressions and DSL kernels** over fixed-width `<Un`
+  arrays now run on miniexpr instead of falling back to NumPy.
+  Concatenation (`arr + "suffix"`, `"prefix=" + arr`) plus `lower`,
+  `upper`, `strip`/`lstrip`/`rstrip`, `removeprefix`, `removesuffix`,
+  `replace`, `substr` and `split_part` all produce string results, and
+  `@blosc2.dsl_kernel` accepts method syntax (`name.lower()`) and tuple
+  unpacking (`before, after = desc.split(sep, 1)`), which are rewritten to
+  the DSL grammar. The output width is inferred by miniexpr and the
+  container is allocated from it, so nothing truncates — `.dtype` may be
+  wider than NumPy's exact answer, never narrower. Variable-width `utf8()`
+  columns and bytes (`S`) dtypes still use the NumPy path.
 - New `blosc2.random` module: seedable, NumPy-quality random `NDArray`
   constructors. Each chunk gets its own independent `SeedSequence`-spawned
   stream and is generated concurrently in a thread pool, giving full `PCG64`
