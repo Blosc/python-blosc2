@@ -575,7 +575,7 @@ class DSLValidator:
             return
         if isinstance(node, ast.Constant):
             val = node.value
-            if isinstance(val, bool | int | float | str):
+            if isinstance(val, bool | int | float | str | bytes):
                 return
             self._err(node, "Unsupported constant in DSL expression")
         if isinstance(node, ast.UnaryOp):

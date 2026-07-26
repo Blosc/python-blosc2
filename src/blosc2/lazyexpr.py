@@ -3620,14 +3620,14 @@ class LazyExpr(LazyArray):
                 if dt is None:
                     return None
                 dtypes[k] = dt
-            if not any(np.dtype(dt).kind == "U" for dt in dtypes.values()):
+            if not any(np.dtype(dt).kind in "US" for dt in dtypes.values()):
                 return None
             from blosc2 import blosc2_ext
 
             out = blosc2_ext.me_output_dtype(self.expression, dtypes)
         except Exception:
             return None
-        if out is not None and np.dtype(out).kind != "U":
+        if out is not None and np.dtype(out).kind not in "US":
             out = None
         self._me_str_dtype_ = (out,)
         self._me_str_expr_ = self.expression
@@ -4675,7 +4675,7 @@ def _dsl_kernel_string_dtype(func, inputs):
             if dt is None:
                 return None
             dtypes[name] = dt
-        if not any(np.dtype(dt).kind == "U" for dt in dtypes.values()):
+        if not any(np.dtype(dt).kind in "US" for dt in dtypes.values()):
             return None
 
         from blosc2 import blosc2_ext
@@ -4683,7 +4683,7 @@ def _dsl_kernel_string_dtype(func, inputs):
         out = blosc2_ext.me_output_dtype(func.dsl_source, dtypes)
     except Exception:
         return None
-    if out is None or np.dtype(out).kind != "U":
+    if out is None or np.dtype(out).kind not in "US":
         return None
     return np.dtype(out)
 

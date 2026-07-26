@@ -674,6 +674,7 @@ cdef extern from "miniexpr.h":
         ME_COMPLEX64
         ME_COMPLEX128
         ME_STRING
+        ME_BYTES
 
     # typedef struct me_variable
     ctypedef struct me_variable:
@@ -907,6 +908,10 @@ cdef inline me_dtype _me_dtype_from_numpy_dtype(dtype_obj):
                 f"miniexpr string operands require unicode dtype with UCS4 itemsize; got '{dtype}'"
             )
         return ME_STRING
+    elif kind == "S":
+        if itemsize <= 0:
+            raise TypeError(f"miniexpr bytes operands require a non-empty itemsize; got '{dtype}'")
+        return ME_BYTES
     return <me_dtype>-1
 
 
@@ -987,7 +992,7 @@ def me_output_dtype(expression, operands):
             var.address = NULL
             var.type = 0
             var.context = NULL
-            var.itemsize = operand_dtype.itemsize if operand_dtype.num == 19 else 0
+            var.itemsize = operand_dtype.itemsize if operand_dtype.num in (18, 19) else 0
             built += 1
 
         expression_bytes = (
@@ -1007,6 +1012,10 @@ def me_output_dtype(expression, operands):
             if itemsize == 0 or itemsize % 4 != 0:
                 return None
             return np.dtype("<U%d" % (itemsize // 4))
+        if out_dt == ME_BYTES:
+            if itemsize == 0:
+                return None
+            return np.dtype("S%d" % itemsize)
         return _numpy_dtype_from_me_dtype(out_dt)
     finally:
         for i in range(built):
@@ -4298,7 +4307,7 @@ cdef class NDArray:
             var.address = NULL  # chunked compile: addresses provided later
             var.type = 0  # auto-set to ME_VARIABLE inside compiler
             var.context = NULL
-            var.itemsize = v.dtype.itemsize if v.dtype.num == 19 else 0 # only store item type if string
+            var.itemsize = v.dtype.itemsize if v.dtype.num in (18, 19) else 0 # only store item size for strings/bytes
 
         cdef int error = 0
         cdef bytes expression_bytes
@@ -4329,7 +4338,7 @@ cdef class NDArray:
         # The output container was allocated before compiling, so a width miniexpr
         # infers differently from the container's would overrun the block buffer.
         cdef size_t inferred_itemsize = me_get_itemsize(out_expr)
-        if me_output_dtype == ME_STRING and inferred_itemsize != <size_t> out_np_dtype.itemsize:
+        if me_output_dtype in (ME_STRING, ME_BYTES) and inferred_itemsize != <size_t> out_np_dtype.itemsize:
             me_free(out_expr)
             raise ValueError(
                 f"miniexpr infers a {inferred_itemsize}-byte string result for "
@@ -4398,7 +4407,7 @@ cdef class NDArray:
             var.address = NULL
             var.type = 0
             var.context = NULL
-            var.itemsize = v.dtype.itemsize if v.dtype.num == 19 else 0
+            var.itemsize = v.dtype.itemsize if v.dtype.num in (18, 19) else 0
 
         cdef bytes expression_bytes = (
             (<str>expression).encode("utf-8") if isinstance(expression, str) else expression

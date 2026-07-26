@@ -127,10 +127,10 @@ def test_blog_kernel_as_dsl_kernel(names):
 
 
 def test_probe_reports_none_for_unsupported():
-    # Bytes are not wired up yet; the probe must say so rather than guess, so
-    # the caller keeps its numpy path.
-    assert blosc2_ext.me_output_dtype("o0 + o1", {"o0": "S8", "o1": "S8"}) is None
+    # When miniexpr cannot type an expression the probe must say so rather than
+    # guess, so the caller keeps its numpy path.
     assert blosc2_ext.me_output_dtype("nosuchfunc(o0)", {"o0": "<U8"}) is None
+    assert blosc2_ext.me_output_dtype("o0 + o1", {"o0": "<U8", "o1": "f8"}) is None
 
 
 def test_string_literal_with_equals_sign():
@@ -141,3 +141,57 @@ def test_string_literal_with_equals_sign():
     got = ("property_type=" + arr).compute(strict_miniexpr=True)
     expected = "property_type=" + src
     assert list(got[:]) == list(expected)
+
+
+# --- bytes ('S') columns: same kernels, 1-byte code units -------------------
+
+BYTES_VALUES = [b"foo", b"Hello", b" pad  ", b"abcdefgh"]
+
+
+@pytest.fixture
+def raws():
+    return np.array(BYTES_VALUES * 32, dtype="S8")
+
+
+def test_bytes_concat_matches_numpy(raws):
+    arr = blosc2.asarray(raws)
+    got = (arr + b"-x").compute(strict_miniexpr=True)
+    expected = raws + b"-x"
+    assert got.dtype == expected.dtype
+    assert list(got[:]) == list(expected)
+
+
+@pytest.mark.parametrize("func", ["lower", "upper"])
+def test_bytes_case_matches_numpy(raws, func):
+    # NumPy's `S` case mapping is ASCII-only and 1:1, so unlike `U` the width
+    # must not grow.
+    arr = blosc2.asarray(raws)
+    got = getattr(blosc2, func)(arr).compute(strict_miniexpr=True)
+    expected = getattr(np.strings, func)(raws)
+    assert got.dtype == expected.dtype
+    assert list(got[:]) == list(expected)
+
+
+def test_bytes_predicates_match_numpy(raws):
+    arr = blosc2.asarray(raws)
+    assert list((arr == b"foo").compute(strict_miniexpr=True)[:]) == list(raws == b"foo")
+    got = blosc2.contains(arr, b"ell").compute(strict_miniexpr=True)
+    assert list(got[:]) == list(np.strings.find(raws, b"ell") >= 0)
+
+
+def test_bytes_dsl_kernel(raws):
+    @blosc2.dsl_kernel
+    def tag(x):
+        if b"o" in x:
+            return x
+        return b"long-" + x
+
+    arr = blosc2.asarray(raws)
+    got = blosc2.lazyudf(tag, (arr,)).compute(strict_miniexpr=True)
+    expected = [v if b"o" in v else b"long-" + v for v in raws]
+    assert list(got[:]) == expected
+
+
+def test_bytes_and_str_do_not_mix(raws):
+    # NumPy raises on `S` + `U` too; miniexpr must not silently pick one.
+    assert blosc2_ext.me_output_dtype("o0 + o1", {"o0": "S8", "o1": "<U8"}) is None

@@ -15,8 +15,12 @@ XXX version-specific blurb XXX
   unpacking (`before, after = desc.split(sep, 1)`), which are rewritten to
   the DSL grammar. The output width is inferred by miniexpr and the
   container is allocated from it, so nothing truncates — `.dtype` may be
-  wider than NumPy's exact answer, never narrower. Variable-width `utf8()`
-  columns and bytes (`S`) dtypes still use the NumPy path.
+  wider than NumPy's exact answer, never narrower.
+- **Bytes (`S`) arrays** go through the same engine, with NumPy's `S`
+  semantics rather than `<U`'s: ASCII-only case mapping (so `upper`/`lower`
+  keep the width instead of growing) and ASCII-only stripping. `S` and `<U`
+  operands do not mix in one expression, which is what NumPy does too.
+  Variable-width `utf8()` columns still use the NumPy path.
 - New `blosc2.random` module: seedable, NumPy-quality random `NDArray`
   constructors. Each chunk gets its own independent `SeedSequence`-spawned
   stream and is generated concurrently in a thread pool, giving full `PCG64`
