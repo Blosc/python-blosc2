@@ -4326,6 +4326,15 @@ cdef class NDArray:
             raise TypeError(f"miniexpr does not support operand or output dtype: {expression_display}; details: {me_error_msg}")
         if rc != ME_COMPILE_SUCCESS:
             raise NotImplementedError(f"Cannot compile expression: {expression_display}; details: {me_error_msg}")
+        # The output container was allocated before compiling, so a width miniexpr
+        # infers differently from the container's would overrun the block buffer.
+        cdef size_t inferred_itemsize = me_get_itemsize(out_expr)
+        if me_output_dtype == ME_STRING and inferred_itemsize != <size_t> out_np_dtype.itemsize:
+            me_free(out_expr)
+            raise ValueError(
+                f"miniexpr infers a {inferred_itemsize}-byte string result for "
+                f"{expression_display}, but the output array is {out_np_dtype}"
+            )
         udata.miniexpr_handle = out_expr
 
         # Free resources

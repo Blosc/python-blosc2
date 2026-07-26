@@ -5187,7 +5187,9 @@ def lazyudf(
                 raise TypeError(
                     "Cannot infer dtype for DSL kernel with no array inputs; pass dtype= explicitly."
                 )
-            dtype = np.result_type(*dep_dtypes)
+            # A string-returning kernel is not a promotion of its inputs: only
+            # miniexpr knows the concat/case-mapping width bound.
+            dtype = _dsl_kernel_string_dtype(func, inputs) or np.result_type(*dep_dtypes)
         else:
             raise TypeError("dtype is required for non-DSL UDFs.")
     return LazyUDF(func, inputs, dtype, shape, chunked_eval, jit, jit_backend, **kwargs)
