@@ -697,6 +697,9 @@ cdef extern from "miniexpr.h":
         int ncode
         void *parameters[1]
 
+    int me_compile(const char *expression, const me_variable *variables,
+                   int var_count, me_dtype dtype, int *error, me_expr **out)
+
     int me_compile_nd_jit(const char *expression, const me_variable *variables,
                           int var_count, me_dtype dtype, int ndims,
                           const int64_t *shape, const int32_t *chunkshape,
@@ -739,6 +742,9 @@ cdef extern from "miniexpr.h":
                    int64_t nchunk, int64_t nblock, const me_eval_params *params) nogil
 
     int me_nd_valid_nitems(const me_expr *expr, int64_t nchunk, int64_t nblock, int64_t *valid_nitems) nogil
+
+    me_dtype me_get_dtype(const me_expr *expr) nogil
+    size_t me_get_itemsize(const me_expr *expr) nogil
 
     void me_print(const me_expr *n) nogil
     void me_free(me_expr *n) nogil
@@ -902,6 +908,110 @@ cdef inline me_dtype _me_dtype_from_numpy_dtype(dtype_obj):
             )
         return ME_STRING
     return <me_dtype>-1
+
+
+cdef inline object _numpy_dtype_from_me_dtype(me_dtype dt):
+    if dt == ME_BOOL:
+        return np.dtype(np.bool_)
+    if dt == ME_INT8:
+        return np.dtype(np.int8)
+    if dt == ME_INT16:
+        return np.dtype(np.int16)
+    if dt == ME_INT32:
+        return np.dtype(np.int32)
+    if dt == ME_INT64:
+        return np.dtype(np.int64)
+    if dt == ME_UINT8:
+        return np.dtype(np.uint8)
+    if dt == ME_UINT16:
+        return np.dtype(np.uint16)
+    if dt == ME_UINT32:
+        return np.dtype(np.uint32)
+    if dt == ME_UINT64:
+        return np.dtype(np.uint64)
+    if dt == ME_FLOAT32:
+        return np.dtype(np.float32)
+    if dt == ME_FLOAT64:
+        return np.dtype(np.float64)
+    if dt == ME_COMPLEX64:
+        return np.dtype(np.complex64)
+    if dt == ME_COMPLEX128:
+        return np.dtype(np.complex128)
+    return None
+
+
+def me_output_dtype(expression, operands):
+    """Ask miniexpr what dtype *expression* would produce over *operands*.
+
+    ``operands`` maps operand name -> numpy dtype.  Compiles with ME_AUTO, reads
+    the inferred result back, and throws the program away.  python-blosc2 needs
+    this before evaluating, because the output container must be allocated with a
+    fixed itemsize and string widths are known only to miniexpr's own inference
+    (e.g. `<U20` + `<U15` -> `<U34`).
+
+    Returns a numpy dtype, or None when miniexpr cannot compile the expression,
+    in which case the caller should use its numpy fallback.
+    """
+    cdef Py_ssize_t n = len(operands)
+    cdef me_variable* variables = NULL
+    cdef me_variable *var
+    cdef bytes var_name
+    cdef bytes expression_bytes
+    cdef np.dtype operand_dtype
+    cdef Py_ssize_t built = 0
+    cdef int error = 0
+    cdef int rc = 0
+    cdef me_expr *out_expr = NULL
+    cdef me_dtype out_dt
+    cdef size_t itemsize = 0
+    cdef Py_ssize_t i
+
+    if n > 0:
+        variables = <me_variable *> malloc(sizeof(me_variable) * n)
+        if variables == NULL:
+            raise MemoryError()
+
+    try:
+        for k, v in operands.items():
+            var = &variables[built]
+            operand_dtype = np.dtype(v)
+            try:
+                var.dtype = _me_dtype_from_numpy_dtype(operand_dtype)
+            except TypeError:
+                return None
+            if <int>var.dtype < 0:
+                return None
+            var_name = k.encode("utf-8") if isinstance(k, str) else k
+            var.name = <char *> malloc(strlen(var_name) + 1)
+            strcpy(var.name, var_name)
+            var.address = NULL
+            var.type = 0
+            var.context = NULL
+            var.itemsize = operand_dtype.itemsize if operand_dtype.num == 19 else 0
+            built += 1
+
+        expression_bytes = (
+            (<str>expression).encode("utf-8") if isinstance(expression, str) else expression
+        )
+        rc = me_compile(expression_bytes, variables, <int>n, ME_AUTO, &error, &out_expr)
+        if rc != ME_COMPILE_SUCCESS or out_expr == NULL:
+            if out_expr != NULL:
+                me_free(out_expr)
+            return None
+
+        out_dt = me_get_dtype(out_expr)
+        itemsize = me_get_itemsize(out_expr)
+        me_free(out_expr)
+
+        if out_dt == ME_STRING:
+            if itemsize == 0 or itemsize % 4 != 0:
+                return None
+            return np.dtype("<U%d" % (itemsize // 4))
+        return _numpy_dtype_from_me_dtype(out_dt)
+    finally:
+        for i in range(built):
+            free(variables[i].name)
+        free(variables)
 
 
 cdef inline str _me_compile_status_name(int rc):

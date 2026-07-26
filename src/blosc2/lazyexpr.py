@@ -3597,8 +3597,48 @@ class LazyExpr(LazyArray):
         finally:
             blosc2._disable_overloaded_equal = prev_flag
 
+    def _miniexpr_string_dtype(self):
+        """Width of a string-valued result, as inferred by miniexpr itself.
+
+        Only miniexpr knows the width its kernels produce: concat adds operand
+        widths, and case mapping can expand (numpy's ``result_type`` models
+        neither).  Allocating the output container from numpy's answer makes the
+        kernel silently truncate, so ask miniexpr whenever a string operand is
+        involved.  Returns None when no string is involved or miniexpr cannot
+        compile the expression, leaving the numpy path in charge.
+        """
+        cached = getattr(self, "_me_str_dtype_", None)
+        if cached is not None and self._me_str_expr_ == self.expression:
+            return cached[0]
+        try:
+            operands = self.operands
+            if not operands or any(v is None for v in operands.values()):
+                return None
+            dtypes = {}
+            for k, v in operands.items():
+                dt = getattr(v, "dtype", None)
+                if dt is None:
+                    return None
+                dtypes[k] = dt
+            if not any(np.dtype(dt).kind == "U" for dt in dtypes.values()):
+                return None
+            from blosc2 import blosc2_ext
+
+            out = blosc2_ext.me_output_dtype(self.expression, dtypes)
+        except Exception:
+            return None
+        if out is not None and np.dtype(out).kind != "U":
+            out = None
+        self._me_str_dtype_ = (out,)
+        self._me_str_expr_ = self.expression
+        return out
+
     @property
     def dtype(self):
+        # miniexpr owns string widths; see _miniexpr_string_dtype.
+        string_dtype = self._miniexpr_string_dtype()
+        if string_dtype is not None:
+            return string_dtype
         # Honor self._dtype; it can be set during the building of the expression
         if hasattr(self, "_dtype"):
             # In some situations, we already know the dtype

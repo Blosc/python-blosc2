@@ -3359,7 +3359,9 @@ class Operand:
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
     def __radd__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
-        return self.__add__(value)
+        # Order matters: `+` on strings is concatenation, not commutative.
+        _check_allowed_dtypes(value)
+        return blosc2.LazyExpr(new_op=(value, "+", self))
 
     def __iadd__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         return self.__add__(value)
