@@ -4659,6 +4659,35 @@ def _align_dsl_operand_grids(inputs):
     return aligned
 
 
+def _dsl_kernel_string_dtype(func, inputs):
+    """Output dtype of a string-returning DSL kernel, per miniexpr.
+
+    Returns None when the kernel is not string-valued or miniexpr cannot type
+    it, leaving the existing dtype handling in charge.
+    """
+    try:
+        params = list(getattr(func, "input_names", None) or [])
+        if not params or len(params) != len(inputs):
+            return None
+        dtypes = {}
+        for name, arr in zip(params, inputs, strict=True):
+            dt = getattr(arr, "dtype", None)
+            if dt is None:
+                return None
+            dtypes[name] = dt
+        if not any(np.dtype(dt).kind == "U" for dt in dtypes.values()):
+            return None
+
+        from blosc2 import blosc2_ext
+
+        out = blosc2_ext.me_output_dtype(func.dsl_source, dtypes)
+    except Exception:
+        return None
+    if out is None or np.dtype(out).kind != "U":
+        return None
+    return np.dtype(out)
+
+
 class LazyUDF(LazyArray):
     def __init__(
         self, func, inputs, dtype, shape=None, chunked_eval=True, jit=None, jit_backend=None, **kwargs
@@ -4676,6 +4705,12 @@ class LazyUDF(LazyArray):
                 )
         else:
             self._shape = shape
+
+        if dtype is None and isinstance(func, DSLKernel) and func.dsl_source is not None:
+            # A string-returning DSL kernel needs miniexpr's own width inference:
+            # the output container is allocated before evaluation, and nothing on
+            # the Python side can predict a concat/case-mapping width.
+            dtype = _dsl_kernel_string_dtype(func, self.inputs) or dtype
 
         self.kwargs = kwargs
         self.kwargs["dtype"] = dtype

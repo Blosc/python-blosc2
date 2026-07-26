@@ -39,6 +39,122 @@ _NUMPY_TO_DSL_FUNC_ALIASES = {
 }
 
 
+# Python string methods the DSL grammar exposes as plain functions.  The DSL
+# parser has no attribute syntax, so `desc.lower()` has to become `lower(desc)`
+# before the source reaches miniexpr.
+_STRING_METHOD_TO_DSL_FUNC = {
+    "lower": "lower",
+    "upper": "upper",
+    "strip": "strip",
+    "lstrip": "lstrip",
+    "rstrip": "rstrip",
+    "removeprefix": "removeprefix",
+    "removesuffix": "removesuffix",
+    "replace": "replace",
+    "startswith": "startswith",
+    "endswith": "endswith",
+}
+
+
+class _StringSyntaxRewriter(ast.NodeTransformer):
+    """Make ordinary Python string syntax parseable by the DSL grammar.
+
+    Three rewrites, all shape-preserving:
+
+      ``s.lower()``        -> ``lower(s)``
+      ``x in s``           -> ``contains(s, x)``      (``not in`` negated)
+      ``a, b = s.split(sep, 1)``
+                           -> ``a = split_part(s, sep, 0)``
+                              ``b = split_part(s, sep, 1)``
+
+    The point is that a pandas UDF written in normal Python runs unmodified;
+    without this, `df.apply(f, axis=1, engine=blosc2.jit)` would require the
+    user to rewrite their function into function-call form first.
+    """
+
+    def __init__(self):
+        self.rewrote_any = False
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr in _STRING_METHOD_TO_DSL_FUNC:
+            # `np.foo(...)` is handled by _NumpyAttrCallRewriter; leave it alone.
+            dsl_name = _STRING_METHOD_TO_DSL_FUNC[func.attr]
+            new_call = ast.Call(
+                func=ast.Name(id=dsl_name, ctx=ast.Load()),
+                args=[func.value, *node.args],
+                keywords=node.keywords,
+            )
+            self.rewrote_any = True
+            return ast.copy_location(new_call, node)
+        return node
+
+    def visit_Compare(self, node: ast.Compare) -> ast.AST:
+        self.generic_visit(node)
+        if len(node.ops) != 1 or not isinstance(node.ops[0], (ast.In, ast.NotIn)):
+            return node
+        needle, haystack = node.left, node.comparators[0]
+        call = ast.Call(
+            func=ast.Name(id="contains", ctx=ast.Load()),
+            args=[haystack, needle],
+            keywords=[],
+        )
+        self.rewrote_any = True
+        if isinstance(node.ops[0], ast.NotIn):
+            call = ast.UnaryOp(op=ast.Not(), operand=call)
+        return ast.copy_location(call, node)
+
+    def visit_Assign(self, node: ast.Assign):
+        self.generic_visit(node)
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
+            return node
+        targets = node.targets[0].elts
+        parts = self._split_call_parts(node.value, len(targets))
+        if parts is None:
+            # Leave it for the validator to reject with a proper message.
+            return node
+        self.rewrote_any = True
+        out = []
+        for target, value in zip(targets, parts, strict=True):
+            assign = ast.Assign(targets=[target], value=value)
+            out.append(ast.copy_location(assign, node))
+        return out
+
+    @staticmethod
+    def _split_call_parts(value, count):
+        """Turn ``s.split(sep, 1)`` into ``count`` split_part() calls, or None.
+
+        Only the maxsplit=1 form is supported, which is what tuple unpacking can
+        consume; a general N-way split has no fixed arity to unpack into.
+        """
+        if count != 2 or not isinstance(value, ast.Call):
+            return None
+        func = value.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name != "split":
+            return None
+        if isinstance(func, ast.Attribute):
+            subject, args = func.value, list(value.args)
+        else:
+            if not value.args:
+                return None
+            subject, args = value.args[0], list(value.args[1:])
+        if len(args) != 2:
+            return None
+        sep, maxsplit = args
+        if not (isinstance(maxsplit, ast.Constant) and maxsplit.value == 1):
+            return None
+        return [
+            ast.Call(
+                func=ast.Name(id="split_part", ctx=ast.Load()),
+                args=[subject, sep, ast.Constant(value=k)],
+                keywords=[],
+            )
+            for k in range(count)
+        ]
+
+
 class _NumpyAttrCallRewriter(ast.NodeTransformer):
     """Rewrite `alias.foo(...)` calls to the bare `foo(...)` form the DSL grammar
     requires, for every *alias* bound to the real NumPy module.  Also applies
@@ -603,6 +719,8 @@ class DSLKernel:
             func, dsl_source, dsl_tree, dsl_func, input_names
         )
 
+        dsl_source, dsl_tree, dsl_func = self._rewrite_string_syntax(dsl_source, dsl_tree, dsl_func)
+
         if validate:
             DSLValidator(dsl_source, input_names=input_names).validate(dsl_func)
         if _PRINT_DSL_KERNEL:
@@ -610,6 +728,23 @@ class DSLKernel:
             print(f"[DSLKernel:{func_name}] dsl_source (full):")
             print(dsl_source)
         return dsl_source, input_names
+
+    @staticmethod
+    def _rewrite_string_syntax(dsl_source, dsl_tree, dsl_func):
+        """Lower Python string syntax to the DSL's function-call grammar.
+
+        No-op (returning the inputs unchanged) when there is nothing to rewrite.
+        """
+        rewriter = _StringSyntaxRewriter()
+        rewritten = rewriter.visit(ast.parse(dsl_source))
+        if not rewriter.rewrote_any:
+            return dsl_source, dsl_tree, dsl_func
+
+        ast.fix_missing_locations(rewritten)
+        new_source = ast.unparse(rewritten)
+        new_tree = ast.parse(new_source)
+        new_func = next((node for node in new_tree.body if isinstance(node, ast.FunctionDef)), None)
+        return new_source, new_tree, new_func
 
     @staticmethod
     def _rewrite_numpy_attr_calls(func, dsl_source, dsl_tree, dsl_func, input_names):
