@@ -115,7 +115,7 @@ message when opening a nonexistent `CTable` in append mode.
   Reachable from ordinary data -- an `<U64` NDArray is a 256-byte typesize,
   so `arr.schunk[1:4]` hit it. `SChunk.get_slice()` now decompresses the
   covered chunks whole for such typesizes, a path that never calls `getitem`.
-  (The underlying bug is upstream in c-blosc2.)
+  (The underlying bug is upstream: Blosc/c-blosc2#796.)
 - **`create_index()` on a string column made every query on it return zero
   rows.** Silently -- adding an index, an optimization, changed the answer.
   A segment summary is a `(min, max, flags)` record, so a `<Un` column makes

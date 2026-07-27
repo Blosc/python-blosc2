@@ -1197,6 +1197,9 @@ class SChunk(blosc2_ext.SChunk):
 
         Decompress each covered chunk whole and cut the requested range out of
         it; that path never calls ``getitem``, so it is unaffected.
+
+        Upstream: https://github.com/Blosc/c-blosc2/issues/796 -- drop this
+        once the fix lands in the pinned c-blosc2.
         """
         nitems = len(self)
         start, stop, _ = slice(start, stop, 1).indices(nitems)
