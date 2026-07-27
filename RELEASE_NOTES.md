@@ -32,6 +32,14 @@ XXX version-specific blurb XXX
   Nulls are materialized to `""` before any kernel sees them and re-masked
   afterwards, so a null never satisfies a predicate — the same answer the
   operator form gives.
+- **Scalar comparisons on `utf8()` columns are 5-6x faster in expression
+  form.** `t.where("name == 'x'")` (and `!=`, `<`, `<=`, `>`, `>=`, either
+  operand order) is now answered by the same raw-byte scan the operator form
+  `t[t.name == "x"]` uses, instead of decoding the column to fixed-width
+  first: 156 -> 28 ms over 1M short values, 268 -> 56 ms over 1M ~31-byte
+  values. Mixed expressions get whatever they can -- in
+  `startswith(name, 'x') | (name == 'zz')` the comparison takes the fast
+  path and `startswith` still decodes.
 - **New `blosc2.utf8_array(seq, spec=None)`** builds a `Utf8Array` from an
   iterable of strings; `Utf8Array` is exported too. Previously the only
   construction path was `Utf8Array(spec)` + `.extend()` + `.flush()`, which
