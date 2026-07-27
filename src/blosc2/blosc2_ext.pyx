@@ -3862,6 +3862,11 @@ cdef class NDArray:
         cdef int rc
         cdef int32_t lazychunk_cbytes
         cdef c_bool owns_dctx = False
+        cdef size_t header_typesize
+        cdef int header_flags
+        cdef int64_t span_start
+        cdef int32_t span_nitems
+        cdef int32_t want_nbytes
 
         lazychunk_cbytes = blosc2_schunk_get_lazychunk(self.array.sc, nchunk, &chunk, &needs_free)
         if lazychunk_cbytes < 0:
@@ -3892,10 +3897,26 @@ cdef class NDArray:
             if needs_free:
                 free(chunk)
             raise RuntimeError("Could not create decompression context")
+        # blosc2_getitem_ctx() counts in the typesize the *chunk header* records,
+        # which is not always the array's: c-blosc2 caps a typesize above
+        # BLOSC_MAX_TYPESIZE (255) to 1 so its split machinery keeps working.
+        # Asking in element units then silently reads a byte range instead --
+        # an index summary over a <U32 column is a 257-byte record, so every
+        # such sidecar decoded to garbage and pruned every candidate away.
+        blosc1_cbuffer_metainfo(chunk, &header_typesize, &header_flags)
+        if header_typesize <= 0:
+            PyBuffer_Release(&view)
+            if needs_free:
+                free(chunk)
+            raise RuntimeError("invalid chunk typesize")
+        want_nbytes = nitems * self.array.sc.typesize
+        span_start = (<int64_t> start * self.array.sc.typesize) // <int64_t> header_typesize
+        span_nitems = want_nbytes // <int32_t> header_typesize
         # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
         # blosc2_getitem_ctx() needs the full lazy chunk size returned by
         # blosc2_schunk_get_lazychunk().
-        rc = blosc2_getitem_ctx(dctx, chunk, lazychunk_cbytes, start, nitems, view.buf, view.len)
+        rc = blosc2_getitem_ctx(dctx, chunk, lazychunk_cbytes, <int> span_start, <int> span_nitems,
+                                view.buf, view.len)
         if owns_dctx:
             blosc2_free_ctx(dctx)
         PyBuffer_Release(&view)
@@ -3903,6 +3924,12 @@ cdef class NDArray:
             free(chunk)
         if rc < 0:
             raise RuntimeError("Error while decoding the requested span")
+        if rc != want_nbytes:
+            # A short read used to pass silently and leave the tail of the
+            # destination uninitialised.
+            raise RuntimeError(
+                f"decoded {rc} bytes for the requested span, expected {want_nbytes}"
+            )
 
         return arr
 

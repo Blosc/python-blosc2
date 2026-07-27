@@ -1160,3 +1160,62 @@ def test_merge_segment_plans_intersection_union_and_fallback():
     assert _merge_segment_plans(coarse, fine, "and") is fine  # fine prunes more
     assert _merge_segment_plans(fine, coarse, "and") is fine
     assert _merge_segment_plans(coarse, fine, "or") is None
+
+
+# ---------------------------------------------------------------------------
+# String index summaries wider than 255 bytes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("max_length", [16, 31, 32, 64, 100])
+@pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "full", "opsi"])
+def test_string_index_matches_unindexed_scan(max_length, kind):
+    """An index must never change a query's answer.
+
+    A segment summary is a ``(min, max, flags)`` record, so a ``<Un`` column
+    makes it ``8*n + 1`` bytes -- 257 for the *default* ``max_length=32``.
+    c-blosc2 caps a typesize above 255 to 1 in the chunk header, and the
+    sidecar reader asked ``blosc2_getitem_ctx()`` in element units, so those
+    summaries decoded to garbage and pruned every candidate away: indexed
+    queries returned zero rows, silently, on the default string width.
+    """
+
+    @dataclasses.dataclass
+    class StrRow:
+        name: str = blosc2.field(blosc2.string(max_length=max_length))
+        x: int = blosc2.field(blosc2.int64())
+
+    values = [f"c{i % 20:02d}" for i in range(5000)]
+    t = blosc2.CTable(StrRow, new_data={"name": values, "x": list(range(len(values)))})
+
+    queries = [
+        "name == 'c07'",
+        "name != 'c07'",
+        "name < 'c10'",
+        "name >= 'c10'",
+        "(name > 'c05') & (name <= 'c08')",
+    ]
+    expected = {q: sorted(int(v) for v in t.where(q)["x"][:]) for q in queries}
+    assert expected["name == 'c07'"], "fixture should match some rows"
+
+    t.create_index(col_name="name", kind=blosc2.IndexKind(kind))
+    for q in queries:
+        assert sorted(int(v) for v in t.where(q)["x"][:]) == expected[q], q
+
+
+def test_wide_sidecar_span_read_is_not_short():
+    """get_1d_span_numpy() must fill the whole destination, not part of it.
+
+    A short read used to leave the tail uninitialised rather than raise.
+    """
+    dtype = np.dtype([("min", "<U32"), ("max", "<U32"), ("flags", np.uint8)])
+    assert dtype.itemsize > 255, "the point of this test is a capped typesize"
+    values = np.zeros(500, dtype=dtype)
+    values["min"] = [f"lo-{i:04d}" for i in range(500)]
+    values["max"] = [f"hi-{i:04d}" for i in range(500)]
+    values["flags"] = np.arange(500) % 251
+
+    arr = blosc2.asarray(values, chunks=(128,))
+    out = np.empty(100, dtype=dtype)
+    arr.get_1d_span_numpy(out, 1, 5, 100)
+    assert out.tolist() == values[128 + 5 : 128 + 105].tolist()
