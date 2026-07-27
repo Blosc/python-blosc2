@@ -106,6 +106,17 @@ message when opening a nonexistent `CTable` in append mode.
 
 ### Bug fixes
 
+- **`create_index()` on a string column made every query on it return zero
+  rows.** Silently -- adding an index, an optimization, changed the answer.
+  A segment summary is a `(min, max, flags)` record, so a `<Un` column makes
+  it `8n + 1` bytes: 257 for `max_length=32`, which is the **default** width
+  for a plain `str` annotation. Past 255 bytes c-blosc2 records the chunk
+  typesize as 1, and the sidecar reader asked for spans in element units, so
+  summaries decoded to garbage and pruned every candidate away. The boundary
+  is exactly `8*max_length + 1 > 255` (31 works, 32 does not); `summary`,
+  `bucket`, `partial` and `full` indexes were affected, `opsi` was not.
+  A short span read now raises instead of leaving the destination partly
+  uninitialised.
 - **Expressions over operands wider than 255 bytes returned wrong results.**
   c-blosc2 caps a typesize above 255 to 1 in the chunk header so its split
   machinery keeps working, and the miniexpr prefilter was asking
