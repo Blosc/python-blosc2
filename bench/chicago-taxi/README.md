@@ -66,7 +66,118 @@ yourself if flushing manually):
 | `select-pandas-flat.py` | the query via pandas (parquet read + NumPy filter/sort) |
 | `select-polars-flat.py` | the query via polars lazy scan over parquet |
 | `select-blosc2.py` | the query via `blosc2.open()` + `CTable.where()` over `.b2z` |
+| `string-ops.py` | a separate benchmark: *string* kernels over the same dataset (see below) |
 
 Each `select-*.py` prints the result, then `open:`/`compute:`/`print:`/`total:`
 timings; the driver parses the `total:` line (query time, excluding interpreter
 and import startup) alongside `/usr/bin/time`'s wall clock and peak memory.
+
+## String ops (`string-ops.py`)
+
+The numeric benchmark above is I/O-bound. `string-ops.py` is the opposite: it
+loads the two *string* columns — `company` (`<U44`) and `payment.type`
+(`<U11`) — into memory once and times three string workloads on each engine.
+All engines must produce identical results or the run fails.
+
+```bash
+python string-ops.py                      # whole 24.3 M-row table, best of 3
+python string-ops.py --nrows 1000000 --apply
+python string-ops.py --engines blosc2,numpy --nrows 1000000
+```
+
+| task | expression |
+|---|---|
+| `filter` | `startswith(company, 'Taxi') & (payment_type != 'Cash')` → bool |
+| `transform` | `'co=' + company + '\|pay=' + lower(payment_type)` → str |
+| `kernel` | the same, branching on whether the company is a cab company |
+
+All three are timed; only `kernel` is plotted. It is the point of the exercise:
+the shape of the
+[pandas-3 blog kernel](https://datapythonista.me/blog/whats-new-in-pandas-3),
+row-wise control flow rather than one expression. blosc2 runs it as a
+`@blosc2.dsl_kernel`; the other engines have to rewrite it as a mask plus two
+fully-evaluated branches. `--apply` adds the row-wise pandas spelling, which is
+what you would write first and is ~70x slower than everything else.
+
+**`blosc2 (raw)` is the same blosc2 path at `clevel=0`** — same container, same
+kernel, operands and result both uncompressed. Compression is the only variable
+between the two blosc2 bars, so their time gap is what compression costs and
+their footprint gap is what it buys.
+
+Results on an Apple M-series laptop (8 cores, 24 GB), full table, warm
+(see `string-ops.png`):
+
+| | filter | transform | kernel | kernel result |
+|---|---|---|---|---|
+| blosc2 | 469 ms | 2.11 s | 4.03 s | **18 MB** |
+| blosc2 (raw) | 174 ms | 1.29 s | 3.54 s | 5 766 MB |
+| pandas | 192 ms | 1.99 s | 5.12 s | 932 MB |
+| polars | 92 ms | 1.75 s | 3.88 s | 932 MB |
+| duckdb | 334 ms | 1.99 s | 2.96 s | 842 MB |
+
+blosc2 is at parity with DuckDB on `transform`, 1.36x on `kernel`, and ahead of
+pandas on both — holding the result in **46x less memory** than any of them.
+`filter` is the weak task: a bool result is 1 byte per row, so there is no
+output-side win to offset reading the operands.
+
+**Compression now costs ~12 % of kernel time and saves 315x the memory** — 18 MB
+against 5.8 GB for the identical uncompressed run.
+
+Three things got this from an earlier 8.49 s `kernel`, and two were bugs rather
+than tuning:
+
+1. **`upper`/`lower` stopped reserving a 3x/2x case-expansion bound** (miniexpr
+   `5a7de4f`). NumPy does not reserve either — it truncates — so the result went
+   `<U101` → `<U54`, halving every byte moved.
+2. **Expression results were losing SHUFFLE's code-unit width.** Constructing a
+   `CParams` defaults `filters_meta` to all zeros, i.e. "shuffle by the whole
+   item", which scatters characters across the slot; left alone the container
+   picks 4 for `<U` (the UCS4 code unit). Identical bytes compressed 3.2x worse
+   on the expression path than through `asarray()`.
+3. **Blocks are now sized for the result, not the operands** (see `BLOCKS` in
+   the script). The result inherits the operands' block shape in *rows* and is
+   much wider per row, so a row count tuned for `<U36` operands gave 1.7 MB
+   blocks for the `<U54` result — out of cache on every task.
+
+Tuning note, not applied here because it changes stock compression settings:
+`cparams=CParams(codec=ZSTD, clevel=1, ...)` trades ratio for speed and at 1 M
+rows gives `transform` 52 ms and `kernel` 127 ms (against DuckDB's 71 and 112)
+for 1.0 MB instead of 0.75.
+
+### The `<U` dtype used to cost 3.2x here (mostly fixed — see above)
+
+The same kernel over the *same* blosc2 code path, with `S` (bytes) operands
+instead of `<U`, at 1 M rows:
+
+| | time | output |
+|---|---|---|
+| blosc2 `<U` | 300 ms | 404 B/row |
+| **blosc2 `S`** | **114 ms** | **54 B/row** |
+| duckdb | 111 ms | 35.9 B/row |
+| polars | 137 ms | 39.7 B/row |
+
+On `S`, blosc2 is at DuckDB parity and ahead of polars — with the result still
+compressed to 2 MB. Three multiplicative factors inflate `<U`:
+
+1. **UCS4 — 4 bytes per codepoint.** The others hold UTF-8, ~1 B/char here.
+2. **The `lower()` width bound — 2x.** On `<U` it must reserve for Unicode
+   full-case expansion (`ß`→`SS`), so `<U36`.lower() → `<U72` and the result is
+   `<U101` where 54 suffices. On `S`, case mapping is ASCII-only and 1:1, so the
+   bound is exact — that is most of the `S` win.
+3. **Fixed-width padding.** Mean result length is 31.7 chars in a 101-char slot.
+
+Even on `S`, blosc2 holds 54 B/row (the compile-time max, on every row) against
+DuckDB's 35.9 (31.7 data + 4 offset + 0.1 validity) — they pay the mean plus an
+offset. That residual 1.4x is what native variable-width output would remove.
+
+Everything else measured small: operand decompression 23 ms; per-op interpreter
+cost ~10 ns/row/op (~50 ms of the 300 for this 5-op kernel); `lazyudf`
+construction ~0. Thread scaling is 3.9x on 8 cores, consistent with being
+bandwidth-bound on the wide output.
+
+**Practical advice: use `S` for ASCII/Latin-1 string columns.** It is available
+today and already reaches DuckDB parity on this workload.
+
+NumPy is implemented but **off by default**: its `kernel` builds five full-width
+`<U` temporaries, ~10 GB each at 24 M rows. Run it with `--engines` at a smaller
+`--nrows` — at 1 M rows it is 718 ms and 417 MB, losing on both counts.
