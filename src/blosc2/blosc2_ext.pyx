@@ -2630,6 +2630,38 @@ cdef int general_filler(blosc2_prefilter_params *params):
     return 0
 
 
+cdef inline int getitem_span(blosc2_context* dctx, const uint8_t* chunk, int32_t chunk_cbytes,
+                             int64_t start_item, int32_t nitems, int32_t typesize,
+                             void* dest, int32_t destsize) nogil:
+    """``blosc2_getitem_ctx()`` addressed in elements of *typesize*.
+
+    ``blosc2_getitem_ctx()`` counts in the typesize the *chunk header*
+    records, which is not always the array's: c-blosc2 caps a typesize above
+    BLOSC_MAX_TYPESIZE (255) to 1 so its split machinery keeps working
+    ("treat buffer as an 1-byte stream", blosc2.c).  Asking in element units
+    then silently reads a byte range instead -- results were wrong, partly
+    uninitialised, and no error was raised anywhere.  Convert through bytes:
+    identical arithmetic whenever the typesize is not capped.
+
+    Returns the number of bytes decoded, a negative blosc2 error code, or
+    -1 when the header typesize is unusable.  Callers should treat a return
+    other than ``nitems * typesize`` as a failure; a short read leaves the
+    tail of *dest* untouched.
+    """
+    cdef size_t header_typesize
+    cdef int header_flags
+    cdef int64_t span_start
+    cdef int32_t span_nitems
+
+    blosc1_cbuffer_metainfo(chunk, &header_typesize, &header_flags)
+    if header_typesize == 0:
+        return -1
+    span_start = (start_item * typesize) // <int64_t> header_typesize
+    span_nitems = (nitems * typesize) // <int32_t> header_typesize
+    return blosc2_getitem_ctx(dctx, chunk, chunk_cbytes, <int> span_start, <int> span_nitems,
+                              dest, destsize)
+
+
 # Auxiliary function for miniexpr as a prefilter
 # Only meant for (input and output) arrays that are blosc2.NDArray objects.
 cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
@@ -2660,10 +2692,6 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef me_input_cache_s* input_cache
     cdef int32_t chunk_nbytes, chunk_cbytes, block_nbytes
     cdef int start, blocknitems, expected_blocknitems
-    cdef size_t header_typesize
-    cdef int header_flags
-    cdef int64_t getitem_start
-    cdef int32_t getitem_nitems
     cdef int64_t valid_nitems
     cdef int64_t global_block
     cdef int32_t input_typesize
@@ -2836,17 +2864,6 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             expected_blocknitems = blocknitems
         elif blocknitems != expected_blocknitems:
             raise ValueError("miniexpr: inconsistent block element counts across inputs")
-        # blosc2_getitem_ctx() counts in the typesize the *chunk header* records,
-        # which is not always the array's: c-blosc2 caps a typesize above
-        # BLOSC_MAX_TYPESIZE (255) to 1 so its split machinery keeps working
-        # (blosc2.c, "treat buffer as an 1-byte stream").  Asking in element
-        # units then silently reads a byte range instead -- every block past the
-        # first came back as uninitialised memory.  Convert through bytes.
-        blosc1_cbuffer_metainfo(src, &header_typesize, &header_flags)
-        if header_typesize <= 0:
-            raise ValueError("miniexpr: invalid chunk typesize")
-        getitem_start = (<int64_t> nblock * block_nbytes) // <int64_t> header_typesize
-        getitem_nitems = block_nbytes // <int32_t> header_typesize
         # This is needed for thread safety, but adds a pretty low overhead (< 400ns on a modern CPU)
         # In the future, perhaps one can create a specific (serial) context just for
         # blosc2_getitem_ctx, but this is probably never going to be necessary.
@@ -2855,10 +2872,10 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         # dctx = ndarr.sc.dctx
         if valid_nitems > blocknitems:
             raise ValueError("miniexpr: valid items exceed padded block size")
-        rc = blosc2_getitem_ctx(dctx, src, chunk_cbytes, <int> getitem_start, <int> getitem_nitems,
-                                input_buffers[i], block_nbytes)
+        rc = getitem_span(dctx, src, chunk_cbytes, <int64_t> nblock * blocknitems, blocknitems,
+                          input_typesize, input_buffers[i], block_nbytes)
         blosc2_free_ctx(dctx)
-        if rc < 0:
+        if rc != block_nbytes:
             raise ValueError("miniexpr: error decompressing the chunk")
     # For reduction operations, we need to track which block we're processing
     # The linear_block_index should be based on the same grid the output shares
@@ -3012,13 +3029,17 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
         while True: # block loop
             startA = nblockA * blocknitems[0]
             startB = nblockB * blocknitems[1]
-            rc = blosc2_getitem_ctx(dctx, src[0], chunk_cbytes[0], startA, blocknitems[0],
-                                    input_buffers[0], block_nbytes[0])
-            if rc < 0:
+            # Element units, so via getitem_span() -- see its docstring.  matmul
+            # only ever sees numeric scalars (typesize <= 8), so the capped-typesize
+            # case is unreachable here today; going through the helper keeps that
+            # from being a latent trap if it ever stops being true.
+            rc = getitem_span(dctx, src[0], chunk_cbytes[0], startA, blocknitems[0],
+                              udata.inputs[0].sc.typesize, input_buffers[0], block_nbytes[0])
+            if rc != block_nbytes[0]:
                 raise ValueError("matmul: error decompressing the A chunk")
-            rc = blosc2_getitem_ctx(dctx, src[1], chunk_cbytes[1], startB, blocknitems[1],
-                                    input_buffers[1], block_nbytes[1])
-            if rc < 0:
+            rc = getitem_span(dctx, src[1], chunk_cbytes[1], startB, blocknitems[1],
+                              udata.inputs[1].sc.typesize, input_buffers[1], block_nbytes[1])
+            if rc != block_nbytes[1]:
                 raise ValueError("matmul: error decompressing the B chunk")
             batch = 0
             while batch < batches:
@@ -3862,10 +3883,6 @@ cdef class NDArray:
         cdef int rc
         cdef int32_t lazychunk_cbytes
         cdef c_bool owns_dctx = False
-        cdef size_t header_typesize
-        cdef int header_flags
-        cdef int64_t span_start
-        cdef int32_t span_nitems
         cdef int32_t want_nbytes
 
         lazychunk_cbytes = blosc2_schunk_get_lazychunk(self.array.sc, nchunk, &chunk, &needs_free)
@@ -3897,26 +3914,16 @@ cdef class NDArray:
             if needs_free:
                 free(chunk)
             raise RuntimeError("Could not create decompression context")
-        # blosc2_getitem_ctx() counts in the typesize the *chunk header* records,
-        # which is not always the array's: c-blosc2 caps a typesize above
-        # BLOSC_MAX_TYPESIZE (255) to 1 so its split machinery keeps working.
-        # Asking in element units then silently reads a byte range instead --
-        # an index summary over a <U32 column is a 257-byte record, so every
-        # such sidecar decoded to garbage and pruned every candidate away.
-        blosc1_cbuffer_metainfo(chunk, &header_typesize, &header_flags)
-        if header_typesize <= 0:
-            PyBuffer_Release(&view)
-            if needs_free:
-                free(chunk)
-            raise RuntimeError("invalid chunk typesize")
-        want_nbytes = nitems * self.array.sc.typesize
-        span_start = (<int64_t> start * self.array.sc.typesize) // <int64_t> header_typesize
-        span_nitems = want_nbytes // <int32_t> header_typesize
+        # An index summary over a <U32 column is a 257-byte record, so this
+        # reader needs getitem_span()'s element-to-byte conversion: without it
+        # every such sidecar decoded to garbage and the index pruned away
+        # every candidate.
         # For lazy chunks, blosc2_cbuffer_sizes() only reports the header cbytes.
         # blosc2_getitem_ctx() needs the full lazy chunk size returned by
         # blosc2_schunk_get_lazychunk().
-        rc = blosc2_getitem_ctx(dctx, chunk, lazychunk_cbytes, <int> span_start, <int> span_nitems,
-                                view.buf, view.len)
+        want_nbytes = nitems * self.array.sc.typesize
+        rc = getitem_span(dctx, chunk, lazychunk_cbytes, start, nitems,
+                          self.array.sc.typesize, view.buf, view.len)
         if owns_dctx:
             blosc2_free_ctx(dctx)
         PyBuffer_Release(&view)
