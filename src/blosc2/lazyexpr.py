@@ -231,6 +231,26 @@ _TRANSIENT_MASK_CPARAMS = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=5, filte
 _constructor_call_patterns = {name: re.compile(rf"\b{re.escape(name)}\s*\(") for name in constructors}
 
 
+def _restore_code_unit_shuffle(cparams: blosc2.CParams, dtype) -> None:
+    """Give SHUFFLE the code-unit width that constructing a CParams erases.
+
+    Left to itself, ``blosc2.uninit()`` shuffles a ``<U`` array by 4 bytes --
+    the UCS4 code unit -- which for text groups the (mostly zero) high bytes of
+    every codepoint together.  ``CParams`` defaults ``filters_meta`` to all
+    zeros, meaning "shuffle by the whole item", so merely passing a ``CParams``
+    to set something unrelated silently scatters characters across the slot
+    instead.  That cost 3.2x on the compressed result of every string
+    expression: 2.01 MB against 0.63 for the same bytes.
+
+    Only touches an entry the caller left at 0, and only for ``U``.
+    """
+    if getattr(dtype, "kind", None) != "U":
+        return
+    for i, filt in enumerate(cparams.filters):
+        if filt == blosc2.Filter.SHUFFLE and cparams.filters_meta[i] == 0:
+            cparams.filters_meta[i] = 4
+
+
 def _has_constructor_call(expression: str, constructor: str) -> bool:
     return _constructor_call_patterns[constructor].search(expression) is not None
 
@@ -1806,12 +1826,19 @@ def fast_eval(  # noqa: C901
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", None)
-        if cparams is None:
+        if cparams is None and getitem:
             # getitem output is throwaway scratch (returned as a NumPy array and
             # discarded), so compressing it buys nothing but a round trip.
-            cparams = blosc2.CParams(clevel=0) if getitem else blosc2.CParams()
+            cparams = blosc2.CParams(clevel=0)
+        # Otherwise leave cparams unset rather than passing CParams(): its
+        # filters_meta defaults to all zeros, which *overrides* the dtype-aware
+        # shuffle width uninit() would pick.  For <U that width is 4 (the UCS4
+        # code unit); shuffling by the full slot instead scatters characters
+        # across it and cost 3.2x on the compressed result.
+        if cparams is not None:
+            kwargs["cparams"] = cparams
         # All values will be overwritten, so we can use an uninitialized array
-        res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
+        res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, **kwargs)
         prefilter_set = False
         try:
             # Fuse where(cond, x, y) into the expression for miniexpr
@@ -2670,8 +2697,11 @@ def reduce_slices(  # noqa: C901
             use_miniexpr = False
 
     if use_miniexpr:
-        # Experiments say that not splitting is best (at least on Apple Silicon M4 Pro)
-        cparams = kwargs.pop("cparams", blosc2.CParams(splitmode=blosc2.SplitMode.NEVER_SPLIT))
+        cparams = kwargs.pop("cparams", None)
+        if cparams is None:
+            # Experiments say that not splitting is best (at least on Apple Silicon M4 Pro)
+            cparams = blosc2.CParams(splitmode=blosc2.SplitMode.NEVER_SPLIT)
+            _restore_code_unit_shuffle(cparams, dtype)
         # Create a fake NDArray just to drive the miniexpr evaluation (values won't be used)
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         # Compute the number of blocks in the result
@@ -4882,7 +4912,12 @@ class LazyUDF(LazyArray):
             # Convert to dictionary
             cparams = asdict(cparams)
         aux_cparams.update(cparams)
-        aux_kwargs["cparams"] = aux_cparams
+        if aux_cparams:
+            # Only when something was actually asked for: passing an empty dict
+            # still materializes CParams' defaults, whose all-zero filters_meta
+            # overrides the dtype-aware shuffle width (4 for <U, the UCS4 code
+            # unit) that the container would otherwise pick for itself.
+            aux_kwargs["cparams"] = aux_cparams
 
         aux_dparams = aux_kwargs.get("dparams", {})
         if isinstance(aux_dparams, blosc2.DParams):
