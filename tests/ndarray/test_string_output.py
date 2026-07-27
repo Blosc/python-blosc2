@@ -220,3 +220,17 @@ def test_wide_string_operands_match_numpy(width):
 
     upper = blosc2.upper(arr).compute(strict_miniexpr=True)
     assert list(upper[:]) == list(np.strings.upper(values))
+
+
+def test_block_larger_than_the_eval_block():
+    # miniexpr splits a block into ME_EVAL_BLOCK_NITEMS (4096) element chunks and
+    # advances the output pointer by dtype_size(), which is 0 for ME_STRING -- so
+    # every eval chunk after the first landed back on element 0 and everything
+    # past 4096 stayed as allocated.  Silent: values 0..4095 looked right.
+    n = 20000
+    values = np.array([f"row{i:05d}" for i in range(n)], dtype="<U16")
+    arr = blosc2.asarray(values, chunks=(n,), blocks=(n // 2,))
+    assert arr.blocks[0] > 4096, "need a block wider than one miniexpr eval block"
+
+    got = ("x=" + arr).compute(strict_miniexpr=True)
+    assert list(got[:]) == list("x=" + values)
