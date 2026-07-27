@@ -15,8 +15,9 @@ endif()
 project(python-blosc2)
 
 # blosc2_ext.pyx calls blosc2_schunk_lock()/unlock(), added in c-blosc2 3.2.x
-set(BLOSC2_MIN_VERSION 3.2.1)
-set(BLOSC2_BUNDLED_VERSION v3.2.3)
+set(BLOSC2_MIN_VERSION 3.3.0)
+set(BLOSC2_BUNDLED_VERSION v3.3.0)
+# set(BLOSC2_BUNDLED_VERSION bc074b228968d6121b3c8c1a38c0afc0bbf923f6)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
@@ -109,7 +110,7 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG 58d2d0b4a3aee3d1ac84b213712cf982744196c8
+    GIT_TAG 08b232933cecc7a4c2acfc808c24d8d0604819da
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
