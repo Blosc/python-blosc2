@@ -112,19 +112,18 @@ Results on an Apple M-series laptop (8 cores, 24 GB), full table, warm
 
 | | filter | transform | kernel | kernel result |
 |---|---|---|---|---|
-| **blosc2** | 299 ms | **1.48 s** | 3.09 s | **68 MB** |
-| blosc2 (raw) | 177 ms | 1.36 s | 3.62 s | 5 766 MB |
-| pandas | 194 ms | 2.07 s | 5.31 s | 932 MB |
-| polars | 92 ms | 1.74 s | 3.72 s | 932 MB |
-| duckdb | 335 ms | 1.97 s | 2.95 s | 842 MB |
+| **blosc2** | 315 ms | **1.27 s** | 3.08 s | **68 MB** |
+| blosc2 (raw) | 192 ms | 1.31 s | 3.57 s | 5 766 MB |
+| pandas | 191 ms | 2.00 s | 5.11 s | 932 MB |
+| polars | 92 ms | 1.74 s | 3.53 s | 932 MB |
+| duckdb | 344 ms | 2.01 s | 2.97 s | 842 MB |
 
-blosc2 is **fastest of all five on `transform`**, ahead of DuckDB on `filter`,
-and within 1.05x on `kernel` — while holding the result in **12x less memory**
-than any of them. Only polars' `filter` is faster.
+blosc2 is **fastest of all five on `transform`** (1.58x DuckDB), ahead of DuckDB
+on `filter`, and within 1.04x on `kernel` — while holding the result in **12x
+less memory** than any of them. Only polars' `filter` is faster.
 
-`transform` is the noisiest row: blosc2 alone in the process gives 1.24–1.26 s
-over repeated runs against the 1.48 s above, so read it as ~1.3 s and quote the
-ratio, not the absolute.
+Quote ratios rather than absolutes: `transform` moved between 1.27 and 1.48 s
+across full-table runs, and blosc2 alone in the process gives 1.24–1.26 s.
 
 **Compression is close to free.** Compare the two blosc2 rows: the compressed
 run is *faster* than the uncompressed one on `kernel` (3.09 s vs 3.62), because
