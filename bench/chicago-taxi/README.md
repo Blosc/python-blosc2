@@ -100,9 +100,9 @@ fully-evaluated branches. `--apply` adds the row-wise pandas spelling, which is
 what you would write first and is ~70x slower than everything else.
 
 **blosc2 uses LZ4 at `clevel=5` with no filters**, rather than the stock
-ZSTD-5 + SHUFFLE. LZ4 is ~1.6x faster to write for ~3.6x more stored bytes,
-still 13x below what the Arrow-backed engines hold; dropping SHUFFLE is
-explained under the results. **`blosc2 (raw)` is the identical path at
+ZSTD-5 + SHUFFLE. Both are throughput-for-ratio trades and both are explained
+under the results; the result is still 12x smaller than what the Arrow-backed
+engines hold. **`blosc2 (raw)` is the identical path at
 `clevel=0`** — same container, same kernel, same (empty) filter pipeline,
 operands and result both uncompressed. Compression is the only variable between
 the two blosc2 bars.
@@ -127,25 +127,33 @@ compressed run is *faster* than the uncompressed one on all three tasks,
 because a compressed block is less memory traffic than a 5.8 GB uncompressed
 result. It also stores 85x smaller.
 
-### Why no filters
+### Why no filters — a time/ratio tradeoff, not a fix
 
-The default pipeline ends in SHUFFLE, which de-interleaves byte positions
-*within* an item. That is exactly right for numeric data — byte 0 of every
-float is a column of similar values — and pointless for text, where it only
-scatters each string across its slot. On `transform`, 1 M rows, LZ4-5,
-blosc2 alone in the process:
+blosc2's default for `<U` is SHUFFLE with `filters_meta` 4: shuffle by the UCS4
+code unit, which separates the ASCII payload byte from the three mostly-zero
+high bytes. That is a good default and it wins on **ratio**. It costs time,
+which is what this benchmark optimizes for. 1 M rows, blosc2 alone in the
+process:
 
-| | time | stored |
-|---|---|---|
-| **no filters** | **44.0 ms** | 2.8 MB |
-| SHUFFLE, width 4 | 49.3 ms | 2.7 MB |
-| SHUFFLE, width = itemsize | 75.8 ms | 6.6 MB |
+| codec | filters | filter | transform | kernel | result | operand cratio |
+|---|---|---|---|---|---|---|
+| ZSTD-5 | none | 10.0 ms | 80.3 ms | 149.3 ms | 1.08 MB | 860x |
+| ZSTD-5 | **SHUFFLE meta=4** (default) | 15.9 | 80.4 | 155.5 | **0.75 MB** | **1321x** |
+| LZ4-5 | none | 7.2 | 43.9 | 118.1 | 2.76 MB | 198x |
+| LZ4-5 | SHUFFLE meta=4 | 12.4 | 50.5 | 124.8 | 2.70 MB | 225x |
 
-`filter` shows it most: 7.3 ms against 11.9. The third row is a trap worth
-knowing about: `filters_meta` is SHUFFLE's element width, a `<U` container
-picks 4 for itself (the UCS4 code unit), but constructing a `CParams` for any
-reason resets it to 0 — "shuffle by the whole item". Turning the filter off
-sidesteps the question and beats both.
+Shuffle buys 1.4x ratio under ZSTD and ~2 % under LZ4, where the codec already
+handles the zero runs. `filter` pays the most for it — that task writes 1 byte
+per row, so the un-shuffle on the operand side has nothing on the output side
+to offset it. **Keep the default when ratio matters; drop filters for
+throughput**, which is the call made here because 2.8 MB against DuckDB's 34 is
+an overwhelming memory win either way.
+
+One trap regardless of which you pick: `filters_meta` is SHUFFLE's element
+width, and a `<U` container picks 4 for itself only when you *don't* build a
+`CParams`. Constructing one for any reason resets it to 0 — "shuffle by the
+whole item" — which is strictly worse than both rows above: 6.6 MB and 75.8 ms
+on the LZ4 `transform`.
 
 Note the numbers above are lower than the table's: timing blosc2 in a process
 that also runs the other engines costs it ~40 % even though it goes first. The
