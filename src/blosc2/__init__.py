@@ -568,6 +568,7 @@ from .tree_store import TreeStore
 from .batch_array import Batch, BatchArray
 from .list_array import ListArray
 from ._utf8_array import Utf8Array, utf8_array
+from ._varlen_expr import compute_varlen
 from .objectarray import ObjectArray, objectarray_from_cframe
 from .ref import Ref
 from .b2objects import open_b2object
@@ -930,6 +931,7 @@ __all__ = [  # noqa : RUF022
     "compress2",
     "compressor_list",
     "compute_chunks_blocks",
+    "compute_varlen",
     "concat",
     "conj",
     "contains",

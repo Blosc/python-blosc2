@@ -748,6 +748,13 @@ cdef extern from "miniexpr.h":
 
     int me_nd_valid_nitems(const me_expr *expr, int64_t nchunk, int64_t nblock, int64_t *valid_nitems) nogil
 
+    size_t me_varlen_data_bound(const me_expr *expr, int block_nitems) nogil
+
+    int me_eval_varlen(const me_expr *expr, const void **vars_block, int n_vars,
+                       int block_nitems, int64_t *offsets,
+                       void *data, size_t data_capacity, size_t *data_used,
+                       const me_eval_params *params) nogil
+
     me_dtype me_get_dtype(const me_expr *expr) nogil
     size_t me_get_itemsize(const me_expr *expr) nogil
 
@@ -1025,6 +1032,119 @@ def me_output_dtype(expression, operands):
         for i in range(built):
             free(variables[i].name)
         free(variables)
+
+
+def eval_varlen(expression, operands):
+    """Evaluate a string *expression* straight into the Arrow varlen layout.
+
+    ``operands`` maps operand name -> a C-contiguous NumPy array; every operand
+    must have the same length.  Returns ``(offsets, data)`` -- an ``int64``
+    array of ``n + 1`` entries and the ``uint8`` byte blob they index, i.e.
+    Arrow ``large_string`` for ``<U`` results (UTF-8) and ``large_binary`` for
+    ``S`` results (bytes verbatim).
+
+    This is the whole point of the varlen path: the caller stores ``len(data)``
+    bytes instead of ``n * itemsize``, where ``itemsize`` is miniexpr's
+    conservative compile-time width bound.  Raises ``ValueError`` when the
+    expression does not compile or does not produce a string.
+    """
+    cdef Py_ssize_t n = len(operands)
+    cdef me_variable* variables = NULL
+    cdef const void** var_ptrs = NULL
+    cdef me_variable *var
+    cdef bytes var_name
+    cdef bytes expression_bytes
+    cdef np.dtype operand_dtype
+    cdef Py_ssize_t built = 0
+    cdef int error = 0
+    cdef int rc = 0
+    cdef me_expr *out_expr = NULL
+    cdef size_t bound = 0
+    cdef size_t used = 0
+    cdef Py_ssize_t nitems = -1
+    cdef Py_ssize_t i
+    cdef np.ndarray offsets
+    cdef np.ndarray data
+    cdef int64_t* offs_ptr = NULL
+    cdef void* data_ptr = NULL
+    cdef int nvars = 0
+    cdef int nrows = 0
+
+    if n == 0:
+        raise ValueError("eval_varlen() needs at least one operand")
+
+    values = []
+    for k, v in operands.items():
+        arr = np.ascontiguousarray(v)
+        if nitems < 0:
+            nitems = arr.shape[0]
+        elif arr.shape[0] != nitems:
+            raise ValueError("All operands must have the same length")
+        values.append((k, arr))
+    if nitems <= 0:
+        raise ValueError("eval_varlen() needs at least one row")
+
+    variables = <me_variable *> malloc(sizeof(me_variable) * n)
+    var_ptrs = <const void **> malloc(sizeof(void *) * n)
+    if variables == NULL or var_ptrs == NULL:
+        free(variables)
+        free(var_ptrs)
+        raise MemoryError()
+
+    try:
+        for k, arr in values:
+            var = &variables[built]
+            operand_dtype = arr.dtype
+            var.dtype = _me_dtype_from_numpy_dtype(operand_dtype)
+            if <int>var.dtype < 0:
+                raise ValueError(f"Operand {k!r} has an unsupported dtype {operand_dtype!r}")
+            var_name = k.encode("utf-8") if isinstance(k, str) else k
+            var.name = <char *> malloc(strlen(var_name) + 1)
+            strcpy(var.name, var_name)
+            var.address = np.PyArray_DATA(arr)
+            var.type = 0
+            var.context = NULL
+            var.itemsize = operand_dtype.itemsize if operand_dtype.num in (18, 19) else 0
+            var_ptrs[built] = var.address
+            built += 1
+
+        expression_bytes = (
+            (<str>expression).encode("utf-8") if isinstance(expression, str) else expression
+        )
+        rc = me_compile(expression_bytes, variables, <int>n, ME_AUTO, &error, &out_expr)
+        if rc != ME_COMPILE_SUCCESS or out_expr == NULL:
+            if out_expr != NULL:
+                me_free(out_expr)
+                out_expr = NULL
+            raise ValueError(f"miniexpr could not compile the expression: "
+                             f"{_me_compile_error_details(rc, error)}")
+
+        bound = me_varlen_data_bound(out_expr, <int>nitems)
+        if bound == 0:
+            raise ValueError("The expression does not produce a string result")
+
+        offsets = np.empty(nitems + 1, dtype=np.int64)
+        data = np.empty(bound, dtype=np.uint8)
+        offs_ptr = <int64_t *> np.PyArray_DATA(offsets)
+        data_ptr = np.PyArray_DATA(data)
+        nvars = <int>n
+        nrows = <int>nitems
+        # Released so a caller can run spans across a thread pool: the span
+        # driver is the only source of parallelism here, since varlen output
+        # cannot go through the prefilter.
+        with nogil:
+            rc = me_eval_varlen(out_expr, var_ptrs, nvars, nrows,
+                                offs_ptr, data_ptr, bound, &used, NULL)
+        if rc != 0:
+            raise ValueError(f"miniexpr varlen evaluation failed with code {rc}")
+        return offsets, data[:used]
+    finally:
+        if out_expr != NULL:
+            me_free(out_expr)
+        for i in range(built):
+            free(variables[i].name)
+        free(variables)
+        free(var_ptrs)
 
 
 cdef inline str _me_compile_status_name(int rc):
