@@ -21,6 +21,21 @@ XXX version-specific blurb XXX
   keep the width instead of growing) and ASCII-only stripping. `S` and `<U`
   operands do not mix in one expression, which is what NumPy does too.
   Variable-width `utf8()` columns still use the NumPy path.
+- **String expressions now work on `utf8()` columns.** `t.where("name ==
+  'x'")`, `startswith`/`endswith`/`contains` and mixed predicates such as
+  `t.where("(name == 'b') | (x > 2)")` used to raise `NotImplementedError`;
+  only the operator form `t[t.name == "x"]` was available. A variable-length
+  column cannot be an expression operand (its offsets and data have
+  independent chunk grids, so the prefilter contract does not apply), so
+  these are evaluated span by span, each span materialized to a fixed-width
+  array whose width is rounded up to a power of two and handed to miniexpr.
+  Nulls are materialized to `""` before any kernel sees them and re-masked
+  afterwards, so a null never satisfies a predicate — the same answer the
+  operator form gives.
+- **New `blosc2.utf8_array(seq, spec=None)`** builds a `Utf8Array` from an
+  iterable of strings; `Utf8Array` is exported too. Previously the only
+  construction path was `Utf8Array(spec)` + `.extend()` + `.flush()`, which
+  was not exported at all.
 - **`df.apply(f, axis=1, engine=blosc2.jit)` now runs `row["colname"]`
   kernels that contain an `if`.** Neither dispatch route could before:
   tracing evaluated the branch over a whole column (`truth value ... is
@@ -83,6 +98,15 @@ message when opening a nonexistent `CTable` in append mode.
 
 ### Bug fixes
 
+- **Expressions over operands wider than 255 bytes returned wrong results.**
+  c-blosc2 caps a typesize above 255 to 1 in the chunk header so its split
+  machinery keeps working, and the miniexpr prefilter was asking
+  `blosc2_getitem_ctx()` for operand blocks in element units, which the chunk
+  then read as a byte range: every block past the first was uninitialised
+  memory. `arr == "hello"` over 1200 rows of `<U64` (256 bytes) matched 1 row
+  instead of 400, non-deterministically and with no error raised. Affects any
+  dtype whose itemsize exceeds 255 bytes; `<U64` is the first fixed-width
+  string that hits it.
 - Opening a `CTable` with `mode="a"` at a path that doesn't exist yet now
   raises a clear `FileNotFoundError` ("mode='a' opens an existing table;
   use mode='w' to create a new one") instead of silently falling through

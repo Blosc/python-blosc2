@@ -540,6 +540,17 @@ class ColumnViewIndexer:
 # ---------------------------------------------------------------------------
 
 
+def _utf8_span_dtype(span: np.ndarray) -> np.dtype:
+    """Fixed-width ``U`` dtype wide enough for every value in *span*.
+
+    The width is span-local and data-dependent, whereas miniexpr bakes output
+    widths in at compile time, so round it up to a power of two: a column then
+    costs a handful of distinct compilations instead of one per span.
+    """
+    longest = max((len(s) for s in span), default=0)
+    return np.dtype(f"<U{1 << max(0, longest - 1).bit_length()}")
+
+
 def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
     """Translate a logical (valid-row) index into a physical array index.
 
@@ -2580,10 +2591,13 @@ class Column:
         if where is None:
             return None
         if isinstance(where, str):
-            self._table._guard_varlen_scalar_expression(where)
+            self._table._guard_varlen_scalar_expression(where, allow_utf8=True)
+            utf8_names = self._table._utf8_names_in(where)
             operands = self._table._where_expression_operands(where)
             where, operands = self._table._rewrite_nested_expression(where, operands)
-            where = blosc2.lazyexpr(where, operands)
+            where = self._table._lazyexpr_over_cols(where, operands, utf8_names)
+            if isinstance(where, np.ndarray):
+                where = blosc2.asarray(where)
         if isinstance(where, np.ndarray) and where.dtype == np.bool_:
             where = blosc2.asarray(where)
         if isinstance(where, Column):
@@ -12656,7 +12670,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _expression_references_name(expr: str, name: str) -> bool:
         return re.search(rf"(?<![\w.]){re.escape(name)}(?![\w.])", expr) is not None
 
-    def _guard_scalar_expression(self, expr: str) -> None:
+    def _guard_scalar_expression(self, expr: str, *, allow_utf8: bool = False) -> None:
         for name, meta in self._root_table._materialized_cols.items():
             if meta.get("stale", False) and self._expression_references_name(expr, name):
                 raise ValueError(
@@ -12671,9 +12685,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     "support scalar columns. Use an element projection or a row-wise reduction first."
                 )
             if self._is_utf8_column(col) and self._expression_references_name(expr, col.name):
+                if allow_utf8:
+                    continue
                 raise NotImplementedError(
                     f"Column {col.name!r} is a variable-length utf8 column; "
-                    "string expressions on utf8 columns are not supported yet."
+                    "string expressions on utf8 columns are not supported here."
                 )
             if self._is_varlen_scalar_column(col) and self._expression_references_name(expr, col.name):
                 raise NotImplementedError(
@@ -12681,8 +12697,123 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     "lazy expressions are not supported yet."
                 )
 
-    def _guard_varlen_scalar_expression(self, expr: str) -> None:
-        self._guard_scalar_expression(expr)
+    def _guard_varlen_scalar_expression(self, expr: str, *, allow_utf8: bool = False) -> None:
+        self._guard_scalar_expression(expr, allow_utf8=allow_utf8)
+
+    # ------------------------------------------------------------------
+    # utf8 string expressions: span-loop driver
+    # ------------------------------------------------------------------
+
+    #: Rows materialized per span by the utf8 expression driver.  Matches the
+    #: chunk size of :meth:`Column._utf8_chunked_bool`.
+    _UTF8_EXPR_SPAN = 65536
+
+    #: Byte ceiling for one span's fixed-width ``<Un`` materialization.  A span
+    #: is sized to the *longest* value in it, so a single 4 KB row among short
+    #: ones would otherwise cost 65536 x 4096 x 4 = 1 GiB.
+    _UTF8_EXPR_BUDGET = 64 << 20
+
+    def _utf8_spans(self, arrays: dict, n_logical: int):
+        """Yield ``(start, stop)`` row spans to materialize, longest value first.
+
+        Splits the nominal ``_UTF8_EXPR_SPAN`` further whenever the widest
+        value in it would push the ``<Un`` buffer past ``_UTF8_EXPR_BUDGET``.
+        The widths come from the offsets-derived byte lengths, which bound the
+        codepoint count, so no span is read twice to size it.
+        """
+        for start in range(0, n_logical, self._UTF8_EXPR_SPAN):
+            stop = min(start + self._UTF8_EXPR_SPAN, n_logical)
+            widest = max(a._span_max_bytes(start, stop) for a in arrays.values())
+            per_row = 4 * max(1, 1 << max(0, widest - 1).bit_length()) * len(arrays)
+            rows = max(1, min(stop - start, self._UTF8_EXPR_BUDGET // per_row))
+            for a in range(start, stop, rows):
+                yield a, min(a + rows, stop)
+
+    def _utf8_names_in(self, expr: str) -> list[str]:
+        """utf8 column names referenced by *expr*, in schema order.
+
+        Call this on the *original* expression, before the dictionary/nested
+        rewrites: a nested utf8 leaf is aliased away by
+        :meth:`_rewrite_nested_expression` and would no longer be findable.
+        """
+        return [
+            col.name
+            for col in self._schema.columns
+            if self._is_utf8_column(col) and self._expression_references_name(expr, col.name)
+        ]
+
+    def _lazyexpr_over_cols(self, expr: str, operands: dict, utf8_names: list[str]):
+        """``blosc2.lazyexpr(expr, operands)``, or the utf8 span driver.
+
+        A variable-length utf8 column cannot be an expression operand: its
+        offsets and data live in separate NDArrays with independent chunk
+        grids, so the prefilter contract does not apply.  When *expr* touches
+        one, evaluate it span by span instead, materializing each span to a
+        fixed-width ``<Un`` array that the (Phase 1) string kernels accept.
+        """
+        if not utf8_names:
+            return blosc2.lazyexpr(expr, operands)
+        dotted = [n for n in utf8_names if "." in n]
+        if dotted:
+            raise NotImplementedError(
+                f"Column {dotted[0]!r} is a nested variable-length utf8 column; "
+                "string expressions only support top-level utf8 columns."
+            )
+        return self._utf8_span_eval(expr, operands, utf8_names)
+
+    def _utf8_span_eval(self, expr: str, operands: dict, utf8_names: list[str], *, strict: bool = False):
+        """Evaluate *expr* in row spans, materializing utf8 operands per span.
+
+        Returns a NumPy array of the table's *physical* length (the coordinate
+        system every other predicate here uses); rows past the utf8 columns'
+        logical length keep the zero value of the result dtype.
+
+        Nulls are materialized to ``""`` so no string kernel ever sees a
+        sentinel, and nullity is re-applied afterwards: a boolean result is
+        forced ``False`` (SQL ``WHERE`` semantics, matching
+        :meth:`Column._utf8_compare`), a string result gets the sentinel back.
+
+        Span operands are handed over as blosc2 arrays rather than NumPy ones:
+        the NumPy route evaluates through ``slices_eval``, which never reaches
+        miniexpr, so the string kernels would be bypassed for correct-looking
+        results.  *strict* (``strict_miniexpr``) is the assertion that pins
+        that down; tests set it, callers leave the numpy fallback in place.
+        """
+        arrays = {name: self._cols[name] for name in utf8_names}
+        sentinels = {name: self[name].null_value for name in utf8_names}
+        n_logical = min(len(a) for a in arrays.values())
+        n_phys = len(self._valid_rows)
+        compute_kwargs = {"strict_miniexpr": True} if strict else {}
+
+        out = None
+        for start, stop in self._utf8_spans(arrays, n_logical):
+            span = {k: blosc2.asarray(np.asarray(v[start:stop])) for k, v in operands.items()}
+            nulls = None
+            for name, arr in arrays.items():
+                raw = np.asarray(arr[start:stop])
+                nv = sentinels[name]
+                if nv is not None:
+                    mask = raw == nv
+                    if mask.any():
+                        nulls = mask if nulls is None else (nulls | mask)
+                        raw = np.where(mask, "", raw)
+                span[name] = blosc2.asarray(raw.astype(_utf8_span_dtype(raw)))
+            res = np.asarray(blosc2.lazyexpr(expr, span).compute(**compute_kwargs))
+            if nulls is not None:
+                if res.dtype.kind == "b":
+                    res = res & ~nulls
+                elif res.dtype.kind == "U":
+                    # The sentinel may be wider than the computed values.
+                    nv = next(v for v in sentinels.values() if v is not None)
+                    res = np.where(nulls, nv, res.astype(f"<U{max(res.dtype.itemsize // 4, len(nv))}"))
+            if out is None:
+                out = np.zeros(n_phys, dtype=res.dtype)
+            elif res.dtype.kind == "U" and res.dtype.itemsize > out.dtype.itemsize:
+                out = out.astype(res.dtype)
+            out[start:stop] = res
+        if out is None:  # empty table
+            out = np.zeros(n_phys, dtype=np.bool_)
+        return out
 
     def _is_nullable_column(self, name: str) -> bool:
         col = self[name]
@@ -12801,11 +12932,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if isinstance(expr_result, ColExpr):
             expr_result = expr_result._bind(self)
         if isinstance(expr_result, str):
-            self._guard_varlen_scalar_expression(expr_result)
+            self._guard_varlen_scalar_expression(expr_result, allow_utf8=True)
+            utf8_names = self._utf8_names_in(expr_result)
             operands = self._where_expression_operands(expr_result)
             expr_result, operands = self._rewrite_dictionary_predicates(expr_result, operands)
             expr_result, operands = self._rewrite_nested_expression(expr_result, operands)
-            expr_result = blosc2.lazyexpr(expr_result, operands)
+            expr_result = self._lazyexpr_over_cols(expr_result, operands, utf8_names)
         if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:
             expr_result = blosc2.asarray(expr_result)
         if isinstance(expr_result, Column):

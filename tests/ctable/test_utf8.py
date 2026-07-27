@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 
 import numpy as np
@@ -255,7 +256,7 @@ def force_kernel_mode(request, monkeypatch):
     pure-Python per-row fallback, so the fallback stays covered even on a
     build where the compiled extension is available."""
     if request.param == "fallback":
-        monkeypatch.setattr("blosc2.utf8_array._pack_utf8_kernel", lambda: None)
+        monkeypatch.setattr(sys.modules["blosc2.utf8_array"], "_pack_utf8_kernel", lambda: None)
     return request.param
 
 
@@ -336,7 +337,7 @@ def force_write_kernel_mode(request, monkeypatch):
     join+encode fallback, so the fallback stays covered even on a build
     where the compiled extension is available."""
     if request.param == "fallback":
-        monkeypatch.setattr("blosc2.utf8_array._encode_utf8_kernel", lambda: None)
+        monkeypatch.setattr(sys.modules["blosc2.utf8_array"], "_encode_utf8_kernel", lambda: None)
     return request.param
 
 
@@ -1172,12 +1173,6 @@ def test_ctable_utf8_sort_non_ascii():
 # ---------------------------------------------------------------------------
 
 
-def test_ctable_utf8_where_expression_raises_clearly():
-    t = make_table()
-    with pytest.raises(NotImplementedError, match="utf8"):
-        t.where("name == 'hello'")
-
-
 def test_ctable_utf8_create_index_raises_clearly():
     t = make_table()
     with pytest.raises(NotImplementedError, match="utf8"):
@@ -1281,3 +1276,170 @@ def test_utf8_duckdb_query():
         "SELECT name, count(*) AS n FROM arrow_tbl WHERE name = 'paris' GROUP BY name"
     ).fetchall()
     assert result == [("paris", 2)]
+
+
+# ---------------------------------------------------------------------------
+# utf8_array() constructor
+# ---------------------------------------------------------------------------
+
+
+def test_utf8_array_constructor():
+    arr = blosc2.utf8_array(SAMPLE)
+    assert isinstance(arr, blosc2.Utf8Array)
+    assert len(arr) == len(SAMPLE)
+    assert list(arr[:]) == SAMPLE
+
+
+def test_utf8_array_constructor_with_spec_and_nulls():
+    arr = blosc2.utf8_array(["a", None, "c"], blosc2.utf8(nullable=True, null_value="<NA>"))
+    assert list(arr[:]) == ["a", "<NA>", "c"]
+
+
+def test_utf8_array_constructor_rejects_none_without_nullable_spec():
+    with pytest.raises(TypeError, match="not nullable"):
+        blosc2.utf8_array(["a", None])
+
+
+def test_utf8_array_span_max_bytes_reads_only_offsets():
+    arr = blosc2.utf8_array(["a", "café", "日本語"])  # 1, 5 and 9 UTF-8 bytes
+    assert arr._span_max_bytes(0, 3) == 9
+    assert arr._span_max_bytes(0, 2) == 5
+    assert arr._span_max_bytes(0, 0) == 0
+    # Pending (unflushed) rows are measured too.
+    arr.append("x" * 20)
+    assert arr._span_max_bytes(0, 4) == 20
+
+
+# ---------------------------------------------------------------------------
+# String expressions over utf8 columns (span-loop driver)
+# ---------------------------------------------------------------------------
+
+
+def test_ctable_utf8_where_expression_equality():
+    t = make_table(["hello", "help", "world", "café"])
+    assert list(t.where("name == 'hello'")["name"][:]) == ["hello"]
+    assert list(t.where("name != 'hello'")["name"][:]) == ["help", "world", "café"]
+
+
+def test_ctable_utf8_where_expression_matches_operator_form():
+    t = make_table(["paris", "london", "tokyo", "paris"])
+    for value in ("paris", "tokyo", "absent"):
+        expr = list(t.where(f"name == '{value}'")["x"][:])
+        operator = list(t[t.name == value]["x"][:])
+        assert expr == operator, value
+
+
+def test_ctable_utf8_where_expression_predicates():
+    t = make_table(["hello", "help", "world"])
+    assert list(t.where("startswith(name, 'hel')")["name"][:]) == ["hello", "help"]
+    assert list(t.where("endswith(name, 'lo')")["name"][:]) == ["hello"]
+    assert list(t.where("contains(name, 'l')")["name"][:]) == ["hello", "help", "world"]
+
+
+def test_ctable_utf8_where_expression_mixes_with_numeric_columns():
+    t = make_table(["a", "b", "c", "d"])
+    assert list(t.where("(name == 'b') | (x > 2)")["name"][:]) == ["b", "d"]
+    assert list(t.where("(name != 'a') & (x < 2)")["name"][:]) == ["b"]
+
+
+def test_ctable_utf8_where_expression_runs_on_miniexpr():
+    """A silent NumPy fallback would produce the same values, so pin the engine.
+
+    ``strict_miniexpr`` raises rather than falling back, which is the only
+    assertion that distinguishes the two.
+    """
+    t = make_table(["hello", "help", "world"])
+    got = t._utf8_span_eval("startswith(name, 'hel')", {}, ["name"], strict=True)
+    assert list(got[:3]) == [True, True, False]
+
+
+def test_ctable_utf8_where_expression_spans_many_widths():
+    # Exercises the power-of-two width bucketing: values straddle several
+    # buckets and one of them is past the 255-byte typesize cap.
+    values = ["a", "bb", "x" * 40, "y" * 300, "café", ""] * 30
+    t = make_table(values)
+    assert list(t.where("name == 'café'")["x"][:]) == [i for i, v in enumerate(values) if v == "café"]
+    assert list(t.where("startswith(name, 'y')")["x"][:]) == [
+        i for i, v in enumerate(values) if v.startswith("y")
+    ]
+
+
+def test_ctable_utf8_where_expression_splits_oversized_spans():
+    # A single long row would size the whole span's <Un buffer; the driver must
+    # split it rather than materialize rows x longest.
+    values = ["hello", "help", "world"] * 10 + ["z" * 5000]
+    t = make_table(values)
+    t._UTF8_EXPR_BUDGET = 4096  # force the split path
+    assert list(t.where("startswith(name, 'hel')")["x"][:]) == [
+        i for i, v in enumerate(values) if v.startswith("hel")
+    ]
+
+
+def test_ctable_utf8_where_expression_multiple_utf8_columns():
+    @dataclass
+    class TwoRow:
+        first: str = blosc2.field(blosc2.utf8())
+        second: str = blosc2.field(blosc2.utf8())
+
+    t = CTable(
+        TwoRow,
+        new_data={"first": ["ab", "cd", "ef"], "second": ["ab", "xy", "ef"]},
+    )
+    assert list(t.where("first == second")["first"][:]) == ["ab", "ef"]
+
+
+def test_ctable_utf8_where_expression_empty_table():
+    t = make_table([])
+    assert len(t.where("name == 'hello'")) == 0
+
+
+def test_ctable_utf8_where_expression_on_view_and_after_delete():
+    t = make_table(["paris", "london", "paris", "tokyo"])
+    t.delete([0])
+    assert list(t.where("name == 'paris'")["x"][:]) == [2]
+    view = t[t.x > 1]
+    assert list(view.where("name == 'paris'")["x"][:]) == [2]
+
+
+# ---------------------------------------------------------------------------
+# Null policy (3c): nulls are materialized to "" and re-masked afterwards
+# ---------------------------------------------------------------------------
+
+
+def _nullable_table(values):
+    return CTable(
+        NullableRow,
+        new_data={"name": list(values), "x": list(range(len(values)))},
+    )
+
+
+def test_ctable_utf8_where_expression_nulls_never_match():
+    t = _nullable_table(["hello", None, "help", None, "world"])
+    assert list(t.where("name == 'hello'")["x"][:]) == [0]
+    assert list(t.where("startswith(name, 'hel')")["x"][:]) == [0, 2]
+    # Not even against the sentinel string itself: a null is not a value.
+    assert list(t.where("name == '<NA>'")["x"][:]) == []
+
+
+def test_ctable_utf8_where_expression_nulls_match_operator_form():
+    t = _nullable_table(["hello", None, "help", None, "world"])
+    for value in ("hello", "world", "<NA>"):
+        assert list(t.where(f"name == '{value}'")["x"][:]) == list(t[t.name == value]["x"][:])
+        assert list(t.where(f"name != '{value}'")["x"][:]) == list(t[t.name != value]["x"][:])
+
+
+def test_ctable_utf8_where_expression_all_null_column():
+    t = _nullable_table([None] * 5)
+    assert list(t.where("name == 'hello'")["x"][:]) == []
+    assert list(t.where("name != 'hello'")["x"][:]) == []
+
+
+def test_ctable_utf8_where_expression_null_count_zero_fast_path():
+    # A nullable column with no actual nulls must not mask anything away.
+    t = _nullable_table(["hello", "help", "world"])
+    assert list(t.where("startswith(name, 'hel')")["x"][:]) == [0, 1]
+
+
+def test_ctable_utf8_sum_where_expression():
+    t = make_table(["hello", "help", "world"])
+    assert t["x"].sum(where="startswith(name, 'hel')") == 1

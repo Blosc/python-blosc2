@@ -251,6 +251,27 @@ class Utf8Array:
             out[i] = blob[rel[i] : rel[i + 1]].decode("utf-8")
         return out
 
+    def _span_max_bytes(self, a: int, b: int) -> int:
+        """Longest UTF-8 byte length among rows ``[a, b)``.
+
+        Read from the offsets alone -- no row is decoded.  A byte length bounds
+        the codepoint count, so callers sizing a fixed-width ``U`` buffer can
+        use this directly.
+        """
+        b = min(b, len(self))
+        if b <= a:
+            return 0
+        np_rows = self._persisted_rows
+        widest = 0
+        if a < np_rows:
+            offs = np.asarray(self._offsets[a : min(b, np_rows) + 1], dtype=np.int64)
+            if offs.size > 1:
+                widest = int(np.diff(offs).max())
+        if b > np_rows:
+            pending = self._pending[max(0, a - np_rows) : b - np_rows]
+            widest = max(widest, max((len(s.encode("utf-8")) for s in pending), default=0))
+        return widest
+
     def _gather_persisted(self, indices: np.ndarray) -> np.ndarray:
         """Gather persisted rows at *indices* (any order) as a StringDType array.
 
@@ -656,6 +677,38 @@ class Utf8Array:
         out.extend(self)
         out.flush()
         return out
+
+
+def utf8_array(seq, spec=None, **kwargs) -> Utf8Array:
+    """Build a :class:`Utf8Array` from an iterable of strings.
+
+    Parameters
+    ----------
+    seq:
+        Iterable of ``str`` (or ``None`` for a nullable *spec*).
+    spec:
+        The :class:`~blosc2.schema.Utf8Spec` describing the array.  Defaults
+        to ``blosc2.utf8()`` (non-nullable).
+    kwargs:
+        Forwarded to :class:`Utf8Array` (``offsets``, ``data``).
+
+    Returns
+    -------
+    Utf8Array
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> arr = blosc2.utf8_array(["hello", "café", "日本語"])
+    >>> str(arr[1])
+    'café'
+    """
+    import blosc2
+
+    arr = Utf8Array(spec if spec is not None else blosc2.utf8(), **kwargs)
+    arr.extend(seq)
+    arr.flush()
+    return arr
 
 
 class Utf8Factorizer:

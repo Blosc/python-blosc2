@@ -943,12 +943,14 @@ Text & binary
 
     string
     utf8
+    utf8_array
     bytes
     vlstring
     vlbytes
 
 .. autoclass:: string
 .. autofunction:: utf8
+.. autofunction:: utf8_array
 .. autoclass:: bytes
 .. autofunction:: vlstring
 .. autofunction:: vlbytes
@@ -1005,7 +1007,7 @@ CTable offers four ways to store strings.  As a quick decision path:
      - native ``None``
    * - Filters (``==``, ``<``, …)
      - ✓ (incl. string expressions)
-     - ✓ operators only [#utf8expr]_
+     - ✓ (incl. string expressions) [#utf8expr]_
      - ``==`` / ``isin()`` only
      - ✗
    * - :meth:`CTable.group_by` key / :meth:`CTable.sort_by`
@@ -1034,11 +1036,15 @@ CTable offers four ways to store strings.  As a quick decision path:
      - low-cardinality categories
      - NumPy < 2.0; native-``None`` nulls
 
-.. [#utf8expr] utf8 columns support the operator form ``t[t.name == "x"]``
-   (also ``!=``, ``<``, ``<=``, ``>``, ``>=``), but not the string-expression
-   form ``t.where("name == 'x'")`` yet.  :meth:`CTable.create_index` on utf8
-   columns is not supported yet either; both raise ``NotImplementedError``
-   with a clear message.
+.. [#utf8expr] utf8 columns support both the operator form
+   ``t[t.name == "x"]`` and the string-expression form
+   ``t.where("name == 'x'")``.  Because a variable-length column cannot be an
+   expression operand directly, string expressions are evaluated span by span,
+   with each span materialized to a fixed-width array first; results are
+   identical to the operator form, including that a null never satisfies any
+   predicate.  Nested (dotted) utf8 leaves and :meth:`CTable.create_index` on
+   utf8 columns are still unsupported and raise ``NotImplementedError`` with a
+   clear message.
 
 Note that a plain ``str`` annotation without an explicit :func:`field` spec
 still maps to fixed-width ``string(max_length=32)`` for backward
