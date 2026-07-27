@@ -1179,48 +1179,7 @@ class SChunk(blosc2_ext.SChunk):
         >>> f"Slice data: {slice_array[:10]} ..."  # Print the first 10 elements
         Slice data: [200000 200001 200002 200003 200004 200005 200006 200007 200008 200009] ...
         """
-        if self.typesize > 255:
-            return self._get_slice_wide_typesize(start, stop, out)
         return super().get_slice(start, stop, out)
-
-    def _get_slice_wide_typesize(self, start, stop, out):
-        """``get_slice()`` for a typesize above ``BLOSC_MAX_TYPESIZE`` (255).
-
-        c-blosc2 records such a typesize as 1 in the chunk header so its split
-        machinery keeps working, but ``blosc2_schunk_get_slice_buffer()`` still
-        derives the ``getitem`` it performs for a partially covered chunk by
-        dividing byte offsets by ``schunk->typesize``.  The two disagree, so the
-        read addresses the wrong range: usually it fails outright, and for a
-        single-element slice it returns the wrong bytes with no error at all.
-        An ``<U64`` NDArray is a 256-byte typesize, so this is reachable from
-        ordinary string columns.
-
-        Decompress each covered chunk whole and cut the requested range out of
-        it; that path never calls ``getitem``, so it is unaffected.
-
-        Upstream: https://github.com/Blosc/c-blosc2/issues/796 -- drop this
-        once the fix lands in the pinned c-blosc2.
-        """
-        nitems = len(self)
-        start, stop, _ = slice(start, stop, 1).indices(nitems)
-        if start >= stop:
-            return b""
-        per_chunk = self.chunkshape
-        pieces = []
-        for nchunk in range(start // per_chunk, (stop - 1) // per_chunk + 1):
-            base = nchunk * per_chunk
-            lo = max(start, base) - base
-            hi = min(stop, base + per_chunk) - base
-            chunk = self.decompress_chunk(nchunk)
-            pieces.append(chunk[lo * self.typesize : hi * self.typesize])
-        data = b"".join(pieces)
-        if out is None:
-            return data
-        view = memoryview(out).cast("B")
-        if len(view) < len(data):
-            raise ValueError("Not enough space for writing the slice in out")
-        view[: len(data)] = data
-        return None
 
     def __len__(self) -> int:
         """

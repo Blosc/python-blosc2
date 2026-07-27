@@ -113,9 +113,8 @@ message when opening a nonexistent `CTable` in append mode.
   shapes at typesize 256, 150 raised `"Error while getting the slice"` and
   the 3 single-element ones returned the wrong bytes with no error at all.
   Reachable from ordinary data -- an `<U64` NDArray is a 256-byte typesize,
-  so `arr.schunk[1:4]` hit it. `SChunk.get_slice()` now decompresses the
-  covered chunks whole for such typesizes, a path that never calls `getitem`.
-  (The underlying bug is upstream: Blosc/c-blosc2#796.)
+  so `arr.schunk[1:4]` hit it. Fixed upstream in Blosc/c-blosc2#796, so this
+  release requires a c-blosc2 that carries that fix.
 - **`create_index()` on a string column made every query on it return zero
   rows.** Silently -- adding an index, an optimization, changed the answer.
   A segment summary is a `(min, max, flags)` record, so a `<Un` column makes
