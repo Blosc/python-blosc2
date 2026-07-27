@@ -345,10 +345,6 @@ class Utf8Array:
             encoded = [v.encode("utf-8") for v in values]
             data_arr = np.frombuffer(b"".join(encoded), dtype=np.uint8)
             lengths = np.fromiter((len(e) for e in encoded), dtype=np.int64, count=len(encoded))
-        self._write_encoded(pos, data_arr, lengths)
-
-    def _write_encoded(self, pos: int, data_arr: np.ndarray, lengths: np.ndarray) -> None:
-        """Replace persisted rows ``pos ..`` with already-encoded UTF-8 bytes."""
         if pos == 0:
             start = 0
         elif pos == self._persisted_rows:
@@ -356,42 +352,17 @@ class Utf8Array:
         else:
             start = int(self._offsets[pos])
         new_used = start + len(data_arr)
-        new_rows = pos + len(lengths)
+        new_rows = pos + len(values)
         if int(self._data.shape[0]) != max(new_used, 1):
             self._data.resize((max(new_used, 1),))
         if len(data_arr):
             self._data[start:new_used] = data_arr
         if int(self._offsets.shape[0]) != new_rows + 1:
             self._offsets.resize((new_rows + 1,))
-        if len(lengths):
+        if values:
             self._offsets[pos + 1 : new_rows + 1] = start + np.cumsum(lengths)
         self._persisted_rows = new_rows
         self._bytes_used_cache = new_used
-
-    def extend_encoded(self, offsets: np.ndarray, data: np.ndarray) -> None:
-        """Append rows already encoded as Arrow offsets plus a UTF-8 byte blob.
-
-        The bulk counterpart of :meth:`extend`: *offsets* has ``n + 1`` entries
-        indexing *data*, and nothing is decoded to ``str`` on the way in.  A
-        producer that already speaks the Arrow layout -- miniexpr's varlen
-        output, an Arrow buffer -- hands its bytes straight through instead of
-        paying for ``n`` Python string objects.
-
-        Parameters
-        ----------
-        offsets:
-            ``int64`` array of ``n + 1`` byte offsets, starting at 0.
-        data:
-            ``uint8`` array holding ``offsets[-1]`` bytes of UTF-8.
-        """
-        offsets = np.ascontiguousarray(offsets, dtype=np.int64)
-        if offsets.ndim != 1 or offsets.shape[0] < 1:
-            raise ValueError("offsets must be a 1-D array of n + 1 entries")
-        data = np.ascontiguousarray(data, dtype=np.uint8)
-        if offsets.shape[0] > 1 and int(offsets[-1]) != data.shape[0]:
-            raise ValueError(f"offsets[-1] is {int(offsets[-1])} but data holds {data.shape[0]} bytes")
-        self.flush()  # keep row order: pending rows come before these
-        self._write_encoded(self._persisted_rows, data, np.diff(offsets))
 
     # ------------------------------------------------------------------
     # Public write interface
