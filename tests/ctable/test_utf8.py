@@ -1374,6 +1374,49 @@ def test_ctable_utf8_where_expression_splits_oversized_spans():
     ]
 
 
+def test_ctable_utf8_string_result_is_a_utf8_array():
+    """utf8 is contagious: a string-returning expression stays variable-width.
+
+    A ``<Un`` result would pad every row out to miniexpr's compile-time bound,
+    which for ``lower()`` reserves a 2x case-expansion factor at 4 bytes per
+    codepoint.  The driver returns a Utf8Array instead.
+    """
+    values = ["hello", "world", "café", ""]
+    t = make_table(values)
+    got = t._utf8_span_eval("'x=' + name", {}, ["name"], strict=True)
+    assert isinstance(got, blosc2.Utf8Array)
+    assert [str(v) for v in got[: len(values)]] == [f"x={v}" for v in values]
+    # Physical length, like every other result from this driver.
+    assert len(got) == len(t._valid_rows)
+    assert all(str(v) == "" for v in got[len(values) :])
+
+
+def test_ctable_utf8_bool_result_stays_a_numpy_array():
+    t = make_table(["hello", "help", "world"])
+    got = t._utf8_span_eval("startswith(name, 'hel')", {}, ["name"], strict=True)
+    assert isinstance(got, np.ndarray)
+    assert got.dtype == np.bool_
+
+
+def test_ctable_utf8_string_result_concatenates_across_spans():
+    """The Utf8Array is extended span by span, so span order and row counts
+    must line up exactly; a single-span run would not catch a drift."""
+    values = [f"v{i}" for i in range(50)]
+    t = make_table(values)
+    t._UTF8_EXPR_SPAN = 7  # several spans, with a short final one
+    got = t._utf8_span_eval("'x=' + name", {}, ["name"], strict=True)
+    assert isinstance(got, blosc2.Utf8Array)
+    assert [str(v) for v in got[: len(values)]] == [f"x={v}" for v in values]
+
+
+def test_ctable_utf8_string_result_keeps_the_null_sentinel():
+    t = CTable(NullableRow, new_data={"name": ["a", None, "c"], "x": [0, 1, 2]})
+    got = t._utf8_span_eval("'p=' + name", {}, ["name"], strict=True)
+    assert isinstance(got, blosc2.Utf8Array)
+    assert got.spec.null_value == t["name"].null_value
+    assert [str(v) for v in got[:3]] == ["p=a", t["name"].null_value, "p=c"]
+
+
 def test_ctable_utf8_where_expression_multiple_utf8_columns():
     @dataclass
     class TwoRow:

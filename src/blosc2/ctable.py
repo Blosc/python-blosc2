@@ -12836,9 +12836,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _utf8_span_eval(self, expr: str, operands: dict, utf8_names: list[str], *, strict: bool = False):
         """Evaluate *expr* in row spans, materializing utf8 operands per span.
 
-        Returns a NumPy array of the table's *physical* length (the coordinate
+        Returns a result of the table's *physical* length (the coordinate
         system every other predicate here uses); rows past the utf8 columns'
-        logical length keep the zero value of the result dtype.
+        logical length keep the zero value of the result dtype.  A bool or
+        numeric result is a NumPy array; a **string** result is a
+        :class:`Utf8Array`, following the contagion rule -- a string-returning
+        expression with a utf8 operand stays variable-width rather than
+        widening every row to miniexpr's compile-time bound.  It is built by
+        extending span by span, so only one span's ``<Un`` block is ever live.
 
         Nulls are materialized to ``""`` so no string kernel ever sees a
         sentinel, and nullity is re-applied afterwards: a boolean result is
@@ -12856,8 +12861,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         n_logical = min(len(a) for a in arrays.values())
         n_phys = len(self._valid_rows)
         compute_kwargs = {"strict_miniexpr": True} if strict else {}
+        null_value = next((v for v in sentinels.values() if v is not None), None)
 
         out = None
+        utf8_out = None
         for start, stop in self._utf8_spans(arrays, n_logical):
             span = {k: blosc2.asarray(np.asarray(v[start:stop])) for k, v in operands.items()}
             nulls = None
@@ -12876,13 +12883,25 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     res = res & ~nulls
                 elif res.dtype.kind == "U":
                     # The sentinel may be wider than the computed values.
-                    nv = next(v for v in sentinels.values() if v is not None)
-                    res = np.where(nulls, nv, res.astype(f"<U{max(res.dtype.itemsize // 4, len(nv))}"))
+                    res = np.where(
+                        nulls,
+                        null_value,
+                        res.astype(f"<U{max(res.dtype.itemsize // 4, len(null_value))}"),
+                    )
+            if res.dtype.kind == "U":
+                if utf8_out is None:
+                    utf8_out = blosc2.Utf8Array(blosc2.utf8(null_value=null_value))
+                # tolist() gives plain str, which is Utf8Array.extend's fast path.
+                utf8_out.extend(res.tolist())
+                continue
             if out is None:
                 out = np.zeros(n_phys, dtype=res.dtype)
-            elif res.dtype.kind == "U" and res.dtype.itemsize > out.dtype.itemsize:
-                out = out.astype(res.dtype)
             out[start:stop] = res
+        if utf8_out is not None:
+            # Rows past the utf8 columns' logical length: the string zero value.
+            utf8_out.extend([""] * (n_phys - len(utf8_out)))
+            utf8_out.flush()
+            return utf8_out
         if out is None:  # empty table
             out = np.zeros(n_phys, dtype=np.bool_)
         return out
