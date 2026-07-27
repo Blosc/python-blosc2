@@ -847,14 +847,13 @@ def utf8(*, nullable: bool = False, null_value: str | None = None) -> Utf8Spec:
     inferred automatically from plain ``str`` annotations.
 
     utf8 columns support vectorized comparisons (``==``, ``!=``, ``<``,
-    ``<=``, ``>``, ``>=``), :meth:`CTable.group_by` keys,
-    :meth:`CTable.sort_by`, and Arrow/Parquet interop.  Current limitations:
-    :meth:`CTable.create_index` is not supported yet (use a fixed-width
-    :class:`string` column if you need an index), and string-*expression*
-    filters such as ``t.where("name == 'x'")`` are not supported yet — use
-    the operator form ``t[t.name == 'x']`` instead.  See
-    :ref:`ChoosingStringType` for a full comparison with :class:`string`
-    and :func:`vlstring`.
+    ``<=``, ``>``, ``>=``), string-expression filters such as
+    ``t.where("name == 'x'")`` and ``t.where("startswith(name, 'x')")``,
+    :meth:`CTable.group_by` keys, :meth:`CTable.sort_by`, and Arrow/Parquet
+    interop.  Current limitation: :meth:`CTable.create_index` is not
+    supported yet (use a fixed-width :class:`string` column if you need an
+    index).  See :ref:`ChoosingStringType` for a full comparison with
+    :class:`string` and :func:`vlstring`.
 
     Parameters
     ----------
