@@ -567,7 +567,7 @@ from .dict_store import DictStore
 from .tree_store import TreeStore
 from .batch_array import Batch, BatchArray
 from .list_array import ListArray
-from .utf8_array import Utf8Array, utf8_array
+from ._utf8_array import Utf8Array, utf8_array
 from .objectarray import ObjectArray, objectarray_from_cframe
 from .ref import Ref
 from .b2objects import open_b2object

@@ -872,7 +872,7 @@ def utf8(*, nullable: bool = False, null_value: str | None = None) -> Utf8Spec:
     ...     name: str = b2.field(b2.utf8())
     ...     note: str = b2.field(b2.utf8(nullable=True))
     """
-    from blosc2.utf8_array import string_dtype
+    from blosc2._utf8_array import string_dtype
 
     string_dtype()  # fail early with a clear error on NumPy < 2.0
     return Utf8Spec(nullable=nullable, null_value=null_value)

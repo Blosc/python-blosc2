@@ -506,7 +506,7 @@ def test_cli_decode_dictionaries_flag(tmp_path):
     assert main(["--decode-dictionaries", str(path), str(out)]) == 0
 
     ct = CTable.open(str(out), mode="r")
-    from blosc2.utf8_array import have_string_dtype
+    from blosc2._utf8_array import have_string_dtype
 
     # Decoded strings become utf8 columns on NumPy >= 2.0, vlstring on older NumPy.
     expected_spec = Utf8Spec if have_string_dtype() else VLStringSpec

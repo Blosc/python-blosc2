@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 
 import numpy as np
@@ -111,7 +110,7 @@ def test_utf8_not_inferred_from_plain_str_annotation():
 
 
 def test_utf8_array_basic_roundtrip():
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     arr = Utf8Array(blosc2.utf8())
     arr.extend(SAMPLE)
@@ -125,7 +124,7 @@ def test_utf8_array_basic_roundtrip():
 
 
 def test_utf8_array_reads_across_pending_boundary():
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     arr = Utf8Array(blosc2.utf8())
     arr.extend(SAMPLE[:4])
@@ -142,7 +141,7 @@ def test_utf8_array_reads_across_pending_boundary():
 
 
 def test_utf8_array_setitem_shifts_offsets():
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     arr = Utf8Array(blosc2.utf8())
     arr.extend(["aa", "bb", "cc"])
@@ -154,7 +153,7 @@ def test_utf8_array_setitem_shifts_offsets():
 
 
 def test_utf8_array_rejects_non_str():
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     arr = Utf8Array(blosc2.utf8())
     with pytest.raises(TypeError, match="Expected str"):
@@ -169,7 +168,7 @@ def test_utf8_array_rejects_non_str():
 
 
 def test_utf8_array_extend_empty_iterable_is_noop():
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     arr = Utf8Array(blosc2.utf8())
     arr.extend([])
@@ -185,7 +184,7 @@ def test_utf8_array_extend_many_rows_no_dropped_rows():
     `self._pending` to a fresh list rather than mutating it, so an
     `extend()` spanning several internal flushes must re-read
     `self._pending` after each one instead of caching a reference."""
-    from blosc2.utf8_array import _FLUSH_ROWS, Utf8Array
+    from blosc2._utf8_array import _FLUSH_ROWS, Utf8Array
 
     n = _FLUSH_ROWS * 3 + 7
     values = [f"row{i}" for i in range(n)]
@@ -198,7 +197,7 @@ def test_utf8_array_extend_many_rows_no_dropped_rows():
 
 
 def test_utf8_array_extend_none_straddles_chunk_boundary():
-    from blosc2.utf8_array import _FLUSH_ROWS, Utf8Array
+    from blosc2._utf8_array import _FLUSH_ROWS, Utf8Array
 
     values = [f"v{i}" for i in range(_FLUSH_ROWS + 2)]
     values[_FLUSH_ROWS - 1] = None  # last row of first chunk
@@ -210,7 +209,7 @@ def test_utf8_array_extend_none_straddles_chunk_boundary():
 
 
 def test_utf8_array_extend_append_interleaved_before_flush():
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     arr = Utf8Array(blosc2.utf8())
     arr.append("first")
@@ -221,7 +220,7 @@ def test_utf8_array_extend_append_interleaved_before_flush():
 
 
 def test_utf8_array_extend_ascii_nul_byte_preserved():
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     values = ["nul\x00in", "plain", "\x00leading", "trailing\x00"]
     assert all(v.isascii() for v in values)
@@ -236,7 +235,7 @@ def test_utf8_array_extend_multi_mb_strings_bounded_flush():
     per _FLUSH_ROWS-sized chunk (not per row), so this overshoots
     _FLUSH_CHARS by at most one chunk before flushing -- confirm read-back
     is still correct despite the coarser check."""
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     values = [f"{i:06d}" + "x" * (2 * 1024 * 1024) for i in range(20)]
     arr = Utf8Array(blosc2.utf8())
@@ -256,7 +255,7 @@ def force_kernel_mode(request, monkeypatch):
     pure-Python per-row fallback, so the fallback stays covered even on a
     build where the compiled extension is available."""
     if request.param == "fallback":
-        monkeypatch.setattr(sys.modules["blosc2.utf8_array"], "_pack_utf8_kernel", lambda: None)
+        monkeypatch.setattr("blosc2._utf8_array._pack_utf8_kernel", lambda: None)
     return request.param
 
 
@@ -283,7 +282,7 @@ def test_pack_utf8_span_rejects_malformed_rel():
 
 
 def test_utf8_array_bulk_read_kernel_and_fallback(force_kernel_mode):
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     arr = Utf8Array(blosc2.utf8())
     arr.extend(SAMPLE)
@@ -296,7 +295,7 @@ def test_utf8_array_bulk_read_kernel_and_fallback(force_kernel_mode):
 def test_utf8_array_bulk_read_matches_python_ground_truth(force_kernel_mode):
     """A wider mix of byte lengths and edge cases than SAMPLE: many distinct
     ASCII/multi-byte/empty/NUL-bearing values, read back in one bulk span."""
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     rng = np.random.default_rng(5)
     pool = ["", "a", "café", "日本語", "x" * 5000, "nul\x00in", "nul\x00INSIDE", "emoji 🎉🚀"]
@@ -337,12 +336,12 @@ def force_write_kernel_mode(request, monkeypatch):
     join+encode fallback, so the fallback stays covered even on a build
     where the compiled extension is available."""
     if request.param == "fallback":
-        monkeypatch.setattr(sys.modules["blosc2.utf8_array"], "_encode_utf8_kernel", lambda: None)
+        monkeypatch.setattr("blosc2._utf8_array._encode_utf8_kernel", lambda: None)
     return request.param
 
 
 def test_utf8_array_extend_kernel_and_fallback(force_write_kernel_mode):
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     arr = Utf8Array(blosc2.utf8())
     arr.extend(SAMPLE)
@@ -353,7 +352,7 @@ def test_utf8_array_extend_kernel_and_fallback(force_write_kernel_mode):
 def test_utf8_array_extend_matches_python_ground_truth(force_write_kernel_mode):
     """Same wider mix of byte lengths and edge cases as the read-side
     ground-truth test, exercised through the write path this time."""
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     rng = np.random.default_rng(7)
     pool = ["", "a", "café", "日本語", "x" * 5000, "nul\x00in", "nul\x00INSIDE", "emoji 🎉🚀"]
@@ -365,7 +364,7 @@ def test_utf8_array_extend_matches_python_ground_truth(force_write_kernel_mode):
 
 
 def test_utf8_array_extend_ascii_nul_byte_kernel_and_fallback(force_write_kernel_mode):
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     values = ["nul\x00in", "plain", "\x00leading", "trailing\x00"]
     arr = Utf8Array(blosc2.utf8())
@@ -377,7 +376,7 @@ def test_utf8_array_extend_ascii_nul_byte_kernel_and_fallback(force_write_kernel
 def test_utf8_array_extend_multi_mb_string_kernel_and_fallback(force_write_kernel_mode):
     """A single multi-MB value alongside short ones -- sanity-checks the
     total-length/offset accumulation in the compiled kernel's two passes."""
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     values = ["head", "x" * (8 * 1024 * 1024), "tail", "café" * 100_000]
     arr = Utf8Array(blosc2.utf8())
@@ -396,7 +395,7 @@ def test_utf8_array_extend_lone_surrogate_raises_and_recovers(force_write_kernel
     UnicodeEncodeError, matching str.encode('utf-8')'s own behavior, and
     the array must remain usable afterwards -- a regression test for the
     compiled kernel's temp-buffer cleanup on the error path."""
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     arr = Utf8Array(blosc2.utf8())
     arr.extend(["first"])
@@ -865,7 +864,7 @@ def test_utf8_factorize_span_matches_np_unique_contract():
     numpy's np.unique on StringDType merges strings differing only after an
     embedded NUL (numpy bug), which the byte-exact factorization does not.
     """
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     rng = np.random.default_rng(7)
     pool = ["", "a", "ab", "café", "日本語", "x" * 3000, "nul\x00in", "nul\x00IN", "Wien", "wien"]
@@ -878,7 +877,7 @@ def test_utf8_factorize_span_matches_np_unique_contract():
 
 
 def test_utf8_factorizer_cross_span_codes_are_global():
-    from blosc2.utf8_array import Utf8Array
+    from blosc2._utf8_array import Utf8Array
 
     arr = Utf8Array(blosc2.utf8())
     arr.extend(["b", "a", "b", "c", "a", "d"])

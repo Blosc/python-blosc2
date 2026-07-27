@@ -2040,7 +2040,7 @@ class Column:
         """Apply ``fn(chunk, start, stop)`` over this utf8 column's logical rows.
 
         *fn* returns a boolean array for each ``StringDType`` chunk read from
-        the underlying :class:`~blosc2.utf8_array.Utf8Array`.  Returns a
+        the underlying :class:`~blosc2._utf8_array.Utf8Array`.  Returns a
         physical-length (``_valid_rows``-length) boolean NumPy array; rows
         beyond the column's logical length are left ``False``.
         """
@@ -2057,7 +2057,7 @@ class Column:
         """Apply ``fn(arr, start, stop)`` over this utf8 column's logical rows.
 
         Like :meth:`_utf8_chunked_bool`, but *fn* operates directly on the
-        underlying :class:`~blosc2.utf8_array.Utf8Array` (raw offsets/bytes)
+        underlying :class:`~blosc2._utf8_array.Utf8Array` (raw offsets/bytes)
         instead of a materialized ``StringDType`` chunk, so no per-row decode
         happens.  Returns a physical-length boolean NumPy array; rows beyond
         the column's logical length are left ``False``.
@@ -2118,8 +2118,8 @@ class Column:
     def _utf8_compare_scalar(self, numpy_op, value: str):
         """Scalar comparison, evaluated chunk by chunk directly on raw UTF-8
         bytes (no decode to ``StringDType``) via
-        :meth:`~blosc2.utf8_array.Utf8Array.equal_mask_span` /
-        :meth:`~blosc2.utf8_array.Utf8Array.order_masks_span`.
+        :meth:`~blosc2._utf8_array.Utf8Array.equal_mask_span` /
+        :meth:`~blosc2._utf8_array.Utf8Array.order_masks_span`.
         """
         nv = self.null_value
 
@@ -7070,7 +7070,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         if _is_arrow_string_type(pa, pa_type):
             if string_max_length is None:
-                from blosc2.utf8_array import have_string_dtype
+                from blosc2._utf8_array import have_string_dtype
 
                 if not have_string_dtype():
                     # utf8 columns need numpy.dtypes.StringDType (NumPy >= 2.0).
@@ -7141,7 +7141,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             # only binary columns keep the native-None varlen treatment.
             # On NumPy < 2.0 (no StringDType) utf8 columns are unavailable and
             # scalar strings keep the historical vlstring treatment instead.
-            from blosc2.utf8_array import have_string_dtype
+            from blosc2._utf8_array import have_string_dtype
 
             field_is_varlen_scalar = (
                 not field_is_list

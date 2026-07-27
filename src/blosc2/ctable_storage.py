@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 import blosc2
+from blosc2._utf8_array import Utf8Array, _new_backend_arrays
 from blosc2.batch_array import BatchArray
 from blosc2.dictionary_column import DictionaryColumn
 from blosc2.list_array import ListArray
@@ -39,7 +40,6 @@ from blosc2.scalar_array import (
 )
 from blosc2.schema import Utf8Spec
 from blosc2.schunk import process_opened_object
-from blosc2.utf8_array import Utf8Array, _new_backend_arrays
 
 if TYPE_CHECKING:
     from blosc2.schema import ListSpec
