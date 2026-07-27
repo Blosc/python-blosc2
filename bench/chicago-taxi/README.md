@@ -99,31 +99,36 @@ row-wise control flow rather than one expression. blosc2 runs it as a
 fully-evaluated branches. `--apply` adds the row-wise pandas spelling, which is
 what you would write first and is ~70x slower than everything else.
 
-**`blosc2 (raw)` is the same blosc2 path at `clevel=0`** — same container, same
-kernel, operands and result both uncompressed. Compression is the only variable
-between the two blosc2 bars, so their time gap is what compression costs and
-their footprint gap is what it buys.
+**blosc2 uses LZ4 at `clevel=5`**, not the ZSTD-5 default: on this workload it
+is ~1.6x faster to write for ~3.6x more stored bytes, which is still 13x below
+what the Arrow-backed engines hold. **`blosc2 (raw)` is the identical path at
+`clevel=0`** — same container, same kernel, same filter pipeline, operands and
+result both uncompressed. Compression is the only variable between the two
+blosc2 bars.
 
 Results on an Apple M-series laptop (8 cores, 24 GB), full table, warm
 (see `string-ops.png`):
 
 | | filter | transform | kernel | kernel result |
 |---|---|---|---|---|
-| blosc2 | 469 ms | 2.11 s | 4.03 s | **18 MB** |
-| blosc2 (raw) | 174 ms | 1.29 s | 3.54 s | 5 766 MB |
-| pandas | 192 ms | 1.99 s | 5.12 s | 932 MB |
-| polars | 92 ms | 1.75 s | 3.88 s | 932 MB |
-| duckdb | 334 ms | 1.99 s | 2.96 s | 842 MB |
+| **blosc2** | **297 ms** | **1.22 s** | 3.09 s | **68 MB** |
+| blosc2 (raw) | 187 ms | 1.39 s | 3.58 s | 5 766 MB |
+| pandas | 192 ms | 2.07 s | 5.28 s | 932 MB |
+| polars | 93 ms | 1.75 s | 3.87 s | 932 MB |
+| duckdb | 344 ms | 1.98 s | 2.96 s | 842 MB |
 
-blosc2 is at parity with DuckDB on `transform`, 1.36x on `kernel`, and ahead of
-pandas on both — holding the result in **46x less memory** than any of them.
-`filter` is the weak task: a bool result is 1 byte per row, so there is no
-output-side win to offset reading the operands.
+blosc2 is **fastest of all five on `transform`** (1.62x DuckDB), ahead of DuckDB
+on `filter`, and within 1.04x on `kernel` — while holding the result in **14x
+less memory** than any of them. Only polars' `filter` is faster.
 
-**Compression now costs ~12 % of kernel time and saves 315x the memory** — 18 MB
-against 5.8 GB for the identical uncompressed run.
+**Compression is now free, and then some.** Compare the two blosc2 rows: the
+compressed run is *faster* than the uncompressed one on both `transform`
+(1.22 s vs 1.39) and `kernel` (3.09 s vs 3.58), because a compressed block is
+less memory traffic than a 5.8 GB uncompressed result. It also stores 85x
+smaller. `filter` is the one exception — a bool result is 1 byte per row, so
+there is no output-side win to offset the operand reads.
 
-Three things got this from an earlier 8.49 s `kernel`, and two were bugs rather
+Four things got this from an earlier 8.49 s `kernel`, and two were bugs rather
 than tuning:
 
 1. **`upper`/`lower` stopped reserving a 3x/2x case-expansion bound** (miniexpr
@@ -139,10 +144,12 @@ than tuning:
    much wider per row, so a row count tuned for `<U36` operands gave 1.7 MB
    blocks for the `<U54` result — out of cache on every task.
 
-Tuning note, not applied here because it changes stock compression settings:
-`cparams=CParams(codec=ZSTD, clevel=1, ...)` trades ratio for speed and at 1 M
-rows gives `transform` 52 ms and `kernel` 127 ms (against DuckDB's 71 and 112)
-for 1.0 MB instead of 0.75.
+4. **LZ4-5 instead of the ZSTD-5 default**, as described above.
+
+A footgun worth knowing about: `filters_meta` must be spelled out whenever you
+construct a `CParams` for a `<U` array, or you silently lose the code-unit
+shuffle width. Same `transform`, LZ4-5, 1 M rows: 6.55 MB / 77.6 ms with the
+`CParams` default, 2.72 MB / 48.9 ms with `filters_meta=[0, 0, 0, 0, 0, 4]`.
 
 ### The `<U` dtype used to cost 3.2x here (mostly fixed — see above)
 

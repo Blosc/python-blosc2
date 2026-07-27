@@ -58,7 +58,24 @@ COLS = ["company", "payment.type"]
 # asarray() picks for itself when left alone) they are 15.0 / 79.7 / 154.0.
 CHUNKS, BLOCKS = (1 << 16,), (512,)
 
-RAW = blosc2.CParams(clevel=0)
+# LZ4 rather than the ZSTD-5 default: on this workload it is ~1.6x faster to
+# write for ~3.6x more stored bytes, which is still 13x smaller than what the
+# Arrow-backed engines hold.
+#
+# filters_meta has to be spelled out.  It is SHUFFLE's element width, and left
+# to itself a <U container picks 4 -- the UCS4 code unit -- so shuffle groups
+# the (mostly zero) high bytes of every codepoint together.  Constructing a
+# CParams for any reason defaults it to 0, "shuffle by the whole item", which
+# scatters characters across the slot: 6.55 MB and 77.6 ms against 2.72 MB and
+# 48.9 ms for the same `transform`.
+_SHUFFLE_LAST = [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE]
+_UCS4_WIDTH = [0, 0, 0, 0, 0, 4]
+DEFAULT = blosc2.CParams(
+    codec=blosc2.Codec.LZ4, clevel=5, filters=_SHUFFLE_LAST, filters_meta=_UCS4_WIDTH
+)
+
+# Same filter pipeline as DEFAULT so that clevel is genuinely the only variable.
+RAW = blosc2.CParams(clevel=0, filters=_SHUFFLE_LAST, filters_meta=_UCS4_WIDTH)
 
 TASKS = ["filter", "transform", "kernel"]
 PLOT_TASK = "kernel"
@@ -105,8 +122,8 @@ def taxi_label(company, ptype):
     return "other|" + c + "|" + pay
 
 
-def blosc2_setup(co, pt, cparams=None):
-    cp = {"cparams": cparams} if cparams is not None else {}
+def blosc2_setup(co, pt, cparams=DEFAULT):
+    cp = {"cparams": cparams}
     kw = {"chunks": CHUNKS, "blocks": BLOCKS, **cp}
     return blosc2.asarray(co, **kw), blosc2.asarray(pt, **kw), cp
 
