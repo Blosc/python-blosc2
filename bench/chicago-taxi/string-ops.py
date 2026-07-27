@@ -58,29 +58,33 @@ COLS = ["company", "payment.type"]
 # asarray() picks for itself when left alone) they are 15.0 / 79.7 / 154.0.
 CHUNKS, BLOCKS = (1 << 16,), (512,)
 
-# LZ4 rather than the ZSTD-5 default: on this workload it is ~1.6x faster to
-# write for ~3.6x more stored bytes, which is still 13x smaller than what the
-# Arrow-backed engines hold.
+# LZ4-5 rather than the ZSTD-5 default: ~1.6x faster to write for ~3.6x more
+# stored bytes, and 68 MB against DuckDB's 842 either way.
 #
-# And no filters at all.  The default pipeline ends in SHUFFLE, which
-# de-interleaves byte positions *within* an item -- sensible for numeric data,
-# where byte 0 of every float is a column of similar values, and pointless for
-# text, where it just scatters each string across the slot.  Measured on
-# `transform`, 1 M rows, LZ4-5:
+# SHUFFLE stays on with filters_meta 4, which is what a <U container picks for
+# itself: shuffle by the UCS4 code unit separates the ASCII payload byte from
+# the three mostly-zero high bytes.  It has to be spelled out here because
+# constructing a CParams for any reason resets filters_meta to 0, meaning
+# "shuffle by the whole item" -- strictly worse than either alternative
+# (6.6 MB and 75.8 ms on `transform`, against 2.7 MB / 50.5 with width 4).
 #
-#     no filters                42.9 ms   2.78 MB
-#     SHUFFLE, width 4          48.2 ms   2.72 MB   <- the default for <U
-#     SHUFFLE, width = itemsize 75.8 ms   6.55 MB
+# It is a ratio-for-time trade, measured at 1 M rows with blosc2 alone in the
+# process (`--engines blosc2`; sharing the process with the other engines costs
+# blosc2 ~40 % even though it runs first):
 #
-# The last row is the trap: filters_meta is SHUFFLE's element width, a <U
-# container picks 4 for itself (the UCS4 code unit), but constructing a CParams
-# for any reason resets it to 0, meaning "shuffle by the whole item".  Turning
-# the filter off sidesteps the question and is faster than either.
-_NO_FILTERS = [blosc2.Filter.NOFILTER] * 6
-DEFAULT = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=5, filters=_NO_FILTERS)
+#     codec   filters          filter  transform  kernel  result  operand cr
+#     ZSTD-5  none              10.0     80.3      149.3  1.08 MB      860x
+#     ZSTD-5  SHUFFLE meta=4    15.9     80.4      155.5  0.75 MB     1321x
+#     LZ4-5   none               7.2     43.9      118.1  2.76 MB      198x
+#     LZ4-5   SHUFFLE meta=4    12.4     50.5      124.8  2.70 MB      225x
+_SHUFFLE_UCS4 = [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE]
+_UCS4_WIDTH = [0, 0, 0, 0, 0, 4]
+DEFAULT = blosc2.CParams(
+    codec=blosc2.Codec.LZ4, clevel=5, filters=_SHUFFLE_UCS4, filters_meta=_UCS4_WIDTH
+)
 
 # Same filter pipeline as DEFAULT so that clevel is genuinely the only variable.
-RAW = blosc2.CParams(clevel=0, filters=_NO_FILTERS)
+RAW = blosc2.CParams(clevel=0, filters=_SHUFFLE_UCS4, filters_meta=_UCS4_WIDTH)
 
 TASKS = ["filter", "transform", "kernel"]
 PLOT_TASK = "kernel"

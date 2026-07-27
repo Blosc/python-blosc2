@@ -99,10 +99,10 @@ row-wise control flow rather than one expression. blosc2 runs it as a
 fully-evaluated branches. `--apply` adds the row-wise pandas spelling, which is
 what you would write first and is ~70x slower than everything else.
 
-**blosc2 uses LZ4 at `clevel=5` with no filters**, rather than the stock
-ZSTD-5 + SHUFFLE. Both are throughput-for-ratio trades and both are explained
-under the results; the result is still 12x smaller than what the Arrow-backed
-engines hold. **`blosc2 (raw)` is the identical path at
+**blosc2 uses LZ4 at `clevel=5`**, rather than the stock ZSTD-5 — a
+throughput-for-ratio trade, and the result is still 12x smaller than what the
+Arrow-backed engines hold. SHUFFLE stays on at the `<U` code-unit width; see
+below. **`blosc2 (raw)` is the identical path at
 `clevel=0`** — same container, same kernel, same (empty) filter pipeline,
 operands and result both uncompressed. Compression is the only variable between
 the two blosc2 bars.
@@ -112,22 +112,26 @@ Results on an Apple M-series laptop (8 cores, 24 GB), full table, warm
 
 | | filter | transform | kernel | kernel result |
 |---|---|---|---|---|
-| **blosc2** | **167 ms** | **1.10 s** | 3.11 s | **68 MB** |
-| blosc2 (raw) | 224 ms | 1.21 s | 3.40 s | 5 766 MB |
-| pandas | 193 ms | 2.07 s | 5.28 s | 932 MB |
-| polars | 92 ms | 1.74 s | 3.83 s | 932 MB |
-| duckdb | 337 ms | 1.98 s | 2.94 s | 842 MB |
+| **blosc2** | 299 ms | **1.48 s** | 3.09 s | **68 MB** |
+| blosc2 (raw) | 177 ms | 1.36 s | 3.62 s | 5 766 MB |
+| pandas | 194 ms | 2.07 s | 5.31 s | 932 MB |
+| polars | 92 ms | 1.74 s | 3.72 s | 932 MB |
+| duckdb | 335 ms | 1.97 s | 2.95 s | 842 MB |
 
-blosc2 is **fastest of all five on `transform`** (1.80x DuckDB), **2.0x DuckDB
-on `filter`**, and within 1.06x on `kernel` — while holding the result in **12x
-less memory** than any of them. Only polars' `filter` is faster.
+blosc2 is **fastest of all five on `transform`**, ahead of DuckDB on `filter`,
+and within 1.05x on `kernel` — while holding the result in **12x less memory**
+than any of them. Only polars' `filter` is faster.
 
-**Compression is free, and then some.** Compare the two blosc2 rows: the
-compressed run is *faster* than the uncompressed one on all three tasks,
-because a compressed block is less memory traffic than a 5.8 GB uncompressed
-result. It also stores 85x smaller.
+`transform` is the noisiest row: blosc2 alone in the process gives 1.24–1.26 s
+over repeated runs against the 1.48 s above, so read it as ~1.3 s and quote the
+ratio, not the absolute.
 
-### Why no filters — a time/ratio tradeoff, not a fix
+**Compression is close to free.** Compare the two blosc2 rows: the compressed
+run is *faster* than the uncompressed one on `kernel` (3.09 s vs 3.62), because
+a compressed block is less memory traffic than a 5.8 GB uncompressed result. It
+also stores 85x smaller.
+
+### Filters and codec — time/ratio trades, not fixes
 
 blosc2's default for `<U` is SHUFFLE with `filters_meta` 4: shuffle by the UCS4
 code unit, which separates the ASCII payload byte from the three mostly-zero
@@ -145,9 +149,8 @@ process:
 Shuffle buys 1.4x ratio under ZSTD and ~2 % under LZ4, where the codec already
 handles the zero runs. `filter` pays the most for it — that task writes 1 byte
 per row, so the un-shuffle on the operand side has nothing on the output side
-to offset it. **Keep the default when ratio matters; drop filters for
-throughput**, which is the call made here because 2.8 MB against DuckDB's 34 is
-an overwhelming memory win either way.
+to offset it. This benchmark **keeps shuffle** (the ratio is the point of using
+blosc2 at all) and takes its throughput from the codec instead.
 
 One trap regardless of which you pick: `filters_meta` is SHUFFLE's element
 width, and a `<U` container picks 4 for itself only when you *don't* build a
@@ -176,8 +179,7 @@ than tuning:
    much wider per row, so a row count tuned for `<U36` operands gave 1.7 MB
    blocks for the `<U54` result — out of cache on every task.
 
-4. **LZ4-5 and no filters instead of the ZSTD-5 + SHUFFLE default**, as
-   described below.
+4. **LZ4-5 instead of the ZSTD-5 default**, as described below.
 
 ### The `<U` dtype used to cost 3.2x here (mostly fixed — see above)
 
