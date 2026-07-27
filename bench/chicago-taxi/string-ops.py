@@ -62,20 +62,25 @@ CHUNKS, BLOCKS = (1 << 16,), (512,)
 # write for ~3.6x more stored bytes, which is still 13x smaller than what the
 # Arrow-backed engines hold.
 #
-# filters_meta has to be spelled out.  It is SHUFFLE's element width, and left
-# to itself a <U container picks 4 -- the UCS4 code unit -- so shuffle groups
-# the (mostly zero) high bytes of every codepoint together.  Constructing a
-# CParams for any reason defaults it to 0, "shuffle by the whole item", which
-# scatters characters across the slot: 6.55 MB and 77.6 ms against 2.72 MB and
-# 48.9 ms for the same `transform`.
-_SHUFFLE_LAST = [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE]
-_UCS4_WIDTH = [0, 0, 0, 0, 0, 4]
-DEFAULT = blosc2.CParams(
-    codec=blosc2.Codec.LZ4, clevel=5, filters=_SHUFFLE_LAST, filters_meta=_UCS4_WIDTH
-)
+# And no filters at all.  The default pipeline ends in SHUFFLE, which
+# de-interleaves byte positions *within* an item -- sensible for numeric data,
+# where byte 0 of every float is a column of similar values, and pointless for
+# text, where it just scatters each string across the slot.  Measured on
+# `transform`, 1 M rows, LZ4-5:
+#
+#     no filters                42.9 ms   2.78 MB
+#     SHUFFLE, width 4          48.2 ms   2.72 MB   <- the default for <U
+#     SHUFFLE, width = itemsize 75.8 ms   6.55 MB
+#
+# The last row is the trap: filters_meta is SHUFFLE's element width, a <U
+# container picks 4 for itself (the UCS4 code unit), but constructing a CParams
+# for any reason resets it to 0, meaning "shuffle by the whole item".  Turning
+# the filter off sidesteps the question and is faster than either.
+_NO_FILTERS = [blosc2.Filter.NOFILTER] * 6
+DEFAULT = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=5, filters=_NO_FILTERS)
 
 # Same filter pipeline as DEFAULT so that clevel is genuinely the only variable.
-RAW = blosc2.CParams(clevel=0, filters=_SHUFFLE_LAST, filters_meta=_UCS4_WIDTH)
+RAW = blosc2.CParams(clevel=0, filters=_NO_FILTERS)
 
 TASKS = ["filter", "transform", "kernel"]
 PLOT_TASK = "kernel"

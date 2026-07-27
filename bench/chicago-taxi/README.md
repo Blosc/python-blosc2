@@ -99,34 +99,58 @@ row-wise control flow rather than one expression. blosc2 runs it as a
 fully-evaluated branches. `--apply` adds the row-wise pandas spelling, which is
 what you would write first and is ~70x slower than everything else.
 
-**blosc2 uses LZ4 at `clevel=5`**, not the ZSTD-5 default: on this workload it
-is ~1.6x faster to write for ~3.6x more stored bytes, which is still 13x below
-what the Arrow-backed engines hold. **`blosc2 (raw)` is the identical path at
-`clevel=0`** — same container, same kernel, same filter pipeline, operands and
-result both uncompressed. Compression is the only variable between the two
-blosc2 bars.
+**blosc2 uses LZ4 at `clevel=5` with no filters**, rather than the stock
+ZSTD-5 + SHUFFLE. LZ4 is ~1.6x faster to write for ~3.6x more stored bytes,
+still 13x below what the Arrow-backed engines hold; dropping SHUFFLE is
+explained under the results. **`blosc2 (raw)` is the identical path at
+`clevel=0`** — same container, same kernel, same (empty) filter pipeline,
+operands and result both uncompressed. Compression is the only variable between
+the two blosc2 bars.
 
 Results on an Apple M-series laptop (8 cores, 24 GB), full table, warm
 (see `string-ops.png`):
 
 | | filter | transform | kernel | kernel result |
 |---|---|---|---|---|
-| **blosc2** | **297 ms** | **1.22 s** | 3.09 s | **68 MB** |
-| blosc2 (raw) | 187 ms | 1.39 s | 3.58 s | 5 766 MB |
-| pandas | 192 ms | 2.07 s | 5.28 s | 932 MB |
-| polars | 93 ms | 1.75 s | 3.87 s | 932 MB |
-| duckdb | 344 ms | 1.98 s | 2.96 s | 842 MB |
+| **blosc2** | **167 ms** | **1.10 s** | 3.11 s | **68 MB** |
+| blosc2 (raw) | 224 ms | 1.21 s | 3.40 s | 5 766 MB |
+| pandas | 193 ms | 2.07 s | 5.28 s | 932 MB |
+| polars | 92 ms | 1.74 s | 3.83 s | 932 MB |
+| duckdb | 337 ms | 1.98 s | 2.94 s | 842 MB |
 
-blosc2 is **fastest of all five on `transform`** (1.62x DuckDB), ahead of DuckDB
-on `filter`, and within 1.04x on `kernel` — while holding the result in **14x
+blosc2 is **fastest of all five on `transform`** (1.80x DuckDB), **2.0x DuckDB
+on `filter`**, and within 1.06x on `kernel` — while holding the result in **12x
 less memory** than any of them. Only polars' `filter` is faster.
 
-**Compression is now free, and then some.** Compare the two blosc2 rows: the
-compressed run is *faster* than the uncompressed one on both `transform`
-(1.22 s vs 1.39) and `kernel` (3.09 s vs 3.58), because a compressed block is
-less memory traffic than a 5.8 GB uncompressed result. It also stores 85x
-smaller. `filter` is the one exception — a bool result is 1 byte per row, so
-there is no output-side win to offset the operand reads.
+**Compression is free, and then some.** Compare the two blosc2 rows: the
+compressed run is *faster* than the uncompressed one on all three tasks,
+because a compressed block is less memory traffic than a 5.8 GB uncompressed
+result. It also stores 85x smaller.
+
+### Why no filters
+
+The default pipeline ends in SHUFFLE, which de-interleaves byte positions
+*within* an item. That is exactly right for numeric data — byte 0 of every
+float is a column of similar values — and pointless for text, where it only
+scatters each string across its slot. On `transform`, 1 M rows, LZ4-5,
+blosc2 alone in the process:
+
+| | time | stored |
+|---|---|---|
+| **no filters** | **44.0 ms** | 2.8 MB |
+| SHUFFLE, width 4 | 49.3 ms | 2.7 MB |
+| SHUFFLE, width = itemsize | 75.8 ms | 6.6 MB |
+
+`filter` shows it most: 7.3 ms against 11.9. The third row is a trap worth
+knowing about: `filters_meta` is SHUFFLE's element width, a `<U` container
+picks 4 for itself (the UCS4 code unit), but constructing a `CParams` for any
+reason resets it to 0 — "shuffle by the whole item". Turning the filter off
+sidesteps the question and beats both.
+
+Note the numbers above are lower than the table's: timing blosc2 in a process
+that also runs the other engines costs it ~40 % even though it goes first. The
+comparison table keeps every engine in one process, as it always has; use
+`--engines blosc2` when tuning.
 
 Four things got this from an earlier 8.49 s `kernel`, and two were bugs rather
 than tuning:
@@ -144,12 +168,8 @@ than tuning:
    much wider per row, so a row count tuned for `<U36` operands gave 1.7 MB
    blocks for the `<U54` result — out of cache on every task.
 
-4. **LZ4-5 instead of the ZSTD-5 default**, as described above.
-
-A footgun worth knowing about: `filters_meta` must be spelled out whenever you
-construct a `CParams` for a `<U` array, or you silently lose the code-unit
-shuffle width. Same `transform`, LZ4-5, 1 M rows: 6.55 MB / 77.6 ms with the
-`CParams` default, 2.72 MB / 48.9 ms with `filters_meta=[0, 0, 0, 0, 0, 4]`.
+4. **LZ4-5 and no filters instead of the ZSTD-5 + SHUFFLE default**, as
+   described below.
 
 ### The `<U` dtype used to cost 3.2x here (mostly fixed — see above)
 
