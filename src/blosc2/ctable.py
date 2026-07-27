@@ -15,6 +15,7 @@ import contextlib
 import contextvars
 import copy
 import dataclasses
+import itertools
 import json
 import operator
 import os
@@ -26,7 +27,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass
 from dataclasses import field as dataclass_field
 from textwrap import TextWrapper
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar
 
 import numpy as np
 
@@ -2115,11 +2116,14 @@ class Column:
         raw = self._utf8_chunked_bool(fn)
         return blosc2.asarray(raw) & self._lazy_valid_rows()
 
-    def _utf8_compare_scalar(self, numpy_op, value: str):
-        """Scalar comparison, evaluated chunk by chunk directly on raw UTF-8
-        bytes (no decode to ``StringDType``) via
+    def _utf8_scalar_mask(self, numpy_op, value: str) -> np.ndarray:
+        """Raw physical-length boolean mask for ``column <numpy_op> value``.
+
+        Compares raw UTF-8 bytes with no decode to ``StringDType``, via
         :meth:`~blosc2._utf8_array.Utf8Array.equal_mask_span` /
-        :meth:`~blosc2._utf8_array.Utf8Array.order_masks_span`.
+        :meth:`~blosc2._utf8_array.Utf8Array.order_masks_span`.  A null never
+        satisfies any comparison.  Not intersected with the live-row mask --
+        see :meth:`_utf8_compare_scalar` for that.
         """
         nv = self.null_value
 
@@ -2148,8 +2152,11 @@ class Column:
                     res = res & ~arr.equal_mask_span(nv, start, stop)
                 return res
 
-        raw = self._utf8_chunked_bytes(fn)
-        return blosc2.asarray(raw) & self._lazy_valid_rows()
+        return self._utf8_chunked_bytes(fn)
+
+    def _utf8_compare_scalar(self, numpy_op, value: str):
+        """Scalar comparison as a live-row-intersected boolean NDArray."""
+        return blosc2.asarray(self._utf8_scalar_mask(numpy_op, value)) & self._lazy_valid_rows()
 
     def _dictionary_eq(self, other):
         """Return a physical-slot boolean predicate for dictionary equality.
@@ -12742,14 +12749,76 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if self._is_utf8_column(col) and self._expression_references_name(expr, col.name)
         ]
 
+    #: Comparisons a utf8 column supports against a string literal, longest
+    #: spelling first so ``<=`` is not matched as ``<``.
+    _UTF8_CMP_OPS: ClassVar[dict] = {
+        "==": np.equal,
+        "!=": np.not_equal,
+        "<=": np.less_equal,
+        ">=": np.greater_equal,
+        "<": np.less,
+        ">": np.greater,
+    }
+    #: Mirrored operator for a reversed comparison (``'x' < name``).
+    _UTF8_CMP_MIRROR: ClassVar[dict] = {"==": "==", "!=": "!=", "<=": ">=", ">=": "<=", "<": ">", ">": "<"}
+
+    def _rewrite_utf8_predicates(
+        self, expr: str, operands: dict, utf8_names: list[str]
+    ) -> tuple[str, dict, list[str]]:
+        """Replace ``utf8col <cmp> 'literal'`` terms with precomputed masks.
+
+        A scalar comparison is answered by a raw-byte scan of the offsets/data
+        pair (:meth:`Column._utf8_scalar_mask`) with no decode at all, which is
+        several times cheaper than the span driver's decode -> ``<Un`` ->
+        miniexpr round trip and is exactly what the operator form
+        ``t[t.name == "x"]`` already does.  Substituting the mask as a boolean
+        operand keeps the rest of the expression (``&``/``|``, numeric terms) a
+        single native expression.
+
+        Returns the rewritten expression, the extended operands, and the utf8
+        names still referenced -- a name drops out only when *every* one of its
+        occurrences was rewritten, so anything else (``startswith(name, 'x')``,
+        ``upper(name)``) still routes to the span driver.
+        """
+        rewritten = expr
+        new_operands = dict(operands)
+        remaining = []
+        ops = "|".join(re.escape(o) for o in self._UTF8_CMP_OPS)
+        for i, name in enumerate(utf8_names):
+            column = self[name]
+            counter = itertools.count()
+
+            def repl(match: re.Match, _col=column, _i=i, _c=counter, reverse=False) -> str:
+                op = match.group(1)
+                literal = ast.literal_eval(match.group(2) if not reverse else match.group(1))
+                if reverse:
+                    op = self._UTF8_CMP_MIRROR[match.group(2)]
+                alias = f"__u8{_i}_{next(_c)}"
+                new_operands[alias] = blosc2.asarray(_col._utf8_scalar_mask(self._UTF8_CMP_OPS[op], literal))
+                return alias
+
+            escaped = r"(?<![\w.])" + re.escape(name) + r"(?![\w.])"
+            forward = re.sub(escaped + r"\s*(" + ops + r")\s*" + self._STR_LITERAL, repl, rewritten)
+            reversed_ = re.sub(
+                self._STR_LITERAL + r"\s*(" + ops + r")\s*" + escaped,
+                lambda m: repl(m, reverse=True),
+                forward,
+            )
+            if self._expression_references_name(reversed_, name):
+                remaining.append(name)
+            rewritten = reversed_
+        return rewritten, new_operands, remaining
+
     def _lazyexpr_over_cols(self, expr: str, operands: dict, utf8_names: list[str]):
         """``blosc2.lazyexpr(expr, operands)``, or the utf8 span driver.
 
         A variable-length utf8 column cannot be an expression operand: its
         offsets and data live in separate NDArrays with independent chunk
-        grids, so the prefilter contract does not apply.  When *expr* touches
-        one, evaluate it span by span instead, materializing each span to a
-        fixed-width ``<Un`` array that the (Phase 1) string kernels accept.
+        grids, so the prefilter contract does not apply.  Scalar comparisons
+        are answered by a raw-byte scan and substituted as boolean operands
+        first; whatever still references a utf8 column is evaluated span by
+        span, materializing each span to a fixed-width ``<Un`` array that the
+        (Phase 1) string kernels accept.
         """
         if not utf8_names:
             return blosc2.lazyexpr(expr, operands)
@@ -12759,6 +12828,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 f"Column {dotted[0]!r} is a nested variable-length utf8 column; "
                 "string expressions only support top-level utf8 columns."
             )
+        expr, operands, utf8_names = self._rewrite_utf8_predicates(expr, operands, utf8_names)
+        if not utf8_names:
+            return blosc2.lazyexpr(expr, operands)
         return self._utf8_span_eval(expr, operands, utf8_names)
 
     def _utf8_span_eval(self, expr: str, operands: dict, utf8_names: list[str], *, strict: bool = False):

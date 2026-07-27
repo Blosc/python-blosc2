@@ -1442,3 +1442,88 @@ def test_ctable_utf8_where_expression_null_count_zero_fast_path():
 def test_ctable_utf8_sum_where_expression():
     t = make_table(["hello", "help", "world"])
     assert t["x"].sum(where="startswith(name, 'hel')") == 1
+
+
+# ---------------------------------------------------------------------------
+# Scalar predicates take the raw-byte path instead of the span driver
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("expr", "predicate"),
+    [
+        ("name == 'help'", lambda v: v == "help"),
+        ("name != 'help'", lambda v: v != "help"),
+        ("name < 'm'", lambda v: v < "m"),
+        ("name <= 'help'", lambda v: v <= "help"),
+        ("name > 'm'", lambda v: v > "m"),
+        ("name >= 'help'", lambda v: v >= "help"),
+        ("'help' == name", lambda v: v == "help"),
+        ("'help' != name", lambda v: v != "help"),
+        ("'m' > name", lambda v: v < "m"),
+        ("'m' <= name", lambda v: v >= "m"),
+    ],
+)
+def test_ctable_utf8_scalar_predicates_match_python(expr, predicate):
+    values = ["hello", "help", "world", "café", "日本語", "", "zz"]
+    t = make_table(values)
+    assert list(t.where(expr)["x"][:]) == [i for i, v in enumerate(values) if predicate(v)]
+
+
+@pytest.mark.parametrize(
+    ("expr", "rewritten_away"),
+    [
+        ("name == 'help'", True),
+        ("'help' == name", True),
+        ("name < 'm'", True),
+        ("(name == 'help') | (x > 4)", True),
+        ("(name == 'a') & (name != 'b')", True),
+        # Not a scalar comparison: these still need the span driver.
+        ("startswith(name, 'hel')", False),
+        ("contains(name, 'l')", False),
+        ("startswith(name, 'hel') | (name == 'zz')", False),
+    ],
+)
+def test_ctable_utf8_scalar_predicates_skip_the_span_driver(expr, rewritten_away):
+    """The raw-byte scan is several times cheaper than decode -> <Un -> miniexpr.
+
+    Correctness alone would not notice the difference, so assert on which route
+    the expression takes: a utf8 name survives the rewrite only when something
+    other than a scalar comparison still references it.
+    """
+    t = make_table(["hello", "help", "world", "zz", "a", "b"])
+    operands = t._where_expression_operands(expr)
+    _, _, remaining = t._rewrite_utf8_predicates(expr, operands, t._utf8_names_in(expr))
+    assert (remaining == []) is rewritten_away
+
+
+def test_ctable_utf8_rewritten_predicate_matches_span_driver():
+    """Both routes must agree, including on nulls and on the sentinel spelling."""
+    values = ["hello", None, "help", None, "world"]
+    t = _nullable_table(values)
+    for expr in ("name == 'hello'", "name != 'hello'", "name < 'm'", "name == '<NA>'"):
+        fast = list(t.where(expr)["x"][:])
+        slow = list(np.flatnonzero(t._utf8_span_eval(expr, {}, ["name"])[: len(values)]))
+        assert fast == slow, expr
+
+
+def test_ctable_utf8_scalar_predicate_literal_with_operator_chars():
+    # The literal is parsed with ast.literal_eval, so quoted operators and
+    # spaces inside it must not be mistaken for expression syntax.
+    values = ["a == b", "x > y", "plain"]
+    t = make_table(values)
+    assert list(t.where("name == 'a == b'")["x"][:]) == [0]
+    assert list(t.where("name == 'x > y'")["x"][:]) == [1]
+
+
+def test_ctable_utf8_scalar_predicate_on_view_and_after_delete():
+    t = make_table(["paris", "london", "paris", "tokyo"])
+    t.delete([0])
+    assert list(t.where("name == 'paris'")["x"][:]) == [2]
+    view = t[t.x > 1]
+    assert list(view.where("name == 'paris'")["x"][:]) == [2]
+
+
+def test_ctable_utf8_two_scalar_predicates_on_the_same_column():
+    t = make_table(["a", "b", "c", "d"])
+    assert list(t.where("(name > 'a') & (name < 'd')")["name"][:]) == ["b", "c"]
