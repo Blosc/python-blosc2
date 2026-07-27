@@ -287,7 +287,7 @@ cdef extern from "blosc2.h":
 
     int blosc1_cbuffer_validate(const void* cbuffer, size_t cbytes, size_t* nbytes)
 
-    void blosc1_cbuffer_metainfo(const void* cbuffer, size_t* typesize, int* flags)
+    void blosc1_cbuffer_metainfo(const void* cbuffer, size_t* typesize, int* flags) nogil
 
     void blosc1_cbuffer_versions(const void* cbuffer, int* version, int* versionlz)
 
@@ -2660,6 +2660,10 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef me_input_cache_s* input_cache
     cdef int32_t chunk_nbytes, chunk_cbytes, block_nbytes
     cdef int start, blocknitems, expected_blocknitems
+    cdef size_t header_typesize
+    cdef int header_flags
+    cdef int64_t getitem_start
+    cdef int32_t getitem_nitems
     cdef int64_t valid_nitems
     cdef int64_t global_block
     cdef int32_t input_typesize
@@ -2832,7 +2836,17 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             expected_blocknitems = blocknitems
         elif blocknitems != expected_blocknitems:
             raise ValueError("miniexpr: inconsistent block element counts across inputs")
-        start = nblock * blocknitems
+        # blosc2_getitem_ctx() counts in the typesize the *chunk header* records,
+        # which is not always the array's: c-blosc2 caps a typesize above
+        # BLOSC_MAX_TYPESIZE (255) to 1 so its split machinery keeps working
+        # (blosc2.c, "treat buffer as an 1-byte stream").  Asking in element
+        # units then silently reads a byte range instead -- every block past the
+        # first came back as uninitialised memory.  Convert through bytes.
+        blosc1_cbuffer_metainfo(src, &header_typesize, &header_flags)
+        if header_typesize <= 0:
+            raise ValueError("miniexpr: invalid chunk typesize")
+        getitem_start = (<int64_t> nblock * block_nbytes) // <int64_t> header_typesize
+        getitem_nitems = block_nbytes // <int32_t> header_typesize
         # This is needed for thread safety, but adds a pretty low overhead (< 400ns on a modern CPU)
         # In the future, perhaps one can create a specific (serial) context just for
         # blosc2_getitem_ctx, but this is probably never going to be necessary.
@@ -2841,7 +2855,7 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         # dctx = ndarr.sc.dctx
         if valid_nitems > blocknitems:
             raise ValueError("miniexpr: valid items exceed padded block size")
-        rc = blosc2_getitem_ctx(dctx, src, chunk_cbytes, start, blocknitems,
+        rc = blosc2_getitem_ctx(dctx, src, chunk_cbytes, <int> getitem_start, <int> getitem_nitems,
                                 input_buffers[i], block_nbytes)
         blosc2_free_ctx(dctx)
         if rc < 0:

@@ -195,3 +195,28 @@ def test_bytes_dsl_kernel(raws):
 def test_bytes_and_str_do_not_mix(raws):
     # NumPy raises on `S` + `U` too; miniexpr must not silently pick one.
     assert blosc2_ext.me_output_dtype("o0 + o1", {"o0": "S8", "o1": "<U8"}) is None
+
+
+# ---------------------------------------------------------------------------
+# Wide operands: itemsize above BLOSC_MAX_TYPESIZE (255 bytes)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("width", [63, 64, 128, 512])
+def test_wide_string_operands_match_numpy(width):
+    # c-blosc2 caps a typesize above 255 to 1 in the chunk header so its split
+    # machinery keeps working, so the miniexpr prefilter must ask
+    # blosc2_getitem_ctx() in *header* units.  Asking in element units read a
+    # byte range instead: every block past the first was uninitialised memory
+    # and predicates came back almost entirely False.  <U64 is 256 bytes, the
+    # first width that trips it.
+    values = np.array(["hello", "help", "world"] * 400, dtype=f"<U{width}")
+    arr = blosc2.asarray(values)
+    assert arr.dtype.itemsize == width * 4
+    assert arr.blocks[0] < len(values), "need several blocks to catch the bug"
+
+    got = (arr == "hello").compute(strict_miniexpr=True)
+    assert list(got[:]) == list(values == "hello")
+
+    upper = blosc2.upper(arr).compute(strict_miniexpr=True)
+    assert list(upper[:]) == list(np.strings.upper(values))
