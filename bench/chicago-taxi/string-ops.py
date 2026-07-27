@@ -48,7 +48,15 @@ COLS = ["company", "payment.type"]
 # NDArrays only take the (miniexpr) fast path when the operands share a chunk
 # grid, and asarray() picks the grid from the itemsize -- which differs between
 # <U36 and <U11.  Pinning it here is what keeps `filter` on miniexpr.
-CHUNKS, BLOCKS = (1 << 16,), (1 << 13,)
+#
+# BLOCKS is small on purpose.  The result container inherits the operands'
+# block shape in *rows*, and a string result is far wider per row than its
+# operands (<U54 against <U36), so a row count tuned for the operands gives a
+# much larger byte-block for the result.  At 8192 rows the <U54 result blocks
+# were 1.7 MB, well out of cache, and every task paid for it: filter 28.1 ms,
+# transform 124.1, kernel 231.6.  At 512 rows (~108 KB, which is what
+# asarray() picks for itself when left alone) they are 15.0 / 79.7 / 154.0.
+CHUNKS, BLOCKS = (1 << 16,), (512,)
 
 RAW = blosc2.CParams(clevel=0)
 
