@@ -34,7 +34,7 @@ because two of the conclusions below originally rested on it.
 | nested (dotted) leaf in expr | ✓ | ✓ | ✗ NotImpl | ✗ | ✗ |
 | **Bare container (no CTable)** | | | | | |
 | `lazyexpr(expr, {a: col})` | ✓ NDArray | ✓ | ⚠ returns `<Un`, numpy fallback ² | ⚠ | ⚠ |
-| `col == "scalar"` | ✓ LazyExpr | ✓ LazyExpr | **⚠ plain `False`** ³ | ⚠ `False` | ⚠ `False` |
+| `col == "scalar"` | ✓ LazyExpr | ✓ LazyExpr | ✓ bool mask ³ | ⚠ `False` | ⚠ `False` |
 | **Interop** | | | | | |
 | `to_arrow` | `string` | `large_binary` | `large_string` | `dictionary<…>` | `string` / `large_binary` |
 | save + reopen | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -45,7 +45,10 @@ output with `dtype=StringDType()`, which `NDArray.dtype`'s `ast.literal_eval` ro
 parse (`blosc2_ext.pyx:3818`).
 ² Correct values down the wrong path: it never reaches miniexpr, ignores `_UTF8_EXPR_BUDGET`, and
 loses the utf8 container.
-³ No `__eq__` on `Utf8Array`, so this is object identity — **silently wrong**, not an error.
+³ Fixed in `3692673f` — was a plain `False` (object identity, silently wrong) because `Utf8Array`
+defined no comparison operators. All six now return a boolean mask, answering a scalar `str` with
+the existing raw-byte scanners so no row is decoded. `dictionary` and `vlstring` are still
+identity-compared.
 
 ### Measured cost — 200 k rows of free text, max 37 chars
 
@@ -266,9 +269,10 @@ utf8 without an index, and the parity plan spends a week doing so. Given that th
 is already proven in-tree for dictionary and costs about as much as G2 alone, the priority order
 inverts:
 
-1. **Fix what is wrong, not merely absent** — `Utf8Array.__eq__` returning `False` (make it work or
-   make it raise; ~1 h) and the bare-array `lazyexpr` numpy fallback (G4). Silent-wrong results,
-   and they bite regardless of which rule is chosen.
+1. ~~**Fix what is wrong, not merely absent** — `Utf8Array.__eq__` returning `False`~~ — **done**,
+   `3692673f`; `==`, `!=`, `<`, `<=`, `>`, `>=` all return boolean masks now. The bare-array
+   `lazyexpr` numpy fallback (G4) is the remaining silent-wrong result and still worth fixing
+   whichever rule is chosen.
 2. **Publish the conversion pair.** `Utf8Array.astype("<U")` / `blosc2.from_utf8()` and `.to_utf8()`,
    plus `add_column(..., values=)` so the result can land back in the table without a private call.
    ~1–2 days, and it closes the whole compute asymmetry by declaring a rule instead of chasing it.
