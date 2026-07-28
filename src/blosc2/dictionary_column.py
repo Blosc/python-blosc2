@@ -57,24 +57,32 @@ class DictionaryColumn:
         self._dict_store = dict_store  # _ScalarVarLenArray of vlstring (unique values)
         # Cache: str → int32 code.  Built lazily from dict_store on first access.
         self._value_to_code: dict[str, int] | None = None
+        # Reverse cache: code → str, same lazy build.  Indexing dict_store per
+        # code decompresses a whole msgpack batch every time, so decoding N rows
+        # that way costs O(N) batch decompressions instead of one dictionary read.
+        self._code_to_value: list[str] | None = None
 
     # ------------------------------------------------------------------
     # Cache management
     # ------------------------------------------------------------------
 
     def _ensure_cache(self) -> None:
-        """Build the value→code mapping from the persisted dict_store."""
+        """Build the value→code and code→value mappings from the persisted dict_store."""
         if self._value_to_code is not None:
             return
         self._dict_store.flush()
         cache: dict[str, int] = {}
+        values: list[str] = []
         for code, value in enumerate(self._dict_store):
+            values.append(value)
             if value is not None:
                 cache[value] = code
         self._value_to_code = cache
+        self._code_to_value = values
 
     def _invalidate_cache(self) -> None:
         self._value_to_code = None
+        self._code_to_value = None
 
     # ------------------------------------------------------------------
     # Encoding / decoding
@@ -101,6 +109,8 @@ class DictionaryColumn:
             )
         self._dict_store.append(value)
         self._value_to_code[value] = new_code
+        assert self._code_to_value is not None
+        self._code_to_value.append(value)
         return new_code
 
     def decode(self, code: int) -> str | None:
@@ -108,7 +118,8 @@ class DictionaryColumn:
         if code == self._spec.null_code:
             return None
         self._ensure_cache()
-        return self._dict_store[int(code)]
+        assert self._code_to_value is not None
+        return self._code_to_value[int(code)]
 
     def decode_batch(self, codes) -> list[str | None]:
         """Decode an array of int32 *codes* to a list of strings (``None`` for null codes).
@@ -119,8 +130,8 @@ class DictionaryColumn:
         is dramatically cheaper than looping over :meth:`decode`.
         """
         codes = np.asarray(codes)
-        self._dict_store.flush()
-        all_strings = np.asarray(self._dict_store[:])  # D unique values, no nulls
+        self._ensure_cache()
+        all_strings = np.asarray(self._code_to_value)  # D unique values, no nulls
         null_code = int(self._spec.null_code)
         result: list[str | None] = [None] * len(codes)
         non_null_idx = np.nonzero(codes != null_code)[0]

@@ -538,5 +538,41 @@ def test_cli_dict_export_roundtrip(tmp_path):
     assert rt.column("score").to_pylist() == [1, 2, 3, 4]
 
 
+def test_decode_reads_dictionary_once_not_per_row():
+    """Decoding N rows must not index the dict store N times.
+
+    Each ``dict_store[code]`` decompresses a whole msgpack batch, so a per-code
+    decode makes reads and lexsort-based ``sort_by`` cost O(N) decompressions.
+    """
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+
+    t = CTable(Row)
+    t.extend({"c": [f"v{i % 50}" for i in range(2000)]}, validate=False)
+    t._flush_varlen_columns()
+
+    col = t._cols["c"]
+    col._invalidate_cache()
+    store = col._dict_store
+    original = type(store).__getitem__
+    calls = 0
+
+    def counting_getitem(self, key):
+        nonlocal calls
+        calls += 1
+        return original(self, key)
+
+    type(store).__getitem__ = counting_getitem
+    try:
+        values = col[0:2000]
+    finally:
+        type(store).__getitem__ = original
+
+    assert values == [f"v{i % 50}" for i in range(2000)]
+    assert calls <= 1, f"decoded 2000 rows with {calls} dict-store reads"
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
