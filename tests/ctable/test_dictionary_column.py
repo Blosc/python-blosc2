@@ -576,3 +576,27 @@ def test_decode_reads_dictionary_once_not_per_row():
 
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
+
+
+def test_dictionary_column_comparisons_are_elementwise():
+    """``column == value`` must not fall through to object identity.
+
+    It used to return a plain ``False`` — silently wrong rather than an error.
+    """
+    import numpy as np
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+
+    t = CTable(Row)
+    t.extend({"c": ["hello", "world", "hello"]}, validate=False)
+    t._flush_varlen_columns()
+    col = t._cols["c"]
+
+    np.testing.assert_array_equal((col == "hello")[:3], [True, False, True])
+    np.testing.assert_array_equal((col != "hello")[:3], [False, True, False])
+    # A value absent from the dictionary matches nothing rather than raising.
+    np.testing.assert_array_equal((col == "absent")[:3], [False, False, False])
+    # Defining __eq__ must not have made the container unhashable.
+    assert isinstance(hash(col), int)

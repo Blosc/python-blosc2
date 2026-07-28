@@ -24,6 +24,8 @@ from bisect import bisect_right
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
@@ -265,6 +267,32 @@ class _ScalarVarLenArray:
 
     def __iter__(self) -> Iterator[Any]:
         yield from self[:]
+
+    # Identity hashing is kept: these objects were hashable before __eq__ was
+    # defined, and an element-wise __eq__ never returns a bool for the hash
+    # contract to apply to.
+    __hash__ = object.__hash__
+
+    def __eq__(self, other):
+        """Element-wise equality mask over the stored rows.
+
+        Without this the comparison fell through to object identity and
+        ``column == "value"`` was a plain ``False`` — silently wrong.  Rows hold
+        arbitrary msgpack payloads, so the comparison is handed to NumPy over
+        the decoded values.
+        """
+        import blosc2
+
+        if blosc2._disable_overloaded_equal:
+            return self is other
+        return np.asarray(self[:], dtype=object) == other
+
+    def __ne__(self, other):
+        import blosc2
+
+        if blosc2._disable_overloaded_equal:
+            return self is not other
+        return np.asarray(self[:], dtype=object) != other
 
     def __getitem__(self, index: int | slice | list | tuple) -> Any | list[Any]:
         if isinstance(index, int):

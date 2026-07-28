@@ -535,3 +535,18 @@ def test_objectarray_delete_negative_step_slice():
     oarr2.extend(range(5))
     del oarr2[::-1]
     assert len(oarr2) == 0
+
+
+def test_varlen_scalar_column_comparisons_are_elementwise():
+    """``column == value`` must not fall through to object identity."""
+    from dataclasses import make_dataclass
+
+    row_cls = make_dataclass("Row", [("c", str, blosc2.field(blosc2.vlstring()))])
+    t = blosc2.CTable(row_cls)
+    t.extend({"c": ["hello", "world", "hello"]}, validate=False)
+    t._flush_varlen_columns()
+    col = t._cols["c"]
+
+    np.testing.assert_array_equal(col == "hello", [True, False, True])
+    np.testing.assert_array_equal(col != "hello", [False, True, False])
+    assert isinstance(hash(col), int)

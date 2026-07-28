@@ -247,6 +247,43 @@ class DictionaryColumn:
             return [self.decode(int(codes_arr))]
         raise TypeError(f"DictionaryColumn indices must be int, slice, or array; got {type(key)!r}")
 
+    # Identity hashing is kept: these objects were hashable before __eq__ was
+    # defined, and an element-wise __eq__ never returns a bool for the hash
+    # contract to apply to.
+    __hash__ = object.__hash__
+
+    def __eq__(self, other):
+        """Element-wise equality mask, over the same slots ``self[:]`` exposes.
+
+        Without this the comparison fell through to object identity and
+        ``column == "value"`` was a plain ``False`` — silently wrong.  A scalar
+        string is answered by comparing *codes*, so no row is decoded; null
+        slots hold ``null_code`` and so never match.
+        """
+        import blosc2
+
+        if blosc2._disable_overloaded_equal:
+            return self is other
+        return self._equality_mask(other, invert=False)
+
+    def __ne__(self, other):
+        import blosc2
+
+        if blosc2._disable_overloaded_equal:
+            return self is not other
+        return self._equality_mask(other, invert=True)
+
+    def _equality_mask(self, other, *, invert: bool):
+        codes = np.asarray(self._codes[:], dtype=np.int32)
+        if isinstance(other, str):
+            self._ensure_cache()
+            assert self._value_to_code is not None
+            code = self._value_to_code.get(other)
+            mask = np.zeros(len(codes), dtype=bool) if code is None else codes == code
+        else:
+            mask = np.asarray(self[:], dtype=object) == other
+        return ~mask if invert else mask
+
     def __setitem__(self, key, value) -> None:
         """Encode *value* (str/None or list thereof) and write the code(s)."""
         if isinstance(key, (int, np.integer)):
