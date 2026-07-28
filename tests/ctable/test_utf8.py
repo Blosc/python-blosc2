@@ -1616,3 +1616,72 @@ def test_utf8_array_comparison_edge_cases():
 
     # Defining __eq__ must not have made the container unhashable.
     assert isinstance(hash(arr), int)
+
+
+def test_bare_utf8_array_expression_uses_the_span_driver():
+    """A bare Utf8Array must not evaluate through the NumPy slices_eval path.
+
+    That path returns correct-looking values while never reaching miniexpr,
+    ignoring the span budget, and widening the result to a fixed ``<Un``.
+    """
+    values = ["hello", "world", "héllo"]
+    arr = blosc2.utf8_array(values)
+
+    result = blosc2.lazyexpr("'x=' + a", {"a": arr}).compute(strict_miniexpr=True)
+    # Contagion: a string result over a utf8 operand stays variable-width.
+    assert isinstance(result, blosc2.Utf8Array)
+    assert list(result[:]) == ["x=" + v for v in values]
+
+    # A boolean result is a plain NumPy array, as for a CTable column.
+    mask = blosc2.lazyexpr("startswith(a, 'h')", {"a": arr}).compute(strict_miniexpr=True)
+    assert isinstance(mask, np.ndarray)
+    np.testing.assert_array_equal(mask, [True, False, True])
+
+
+def test_bare_utf8_array_expression_with_mixed_operands():
+    arr = blosc2.utf8_array(["hello", "world", "héllo"])
+    other = blosc2.utf8_array(["A", "B", "C"])
+    joined = blosc2.lazyexpr("a + b", {"a": arr, "b": other}).compute(strict_miniexpr=True)
+    assert isinstance(joined, blosc2.Utf8Array)
+    assert list(joined[:]) == ["helloA", "worldB", "hélloC"]
+
+    nums = blosc2.asarray(np.array([1, 2, 3]))
+    mixed = blosc2.lazyexpr("startswith(a, 'h') & (n > 1)", {"a": arr, "n": nums})
+    np.testing.assert_array_equal(mixed.compute(strict_miniexpr=True), [False, False, True])
+
+
+@pytest.mark.parametrize(("span_rows", "budget"), [(7, 64 << 20), (65536, 512)])
+def test_bare_utf8_array_expression_splits_spans(span_rows, budget, monkeypatch):
+    """Both the row-span and the byte-budget splits must hold over a bare array."""
+    from blosc2 import _utf8_array
+
+    values = [f"row-{i}" for i in range(50)]
+    arr = blosc2.utf8_array(values)
+
+    spans = []
+    original = _utf8_array.utf8_spans
+    monkeypatch.setattr(
+        _utf8_array,
+        "utf8_spans",
+        lambda a, n, s, b: [spans.append(x) or x for x in original(a, n, s, b)],
+    )
+    monkeypatch.setattr(_utf8_array, "UTF8_EXPR_SPAN", span_rows)
+    monkeypatch.setattr(_utf8_array, "UTF8_EXPR_BUDGET", budget)
+
+    result = blosc2.lazyexpr("'x=' + a", {"a": arr}).compute(strict_miniexpr=True)
+    assert len(spans) > 1, f"expected a split, got {spans}"
+    assert list(result[:]) == ["x=" + v for v in values]
+
+
+def test_bare_utf8_array_expression_rejects_unsupported_forms():
+    arr = blosc2.utf8_array(["a", "b"])
+    lazy = blosc2.lazyexpr("upper(a)", {"a": arr})
+
+    assert lazy.shape == (2,)
+    assert len(lazy) == 2
+    assert list(lazy[0:1]) == ["A"]
+
+    with pytest.raises(NotImplementedError, match="whole-array only"):
+        lazy.compute(item=slice(0, 1))
+    with pytest.raises(NotImplementedError, match="not supported"):
+        blosc2.lazyexpr("upper(a)", {"a": arr}, where=(arr, arr))

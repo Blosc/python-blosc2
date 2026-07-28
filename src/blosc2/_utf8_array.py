@@ -66,6 +66,194 @@ _GATHER_GAP = 1024
 # groupby._factorize_fixed_width_str).
 _HASH_MIX = np.uint64(0x9E3779B97F4A7C15)
 
+#: Nominal row span for evaluating an expression over utf8 operands.
+UTF8_EXPR_SPAN = 65536
+
+#: Byte ceiling for one span's fixed-width ``<Un`` materialization.  A span is
+#: sized to the *longest* value in it, so a single 4 KB row among short ones
+#: would otherwise cost 65536 x 4096 x 4 = 1 GiB.
+UTF8_EXPR_BUDGET = 64 << 20
+
+
+def utf8_span_dtype(span: np.ndarray) -> np.dtype:
+    """Fixed-width ``U`` dtype wide enough for every value in *span*.
+
+    The width is span-local and data-dependent, whereas miniexpr bakes output
+    widths in at compile time, so round it up to a power of two: a column then
+    costs a handful of distinct compilations instead of one per span.
+    """
+    longest = max((len(s) for s in span), default=0)
+    return np.dtype(f"<U{1 << max(0, longest - 1).bit_length()}")
+
+
+def utf8_spans(arrays: dict, n_logical: int, span_rows: int, budget: int):
+    """Yield ``(start, stop)`` row spans to materialize, longest value first.
+
+    Splits the nominal *span_rows* further whenever the widest value in it
+    would push the ``<Un`` buffer past *budget*.  The widths come from the
+    offsets-derived byte lengths, which bound the codepoint count, so no span
+    is read twice to size it.
+    """
+    for start in range(0, n_logical, span_rows):
+        stop = min(start + span_rows, n_logical)
+        widest = max(a._span_max_bytes(start, stop) for a in arrays.values())
+        per_row = 4 * max(1, 1 << max(0, widest - 1).bit_length()) * len(arrays)
+        rows = max(1, min(stop - start, budget // per_row))
+        for a in range(start, stop, rows):
+            yield a, min(a + rows, stop)
+
+
+def utf8_span_eval(
+    expr: str,
+    operands: dict,
+    arrays: dict,
+    sentinels: dict,
+    n_phys: int,
+    *,
+    strict: bool = False,
+    span_rows: int = UTF8_EXPR_SPAN,
+    budget: int = UTF8_EXPR_BUDGET,
+):
+    """Evaluate *expr* in row spans, materializing utf8 operands per span.
+
+    *arrays* maps operand name to :class:`Utf8Array`, *sentinels* maps the same
+    names to each one's null sentinel (or ``None``), and *n_phys* is the length
+    of the result; rows past the utf8 operands' logical length keep the zero
+    value of the result dtype.  A bool or numeric result is a NumPy array; a
+    **string** result is a :class:`Utf8Array`, following the contagion rule --
+    a string-returning expression with a utf8 operand stays variable-width
+    rather than widening every row to miniexpr's compile-time bound.  It is
+    built by extending span by span, so only one span's ``<Un`` block is ever
+    live.
+
+    Nulls are materialized to ``""`` so no string kernel ever sees a sentinel,
+    and nullity is re-applied afterwards: a boolean result is forced ``False``
+    (SQL ``WHERE`` semantics), a string result gets the sentinel back.
+
+    Span operands are handed over as blosc2 arrays rather than NumPy ones: the
+    NumPy route evaluates through ``slices_eval``, which never reaches
+    miniexpr, so the string kernels would be bypassed for correct-looking
+    results.  *strict* (``strict_miniexpr``) is the assertion that pins that
+    down; tests set it, callers leave the numpy fallback in place.
+    """
+    import blosc2
+
+    n_logical = min(len(a) for a in arrays.values())
+    compute_kwargs = {"strict_miniexpr": True} if strict else {}
+    null_value = next((v for v in sentinels.values() if v is not None), None)
+
+    out = None
+    utf8_out = None
+    for start, stop in utf8_spans(arrays, n_logical, span_rows, budget):
+        span = {k: blosc2.asarray(np.asarray(v[start:stop])) for k, v in operands.items()}
+        nulls = None
+        for name, arr in arrays.items():
+            raw = np.asarray(arr[start:stop])
+            nv = sentinels[name]
+            if nv is not None:
+                mask = raw == nv
+                if mask.any():
+                    nulls = mask if nulls is None else (nulls | mask)
+                    raw = np.where(mask, "", raw)
+            span[name] = blosc2.asarray(raw.astype(utf8_span_dtype(raw)))
+        res = np.asarray(blosc2.lazyexpr(expr, span).compute(**compute_kwargs))
+        if nulls is not None:
+            if res.dtype.kind == "b":
+                res = res & ~nulls
+            elif res.dtype.kind == "U":
+                # The sentinel may be wider than the computed values.
+                res = np.where(
+                    nulls,
+                    null_value,
+                    res.astype(f"<U{max(res.dtype.itemsize // 4, len(null_value))}"),
+                )
+        if res.dtype.kind == "U":
+            if utf8_out is None:
+                utf8_out = Utf8Array(blosc2.utf8(null_value=null_value))
+            # tolist() gives plain str, which is Utf8Array.extend's fast path.
+            utf8_out.extend(res.tolist())
+            continue
+        if out is None:
+            out = np.zeros(n_phys, dtype=res.dtype)
+        out[start:stop] = res
+    if utf8_out is not None:
+        # Rows past the utf8 operands' logical length: the string zero value.
+        utf8_out.extend([""] * (n_phys - len(utf8_out)))
+        utf8_out.flush()
+        return utf8_out
+    if out is None:  # no rows at all
+        out = np.zeros(n_phys, dtype=np.bool_)
+    return out
+
+
+class Utf8LazyExpr:
+    """A deferred expression with at least one :class:`Utf8Array` operand.
+
+    ``LazyExpr`` cannot hold one: a variable-width column is not an expression
+    operand, and wrapping it widens every row to a fixed ``<Un`` and drops
+    evaluation into the NumPy ``slices_eval`` path.  This evaluates through
+    :func:`utf8_span_eval` instead, so the span budget applies, miniexpr is
+    actually reached, and a string result comes back as a ``Utf8Array``
+    (the contagion rule) rather than a fixed-width array.
+
+    Only whole-array evaluation is offered — ``compute()``, ``[:]`` — matching
+    the DSL-kernel columns in :class:`~blosc2.CTable`, which materialize for
+    the same reason.  Slicing the *result* works normally.
+    """
+
+    def __init__(self, expression: str, operands: dict, *, ne_args: dict | None = None) -> None:
+        self.expression = expression
+        self.operands = dict(operands)
+        self._ne_args = ne_args
+        self._utf8 = {k: v for k, v in self.operands.items() if isinstance(v, Utf8Array)}
+        if not self._utf8:
+            raise ValueError("Utf8LazyExpr needs at least one Utf8Array operand")
+
+    def __len__(self) -> int:
+        return min(len(v) for v in self._utf8.values())
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return (len(self),)
+
+    def compute(self, item=(), **kwargs):
+        """Evaluate the whole expression.
+
+        Returns a :class:`Utf8Array` for a string result and a NumPy array for
+        a boolean or numeric one.  ``strict_miniexpr=True`` asserts that
+        evaluation really did reach miniexpr rather than a NumPy fallback.
+        """
+        if item not in ((), slice(None), Ellipsis):
+            raise NotImplementedError(
+                "expressions over a bare Utf8Array evaluate whole-array only; "
+                "call compute() and slice the result"
+            )
+        strict = kwargs.pop("strict_miniexpr", False)
+        if kwargs:
+            raise TypeError(f"unexpected keyword arguments: {sorted(kwargs)}")
+        return utf8_span_eval(
+            self.expression,
+            {k: v for k, v in self.operands.items() if k not in self._utf8},
+            self._utf8,
+            {k: v.spec.null_value for k, v in self._utf8.items()},
+            len(self),
+            strict=strict,
+            # Read at call time, not bound as a default, so both are tunable.
+            span_rows=UTF8_EXPR_SPAN,
+            budget=UTF8_EXPR_BUDGET,
+        )
+
+    def __getitem__(self, item):
+        result = self.compute()
+        return result[item]
+
+    def __str__(self) -> str:
+        return self.expression
+
+    def __repr__(self) -> str:
+        return f"Utf8LazyExpr({self.expression!r}, shape={self.shape})"
+
+
 # Fallback for comparisons against anything that is not a scalar str.
 _COMPARE_OPS = {
     "==": operator.eq,

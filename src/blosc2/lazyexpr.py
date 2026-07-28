@@ -5336,6 +5336,23 @@ def lazyexpr(
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
+    if operands is not None and isinstance(expression, str):
+        # A Utf8Array is variable-width, so it cannot be an expression operand.
+        # It only duck-types as one: LazyExpr would wrap it in a SimpleProxy,
+        # which converts it to a fixed-width <Un NumPy array, and evaluation
+        # would land in slices_eval -- correct-looking values down a path that
+        # never reaches miniexpr, ignores the span budget, and loses the utf8
+        # container.  Route it through the span driver instead.
+        from blosc2._utf8_array import Utf8Array, Utf8LazyExpr
+
+        if any(isinstance(v, Utf8Array) for v in operands.values()):
+            if out is not None or where is not None:
+                raise NotImplementedError(
+                    "'out' and 'where' are not supported for expressions over a bare "
+                    "Utf8Array; use a CTable column, which supports both."
+                )
+            return Utf8LazyExpr(expression, operands, ne_args=ne_args)
+
     if isinstance(expression, LazyExpr):
         if operands is not None:
             expression.operands.update(operands)

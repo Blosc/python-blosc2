@@ -541,17 +541,6 @@ class ColumnViewIndexer:
 # ---------------------------------------------------------------------------
 
 
-def _utf8_span_dtype(span: np.ndarray) -> np.dtype:
-    """Fixed-width ``U`` dtype wide enough for every value in *span*.
-
-    The width is span-local and data-dependent, whereas miniexpr bakes output
-    widths in at compile time, so round it up to a power of two: a column then
-    costs a handful of distinct compilations instead of one per span.
-    """
-    longest = max((len(s) for s in span), default=0)
-    return np.dtype(f"<U{1 << max(0, longest - 1).bit_length()}")
-
-
 def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
     """Translate a logical (valid-row) index into a physical array index.
 
@@ -12721,20 +12710,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     _UTF8_EXPR_BUDGET = 64 << 20
 
     def _utf8_spans(self, arrays: dict, n_logical: int):
-        """Yield ``(start, stop)`` row spans to materialize, longest value first.
+        """Row spans to materialize; see :func:`~blosc2._utf8_array.utf8_spans`."""
+        from blosc2._utf8_array import utf8_spans
 
-        Splits the nominal ``_UTF8_EXPR_SPAN`` further whenever the widest
-        value in it would push the ``<Un`` buffer past ``_UTF8_EXPR_BUDGET``.
-        The widths come from the offsets-derived byte lengths, which bound the
-        codepoint count, so no span is read twice to size it.
-        """
-        for start in range(0, n_logical, self._UTF8_EXPR_SPAN):
-            stop = min(start + self._UTF8_EXPR_SPAN, n_logical)
-            widest = max(a._span_max_bytes(start, stop) for a in arrays.values())
-            per_row = 4 * max(1, 1 << max(0, widest - 1).bit_length()) * len(arrays)
-            rows = max(1, min(stop - start, self._UTF8_EXPR_BUDGET // per_row))
-            for a in range(start, stop, rows):
-                yield a, min(a + rows, stop)
+        return utf8_spans(arrays, n_logical, self._UTF8_EXPR_SPAN, self._UTF8_EXPR_BUDGET)
 
     def _utf8_names_in(self, expr: str) -> list[str]:
         """utf8 column names referenced by *expr*, in schema order.
@@ -12834,77 +12813,24 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return self._utf8_span_eval(expr, operands, utf8_names)
 
     def _utf8_span_eval(self, expr: str, operands: dict, utf8_names: list[str], *, strict: bool = False):
-        """Evaluate *expr* in row spans, materializing utf8 operands per span.
+        """Evaluate *expr* over this table's utf8 columns in row spans.
 
-        Returns a result of the table's *physical* length (the coordinate
-        system every other predicate here uses); rows past the utf8 columns'
-        logical length keep the zero value of the result dtype.  A bool or
-        numeric result is a NumPy array; a **string** result is a
-        :class:`Utf8Array`, following the contagion rule -- a string-returning
-        expression with a utf8 operand stays variable-width rather than
-        widening every row to miniexpr's compile-time bound.  It is built by
-        extending span by span, so only one span's ``<Un`` block is ever live.
-
-        Nulls are materialized to ``""`` so no string kernel ever sees a
-        sentinel, and nullity is re-applied afterwards: a boolean result is
-        forced ``False`` (SQL ``WHERE`` semantics, matching
-        :meth:`Column._utf8_compare`), a string result gets the sentinel back.
-
-        Span operands are handed over as blosc2 arrays rather than NumPy ones:
-        the NumPy route evaluates through ``slices_eval``, which never reaches
-        miniexpr, so the string kernels would be bypassed for correct-looking
-        results.  *strict* (``strict_miniexpr``) is the assertion that pins
-        that down; tests set it, callers leave the numpy fallback in place.
+        Thin wrapper over :func:`~blosc2._utf8_array.utf8_span_eval`; the result
+        uses the table's *physical* length, the coordinate system every other
+        predicate here works in.
         """
-        arrays = {name: self._cols[name] for name in utf8_names}
-        sentinels = {name: self[name].null_value for name in utf8_names}
-        n_logical = min(len(a) for a in arrays.values())
-        n_phys = len(self._valid_rows)
-        compute_kwargs = {"strict_miniexpr": True} if strict else {}
-        null_value = next((v for v in sentinels.values() if v is not None), None)
+        from blosc2._utf8_array import utf8_span_eval
 
-        out = None
-        utf8_out = None
-        for start, stop in self._utf8_spans(arrays, n_logical):
-            span = {k: blosc2.asarray(np.asarray(v[start:stop])) for k, v in operands.items()}
-            nulls = None
-            for name, arr in arrays.items():
-                raw = np.asarray(arr[start:stop])
-                nv = sentinels[name]
-                if nv is not None:
-                    mask = raw == nv
-                    if mask.any():
-                        nulls = mask if nulls is None else (nulls | mask)
-                        raw = np.where(mask, "", raw)
-                span[name] = blosc2.asarray(raw.astype(_utf8_span_dtype(raw)))
-            res = np.asarray(blosc2.lazyexpr(expr, span).compute(**compute_kwargs))
-            if nulls is not None:
-                if res.dtype.kind == "b":
-                    res = res & ~nulls
-                elif res.dtype.kind == "U":
-                    # The sentinel may be wider than the computed values.
-                    res = np.where(
-                        nulls,
-                        null_value,
-                        res.astype(f"<U{max(res.dtype.itemsize // 4, len(null_value))}"),
-                    )
-            if res.dtype.kind == "U":
-                if utf8_out is None:
-                    utf8_out = blosc2.Utf8Array(blosc2.utf8(null_value=null_value))
-                # tolist() gives plain str, which is Utf8Array.extend's fast path.
-                utf8_out.extend(res.tolist())
-                continue
-            if out is None:
-                out = np.zeros(n_phys, dtype=res.dtype)
-            out[start:stop] = res
-        if utf8_out is not None:
-            # Rows past the utf8 columns' logical length: the string zero value.
-            utf8_out.extend([""] * (n_phys - len(utf8_out)))
-            utf8_out.flush()
-            return utf8_out
-        if out is None:  # empty table
-            out = np.zeros(n_phys, dtype=np.bool_)
-        return out
+        return utf8_span_eval(
+            expr,
+            operands,
+            {name: self._cols[name] for name in utf8_names},
+            {name: self[name].null_value for name in utf8_names},
+            len(self._valid_rows),
+            strict=strict,
+            span_rows=self._UTF8_EXPR_SPAN,
+            budget=self._UTF8_EXPR_BUDGET,
+        )
 
     def _is_nullable_column(self, name: str) -> bool:
         col = self[name]
