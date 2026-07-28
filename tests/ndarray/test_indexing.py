@@ -265,7 +265,10 @@ def test_random_field_index_matches_scan(kind):
     arr.create_index(field="id", kind=_public_kind(kind))
 
     expr = blosc2.lazyexpr("(id >= 70_000) & (id < 71_200)", arr.fields).where(arr)
-    assert expr.will_use_index() is True
+    # A shuffled column spreads the matches over every block, so a bucket mask
+    # prunes nothing worth reading and the planner declines it in favour of the
+    # scan.  partial and full produce exact positions and are unaffected.
+    assert expr.will_use_index() is (kind != "bucket")
 
     indexed = expr.compute()[:]
     scanned = expr.compute(_use_index=False)[:]
@@ -354,11 +357,11 @@ def test_numeric_unsupported_dtype_fallback_matches_scan():
 
 
 def test_bucket_lossy_integer_values_match_scan():
-    rng = np.random.default_rng(2)
     dtype = np.dtype([("id", np.int64), ("payload", np.float32)])
     data = np.zeros(180_000, dtype=dtype)
+    # Ordered, so the matches sit in few blocks and the bucket evaluator — the
+    # thing under test — is actually reached rather than declined for a scan.
     data["id"] = np.arange(-90_000, 90_000, dtype=np.int64)
-    rng.shuffle(data["id"])
 
     arr = blosc2.asarray(data, chunks=(18_000,), blocks=(3_000,))
     descriptor = arr.create_index(field="id", kind=blosc2.IndexKind.BUCKET, optlevel=0)
@@ -375,11 +378,10 @@ def test_bucket_lossy_integer_values_match_scan():
 
 
 def test_bucket_lossy_float_values_match_scan():
-    rng = np.random.default_rng(3)
     dtype = np.dtype([("x", np.float64), ("payload", np.float32)])
     data = np.zeros(160_000, dtype=dtype)
+    # Ordered for the same reason as the integer case above.
     data["x"] = np.linspace(-5000.0, 5000.0, data.shape[0], dtype=np.float64)
-    rng.shuffle(data["x"])
 
     arr = blosc2.asarray(data, chunks=(16_000,), blocks=(4_000,))
     descriptor = arr.create_index(field="x", kind=blosc2.IndexKind.BUCKET, optlevel=0)
@@ -537,7 +539,10 @@ def test_bucket_threaded_downstream_order_matches_scan(monkeypatch):
     monkeypatch.setattr(indexing, "INDEX_QUERY_MIN_CHUNKS_PER_THREAD", 1)
     monkeypatch.setattr(blosc2, "nthreads", 4)
 
-    expr = blosc2.lazyexpr("(id >= 60_000) & (id < 180_000)", arr.fields).where(arr)
+    # 4 of the 20 chunks: enough to fan out over the thread pool, few enough
+    # blocks that the plan is worth taking.  A 50% span reads over half the
+    # column's blocks, at which point the planner rightly prefers the scan.
+    expr = blosc2.lazyexpr("(id >= 60_000) & (id < 108_000)", arr.fields).where(arr)
     explanation = expr.explain()
 
     assert explanation["will_use_index"] is True
@@ -545,7 +550,7 @@ def test_bucket_threaded_downstream_order_matches_scan(monkeypatch):
 
     indexed = expr.compute()[:]
     scanned = expr.compute(_use_index=False)[:]
-    expected = data[(data["id"] >= 60_000) & (data["id"] < 180_000)]
+    expected = data[(data["id"] >= 60_000) & (data["id"] < 108_000)]
 
     np.testing.assert_array_equal(indexed, scanned)
     np.testing.assert_array_equal(indexed, expected)
@@ -1120,11 +1125,11 @@ def test_in_memory_positional_queries_avoid_whole_loading_index_payloads(monkeyp
 
 @pytest.mark.parametrize("kind", ["bucket", "partial", "full"])
 def test_expression_index_matches_scan(kind):
-    rng = np.random.default_rng(9)
     dtype = np.dtype([("x", np.int64), ("payload", np.int32)])
     data = np.zeros(150_000, dtype=dtype)
+    # Ordered, so abs(x) puts the matches in two short runs rather than across
+    # every block, which is what lets the bucket plan be taken at all.
     data["x"] = np.arange(-75_000, 75_000, dtype=np.int64)
-    rng.shuffle(data["x"])
     data["payload"] = np.arange(data.shape[0], dtype=np.int32)
 
     arr = blosc2.asarray(data, chunks=(15_000,), blocks=(3_000,))
