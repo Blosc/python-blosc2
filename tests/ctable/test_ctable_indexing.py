@@ -1219,3 +1219,79 @@ def test_wide_sidecar_span_read_is_not_short():
     out = np.empty(100, dtype=dtype)
     arr.get_1d_span_numpy(out, 1, 5, 100)
     assert out.tolist() == values[128 + 5 : 128 + 105].tolist()
+
+
+def test_coalesce_spans_merges_within_a_block():
+    """Spans closer than one block must merge: reading them apart re-reads the block."""
+    coalesce = blosc2.indexing._coalesce_spans
+    spans = [(0, 100), (200, 300), (50_000, 50_100)]
+    assert coalesce(spans, 1024) == [(0, 300), (50_000, 50_100)]
+    assert coalesce(spans, 0) == spans  # unknown block size → leave alone
+    assert coalesce([(0, 10)], 1024) == [(0, 10)]
+    # merged spans stay disjoint and ordered, so gathered positions stay unique
+    merged = coalesce([(0, 100), (10, 400), (401, 402)], 1024)
+    assert merged == [(0, 402)]
+
+
+def test_bucket_block_fraction_counts_blocks_not_buckets():
+    """Selectivity in buckets overstates the saving; the read unit is the block."""
+    frac = blosc2.indexing._bucket_block_fraction
+    geom = {"nav_segment_len": 16384, "bucket_len": 256}  # 64 buckets per block
+
+    scattered = np.zeros((1, 640), dtype=bool)
+    scattered[0, ::64] = True  # 1.6% of buckets, but one in every block
+    assert frac(scattered, geom) == 1.0
+
+    clustered = np.zeros((1, 640), dtype=bool)
+    clustered[0, 0:64] = True  # 10% of buckets, all inside one block
+    assert frac(clustered, geom) == 0.1
+
+    assert frac(np.zeros((1, 640), dtype=bool), geom) == 0.0
+
+
+def test_bucket_plan_gate_matches_block_fraction():
+    """The planner must take a bucket plan only when it prunes actual blocks."""
+    rng = np.random.default_rng(0)
+    n, card = 200_000, 5_000
+    pool = sorted(f"v-{i:05d}" for i in range(card))
+
+    @dataclasses.dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.string(max_length=8))
+        v: float = blosc2.field(blosc2.float64())
+
+    def table(values, kind):
+        t = blosc2.CTable(Row)
+        t.extend({"c": values, "v": rng.random(n)}, validate=False)
+        if kind:
+            t.create_index("c", kind=kind)
+        return t
+
+    query = f"(c >= '{pool[100]}') & (c < '{pool[120]}')"
+    values = [pool[i] for i in rng.integers(0, card, n)]
+
+    seen = []
+    original = blosc2.indexing._plan_single_exact_query
+
+    def capture(exact_plan):
+        plan = original(exact_plan)
+        if plan.bucket_masks is not None:
+            fraction = blosc2.indexing._bucket_block_fraction(
+                plan.bucket_masks, exact_plan.descriptor["bucket"]
+            )
+            seen.append((plan.usable, fraction))
+        return plan
+
+    blosc2.indexing._plan_single_exact_query = capture
+    try:
+        indexed = sorted(table(values, "bucket").where(query)["c"][:].tolist())
+    finally:
+        blosc2.indexing._plan_single_exact_query = original
+
+    assert seen, "no bucket plan was considered"
+    for usable, fraction in seen:
+        gate = blosc2.indexing._BUCKET_MAX_BLOCK_FRACTION
+        assert usable == (fraction <= gate), f"took={usable} at block fraction {fraction}"
+
+    # Whichever way the gate goes, the answer is the same as an unindexed scan.
+    assert indexed == sorted(table(values, None).where(query)["c"][:].tolist())
