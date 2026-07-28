@@ -33,7 +33,7 @@ because two of the conclusions below originally rested on it.
 | `t.apply(dsl_kernel)` / `lazyudf` | ✓ | ✓ | **✗ ValueError** ¹ | ✗ | ✗ RuntimeError |
 | nested (dotted) leaf in expr | ✓ | ✓ | ✗ NotImpl | ✗ | ✗ |
 | **Bare container (no CTable)** | | | | | |
-| `lazyexpr(expr, {a: col})` | ✓ NDArray | ✓ | ⚠ returns `<Un`, numpy fallback ² | ⚠ | ⚠ |
+| `lazyexpr(expr, {a: col})` | ✓ NDArray | ✓ | ✓ span driver, returns `Utf8Array` ² | ⚠ | ⚠ |
 | `col == "scalar"` | ✓ LazyExpr | ✓ LazyExpr | ✓ bool mask ³ | ⚠ `False` | ⚠ `False` |
 | **Interop** | | | | | |
 | `to_arrow` | `string` | `large_binary` | `large_string` | `dictionary<…>` | `string` / `large_binary` |
@@ -43,8 +43,10 @@ because two of the conclusions below originally rested on it.
 ¹ `ValueError: malformed node or string … StringDType()` — `lazyudf` tries to allocate an NDArray
 output with `dtype=StringDType()`, which `NDArray.dtype`'s `ast.literal_eval` round-trip cannot
 parse (`blosc2_ext.pyx:3818`).
-² Correct values down the wrong path: it never reaches miniexpr, ignores `_UTF8_EXPR_BUDGET`, and
-loses the utf8 container.
+² Fixed in `0b486b07` — was correct values down the wrong path: a `SimpleProxy` widened the column
+to a fixed `<Un` and evaluation fell into `slices_eval`, never reaching miniexpr, ignoring
+`_UTF8_EXPR_BUDGET` and losing the utf8 container. The span driver now lives at module level and
+`lazyexpr()` routes utf8 operands to it. Whole-array evaluation only.
 ³ Fixed in `3692673f` — was a plain `False` (object identity, silently wrong) because `Utf8Array`
 defined no comparison operators. All six now return a boolean mask, answering a scalar `str` with
 the existing raw-byte scanners so no row is decoded. `dictionary` and `vlstring` are still
@@ -253,7 +255,7 @@ So the choice is not "parity vs. conversion" — it is **which rule do we publis
 
 | | full compute parity (`utf8-string-support.md`) | storage+query utf8, compute on `<U` |
 |---|---|---|
-| effort | ~1 week (G2+G3+G5), ~2 with G4 | ~1–2 days |
+| effort | ~1 week (G2+G3+G5); G4 is now done | ~1–2 days |
 | rule the user learns | "everything works everywhere" | "utf8 stores and filters; convert to compute" |
 | perf honesty | hides a 3–5× penalty behind an identical API | the `.astype()` is visible, so the cost is |
 | persistence risk | G2 must serialize `StringDType` — get it wrong and the **table won't reopen** | none; no new dtype is persisted |
@@ -269,10 +271,9 @@ utf8 without an index, and the parity plan spends a week doing so. Given that th
 is already proven in-tree for dictionary and costs about as much as G2 alone, the priority order
 inverts:
 
-1. ~~**Fix what is wrong, not merely absent** — `Utf8Array.__eq__` returning `False`~~ — **done**,
-   `3692673f`; `==`, `!=`, `<`, `<=`, `>`, `>=` all return boolean masks now. The bare-array
-   `lazyexpr` numpy fallback (G4) is the remaining silent-wrong result and still worth fixing
-   whichever rule is chosen.
+1. ~~**Fix what is wrong, not merely absent**~~ — **done**. `Utf8Array` comparisons (`3692673f`)
+   and the bare-array `lazyexpr` fallback (G4, `0b486b07`). Both were silent-wrong results, and
+   neither depended on which rule is chosen below. **No known silently-wrong utf8 path remains.**
 2. **Publish the conversion pair.** `Utf8Array.astype("<U")` / `blosc2.from_utf8()` and `.to_utf8()`,
    plus `add_column(..., values=)` so the result can land back in the table without a private call.
    ~1–2 days, and it closes the whole compute asymmetry by declaring a rule instead of chasing it.
