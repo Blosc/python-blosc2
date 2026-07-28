@@ -33,6 +33,7 @@ which support vectorized comparison, ordering, and ``np.strings`` functions.
 from __future__ import annotations
 
 import itertools
+import operator
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -64,6 +65,16 @@ _GATHER_GAP = 1024
 # Multiplier for the byte-hash in factorize_span (same mixer as
 # groupby._factorize_fixed_width_str).
 _HASH_MIX = np.uint64(0x9E3779B97F4A7C15)
+
+# Fallback for comparisons against anything that is not a scalar str.
+_COMPARE_OPS = {
+    "==": operator.eq,
+    "!=": operator.ne,
+    "<": operator.lt,
+    "<=": operator.le,
+    ">": operator.gt,
+    ">=": operator.ge,
+}
 
 
 def _factorize_byte_rows(mat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -501,6 +512,58 @@ class Utf8Array:
                 np.asarray(self._offsets[index + 1 : n + 1], dtype=np.int64) + delta
             )
             self._bytes_used_cache = new_used
+
+    # ------------------------------------------------------------------
+    # Comparisons
+    # ------------------------------------------------------------------
+
+    def _compare(self, other: Any, op: str) -> np.ndarray:
+        """Element-wise comparison, returning a boolean mask.
+
+        A scalar ``str`` is answered by the raw-byte scanners, which never
+        decode a row.  Anything else (a list, an ndarray, another
+        :class:`Utf8Array`) is materialized and handed to NumPy.
+        """
+        if isinstance(other, str):
+            n = len(self)
+            if op in ("==", "!="):
+                mask = self.equal_mask_span(other, 0, n)
+                return ~mask if op == "!=" else mask
+            lt, gt = self.order_masks_span(other, 0, n)
+            return {"<": lt, ">": gt, "<=": ~gt, ">=": ~lt}[op]
+        right = other[:] if isinstance(other, Utf8Array) else other
+        return _COMPARE_OPS[op](np.asarray(self[:]), right)
+
+    # Identity hashing is kept: these objects were hashable before __eq__ was
+    # defined, and an element-wise __eq__ never returns a bool for the hash
+    # contract to apply to.
+    __hash__ = object.__hash__
+
+    def __eq__(self, other: Any, /):
+        import blosc2
+
+        if blosc2._disable_overloaded_equal:
+            return self is other
+        return self._compare(other, "==")
+
+    def __ne__(self, other: Any, /):
+        import blosc2
+
+        if blosc2._disable_overloaded_equal:
+            return self is not other
+        return self._compare(other, "!=")
+
+    def __lt__(self, other: Any, /):
+        return self._compare(other, "<")
+
+    def __le__(self, other: Any, /):
+        return self._compare(other, "<=")
+
+    def __gt__(self, other: Any, /):
+        return self._compare(other, ">")
+
+    def __ge__(self, other: Any, /):
+        return self._compare(other, ">=")
 
     # ------------------------------------------------------------------
     # Properties mirroring the interface expected by CTable

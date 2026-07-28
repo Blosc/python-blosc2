@@ -1570,3 +1570,49 @@ def test_ctable_utf8_scalar_predicate_on_view_and_after_delete():
 def test_ctable_utf8_two_scalar_predicates_on_the_same_column():
     t = make_table(["a", "b", "c", "d"])
     assert list(t.where("(name > 'a') & (name < 'd')")["name"][:]) == ["b", "c"]
+
+
+@pytest.mark.parametrize("op", ["==", "!=", "<", "<=", ">", ">="])
+def test_utf8_array_comparisons_match_numpy(op):
+    """Comparisons must be element-wise, not object identity.
+
+    Without ``__eq__`` these fell through to identity, so ``arr == "hello"``
+    was a plain ``False`` — silently wrong rather than an error.
+    """
+    import operator
+
+    values = ["hello", "world", "héllo", "abc", "", "hello"]
+    arr = blosc2.utf8_array(values)
+    ref = np.array(values, dtype=arr.dtype)
+    fn = getattr(operator, {"==": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge"}[op])
+
+    for probe in ("hello", "héllo", "", "zzz"):
+        got = fn(arr, probe)
+        assert isinstance(got, np.ndarray)
+        assert got.dtype == np.bool_
+        np.testing.assert_array_equal(got, fn(ref, probe))
+
+
+def test_utf8_array_comparison_against_array_likes():
+    values = ["a", "bb", "ccc"]
+    arr = blosc2.utf8_array(values)
+    ref = np.array(values, dtype=arr.dtype)
+
+    np.testing.assert_array_equal(arr == values, np.ones(3, dtype=bool))
+    np.testing.assert_array_equal(arr == ref, np.ones(3, dtype=bool))
+    np.testing.assert_array_equal(arr == blosc2.utf8_array(values), np.ones(3, dtype=bool))
+    np.testing.assert_array_equal(arr != blosc2.utf8_array(["a", "x", "ccc"]), [False, True, False])
+
+
+def test_utf8_array_comparison_edge_cases():
+    # Unflushed pending rows take part in the comparison.
+    arr = blosc2.utf8_array(["a"])
+    arr.append("b")
+    np.testing.assert_array_equal(arr == "b", [False, True])
+
+    # Empty array yields an empty mask rather than raising.
+    empty = blosc2.utf8_array([])
+    assert (empty == "x").shape == (0,)
+
+    # Defining __eq__ must not have made the container unhashable.
+    assert isinstance(hash(arr), int)
