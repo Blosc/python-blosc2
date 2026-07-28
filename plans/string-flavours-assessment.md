@@ -33,8 +33,8 @@ because two of the conclusions below originally rested on it.
 | `t.apply(dsl_kernel)` / `lazyudf` | ✓ | ✓ | **✗ ValueError** ¹ | ✗ | ✗ RuntimeError |
 | nested (dotted) leaf in expr | ✓ | ✓ | ✗ NotImpl | ✗ | ✗ |
 | **Bare container (no CTable)** | | | | | |
-| `lazyexpr(expr, {a: col})` | ✓ NDArray | ✓ | ✓ span driver, returns `Utf8Array` ² | ⚠ | ⚠ |
-| `col == "scalar"` | ✓ LazyExpr | ✓ LazyExpr | ✓ bool mask ³ | ⚠ `False` | ⚠ `False` |
+| `lazyexpr(expr, {a: col})` | ✓ NDArray | ✓ | ✓ span driver, returns `Utf8Array` ² | ⚠ padded ⁶ | ⚠ numpy |
+| `col == "scalar"` | ✓ LazyExpr | ✓ LazyExpr | ✓ bool mask ³ | ✓ bool mask ³ | ✓ bool mask ³ |
 | **Interop** | | | | | |
 | `to_arrow` | `string` | `large_binary` | `large_string` | `dictionary<…>` | `string` / `large_binary` |
 | save + reopen | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -47,10 +47,12 @@ parse (`blosc2_ext.pyx:3818`).
 to a fixed `<Un` and evaluation fell into `slices_eval`, never reaching miniexpr, ignoring
 `_UTF8_EXPR_BUDGET` and losing the utf8 container. The span driver now lives at module level and
 `lazyexpr()` routes utf8 operands to it. Whole-array evaluation only.
-³ Fixed in `3692673f` — was a plain `False` (object identity, silently wrong) because `Utf8Array`
-defined no comparison operators. All six now return a boolean mask, answering a scalar `str` with
-the existing raw-byte scanners so no row is decoded. `dictionary` and `vlstring` are still
-identity-compared.
+³ Fixed in `3692673f` (utf8) and `486be882` (dictionary, vlstring) — each was a plain `False`,
+object identity, silently wrong, because none of the three defined comparison operators. `Utf8Array`
+answers a scalar `str` with its existing raw-byte scanners (all six operators, no row decoded);
+`DictionaryColumn` compares codes, so also no decode; `_ScalarVarLenArray` decodes and delegates to
+NumPy. The bug survived because `CTable` answers `==` through its own predicate path and never asks
+the container.
 
 ### Measured cost — 200 k rows of free text, max 37 chars
 
@@ -294,3 +296,9 @@ Found while measuring, unrelated to the utf8 decision:
 - ~~`kind=BUCKET` is a pessimization~~ — **fixed**, `92c39aa6`. Affected every indexable dtype.
 - Still open: the doc table's plain ✓ for `create_index` on `dictionary` should read "ordering
   only", and `_build_lex_keys` could sort dictionary ranks instead of decoded strings (~4×).
+
+⁶ `blosc2.lazyexpr` over a bare `DictionaryColumn` returns the **capacity-padded** slot array —
+1 048 576 rows for a 3-row table. Not a container bug: `DictionaryColumn.__len__` is documented as
+the physical slot capacity and `CTable` indexes it with live positions. It only misleads because
+these are internal classes reachable through `t._cols`, never a public route. Left alone
+deliberately: changing the length semantics would touch every table-layer caller.
