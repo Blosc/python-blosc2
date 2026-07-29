@@ -23,6 +23,7 @@ because two of the conclusions below originally rested on it.
 | `where("c == 'v'")` | ✓ | ✓ | ✓ | ✓ | ✗ NotImpl |
 | `where("startswith(c,…)")` | ✓ | ✓ | ✓ | ✗ *Unknown symbol* | ✗ NotImpl |
 | `where("upper(c) == …")` | ✓ | ✓ | ✓ | ✗ *Unknown symbol* | ✗ NotImpl |
+| nested (dotted) leaf in predicate | ✓ | ✓ | ✓ ¹² | ✓ | ✗ |
 | `sum(where=…)` | ✓ | ✓ | ✓ | ✗ | ✗ |
 | `sort_by` | ✓ | ✓ | ✓ | ✓ | ✗ TypeError |
 | `group_by` | ✓ | ✓ | ✓ | ✓ | ✗ |
@@ -31,7 +32,6 @@ because two of the conclusions below originally rested on it.
 | `add_computed_column("'x='+c")` | ✓ | ✓ | ✗ NotImpl, routes ¹⁰ | ✗ | ✗ |
 | `assign(new=…)` | ✓ | ✓ | ✗ NotImpl, routes ¹⁰ | ✗ | ✗ |
 | `t.apply(dsl_kernel)` / `lazyudf` | ✓ | ✓ | ✗ NotImpl, routes ¹ ¹⁰ | ✗ | ✗ RuntimeError |
-| nested (dotted) leaf in expr | ✓ | ✓ | ✗ NotImpl | ✗ | ✗ |
 | **Bare container (no CTable)** | | | | | |
 | `lazyexpr(expr, {a: col})` | ✓ NDArray | ✓ | ✓ span driver, returns `UTF8Array` ² | ⚠ padded ⁶ | ⚠ numpy |
 | `col == "scalar"` | ✓ LazyExpr | ✓ LazyExpr | ✓ bool mask ³ | ✓ bool mask ³ | ✓ bool mask ³ |
@@ -313,8 +313,11 @@ never rested on these two rows, which is exactly the point the next paragraph ma
    made a literal→rank lookup one `searchsorted`, so `==` went 29.00 → 5.49 ms and `<` 34.57 →
    5.45 ms. It was inherited from the "ordering only" misreading corrected two sections above.
 4. ~~**Make the error messages route.**~~ — **done**, `8e3868ba`. See ¹⁰.
-5. **Drop G2/G3/G5**, or park them behind a concrete user request. G2 in particular buys a
+5. ~~**Drop G2/G3/G5**, or park them behind a concrete user request.~~ — **decided**. G2, G3 and
+   G4 are withdrawn and recorded as such at the top of `utf8-string-support.md`; they buy a
    `StringDType`-in-schema serialization hazard for a surface the conversion pair already covers.
+   **G5 was pulled out of that group and shipped**, because it turned out not to be a compute gap
+   at all — see ¹².
 
 Found while measuring, unrelated to the utf8 decision:
 
@@ -328,6 +331,7 @@ Found while measuring, unrelated to the utf8 decision:
   bugs, both affecting *every* indexable dtype, neither utf8-specific.
 - ~~`create_index` accepts any of the five kinds on a rank-indexed column and silently builds one
   that is never consulted~~ — **fixed**, see §⁹.
+- ~~Nested (dotted) utf8 leaves cannot be filtered~~ — **fixed**, see ¹².
 - Still open: `_build_lex_keys` could sort dictionary ranks instead of decoded strings (~4×), and
   the `where("c == 'x'")` string form still bypasses the index for both flavours.
 
@@ -660,3 +664,50 @@ reminder that `hasattr` probes for capability make silent contracts out of missi
 Deliberately not done: making `UTF8Spec.dtype` return `StringDType()`. It would have to stay lazy
 for NumPy 1.26, `dtype is None` is load-bearing at three sites, and `Column.dtype` already reports
 `StringDType()` — so the win is cosmetic.
+
+---
+
+## ¹² Nested (dotted) utf8 leaves, and the G2/G3/G4 decision
+
+Item 5 was supposed to be a decision, not work. Probing it turned up one thing that had to ship
+first.
+
+**The matrix filed nested leaves under *Compute*, which read as "another casualty of the same
+decision".** It was not. A dotted utf8 leaf could not be *filtered* either:
+
+| | `where('trip.name == "x"')` |
+|---|---|
+| `string()` / `bytes()` nested leaf | ✓ (and `startswith`, and computed columns) |
+| `dictionary()` nested leaf | ✓ |
+| `utf8()` nested leaf | ✗ `NotImplementedError` |
+
+utf8 was the only flavour where a dotted name could not be queried at all — a hole in the very rule
+the other gaps were being withdrawn in favour of. So G5 shipped and G2/G3/G4 did not.
+
+**The cause was not the one `utf8-string-support.md` §G5 recorded.** That section blamed
+`_rewrite_nested_expression` aliasing the name away before the driver could find it, and prescribed
+carrying the alias map through. Carrying it through changes nothing: that rewrite only touches names
+present in `operands`, and utf8 columns are *excluded* from the operand namespace — a
+variable-length column cannot be an expression operand, which is the premise the whole span driver
+exists to work around. So the dotted name never reached the rewrite and arrived at
+`blosc2.lazyexpr` still spelled with dots, where it is not a parseable identifier.
+
+The fix aliases dotted utf8 names in `_lazyexpr_over_cols` itself, sharing one `_alias_dotted`
+helper with the nested rewrite. `_rewrite_utf8_predicates` and `_utf8_span_eval` take the
+`alias -> column` map, since they must still reach storage and the null sentinel by column name
+while matching the alias in the expression. Both the raw-byte scalar-mask route and the span driver
+are covered, including a leaf whose name is a prefix of another (`trip.who` under `trip.begin.who` —
+longest-first ordering, same as the nested rewrite).
+
+**And the decision itself: G2, G3 and G4 are withdrawn**, recorded at the top of
+`utf8-string-support.md` rather than here, so the plan cannot be picked up later without meeting the
+verdict first. The short form: they would deliver an API indistinguishable from `<U` that runs 3–5×
+slower, in exchange for a `StringDType`-in-schema round trip whose failure mode is a table that will
+not reopen. G4's two genuinely-wrong behaviours were already fixed on their own merits (`3692673f`,
+`0b486b07`); what remains of it is a lift with no asked-for caller.
+
+A methodology note, the third in this document: the first attempt at the G5 fix implemented §G5 as
+written — alias map threaded through `_rewrite_nested_expression`, three call sites updated — and
+`==` started passing, which looked like success. It was not: the mask rewrite had simply removed the
+dotted name from the expression entirely, and `startswith` still failed. A plan's diagnosis is worth
+re-deriving before its prescription is implemented, and one passing case is not a route check.
