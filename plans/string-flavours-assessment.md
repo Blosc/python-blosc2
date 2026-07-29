@@ -26,7 +26,7 @@ because two of the conclusions below originally rested on it.
 | `sum(where=…)` | ✓ | ✓ | ✓ | ✗ | ✗ |
 | `sort_by` | ✓ | ✓ | ✓ | ✓ | ✗ TypeError |
 | `group_by` | ✓ | ✓ | ✓ | ✓ | ✗ |
-| `create_index` | ✓ all 5 kinds | ✓ all 5 kinds | ✓ rank, ordering + predicates ⁷ | ✓ rank, ordering only | ✗ |
+| `create_index` | ✓ all 5 kinds | ✓ all 5 kinds | ✓ rank, ordering + predicates ⁷ | ✓ rank, ordering + `==`/`!=` ⁷ | ✗ |
 | **Compute (string-returning)** | | | | | |
 | `add_computed_column("'x='+c")` | ✓ | ✓ | **✗ NotImpl** | ✗ | ✗ |
 | `assign(new=…)` | ✓ | ✓ | **✗ NotImpl** | ✗ | ✗ |
@@ -351,9 +351,25 @@ returns `None` to fall back to the scan whenever the index cannot answer. Note t
 `where()` gain is smaller than these numbers — materializing the result rows out of the
 offsets/blob dominates once the mask is cheap.
 
-`plan_query` is still never consulted for a utf8 or dictionary predicate; this route bypasses it
-rather than fixing that. **Dictionary still has no predicate acceleration** — it has the vocabulary
-(its own dictionary) but nothing wires it to its rank index.
+**Dictionary followed in `1c22fdf5`**, minus the persistence — a dictionary already holds its
+vocabulary in memory. The operator form `t[t.c == v]` goes **329.6 ms → 8.4 ms**.
+
+Two things surfaced while wiring it, both worth more than the feature:
+
+- **The staleness check cost more than the scan it saved.** `_dict_rank_index_stale` SHA1s the whole
+  dictionary — 24 ms for 20 k entries — on *every* query, including the ordering path that already
+  used the index. It now settles from the value epoch first, which also drops dictionary
+  `sorted_slice` from 51.3 ms to 37.7 ms. Wiring the index made queries *slower* until this was found.
+- **`col != value` raised `IndexError`** on any table with capacity padding: `__ne__` negated the
+  result of `_dictionary_eq`, which had already been intersected with the live-row mask, so
+  `~(pred & valid)` turned every dead slot True. Pre-existing and unrelated to indexing; found by
+  fuzzing indexed against unindexed results.
+
+**The `where("c == 'x'")` string form is deliberately left alone** for both flavours. Rewriting to a
+code comparison keeps it a single fused numeric expression; substituting a precomputed mask measured
+*slower* (22.9 ms → 28.7 ms) even though the mask costs 4.8 ms. `plan_query` is still never consulted
+for a utf8 or dictionary predicate — both routes bypass it rather than fix it, and accelerating the
+string form needs the planner to consume index *positions* rather than a mask.
 
 **Also found here:** NumPy 2.4 does not match a lone `"\x00"` against a `StringDType` array
 (`np.array(["\x00"], dtype=StringDType()) == "\x00"` is `False`), while `"\x00x"` and `"a\x00b"`
