@@ -64,7 +64,7 @@ def test_eq_sentinel_literal_does_not_match_null():
     assert t[t.score == NULL_I64]["id"][:].tolist() == []
 
 
-def test_ne_sentinel_literal_does_not_match_null_either():
+def test_ne_sentinel_literal_no_null_match():
     t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0)])
     # A null never satisfies `!=` either — it isn't "not equal", it's unknown.
     assert t[t.score != NULL_I64]["id"][:].tolist() == [1]
@@ -75,7 +75,7 @@ def test_is_null_still_finds_nulls():
     assert list(t.score.is_null()) == [False, True]
 
 
-def test_comparison_between_two_nullable_columns_excludes_either_null():
+def test_two_nullable_cols_exclude_either_null():
     t = CTable(
         IntRow,
         new_data=[
@@ -94,7 +94,7 @@ def test_ge_le_also_exclude_nulls():
     assert t[t.score <= -20]["id"][:].tolist() == [3]
 
 
-def test_comparison_against_nan_scalar_does_not_crash_and_matches_nothing():
+def test_nan_scalar_comparison_matches_nothing():
     """Regression: ``t.f == np.nan`` used to crash with NameError inside the
     lazyexpr evaluator (the scalar was embedded as the bare literal ``nan``).
     Now it evaluates -- and matches nothing, since a null satisfies no
@@ -236,7 +236,7 @@ def test_reduction_on_derived_expression_skips_nulls():
     assert (t.score + 1).std() == pytest.approx(15.0)
 
 
-def test_reduction_on_chained_and_mixed_expressions_skips_nulls():
+def test_chained_expr_reduction_skips_nulls():
     t = CTable(IntRow, new_data=[(1, 10, 5), (2, NULL_I64, 5), (3, -20, NULL_I64)])
     assert ((t.score + 1) * 2).sum() == pytest.approx(2 * (11 - 19))
     # nullable + nullable: null wherever either operand is null -> only row 1 live
@@ -248,7 +248,7 @@ def test_reduction_on_chained_and_mixed_expressions_skips_nulls():
     assert (t.score**0).sum() == pytest.approx(2.0)  # nan**0 must not resurrect the null
 
 
-def test_reduction_on_derived_expression_matches_pandas():
+def test_derived_expr_reduction_vs_pandas():
     pd = pytest.importorskip("pandas")
     t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0), (3, -20, 0), (4, 7, 0)])
     s = pd.Series([10, None, -20, 7], dtype="Int64")
@@ -256,7 +256,7 @@ def test_reduction_on_derived_expression_matches_pandas():
     assert (t.score + 1).mean() == pytest.approx(float((s + 1).mean()))
 
 
-def test_derived_expression_reductions_respect_deleted_rows_and_views():
+def test_derived_expr_respects_deletes_and_views():
     t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0), (3, -20, 0), (4, 7, 0)])
     t.delete([0])  # drop score=10
     assert (t.score + 1).sum() == pytest.approx(-19 + 8)
@@ -264,7 +264,7 @@ def test_derived_expression_reductions_respect_deleted_rows_and_views():
     assert (view.score + 1).sum() == pytest.approx(8.0)
 
 
-def test_derived_expression_all_null_reduction_semantics():
+def test_derived_expr_all_null_reduction():
     t = CTable(IntRow, new_data=[(1, NULL_I64, 0), (2, NULL_I64, 0)])
     assert (t.score + 1).sum() == 0.0  # same convention as Column.sum()
     assert math.isnan((t.score + 1).mean())
@@ -274,7 +274,7 @@ def test_derived_expression_all_null_reduction_semantics():
         (t.score + 1).max()
 
 
-def test_derived_expression_ne_comparison_excludes_nulls():
+def test_derived_expr_ne_excludes_nulls():
     t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0), (3, -20, 0)])
     assert t[(t.score + 1) != 11]["id"][:].tolist() == [3]
     assert t[(t.score + 1) > 0]["id"][:].tolist() == [1]

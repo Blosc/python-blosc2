@@ -165,7 +165,7 @@ def test_fixed_shape_ndarray_column_roundtrip(tmp_path):
     assert np.array_equal(reopened.matrix[:], data)
 
 
-def test_fixed_shape_ndarray_column_rejects_wrong_shape():
+def test_fixed_shape_ndarray_rejects_wrong_shape():
     @dataclass
     class ArrayRow:
         matrix: np.ndarray = blosc2.field(blosc2.ndarray((2, 3), dtype=np.float64))  # noqa: RUF009

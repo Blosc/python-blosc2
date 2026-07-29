@@ -50,7 +50,7 @@ def test_listarray_append_extend_and_replace(storage, tmp_path):
     assert restored[:] == reopened[:]
 
 
-def test_listarray_batch_pending_rows_visible_before_flush():
+def test_listarray_pending_rows_visible():
     arr = blosc2.ListArray(item_spec=blosc2.int32(), storage="batch", batch_rows=4)
     arr.append([1, 2])
     arr.append([])
@@ -86,7 +86,7 @@ def test_listarray_arrow_roundtrip():
     assert arr.to_arrow().to_pylist() == [["a"], None, ["b", "c"]]
 
 
-def test_listarray_extend_validate_false_preserves_none():
+def test_listarray_extend_no_validate_keeps_none():
     arr = blosc2.ListArray(item_spec=blosc2.int32(), nullable=True, storage="batch", batch_rows=2)
     arr.extend([[1], None, [2, 3]], validate=False)
     assert arr[:] == [[1], None, [2, 3]]
@@ -139,7 +139,7 @@ def test_listarray_copy_fast_path_empty():
     assert dst[:] == []
 
 
-def test_listarray_copy_cparams_override_uses_slow_path():
+def test_listarray_copy_cparams_slow_path():
     # Supplying cparams must bypass chunk_copy and still produce correct data.
     src = _make_batch_array()
     dst = src.copy(cparams={"codec": blosc2.Codec.LZ4, "clevel": 1})

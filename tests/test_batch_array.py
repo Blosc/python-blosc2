@@ -143,7 +143,7 @@ def test_batcharray_arrow_ipc_roundtrip():
     blosc2.remove_urlpath(urlpath)
 
 
-def test_batcharray_inferred_layout_preserves_user_vlmeta():
+def test_batcharray_layout_keeps_user_vlmeta():
     barray = blosc2.BatchArray()
     barray.vlmeta["user"] = {"x": 1}
 
@@ -152,7 +152,7 @@ def test_batcharray_inferred_layout_preserves_user_vlmeta():
     assert barray.vlmeta["user"] == {"x": 1}
 
 
-def test_batcharray_arrow_layout_persistence_preserves_user_vlmeta():
+def test_batcharray_arrow_layout_keeps_vlmeta():
     pa = pytest.importorskip("pyarrow")
 
     barray = blosc2.BatchArray(serializer="arrow")
@@ -232,7 +232,7 @@ def test_batcharray_info_uses_persisted_batch_lengths():
     assert "items per batch: mean=" in items["nbatches"]
 
 
-def test_batcharray_info_reports_exact_block_stats_from_lazy_chunks():
+def test_batcharray_info_block_stats_from_lazy():
     barray = blosc2.BatchArray(items_per_block=2)
     barray.extend([[1, 2, 3, 4, 5], [6, 7], [8]])
 
@@ -240,7 +240,7 @@ def test_batcharray_info_reports_exact_block_stats_from_lazy_chunks():
     assert items["nblocks"] == "5 (items per block: mean=1.60, max=2, min=1)"
 
 
-def test_batcharray_pop_keeps_batch_lengths_metadata_in_sync():
+def test_batcharray_pop_keeps_lengths_in_sync():
     barray = blosc2.BatchArray(items_per_block=2)
     barray.extend([[1, 2, 3], [4, 5], [6]])
 
@@ -253,7 +253,7 @@ def test_batcharray_pop_keeps_batch_lengths_metadata_in_sync():
     assert items["nbatches"].startswith("2 (items per batch: mean=2.00")
 
 
-def test_batcharray_clear_keeps_empty_store_vlmeta_readable():
+def test_batcharray_clear_keeps_vlmeta_ok():
     urlpath = "test_batcharray_clear_empty_vlmeta.b2b"
     blosc2.remove_urlpath(urlpath)
 
@@ -269,7 +269,7 @@ def test_batcharray_clear_keeps_empty_store_vlmeta_readable():
     blosc2.remove_urlpath(urlpath)
 
 
-def test_batcharray_delete_last_keeps_empty_store_vlmeta_readable():
+def test_batcharray_delete_last_keeps_vlmeta():
     urlpath = "test_batcharray_delete_last_empty_vlmeta.b2b"
     blosc2.remove_urlpath(urlpath)
 
@@ -360,7 +360,7 @@ def test_batcharray_iter_items():
     assert list(barray.iter_items()) == [1, 2, 3, 4, 5, 6]
 
 
-def test_batcharray_respects_explicit_use_dict_and_non_zstd():
+def test_batcharray_use_dict_and_non_zstd():
     barray = blosc2.BatchArray(cparams={"codec": blosc2.Codec.LZ4, "clevel": 5})
     assert barray.cparams.codec == blosc2.Codec.LZ4
     assert barray.cparams.use_dict is False
@@ -380,36 +380,26 @@ def test_batcharray_respects_explicit_use_dict_and_non_zstd():
     assert barray.cparams.use_dict is False
 
 
-def test_batcharray_guess_items_per_block_uses_1mib_budget_for_low_clevel(monkeypatch):
-    # Budgets are fixed; detected cache sizes must not influence the layout.
+@pytest.mark.parametrize(
+    ("clevel", "payloads", "expected"),
+    [
+        # 1 MiB budget: three 300 KiB payloads fit, a fourth would exceed it
+        (3, [300 * 1024] * 4, 3),
+        # 8 MiB budget: a single 5 MiB payload fits, a second would exceed it
+        (5, [5 * 2**20] * 4, 1),
+        # 16 MiB budget: two 6 MiB payloads fit, a third would exceed it
+        (7, [6 * 2**20] * 4, 2),
+        # clevel 9 takes the whole batch, whatever the payload sizes
+        (9, [100] * 4, 4),
+    ],
+    ids=["1mib-low", "8mib-default", "16mib-high", "full-batch"],
+)
+def test_batcharray_blocksize_budget(monkeypatch, clevel, payloads, expected):
+    """The per-clevel budget picks the block size, not the detected caches."""
     monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
     monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 1000)
-    barray = blosc2.BatchArray(cparams={"clevel": 3})
-    # 1 MiB budget: three 300 KiB payloads fit, a fourth would exceed it
-    assert barray._guess_blocksize([300 * 1024] * 4) == 3
-
-
-def test_batcharray_guess_items_per_block_uses_8mib_budget_for_default_clevel(monkeypatch):
-    monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
-    monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 150)
-    barray = blosc2.BatchArray(cparams={"clevel": 5})
-    # 8 MiB budget: a single 5 MiB payload fits, a second would exceed it
-    assert barray._guess_blocksize([5 * 2**20] * 4) == 1
-
-
-def test_batcharray_guess_items_per_block_uses_16mib_budget_for_high_clevel(monkeypatch):
-    monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
-    monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 150)
-    barray = blosc2.BatchArray(cparams={"clevel": 7})
-    # 16 MiB budget: two 6 MiB payloads fit, a third would exceed it
-    assert barray._guess_blocksize([6 * 2**20] * 4) == 2
-
-
-def test_batcharray_guess_items_per_block_uses_full_batch_for_clevel_9(monkeypatch):
-    monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 1)
-    monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 1)
-    barray = blosc2.BatchArray(cparams={"clevel": 9})
-    assert barray._guess_blocksize([100, 100, 100, 100]) == 4
+    barray = blosc2.BatchArray(cparams={"clevel": clevel})
+    assert barray._guess_blocksize(payloads) == expected
 
 
 def test_vlcompress_small_blocks_roundtrip():
@@ -636,7 +626,7 @@ def test_batcharray_copy():
     blosc2.remove_urlpath(copy_path)
 
 
-def test_batcharray_copy_with_storage_preserves_user_metadata():
+def test_batcharray_copy_keeps_user_metadata():
     urlpath = "test_batcharray_copy_storage.b2b"
     copy_path = "test_batcharray_copy_storage_out.b2b"
     blosc2.remove_urlpath(urlpath)

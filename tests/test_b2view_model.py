@@ -116,7 +116,7 @@ def test_preview_array_2d_returns_grid_preview():
     np.testing.assert_array_equal(preview["data"]["4"], np.array([10, 16, 22]))
 
 
-def test_store_browser_uses_grid_preview_for_2d_ndarray(tmp_path):
+def test_browser_grid_preview_for_2d_ndarray(tmp_path):
     path = tmp_path / "bundle.b2z"
     with blosc2.TreeStore(str(path), mode="w") as store:
         store["/arr"] = np.arange(30).reshape(5, 6)
@@ -154,7 +154,7 @@ def test_ctable_preview_buffer_reuses_loaded_rows(tmp_path):
         np.testing.assert_array_equal(page1["data"]["x"], np.arange(5, 10))
 
 
-def test_preview_ctable_skips_expensive_nested_columns_by_default():
+def test_preview_skips_expensive_nested_cols():
     class Table:
         def __init__(self):
             self.col_names = ["path"]
@@ -289,7 +289,7 @@ def test_ctable_preview_preserves_ragged_nested_values():
     assert preview["data"]["path"][1] == [{"x": 2}, {"x": 3}]
 
 
-def test_ctable_preview_header_uses_column_names_without_dtype_labels():
+def test_preview_header_omits_dtype_labels():
     preview = {
         "start": 0,
         "stop": 1,

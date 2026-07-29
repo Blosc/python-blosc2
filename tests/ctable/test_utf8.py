@@ -196,7 +196,7 @@ def test_utf8_array_extend_many_rows_no_dropped_rows():
     assert list(arr[:]) == values
 
 
-def test_utf8_array_extend_none_straddles_chunk_boundary():
+def test_utf8_array_extend_none_straddles_chunk():
     from blosc2._utf8_array import _FLUSH_ROWS, UTF8Array
 
     values = [f"v{i}" for i in range(_FLUSH_ROWS + 2)]
@@ -208,7 +208,7 @@ def test_utf8_array_extend_none_straddles_chunk_boundary():
     assert list(arr[:]) == expected
 
 
-def test_utf8_array_extend_append_interleaved_before_flush():
+def test_utf8_array_extend_append_interleaved():
     from blosc2._utf8_array import UTF8Array
 
     arr = UTF8Array(blosc2.utf8())
@@ -230,7 +230,7 @@ def test_utf8_array_extend_ascii_nul_byte_preserved():
     assert list(arr[:]) == values
 
 
-def test_utf8_array_extend_multi_mb_strings_bounded_flush():
+def test_utf8_array_extend_multi_mb_bounded():
     """~20 multi-MB ASCII strings: char-count flush bound is checked once
     per _FLUSH_ROWS-sized chunk (not per row), so this overshoots
     _FLUSH_CHARS by at most one chunk before flushing -- confirm read-back
@@ -292,7 +292,7 @@ def test_utf8_array_bulk_read_kernel_and_fallback(force_kernel_mode):
     assert list(got) == SAMPLE
 
 
-def test_utf8_array_bulk_read_matches_python_ground_truth(force_kernel_mode):
+def test_utf8_array_bulk_read_matches_python(force_kernel_mode):
     """A wider mix of byte lengths and edge cases than SAMPLE: many distinct
     ASCII/multi-byte/empty/NUL-bearing values, read back in one bulk span."""
     from blosc2._utf8_array import UTF8Array
@@ -306,7 +306,7 @@ def test_utf8_array_bulk_read_matches_python_ground_truth(force_kernel_mode):
     assert list(arr[:]) == values
 
 
-def test_ctable_utf8_extend_and_read_kernel_and_fallback(force_kernel_mode):
+def test_ctable_utf8_extend_read_two_routes(force_kernel_mode):
     t = make_table()
     values = t["name"][:]
     assert values.dtype == STRING_DTYPE
@@ -314,7 +314,7 @@ def test_ctable_utf8_extend_and_read_kernel_and_fallback(force_kernel_mode):
 
 
 @pytest.mark.parametrize("ext", [".b2z", ".b2d"])
-def test_ctable_utf8_persistence_roundtrip_kernel_and_fallback(tmp_path, ext, force_kernel_mode):
+def test_ctable_utf8_persist_two_routes(tmp_path, ext, force_kernel_mode):
     urlpath = str(tmp_path / f"utf8_kernel_mode{ext}")
     t = make_table(urlpath=urlpath, mode="w")
     t.close()
@@ -363,7 +363,7 @@ def test_utf8_array_extend_matches_python_ground_truth(force_write_kernel_mode):
     assert list(arr[:]) == values
 
 
-def test_utf8_array_extend_ascii_nul_byte_kernel_and_fallback(force_write_kernel_mode):
+def test_utf8_array_extend_nul_two_routes(force_write_kernel_mode):
     from blosc2._utf8_array import UTF8Array
 
     values = ["nul\x00in", "plain", "\x00leading", "trailing\x00"]
@@ -373,7 +373,7 @@ def test_utf8_array_extend_ascii_nul_byte_kernel_and_fallback(force_write_kernel
     assert list(arr[:]) == values
 
 
-def test_utf8_array_extend_multi_mb_string_kernel_and_fallback(force_write_kernel_mode):
+def test_utf8_array_extend_mb_two_routes(force_write_kernel_mode):
     """A single multi-MB value alongside short ones -- sanity-checks the
     total-length/offset accumulation in the compiled kernel's two passes."""
     from blosc2._utf8_array import UTF8Array
@@ -390,7 +390,7 @@ def test_ctable_utf8_extend_kernel_and_fallback(force_write_kernel_mode):
     assert list(t["name"][:]) == SAMPLE
 
 
-def test_utf8_array_extend_lone_surrogate_raises_and_recovers(force_write_kernel_mode):
+def test_utf8_array_extend_surrogate_recovers(force_write_kernel_mode):
     """A lone surrogate is invalid UTF-8: flush() must raise
     UnicodeEncodeError, matching str.encode('utf-8')'s own behavior, and
     the array must remain usable afterwards -- a regression test for the
@@ -515,7 +515,7 @@ def test_ctable_utf8_add_column_values():
     assert list(t["note"][:]) == ["x", "yy", "zzz"]
 
 
-def test_ctable_utf8_add_column_values_from_computed_expression():
+def test_ctable_utf8_add_col_values_from_expr():
     """The documented round trip: compute on <U, land the result back as utf8."""
     t = make_table(["a", "bb", "ccc"])
     arr = t["name"][:].astype("<U8")
@@ -730,7 +730,7 @@ def test_ctable_utf8_comparison_on_view():
     assert list(filtered["name"][:]) == ["paris", "paris"]
 
 
-def test_ctable_utf8_comparison_with_non_string_scalar_raises():
+def test_ctable_utf8_cmp_non_string_raises():
     t = make_table()
     with pytest.raises(TypeError, match="utf8"):
         t.name == 42  # noqa: B015
@@ -738,7 +738,7 @@ def test_ctable_utf8_comparison_with_non_string_scalar_raises():
         t.name < 3.14  # noqa: B015
 
 
-def test_ctable_utf8_comparison_with_mismatched_column_type_raises():
+def test_ctable_utf8_cmp_wrong_col_type_raises():
     @dataclass
     class Mixed:
         name: str = blosc2.field(blosc2.utf8())
@@ -830,7 +830,7 @@ def test_ctable_utf8_ordering_empty_string_probe():
     assert list(t[t.name >= ""]["name"][:]) == ["", "a", "zzz"]
 
 
-def test_ctable_utf8_ordering_multibyte_byte_length_boundaries():
+def test_ctable_utf8_ordering_multibyte_bounds():
     """1-, 2-, and 3-byte UTF-8 encodings must byte-compare in code-point
     order (code points 0x7A < 0xE9 < 0x65E5)."""
     assert "z" < "é" < "日"
@@ -864,7 +864,7 @@ def test_ctable_utf8_ordering_probe_equals_sentinel():
         assert None not in got
 
 
-def test_ctable_utf8_scalar_comparison_view_and_deleted_rows():
+def test_ctable_utf8_scalar_cmp_view_deletes():
     """The predicate mask is physical-length; it must stay correct through a
     view and after rows have been deleted (live-row mask intersection)."""
     t = make_table(["paris", "london", "paris", "tokyo", "berlin", "paris"])
@@ -891,7 +891,7 @@ def test_ctable_utf8_startswith_endswith():
 # ---------------------------------------------------------------------------
 
 
-def test_utf8_factorize_span_matches_np_unique_contract():
+def test_utf8_factorize_span_matches_np_unique():
     """The raw-bytes factorization keeps the np.unique contract: uniques
     sorted ascending, codes indexing them.  Ground truth is Python's set —
     numpy's np.unique on StringDType merges strings differing only after an
@@ -924,7 +924,7 @@ def test_utf8_factorizer_cross_span_codes_are_global():
     assert c1[1] == c2[1]
 
 
-def test_ctable_utf8_groupby_many_byte_lengths_and_non_ascii():
+def test_ctable_utf8_groupby_lengths_non_ascii():
     rng = np.random.default_rng(3)
     pool = ["", "a", "bb", "café", "日本語のテキスト", "x" * 2000, "münchen"]
     names = [pool[i] for i in rng.integers(0, len(pool), 3000)]
@@ -1101,7 +1101,7 @@ def test_ctable_utf8_sort_inplace():
     assert list(t["name"][:]) == ["a", "b", "c"]
 
 
-def test_ctable_utf8_sort_multi_key_with_bystander_utf8_column():
+def test_ctable_utf8_sort_multi_key_bystander():
     """A non-key utf8 column in the same table must be reordered along with
     the sort, not just the sort key itself."""
 
@@ -1137,7 +1137,7 @@ def test_ctable_utf8_sort_inplace_bystander_column():
 
 
 @pytest.mark.parametrize("ext", [".b2z", ".b2d"])
-def test_ctable_utf8_sort_inplace_persists_after_reopen(tmp_path, ext):
+def test_ctable_utf8_sort_inplace_persists(tmp_path, ext):
     """Regression: sort_by(inplace=True) on a file-backed table must write the
     sorted utf8 rows through to the store, keeping them aligned with the other
     (on-disk-sorted) columns after close/reopen."""
@@ -1174,7 +1174,7 @@ def test_ctable_utf8_compact_persists_after_reopen(tmp_path, ext):
         t2.close()
 
 
-def test_ctable_utf8_setitem_persisted_shifts_survive_reopen(tmp_path):
+def test_ctable_utf8_setitem_shifts_reopen(tmp_path):
     """__setitem__ on persisted rows shifts the byte blob in place; longer,
     shorter, equal-length, and empty replacements must all round-trip."""
     urlpath = str(tmp_path / "utf8_setitem.b2d")
@@ -1305,7 +1305,7 @@ def test_utf8_from_arrow_nulls_use_sentinel():
     assert t["name"].null_count() == 1
 
 
-def test_utf8_from_arrow_fixed_width_when_max_length_given():
+def test_utf8_from_arrow_fixed_width_max_len():
     pa = pytest.importorskip("pyarrow")
     at = pa.table({"name": pa.array(["hi", "there"], type=pa.string())})
     t = CTable.from_arrow(at.schema, at.to_batches(), string_max_length=32)
@@ -1341,7 +1341,7 @@ def test_utf8_array_constructor_with_spec_and_nulls():
     assert list(arr[:]) == ["a", "<NA>", "c"]
 
 
-def test_utf8_array_constructor_rejects_none_without_nullable_spec():
+def test_utf8_array_ctor_rejects_none_if_not_null():
     with pytest.raises(TypeError, match="not nullable"):
         blosc2.utf8_array(["a", None])
 
@@ -1367,7 +1367,7 @@ def test_ctable_utf8_where_expression_equality():
     assert list(t.where("name != 'hello'")["name"][:]) == ["help", "world", "café"]
 
 
-def test_ctable_utf8_where_expression_matches_operator_form():
+def test_ctable_utf8_where_expr_vs_operator():
     t = make_table(["paris", "london", "tokyo", "paris"])
     for value in ("paris", "tokyo", "absent"):
         expr = list(t.where(f"name == '{value}'")["x"][:])
@@ -1382,7 +1382,7 @@ def test_ctable_utf8_where_expression_predicates():
     assert list(t.where("contains(name, 'l')")["name"][:]) == ["hello", "help", "world"]
 
 
-def test_ctable_utf8_where_expression_mixes_with_numeric_columns():
+def test_ctable_utf8_where_expr_mixes_numeric():
     t = make_table(["a", "b", "c", "d"])
     assert list(t.where("(name == 'b') | (x > 2)")["name"][:]) == ["b", "d"]
     assert list(t.where("(name != 'a') & (x < 2)")["name"][:]) == ["b"]
@@ -1399,7 +1399,7 @@ def test_ctable_utf8_where_expression_runs_on_miniexpr():
     assert list(got[:3]) == [True, True, False]
 
 
-def test_ctable_utf8_where_expression_spans_many_widths():
+def test_ctable_utf8_where_expr_many_widths():
     # Exercises the power-of-two width bucketing: values straddle several
     # buckets and one of them is past the 255-byte typesize cap.
     values = ["a", "bb", "x" * 40, "y" * 300, "café", ""] * 30
@@ -1410,7 +1410,7 @@ def test_ctable_utf8_where_expression_spans_many_widths():
     ]
 
 
-def test_ctable_utf8_where_expression_splits_oversized_spans():
+def test_ctable_utf8_where_expr_splits_spans():
     # A single long row would size the whole span's <Un buffer; the driver must
     # split it rather than materialize rows x longest.
     values = ["hello", "help", "world"] * 10 + ["z" * 5000]
@@ -1445,7 +1445,7 @@ def test_ctable_utf8_bool_result_stays_a_numpy_array():
     assert got.dtype == np.bool_
 
 
-def test_ctable_utf8_string_result_concatenates_across_spans():
+def test_ctable_utf8_result_across_spans():
     """The UTF8Array is extended span by span, so span order and row counts
     must line up exactly; a single-span run would not catch a drift."""
     values = [f"v{i}" for i in range(50)]
@@ -1456,7 +1456,7 @@ def test_ctable_utf8_string_result_concatenates_across_spans():
     assert [str(v) for v in got[: len(values)]] == [f"x={v}" for v in values]
 
 
-def test_ctable_utf8_string_result_keeps_the_null_sentinel():
+def test_ctable_utf8_result_keeps_sentinel():
     t = CTable(NullableRow, new_data={"name": ["a", None, "c"], "x": [0, 1, 2]})
     got = t._utf8_span_eval("'p=' + name", {}, ["name"], strict=True)
     assert isinstance(got, blosc2.UTF8Array)
@@ -1464,7 +1464,7 @@ def test_ctable_utf8_string_result_keeps_the_null_sentinel():
     assert [str(v) for v in got[:3]] == ["p=a", t["name"].null_value, "p=c"]
 
 
-def test_ctable_utf8_where_expression_multiple_utf8_columns():
+def test_ctable_utf8_where_expr_multi_cols():
     @dataclass
     class TwoRow:
         first: str = blosc2.field(blosc2.utf8())
@@ -1482,7 +1482,7 @@ def test_ctable_utf8_where_expression_empty_table():
     assert len(t.where("name == 'hello'")) == 0
 
 
-def test_ctable_utf8_where_expression_on_view_and_after_delete():
+def test_ctable_utf8_where_expr_view_delete():
     t = make_table(["paris", "london", "paris", "tokyo"])
     t.delete([0])
     assert list(t.where("name == 'paris'")["x"][:]) == [2]
@@ -1502,7 +1502,7 @@ def _nullable_table(values):
     )
 
 
-def test_ctable_utf8_where_expression_nulls_never_match():
+def test_ctable_utf8_where_expr_nulls_no_match():
     t = _nullable_table(["hello", None, "help", None, "world"])
     assert list(t.where("name == 'hello'")["x"][:]) == [0]
     assert list(t.where("startswith(name, 'hel')")["x"][:]) == [0, 2]
@@ -1510,7 +1510,7 @@ def test_ctable_utf8_where_expression_nulls_never_match():
     assert list(t.where("name == '<NA>'")["x"][:]) == []
 
 
-def test_ctable_utf8_where_expression_nulls_match_operator_form():
+def test_ctable_utf8_where_expr_nulls_operator():
     t = _nullable_table(["hello", None, "help", None, "world"])
     for value in ("hello", "world", "<NA>"):
         assert list(t.where(f"name == '{value}'")["x"][:]) == list(t[t.name == value]["x"][:])
@@ -1523,7 +1523,7 @@ def test_ctable_utf8_where_expression_all_null_column():
     assert list(t.where("name != 'hello'")["x"][:]) == []
 
 
-def test_ctable_utf8_where_expression_null_count_zero_fast_path():
+def test_ctable_utf8_where_expr_no_nulls_fast():
     # A nullable column with no actual nulls must not mask anything away.
     t = _nullable_table(["hello", "help", "world"])
     assert list(t.where("startswith(name, 'hel')")["x"][:]) == [0, 1]
@@ -1574,7 +1574,7 @@ def test_ctable_utf8_scalar_predicates_match_python(expr, predicate):
         ("startswith(name, 'hel') | (name == 'zz')", False),
     ],
 )
-def test_ctable_utf8_scalar_predicates_skip_the_span_driver(expr, rewritten_away):
+def test_ctable_utf8_preds_skip_span_driver(expr, rewritten_away):
     """The raw-byte scan is several times cheaper than decode -> <Un -> miniexpr.
 
     Correctness alone would not notice the difference, so assert on which route
@@ -1587,7 +1587,7 @@ def test_ctable_utf8_scalar_predicates_skip_the_span_driver(expr, rewritten_away
     assert (remaining == []) is rewritten_away
 
 
-def test_ctable_utf8_rewritten_predicate_matches_span_driver():
+def test_ctable_utf8_rewritten_pred_vs_driver():
     """Both routes must agree, including on nulls and on the sentinel spelling."""
     values = ["hello", None, "help", None, "world"]
     t = _nullable_table(values)
@@ -1597,7 +1597,7 @@ def test_ctable_utf8_rewritten_predicate_matches_span_driver():
         assert fast == slow, expr
 
 
-def test_ctable_utf8_scalar_predicate_literal_with_operator_chars():
+def test_ctable_utf8_pred_literal_with_ops():
     # The literal is parsed with ast.literal_eval, so quoted operators and
     # spaces inside it must not be mistaken for expression syntax.
     values = ["a == b", "x > y", "plain"]
@@ -1606,7 +1606,7 @@ def test_ctable_utf8_scalar_predicate_literal_with_operator_chars():
     assert list(t.where("name == 'x > y'")["x"][:]) == [1]
 
 
-def test_ctable_utf8_scalar_predicate_on_view_and_after_delete():
+def test_ctable_utf8_pred_view_and_delete():
     t = make_table(["paris", "london", "paris", "tokyo"])
     t.delete([0])
     assert list(t.where("name == 'paris'")["x"][:]) == [2]
@@ -1614,7 +1614,7 @@ def test_ctable_utf8_scalar_predicate_on_view_and_after_delete():
     assert list(view.where("name == 'paris'")["x"][:]) == [2]
 
 
-def test_ctable_utf8_two_scalar_predicates_on_the_same_column():
+def test_ctable_utf8_two_preds_same_col():
     t = make_table(["a", "b", "c", "d"])
     assert list(t.where("(name > 'a') & (name < 'd')")["name"][:]) == ["b", "c"]
 
@@ -1665,7 +1665,7 @@ def test_utf8_array_comparison_edge_cases():
     assert isinstance(hash(arr), int)
 
 
-def test_bare_utf8_array_expression_uses_the_span_driver():
+def test_bare_utf8_expr_uses_span_driver():
     """A bare UTF8Array must not evaluate through the NumPy slices_eval path.
 
     That path returns correct-looking values while never reaching miniexpr,
@@ -1685,7 +1685,7 @@ def test_bare_utf8_array_expression_uses_the_span_driver():
     np.testing.assert_array_equal(mask, [True, False, True])
 
 
-def test_bare_utf8_array_expression_with_mixed_operands():
+def test_bare_utf8_expr_mixed_operands():
     arr = blosc2.utf8_array(["hello", "world", "héllo"])
     other = blosc2.utf8_array(["A", "B", "C"])
     joined = blosc2.lazyexpr("a + b", {"a": arr, "b": other}).compute(strict_miniexpr=True)
@@ -1720,7 +1720,7 @@ def test_bare_utf8_array_expression_splits_spans(span_rows, budget, monkeypatch)
     assert list(result[:]) == ["x=" + v for v in values]
 
 
-def test_bare_utf8_array_expression_rejects_unsupported_forms():
+def test_bare_utf8_expr_rejects_unsupported():
     arr = blosc2.utf8_array(["a", "b"])
     lazy = blosc2.lazyexpr("upper(a)", {"a": arr})
 
@@ -1734,7 +1734,7 @@ def test_bare_utf8_array_expression_rejects_unsupported_forms():
         blosc2.lazyexpr("upper(a)", {"a": arr}, where=(arr, arr))
 
 
-def test_ctable_utf8_index_survives_reopen_and_orders_nulls_last(tmp_path):
+def test_ctable_utf8_index_reopen_nulls_last(tmp_path):
     """A persisted utf8 rank index must reopen and keep nulls at the end."""
     from dataclasses import make_dataclass
 
@@ -1754,7 +1754,7 @@ def test_ctable_utf8_index_survives_reopen_and_orders_nulls_last(tmp_path):
     assert ordered[3] == reopened["name"].null_value  # the null sentinel sorts last
 
 
-def test_ctable_utf8_index_goes_stale_when_the_column_changes():
+def test_ctable_utf8_index_stale_on_change():
     """Appending a value ahead of existing ones invalidates every rank."""
     t = make_table(["pear", "banana"])
     t.create_index("name", kind="full")
@@ -1829,7 +1829,7 @@ def test_ctable_utf8_index_answers_scalar_predicates(nullable, tmp_path):
         np.testing.assert_array_equal(masks["index"][key], scanned, err_msg=f"{key}")
 
 
-def test_ctable_utf8_index_predicate_falls_back_when_stale(tmp_path):
+def test_ctable_utf8_index_pred_falls_back(tmp_path):
     """A stale rank index must not answer predicates from frozen ranks."""
     from dataclasses import make_dataclass
 
@@ -1872,7 +1872,7 @@ def test_utf8_astype_width_is_codepoints_not_bytes():
     assert arr.astype().dtype == np.dtype("<U8")
 
 
-def test_utf8_astype_explicit_width_truncates_like_numpy():
+def test_utf8_astype_width_truncates_like_np():
     arr = blosc2.utf8_array(["hello", "hi"])
     assert list(arr.astype("<U3")) == ["hel", "hi"]
 
@@ -1940,7 +1940,7 @@ def test_utf8_conversion_round_trip():
     assert list(blosc2.to_utf8(blosc2.from_utf8(arr))[:]) == values
 
 
-def test_utf8_conversion_round_trip_through_an_expression():
+def test_utf8_conversion_round_trip_via_expr():
     """The documented compute rule, end to end."""
     t = make_table(["a", "bb", "ccc"])
     fixed = blosc2.from_utf8(t["name"])
@@ -1960,7 +1960,7 @@ def test_ctable_utf8_column_assign():
     assert list(t["name"][:]) == ["X", "YY", "ZZZ"]
 
 
-def test_ctable_utf8_column_assign_from_computed_result():
+def test_ctable_utf8_col_assign_from_computed():
     t = make_table(["a", "bb"])
     fixed = blosc2.from_utf8(t["name"])
     res = blosc2.lazyexpr("a + '!'", {"a": fixed}).compute()[:]
@@ -2009,7 +2009,7 @@ def _assert_routes(message, source):
     assert "Computing strings on a utf8 column" in message
 
 
-def test_utf8_computed_column_expression_names_the_workaround():
+def test_utf8_computed_col_names_workaround():
     t = make_table(["a", "bb"])
     with pytest.raises(NotImplementedError) as exc:
         t.add_computed_column("up", "upper(name)")
@@ -2024,14 +2024,14 @@ def test_utf8_assign_expression_names_the_workaround():
     _assert_routes(str(exc.value), "t['name']")
 
 
-def test_utf8_generated_column_expression_names_the_workaround():
+def test_utf8_generated_col_names_workaround():
     t = make_table(["a", "bb"])
     with pytest.raises(NotImplementedError) as exc:
         t.add_generated_column("g", values="upper(name)")
     _assert_routes(str(exc.value), "t['name']")
 
 
-def test_utf8_dsl_kernel_column_refused_at_registration():
+def test_utf8_kernel_refused_at_registration():
     """Regression: it used to register, then break every read *and* str(t)."""
     t = make_table(["a", "bb"])
     with pytest.raises(NotImplementedError) as exc:
@@ -2043,7 +2043,7 @@ def test_utf8_dsl_kernel_column_refused_at_registration():
     assert "name" in str(t)
 
 
-def test_utf8_dsl_kernel_refused_whatever_the_kernel_returns():
+def test_utf8_kernel_refused_whatever_returned():
     """It is the utf8 operand that cannot work, not the string output."""
 
     @blosc2.dsl_kernel
@@ -2109,7 +2109,7 @@ def test_non_utf8_dsl_kernel_column_still_works():
 # ---------------------------------------------------------------------------
 
 
-def test_utf8_array_satisfies_the_blosc2_array_protocol():
+def test_utf8_array_satisfies_array_protocol():
     arr = blosc2.utf8_array(["a", "bb", "ccc"])
     assert isinstance(arr, blosc2.Array)
     assert arr.shape == (3,)
@@ -2128,7 +2128,7 @@ def test_utf8_array_np_asarray_keeps_string_dtype():
     assert out.dtype == arr[:].dtype
 
 
-def test_utf8_array_np_asarray_honours_an_explicit_dtype():
+def test_utf8_array_np_asarray_honours_dtype():
     arr = blosc2.utf8_array(["abc", "de"])
     assert list(np.asarray(arr, dtype="<U5")) == ["abc", "de"]
     assert np.asarray(arr, dtype="<U5").dtype == np.dtype("<U5")
@@ -2148,7 +2148,7 @@ def test_asarray_dispatches_on_the_target_dtype():
     assert list(out[:]) == ["a", "bb"]
 
 
-def test_asarray_leaves_utf8_when_a_fixed_width_dtype_is_asked_for():
+def test_asarray_leaves_utf8_for_fixed_width():
     src = np.array(["a", "bb"], dtype=STRING_DTYPE)
     out = blosc2.asarray(src, dtype="<U8")
     assert isinstance(out, blosc2.NDArray)
@@ -2168,7 +2168,7 @@ def test_asarray_returns_a_utf8array_unchanged():
     assert list(copied[:]) == ["a", "bb"]
 
 
-def test_asarray_string_dtype_rejects_nd_and_storage_kwargs():
+def test_asarray_str_dtype_rejects_nd_kwargs():
     src2d = np.array([["a"], ["b"]], dtype=STRING_DTYPE)
     with pytest.raises(ValueError, match="1-D only"):
         blosc2.asarray(src2d)
@@ -2200,21 +2200,21 @@ def test_constructors_with_string_dtype_match_numpy(call, expected):
     assert list(out[:]) == expected
 
 
-def test_constructors_with_string_dtype_agree_with_numpy_exactly():
+def test_constructors_string_dtype_vs_numpy():
     d = STRING_DTYPE
     assert list(blosc2.zeros(3, dtype=d)[:]) == list(np.zeros(3, dtype=d))
     assert list(blosc2.ones(3, dtype=d)[:]) == list(np.ones(3, dtype=d))
     assert list(blosc2.full(3, "x", dtype=d)[:]) == list(np.full(3, "x", dtype=d))
 
 
-def test_constructors_with_string_dtype_reject_nd_and_storage_kwargs():
+def test_constructors_string_dtype_reject_nd():
     with pytest.raises(ValueError, match="1-D only"):
         blosc2.zeros((2, 3), dtype=STRING_DTYPE)
     with pytest.raises(TypeError, match="utf8_array"):
         blosc2.zeros(3, dtype=STRING_DTYPE, urlpath="unused.b2nd")
 
 
-def test_utf8_dispatch_round_trips_through_the_conversion_pair():
+def test_utf8_dispatch_round_trips_conversion():
     out = blosc2.full(2, "hé", dtype=STRING_DTYPE)
     assert list(blosc2.to_utf8(blosc2.from_utf8(out))[:]) == ["hé", "hé"]
 
@@ -2262,7 +2262,7 @@ def test_ctable_utf8_nested_leaf_filters(expr, expected):
     assert list(t.where(expr)["x"][:]) == expected
 
 
-def test_ctable_utf8_nested_leaf_matches_the_flat_column():
+def test_ctable_utf8_nested_leaf_matches_flat():
     """A dotted name must not change the answer the same data gives flat."""
     values = ["hello", "help", "world", "zz"]
     flat = make_table(values)
@@ -2276,7 +2276,7 @@ def test_ctable_utf8_nested_leaf_matches_the_flat_column():
         assert list(flat.where(flat_expr)["x"][:]) == list(nested.where(nested_expr)["x"][:])
 
 
-def test_ctable_utf8_nested_leaf_sum_where_and_persistence(tmp_path):
+def test_ctable_utf8_nested_leaf_sum_persist(tmp_path):
     urlpath = str(tmp_path / "utf8_nested.b2z")
     t = _nested_table(urlpath=urlpath, mode="w")
     assert t["x"].sum(where='startswith(trip.begin.who, "c")') == 2

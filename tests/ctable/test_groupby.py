@@ -76,7 +76,7 @@ def test_groupby_agg_numeric_reductions():
     assert got[2] == ("Rome", 60.0, 30.0, 20.0, 40.0, 2)
 
 
-def test_groupby_argmin_argmax_return_logical_positions():
+def test_groupby_argmin_argmax_logical_pos():
     t = CTable(SalesRow, new_data=DATA)
 
     out = t.group_by("city", sort=True).agg({"sales": ["argmin", "argmax"]})
@@ -85,7 +85,7 @@ def test_groupby_argmin_argmax_return_logical_positions():
     assert rows(out) == [("Berlin", -1, -1), ("Paris", 0, 3), ("Rome", 2, 4)]
 
 
-def test_groupby_argmin_argmax_convenience_methods_and_view_positions():
+def test_groupby_argmin_methods_and_view_pos():
     t = CTable(SalesRow, new_data=DATA)
     view = t.where("qty >= 3")
 
@@ -161,7 +161,7 @@ class DictRow:
     sales: int = blosc2.field(blosc2.int32())
 
 
-def test_groupby_dictionary_key_groups_by_decoded_value():
+def test_groupby_dict_key_groups_by_value():
     t = CTable(DictRow, new_data=[("Paris", 10), ("Rome", 20), ("Paris", 30)])
 
     out = t.group_by("city", sort=True).agg({"sales": "sum"})
@@ -170,7 +170,7 @@ def test_groupby_dictionary_key_groups_by_decoded_value():
     assert rows(out) == [("Paris", 40), ("Rome", 20)]
 
 
-def test_groupby_dictionary_key_sorted_by_string_not_code_order():
+def test_groupby_dict_key_sorted_by_string():
     """Dict groups come out alphabetical even when codes are assigned otherwise.
 
     Regression for the always-sorted contract: with "Rome" seen before "Paris"
@@ -188,7 +188,7 @@ def test_groupby_dictionary_key_sorted_by_string_not_code_order():
     assert rows(out) == [("Paris", 1, 3), ("Rome", 2, 0)]
 
 
-def test_groupby_dictionary_key_sorted_matches_python_sorted():
+def test_groupby_dict_key_matches_python_sort():
     """Vectorized dict-key ordering matches a Python sorted() reference."""
     rng = np.random.default_rng(0)
     labels = [f"city_{i:03d}" for i in range(200)]
@@ -206,7 +206,7 @@ def test_groupby_string_key_sorted_without_sort_flag():
     assert [r[0] for r in rows(out)] == ["Berlin", "Paris", "Rome"]
 
 
-def test_groupby_dictionary_key_argmin_argmax_positions():
+def test_groupby_dict_key_argmin_argmax_pos():
     # Dictionary key drives the dense-position fast path; verify it returns the
     # logical row positions of the extremes (chicago-taxi "company" shape).
     t = CTable(DictRow, new_data=[("Paris", 10), ("Rome", 50), ("Paris", 30), ("Rome", 20)])
@@ -218,7 +218,7 @@ def test_groupby_dictionary_key_argmin_argmax_positions():
     assert rows(out) == [("Paris", 0, 2), ("Rome", 3, 1)]
 
 
-def test_groupby_dictionary_key_beyond_default_code_capacity():
+def test_groupby_dict_key_beyond_capacity():
     data = [("Paris" if i % 2 == 0 else "Rome", 1) for i in range(5000)]
     t = CTable(DictRow, new_data=data)
 
@@ -313,7 +313,7 @@ def test_groupby_fast_path_sum_variants(row_type, data, expected):
     assert rows(out) == expected
 
 
-def test_groupby_float_integral_fast_path_falls_back_for_non_integral_keys():
+def test_groupby_float_path_falls_back_fractional():
     t = CTable(Float64KeyRow, new_data=[(0.5, 1.0), (1.5, 2.0), (0.5, 3.0)])
 
     # Float keys are not key-sorted by default (sort=None); request sort=True to
@@ -323,7 +323,7 @@ def test_groupby_float_integral_fast_path_falls_back_for_non_integral_keys():
     assert rows(out) == [(0.5, 4.0), (1.5, 2.0)]
 
 
-def test_groupby_float_integral_fast_path_falls_back_for_nan_group_when_kept():
+def test_groupby_float_path_falls_back_nan_group():
     t = CTable(Float64KeyRow, new_data=[(0.0, 1.0), (np.nan, 2.0), (0.0, 3.0)])
 
     out = t.group_by("key", dropna=False).agg({"value": "sum"})
@@ -349,7 +349,7 @@ def test_groupby_integral_float_key_dense_min_max(row_type):
     assert out_max._cols["key"][:].dtype == t._cols["key"][:].dtype
 
 
-def test_groupby_integral_float_key_falls_back_for_negative_keys():
+def test_groupby_float_key_falls_back_negative():
     # Negative keys cannot use the dense (non-negative) mapping; the generic
     # path must still produce correct max results.
     t = CTable(Float64KeyRow, new_data=[(-1.0, 5.0), (-1.0, 8.0), (2.0, 3.0)])
@@ -368,7 +368,7 @@ def test_group_reduce_object_keys_sort_with_none():
     assert sizes.tolist() == [1, 1, 2]
 
 
-def test_group_reduce_object_numeric_keys_sort_with_none():
+def test_group_reduce_numeric_keys_with_none():
     groups, sizes = blosc2.group_reduce(np.array([None, 2, 1, 2], dtype=object), sort=True, dropna=False)
 
     assert groups.tolist() == [None, 1, 2]
@@ -474,7 +474,7 @@ def test_groupby_cython_integer_key_more_integer_aggs():
     assert rows(out) == [(0, 2, 2, 3, 1.5, -2, 5), (1, 2, 2, 30, 15.0, 10, 20), (2, 1, 1, 7, 7.0, 7, 7)]
 
 
-def test_groupby_cython_integer_key_nullable_float_aggs():
+def test_groupby_cython_int_key_null_aggs():
     row_type = make_dataclass(
         "IntKeyNullableFloatAggsRow",
         [
@@ -514,7 +514,7 @@ def test_groupby_cython_arbitrary_float_key_aggs():
     ]
 
 
-def test_groupby_cython_arbitrary_float_key_nan_and_signed_zero():
+def test_groupby_cython_float_key_nan_and_zero():
     t = CTable(Float64KeyRow, new_data=[(-0.0, 1.0), (0.0, 2.0), (np.nan, 3.0), (np.nan, 4.0)])
 
     dropped = t.group_by("key").agg({"value": "sum"})
@@ -595,7 +595,7 @@ def test_groupby_persistent_output_urlpath(tmp_path):
     assert rows(reopened) == [("Berlin", 6), ("Paris", 7), ("Rome", 8)]
 
 
-def test_groupby_persistent_output_urlpath_on_convenience_method(tmp_path):
+def test_groupby_persistent_urlpath_shorthand(tmp_path):
     t = CTable(SalesRow, new_data=DATA)
     path = tmp_path / "grouped_mean.b2d"
 
@@ -621,7 +621,7 @@ def _keys(out):
     return [out._cols[out.col_names[0]][i] for i in range(out.nrows)]
 
 
-def test_groupby_int_key_always_ascending_regardless_of_sort():
+def test_groupby_int_key_always_ascending():
     # Integer/dense keys come out ascending under every sort= value -- nonzero
     # ordering is free and unavoidable.
     t = CTable(Int32FloatRow, new_data=_INT_SORT_DATA)
@@ -638,7 +638,7 @@ def test_groupby_dict_key_sorted_under_auto_and_true():
     assert _keys(t.group_by("key", sort=False).sum("value")) == ["zeta", "alpha", "mike"]
 
 
-def test_groupby_float_key_unsorted_under_auto_sorted_under_true():
+def test_groupby_float_key_auto_vs_sorted():
     # Float keys only sort via a Python list.sort, so None (auto) leaves them
     # unsorted; True sorts. The unsorted order must be deterministic across runs.
     t = CTable(Float64KeyRow, new_data=_FLOAT_SORT_DATA)
@@ -649,7 +649,7 @@ def test_groupby_float_key_unsorted_under_auto_sorted_under_true():
     assert sorted(auto1) == [1.5, 2.5, 3.5]  # same groups, order unspecified
 
 
-def test_groupby_multikey_unsorted_under_auto_sorted_under_true():
+def test_groupby_multikey_auto_vs_sorted():
     # Multi-key results only sort via a Python list.sort, so None (auto) leaves
     # them unsorted (deterministic but unspecified order); True sorts.
     data = [("z", 2, 1.0), ("a", 1, 2.0), ("z", 1, 3.0), ("a", 1, 4.0)]
@@ -915,7 +915,7 @@ def test_agg_udf_inconsistent_types_raise_clear_error():
         g.agg(x=("sales", inconsistent))
 
 
-def test_agg_udf_unsupported_result_dtype_raises_clear_error():
+def test_agg_udf_bad_result_dtype_raises():
     t = CTable(SalesRow, new_data=DATA)
     g = t.group_by("city")
 
@@ -1065,7 +1065,7 @@ def test_factorize_fixed_width_str_matches_np_unique():
         np.testing.assert_array_equal(got_inv, ref_inv)
 
 
-def test_factorize_fixed_width_str_collision_falls_back(monkeypatch):
+def test_factorize_str_collision_falls_back(monkeypatch):
     """With the mix constant forced to 0, the row hash degenerates to the last
     uint32 word, so strings differing only in earlier characters collide --
     the verify pass must detect it and fall back to exact np.unique."""

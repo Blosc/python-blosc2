@@ -114,7 +114,7 @@ def test_view_blocks_assign():
     assert t["score"][5] == pytest.approx(50.0)
 
 
-def test_take_from_view_yields_independent_writable_table():
+def test_take_from_view_is_independent():
     t = CTable(Row, new_data=DATA10)
     view = t.where(t["id"] > 4)
     independent = view.take([0, 1])
@@ -190,7 +190,7 @@ def test_blosc2_open_raw_treestore_without_manifest():
     assert np.array_equal(opened["/group/node"][:], np.arange(5))
 
 
-def test_blosc2_open_raw_treestore_for_unknown_manifest_kind():
+def test_open_raw_treestore_unknown_manifest():
     path = table_path("unknown_manifest")
     with blosc2.TreeStore(path, mode="w", threshold=0) as tstore:
         meta = blosc2.SChunk()
@@ -204,7 +204,7 @@ def test_blosc2_open_raw_treestore_for_unknown_manifest_kind():
     assert np.array_equal(opened["/payload"][:], np.arange(3))
 
 
-def test_extensionless_ctable_path_uses_extensionless_store():
+def test_extensionless_path_uses_that_store():
     path = os.path.join(TABLE_ROOT, "alias_ctable")
     t = CTable(Row, urlpath=path, mode="w", new_data=DATA10)
     t.close()
@@ -271,14 +271,14 @@ def test_add_column_fills_default_for_existing_rows():
     np.testing.assert_array_equal(t["weight"][:], np.full(10, 5.5))
 
 
-def test_add_column_without_default_allowed_for_empty_table():
+def test_add_col_no_default_ok_when_empty():
     t = CTable(Row)
     t.add_column("weight", blosc2.float64())
     t.append((1, 2.0, True, 3.0))
     assert t["weight"][0] == pytest.approx(3.0)
 
 
-def test_add_column_without_default_on_non_empty_table_raises():
+def test_add_col_no_default_raises_non_empty():
     t = CTable(Row, new_data=DATA10)
     with pytest.raises(ValueError, match="requires a default"):
         t.add_column("weight", blosc2.float64())
@@ -387,7 +387,7 @@ def test_add_column_values_skips_deleted_rows():
     np.testing.assert_array_equal(t["id"][:], np.arange(2, 10))
 
 
-def test_add_column_values_keeps_default_for_later_rows():
+def test_add_col_values_keeps_default_later():
     t = CTable(Row, new_data=DATA10)
     t.add_column("weight", blosc2.field(blosc2.float64(), default=9.0), values=[1.0] * 10)
     t.append((10, 0.0, True, 0.0))
@@ -432,7 +432,7 @@ def test_add_column_values_vlstring_skips_deleted_rows():
     assert list(t["s"][:]) == vals
 
 
-def test_add_column_default_vlstring_skips_deleted_rows():
+def test_add_col_vlstring_skips_deleted_rows():
     t = CTable(Row, new_data=DATA10)
     t.delete([0, 1])
     t.add_column("s", blosc2.field(blosc2.vlstring(), default="z"))

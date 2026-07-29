@@ -356,7 +356,7 @@ def test_from_csv_ndarray_wrong_shape_raises(tmp_csv):
         CTable.from_csv(tmp_csv, NdarrayRow)
 
 
-def test_from_csv_nonnullable_ndarray_empty_cell_raises(tmp_csv):
+def test_csv_nonnullable_empty_cell_raises(tmp_csv):
     with open(tmp_csv, "w") as f:
         f.write("id,embedding\n")
         f.write("1,\n")

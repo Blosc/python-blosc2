@@ -47,7 +47,7 @@ def test_scalar_index_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data >= 120_000) & (data < 125_000)])
 
 
-def test_opsi_index_accepts_non_multiple_chunk_and_block_lengths():
+def test_opsi_accepts_non_multiple_chunk_block():
     rng = np.random.default_rng(42)
     data = rng.random(5_000, dtype=np.float64)
     arr = blosc2.asarray(data, chunks=(781,), blocks=(160,))
@@ -105,7 +105,7 @@ def test_opsi_optlevel_controls_chunk_multiplier(optlevel, expected_multiplier):
         (9, 4),
     ],
 )
-def test_chunk_local_indexes_optlevel_controls_chunk_multiplier(kind, optlevel, expected_multiplier):
+def test_chunk_local_optlevel_sets_multiplier(kind, optlevel, expected_multiplier):
     rng = np.random.default_rng(44)
     data = rng.integers(0, 100_000, size=20_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(1_000,), blocks=(200,))
@@ -142,7 +142,7 @@ def test_structured_field_index_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data["id"] >= 48_000) & (data["id"] < 51_000)])
 
 
-def test_module_level_will_use_index_matches_lazyexpr_method():
+def test_module_will_use_index_matches_method():
     import blosc2.indexing as indexing
 
     indexed = blosc2.asarray(np.arange(100_000, dtype=np.int64), chunks=(10_000,), blocks=(2_000,))
@@ -218,7 +218,8 @@ def test_index_accessor_compact_updates_live_view(tmp_path):
     assert reopened.index("a")["full"]["runs"] == []
 
 
-def test_gather_positions_by_block_avoids_whole_chunk_fallback_for_multi_block_reads(monkeypatch):
+def test_gather_by_block_avoids_chunk_fallback(monkeypatch):
+    """A read spanning several blocks gathers by block, not by whole chunk."""
     import blosc2.indexing as indexing
 
     class FakeSource:
@@ -343,7 +344,7 @@ def test_bucket_numeric_dtype_query_matches_scan(dtype):
     np.testing.assert_array_equal(indexed, expected)
 
 
-def test_numeric_unsupported_dtype_fallback_matches_scan():
+def test_unsupported_dtype_fallback_vs_scan():
     values = (np.arange(2_000, dtype=np.float16) / np.float16(10)).astype(np.float16)
 
     arr = blosc2.asarray(values, chunks=(500,), blocks=(100,))
@@ -499,7 +500,7 @@ def test_cross_column_exact_refinement_with_full_index(tmp_path, persistent):
     np.testing.assert_array_equal(indexed, expected)
 
 
-def test_summary_threaded_downstream_order_matches_scan(monkeypatch):
+def test_summary_threaded_order_matches_scan(monkeypatch):
     dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
     data = np.zeros(240_000, dtype=dtype)
     data["id"] = np.arange(data.shape[0], dtype=np.int64)
@@ -586,7 +587,7 @@ def test_persistent_index_survives_reopen(tmp_path, kind):
 
 
 @pytest.mark.parametrize("kind", ["bucket", "partial", "full"])
-def test_default_ooc_persistent_index_matches_scan_and_rebuilds(tmp_path, kind):
+def test_ooc_persistent_matches_scan_rebuilds(tmp_path, kind):
     path = tmp_path / f"indexed_ooc_{kind}.b2nd"
     rng = np.random.default_rng(7)
     dtype = np.dtype([("id", np.int64), ("payload", np.float32)])
@@ -616,7 +617,7 @@ def test_default_ooc_persistent_index_matches_scan_and_rebuilds(tmp_path, kind):
 
 
 @pytest.mark.parametrize("kind", ["bucket", "partial"])
-def test_persistent_chunk_local_ooc_builds_do_not_use_temp_memmap(tmp_path, kind):
+def test_persistent_chunk_ooc_no_temp_memmap(tmp_path, kind):
     path = tmp_path / f"persistent_no_memmap_{kind}.b2nd"
     data = np.arange(120_000, dtype=np.int64)
     indexing = __import__("blosc2.indexing", fromlist=["_segment_row_count"])
@@ -636,7 +637,7 @@ def test_persistent_chunk_local_ooc_builds_do_not_use_temp_memmap(tmp_path, kind
 
 
 @pytest.mark.parametrize("kind", ["bucket", "partial"])
-def test_in_memory_chunk_local_ooc_builds_do_not_use_temp_memmap(kind):
+def test_in_memory_chunk_ooc_no_temp_memmap(kind):
     data = np.arange(120_000, dtype=np.int64)
     indexing = __import__("blosc2.indexing", fromlist=["_segment_row_count"])
     assert not hasattr(indexing, "_open_temp_memmap")
@@ -706,7 +707,7 @@ def test_in_mem_override_disables_ooc_builder(kind):
 
 
 @pytest.mark.parametrize("use_expression", [False, True])
-def test_ultralight_ooc_build_does_not_materialize_full_target(monkeypatch, tmp_path, use_expression):
+def test_ultralight_ooc_no_full_materialize(monkeypatch, tmp_path, use_expression):
     path = tmp_path / ("indexed_expr_ultralight.b2nd" if use_expression else "indexed_ultralight.b2nd")
     if use_expression:
         data = np.zeros(120_000, dtype=[("x", np.int64)])
@@ -729,7 +730,8 @@ def test_ultralight_ooc_build_does_not_materialize_full_target(monkeypatch, tmp_
 
 
 @pytest.mark.parametrize("kind", ["bucket", "partial"])
-def test_chunk_local_ooc_intra_chunk_build_uses_thread_pool_when_threads_forced(monkeypatch, kind):
+def test_intra_chunk_ooc_uses_thread_pool(monkeypatch, kind):
+    """The intra-chunk OOC build uses the thread pool when threads are forced."""
     if blosc2.IS_WASM:
         pytest.skip("wasm32 does not use Python thread pools for index building")
     data = np.arange(48_000, dtype=np.int64)
@@ -761,7 +763,7 @@ def test_chunk_local_ooc_intra_chunk_build_uses_thread_pool_when_threads_forced(
 
 
 @pytest.mark.parametrize("kind", ["bucket", "partial"])
-def test_in_memory_chunk_local_build_uses_cparams_nthreads(monkeypatch, kind):
+def test_in_memory_chunk_uses_cparams_threads(monkeypatch, kind):
     if blosc2.IS_WASM:
         pytest.skip("wasm32 does not use Python thread pools for index building")
     data = np.arange(48_000, dtype=np.int64)
@@ -812,7 +814,7 @@ def test_persistent_chunk_local_sidecars_use_cparams(tmp_path, kind):
         assert sidecar.cparams.clevel == 2
 
 
-def test_intra_chunk_sort_run_matches_numpy_stable_order():
+def test_intra_chunk_sort_matches_np_stable():
     indexing_ext = __import__("blosc2.indexing_ext", fromlist=["intra_chunk_sort_run"])
     values = np.array([4.0, np.nan, 2.0, 2.0, np.nan, 1.0, 4.0], dtype=np.float64)
 
@@ -823,7 +825,7 @@ def test_intra_chunk_sort_run_matches_numpy_stable_order():
     np.testing.assert_array_equal(positions, order.astype(np.uint16, copy=False))
 
 
-def test_intra_chunk_merge_sorted_slices_matches_lexsort_merge():
+def test_intra_chunk_merge_matches_lexsort():
     indexing_ext = __import__("blosc2.indexing_ext", fromlist=["intra_chunk_merge_sorted_slices"])
     left_values = np.array([1.0, 2.0, 2.0, np.nan], dtype=np.float64)
     left_positions = np.array([0, 2, 3, 6], dtype=np.uint16)
@@ -841,7 +843,7 @@ def test_intra_chunk_merge_sorted_slices_matches_lexsort_merge():
     np.testing.assert_array_equal(merged_positions, all_positions[order])
 
 
-def test_intra_chunk_merge_sorted_slices_validates_lengths():
+def test_intra_chunk_merge_validates_lengths():
     indexing_ext = __import__("blosc2.indexing_ext", fromlist=["intra_chunk_merge_sorted_slices"])
     values = np.array([1.0, 2.0], dtype=np.float64)
     positions = np.array([0, 1], dtype=np.uint16)
@@ -852,7 +854,7 @@ def test_intra_chunk_merge_sorted_slices_validates_lengths():
         )
 
 
-def test_index_search_boundary_bounds_validates_lengths():
+def test_search_boundary_validates_lengths():
     indexing_ext = __import__("blosc2.indexing_ext", fromlist=["index_search_boundary_bounds"])
     starts = np.array([1, 3], dtype=np.int64)
     ends = np.array([2], dtype=np.int64)
@@ -861,7 +863,7 @@ def test_index_search_boundary_bounds_validates_lengths():
         indexing_ext.index_search_boundary_bounds(starts, ends, None, True, None, True)
 
 
-def test_mutation_marks_index_stale_and_rebuild_restores_it():
+def test_mutation_marks_stale_rebuild_restores():
     data = np.arange(50_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(5_000,), blocks=(1_000,))
     arr.create_index(kind=blosc2.IndexKind.FULL)
@@ -878,7 +880,7 @@ def test_mutation_marks_index_stale_and_rebuild_restores_it():
     assert expr.will_use_index() is True
 
 
-def test_full_index_reuses_primary_order_for_indices_and_sort():
+def test_full_index_reuses_primary_order():
     dtype = np.dtype([("a", np.int64), ("b", np.int64)])
     data = np.array(
         [(2, 9), (1, 8), (2, 7), (1, 6), (2, 5), (1, 4), (2, 3), (1, 2), (2, 1), (1, 0)],
@@ -914,7 +916,7 @@ def test_persistent_scalar_argsort_uses_full_index(tmp_path):
     np.testing.assert_array_equal(result[:], np.argsort(data, kind="stable"))
 
 
-def test_filtered_ordered_queries_support_cross_field_exact_indexes():
+def test_filtered_ordered_cross_field_indexes():
     dtype = np.dtype([("a", np.int64), ("b", np.int64), ("payload", np.int32)])
     data = np.array(
         [
@@ -1070,7 +1072,8 @@ def test_persistent_full_index_runs_survive_reopen(tmp_path):
     np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
 
 
-def test_persistent_compact_full_positional_query_avoids_whole_sidecar_load(monkeypatch, tmp_path):
+def test_compact_positional_no_sidecar_load(monkeypatch, tmp_path):
+    """A positional query on a persistent compact index reads no whole sidecar."""
     path = tmp_path / "full_selective_ooc.b2nd"
     rng = np.random.default_rng(12)
     data = np.arange(120_000, dtype=np.int64)
@@ -1104,7 +1107,7 @@ def test_persistent_compact_full_positional_query_avoids_whole_sidecar_load(monk
         ("full", {("full", "values"), ("full", "positions")}),
     ],
 )
-def test_in_memory_positional_queries_avoid_whole_loading_index_payloads(monkeypatch, kind, blocked):
+def test_in_memory_positional_no_full_load(monkeypatch, kind, blocked):
     data = np.arange(120_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(12_000,), blocks=(2_000,))
     arr.create_index(kind=_public_kind(kind))
@@ -1257,7 +1260,7 @@ def test_append_keeps_expression_index_current(kind):
         np.testing.assert_array_equal(arr.sort(order="abs(x)")[:], all_data[expected_positions])
 
 
-def test_repeated_appends_keep_full_expression_index_current():
+def test_repeated_appends_keep_expr_index():
     dtype = np.dtype([("x", np.int64), ("payload", np.int32)])
     data = np.array([(-10, 0), (7, 1), (-3, 2), (1, 3)], dtype=dtype)
     arr = blosc2.asarray(data, chunks=(2,), blocks=(2,))
@@ -1280,7 +1283,7 @@ def test_repeated_appends_keep_full_expression_index_current():
     np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
 
 
-def test_compact_full_index_clears_runs_and_preserves_results(tmp_path):
+def test_compact_clears_runs_keeps_results(tmp_path):
     path = tmp_path / "compact_full_runs.b2nd"
     dtype = np.dtype([("a", np.int64), ("b", np.int64)])
     data = np.array([(3, 9), (1, 8), (2, 7), (1, 6)], dtype=dtype)
@@ -1321,7 +1324,7 @@ def test_compact_full_index_clears_runs_and_preserves_results(tmp_path):
     np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
 
 
-def test_compact_full_expression_index_preserves_results():
+def test_compact_expr_index_keeps_results():
     dtype = np.dtype([("x", np.int64), ("payload", np.int32)])
     data = np.array([(-10, 0), (7, 1), (-3, 2), (1, 3)], dtype=dtype)
     arr = blosc2.asarray(data, chunks=(2,), blocks=(2,))
@@ -1343,7 +1346,7 @@ def test_compact_full_expression_index_preserves_results():
     np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
 
 
-def test_forced_ooc_full_index_merge_preserves_sorted_sidecars(monkeypatch, tmp_path):
+def test_forced_ooc_merge_keeps_sidecars(monkeypatch, tmp_path):
     path = tmp_path / "forced_ooc_full_merge.b2nd"
     rng = np.random.default_rng(14)
     data = np.arange(4096, dtype=np.int64)
@@ -1413,7 +1416,7 @@ def test_full_ooc_run_items_env_overrides_optlevel(monkeypatch, tmp_path, optlev
     assert full["ooc_run_item_budget_source"] == "env"
 
 
-def test_create_index_full_ooc_defaults_tmpdir_to_array_directory(monkeypatch, tmp_path):
+def test_full_ooc_tmpdir_defaults_to_array(monkeypatch, tmp_path):
     path = tmp_path / "default_tmpdir_full.b2nd"
     data = np.arange(4096, dtype=np.int64)
     arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(256,), blocks=(64,))
@@ -1433,7 +1436,7 @@ def test_create_index_full_ooc_defaults_tmpdir_to_array_directory(monkeypatch, t
     assert recorded["dir"] == str(path.parent.resolve())
 
 
-def test_create_sorted_index_full_ooc_uses_explicit_tmpdir(monkeypatch, tmp_path):
+def test_sorted_full_ooc_uses_given_tmpdir(monkeypatch, tmp_path):
     path = tmp_path / "explicit_tmpdir_full.b2nd"
     custom_tmpdir = tmp_path / "custom-index-tmp"
     custom_tmpdir.mkdir()
@@ -1458,7 +1461,7 @@ def test_create_sorted_index_full_ooc_uses_explicit_tmpdir(monkeypatch, tmp_path
 
 
 @pytest.mark.parametrize("persistent", [False, True])
-def test_compact_full_index_rebuilds_navigation_without_whole_loading(monkeypatch, tmp_path, persistent):
+def test_compact_rebuilds_nav_without_full_load(monkeypatch, tmp_path, persistent):
     dtype = np.dtype([("a", np.int64), ("b", np.int64)])
     data = np.array([(3, 9), (1, 8), (2, 7), (1, 6)], dtype=dtype)
     kwargs = {"chunks": (2,), "blocks": (2,)}
@@ -1493,7 +1496,7 @@ def test_compact_full_index_rebuilds_navigation_without_whole_loading(monkeypatc
     np.testing.assert_array_equal(expr.compute()[:], expected)
 
 
-def test_persistent_large_run_full_query_uses_bounded_fallback(monkeypatch, tmp_path):
+def test_large_run_query_bounded_fallback(monkeypatch, tmp_path):
     path = tmp_path / "large_run_fallback.b2nd"
     dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
     data = np.array([(10, 0), (20, 1), (30, 2), (40, 3)], dtype=dtype)
@@ -1525,7 +1528,7 @@ def test_persistent_large_run_full_query_uses_bounded_fallback(monkeypatch, tmp_
     np.testing.assert_array_equal(expr.compute()[:], expected)
 
 
-def test_large_run_full_expression_query_uses_bounded_fallback(monkeypatch):
+def test_large_run_expr_query_bounded_fallback(monkeypatch):
     dtype = np.dtype([("x", np.int64), ("payload", np.int32)])
     data = np.array([(-10, 0), (7, 1), (-3, 2), (1, 3)], dtype=dtype)
     arr = blosc2.asarray(data, chunks=(4,), blocks=(2,))
@@ -1610,7 +1613,7 @@ def test_canonical_digest_differs_on_order_change():
     assert indexing._query_cache_digest(d1) != indexing._query_cache_digest(d2)
 
 
-def test_canonical_digest_preserves_order_field_sequence():
+def test_canonical_digest_keeps_field_order():
     d1 = indexing._normalize_query_descriptor("(id >= 3) & (id < 6)", ["__self__"], ["a", "b"])
     d2 = indexing._normalize_query_descriptor("(id >= 3) & (id < 6)", ["__self__"], ["b", "a"])
     assert indexing._query_cache_digest(d1) != indexing._query_cache_digest(d2)
@@ -1741,7 +1744,7 @@ def test_in_memory_array_hot_cache_hit():
 # ---------------------------------------------------------------------------
 
 
-def test_persistent_arrays_do_not_create_query_cache_artifacts(tmp_path):
+def test_persistent_arrays_no_cache_artifacts(tmp_path):
     arr, urlpath = _make_persistent_array(tmp_path)
     _clear_caches()
 
@@ -1777,7 +1780,7 @@ def test_persistent_cache_helpers_are_disabled(tmp_path):
     assert not Path(indexing._query_cache_payload_path(arr)).exists()
 
 
-def test_store_cached_coords_for_persistent_array_uses_hot_cache_only(tmp_path):
+def test_cached_coords_use_hot_cache_only(tmp_path):
     arr, _ = _make_persistent_array(tmp_path, n=8_000)
     _clear_caches()
 
@@ -1920,7 +1923,7 @@ def test_ordered_query_indices_cached(tmp_path, monkeypatch):
     np.testing.assert_array_equal(result1, result2)
 
 
-def test_ordered_query_cache_distinguishes_order_sequences(tmp_path):
+def test_query_cache_distinguishes_orders(tmp_path):
     path = tmp_path / "ordered_sequences.b2nd"
     dtype = np.dtype([("a", np.int64), ("b", np.int64)])
     data = np.array([(1, 2), (1, 1), (2, 1), (2, 2)], dtype=dtype)
@@ -2254,7 +2257,7 @@ def test_inmem_indices_cache_entries_are_dropped_on_gc():
     assert indexing._HOT_CACHE == {}
 
 
-def test_ondisk_indices_path_no_cross_array_hot_cache_contamination(tmp_path):
+def test_ondisk_no_cross_array_cache_mixing(tmp_path):
     dtype = np.dtype([("id", np.int64), ("val", np.float32)])
     data1 = np.empty(1_000, dtype=dtype)
     data2 = np.empty(1_000, dtype=dtype)

@@ -103,7 +103,7 @@ def test_where_with_index_matches_scan_in_memory():
 
 
 @pytest.mark.heavy
-def test_indexed_where_view_sort_by_reuses_cached_live_positions(monkeypatch):
+def test_indexed_where_sort_by_reuses_live_pos(monkeypatch):
     t = _make_table(200)
     t.create_index("id", kind=blosc2.IndexKind.FULL)
 
@@ -128,7 +128,7 @@ def test_create_expression_index_in_memory():
 
 
 @pytest.mark.heavy
-def test_where_with_expression_index_matches_scan_in_memory():
+def test_where_expr_index_matches_scan():
     t = _make_table(200)
     t.create_index(expression="value * category", kind=blosc2.IndexKind.FULL, name="vc")
     result_idx = t.where((t._cols["value"] * t._cols["category"]) >= 150)
@@ -196,7 +196,7 @@ def test_stale_on_column_assign_in_memory():
     assert t.index("id").stale
 
 
-def test_delete_bumps_visibility_epoch_not_stale_in_memory():
+def test_delete_bumps_epoch_not_stale():
     t = _make_table(20)
     t.create_index("id")
     t.delete(0)
@@ -226,7 +226,7 @@ def test_compact_index_in_memory():
 
 
 @pytest.mark.heavy
-def test_multi_column_conjunction_uses_multiple_indexes_in_memory():
+def test_conjunction_uses_multiple_indexes():
     t = _make_table(200)
     t.create_index("id", kind=blosc2.IndexKind.FULL)
     t.create_index("category", kind=blosc2.IndexKind.FULL)
@@ -240,7 +240,7 @@ def test_multi_column_conjunction_uses_multiple_indexes_in_memory():
     assert ids_idx == ids_scan
 
 
-def test_full_index_large_ctable_column_matches_scan_in_memory():
+def test_full_index_large_column_matches_scan():
     @dataclasses.dataclass
     class SensorRow:
         sensor_id: int = blosc2.field(blosc2.int32())
@@ -288,7 +288,7 @@ def test_create_index_persistent(tmpdir):
     assert sidecars, "No sidecar .b2nd files found"
 
 
-def test_create_index_persistent_does_not_cache_sidecar_handles(tmpdir):
+def test_create_index_does_not_cache_sidecars(tmpdir):
     import blosc2.indexing as indexing
 
     path = str(tmpdir / "table.b2d")
@@ -303,7 +303,7 @@ def test_create_index_persistent_does_not_cache_sidecar_handles(tmpdir):
     assert cached == []
 
 
-def test_persistent_ctable_releases_immediately_without_gc(tmpdir):
+def test_persistent_releases_without_gc(tmpdir):
     path = str(tmpdir / "table.b2d")
 
     def build_table():
@@ -372,7 +372,7 @@ def test_where_with_index_matches_scan_persistent(tmpdir):
 
 
 @pytest.mark.heavy
-def test_relative_b2d_ctable_index_sidecars_survive_reopen(tmp_path, monkeypatch):
+def test_relative_b2d_sidecars_survive_reopen(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     t = _make_table(200, persistent_path="table.b2d")
     t.create_index("id", kind=blosc2.IndexKind.BUCKET)
@@ -385,7 +385,7 @@ def test_relative_b2d_ctable_index_sidecars_survive_reopen(tmp_path, monkeypatch
 
 
 @pytest.mark.heavy
-def test_persistent_index_drop_releases_sidecars_without_gc(tmpdir):
+def test_index_drop_releases_sidecars_no_gc(tmpdir):
     import gc
 
     def run_query_and_drop():
@@ -434,7 +434,7 @@ def test_expression_index_persistent_roundtrip(tmpdir):
     assert len(result) > 0
 
 
-def test_sort_by_computed_column_with_expression_full_index():
+def test_sort_by_computed_col_full_index():
     t = _make_table(40)
     t.add_computed_column("score", "value * category")
     t.create_index(expression="value * category", kind=blosc2.IndexKind.FULL, name="score_expr")
@@ -462,7 +462,7 @@ def test_drop_index_persistent_catalog_cleared(tmpdir):
     assert len(t2.indexes) == 0
 
 
-def test_drop_indexed_column_removes_persistent_sidecars(tmpdir):
+def test_drop_indexed_col_removes_sidecars(tmpdir):
     path = str(tmpdir / "table.b2d")
     t = _make_table(30, persistent_path=path)
     t.create_index("id")
@@ -539,7 +539,7 @@ def test_query_after_reopen_persistent(tmpdir):
     assert ids == list(range(91, 100))
 
 
-def test_rename_indexed_column_rebuilds_catalog_persistent(tmpdir):
+def test_rename_indexed_col_rebuilds_catalog(tmpdir):
     path = str(tmpdir / "table.b2d")
     t = _make_table(40, persistent_path=path)
     t.create_index("id")
@@ -629,7 +629,7 @@ def test_indexes_multiple_columns():
     assert col_names == {"id", "category"}
 
 
-def test_indexed_ctable_b2z_double_open_append_no_corruption(tmp_path):
+def test_b2z_double_open_append_no_corruption(tmp_path):
     """Opening an indexed CTable .b2z in append mode twice must not corrupt it.
 
     Regression test: GC of a CTable opened from .b2z was calling close() →
@@ -688,7 +688,8 @@ def test_indexing_purges_stale_persistent_caches():
     assert all(tmpdir not in path for path in indexing._GATHER_MMAP_HANDLES)
 
 
-def test_indexing_purge_tolerates_reentrant_sidecar_handle_cache_mutation(monkeypatch):
+def test_purge_tolerates_reentrant_cache_change(monkeypatch):
+    """Purging survives a sidecar handle cache mutated re-entrantly mid-purge."""
     import blosc2.indexing as indexing
 
     stale_scope = ("persistent", "/tmp/stale-index.b2nd")
@@ -713,7 +714,7 @@ def test_indexing_purge_tolerates_reentrant_sidecar_handle_cache_mutation(monkey
     indexing._SIDECAR_HANDLE_CACHE.pop(injected_key, None)
 
 
-def test_summary_index_compact_store_no_cross_column_confusion(tmp_path):
+def test_summary_compact_no_cross_column_mixup(tmp_path):
     """Regression: a SUMMARY index on one column of a compact (.b2z) store must
     not be applied to a *different* column's predicate.
 
@@ -756,7 +757,7 @@ def test_summary_index_compact_store_no_cross_column_confusion(tmp_path):
     assert got == expected, f"index returned {got}, expected {expected} (scan)"
 
 
-def test_sidecar_handle_cache_no_cross_column_collision(tmp_path):
+def test_sidecar_cache_no_cross_col_collision(tmp_path):
     """Regression: in a compact (.b2z) multi-column store, reading the SUMMARY
     block sidecar handle for each column must return *that* column's data, not
     a sibling's.
@@ -900,7 +901,7 @@ def test_incremental_summary_matches_ooc_build(tmp_path):
         assert np.allclose(a["max"], b["max"], equal_nan=True)
 
 
-def test_incremental_summary_invalidated_by_inplace_update(tmp_path):
+def test_incremental_summary_stale_on_inplace(tmp_path):
     """An in-place column write before close must invalidate the accumulator so
     the builder falls back to a correct full rescan."""
     f, i = _build_incr_data(n=4000)
@@ -934,7 +935,7 @@ def test_granularity_only_valid_for_summary():
 
 @pytest.mark.heavy
 @pytest.mark.parametrize("threshold", [5.0, 50.0, 99.0, 99.99])
-def test_summary_cost_gate_correctness_across_selectivity(threshold):
+def test_summary_cost_gate_across_selectivity(threshold):
     """The SUMMARY cost gate may use the index (selective query) or fall back to
     a scan (broad query); both branches must return scan-correct results."""
     t, _ = _make_gran_table(n=6000)
@@ -1103,7 +1104,7 @@ def test_cross_column_or_prunes_segments_compact_b2z(tmp_path, monkeypatch):
     assert pruned, "cross-column OR fell back to a full scan instead of pruning"
 
 
-def test_cross_column_predicates_match_scan_compact_b2z(tmp_path):
+def test_cross_column_preds_match_scan_b2z(tmp_path):
     """Cross-column AND/OR over two SUMMARY-indexed columns must match the
     boolean-mask (no-index) result across selective, non-selective, empty, and
     mixed-direction predicates."""
@@ -1141,7 +1142,7 @@ def _seg_plan(units, *, base_nrows=1000, segment_len=250, level="block"):
     )
 
 
-def test_merge_segment_plans_intersection_union_and_fallback():
+def test_merge_segment_plans_and_fallback():
     """Unit-level guard for the cross-column merge semantics."""
     from blosc2.indexing import _merge_segment_plans
 
@@ -1233,7 +1234,7 @@ def test_coalesce_spans_merges_within_a_block():
     assert merged == [(0, 402)]
 
 
-def test_bucket_block_fraction_counts_blocks_not_buckets():
+def test_bucket_gate_counts_blocks_not_buckets():
     """Selectivity in buckets overstates the saving; the read unit is the block."""
     frac = blosc2.indexing._bucket_block_fraction
     geom = {"nav_segment_len": 16384, "bucket_len": 256}  # 64 buckets per block

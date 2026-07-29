@@ -99,7 +99,7 @@ def test_stream_envelope_matches_full_read_ctable(plot_store, monkeypatch):
     _assert_exact(env, vals)
 
 
-def test_stream_envelope_captures_spike_a_sample_would_miss(plot_store, monkeypatch):
+def test_stream_envelope_captures_spike(plot_store, monkeypatch):
     path, vals = plot_store
     _force_stream(monkeypatch)
     with StoreBrowser(path) as browser:
@@ -222,7 +222,7 @@ def test_read_series_clamps_range(plot_store):
     assert clamped["y"].shape == (N,)
 
 
-def test_locked_row_window_confines_plot_and_read_series(plot_store):
+def test_locked_row_window_confines_plot(plot_store):
     """A locked row window (the 'v' action) takes precedence over the full
     series in both plot_series and read_series, matching preview()/read_cell()
     (PR #663 review): a plot/hi-res of a windowed CTable shows only its rows."""

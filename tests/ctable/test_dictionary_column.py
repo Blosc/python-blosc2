@@ -215,7 +215,7 @@ class TestCTableBehavior:
         assert ct.where('"Acme" in company and amount > 8')["amount"][:].tolist() == [9.0]
         assert ct.where('"Acme" in company or "Beta" in company').nrows == 3
 
-    def test_string_where_dictionary_literal_with_special_chars(self):
+    def test_where_dict_literal_special_chars(self):
         # Literals with commas/spaces/dashes (e.g. chicago-taxi company names).
         @dataclass
         class Row:
@@ -229,7 +229,7 @@ class TestCTableBehavior:
         assert ct.where(f'company == "{name}"')["n"][:].tolist() == [1, 3]
         assert ct.where(f"company == '{name}'")["n"][:].tolist() == [1, 3]  # single quotes too
 
-    def test_dictionary_predicate_combines_with_regular_predicate_in_aggregate(self):
+    def test_dict_pred_combines_in_aggregate(self):
         ct = CTable(TripRow)
         ct.extend(DATA_TUPLES)
         assert ct["fare"].sum(where=(ct["fare"] > 6) & (ct["vendor"] == "Uber")) == pytest.approx(25.5)
@@ -659,7 +659,7 @@ def test_dictionary_index_answers_equality(tmp_path):
     assert results["scan"]["apple"][0] == ["apple", "apple"]
 
 
-def test_dict_rank_index_staleness_uses_the_value_epoch(tmp_path):
+def test_dict_rank_staleness_uses_value_epoch(tmp_path):
     """The staleness check must not re-hash the whole dictionary per query."""
     from blosc2.ctable_indexing import _dict_rank_hash
 

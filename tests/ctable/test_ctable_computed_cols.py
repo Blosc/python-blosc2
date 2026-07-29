@@ -164,7 +164,7 @@ def test_computed_column_where_via_col():
     assert len(view) == 3  # 9, 16, 25
 
 
-def test_getitem_boolean_lazyexpr_matches_where_for_computed_column():
+def test_getitem_bool_lazyexpr_matches_where():
     t = _make_invoice_table(5)
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
     expr = t.total >= 9
@@ -499,7 +499,7 @@ def test_materialize_computed_column_extend_autofill():
     np.testing.assert_allclose(t["total_stored"][:], [1.0, 4.0, 9.0, 16.0])
 
 
-def test_materialize_computed_column_explicit_append_value_wins():
+def test_materialize_explicit_append_wins():
     t = _make_invoice_table(2)
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
     t.materialize_computed_column("total", new_name="total_stored")
@@ -745,7 +745,7 @@ def test_materialize_computed_column_open_roundtrip(tmp_path):
     assert t2.index("total_stored").kind == "full"
 
 
-def test_materialize_computed_column_open_append_autofill(tmp_path):
+def test_materialize_open_append_autofill(tmp_path):
     path = str(tmp_path / "tbl")
     t = CTable(Invoice, [(1.0, 1, 0.1), (2.0, 2, 0.1)], urlpath=path, mode="w")
     t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
@@ -1066,7 +1066,7 @@ def test_add_computed_column_empty_expression_raises(monkeypatch):
         t.add_computed_column("total", lambda cols: cols["price"] * cols["qty"])
 
 
-def test_add_computed_column_malformed_expression_raises(monkeypatch):
+def test_add_computed_malformed_expr_raises(monkeypatch):
     """add_computed_column raises ValueError when the expression string cannot be re-parsed."""
     t = _make_invoice_table()
 

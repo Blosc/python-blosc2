@@ -181,7 +181,7 @@ class TestPandasEngineEndToEnd:
         with pytest.raises(ValueError, match="numeric dtype"):
             df.apply(lambda x: x + 1, engine=blosc2.jit)
 
-    def test_apply_axis1_row_subscript_idiom_matches_default_engine(self):
+    def test_axis1_subscript_matches_default_engine(self):
         def add_people(row):
             return row["max_people"] + row["max_children"]
 
@@ -190,7 +190,7 @@ class TestPandasEngineEndToEnd:
         result = df.apply(add_people, engine=blosc2.jit, axis=1)
         pd.testing.assert_series_equal(result, expected)
 
-    def test_apply_axis1_row_subscript_args_kwargs_forwarded(self):
+    def test_axis1_subscript_args_kwargs_forwarded(self):
         def combine(row, num1, num2=0):
             return row["a"] + row["b"] + num1 + num2
 
@@ -199,7 +199,7 @@ class TestPandasEngineEndToEnd:
         result = df.apply(combine, engine=blosc2.jit, axis=1, args=(10,), num2=100)
         pd.testing.assert_series_equal(result, expected)
 
-    def test_apply_axis1_row_subscript_preserves_column_dtype(self):
+    def test_axis1_subscript_keeps_column_dtype(self):
         # a mixed-dtype frame would be upcast by DataFrame.values; the row
         # proxy must extract columns from the original frame instead.
         def add(row):
@@ -209,7 +209,7 @@ class TestPandasEngineEndToEnd:
         result = df.apply(add, engine=blosc2.jit, axis=1)
         np.testing.assert_allclose(result.to_numpy(), [1.5, 2.5, 3.5])
 
-    def test_apply_axis1_row_subscript_with_loop_raises_clear_error(self):
+    def test_axis1_subscript_with_loop_raises(self):
         def kepler_row(row):
             m, ecc = row["m"], row["ecc"]
             e = m + ecc * np.sin(m)
@@ -222,7 +222,7 @@ class TestPandasEngineEndToEnd:
         with pytest.raises(TypeError, match="for/while loop"):
             df.apply(kepler_row, engine=blosc2.jit, axis=1)
 
-    def test_apply_axis1_row_subscript_duplicate_column_raises(self):
+    def test_axis1_subscript_duplicate_col_raises(self):
         def add(row):
             return row["a"] + 1
 
@@ -230,7 +230,7 @@ class TestPandasEngineEndToEnd:
         with pytest.raises(KeyError, match="duplicated"):
             df.apply(add, engine=blosc2.jit, axis=1)
 
-    def test_apply_axis1_row_subscript_attribute_access_raises(self):
+    def test_axis1_subscript_attr_access_raises(self):
         def bad(row):
             return row["a"] + row.b
 
@@ -238,7 +238,7 @@ class TestPandasEngineEndToEnd:
         with pytest.raises(AttributeError, match="row\\['b'\\]"):
             df.apply(bad, engine=blosc2.jit, axis=1)
 
-    def test_apply_axis1_row_subscript_unvectorizable_column_raises(self):
+    def test_axis1_subscript_unvectorizable_raises(self):
         # String columns are supported now, so the per-column check in
         # `_PandasRowProxy` is what still rejects a dtype the engine cannot
         # vectorize at all.
@@ -249,7 +249,7 @@ class TestPandasEngineEndToEnd:
         with pytest.raises(ValueError, match="cannot vectorize"):
             df.apply(bad, engine=blosc2.jit, axis=1)
 
-    def test_apply_axis1_positional_idiom_still_uses_per_row_loop(self):
+    def test_axis1_positional_uses_per_row_loop(self):
         # No `row["..."]` subscript: falls back to the historical per-row
         # loop, unaffected by the row-proxy dispatch added for the subscript
         # idiom above.
@@ -258,7 +258,7 @@ class TestPandasEngineEndToEnd:
         result = df.apply(lambda row: row * 2, engine=blosc2.jit, axis=1)
         pd.testing.assert_frame_equal(result, expected)
 
-    def test_apply_already_jitted_function_is_not_decorated_twice(self):
+    def test_apply_jitted_func_not_decorated_twice(self):
         # Decorating and passing engine= both request the same thing. Applying
         # the decorator a second time used to wrap the array in a SimpleProxy
         # before the inner DSL kernel saw it, which then failed asking for
@@ -277,7 +277,7 @@ class TestPandasEngineEndToEnd:
             result = df.apply(func, engine=blosc2.jit)
             pd.testing.assert_frame_equal(result, expected)
 
-    def test_map_already_jitted_function_is_not_decorated_twice(self):
+    def test_map_jitted_func_not_decorated_twice(self):
         def branch(col):
             if col >= 0:
                 out = col * 2.0

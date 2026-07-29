@@ -216,7 +216,7 @@ _VECTOR_DIST_CASES = {
     [(m, a, k) for m, (a, k) in _VECTOR_DIST_CASES.items()],
     ids=_VECTOR_DIST_CASES.keys(),
 )
-def test_vector_distribution_shape_reproducible_and_finite(method, args, k):
+def test_vector_dist_reproducible_and_finite(method, args, k):
     def draw():
         rng = getattr(blosc2.random.default_rng(0), method)
         return rng(*args, shape=(40,))
@@ -249,7 +249,7 @@ def test_vector_dist_numpy_integer_shape():
     assert a.shape == (5, 3)
 
 
-def test_permutation_int_is_a_permutation_and_reproducible():
+def test_permutation_int_is_valid_and_stable():
     a = blosc2.random.default_rng(0).permutation(10)
     b = blosc2.random.default_rng(0).permutation(10)
     np.testing.assert_array_equal(a[:], b[:])

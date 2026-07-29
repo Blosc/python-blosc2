@@ -157,7 +157,7 @@ def test_lazyexpr_where_full_slice_no_recursion():
     np.testing.assert_allclose(a[a < 5][:], expected)
 
 
-def test_lazyexpr_where_full_slice_persisted_reuses_shared_chunk_cache(tmp_path):
+def test_where_full_slice_reuses_shared_cache(tmp_path):
     nitems = 60_000
     expected = np.linspace(0, 1, nitems)
     a = blosc2.asarray(
@@ -172,7 +172,7 @@ def test_lazyexpr_where_full_slice_persisted_reuses_shared_chunk_cache(tmp_path)
         blosc2.set_nthreads(old_nthreads)
 
 
-def test_lazyexpr_where_full_slice_cached_repeat_avoids_full_mask_scan(monkeypatch):
+def test_where_full_slice_repeat_avoids_scan(monkeypatch):
     nitems = 60_000
     expected = np.arange(5, dtype=np.int64)
     a = blosc2.asarray(np.arange(nitems, dtype=np.int64), chunks=(20_000,))
@@ -188,7 +188,7 @@ def test_lazyexpr_where_full_slice_cached_repeat_avoids_full_mask_scan(monkeypat
 
 
 @pytest.mark.parametrize("mode", ["r", "a"])
-def test_lazyexpr_where_full_slice_persistent_uses_hot_cache_without_persisting(tmp_path, monkeypatch, mode):
+def test_where_full_slice_hot_cache_no_persist(tmp_path, monkeypatch, mode):
     nitems = 60_000
     expected = np.arange(5, dtype=np.int64)
     urlpath = tmp_path / "persisted_readonly.b2nd"
@@ -303,7 +303,8 @@ def test_take_1d_sparse_path_negative_indices():
     np.testing.assert_array_equal(a[idx], npa[idx])
 
 
-def test_take_1d_sparse_path_structured_non_behaved_partitions():
+def test_take_1d_sparse_structured_partitions():
+    """The 1-D sparse path, on structured dtypes with non-behaved partitions."""
     npa = np.empty((100,), dtype=[("a", np.int32), ("b", np.int32)])
     npa["a"] = np.arange(1, 101)
     npa["b"] = np.arange(200, 100, -1)
@@ -328,7 +329,7 @@ def test_ndarray_take_1d_matches_numpy():
     np.testing.assert_array_equal(result[()], np.take(npa, idx))
 
 
-def test_ndarray_take_axis_with_nd_indices_matches_numpy():
+def test_take_axis_nd_indices_matches_numpy():
     npa = np.arange(3 * 4 * 5, dtype=np.int32).reshape(3, 4, 5)
     a = blosc2.asarray(npa, chunks=(2, 2, 3))
     idx = np.array([[3, 0], [1, -1]], dtype=np.int64)
@@ -342,7 +343,7 @@ def test_ndarray_take_axis_with_nd_indices_matches_numpy():
     np.testing.assert_array_equal(top_level_result[()], expected)
 
 
-def test_ndarray_take_axis_none_nd_fallback_matches_numpy():
+def test_take_axis_none_nd_matches_numpy():
     npa = np.arange(3 * 4 * 5, dtype=np.int32).reshape(3, 4, 5)
     a = blosc2.asarray(npa, chunks=(2, 2, 3))
     idx = np.array([[0, -1], [17, 5]], dtype=np.int64)
@@ -648,7 +649,7 @@ def test_getitem_integer_array_out_of_bounds():
         _ = a[[-4]]
 
 
-def test_getitem_integer_array_still_uses_fancy_for_boolean():
+def test_getitem_int_array_fancy_for_boolean():
     """Boolean arrays should NOT be routed through the sparse path."""
     a = blosc2.asarray(np.arange(12, dtype=np.int32).reshape(3, 4))
     mask = np.array([True, False, True])

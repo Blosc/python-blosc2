@@ -18,7 +18,7 @@ def _table_with_empty_root_alias():
     return blosc2.CTable.from_arrow(schema, [batch])
 
 
-def test_schema_version_2_with_nested_metadata_roundtrip():
+def test_schema_v2_nested_metadata_roundtrip():
     schema = pa.schema([pa.field("x.y", pa.float64())])
     batch = pa.record_batch([pa.array([1.0, 2.0])], schema=schema)
     t = blosc2.CTable.from_arrow(schema, [batch])
@@ -31,13 +31,13 @@ def test_schema_version_2_with_nested_metadata_roundtrip():
     assert restored.metadata["nested"]["logical_to_physical"]["x.y"] == "x.y"
 
 
-def test_empty_root_metadata_exports_back_to_empty_arrow_name():
+def test_empty_root_exports_empty_arrow_name():
     t = _table_with_empty_root_alias()
     out = t.to_arrow()
     assert out.schema.names == [""]
 
 
-def test_empty_root_logical_alias_getitem_select_and_index():
+def test_empty_root_alias_getitem_and_select():
     t = _table_with_empty_root_alias()
     assert t[""][0] == 1.0
     s = t.select([""])

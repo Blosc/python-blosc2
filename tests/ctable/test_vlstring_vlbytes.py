@@ -206,7 +206,7 @@ def test_scalar_varlen_array_nullable():
     assert sva[3] is None
 
 
-def test_scalar_varlen_array_rejects_none_when_not_nullable():
+def test_varlen_array_rejects_none_not_nullable():
     spec = blosc2.vlstring(nullable=False)
     sva = _make_sva(spec)
     with pytest.raises(TypeError, match="not nullable"):
@@ -313,7 +313,7 @@ def test_ctable_vlstring_column_is_not_list():
     assert ct.text.is_varlen_scalar
 
 
-def test_ctable_vlstring_column_null_count_non_nullable():
+def test_vlstring_null_count_non_nullable():
     ct = blosc2.CTable(VLRow, new_data=ROWS)
     # Non-nullable: no Nones → null_count = 0
     assert ct.text.null_count() == 0
@@ -395,7 +395,7 @@ def test_ctable_vlstring_copy_with_deletions_compact():
     assert list(copied.text) == expected
 
 
-def test_ctable_vlstring_copy_noncompact_preserves_tombstones():
+def test_vlstring_copy_keeps_tombstones():
     ct = blosc2.CTable(VLRow, new_data=ROWS)
     ct.delete([1, 3])
     copied = ct.copy(compact=False)
@@ -441,7 +441,7 @@ def test_ctable_vlstring_backend_role_metadata(tmp_path):
     }
 
 
-def test_ctable_constructor_reopens_vlstring_persistent_table(tmp_path):
+def test_ctor_reopens_vlstring_persistent(tmp_path):
     urlpath = str(tmp_path / "vl_ctor_reopen.b2d")
     ct = blosc2.CTable(VLRow, new_data=ROWS[:2], urlpath=urlpath, mode="w")
     ct.close()
@@ -668,7 +668,7 @@ def test_ctable_vlbytes_column_assign():
     assert list(ct["data"][:]) == [bytes([i]) for i in range(len(ROWS))]
 
 
-def test_ctable_vlstring_column_assign_skips_deleted_rows():
+def test_vlstring_assign_skips_deleted_rows():
     ct = blosc2.CTable(VLRow, new_data=ROWS)
     ct.delete([1, 3])
     ct["text"].assign(["p", "q", "r"])
@@ -676,7 +676,7 @@ def test_ctable_vlstring_column_assign_skips_deleted_rows():
     assert list(ct["id"][:]) == [0, 2, 4]
 
 
-def test_ctable_vlstring_column_assign_wrong_length_raises():
+def test_vlstring_assign_wrong_length_raises():
     ct = blosc2.CTable(VLRow, new_data=ROWS)
     with pytest.raises(ValueError, match="requires 5 values"):
         ct["text"].assign(["too", "few"])

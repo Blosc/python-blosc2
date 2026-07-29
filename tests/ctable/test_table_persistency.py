@@ -944,7 +944,7 @@ def test_to_cframe_with_vlstring_lazy_view():
     assert t2["data"][:] == [b"bin2", b"bin3"]
 
 
-def test_ctable_from_cframe_rejects_non_embedstore_cframe():
+def test_from_cframe_rejects_non_embedstore():
     """Passing an NDArray cframe raises ValueError."""
     nd = blosc2.arange(10)
     cframe = nd.to_cframe()

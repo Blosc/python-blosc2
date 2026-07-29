@@ -439,7 +439,7 @@ def test_sum_empty_filtered_view_returns_zero():
     assert t[t.id < 0]["id"].sum() == 0
 
 
-def test_sum_where_skips_valid_rows_mask_when_all_rows_visible():
+def test_sum_where_skips_mask_when_all_visible():
     t = CTable(Row, new_data=DATA20, expected_size=len(DATA20))
     mask = t["id"]._lazy_nonnull_mask(where=t["score"] < 100)
     assert mask.expression == "(o0 < 100)"
@@ -904,7 +904,7 @@ def test_column_repr_shows_preview_values():
     assert "..." in r
 
 
-def test_info_omits_capacity_and_read_only_for_in_memory_table():
+def test_info_omits_capacity_for_in_memory():
     t = CTable(Row, new_data=DATA20)
     info = repr(t.info)
     assert "capacity" not in info
@@ -1077,7 +1077,7 @@ def test_ctable_setitem_view_raises():
         view["score"] = np.zeros(len(view))
 
 
-def test_column_setitem_ndarray_fast_path_on_disk_table(tmp_path):
+def test_setitem_ndarray_fast_path_on_disk(tmp_path):
     """Fast path fires for a disk-opened table (not just freshly-built in-memory tables)."""
     n = 60
     urlpath = str(tmp_path / "tbl.b2")
@@ -1113,7 +1113,7 @@ def test_column_setitem_blosc2_ndarray_no_holes():
     np.testing.assert_allclose(t["val"][:], np.arange(n, dtype=np.float64) * 3.14)
 
 
-def test_column_setitem_blosc2_ndarray_no_holes_uneven_chunks():
+def test_setitem_b2_ndarray_no_holes_uneven():
     """Fast path works when nrows is not a multiple of chunk_size."""
     n = 70
 

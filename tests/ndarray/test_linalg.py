@@ -162,7 +162,7 @@ def test_matmul_uses_fast_path_for_supported_2d(monkeypatch, dtype):
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_matmul_uses_fast_path_with_multiple_inner_blocks(monkeypatch, dtype):
+def test_matmul_fast_path_many_inner_blocks(monkeypatch, dtype):
     old_flag = utils_mod.try_miniexpr
     calls = _set_pref_matmul_call_recorder(monkeypatch)
     try:
@@ -257,7 +257,7 @@ def test_matmul_falls_back_for_dtype_mismatch(monkeypatch):
         _toggle_miniexpr(old_flag)
 
 
-def test_matmul_fast_path_limits_blas_threads_for_cblas(monkeypatch):
+def test_matmul_limits_blas_threads_for_cblas(monkeypatch):
     old_flag = utils_mod.try_miniexpr
     calls = []
 
@@ -294,7 +294,7 @@ def test_matmul_fast_path_limits_blas_threads_for_cblas(monkeypatch):
         _toggle_miniexpr(old_flag)
 
 
-def test_matmul_fast_path_skips_blas_thread_limits_above_block_threshold(monkeypatch):
+def test_matmul_keeps_blas_threads_over_limit(monkeypatch):
     old_flag = utils_mod.try_miniexpr
 
     def unexpected_threadpool_limits(*args, **kwargs):
@@ -321,7 +321,7 @@ def test_matmul_fast_path_skips_blas_thread_limits_above_block_threshold(monkeyp
         _toggle_miniexpr(old_flag)
 
 
-def test_matmul_fast_path_skips_blas_thread_limits_on_darwin(monkeypatch):
+def test_matmul_keeps_blas_threads_on_darwin(monkeypatch):
     old_flag = utils_mod.try_miniexpr
 
     def unexpected_threadpool_limits(*args, **kwargs):
@@ -347,7 +347,7 @@ def test_matmul_fast_path_skips_blas_thread_limits_on_darwin(monkeypatch):
         _toggle_miniexpr(old_flag)
 
 
-def test_matmul_fast_path_skips_blas_thread_limits_for_non_cblas(monkeypatch):
+def test_matmul_keeps_blas_threads_non_cblas(monkeypatch):
     old_flag = utils_mod.try_miniexpr
 
     def unexpected_threadpool_limits(*args, **kwargs):
@@ -372,7 +372,8 @@ def test_matmul_fast_path_skips_blas_thread_limits_for_non_cblas(monkeypatch):
         _toggle_miniexpr(old_flag)
 
 
-def test_matmul_fast_path_skips_blas_thread_limits_when_threadpoolctl_missing(monkeypatch):
+def test_matmul_keeps_blas_threads_no_tpctl(monkeypatch):
+    """Without threadpoolctl installed, the BLAS thread limit is left alone."""
     old_flag = utils_mod.try_miniexpr
     monkeypatch.setattr(blosc2_linalg, "threadpool_limits", None)
     monkeypatch.setattr(blosc2.blosc2_ext, "get_selected_matmul_block_backend", lambda: "cblas")
