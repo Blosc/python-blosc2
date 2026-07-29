@@ -26,7 +26,7 @@ because two of the conclusions below originally rested on it.
 | `sum(where=…)` | ✓ | ✓ | ✓ | ✗ | ✗ |
 | `sort_by` | ✓ | ✓ | ✓ | ✓ | ✗ TypeError |
 | `group_by` | ✓ | ✓ | ✓ | ✓ | ✗ |
-| `create_index` | ✓ all 5 kinds | ✓ all 5 kinds | ✓ rank, ordering + predicates ⁷ | ✓ rank, ordering + `==`/`!=` ⁷ | ✗ |
+| `create_index` | ✓ all 5 kinds | ✓ all 5 kinds | ✓ rank, `FULL` only ⁷ ⁹ | ✓ rank, `FULL` only ⁷ ⁹ | ✗ |
 | **Compute (string-returning)** | | | | | |
 | `add_computed_column("'x='+c")` | ✓ | ✓ | **✗ NotImpl** | ✗ | ✗ |
 | `assign(new=…)` | ✓ | ✓ | **✗ NotImpl** | ✗ | ✗ |
@@ -71,8 +71,9 @@ caching the code→value map that `_ensure_cache()` was already building the for
 
 `create_index` is the one place where the flavours are not merely *slower* or *less convenient* than
 each other — they are in different performance classes. All five index kinds
-(`SUMMARY`/`BUCKET`/`PARTIAL`/`FULL`/`OPSI`) build on `string()`, `bytes()` and — since `b1bbc54e` —
-`utf8()`. What follows was written when utf8 had no index at all; the ⁷ note records what changed.
+(`SUMMARY`/`BUCKET`/`PARTIAL`/`FULL`/`OPSI`) work on `string()` and `bytes()`. `utf8()` gained an
+index in `b1bbc54e`, and `dictionary()` has always had one, but both are **`FULL`-only** — see §⁹.
+What follows was written when utf8 had no index at all; the ⁷ note records what changed.
 
 ### What a FULL index buys on `<U` — 2 M rows, cardinality 20 k, `<U15`
 
@@ -143,9 +144,15 @@ losing on two independent axes at once, and only one of them is about indexing.
   redundant decompression dominates outright. Clustered data, where the index prunes real work,
   still uses it and still wins (`int64` 3.7→2.4 ms, `<U32` 77.4→2.7 ms).
 
-- **`dictionary`'s FULL index gives no equality speedup** (25 ms indexed vs 25 ms unindexed at 2 M
-  rows). That is by design — the rank index is built for *ordering*, not filtering — but the docs
-  present `create_index` on dictionary as a plain ✓, which oversells it. Still open.
+- ~~**`dictionary`'s FULL index gives no equality speedup**~~ (25 ms indexed vs 25 ms unindexed at
+  2 M rows) — **fixed**, `1c22fdf5`; the operator form `t[t.c == v]` is now 329.6 → 8.4 ms. The
+  reading recorded here first, *"by design — the rank index is built for ordering, not filtering"*,
+  was **wrong**: instrumenting the planner showed the index was simply never consulted, because a
+  dictionary `==` is rewritten into a code comparison and evaluated directly. A wiring gap, not a
+  property of rank indexes — ranks are order-preserving, so a literal maps to a rank by binary
+  search and equality is a contiguous run. The correction is worked through under "Could utf8 have
+  an index?" below, which is where the fix came from. The docs no longer oversell it either
+  (`e707c91c` added the `[#rankindex]` footnote).
 
 A methodology note worth keeping: the first pass at the dtype sweep concluded "strings only",
 because the numeric query literals were built with `repr()` and NumPy 2 renders `repr(np.int64(5))`
@@ -235,9 +242,10 @@ layout pandas 3 string columns use). The whole *query* surface is already at par
 string-returning expressions, DSL kernels, `create_index`, dotted leaves. Reads need NumPy ≥ 2.0.
 
 **`dictionary()`** — unbeatable for low-cardinality categories, the fastest `group_by` of any
-flavour, and the only variable-length flavour with a working index. But it is not a general string
-type: string *functions* don't reach it at all (`Unknown symbol`), and its index accelerates
-ordering only, not filtering.
+flavour, and the first variable-length flavour to get a working index (utf8 has one since
+`b1bbc54e`). Its rank index accelerates ordering *and*, since `1c22fdf5`, equality — `FULL` is the
+only kind that reaches it (§⁹). But it is not a general string type: string *functions* don't reach
+it at all (`Unknown symbol`).
 
 **`vlstring()` / `vlbytes()`** — storage only. Native `None` nulls with no sentinel, works on
 NumPy 1.x. Nothing else works; every query and compute surface raises.
@@ -277,8 +285,8 @@ So the choice is not "parity vs. conversion" — it is **which rule do we publis
 | rule the user learns | "everything works everywhere" | "utf8 stores and filters; convert to compute" |
 | perf honesty | hides a 3–5× penalty behind an identical API | the `.astype()` is visible, so the cost is |
 | persistence risk | G2 must serialize `StringDType` — get it wrong and the **table won't reopen** | none; no new dtype is persisted |
-| `create_index` on utf8 | still missing | still missing |
-| top-*k* windows on utf8 | still 52× slower | still 52× slower |
+| `create_index` on utf8 | still missing ⁺ | still missing ⁺ |
+| top-*k* windows on utf8 | still 52× slower ⁺ | still 52× slower ⁺ |
 
 The second column is the better trade for the *compute* surface, and it is the honest one: the span
 driver's cost *is* a decode + `astype` per span, so making the user write `.astype()` describes what
@@ -289,14 +297,20 @@ utf8 without an index, and the parity plan spends a week doing so. Given that th
 is already proven in-tree for dictionary and costs about as much as G2 alone, the priority order
 inverts:
 
+⁺ Both rows were true when this table was written and are **no longer**: the utf8 rank index shipped
+in `b1bbc54e` (§⁷), taking top-*k* to 43.2 ms and `sort_by` to parity with `<U`+FULL. The comparison
+is kept as written because it is what the decision was made on — the argument for the second column
+never rested on these two rows, which is exactly the point the next paragraph makes.
+
 1. ~~**Fix what is wrong, not merely absent**~~ — **done**. `Utf8Array` comparisons (`3692673f`)
    and the bare-array `lazyexpr` fallback (G4, `0b486b07`). Both were silent-wrong results, and
    neither depended on which rule is chosen below. **No known silently-wrong utf8 path remains.**
 2. ~~**Publish the conversion pair.**~~ — **done**, `f8af0714` + `5b31abe4`. See ⁸.
-3. **Then the utf8 rank index** (2–3 d) — ~8× on top-*k*, using `Utf8Factorizer` exactly as
-   dictionary uses its `dictionary` list. Worth doing, but go in knowing it does *not* close the
-   15×/40× equality and range gap; if those workloads are the target, `<U` + FULL stays the answer
-   and the docs should say so plainly.
+3. ~~**Then the utf8 rank index**~~ — **done**, `b1bbc54e` (ordering) + `f132d6df` (scalar
+   predicates). See ⁷ and ⁹. The caveat written here — *"go in knowing it does not close the
+   15×/40× equality and range gap"* — proved **too pessimistic**: persisting the sorted vocabulary
+   made a literal→rank lookup one `searchsorted`, so `==` went 29.00 → 5.49 ms and `<` 34.57 →
+   5.45 ms. It was inherited from the "ordering only" misreading corrected two sections above.
 4. **Make the error messages route.** `add_computed_column` on utf8 currently says only "not
    supported"; it should name the two-line workaround. That, more than parity, is what removes the
    confusion you are objecting to.
@@ -311,6 +325,10 @@ Found while measuring, unrelated to the utf8 decision:
 - ~~The doc table's `create_index` entries are stale~~ — **done**, `e707c91c`. The reference table
   and the `utf8()` docstring both claimed utf8 could not be indexed, which my own change had made
   false; 4.9.2 release notes added for this whole line of work.
+- ~~`min()`/`max()` from the block summaries are silently wrong~~ — **fixed**, see §⁹. Two separate
+  bugs, both affecting *every* indexable dtype, neither utf8-specific.
+- ~~`create_index` accepts any of the five kinds on a rank-indexed column and silently builds one
+  that is never consulted~~ — **fixed**, see §⁹.
 - Still open: `_build_lex_keys` could sort dictionary ranks instead of decoded strings (~4×), and
   the `where("c == 'x'")` string form still bypasses the index for both flavours.
 
@@ -431,3 +449,99 @@ Still open after this, and now the top of the list: **item 4, the error messages
 returning strings over a utf8 column fails with NumPy's `DTypePromotionError`, which names neither
 the column nor the workaround. `add_computed_column` and `assign` at least raise
 `NotImplementedError` naming the column — but still not the two-line conversion that fixes it.
+
+---
+
+## ⁹ Index kinds and summary reductions — two silent-wrong bugs and a refused kind
+
+Started as a narrow question — *does `create_index` support all five kinds on utf8 the way it does on
+`<U`?* — and the answer turned out to be interesting only because of what verifying it turned up.
+
+### The kinds question: all five build, only FULL is ever consulted
+
+No kind restriction existed. `_utf8_rank_arrays` materializes the int32 ranks *before* the kind
+dispatch, so any kind builds over them, returns correct results, and costs build time and disk.
+Measured, 1 M rows, cardinality 20 k, persistent:
+
+| kind | utf8 `==` | utf8 `<` | `<U11` `==` | `<U11` `<` |
+|---|---|---|---|---|
+| no index | 24.15 ms | 29.01 ms | 4.88 ms | 12.84 ms |
+| `SUMMARY` | ≈ no index | ≈ no index | 3.25 ms | — |
+| `BUCKET` | 24.73 ms | 29.79 ms | 15.99 ms | 27.97 ms |
+| `PARTIAL` | ≈ no index | ≈ no index | 11.95 ms | — |
+| `FULL` | **6.50 ms** | **6.98 ms** | 3.51 ms | 6.21 ms |
+| `OPSI` | 25.22 ms | ≈ no index | **2.74 ms** | 5.78 ms |
+
+Two gates explain it, and the second is the real one. `_utf8_index_mask` requires `kind == "full"`
+plus persistent sidecars. And **`plan_query` is never invoked for a rank-indexed predicate at all** —
+instrumented, it is called 4× per query on `<U11` whenever an index exists and **0×** on utf8 in
+every configuration. BUCKET/PARTIAL/SUMMARY/OPSI are precisely the kinds that only pay off *through*
+the planner, so on these flavours they have no consumer. Same for ordering: `_sorted_slice_positions`
+and `_sorted_positions_from_full_index` both require FULL.
+
+This is a property of the **rank-index design**, not of utf8 — `_dictionary_index_mask` gates
+identically. And the default `kind=IndexKind.BUCKET` meant `create_index("c")` on a dictionary column
+had *always* built an index nothing could use.
+
+**Fixed.** `kind` now defaults to `None` and resolves to `FULL` for `Utf8Spec`/`DictionarySpec`
+(`BUCKET` unchanged everywhere else); an *explicit* non-FULL kind on those flavours raises
+`ValueError` naming the reason. Erroring rather than warning because it is not a trade-off — there is
+no workload where those kinds help — and because relaxing an error later is non-breaking while
+tightening a warning is not.
+
+### Bug A — capacity padding leaks into the block summaries
+
+`_index_summary_minmax` reduces the per-block `(min, max, flags)` sidecars, a ~780× shortcut on a
+string column. But the summaries cover the column's **physical** extent, which is padded to slot
+capacity with zeros/empty strings — values that beat any real datum on `min`:
+
+| rows | capacity | `<U11` `.min()` | `int64` `.min()` |
+|---|---|---|---|
+| 1 000 000 | 1 048 576 | `''` — **wrong** (`'taxi-00000'`) | `0` — **wrong** (`5`) |
+| 1 048 576 | 1 048 576 | ✓ | ✓ |
+| 1 000 | 1 048 576 | `''` — **wrong** | `0` — **wrong** |
+
+Correct only when `n_rows` lands exactly on capacity. `max` was unaffected (padding is below the
+data). Both wrong rows are **non-nullable** columns, so the existing sentinel gate — which was
+written for exactly this class of leak — never fired. The docstring asserted the opposite: *"capacity
+padding never enters the summaries"*.
+
+### Bug B — `delete()` never marked the index stale
+
+Independent of padding, and it had to be fixed first because the boundary fix assumes live rows are
+the prefix `[0, n_rows)`. On a **zero-padding** table, after deleting the rows holding the extremes:
+`min()` still returned `5` (true `6`), `max()` still returned `1048580` (true `1048579`). Deleted
+rows keep sitting in their block and keep contributing to its extrema.
+
+The signal already existed and was unused: `delete()` bumps a `visibility_epoch` that nothing
+recorded or compared. Index builds now store `built_visibility_epoch`, and the shortcut declines when
+it has moved. Deliberately *not* by marking the index stale — that would forfeit query acceleration
+after any delete.
+
+### The fix, and what it costs
+
+Blocks wholly below `n_rows` are read from the sidecar as before; the single block straddling the
+boundary is rescanned (one block decompression); blocks past it are dropped. `_summary_minmax_source`
+now returns `segment_len` so the caller can do that arithmetic.
+
+| | indexed | scan | |
+|---|---|---|---|
+| `<U11`, 1 000 000 rows (576-row tail) | 1.44 ms | 116.52 ms | **81×** |
+| `<U11`, 1 048 576 rows (no tail) | 0.18 ms | 119.78 ms | 670× |
+| `int64`, 1 000 000 rows | 1.31 ms | 3.92 ms | 3× |
+
+So the shortcut survives at 81× where it matters. The `int64` row is the honest caveat: its scan is
+fast enough that a ~1.2 ms boundary read eats most of the win. Reading the tail from the raw NDArray
+instead of through `Column.__getitem__` would recover it; not done, since the string case is where
+the shortcut earns its keep.
+
+**Note for any future sweep**, in the same spirit as the `repr(np.int64(5))` methodology note above:
+an early run showed `OPSI` on utf8 at 38 ms against a 24 ms baseline and I nearly wrote it up as a
+pessimization. Re-run paired A/B it is 25.2 vs 23.4 ms — neutral. Single-shot timings across
+separately-built tables are not comparable; build the A and B tables in the same process and
+interleave.
+
+Also worth recording: `_summary_minmax_source` excludes utf8 via the `is_varlen_scalar` catch-all, so
+a `SUMMARY` index on a utf8 column writes block extrema nothing will ever read. That is now moot —
+the kind is refused outright — but if utf8 `min()`/`max()` is ever wanted, the extrema are
+well-defined and the exclusion is the only thing in the way.

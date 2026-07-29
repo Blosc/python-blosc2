@@ -662,7 +662,7 @@ class _CTableIndexingMixin:
         field: str | None = None,
         expression: str | None = None,
         operands: dict | None = None,
-        kind: blosc2.IndexKind = blosc2.IndexKind.BUCKET,
+        kind: blosc2.IndexKind | None = None,
         optlevel: int = 5,
         name: str | None = None,
         build: str = "auto",
@@ -710,6 +710,12 @@ class _CTableIndexingMixin:
         lightest kind; it may still skip segments for broad range
         queries but cannot accelerate ``sort_by``.
 
+        When *kind* is omitted it defaults to ``BUCKET``, except on ``utf8()``
+        and ``dictionary()`` columns, which are indexed by alphabetical rank and
+        only ever consulted through a ``FULL`` index — there the default is
+        ``FULL``, and asking for any other kind raises ``ValueError`` rather
+        than building an index that nothing would use.
+
         .. rubric:: SUMMARY granularity
 
         For ``kind=SUMMARY``, ``granularity`` controls the segment size of the
@@ -750,6 +756,22 @@ class _CTableIndexingMixin:
             opsi_max_cycles = max(1, int(opsi_max_cycles))
         if kwargs:
             raise TypeError(f"unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+
+        # Rank-indexed flavours are only ever consulted through a FULL index, so
+        # the BUCKET default would hand them an index nothing can use.  Default
+        # per flavour, and remember whether the caller chose the kind: an
+        # explicit non-FULL request is an error rather than a silent promotion.
+        explicit_kind = kind is not None
+        if kind is None:
+            spec = None
+            if col_name is not None:
+                col_info = self._schema.columns_by_name.get(col_name)
+                spec = col_info.spec if col_info is not None else None
+            kind = (
+                blosc2.IndexKind.FULL
+                if isinstance(spec, (Utf8Spec, DictionarySpec))
+                else blosc2.IndexKind.BUCKET
+            )
 
         kind_str = _normalize_index_kind(kind)
         build_str = _normalize_build_mode(build)
@@ -792,8 +814,9 @@ class _CTableIndexingMixin:
             descriptor["token"] = token
             descriptor["dtype"] = str(np.dtype(dtype))
             descriptor["expr_values_path"] = getattr(expr_arr, "urlpath", None)
-            value_epoch, _ = self._storage.get_epoch_counters()
+            value_epoch, visibility_epoch = self._storage.get_epoch_counters()
             descriptor["built_value_epoch"] = value_epoch
+            descriptor["built_visibility_epoch"] = visibility_epoch
             catalog[token] = descriptor
             self._storage.save_index_catalog(catalog)
             self._invalidate_index_catalog_cache()
@@ -830,6 +853,19 @@ class _CTableIndexingMixin:
             raise NotImplementedError(
                 f"Cannot create an index on variable-length scalar column {col_name!r}: "
                 "indexing for vlstring/vlbytes/struct/object columns is not supported yet."
+            )
+        # Rank-indexed flavours (utf8, dictionary) are queried through their own
+        # literal->rank lookup rather than through plan_query, and both that path
+        # and the ordering path require kind="full".  The other kinds build over
+        # the ranks without error and are then never consulted, so refuse them
+        # here rather than charge for an index nothing can use.
+        rank_spec = self._schema.columns_by_name[col_name].spec
+        if explicit_kind and kind_str != "full" and isinstance(rank_spec, (Utf8Spec, DictionarySpec)):
+            flavour = "utf8" if isinstance(rank_spec, Utf8Spec) else "dictionary"
+            raise ValueError(
+                f"Column {col_name!r} is a {flavour} column, which is indexed by alphabetical rank; "
+                f"only kind='full' consults that index, so kind={kind_str!r} would build but never "
+                "be used. Use kind='full'."
             )
         # utf8 columns: index the alphabetical rank of each row's value.  There is
         # no stored code array to wrap lazily, so the ranks are materialized here
@@ -913,8 +949,9 @@ class _CTableIndexingMixin:
                 _persist_utf8_vocab(full, utf8_rank_meta, utf8_vocab)
                 full["utf8_rank"] = utf8_rank_meta
 
-        value_epoch, _ = self._storage.get_epoch_counters()
+        value_epoch, visibility_epoch = self._storage.get_epoch_counters()
         descriptor["built_value_epoch"] = value_epoch
+        descriptor["built_visibility_epoch"] = visibility_epoch
 
         if is_persistent:
             # Use column name as token so sibling columns in compact stores get
@@ -1002,6 +1039,7 @@ class _CTableIndexingMixin:
             finally:
                 _PERSISTENT_INDEXES.pop(proxy_key, None)
             updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
+            updated_desc["built_visibility_epoch"] = descriptor.get("built_visibility_epoch")
             catalog[lookup_key] = updated_desc
             self._storage.save_index_catalog(catalog)
             self._invalidate_index_catalog_cache()
@@ -1013,6 +1051,7 @@ class _CTableIndexingMixin:
                 token = descriptor["token"]
                 updated_desc = _copy_descriptor(store["indexes"].get(token, descriptor))
                 updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
+                updated_desc["built_visibility_epoch"] = descriptor.get("built_visibility_epoch")
                 catalog[lookup_key] = updated_desc
                 self._storage.save_index_catalog(catalog)
                 self._invalidate_index_catalog_cache()

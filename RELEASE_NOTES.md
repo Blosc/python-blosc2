@@ -134,6 +134,23 @@ XXX version-specific blurb XXX
 
 ### Bug fixes
 
+- **`min()`/`max()` read from a column index returned the wrong value.** Two
+  independent causes, both affecting every indexable dtype. The block summaries
+  cover the column's *physical* extent, so the capacity padding (zeros, empty
+  strings) was reduced along with the data and `min()` reported it — wrong on
+  any table whose row count is not exactly its slot capacity. And `delete()`
+  bumps a visibility epoch that nothing recorded, so deleted rows kept
+  contributing their values to the block they sat in. Whole blocks below the
+  live row count are still read from the sidecar; the block straddling the
+  boundary is now rescanned, and a deletion since the index was built makes the
+  shortcut stand down.
+- **`create_index` on `utf8()` and `dictionary()` columns accepted any index
+  kind** and built one over the alphabetical ranks that no query would ever
+  consult — only `IndexKind.FULL` reaches a rank index. `kind` now defaults to
+  `FULL` for these two column kinds (`BUCKET` elsewhere, unchanged) and raises
+  `ValueError` when another kind is requested explicitly. Previously
+  `create_index("category")` on a dictionary column built an unused BUCKET
+  index by default.
 - **Comparison operators on `Utf8Array`, dictionary and varlen scalar columns**
   returned a plain `False`: none defined them, so `column == "value"` fell
   through to object identity. Silently wrong rather than an error. All now

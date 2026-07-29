@@ -3002,17 +3002,23 @@ class Column:
         return NotImplemented
 
     def _summary_minmax_source(self):
-        """Return ``(sidecar_path, dtype, nullable)`` for a summary-readable
-        ``min``/``max``, or ``None`` when the index shortcut is not provably
-        correct.
+        """Return ``(sidecar_path, dtype, nullable, segment_len)`` for a
+        summary-readable ``min``/``max``, or ``None`` when the index shortcut is
+        not provably correct.
 
         Excluded: a view (its summary describes the base table); a column kind
         without numeric/string block extrema; a leaky null sentinel (only a
         non-nullable column, or a NaN-sentinel float — whose NaNs the summary
         drops — match the nulls-skipped contract of ``min()``); and a stale,
-        absent, or in-memory-only index.  Deletions/appends are covered by the
-        stale flag (every mutation marks the index stale; a rebuild re-summarises
-        only the live rows, and capacity padding never enters the summaries).
+        absent, or in-memory-only index.
+
+        Appends mark the index stale, so they are covered.  Deletions are *not*
+        (``delete()`` bumps the visibility epoch and leaves the index usable for
+        queries), and a deleted row keeps contributing its value to the block it
+        sits in — so a visibility epoch that has moved since the index was built
+        disqualifies the shortcut.  Capacity padding *does* enter the summaries;
+        ``segment_len`` is returned so the caller can drop the padded tail and
+        rescan the one block that straddles the live/padded boundary.
         """
         table = self._table
         if table.base is not None:
@@ -3035,8 +3041,14 @@ class Column:
         is_nan_float = dtype.kind == "f" and isinstance(null_value, float) and np.isnan(null_value)
         if nullable and not is_nan_float:
             return None  # non-NaN sentinel leaks into the block extrema
-        desc = table._root_table._get_index_catalog().get(self._col_name)
+        root = table._root_table
+        desc = root._get_index_catalog().get(self._col_name)
         if not desc or desc.get("stale", False):
+            return None
+        # Deleted rows still sit in their block and still contribute to its
+        # extrema, so any deletion since the build invalidates the shortcut.
+        built_vis = desc.get("built_visibility_epoch")
+        if built_vis is None or root._storage.get_epoch_counters()[1] != built_vis:
             return None
         levels = desc.get("levels") or {}
         level = "block" if "block" in levels else next(iter(levels), None)
@@ -3045,7 +3057,10 @@ class Column:
         path = levels[level].get("path")
         if path is None:
             return None  # in-memory sidecar: the scan is already fast
-        return path, dtype, nullable
+        segment_len = levels[level].get("segment_len")
+        if not segment_len:
+            return None
+        return path, dtype, nullable, int(segment_len)
 
     def _index_summary_minmax(self, op: str):
         """Exact ``min``/``max`` from the column index's block summaries, or
@@ -3055,11 +3070,21 @@ class Column:
         Every index kind (SUMMARY/FULL/PARTIAL/BUCKET/OPSI) persists per-block
         ``(min, max, flags)``, so reducing those is decompression-free (~240x
         faster than scanning tens of millions of rows).
+
+        The summaries cover the column's *physical* extent, which is padded out
+        to the slot capacity with zeros/empty strings — values that beat any real
+        datum on ``min``.  Only whole blocks below ``n_rows`` are read from the
+        sidecar; the single block straddling the boundary is rescanned (one block
+        decompression, so the shortcut is preserved) and blocks past it dropped.
         """
         source = self._summary_minmax_source()
         if source is None:
             return NotImplemented
-        path, dtype, nullable = source
+        path, dtype, nullable, segment_len = source
+        n_live = self._table._root_table._n_rows
+        if n_live is None or n_live == 0:
+            return NotImplemented
+        n_full = n_live // segment_len  # blocks entirely within the live rows
         try:
             from blosc2.indexing import _INDEX_MMAP_MODE, FLAG_ALL_NAN, FLAG_HAS_NAN, _open_sidecar_file
 
@@ -3074,14 +3099,37 @@ class Column:
             return NotImplemented
         if vals.shape[0] == 0:
             return NotImplemented
+        # Drop the padded tail: keep only blocks lying wholly below n_rows.
+        flags = flags[:n_full]
+        vals = vals[:n_full]
         # A non-nullable float with NaN *data* makes numpy min/max return NaN,
         # but the summary dropped those NaNs — they would disagree, so bail.
         if dtype.kind == "f" and not nullable and bool((flags & (FLAG_HAS_NAN | FLAG_ALL_NAN)).any()):
             return NotImplemented
         valid = (flags & FLAG_ALL_NAN) == 0
-        if not valid.any():
-            return NotImplemented  # whole column null → let the scan raise
         vals = vals[valid]
+
+        # The straddling block is not summarisable (its tail is padding), so read
+        # just its live rows.  This is also the whole answer when the column is
+        # shorter than one block, in which case no summary entry is usable.
+        tail = n_live - n_full * segment_len
+        if tail:
+            try:
+                seg = np.asarray(self[n_full * segment_len : n_live])
+            except Exception:
+                return NotImplemented
+            if dtype.kind == "f":
+                seg = seg[~np.isnan(seg)]
+                if not nullable and seg.shape[0] != tail:
+                    return NotImplemented  # NaN data: see above
+            if seg.shape[0]:
+                seg_val = min(seg) if dtype.kind in "US" else seg.min()
+                if op == "max":
+                    seg_val = max(seg) if dtype.kind in "US" else seg.max()
+                vals = np.concatenate([vals, np.asarray([seg_val], dtype=dtype)])
+
+        if vals.shape[0] == 0:
+            return NotImplemented  # nothing usable → let the scan decide/raise
         if dtype.kind in "US":
             return min(vals) if op == "min" else max(vals)
         return vals.min() if op == "min" else vals.max()

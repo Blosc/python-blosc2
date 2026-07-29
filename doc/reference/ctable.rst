@@ -1072,6 +1072,9 @@ CTable offers four ways to store strings.  As a quick decision path:
    ``startswith``/substring searches, which no index covers, and the ranks are
    frozen at build time: a value inserted ahead of existing ones invalidates
    all of them, so the index falls back to a full sort until rebuilt.
+   Only ``kind=IndexKind.FULL`` consults a rank index, so that is the default
+   for these two column kinds (elsewhere the default is ``BUCKET``) and any
+   other kind raises ``ValueError`` rather than building an unused index.
 
 .. [#utf8expr] utf8 columns support both the operator form
    ``t[t.name == "x"]`` and the string-expression form

@@ -1295,3 +1295,139 @@ def test_bucket_plan_gate_matches_block_fraction():
 
     # Whichever way the gate goes, the answer is the same as an unindexed scan.
     assert indexed == sorted(table(values, None).where(query)["c"][:].tolist())
+
+
+# ---------------------------------------------------------------------------
+# Summary min()/max() shortcut: live rows only
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class MinMaxRow:
+    c: str = blosc2.field(blosc2.string(max_length=11))
+    n: int = blosc2.field(blosc2.int64())
+    f: float = blosc2.field(blosc2.float64())
+
+
+def _minmax_table(path, n, kind="summary"):
+    t = blosc2.CTable(MinMaxRow, urlpath=str(path), mode="w")
+    strings = [f"taxi-{i % 997:05d}" for i in range(n)]
+    t.extend({"c": strings, "n": np.arange(n) + 5, "f": (np.arange(n) + 5) * 1.5})
+    if kind is not None:
+        for col in ("c", "n", "f"):
+            t.create_index(col, kind=kind)
+    return t, strings
+
+
+# 16384 is the block length these columns get, so these straddle, exactly fill,
+# and fall short of a block boundary respectively.
+@pytest.mark.parametrize("n", [5, 1000, 16384, 16385, 100_000])
+def test_summary_minmax_ignores_capacity_padding(tmpdir, n):
+    """Padded slots hold 0/'' and must not be reported as the column minimum."""
+    t, strings = _minmax_table(tmpdir / f"pad{n}.b2t", n)
+    assert len(t._valid_rows) > t._n_rows or n == len(t._valid_rows)  # padding present
+    assert t["c"].min() == min(strings)
+    assert t["c"].max() == max(strings)
+    assert t["n"].min() == 5
+    assert t["n"].max() == n + 4
+    assert t["f"].min() == 7.5
+
+
+@pytest.mark.parametrize("n", [5, 1000, 16385, 100_000])
+def test_summary_minmax_matches_unindexed_scan(tmpdir, n):
+    indexed, _ = _minmax_table(tmpdir / f"i{n}.b2t", n)
+    scan, _ = _minmax_table(tmpdir / f"s{n}.b2t", n, kind=None)
+    for col in ("c", "n", "f"):
+        assert indexed[col].min() == scan[col].min()
+        assert indexed[col].max() == scan[col].max()
+
+
+def test_summary_minmax_declines_after_delete(tmpdir):
+    """delete() leaves the index usable for queries but the deleted row still
+    sits in its block, so the summary shortcut must stand down."""
+    t, _ = _minmax_table(tmpdir / "del.b2t", 100_000)
+    assert t["n"].min() == 5
+    t.delete(0)  # drop the unique minimum
+    assert t["n"].min() == 6
+    t.delete(t._n_rows - 1)  # drop the unique maximum (values now run 6..100003)
+    assert t["n"].max() == 100_003
+    assert t["c"].min() == min(t["c"][:].tolist())
+
+
+def test_summary_minmax_shortcut_still_taken(tmpdir):
+    """The padding fix must not disable the shortcut on the common padded table."""
+    t, _ = _minmax_table(tmpdir / "fast.b2t", 100_000)
+    assert t["n"]._summary_minmax_source() is not None
+    assert t["n"]._index_summary_minmax("min") is not NotImplemented
+    t.delete(0)
+    assert t["n"]._summary_minmax_source() is None
+
+
+def test_summary_minmax_nullable_nan_float(tmpdir):
+    """A NaN-sentinel float is the one nullable column the shortcut accepts;
+    padding is 0.0 there, which is not NaN and would pass as a real value."""
+
+    @dataclasses.dataclass
+    class NanRow:
+        f: float = blosc2.field(blosc2.float64(nullable=True, null_value=float("nan")))
+
+    t = blosc2.CTable(NanRow, urlpath=str(tmpdir / "nan.b2t"), mode="w")
+    vals = (np.arange(50_000) + 5) * 1.5
+    vals[:10] = np.nan  # leading nulls
+    t.extend({"f": vals})
+    t.create_index("f", kind="summary")
+    assert t["f"].min() == np.nanmin(vals)
+    assert t["f"].max() == np.nanmax(vals)
+
+
+# ---------------------------------------------------------------------------
+# Rank-indexed flavours accept kind="full" only
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Utf8Row:
+    c: str = blosc2.field(blosc2.utf8())
+
+
+@dataclasses.dataclass
+class DictRow:
+    c: str = blosc2.field(blosc2.dictionary())
+
+
+@pytest.mark.parametrize(("row_cls", "flavour"), [(Utf8Row, "utf8"), (DictRow, "dictionary")])
+@pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "opsi"])
+def test_rank_index_rejects_non_full_kind(tmpdir, row_cls, flavour, kind):
+    """These build over the int32 ranks without error and are then never
+    consulted, so they must be refused rather than silently useless."""
+    t = blosc2.CTable(row_cls, urlpath=str(tmpdir / f"{flavour}_{kind}.b2t"), mode="w")
+    t.extend({"c": [f"v{i % 50:03d}" for i in range(2000)]})
+    with pytest.raises(ValueError, match=f"{flavour} column.*kind='full'"):
+        t.create_index("c", kind=kind)
+    assert "c" not in t._get_index_catalog()
+
+
+@pytest.mark.parametrize(("row_cls", "flavour"), [(Utf8Row, "utf8"), (DictRow, "dictionary")])
+def test_rank_index_accepts_full_kind(tmpdir, row_cls, flavour):
+    t = blosc2.CTable(row_cls, urlpath=str(tmpdir / f"{flavour}_full.b2t"), mode="w")
+    values = [f"v{i % 50:03d}" for i in range(2000)]
+    t.extend({"c": values})
+    t.create_index("c", kind="full")
+    assert t._get_index_catalog()["c"]["kind"] == "full"
+    # and it still answers correctly through the rank path
+    assert sorted(t[t["c"] == "v007"]["c"][:]) == [v for v in values if v == "v007"]
+
+
+@pytest.mark.parametrize(("row_cls", "flavour"), [(Utf8Row, "utf8"), (DictRow, "dictionary")])
+def test_rank_index_default_kind_is_full(tmpdir, row_cls, flavour):
+    """The BUCKET default would hand these flavours an unusable index."""
+    t = blosc2.CTable(row_cls, urlpath=str(tmpdir / f"{flavour}_def.b2t"), mode="w")
+    t.extend({"c": [f"v{i % 50:03d}" for i in range(2000)]})
+    t.create_index("c")  # no kind
+    assert t._get_index_catalog()["c"]["kind"] == "full"
+
+
+def test_default_kind_unchanged_for_other_columns(tmpdir):
+    t = _make_table(200, persistent_path=str(tmpdir / "def.b2t"))
+    t.create_index("id")
+    assert t._get_index_catalog()["id"]["kind"] == "bucket"
