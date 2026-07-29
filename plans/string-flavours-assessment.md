@@ -265,7 +265,9 @@ out = blosc2.utf8_array(list(res))  # to_utf8, works today
 
 The one genuinely missing piece is writing that result back as a table column: `add_column()` has no
 `values=` parameter, so today it takes `add_column("out", field(utf8(), default=""))` followed by the
-private `_cols["out"].set_all(...)`.
+private `_cols["out"].set_all(...)`. **Fixed in `f8af0714`** (see ⁸); the `blosc2.asarray()` in the
+snippet above also turns out to be unnecessary — `lazyexpr` takes a plain numpy operand, and wrapping
+one that is already in memory only adds a compression round trip (36.2 → 30.1 ms per 1 M rows).
 
 So the choice is not "parity vs. conversion" — it is **which rule do we publish**:
 
@@ -290,9 +292,7 @@ inverts:
 1. ~~**Fix what is wrong, not merely absent**~~ — **done**. `Utf8Array` comparisons (`3692673f`)
    and the bare-array `lazyexpr` fallback (G4, `0b486b07`). Both were silent-wrong results, and
    neither depended on which rule is chosen below. **No known silently-wrong utf8 path remains.**
-2. **Publish the conversion pair.** `Utf8Array.astype("<U")` / `blosc2.from_utf8()` and `.to_utf8()`,
-   plus `add_column(..., values=)` so the result can land back in the table without a private call.
-   ~1–2 days, and it closes the whole compute asymmetry by declaring a rule instead of chasing it.
+2. ~~**Publish the conversion pair.**~~ — **done**, `f8af0714` + `5b31abe4`. See ⁸.
 3. **Then the utf8 rank index** (2–3 d) — ~8× on top-*k*, using `Utf8Factorizer` exactly as
    dictionary uses its `dictionary` list. Worth doing, but go in knowing it does *not* close the
    15×/40× equality and range gap; if those workloads are the target, `<U` + FULL stays the answer
@@ -379,3 +379,55 @@ string form needs the planner to consume index *positions* rather than a mask.
 compare correctly. Every null mask in the utf8 paths is such a comparison, so that sentinel would
 silently stop marking anything as null. `blosc2.utf8(null_value="\x00")` now rejects it. The
 default sentinel is `'__BLOSC2_NULL__'`, so no shipped configuration was affected.
+
+---
+
+## ⁸ The conversion pair — what shipped
+
+`f8af0714` and `5b31abe4`. The rule is now published rather than implied: **utf8 stores and filters;
+fixed-width computes.**
+
+```python
+fixed = blosc2.from_utf8(t["name"])  # -> <Un ndarray, exact width
+res = blosc2.lazyexpr("'x=' + a", {"a": fixed}).compute()[:]
+t.add_column("prefixed", blosc2.utf8(), values=blosc2.to_utf8(res))
+t["name"].assign(res)  # or overwrite in place
+```
+
+Four pieces, all of which were missing:
+
+- **`add_column(..., values=)`** — one entry per *live* row, coerced to the column's dtype. A
+  declared default still governs rows appended later, so the two combine.
+- **`blosc2.from_utf8()` / `blosc2.to_utf8()`**, plus `Utf8Array.astype()` as the method form.
+- **`Column.assign()` on utf8 and the other varlen scalar columns**, which raised
+  `TypeError: Utf8Array assignment index must be int` — there was no public way to overwrite a
+  variable-length column at all.
+- **The rule itself**, in `doc/reference/ctable.rst` (§Utf8Compute), with a compute row added to the
+  flavour comparison table.
+
+Two design points worth keeping:
+
+- **Width inference is by codepoint, not byte.** A UTF-8 codepoint starts at every non-continuation
+  byte, so the exact `<U` width is a masked count over the raw blob — no row decoded. Byte lengths
+  would only *bound* it, over-allocating 3–4× on CJK. Spans whose byte lengths cannot beat the
+  running best are skipped without touching data, and an all-ASCII span settles from the offsets
+  alone, so the inference costs ~2 ms per 500 k rows on top of the copy (16.8 ms against 14.8 ms for
+  a hand-sized `astype("<U13")` — which was also 1.3× wider than needed).
+- **The varlen columns are rewritten whole, not row by row.** `_ScalarVarLenArray.__setitem__`
+  rewrites an entire msgpack batch per row, the same O(N × batch) shape as the dictionary decode bug
+  in ⁴. `set_all()` (which `Utf8Array` already had, and `_ScalarVarLenArray` now grows) writes each
+  batch once. utf8 `assign` measures 122 ms per 200 k rows.
+
+Found while doing it, both pre-existing:
+
+- **`add_column()` on a varlen column was broken on any table with deleted rows.** Those columns are
+  indexed by *physical* position but were filled with only `n_live` entries, so the first read after
+  a `delete()` raised `IndexError`. Hit the plain `default=` path too, not just the new one.
+- **`add_column()` on a `dictionary()` column** raised `AttributeError` from inside the fixed-width
+  path (`DictionarySpec` has no dtype). Now a `TypeError` naming the limitation; actually supporting
+  it would mean wiring `create_dictionary_column`, which nothing has asked for.
+
+Still open after this, and now the top of the list: **item 4, the error messages.** A DSL kernel
+returning strings over a utf8 column fails with NumPy's `DTypePromotionError`, which names neither
+the column nor the workaround. `add_computed_column` and `assign` at least raise
+`NotImplementedError` naming the column — but still not the two-line conversion that fixes it.
