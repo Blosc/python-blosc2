@@ -181,10 +181,10 @@ Also note `group_by` is *fastest* on dictionary (81 ms vs 217 ms for `<U`, 217 m
 codes are already integers, so there is nothing to factorize. This was true even before the decode
 fix, because `group_by` was the only caller that used the batched `decode_batch()` path.
 
-One optimization deliberately left on the table: `_build_lex_keys` (`ctable.py:11292`) still decodes
-a dictionary column to an object array and lexsorts that. Sorting the int32 *ranks* instead — the
-trick `create_index` already uses — measured ~4× faster again (107 ms → 27 ms per 200 k rows). Not
-done, because it is a tuning item rather than a bug once the decode is O(D) instead of O(N).
+~~One optimization deliberately left on the table: `_build_lex_keys` (`ctable.py:11292`) still
+decodes a dictionary column to an object array and lexsorts that. Sorting the int32 *ranks* instead
+— the trick `create_index` already uses — measured ~4× faster again (107 ms → 27 ms per 200 k
+rows).~~ — **done**, see ¹³.
 
 ### Could utf8 have an index? Yes, and the pattern is already in-tree
 
@@ -332,8 +332,11 @@ Found while measuring, unrelated to the utf8 decision:
 - ~~`create_index` accepts any of the five kinds on a rank-indexed column and silently builds one
   that is never consulted~~ — **fixed**, see §⁹.
 - ~~Nested (dotted) utf8 leaves cannot be filtered~~ — **fixed**, see ¹².
-- Still open: `_build_lex_keys` could sort dictionary ranks instead of decoded strings (~4×), and
-  the `where("c == 'x'")` string form still bypasses the index for both flavours.
+- ~~`_build_lex_keys` could sort dictionary ranks instead of decoded strings (~4×)~~ — **done**,
+  see ¹³.
+- Still open: the `where("c == 'x'")` string form bypasses the index for both flavours, deliberately
+  (see ⁷ — substituting a precomputed mask measured *slower*; the real fix is teaching `plan_query`
+  to consume index positions).
 
 ⁶ `blosc2.lazyexpr` over a bare `DictionaryColumn` returns the **capacity-padded** slot array —
 1 048 576 rows for a 3-row table. Not a container bug: `DictionaryColumn.__len__` is documented as
@@ -711,3 +714,39 @@ written — alias map threaded through `_rewrite_nested_expression`, three call 
 `==` started passing, which looked like success. It was not: the mask rewrite had simply removed the
 dotted name from the expression entirely, and `startswith` still failed. A plan's diagnosis is worth
 re-deriving before its prescription is implemented, and one passing case is not a route check.
+
+---
+
+## ¹³ Dictionary `sort_by` on ranks — what shipped
+
+The last tuning item from the list above. A row's alphabetical rank orders exactly as its decoded
+value does, which is the whole basis of the FULL rank index; `_build_lex_keys` was the one caller
+still paying for the strings. It now maps codes through `_dict_code_to_rank` — extracted from the
+index builder so the two cannot drift — and hands `np.lexsort` an int32 key.
+
+200 k rows, cardinality 5 000, single ascending key:
+
+| | before | after |
+|---|---|---|
+| key construction | 106.2 ms | **21.4 ms** |
+| `sort_by(view=True)` | 246.7 ms | **156.9 ms** |
+| `sort_by(view=True, ascending=False)` | 273.5 ms | **156.2 ms** |
+| `sort_by()` (materializes) | 298.5 ms | 206.5 ms |
+
+Key construction matches the ~4× the assessment predicted; end-to-end is ~1.6×, because the key was
+about 40 % of `sort_by`. Descending gains a little more than ascending: an object key could not be
+negated, so it went through a double `argsort` that an int32 key does not need.
+
+**A second copy of the key builder turned up** in `_sorted_small_copy_from_live_positions` — the
+filtered-table path — carrying the same decode, its own subtly different dtype list (`USO` against
+`USOT`, so no `StringDType` sort keys), and a `KeyError` for a computed sort column. It also
+gathered the codes and then threw them away to re-read and decode the column. It now calls
+`_build_lex_keys` with the arrays it already gathered, which deletes the duplicate and fixes all
+three divergences.
+
+Verification worth noting, since a sort is easy to get subtly wrong: the new tests were run against
+the *old* implementation too. The two behaviour tests (nulls last in both directions, rank keys
+composing with a secondary key, filtered path agreeing) pass on both, so they pin behaviour rather
+than the change; only the route assertion — that the value key is `int32` — fails on the old code.
+Separately, a fuzz over 5 table sizes × 7 column/direction combinations × with and without deleted
+rows was checked against a plain Python `sorted()` reference.
