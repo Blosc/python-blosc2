@@ -28,9 +28,9 @@ because two of the conclusions below originally rested on it.
 | `group_by` | ✓ | ✓ | ✓ | ✓ | ✗ |
 | `create_index` | ✓ all 5 kinds | ✓ all 5 kinds | ✓ rank, `FULL` only ⁷ ⁹ | ✓ rank, `FULL` only ⁷ ⁹ | ✗ |
 | **Compute (string-returning)** | | | | | |
-| `add_computed_column("'x='+c")` | ✓ | ✓ | **✗ NotImpl** | ✗ | ✗ |
-| `assign(new=…)` | ✓ | ✓ | **✗ NotImpl** | ✗ | ✗ |
-| `t.apply(dsl_kernel)` / `lazyudf` | ✓ | ✓ | **✗ ValueError** ¹ | ✗ | ✗ RuntimeError |
+| `add_computed_column("'x='+c")` | ✓ | ✓ | ✗ NotImpl, routes ¹⁰ | ✗ | ✗ |
+| `assign(new=…)` | ✓ | ✓ | ✗ NotImpl, routes ¹⁰ | ✗ | ✗ |
+| `t.apply(dsl_kernel)` / `lazyudf` | ✓ | ✓ | ✗ NotImpl, routes ¹ ¹⁰ | ✗ | ✗ RuntimeError |
 | nested (dotted) leaf in expr | ✓ | ✓ | ✗ NotImpl | ✗ | ✗ |
 | **Bare container (no CTable)** | | | | | |
 | `lazyexpr(expr, {a: col})` | ✓ NDArray | ✓ | ✓ span driver, returns `Utf8Array` ² | ⚠ padded ⁶ | ⚠ numpy |
@@ -40,9 +40,10 @@ because two of the conclusions below originally rested on it.
 | save + reopen | ✓ | ✓ | ✓ | ✓ | ✓ |
 | NumPy requirement | any | any | ≥ 2.0 | any | any |
 
-¹ `ValueError: malformed node or string … StringDType()` — `lazyudf` tries to allocate an NDArray
+¹ Was `ValueError: malformed node or string … StringDType()` — `lazyudf` allocates an NDArray
 output with `dtype=StringDType()`, which `NDArray.dtype`'s `ast.literal_eval` round-trip cannot
-parse (`blosc2_ext.pyx:3818`).
+parse (`blosc2_ext.pyx:3818`). The underlying limit stands (that is G2, dropped); since `8e3868ba`
+the operand is refused up front instead, with a message that names the conversion. See ¹⁰.
 ² Fixed in `0b486b07` — was correct values down the wrong path: a `SimpleProxy` widened the column
 to a fixed `<Un` and evaluation fell into `slices_eval`, never reaching miniexpr, ignoring
 `_UTF8_EXPR_BUDGET` and losing the utf8 container. The span driver now lives at module level and
