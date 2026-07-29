@@ -983,15 +983,74 @@ Text & binary
 Choosing a string column type
 -----------------------------
 
-CTable offers four ways to store strings.  As a quick decision path:
+CTable offers four ways to store strings.  The question that decides it is
+**do you know a bound on the length, and is it small?**  Fixed-width storage
+is the fastest of the four whenever you can name that bound; the
+variable-length types exist for when you cannot.
 
 * Low-cardinality strings (categories, enumerations, repeated labels):
-  use :func:`dictionary` — repeated values are stored once as integer codes.
-* Everything else (names, free text, high-cardinality values):
-  use :func:`utf8` — the recommended default for variable-length text.
-* Short codes of near-uniform length: use :class:`string` (fixed-width).
-* NumPy < 2.0, or nullable columns where any string value can legally occur
-  (native ``None`` nulls, no sentinel): use :func:`vlstring`.
+  use :func:`dictionary` — repeated values are stored once as integer codes,
+  and it has the fastest ``group_by`` of any flavour.
+* **Bounded length, up to about 32 characters** (identifiers, ISO dates,
+  currency or country codes, hashes, SKUs): use :class:`string`.  It is the
+  fastest option to read and to filter, every index kind works on it, and
+  string-returning expressions run on it natively.
+* **Unbounded or long** (names, addresses, free text, URLs, log lines, user
+  content): use :func:`utf8`.  There is no width to declare and rows cost
+  what they weigh.
+* Nullable columns where *any* string value can legally occur, or NumPy
+  < 2.0: use :func:`vlstring` / :func:`vlbytes`.  These are the only types
+  with a native ``None`` null that cannot collide with a real value, and
+  :func:`vlbytes` is the only one that stores arbitrary (non-UTF-8) bytes.
+
+Why 32, and what happens past it.  A fixed-width column costs
+4 × ``max_length`` bytes per row **every time it is read**, not merely on
+disk — compression hides this from the file size but not from memory.  So the
+advantage decays as the declared width grows.  Measured on 500 000 rows of
+mean length 14:
+
+.. list-table::
+   :header-rows: 1
+   :stub-columns: 1
+
+   * -
+     - in-memory size
+     - full read
+     - ``where(startswith(...))``
+   * - ``string(max_length=32)``
+     - 64 MB
+     - **23 ms**
+     - **104 ms**
+   * - ``string(max_length=64)``
+     - 128 MB
+     - 30 ms
+     - 124 ms
+   * - ``string(max_length=128)``
+     - 256 MB
+     - 40 ms
+     - 154 ms
+   * - :func:`utf8`
+     - **4 MB**
+     - 35 ms
+     - 165 ms
+
+Fixed-width wins outright at 32, still leads at 48, and is overtaken between
+64 and 128 — by which point it is also using 60× the memory.  Treat 32 as a
+comfortable recommendation rather than a cliff: if your data is bounded at 40,
+:class:`string` is still the better choice.
+
+Declaring ``max_length`` too small is safe in the sense that matters: a value
+that does not fit raises ``ValueError`` on write rather than being silently
+truncated.  It is not safe for *availability* — the write fails, and a column
+whose bound you guessed from a sample can start rejecting rows in production.
+When the bound is a guess rather than a fact, that is the signal to use
+:func:`utf8`.
+
+The compressed sizes of :class:`string` and :func:`utf8` are much closer than
+the in-memory sizes, but by how much depends entirely on the data: the UCS-4
+padding compresses away almost completely on low-entropy text (within ~30 %
+of utf8) and much less well on high-entropy values (~7× larger was measured
+above).  Do not plan storage on either figure without measuring your own data.
 
 .. list-table::
    :header-rows: 1
@@ -1091,9 +1150,10 @@ CTable offers four ways to store strings.  As a quick decision path:
    :ref:`ComputingUtf8Strings` below.
 
 Note that a plain ``str`` annotation without an explicit :func:`field` spec
-still maps to fixed-width ``string(max_length=32)`` for backward
-compatibility; opt in to variable-length storage with
-``blosc2.field(blosc2.utf8())``.
+maps to fixed-width ``string(max_length=32)`` — the same width the decision
+path above recommends, so the default is the fast path rather than a
+compatibility accident.  Opt in to variable-length storage with
+``blosc2.field(blosc2.utf8())`` when the length is unbounded.
 
 .. _Utf8AndStringDType:
 
