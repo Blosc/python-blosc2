@@ -4720,11 +4720,11 @@ def _dsl_kernel_string_dtype(func, inputs):
 
 def _guard_utf8_udf_inputs(inputs) -> None:
     """Reject variable-length utf8 operands in a UDF, naming the conversion."""
-    from blosc2._utf8_array import Utf8Array, utf8_compute_error
+    from blosc2._utf8_array import UTF8Array, utf8_compute_error
 
     for operand in inputs or ():
         raw = getattr(operand, "raw", operand)  # a CTable Column exposes its container here
-        if not isinstance(raw, Utf8Array):
+        if not isinstance(raw, UTF8Array):
             continue
         name = getattr(operand, "_col_name", None)
         source = f"t[{name!r}]" if name else "arr"
@@ -4733,7 +4733,7 @@ def _guard_utf8_udf_inputs(inputs) -> None:
                 (
                     f"Column {name!r} is a variable-length utf8 column and cannot be a UDF operand."
                     if name
-                    else "A variable-length Utf8Array cannot be a UDF operand."
+                    else "A variable-length UTF8Array cannot be a UDF operand."
                 ),
                 source=source,
                 compute="blosc2.lazyudf(kernel, (fixed,)).compute()[:]",
@@ -5371,21 +5371,21 @@ def lazyexpr(
     [16.0625   21.140625 27.      ]]
     """
     if operands is not None and isinstance(expression, str):
-        # A Utf8Array is variable-width, so it cannot be an expression operand.
+        # A UTF8Array is variable-width, so it cannot be an expression operand.
         # It only duck-types as one: LazyExpr would wrap it in a SimpleProxy,
         # which converts it to a fixed-width <Un NumPy array, and evaluation
         # would land in slices_eval -- correct-looking values down a path that
         # never reaches miniexpr, ignores the span budget, and loses the utf8
         # container.  Route it through the span driver instead.
-        from blosc2._utf8_array import Utf8Array, Utf8LazyExpr
+        from blosc2._utf8_array import UTF8Array, UTF8LazyExpr
 
-        if any(isinstance(v, Utf8Array) for v in operands.values()):
+        if any(isinstance(v, UTF8Array) for v in operands.values()):
             if out is not None or where is not None:
                 raise NotImplementedError(
                     "'out' and 'where' are not supported for expressions over a bare "
-                    "Utf8Array; use a CTable column, which supports both."
+                    "UTF8Array; use a CTable column, which supports both."
                 )
-            return Utf8LazyExpr(expression, operands, ne_args=ne_args)
+            return UTF8LazyExpr(expression, operands, ne_args=ne_args)
 
     if isinstance(expression, LazyExpr):
         if operands is not None:

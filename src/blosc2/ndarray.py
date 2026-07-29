@@ -5743,24 +5743,24 @@ def _is_string_dtype(dtype) -> bool:
 def _asarray_string_dispatch(array, copy, kwargs):
     """Route variable-length text out of :func:`asarray`'s NDArray path.
 
-    Returns ``(result, array)``.  *result* is a :class:`Utf8Array` when the
+    Returns ``(result, array)``.  *result* is a :class:`UTF8Array` when the
     **target** dtype is NumPy's ``StringDType``, and ``None`` otherwise -- in
     which case *array* comes back ready for the fixed-width path, so
     ``asarray(utf8_source, dtype="<U8")`` still yields a plain NDArray.
     """
-    from blosc2._utf8_array import Utf8Array, asarray_utf8, is_string_dtype
+    from blosc2._utf8_array import UTF8Array, asarray_utf8, is_string_dtype
 
     requested = kwargs.get("dtype")
     if is_string_dtype(requested if requested is not None else array.dtype):
         storage_kwargs = {k: v for k, v in kwargs.items() if k != "dtype"}
         return asarray_utf8(array, copy=copy, **storage_kwargs), array
-    if isinstance(array, Utf8Array):
+    if isinstance(array, UTF8Array):
         return None, array.astype(requested)
     return None, array
 
 
 def _utf8_filled(shape, fill: str, **kwargs):
-    """Build a :class:`Utf8Array` of *fill* repeated, for ``dtype=StringDType()``.
+    """Build a :class:`UTF8Array` of *fill* repeated, for ``dtype=StringDType()``.
 
     Shared by empty/zeros/ones/full: NumPy fills those with ``''``, ``''``,
     ``'1'`` and ``str(fill_value)`` respectively, and blosc2 matches.  A
@@ -6748,10 +6748,10 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
 
     Returns
     -------
-    out: :ref:`NDArray` or :class:`Utf8Array`
+    out: :ref:`NDArray` or :class:`UTF8Array`
         A new :ref:`NDArray` made of :paramref:`array`, or the original
         array when a copy is not required.  When the target dtype is NumPy's
-        variable-length ``StringDType``, a :class:`Utf8Array` is returned
+        variable-length ``StringDType``, a :class:`UTF8Array` is returned
         instead -- see the Notes.
 
     Notes
@@ -6764,7 +6764,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     ``StringDType`` cannot back an NDArray: it keeps each row's payload outside
     the array buffer (a 100-character string still reports ``nbytes == 16``)
     and offers no buffer protocol, so compressing that buffer would persist
-    pointers.  Such input is therefore stored as a :class:`Utf8Array`, which
+    pointers.  Such input is therefore stored as a :class:`UTF8Array`, which
     holds the same text as offsets + UTF-8 bytes -- the layout Arrow uses for
     ``large_string``.  The dispatch is on the *target* dtype, so
     ``asarray(utf8_source, dtype="<U8")`` still gives a fixed-width NDArray.

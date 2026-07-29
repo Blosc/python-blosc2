@@ -42,7 +42,7 @@ discussions that produced this plan. Everything needed is in this file.
 
 ## The problem, quantified
 
-`Utf8Array` ingest (`src/blosc2/utf8_array.py`) is far slower than the
+`UTF8Array` ingest (`src/blosc2/utf8_array.py`) is far slower than the
 alternatives on the same benchmark (`bench_string_kinds.py`,
 `t.extend({"s": values, "val": float_vals}, validate=False)` on 1e7 rows
 of the Chicago-taxi `company` column):
@@ -53,7 +53,7 @@ of the Chicago-taxi `company` column):
 | `string(max_length=44)` | 478 ms | 7.6x faster |
 | `vlstring()` | 1193 ms | 3x faster |
 
-**Root cause (verified against current code):** `Utf8Array.extend()` /
+**Root cause (verified against current code):** `UTF8Array.extend()` /
 `.append()` buffer rows one at a time in a pure-Python loop:
 
 ```python
@@ -158,10 +158,10 @@ losslessly (see the NUL-bearing tests already in `tests/ctable/test_utf8.py`).
 
 ### I1.a — Chunked bulk-check `extend()`
 
-**Where:** `Utf8Array.extend` (`src/blosc2/utf8_array.py`).
+**Where:** `UTF8Array.extend` (`src/blosc2/utf8_array.py`).
 
 Pull `values` in chunks of `_FLUSH_ROWS` via `itertools.islice` (keeps
-support for genuinely lazy iterables — `Utf8Array.copy()` calls
+support for genuinely lazy iterables — `UTF8Array.copy()` calls
 `out.extend(self)`). Per chunk, try a bulk fast path; fall back per-item
 only for that chunk if needed:
 
@@ -218,7 +218,7 @@ complexity to close the soft-bound gap.
 
 ### I1.c — Bulk `_rewrite_from` via `str.join` + `isascii()` fast path
 
-**Where:** `Utf8Array._rewrite_from` (`src/blosc2/utf8_array.py`).
+**Where:** `UTF8Array._rewrite_from` (`src/blosc2/utf8_array.py`).
 
 ```python
 def _rewrite_from(self, pos: int, values: list[str]) -> None:
@@ -480,7 +480,7 @@ not investigated further; not gated by this plan.
   and stop.
 - Never regress `string()`/`vlstring()` ingest performance — guard with
   the full `bench_string_kinds.py` script, not just utf8's rows.
-- No new public API — everything here is internal (`Utf8Array` methods,
+- No new public API — everything here is internal (`UTF8Array` methods,
   one new lazy-import helper, one new compiled function in the existing
   `utf8_ext` module).
 
@@ -488,7 +488,7 @@ not investigated further; not gated by this plan.
 
 ## Critical files
 
-- `src/blosc2/utf8_array.py` — `Utf8Array.extend`, `_rewrite_from`, new
+- `src/blosc2/utf8_array.py` — `UTF8Array.extend`, `_rewrite_from`, new
   `_encode_utf8_kernel()` helper (I1.a, I1.c, I2 caller-side wiring).
 - `src/blosc2/utf8_ext.pyx` — new `encode_utf8_span` function alongside
   the existing `pack_utf8_span` (I2 kernel).

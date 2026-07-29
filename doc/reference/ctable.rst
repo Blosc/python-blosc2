@@ -973,7 +973,7 @@ Text & binary
 .. autofunction:: utf8_array
 .. autofunction:: from_utf8
 .. autofunction:: to_utf8
-.. automethod:: Utf8Array.astype
+.. automethod:: UTF8Array.astype
 .. autoclass:: bytes
 .. autofunction:: vlstring
 .. autofunction:: vlbytes
@@ -1104,9 +1104,9 @@ utf8 and NumPy's ``StringDType``
 ``StringDType``, and the two interoperate on dtype: reads return
 ``StringDType`` arrays, and the array constructors dispatch on it::
 
-    blosc2.asarray(np.array(["a", "bb"], dtype=StringDType()))  # -> Utf8Array
-    blosc2.zeros(3, dtype=StringDType())                        # -> Utf8Array
-    blosc2.full(3, "x", dtype=StringDType())                    # -> Utf8Array
+    blosc2.asarray(np.array(["a", "bb"], dtype=StringDType()))  # -> UTF8Array
+    blosc2.zeros(3, dtype=StringDType())                        # -> UTF8Array
+    blosc2.full(3, "x", dtype=StringDType())                    # -> UTF8Array
 
 The fill values match NumPy's own (``''`` for ``zeros``/``empty``, ``'1'`` for
 ``ones``, ``str(fill_value)`` for ``full``), and the result satisfies the
@@ -1116,7 +1116,7 @@ What blosc2 does **not** do is store ``StringDType`` in an
 :class:`~blosc2.NDArray`, and it cannot: that dtype keeps each row's payload
 outside the array buffer — a 100-character string still reports
 ``nbytes == 16`` — and supports no buffer protocol, so compressing the buffer
-would persist pointers rather than text.  A :class:`Utf8Array` holds the same
+would persist pointers rather than text.  A :class:`UTF8Array` holds the same
 text as int64 offsets plus a UTF-8 blob, which is the layout Arrow uses for
 ``large_string`` and what makes :meth:`CTable.to_arrow` zero-copy.
 
@@ -1151,7 +1151,7 @@ computed, and written back::
 :func:`from_utf8` sizes the result to the longest value, counted in
 codepoints, so nothing truncates and non-ASCII text does not over-allocate.
 Pass an explicit ``dtype`` to choose the width yourself, which truncates
-longer values exactly as NumPy's ``astype`` does.  :meth:`Utf8Array.astype`
+longer values exactly as NumPy's ``astype`` does.  :meth:`UTF8Array.astype`
 is the same conversion as a method.
 
 To overwrite an existing column rather than add one, use
@@ -1175,7 +1175,7 @@ naming the column and printing the recipe above:
   boolean is refused just the same.
 
 Only :func:`blosc2.lazyexpr` accepts a utf8 operand directly: it routes to the
-span driver and returns a :class:`Utf8Array`, evaluating span by span.
+span driver and returns a :class:`UTF8Array`, evaluating span by span.
 
 Array, encoded, and compound specs
 ----------------------------------

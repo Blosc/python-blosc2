@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 import blosc2
-from blosc2._utf8_array import Utf8Array, _new_backend_arrays
+from blosc2._utf8_array import UTF8Array, _new_backend_arrays
 from blosc2.batch_array import BatchArray
 from blosc2.dictionary_column import DictionaryColumn
 from blosc2.list_array import ListArray
@@ -253,7 +253,7 @@ class InMemoryTableStorage(TableStorage):
     def create_varlen_scalar_column(self, name, *, spec, cparams=None, dparams=None):
         if isinstance(spec, Utf8Spec):
             offsets, data = _new_backend_arrays(cparams, dparams)
-            return Utf8Array(spec, offsets, data)
+            return UTF8Array(spec, offsets, data)
         return _ScalarVarLenArray(spec)
 
     def open_varlen_scalar_column(self, name, spec):
@@ -487,7 +487,7 @@ class EmbedStoreTableStorage(TableStorage):
         if isinstance(spec, Utf8Spec):
             offsets = self._estore[self._col_key(name)]
             data = self._estore[self._col_key(name) + _UTF8_DATA_SUFFIX]
-            return Utf8Array(spec, offsets, data)
+            return UTF8Array(spec, offsets, data)
         backend = self._estore[self._col_key(name)]
         return _ScalarVarLenArray(spec, backend)
 
@@ -728,7 +728,7 @@ class FileTableStorage(TableStorage):
             data_key = key + _UTF8_DATA_SUFFIX
             store[key] = offsets
             store[data_key] = data
-            return Utf8Array(spec, store[key], store[data_key])
+            return UTF8Array(spec, store[key], store[data_key])
         urlpath = self._list_col_path(name)
         backend = _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
         return _ScalarVarLenArray(spec, backend)
@@ -738,7 +738,7 @@ class FileTableStorage(TableStorage):
             store = self._open_store()
             offsets = store[self._col_key(name)]
             data = store[self._col_key(name) + _UTF8_DATA_SUFFIX]
-            return Utf8Array(spec, offsets, data)
+            return UTF8Array(spec, offsets, data)
         store = self._open_store()
         path = self._list_col_path(name)
         if store.is_zip_store and self._mode == "r":
@@ -1316,7 +1316,7 @@ class TreeStoreTableStorage(TableStorage):
                 rel_path = os.path.relpath(dest_path, self._working_dir()).replace(os.sep, "/")
                 self._store.map_tree[self._table_key(logical)] = rel_path
             self._store._modified = True
-            return Utf8Array(spec, offsets, data)
+            return UTF8Array(spec, offsets, data)
         urlpath = self._list_col_path(name)
         os.makedirs(os.path.dirname(urlpath), exist_ok=True)
         return _make_persistent_backend(spec, urlpath, "w", cparams=cparams, dparams=dparams)
@@ -1326,7 +1326,7 @@ class TreeStoreTableStorage(TableStorage):
             logical_key = self._col_logical_key(name)
             offsets = self._open_leaf(logical_key)
             data = self._open_leaf(logical_key + _UTF8_DATA_SUFFIX)
-            return Utf8Array(spec, offsets, data)
+            return UTF8Array(spec, offsets, data)
         if self._store.is_zip_store and self._mode == "r":
             rel = self._table_key(self._col_logical_key(name)).lstrip("/") + ".b2b"
             if rel not in self._store.offsets:

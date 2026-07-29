@@ -1255,7 +1255,7 @@ class Column:
             # letting NDArray's strided-gather fast path handle coarse steps.
             # Plain stored columns only; everything else falls through to the
             # position-gather path below.  utf8 is a varlen-scalar kind but
-            # Utf8Array slices itself efficiently (offsets+bytes span read),
+            # UTF8Array slices itself efficiently (offsets+bytes span read),
             # so it takes the fast path too instead of the index-gather one.
             if (
                 not (
@@ -2054,7 +2054,7 @@ class Column:
         """Apply ``fn(chunk, start, stop)`` over this utf8 column's logical rows.
 
         *fn* returns a boolean array for each ``StringDType`` chunk read from
-        the underlying :class:`~blosc2._utf8_array.Utf8Array`.  Returns a
+        the underlying :class:`~blosc2._utf8_array.UTF8Array`.  Returns a
         physical-length (``_valid_rows``-length) boolean NumPy array; rows
         beyond the column's logical length are left ``False``.
         """
@@ -2071,7 +2071,7 @@ class Column:
         """Apply ``fn(arr, start, stop)`` over this utf8 column's logical rows.
 
         Like :meth:`_utf8_chunked_bool`, but *fn* operates directly on the
-        underlying :class:`~blosc2._utf8_array.Utf8Array` (raw offsets/bytes)
+        underlying :class:`~blosc2._utf8_array.UTF8Array` (raw offsets/bytes)
         instead of a materialized ``StringDType`` chunk, so no per-row decode
         happens.  Returns a physical-length boolean NumPy array; rows beyond
         the column's logical length are left ``False``.
@@ -2133,8 +2133,8 @@ class Column:
         """Raw physical-length boolean mask for ``column <numpy_op> value``.
 
         Compares raw UTF-8 bytes with no decode to ``StringDType``, via
-        :meth:`~blosc2._utf8_array.Utf8Array.equal_mask_span` /
-        :meth:`~blosc2._utf8_array.Utf8Array.order_masks_span`.  A null never
+        :meth:`~blosc2._utf8_array.UTF8Array.equal_mask_span` /
+        :meth:`~blosc2._utf8_array.UTF8Array.order_masks_span`.  A null never
         satisfies any comparison.  Not intersected with the live-row mask --
         see :meth:`_utf8_compare_scalar` for that.
         """

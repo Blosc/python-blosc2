@@ -1386,7 +1386,7 @@ def test_summary_minmax_nullable_nan_float(tmpdir):
 
 
 @dataclasses.dataclass
-class Utf8Row:
+class UTF8Row:
     c: str = blosc2.field(blosc2.utf8())
 
 
@@ -1395,7 +1395,7 @@ class DictRow:
     c: str = blosc2.field(blosc2.dictionary())
 
 
-@pytest.mark.parametrize(("row_cls", "flavour"), [(Utf8Row, "utf8"), (DictRow, "dictionary")])
+@pytest.mark.parametrize(("row_cls", "flavour"), [(UTF8Row, "utf8"), (DictRow, "dictionary")])
 @pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "opsi"])
 def test_rank_index_rejects_non_full_kind(tmpdir, row_cls, flavour, kind):
     """These build over the int32 ranks without error and are then never
@@ -1407,7 +1407,7 @@ def test_rank_index_rejects_non_full_kind(tmpdir, row_cls, flavour, kind):
     assert "c" not in t._get_index_catalog()
 
 
-@pytest.mark.parametrize(("row_cls", "flavour"), [(Utf8Row, "utf8"), (DictRow, "dictionary")])
+@pytest.mark.parametrize(("row_cls", "flavour"), [(UTF8Row, "utf8"), (DictRow, "dictionary")])
 def test_rank_index_accepts_full_kind(tmpdir, row_cls, flavour):
     t = blosc2.CTable(row_cls, urlpath=str(tmpdir / f"{flavour}_full.b2t"), mode="w")
     values = [f"v{i % 50:03d}" for i in range(2000)]
@@ -1418,7 +1418,7 @@ def test_rank_index_accepts_full_kind(tmpdir, row_cls, flavour):
     assert sorted(t[t["c"] == "v007"]["c"][:]) == [v for v in values if v == "v007"]
 
 
-@pytest.mark.parametrize(("row_cls", "flavour"), [(Utf8Row, "utf8"), (DictRow, "dictionary")])
+@pytest.mark.parametrize(("row_cls", "flavour"), [(UTF8Row, "utf8"), (DictRow, "dictionary")])
 def test_rank_index_default_kind_is_full(tmpdir, row_cls, flavour):
     """The BUCKET default would hand these flavours an unusable index."""
     t = blosc2.CTable(row_cls, urlpath=str(tmpdir / f"{flavour}_def.b2t"), mode="w")

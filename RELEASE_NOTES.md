@@ -40,9 +40,9 @@ XXX version-specific blurb XXX
   values. Mixed expressions get whatever they can -- in
   `startswith(name, 'x') | (name == 'zz')` the comparison takes the fast
   path and `startswith` still decodes.
-- **New `blosc2.utf8_array(seq, spec=None)`** builds a `Utf8Array` from an
-  iterable of strings; `Utf8Array` is exported too. Previously the only
-  construction path was `Utf8Array(spec)` + `.extend()` + `.flush()`, which
+- **New `blosc2.utf8_array(seq, spec=None)`** builds a `UTF8Array` from an
+  iterable of strings; `UTF8Array` is exported too. Previously the only
+  construction path was `UTF8Array(spec)` + `.extend()` + `.flush()`, which
   was not exported at all.
 - **`df.apply(f, axis=1, engine=blosc2.jit)` now runs `row["colname"]`
   kernels that contain an `if`.** Neither dispatch route could before:
@@ -101,7 +101,7 @@ XXX version-specific blurb XXX
   evaluated on fixed-width arrays, and the result previously had to be written
   through the private `t._cols[name].set_all(...)`. A declared default is still
   honoured for rows appended later, so the two can be combined.
-- **`blosc2.from_utf8()` / `blosc2.to_utf8()` and `Utf8Array.astype()`** make
+- **`blosc2.from_utf8()` / `blosc2.to_utf8()` and `UTF8Array.astype()`** make
   the conversion between variable-length and fixed-width text an explicit,
   documented pair. utf8 columns store and filter text compactly, but
   string-*returning* expressions need miniexpr's compile-time output width, so
@@ -115,21 +115,21 @@ XXX version-specific blurb XXX
   `blosc2.asarray(np.array([...], dtype=StringDType()))` used to raise
   `TypeError: data type 'StringDType()' not understood`, and
   `blosc2.zeros(n, dtype=StringDType())` a `malformed node` `ValueError`; both
-  now return a `Utf8Array`, as do `empty`, `ones` and `full`, with the same
+  now return a `UTF8Array`, as do `empty`, `ones` and `full`, with the same
   fill values NumPy uses (`''`, `''`, `'1'`, `str(fill_value)`). The dispatch
   is on the *target* dtype, so `asarray(utf8_source, dtype="<U8")` still gives
   a fixed-width NDArray. `StringDType` still cannot back an NDArray — it keeps
   each row's payload outside the array buffer and offers no buffer protocol,
   so compressing that buffer would persist pointers — which is why the
   variable-length container is what comes back.
-- **`Utf8Array` gained `.shape`, `.ndim`, `.size` and `__array__`**, so it now
+- **`UTF8Array` gained `.shape`, `.ndim`, `.size` and `__array__`**, so it now
   satisfies the `blosc2.Array` protocol (`.shape` was the only member it
   lacked) and `np.asarray(arr)` returns `StringDType` instead of silently
   widening to a fixed-width `<Un` — for 200-character values that was 1600
   bytes where the payload is 203, and a different dtype than `arr[:]` reported
   for the same object.
 - **`Column.assign()` works on utf8, vlstring, vlbytes, struct and object
-  columns.** It previously raised `TypeError: Utf8Array assignment index must
+  columns.** It previously raised `TypeError: UTF8Array assignment index must
   be int`, leaving no public way to overwrite a variable-length column's
   values. These are now rewritten whole (one write per backing batch) rather
   than row by row, which for the batched varlen columns would have rewritten a
@@ -181,19 +181,19 @@ XXX version-specific blurb XXX
   `ValueError` when another kind is requested explicitly. Previously
   `create_index("category")` on a dictionary column built an unused BUCKET
   index by default.
-- **Comparison operators on `Utf8Array`, dictionary and varlen scalar columns**
+- **Comparison operators on `UTF8Array`, dictionary and varlen scalar columns**
   returned a plain `False`: none defined them, so `column == "value"` fell
   through to object identity. Silently wrong rather than an error. All now
-  return boolean masks; `Utf8Array` and `DictionaryColumn` answer a scalar
+  return boolean masks; `UTF8Array` and `DictionaryColumn` answer a scalar
   without decoding any row.
 - **`dictcol != value` raised `IndexError`** on any table with capacity
   padding: the negation was applied after the live-row intersection, turning
   every dead slot `True`.
-- **Expressions over a bare `Utf8Array`** (`blosc2.lazyexpr("'x=' + a", {"a":
+- **Expressions over a bare `UTF8Array`** (`blosc2.lazyexpr("'x=' + a", {"a":
   arr})`) produced correct values down the wrong path — widened to fixed-width
   `<Un` and evaluated by the NumPy fallback, never reaching miniexpr, ignoring
   the span budget and losing the utf8 container. They now run through the span
-  driver and return a `Utf8Array`.
+  driver and return a `UTF8Array`.
 - **`add_column()` on a varlen column left it short on tables with deleted
   rows.** vlstring/vlbytes/utf8/struct/object columns are indexed by physical
   position but the new column was filled with only as many entries as there

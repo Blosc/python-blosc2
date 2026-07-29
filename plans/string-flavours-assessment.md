@@ -33,7 +33,7 @@ because two of the conclusions below originally rested on it.
 | `t.apply(dsl_kernel)` / `lazyudf` | ✓ | ✓ | ✗ NotImpl, routes ¹ ¹⁰ | ✗ | ✗ RuntimeError |
 | nested (dotted) leaf in expr | ✓ | ✓ | ✗ NotImpl | ✗ | ✗ |
 | **Bare container (no CTable)** | | | | | |
-| `lazyexpr(expr, {a: col})` | ✓ NDArray | ✓ | ✓ span driver, returns `Utf8Array` ² | ⚠ padded ⁶ | ⚠ numpy |
+| `lazyexpr(expr, {a: col})` | ✓ NDArray | ✓ | ✓ span driver, returns `UTF8Array` ² | ⚠ padded ⁶ | ⚠ numpy |
 | `col == "scalar"` | ✓ LazyExpr | ✓ LazyExpr | ✓ bool mask ³ | ✓ bool mask ³ | ✓ bool mask ³ |
 | **Interop** | | | | | |
 | `to_arrow` | `string` | `large_binary` | `large_string` | `dictionary<…>` | `string` / `large_binary` |
@@ -49,7 +49,7 @@ to a fixed `<Un` and evaluation fell into `slices_eval`, never reaching miniexpr
 `_UTF8_EXPR_BUDGET` and losing the utf8 container. The span driver now lives at module level and
 `lazyexpr()` routes utf8 operands to it. Whole-array evaluation only.
 ³ Fixed in `3692673f` (utf8) and `486be882` (dictionary, vlstring) — each was a plain `False`,
-object identity, silently wrong, because none of the three defined comparison operators. `Utf8Array`
+object identity, silently wrong, because none of the three defined comparison operators. `UTF8Array`
 answers a scalar `str` with its existing raw-byte scanners (all six operators, no row decoded);
 `DictionaryColumn` compares codes, so also no decode; `_ScalarVarLenArray` decodes and delegates to
 NumPy. The bug survived because `CTable` answers `==` through its own predicate path and never asks
@@ -193,7 +193,7 @@ comparison entirely: derive an **alphabetical rank per row as int32**, index *th
 numeric FULL-index machinery — sort, window, null block, OOC merge — works unchanged. Sorting by
 rank is sorting by string.
 
-utf8 has the missing ingredient already: `Utf8Factorizer` (`_utf8_array.py:714`) produces global
+utf8 has the missing ingredient already: `UTF8Factorizer` (`_utf8_array.py:714`) produces global
 codes plus a decoded vocabulary without decoding a single row, and `group_by` already runs it at
 scale — 227 ms for 1 M rows above. So a utf8 rank index is roughly: factorize (~230 ms/M rows),
 `argsort` the vocabulary, map codes→ranks, hand an int32 array to the existing builder. Build cost
@@ -303,7 +303,7 @@ in `b1bbc54e` (§⁷), taking top-*k* to 43.2 ms and `sort_by` to parity with `<
 is kept as written because it is what the decision was made on — the argument for the second column
 never rested on these two rows, which is exactly the point the next paragraph makes.
 
-1. ~~**Fix what is wrong, not merely absent**~~ — **done**. `Utf8Array` comparisons (`3692673f`)
+1. ~~**Fix what is wrong, not merely absent**~~ — **done**. `UTF8Array` comparisons (`3692673f`)
    and the bare-array `lazyexpr` fallback (G4, `0b486b07`). Both were silent-wrong results, and
    neither depended on which rule is chosen below. **No known silently-wrong utf8 path remains.**
 2. ~~**Publish the conversion pair.**~~ — **done**, `f8af0714` + `5b31abe4`. See ⁸.
@@ -415,9 +415,9 @@ Four pieces, all of which were missing:
 
 - **`add_column(..., values=)`** — one entry per *live* row, coerced to the column's dtype. A
   declared default still governs rows appended later, so the two combine.
-- **`blosc2.from_utf8()` / `blosc2.to_utf8()`**, plus `Utf8Array.astype()` as the method form.
+- **`blosc2.from_utf8()` / `blosc2.to_utf8()`**, plus `UTF8Array.astype()` as the method form.
 - **`Column.assign()` on utf8 and the other varlen scalar columns**, which raised
-  `TypeError: Utf8Array assignment index must be int` — there was no public way to overwrite a
+  `TypeError: UTF8Array assignment index must be int` — there was no public way to overwrite a
   variable-length column at all.
 - **The rule itself**, in `doc/reference/ctable.rst` (§Utf8Compute), with a compute row added to the
   flavour comparison table.
@@ -432,7 +432,7 @@ Two design points worth keeping:
   a hand-sized `astype("<U13")` — which was also 1.3× wider than needed).
 - **The varlen columns are rewritten whole, not row by row.** `_ScalarVarLenArray.__setitem__`
   rewrites an entire msgpack batch per row, the same O(N × batch) shape as the dictionary decode bug
-  in ⁴. `set_all()` (which `Utf8Array` already had, and `_ScalarVarLenArray` now grows) writes each
+  in ⁴. `set_all()` (which `UTF8Array` already had, and `_ScalarVarLenArray` now grows) writes each
   batch once. utf8 `assign` measures 122 ms per 200 k rows.
 
 Found while doing it, both pre-existing:
@@ -622,7 +622,7 @@ through a *dtype* (`np.array(v, dtype=StringDType())`) rather than through a sep
 
 blosc2's NDArray compresses *buffers*, so `NDArray(dtype=StringDType())` would persist pointers —
 garbage on reopen, in another process, or on another machine. Arrow reached the same conclusion, and
-`Utf8Array`'s layout **is** Arrow's `large_string`, which is what makes `to_arrow` zero-copy. (The
+`UTF8Array`'s layout **is** Arrow's `large_string`, which is what makes `to_arrow` zero-copy. (The
 `ast.literal_eval` failure in `NDArray.dtype` is a symptom, ~5 lines to fix, and fixing it buys
 nothing.)
 
@@ -635,15 +635,15 @@ where `StringDType` does not exist; `Utf8Spec.dtype = None` is deliberate.)
 **What shipped.** Constructors dispatch on the target dtype, matching NumPy's fill values exactly:
 
 ```python
-blosc2.asarray(np.array(["a", "bb"], dtype=StringDType()))  # -> Utf8Array
-blosc2.zeros(3, dtype=StringDType())  # -> Utf8Array, ['', '', '']
-blosc2.ones(3, dtype=StringDType())  # -> Utf8Array, ['1', '1', '1']
+blosc2.asarray(np.array(["a", "bb"], dtype=StringDType()))  # -> UTF8Array
+blosc2.zeros(3, dtype=StringDType())  # -> UTF8Array, ['', '', '']
+blosc2.ones(3, dtype=StringDType())  # -> UTF8Array, ['1', '1', '1']
 blosc2.asarray(utf8_source, dtype="<U8")  # -> NDArray, fixed width
 ```
 
 Two container gaps closed along the way, both worth more than the dispatch:
 
-- **`Utf8Array` failed the `blosc2.Array` protocol**, and `.shape` was the *only* member it lacked —
+- **`UTF8Array` failed the `blosc2.Array` protocol**, and `.shape` was the *only* member it lacked —
   for a container `CTable` uses throughout. It now has `.shape`/`.ndim`/`.size`.
 - **`np.asarray(utf8_arr)` silently widened** to a fixed-width `<Un`, because there was no
   `__array__` and NumPy fell back to iterating rows: 1600 bytes for two 200-character values whose

@@ -567,7 +567,7 @@ from .dict_store import DictStore
 from .tree_store import TreeStore
 from .batch_array import Batch, BatchArray
 from .list_array import ListArray
-from ._utf8_array import Utf8Array, from_utf8, to_utf8, utf8_array
+from ._utf8_array import UTF8Array, from_utf8, to_utf8, utf8_array
 from .objectarray import ObjectArray, objectarray_from_cframe
 from .ref import Ref
 from .b2objects import open_b2object
@@ -884,7 +884,7 @@ __all__ = [  # noqa : RUF022
     "Tuner",
     "URLPath",
     "ObjectArray",
-    "Utf8Array",
+    "UTF8Array",
     # Version
     "__version__",
     # Utils

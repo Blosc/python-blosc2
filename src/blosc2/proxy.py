@@ -673,9 +673,9 @@ class SimpleProxy(blosc2.Operand):
     """
 
     def __init__(self, src, chunks: tuple | None = None, blocks: tuple | None = None):
-        from blosc2._utf8_array import Utf8Array
+        from blosc2._utf8_array import UTF8Array
 
-        if isinstance(src, Utf8Array):
+        if isinstance(src, UTF8Array):
             # The compute engine indexes chunk-wise into fixed-width elements,
             # which a variable-length utf8 array has not got, so widen it here.
             # (lazyexpr() routes utf8 operands to the span driver instead; this

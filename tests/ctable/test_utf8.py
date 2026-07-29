@@ -105,14 +105,14 @@ def test_utf8_not_inferred_from_plain_str_annotation():
 
 
 # ---------------------------------------------------------------------------
-# Utf8Array internal adapter
+# UTF8Array internal adapter
 # ---------------------------------------------------------------------------
 
 
 def test_utf8_array_basic_roundtrip():
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(SAMPLE)
     assert len(arr) == len(SAMPLE)
     assert list(arr[:]) == SAMPLE
@@ -124,9 +124,9 @@ def test_utf8_array_basic_roundtrip():
 
 
 def test_utf8_array_reads_across_pending_boundary():
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(SAMPLE[:4])
     arr.flush()
     arr.extend(SAMPLE[4:])  # stays pending
@@ -141,9 +141,9 @@ def test_utf8_array_reads_across_pending_boundary():
 
 
 def test_utf8_array_setitem_shifts_offsets():
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(["aa", "bb", "cc"])
     arr.flush()
     arr[1] = "a longer replacement value"
@@ -153,9 +153,9 @@ def test_utf8_array_setitem_shifts_offsets():
 
 
 def test_utf8_array_rejects_non_str():
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     with pytest.raises(TypeError, match="Expected str"):
         arr.append(42)
     with pytest.raises(TypeError, match="not nullable"):
@@ -168,9 +168,9 @@ def test_utf8_array_rejects_non_str():
 
 
 def test_utf8_array_extend_empty_iterable_is_noop():
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend([])
     assert len(arr) == 0
     arr.extend(iter([]))
@@ -184,11 +184,11 @@ def test_utf8_array_extend_many_rows_no_dropped_rows():
     `self._pending` to a fresh list rather than mutating it, so an
     `extend()` spanning several internal flushes must re-read
     `self._pending` after each one instead of caching a reference."""
-    from blosc2._utf8_array import _FLUSH_ROWS, Utf8Array
+    from blosc2._utf8_array import _FLUSH_ROWS, UTF8Array
 
     n = _FLUSH_ROWS * 3 + 7
     values = [f"row{i}" for i in range(n)]
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(values)
     assert len(arr) == n
     arr.flush()
@@ -197,21 +197,21 @@ def test_utf8_array_extend_many_rows_no_dropped_rows():
 
 
 def test_utf8_array_extend_none_straddles_chunk_boundary():
-    from blosc2._utf8_array import _FLUSH_ROWS, Utf8Array
+    from blosc2._utf8_array import _FLUSH_ROWS, UTF8Array
 
     values = [f"v{i}" for i in range(_FLUSH_ROWS + 2)]
     values[_FLUSH_ROWS - 1] = None  # last row of first chunk
     values[_FLUSH_ROWS + 1] = None  # second row of second chunk
-    arr = Utf8Array(blosc2.utf8(null_value="<NA>"))
+    arr = UTF8Array(blosc2.utf8(null_value="<NA>"))
     arr.extend(values)
     expected = [v if v is not None else "<NA>" for v in values]
     assert list(arr[:]) == expected
 
 
 def test_utf8_array_extend_append_interleaved_before_flush():
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.append("first")
     arr.extend(["second", "third"])
     arr.append("fourth")
@@ -220,11 +220,11 @@ def test_utf8_array_extend_append_interleaved_before_flush():
 
 
 def test_utf8_array_extend_ascii_nul_byte_preserved():
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
     values = ["nul\x00in", "plain", "\x00leading", "trailing\x00"]
     assert all(v.isascii() for v in values)
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(values)
     arr.flush()
     assert list(arr[:]) == values
@@ -235,10 +235,10 @@ def test_utf8_array_extend_multi_mb_strings_bounded_flush():
     per _FLUSH_ROWS-sized chunk (not per row), so this overshoots
     _FLUSH_CHARS by at most one chunk before flushing -- confirm read-back
     is still correct despite the coarser check."""
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
     values = [f"{i:06d}" + "x" * (2 * 1024 * 1024) for i in range(20)]
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(values)
     arr.flush()
     assert list(arr[:]) == values
@@ -282,9 +282,9 @@ def test_pack_utf8_span_rejects_malformed_rel():
 
 
 def test_utf8_array_bulk_read_kernel_and_fallback(force_kernel_mode):
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(SAMPLE)
     arr.flush()
     got = arr[:]
@@ -295,12 +295,12 @@ def test_utf8_array_bulk_read_kernel_and_fallback(force_kernel_mode):
 def test_utf8_array_bulk_read_matches_python_ground_truth(force_kernel_mode):
     """A wider mix of byte lengths and edge cases than SAMPLE: many distinct
     ASCII/multi-byte/empty/NUL-bearing values, read back in one bulk span."""
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
     rng = np.random.default_rng(5)
     pool = ["", "a", "café", "日本語", "x" * 5000, "nul\x00in", "nul\x00INSIDE", "emoji 🎉🚀"]
     values = [pool[i] for i in rng.integers(0, len(pool), 3000)]
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(values)
     arr.flush()
     assert list(arr[:]) == values
@@ -341,9 +341,9 @@ def force_write_kernel_mode(request, monkeypatch):
 
 
 def test_utf8_array_extend_kernel_and_fallback(force_write_kernel_mode):
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(SAMPLE)
     arr.flush()
     assert list(arr[:]) == SAMPLE
@@ -352,22 +352,22 @@ def test_utf8_array_extend_kernel_and_fallback(force_write_kernel_mode):
 def test_utf8_array_extend_matches_python_ground_truth(force_write_kernel_mode):
     """Same wider mix of byte lengths and edge cases as the read-side
     ground-truth test, exercised through the write path this time."""
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
     rng = np.random.default_rng(7)
     pool = ["", "a", "café", "日本語", "x" * 5000, "nul\x00in", "nul\x00INSIDE", "emoji 🎉🚀"]
     values = [pool[i] for i in rng.integers(0, len(pool), 3000)]
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(values)
     arr.flush()
     assert list(arr[:]) == values
 
 
 def test_utf8_array_extend_ascii_nul_byte_kernel_and_fallback(force_write_kernel_mode):
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
     values = ["nul\x00in", "plain", "\x00leading", "trailing\x00"]
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(values)
     arr.flush()
     assert list(arr[:]) == values
@@ -376,10 +376,10 @@ def test_utf8_array_extend_ascii_nul_byte_kernel_and_fallback(force_write_kernel
 def test_utf8_array_extend_multi_mb_string_kernel_and_fallback(force_write_kernel_mode):
     """A single multi-MB value alongside short ones -- sanity-checks the
     total-length/offset accumulation in the compiled kernel's two passes."""
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
     values = ["head", "x" * (8 * 1024 * 1024), "tail", "café" * 100_000]
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(values)
     arr.flush()
     assert list(arr[:]) == values
@@ -395,9 +395,9 @@ def test_utf8_array_extend_lone_surrogate_raises_and_recovers(force_write_kernel
     UnicodeEncodeError, matching str.encode('utf-8')'s own behavior, and
     the array must remain usable afterwards -- a regression test for the
     compiled kernel's temp-buffer cleanup on the error path."""
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(["first"])
     arr.flush()
     arr.extend(["ok", "bad\udc80value"])
@@ -897,12 +897,12 @@ def test_utf8_factorize_span_matches_np_unique_contract():
     numpy's np.unique on StringDType merges strings differing only after an
     embedded NUL (numpy bug), which the byte-exact factorization does not.
     """
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
     rng = np.random.default_rng(7)
     pool = ["", "a", "ab", "café", "日本語", "x" * 3000, "nul\x00in", "nul\x00IN", "Wien", "wien"]
     values = [pool[i] for i in rng.integers(0, len(pool), 5000)]
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(values)
     codes, uniques = arr.factorize_span(0, len(values))
     assert list(uniques) == sorted(set(values))
@@ -910,9 +910,9 @@ def test_utf8_factorize_span_matches_np_unique_contract():
 
 
 def test_utf8_factorizer_cross_span_codes_are_global():
-    from blosc2._utf8_array import Utf8Array
+    from blosc2._utf8_array import UTF8Array
 
-    arr = Utf8Array(blosc2.utf8())
+    arr = UTF8Array(blosc2.utf8())
     arr.extend(["b", "a", "b", "c", "a", "d"])
     fact = arr.factorizer()
     c1 = fact.codes_for_span(0, 3)  # b, a, b
@@ -1331,7 +1331,7 @@ def test_utf8_duckdb_query():
 
 def test_utf8_array_constructor():
     arr = blosc2.utf8_array(SAMPLE)
-    assert isinstance(arr, blosc2.Utf8Array)
+    assert isinstance(arr, blosc2.UTF8Array)
     assert len(arr) == len(SAMPLE)
     assert list(arr[:]) == SAMPLE
 
@@ -1426,12 +1426,12 @@ def test_ctable_utf8_string_result_is_a_utf8_array():
 
     A ``<Un`` result would pad every row out to miniexpr's compile-time bound,
     which for ``lower()`` reserves a 2x case-expansion factor at 4 bytes per
-    codepoint.  The driver returns a Utf8Array instead.
+    codepoint.  The driver returns a UTF8Array instead.
     """
     values = ["hello", "world", "café", ""]
     t = make_table(values)
     got = t._utf8_span_eval("'x=' + name", {}, ["name"], strict=True)
-    assert isinstance(got, blosc2.Utf8Array)
+    assert isinstance(got, blosc2.UTF8Array)
     assert [str(v) for v in got[: len(values)]] == [f"x={v}" for v in values]
     # Physical length, like every other result from this driver.
     assert len(got) == len(t._valid_rows)
@@ -1446,20 +1446,20 @@ def test_ctable_utf8_bool_result_stays_a_numpy_array():
 
 
 def test_ctable_utf8_string_result_concatenates_across_spans():
-    """The Utf8Array is extended span by span, so span order and row counts
+    """The UTF8Array is extended span by span, so span order and row counts
     must line up exactly; a single-span run would not catch a drift."""
     values = [f"v{i}" for i in range(50)]
     t = make_table(values)
     t._UTF8_EXPR_SPAN = 7  # several spans, with a short final one
     got = t._utf8_span_eval("'x=' + name", {}, ["name"], strict=True)
-    assert isinstance(got, blosc2.Utf8Array)
+    assert isinstance(got, blosc2.UTF8Array)
     assert [str(v) for v in got[: len(values)]] == [f"x={v}" for v in values]
 
 
 def test_ctable_utf8_string_result_keeps_the_null_sentinel():
     t = CTable(NullableRow, new_data={"name": ["a", None, "c"], "x": [0, 1, 2]})
     got = t._utf8_span_eval("'p=' + name", {}, ["name"], strict=True)
-    assert isinstance(got, blosc2.Utf8Array)
+    assert isinstance(got, blosc2.UTF8Array)
     assert got.spec.null_value == t["name"].null_value
     assert [str(v) for v in got[:3]] == ["p=a", t["name"].null_value, "p=c"]
 
@@ -1666,7 +1666,7 @@ def test_utf8_array_comparison_edge_cases():
 
 
 def test_bare_utf8_array_expression_uses_the_span_driver():
-    """A bare Utf8Array must not evaluate through the NumPy slices_eval path.
+    """A bare UTF8Array must not evaluate through the NumPy slices_eval path.
 
     That path returns correct-looking values while never reaching miniexpr,
     ignoring the span budget, and widening the result to a fixed ``<Un``.
@@ -1676,7 +1676,7 @@ def test_bare_utf8_array_expression_uses_the_span_driver():
 
     result = blosc2.lazyexpr("'x=' + a", {"a": arr}).compute(strict_miniexpr=True)
     # Contagion: a string result over a utf8 operand stays variable-width.
-    assert isinstance(result, blosc2.Utf8Array)
+    assert isinstance(result, blosc2.UTF8Array)
     assert list(result[:]) == ["x=" + v for v in values]
 
     # A boolean result is a plain NumPy array, as for a CTable column.
@@ -1689,7 +1689,7 @@ def test_bare_utf8_array_expression_with_mixed_operands():
     arr = blosc2.utf8_array(["hello", "world", "héllo"])
     other = blosc2.utf8_array(["A", "B", "C"])
     joined = blosc2.lazyexpr("a + b", {"a": arr, "b": other}).compute(strict_miniexpr=True)
-    assert isinstance(joined, blosc2.Utf8Array)
+    assert isinstance(joined, blosc2.UTF8Array)
     assert list(joined[:]) == ["helloA", "worldB", "hélloC"]
 
     nums = blosc2.asarray(np.array([1, 2, 3]))
@@ -1924,7 +1924,7 @@ def test_to_utf8_from_fixed_width_and_lists():
     values = ["hello", "café", ""]
     for source in (np.array(values, dtype="<U5"), np.array(values, dtype=STRING_DTYPE), values):
         out = blosc2.to_utf8(source)
-        assert isinstance(out, blosc2.Utf8Array)
+        assert isinstance(out, blosc2.UTF8Array)
         assert list(out[:]) == values, source
 
 
@@ -2105,7 +2105,7 @@ def test_non_utf8_dsl_kernel_column_still_works():
 
 
 # ---------------------------------------------------------------------------
-# NumPy StringDType interop: dtype-based dispatch to Utf8Array
+# NumPy StringDType interop: dtype-based dispatch to UTF8Array
 # ---------------------------------------------------------------------------
 
 
@@ -2137,14 +2137,14 @@ def test_utf8_array_np_asarray_honours_an_explicit_dtype():
 def test_asarray_dispatches_string_dtype_to_utf8array():
     src = np.array(["a", "bb", "日本語"], dtype=STRING_DTYPE)
     out = blosc2.asarray(src)
-    assert isinstance(out, blosc2.Utf8Array)
+    assert isinstance(out, blosc2.UTF8Array)
     assert list(out[:]) == ["a", "bb", "日本語"]
 
 
 def test_asarray_dispatches_on_the_target_dtype():
     """A fixed-width source asked for StringDType becomes variable-length."""
     out = blosc2.asarray(np.array(["a", "bb"], dtype="<U2"), dtype=STRING_DTYPE)
-    assert isinstance(out, blosc2.Utf8Array)
+    assert isinstance(out, blosc2.UTF8Array)
     assert list(out[:]) == ["a", "bb"]
 
 
@@ -2196,7 +2196,7 @@ def test_asarray_non_string_paths_are_unchanged():
 )
 def test_constructors_with_string_dtype_match_numpy(call, expected):
     out = call(STRING_DTYPE)
-    assert isinstance(out, blosc2.Utf8Array)
+    assert isinstance(out, blosc2.UTF8Array)
     assert list(out[:]) == expected
 
 
