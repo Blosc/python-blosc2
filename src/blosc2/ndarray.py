@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import builtins
 import inspect
+import itertools
 import math
 import weakref
 from abc import abstractmethod
@@ -5781,10 +5782,14 @@ def _utf8_filled(shape, fill: str, **kwargs):
             f"Variable-length text is 1-D only, got shape {shape}. Use a fixed-width "
             "'<U' dtype for an N-D NDArray."
         )
-    return to_utf8([fill] * shape[0])
+    # repeat() rather than a list: the fill is one interned string, so a list
+    # would be shape[0] pointers to it before the packer sees any of them.
+    return to_utf8(itertools.repeat(fill, shape[0]))
 
 
-def empty(shape: int | tuple | list, dtype: np.dtype | str | None = np.float64, **kwargs: Any) -> NDArray:
+def empty(
+    shape: int | tuple | list, dtype: np.dtype | str | None = np.float64, **kwargs: Any
+) -> NDArray | blosc2.UTF8Array:
     """Create an empty array.
 
     Parameters
@@ -5917,7 +5922,9 @@ def nans(shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwargs
     return blosc2_ext.nans(shape, chunks, blocks, dtype, **kwargs)
 
 
-def zeros(shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwargs: Any) -> NDArray:
+def zeros(
+    shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwargs: Any
+) -> NDArray | blosc2.UTF8Array:
     """Create an array with zero as the default value
     for uninitialized portions of the array.
 
@@ -5964,7 +5971,7 @@ def full(
     fill_value: bytes | int | float | bool,
     dtype: np.dtype | str = None,
     **kwargs: Any,
-) -> NDArray:
+) -> NDArray | blosc2.UTF8Array:
     """Create an array, with :paramref:`fill_value` being used as the default value
     for uninitialized portions of the array.
 
@@ -6021,7 +6028,9 @@ def full(
     return blosc2_ext.full(shape, chunks, blocks, fill_value, dtype, **kwargs)
 
 
-def ones(shape: int | tuple | list, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray:
+def ones(
+    shape: int | tuple | list, dtype: np.dtype | str = None, **kwargs: Any
+) -> NDArray | blosc2.UTF8Array:
     """Create an array with one as values.
 
     The parameters and keyword arguments are the same as for the
@@ -6728,7 +6737,9 @@ def _ndarray_asarray_requires_copy(
     return builtins.any(key in user_kwargs for key in copy_keys)
 
 
-def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: Any) -> NDArray:
+def asarray(
+    array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: Any
+) -> NDArray | blosc2.UTF8Array:
     """Convert the `array` to an `NDArray`.
 
     Parameters

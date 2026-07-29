@@ -427,6 +427,26 @@ class TestRowKernelsWithControlFlow:
         result = df.apply(format_room_info, axis=1, engine=blosc2.jit)
         pd.testing.assert_series_equal(result, expected)
 
+    def test_column_named_like_a_dsl_function(self):
+        """A column name that shadows a DSL builtin must not change meaning.
+
+        The rewrite turns row["sqrt"] into a parameter literally called
+        `sqrt`, which then coexists with a real sqrt() call in the same
+        expression; operands and calls are distinguished by position, so both
+        resolve correctly.  Index symbols (`_i0`) are checked for the same
+        reason.
+        """
+
+        def collide(row):
+            return row["sqrt"] + np.sqrt(row["b"])
+
+        def index_symbol(row):
+            return row["_i0"] + row["b"]
+
+        df = pd.DataFrame({"sqrt": [1.0, 2.0], "b": [4.0, 9.0], "_i0": [5.0, 6.0]})
+        for fn in (collide, index_symbol):
+            pd.testing.assert_series_equal(df.apply(fn, axis=1, engine=blosc2.jit), df.apply(fn, axis=1))
+
     def test_non_identifier_column_label(self):
         def tag(row):
             if row["room type"] == "loft":

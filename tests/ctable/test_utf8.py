@@ -2214,6 +2214,29 @@ def test_constructors_string_dtype_reject_nd():
         blosc2.zeros(3, dtype=STRING_DTYPE, urlpath="unused.b2nd")
 
 
+def test_constructors_string_dtype_do_not_materialize_a_fill_list():
+    """The fill is one string repeated; building a list of it is pure overhead.
+
+    A list would hold shape[0] pointers to the same object before the packer
+    sees any of them, which is what makes zeros(10_000_000, StringDType())
+    expensive for no reason.
+    """
+    import tracemalloc
+
+    n = 1_000_000
+    tracemalloc.start()
+    try:
+        arr = blosc2.zeros(n, dtype=STRING_DTYPE)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert len(arr) == n
+    assert arr[0] == ""
+    # A list of n pointers alone is 8n bytes (~7.6 MiB here) on top of the
+    # array itself; the streamed build stays far below that.
+    assert peak < 4 * 2**20, f"peak {peak / 2**20:.1f} MiB suggests a materialized fill list"
+
+
 def test_utf8_dispatch_round_trips_conversion():
     out = blosc2.full(2, "hé", dtype=STRING_DTYPE)
     assert list(blosc2.to_utf8(blosc2.from_utf8(out))[:]) == ["hé", "hé"]
