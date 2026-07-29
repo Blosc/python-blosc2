@@ -1385,9 +1385,22 @@ def test_summary_minmax_nullable_nan_float(tmpdir):
 # ---------------------------------------------------------------------------
 
 
-@dataclasses.dataclass
-class UTF8Row:
-    c: str = blosc2.field(blosc2.utf8())
+_needs_string_dtype = pytest.mark.skipif(
+    not hasattr(np.dtypes, "StringDType"),
+    reason="utf8 columns require NumPy >= 2.0 (StringDType)",
+)
+
+if hasattr(np.dtypes, "StringDType"):
+
+    @dataclasses.dataclass
+    class UTF8Row:
+        c: str = blosc2.field(blosc2.utf8())
+
+else:
+    # blosc2.utf8() raises on NumPy < 2.0, so the class cannot even be defined
+    # there.  Every parametrization using it carries _needs_string_dtype, so
+    # this placeholder is never dereferenced.
+    UTF8Row = None
 
 
 @dataclasses.dataclass
@@ -1395,7 +1408,14 @@ class DictRow:
     c: str = blosc2.field(blosc2.dictionary())
 
 
-@pytest.mark.parametrize(("row_cls", "flavour"), [(UTF8Row, "utf8"), (DictRow, "dictionary")])
+#: The two flavours whose indexes are rank-based, utf8 skipped on NumPy 1.x.
+RANK_FLAVOURS = [
+    pytest.param(UTF8Row, "utf8", marks=_needs_string_dtype),
+    pytest.param(DictRow, "dictionary"),
+]
+
+
+@pytest.mark.parametrize(("row_cls", "flavour"), RANK_FLAVOURS)
 @pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "opsi"])
 def test_rank_index_rejects_non_full_kind(tmpdir, row_cls, flavour, kind):
     """These build over the int32 ranks without error and are then never
@@ -1407,7 +1427,7 @@ def test_rank_index_rejects_non_full_kind(tmpdir, row_cls, flavour, kind):
     assert "c" not in t._get_index_catalog()
 
 
-@pytest.mark.parametrize(("row_cls", "flavour"), [(UTF8Row, "utf8"), (DictRow, "dictionary")])
+@pytest.mark.parametrize(("row_cls", "flavour"), RANK_FLAVOURS)
 def test_rank_index_accepts_full_kind(tmpdir, row_cls, flavour):
     t = blosc2.CTable(row_cls, urlpath=str(tmpdir / f"{flavour}_full.b2t"), mode="w")
     values = [f"v{i % 50:03d}" for i in range(2000)]
@@ -1418,7 +1438,7 @@ def test_rank_index_accepts_full_kind(tmpdir, row_cls, flavour):
     assert sorted(t[t["c"] == "v007"]["c"][:]) == [v for v in values if v == "v007"]
 
 
-@pytest.mark.parametrize(("row_cls", "flavour"), [(UTF8Row, "utf8"), (DictRow, "dictionary")])
+@pytest.mark.parametrize(("row_cls", "flavour"), RANK_FLAVOURS)
 def test_rank_index_default_kind_is_full(tmpdir, row_cls, flavour):
     """The BUCKET default would hand these flavours an unusable index."""
     t = blosc2.CTable(row_cls, urlpath=str(tmpdir / f"{flavour}_def.b2t"), mode="w")

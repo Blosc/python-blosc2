@@ -18,6 +18,18 @@ import pytest
 import blosc2
 from blosc2 import blosc2_ext
 
+# NumPy 2.0 added the `np.strings` namespace and the `+` ufunc loop for U/S
+# arrays; blosc2 still supports NumPy 1.26, where `np.char` is the equivalent
+# and `arr + arr` raises "ufunc 'add' did not contain a loop".  Only the
+# *reference* values below need this -- what is under test runs on both.
+np_strings = getattr(np, "strings", np.char)
+
+
+def np_add(a, b):
+    """NumPy's own string concatenation, spelled to work on NumPy 1.26 too."""
+    return np.char.add(a, b)
+
+
 NAMES = [
     "Cozy Loft With City View",
     "Small Single Room",
@@ -37,7 +49,7 @@ def test_concat_scalar_does_not_truncate():
     full = np.array(["A" * 16] * 128, dtype="<U16")
     arr = blosc2.asarray(full)
     got = (arr + "XYZ").compute(strict_miniexpr=True)
-    expected = full + "XYZ"
+    expected = np_add(full, "XYZ")
     assert got.dtype == expected.dtype
     assert list(got[:]) == list(expected)
 
@@ -46,7 +58,7 @@ def test_concat_two_arrays(names):
     other = np.array(["/x"] * names.size, dtype="<U4")
     a, b = blosc2.asarray(names), blosc2.asarray(other)
     got = (a + b).compute(strict_miniexpr=True)
-    expected = names + other
+    expected = np_add(names, other)
     assert list(got[:]) == list(expected)
     # miniexpr's bound is conservative: at least wide enough, never narrower.
     assert got.dtype.itemsize >= expected.dtype.itemsize
@@ -56,7 +68,7 @@ def test_concat_two_arrays(names):
 def test_case_matches_numpy(names, func):
     arr = blosc2.asarray(names)
     got = getattr(blosc2, func)(arr).compute(strict_miniexpr=True)
-    expected = getattr(np.strings, func)(names)
+    expected = getattr(np_strings, func)(names)
     assert list(got[:]) == list(expected)
 
 
@@ -65,14 +77,14 @@ def test_case_expansion_matches_numpy():
     src = np.array(["straße", "ﬁx"] * 64, dtype="<U8")
     arr = blosc2.asarray(src)
     got = blosc2.upper(arr).compute(strict_miniexpr=True)
-    expected = np.strings.upper(src)
+    expected = np_strings.upper(src)
     assert list(got[:]) == list(expected)
 
 
 def test_nested_kernel_shape(names):
     arr = blosc2.asarray(names)
     got = ("room_type=" + blosc2.lower(arr)).compute(strict_miniexpr=True)
-    expected = "room_type=" + np.strings.lower(names)
+    expected = np_add("room_type=", np_strings.lower(names))
     assert list(got[:]) == list(expected)
 
 
@@ -85,7 +97,7 @@ def test_uses_miniexpr_not_the_numpy_fallback(names):
     # ...and that evaluation really goes through it.  Every other test here
     # passes strict_miniexpr=True for the same reason.
     arr = blosc2.asarray(names)
-    assert list((arr + "x").compute(strict_miniexpr=True)[:]) == list(names + "x")
+    assert list((arr + "x").compute(strict_miniexpr=True)[:]) == list(np_add(names, "x"))
 
 
 BLOG_PROPS = ["Entire home", "Private room", "Shared room", "Loft"]
@@ -139,7 +151,7 @@ def test_string_literal_with_equals_sign():
     src = np.array(["home", "loft"] * 64, dtype="<U8")
     arr = blosc2.asarray(src)
     got = ("property_type=" + arr).compute(strict_miniexpr=True)
-    expected = "property_type=" + src
+    expected = np_add("property_type=", src)
     assert list(got[:]) == list(expected)
 
 
@@ -156,7 +168,7 @@ def raws():
 def test_bytes_concat_matches_numpy(raws):
     arr = blosc2.asarray(raws)
     got = (arr + b"-x").compute(strict_miniexpr=True)
-    expected = raws + b"-x"
+    expected = np_add(raws, b"-x")
     assert got.dtype == expected.dtype
     assert list(got[:]) == list(expected)
 
@@ -167,7 +179,7 @@ def test_bytes_case_matches_numpy(raws, func):
     # must not grow.
     arr = blosc2.asarray(raws)
     got = getattr(blosc2, func)(arr).compute(strict_miniexpr=True)
-    expected = getattr(np.strings, func)(raws)
+    expected = getattr(np_strings, func)(raws)
     assert got.dtype == expected.dtype
     assert list(got[:]) == list(expected)
 
@@ -176,7 +188,7 @@ def test_bytes_predicates_match_numpy(raws):
     arr = blosc2.asarray(raws)
     assert list((arr == b"foo").compute(strict_miniexpr=True)[:]) == list(raws == b"foo")
     got = blosc2.contains(arr, b"ell").compute(strict_miniexpr=True)
-    assert list(got[:]) == list(np.strings.find(raws, b"ell") >= 0)
+    assert list(got[:]) == list(np_strings.find(raws, b"ell") >= 0)
 
 
 def test_bytes_dsl_kernel(raws):
@@ -219,7 +231,7 @@ def test_wide_string_operands_match_numpy(width):
     assert list(got[:]) == list(values == "hello")
 
     upper = blosc2.upper(arr).compute(strict_miniexpr=True)
-    assert list(upper[:]) == list(np.strings.upper(values))
+    assert list(upper[:]) == list(np_strings.upper(values))
 
 
 def test_block_larger_than_the_eval_block():
@@ -233,4 +245,4 @@ def test_block_larger_than_the_eval_block():
     assert arr.blocks[0] > 4096, "need a block wider than one miniexpr eval block"
 
     got = ("x=" + arr).compute(strict_miniexpr=True)
-    assert list(got[:]) == list("x=" + values)
+    assert list(got[:]) == list(np_add("x=", values))
