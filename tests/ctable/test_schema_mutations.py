@@ -378,6 +378,23 @@ def test_add_column_values_uncoercible_raises():
         t.add_column("n", blosc2.int8(), values=["nope"] * 10)
 
 
+def test_add_column_values_enforces_declared_constraints():
+    """values= must not slip past the constraints the spec declares.
+
+    Coercing to a fixed-width dtype truncates an over-long string instead of
+    complaining, so an unchecked values= would silently drop characters --
+    the same check runs for numeric bounds, hence both cases here.
+    """
+    t = CTable(Row, new_data=DATA10)
+    with pytest.raises(ValueError, match="exceeds max_length=4"):
+        t.add_column("code", blosc2.string(max_length=4), values=["toolongvalue"] * 10)
+    with pytest.raises(ValueError, match="violates constraint le="):
+        t.add_column("bounded", blosc2.int64(le=100), values=[999] * 10)
+    # A value that does fit is still accepted, uncut.
+    t.add_column("code", blosc2.string(max_length=4), values=["abcd"] * 10)
+    assert list(t["code"][:]) == ["abcd"] * 10
+
+
 def test_add_column_values_skips_deleted_rows():
     """values= is positional over *live* rows, not physical slots."""
     t = CTable(Row, new_data=DATA10)

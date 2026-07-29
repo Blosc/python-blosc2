@@ -1043,9 +1043,11 @@ Declaring ``max_length`` too small is caught on the **validated** write paths
 — the constructor, :meth:`CTable.append` and :meth:`CTable.extend` — which
 raise ``ValueError`` naming the column and the offending value.  It is
 **not** caught on the paths that bypass validation: ``extend(validate=False)``,
-``col[i] = value``, :meth:`Column.assign` and ``add_column(values=...)`` fall
-through to NumPy's ``U`` semantics and truncate the value at ``max_length``
-with no error.
+``col[i] = value`` and :meth:`Column.assign` fall through to NumPy's ``U``
+semantics and truncate the value at ``max_length`` with no error.  This is the
+same bypass the numeric constraints have — ``col[i] = 999`` on an
+``int64(le=100)`` column stores 999 — except that truncation destroys the
+value rather than merely storing a wrong one.
 
 So a bound you guessed from a sample can fail in two different ways depending
 on how the data arrives — rejected rows on one path, silently shortened

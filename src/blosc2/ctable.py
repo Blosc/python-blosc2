@@ -9216,7 +9216,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         Returns a list for varlen scalar columns (which are fed row by row) and
         a dtype-coerced ndarray for the fixed-width ones.
+
+        Constraints declared on the spec are checked here, *before* the
+        ``astype`` below: coercing to a fixed-width dtype truncates a too-long
+        string to ``max_length`` instead of complaining, so skipping the check
+        would silently drop characters.
         """
+        from blosc2.schema_vectorized import validate_column_values
+
         if self._is_varlen_scalar_column(col):
             values = list(values)
             if len(values) != n_live:
@@ -9224,6 +9231,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     f"add_column() values= for {name!r} requires {n_live} entries "
                     f"(live rows), got {len(values)}."
                 )
+            validate_column_values(col, values)
             return values
 
         arr = values[:] if isinstance(values, blosc2.NDArray) else np.asarray(values)
@@ -9236,6 +9244,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise ValueError(
                 f"add_column() values= for {name!r} must have shape {expected}, got {arr.shape}."
             )
+        validate_column_values(col, arr)
         try:
             return arr.astype(col.spec.dtype)
         except (ValueError, OverflowError) as exc:

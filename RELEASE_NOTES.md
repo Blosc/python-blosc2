@@ -100,7 +100,10 @@ XXX version-specific blurb XXX
   which matters most for `utf8()` columns: string-returning expressions are
   evaluated on fixed-width arrays, and the result previously had to be written
   through the private `t._cols[name].set_all(...)`. A declared default is still
-  honoured for rows appended later, so the two can be combined.
+  honoured for rows appended later, so the two can be combined. `values=` is
+  checked against the constraints declared on the spec, like the constructor
+  and `extend()` are: without that, coercion to a fixed-width dtype would
+  truncate an over-long string to `max_length` instead of complaining.
 - **`blosc2.from_utf8()` / `blosc2.to_utf8()` and `UTF8Array.astype()`** make
   the conversion between variable-length and fixed-width text an explicit,
   documented pair. utf8 columns store and filter text compactly, but
