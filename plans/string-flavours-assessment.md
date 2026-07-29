@@ -308,8 +308,11 @@ Found while measuring, unrelated to the utf8 decision:
 - ~~`sort_by` on an unindexed `dictionary` column takes 235 s at 1 M rows~~ — **fixed**, `a9446841`.
   Per-row decode; now 759 ms.
 - ~~`kind=BUCKET` is a pessimization~~ — **fixed**, `92c39aa6`. Affected every indexable dtype.
-- Still open: the doc table's plain ✓ for `create_index` on `dictionary` should read "ordering
-  only", and `_build_lex_keys` could sort dictionary ranks instead of decoded strings (~4×).
+- ~~The doc table's `create_index` entries are stale~~ — **done**, `e707c91c`. The reference table
+  and the `utf8()` docstring both claimed utf8 could not be indexed, which my own change had made
+  false; 4.9.2 release notes added for this whole line of work.
+- Still open: `_build_lex_keys` could sort dictionary ranks instead of decoded strings (~4×), and
+  the `where("c == 'x'")` string form still bypasses the index for both flavours.
 
 ⁶ `blosc2.lazyexpr` over a bare `DictionaryColumn` returns the **capacity-padded** slot array —
 1 048 576 rows for a 3-row table. Not a container bug: `DictionaryColumn.__len__` is documented as
