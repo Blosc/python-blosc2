@@ -1039,12 +1039,18 @@ Fixed-width wins outright at 32, still leads at 48, and is overtaken between
 comfortable recommendation rather than a cliff: if your data is bounded at 40,
 :class:`string` is still the better choice.
 
-Declaring ``max_length`` too small is safe in the sense that matters: a value
-that does not fit raises ``ValueError`` on write rather than being silently
-truncated.  It is not safe for *availability* — the write fails, and a column
-whose bound you guessed from a sample can start rejecting rows in production.
-When the bound is a guess rather than a fact, that is the signal to use
-:func:`utf8`.
+Declaring ``max_length`` too small is caught on the **validated** write paths
+— the constructor, :meth:`CTable.append` and :meth:`CTable.extend` — which
+raise ``ValueError`` naming the column and the offending value.  It is
+**not** caught on the paths that bypass validation: ``extend(validate=False)``,
+``col[i] = value``, :meth:`Column.assign` and ``add_column(values=...)`` fall
+through to NumPy's ``U`` semantics and truncate the value at ``max_length``
+with no error.
+
+So a bound you guessed from a sample can fail in two different ways depending
+on how the data arrives — rejected rows on one path, silently shortened
+strings on another.  When the bound is a guess rather than a fact, use
+:func:`utf8` instead of relying on the check.
 
 The compressed sizes of :class:`string` and :func:`utf8` are much closer than
 the in-memory sizes, but by how much depends entirely on the data: the UCS-4
