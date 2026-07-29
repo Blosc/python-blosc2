@@ -13035,6 +13035,25 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 rewritten = new_expr
         return rewritten, new_operands
 
+    @staticmethod
+    def _alias_dotted(expr: str, names: list[str], prefix: str) -> tuple[str, dict[str, str]]:
+        """Replace each dotted name in *expr* with ``{prefix}{i}``.
+
+        Returns the rewritten expression and the ``alias -> original name``
+        map, holding only the names that actually occurred in *expr*.
+        """
+        rewritten = expr
+        aliases = {}
+        # Longest names first so trip.begin.lon is rewritten before trip.begin.
+        for i, name in enumerate(sorted((n for n in names if "." in n), key=len, reverse=True)):
+            alias = f"{prefix}{i}"
+            pattern = rf"(?<![\w.]){re.escape(name)}(?![\w.])"
+            replaced = re.sub(pattern, alias, rewritten)
+            if replaced != rewritten:
+                rewritten = replaced
+                aliases[alias] = name
+        return rewritten, aliases
+
     def _rewrite_nested_expression(
         self, expr: str, operands: dict[str, blosc2.NDArray | blosc2.LazyExpr]
     ) -> tuple[str, dict[str, blosc2.NDArray | blosc2.LazyExpr]]:
@@ -13044,21 +13063,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         columns are naturally addressed as dotted paths (e.g. ``trip.begin.lon``).
         This maps them to temporary aliases and returns rewritten expression and
         operand mapping.
+
+        Only names present in *operands* are rewritten; the flavours excluded
+        from the operand namespace (utf8, dictionary, ...) are aliased by
+        whichever driver evaluates them -- see :meth:`_lazyexpr_over_cols`.
         """
-        dotted = [name for name in operands if "." in name]
-        if not dotted:
+        rewritten, aliases = self._alias_dotted(expr, list(operands), "__nf")
+        if not aliases:
             return expr, operands
 
-        rewritten = expr
         new_operands = dict(operands)
-        # Longest names first so trip.begin.lon is rewritten before trip.begin.
-        for i, name in enumerate(sorted(dotted, key=len, reverse=True)):
-            alias = f"__nf{i}"
-            pattern = rf"(?<![\w.]){re.escape(name)}(?![\w.])"
-            replaced = re.sub(pattern, alias, rewritten)
-            if replaced != rewritten:
-                rewritten = replaced
-                new_operands[alias] = new_operands.pop(name)
+        for alias, name in aliases.items():
+            new_operands[alias] = new_operands.pop(name)
         return rewritten, new_operands
 
     @staticmethod
@@ -13147,7 +13163,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     _UTF8_CMP_MIRROR: ClassVar[dict] = {"==": "==", "!=": "!=", "<=": ">=", ">=": "<=", "<": ">", ">": "<"}
 
     def _rewrite_utf8_predicates(
-        self, expr: str, operands: dict, utf8_names: list[str]
+        self, expr: str, operands: dict, utf8_names: list[str], aliases: dict[str, str] | None = None
     ) -> tuple[str, dict, list[str]]:
         """Replace ``utf8col <cmp> 'literal'`` terms with precomputed masks.
 
@@ -13163,13 +13179,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         names still referenced -- a name drops out only when *every* one of its
         occurrences was rewritten, so anything else (``startswith(name, 'x')``,
         ``upper(name)``) still routes to the span driver.
+
+        Names are as they appear in *expr*; a nested leaf appears under an
+        alias and resolves to its column through *aliases*.
         """
         rewritten = expr
         new_operands = dict(operands)
         remaining = []
+        col_of = (aliases or {}).get
         ops = "|".join(re.escape(o) for o in self._UTF8_CMP_OPS)
         for i, name in enumerate(utf8_names):
-            column = self[name]
+            column = self[col_of(name, name)]
             counter = itertools.count()
 
             def repl(match: re.Match, _col=column, _i=i, _c=counter, reverse=False) -> str:
@@ -13206,31 +13226,43 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if not utf8_names:
             return blosc2.lazyexpr(expr, operands)
-        dotted = [n for n in utf8_names if "." in n]
-        if dotted:
-            raise NotImplementedError(
-                f"Column {dotted[0]!r} is a nested variable-length utf8 column; "
-                "string expressions only support top-level utf8 columns."
-            )
-        expr, operands, utf8_names = self._rewrite_utf8_predicates(expr, operands, utf8_names)
+        # utf8 columns are outside the operand namespace, so _rewrite_nested_expression
+        # never saw them; a nested leaf still carries its dotted name here, which
+        # neither miniexpr nor blosc2.lazyexpr can parse as an identifier.
+        expr, aliases = self._alias_dotted(expr, utf8_names, "__u8n")
+        renamed = {name: alias for alias, name in aliases.items()}
+        utf8_names = [renamed.get(name, name) for name in utf8_names]
+        expr, operands, utf8_names = self._rewrite_utf8_predicates(expr, operands, utf8_names, aliases)
         if not utf8_names:
             return blosc2.lazyexpr(expr, operands)
-        return self._utf8_span_eval(expr, operands, utf8_names)
+        return self._utf8_span_eval(expr, operands, utf8_names, aliases=aliases)
 
-    def _utf8_span_eval(self, expr: str, operands: dict, utf8_names: list[str], *, strict: bool = False):
+    def _utf8_span_eval(
+        self,
+        expr: str,
+        operands: dict,
+        utf8_names: list[str],
+        *,
+        aliases: dict[str, str] | None = None,
+        strict: bool = False,
+    ):
         """Evaluate *expr* over this table's utf8 columns in row spans.
 
         Thin wrapper over :func:`~blosc2._utf8_array.utf8_span_eval`; the result
         uses the table's *physical* length, the coordinate system every other
-        predicate here works in.
+        predicate here works in.  Names in *utf8_names* are as they appear in
+        *expr*, which for a nested leaf is an alias -- *aliases* maps it back to
+        the column.
         """
         from blosc2._utf8_array import utf8_span_eval
+
+        col_of = (aliases or {}).get
 
         return utf8_span_eval(
             expr,
             operands,
-            {name: self._cols[name] for name in utf8_names},
-            {name: self[name].null_value for name in utf8_names},
+            {name: self._cols[col_of(name, name)] for name in utf8_names},
+            {name: self[col_of(name, name)].null_value for name in utf8_names},
             len(self._valid_rows),
             strict=strict,
             span_rows=self._UTF8_EXPR_SPAN,

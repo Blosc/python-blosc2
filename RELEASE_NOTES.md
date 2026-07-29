@@ -205,6 +205,14 @@ XXX version-specific blurb XXX
   NUL against a `StringDType` array (`"\x00x"` and `"a\x00b"` compare fine), so
   every null mask would silently stop marking nulls. The default sentinel
   `'__BLOSC2_NULL__'` was never affected.
+- **Nested (dotted) `utf8()` leaves can be filtered.** `t.where("trip.name ==
+  'x'")` raised `NotImplementedError` on a utf8 leaf, while the same query on a
+  `<Un`, `bytes()` or `dictionary()` leaf worked — utf8 was the only flavour
+  where a dotted name could not be queried at all. Dotted names are aliased to
+  safe identifiers before evaluation, but utf8 columns are outside the operand
+  namespace, so they never reached that rewrite; they are now aliased by the
+  utf8 driver itself. Covers scalar comparisons, `startswith`/`upper` and
+  friends, mixed numeric predicates and `sum(where=)`.
 
 ## Changes from 4.9.0 to 4.9.1
 

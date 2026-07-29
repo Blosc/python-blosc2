@@ -1082,8 +1082,8 @@ CTable offers four ways to store strings.  As a quick decision path:
    expression operand directly, string expressions are evaluated span by span,
    with each span materialized to a fixed-width array first; results are
    identical to the operator form, including that a null never satisfies any
-   predicate.  Nested (dotted) utf8 leaves are still unsupported and raise
-   ``NotImplementedError`` with a clear message.
+   predicate.  Nested (dotted) utf8 leaves are addressed by their dotted path
+   just like any other leaf.
 
 .. [#utf8compute] Expressions that *return* strings — concatenation,
    ``upper``, ``replace``, DSL kernels — run on fixed-width arrays, so a utf8

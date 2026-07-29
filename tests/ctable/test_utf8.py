@@ -2217,3 +2217,73 @@ def test_constructors_with_string_dtype_reject_nd_and_storage_kwargs():
 def test_utf8_dispatch_round_trips_through_the_conversion_pair():
     out = blosc2.full(2, "hé", dtype=STRING_DTYPE)
     assert list(blosc2.to_utf8(blosc2.from_utf8(out))[:]) == ["hé", "hé"]
+
+
+# ---------------------------------------------------------------------------
+# Nested (dotted) utf8 leaves
+# ---------------------------------------------------------------------------
+
+
+def _nested_table(**kwargs):
+    """A table whose utf8 column is addressed by a dotted path.
+
+    Two leaves under overlapping prefixes, so the longest-name-first aliasing
+    is exercised: rewriting "trip.who" first would corrupt "trip.begin.who".
+    """
+    names = ["alice", "bob", "carol", "dave"]
+    t = CTable(
+        Row,
+        new_data={"name": names, "x": list(range(len(names)))},
+        **kwargs,
+    )
+    t.rename_column("name", "trip.begin.who")
+    t.add_column("trip.who", blosc2.utf8(), values=[n.upper() for n in names])
+    return t
+
+
+@pytest.mark.parametrize(
+    ("expr", "expected"),
+    [
+        ('trip.begin.who == "bob"', [1]),
+        ('"bob" == trip.begin.who', [1]),
+        ('trip.begin.who != "bob"', [0, 2, 3]),
+        ('trip.begin.who < "c"', [0, 1]),
+        ('startswith(trip.begin.who, "c")', [2]),
+        ('upper(trip.begin.who) == "DAVE"', [3]),
+        ('startswith(trip.begin.who, "c") & (x > 1)', [2]),
+        # Both leaves at once, and the shorter name is a prefix of the longer.
+        ('(trip.begin.who == "bob") | (trip.who == "CAROL")', [1, 2]),
+    ],
+)
+def test_ctable_utf8_nested_leaf_filters(expr, expected):
+    # Dotted utf8 leaves are outside the operand namespace, so they reach the
+    # utf8 driver still spelled with dots -- which no expression engine parses.
+    t = _nested_table()
+    assert list(t.where(expr)["x"][:]) == expected
+
+
+def test_ctable_utf8_nested_leaf_matches_the_flat_column():
+    """A dotted name must not change the answer the same data gives flat."""
+    values = ["hello", "help", "world", "zz"]
+    flat = make_table(values)
+    nested = make_table(values)
+    nested.rename_column("name", "trip.who")
+    for flat_expr, nested_expr in (
+        ("name == 'hello'", 'trip.who == "hello"'),
+        ("startswith(name, 'hel')", 'startswith(trip.who, "hel")'),
+        ("name < 'w'", 'trip.who < "w"'),
+    ):
+        assert list(flat.where(flat_expr)["x"][:]) == list(nested.where(nested_expr)["x"][:])
+
+
+def test_ctable_utf8_nested_leaf_sum_where_and_persistence(tmp_path):
+    urlpath = str(tmp_path / "utf8_nested.b2z")
+    t = _nested_table(urlpath=urlpath, mode="w")
+    assert t["x"].sum(where='startswith(trip.begin.who, "c")') == 2
+    t.close()
+
+    reopened = CTable.open(urlpath, mode="r")
+    try:
+        assert list(reopened.where('trip.begin.who == "dave"')["x"][:]) == [3]
+    finally:
+        reopened.close()
