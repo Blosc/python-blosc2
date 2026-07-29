@@ -8963,8 +8963,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self,
         name: str,
         spec: SchemaSpec | dataclasses.Field,
+        values=None,
     ) -> None:
-        """Add a new column filled from the default declared in *spec*.
+        """Add a new column filled from *values*, or from the default declared in *spec*.
 
         Parameters
         ----------
@@ -8973,16 +8974,30 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         spec:
             A schema descriptor such as ``b2.int64(ge=0)`` or a field
             descriptor such as ``b2.field(b2.int64(ge=0), default=0)``.
-            When the table already has live rows, use ``blosc2.field(...)``
-            with a default declared so those rows can be backfilled.
+            When the table already has live rows and no *values* are given,
+            use ``blosc2.field(...)`` with a default declared so those rows
+            can be backfilled.
+        values:
+            Optional sequence with one entry per **live** row, in row order,
+            used to fill the new column.  This is the supported way to land a
+            computed result back into the table::
+
+                res = blosc2.lazyexpr("'x=' + a", {"a": blosc2.asarray(arr)}).compute()
+                t.add_column("out", blosc2.utf8(), values=res[:])
+
+            A declared default is still honoured for rows appended later, so
+            *values* and ``blosc2.field(..., default=...)`` can be combined.
 
         Raises
         ------
         ValueError
             If the table is read-only, is a view, the column already exists,
-            or a non-empty table is given a column with no default declared.
+            a non-empty table is given a column with neither *values* nor a
+            default declared, or ``len(values)`` does not match the number of
+            live rows.
         TypeError
-            If a declared default cannot be coerced to *spec*'s dtype.
+            If a declared default, or *values*, cannot be coerced to *spec*'s
+            dtype.
         """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
@@ -8997,10 +9012,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         spec, default, column_config = self._column_spec_default_and_config(spec)
 
         n_live = self.nrows
-        if default is MISSING and n_live > 0:
+        if values is None and default is MISSING and n_live > 0:
             raise ValueError(
                 "add_column() requires a default declared as blosc2.field(..., default=...) "
-                "when the table has live rows."
+                "or a values= sequence when the table has live rows."
             )
 
         compiled_col = self._compiled_column_from_spec(name, spec)
@@ -9010,9 +9025,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             validate_column_null_values=False,
         )
         spec = compiled_col.spec
+        if self._is_list_column(compiled_col):
+            raise TypeError(
+                "add_column() does not support list columns; use the constructor with a full schema."
+            )
+        if self._is_dictionary_column(compiled_col):
+            raise TypeError(
+                "add_column() does not support dictionary columns; use the constructor with a full schema."
+            )
+        if values is not None:
+            values = self._add_column_values(name, compiled_col, values, n_live)
 
         if self._is_varlen_scalar_column(compiled_col):
-            # Varlen scalar columns don't use fixed-width NDArray storage.
+            # Varlen scalar columns don't use fixed-width NDArray storage, but the
+            # table still indexes them by *physical* position, so a new one has to
+            # span the physical extent rather than just the live rows -- otherwise
+            # any table with deleted rows reads past its end.
             col_storage = self._resolve_column_storage(compiled_col, None, None)
             new_col = self._storage.create_varlen_scalar_column(
                 name,
@@ -9020,13 +9048,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 cparams=col_storage.get("cparams"),
                 dparams=col_storage.get("dparams"),
             )
-            for _ in range(n_live):
-                new_col.append(default)
+            n_phys = self._resolve_last_pos()
+            filler = self._varlen_filler(spec, default)
+            if values is None:
+                new_col.extend([filler] * n_phys)
+            elif n_live == n_phys:
+                new_col.extend(values)
+            else:
+                padded = [filler] * n_phys
+                live_pos = np.flatnonzero(self._valid_rows[:n_phys])
+                for pos, value in zip(live_pos, values, strict=True):
+                    padded[int(pos)] = value
+                new_col.extend(padded)
             new_col.flush()
-        elif self._is_list_column(compiled_col):
-            raise TypeError(
-                "add_column() does not support list columns; use the constructor with a full schema."
-            )
         else:
             if default is not MISSING:
                 try:
@@ -9055,7 +9089,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 dparams=col_storage.get("dparams"),
             )
             if n_live > 0:
-                if self._is_ndarray_column(compiled_col):
+                if values is not None:
+                    # No holes (the common case) means the live rows are the
+                    # leading slots, so a contiguous write beats a scatter.
+                    if n_live == self._resolve_last_pos():
+                        new_col[:n_live] = values
+                    else:
+                        new_col[np.where(self._valid_rows[:])[0]] = values
+                elif self._is_ndarray_column(compiled_col):
                     new_col[self._valid_rows] = np.broadcast_to(default_val, (n_live, *spec.item_shape))
                 else:
                     new_col[self._valid_rows] = default_val
@@ -9073,6 +9114,56 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         )
         if isinstance(self._storage, FileTableStorage):
             self._storage.save_schema(self._schema_dict_with_computed())
+
+    @staticmethod
+    def _varlen_filler(spec, default):
+        """Value written into the dead slots of a freshly added varlen column.
+
+        Never read back -- the table only ever indexes live positions -- so it
+        just has to be something the spec accepts.
+        """
+        if default is not MISSING:
+            return default
+        null_value = getattr(spec, "null_value", None)
+        if null_value is not None:
+            return null_value
+        if isinstance(spec, VLBytesSpec):
+            return b""
+        if isinstance(spec, (Utf8Spec, VLStringSpec)):
+            return ""
+        return None
+
+    def _add_column_values(self, name: str, col: CompiledColumn, values, n_live: int):
+        """Validate and coerce the ``values=`` argument of :meth:`add_column`.
+
+        Returns a list for varlen scalar columns (which are fed row by row) and
+        a dtype-coerced ndarray for the fixed-width ones.
+        """
+        if self._is_varlen_scalar_column(col):
+            values = list(values)
+            if len(values) != n_live:
+                raise ValueError(
+                    f"add_column() values= for {name!r} requires {n_live} entries "
+                    f"(live rows), got {len(values)}."
+                )
+            return values
+
+        arr = values[:] if isinstance(values, blosc2.NDArray) else np.asarray(values)
+        if len(arr) != n_live:
+            raise ValueError(
+                f"add_column() values= for {name!r} requires {n_live} entries (live rows), got {len(arr)}."
+            )
+        expected = (n_live, *col.spec.item_shape) if self._is_ndarray_column(col) else (n_live,)
+        if arr.shape != expected:
+            raise ValueError(
+                f"add_column() values= for {name!r} must have shape {expected}, got {arr.shape}."
+            )
+        try:
+            return arr.astype(col.spec.dtype)
+        except (ValueError, OverflowError) as exc:
+            raise TypeError(
+                f"Cannot coerce values= for {name!r} to dtype {col.spec.dtype!r}: {exc}"
+            ) from exc
 
     def drop_column(self, name: str) -> None:
         """Remove a column from the table.

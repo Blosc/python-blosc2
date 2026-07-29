@@ -343,6 +343,115 @@ def test_add_column_skips_deleted_rows():
 
 
 # ===========================================================================
+# add_column(values=)
+# ===========================================================================
+
+
+def test_add_column_values_fills_live_rows():
+    t = CTable(Row, new_data=DATA10)
+    t.add_column("weight", blosc2.float64(), values=np.arange(10, dtype=np.float64))
+    np.testing.assert_array_equal(t["weight"][:], np.arange(10, dtype=np.float64))
+
+
+def test_add_column_values_needs_no_default():
+    """values= is the second way to satisfy a non-empty table."""
+    t = CTable(Row, new_data=DATA10)
+    t.add_column("weight", blosc2.float64(), values=[1.0] * 10)
+    assert t["weight"][0] == pytest.approx(1.0)
+
+
+def test_add_column_values_coerced_to_spec_dtype():
+    t = CTable(Row, new_data=DATA10)
+    t.add_column("n", blosc2.int8(), values=list(range(10)))
+    assert t["n"][:].dtype == np.int8
+
+
+def test_add_column_values_wrong_length_raises():
+    t = CTable(Row, new_data=DATA10)
+    with pytest.raises(ValueError, match="requires 10 entries"):
+        t.add_column("weight", blosc2.float64(), values=[1.0, 2.0])
+
+
+def test_add_column_values_uncoercible_raises():
+    t = CTable(Row, new_data=DATA10)
+    with pytest.raises(TypeError, match="Cannot coerce values="):
+        t.add_column("n", blosc2.int8(), values=["nope"] * 10)
+
+
+def test_add_column_values_skips_deleted_rows():
+    """values= is positional over *live* rows, not physical slots."""
+    t = CTable(Row, new_data=DATA10)
+    t.delete([0, 1])  # 8 live rows
+    t.add_column("weight", blosc2.float64(), values=np.arange(8, dtype=np.float64))
+    np.testing.assert_array_equal(t["weight"][:], np.arange(8, dtype=np.float64))
+    np.testing.assert_array_equal(t["id"][:], np.arange(2, 10))
+
+
+def test_add_column_values_keeps_default_for_later_rows():
+    t = CTable(Row, new_data=DATA10)
+    t.add_column("weight", blosc2.field(blosc2.float64(), default=9.0), values=[1.0] * 10)
+    t.append((10, 0.0, True, 0.0))
+    np.testing.assert_array_equal(t["weight"][:], [*([1.0] * 10), 0.0])
+
+
+def test_add_column_values_ndarray_column():
+    t = CTable(Row, new_data=DATA10)
+    vals = np.arange(20, dtype=np.float32).reshape(10, 2)
+    t.add_column("v", blosc2.ndarray((2,), np.float32), values=vals)
+    np.testing.assert_array_equal(t["v"][:], vals)
+
+
+def test_add_column_values_ndarray_bad_shape_raises():
+    t = CTable(Row, new_data=DATA10)
+    with pytest.raises(ValueError, match=r"must have shape \(10, 2\)"):
+        t.add_column("v", blosc2.ndarray((2,), np.float32), values=np.zeros(10, dtype=np.float32))
+
+
+def test_add_column_values_persists_on_disk():
+    path = table_path("add_col_values")
+    t = CTable(Row, urlpath=path, mode="w", new_data=DATA10)
+    t.add_column("weight", blosc2.float64(), values=np.arange(10, dtype=np.float64))
+    t.close()
+    t2 = CTable.open(path)
+    np.testing.assert_array_equal(t2["weight"][:], np.arange(10, dtype=np.float64))
+
+
+def test_add_column_values_vlstring():
+    t = CTable(Row, new_data=DATA10)
+    vals = [f"s{i}" for i in range(10)]
+    t.add_column("s", blosc2.vlstring(), values=vals)
+    assert list(t["s"][:]) == vals
+
+
+def test_add_column_values_vlstring_skips_deleted_rows():
+    """Varlen columns are indexed physically, so the dead slots need filling too."""
+    t = CTable(Row, new_data=DATA10)
+    t.delete([0, 1])
+    vals = [f"s{i}" for i in range(8)]
+    t.add_column("s", blosc2.vlstring(), values=vals)
+    assert list(t["s"][:]) == vals
+
+
+def test_add_column_default_vlstring_skips_deleted_rows():
+    t = CTable(Row, new_data=DATA10)
+    t.delete([0, 1])
+    t.add_column("s", blosc2.field(blosc2.vlstring(), default="z"))
+    assert list(t["s"][:]) == ["z"] * 8
+
+
+def test_add_column_values_list_column_raises():
+    t = CTable(Row, new_data=DATA10)
+    with pytest.raises(TypeError, match="does not support list columns"):
+        t.add_column("l", blosc2.list(blosc2.int64()), values=[[1]] * 10)
+
+
+def test_add_column_values_dictionary_column_raises():
+    t = CTable(Row, new_data=DATA10)
+    with pytest.raises(TypeError, match="does not support dictionary columns"):
+        t.add_column("c", blosc2.dictionary(), values=["a"] * 10)
+
+
+# ===========================================================================
 # drop_column
 # ===========================================================================
 

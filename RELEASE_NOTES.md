@@ -94,6 +94,14 @@ XXX version-specific blurb XXX
   so a value inserted ahead of existing ones sends the index stale until it is
   rebuilt.
 
+- **`CTable.add_column()` accepts `values=`**, a sequence with one entry per
+  live row, as an alternative to backfilling from a declared default. This is
+  the supported way to land a result computed outside the table back into it,
+  which matters most for `utf8()` columns: string-returning expressions are
+  evaluated on fixed-width arrays, and the result previously had to be written
+  through the private `t._cols[name].set_all(...)`. A declared default is still
+  honoured for rows appended later, so the two can be combined.
+
 ### Improvements
 
 - **Dictionary columns decode once per read, not once per row.** Each
@@ -123,6 +131,13 @@ XXX version-specific blurb XXX
   `<Un` and evaluated by the NumPy fallback, never reaching miniexpr, ignoring
   the span budget and losing the utf8 container. They now run through the span
   driver and return a `Utf8Array`.
+- **`add_column()` on a varlen column left it short on tables with deleted
+  rows.** vlstring/vlbytes/utf8/struct/object columns are indexed by physical
+  position but the new column was filled with only as many entries as there
+  were *live* rows, so the first read after a `delete()` raised `IndexError`.
+  The dead slots are now filled too. `add_column()` on a `dictionary()` column
+  raised `AttributeError` from deep inside the fixed-width path; it now raises
+  `TypeError` naming the limitation.
 - **`blosc2.utf8(null_value="\x00")` is rejected.** NumPy does not match a lone
   NUL against a `StringDType` array (`"\x00x"` and `"a\x00b"` compare fine), so
   every null mask would silently stop marking nulls. The default sentinel

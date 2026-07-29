@@ -509,6 +509,39 @@ def test_ctable_utf8_add_and_drop_column():
     assert "note" not in t.col_names
 
 
+def test_ctable_utf8_add_column_values():
+    t = make_table(["a", "b", "c"])
+    t.add_column("note", blosc2.utf8(), values=["x", "yy", "zzz"])
+    assert list(t["note"][:]) == ["x", "yy", "zzz"]
+
+
+def test_ctable_utf8_add_column_values_from_computed_expression():
+    """The documented round trip: compute on <U, land the result back as utf8."""
+    t = make_table(["a", "bb", "ccc"])
+    arr = t["name"][:].astype("<U8")
+    res = blosc2.lazyexpr("'x=' + a", {"a": blosc2.asarray(arr)}).compute()[:]
+    t.add_column("out", blosc2.utf8(), values=res)
+    assert list(t["out"][:]) == ["x=a", "x=bb", "x=ccc"]
+    assert t["out"][:].dtype == STRING_DTYPE
+
+
+def test_ctable_utf8_add_column_values_after_delete():
+    t = make_table(["a", "b", "c", "d"])
+    t.delete([0, 2])
+    t.add_column("note", blosc2.utf8(), values=["P", "Q"])
+    assert list(t["name"][:]) == ["b", "d"]
+    assert list(t["note"][:]) == ["P", "Q"]
+
+
+def test_ctable_utf8_add_column_values_persists(tmp_path):
+    path = str(tmp_path / "utf8_values.b2d")
+    t = make_table(["a", "bb"], urlpath=path, mode="w")
+    t.add_column("note", blosc2.utf8(), values=["hello", "wörld"])
+    t.close()
+    t2 = CTable.open(path)
+    assert list(t2["note"][:]) == ["hello", "wörld"]
+
+
 # ---------------------------------------------------------------------------
 # Nulls (sentinel-based)
 # ---------------------------------------------------------------------------

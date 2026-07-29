@@ -458,6 +458,24 @@ For array-oriented grouped reductions without a :class:`CTable`, see
 Mutations
 ---------
 
+:meth:`CTable.add_column` adds a physical column, filled either from a default
+declared in the spec or from a ``values=`` sequence with one entry per live row::
+
+    t.add_column("weight", blosc2.field(blosc2.float64(), default=0.0))
+    t.add_column("label", blosc2.utf8(), values=[f"row-{i}" for i in range(len(t))])
+
+``values=`` is how a result computed outside the table lands back in it, which
+matters most for :func:`utf8` columns: string-returning expressions are
+evaluated on fixed-width arrays, so the result is written back explicitly rather
+than by :meth:`CTable.add_computed_column`::
+
+    arr = t["name"][:].astype("<U37")
+    res = blosc2.lazyexpr("'x=' + a", {"a": blosc2.asarray(arr)}).compute()[:]
+    t.add_column("prefixed", blosc2.utf8(), values=res)
+
+A declared default is still honoured for rows appended later, so ``values=`` and
+``blosc2.field(..., default=...)`` can be combined.
+
 In addition to physical schema changes such as :meth:`CTable.add_column`,
 CTables support two kinds of derived columns:
 
