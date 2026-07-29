@@ -146,13 +146,13 @@ append/extend, setitem, persistence, repr.
 **P3.a implementation notes (landed 2026-07-16, commit e5bbd559, branch
 `enhancing-ctable3`):**
 
-- What landed: `Utf8Spec`/`blosc2.utf8()` in `schema.py` (kind `"utf8"`,
+- What landed: `UTF8Spec`/`blosc2.utf8()` in `schema.py` (kind `"utf8"`,
   registered in `schema_compiler._KIND_TO_SPEC`); new `src/blosc2/utf8_array.py`
   with the `UTF8Array` adapter; storage dispatch in all four `TableStorage`
   backends; sentinel-null wiring; guards for the not-yet-supported operations;
   37 tests in `tests/ctable/test_utf8.py`.
 - **Key deviation from the plan text**: rather than a new column category
-  with its own ~50 dispatch sites (the `DictionaryColumn` route), `Utf8Spec`
+  with its own ~50 dispatch sites (the `DictionaryColumn` route), `UTF8Spec`
   joins the `_is_varlen_scalar_column` predicate and `UTF8Array` implements
   the `_ScalarVarLenArray` row interface (`append`/`extend`/`flush`/getitem/
   setitem). That made create/open/save/load/copy/take/cframe/TreeStore paths
@@ -200,7 +200,7 @@ on a utf8 column, `from_arrow(pa_table)` ingest.
 
 **P3.b implementation notes (landed 2026-07-16, branch `enhancing-ctable3`):**
 
-- What landed: `_pa_type_from_spec` maps `Utf8Spec` → `pa.large_string()`
+- What landed: `_pa_type_from_spec` maps `UTF8Spec` → `pa.large_string()`
   (always large, per the plan); `iter_arrow_batches` builds a null mask from
   the sentinel and exports proper Arrow nulls; `_arrow_type_to_spec` now maps
   incoming Arrow `string`/`large_string` (when `string_max_length` is not
@@ -342,7 +342,7 @@ proves hard, the honest fallback is `np.unique` on the StringDType chunk
   fixed-width dispatch and the single-key path already falls through to the
   correct `np.unique(arr, return_inverse=True)` for free. `_null_mask` already
   worked unmodified (`values == null_value` on a `StringDType` array is
-  correct). `_result_spec_for_key` deep-copies the source `Utf8Spec`
+  correct). `_result_spec_for_key` deep-copies the source `UTF8Spec`
   unmodified, so a groupby result's key column is itself a utf8 column
   (`Column.is_utf8` true). `_python_type_for_spec`/`_python_scalar` already
   produce plain `str` for utf8 (indexing a `StringDType` array yields
@@ -614,10 +614,10 @@ branch):**
   adds a scalar delta to the tail offsets instead of decoding and
   re-encoding every following row (21 ms to overwrite row 100 of 1M).
   Test: grow/shrink/equal/empty replacements persisted across reopen.
-- **Cleanup:** `Utf8Spec` imported once at `ctable_storage.py` module top
+- **Cleanup:** `UTF8Spec` imported once at `ctable_storage.py` module top
   (was: six local imports); `FileTableStorage.create_varlen_scalar_column`
   hoists the column key.
-- **Review finding rejected on inspection:** removing `Utf8Spec.__init__`'s
+- **Review finding rejected on inspection:** removing `UTF8Spec.__init__`'s
   inline `null_value must be str` check (flagged as duplicating
   `_validate_null_value_for_spec`) would open a validation hole —
   `_resolve_nullable_specs` *skips* specs whose `null_value` is already set,

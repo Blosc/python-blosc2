@@ -392,12 +392,12 @@ class UTF8Array:
 
     This class is internal; obtain instances via
     ``storage.create_varlen_scalar_column()`` or
-    ``storage.open_varlen_scalar_column()`` with a ``Utf8Spec``.
+    ``storage.open_varlen_scalar_column()`` with a ``UTF8Spec``.
 
     Parameters
     ----------
     spec:
-        The :class:`~blosc2.schema.Utf8Spec` describing this column.
+        The :class:`~blosc2.schema.UTF8Spec` describing this column.
     offsets:
         ``int64`` NDArray of row offsets (length ``n + 1``).  Created fresh
         (in memory) when ``None``.
@@ -407,10 +407,10 @@ class UTF8Array:
     """
 
     def __init__(self, spec, offsets=None, data=None) -> None:
-        from blosc2.schema import Utf8Spec
+        from blosc2.schema import UTF8Spec
 
-        if not isinstance(spec, Utf8Spec):
-            raise TypeError(f"UTF8Array requires a Utf8Spec, got {type(spec)!r}")
+        if not isinstance(spec, UTF8Spec):
+            raise TypeError(f"UTF8Array requires a UTF8Spec, got {type(spec)!r}")
         self._dtype = string_dtype()
         self._spec = spec
         if (offsets is None) != (data is None):
@@ -1068,7 +1068,7 @@ def utf8_array(seq, spec=None, **kwargs) -> UTF8Array:
     seq:
         Iterable of ``str`` (or ``None`` for a nullable *spec*).
     spec:
-        The :class:`~blosc2.schema.Utf8Spec` describing the array.  Defaults
+        The :class:`~blosc2.schema.UTF8Spec` describing the array.  Defaults
         to ``blosc2.utf8()`` (non-nullable).
     kwargs:
         Forwarded to :class:`UTF8Array` (``offsets``, ``data``).
@@ -1151,7 +1151,7 @@ def to_utf8(values, spec=None) -> UTF8Array:
         NumPy ``U``/``StringDType`` array, or any iterable of ``str`` (or
         ``None`` for a nullable *spec*).
     spec:
-        The :class:`~blosc2.schema.Utf8Spec` describing the result.  Defaults
+        The :class:`~blosc2.schema.UTF8Spec` describing the result.  Defaults
         to ``blosc2.utf8()`` (non-nullable).
 
     Returns

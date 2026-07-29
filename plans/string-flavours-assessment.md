@@ -482,7 +482,7 @@ This is a property of the **rank-index design**, not of utf8 — `_dictionary_in
 identically. And the default `kind=IndexKind.BUCKET` meant `create_index("c")` on a dictionary column
 had *always* built an index nothing could use.
 
-**Fixed.** `kind` now defaults to `None` and resolves to `FULL` for `Utf8Spec`/`DictionarySpec`
+**Fixed.** `kind` now defaults to `None` and resolves to `FULL` for `UTF8Spec`/`DictionarySpec`
 (`BUCKET` unchanged everywhere else); an *explicit* non-FULL kind on those flavours raises
 `ValueError` naming the reason. Erroring rather than warning because it is not a trade-off — there is
 no workload where those kinds help — and because relaxing an error later is non-breaking while
@@ -630,7 +630,7 @@ nothing.)
 *every* column type — `field(np.dtype("int32"))` is a `TypeError` too. Specs carry nullability, the
 null sentinel, `ge`/`le`, storage config, `batch_rows`. Making utf8 the one dtype-addressable type
 would have *broken* schema uniformity, not restored it. (Also: the runtime floor is `numpy>=1.26`,
-where `StringDType` does not exist; `Utf8Spec.dtype = None` is deliberate.)
+where `StringDType` does not exist; `UTF8Spec.dtype = None` is deliberate.)
 
 **What shipped.** Constructors dispatch on the target dtype, matching NumPy's fill values exactly:
 
@@ -657,6 +657,6 @@ into fixed-width elements; the span driver is the path that avoids it), so it is
 than incidental, and goes through `astype()`, which sizes the result without decoding a row. A
 reminder that `hasattr` probes for capability make silent contracts out of missing attributes.
 
-Deliberately not done: making `Utf8Spec.dtype` return `StringDType()`. It would have to stay lazy
+Deliberately not done: making `UTF8Spec.dtype` return `StringDType()`. It would have to stay lazy
 for NumPy 1.26, `dtype is None` is load-bearing at three sites, and `Column.dtype` already reports
 `StringDType()` — so the win is cosmetic.

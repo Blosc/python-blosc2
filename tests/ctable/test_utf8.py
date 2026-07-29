@@ -77,7 +77,7 @@ def test_utf8_spec_metadata_round_trip():
     assert d["null_value"] == "<NA>"
 
     restored = spec_from_metadata_dict(d)
-    assert type(restored).__name__ == "Utf8Spec"
+    assert type(restored).__name__ == "UTF8Spec"
     assert restored.nullable is True
     assert restored.null_value == "<NA>"
 

@@ -55,7 +55,7 @@ from blosc2.schema import (
     ObjectSpec,
     SchemaSpec,
     StructSpec,
-    Utf8Spec,
+    UTF8Spec,
     VLBytesSpec,
     VLStringSpec,
     complex64,
@@ -1118,14 +1118,14 @@ class Column:
         """True if this column holds variable-length scalar strings or bytes."""
         col = self._table._schema.columns_by_name.get(self._col_name)
         return col is not None and isinstance(
-            col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, Utf8Spec)
+            col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, UTF8Spec)
         )
 
     @property
     def is_utf8(self) -> bool:
         """True if this column stores variable-length UTF-8 strings (offsets + bytes)."""
         col = self._table._schema.columns_by_name.get(self._col_name)
-        return col is not None and isinstance(col.spec, Utf8Spec)
+        return col is not None and isinstance(col.spec, UTF8Spec)
 
     @property
     def is_dictionary(self) -> bool:
@@ -4275,11 +4275,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     @staticmethod
     def _is_varlen_scalar_column(col: CompiledColumn) -> bool:
-        return isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, Utf8Spec))
+        return isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, UTF8Spec))
 
     @staticmethod
     def _is_utf8_column(col: CompiledColumn) -> bool:
-        return isinstance(col.spec, Utf8Spec)
+        return isinstance(col.spec, UTF8Spec)
 
     @staticmethod
     def _is_dictionary_column(col: CompiledColumn) -> bool:
@@ -4431,7 +4431,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return policy.float_value
         if isinstance(spec, b2_bool):
             return policy.bool_value
-        if isinstance(spec, (string, Utf8Spec)):
+        if isinstance(spec, (string, UTF8Spec)):
             return policy.string_value
         if isinstance(spec, b2_bytes):
             return policy.bytes_value
@@ -4481,7 +4481,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if null_value != 255:
                 raise ValueError(f"Null sentinel for nullable bool column {name!r} must be 255")
             return
-        if isinstance(spec, (string, Utf8Spec)):
+        if isinstance(spec, (string, UTF8Spec)):
             if not isinstance(null_value, str):
                 raise TypeError(f"Null sentinel for string column {name!r} must be str")
             return
@@ -6908,7 +6908,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _pa_type_from_spec(pa, spec):
         if isinstance(spec, DictionarySpec):
             return pa.dictionary(pa.int32(), pa.string(), ordered=spec.ordered)
-        if isinstance(spec, Utf8Spec):
+        if isinstance(spec, UTF8Spec):
             # Always large_string: 64-bit offsets match the int64 offsets array,
             # so multi-GB string columns export without int32-offset overflow.
             return pa.large_string()
@@ -9207,7 +9207,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return null_value
         if isinstance(spec, VLBytesSpec):
             return b""
-        if isinstance(spec, (Utf8Spec, VLStringSpec)):
+        if isinstance(spec, (UTF8Spec, VLStringSpec)):
             return ""
         return None
 
@@ -12569,7 +12569,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if isinstance(spec, DictionarySpec):
             ordered_tag = ", ordered" if spec.ordered else ""
             return f"dictionary[str{ordered_tag}]"
-        if isinstance(spec, Utf8Spec):
+        if isinstance(spec, UTF8Spec):
             return "utf8"
         if isinstance(spec, VLStringSpec):
             return "vlstring"

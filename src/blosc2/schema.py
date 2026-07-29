@@ -597,7 +597,7 @@ class VLStringSpec(SchemaSpec):
         return d
 
 
-class Utf8Spec(SchemaSpec):
+class UTF8Spec(SchemaSpec):
     """Variable-length UTF-8 string column stored Arrow-style as offsets + bytes.
 
     Unlike :class:`string`, this spec does not use a fixed-width NumPy dtype:
@@ -649,6 +649,12 @@ class Utf8Spec(SchemaSpec):
 
     def display_label(self) -> str:
         return "utf8"
+
+
+#: Deprecated alias kept for the name this class shipped under in 4.9.1.
+#: Persisted schemas are unaffected either way -- they record ``kind: "utf8"``,
+#: never the class name.
+Utf8Spec = UTF8Spec
 
 
 class ObjectSpec(SchemaSpec):
@@ -844,7 +850,7 @@ def vlstring(
     )
 
 
-def utf8(*, nullable: bool = False, null_value: str | None = None) -> Utf8Spec:
+def utf8(*, nullable: bool = False, null_value: str | None = None) -> UTF8Spec:
     """Build a variable-length UTF-8 string schema descriptor.
 
     Use this for high-cardinality or free-text string columns: values are
@@ -888,7 +894,7 @@ def utf8(*, nullable: bool = False, null_value: str | None = None) -> Utf8Spec:
     from blosc2._utf8_array import string_dtype
 
     string_dtype()  # fail early with a clear error on NumPy < 2.0
-    return Utf8Spec(nullable=nullable, null_value=null_value)
+    return UTF8Spec(nullable=nullable, null_value=null_value)
 
 
 def object(

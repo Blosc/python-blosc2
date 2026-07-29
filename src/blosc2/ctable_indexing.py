@@ -26,7 +26,7 @@ from blosc2.schema import (
     NDArraySpec,
     ObjectSpec,
     StructSpec,
-    Utf8Spec,
+    UTF8Spec,
     VLBytesSpec,
     VLStringSpec,
 )
@@ -769,7 +769,7 @@ class _CTableIndexingMixin:
                 spec = col_info.spec if col_info is not None else None
             kind = (
                 blosc2.IndexKind.FULL
-                if isinstance(spec, (Utf8Spec, DictionarySpec))
+                if isinstance(spec, (UTF8Spec, DictionarySpec))
                 else blosc2.IndexKind.BUCKET
             )
 
@@ -860,8 +860,8 @@ class _CTableIndexingMixin:
         # the ranks without error and are then never consulted, so refuse them
         # here rather than charge for an index nothing can use.
         rank_spec = self._schema.columns_by_name[col_name].spec
-        if explicit_kind and kind_str != "full" and isinstance(rank_spec, (Utf8Spec, DictionarySpec)):
-            flavour = "utf8" if isinstance(rank_spec, Utf8Spec) else "dictionary"
+        if explicit_kind and kind_str != "full" and isinstance(rank_spec, (UTF8Spec, DictionarySpec)):
+            flavour = "utf8" if isinstance(rank_spec, UTF8Spec) else "dictionary"
             raise ValueError(
                 f"Column {col_name!r} is a {flavour} column, which is indexed by alphabetical rank; "
                 f"only kind='full' consults that index, so kind={kind_str!r} would build but never "
@@ -870,7 +870,7 @@ class _CTableIndexingMixin:
         # utf8 columns: index the alphabetical rank of each row's value.  There is
         # no stored code array to wrap lazily, so the ranks are materialized here
         # (int32, 4 B/row) and handed to the builder as an ordinary array.
-        is_utf8 = isinstance(self._schema.columns_by_name[col_name].spec, Utf8Spec)
+        is_utf8 = isinstance(self._schema.columns_by_name[col_name].spec, UTF8Spec)
         utf8_rank_meta = None
         if is_utf8:
             n_live = self._n_rows if self._n_rows is not None else len(self._valid_rows)
