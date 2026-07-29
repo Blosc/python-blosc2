@@ -4087,6 +4087,21 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return True
         return _dict_rank_hash(dictionary) != dict_rank_meta.get("dict_hash")
 
+    def _utf8_rank_index_stale(self, name: str, utf8_rank_meta: dict) -> bool:
+        """True if a utf8-rank FULL index no longer matches the live column.
+
+        The index encodes alphabetical ranks frozen at build time, so a value
+        appended ahead of existing ones invalidates every rank, not just the new
+        rows'.  Checked with O(1) signals — re-deriving the vocabulary would mean
+        factorizing the column on every query.
+        """
+        col = self._root_table._cols.get(name)
+        if col is None:
+            return True
+        return len(col) != utf8_rank_meta.get("n_rows") or int(col._bytes_used) != utf8_rank_meta.get(
+            "nbytes"
+        )
+
     @staticmethod
     def _is_ndarray_column(col: CompiledColumn) -> bool:
         return isinstance(col.spec, NDArraySpec)
@@ -11147,11 +11162,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 descriptor = None
             else:
                 dict_rank_meta = descriptor.get("full", {}).get("dict_rank")
+                utf8_rank_meta = descriptor.get("full", {}).get("utf8_rank")
                 if dict_rank_meta is not None:
                     if self._dict_rank_index_stale(name, dict_rank_meta):
                         descriptor = None  # ranks no longer match dictionary → lexsort
                     else:
                         is_dict_rank = True
+                elif utf8_rank_meta is not None and self._utf8_rank_index_stale(name, utf8_rank_meta):
+                    descriptor = None  # ranks no longer match the column → lexsort
         elif name in root._computed_cols:
             cc = root._computed_cols[name]
             for _lookup_key, candidate in catalog.items():
@@ -11464,12 +11482,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         col_info = self._schema.columns_by_name.get(name)
         null_value = getattr(col_info.spec, "null_value", None) if col_info is not None else None
-        # Dict-rank index: use null_rank (int32) as sentinel for null-block location.
+        # Rank index: the sidecar holds int32 ranks, so the null block is located
+        # by null_rank, not by the column's own sentinel (a string, for utf8).
         dict_rank = full.get("dict_rank")
         if dict_rank is not None:
             if self._dict_rank_index_stale(name, dict_rank):
                 return None  # ranks no longer match dictionary → lexsort
             null_value = dict_rank["null_rank"]
+        utf8_rank = full.get("utf8_rank")
+        if utf8_rank is not None:
+            if self._utf8_rank_index_stale(name, utf8_rank):
+                return None  # ranks no longer match the column → lexsort
+            null_value = utf8_rank["null_rank"] if null_value is not None else None
         # Numeric / NaN / string sentinels keep the null rows in one contiguous block
         # once sorted; other non-numeric sentinels (e.g. object) would need a
         # different locator.

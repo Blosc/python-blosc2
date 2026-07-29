@@ -1172,10 +1172,24 @@ def test_ctable_utf8_sort_non_ascii():
 # ---------------------------------------------------------------------------
 
 
-def test_ctable_utf8_create_index_raises_clearly():
-    t = make_table()
-    with pytest.raises(NotImplementedError, match="utf8"):
-        t.create_index(col_name="name")
+def test_ctable_utf8_create_index_builds_a_rank_index():
+    """utf8 is indexed by the alphabetical rank of each row's value.
+
+    Sorting by rank is sorting by decoded string, so an int32 rank column drives
+    the existing numeric index machinery unchanged.
+    """
+    values = ["pear", "apple", "café", "banana", "apple"]
+    t = make_table(values)
+    index = t.create_index(col_name="name", kind="full")
+
+    assert index.kind == "full"
+    meta = t._get_index_catalog()["name"]["full"]["utf8_rank"]
+    assert meta["vocab_len"] == len(set(values))
+    assert meta["n_rows"] == len(values)
+
+    # Ordering through the index must match a plain sort.
+    assert list(t.sort_by("name", view=True)["name"][:]) == sorted(values)
+    assert list(t.sorted_slice("name", slice(0, 2))["name"][:]) == sorted(values)[:2]
 
 
 def test_ctable_utf8_arrow_export_large_string():
@@ -1685,3 +1699,50 @@ def test_bare_utf8_array_expression_rejects_unsupported_forms():
         lazy.compute(item=slice(0, 1))
     with pytest.raises(NotImplementedError, match="not supported"):
         blosc2.lazyexpr("upper(a)", {"a": arr}, where=(arr, arr))
+
+
+def test_ctable_utf8_index_survives_reopen_and_orders_nulls_last(tmp_path):
+    """A persisted utf8 rank index must reopen and keep nulls at the end."""
+    from dataclasses import make_dataclass
+
+    path = str(tmp_path / "utf8_index.b2t")
+    row_cls = make_dataclass("Row", [("name", str, blosc2.field(blosc2.utf8(nullable=True)))])
+    values = ["pear", "apple", None, "banana"]
+    t = blosc2.CTable(row_cls, urlpath=path, mode="w")
+    t.extend({"name": values}, validate=False)
+    t._flush_varlen_columns()
+    t.create_index("name", kind="full")
+    del t
+
+    reopened = blosc2.open(path)
+    assert reopened._get_index_catalog()["name"]["full"]["utf8_rank"]["null_rank"] == 3
+    ordered = list(reopened.sort_by("name", view=True)["name"][:])
+    assert ordered[:3] == ["apple", "banana", "pear"]
+    assert ordered[3] == reopened["name"].null_value  # the null sentinel sorts last
+
+
+def test_ctable_utf8_index_goes_stale_when_the_column_changes():
+    """Appending a value ahead of existing ones invalidates every rank."""
+    t = make_table(["pear", "banana"])
+    t.create_index("name", kind="full")
+    meta = t._get_index_catalog()["name"]["full"]["utf8_rank"]
+    assert not t._utf8_rank_index_stale("name", meta)
+
+    t.append({"name": "apple", "x": 2})
+    t._flush_varlen_columns()
+    assert t._utf8_rank_index_stale("name", meta)
+    # The answer stays correct via the lexsort fallback.
+    assert list(t.sort_by("name", view=True)["name"][:]) == ["apple", "banana", "pear"]
+
+
+def test_utf8_rejects_a_lone_nul_null_value():
+    """NumPy will not match a lone NUL against StringDType, so nulls would vanish."""
+    import numpy as np
+
+    probe = np.array(["\x00"], dtype=np.dtypes.StringDType())
+    assert not (probe == "\x00")[0], "numpy started matching lone NUL; the guard can go"
+
+    with pytest.raises(ValueError, match="NUL"):
+        blosc2.utf8(null_value="\x00")
+    # A NUL that is not the whole string is fine — numpy matches those.
+    assert blosc2.utf8(null_value="\x00x").null_value == "\x00x"

@@ -622,6 +622,17 @@ class Utf8Spec(SchemaSpec):
     def __init__(self, *, nullable: _builtin_bool = False, null_value: str | None = None):
         if null_value is not None and not isinstance(null_value, str):
             raise TypeError(f"utf8 null_value must be str, got {type(null_value).__name__!r}")
+        if null_value == "\x00":
+            # NumPy 2.4 compares a lone NUL against StringDType as no-match:
+            # np.array(["\x00"], dtype=StringDType()) == "\x00" is False, while
+            # "\x00x" and "a\x00b" both compare correctly.  Every null mask here
+            # is such a comparison, so this sentinel would silently stop marking
+            # anything as null.  Reject it rather than mis-handle it.
+            raise ValueError(
+                "utf8 null_value cannot be a single NUL character: NumPy does not "
+                "match it against StringDType arrays, so nulls would go undetected. "
+                "Use a longer sentinel (the default is '__BLOSC2_NULL__')."
+            )
         self.nullable = nullable or null_value is not None
         self.null_value = _normalize_scalar_value(null_value)
 

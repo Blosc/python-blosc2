@@ -74,6 +74,55 @@ def _dict_rank_hash(dictionary) -> str:
     return h.hexdigest()
 
 
+#: Rows factorized per pass when building a utf8 rank index.  Bounds the
+#: transient code buffer without changing the result.
+_UTF8_RANK_SPAN = 1 << 20
+
+
+def _utf8_rank_arrays(col, n_live: int, null_value: str | None):
+    """Alphabetical rank per row for a utf8 column, plus its staleness metadata.
+
+    Sorting by rank is sorting by decoded string, so an ``int32`` rank column
+    can drive the whole numeric index machinery unchanged — the same trick
+    :class:`_DictRankWrapper` plays for dictionary columns.  Unlike a dictionary
+    there is no stored code array, so the column is factorized here; the
+    factorizer hashes raw bytes and only ever decodes the distinct values.
+
+    Null rows carry a sentinel *string*, so the sentinel is just another
+    vocabulary entry; it is given the largest rank so nulls sort last, matching
+    both the dictionary index and ``_build_lex_keys``.
+    """
+    fact = col.factorizer()
+    codes = np.empty(n_live, dtype=np.int64)
+    for start in range(0, n_live, _UTF8_RANK_SPAN):
+        stop = min(start + _UTF8_RANK_SPAN, n_live)
+        codes[start:stop] = fact.codes_for_span(start, stop)
+    uniques = fact.uniques()
+    n_entries = len(uniques)
+
+    is_null = uniques == null_value if null_value is not None else np.zeros(n_entries, dtype=bool)
+    non_null = np.flatnonzero(~is_null)
+    order = non_null[np.argsort(uniques[non_null], kind="stable")]
+    code_to_rank = np.empty(max(n_entries, 1), dtype=np.int32)
+    code_to_rank[order] = np.arange(len(order), dtype=np.int32)
+    null_rank = np.int32(len(order))
+    if is_null.any():
+        code_to_rank[is_null] = null_rank
+
+    ranks = code_to_rank[codes] if n_entries else np.zeros(n_live, dtype=np.int32)
+    # Staleness signals must be O(1) to check: re-deriving the vocabulary would
+    # mean factorizing the column again on every query.  Any write already marks
+    # every index stale, so these only have to catch a rebuilt-but-changed
+    # column, for which row count plus blob size is enough.
+    meta = {
+        "null_rank": int(null_rank),
+        "vocab_len": int(n_entries),
+        "n_rows": int(n_live),
+        "nbytes": int(col._bytes_used),
+    }
+    return ranks.astype(np.int32, copy=False), meta
+
+
 class _DictRankWrapper:
     """Wrap a dictionary column's codes NDArray, translating codes to alphabetical ranks on read.
 
@@ -750,12 +799,6 @@ class _CTableIndexingMixin:
             )
         if isinstance(self._schema.columns_by_name[col_name].spec, ListSpec):
             raise ValueError(f"Cannot create an index on list column {col_name!r} in V1.")
-        if isinstance(self._schema.columns_by_name[col_name].spec, Utf8Spec):
-            raise NotImplementedError(
-                f"Cannot create an index on variable-length utf8 column {col_name!r}: "
-                "indexing for utf8 columns is not supported yet. "
-                "Use a fixed-width string(max_length=N) column if you need an index."
-            )
         if isinstance(
             self._schema.columns_by_name[col_name].spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)
         ):
@@ -763,6 +806,16 @@ class _CTableIndexingMixin:
                 f"Cannot create an index on variable-length scalar column {col_name!r}: "
                 "indexing for vlstring/vlbytes/struct/object columns is not supported yet."
             )
+        # utf8 columns: index the alphabetical rank of each row's value.  There is
+        # no stored code array to wrap lazily, so the ranks are materialized here
+        # (int32, 4 B/row) and handed to the builder as an ordinary array.
+        is_utf8 = isinstance(self._schema.columns_by_name[col_name].spec, Utf8Spec)
+        utf8_rank_meta = None
+        if is_utf8:
+            n_live = self._n_rows if self._n_rows is not None else len(self._valid_rows)
+            ranks_arr, utf8_rank_meta = _utf8_rank_arrays(col_arr, n_live, self[col_name].null_value)
+            col_arr = blosc2.asarray(ranks_arr)
+
         # Dictionary columns: index by alphabetical rank instead of insertion-order codes.
         is_dictionary = isinstance(self._schema.columns_by_name[col_name].spec, DictionarySpec)
         dict_rank_meta = None
@@ -823,11 +876,14 @@ class _CTableIndexingMixin:
             )
             store = _IN_MEMORY_INDEXES[id(col_arr)]
             descriptor = _copy_descriptor(store["indexes"]["__self__"])
-        if dict_rank_meta is not None:
+        if dict_rank_meta is not None or utf8_rank_meta is not None:
             full = descriptor.setdefault("full", {})
             if full is None:
                 full = descriptor["full"] = {}
-            full["dict_rank"] = dict_rank_meta
+            if dict_rank_meta is not None:
+                full["dict_rank"] = dict_rank_meta
+            else:
+                full["utf8_rank"] = utf8_rank_meta
 
         value_epoch, _ = self._storage.get_epoch_counters()
         descriptor["built_value_epoch"] = value_epoch
