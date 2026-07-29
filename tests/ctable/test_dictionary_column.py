@@ -659,6 +659,31 @@ def test_dictionary_index_answers_equality(tmp_path):
     assert results["scan"]["apple"][0] == ["apple", "apple"]
 
 
+def test_dictionary_index_spans_deleted_rows(tmp_path):
+    """The rank index has to cover the physical extent, not the live row count.
+
+    delete() tombstones in place and only decrements the live count, so live
+    rows can sit past it.  An index sized by that count silently drops them
+    from equality results.
+    """
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+
+    values = ["pear", "apple", "cherry", "apple", "banana", "apple"]
+    t = CTable(Row, urlpath=str(tmp_path / "t.b2t"), mode="w")
+    t.extend({"c": values}, validate=False)
+    t._flush_varlen_columns()
+    t.delete(0)
+    t.create_index("c", kind="full")
+
+    assert t["c"]._dictionary_index_mask("apple") is not None
+    # The trailing "apple" is live and must not be lost to the index.
+    assert sorted(t[t["c"] == "apple"]["c"][:]) == ["apple"] * 3
+    assert sorted(t[t["c"] != "apple"]["c"][:]) == ["banana", "cherry"]
+
+
 def test_dict_rank_staleness_uses_value_epoch(tmp_path):
     """The staleness check must not re-hash the whole dictionary per query."""
     from blosc2.ctable_indexing import _dict_rank_hash

@@ -2223,7 +2223,7 @@ class Column:
             mask[: len(table._cols[self._col_name])] = True
             if bounds is not None:
                 mask[rows_for_ranks(*bounds)] = False
-            mask[rows_for_ranks(null_rank, None if null_rank == 0 else null_rank + 1)] = False
+            mask[rows_for_ranks(null_rank, null_rank + 1)] = False
         elif bounds is not None:
             mask[rows_for_ranks(*bounds)] = True
         return mask

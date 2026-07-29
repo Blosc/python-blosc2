@@ -96,7 +96,7 @@ def _dict_rank_hash(dictionary) -> str:
 _UTF8_RANK_SPAN = 1 << 20
 
 
-def _utf8_rank_arrays(col, n_live: int, null_value: str | None):
+def _utf8_rank_arrays(col, n_phys: int, null_value: str | None):
     """Alphabetical rank per row for a utf8 column, plus its staleness metadata.
 
     Sorting by rank is sorting by decoded string, so an ``int32`` rank column
@@ -110,9 +110,9 @@ def _utf8_rank_arrays(col, n_live: int, null_value: str | None):
     both the dictionary index and ``_build_lex_keys``.
     """
     fact = col.factorizer()
-    codes = np.empty(n_live, dtype=np.int64)
-    for start in range(0, n_live, _UTF8_RANK_SPAN):
-        stop = min(start + _UTF8_RANK_SPAN, n_live)
+    codes = np.empty(n_phys, dtype=np.int64)
+    for start in range(0, n_phys, _UTF8_RANK_SPAN):
+        stop = min(start + _UTF8_RANK_SPAN, n_phys)
         codes[start:stop] = fact.codes_for_span(start, stop)
     uniques = fact.uniques()
     n_entries = len(uniques)
@@ -129,7 +129,7 @@ def _utf8_rank_arrays(col, n_live: int, null_value: str | None):
     # Rank order == alphabetical order, so this doubles as the lookup table that
     # turns a query literal into a rank (np.searchsorted) without touching data.
     sorted_vocab = uniques[order]
-    ranks = code_to_rank[codes] if n_entries else np.zeros(n_live, dtype=np.int32)
+    ranks = code_to_rank[codes] if n_entries else np.zeros(n_phys, dtype=np.int32)
     # Staleness signals must be O(1) to check: re-deriving the vocabulary would
     # mean factorizing the column again on every query.  Any write already marks
     # every index stale, so these only have to catch a rebuilt-but-changed
@@ -137,7 +137,7 @@ def _utf8_rank_arrays(col, n_live: int, null_value: str | None):
     meta = {
         "null_rank": int(null_rank),
         "vocab_len": int(n_entries),
-        "n_rows": int(n_live),
+        "n_rows": int(n_phys),
         "nbytes": int(col._bytes_used),
     }
     return ranks.astype(np.int32, copy=False), meta, sorted_vocab
@@ -181,7 +181,7 @@ class _DictRankWrapper:
         null_rank: np.int32,
         null_code: int,
         nullable: bool,
-        n_live: int,
+        n_phys: int,
     ):
         self._codes = codes  # int32 NDArray
         self._code_to_rank = code_to_rank  # int32 array mapping code -> rank
@@ -189,15 +189,17 @@ class _DictRankWrapper:
         self._null_code = null_code
         self._nullable = nullable
         self.dtype = np.dtype(np.int32)
-        # The codes array carries capacity padding beyond the live rows; expose only
-        # the live range so the index sidecars match n_rows (no padding → the
-        # zero-permutation window read engages instead of falling back).
-        self.shape = (n_live,)
+        # The codes array carries capacity padding beyond the written rows; expose
+        # only the physical extent so the index sidecars match n_rows (no padding →
+        # the zero-permutation window read engages instead of falling back).  It has
+        # to be the physical extent and not the live count: tombstoned rows keep
+        # their positions, so live rows can sit past the live count.
+        self.shape = (n_phys,)
         self.ndim = 1
-        chunk0 = codes.chunks[0] if codes.chunks else n_live
-        block0 = codes.blocks[0] if codes.blocks else n_live
-        self.chunks = (min(chunk0, n_live),)
-        self.blocks = (min(block0, n_live),)
+        chunk0 = codes.chunks[0] if codes.chunks else n_phys
+        block0 = codes.blocks[0] if codes.blocks else n_phys
+        self.chunks = (min(chunk0, n_phys),)
+        self.blocks = (min(block0, n_phys),)
 
     def __getitem__(self, key):
         codes_slice = np.asarray(self._codes[key], dtype=np.int32)
@@ -889,9 +891,13 @@ class _CTableIndexingMixin:
         is_utf8 = isinstance(self._schema.columns_by_name[col_name].spec, UTF8Spec)
         utf8_rank_meta = None
         if is_utf8:
-            n_live = self._n_rows if self._n_rows is not None else len(self._valid_rows)
+            # Span the physical extent, not the live count: delete() tombstones in
+            # place, so live rows sit past _n_rows.  A utf8 column carries no
+            # capacity padding (__len__ is persisted + pending), and this is the
+            # same length _utf8_rank_index_stale() compares the meta against.
+            n_phys = len(col_arr)
             ranks_arr, utf8_rank_meta, utf8_vocab = _utf8_rank_arrays(
-                col_arr, n_live, self[col_name].null_value
+                col_arr, n_phys, self[col_name].null_value
             )
             col_arr = blosc2.asarray(ranks_arr)
 
@@ -900,7 +906,10 @@ class _CTableIndexingMixin:
         dict_rank_meta = None
         if is_dictionary:
             dict_col = col_arr
-            n_live = self._n_rows if self._n_rows is not None else len(self._valid_rows)
+            # Physical extent again, but len(dict_col) is the slot *capacity*, so
+            # take the live-data watermark instead: it covers every live row while
+            # still excluding the trailing padding.
+            n_phys = self._resolve_last_pos()
             dictionary = list(dict_col.dictionary)
             n_entries = len(dictionary)
             code_to_rank = _dict_code_to_rank(dictionary)
@@ -910,7 +919,7 @@ class _CTableIndexingMixin:
             dict_hash = _dict_rank_hash(dictionary)
             dict_rank_meta = {"null_rank": int(null_rank), "dict_hash": dict_hash, "dict_len": n_entries}
             col_arr = _DictRankWrapper(
-                dict_col.codes, code_to_rank, null_rank, null_code, dict_col.spec.nullable, n_live
+                dict_col.codes, code_to_rank, null_rank, null_code, dict_col.spec.nullable, n_phys
             )
         is_persistent = self._storage.index_anchor_path(col_name) is not None
 
@@ -932,7 +941,7 @@ class _CTableIndexingMixin:
         else:
             # In-memory path: materialise ranks as a proper NDArray (small tables only).
             if is_dictionary:
-                codes = np.asarray(dict_col.codes[:n_live], dtype=np.int32)
+                codes = np.asarray(dict_col.codes[:n_phys], dtype=np.int32)
                 ranks_arr = code_to_rank[codes]
                 if dict_col.spec.nullable:
                     ranks_arr[codes == null_code] = null_rank

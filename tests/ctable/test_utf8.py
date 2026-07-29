@@ -1848,6 +1848,51 @@ def test_ctable_utf8_index_pred_falls_back(tmp_path):
     np.testing.assert_array_equal(t["c"]._utf8_scalar_mask(np.equal, "apple")[:3], [False, False, True])
 
 
+def test_ctable_utf8_index_spans_deleted_rows(tmp_path):
+    """The index has to cover the physical extent, not the live row count.
+
+    delete() tombstones in place, so live rows sit past the live count.  Sizing
+    the index by that count leaves it permanently stale -- built, paid for, and
+    never consulted.
+    """
+    from dataclasses import make_dataclass
+
+    import numpy as np
+
+    values = ["pear", "apple", "cherry", "apple", "banana", "apple"]
+    row_cls = make_dataclass("Row", [("c", str, blosc2.field(blosc2.utf8()))])
+    t = blosc2.CTable(row_cls, urlpath=str(tmp_path / "t.b2t"), mode="w")
+    t.extend({"c": values}, validate=False)
+    t._flush_varlen_columns()
+    t.delete(0)
+    t.create_index("c", kind="full")
+
+    meta = t._get_index_catalog()["c"]["full"]["utf8_rank"]
+    assert not t._utf8_rank_index_stale("c", meta)
+    assert t["c"]._utf8_index_mask(np.equal, "apple") is not None
+    # Every live "apple" comes back, including the one at the last position.
+    assert sorted(t[t["c"] == "apple"]["c"][:]) == ["apple"] * 3
+
+
+def test_ctable_utf8_index_ne_on_all_null_column(tmp_path):
+    """A null satisfies no comparison, so ``!= x`` on an all-null column is empty.
+
+    With no non-null distinct values the null rank is 0, which used to send the
+    null-exclusion lookup down an always-empty branch.
+    """
+    from dataclasses import make_dataclass
+
+    row_cls = make_dataclass("Row", [("c", str, blosc2.field(blosc2.utf8(nullable=True)))])
+    t = blosc2.CTable(row_cls, urlpath=str(tmp_path / "t.b2t"), mode="w")
+    t.extend({"c": [None] * 6}, validate=False)
+    t._flush_varlen_columns()
+    t.create_index("c", kind="full")
+
+    assert t._get_index_catalog()["c"]["full"]["utf8_rank"]["null_rank"] == 0
+    assert len(t[t["c"] != "x"]["c"][:]) == 0
+    assert len(t[t["c"] == "x"]["c"][:]) == 0
+
+
 # ---------------------------------------------------------------------------
 # Fixed-width conversion pair: astype / from_utf8 / to_utf8
 # ---------------------------------------------------------------------------
