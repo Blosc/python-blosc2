@@ -26,7 +26,7 @@ because two of the conclusions below originally rested on it.
 | `sum(where=…)` | ✓ | ✓ | ✓ | ✗ | ✗ |
 | `sort_by` | ✓ | ✓ | ✓ | ✓ | ✗ TypeError |
 | `group_by` | ✓ | ✓ | ✓ | ✓ | ✗ |
-| `create_index` | ✓ all 5 kinds | ✓ all 5 kinds | ✓ rank, ordering only ⁷ | ✓ rank, ordering only | ✗ |
+| `create_index` | ✓ all 5 kinds | ✓ all 5 kinds | ✓ rank, ordering + predicates ⁷ | ✓ rank, ordering only | ✗ |
 | **Compute (string-returning)** | | | | | |
 | `add_computed_column("'x='+c")` | ✓ | ✓ | **✗ NotImpl** | ✗ | ✗ |
 | `assign(new=…)` | ✓ | ✓ | **✗ NotImpl** | ✗ | ✗ |
@@ -335,14 +335,25 @@ cardinality 20 k, persistent:
 build, because it sorts `int32` ranks rather than `<U` payloads. `sorted_slice` keeps a ~4× gap:
 that is the cost of gathering the result rows out of the offsets/blob, not of the index.
 
-**Equality and ranges are still not accelerated** — `col == 'lit'` is answered by the 34.8 ms
-raw-byte scan, exactly as before. Two things are missing, and dictionary lacks both as well:
+**Scalar predicates followed in `f132d6df`.** The sorted vocabulary is now persisted beside the
+index's other sidecars, so a literal maps to a rank by one `searchsorted` and the matching rows are
+a contiguous run of the sorted-positions sidecar. Mask construction, same workload:
 
-1. The sorted vocabulary is not persisted with the index, so a literal cannot be turned into a rank
-   at query time. Re-deriving it means factorizing (272 ms/M rows), which defeats the purpose.
-2. `plan_query` is never consulted for a utf8 or dictionary equality in the first place.
+| | scan | rank index |
+|---|---|---|
+| `==` | 29.00 ms | **5.49 ms** |
+| `!=` | 28.55 ms | 10.24 ms |
+| `<` | 34.57 ms | **5.45 ms** |
+| `>=` | 34.16 ms | 8.07 ms |
 
-Neither is hard, but they are the *next* piece of work, not part of what shipped.
+It hangs off `Column._utf8_scalar_mask`, which every scalar predicate already funnels through, and
+returns `None` to fall back to the scan whenever the index cannot answer. Note the end-to-end
+`where()` gain is smaller than these numbers — materializing the result rows out of the
+offsets/blob dominates once the mask is cheap.
+
+`plan_query` is still never consulted for a utf8 or dictionary predicate; this route bypasses it
+rather than fixing that. **Dictionary still has no predicate acceleration** — it has the vocabulary
+(its own dictionary) but nothing wires it to its rank index.
 
 **Also found here:** NumPy 2.4 does not match a lone `"\x00"` against a `StringDType` array
 (`np.array(["\x00"], dtype=StringDType()) == "\x00"` is `False`), while `"\x00x"` and `"a\x00b"`
