@@ -142,6 +142,13 @@ XXX version-specific blurb XXX
   lexsort-based `sort_by` cost O(N) decompressions. At 1M rows an unindexed
   `sort_by` drops from 236 s to 713 ms, and a full column read from 44 s (at
   200k rows) to 193 ms.
+- **`sort_by` on a dictionary column sorts int32 ranks, not decoded
+  strings.** A row's alphabetical rank orders exactly as its value does — the
+  trick the FULL index already used — so the sort key needs neither the decode
+  nor lexsort's string comparisons. Key construction drops from 106 ms to 21 ms
+  per 200k rows (cardinality 5000) and `sort_by(view=True)` from 247 ms to
+  157 ms. The filtered small-copy path, which had its own copy of the key
+  builder, now shares this one and picks up the same speedup.
 - **`kind=BUCKET` indexes no longer cost more than the scan they replace.**
   Scattered matches were read one bucket run at a time, re-decompressing the
   same blocks many times, and the planner measured selectivity in buckets while

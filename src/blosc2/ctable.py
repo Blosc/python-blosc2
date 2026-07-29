@@ -11645,13 +11645,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ascending: list[bool],
         live_pos: np.ndarray,
         n: int,
+        gathered: dict[str, np.ndarray] | None = None,
     ) -> list[np.ndarray]:
         """Build the key list for np.lexsort (innermost = last = primary key).
 
         For nullable columns a null-indicator key (0=non-null, 1=null) is
         inserted immediately after the value key, making it more significant.
         This ensures nulls sort last regardless of ascending/descending order.
+
+        *gathered* lets a caller that has already read the columns at
+        *live_pos* hand them over instead of paying for a second gather; a
+        dictionary column is expected there as its **codes**, which is what it
+        is cheap to gather.
         """
+        from blosc2.ctable_indexing import _dict_code_to_rank
+
+        gathered = gathered or {}
         lex_keys = []
         for name, asc in zip(reversed(cols), reversed(ascending), strict=True):
             cc = self._computed_cols.get(name)
@@ -11663,14 +11672,24 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 is_dict_col = col_info is not None and self._is_dictionary_column(col_info)
                 if is_dict_col:
-                    # Sort dictionary columns by decoded string values.
-                    decoded = self._cols[name][live_pos]
-                    raw = np.array(decoded, dtype=object)
-                    # Replace None with placeholder so lexsort never compares None.
-                    # Null indicator key (below) already places nulls last.
-                    raw[raw == None] = ""  # noqa: E711
+                    # Sort a dictionary column by the alphabetical rank of each
+                    # row's code -- the same trick the FULL index plays.  Ranks
+                    # order exactly as the decoded values do, and sorting int32
+                    # skips both the decode and lexsort's string comparisons.
+                    dict_col = self._cols[name]
+                    dictionary = list(dict_col.dictionary)
+                    code_to_rank = _dict_code_to_rank(dictionary)
+                    raw_codes = gathered[name] if name in gathered else dict_col.codes[live_pos]
+                    codes = np.asarray(raw_codes, dtype=np.int32)
+                    # The null code is reserved (-1), not a dictionary entry, so
+                    # it cannot be looked up; nulls take the largest rank.  The
+                    # null indicator key below is what actually places them.
+                    is_null = codes == col_info.spec.null_code
+                    raw = np.empty(len(codes), dtype=np.int32)
+                    raw[~is_null] = code_to_rank[codes[~is_null]]
+                    raw[is_null] = np.int32(len(dictionary))
                 else:
-                    raw = self._cols[name][live_pos]
+                    raw = gathered[name] if name in gathered else self._cols[name][live_pos]
             nv = getattr(col_info.spec, "null_value", None) if col_info else None
 
             # Value key
@@ -11689,10 +11708,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             # Null indicator key — more significant than the value key above,
             # so nulls always sort last (0 before 1 → non-null before null).
             if is_dict_col and col_info.spec.nullable:
-                null_code = col_info.spec.null_code
-                codes_at_pos = np.asarray(self._cols[name].codes[live_pos], dtype=np.int32)
-                null_ind = (codes_at_pos == null_code).astype(np.intp)
-                lex_keys.append(null_ind)
+                lex_keys.append(is_null.astype(np.intp))
             elif nv is not None:
                 if isinstance(nv, float) and np.isnan(nv):
                     null_ind = np.isnan(raw).astype(np.intp)
@@ -11966,43 +11982,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 gathered[col.name] = arr[live_pos]
 
-        lex_keys = []
-        for name, asc in zip(reversed(cols), reversed(ascending), strict=True):
-            col_info = self._schema.columns_by_name.get(name)
-            is_dict_col = col_info is not None and self._is_dictionary_column(col_info)
-            if is_dict_col:
-                raw = np.array(self._cols[name][live_pos], dtype=object)
-                # Replace None with placeholder so lexsort never compares None.
-                raw[raw == None] = ""  # noqa: E711
-            else:
-                raw = gathered[name]
-
-            if not asc:
-                if raw.dtype.kind in "USO":
-                    rank = np.argsort(np.argsort(raw, kind="stable"), kind="stable")
-                    lex_keys.append((n - 1 - rank).astype(np.intp))
-                elif np.issubdtype(raw.dtype, np.unsignedinteger):
-                    lex_keys.append(-raw.astype(np.int64))
-                else:
-                    lex_keys.append(-raw)
-            else:
-                lex_keys.append(raw)
-
-            if is_dict_col and col_info.spec.nullable:
-                null_code = col_info.spec.null_code
-                codes_at_pos = np.asarray(self._cols[name].codes[live_pos], dtype=np.int32)
-                null_ind = (codes_at_pos == null_code).astype(np.intp)
-                lex_keys.append(null_ind)
-            else:
-                nv = getattr(col_info.spec, "null_value", None) if col_info else None
-                if nv is not None:
-                    if isinstance(nv, float) and np.isnan(nv):
-                        null_ind = np.isnan(raw).astype(np.intp)
-                    else:
-                        null_ind = (raw == nv).astype(np.intp)
-                    lex_keys.append(null_ind)
-
-        order = np.lexsort(lex_keys)
+        # The gather above already read every column at live_pos, dictionary
+        # columns as codes -- exactly what the key builder wants.
+        order = np.lexsort(self._build_lex_keys(cols, ascending, live_pos, n, gathered))
         result = self._empty_copy(capacity=n)
         for col in self._schema.columns:
             col_name = col.name

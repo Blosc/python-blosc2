@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import pytest
 
 import blosc2
@@ -686,3 +687,61 @@ def test_dict_rank_index_staleness_uses_the_value_epoch(tmp_path):
     finally:
         ci._dict_rank_hash = _dict_rank_hash
     assert calls == 0, "value epoch was unchanged, so no hash should have been needed"
+
+
+def test_sort_by_keys_on_ranks_not_decoded_strings():
+    """sort_by must not decode a dictionary column to sort it.
+
+    Sorting by alphabetical rank is sorting by decoded value, so the key can
+    stay int32 -- which skips both the decode and lexsort's string
+    comparisons.  Correctness alone would not notice the difference, so
+    assert on the key dtype as well as the order.
+    """
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+        x: int = blosc2.field(blosc2.int64())
+
+    values = ["delta", "alpha", "Zeta", "beta", "alpha"]
+    t = CTable(Row, new_data={"c": values, "x": list(range(len(values)))})
+
+    live = np.arange(len(values))
+    keys = t._build_lex_keys(["c"], [True], live, len(values))
+    assert keys[0].dtype == np.int32
+
+    # Ranks must order exactly as Python orders the decoded strings.
+    assert list(t.sort_by("c")["c"][:]) == sorted(values)
+    assert list(t.sort_by("c", ascending=False)["c"][:]) == sorted(values, reverse=True)
+
+
+def test_sort_by_dictionary_nulls_and_multiple_keys():
+    """Nulls sort last in both directions, and rank keys compose with others."""
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary(nullable=True))
+        x: int = blosc2.field(blosc2.int64())
+
+    values = ["b", None, "a", None, "b"]
+    t = CTable(Row, new_data={"c": values, "x": [0, 1, 2, 3, 4]})
+
+    assert list(t.sort_by("c")["c"][:]) == ["a", "b", "b", None, None]
+    assert list(t.sort_by("c", ascending=False)["c"][:]) == ["b", "b", "a", None, None]
+    # Secondary key breaks the "b" tie; nulls still trail.
+    assert list(t.sort_by(["c", "x"], [True, False])["x"][:]) == [2, 4, 0, 3, 1]
+
+
+def test_sort_by_dictionary_view_and_small_copy_agree():
+    """The filtered small-copy path builds its keys the same way sort_by does."""
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary(nullable=True))
+        x: int = blosc2.field(blosc2.int64())
+
+    values = ["b", None, "a", "c", "b", None, "a"]
+    t = CTable(Row, new_data={"c": values, "x": list(range(len(values)))})
+    filtered = t[t.x > 1]  # small enough to take _sorted_small_copy_from_live_positions
+    assert list(filtered.sort_by("c")["c"][:]) == ["a", "a", "b", "c", None]
+    assert list(filtered.sort_by("c", ascending=False)["c"][:]) == ["c", "b", "a", "a", None]

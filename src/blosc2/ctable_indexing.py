@@ -58,6 +58,22 @@ class _FakeSchunk:
         self.vlmeta = _FakeVlMeta()
 
 
+def _dict_code_to_rank(dictionary) -> np.ndarray:
+    """``code -> alphabetical rank`` lookup for a dictionary column.
+
+    Sorting by rank is sorting by decoded value, which is what lets an int32
+    array stand in for the strings — in the FULL index (:class:`_DictRankWrapper`)
+    and in ``CTable._build_lex_keys``.  The reserved null code is *not* a
+    dictionary entry, so callers assign nulls a rank of their own (``len``,
+    the largest, so nulls sort last).
+    """
+    n_entries = len(dictionary)
+    order = np.argsort(dictionary, kind="stable")
+    code_to_rank = np.empty(n_entries, dtype=np.int32)
+    code_to_rank[order] = np.arange(n_entries, dtype=np.int32)
+    return code_to_rank
+
+
 def _dict_rank_hash(dictionary) -> str:
     """Stable hash of a dictionary's entries (code position + value).
 
@@ -887,9 +903,7 @@ class _CTableIndexingMixin:
             n_live = self._n_rows if self._n_rows is not None else len(self._valid_rows)
             dictionary = list(dict_col.dictionary)
             n_entries = len(dictionary)
-            order = np.argsort(dictionary, kind="stable")
-            code_to_rank = np.empty(n_entries, dtype=np.int32)
-            code_to_rank[order] = np.arange(n_entries, dtype=np.int32)
+            code_to_rank = _dict_code_to_rank(dictionary)
             null_code = dict_col.spec.null_code
             null_rank = np.int32(n_entries)
             # Hash for staleness detection.
