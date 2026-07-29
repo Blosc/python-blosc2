@@ -311,9 +311,7 @@ never rested on these two rows, which is exactly the point the next paragraph ma
    15×/40× equality and range gap"* — proved **too pessimistic**: persisting the sorted vocabulary
    made a literal→rank lookup one `searchsorted`, so `==` went 29.00 → 5.49 ms and `<` 34.57 →
    5.45 ms. It was inherited from the "ordering only" misreading corrected two sections above.
-4. **Make the error messages route.** `add_computed_column` on utf8 currently says only "not
-   supported"; it should name the two-line workaround. That, more than parity, is what removes the
-   confusion you are objecting to.
+4. ~~**Make the error messages route.**~~ — **done**, `8e3868ba`. See ¹⁰.
 5. **Drop G2/G3/G5**, or park them behind a concrete user request. G2 in particular buys a
    `StringDType`-in-schema serialization hazard for a surface the conversion pair already covers.
 
@@ -545,3 +543,61 @@ Also worth recording: `_summary_minmax_source` excludes utf8 via the `is_varlen_
 a `SUMMARY` index on a utf8 column writes block extrema nothing will ever read. That is now moot —
 the kind is refused outright — but if utf8 `min()`/`max()` is ever wanted, the extrema are
 well-defined and the exclusion is the only thing in the way.
+
+---
+
+## ¹⁰ The compute-side error messages — what shipped
+
+`8e3868ba`. Item 4 turned out to be two jobs, not one: most paths raised something clear but
+unhelpful, two raised something *un*clear, and one did not raise at all.
+
+Every refusal now names the column and prints the recipe, echoing the user's own expression:
+
+```
+Column 'name' is a variable-length utf8 column; string expressions that reference one
+are not supported here.
+utf8 stores and filters; fixed-width computes. Convert, compute, write back:
+    fixed = blosc2.from_utf8(t['name'])
+    res = blosc2.lazyexpr('upper(name)', {'name': fixed}).compute()[:]
+    t.add_column('out', blosc2.utf8(), values=blosc2.to_utf8(res))   # or t['name'].assign(res)
+See 'Computing strings on a utf8 column' in the CTable reference docs.
+```
+
+The full inventory, probed rather than assumed:
+
+| path | before | now |
+|---|---|---|
+| `add_computed_column("upper(c)")` | NotImpl, no route | routes |
+| `assign(new="upper(c)")` | NotImpl, no route | routes |
+| `add_generated_column(values="upper(c)")` | NotImpl, no route | routes |
+| `add_computed_column(kernel, inputs=["c"])` | **accepted, then broke the table** | refused at registration |
+| `t.apply(kernel)` | NumPy `DTypePromotionError` | routes, names the column |
+| `lazyudf(kernel, (t["c"],))` | `ValueError: malformed node … StringDType()` | routes, names the column |
+| `lazyudf(kernel, (utf8_array,))` | same | routes (no `.assign` line — no table) |
+| `lazyexpr(expr, {"a": utf8_array})` | works (span driver, ²) | unchanged |
+
+Three things worth keeping:
+
+- **The `inputs=` route was a table-breaker, not just a bad message.** `add_computed_column(name,
+  kernel, inputs=["utf8_col"])` registered fine; afterwards every read of that column *and*
+  `str(table)` raised `ValueError: malformed node or string`, so the table could not even be
+  displayed. The guard is now on the kernel's dependencies and fires at registration, while the
+  table is still untouched.
+- **It is the utf8 *operand* that cannot work, not the string output.** A kernel returning a bool
+  (`name > "b"`) fails identically — the operand is widened to a `SimpleProxy` and the output
+  container is allocated from a `StringDType` the NDArray dtype round-trip cannot parse. So the
+  guard is on inputs, and the docs say so; an earlier draft of this document implied the output
+  type was the problem.
+- **`lazyudf()` needed the guard twice.** The `DTypePromotionError` fires in the `lazyudf()`
+  function's dtype inference, before `LazyUDF.__init__` runs, so guarding the constructor alone
+  left `t.apply()` untouched. Both now check; `apply` also guards at the CTable level, because
+  `lazyudf` only ever sees the container and cannot say *which* column.
+
+Each printed recipe was run verbatim before the message shipped.
+
+Also fixed here: the `.. _Utf8Compute:` anchor added in `5b31abe4` collided with the
+`[#utf8compute]` footnote label — docutils normalizes both to the same target name, which cost the
+footnote its reference. Renamed to `ComputingUtf8Strings`.
+
+With this, items 1–4 of the priority list are done and only item 5 (drop G2/G3/G5, a decision
+rather than work) remains.
