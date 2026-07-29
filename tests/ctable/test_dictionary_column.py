@@ -600,3 +600,89 @@ def test_dictionary_column_comparisons_are_elementwise():
     np.testing.assert_array_equal((col == "absent")[:3], [False, False, False])
     # Defining __eq__ must not have made the container unhashable.
     assert isinstance(hash(col), int)
+
+
+def test_dictionary_ne_predicate_matches_live_rows():
+    """``col != value`` must negate the value test, not the live-row mask.
+
+    Negating afterwards turned every dead capacity slot True, which then failed
+    with an IndexError when used to select rows.
+    """
+    import numpy as np
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+
+    values = ["a1", "b2", "c3"] * 13  # 39 live rows in a padded slot array
+    t = CTable(Row)
+    t.extend({"c": values}, validate=False)
+    t._flush_varlen_columns()
+
+    assert sorted(t[t["c"] != "a1"]["c"][:]) == sorted(v for v in values if v != "a1")
+    assert len(t[t["c"] == "a1"]["c"][:]) == 13
+    # A value no row carries: nothing matches, everything differs.
+    assert len(t[t["c"] == "absent"]["c"][:]) == 0
+    assert len(t[t["c"] != "absent"]["c"][:]) == len(values)
+    assert np.asarray((t["c"] != "a1")[:]).sum() == 26
+
+
+def test_dictionary_index_answers_equality(tmp_path):
+    """With a rank index, ``col == value`` is a sidecar lookup, not a codes scan."""
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+
+    values = ["pear", "apple", "cherry", "apple", "banana"]
+    results = {}
+    for tag in ("scan", "index"):
+        t = CTable(Row, urlpath=str(tmp_path / f"{tag}.b2t"), mode="w")
+        t.extend({"c": values}, validate=False)
+        t._flush_varlen_columns()
+        if tag == "index":
+            t.create_index("c", kind="full")
+            assert t["c"]._dictionary_index_mask("apple") is not None
+            # A value absent from the dictionary still answers, matching nothing.
+            assert not t["c"]._dictionary_index_mask("absent").any()
+        results[tag] = {
+            probe: (
+                sorted(t[t["c"] == probe]["c"][:]),
+                sorted(t[t["c"] != probe]["c"][:]),
+            )
+            for probe in ("apple", "pear", "absent")
+        }
+        del t
+
+    assert results["index"] == results["scan"]
+    assert results["scan"]["apple"][0] == ["apple", "apple"]
+
+
+def test_dict_rank_index_staleness_uses_the_value_epoch(tmp_path):
+    """The staleness check must not re-hash the whole dictionary per query."""
+    from blosc2.ctable_indexing import _dict_rank_hash
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+
+    t = CTable(Row, urlpath=str(tmp_path / "t.b2t"), mode="w")
+    t.extend({"c": [f"v{i % 50}" for i in range(500)]}, validate=False)
+    t._flush_varlen_columns()
+    t.create_index("c", kind="full")
+    meta = t._get_index_catalog()["c"]["full"]["dict_rank"]
+
+    calls = 0
+    import blosc2.ctable_indexing as ci
+
+    def counting_hash(dictionary):
+        nonlocal calls
+        calls += 1
+        return _dict_rank_hash(dictionary)
+
+    ci._dict_rank_hash = counting_hash
+    try:
+        assert not t._dict_rank_index_stale("c", meta)
+    finally:
+        ci._dict_rank_hash = _dict_rank_hash
+    assert calls == 0, "value epoch was unchanged, so no hash should have been needed"

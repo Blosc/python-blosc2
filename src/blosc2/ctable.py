@@ -541,6 +541,33 @@ class ColumnViewIndexer:
 # ---------------------------------------------------------------------------
 
 
+def _rank_index_row_lookup(values_path: str, positions_path: str, table, null_rank: int):
+    """Build ``rows_for_ranks(lo, hi)`` over a rank index's sorted sidecars.
+
+    Shared by the utf8 and dictionary rank indexes, which differ only in how a
+    literal becomes a rank.  Returns the physical rows whose rank lies in
+    ``[lo, hi)``; ``hi is None`` means "up to but excluding the nulls", which
+    carry the largest rank because a null satisfies no comparison.
+    """
+    from blosc2.indexing import _open_sidecar_file
+
+    vnd = _open_sidecar_file(values_path)
+    pnd = _open_sidecar_file(positions_path)
+
+    def rows_for_ranks(rank_lo, rank_hi) -> np.ndarray:
+        start = table._sidecar_bisect(vnd, rank_lo, "left")
+        stop = (
+            table._sidecar_bisect(vnd, null_rank, "left")
+            if rank_hi is None
+            else table._sidecar_bisect(vnd, rank_hi - 1, "right")
+        )
+        if stop <= start:
+            return np.empty(0, dtype=np.int64)
+        return np.asarray(pnd[start:stop], dtype=np.int64)
+
+    return rows_for_ranks
+
+
 def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
     """Translate a logical (valid-row) index into a physical array index.
 
@@ -2015,10 +2042,7 @@ class Column:
 
     def __ne__(self, other):
         if self.is_dictionary:
-            result = self._dictionary_eq(other)
-            if isinstance(result, np.ndarray):
-                return ~result
-            return ~np.asarray(result, dtype=bool)
+            return self._dictionary_eq(other, negate=True)
         if self.is_utf8:
             return self._utf8_compare(np.not_equal, other)
         self._ensure_comparable()
@@ -2187,28 +2211,9 @@ class Column:
         hit = lo < len(vocab) and vocab[lo] == value
         bounds = self._UTF8_RANK_PREDICATE[numpy_op.__name__](lo, hit)
 
-        from blosc2.indexing import _open_sidecar_file
-
-        vnd = _open_sidecar_file(values_path)
-        pnd = _open_sidecar_file(positions_path)
         null_rank = meta["null_rank"]
         n_phys = len(table._valid_rows)
-
-        def rows_for_ranks(rank_lo, rank_hi) -> np.ndarray:
-            """Physical rows whose rank is in ``[rank_lo, rank_hi)``.
-
-            ``rank_hi is None`` means "up to but excluding the nulls", which
-            carry the largest rank — a null satisfies no comparison.
-            """
-            start = table._sidecar_bisect(vnd, rank_lo, "left")
-            stop = (
-                table._sidecar_bisect(vnd, null_rank, "left")
-                if rank_hi is None
-                else table._sidecar_bisect(vnd, rank_hi - 1, "right")
-            )
-            if stop <= start:
-                return np.empty(0, dtype=np.int64)
-            return np.asarray(pnd[start:stop], dtype=np.int64)
+        rows_for_ranks = _rank_index_row_lookup(values_path, positions_path, table, null_rank)
 
         mask = np.zeros(n_phys, dtype=bool)
         if numpy_op is np.not_equal:
@@ -2227,7 +2232,47 @@ class Column:
         """Scalar comparison as a live-row-intersected boolean NDArray."""
         return blosc2.asarray(self._utf8_scalar_mask(numpy_op, value)) & self._lazy_valid_rows()
 
-    def _dictionary_eq(self, other):
+    def _dictionary_index_mask(self, value: str) -> np.ndarray | None:
+        """Answer ``column == value`` from the dict-rank index, or ``None``.
+
+        The same lookup the utf8 rank index does, minus the persistence: a
+        dictionary already holds its own vocabulary in memory, so the literal's
+        rank is a ``searchsorted`` over the sorted dictionary.  Returns ``None``
+        whenever the index cannot answer, and the caller falls back to the
+        codes comparison.
+        """
+        table = self._table
+        descriptor = table._get_index_catalog().get(self._col_name)
+        if not descriptor or descriptor.get("kind") != "full" or descriptor.get("stale", False):
+            return None
+        full = descriptor.get("full") or {}
+        meta = full.get("dict_rank")
+        if meta is None or table._dict_rank_index_stale(self._col_name, meta):
+            return None
+        values_path, positions_path = full.get("values_path"), full.get("positions_path")
+        if positions_path is None or values_path is None:  # in-memory sidecars
+            return None
+
+        # Ranks were assigned by argsort over the dictionary, so the rank of a
+        # literal is its position in the sorted dictionary.
+        dc = self._raw_col
+        cache = table.__dict__.setdefault("_dict_vocab_cache", {})
+        key = (self._col_name, meta.get("dict_hash"))
+        sorted_vocab = cache.get(key)
+        if sorted_vocab is None:
+            cache.clear()
+            sorted_vocab = np.sort(np.asarray(list(dc.dictionary), dtype=np.str_))
+            cache[key] = sorted_vocab
+        lo = int(np.searchsorted(sorted_vocab, value, side="left"))
+        if lo >= len(sorted_vocab) or sorted_vocab[lo] != value:
+            return np.zeros(len(table._valid_rows), dtype=bool)
+
+        rows_for_ranks = _rank_index_row_lookup(values_path, positions_path, table, meta["null_rank"])
+        mask = np.zeros(len(table._valid_rows), dtype=bool)
+        mask[rows_for_ranks(lo, lo + 1)] = True
+        return mask
+
+    def _dictionary_eq(self, other, *, negate: bool = False):
         """Return a physical-slot boolean predicate for dictionary equality.
 
         Regular fixed-width columns build predicates against their raw physical
@@ -2235,25 +2280,37 @@ class Column:
         need to use the same coordinate system so they can be combined with
         regular predicates before aggregate/view code intersects them with
         ``_valid_rows``.
+
+        *negate* inverts the value test *before* the live-row intersection, so
+        ``!=`` stays a same-shaped predicate over live rows.  Negating the
+        returned value instead would turn every dead slot True.
         """
+        n_phys = len(self._table._valid_rows)
         dc = self._raw_col  # DictionaryColumn
         spec = self._table._schema.columns_by_name[self._col_name].spec
+        valid = self._lazy_valid_rows()
         if other is None:
             target_code = spec.null_code
         elif isinstance(other, str):
+            indexed = self._dictionary_index_mask(other)
+            if indexed is not None:
+                return blosc2.asarray(~indexed if negate else indexed) & valid
             try:
                 target_code = dc.value_to_code(other)
             except KeyError:
-                return blosc2.zeros(len(self._table._valid_rows), dtype=np.bool_)
+                # No row carries this value: nothing matches, everything differs.
+                if negate:
+                    return blosc2.ones(n_phys, dtype=np.bool_) & valid
+                return blosc2.zeros(n_phys, dtype=np.bool_)
         else:
             raise TypeError(
                 f"Dictionary column {self._col_name!r} can only be compared with str or None, "
                 f"got {type(other).__name__!r}."
             )
-        pred = dc.codes == np.int32(target_code)
-        valid = self._lazy_valid_rows()
-        if len(dc.codes) != len(self._table._valid_rows):
-            physical = blosc2.zeros(len(self._table._valid_rows), dtype=np.bool_)
+        code = np.int32(target_code)
+        pred = dc.codes != code if negate else dc.codes == code
+        if len(dc.codes) != n_phys:
+            physical = blosc2.zeros(n_phys, dtype=np.bool_)
             physical[: len(dc.codes)] = pred
             pred = physical
         return pred & valid
@@ -4159,9 +4216,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         from blosc2.ctable_indexing import _dict_rank_hash
 
-        col = self._root_table._cols.get(name)
+        root = self._root_table
+        col = root._cols.get(name)
         if col is None:
             return True
+        # Hashing the whole dictionary costs more than the scan this check is
+        # meant to let us skip (24 ms for 20k entries), so settle it from the
+        # value epoch first: unchanged epoch means nothing has been written
+        # since the index was built, so the ranks cannot have moved.
+        built_epoch = (root._get_index_catalog().get(name) or {}).get("built_value_epoch")
+        if built_epoch is not None and root._storage.get_epoch_counters()[0] == built_epoch:
+            return False
         dictionary = list(col.dictionary)
         if len(dictionary) != dict_rank_meta.get("dict_len"):
             return True
@@ -12724,6 +12789,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             def eq_repl(match: re.Match, _dc=dc, _name=name) -> str:
                 value = ast.literal_eval(match.group(2))
+                # Deliberately *not* served from the rank index, unlike the
+                # operator form: rewriting to a code comparison keeps this a
+                # single fused numeric expression, and substituting a
+                # precomputed mask instead measured consistently slower
+                # (22.9 ms -> 28.7 ms at 1M rows) even though the mask itself
+                # costs only 4.8 ms.  Accelerating this form needs the planner
+                # to consume index positions, not a mask.
                 try:
                     code = int(_dc.value_to_code(value))
                 except KeyError:
