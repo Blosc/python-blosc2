@@ -1989,3 +1989,116 @@ def test_ctable_utf8_column_assign_persists(tmp_path):
     t.close()
     t2 = CTable.open(path)
     assert list(t2["name"][:]) == ["hello", "wörld"]
+
+
+# ---------------------------------------------------------------------------
+# Compute-side refusals: they must name the column and route to the conversion
+# ---------------------------------------------------------------------------
+
+
+@blosc2.dsl_kernel
+def _shout(name):
+    return name.upper()
+
+
+def _assert_routes(message, source):
+    """Every utf8 compute refusal must hand back a usable recipe."""
+    assert "blosc2.from_utf8(" in message
+    assert "blosc2.to_utf8(" in message
+    assert source in message
+    assert "Computing strings on a utf8 column" in message
+
+
+def test_utf8_computed_column_expression_names_the_workaround():
+    t = make_table(["a", "bb"])
+    with pytest.raises(NotImplementedError) as exc:
+        t.add_computed_column("up", "upper(name)")
+    _assert_routes(str(exc.value), "t['name']")
+    assert "upper(name)" in str(exc.value)  # the user's own expression is echoed
+
+
+def test_utf8_assign_expression_names_the_workaround():
+    t = make_table(["a", "bb"])
+    with pytest.raises(NotImplementedError) as exc:
+        t.assign(up="upper(name)")
+    _assert_routes(str(exc.value), "t['name']")
+
+
+def test_utf8_generated_column_expression_names_the_workaround():
+    t = make_table(["a", "bb"])
+    with pytest.raises(NotImplementedError) as exc:
+        t.add_generated_column("g", values="upper(name)")
+    _assert_routes(str(exc.value), "t['name']")
+
+
+def test_utf8_dsl_kernel_column_refused_at_registration():
+    """Regression: it used to register, then break every read *and* str(t)."""
+    t = make_table(["a", "bb"])
+    with pytest.raises(NotImplementedError) as exc:
+        t.add_computed_column("up", _shout, inputs=["name"])
+    _assert_routes(str(exc.value), "t['name']")
+    # The table must be left untouched and usable.
+    assert "up" not in t.col_names
+    assert list(t["name"][:]) == ["a", "bb"]
+    assert "name" in str(t)
+
+
+def test_utf8_dsl_kernel_refused_whatever_the_kernel_returns():
+    """It is the utf8 operand that cannot work, not the string output."""
+
+    @blosc2.dsl_kernel
+    def is_long(name):
+        return name > "b"
+
+    t = make_table(["a", "bb"])
+    with pytest.raises(NotImplementedError, match="cannot be a UDF"):
+        t.add_computed_column("flag", is_long, inputs=["name"])
+
+
+def test_utf8_apply_names_the_column():
+    t = make_table(["a", "bb"])
+    with pytest.raises(NotImplementedError) as exc:
+        t.apply(_shout, columns=["name"])
+    _assert_routes(str(exc.value), "t['name']")
+
+
+def test_utf8_lazyudf_over_a_column_names_the_column():
+    t = make_table(["a", "bb"])
+    with pytest.raises(NotImplementedError) as exc:
+        blosc2.lazyudf(_shout, (t["name"],))
+    _assert_routes(str(exc.value), "t['name']")
+
+
+def test_utf8_lazyudf_over_a_bare_array_routes_too():
+    arr = blosc2.utf8_array(["a", "bb"])
+    with pytest.raises(NotImplementedError) as exc:
+        blosc2.lazyudf(_shout, (arr,))
+    msg = str(exc.value)
+    assert "blosc2.from_utf8(arr)" in msg
+    assert "blosc2.to_utf8(" in msg
+    # No table to assign into, so the message must not suggest one.
+    assert ".assign(" not in msg
+
+
+def test_utf8_refusal_recipe_actually_works():
+    """The recipe the error prints must run as printed."""
+    t = make_table(["a", "bb"])
+    fixed = blosc2.from_utf8(t["name"])
+    res = blosc2.lazyexpr("upper(name)", {"name": fixed}).compute()[:]
+    t.add_column("out", blosc2.utf8(), values=blosc2.to_utf8(res))
+    assert list(t["out"][:]) == ["A", "BB"]
+
+    res = blosc2.lazyudf(_shout, (fixed,)).compute()[:]
+    assert list(blosc2.to_utf8(res)[:]) == ["A", "BB"]
+
+
+def test_non_utf8_dsl_kernel_column_still_works():
+    """The guard must not catch ordinary columns."""
+
+    @blosc2.dsl_kernel
+    def double(x):
+        return x * 2
+
+    t = make_table(["a", "bb"])
+    t.add_computed_column("dbl", double, inputs=["x"])
+    np.testing.assert_array_equal(t["dbl"][:], [0, 2])

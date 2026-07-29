@@ -75,6 +75,29 @@ UTF8_EXPR_SPAN = 65536
 UTF8_EXPR_BUDGET = 64 << 20
 
 
+def utf8_compute_error(lead: str, *, source: str, compute: str, assignable: bool = True) -> str:
+    """Message for every "utf8 does not compute here" refusal.
+
+    The rule (utf8 stores and filters; fixed-width computes) is deliberate, so
+    the error's job is to route rather than merely refuse: *lead* states what
+    was rejected, and the shared tail spells out the three-line conversion,
+    parameterized on how the caller got here.
+    """
+    write_back = (
+        f"    t.add_column('out', blosc2.utf8(), values=blosc2.to_utf8(res))   # or {source}.assign(res)"
+        if assignable
+        else "    out = blosc2.to_utf8(res)"
+    )
+    return (
+        f"{lead}\n"
+        "utf8 stores and filters; fixed-width computes. Convert, compute, write back:\n"
+        f"    fixed = blosc2.from_utf8({source})\n"
+        f"    res = {compute}\n"
+        f"{write_back}\n"
+        "See 'Computing strings on a utf8 column' in the CTable reference docs."
+    )
+
+
 def utf8_span_dtype(span: np.ndarray) -> np.dtype:
     """Fixed-width ``U`` dtype wide enough for every value in *span*.
 

@@ -1088,14 +1088,14 @@ CTable offers four ways to store strings.  As a quick decision path:
 .. [#utf8compute] Expressions that *return* strings — concatenation,
    ``upper``, ``replace``, DSL kernels — run on fixed-width arrays, so a utf8
    column is converted first and the result written back.  See
-   :ref:`Utf8Compute` below.
+   :ref:`ComputingUtf8Strings` below.
 
 Note that a plain ``str`` annotation without an explicit :func:`field` spec
 still maps to fixed-width ``string(max_length=32)`` for backward
 compatibility; opt in to variable-length storage with
 ``blosc2.field(blosc2.utf8())``.
 
-.. _Utf8Compute:
+.. _ComputingUtf8Strings:
 
 Computing strings on a utf8 column
 ----------------------------------
@@ -1127,13 +1127,20 @@ To overwrite an existing column rather than add one, use
 Both write paths take one value per **live** row, so rows removed by
 :meth:`CTable.delete` are skipped.
 
-:meth:`CTable.add_computed_column` and :meth:`CTable.assign` do **not** accept
-string-returning expressions over utf8 columns; they raise
-``NotImplementedError`` rather than convert behind your back, because the
-conversion's cost — a decode plus a widening copy — is worth being visible.
-Passing a :func:`blosc2.dsl_kernel` that returns strings over a utf8 column is
-not supported either, and currently fails with a NumPy dtype-promotion error
-rather than a clear one.
+The compute surface refuses a utf8 column rather than converting behind your
+back, because the conversion's cost — a decode plus a widening copy — is worth
+being visible.  Every one of those refusals raises ``NotImplementedError``
+naming the column and printing the recipe above:
+
+* :meth:`CTable.add_computed_column`, :meth:`CTable.add_generated_column` and
+  :meth:`CTable.assign` with a string expression that references a utf8 column;
+* the same three with a :func:`blosc2.dsl_kernel`, plus :meth:`CTable.apply`
+  and :func:`blosc2.lazyudf` — note it is the utf8 **operand** that cannot
+  work, whatever the kernel returns, so a kernel producing a number or a
+  boolean is refused just the same.
+
+Only :func:`blosc2.lazyexpr` accepts a utf8 operand directly: it routes to the
+span driver and returns a :class:`Utf8Array`, evaluating span by span.
 
 Array, encoded, and compound specs
 ----------------------------------

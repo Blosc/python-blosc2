@@ -131,9 +131,22 @@ XXX version-specific blurb XXX
   the cost is paid in blocks — a mask selecting 21% of buckets could touch 96%
   of them. Affected every indexable dtype; the relative penalty was worst on
   numerics (`float64` 6.3 ms -> 77.9 ms before, 6.6 ms after).
+- **The utf8 compute refusals now route instead of merely refusing.** Every
+  path that cannot take a utf8 column — `add_computed_column`,
+  `add_generated_column`, `assign`, `apply`, `lazyudf`, with a string
+  expression or a DSL kernel — raises `NotImplementedError` naming the column
+  and printing the three-line conversion, echoing the user's own expression
+  where there is one. Two of those paths previously failed with a raw NumPy
+  `DTypePromotionError` and a `ValueError: malformed node or string ...
+  StringDType()`, neither of which named the column or the fix.
 
 ### Bug fixes
 
+- **A DSL kernel over a utf8 column registered as a computed column, then
+  broke the table.** `add_computed_column(name, kernel, inputs=["utf8_col"])`
+  was accepted, after which every read of that column *and* `str(table)`
+  raised `ValueError: malformed node or string`. The kernel is now refused at
+  registration, where the table is still untouched.
 - **`min()`/`max()` read from a column index returned the wrong value.** Two
   independent causes, both affecting every indexable dtype. The block summaries
   cover the column's *physical* extent, so the capacity padding (zeros, empty

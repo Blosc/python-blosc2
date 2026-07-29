@@ -4718,10 +4718,41 @@ def _dsl_kernel_string_dtype(func, inputs):
     return np.dtype(out)
 
 
+def _guard_utf8_udf_inputs(inputs) -> None:
+    """Reject variable-length utf8 operands in a UDF, naming the conversion."""
+    from blosc2._utf8_array import Utf8Array, utf8_compute_error
+
+    for operand in inputs or ():
+        raw = getattr(operand, "raw", operand)  # a CTable Column exposes its container here
+        if not isinstance(raw, Utf8Array):
+            continue
+        name = getattr(operand, "_col_name", None)
+        source = f"t[{name!r}]" if name else "arr"
+        raise NotImplementedError(
+            utf8_compute_error(
+                (
+                    f"Column {name!r} is a variable-length utf8 column and cannot be a UDF operand."
+                    if name
+                    else "A variable-length Utf8Array cannot be a UDF operand."
+                ),
+                source=source,
+                compute="blosc2.lazyudf(kernel, (fixed,)).compute()[:]",
+                assignable=name is not None,
+            )
+        )
+
+
 class LazyUDF(LazyArray):
     def __init__(
         self, func, inputs, dtype, shape=None, chunked_eval=True, jit=None, jit_backend=None, **kwargs
     ):
+        # A utf8 operand only duck-types as an array: convert_inputs() would wrap
+        # it in a SimpleProxy widened to a fixed <Un, and the output container is
+        # then allocated from a StringDType the NDArray dtype round-trip cannot
+        # parse -- an obscure "malformed node" ValueError, on every evaluation,
+        # whatever the kernel returns.  Refuse it here, where the operand is
+        # still recognizable, and name the conversion instead.
+        _guard_utf8_udf_inputs(inputs)
         # After this, all the inputs should be np.ndarray or NDArray objects
         self.inputs = convert_inputs(inputs)
         if isinstance(func, DSLKernel):
@@ -5215,6 +5246,9 @@ def lazyudf(
     if isinstance(func, DSLKernel) and func.dsl_error is not None:
         udf_name = getattr(func.func, "__name__", func.__name__)
         raise DSLSyntaxError(f"Invalid DSL kernel '{udf_name}'.\n{func.dsl_error}") from None
+    # Ahead of the dtype inference below, which a StringDType operand fails with
+    # a bare NumPy promotion error naming neither the column nor the way out.
+    _guard_utf8_udf_inputs(inputs)
     if dtype is None:
         if isinstance(func, DSLKernel):
             dep_dtypes = [arr.dtype for arr in (inputs or []) if hasattr(arr, "dtype")]

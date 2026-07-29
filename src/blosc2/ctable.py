@@ -10203,6 +10203,31 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._validate_transformer_dep(d)
         return kernel, col_deps
 
+    def _guard_utf8_kernel_deps(self, col_deps) -> None:
+        """Refuse a UDF/DSL kernel that reads a utf8 column, naming the column.
+
+        :func:`blosc2.lazyudf` refuses the operand on its own, but only ever
+        sees the container, so it cannot say *which* column.  Called from the
+        column-registration paths as well, where the kernel would otherwise be
+        accepted and then fail on every read -- and on ``str(table)`` -- when
+        the output container is allocated from a ``StringDType`` the NDArray
+        dtype round-trip cannot parse.  It is the utf8 *operand* that does
+        this, whatever the kernel returns.
+        """
+        from blosc2._utf8_array import utf8_compute_error
+
+        for dep in col_deps:
+            col = self._schema.columns_by_name.get(dep)
+            if col is not None and self._is_utf8_column(col):
+                raise NotImplementedError(
+                    utf8_compute_error(
+                        f"Column {dep!r} is a variable-length utf8 column and cannot be a UDF "
+                        "or DSL kernel operand.",
+                        source=f"t[{dep!r}]",
+                        compute="blosc2.lazyudf(kernel, (fixed,)).compute()[:]",
+                    )
+                )
+
     def _normalize_transformer(self, expr, inputs=None) -> dict:
         """Resolve *expr* into a transformer descriptor.
 
@@ -10218,6 +10243,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if isinstance(expr, blosc2.DSLKernel):
             kernel, col_deps = self._resolve_dsl_kernel(expr, inputs)
+            self._guard_utf8_kernel_deps(col_deps)
             return {"kind": "dsl", "kernel": kernel, "col_deps": col_deps}
         # Resolve a callable once (a lambda may return a LazyExpr or a LazyUDF).
         obj = expr(self._cols) if (callable(expr) and not isinstance(expr, blosc2.LazyExpr)) else expr
@@ -10229,10 +10255,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             kernel = obj.func
             if kernel.dsl_error is not None:
                 raise blosc2.DSLSyntaxError(f"Invalid DSL kernel: {kernel.dsl_error}")
+            col_deps = self._dsl_deps_from_lazyudf(obj)
+            self._guard_utf8_kernel_deps(col_deps)
             return {
                 "kind": "dsl",
                 "kernel": kernel,
-                "col_deps": self._dsl_deps_from_lazyudf(obj),
+                "col_deps": col_deps,
                 "jit_backend": obj.kwargs.get("jit_backend"),
             }
         lazy, col_deps = self._normalize_expression_transformer(obj)
@@ -10471,6 +10499,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # inputs add_computed_column()/add_generated_column() pass to
         # lazyudf() for DSL/UDF columns -- so the live-row mask is applied
         # once, here, to the result rather than to every operand.
+        # lazyudf() refuses a utf8 operand too, but only sees the container, so
+        # settle it here where the column name is still known.
+        self._guard_utf8_kernel_deps(names)
         operands = tuple(self._cols[self._logical_to_physical_name(name)] for name in names)
         result = blosc2.lazyudf(func, operands, dtype=dtype, jit=jit).compute()
         return result[self._valid_rows]
@@ -13035,6 +13066,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return re.search(rf"(?<![\w.]){re.escape(name)}(?![\w.])", expr) is not None
 
     def _guard_scalar_expression(self, expr: str, *, allow_utf8: bool = False) -> None:
+        from blosc2._utf8_array import utf8_compute_error
+
         for name, meta in self._root_table._materialized_cols.items():
             if meta.get("stale", False) and self._expression_references_name(expr, name):
                 raise ValueError(
@@ -13052,8 +13085,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if allow_utf8:
                     continue
                 raise NotImplementedError(
-                    f"Column {col.name!r} is a variable-length utf8 column; "
-                    "string expressions on utf8 columns are not supported here."
+                    utf8_compute_error(
+                        f"Column {col.name!r} is a variable-length utf8 column; string expressions "
+                        "that reference one are not supported here.",
+                        source=f"t[{col.name!r}]",
+                        compute=f"blosc2.lazyexpr({expr!r}, {{{col.name!r}: fixed}}).compute()[:]",
+                    )
                 )
             if self._is_varlen_scalar_column(col) and self._expression_references_name(expr, col.name):
                 raise NotImplementedError(
