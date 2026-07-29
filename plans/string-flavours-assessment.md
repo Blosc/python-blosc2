@@ -26,7 +26,7 @@ because two of the conclusions below originally rested on it.
 | `sum(where=…)` | ✓ | ✓ | ✓ | ✗ | ✗ |
 | `sort_by` | ✓ | ✓ | ✓ | ✓ | ✗ TypeError |
 | `group_by` | ✓ | ✓ | ✓ | ✓ | ✗ |
-| `create_index` | ✓ all 5 kinds | ✓ all 5 kinds | **✗ NotImpl (all kinds)** | ✓ rank, ordering only | ✗ |
+| `create_index` | ✓ all 5 kinds | ✓ all 5 kinds | ✓ rank, ordering only ⁷ | ✓ rank, ordering only | ✗ |
 | **Compute (string-returning)** | | | | | |
 | `add_computed_column("'x='+c")` | ✓ | ✓ | **✗ NotImpl** | ✗ | ✗ |
 | `assign(new=…)` | ✓ | ✓ | **✗ NotImpl** | ✗ | ✗ |
@@ -71,8 +71,8 @@ caching the code→value map that `_ensure_cache()` was already building the for
 
 `create_index` is the one place where the flavours are not merely *slower* or *less convenient* than
 each other — they are in different performance classes. All five index kinds
-(`SUMMARY`/`BUCKET`/`PARTIAL`/`FULL`/`OPSI`) build on `string()` and `bytes()`; **all five raise
-`NotImplementedError` on `utf8()`**, from a single guard at `ctable_indexing.py:753`.
+(`SUMMARY`/`BUCKET`/`PARTIAL`/`FULL`/`OPSI`) build on `string()`, `bytes()` and — since `b1bbc54e` —
+`utf8()`. What follows was written when utf8 had no index at all; the ⁷ note records what changed.
 
 ### What a FULL index buys on `<U` — 2 M rows, cardinality 20 k, `<U15`
 
@@ -196,18 +196,32 @@ assumed:
 
 - ✓ `sorted_slice` / `sort_by` top-*k*. Expect utf8 to land near dictionary's 51.3 ms — call it
   **~8× faster than utf8's current 427 ms**, still ~6× behind `<U`+FULL's 8.2 ms.
-- ✗ equality and range filtering — dictionary's rank index does not accelerate those (25 ms indexed
-  vs 25 ms unindexed at 2 M rows), so utf8's wouldn't either without more work. **utf8 would stay
-  15×/40× behind an indexed `<U` on point and range lookups.**
+- ✓ **equality and range filtering too** — this corrects an earlier reading of this document.
+  Dictionary's rank index shows no equality speedup (27.2 ms indexed vs 24.9 ms unindexed at 2 M
+  rows), but instrumenting the planner shows **the index is never consulted**: a dictionary `==` is
+  rewritten into a code comparison and evaluated directly, bypassing `plan_query` entirely. That is
+  a wiring gap, not a limit of rank indexes. Ranks are order-preserving, so `col == 'lit'` becomes
+  `rank == r` with `r` a binary search of the literal in the sorted vocabulary — **0.59 ms** once
+  per query for a 20 k vocabulary, against the **34.8 ms** raw-byte scan (`equal_mask_span`) that
+  is where utf8's 43 ms equality actually goes. The same translation serves `<`, `>` and ranges,
+  because rank order *is* lexicographic order.
 - ✗ `startswith` — nothing indexes prefixes on any flavour.
 - ⚠ staleness: ranks shift when new values arrive. Dictionary handles this with a stored
   `dict_hash` (`_dict_rank_hash`) and falls back to lexsort when stale; utf8 would need the same,
   and a utf8 column is much more likely to gain new values than a category column is — which means
   the fallback would fire often, and the fallback is a full lexsort.
 
-Rough cost: **2–3 days**, most of it staleness and the persistent-sidecar round trip, not the rank
-computation. Comparable to G2 in the parity plan, and it buys something G2 does not — but it is a
-partial fix, not parity with an indexed `<U` column.
+**Ordering shipped in `b1bbc54e`** (see ⁷); equality and ranges did not.
+
+Realistic remaining target: `<U`+FULL territory, **~2-4 ms against today's 43 ms** for equality and
+ranges — not the "ordering only" partial fix an earlier draft of this section claimed.
+
+Rough cost: more than the 2-3 days first estimated, because the literal→rank translation in the
+planner **does not exist for any flavour** — dictionary has a working rank index and still cannot
+use it for `==`. That is new work rather than reuse, though dictionary inherits the same speedup
+once it exists. Index build is dominated by factorizing: 279 ms per 1 M rows, against 1148 ms for
+`<U`'s FULL build, so the build cost is not the problem. Staleness is: any new value shifts ranks,
+and a utf8 column gains new values far more readily than a category column.
 
 ## Pros and cons
 
@@ -302,3 +316,36 @@ Found while measuring, unrelated to the utf8 decision:
 the physical slot capacity and `CTable` indexes it with live positions. It only misleads because
 these are internal classes reachable through `t._cols`, never a public route. Left alone
 deliberately: changing the length semantics would touch every table-layer caller.
+
+---
+
+## ⁷ utf8 `create_index` — what shipped
+
+`b1bbc54e`. `_utf8_rank_arrays()` factorizes the column and materializes an `int32` alphabetical
+rank per row, which drives the existing numeric index machinery unchanged. Measured at 1 M rows,
+cardinality 20 k, persistent:
+
+| | no index | utf8 + FULL | `<U` + FULL |
+|---|---|---|---|
+| `sorted_slice` top-100 | 458.5 ms | **43.2 ms** | 9.9 ms |
+| `sort_by(view)[:100]` | 424.2 ms | **7.2 ms** | 7.9 ms |
+| index build | — | **277 ms** | 867 ms |
+
+`sort_by` reaches parity with an indexed `<U` column and the index is the cheapest of the three to
+build, because it sorts `int32` ranks rather than `<U` payloads. `sorted_slice` keeps a ~4× gap:
+that is the cost of gathering the result rows out of the offsets/blob, not of the index.
+
+**Equality and ranges are still not accelerated** — `col == 'lit'` is answered by the 34.8 ms
+raw-byte scan, exactly as before. Two things are missing, and dictionary lacks both as well:
+
+1. The sorted vocabulary is not persisted with the index, so a literal cannot be turned into a rank
+   at query time. Re-deriving it means factorizing (272 ms/M rows), which defeats the purpose.
+2. `plan_query` is never consulted for a utf8 or dictionary equality in the first place.
+
+Neither is hard, but they are the *next* piece of work, not part of what shipped.
+
+**Also found here:** NumPy 2.4 does not match a lone `"\x00"` against a `StringDType` array
+(`np.array(["\x00"], dtype=StringDType()) == "\x00"` is `False`), while `"\x00x"` and `"a\x00b"`
+compare correctly. Every null mask in the utf8 paths is such a comparison, so that sentinel would
+silently stop marking anything as null. `blosc2.utf8(null_value="\x00")` now rejects it. The
+default sentinel is `'__BLOSC2_NULL__'`, so no shipped configuration was affected.
