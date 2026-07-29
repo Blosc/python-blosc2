@@ -602,3 +602,61 @@ footnote its reference. Renamed to `ComputingUtf8Strings`.
 
 With this, items 1–4 of the priority list are done and only item 5 (drop G2/G3/G5, a decision
 rather than work) remains.
+
+---
+
+## ¹¹ NumPy `StringDType` convention — what was adopted, and what could not be
+
+`0ed38238`. The question was whether blosc2 should follow NumPy, which builds variable-length text
+through a *dtype* (`np.array(v, dtype=StringDType())`) rather than through a separate constructor
+(`blosc2.utf8_array(v)`). Answer: adopt the **dispatch**, not the dtype.
+
+**Why the dtype itself cannot be adopted.** `StringDType` is not a storage format:
+
+| | |
+|---|---|
+| `memoryview(arr)` | `ValueError: cannot include dtype 'StringDType' in a buffer` |
+| `itemsize` | 16, whatever the content |
+| `np.array(["x"*100], dtype=StringDType()).nbytes` | **16** — the payload is elsewhere |
+| `.tobytes()` | a handle, not the text (≤15-byte strings are inlined; longer ones are pointers) |
+
+blosc2's NDArray compresses *buffers*, so `NDArray(dtype=StringDType())` would persist pointers —
+garbage on reopen, in another process, or on another machine. Arrow reached the same conclusion, and
+`Utf8Array`'s layout **is** Arrow's `large_string`, which is what makes `to_arrow` zero-copy. (The
+`ast.literal_eval` failure in `NDArray.dtype` is a symptom, ~5 lines to fix, and fixing it buys
+nothing.)
+
+**Why the schema layer was left alone.** `blosc2.field()` accepts a spec and never a raw dtype, for
+*every* column type — `field(np.dtype("int32"))` is a `TypeError` too. Specs carry nullability, the
+null sentinel, `ge`/`le`, storage config, `batch_rows`. Making utf8 the one dtype-addressable type
+would have *broken* schema uniformity, not restored it. (Also: the runtime floor is `numpy>=1.26`,
+where `StringDType` does not exist; `Utf8Spec.dtype = None` is deliberate.)
+
+**What shipped.** Constructors dispatch on the target dtype, matching NumPy's fill values exactly:
+
+```python
+blosc2.asarray(np.array(["a", "bb"], dtype=StringDType()))  # -> Utf8Array
+blosc2.zeros(3, dtype=StringDType())  # -> Utf8Array, ['', '', '']
+blosc2.ones(3, dtype=StringDType())  # -> Utf8Array, ['1', '1', '1']
+blosc2.asarray(utf8_source, dtype="<U8")  # -> NDArray, fixed width
+```
+
+Two container gaps closed along the way, both worth more than the dispatch:
+
+- **`Utf8Array` failed the `blosc2.Array` protocol**, and `.shape` was the *only* member it lacked —
+  for a container `CTable` uses throughout. It now has `.shape`/`.ndim`/`.size`.
+- **`np.asarray(utf8_arr)` silently widened** to a fixed-width `<Un`, because there was no
+  `__array__` and NumPy fell back to iterating rows: 1600 bytes for two 200-character values whose
+  payload is 203, and a *different dtype* than `arr[:]` reported for the same object. Same family as
+  the ² and ³ bugs.
+
+**One interaction worth recording.** `SimpleProxy.__init__` tested `hasattr(src, "shape")` to decide
+whether to fall back to `np.asarray` — so adding `.shape` stopped it widening utf8 operands, and a
+`startswith` test failed. That widening is genuinely wanted (the compute engine indexes chunk-wise
+into fixed-width elements; the span driver is the path that avoids it), so it is now explicit rather
+than incidental, and goes through `astype()`, which sizes the result without decoding a row. A
+reminder that `hasattr` probes for capability make silent contracts out of missing attributes.
+
+Deliberately not done: making `Utf8Spec.dtype` return `StringDType()`. It would have to stay lazy
+for NumPy 1.26, `dtype is None` is load-bearing at three sites, and `Column.dtype` already reports
+`StringDType()` — so the win is cosmetic.
