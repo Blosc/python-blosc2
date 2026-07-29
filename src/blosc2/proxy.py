@@ -1073,6 +1073,9 @@ def _jit_dsl_wrapper(kernel: DSLKernel, out, decorator_kwargs: dict):
             return out
 
         if storage_kwargs and any(v is not None for v in storage_kwargs.values()):
+            # Execution-tuning kwargs go along too: compute() names all three,
+            # while lazyudf() above only names jit/jit_backend, so fp_accuracy
+            # would otherwise be dropped on this path.
             return lexpr.compute(**decorator_kwargs)
         return lexpr[()]
 
@@ -1270,8 +1273,11 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
             # If it is a numpy array, return it as is
             if isinstance(retval, np.ndarray):
                 if storage_kwargs and any(v is not None for v in storage_kwargs.values()):
-                    # But if storage kwargs are provided, return a NDArray instead
-                    return blosc2.asarray(retval, **kwargs)
+                    # But if storage kwargs are provided, return a NDArray instead.
+                    # Only storage kwargs: asarray() rejects the execution-tuning
+                    # ones, and there is nothing left to tune -- the function has
+                    # already run.
+                    return blosc2.asarray(retval, **storage_kwargs)
                 return retval
 
             # In some instances, the return value is not a LazyExpr

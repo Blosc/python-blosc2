@@ -12,9 +12,11 @@
 # doc/guides/optimization_tips.md ("Let @blosc2.jit compile control flow
 # instead of tracing it").
 #
-# Return paths are equalized (both calls end in a plain NumPy array): any
-# non-None jit() kwarg flips the return from `retval[()]` to `.compute()`,
-# which would otherwise skew the comparison.
+# Return paths are equalized (both calls end in a plain NumPy array): a storage
+# kwarg (cparams/chunks/urlpath/...) flips the return from `retval[()]` to
+# `.compute()`, i.e. to an NDArray, which would otherwise skew the comparison.
+# Execution-tuning kwargs (jit/jit_backend/fp_accuracy) do not, so `@blosc2.jit`
+# is used bare here.
 
 from __future__ import annotations
 

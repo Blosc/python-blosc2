@@ -1027,6 +1027,22 @@ def me_output_dtype(expression, operands):
         free(variables)
 
 
+cdef inline void _free_me_udata_tables(me_udata* udata, b2nd_array_t** inputs_,
+                                       uint8_t** np_data, int32_t* np_typesizes):
+    """Release the per-input tables and the udata block itself.
+
+    ``_fill_me_udata`` has half a dozen allocation-failure exits; routing them
+    all through here is what keeps the tables from drifting apart, which they
+    already had once -- ``np_data``/``np_typesizes`` arrived later and every
+    exit but the first kept freeing only ``inputs``.  ``free(NULL)`` is a no-op,
+    so no exit needs to know which tables it got as far as allocating.
+    """
+    free(inputs_)
+    free(np_data)
+    free(np_typesizes)
+    free(udata)
+
+
 cdef inline str _me_compile_status_name(int rc):
     if rc == ME_COMPILE_SUCCESS:
         return "ME_COMPILE_SUCCESS"
@@ -4155,10 +4171,7 @@ cdef class NDArray:
             np_data = <uint8_t**> calloc(ninputs, sizeof(uint8_t*))
             np_typesizes = <int32_t*> calloc(ninputs, sizeof(int32_t))
             if np_data == NULL or np_typesizes == NULL:
-                free(inputs_)
-                free(np_data)
-                free(np_typesizes)
-                free(udata)
+                _free_me_udata_tables(udata, inputs_, np_data, np_typesizes)
                 raise MemoryError("Cannot allocate miniexpr raw-input tables")
         for i, operand in enumerate(operands):
             if isinstance(operand, np.ndarray):
@@ -4176,8 +4189,7 @@ cdef class NDArray:
         if ninputs > 0:
             input_chunk_caches = <me_input_cache_s*> calloc(ninputs, sizeof(me_input_cache_s))
             if input_chunk_caches == NULL:
-                free(inputs_)
-                free(udata)
+                _free_me_udata_tables(udata, inputs_, np_data, np_typesizes)
                 raise MemoryError("Cannot allocate miniexpr chunk caches")
             for i in range(ninputs):
                 input_chunk_caches[i].nchunk = -1
@@ -4191,8 +4203,7 @@ cdef class NDArray:
                         if input_chunk_caches[i].ready_lock != NULL:
                             PyThread_free_lock(input_chunk_caches[i].ready_lock)
                     free(input_chunk_caches)
-                    free(inputs_)
-                    free(udata)
+                    _free_me_udata_tables(udata, inputs_, np_data, np_typesizes)
                     raise MemoryError("Cannot allocate miniexpr chunk cache state lock")
                 input_chunk_caches[i].ready_lock = PyThread_allocate_lock()
                 if input_chunk_caches[i].ready_lock == NULL:
@@ -4205,8 +4216,7 @@ cdef class NDArray:
                         if input_chunk_caches[i].ready_lock != NULL:
                             PyThread_free_lock(input_chunk_caches[i].ready_lock)
                     free(input_chunk_caches)
-                    free(inputs_)
-                    free(udata)
+                    _free_me_udata_tables(udata, inputs_, np_data, np_typesizes)
                     raise MemoryError("Cannot allocate miniexpr chunk cache ready lock")
         udata.input_chunk_caches = input_chunk_caches
         eval_params = <me_eval_params*> malloc(sizeof(me_eval_params))
@@ -4217,8 +4227,7 @@ cdef class NDArray:
                 if input_chunk_caches[i].ready_lock != NULL:
                     PyThread_free_lock(input_chunk_caches[i].ready_lock)
             free(input_chunk_caches)
-            free(inputs_)
-            free(udata)
+            _free_me_udata_tables(udata, inputs_, np_data, np_typesizes)
             raise MemoryError("Cannot allocate miniexpr eval params")
         eval_params.disable_simd = False
         eval_params.simd_ulp_mode = ME_SIMD_ULP_3_5 if fp_accuracy == blosc2.FPAccuracy.MEDIUM else ME_SIMD_ULP_1

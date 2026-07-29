@@ -205,3 +205,19 @@ def test_jit_execution_tuning_kwarg_with_storage_kwarg_still_returns_ndarray():
     assert isinstance(res, blosc2.NDArray)
     assert res.schunk.cparams.clevel == 2
     np.testing.assert_allclose(res[:], a * 2.0 + b)
+
+
+def test_jit_numpy_return_with_storage_and_tuning_kwargs():
+    # A traced function whose return is already a NumPy array takes the
+    # asarray() branch, which accepts storage kwargs only -- forwarding the
+    # execution-tuning ones there raised instead of returning an NDArray.
+    @blosc2.jit(jit=False, cparams=blosc2.CParams(clevel=2))
+    def f(a, b):
+        return np.sum(a * 2.0 + b, axis=0)
+
+    a = np.arange(1000, dtype=np.float64).reshape(10, 100)
+    b = np.arange(1000, dtype=np.float64).reshape(10, 100) * 0.5
+    res = f(a, b)
+    assert isinstance(res, blosc2.NDArray)
+    assert res.schunk.cparams.clevel == 2
+    np.testing.assert_allclose(res[:], np.sum(a * 2.0 + b, axis=0))

@@ -166,6 +166,12 @@ XXX version-specific blurb XXX
 
 ### Bug fixes
 
+- **`@blosc2.jit` raised when a storage kwarg and an execution-tuning kwarg
+  were combined** and the decorated function returned a NumPy array —
+  `@blosc2.jit(jit=False, cparams=...)` ended in
+  `blosc2.asarray(retval, jit=False, ...)`, which rejects the tuning kwargs.
+  Only storage kwargs reach `asarray()` now; the function has already run, so
+  there is nothing left to tune.
 - **A DSL kernel over a utf8 column registered as a computed column, then
   broke the table.** `add_computed_column(name, kernel, inputs=["utf8_col"])`
   was accepted, after which every read of that column *and* `str(table)`
