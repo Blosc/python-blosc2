@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import os
+import pathlib
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -109,6 +110,9 @@ def _utf8_rank_arrays(col, n_live: int, null_value: str | None):
     if is_null.any():
         code_to_rank[is_null] = null_rank
 
+    # Rank order == alphabetical order, so this doubles as the lookup table that
+    # turns a query literal into a rank (np.searchsorted) without touching data.
+    sorted_vocab = uniques[order]
     ranks = code_to_rank[codes] if n_entries else np.zeros(n_live, dtype=np.int32)
     # Staleness signals must be O(1) to check: re-deriving the vocabulary would
     # mean factorizing the column again on every query.  Any write already marks
@@ -120,7 +124,28 @@ def _utf8_rank_arrays(col, n_live: int, null_value: str | None):
         "n_rows": int(n_live),
         "nbytes": int(col._bytes_used),
     }
-    return ranks.astype(np.int32, copy=False), meta
+    return ranks.astype(np.int32, copy=False), meta, sorted_vocab
+
+
+def _persist_utf8_vocab(full: dict, meta: dict, sorted_vocab: np.ndarray) -> None:
+    """Store the rank-ordered vocabulary so a query literal can be turned into a rank.
+
+    Written beside the index's own sidecars when the table is persistent, and
+    inlined into the descriptor otherwise — the in-memory index path is for
+    small tables by construction.  Without it a literal→rank lookup would mean
+    factorizing the column again on every query.
+    """
+    if len(sorted_vocab) == 0:
+        meta["vocab"] = []
+        return
+    values_path = full.get("values_path")
+    if values_path is None:  # in-memory index
+        meta["vocab"] = sorted_vocab.tolist()
+        return
+    width = max(len(v) for v in sorted_vocab)
+    vocab_path = str(pathlib.Path(values_path).with_suffix("")) + ".utf8_vocab.b2nd"
+    blosc2.asarray(sorted_vocab.astype(f"<U{width}"), urlpath=vocab_path, mode="w")
+    meta["vocab_path"] = vocab_path
 
 
 class _DictRankWrapper:
@@ -813,7 +838,9 @@ class _CTableIndexingMixin:
         utf8_rank_meta = None
         if is_utf8:
             n_live = self._n_rows if self._n_rows is not None else len(self._valid_rows)
-            ranks_arr, utf8_rank_meta = _utf8_rank_arrays(col_arr, n_live, self[col_name].null_value)
+            ranks_arr, utf8_rank_meta, utf8_vocab = _utf8_rank_arrays(
+                col_arr, n_live, self[col_name].null_value
+            )
             col_arr = blosc2.asarray(ranks_arr)
 
         # Dictionary columns: index by alphabetical rank instead of insertion-order codes.
@@ -883,6 +910,7 @@ class _CTableIndexingMixin:
             if dict_rank_meta is not None:
                 full["dict_rank"] = dict_rank_meta
             else:
+                _persist_utf8_vocab(full, utf8_rank_meta, utf8_vocab)
                 full["utf8_rank"] = utf8_rank_meta
 
         value_epoch, _ = self._storage.get_epoch_counters()

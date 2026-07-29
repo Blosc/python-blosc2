@@ -1746,3 +1746,70 @@ def test_utf8_rejects_a_lone_nul_null_value():
         blosc2.utf8(null_value="\x00")
     # A NUL that is not the whole string is fine — numpy matches those.
     assert blosc2.utf8(null_value="\x00x").null_value == "\x00x"
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+def test_ctable_utf8_index_answers_scalar_predicates(nullable, tmp_path):
+    """With a rank index, a scalar comparison is a sidecar lookup, not a scan.
+
+    The literal is located by one searchsorted over the stored vocabulary and
+    the matching rows are a contiguous run of the sorted-positions sidecar.
+    Results must be identical to the raw-byte scan, including that a null
+    satisfies no comparison.
+    """
+    from dataclasses import make_dataclass
+
+    import numpy as np
+
+    values = ["pear", "apple", "café", "banana", "apple", "pear"]
+    if nullable:
+        values = [*values, None]
+    spec = blosc2.utf8(nullable=True) if nullable else blosc2.utf8()
+    row_cls = make_dataclass("Row", [("c", str, blosc2.field(spec))])
+
+    masks = {}
+    for tag in ("scan", "index"):
+        t = blosc2.CTable(row_cls, urlpath=str(tmp_path / f"{tag}.b2t"), mode="w")
+        t.extend({"c": values}, validate=False)
+        t._flush_varlen_columns()
+        if tag == "index":
+            t.create_index("c", kind="full")
+        col = t["c"]
+        got = {}
+        for name, op in (
+            ("==", np.equal),
+            ("!=", np.not_equal),
+            ("<", np.less),
+            ("<=", np.less_equal),
+            (">", np.greater),
+            (">=", np.greater_equal),
+        ):
+            for probe in ("apple", "pear", "zzz-absent", ""):
+                got[(name, probe)] = col._utf8_scalar_mask(op, probe).copy()
+        masks[tag] = got
+        if tag == "index":
+            # The fast path must really have been taken, not silently skipped.
+            assert col._utf8_index_mask(np.equal, "apple") is not None
+        del t
+
+    for key, scanned in masks["scan"].items():
+        np.testing.assert_array_equal(masks["index"][key], scanned, err_msg=f"{key}")
+
+
+def test_ctable_utf8_index_predicate_falls_back_when_stale(tmp_path):
+    """A stale rank index must not answer predicates from frozen ranks."""
+    from dataclasses import make_dataclass
+
+    import numpy as np
+
+    row_cls = make_dataclass("Row", [("c", str, blosc2.field(blosc2.utf8()))])
+    t = blosc2.CTable(row_cls, urlpath=str(tmp_path / "t.b2t"), mode="w")
+    t.extend({"c": ["pear", "banana"]}, validate=False)
+    t._flush_varlen_columns()
+    t.create_index("c", kind="full")
+    assert t["c"]._utf8_index_mask(np.equal, "pear") is not None
+
+    t.append({"c": "apple"})  # a value ahead of the others invalidates every rank
+    t._flush_varlen_columns()
+    assert t["c"]._utf8_index_mask(np.equal, "pear") is None
+    np.testing.assert_array_equal(t["c"]._utf8_scalar_mask(np.equal, "apple")[:3], [False, False, True])

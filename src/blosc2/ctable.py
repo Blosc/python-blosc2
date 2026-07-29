@@ -2116,6 +2116,10 @@ class Column:
         """
         nv = self.null_value
 
+        indexed = self._utf8_index_mask(numpy_op, value)
+        if indexed is not None:
+            return indexed
+
         if numpy_op in (np.equal, np.not_equal):
 
             def fn(arr, start, stop):
@@ -2142,6 +2146,82 @@ class Column:
                 return res
 
         return self._utf8_chunked_bytes(fn)
+
+    #: Rank predicate implied by each comparison, given the literal's insertion
+    #: point ``lo`` and whether the literal is itself in the vocabulary.
+    _UTF8_RANK_PREDICATE: ClassVar[dict] = {
+        "equal": lambda lo, hit: (lo, lo + 1) if hit else None,
+        "not_equal": lambda lo, hit: (lo, lo + 1) if hit else None,  # inverted by caller
+        "less": lambda lo, hit: (0, lo),
+        "less_equal": lambda lo, hit: (0, lo + 1 if hit else lo),
+        "greater": lambda lo, hit: (lo + 1 if hit else lo, None),
+        "greater_equal": lambda lo, hit: (lo, None),
+    }
+
+    def _utf8_index_mask(self, numpy_op, value: str) -> np.ndarray | None:
+        """Answer ``column <numpy_op> value`` from the rank index, or ``None``.
+
+        The index sorts rows by alphabetical rank, so a literal is located by
+        one ``searchsorted`` over the stored vocabulary and the matching rows
+        are a contiguous run of the sorted-positions sidecar — no scan of the
+        column at all.  Returns ``None`` whenever the index cannot answer, and
+        the caller falls back to the raw-byte scan.
+        """
+        table = self._table
+        descriptor = table._get_index_catalog().get(self._col_name)
+        if not descriptor or descriptor.get("kind") != "full" or descriptor.get("stale", False):
+            return None
+        full = descriptor.get("full") or {}
+        meta = full.get("utf8_rank")
+        if meta is None or table._utf8_rank_index_stale(self._col_name, meta):
+            return None
+        positions_path = full.get("positions_path")
+        values_path = full.get("values_path")
+        if positions_path is None or values_path is None:  # in-memory sidecars
+            return None
+
+        vocab = table._utf8_index_vocab(self._col_name, meta)
+        if vocab is None:
+            return None
+        lo = int(np.searchsorted(vocab, value, side="left"))
+        hit = lo < len(vocab) and vocab[lo] == value
+        bounds = self._UTF8_RANK_PREDICATE[numpy_op.__name__](lo, hit)
+
+        from blosc2.indexing import _open_sidecar_file
+
+        vnd = _open_sidecar_file(values_path)
+        pnd = _open_sidecar_file(positions_path)
+        null_rank = meta["null_rank"]
+        n_phys = len(table._valid_rows)
+
+        def rows_for_ranks(rank_lo, rank_hi) -> np.ndarray:
+            """Physical rows whose rank is in ``[rank_lo, rank_hi)``.
+
+            ``rank_hi is None`` means "up to but excluding the nulls", which
+            carry the largest rank — a null satisfies no comparison.
+            """
+            start = table._sidecar_bisect(vnd, rank_lo, "left")
+            stop = (
+                table._sidecar_bisect(vnd, null_rank, "left")
+                if rank_hi is None
+                else table._sidecar_bisect(vnd, rank_hi - 1, "right")
+            )
+            if stop <= start:
+                return np.empty(0, dtype=np.int64)
+            return np.asarray(pnd[start:stop], dtype=np.int64)
+
+        mask = np.zeros(n_phys, dtype=bool)
+        if numpy_op is np.not_equal:
+            # Invert over the column's own rows only: the physical mask is
+            # capacity-padded, and padded slots must stay False, as they do on
+            # the scan path.  Nulls are excluded rather than inverted into.
+            mask[: len(table._cols[self._col_name])] = True
+            if bounds is not None:
+                mask[rows_for_ranks(*bounds)] = False
+            mask[rows_for_ranks(null_rank, None if null_rank == 0 else null_rank + 1)] = False
+        elif bounds is not None:
+            mask[rows_for_ranks(*bounds)] = True
+        return mask
 
     def _utf8_compare_scalar(self, numpy_op, value: str):
         """Scalar comparison as a live-row-intersected boolean NDArray."""
@@ -4086,6 +4166,29 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if len(dictionary) != dict_rank_meta.get("dict_len"):
             return True
         return _dict_rank_hash(dictionary) != dict_rank_meta.get("dict_hash")
+
+    def _utf8_index_vocab(self, name: str, utf8_rank_meta: dict) -> np.ndarray | None:
+        """Rank-ordered vocabulary for a utf8 index, cached per table.
+
+        Small relative to the column (one entry per distinct value) and read
+        once, so a literal→rank lookup costs a ``searchsorted`` rather than a
+        re-factorization of the column.
+        """
+        cache = self.__dict__.setdefault("_utf8_vocab_cache", {})
+        key = (name, utf8_rank_meta.get("n_rows"), utf8_rank_meta.get("nbytes"))
+        if key in cache:
+            return cache[key]
+        inline = utf8_rank_meta.get("vocab")
+        if inline is not None:
+            vocab = np.array(inline, dtype=np.str_) if inline else np.empty(0, dtype=np.str_)
+        else:
+            path = utf8_rank_meta.get("vocab_path")
+            if path is None or not os.path.exists(path):
+                return None
+            vocab = np.asarray(blosc2.open(path, mode="r")[:])
+        cache.clear()  # only the current build's vocabulary is ever of interest
+        cache[key] = vocab
+        return vocab
 
     def _utf8_rank_index_stale(self, name: str, utf8_rank_meta: dict) -> bool:
         """True if a utf8-rank FULL index no longer matches the live column.
