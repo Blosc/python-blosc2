@@ -2102,3 +2102,118 @@ def test_non_utf8_dsl_kernel_column_still_works():
     t = make_table(["a", "bb"])
     t.add_computed_column("dbl", double, inputs=["x"])
     np.testing.assert_array_equal(t["dbl"][:], [0, 2])
+
+
+# ---------------------------------------------------------------------------
+# NumPy StringDType interop: dtype-based dispatch to Utf8Array
+# ---------------------------------------------------------------------------
+
+
+def test_utf8_array_satisfies_the_blosc2_array_protocol():
+    arr = blosc2.utf8_array(["a", "bb", "ccc"])
+    assert isinstance(arr, blosc2.Array)
+    assert arr.shape == (3,)
+    assert arr.ndim == 1
+    assert arr.size == 3
+    assert arr.dtype == STRING_DTYPE
+
+
+def test_utf8_array_np_asarray_keeps_string_dtype():
+    """np.asarray() used to iterate the rows and infer a fixed-width <Un."""
+    arr = blosc2.utf8_array(["x" * 3, "y" * 200])
+    out = np.asarray(arr)
+    assert out.dtype == STRING_DTYPE
+    assert list(out) == ["x" * 3, "y" * 200]
+    # ... and the same dtype arr[:] reports, which is the point.
+    assert out.dtype == arr[:].dtype
+
+
+def test_utf8_array_np_asarray_honours_an_explicit_dtype():
+    arr = blosc2.utf8_array(["abc", "de"])
+    assert list(np.asarray(arr, dtype="<U5")) == ["abc", "de"]
+    assert np.asarray(arr, dtype="<U5").dtype == np.dtype("<U5")
+
+
+def test_asarray_dispatches_string_dtype_to_utf8array():
+    src = np.array(["a", "bb", "日本語"], dtype=STRING_DTYPE)
+    out = blosc2.asarray(src)
+    assert isinstance(out, blosc2.Utf8Array)
+    assert list(out[:]) == ["a", "bb", "日本語"]
+
+
+def test_asarray_dispatches_on_the_target_dtype():
+    """A fixed-width source asked for StringDType becomes variable-length."""
+    out = blosc2.asarray(np.array(["a", "bb"], dtype="<U2"), dtype=STRING_DTYPE)
+    assert isinstance(out, blosc2.Utf8Array)
+    assert list(out[:]) == ["a", "bb"]
+
+
+def test_asarray_leaves_utf8_when_a_fixed_width_dtype_is_asked_for():
+    src = np.array(["a", "bb"], dtype=STRING_DTYPE)
+    out = blosc2.asarray(src, dtype="<U8")
+    assert isinstance(out, blosc2.NDArray)
+    assert out.dtype == np.dtype("<U8")
+    assert list(out[:]) == ["a", "bb"]
+
+    out = blosc2.asarray(blosc2.utf8_array(["a", "bb"]), dtype="<U8")
+    assert isinstance(out, blosc2.NDArray)
+    assert list(out[:]) == ["a", "bb"]
+
+
+def test_asarray_returns_a_utf8array_unchanged():
+    arr = blosc2.utf8_array(["a", "bb"])
+    assert blosc2.asarray(arr) is arr
+    copied = blosc2.asarray(arr, copy=True)
+    assert copied is not arr
+    assert list(copied[:]) == ["a", "bb"]
+
+
+def test_asarray_string_dtype_rejects_nd_and_storage_kwargs():
+    src2d = np.array([["a"], ["b"]], dtype=STRING_DTYPE)
+    with pytest.raises(ValueError, match="1-D only"):
+        blosc2.asarray(src2d)
+    with pytest.raises(TypeError, match="utf8_array"):
+        blosc2.asarray(np.array(["a"], dtype=STRING_DTYPE), urlpath="unused.b2nd")
+
+
+def test_asarray_non_string_paths_are_unchanged():
+    assert isinstance(blosc2.asarray(np.arange(3)), blosc2.NDArray)
+    fixed = blosc2.asarray(np.array(["a", "bb"], dtype="<U2"))
+    assert isinstance(fixed, blosc2.NDArray)
+    assert fixed.dtype == np.dtype("<U2")
+    # A plain list of str still infers a fixed width, as it always did.
+    assert isinstance(blosc2.asarray(["a", "bb"]), blosc2.NDArray)
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        (lambda d: blosc2.zeros(3, dtype=d), ["", "", ""]),
+        (lambda d: blosc2.empty(3, dtype=d), ["", "", ""]),
+        (lambda d: blosc2.ones(3, dtype=d), ["1", "1", "1"]),
+        (lambda d: blosc2.full(3, "x", dtype=d), ["x", "x", "x"]),
+    ],
+)
+def test_constructors_with_string_dtype_match_numpy(call, expected):
+    out = call(STRING_DTYPE)
+    assert isinstance(out, blosc2.Utf8Array)
+    assert list(out[:]) == expected
+
+
+def test_constructors_with_string_dtype_agree_with_numpy_exactly():
+    d = STRING_DTYPE
+    assert list(blosc2.zeros(3, dtype=d)[:]) == list(np.zeros(3, dtype=d))
+    assert list(blosc2.ones(3, dtype=d)[:]) == list(np.ones(3, dtype=d))
+    assert list(blosc2.full(3, "x", dtype=d)[:]) == list(np.full(3, "x", dtype=d))
+
+
+def test_constructors_with_string_dtype_reject_nd_and_storage_kwargs():
+    with pytest.raises(ValueError, match="1-D only"):
+        blosc2.zeros((2, 3), dtype=STRING_DTYPE)
+    with pytest.raises(TypeError, match="utf8_array"):
+        blosc2.zeros(3, dtype=STRING_DTYPE, urlpath="unused.b2nd")
+
+
+def test_utf8_dispatch_round_trips_through_the_conversion_pair():
+    out = blosc2.full(2, "hé", dtype=STRING_DTYPE)
+    assert list(blosc2.to_utf8(blosc2.from_utf8(out))[:]) == ["hé", "hé"]

@@ -111,6 +111,23 @@ XXX version-specific blurb XXX
   **codepoints**, counted from the raw bytes without decoding a row, so nothing
   truncates and non-ASCII text does not over-allocate the 3-4x a byte-length
   bound would.
+- **The array constructors dispatch on NumPy's `StringDType`.**
+  `blosc2.asarray(np.array([...], dtype=StringDType()))` used to raise
+  `TypeError: data type 'StringDType()' not understood`, and
+  `blosc2.zeros(n, dtype=StringDType())` a `malformed node` `ValueError`; both
+  now return a `Utf8Array`, as do `empty`, `ones` and `full`, with the same
+  fill values NumPy uses (`''`, `''`, `'1'`, `str(fill_value)`). The dispatch
+  is on the *target* dtype, so `asarray(utf8_source, dtype="<U8")` still gives
+  a fixed-width NDArray. `StringDType` still cannot back an NDArray — it keeps
+  each row's payload outside the array buffer and offers no buffer protocol,
+  so compressing that buffer would persist pointers — which is why the
+  variable-length container is what comes back.
+- **`Utf8Array` gained `.shape`, `.ndim`, `.size` and `__array__`**, so it now
+  satisfies the `blosc2.Array` protocol (`.shape` was the only member it
+  lacked) and `np.asarray(arr)` returns `StringDType` instead of silently
+  widening to a fixed-width `<Un` — for 200-character values that was 1600
+  bytes where the payload is 203, and a different dtype than `arr[:]` reported
+  for the same object.
 - **`Column.assign()` works on utf8, vlstring, vlbytes, struct and object
   columns.** It previously raised `TypeError: Utf8Array assignment index must
   be int`, leaving no public way to overwrite a variable-length column's

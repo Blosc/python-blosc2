@@ -5733,6 +5733,57 @@ def _check_dtype(dtype):
     return dtype
 
 
+def _is_string_dtype(dtype) -> bool:
+    """True for NumPy's variable-length ``StringDType``; see ``_utf8_array``."""
+    from blosc2._utf8_array import is_string_dtype
+
+    return is_string_dtype(dtype)
+
+
+def _asarray_string_dispatch(array, copy, kwargs):
+    """Route variable-length text out of :func:`asarray`'s NDArray path.
+
+    Returns ``(result, array)``.  *result* is a :class:`Utf8Array` when the
+    **target** dtype is NumPy's ``StringDType``, and ``None`` otherwise -- in
+    which case *array* comes back ready for the fixed-width path, so
+    ``asarray(utf8_source, dtype="<U8")`` still yields a plain NDArray.
+    """
+    from blosc2._utf8_array import Utf8Array, asarray_utf8, is_string_dtype
+
+    requested = kwargs.get("dtype")
+    if is_string_dtype(requested if requested is not None else array.dtype):
+        storage_kwargs = {k: v for k, v in kwargs.items() if k != "dtype"}
+        return asarray_utf8(array, copy=copy, **storage_kwargs), array
+    if isinstance(array, Utf8Array):
+        return None, array.astype(requested)
+    return None, array
+
+
+def _utf8_filled(shape, fill: str, **kwargs):
+    """Build a :class:`Utf8Array` of *fill* repeated, for ``dtype=StringDType()``.
+
+    Shared by empty/zeros/ones/full: NumPy fills those with ``''``, ``''``,
+    ``'1'`` and ``str(fill_value)`` respectively, and blosc2 matches.  A
+    variable-length dtype cannot back an NDArray -- see
+    :func:`blosc2._utf8_array.asarray_utf8` for why -- so these return the
+    variable-length container instead.
+    """
+    from blosc2._utf8_array import to_utf8
+
+    if kwargs:
+        raise TypeError(
+            f"blosc2 does not accept {sorted(kwargs)!r} for variable-length text; "
+            "use blosc2.utf8_array(values, spec) to control its storage."
+        )
+    shape = _check_shape(shape)
+    if len(shape) != 1:
+        raise ValueError(
+            f"Variable-length text is 1-D only, got shape {shape}. Use a fixed-width "
+            "'<U' dtype for an N-D NDArray."
+        )
+    return to_utf8([fill] * shape[0])
+
+
 def empty(shape: int | tuple | list, dtype: np.dtype | str | None = np.float64, **kwargs: Any) -> NDArray:
     """Create an empty array.
 
@@ -5787,6 +5838,8 @@ def empty(shape: int | tuple | list, dtype: np.dtype | str | None = np.float64, 
     >>> array.dtype
     dtype('int32')
     """
+    if _is_string_dtype(dtype):
+        return _utf8_filled(shape, "", **kwargs)
     dtype = _check_dtype(dtype)
     shape = _check_shape(shape)
     kwargs = _check_ndarray_kwargs(**kwargs)
@@ -5895,6 +5948,8 @@ def zeros(shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwarg
     >>> array.dtype
     dtype('float64')
     """
+    if _is_string_dtype(dtype):
+        return _utf8_filled(shape, "", **kwargs)
     dtype = _check_dtype(dtype)
     shape = _check_shape(shape)
     kwargs = _check_ndarray_kwargs(**kwargs)
@@ -5949,6 +6004,8 @@ def full(
     >>> array.dtype
     dtype('bool')
     """
+    if _is_string_dtype(dtype):
+        return _utf8_filled(shape, str(fill_value), **kwargs)
     if isinstance(fill_value, bytes):
         dtype = np.dtype(f"S{len(fill_value)}")
     if dtype is None:
@@ -6691,9 +6748,11 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
 
     Returns
     -------
-    out: :ref:`NDArray`
+    out: :ref:`NDArray` or :class:`Utf8Array`
         A new :ref:`NDArray` made of :paramref:`array`, or the original
-        array when a copy is not required.
+        array when a copy is not required.  When the target dtype is NumPy's
+        variable-length ``StringDType``, a :class:`Utf8Array` is returned
+        instead -- see the Notes.
 
     Notes
     -----
@@ -6701,6 +6760,16 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     without the need to create a contiguous NumPy array internally.  This can
     be used for ingesting e.g. disk or network based arrays very effectively
     and without consuming lots of memory.
+
+    ``StringDType`` cannot back an NDArray: it keeps each row's payload outside
+    the array buffer (a 100-character string still reports ``nbytes == 16``)
+    and offers no buffer protocol, so compressing that buffer would persist
+    pointers.  Such input is therefore stored as a :class:`Utf8Array`, which
+    holds the same text as offsets + UTF-8 bytes -- the layout Arrow uses for
+    ``large_string``.  The dispatch is on the *target* dtype, so
+    ``asarray(utf8_source, dtype="<U8")`` still gives a fixed-width NDArray.
+    :func:`blosc2.zeros`, :func:`blosc2.empty`, :func:`blosc2.ones` and
+    :func:`blosc2.full` dispatch the same way, matching NumPy's fill values.
 
     Examples
     --------
@@ -6718,6 +6787,9 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
         raise ValueError("Only unsafe casting is supported at the moment.")
     if not hasattr(array, "shape"):
         array = np.asarray(array)  # defaults if dtype=None
+    utf8_out, array = _asarray_string_dispatch(array, copy, kwargs)
+    if utf8_out is not None:
+        return utf8_out
     dtype_ = blosc2.proxy.convert_dtype(array.dtype)
     dtype = blosc2.proxy.convert_dtype(kwargs.pop("dtype", dtype_))  # check if dtype provided
     kwargs = _check_ndarray_kwargs(**kwargs)

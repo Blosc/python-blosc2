@@ -1095,6 +1095,41 @@ still maps to fixed-width ``string(max_length=32)`` for backward
 compatibility; opt in to variable-length storage with
 ``blosc2.field(blosc2.utf8())``.
 
+.. _Utf8AndStringDType:
+
+utf8 and NumPy's ``StringDType``
+--------------------------------
+
+:func:`utf8` is blosc2's answer to the same problem NumPy 2.0 solved with
+``StringDType``, and the two interoperate on dtype: reads return
+``StringDType`` arrays, and the array constructors dispatch on it::
+
+    blosc2.asarray(np.array(["a", "bb"], dtype=StringDType()))  # -> Utf8Array
+    blosc2.zeros(3, dtype=StringDType())                        # -> Utf8Array
+    blosc2.full(3, "x", dtype=StringDType())                    # -> Utf8Array
+
+The fill values match NumPy's own (``''`` for ``zeros``/``empty``, ``'1'`` for
+``ones``, ``str(fill_value)`` for ``full``), and the result satisfies the
+:class:`blosc2.Array` protocol, so it can be used wherever a blosc2 array can.
+
+What blosc2 does **not** do is store ``StringDType`` in an
+:class:`~blosc2.NDArray`, and it cannot: that dtype keeps each row's payload
+outside the array buffer — a 100-character string still reports
+``nbytes == 16`` — and supports no buffer protocol, so compressing the buffer
+would persist pointers rather than text.  A :class:`Utf8Array` holds the same
+text as int64 offsets plus a UTF-8 blob, which is the layout Arrow uses for
+``large_string`` and what makes :meth:`CTable.to_arrow` zero-copy.
+
+The dispatch is on the *target* dtype, so asking for a fixed width still gets
+you a plain NDArray::
+
+    blosc2.asarray(utf8_source, dtype="<U8")   # -> NDArray, fixed width
+
+Note the schema layer keeps its own vocabulary: ``blosc2.field()`` takes a
+spec (:func:`utf8`, :func:`string`, :func:`int32`, ...) and not a raw NumPy
+dtype, for any column type, because a spec also carries nullability, the null
+sentinel, constraints and storage configuration.
+
 .. _ComputingUtf8Strings:
 
 Computing strings on a utf8 column

@@ -790,6 +790,32 @@ class Utf8Array:
         return self._dtype
 
     @property
+    def shape(self) -> tuple[int, ...]:
+        """Row count as a 1-D shape.  Completes the :class:`blosc2.Array` protocol."""
+        return (len(self),)
+
+    @property
+    def ndim(self) -> int:
+        """Always 1: a utf8 array is a flat sequence of strings."""
+        return 1
+
+    @property
+    def size(self) -> int:
+        """Number of rows, matching NumPy's ``size`` for a 1-D array."""
+        return len(self)
+
+    def __array__(self, dtype=None, copy=None) -> np.ndarray:
+        """Materialize for NumPy, keeping ``StringDType`` unless asked otherwise.
+
+        Without this, ``np.asarray`` falls back to iterating the rows and infers
+        a fixed-width ``<Un`` from them -- a different dtype than ``arr[:]``
+        gives for the same object, and one that costs 4 bytes per character of
+        the *longest* row for every row.
+        """
+        out = self[:]
+        return out if dtype is None else out.astype(dtype)
+
+    @property
     def offsets(self):
         """The underlying ``int64`` NDArray of row offsets (length ``n + 1``)."""
         return self._offsets
@@ -1137,6 +1163,43 @@ def to_utf8(values, spec=None) -> Utf8Array:
         # iterating the array yields np.str_, which is not.
         values = values.tolist()
     return utf8_array(values, spec)
+
+
+def is_string_dtype(dtype) -> bool:
+    """True for NumPy's variable-length ``StringDType`` (kind ``'T'``)."""
+    if dtype is None:
+        return False
+    try:
+        return np.dtype(dtype).kind == "T"
+    except TypeError:
+        # np.dtype() rejects StringDType passed as a class rather than instance.
+        return isinstance(dtype, type) and getattr(dtype, "kind", None) == "T"
+
+
+def asarray_utf8(array, copy=None, **kwargs) -> Utf8Array:
+    """Back :func:`blosc2.asarray` when the *target* dtype is ``StringDType``.
+
+    A ``StringDType`` array keeps its payload outside its own buffer (a 100
+    character string still reports ``nbytes == 16``) and offers no buffer
+    protocol at all, so an :class:`~blosc2.NDArray` -- which compresses that
+    buffer -- cannot hold one: it would persist pointers.  A
+    :class:`Utf8Array` holds the same text as offsets + UTF-8 bytes, the
+    layout Arrow uses for ``large_string``, so that is what this returns.
+    """
+    if kwargs:
+        raise TypeError(
+            f"blosc2.asarray() does not accept {sorted(kwargs)!r} for variable-length "
+            "text; use blosc2.utf8_array(values, spec) to control its storage."
+        )
+    ndim = getattr(array, "ndim", 1)
+    if ndim != 1:
+        raise ValueError(
+            f"Variable-length text is 1-D only, got a {ndim}-D array. Reshape it, or ask "
+            "for a fixed-width '<U' dtype to get an N-D NDArray."
+        )
+    if isinstance(array, Utf8Array):
+        return array.copy() if copy else array
+    return to_utf8(np.asarray(array))
 
 
 class Utf8Factorizer:

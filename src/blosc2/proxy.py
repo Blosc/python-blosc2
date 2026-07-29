@@ -673,7 +673,17 @@ class SimpleProxy(blosc2.Operand):
     """
 
     def __init__(self, src, chunks: tuple | None = None, blocks: tuple | None = None):
-        if not hasattr(src, "shape") or not hasattr(src, "dtype"):
+        from blosc2._utf8_array import Utf8Array
+
+        if isinstance(src, Utf8Array):
+            # The compute engine indexes chunk-wise into fixed-width elements,
+            # which a variable-length utf8 array has not got, so widen it here.
+            # (lazyexpr() routes utf8 operands to the span driver instead; this
+            # is the fallback for the entry points that do not.)  Until this
+            # array grew a .shape, the branch below did the same thing by
+            # accident, via np.asarray.
+            src = src.astype()
+        elif not hasattr(src, "shape") or not hasattr(src, "dtype"):
             # If the source is not an array, convert it to NumPy
             src = np.asarray(src)
         if not hasattr(src, "__getitem__"):
