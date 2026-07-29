@@ -1,20 +1,27 @@
-# Using Blosc2 as a pandas Engine
+# Using Blosc2 with pandas
 
-pandas' `DataFrame.apply` and `Series.map` accept an `engine=` argument, and
-`blosc2.jit` is one such engine. Instead of running your function once per
-element in a Python loop, pandas hands it the **whole column at once**, and
-Blosc2 evaluates the entire function body in a single multi-threaded pass
-over the data.
+There are two ways to make a pandas computation faster with Blosc2, and which
+one you want depends on a single question: **does your function work on one
+column at a time, or does it combine several columns per row?**
 
-The result is typically **2-3x faster than a plain `apply`**, with the
-function itself left exactly as you wrote it.
+| your function | use | typical win |
+| --- | --- | --- |
+| transforms one column (`axis=0`) | `df.apply(f, engine=blosc2.jit)` | 2-3x |
+| combines columns, one result per row | `f(**df)` — no `apply` at all | 5-7x |
 
-## An example
+Both need a decent amount of data and a decent amount of arithmetic to be
+worth it; the sections below say how much.
 
-Yeo-Johnson is the power transform behind scikit-learn's `PowerTransformer`,
-used to make skewed features more normally distributed. Its parameter is
-fitted per column, so applying it to every column of a feature matrix is
-precisely what you want:
+## One column at a time: `engine=blosc2.jit`
+
+`DataFrame.apply` and `Series.map` accept an `engine=` argument, and
+`blosc2.jit` is one such engine. pandas hands your function the **whole column
+at once**, and Blosc2 evaluates the entire function body in a single
+multi-threaded pass.
+
+Yeo-Johnson — the power transform behind scikit-learn's `PowerTransformer` —
+is a good fit: its parameter is fitted per column, so you apply it to every
+column of a feature matrix.
 
 ```python
 import numpy as np
@@ -37,159 +44,199 @@ def yeo_johnson(col, lam=0.5):
 result = df.apply(yeo_johnson, engine=blosc2.jit)
 ```
 
-`result` is a DataFrame of the same shape and column names as `df`, with the
-transform applied to every column — the same thing plain `df.apply(yeo_johnson)`
-returns, only computed differently. On the machine below it takes 0.056 s
-instead of 0.119 s, a **2.1x** speedup.
+You get back the same DataFrame plain `df.apply(yeo_johnson)` would return,
+computed differently: 0.058 s instead of 0.121 s, a **2.1x** speedup.
 
-## Why it is faster
+The win comes from not materialising intermediates. NumPy runs that body one
+operation at a time, allocating a full-size temporary array at each step.
+Blosc2 captures the whole expression first, then makes one pass over the data,
+computing every step on a small piece while it is still in cache and spreading
+the pieces across cores.
 
-Evaluated by NumPy, that function body is a sequence of separate steps: raise
-to a power, subtract, divide, do it again for the negative branch, then select.
-Each step walks the full column and allocates a new full-size temporary array
-to hold its result.
-
-Blosc2 does not execute the steps one at a time. It captures the whole
-expression first, then makes a single pass over the data, computing every step
-on one small piece while that piece is still in cache, and spreading the pieces
-across cores. The intermediate arrays are never created.
-
-## When it pays off
-
-Two things have to be true, and the plot below measures each one on its own.
+### When it pays off
 
 ![Speedup vs rows and vs number of fused operations](pandas_engine/speedup.png)
 
-**Enough rows.** Setting up the compute engine costs a fixed amount per call.
-At a few hundred thousand rows that setup is still larger than anything it
-saves, and the engine is a net loss — at 100,000 rows it runs at 0.70x. Break-even
-falls between 100,000 and 1,000,000 rows.
+**Enough rows** (left): setup costs a fixed amount per call, so break-even
+falls between 100,000 and 1,000,000 rows. Below that, use a plain `apply`.
+Beyond a few million the win eases off — the data no longer fits in cache and
+memory bandwidth becomes the limit.
 
-**Enough arithmetic.** The more operations there are to fuse into one pass, the
-more temporaries are avoided and the bigger the win — from 2.1x for a single
-operation up to 3.8x for five.
+**Enough arithmetic** (right): the more operations there are to fuse, the more
+temporaries are skipped — 1.9x for a single operation, 3.5x for five. One
+cheap operation over a big array wins nothing at all
+(`df.apply(lambda col: col + 1, engine=blosc2.jit)` runs at *half* the speed
+of a plain `apply`). Reach for the engine when the function does real work per
+element.
 
-Beyond a few million rows the speedup flattens and then eases off (1.9x at 5M
-above): the arrays no longer fit in cache and the whole computation becomes
-limited by memory bandwidth, which fusion can reduce but not eliminate.
+`pd.eval(..., engine="numexpr")` fuses expressions the same way and is
+somewhat faster here; the reason to prefer `engine=blosc2.jit` is that you
+write a Python function instead of a quoted expression string. See
+[Details](#details).
 
-## When not to use it
+## Several columns per row: skip `apply`, pass the columns
 
-**Trivial expressions.** Arithmetic intensity matters more than the raw number
-of operations. A single cheap operation over a large array is limited by memory
-bandwidth, not by computation, so there is nothing for the engine to win back:
+This is the case pandas 3 highlights `engine=` for, and it is where `apply` is
+the wrong shape: its contract is one call per row. A `@blosc2.jit` function
+takes one parameter per column and is called directly — and since a DataFrame
+unpacks into one keyword argument per column, that call is just `f(**df)`.
 
-```python
-result = df.apply(lambda col: col + 1, engine=blosc2.jit)  # 0.53x — slower!
-```
-
-That runs at roughly **half** the speed of a plain `apply`. Reach for the engine
-when the function does real work per element, such as transcendental functions
-or several chained operations.
-
-**Small frames.** See the plot above: below a few hundred thousand rows, use a
-plain `apply`.
-
-## Compared to `pd.eval` and numexpr
-
-pandas' own [Enhancing performance](https://pandas.pydata.org/docs/user_guide/enhancingperf.html)
-guide describes `pd.eval(..., engine="numexpr")`, which fuses expressions using
-the same underlying idea. It is worth being straightforward about how the two
-compare on the example above:
-
-| approach | time | vs plain apply |
-| --- | --- | --- |
-| plain `df.apply(f)` | 0.1194 s | 1.00x |
-| `df.apply(f, engine=blosc2.jit)` | 0.0561 s | 2.13x |
-| `numexpr.evaluate(...)` per column | 0.0380 s | 3.14x |
-
-On an in-memory DataFrame, numexpr is somewhat faster. The reason to prefer
-`engine=blosc2.jit` is not raw speed but that **you write a Python function
-rather than a quoted string**. The numexpr equivalent of `yeo_johnson` has to
-become a single expression:
+Kepler's equation, solved per row by Newton-Raphson:
 
 ```python
-"where(c >= 0, "
-"((maximum(c, 0.0) + 1.0) ** lam - 1.0) / lam, "
-"-((maximum(-c, 0.0) + 1.0) ** (2.0 - lam) - 1.0) / (2.0 - lam))"
+rng = np.random.default_rng(0)
+orbits = pd.DataFrame(
+    {
+        "mean_anomaly": rng.uniform(0, 2 * np.pi, 1_000_000),
+        "eccentricity": rng.uniform(0.0, 0.95, 1_000_000),
+    }
+)
+
+
+@blosc2.jit
+def kepler(mean_anomaly, eccentricity):
+    e = mean_anomaly + eccentricity * sin(mean_anomaly)
+    for _ in range(100):
+        diff = (e - eccentricity * sin(e) - mean_anomaly) / (
+            1.0 - eccentricity * cos(e)
+        )
+        e = e - diff
+        if abs(diff) < 1e-12:
+            break
+    return e
+
+
+orbits["E"] = kepler(**orbits)
 ```
 
-The Blosc2 version keeps its intermediate variables and its name, can call
-helper functions, can be unit-tested and reused elsewhere under `@blosc2.jit`,
-and is checked by your editor and linters. That is the trade being offered.
+No `apply`, no `engine=`. The parameter names match the column names, so `**`
+does the wiring — by name, so the column order in the frame is irrelevant.
+Each column arrives as a pandas Series, which the kernel accepts like any
+array (zero-copy for ordinary numeric dtypes). `**df` passes
+*every* column, so subset first if the frame has more:
+`kepler(**orbits[["mean_anomaly", "eccentricity"]])`.
 
-Note also that Blosc2's characteristic strength — computing directly over
-compressed, potentially larger-than-memory arrays — does not come into play on
-this path, because pandas materialises each column as a plain NumPy array
-before the engine ever sees it.
+On 1,000,000 rows that runs in 0.027 s against 0.165 s for fully vectorized
+NumPy — **6.2x** — and about 164x faster per row than a plain
+`df.apply(..., axis=1)`.
+
+### Why it beats even vectorized NumPy
+
+Vectorized NumPy has to keep looping until the *worst* row converges: the loop
+is at the whole-array level, so every row pays for the slowest one. The
+kernel's `for`/`if`/`break` compile to a real per-element loop, so each row
+stops as soon as *it* converges — and the whole thing still runs as one fused,
+multi-threaded pass.
+
+![Kepler speedup vs rows and vs eccentricity](pandas_engine/kepler.png)
+
+That explanation predicts the right-hand panel, which varies orbital
+eccentricity — i.e. how much harder the worst row is than a typical one. With
+near-circular orbits every row converges in the same 3 iterations, there is
+nothing for `break` to skip, and the win falls to 2.7x. With near-parabolic
+ones the slowest row needs 10 iterations while the average needs 4, and the
+win climbs to 7.4x. **The more uneven the work per row, the more this
+pattern wins.** The left panel is the familiar row-count story: break-even
+around 20,000 rows, 3.5x at 100,000.
+
+Note that the kernel never learns it was handed a DataFrame. The same call
+works with polars, xarray, h5py — or a `blosc2.NDArray`, which is how you
+reach compressed, larger-than-memory operands. Only the `**df` spelling is
+pandas-specific.
+
+### If your function has no per-row loop
+
+`df.apply(f, engine=blosc2.jit, axis=1)` does work for functions that merely
+combine columns by name (`row["a"] + row["b"]`): they are dispatched to a
+single whole-column call rather than a per-row Python loop. Add a `for` or
+`while` to that idiom and it raises a `TypeError` pointing back here — that
+shape can only be compiled, not traced.
 
 ## Gotchas
 
-**`std()` silently changes meaning.** A plain `apply` passes your function a
-pandas Series, whose `.std()` defaults to `ddof=1`. The engine passes a NumPy
-array, whose `.std()` defaults to `ddof=0`. The same source code therefore
-computes slightly different numbers depending on the engine. Pass `ddof`
-explicitly if it matters:
+**Your function normally runs only once.** The engine calls it a single time
+with stand-in objects that record operations rather than compute them, then
+evaluates the recorded expression over the real data (this is *tracing*). So a
+plain `if` on column values has nothing to look at and raises `ValueError: The
+truth value of an array ... is ambiguous`. Use `np.where`, or write the
+function so it compiles instead — see below.
 
-```python
-z = (col - col.mean()) / col.std(ddof=0)
-```
+**Real `if`/`for`/`while` works, if the function fits the DSL.** When your
+function branches or loops over column values *and* fits Blosc2's
+[DSL grammar](../reference/dsl_syntax.md), it is compiled and runs as written,
+branches and all — that is what makes the Kepler kernel above possible. If it
+doesn't fit the grammar, it silently falls back to tracing (hence the
+`ValueError`); if it looks DSL-shaped but calls an unsupported function, you
+get a `RuntimeError` naming it.
 
-**No Python `if` on values.** The function is traced rather than executed
-statement by statement, so branching on array contents raises
-`ValueError: The truth value of an array ... is ambiguous`. Use `np.where`,
-nesting it where you would have used `elif`. (This is the same restriction
-numexpr has.) Branching on a scalar *parameter* is fine.
+**`np.where` evaluates both arms.** Both branches are computed over the whole
+column before one is selected, so each runs on values it was never meant to
+see — negative bases, divisions by zero, `RuntimeWarning`s. The answer is
+still correct, but clamp each arm to its own domain (as `yeo_johnson` does
+with `np.maximum`) to keep the noise and wasted work away.
 
-**`np.where` evaluates both arms.** Unlike a real `if`, both branches are
-computed over the whole column and only then selected between, so each one runs
-on values it was never meant to see. In `yeo_johnson` above, `np.power(col + 1.0,
-0.5)` would hit a negative base wherever `col < -1` — around 159,000 elements in
-a million-row standard normal — producing NaNs and a
-`RuntimeWarning: invalid value encountered in power`. The final answer is still
-correct, because `np.where` discards them, but the warning is noise and the work
-is wasted. That is why each arm is clamped to its own domain with `np.maximum`.
-The same caveat applies to numexpr's `where()`.
+**Don't put a reduction inside per-element control flow.** In a DSL kernel,
+`sum`/`max`/`min` collapse the whole block being evaluated to a single value,
+not one per row. So `if max(abs(diff)) < 1e-12: break` compiles, runs, and
+silently gives wrong results for every row but the first. Write the
+per-element form: `if abs(diff) < 1e-12: break`.
 
-**`np.sign` is not supported** on the traced expressions and raises a
-`TypeError`. Express it with `np.where` instead.
-
-## Row-wise (`axis=1`)
-
-`axis=0`, the default, calls the function once per column and is where the
-benefit lies. `axis=1` calls it once per row — the same Python-level loop plain
-pandas would run, except each call now also pays the cost of wrapping a tiny
-array for the compute engine. For a handful of columns that overhead outweighs
-any gain, making `engine=blosc2.jit` with `axis=1` typically *slower* than a
-plain `apply(axis=1)`.
-
-Use `axis=0`, or restructure the computation so it works column-wise.
+**`std()` changes meaning.** A plain `apply` passes a pandas Series
+(`ddof=1`); the engine passes a NumPy array (`ddof=0`). Pass `ddof` explicitly
+if it matters.
 
 ## Limitations
 
-- Only numeric dtypes are supported. A non-numeric (e.g. object-dtype or
-  string) column raises a `ValueError` naming the limitation rather than
-  attempting the computation.
-- `na_action="ignore"` is not supported for `map` and raises
-  `NotImplementedError` — the vectorized-call contract means there is no
-  per-element step at which to skip a value.
-- `Series.apply(func, engine=...)` and `DataFrame.map(func, engine=...)` do
-  not reach `blosc2.jit` at all: pandas 3's `Series.apply` does not accept
-  an `engine` keyword for non-string functions, and `DataFrame.map` doesn't
-  forward `engine` to a dispatch mechanism at all. These are limitations of
-  the pandas-side API surface, not of the Blosc2 engine. The two entry
-  points that do reach the engine are `DataFrame.apply` and `Series.map`.
+- Numeric dtypes only; anything else raises `ValueError`.
+- `na_action="ignore"` is not supported for `map` (`NotImplementedError`):
+  there is no per-element step at which to skip a value.
+- Only `DataFrame.apply` and `Series.map` reach the engine. pandas 3's
+  `Series.apply` doesn't accept `engine=` for non-string functions, and
+  `DataFrame.map` doesn't forward it — both are pandas-side limits.
+- `engine=` always gets auto-detection: pandas' protocol requires the plain
+  `blosc2.jit` object, so `strict=True`/`strict=False` cannot be passed
+  through it (a direct call can).
 
-`Series.map(func, engine=blosc2.jit)` works the same way as `DataFrame.apply`:
-`func` is called once with the Series' full underlying array.
+## Details
+
+Two things worth knowing once you are actually using this, neither needed to
+get started.
+
+**Against numexpr.** pandas' own
+[Enhancing performance](https://pandas.pydata.org/docs/user_guide/enhancingperf.html)
+guide describes `pd.eval(..., engine="numexpr")`, which fuses expressions on
+the same principle. On the Yeo-Johnson example:
+
+| approach | time | vs plain apply |
+| --- | --- | --- |
+| plain `df.apply(f)` | 0.121 s | 1.00x |
+| `df.apply(f, engine=blosc2.jit)` | 0.058 s | 2.07x |
+| `numexpr.evaluate(...)` per column | 0.039 s | 3.09x |
+
+numexpr is faster on an in-memory frame, so the trade is not raw speed: its
+version of `yeo_johnson` has to collapse into one quoted string,
+`"where(c >= 0, ((maximum(c, 0.0) + 1.0) ** lam - 1.0) / lam, ...)"`, while
+the Blosc2 version stays a Python function — intermediate variables, a name,
+helper calls, unit tests, and your linter. Note also that neither
+`engine=blosc2.jit` nor numexpr touches compressed data here: pandas
+materialises each column as a plain NumPy array first. Only the direct-call
+pattern reaches `blosc2.NDArray` operands.
+
+**What column extraction costs.** `df["col"]` is a zero-copy view for ordinary
+numeric dtypes, including in mixed-dtype frames: pulling out one column never
+triggers the whole-frame upcast that `df.to_numpy()` does (which is what
+`engine=blosc2.jit` uses internally for `axis=0`), and each column keeps its
+own dtype. Nullable (`Float64`/`Int64`), Arrow-backed and tz-aware columns are
+the exception — they allocate a converted array once, which is noise next to
+iterative work like the Kepler kernel.
 
 ## Reproducing these numbers
 
 All figures on this page come from `bench/bench_pandas_engine.py`, measured on
-an Apple M4 with pandas 3.0.3 and 8 threads. Run it yourself with:
+an Apple M4 with pandas 3.0.3 and 8 threads:
 
 ```
 python bench/bench_pandas_engine.py
 ```
 
-It prints the comparison table, both sweeps, and regenerates the plot above.
+It prints every table on this page and regenerates both plots.

@@ -355,3 +355,13 @@ def test_binary_funcs_torch_proxy(np_func, blosc_func, dtype, shape, chunkshape)
 @pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS_HEAVY)
 def test_binary_funcs_heavy(np_func, blosc_func, dtype, shape, chunkshape):
     _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
+
+
+@pytest.mark.parametrize("np_func", [np.sign, np.square, np.negative, np.positive, np.reciprocal])
+@pytest.mark.parametrize("dtype", [blosc2.int64, blosc2.float64, blosc2.complex128])
+def test_ufunc_dispatch(np_func, dtype):
+    # These must build a lazy expression, not raise TypeError from __array_ufunc__.
+    # No zero in the input: reciprocal(0) warns, and that is not what is under test.
+    a = np.array([-2, 1, 3], dtype=dtype)
+    b = blosc2.asarray(a)
+    np.testing.assert_allclose(np_func(b)[()], np_func(a))

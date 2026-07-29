@@ -18,6 +18,15 @@ def kernel(x, y):
 
 Use Python-style indentation and always return a value on the paths you execute.
 
+`@blosc2.jit` auto-detects this DSL: a decorated function whose body contains an
+`if`/`for`/`while` and that compiles under this grammar is dispatched here
+automatically, so its branches and loops actually run, once per chunk, instead
+of `jit`'s normal approach of calling the function only once to record a single
+expression — which would otherwise capture just whichever branch that one call
+happened to take, silently dropping the rest. `@blosc2.dsl_kernel` remains the
+explicit form — it always requires the DSL to compile, equivalent to
+`jit(strict=True)`.
+
 ## Program shape
 
 - Exactly one top-level `def ...:` function is expected.
@@ -169,6 +178,21 @@ Rules:
 - `while` condition is a regular DSL expression.
 - Runtime iteration cap is enforced by `ME_DSL_WHILE_MAX_ITERS`.
 
+### Reductions inside control flow
+
+`sum`, `max`, `min` and other block reductions collapse the whole chunk being
+evaluated to one value, not one value per element. Using one as the
+condition of `if`/`while`, or assigning one to a local that per-element code
+later reads (e.g. `y = max(x)` followed by `if x > 0: y = y + 1`), does
+**not** raise a compile-time or runtime error -- it compiles and runs, and
+produces results that are only correct for element 0 of the block; every
+other element sees a stale/zero value where the reduction result should be.
+This is a rough edge in the underlying
+[miniexpr](https://github.com/Blosc/miniexpr) compiler, not something this
+Python layer validates today. Write the per-element form instead (drop the
+reduction, e.g. `if abs(diff) < tol` rather than `if max(abs(diff)) < tol`)
+whenever the intent is a per-element, not whole-block, decision.
+
 ## `print(...)`
 
 `print` is supported as a DSL statement.
@@ -271,3 +295,6 @@ These Python features are not part of this DSL:
 - Ternary expression: `a if cond else b`
 - `for ... else` and `while ... else`
 - Keyword-argument calls and other call forms outside the supported subset
+- Docstrings (or any other bare string-literal statement) inside the kernel
+  body -- this is a compile-time parse error at the miniexpr level, not a
+  silently-ignored statement.

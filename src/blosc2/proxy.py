@@ -5,7 +5,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import ast
 import asyncio
+import inspect
+import textwrap
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
@@ -18,10 +21,18 @@ except (ImportError, AttributeError):
 import numpy as np
 
 import blosc2
+from blosc2.dsl_kernel import DSLKernel, DSLSyntaxError
 
 # Default Proxy.afetch concurrency cap for remote sources (e.g. C2Array),
 # where fetches are dominated by round-trip latency, not local CPU/IO.
 REMOTE_MAX_CONCURRENCY = 8
+
+# `jit` kwargs that tune *how* an expression is evaluated, not what container the
+# result is stored in. Unlike storage kwargs (`cparams`, `chunks`, `urlpath`, ...),
+# these must not by themselves flip the return type from a plain NumPy array to
+# an NDArray -- wanting a faster JIT backend has nothing to do with wanting a
+# compressed/persisted container back.
+_JIT_EXECUTION_TUNING_KWARGS = frozenset({"jit", "jit_backend", "fp_accuracy"})
 
 
 class ProxyNDSource(ABC):
@@ -751,28 +762,302 @@ def as_simpleproxy(*arrs: Sequence[blosc2.Array]) -> tuple[SimpleProxy | blosc2.
     return out[0] if len(out) == 1 else out
 
 
-def jit(func=None, *, out=None, disable=False, **kwargs):
+class _PandasRowProxy(blosc2.Operand):
+    """Row proxy for `PandasUdfEngine.apply`'s axis=1 route.
+
+    Stands in for "the current row" the way the textbook `axis=1` idiom
+    expects (`row["colname"]`), but is backed by whole *columns*: `row["a"]
+    + row["b"]` traces to one fused expression over the whole column set in
+    a single call, instead of looping over rows in Python. Columns are
+    extracted lazily (and cached) from the original DataFrame, not from a
+    whole-frame NumPy array, so per-column dtypes are preserved.
+    """
+
+    def __init__(self, df):
+        self._df = df
+        self._cache = {}
+
+    def __getitem__(self, key):
+        if not isinstance(key, str):
+            raise TypeError(
+                f"row[{key!r}]: axis=1 row proxies only support column access by "
+                "name (a string). Positional or iterable row access is not "
+                "supported; for row-wise computations, call your @blosc2.jit "
+                "function directly with the DataFrame columns as separate "
+                "arguments instead, e.g. func(df['a'], df['b'])."
+            )
+        if key in self._cache:
+            return self._cache[key]
+        n_matches = int((self._df.columns == key).sum())
+        if n_matches == 0:
+            raise KeyError(f"row[{key!r}]: no such column in the DataFrame")
+        if n_matches > 1:
+            raise KeyError(
+                f"row[{key!r}]: column label is duplicated ({n_matches} matches); "
+                "axis=1 row proxies require unique column labels"
+            )
+        col = self._df[key].to_numpy()
+        if col.dtype.kind not in "biufc":
+            raise ValueError(
+                f"row[{key!r}]: column has dtype {col.dtype!r}, which is not numeric. "
+                "The Blosc2 engine only supports vectorized numeric computations."
+            )
+        proxy = SimpleProxy(col)
+        self._cache[key] = proxy
+        return proxy
+
+    def __getattr__(self, name):
+        raise AttributeError(
+            f"row.{name}: axis=1 row proxies only support column access via "
+            f"row[{name!r}]; attribute access, iteration and per-row methods "
+            "(e.g. row.isna()) are not supported. For per-row computations that "
+            "need more than combining columns (e.g. per-row branching), call "
+            "your @blosc2.jit function directly with the columns as separate "
+            "array arguments instead of through df.apply(..., axis=1)."
+        )
+
+
+def _undecorated(func):
+    """The original function behind a @blosc2.jit wrapper, or *func* itself.
+
+    Source inspection has to see what the user wrote, not the wrapper.
+    """
+    return getattr(func, "_blosc2_jit_wrapped", func)
+
+
+def _decorate_once(func, decorator):
+    """Apply *decorator* unless *func* is already a @blosc2.jit wrapper.
+
+    Decorating twice used to break the DSL route: the outer (tracing) wrapper
+    replaces array arguments with SimpleProxy operands, so the inner DSL kernel
+    saw no array at all and failed asking for `shape=`.
+    """
+    return func if hasattr(func, "_blosc2_jit_wrapped") else decorator(func)
+
+
+def _analyze_row_func(func) -> tuple[bool, bool]:
+    """Inspect *func* for the two signals `PandasUdfEngine.apply`'s axis=1
+    route needs to pick a dispatch strategy: whether it subscripts its first
+    parameter with a string literal anywhere in its body (the `row["colname"]`
+    idiom), and whether its body contains a `for`/`while` loop.
+
+    Both default to False (the historical per-row loop) if the source can't
+    be inspected, e.g. a dynamically built function.
+    """
+    try:
+        sig = inspect.signature(func)
+        params = list(sig.parameters.values())
+        if not params:
+            return False, False
+        row_name = params[0].name
+        source = textwrap.dedent(inspect.getsource(func))
+        tree = ast.parse(source)
+    except (OSError, TypeError, SyntaxError, ValueError):
+        return False, False
+    nodes = list(ast.walk(tree))
+    uses_subscript = any(
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == row_name
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, str)
+        for node in nodes
+    )
+    has_loop = any(isinstance(node, ast.For | ast.While) for node in nodes)
+    return uses_subscript, has_loop
+
+
+def _has_control_flow(source: str | None) -> bool:
+    """Whether *source* (a DSL-extracted function source, or None) contains a
+    branch or loop that tracing cannot observe."""
+    if source is None:
+        return False
+    tree = ast.parse(source)
+    return any(isinstance(node, ast.If | ast.For | ast.While) for node in ast.walk(tree))
+
+
+def _wide_frame_hint(err: BaseException, func_name: str, params) -> str | None:
+    """Guidance to append when a call gets a keyword the function doesn't take.
+
+    The usual cause is the `kernel(**df)` idiom (see doc/guides/pandas_engine.md)
+    against a frame carrying more columns than the kernel has parameters. Extra
+    keywords are rejected rather than dropped, so that a keyword meant to do
+    something -- a typo, a stale argument name -- never goes silently unused.
+    """
+    if not isinstance(err, TypeError) or "unexpected keyword argument" not in str(err):
+        return None
+    params = list(params)
+    if not params:
+        return None
+    cols = ", ".join(repr(p) for p in params)
+    return (
+        f"If you are calling {func_name}(**df), subset the frame to the "
+        f"kernel's parameters: {func_name}(**df[[{cols}]])"
+    )
+
+
+def _signature_params(func) -> list:
+    """Parameter names of *func*, or an empty list if it cannot be introspected."""
+    try:
+        return list(inspect.signature(func).parameters)
+    except (TypeError, ValueError):
+        return []
+
+
+def _jit_dsl_wrapper(kernel: DSLKernel, out, decorator_kwargs: dict):
+    """Build the call wrapper for the DSL (control-flow) dispatch route of `jit`.
+
+    Unlike the tracing `wrapper` (which calls `func` once to record a single
+    expression, losing any branch not taken on that one call), this calls
+    `kernel` once per invocation through `blosc2.lazyudf`, so every branch and
+    loop in the kernel body is compiled and actually runs, once per chunk.
+    """
+
+    def dsl_wrapper(*args, **func_kwargs):
+        sig = kernel._sig
+        if sig is None:
+            raise TypeError(f"@blosc2.jit: cannot introspect the signature of {kernel.__name__!r}")
+        try:
+            bound = sig.bind(*args, **func_kwargs)
+        except TypeError as e:
+            # sig.bind's message names no function; prefix it, and point at the
+            # subsetting fix when a wide DataFrame was unpacked into the call.
+            hint = _wide_frame_hint(e, kernel.__name__, kernel.input_names or sig.parameters)
+            raise TypeError(f"{kernel.__name__}() {e}" + (f"\n{hint}" if hint else "")) from None
+        bound.apply_defaults()
+        values = tuple(bound.arguments[name] for name in kernel.input_names)
+        # Accept array-protocol operands (pandas Series, polars Series, ...) the
+        # same way the tracing route already does; zero-copy when the source is
+        # numpy-backed.
+        values = tuple(
+            np.asarray(v)
+            if not isinstance(v, np.ndarray | blosc2.NDArray)
+            and hasattr(v, "__array__")
+            and getattr(v, "ndim", 0) > 0
+            else v
+            for v in values
+        )
+
+        array_shapes = {
+            v.shape
+            for v in values
+            if isinstance(v, np.ndarray | blosc2.NDArray) and getattr(v, "ndim", 0) > 0
+        }
+        if not array_shapes:
+            shape = decorator_kwargs.get("shape")
+            if shape is None:
+                raise TypeError(
+                    "@blosc2.jit DSL kernels with only scalar inputs require `shape=` "
+                    "(passed to the jit decorator) to determine the result shape."
+                )
+        elif len(array_shapes) > 1:
+            raise TypeError(
+                "blosc2.jit DSL kernels do not support broadcasting; all array arguments "
+                f"must share one shape, got {sorted(array_shapes)}"
+            )
+        else:
+            (shape,) = array_shapes
+
+        # Execution-tuning kwargs (jit/jit_backend/fp_accuracy) are baked into the
+        # LazyUDF at construction, so they take effect on *both* the getitem
+        # (NumPy) and compute (NDArray) return paths below.  Storage kwargs
+        # (cparams, chunks, urlpath, ...) are applied once, only at the return
+        # step -- passing them here too would e.g. apply `urlpath=` twice and raise.
+        exec_kwargs = {
+            k: v for k, v in decorator_kwargs.items() if k in _JIT_EXECUTION_TUNING_KWARGS and v is not None
+        }
+        storage_kwargs = {k: v for k, v in decorator_kwargs.items() if k not in _JIT_EXECUTION_TUNING_KWARGS}
+        lexpr = blosc2.lazyudf(kernel, values, dtype=None, shape=shape, **exec_kwargs)
+
+        if out is not None:
+            if isinstance(out, blosc2.NDArray):
+                raise NotImplementedError(
+                    "blosc2.jit does not support an NDArray `out` on the DSL (control-flow) "
+                    "dispatch route; use lexpr.compute(urlpath=..., mode='w') to persist a "
+                    "result chunk-by-chunk instead."
+                )
+            if not isinstance(out, np.ndarray):
+                raise TypeError(f"blosc2.jit `out` must be a NumPy array or NDArray, got {type(out)!r}")
+            if out.shape != shape:
+                raise TypeError(f"`out` shape {out.shape} does not match operand shape {shape}")
+            res = lexpr.compute(cparams=blosc2.CParams(clevel=0))
+            if out.dtype != res.dtype:
+                raise TypeError(
+                    f"`out` dtype {out.dtype} does not match the inferred result dtype {res.dtype}"
+                )
+            if out.flags.c_contiguous:
+                res.get_slice_numpy(out, (tuple(0 for _ in res.shape), tuple(res.shape)))
+            else:
+                np.copyto(out, res[()], casting="no")
+            return out
+
+        if storage_kwargs and any(v is not None for v in storage_kwargs.values()):
+            return lexpr.compute(**decorator_kwargs)
+        return lexpr[()]
+
+    return dsl_wrapper
+
+
+def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: C901
     """
     Prepare a function so that it can be used with the Blosc2 compute engine.
 
     The inputs of the function can be any combination of NumPy/NDArray arrays
-    and scalars.  The function will be called with the NumPy arrays replaced by
-    :ref:`SimpleProxy` objects, whereas NDArray objects will be used as is.
+    and scalars.  By default, the function is *traced*: it is called once with
+    the NumPy arrays replaced by :ref:`SimpleProxy` objects (NDArray objects are
+    used as is) to record a single expression, which is then what actually gets
+    evaluated. Because tracing only calls the function once, an ``if``/``for``/
+    ``while`` in the body only ever takes the one path that single call
+    happened to follow — see `strict` below for when `jit` instead compiles the
+    function whole, so every branch and loop genuinely runs.
 
-    The returned value will be a NDArray if appropriate kwargs are provided
-    (e.g. `cparams=`). Else, the return value will be a NumPy array
-    (if the function returns a NumPy array).  If `out` is provided,
-    the result will be computed and stored in the `out` array
+    The returned value will be a NDArray if a *storage* kwarg is provided (e.g.
+    `cparams=`, `chunks=`, `urlpath=` — anything that only makes sense for a
+    compressed/persisted container). Else, the return value will be a NumPy
+    array (if the function returns a NumPy array). Execution-tuning kwargs
+    (`jit=`, `jit_backend=`, `fp_accuracy=`) do not by themselves trigger this —
+    they take effect either way, without changing the return type. If `out` is
+    provided, the result will be computed and stored in the `out` array.
 
     Parameters
     ----------
     func: callable
         The function to be prepared for the Blosc2 compute engine.
     out: np.ndarray, NDArray, optional
-        The output array where the result will be stored.
+        The output array where the result will be stored.  On the DSL
+        (control-flow) dispatch route, a NumPy `out` is filled in place
+        (directly when C-contiguous, else via a copy); an NDArray `out` is not
+        supported there — use ``compute(urlpath=..., mode="w")`` instead.
     disable: bool, optional
         If True, the decorator is disabled and the original function is returned unchanged.
         Default is False.
+    strict: bool, optional
+        Control which evaluation route is used:
+
+        - ``None`` (default): if *func*'s body contains an ``if``/``for``/``while``
+          and it compiles as a DSL kernel, dispatch to the DSL route (miniexpr
+          runs the whole function, so branches/loops behave as written); a
+          control-flow function that fails DSL extraction still falls back to
+          tracing, but a subsequent tracing failure is annotated with the DSL
+          extraction error.  Functions without control flow always trace, even
+          if they happen to be DSL-valid (tracing is faster for pure elementwise
+          expressions).
+        - ``True``: always use the DSL route, raising
+          :class:`~blosc2.dsl_kernel.DSLSyntaxError` at decoration time if
+          *func*'s source cannot be **parsed** as a DSL kernel.  Note the
+          guarantee is exactly that -- parsing -- and not that the kernel will
+          compile: a function that is DSL-shaped but calls something miniexpr
+          does not implement passes here and fails later, at call time, with a
+          ``RuntimeError``.  See the DSL syntax reference for what the grammar
+          accepts.  (Unrelated to :func:`blosc2.dsl_kernel`, which builds a
+          :class:`DSLKernel` object rather than an evaluating wrapper.)
+
+          This also works as a pandas engine, which is the only way to reach
+          ``strict`` through that entry point:
+          ``df.apply(f, engine=blosc2.jit(strict=True))``.
+        - ``False``: always use the tracing route, even if *func* has control
+          flow (this only works when branches/loops depend on plain Python
+          values, not on traced arrays).
     **kwargs: dict, optional
         Additional keyword arguments supported by the :func:`empty` constructor.
 
@@ -788,24 +1073,82 @@ def jit(func=None, *, out=None, disable=False, **kwargs):
       (e.g. when using a reduction as the last function).  In this case, you can
       still use the `out` parameter of the reduction function for some custom
       control over the output.
+    * DSL-route kernels do not support broadcasting: every array argument must
+      share the same shape.
 
     Examples
     --------
     >>> import numpy as np
     >>> import blosc2
     >>> @blosc2.jit
-    >>> def compute_expression(a, b, c):
-    >>>     return np.sum(((a ** 3 + np.sin(a * 2)) > 2 * c) & (b > 0), axis=1)
+    ... def compute_expression(a, b, c):
+    ...     return np.sum(((a ** 3 + np.sin(a * 2)) > 2 * c) & (b > 0), axis=1)
     >>> a = np.arange(20, dtype=np.float32).reshape(4, 5)
     >>> b = np.arange(20).reshape(4, 5)
     >>> c = np.arange(5)
     >>> compute_expression(a, b, c)
-    [5 5 5 5]
+    array([3, 5, 5, 5])
+
+    With ``strict=True`` the function is compiled as a DSL kernel, so a real
+    per-element ``if`` runs as written -- only the matching arm is evaluated:
+
+    >>> @blosc2.jit(strict=True)
+    ... def clamp(x):
+    ...     if x < 0.0:
+    ...         out = 0.0
+    ...     else:
+    ...         out = x
+    ...     return out
+    >>> clamp(np.array([-1.5, 2.0, -0.5]))
+    array([0., 2., 0.])
+
+    The guarantee is that the source *parses* as DSL, checked at decoration
+    time. A body the grammar does not accept is rejected right away, rather
+    than silently falling back to tracing:
+
+    >>> @blosc2.jit(strict=True)  # doctest: +IGNORE_EXCEPTION_DETAIL
+    ... def not_dsl(x):
+    ...     return np.where(x >= 0, x.mean(), x)
+    Traceback (most recent call last):
+        ...
+    blosc2.dsl_kernel.DSLSyntaxError: Unsupported call target in DSL ...
     """
 
-    def decorator(func):
+    def decorator(func):  # noqa: C901
         if disable:
             return func
+
+        kernel = DSLKernel(func)
+        has_cf = _has_control_flow(kernel.dsl_source)
+        dsl_ok = kernel.dsl_source is not None and kernel.dsl_error is None
+        if strict is True and not dsl_ok:
+            # One condition, one exception type: DSLSyntaxError (a ValueError)
+            # whether the source failed to parse as DSL or could not be read at
+            # all (a lambda, a C function). The message avoids naming the
+            # decorator spelling, since `strict=True` also arrives through
+            # `df.apply(..., engine=blosc2.jit(strict=True))`.
+            raise kernel.dsl_error or DSLSyntaxError(
+                f"strict=True: could not extract a DSL kernel from {func.__name__!r}"
+            )
+        use_dsl = strict is True or (strict is None and has_cf and dsl_ok)
+
+        if use_dsl:
+            dsl_wrapper = _jit_dsl_wrapper(kernel, out, kwargs)
+            dsl_wrapper._blosc2_jit_wrapped = func
+            return dsl_wrapper
+
+        _trace_hint = None
+        if strict is None and has_cf and not dsl_ok:
+            _trace_hint = (
+                f"Note: {func.__name__!r} contains control flow (if/for/while) but could not be "
+                f"compiled as a DSL kernel: {kernel.dsl_error or 'source unavailable'}. See "
+                "doc/reference/dsl_syntax.md for the DSL syntax reference."
+            )
+
+        exec_kwargs = {
+            k: v for k, v in kwargs.items() if k in _JIT_EXECUTION_TUNING_KWARGS and v is not None
+        }
+        storage_kwargs = {k: v for k, v in kwargs.items() if k not in _JIT_EXECUTION_TUNING_KWARGS}
 
         def wrapper(*args, **func_kwargs):
             # Get some kwargs in decorator for SimpleProxy constructor
@@ -825,13 +1168,28 @@ def jit(func=None, *, out=None, disable=False, **kwargs):
                 func_kwargs[key] = SimpleProxy(value, **proxy_kwargs)
 
             # Call function with the new arguments
-            retval = func(*new_args, **func_kwargs)
+            try:
+                retval = func(*new_args, **func_kwargs)
+            except Exception as e:
+                hints = [
+                    hint
+                    for hint in (
+                        _wide_frame_hint(
+                            e, getattr(func, "__name__", "the function"), _signature_params(func)
+                        ),
+                        _trace_hint,
+                    )
+                    if hint is not None
+                ]
+                if hints:
+                    raise type(e)("\n".join([str(e), *hints])) from e
+                raise
 
             # Treat return value
             # If it is a numpy array, return it as is
             if isinstance(retval, np.ndarray):
-                if kwargs and any(kwargs[key] is not None for key in kwargs):
-                    # But if kwargs are provided, return a NDArray instead
+                if storage_kwargs and any(v is not None for v in storage_kwargs.values()):
+                    # But if storage kwargs are provided, return a NDArray instead
                     return blosc2.asarray(retval, **kwargs)
                 return retval
 
@@ -843,12 +1201,22 @@ def jit(func=None, *, out=None, disable=False, **kwargs):
             # If the return value is a LazyExpr, compute it
             if out is not None:
                 return retval.compute(out=out, **kwargs)
-            if kwargs and any(kwargs[key] is not None for key in kwargs):
+            if storage_kwargs and any(v is not None for v in storage_kwargs.values()):
                 return retval.compute(**kwargs)
-            # If no kwargs are provided, return a numpy array
-            return retval[()]
+            # No storage kwargs: return a NumPy array (like retval[()]), but still
+            # honor any execution-tuning kwargs (jit/jit_backend/fp_accuracy).
+            return retval.compute(_getitem=True, **exec_kwargs)
 
+        # Lets callers (notably the pandas engine below) tell an already-jitted
+        # function from a plain one, so it is not decorated a second time.
+        wrapper._blosc2_jit_wrapped = func
         return wrapper
+
+    # Carry the engine on the decorator too, so a configured call such as
+    # `blosc2.jit(strict=True)` is accepted by `df.apply(..., engine=...)`:
+    # pandas gates on hasattr(engine, "__pandas_udf__") and then uses the engine
+    # object itself as the decorator.
+    decorator.__pandas_udf__ = PandasUdfEngine
 
     if func is None:
         return decorator
@@ -886,7 +1254,7 @@ class PandasUdfEngine:
         if skip_na:
             raise NotImplementedError("The Blosc2 engine does not support na_action='ignore' in map.")
         values = cls._ensure_numpy_data(data)
-        func = decorator(func)
+        func = _decorate_once(func, decorator)
         return func(values, *args, **kwargs)
 
     @classmethod
@@ -899,7 +1267,11 @@ class PandasUdfEngine:
         """
         orig = data
         values = cls._ensure_numpy_data(data)
-        func = decorator(func)
+        func_name = getattr(func, "__name__", "the function")
+        uses_subscript, has_loop = (
+            _analyze_row_func(_undecorated(func)) if hasattr(orig, "columns") else (False, False)
+        )
+        func = _decorate_once(func, decorator)
         if values.ndim == 1 or axis is None:
             # pandas Series.apply or pipe
             result = func(values, *args, **kwargs)
@@ -908,9 +1280,46 @@ class PandasUdfEngine:
             result = [func(values[:, col_idx], *args, **kwargs) for col_idx in range(values.shape[1])]
             result = np.vstack(result).transpose()
         elif axis in (1, "columns"):
-            # pandas apply(axis=1) row-wise
-            result = [func(values[row_idx, :], *args, **kwargs) for row_idx in range(values.shape[0])]
-            result = np.vstack(result)
+            if uses_subscript and has_loop:
+                # row["colname"] combined with for/while: tracing would unroll
+                # the loop eagerly at call time, growing the traced expression
+                # with every iteration (a real per-row iteration count, like a
+                # Newton-Raphson loop, blows this up well past practical). No
+                # existing dispatch route can run this well; point at the one
+                # that can instead of hanging or crashing confusingly.
+                raise TypeError(
+                    f"@blosc2.jit engine=... axis=1: {func_name!r} "
+                    'combines row["colname"] access with a for/while loop, which cannot be '
+                    "traced efficiently per-row. Call your @blosc2.jit function directly with "
+                    "the DataFrame columns as separate array arguments instead: name its "
+                    "parameters after the columns and call kernel(**df) -- see "
+                    "doc/guides/pandas_engine.md."
+                )
+            if uses_subscript:
+                # The `row["colname"]` idiom: replace the per-row Python loop
+                # with one call over whole per-column arrays (row-proxy, see
+                # `_PandasRowProxy`), extracted from the original DataFrame so
+                # per-column dtypes survive.
+                row_proxy = _PandasRowProxy(orig)
+                result = func(row_proxy, *args, **kwargs)
+                if not (
+                    isinstance(result, np.ndarray)
+                    and result.ndim == 1
+                    and result.shape[0] == values.shape[0]
+                ):
+                    raise TypeError(
+                        '@blosc2.jit engine=... axis=1: functions using row["colname"] must '
+                        f"return one scalar per row (shape ({values.shape[0]},)); got "
+                        f"{result!r}. Returning multiple values per row is not supported here."
+                    )
+            else:
+                # pandas apply(axis=1) row-wise: the historical per-row loop.
+                # Fine for functions treating the row as a plain array (e.g.
+                # `row + 1`); functions using row["colname"] are dispatched
+                # above instead, since this loop hands each call a positional
+                # ndarray row that does not support string subscripting.
+                result = [func(values[row_idx, :], *args, **kwargs) for row_idx in range(values.shape[0])]
+                result = np.vstack(result)
         else:
             raise NotImplementedError(f"Unknown axis '{axis}'. Use one of 0, 1 or None.")
 
