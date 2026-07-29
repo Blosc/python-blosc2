@@ -2540,6 +2540,12 @@ class Column:
             root._mark_generated_columns_stale(self._col_name)
             root._mark_all_indexes_stale()
             return
+        if self.is_varlen_scalar:
+            self._assign_varlen_scalar(data)
+            root = self._table._root_table
+            root._mark_generated_columns_stale(self._col_name)
+            root._mark_all_indexes_stale()
+            return
         n_live = len(self)
         arr = np.asarray(data)
         if len(arr) != n_live:
@@ -2553,6 +2559,30 @@ class Column:
         root = self._table._root_table
         root._mark_generated_columns_stale(self._col_name)
         root._mark_all_indexes_stale()
+
+    def _assign_varlen_scalar(self, data) -> None:
+        """``assign()`` for utf8/vlstring/vlbytes/struct/object columns.
+
+        These are rewritten whole rather than row by row: overwriting one row
+        of a utf8 column shifts every later offset, and one row of a batched
+        varlen column rewrites its whole batch, so the loop would be
+        quadratic.  Dead slots keep their current contents.
+        """
+        values = list(data)
+        n_live = len(self)
+        if len(values) != n_live:
+            raise ValueError(f"assign() requires {n_live} values (live rows), got {len(values)}.")
+        raw = self._raw_col
+        raw.flush()
+        n_phys = len(raw)
+        if n_live == n_phys:
+            raw.set_all(values)
+            return
+        current = list(raw[:])
+        live_pos = np.flatnonzero(self._valid_rows[:n_phys])
+        for pos, value in zip(live_pos, values, strict=True):
+            current[int(pos)] = value
+        raw.set_all(current)
 
     # ------------------------------------------------------------------
     # Null sentinel support
@@ -8982,7 +9012,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             used to fill the new column.  This is the supported way to land a
             computed result back into the table::
 
-                res = blosc2.lazyexpr("'x=' + a", {"a": blosc2.asarray(arr)}).compute()
+                res = blosc2.lazyexpr("'x=' + a", {"a": arr}).compute()
                 t.add_column("out", blosc2.utf8(), values=res[:])
 
             A declared default is still honoured for rows appended later, so

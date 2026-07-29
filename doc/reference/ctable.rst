@@ -470,7 +470,7 @@ evaluated on fixed-width arrays, so the result is written back explicitly rather
 than by :meth:`CTable.add_computed_column`::
 
     arr = t["name"][:].astype("<U37")
-    res = blosc2.lazyexpr("'x=' + a", {"a": blosc2.asarray(arr)}).compute()[:]
+    res = blosc2.lazyexpr("'x=' + a", {"a": arr}).compute()[:]
     t.add_column("prefixed", blosc2.utf8(), values=res)
 
 A declared default is still honoured for rows appended later, so ``values=`` and
@@ -962,6 +962,8 @@ Text & binary
     string
     utf8
     utf8_array
+    from_utf8
+    to_utf8
     bytes
     vlstring
     vlbytes
@@ -969,6 +971,9 @@ Text & binary
 .. autoclass:: string
 .. autofunction:: utf8
 .. autofunction:: utf8_array
+.. autofunction:: from_utf8
+.. autofunction:: to_utf8
+.. automethod:: Utf8Array.astype
 .. autoclass:: bytes
 .. autofunction:: vlstring
 .. autofunction:: vlbytes
@@ -1037,6 +1042,11 @@ CTable offers four ways to store strings.  As a quick decision path:
      - ✓ (rank-based) [#rankindex]_
      - ✓ (rank-based) [#rankindex]_
      - ✗
+   * - String-returning expressions
+     - ✓
+     - convert first [#utf8compute]_
+     - ✗
+     - ✗
    * - Arrow / Parquet
      - ✓
      - ✓ (``large_string``)
@@ -1072,10 +1082,55 @@ CTable offers four ways to store strings.  As a quick decision path:
    predicate.  Nested (dotted) utf8 leaves are still unsupported and raise
    ``NotImplementedError`` with a clear message.
 
+.. [#utf8compute] Expressions that *return* strings — concatenation,
+   ``upper``, ``replace``, DSL kernels — run on fixed-width arrays, so a utf8
+   column is converted first and the result written back.  See
+   :ref:`Utf8Compute` below.
+
 Note that a plain ``str`` annotation without an explicit :func:`field` spec
 still maps to fixed-width ``string(max_length=32)`` for backward
 compatibility; opt in to variable-length storage with
 ``blosc2.field(blosc2.utf8())``.
+
+.. _Utf8Compute:
+
+Computing strings on a utf8 column
+----------------------------------
+
+The rule is: **utf8 stores and filters; fixed-width computes.**
+
+Everything on the *query* side works directly on a utf8 column — comparisons,
+``where()`` including ``startswith``/``contains``, ``sum(where=)``,
+``group_by``, ``sort_by`` and ``create_index``.  Expressions that **return
+strings** are different: miniexpr's string kernels need a compile-time output
+width, which a variable-length column does not have.  So those are converted,
+computed, and written back::
+
+    fixed = blosc2.from_utf8(t["name"])              # -> <Un ndarray
+    res = blosc2.lazyexpr("'x=' + a", {"a": fixed}).compute()[:]
+    t.add_column("prefixed", blosc2.utf8(), values=blosc2.to_utf8(res))
+
+:func:`from_utf8` sizes the result to the longest value, counted in
+codepoints, so nothing truncates and non-ASCII text does not over-allocate.
+Pass an explicit ``dtype`` to choose the width yourself, which truncates
+longer values exactly as NumPy's ``astype`` does.  :meth:`Utf8Array.astype`
+is the same conversion as a method.
+
+To overwrite an existing column rather than add one, use
+:meth:`Column.assign`::
+
+    t["name"].assign(res)
+
+Both write paths take one value per **live** row, so rows removed by
+:meth:`CTable.delete` are skipped.
+
+:meth:`CTable.add_computed_column` and :meth:`CTable.assign` do **not** accept
+string-returning expressions over utf8 columns; they raise
+``NotImplementedError`` rather than convert behind your back, because the
+conversion's cost — a decode plus a widening copy — is worth being visible.
+Passing a :func:`blosc2.dsl_kernel` that returns strings over a utf8 column is
+not supported either, and currently fails with a NumPy dtype-promotion error
+rather than a clear one.
 
 Array, encoded, and compound specs
 ----------------------------------

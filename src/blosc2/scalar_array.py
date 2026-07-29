@@ -258,6 +258,22 @@ class _ScalarVarLenArray:
             self._pending.clear()
             self._invalidate_prefix_cache()
 
+    def set_all(self, values: Iterable[Any]) -> None:
+        """Replace the whole content, keeping the current row count.
+
+        Writes each backing batch exactly once, where the equivalent loop over
+        :meth:`__setitem__` would rewrite a whole batch per row.  Mirrors
+        ``Utf8Array.set_all`` so callers can treat both the same way.
+        """
+        coerced = [self._coerce(v) for v in values]
+        if len(coerced) != len(self):
+            raise ValueError(f"set_all() expects {len(self)} values, got {len(coerced)}.")
+        prefix = self._persisted_prefix_sums()
+        for batch_index in range(len(prefix) - 1):
+            self._backend[batch_index] = coerced[prefix[batch_index] : prefix[batch_index + 1]]
+        # Batch lengths are unchanged, so the prefix cache stays valid.
+        self._pending = coerced[self._persisted_row_count :]
+
     # ------------------------------------------------------------------
     # Public read interface
     # ------------------------------------------------------------------

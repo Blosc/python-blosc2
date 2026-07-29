@@ -920,6 +920,87 @@ class Utf8Array:
             n, pa.py_buffer(rel), pa.py_buffer(data), validity, null_count
         )
 
+    def _max_char_len(self, *, span_rows: int = UTF8_EXPR_SPAN) -> int:
+        """Longest value in codepoints, without decoding a row.
+
+        A UTF-8 codepoint starts at every byte that is *not* a continuation
+        byte (``0b10xxxxxx``), so counting those over a row's byte range gives
+        its length in characters -- the width a fixed-width ``U`` array needs.
+        Byte lengths alone would only bound it, over-allocating up to 4x on
+        non-ASCII text.
+
+        Byte lengths come from the offsets, so a span whose longest row cannot
+        beat the running best is skipped without reading any data at all, and
+        an all-ASCII span settles from the offsets alone.
+        """
+        self.flush()
+        n = len(self)
+        widest = 0
+        for start in range(0, n, span_rows):
+            stop = min(start + span_rows, n)
+            offs = np.asarray(self._offsets[start : stop + 1], dtype=np.int64)
+            byte_max = int(np.diff(offs).max(initial=0))
+            if byte_max <= widest:
+                continue  # bytes bound codepoints, so this span cannot win
+            raw = np.asarray(self._data[offs[0] : offs[-1]], dtype=np.uint8)
+            if not (raw & 0x80).any():
+                widest = byte_max  # pure ASCII: one byte per codepoint
+                continue
+            # Cumulative sums rather than reduceat: empty rows repeat an offset,
+            # which reduceat reads as "to the end" instead of as a zero count.
+            cumulative = np.concatenate(([0], np.cumsum((raw & 0xC0) != 0x80)))
+            rel = offs - offs[0]
+            widest = max(widest, int((cumulative[rel[1:]] - cumulative[rel[:-1]]).max(initial=0)))
+        return widest
+
+    def astype(self, dtype=None, *, span_rows: int = UTF8_EXPR_SPAN) -> np.ndarray:
+        """Materialize as a fixed-width NumPy ``U`` array.
+
+        This is the conversion half of the rule utf8 columns follow for
+        compute: they store and filter as variable-length text, and
+        string-returning expressions run on fixed-width arrays.  See
+        :func:`blosc2.to_utf8` for the way back.
+
+        Parameters
+        ----------
+        dtype:
+            Target dtype.  ``None`` or an unsized ``"<U"`` sizes the result to
+            the longest value, so nothing truncates.  An explicit width is used
+            as given and truncates longer values, exactly as NumPy's
+            ``astype`` does.
+        span_rows:
+            Rows materialized per iteration.  Bounds peak memory; the result
+            itself is always a single array.
+
+        Returns
+        -------
+        numpy.ndarray
+            A ``<Un`` array.  Nulls surface as the column's sentinel, the same
+            as a plain ``arr[:]`` read.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> arr = blosc2.utf8_array(["hello", "café", "日本語"])
+        >>> arr.astype().dtype
+        dtype('<U5')
+        """
+        self.flush()
+        if dtype is None or (isinstance(dtype, str) and dtype in ("U", "<U", ">U", "=U")):
+            dtype = np.dtype(f"<U{max(1, self._max_char_len(span_rows=span_rows))}")
+        else:
+            dtype = np.dtype(dtype)
+            if dtype.kind != "U":
+                raise ValueError(f"astype() on a Utf8Array needs a U dtype, got {dtype!r}.")
+            if dtype.itemsize == 0:
+                dtype = np.dtype(f"<U{max(1, self._max_char_len(span_rows=span_rows))}")
+        n = len(self)
+        out = np.empty(n, dtype=dtype)
+        for start in range(0, n, span_rows):
+            stop = min(start + span_rows, n)
+            out[start:stop] = self._read_span(start, stop)
+        return out
+
     def copy(self, spec=None, **kwargs: Any) -> Utf8Array:
         """Return an in-memory copy."""
         if spec is None:
@@ -960,6 +1041,79 @@ def utf8_array(seq, spec=None, **kwargs) -> Utf8Array:
     arr.extend(seq)
     arr.flush()
     return arr
+
+
+def from_utf8(arr, dtype=None) -> np.ndarray:
+    """Convert variable-length UTF-8 text to a fixed-width NumPy ``U`` array.
+
+    The outbound half of the utf8 compute rule: utf8 stores and filters text
+    compactly, while string-returning expressions and DSL kernels run on
+    fixed-width arrays.  :func:`to_utf8` is the way back.
+
+    Parameters
+    ----------
+    arr:
+        A :class:`Utf8Array`, a utf8 :class:`~blosc2.CTable` column, a NumPy
+        ``StringDType`` array, or any iterable of ``str``.
+    dtype:
+        Target dtype.  ``None`` (or an unsized ``"<U"``) sizes the result to
+        the longest value, so nothing truncates.  An explicit width truncates
+        longer values, as NumPy's ``astype`` does.
+
+    Returns
+    -------
+    numpy.ndarray
+        A ``<Un`` array.  Nulls surface as the column's sentinel.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> arr = blosc2.utf8_array(["hello", "café"])
+    >>> fixed = blosc2.from_utf8(arr)
+    >>> fixed.dtype
+    dtype('<U5')
+    >>> blosc2.to_utf8(fixed)[1]
+    'café'
+    """
+    raw = getattr(arr, "raw", arr)  # a CTable Column exposes its container here
+    if isinstance(raw, Utf8Array):
+        return raw.astype(dtype)
+    values = np.asarray(raw if isinstance(raw, np.ndarray) else list(raw))
+    if dtype is None or (isinstance(dtype, str) and dtype in ("U", "<U", ">U", "=U")):
+        if values.dtype.kind == "U":
+            return values
+        dtype = np.dtype(f"<U{max(1, max((len(v) for v in values), default=0))}")
+    return values.astype(dtype)
+
+
+def to_utf8(values, spec=None) -> Utf8Array:
+    """Build a :class:`Utf8Array` from fixed-width or otherwise decoded strings.
+
+    The inbound half of the pair described in :func:`from_utf8`, and the way a
+    computed string result becomes storable again::
+
+        fixed = blosc2.from_utf8(t["name"])
+        res = blosc2.lazyexpr("'x=' + a", {"a": fixed}).compute()[:]
+        t.add_column("prefixed", blosc2.utf8(), values=blosc2.to_utf8(res))
+
+    Parameters
+    ----------
+    values:
+        NumPy ``U``/``StringDType`` array, or any iterable of ``str`` (or
+        ``None`` for a nullable *spec*).
+    spec:
+        The :class:`~blosc2.schema.Utf8Spec` describing the result.  Defaults
+        to ``blosc2.utf8()`` (non-nullable).
+
+    Returns
+    -------
+    Utf8Array
+    """
+    if isinstance(values, np.ndarray):
+        # tolist() yields plain str, which is Utf8Array.extend's fast path;
+        # iterating the array yields np.str_, which is not.
+        values = values.tolist()
+    return utf8_array(values, spec)
 
 
 class Utf8Factorizer:

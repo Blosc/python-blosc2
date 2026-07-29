@@ -519,7 +519,7 @@ def test_ctable_utf8_add_column_values_from_computed_expression():
     """The documented round trip: compute on <U, land the result back as utf8."""
     t = make_table(["a", "bb", "ccc"])
     arr = t["name"][:].astype("<U8")
-    res = blosc2.lazyexpr("'x=' + a", {"a": blosc2.asarray(arr)}).compute()[:]
+    res = blosc2.lazyexpr("'x=' + a", {"a": arr}).compute()[:]
     t.add_column("out", blosc2.utf8(), values=res)
     assert list(t["out"][:]) == ["x=a", "x=bb", "x=ccc"]
     assert t["out"][:].dtype == STRING_DTYPE
@@ -1846,3 +1846,146 @@ def test_ctable_utf8_index_predicate_falls_back_when_stale(tmp_path):
     t._flush_varlen_columns()
     assert t["c"]._utf8_index_mask(np.equal, "pear") is None
     np.testing.assert_array_equal(t["c"]._utf8_scalar_mask(np.equal, "apple")[:3], [False, False, True])
+
+
+# ---------------------------------------------------------------------------
+# Fixed-width conversion pair: astype / from_utf8 / to_utf8
+# ---------------------------------------------------------------------------
+
+
+def test_utf8_astype_infers_exact_width():
+    arr = blosc2.utf8_array(["hello", "café", "日本語", ""])
+    out = arr.astype()
+    assert out.dtype == np.dtype("<U5")
+    assert list(out) == ["hello", "café", "日本語", ""]
+
+
+def test_utf8_astype_unsized_u_also_infers():
+    arr = blosc2.utf8_array(["hello", "café"])
+    assert arr.astype("<U").dtype == np.dtype("<U5")
+    assert arr.astype("U").dtype == np.dtype("<U5")
+
+
+def test_utf8_astype_width_is_codepoints_not_bytes():
+    """A byte-length bound would over-allocate 3-4x on non-ASCII text."""
+    arr = blosc2.utf8_array(["日本語のテキスト", "a"])  # 8 chars, 24 bytes
+    assert arr.astype().dtype == np.dtype("<U8")
+
+
+def test_utf8_astype_explicit_width_truncates_like_numpy():
+    arr = blosc2.utf8_array(["hello", "hi"])
+    assert list(arr.astype("<U3")) == ["hel", "hi"]
+
+
+def test_utf8_astype_rejects_non_string_dtype():
+    arr = blosc2.utf8_array(["a"])
+    with pytest.raises(ValueError, match="needs a U dtype"):
+        arr.astype("int64")
+
+
+def test_utf8_astype_empty_and_all_empty():
+    assert blosc2.utf8_array([]).astype().shape == (0,)
+    assert list(blosc2.utf8_array(["", ""]).astype()) == ["", ""]
+
+
+@pytest.mark.parametrize("span_rows", [1, 3, 65536])
+def test_utf8_astype_span_size_does_not_change_result(span_rows):
+    values = ["", "a", "日本語", "x" * 40, "café", "🎉🚀"]
+    arr = blosc2.utf8_array(values)
+    out = arr.astype(span_rows=span_rows)
+    assert out.dtype == np.dtype("<U40")
+    assert list(out) == values
+
+
+def test_utf8_astype_surfaces_null_sentinel():
+    # A bare spec carries no sentinel until a table resolves its null policy.
+    spec = blosc2.utf8(nullable=True, null_value="<NA>")
+    arr = blosc2.utf8_array(["a", None], spec)
+    assert list(arr.astype()) == ["a", "<NA>"]
+
+
+def test_from_utf8_accepts_array_column_and_iterables():
+    values = ["hello", "café"]
+    arr = blosc2.utf8_array(values)
+    t = make_table(values)
+
+    for source in (arr, t["name"], np.array(values, dtype=STRING_DTYPE), values):
+        out = blosc2.from_utf8(source)
+        assert out.dtype == np.dtype("<U5"), source
+        assert list(out) == values, source
+
+
+def test_from_utf8_honours_explicit_dtype():
+    arr = blosc2.utf8_array(["hello"])
+    assert blosc2.from_utf8(arr, "<U2").dtype == np.dtype("<U2")
+
+
+def test_to_utf8_from_fixed_width_and_lists():
+    values = ["hello", "café", ""]
+    for source in (np.array(values, dtype="<U5"), np.array(values, dtype=STRING_DTYPE), values):
+        out = blosc2.to_utf8(source)
+        assert isinstance(out, blosc2.Utf8Array)
+        assert list(out[:]) == values, source
+
+
+def test_to_utf8_honours_spec():
+    spec = blosc2.utf8(nullable=True, null_value="<NA>")
+    out = blosc2.to_utf8(["a", None], spec)
+    assert out[1] == "<NA>"
+
+
+def test_utf8_conversion_round_trip():
+    values = ["", "a", "日本語のテキスト", "x" * 40, "🎉"]
+    arr = blosc2.utf8_array(values)
+    assert list(blosc2.to_utf8(blosc2.from_utf8(arr))[:]) == values
+
+
+def test_utf8_conversion_round_trip_through_an_expression():
+    """The documented compute rule, end to end."""
+    t = make_table(["a", "bb", "ccc"])
+    fixed = blosc2.from_utf8(t["name"])
+    res = blosc2.lazyexpr("'x=' + a", {"a": fixed}).compute()[:]
+    t.add_column("prefixed", blosc2.utf8(), values=blosc2.to_utf8(res))
+    assert list(t["prefixed"][:]) == ["x=a", "x=bb", "x=ccc"]
+
+
+# ---------------------------------------------------------------------------
+# Column.assign on utf8
+# ---------------------------------------------------------------------------
+
+
+def test_ctable_utf8_column_assign():
+    t = make_table(["a", "bb", "ccc"])
+    t["name"].assign(["X", "YY", "ZZZ"])
+    assert list(t["name"][:]) == ["X", "YY", "ZZZ"]
+
+
+def test_ctable_utf8_column_assign_from_computed_result():
+    t = make_table(["a", "bb"])
+    fixed = blosc2.from_utf8(t["name"])
+    res = blosc2.lazyexpr("a + '!'", {"a": fixed}).compute()[:]
+    t["name"].assign(res)
+    assert list(t["name"][:]) == ["a!", "bb!"]
+
+
+def test_ctable_utf8_column_assign_skips_deleted_rows():
+    t = make_table(["a", "b", "c", "d"])
+    t.delete([0, 2])
+    t["name"].assign(["P", "Q"])
+    assert list(t["name"][:]) == ["P", "Q"]
+    assert list(t["x"][:]) == [1, 3]
+
+
+def test_ctable_utf8_column_assign_wrong_length_raises():
+    t = make_table(["a", "bb"])
+    with pytest.raises(ValueError, match="requires 2 values"):
+        t["name"].assign(["only-one"])
+
+
+def test_ctable_utf8_column_assign_persists(tmp_path):
+    path = str(tmp_path / "utf8_assign.b2d")
+    t = make_table(["a", "bb"], urlpath=path, mode="w")
+    t["name"].assign(["hello", "wörld"])
+    t.close()
+    t2 = CTable.open(path)
+    assert list(t2["name"][:]) == ["hello", "wörld"]

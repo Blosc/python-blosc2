@@ -101,6 +101,22 @@ XXX version-specific blurb XXX
   evaluated on fixed-width arrays, and the result previously had to be written
   through the private `t._cols[name].set_all(...)`. A declared default is still
   honoured for rows appended later, so the two can be combined.
+- **`blosc2.from_utf8()` / `blosc2.to_utf8()` and `Utf8Array.astype()`** make
+  the conversion between variable-length and fixed-width text an explicit,
+  documented pair. utf8 columns store and filter text compactly, but
+  string-*returning* expressions need miniexpr's compile-time output width, so
+  they run on fixed-width arrays; the rule is now written down (see "Computing
+  strings on a utf8 column" in the CTable reference) rather than left for
+  callers to discover. `from_utf8()` sizes the result to the longest value in
+  **codepoints**, counted from the raw bytes without decoding a row, so nothing
+  truncates and non-ASCII text does not over-allocate the 3-4x a byte-length
+  bound would.
+- **`Column.assign()` works on utf8, vlstring, vlbytes, struct and object
+  columns.** It previously raised `TypeError: Utf8Array assignment index must
+  be int`, leaving no public way to overwrite a variable-length column's
+  values. These are now rewritten whole (one write per backing batch) rather
+  than row by row, which for the batched varlen columns would have rewritten a
+  whole batch per row.
 
 ### Improvements
 
