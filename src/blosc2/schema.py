@@ -860,11 +860,13 @@ def utf8(*, nullable: bool = False, null_value: str | None = None) -> Utf8Spec:
     utf8 columns support vectorized comparisons (``==``, ``!=``, ``<``,
     ``<=``, ``>``, ``>=``), string-expression filters such as
     ``t.where("name == 'x'")`` and ``t.where("startswith(name, 'x')")``,
-    :meth:`CTable.group_by` keys, :meth:`CTable.sort_by`, and Arrow/Parquet
-    interop.  Current limitation: :meth:`CTable.create_index` is not
-    supported yet (use a fixed-width :class:`string` column if you need an
-    index).  See :ref:`ChoosingStringType` for a full comparison with
-    :class:`string` and :func:`vlstring`.
+    :meth:`CTable.group_by` keys, :meth:`CTable.sort_by`, Arrow/Parquet
+    interop, and :meth:`CTable.create_index`, which indexes the alphabetical
+    rank of each value and accelerates sorting and scalar comparisons (but
+    not ``startswith``/substring searches, which no index covers).  Nested
+    (dotted) utf8 leaves in an expression are not supported yet.  See
+    :ref:`ChoosingStringType` for a full comparison with :class:`string` and
+    :func:`vlstring`.
 
     Parameters
     ----------

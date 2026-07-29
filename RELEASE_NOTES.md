@@ -81,6 +81,53 @@ XXX version-specific blurb XXX
       matching numpy.
     - Not implemented: `bytes` (returns raw `bytes`, not an `NDArray`).
 
+- **`create_index()` now works on `utf8()` columns**, the last string flavour
+  without one. Both `utf8` and `dictionary` are indexed by the *alphabetical
+  rank* of each value: sorting by rank is sorting by the decoded string, so an
+  `int32` rank column drives the same machinery a numeric column uses. At 1M
+  rows / cardinality 20k: `sort_by` 424 ms -> 7.2 ms, `sorted_slice` 458 ms ->
+  43 ms, and the index is the cheapest of the three flavours to build (277 ms
+  against 867 ms for `<U`). Scalar comparisons are served from it too — utf8
+  `==` 29.0 ms -> 5.5 ms, `<` 34.6 ms -> 5.5 ms, and the dictionary operator
+  form `t[t.c == v]` 329.6 ms -> 8.4 ms. `startswith`/substring searches are
+  not accelerated (no index covers them), and ranks are frozen at build time,
+  so a value inserted ahead of existing ones sends the index stale until it is
+  rebuilt.
+
+### Improvements
+
+- **Dictionary columns decode once per read, not once per row.** Each
+  `dict_store[code]` decompresses a whole msgpack batch, so reads and
+  lexsort-based `sort_by` cost O(N) decompressions. At 1M rows an unindexed
+  `sort_by` drops from 236 s to 713 ms, and a full column read from 44 s (at
+  200k rows) to 193 ms.
+- **`kind=BUCKET` indexes no longer cost more than the scan they replace.**
+  Scattered matches were read one bucket run at a time, re-decompressing the
+  same blocks many times, and the planner measured selectivity in buckets while
+  the cost is paid in blocks — a mask selecting 21% of buckets could touch 96%
+  of them. Affected every indexable dtype; the relative penalty was worst on
+  numerics (`float64` 6.3 ms -> 77.9 ms before, 6.6 ms after).
+
+### Bug fixes
+
+- **Comparison operators on `Utf8Array`, dictionary and varlen scalar columns**
+  returned a plain `False`: none defined them, so `column == "value"` fell
+  through to object identity. Silently wrong rather than an error. All now
+  return boolean masks; `Utf8Array` and `DictionaryColumn` answer a scalar
+  without decoding any row.
+- **`dictcol != value` raised `IndexError`** on any table with capacity
+  padding: the negation was applied after the live-row intersection, turning
+  every dead slot `True`.
+- **Expressions over a bare `Utf8Array`** (`blosc2.lazyexpr("'x=' + a", {"a":
+  arr})`) produced correct values down the wrong path — widened to fixed-width
+  `<Un` and evaluated by the NumPy fallback, never reaching miniexpr, ignoring
+  the span budget and losing the utf8 container. They now run through the span
+  driver and return a `Utf8Array`.
+- **`blosc2.utf8(null_value="\x00")` is rejected.** NumPy does not match a lone
+  NUL against a `StringDType` array (`"\x00x"` and `"a\x00b"` compare fine), so
+  every null mask would silently stop marking nulls. The default sentinel
+  `'__BLOSC2_NULL__'` was never affected.
+
 ## Changes from 4.9.0 to 4.9.1
 
 A small hot-fix release for the Arrow interop work in 4.9.0: a real

@@ -966,8 +966,7 @@ CTable offers four ways to store strings.  As a quick decision path:
   use :func:`dictionary` — repeated values are stored once as integer codes.
 * Everything else (names, free text, high-cardinality values):
   use :func:`utf8` — the recommended default for variable-length text.
-* Short codes of near-uniform length, or columns that need
-  :meth:`CTable.create_index`: use :class:`string` (fixed-width).
+* Short codes of near-uniform length: use :class:`string` (fixed-width).
 * NumPy < 2.0, or nullable columns where any string value can legally occur
   (native ``None`` nulls, no sentinel): use :func:`vlstring`.
 
@@ -1017,8 +1016,8 @@ CTable offers four ways to store strings.  As a quick decision path:
      - ✗
    * - :meth:`CTable.create_index`
      - ✓
-     - not yet
-     - ✓ (rank-based)
+     - ✓ (rank-based) [#rankindex]_
+     - ✓ (rank-based) [#rankindex]_
      - ✗
    * - Arrow / Parquet
      - ✓
@@ -1036,15 +1035,24 @@ CTable offers four ways to store strings.  As a quick decision path:
      - low-cardinality categories
      - NumPy < 2.0; native-``None`` nulls
 
+.. [#rankindex] :func:`utf8` and :func:`dictionary` are indexed by the
+   *alphabetical rank* of each row's value: sorting by rank is sorting by the
+   decoded string, so an ``int32`` rank column drives the same index machinery
+   a numeric column uses.  This accelerates :meth:`CTable.sort_by`,
+   :meth:`CTable.sorted_slice` and scalar comparisons (``==``/``!=`` on both,
+   plus ordering comparisons on utf8).  It does **not** accelerate
+   ``startswith``/substring searches, which no index covers, and the ranks are
+   frozen at build time: a value inserted ahead of existing ones invalidates
+   all of them, so the index falls back to a full sort until rebuilt.
+
 .. [#utf8expr] utf8 columns support both the operator form
    ``t[t.name == "x"]`` and the string-expression form
    ``t.where("name == 'x'")``.  Because a variable-length column cannot be an
    expression operand directly, string expressions are evaluated span by span,
    with each span materialized to a fixed-width array first; results are
    identical to the operator form, including that a null never satisfies any
-   predicate.  Nested (dotted) utf8 leaves and :meth:`CTable.create_index` on
-   utf8 columns are still unsupported and raise ``NotImplementedError`` with a
-   clear message.
+   predicate.  Nested (dotted) utf8 leaves are still unsupported and raise
+   ``NotImplementedError`` with a clear message.
 
 Note that a plain ``str`` annotation without an explicit :func:`field` spec
 still maps to fixed-width ``string(max_length=32)`` for backward
