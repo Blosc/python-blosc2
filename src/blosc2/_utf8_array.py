@@ -151,7 +151,9 @@ def utf8_span_eval(
 
     Nulls are materialized to ``""`` so no string kernel ever sees a sentinel,
     and nullity is re-applied afterwards: a boolean result is forced ``False``
-    (SQL ``WHERE`` semantics), a string result gets the sentinel back.
+    (SQL ``WHERE`` semantics), a string result gets the sentinel back.  A string
+    result therefore needs the operands to agree on one sentinel, and raises
+    ``ValueError`` when they do not.
 
     Span operands are handed over as blosc2 arrays rather than NumPy ones: the
     NumPy route evaluates through ``slices_eval``, which never reaches
@@ -163,7 +165,12 @@ def utf8_span_eval(
 
     n_logical = min(len(a) for a in arrays.values())
     compute_kwargs = {"strict_miniexpr": True} if strict else {}
-    null_value = next((v for v in sentinels.values() if v is not None), None)
+    # One result column, so one sentinel.  Reading it off whichever operand came
+    # first would make the answer depend on the operand mapping's order, so a
+    # disagreement is refused instead -- but only where it shows, on a string
+    # result; a boolean one forces nulls False whatever they were spelled as.
+    distinct_sentinels = sorted({v for v in sentinels.values() if v is not None})
+    null_value = distinct_sentinels[0] if distinct_sentinels else None
 
     out = None
     utf8_out = None
@@ -191,6 +198,13 @@ def utf8_span_eval(
                     res.astype(f"<U{max(res.dtype.itemsize // 4, len(null_value))}"),
                 )
         if res.dtype.kind == "U":
+            if len(distinct_sentinels) > 1:
+                raise ValueError(
+                    f"utf8 operands carry different null sentinels ({distinct_sentinels}); "
+                    "a string result can only have one, and picking one of them would "
+                    "silently relabel the other's nulls. Give the operands a common "
+                    "null_value, or compute on fixed-width arrays (blosc2.from_utf8)."
+                )
             if utf8_out is None:
                 utf8_out = UTF8Array(blosc2.utf8(null_value=null_value))
             # tolist() gives plain str, which is UTF8Array.extend's fast path.

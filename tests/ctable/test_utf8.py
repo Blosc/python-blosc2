@@ -1341,6 +1341,26 @@ def test_utf8_array_constructor_with_spec_and_nulls():
     assert list(arr[:]) == ["a", "<NA>", "c"]
 
 
+def test_utf8_string_expr_rejects_clashing_sentinels():
+    """One result column means one sentinel, so operands must agree on it; the
+    old first-wins pick relabelled the other operand's nulls silently."""
+    a = blosc2.utf8_array(["x", None, "z"], blosc2.utf8(null_value="<NA_A>"))
+    b = blosc2.utf8_array(["1", "2", None], blosc2.utf8(null_value="<NA_B>"))
+    with pytest.raises(ValueError, match="different null sentinels"):
+        blosc2.lazyexpr("a + b", {"a": a, "b": b}).compute()
+    # A boolean result never carries a sentinel, so it is unaffected.
+    assert list(blosc2.lazyexpr("a > b", {"a": a, "b": b}).compute()) == [True, False, False]
+
+
+def test_utf8_string_expr_shared_sentinel_survives():
+    spec = blosc2.utf8(null_value="<NA>")
+    a = blosc2.utf8_array(["x", None, "z"], spec)
+    b = blosc2.utf8_array(["1", "2", None], spec)
+    res = blosc2.lazyexpr("a + b", {"a": a, "b": b}).compute()
+    assert list(res[:]) == ["x1", "<NA>", "<NA>"]
+    assert res.spec.null_value == "<NA>"
+
+
 def test_utf8_array_ctor_rejects_none_if_not_null():
     with pytest.raises(TypeError, match="not nullable"):
         blosc2.utf8_array(["a", None])
