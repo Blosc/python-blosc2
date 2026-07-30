@@ -1249,6 +1249,17 @@ def test_bucket_gate_counts_blocks_not_buckets():
 
     assert frac(np.zeros((1, 640), dtype=bool), geom) == 0.0
 
+    # A bucket at least as wide as a block covers whole blocks, so the fraction of
+    # blocks read is just the fraction of buckets selected -- not, as it once was,
+    # the fraction of *chunks* touched (or a flat 1.0 for a 1-D mask), both of which
+    # overstate the cost and decline plans the index exists to serve.
+    for bucket_len in (16384, 32768):  # one block per bucket, and two
+        wide = {"nav_segment_len": 16384, "bucket_len": bucket_len}
+        selective = np.zeros((1, 10), dtype=bool)
+        selective[0, 0] = True
+        assert frac(selective, wide) == 0.1
+        assert frac(selective[0], wide) == 0.1  # 1-D mask, same answer
+
 
 def test_bucket_plan_gate_matches_block_fraction():
     """The planner must take a bucket plan only when it prunes actual blocks."""

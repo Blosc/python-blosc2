@@ -6863,9 +6863,10 @@ def _bucket_block_fraction(bucket_masks: np.ndarray, bucket: dict) -> float:
     masks = np.asarray(bucket_masks, dtype=bool)
     if masks.size == 0:
         return 0.0
+    # A bucket at least as wide as a block covers whole blocks, so the clamp to 1
+    # is not a special case: the grouping below then reduces to the mask itself,
+    # and the fraction of blocks read equals the fraction of buckets selected.
     per_block = max(1, int(bucket["nav_segment_len"]) // int(bucket["bucket_len"]))
-    if per_block <= 1:
-        return float(masks.any(axis=1).mean()) if masks.ndim > 1 else 1.0
     n_blocks = math.ceil(masks.shape[-1] / per_block)
     padded = np.zeros((*masks.shape[:-1], n_blocks * per_block), dtype=bool)
     padded[..., : masks.shape[-1]] = masks
