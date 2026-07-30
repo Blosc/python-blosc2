@@ -158,6 +158,34 @@ def test_control_flow_scalar_flag_still_traces():
     np.testing.assert_allclose(scalar_flag(a, b, False), a - b)
 
 
+def test_trace_hint_keeps_the_original_error():
+    """A hint must not replace the failure it annotates.
+
+    The hint used to be re-raised as ``type(e)(msg)``, which assumes a
+    one-argument constructor; anything needing more surfaced as a TypeError
+    about that constructor and the real error was lost.
+    """
+
+    class TwoArgError(Exception):
+        def __init__(self, code, detail):
+            super().__init__(f"{code}: {detail}")
+            self.code = code
+
+    @blosc2.jit
+    def cf_func(a, b, flag):
+        if flag:
+            raise TwoArgError(7, "boom")
+        return a - b
+
+    a = np.arange(10, dtype=np.float64)
+    with pytest.raises(TwoArgError) as excinfo:
+        cf_func(a, a, True)
+    assert excinfo.value.code == 7
+    assert "boom" in str(excinfo.value)
+    # The hint still reaches the user, as a note on the original exception.
+    assert any("control flow" in note for note in getattr(excinfo.value, "__notes__", []))
+
+
 def test_jit_dsl_route_rejects_broadcasting():
     @blosc2.jit
     def kernel(a, b, n):

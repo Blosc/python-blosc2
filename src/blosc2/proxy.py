@@ -1255,18 +1255,15 @@ def jit(func=None, *, out=None, disable=False, strict=None, **kwargs):  # noqa: 
             try:
                 retval = func(*new_args, **func_kwargs)
             except Exception as e:
-                hints = [
-                    hint
-                    for hint in (
-                        _wide_frame_hint(
-                            e, getattr(func, "__name__", "the function"), _signature_params(func)
-                        ),
-                        _trace_hint,
-                    )
-                    if hint is not None
-                ]
-                if hints:
-                    raise type(e)("\n".join([str(e), *hints])) from e
+                # Notes rather than a re-raise: type(e)(msg) assumes a one-argument
+                # constructor, and any exception needing more (or rejecting a bare
+                # string) would surface as a TypeError instead of the real failure.
+                for hint in (
+                    _wide_frame_hint(e, getattr(func, "__name__", "the function"), _signature_params(func)),
+                    _trace_hint,
+                ):
+                    if hint is not None:
+                        e.add_note(hint)
                 raise
 
             # Treat return value

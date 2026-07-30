@@ -368,7 +368,9 @@ class TestPandasEngineEndToEnd:
         for name, func in (("traced", traced), ("dsl", dsl)):
             with pytest.raises(TypeError) as excinfo:
                 func(**df)
-            message = str(excinfo.value)
+            # The guidance rides along as a note (it prints with the traceback);
+            # rebuilding the exception to append it would assume its constructor.
+            message = "\n".join([str(excinfo.value), *getattr(excinfo.value, "__notes__", [])])
             assert name in message
             assert "'note'" in message
             assert "**df[['a', 'b']]" in message
