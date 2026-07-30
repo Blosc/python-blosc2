@@ -148,7 +148,7 @@ def test_deletions_use_position_path_and_stay_correct(key):
 
 
 @pytest.mark.parametrize("key", [np.s_[::5], np.s_[::-2], np.s_[::-1]])
-def test_filtered_view_uses_position_path_and_stays_correct(key):
+def test_filtered_view_uses_position_path(key):
     table, arr = _make()
     view = table.where("a >= 500")
     expected = arr["b"][arr["a"] >= 500]

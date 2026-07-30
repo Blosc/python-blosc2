@@ -184,7 +184,7 @@ class TestCodec(unittest.TestCase):
         with pytest.raises(UnicodeDecodeError):
             blosc2.unpack_array(self.PY_27_INPUT)
 
-    def test_unpack_array_with_unicode_characters_from_py27(self):
+    def test_unpack_array_unicode_from_py27(self):
         import numpy as np
 
         out_array = np.array(["å", "ç", "ø", "π", "˚"])

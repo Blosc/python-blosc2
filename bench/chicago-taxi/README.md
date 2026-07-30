@@ -66,7 +66,154 @@ yourself if flushing manually):
 | `select-pandas-flat.py` | the query via pandas (parquet read + NumPy filter/sort) |
 | `select-polars-flat.py` | the query via polars lazy scan over parquet |
 | `select-blosc2.py` | the query via `blosc2.open()` + `CTable.where()` over `.b2z` |
+| `string-ops.py` | a separate benchmark: *string* kernels over the same dataset (see below) |
 
 Each `select-*.py` prints the result, then `open:`/`compute:`/`print:`/`total:`
 timings; the driver parses the `total:` line (query time, excluding interpreter
 and import startup) alongside `/usr/bin/time`'s wall clock and peak memory.
+
+## String ops (`string-ops.py`)
+
+The numeric benchmark above is I/O-bound. `string-ops.py` is the opposite: it
+loads the two *string* columns — `company` (`<U44`) and `payment.type`
+(`<U11`) — into memory once and times three string workloads on each engine.
+All engines must produce identical results or the run fails.
+
+```bash
+python string-ops.py                      # whole 24.3 M-row table, best of 3
+python string-ops.py --nrows 1000000 --apply
+python string-ops.py --engines blosc2,numpy --nrows 1000000
+```
+
+| task | expression |
+|---|---|
+| `filter` | `startswith(company, 'Taxi') & (payment_type != 'Cash')` → bool |
+| `transform` | `'co=' + company + '\|pay=' + lower(payment_type)` → str |
+| `kernel` | the same, branching on whether the company is a cab company |
+
+All three are timed; only `kernel` is plotted. It is the point of the exercise:
+the shape of the
+[pandas-3 blog kernel](https://datapythonista.me/blog/whats-new-in-pandas-3),
+row-wise control flow rather than one expression. blosc2 runs it as a
+`@blosc2.dsl_kernel`; the other engines have to rewrite it as a mask plus two
+fully-evaluated branches. `--apply` adds the row-wise pandas spelling, which is
+what you would write first and is ~70x slower than everything else.
+
+**blosc2 uses LZ4 at `clevel=5`**, rather than the stock ZSTD-5 — a
+throughput-for-ratio trade, and the result is still 12x smaller than what the
+Arrow-backed engines hold. SHUFFLE stays on at the `<U` code-unit width; see
+below. **`blosc2 (raw)` is the identical path at
+`clevel=0`** — same container, same kernel, same (empty) filter pipeline,
+operands and result both uncompressed. Compression is the only variable between
+the two blosc2 bars.
+
+Results on an Apple M-series laptop (8 cores, 24 GB), full table, warm
+(see `string-ops.png`):
+
+| | filter | transform | kernel | kernel result |
+|---|---|---|---|---|
+| **blosc2** | 315 ms | **1.27 s** | 3.08 s | **68 MB** |
+| blosc2 (raw) | 192 ms | 1.31 s | 3.57 s | 5 766 MB |
+| pandas | 191 ms | 2.00 s | 5.11 s | 932 MB |
+| polars | 92 ms | 1.74 s | 3.53 s | 932 MB |
+| duckdb | 344 ms | 2.01 s | 2.97 s | 842 MB |
+
+blosc2 is **fastest of all five on `transform`** (1.58x DuckDB), ahead of DuckDB
+on `filter`, and within 1.04x on `kernel` — while holding the result in **12x
+less memory** than any of them. Only polars' `filter` is faster.
+
+Quote ratios rather than absolutes: `transform` moved between 1.27 and 1.48 s
+across full-table runs, and blosc2 alone in the process gives 1.24–1.26 s.
+
+**Compression is close to free.** Compare the two blosc2 rows: the compressed
+run is *faster* than the uncompressed one on `kernel` (3.09 s vs 3.62), because
+a compressed block is less memory traffic than a 5.8 GB uncompressed result. It
+also stores 85x smaller.
+
+### Filters and codec — time/ratio trades, not fixes
+
+blosc2's default for `<U` is SHUFFLE with `filters_meta` 4: shuffle by the UCS4
+code unit, which separates the ASCII payload byte from the three mostly-zero
+high bytes. That is a good default and it wins on **ratio**. It costs time,
+which is what this benchmark optimizes for. 1 M rows, blosc2 alone in the
+process:
+
+| codec | filters | filter | transform | kernel | result | operand cratio |
+|---|---|---|---|---|---|---|
+| ZSTD-5 | none | 10.0 ms | 80.3 ms | 149.3 ms | 1.08 MB | 860x |
+| ZSTD-5 | **SHUFFLE meta=4** (default) | 15.9 | 80.4 | 155.5 | **0.75 MB** | **1321x** |
+| LZ4-5 | none | 7.2 | 43.9 | 118.1 | 2.76 MB | 198x |
+| LZ4-5 | SHUFFLE meta=4 | 12.4 | 50.5 | 124.8 | 2.70 MB | 225x |
+
+Shuffle buys 1.4x ratio under ZSTD and ~2 % under LZ4, where the codec already
+handles the zero runs. `filter` pays the most for it — that task writes 1 byte
+per row, so the un-shuffle on the operand side has nothing on the output side
+to offset it. This benchmark **keeps shuffle** (the ratio is the point of using
+blosc2 at all) and takes its throughput from the codec instead.
+
+One trap regardless of which you pick: `filters_meta` is SHUFFLE's element
+width, and a `<U` container picks 4 for itself only when you *don't* build a
+`CParams`. Constructing one for any reason resets it to 0 — "shuffle by the
+whole item" — which is strictly worse than both rows above: 6.6 MB and 75.8 ms
+on the LZ4 `transform`.
+
+Note the numbers above are lower than the table's: timing blosc2 in a process
+that also runs the other engines costs it ~40 % even though it goes first. The
+comparison table keeps every engine in one process, as it always has; use
+`--engines blosc2` when tuning.
+
+Four things got this from an earlier 8.49 s `kernel`, and two were bugs rather
+than tuning:
+
+1. **`upper`/`lower` stopped reserving a 3x/2x case-expansion bound** (miniexpr
+   `5a7de4f`). NumPy does not reserve either — it truncates — so the result went
+   `<U101` → `<U54`, halving every byte moved.
+2. **Expression results were losing SHUFFLE's code-unit width.** Constructing a
+   `CParams` defaults `filters_meta` to all zeros, i.e. "shuffle by the whole
+   item", which scatters characters across the slot; left alone the container
+   picks 4 for `<U` (the UCS4 code unit). Identical bytes compressed 3.2x worse
+   on the expression path than through `asarray()`.
+3. **Blocks are now sized for the result, not the operands** (see `BLOCKS` in
+   the script). The result inherits the operands' block shape in *rows* and is
+   much wider per row, so a row count tuned for `<U36` operands gave 1.7 MB
+   blocks for the `<U54` result — out of cache on every task.
+
+4. **LZ4-5 instead of the ZSTD-5 default**, as described below.
+
+### The `<U` dtype used to cost 3.2x here (mostly fixed — see above)
+
+The same kernel over the *same* blosc2 code path, with `S` (bytes) operands
+instead of `<U`, at 1 M rows:
+
+| | time | output |
+|---|---|---|
+| blosc2 `<U` | 300 ms | 404 B/row |
+| **blosc2 `S`** | **114 ms** | **54 B/row** |
+| duckdb | 111 ms | 35.9 B/row |
+| polars | 137 ms | 39.7 B/row |
+
+On `S`, blosc2 is at DuckDB parity and ahead of polars — with the result still
+compressed to 2 MB. Three multiplicative factors inflate `<U`:
+
+1. **UCS4 — 4 bytes per codepoint.** The others hold UTF-8, ~1 B/char here.
+2. **The `lower()` width bound — 2x.** On `<U` it must reserve for Unicode
+   full-case expansion (`ß`→`SS`), so `<U36`.lower() → `<U72` and the result is
+   `<U101` where 54 suffices. On `S`, case mapping is ASCII-only and 1:1, so the
+   bound is exact — that is most of the `S` win.
+3. **Fixed-width padding.** Mean result length is 31.7 chars in a 101-char slot.
+
+Even on `S`, blosc2 holds 54 B/row (the compile-time max, on every row) against
+DuckDB's 35.9 (31.7 data + 4 offset + 0.1 validity) — they pay the mean plus an
+offset. That residual 1.4x is what native variable-width output would remove.
+
+Everything else measured small: operand decompression 23 ms; per-op interpreter
+cost ~10 ns/row/op (~50 ms of the 300 for this 5-op kernel); `lazyudf`
+construction ~0. Thread scaling is 3.9x on 8 cores, consistent with being
+bandwidth-bound on the wide output.
+
+**Practical advice: use `S` for ASCII/Latin-1 string columns.** It is available
+today and already reaches DuckDB parity on this workload.
+
+NumPy is implemented but **off by default**: its `kernel` builds five full-width
+`<U` temporaries, ~10 GB each at 24 M rows. Run it with `--engines` at a smaller
+`--nrows` — at 1 M rows it is 718 ms and 417 MB, losing on both counts.

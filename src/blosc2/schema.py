@@ -597,7 +597,7 @@ class VLStringSpec(SchemaSpec):
         return d
 
 
-class Utf8Spec(SchemaSpec):
+class UTF8Spec(SchemaSpec):
     """Variable-length UTF-8 string column stored Arrow-style as offsets + bytes.
 
     Unlike :class:`string`, this spec does not use a fixed-width NumPy dtype:
@@ -622,6 +622,17 @@ class Utf8Spec(SchemaSpec):
     def __init__(self, *, nullable: _builtin_bool = False, null_value: str | None = None):
         if null_value is not None and not isinstance(null_value, str):
             raise TypeError(f"utf8 null_value must be str, got {type(null_value).__name__!r}")
+        if null_value == "\x00":
+            # NumPy 2.4 compares a lone NUL against StringDType as no-match:
+            # np.array(["\x00"], dtype=StringDType()) == "\x00" is False, while
+            # "\x00x" and "a\x00b" both compare correctly.  Every null mask here
+            # is such a comparison, so this sentinel would silently stop marking
+            # anything as null.  Reject it rather than mis-handle it.
+            raise ValueError(
+                "utf8 null_value cannot be a single NUL character: NumPy does not "
+                "match it against StringDType arrays, so nulls would go undetected. "
+                "Use a longer sentinel (the default is '__BLOSC2_NULL__')."
+            )
         self.nullable = nullable or null_value is not None
         self.null_value = _normalize_scalar_value(null_value)
 
@@ -638,6 +649,12 @@ class Utf8Spec(SchemaSpec):
 
     def display_label(self) -> str:
         return "utf8"
+
+
+#: Deprecated alias kept for the name this class shipped under in 4.9.1.
+#: Persisted schemas are unaffected either way -- they record ``kind: "utf8"``,
+#: never the class name.
+Utf8Spec = UTF8Spec
 
 
 class ObjectSpec(SchemaSpec):
@@ -833,7 +850,7 @@ def vlstring(
     )
 
 
-def utf8(*, nullable: bool = False, null_value: str | None = None) -> Utf8Spec:
+def utf8(*, nullable: bool = False, null_value: str | None = None) -> UTF8Spec:
     """Build a variable-length UTF-8 string schema descriptor.
 
     Use this for high-cardinality or free-text string columns: values are
@@ -847,14 +864,14 @@ def utf8(*, nullable: bool = False, null_value: str | None = None) -> Utf8Spec:
     inferred automatically from plain ``str`` annotations.
 
     utf8 columns support vectorized comparisons (``==``, ``!=``, ``<``,
-    ``<=``, ``>``, ``>=``), :meth:`CTable.group_by` keys,
-    :meth:`CTable.sort_by`, and Arrow/Parquet interop.  Current limitations:
-    :meth:`CTable.create_index` is not supported yet (use a fixed-width
-    :class:`string` column if you need an index), and string-*expression*
-    filters such as ``t.where("name == 'x'")`` are not supported yet — use
-    the operator form ``t[t.name == 'x']`` instead.  See
-    :ref:`ChoosingStringType` for a full comparison with :class:`string`
-    and :func:`vlstring`.
+    ``<=``, ``>``, ``>=``), string-expression filters such as
+    ``t.where("name == 'x'")`` and ``t.where("startswith(name, 'x')")``,
+    :meth:`CTable.group_by` keys, :meth:`CTable.sort_by`, Arrow/Parquet
+    interop, and :meth:`CTable.create_index`, which indexes the alphabetical
+    rank of each value and accelerates sorting and scalar comparisons (but
+    not ``startswith``/substring searches, which no index covers).  See
+    :ref:`ChoosingStringType` for a full comparison with :class:`string` and
+    :func:`vlstring`.
 
     Parameters
     ----------
@@ -873,10 +890,10 @@ def utf8(*, nullable: bool = False, null_value: str | None = None) -> Utf8Spec:
     ...     name: str = b2.field(b2.utf8())
     ...     note: str = b2.field(b2.utf8(nullable=True))
     """
-    from blosc2.utf8_array import string_dtype
+    from blosc2._utf8_array import string_dtype
 
     string_dtype()  # fail early with a clear error on NumPy < 2.0
-    return Utf8Spec(nullable=nullable, null_value=null_value)
+    return UTF8Spec(nullable=nullable, null_value=null_value)
 
 
 def object(

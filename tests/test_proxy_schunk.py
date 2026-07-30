@@ -77,7 +77,7 @@ def test_open(urlpath, chunksize, nchunks):
     blosc2.remove_urlpath(proxy_urlpath)
 
 
-def test_open_readonly_proxy_keeps_schunk_cache_and_source_readonly(tmp_path):
+def test_readonly_proxy_keeps_both_readonly(tmp_path):
     source_path = tmp_path / "source.b2frame"
     proxy_path = tmp_path / "proxy.b2frame"
     data = np.arange(200, dtype="int32")

@@ -32,7 +32,7 @@ DATA = [
 ]
 
 
-def test_display_rows_printoption_truncates_to_five_head_and_tail_rows():
+def test_display_rows_truncates_head_and_tail():
     previous = blosc2.get_printoptions()
     try:
         t = CTable(AccessRow, new_data=[(i, float(i), True, str(i), [i]) for i in range(60)])
@@ -66,7 +66,7 @@ def test_display_rows_printoption_truncates_to_five_head_and_tail_rows():
         )
 
 
-def test_rename_column_recomputes_display_width_for_shorter_name():
+def test_rename_col_recomputes_display_width():
     @dataclass
     class WidthRow:
         very_long_temporary_name: float = blosc2.field(blosc2.float64())
@@ -80,7 +80,7 @@ def test_rename_column_recomputes_display_width_for_shorter_name():
     assert t._col_widths["x"] == max(len("x"), t._schema.columns_by_name["x"].display_width)
 
 
-def test_display_precision_printoption_formats_float_values():
+def test_display_precision_formats_floats():
     previous = blosc2.get_printoptions()
     try:
         t = CTable(AccessRow, new_data=[(1, 1.23456789, True, "x", [1])])
@@ -232,7 +232,7 @@ def test_getitem_slice_returns_view():
     assert sub.base is t
 
 
-def test_getitem_integer_list_and_bool_mask_return_views():
+def test_getitem_int_list_and_bool_mask_views():
     t = CTable(AccessRow, new_data=DATA)
     gathered = t[[3, 0, 2]]
     assert isinstance(gathered, CTable)
@@ -288,7 +288,7 @@ def test_getitem_non_boolean_expression_raises():
         _ = t["id + 1"]
 
 
-def test_ctable_array_materialization_uses_structured_dtype():
+def test_array_materialization_structured():
     t = CTable(AccessRow, new_data=DATA)
     arr = np.asarray(t)
     assert arr.dtype.fields is not None

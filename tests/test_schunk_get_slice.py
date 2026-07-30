@@ -116,3 +116,49 @@ def test_schunk_get_slice_raises():
     assert schunk[start:stop] == b""
 
     blosc2.remove_urlpath(kwargs["urlpath"])
+
+
+# ---------------------------------------------------------------------------
+# Typesizes above BLOSC_MAX_TYPESIZE (255)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("typesize", [252, 256, 512])
+def test_get_slice_wide_typesize_matches_source(typesize):
+    """c-blosc2 records a typesize above 255 as 1 in the chunk header, but
+    blosc2_schunk_get_slice_buffer() still divides byte offsets by
+    schunk->typesize, so a partially covered chunk addressed the wrong range:
+    most slices failed outright and single-element ones returned the wrong
+    bytes with no error.  An <U64 NDArray is a 256-byte typesize, so this is
+    reachable from ordinary string columns.
+    """
+    n = 500
+    data = np.arange(n * typesize, dtype=np.uint8).reshape(n, typesize)
+    data[:, 0] = np.arange(n) % 251
+    data[:, 1] = (np.arange(n) // 251) % 251
+    schunk = blosc2.SChunk(chunksize=100 * typesize, cparams={"typesize": typesize}, data=data.tobytes())
+
+    for start, stop in [(0, 1), (68, 69), (0, 50), (50, 150), (99, 101), (100, 200), (7, 493), (0, n)]:
+        got = np.frombuffer(schunk[start:stop], dtype=np.uint8).reshape(stop - start, typesize)
+        assert np.array_equal(got, data[start:stop]), (start, stop)
+
+
+def test_get_slice_wide_typesize_out_buffer():
+    typesize = 256
+    data = np.arange(20 * typesize, dtype=np.uint8).reshape(20, typesize)
+    data[:, 0] = np.arange(20)
+    schunk = blosc2.SChunk(chunksize=8 * typesize, cparams={"typesize": typesize}, data=data.tobytes())
+    out = bytearray(5 * typesize)
+    schunk.get_slice(6, 11, out=out)
+    assert np.array_equal(np.frombuffer(bytes(out), dtype=np.uint8).reshape(5, typesize), data[6:11])
+
+    with pytest.raises(ValueError, match="Not enough space"):
+        schunk.get_slice(0, 10, out=bytearray(typesize))
+
+
+def test_ndarray_schunk_slice_wide_string_dtype():
+    # <U64 is 256 bytes -- exactly the width the utf8 expression driver buckets to.
+    values = np.array(["hello", "help", "world"] * 200, dtype="<U64")
+    arr = blosc2.asarray(values)
+    assert arr.schunk.typesize == 256
+    assert list(np.frombuffer(arr.schunk[1:4], dtype="<U64")) == list(values[1:4])

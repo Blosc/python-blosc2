@@ -200,7 +200,7 @@ def test_complex128_metadata_dict():
     assert complex128().to_metadata_dict() == {"kind": "complex128"}
 
 
-def test_ndarray_metadata_dict_normalizes_numpy_scalar_null_value():
+def test_ndarray_metadata_normalizes_np_scalar():
     spec = blosc2.ndarray((2,), dtype=np.int16, null_value=np.int16(123))
     d = spec.to_metadata_dict()
 

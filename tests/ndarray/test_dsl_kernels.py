@@ -235,7 +235,7 @@ def test_dsl_kernel_loop_kept_as_full_dsl_function():
     np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
 
 
-def test_dsl_kernel_integer_ops_kept_as_full_dsl_function():
+def test_kernel_integer_ops_kept_as_dsl():
     assert kernel_integer_ops.dsl_source is not None
     assert "def kernel_integer_ops(x, y):" in kernel_integer_ops.dsl_source
     assert kernel_integer_ops.input_names == ["x", "y"]
@@ -286,7 +286,7 @@ def test_dsl_kernel_index_symbols_keep_full_kernel(monkeypatch):
     assert res.shape == shape
 
 
-def test_dsl_kernel_with_no_inputs_works_with_explicit_shape():
+def test_kernel_no_inputs_with_explicit_shape():
     assert kernel_index_ramp_no_inputs.dsl_source is not None
     assert "def kernel_index_ramp_no_inputs():" in kernel_index_ramp_no_inputs.dsl_source
     assert kernel_index_ramp_no_inputs.input_names == []
@@ -308,12 +308,12 @@ def test_dsl_kernel_with_no_inputs_sum_returns_scalar():
     np.testing.assert_allclose(result, expected, rtol=0.0, atol=0.0)
 
 
-def test_dsl_kernel_with_no_inputs_requires_shape_or_out():
+def test_kernel_no_inputs_needs_shape_or_out():
     with pytest.raises(ValueError, match="shape"):
         _ = blosc2.lazyudf(kernel_index_ramp_no_inputs, (), dtype=np.float32)
 
 
-def test_dsl_kernel_with_no_inputs_handles_windows_dtype_policy(monkeypatch):
+def test_kernel_no_inputs_windows_dtype_policy(monkeypatch):
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -326,7 +326,7 @@ def test_dsl_kernel_with_no_inputs_handles_windows_dtype_policy(monkeypatch):
     np.testing.assert_equal(res, expected)
 
 
-def test_dsl_kernel_index_symbols_float_cast_matches_expected_ramp():
+def test_kernel_index_float_cast_matches_ramp():
     shape = (32, 5)
     x2 = blosc2.zeros(shape, dtype=np.float32)
     expr = blosc2.lazyudf(kernel_index_ramp_float_cast, (x2,), dtype=np.float32)
@@ -335,7 +335,7 @@ def test_dsl_kernel_index_symbols_float_cast_matches_expected_ramp():
     np.testing.assert_allclose(res, expected, rtol=0.0, atol=0.0)
 
 
-def test_dsl_kernel_index_symbols_float_cast_uses_miniexpr_fast_path(monkeypatch):
+def test_kernel_index_float_cast_fast_path(monkeypatch):
     original_set_pref_expr = blosc2.NDArray._set_pref_expr
     captured = {"calls": 0, "expr": None}
 
@@ -364,7 +364,7 @@ def test_dsl_kernel_index_symbols_float_cast_uses_miniexpr_fast_path(monkeypatch
     )
 
 
-def test_dsl_kernel_index_symbols_int_cast_matches_expected_ramp():
+def test_kernel_index_int_cast_matches_ramp():
     shape = (32, 5)
     x2 = blosc2.zeros(shape, dtype=np.float32)
     expr = blosc2.lazyudf(kernel_index_ramp_int_cast, (x2,), dtype=np.int64)
@@ -390,7 +390,7 @@ def test_dsl_kernel_bool_cast_numeric_matches_expected():
     np.testing.assert_equal(res, expected)
 
 
-def test_dsl_kernel_full_control_flow_kept_as_dsl_function():
+def test_kernel_control_flow_kept_as_dsl():
     assert kernel_control_flow_full.dsl_source is not None
     assert "def kernel_control_flow_full(x, y):" in kernel_control_flow_full.dsl_source
     assert "for i in range(4):" in kernel_control_flow_full.dsl_source
@@ -453,7 +453,7 @@ def test_dsl_kernel_accepts_scalar_param_per_call():
     np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
 
 
-def test_dsl_kernel_scalar_param_keeps_miniexpr_fast_path(monkeypatch):
+def test_kernel_scalar_param_keeps_fast_path(monkeypatch):
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -501,7 +501,7 @@ def test_dsl_kernel_scalar_param_keeps_miniexpr_fast_path(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-def test_dsl_kernel_scalar_float_cast_inlined_without_float_call(monkeypatch):
+def test_kernel_scalar_float_cast_inlined(monkeypatch):
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -536,7 +536,7 @@ def test_dsl_kernel_scalar_float_cast_inlined_without_float_call(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-def test_dsl_kernel_scalar_only_inputs_route_through_fast_eval(monkeypatch):
+def test_kernel_scalar_only_via_fast_eval(monkeypatch):
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -568,7 +568,8 @@ def test_dsl_kernel_scalar_only_inputs_route_through_fast_eval(monkeypatch):
     np.testing.assert_equal(res[...], np.zeros(shape, dtype=np.float32))
 
 
-def test_dsl_kernel_scalar_only_inputs_specialization_injects_dummy_operand(monkeypatch):
+def test_kernel_scalar_only_injects_dummy(monkeypatch):
+    """Scalar-only inputs specialize to a kernel with a dummy operand injected."""
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -600,7 +601,7 @@ def test_dsl_kernel_scalar_only_inputs_specialization_injects_dummy_operand(monk
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-def test_dsl_kernel_two_scalar_params_start_step_linear_ramp():
+def test_kernel_two_scalar_params_ramp():
     shape = (9, 7)
     start = np.float32(2.5)
     step = np.float32(0.75)
@@ -612,7 +613,7 @@ def test_dsl_kernel_two_scalar_params_start_step_linear_ramp():
     np.testing.assert_allclose(res[...], expected, rtol=0.0, atol=0.0)
 
 
-def test_dsl_kernel_three_scalar_params_start_stop_nitems_ramp():
+def test_kernel_three_scalar_params_ramp():
     shape = (20, 25)
     start = np.float64(1.0)
     stop = np.float64(2.0)
@@ -628,7 +629,7 @@ def test_dsl_kernel_three_scalar_params_start_stop_nitems_ramp():
     np.testing.assert_allclose(res[...], expected, rtol=0.0, atol=0.0)
 
 
-def test_dsl_kernel_float_cast_with_negative_scalar_param():
+def test_kernel_float_cast_negative_scalar():
     shape = (10, 100)
     start = -10
     stop = 10
@@ -643,7 +644,7 @@ def test_dsl_kernel_float_cast_with_negative_scalar_param():
     np.testing.assert_allclose(res[...], expected, rtol=1e-6, atol=1e-6)
 
 
-def test_dsl_kernel_float_cast_with_flat_idx_no_segfault_subprocess():
+def test_kernel_float_cast_flat_idx_no_crash():
     if blosc2.IS_WASM:
         pytest.skip("subprocess is not supported on emscripten/wasm32")
 
@@ -679,7 +680,7 @@ def test_dsl_kernel_float_cast_with_flat_idx_no_segfault_subprocess():
     assert "ok" in result.stdout
 
 
-def test_dsl_kernel_scalar_constant_subexpr_runtime_no_segfault(tmp_path):
+def test_kernel_scalar_const_subexpr_no_crash(tmp_path):
     if blosc2.IS_WASM:
         pytest.skip("subprocess is not supported on emscripten/wasm32")
 
@@ -709,7 +710,7 @@ print("ok")
     assert "ok" in result.stdout
 
 
-def test_dsl_kernel_miniexpr_failure_raises_even_with_strict_disabled(monkeypatch):
+def test_kernel_failure_raises_strict_off(monkeypatch):
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -736,7 +737,7 @@ def test_dsl_kernel_miniexpr_failure_raises_even_with_strict_disabled(monkeypatc
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-def test_dsl_kernel_miniexpr_failure_includes_backend_error_details(monkeypatch):
+def test_kernel_failure_includes_backend_error(monkeypatch):
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -761,7 +762,7 @@ def test_dsl_kernel_miniexpr_failure_includes_backend_error_details(monkeypatch)
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-def test_dsl_kernel_miniexpr_failure_prefers_validate_dsl_error(monkeypatch):
+def test_kernel_failure_prefers_validate_error(monkeypatch):
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -843,7 +844,7 @@ def test_jit_backend_pragma_wrapping_dsl_source():
         kernel_fallback_tuple_assign,
     ],
 )
-def test_dsl_kernel_flawed_syntax_detected_fallback_callable(kernel):
+def test_kernel_flawed_syntax_falls_back(kernel):
     assert kernel.dsl_source is not None
     assert kernel.input_names == ["x", "y"]
     assert kernel.dsl_error is not None
@@ -859,7 +860,7 @@ def test_dsl_kernel_flawed_syntax_detected_fallback_callable(kernel):
         )
 
 
-def test_dsl_kernel_ternary_rejected_with_actionable_error():
+def test_kernel_ternary_rejected_with_hint():
     assert kernel_fallback_ternary.dsl_source is not None
     assert kernel_fallback_ternary.input_names == ["x"]
     assert kernel_fallback_ternary.dsl_error is not None
@@ -1061,7 +1062,7 @@ def test_dsl_save_dictstore_operands(tmp_path):
 #     G3 (variable name colliding with miniexpr codegen identifier) ---
 
 
-def test_dsl_kernel_semicolon_joined_statements_rejected():
+def test_kernel_semicolon_statements_rejected():
     # Source built from a string so the formatter cannot rewrite the ';'-join away.
     result = validate_dsl(
         kernel_from_source("def k(a, b):\n    x = a * a; y = b * b\n    return x + y\n", "k")
@@ -1178,7 +1179,7 @@ def _numpy_operand_kernel(x, y):
         (13, 17, 19),  # 3-D: odd shape
     ],
 )
-def test_dsl_kernel_numpy_operands_match_ndarray_reference(shape):
+def test_kernel_numpy_operands_match_ndarray(shape):
     rng = np.random.default_rng(0)
     a = rng.random(shape).astype(np.float64)
     b = rng.random(shape).astype(np.float64)
@@ -1186,7 +1187,7 @@ def test_dsl_kernel_numpy_operands_match_ndarray_reference(shape):
     np.testing.assert_array_equal(res, _dsl_reference(_numpy_operand_kernel, (a, b)))
 
 
-def test_dsl_kernel_numpy_operands_mixed_dtype_promotes_output():
+def test_kernel_numpy_mixed_dtype_promotes():
     rng = np.random.default_rng(1)
     a = (rng.random(10_007) * 10).astype(np.float32)
     b = (rng.random(10_007) * 10).astype(np.int64)
@@ -1196,7 +1197,7 @@ def test_dsl_kernel_numpy_operands_mixed_dtype_promotes_output():
     np.testing.assert_array_equal(res, ref)
 
 
-def test_dsl_kernel_ndarray_operands_with_different_itemsize():
+def test_kernel_ndarray_different_itemsize():
     # Blocks are sized in bytes, so a float32 and an int64 operand get different
     # chunks/blocks by default; the DSL path has no slow fallback, so it used to
     # raise "slicing is not supported" whenever the grids diverged (which depends
@@ -1219,7 +1220,7 @@ def test_dsl_kernel_mixed_ndarray_and_numpy_operand():
     np.testing.assert_array_equal(res, ref)
 
 
-def test_dsl_kernel_numpy_operands_f_ordered_and_strided():
+def test_kernel_numpy_f_ordered_and_strided():
     shape = (20, 10)
     b = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
     ref = _dsl_reference(_numpy_operand_kernel, (b, b))
@@ -1234,14 +1235,14 @@ def test_dsl_kernel_numpy_operands_f_ordered_and_strided():
     np.testing.assert_array_equal(res_strided, ref_strided)
 
 
-def test_dsl_kernel_numpy_operand_non_native_endian_requires_miniexpr():
+def test_kernel_non_native_endian_needs_miniexpr():
     a = np.arange(100, dtype=">f8").reshape(10, 10)
     b = np.arange(100, dtype=np.float64).reshape(10, 10)
     with pytest.raises(RuntimeError, match="NDArray or NumPy inputs"):
         blosc2.lazyudf(_numpy_operand_kernel, (a, b), dtype=None)[()]
 
 
-def test_dsl_kernel_zero_input_dummy_operand_injection_still_works():
+def test_kernel_zero_input_dummy_injection():
     @blosc2.dsl_kernel
     def ramp(start, step):
         return start + step * _i0  # noqa: F821  # DSL index symbol resolved by miniexpr
@@ -1251,7 +1252,8 @@ def test_dsl_kernel_zero_input_dummy_operand_injection_still_works():
     np.testing.assert_allclose(res, expected)
 
 
-def test_dsl_kernel_numpy_out_matches_compute_and_honors_explicit_cparams():
+def test_kernel_numpy_out_matches_compute():
+    """A NumPy `out` matches compute(), and an explicit cparams is honoured."""
     a = np.arange(1000, dtype=np.float64)
     b = np.arange(1000, dtype=np.float64) * 0.5
     lexpr = blosc2.lazyudf(_numpy_operand_kernel, (a, b), dtype=None)
@@ -1264,7 +1266,7 @@ def test_dsl_kernel_numpy_out_matches_compute_and_honors_explicit_cparams():
     assert res_explicit.schunk.cparams.clevel == 5
 
 
-def test_dsl_kernel_numpy_attribute_calls_are_rewritten_to_bare_names():
+def test_kernel_numpy_attr_calls_rewritten():
     @blosc2.dsl_kernel
     def k(x, y):
         if x >= 0:
@@ -1294,7 +1296,7 @@ def test_dsl_kernel_numpy_attribute_calls_are_rewritten_to_bare_names():
         ("np.absolute(x)", "abs"),
     ],
 )
-def test_dsl_kernel_numpy_func_aliases_map_to_dsl_names(numpy_call, expected_dsl_name):
+def test_kernel_numpy_aliases_map_to_dsl(numpy_call, expected_dsl_name):
     src = f"def k(x):\n    if x >= 0:\n        return {numpy_call}\n    else:\n        return -x\n"
     k = kernel_from_source(src)
 
@@ -1307,7 +1309,7 @@ def test_dsl_kernel_numpy_func_aliases_map_to_dsl_names(numpy_call, expected_dsl
     np.testing.assert_allclose(res, expected)
 
 
-def test_dsl_kernel_numpy_alias_not_rewritten_when_shadowed_by_parameter():
+def test_kernel_numpy_alias_shadowed_by_param():
     # A parameter literally named "np" shadows the module -- the rewrite must
     # not mistake a per-call NDArray/scalar input for the NumPy module.
     src = "def k(np, y):\n    return np * y\n"
@@ -1320,7 +1322,7 @@ def test_dsl_kernel_numpy_alias_not_rewritten_when_shadowed_by_parameter():
     np.testing.assert_allclose(res, a * b)
 
 
-def test_dsl_kernel_numpy_call_without_alias_left_untouched():
+def test_kernel_numpy_call_no_alias_untouched():
     # No import of numpy bound in the kernel's defining scope -- nothing to
     # rewrite, and the plain bare-name form still works unaffected.
     @blosc2.dsl_kernel

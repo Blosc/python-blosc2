@@ -169,7 +169,7 @@ def test_group_sort_noop_when_not_grouped(group_store):
         assert browser.get_group_sort("/ctable") is None
 
 
-def test_group_bars_categorical_is_bar_sorted_desc_and_capped(group_store):
+def test_group_bars_categorical_sorted_and_capped(group_store):
     """A dictionary key yields capped bars ranked by the aggregate descending."""
     path, _ = group_store
     with StoreBrowser(path) as browser:
@@ -195,7 +195,7 @@ def test_group_bars_numeric_is_line_pareto_by_default(group_store):
     assert "rank" in bars["xlabel"]
 
 
-def test_group_bars_numeric_sorted_by_key_uses_key_on_x(group_store):
+def test_group_bars_numeric_sorted_by_key(group_store):
     """Sorting a numeric-key result by the key puts key values on X in that order."""
     path, _ = group_store
     with StoreBrowser(path) as browser:

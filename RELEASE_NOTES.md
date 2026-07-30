@@ -6,6 +6,54 @@ XXX version-specific blurb XXX
 
 ### New features
 
+- **String-valued expressions and DSL kernels** over fixed-width `<Un`
+  arrays now run on miniexpr instead of falling back to NumPy.
+  Concatenation (`arr + "suffix"`, `"prefix=" + arr`) plus `lower`,
+  `upper`, `strip`/`lstrip`/`rstrip`, `removeprefix`, `removesuffix`,
+  `replace`, `substr` and `split_part` all produce string results, and
+  `@blosc2.dsl_kernel` accepts method syntax (`name.lower()`) and tuple
+  unpacking (`before, after = desc.split(sep, 1)`), which are rewritten to
+  the DSL grammar. The output width is inferred by miniexpr and the
+  container is allocated from it, so nothing truncates — `.dtype` may be
+  wider than NumPy's exact answer, never narrower.
+- **Bytes (`S`) arrays** go through the same engine, with NumPy's `S`
+  semantics rather than `<U`'s: ASCII-only case mapping (so `upper`/`lower`
+  keep the width instead of growing) and ASCII-only stripping. `S` and `<U`
+  operands do not mix in one expression, which is what NumPy does too.
+  Variable-width `utf8()` columns still use the NumPy path.
+- **String expressions now work on `utf8()` columns.** `t.where("name ==
+  'x'")`, `startswith`/`endswith`/`contains` and mixed predicates such as
+  `t.where("(name == 'b') | (x > 2)")` used to raise `NotImplementedError`;
+  only the operator form `t[t.name == "x"]` was available. A variable-length
+  column cannot be an expression operand (its offsets and data have
+  independent chunk grids, so the prefilter contract does not apply), so
+  these are evaluated span by span, each span materialized to a fixed-width
+  array whose width is rounded up to a power of two and handed to miniexpr.
+  Nulls are materialized to `""` before any kernel sees them and re-masked
+  afterwards, so a null never satisfies a predicate — the same answer the
+  operator form gives.
+- **Scalar comparisons on `utf8()` columns are 5-6x faster in expression
+  form.** `t.where("name == 'x'")` (and `!=`, `<`, `<=`, `>`, `>=`, either
+  operand order) is now answered by the same raw-byte scan the operator form
+  `t[t.name == "x"]` uses, instead of decoding the column to fixed-width
+  first: 156 -> 28 ms over 1M short values, 268 -> 56 ms over 1M ~31-byte
+  values. Mixed expressions get whatever they can -- in
+  `startswith(name, 'x') | (name == 'zz')` the comparison takes the fast
+  path and `startswith` still decodes.
+- **New `blosc2.utf8_array(seq, spec=None)`** builds a `UTF8Array` from an
+  iterable of strings; `UTF8Array` is exported too. Previously the only
+  construction path was `UTF8Array(spec)` + `.extend()` + `.flush()`, which
+  was not exported at all.
+- **`df.apply(f, axis=1, engine=blosc2.jit)` now runs `row["colname"]`
+  kernels that contain an `if`.** Neither dispatch route could before:
+  tracing evaluated the branch over a whole column (`truth value ... is
+  ambiguous`) and the DSL parser rejected the subscript. Such references are
+  now rewritten into named parameters, so the function is compiled and every
+  branch runs. This is not string-specific — numeric row kernels with a
+  branch were equally blocked. String columns reach this route too, which
+  makes the pandas-3 "format room info" kernel run unmodified. Nulls in a
+  string column are rejected rather than substituted, since a row-wise kernel
+  over a null raises in pandas as well.
 - New `blosc2.random` module: seedable, NumPy-quality random `NDArray`
   constructors. Each chunk gets its own independent `SeedSequence`-spawned
   stream and is generated concurrently in a thread pool, giving full `PCG64`
@@ -33,6 +81,155 @@ XXX version-specific blurb XXX
       matching numpy.
     - Not implemented: `bytes` (returns raw `bytes`, not an `NDArray`).
 
+- **`create_index()` now works on `utf8()` columns**, the last string flavour
+  without one. Both `utf8` and `dictionary` are indexed by the *alphabetical
+  rank* of each value: sorting by rank is sorting by the decoded string, so an
+  `int32` rank column drives the same machinery a numeric column uses. At 1M
+  rows / cardinality 20k: `sort_by` 424 ms -> 7.2 ms, `sorted_slice` 458 ms ->
+  43 ms, and the index is the cheapest of the three flavours to build (277 ms
+  against 867 ms for `<U`). Scalar comparisons are served from it too — utf8
+  `==` 29.0 ms -> 5.5 ms, `<` 34.6 ms -> 5.5 ms, and the dictionary operator
+  form `t[t.c == v]` 329.6 ms -> 8.4 ms. `startswith`/substring searches are
+  not accelerated (no index covers them), and ranks are frozen at build time,
+  so a value inserted ahead of existing ones sends the index stale until it is
+  rebuilt.
+
+- **`CTable.add_column()` accepts `values=`**, a sequence with one entry per
+  live row, as an alternative to backfilling from a declared default. This is
+  the supported way to land a result computed outside the table back into it,
+  which matters most for `utf8()` columns: string-returning expressions are
+  evaluated on fixed-width arrays, and the result previously had to be written
+  through the private `t._cols[name].set_all(...)`. A declared default is still
+  honoured for rows appended later, so the two can be combined. `values=` is
+  checked against the constraints declared on the spec, like the constructor
+  and `extend()` are: without that, coercion to a fixed-width dtype would
+  truncate an over-long string to `max_length` instead of complaining.
+- **`blosc2.from_utf8()` / `blosc2.to_utf8()` and `UTF8Array.astype()`** make
+  the conversion between variable-length and fixed-width text an explicit,
+  documented pair. utf8 columns store and filter text compactly, but
+  string-*returning* expressions need miniexpr's compile-time output width, so
+  they run on fixed-width arrays; the rule is now written down (see "Computing
+  strings on a utf8 column" in the CTable reference) rather than left for
+  callers to discover. `from_utf8()` sizes the result to the longest value in
+  **codepoints**, counted from the raw bytes without decoding a row, so nothing
+  truncates and non-ASCII text does not over-allocate the 3-4x a byte-length
+  bound would.
+- **The array constructors dispatch on NumPy's `StringDType`.**
+  `blosc2.asarray(np.array([...], dtype=StringDType()))` used to raise
+  `TypeError: data type 'StringDType()' not understood`, and
+  `blosc2.zeros(n, dtype=StringDType())` a `malformed node` `ValueError`; both
+  now return a `UTF8Array`, as do `empty`, `ones` and `full`, with the same
+  fill values NumPy uses (`''`, `''`, `'1'`, `str(fill_value)`). The dispatch
+  is on the *target* dtype, so `asarray(utf8_source, dtype="<U8")` still gives
+  a fixed-width NDArray. `StringDType` still cannot back an NDArray — it keeps
+  each row's payload outside the array buffer and offers no buffer protocol,
+  so compressing that buffer would persist pointers — which is why the
+  variable-length container is what comes back.
+- **`UTF8Array` gained `.shape`, `.ndim`, `.size` and `__array__`**, so it now
+  satisfies the `blosc2.Array` protocol (`.shape` was the only member it
+  lacked) and `np.asarray(arr)` returns `StringDType` instead of silently
+  widening to a fixed-width `<Un` — for 200-character values that was 1600
+  bytes where the payload is 203, and a different dtype than `arr[:]` reported
+  for the same object.
+- **`Column.assign()` works on utf8, vlstring, vlbytes, struct and object
+  columns.** It previously raised `TypeError: UTF8Array assignment index must
+  be int`, leaving no public way to overwrite a variable-length column's
+  values. These are now rewritten whole (one write per backing batch) rather
+  than row by row, which for the batched varlen columns would have rewritten a
+  whole batch per row.
+
+### Improvements
+
+- **Dictionary columns decode once per read, not once per row.** Each
+  `dict_store[code]` decompresses a whole msgpack batch, so reads and
+  lexsort-based `sort_by` cost O(N) decompressions. At 1M rows an unindexed
+  `sort_by` drops from 236 s to 713 ms, and a full column read from 44 s (at
+  200k rows) to 193 ms.
+- **`sort_by` on a dictionary column sorts int32 ranks, not decoded
+  strings.** A row's alphabetical rank orders exactly as its value does — the
+  trick the FULL index already used — so the sort key needs neither the decode
+  nor lexsort's string comparisons. Key construction drops from 106 ms to 21 ms
+  per 200k rows (cardinality 5000) and `sort_by(view=True)` from 247 ms to
+  157 ms. The filtered small-copy path, which had its own copy of the key
+  builder, now shares this one and picks up the same speedup.
+- **`kind=BUCKET` indexes no longer cost more than the scan they replace.**
+  Scattered matches were read one bucket run at a time, re-decompressing the
+  same blocks many times, and the planner measured selectivity in buckets while
+  the cost is paid in blocks — a mask selecting 21% of buckets could touch 96%
+  of them. Affected every indexable dtype; the relative penalty was worst on
+  numerics (`float64` 6.3 ms -> 77.9 ms before, 6.6 ms after).
+- **The utf8 compute refusals now route instead of merely refusing.** Every
+  path that cannot take a utf8 column — `add_computed_column`,
+  `add_generated_column`, `assign`, `apply`, `lazyudf`, with a string
+  expression or a DSL kernel — raises `NotImplementedError` naming the column
+  and printing the three-line conversion, echoing the user's own expression
+  where there is one. Two of those paths previously failed with a raw NumPy
+  `DTypePromotionError` and a `ValueError: malformed node or string ...
+  StringDType()`, neither of which named the column or the fix.
+
+### Bug fixes
+
+- **`@blosc2.jit` raised when a storage kwarg and an execution-tuning kwarg
+  were combined** and the decorated function returned a NumPy array —
+  `@blosc2.jit(jit=False, cparams=...)` ended in
+  `blosc2.asarray(retval, jit=False, ...)`, which rejects the tuning kwargs.
+  Only storage kwargs reach `asarray()` now; the function has already run, so
+  there is nothing left to tune.
+- **A DSL kernel over a utf8 column registered as a computed column, then
+  broke the table.** `add_computed_column(name, kernel, inputs=["utf8_col"])`
+  was accepted, after which every read of that column *and* `str(table)`
+  raised `ValueError: malformed node or string`. The kernel is now refused at
+  registration, where the table is still untouched.
+- **`min()`/`max()` read from a column index returned the wrong value.** Two
+  independent causes, both affecting every indexable dtype. The block summaries
+  cover the column's *physical* extent, so the capacity padding (zeros, empty
+  strings) was reduced along with the data and `min()` reported it — wrong on
+  any table whose row count is not exactly its slot capacity. And `delete()`
+  bumps a visibility epoch that nothing recorded, so deleted rows kept
+  contributing their values to the block they sat in. Whole blocks below the
+  live row count are still read from the sidecar; the block straddling the
+  boundary is now rescanned, and a deletion since the index was built makes the
+  shortcut stand down.
+- **`create_index` on `utf8()` and `dictionary()` columns accepted any index
+  kind** and built one over the alphabetical ranks that no query would ever
+  consult — only `IndexKind.FULL` reaches a rank index. `kind` now defaults to
+  `FULL` for these two column kinds (`BUCKET` elsewhere, unchanged) and raises
+  `ValueError` when another kind is requested explicitly. Previously
+  `create_index("category")` on a dictionary column built an unused BUCKET
+  index by default.
+- **Comparison operators on `UTF8Array`, dictionary and varlen scalar columns**
+  returned a plain `False`: none defined them, so `column == "value"` fell
+  through to object identity. Silently wrong rather than an error. All now
+  return boolean masks; `UTF8Array` and `DictionaryColumn` answer a scalar
+  without decoding any row.
+- **`dictcol != value` raised `IndexError`** on any table with capacity
+  padding: the negation was applied after the live-row intersection, turning
+  every dead slot `True`.
+- **Expressions over a bare `UTF8Array`** (`blosc2.lazyexpr("'x=' + a", {"a":
+  arr})`) produced correct values down the wrong path — widened to fixed-width
+  `<Un` and evaluated by the NumPy fallback, never reaching miniexpr, ignoring
+  the span budget and losing the utf8 container. They now run through the span
+  driver and return a `UTF8Array`.
+- **`add_column()` on a varlen column left it short on tables with deleted
+  rows.** vlstring/vlbytes/utf8/struct/object columns are indexed by physical
+  position but the new column was filled with only as many entries as there
+  were *live* rows, so the first read after a `delete()` raised `IndexError`.
+  The dead slots are now filled too. `add_column()` on a `dictionary()` column
+  raised `AttributeError` from deep inside the fixed-width path; it now raises
+  `TypeError` naming the limitation.
+- **`blosc2.utf8(null_value="\x00")` is rejected.** NumPy does not match a lone
+  NUL against a `StringDType` array (`"\x00x"` and `"a\x00b"` compare fine), so
+  every null mask would silently stop marking nulls. The default sentinel
+  `'__BLOSC2_NULL__'` was never affected.
+- **Nested (dotted) `utf8()` leaves can be filtered.** `t.where("trip.name ==
+  'x'")` raised `NotImplementedError` on a utf8 leaf, while the same query on a
+  `<Un`, `bytes()` or `dictionary()` leaf worked — utf8 was the only flavour
+  where a dotted name could not be queried at all. Dotted names are aliased to
+  safe identifiers before evaluation, but utf8 columns are outside the operand
+  namespace, so they never reached that rewrite; they are now aliased by the
+  utf8 driver itself. Covers scalar comparisons, `startswith`/`upper` and
+  friends, mixed numeric predicates and `sum(where=)`.
+
 ## Changes from 4.9.0 to 4.9.1
 
 A small hot-fix release for the Arrow interop work in 4.9.0: a real
@@ -58,6 +255,35 @@ message when opening a nonexistent `CTable` in append mode.
 
 ### Bug fixes
 
+- **`SChunk` slices were broken for typesizes above 255 bytes.** c-blosc2's
+  `blosc2_schunk_get_slice_buffer()` derives the `getitem` for a partially
+  covered chunk by dividing byte offsets by `schunk->typesize`, which the
+  chunk header contradicts once the typesize is capped. Across 153 slice
+  shapes at typesize 256, 150 raised `"Error while getting the slice"` and
+  the 3 single-element ones returned the wrong bytes with no error at all.
+  Reachable from ordinary data -- an `<U64` NDArray is a 256-byte typesize,
+  so `arr.schunk[1:4]` hit it. Fixed upstream in Blosc/c-blosc2#796, so this
+  release requires a c-blosc2 that carries that fix.
+- **`create_index()` on a string column made every query on it return zero
+  rows.** Silently -- adding an index, an optimization, changed the answer.
+  A segment summary is a `(min, max, flags)` record, so a `<Un` column makes
+  it `8n + 1` bytes: 257 for `max_length=32`, which is the **default** width
+  for a plain `str` annotation. Past 255 bytes c-blosc2 records the chunk
+  typesize as 1, and the sidecar reader asked for spans in element units, so
+  summaries decoded to garbage and pruned every candidate away. The boundary
+  is exactly `8*max_length + 1 > 255` (31 works, 32 does not); `summary`,
+  `bucket`, `partial` and `full` indexes were affected, `opsi` was not.
+  A short span read now raises instead of leaving the destination partly
+  uninitialised.
+- **Expressions over operands wider than 255 bytes returned wrong results.**
+  c-blosc2 caps a typesize above 255 to 1 in the chunk header so its split
+  machinery keeps working, and the miniexpr prefilter was asking
+  `blosc2_getitem_ctx()` for operand blocks in element units, which the chunk
+  then read as a byte range: every block past the first was uninitialised
+  memory. `arr == "hello"` over 1200 rows of `<U64` (256 bytes) matched 1 row
+  instead of 400, non-deterministically and with no error raised. Affects any
+  dtype whose itemsize exceeds 255 bytes; `<U64` is the first fixed-width
+  string that hits it.
 - Opening a `CTable` with `mode="a"` at a path that doesn't exist yet now
   raises a clear `FileNotFoundError` ("mode='a' opens an existing table;
   use mode='w' to create a new one") instead of silently falling through

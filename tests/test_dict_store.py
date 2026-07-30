@@ -117,7 +117,7 @@ def test_to_b2z_and_reopen(populated_dict_store):
         assert np.all(dstore_read["/nodeB"][:] == np.arange(6))
 
 
-def test_extensionless_dict_store_defaults_to_directory(tmp_path):
+def test_extensionless_store_is_a_directory(tmp_path):
     path = tmp_path / "test_dstore_extless"
 
     with DictStore(str(path), mode="w") as dstore:
@@ -421,7 +421,7 @@ def test_external_objectarray_file_and_reopen(tmp_path):
 
 
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
-def test_metadata_discovery_reopens_renamed_external_ndarray(storage_type, tmp_path):
+def test_discovery_reopens_renamed_ndarray(storage_type, tmp_path):
     path = tmp_path / f"test_renamed_ndarray.{storage_type}"
     ext_path = tmp_path / "renamed_array_source.b2nd"
 
@@ -445,7 +445,7 @@ def test_metadata_discovery_reopens_renamed_external_ndarray(storage_type, tmp_p
 
 
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
-def test_metadata_discovery_reopens_renamed_external_objectarray(storage_type, tmp_path):
+def test_discovery_reopens_renamed_objectarray(storage_type, tmp_path):
     path = tmp_path / f"test_renamed_objectarray.{storage_type}"
     ext_path = tmp_path / "renamed_objectarray_source.b2frame"
     values = ["alpha", {"nested": True}, None, (1, 2, 3)]

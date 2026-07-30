@@ -267,7 +267,7 @@ class TestParquetRoundTrip:
         reopened = CTable.open(str(path), mode="r")
         assert reopened["props"][:] == [{"a": 1, "b": "x"}, None, {"a": 2, "b": "yy"}]
 
-    def test_from_arrow_object_fallback_for_unsupported_type(self):
+    def test_from_arrow_object_fallback(self):
         map_type = pa.map_(pa.string(), pa.int32())
         batch = pa.record_batch(
             [pa.array([[("a", 1)], None, [("b", 2), ("c", 3)]], type=map_type)], names=["attrs"]
@@ -408,7 +408,7 @@ class TestParquetRoundTrip:
         assert t["vals"][0] == [1]
         assert t["vals"][1] == [2, 3]
 
-    def test_from_arrow_blosc2_batch_size_override_and_none(self):
+    def test_from_arrow_batch_size_override(self):
         at = pa.table({"vals": pa.array([[1], [2], [3]], type=pa.list_(pa.int64()))})
         t = CTable.from_arrow(at.schema, at.to_batches(max_chunksize=1), blosc2_batch_size=2)
         assert t._schema.columns_by_name["vals"].spec.batch_rows == 2
@@ -576,7 +576,7 @@ class TestNullHandling:
         assert t._schema.columns_by_name["i"].spec.null_value == np.iinfo(np.int32).max
         assert t["i"].null_count() == 1
 
-    def test_null_policy_string_value_applies_to_fixed_width_strings(self):
+    def test_null_policy_applies_to_fixed_width(self):
         """string_value in NullPolicy applies when string_max_length is given explicitly."""
         at = pa.table(
             {
@@ -613,14 +613,14 @@ class TestNullHandling:
             t2 = CTable.from_parquet(path, auto_null_sentinels=False)
         assert t2._schema.columns_by_name["i"].spec.null_value == -1
 
-    def test_null_policy_rejects_vlbytes_column_null_values(self):
+    def test_null_policy_rejects_vlbytes_nulls(self):
         """Passing column_null_values for a vlbytes column raises TypeError."""
         at = pa.table({"b": pa.array([b"a", None, b"c"], type=pa.large_binary())})
         policy = blosc2.NullPolicy(column_null_values={"b": b"NA"})
         with blosc2.null_policy(policy), pytest.raises(TypeError, match="vlbytes"):
             CTable.from_arrow(at.schema, at.to_batches())
 
-    def test_null_policy_column_null_values_applies_to_utf8(self):
+    def test_null_policy_col_nulls_apply_to_utf8(self):
         """Passing column_null_values for a utf8 (scalar string) column sets its sentinel.
 
         On NumPy < 2.0 utf8 columns are unavailable, strings import as
@@ -722,7 +722,7 @@ class TestErrors:
         assert len(out) == 6
         np.testing.assert_array_equal(out["id"][:], np.arange(6))
 
-    def test_max_rows_zero_from_parquet_imports_empty_table(self, tmp_path):
+    def test_max_rows_zero_imports_empty_table(self, tmp_path):
         t = CTable(Row, new_data=DATA10)
         path = tmp_path / "x.parquet"
         t.to_parquet(path)
@@ -784,7 +784,7 @@ def test_parquet_cli_nested_progress_skips_write_lines(tmp_path, capsys):
     assert "    write" not in captured.out
 
 
-def test_parquet_cli_separate_nested_flattens_top_level_structs(tmp_path, capsys):
+def test_cli_separate_nested_flattens_structs(tmp_path, capsys):
     from blosc2.cli.parquet_to_blosc2 import main
 
     trip_type = pa.struct(
@@ -819,7 +819,8 @@ def test_parquet_cli_separate_nested_flattens_top_level_structs(tmp_path, capsys
     ct.close()
 
 
-def test_parquet_cli_no_separate_nested_preserves_top_level_struct_as_list(tmp_path):
+def test_cli_no_separate_nested_keeps_struct(tmp_path):
+    """Without --separate-nested a top-level struct stays one list column."""
     from blosc2.cli.parquet_to_blosc2 import main
 
     trip_type = pa.struct([pa.field("sec", pa.float32())])

@@ -18,6 +18,7 @@ variable-length, and object data.
     BatchArray
     ListArray
     ObjectArray
+    UTF8Array
 
 
 Proxies and External Data Sources

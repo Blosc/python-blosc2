@@ -39,7 +39,7 @@ not ask for.
 
 ## The problem, quantified
 
-Every utf8 bulk read funnels through `Utf8Array._read_persisted_span`
+Every utf8 bulk read funnels through `UTF8Array._read_persisted_span`
 (`src/blosc2/utf8_array.py`), which ends in a per-row Python loop:
 
 ```python
@@ -64,7 +64,7 @@ Measured on the taxi `company` column (1e7 rows, ~60 distinct values,
 | sort_by (copy)         | 7712 ms      | 2395 ms    | decode loop feeds sort keys |
 
 groupby keys and dense-table Arrow export were already fixed (phase 3's
-P3.d follow-up: `Utf8Factorizer`; post-review fixes: `arrow_slice`) —
+P3.d follow-up: `UTF8Factorizer`; post-review fixes: `arrow_slice`) —
 both bypass the decode loop. Filters, full reads, sort-key
 materialization, and column-vs-column comparisons still pay it.
 
@@ -82,7 +82,7 @@ predicates into miniexpr only if a real workload later proves it pays.
 
 ## Design decisions already made (do not re-litigate)
 
-1. **Filters do NOT go through `Utf8Factorizer`.** This was prototyped
+1. **Filters do NOT go through `UTF8Factorizer`.** This was prototyped
    and measured on 2026-07-17 (1e7-row taxi column, most-frequent-value
    probe, 2.34e6 hits), all results verified equal to ground truth:
 
@@ -98,7 +98,7 @@ predicates into miniexpr only if a real workload later proves it pays.
    the current path* on high-cardinality columns where nearly every row
    is a new value. Filters need one boolean per row, not value
    identities. **A note in `plans/enhancing-ctable-phase3.md` ("route
-   comparisons through the `Utf8Factorizer`…") predates this measurement
+   comparisons through the `UTF8Factorizer`…") predates this measurement
    and is superseded by this plan — leave that file as is, it is a
    historical record.**
 
@@ -106,7 +106,7 @@ predicates into miniexpr only if a real workload later proves it pays.
    already fully vectorized (whole-array ops only), a C version would buy
    maybe 2x more while adding build friction, and the repo's editable
    install does not rebuild `.pyx`. Precedent:
-   `_factorize_fixed_width_str` and `Utf8Factorizer` solve the same class
+   `_factorize_fixed_width_str` and `UTF8Factorizer` solve the same class
    of problem the same way.
 
 3. **Byte-lexicographic order on UTF-8 bytes equals Unicode code-point
@@ -114,7 +114,7 @@ predicates into miniexpr only if a real workload later proves it pays.
    makes ordering comparisons (`<`, `<=`, `>`, `>=`) implementable on raw
    bytes without decoding. Python `str` comparison is code-point order,
    so byte-lex results match Python/StringDType semantics exactly. (The
-   same property already justifies `Utf8Factorizer`'s rank codes.)
+   same property already justifies `UTF8Factorizer`'s rank codes.)
 
 4. **Null semantics are frozen.** A null (sentinel) value on either side
    never satisfies any comparison — SQL `WHERE` semantics, pinned by
@@ -135,7 +135,7 @@ predicates into miniexpr only if a real workload later proves it pays.
 
 ### U1.a Equality (`==`, `!=`) against a `str` scalar
 
-**Where:** a new method on `Utf8Array` (`src/blosc2/utf8_array.py`), plus
+**Where:** a new method on `UTF8Array` (`src/blosc2/utf8_array.py`), plus
 wiring in `Column._utf8_compare` (`src/blosc2/ctable.py`, grep for
 `def _utf8_compare`).
 
@@ -178,7 +178,7 @@ Key properties to preserve:
   (`idx = idx + 1` creates one new array per byte position; that is
   fine — the point is never materializing a `(k, L)` int64 index matrix).
 - **Pending rows:** call `self.flush()` at the start of the public entry
-  point (precedent: `Utf8Factorizer.__init__` and `factorize_span` flush;
+  point (precedent: `UTF8Factorizer.__init__` and `factorize_span` flush;
   it is a no-op unless there are buffered rows, and read-only tables
   cannot have any).
 
@@ -209,7 +209,7 @@ currently duplicated. Behavior must not change (its tests pin it).
 
 **Algorithm:** per-byte vectorized lexicographic compare against the
 probe's bytes, grouped by row byte-length (the same grouping loop
-`Utf8Array.factorize_span` uses — bincount on `np.diff(rel)`, then one
+`UTF8Array.factorize_span` uses — bincount on `np.diff(rel)`, then one
 iteration per distinct length; distinct lengths are few in practice and
 each row is touched once regardless).
 
@@ -371,7 +371,7 @@ extension.
   (own `add_custom_command`, `Python_add_library`, link/install rules).
   Measured at ~9 ns/row standalone (2e6-row synthetic column), matching
   the plan's 20-40 ns/row estimate.
-- `Utf8Array._read_persisted_span` (`utf8_array.py`) tries the kernel via
+- `UTF8Array._read_persisted_span` (`utf8_array.py`) tries the kernel via
   a new lazy `_pack_utf8_kernel()` helper (mirrors the
   `try: from blosc2 import groupby_ext / except ImportError: return None`
   pattern already used in `groupby.py`) and falls back to the old per-row
@@ -385,10 +385,10 @@ extension.
   until both landed:
   1. `Column._values_from_key`'s slice fast-path (`ctable.py`) excluded
      every `is_varlen_scalar` column, including utf8, from the
-     identity-position direct-slice shortcut, even though `Utf8Array`
+     identity-position direct-slice shortcut, even though `UTF8Array`
      slices itself efficiently. Changed the exclusion to
      `is_varlen_scalar and not is_utf8`.
-  2. The real bottleneck: `Utf8Array._get_many` (used whenever
+  2. The real bottleneck: `UTF8Array._get_many` (used whenever
      `_has_identity_positions()` is false — the common case, since a
      table's physical capacity is normally chunk-padded past its row
      count) always sorted the index array and did a fancy-indexed
@@ -473,5 +473,5 @@ semantics for the C kernels — nothing built in U1 is throwaway.
   the root cause here and stop.
 - Never regress `string()`/`vlstring()` behavior or performance; the
   guard is `bench_string_kinds.py` plus the full test suite.
-- No new public API: everything here is internal (`Utf8Array` methods,
+- No new public API: everything here is internal (`UTF8Array` methods,
   `Column._utf8_compare` internals, an optional compiled helper).

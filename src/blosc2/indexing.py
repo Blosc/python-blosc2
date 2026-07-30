@@ -6223,6 +6223,26 @@ def _bucket_match_from_span(span: np.ndarray, plan: IndexPlan) -> np.ndarray:
     return match
 
 
+def _coalesce_spans(spans: list[tuple[int, int]], max_gap: int) -> list[tuple[int, int]]:
+    """Merge spans separated by fewer than *max_gap* elements.
+
+    A read decompresses whole blocks, so two spans landing in the same block pay
+    for it twice unless they are merged.  Widening a span only hands more rows to
+    the predicate, which rejects them; merged spans stay disjoint and ordered, so
+    positions remain unique and sorted.
+    """
+    if max_gap <= 0 or len(spans) < 2:
+        return spans
+    merged = [spans[0]]
+    for start, stop in spans[1:]:
+        last_start, last_stop = merged[-1]
+        if start - last_stop < max_gap:
+            merged[-1] = (last_start, max(last_stop, stop))
+        else:
+            merged.append((start, stop))
+    return merged
+
+
 def _process_bucket_chunk_batch(
     chunk_ids: np.ndarray,
     where_x,
@@ -6233,15 +6253,19 @@ def _process_bucket_chunk_batch(
     value_parts = []
     position_parts = []
     local_where_x = _bucket_worker_source(where_x)
+    blocks = getattr(local_where_x, "blocks", None)
+    block_len = int(blocks[0]) if blocks else 0
     for chunk_id in chunk_ids:
         bucket_mask = plan.bucket_masks[int(chunk_id)]
         chunk_start = int(chunk_id) * plan.chunk_len
         chunk_stop = min(chunk_start + plan.chunk_len, total_len)
+        spans = []
         for run_start, run_stop in _contiguous_true_runs(np.asarray(bucket_mask, dtype=bool)):
             start = chunk_start + run_start * plan.bucket_len
             stop = min(chunk_start + run_stop * plan.bucket_len, chunk_stop)
-            if start >= stop:
-                continue
+            if start < stop:
+                spans.append((start, stop))
+        for start, stop in _coalesce_spans(spans, block_len):
             if _supports_block_reads(local_where_x):
                 span = np.empty(stop - start, dtype=local_where_x.dtype)
                 _read_ndarray_linear_span(local_where_x, start, span)
@@ -6823,6 +6847,33 @@ def _plan_multi_exact_query(plans: list[ExactPredicatePlan]) -> IndexPlan | None
     return None
 
 
+#: Decline a bucket plan that would touch more than this fraction of the column's
+#: blocks.  Buckets are far smaller than blocks, so a mask can select few buckets
+#: and still force a read of nearly every block — at which point the scattered
+#: reads cost more than the linear scan the index is meant to replace.
+_BUCKET_MAX_BLOCK_FRACTION = 0.5
+
+
+def _bucket_block_fraction(bucket_masks: np.ndarray, bucket: dict) -> float:
+    """Fraction of the column's blocks that *bucket_masks* forces a read of.
+
+    Selectivity in buckets overstates what the index saves: a read decompresses a
+    whole block, so the cost unit is the block, not the bucket.
+    """
+    masks = np.asarray(bucket_masks, dtype=bool)
+    if masks.size == 0:
+        return 0.0
+    # A bucket at least as wide as a block covers whole blocks, so the clamp to 1
+    # is not a special case: the grouping below then reduces to the mask itself,
+    # and the fraction of blocks read equals the fraction of buckets selected.
+    per_block = max(1, int(bucket["nav_segment_len"]) // int(bucket["bucket_len"]))
+    n_blocks = math.ceil(masks.shape[-1] / per_block)
+    padded = np.zeros((*masks.shape[:-1], n_blocks * per_block), dtype=bool)
+    padded[..., : masks.shape[-1]] = masks
+    blocks_hit = padded.reshape(*masks.shape[:-1], n_blocks, per_block).any(axis=-1)
+    return float(blocks_hit.mean())
+
+
 def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
     kind = exact_plan.descriptor["kind"]
     if kind in {"full", "opsi"}:
@@ -6872,7 +6923,10 @@ def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
     bucket = exact_plan.descriptor["bucket"]
     total_units = bucket_masks.size
     selected_units = _bit_count_sum(bucket_masks)
-    if selected_units < total_units:
+    if (
+        selected_units < total_units
+        and _bucket_block_fraction(bucket_masks, bucket) <= _BUCKET_MAX_BLOCK_FRACTION
+    ):
         return IndexPlan(
             True,
             "bucket approximate-order index selected",

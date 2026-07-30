@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import pytest
 
 import blosc2
@@ -214,7 +215,7 @@ class TestCTableBehavior:
         assert ct.where('"Acme" in company and amount > 8')["amount"][:].tolist() == [9.0]
         assert ct.where('"Acme" in company or "Beta" in company').nrows == 3
 
-    def test_string_where_dictionary_literal_with_special_chars(self):
+    def test_where_dict_literal_special_chars(self):
         # Literals with commas/spaces/dashes (e.g. chicago-taxi company names).
         @dataclass
         class Row:
@@ -228,7 +229,7 @@ class TestCTableBehavior:
         assert ct.where(f'company == "{name}"')["n"][:].tolist() == [1, 3]
         assert ct.where(f"company == '{name}'")["n"][:].tolist() == [1, 3]  # single quotes too
 
-    def test_dictionary_predicate_combines_with_regular_predicate_in_aggregate(self):
+    def test_dict_pred_combines_in_aggregate(self):
         ct = CTable(TripRow)
         ct.extend(DATA_TUPLES)
         assert ct["fare"].sum(where=(ct["fare"] > 6) & (ct["vendor"] == "Uber")) == pytest.approx(25.5)
@@ -494,7 +495,7 @@ def test_cli_preserves_dict_by_default(tmp_path):
 
 def test_cli_decode_dictionaries_flag(tmp_path):
     from blosc2.cli.parquet_to_blosc2 import main
-    from blosc2.schema import Utf8Spec, VLStringSpec
+    from blosc2.schema import UTF8Spec, VLStringSpec
 
     path = tmp_path / "dict.parquet"
     out = tmp_path / "dict_decoded.b2d"
@@ -506,10 +507,10 @@ def test_cli_decode_dictionaries_flag(tmp_path):
     assert main(["--decode-dictionaries", str(path), str(out)]) == 0
 
     ct = CTable.open(str(out), mode="r")
-    from blosc2.utf8_array import have_string_dtype
+    from blosc2._utf8_array import have_string_dtype
 
     # Decoded strings become utf8 columns on NumPy >= 2.0, vlstring on older NumPy.
-    expected_spec = Utf8Spec if have_string_dtype() else VLStringSpec
+    expected_spec = UTF8Spec if have_string_dtype() else VLStringSpec
     assert isinstance(ct._schema.columns_by_name["vendor"].spec, expected_spec)
     assert list(ct["vendor"][:]) == ["Uber", "Lyft", "Uber"]
     ct.close()
@@ -538,5 +539,234 @@ def test_cli_dict_export_roundtrip(tmp_path):
     assert rt.column("score").to_pylist() == [1, 2, 3, 4]
 
 
+def test_decode_reads_dictionary_once_not_per_row():
+    """Decoding N rows must not index the dict store N times.
+
+    Each ``dict_store[code]`` decompresses a whole msgpack batch, so a per-code
+    decode makes reads and lexsort-based ``sort_by`` cost O(N) decompressions.
+    """
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+
+    t = CTable(Row)
+    t.extend({"c": [f"v{i % 50}" for i in range(2000)]}, validate=False)
+    t._flush_varlen_columns()
+
+    col = t._cols["c"]
+    col._invalidate_cache()
+    store = col._dict_store
+    original = type(store).__getitem__
+    calls = 0
+
+    def counting_getitem(self, key):
+        nonlocal calls
+        calls += 1
+        return original(self, key)
+
+    type(store).__getitem__ = counting_getitem
+    try:
+        values = col[0:2000]
+    finally:
+        type(store).__getitem__ = original
+
+    assert values == [f"v{i % 50}" for i in range(2000)]
+    assert calls <= 1, f"decoded 2000 rows with {calls} dict-store reads"
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
+
+
+def test_dictionary_column_comparisons_are_elementwise():
+    """``column == value`` must not fall through to object identity.
+
+    It used to return a plain ``False`` — silently wrong rather than an error.
+    """
+    import numpy as np
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+
+    t = CTable(Row)
+    t.extend({"c": ["hello", "world", "hello"]}, validate=False)
+    t._flush_varlen_columns()
+    col = t._cols["c"]
+
+    np.testing.assert_array_equal((col == "hello")[:3], [True, False, True])
+    np.testing.assert_array_equal((col != "hello")[:3], [False, True, False])
+    # A value absent from the dictionary matches nothing rather than raising.
+    np.testing.assert_array_equal((col == "absent")[:3], [False, False, False])
+    # Defining __eq__ must not have made the container unhashable.
+    assert isinstance(hash(col), int)
+
+
+def test_dictionary_ne_predicate_matches_live_rows():
+    """``col != value`` must negate the value test, not the live-row mask.
+
+    Negating afterwards turned every dead capacity slot True, which then failed
+    with an IndexError when used to select rows.
+    """
+    import numpy as np
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+
+    values = ["a1", "b2", "c3"] * 13  # 39 live rows in a padded slot array
+    t = CTable(Row)
+    t.extend({"c": values}, validate=False)
+    t._flush_varlen_columns()
+
+    assert sorted(t[t["c"] != "a1"]["c"][:]) == sorted(v for v in values if v != "a1")
+    assert len(t[t["c"] == "a1"]["c"][:]) == 13
+    # A value no row carries: nothing matches, everything differs.
+    assert len(t[t["c"] == "absent"]["c"][:]) == 0
+    assert len(t[t["c"] != "absent"]["c"][:]) == len(values)
+    assert np.asarray((t["c"] != "a1")[:]).sum() == 26
+
+
+def test_dictionary_index_answers_equality(tmp_path):
+    """With a rank index, ``col == value`` is a sidecar lookup, not a codes scan."""
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+
+    values = ["pear", "apple", "cherry", "apple", "banana"]
+    results = {}
+    for tag in ("scan", "index"):
+        t = CTable(Row, urlpath=str(tmp_path / f"{tag}.b2t"), mode="w")
+        t.extend({"c": values}, validate=False)
+        t._flush_varlen_columns()
+        if tag == "index":
+            t.create_index("c", kind="full")
+            assert t["c"]._dictionary_index_mask("apple") is not None
+            # A value absent from the dictionary still answers, matching nothing.
+            assert not t["c"]._dictionary_index_mask("absent").any()
+        results[tag] = {
+            probe: (
+                sorted(t[t["c"] == probe]["c"][:]),
+                sorted(t[t["c"] != probe]["c"][:]),
+            )
+            for probe in ("apple", "pear", "absent")
+        }
+        del t
+
+    assert results["index"] == results["scan"]
+    assert results["scan"]["apple"][0] == ["apple", "apple"]
+
+
+def test_dictionary_index_spans_deleted_rows(tmp_path):
+    """The rank index has to cover the physical extent, not the live row count.
+
+    delete() tombstones in place and only decrements the live count, so live
+    rows can sit past it.  An index sized by that count silently drops them
+    from equality results.
+    """
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+
+    values = ["pear", "apple", "cherry", "apple", "banana", "apple"]
+    t = CTable(Row, urlpath=str(tmp_path / "t.b2t"), mode="w")
+    t.extend({"c": values}, validate=False)
+    t._flush_varlen_columns()
+    t.delete(0)
+    t.create_index("c", kind="full")
+
+    assert t["c"]._dictionary_index_mask("apple") is not None
+    # The trailing "apple" is live and must not be lost to the index.
+    assert sorted(t[t["c"] == "apple"]["c"][:]) == ["apple"] * 3
+    assert sorted(t[t["c"] != "apple"]["c"][:]) == ["banana", "cherry"]
+
+
+def test_dict_rank_staleness_uses_value_epoch(tmp_path):
+    """The staleness check must not re-hash the whole dictionary per query."""
+    from blosc2.ctable_indexing import _dict_rank_hash
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+
+    t = CTable(Row, urlpath=str(tmp_path / "t.b2t"), mode="w")
+    t.extend({"c": [f"v{i % 50}" for i in range(500)]}, validate=False)
+    t._flush_varlen_columns()
+    t.create_index("c", kind="full")
+    meta = t._get_index_catalog()["c"]["full"]["dict_rank"]
+
+    calls = 0
+    import blosc2.ctable_indexing as ci
+
+    def counting_hash(dictionary):
+        nonlocal calls
+        calls += 1
+        return _dict_rank_hash(dictionary)
+
+    ci._dict_rank_hash = counting_hash
+    try:
+        assert not t._dict_rank_index_stale("c", meta)
+    finally:
+        ci._dict_rank_hash = _dict_rank_hash
+    assert calls == 0, "value epoch was unchanged, so no hash should have been needed"
+
+
+def test_sort_by_keys_on_ranks_not_decoded_strings():
+    """sort_by must not decode a dictionary column to sort it.
+
+    Sorting by alphabetical rank is sorting by decoded value, so the key can
+    stay int32 -- which skips both the decode and lexsort's string
+    comparisons.  Correctness alone would not notice the difference, so
+    assert on the key dtype as well as the order.
+    """
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary())
+        x: int = blosc2.field(blosc2.int64())
+
+    values = ["delta", "alpha", "Zeta", "beta", "alpha"]
+    t = CTable(Row, new_data={"c": values, "x": list(range(len(values)))})
+
+    live = np.arange(len(values))
+    keys = t._build_lex_keys(["c"], [True], live, len(values))
+    assert keys[0].dtype == np.int32
+
+    # Ranks must order exactly as Python orders the decoded strings.
+    assert list(t.sort_by("c")["c"][:]) == sorted(values)
+    assert list(t.sort_by("c", ascending=False)["c"][:]) == sorted(values, reverse=True)
+
+
+def test_sort_by_dictionary_nulls_and_multiple_keys():
+    """Nulls sort last in both directions, and rank keys compose with others."""
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary(nullable=True))
+        x: int = blosc2.field(blosc2.int64())
+
+    values = ["b", None, "a", None, "b"]
+    t = CTable(Row, new_data={"c": values, "x": [0, 1, 2, 3, 4]})
+
+    assert list(t.sort_by("c")["c"][:]) == ["a", "b", "b", None, None]
+    assert list(t.sort_by("c", ascending=False)["c"][:]) == ["b", "b", "a", None, None]
+    # Secondary key breaks the "b" tie; nulls still trail.
+    assert list(t.sort_by(["c", "x"], [True, False])["x"][:]) == [2, 4, 0, 3, 1]
+
+
+def test_sort_by_dictionary_view_and_small_copy_agree():
+    """The filtered small-copy path builds its keys the same way sort_by does."""
+
+    @dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.dictionary(nullable=True))
+        x: int = blosc2.field(blosc2.int64())
+
+    values = ["b", None, "a", "c", "b", None, "a"]
+    t = CTable(Row, new_data={"c": values, "x": list(range(len(values)))})
+    filtered = t[t.x > 1]  # small enough to take _sorted_small_copy_from_live_positions
+    assert list(filtered.sort_by("c")["c"][:]) == ["a", "a", "b", "c", None]
+    assert list(filtered.sort_by("c", ascending=False)["c"][:]) == ["c", "b", "a", "a", None]

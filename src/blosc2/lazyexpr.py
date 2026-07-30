@@ -231,6 +231,26 @@ _TRANSIENT_MASK_CPARAMS = blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=5, filte
 _constructor_call_patterns = {name: re.compile(rf"\b{re.escape(name)}\s*\(") for name in constructors}
 
 
+def _restore_code_unit_shuffle(cparams: blosc2.CParams, dtype) -> None:
+    """Give SHUFFLE the code-unit width that constructing a CParams erases.
+
+    Left to itself, ``blosc2.uninit()`` shuffles a ``<U`` array by 4 bytes --
+    the UCS4 code unit -- which for text groups the (mostly zero) high bytes of
+    every codepoint together.  ``CParams`` defaults ``filters_meta`` to all
+    zeros, meaning "shuffle by the whole item", so merely passing a ``CParams``
+    to set something unrelated silently scatters characters across the slot
+    instead.  That cost 3.2x on the compressed result of every string
+    expression: 2.01 MB against 0.63 for the same bytes.
+
+    Only touches an entry the caller left at 0, and only for ``U``.
+    """
+    if getattr(dtype, "kind", None) != "U":
+        return
+    for i, filt in enumerate(cparams.filters):
+        if filt == blosc2.Filter.SHUFFLE and cparams.filters_meta[i] == 0:
+            cparams.filters_meta[i] = 4
+
+
 def _has_constructor_call(expression: str, constructor: str) -> bool:
     return _constructor_call_patterns[constructor].search(expression) is not None
 
@@ -1761,7 +1781,7 @@ def fast_eval(  # noqa: C901
                     and op.ndim > 0
                     and op.shape == shape
                     and op.dtype.isnative
-                    and op.dtype.kind in "biufc"
+                    and op.dtype.kind in "biufcUS"
                 )
             return False
 
@@ -1806,12 +1826,19 @@ def fast_eval(  # noqa: C901
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", None)
-        if cparams is None:
+        if cparams is None and getitem:
             # getitem output is throwaway scratch (returned as a NumPy array and
             # discarded), so compressing it buys nothing but a round trip.
-            cparams = blosc2.CParams(clevel=0) if getitem else blosc2.CParams()
+            cparams = blosc2.CParams(clevel=0)
+        # Otherwise leave cparams unset rather than passing CParams(): its
+        # filters_meta defaults to all zeros, which *overrides* the dtype-aware
+        # shuffle width uninit() would pick.  For <U that width is 4 (the UCS4
+        # code unit); shuffling by the full slot instead scatters characters
+        # across it and cost 3.2x on the compressed result.
+        if cparams is not None:
+            kwargs["cparams"] = cparams
         # All values will be overwritten, so we can use an uninitialized array
-        res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
+        res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, **kwargs)
         prefilter_set = False
         try:
             # Fuse where(cond, x, y) into the expression for miniexpr
@@ -2670,8 +2697,11 @@ def reduce_slices(  # noqa: C901
             use_miniexpr = False
 
     if use_miniexpr:
-        # Experiments say that not splitting is best (at least on Apple Silicon M4 Pro)
-        cparams = kwargs.pop("cparams", blosc2.CParams(splitmode=blosc2.SplitMode.NEVER_SPLIT))
+        cparams = kwargs.pop("cparams", None)
+        if cparams is None:
+            # Experiments say that not splitting is best (at least on Apple Silicon M4 Pro)
+            cparams = blosc2.CParams(splitmode=blosc2.SplitMode.NEVER_SPLIT)
+            _restore_code_unit_shuffle(cparams, dtype)
         # Create a fake NDArray just to drive the miniexpr evaluation (values won't be used)
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         # Compute the number of blocks in the result
@@ -3597,8 +3627,53 @@ class LazyExpr(LazyArray):
         finally:
             blosc2._disable_overloaded_equal = prev_flag
 
+    def _miniexpr_string_dtype(self):
+        """Width of a string-valued result, as inferred by miniexpr itself.
+
+        Only miniexpr knows the width its kernels produce: concat adds operand
+        widths, and case mapping can expand (numpy's ``result_type`` models
+        neither).  Allocating the output container from numpy's answer makes the
+        kernel silently truncate, so ask miniexpr whenever a string operand is
+        involved.  Returns None when no string is involved or miniexpr cannot
+        compile the expression, leaving the numpy path in charge.
+        """
+        try:
+            operands = self.operands
+            if not operands or any(v is None for v in operands.values()):
+                return None
+            dtypes = {}
+            for k, v in operands.items():
+                dt = getattr(v, "dtype", None)
+                if dt is None:
+                    return None
+                dtypes[k] = dt
+            if not any(np.dtype(dt).kind in "US" for dt in dtypes.values()):
+                return None
+            # The width follows the operand dtypes, not just the expression text, so
+            # both go in the key: rebinding the same expression to wider operands
+            # must not be answered from the narrower build's cache.  Collecting the
+            # dtypes is cheap; what the key protects is the miniexpr compile below.
+            key = (self.expression, tuple((k, str(dt)) for k, dt in dtypes.items()))
+            cached = getattr(self, "_me_str_dtype_", None)
+            if cached is not None and self._me_str_key_ == key:
+                return cached[0]
+            from blosc2 import blosc2_ext
+
+            out = blosc2_ext.me_output_dtype(self.expression, dtypes)
+        except Exception:
+            return None
+        if out is not None and np.dtype(out).kind not in "US":
+            out = None
+        self._me_str_dtype_ = (out,)
+        self._me_str_key_ = key
+        return out
+
     @property
     def dtype(self):
+        # miniexpr owns string widths; see _miniexpr_string_dtype.
+        string_dtype = self._miniexpr_string_dtype()
+        if string_dtype is not None:
+            return string_dtype
         # Honor self._dtype; it can be set during the building of the expression
         if hasattr(self, "_dtype"):
             # In some situations, we already know the dtype
@@ -4619,10 +4694,70 @@ def _align_dsl_operand_grids(inputs):
     return aligned
 
 
+def _dsl_kernel_string_dtype(func, inputs):
+    """Output dtype of a string-returning DSL kernel, per miniexpr.
+
+    Returns None when the kernel is not string-valued or miniexpr cannot type
+    it, leaving the existing dtype handling in charge.
+    """
+    try:
+        params = list(getattr(func, "input_names", None) or [])
+        if not params or len(params) != len(inputs):
+            return None
+        dtypes = {}
+        for name, arr in zip(params, inputs, strict=True):
+            dt = getattr(arr, "dtype", None)
+            if dt is None:
+                return None
+            dtypes[name] = dt
+        if not any(np.dtype(dt).kind in "US" for dt in dtypes.values()):
+            return None
+
+        from blosc2 import blosc2_ext
+
+        out = blosc2_ext.me_output_dtype(func.dsl_source, dtypes)
+    except Exception:
+        return None
+    if out is None or np.dtype(out).kind not in "US":
+        return None
+    return np.dtype(out)
+
+
+def _guard_utf8_udf_inputs(inputs) -> None:
+    """Reject variable-length utf8 operands in a UDF, naming the conversion."""
+    from blosc2._utf8_array import UTF8Array, utf8_compute_error
+
+    for operand in inputs or ():
+        raw = getattr(operand, "raw", operand)  # a CTable Column exposes its container here
+        if not isinstance(raw, UTF8Array):
+            continue
+        name = getattr(operand, "_col_name", None)
+        source = f"t[{name!r}]" if name else "arr"
+        raise NotImplementedError(
+            utf8_compute_error(
+                (
+                    f"Column {name!r} is a variable-length utf8 column and cannot be a UDF operand."
+                    if name
+                    else "A variable-length UTF8Array cannot be a UDF operand."
+                ),
+                source=source,
+                compute="blosc2.lazyudf(kernel, (fixed,)).compute()[:]",
+                assignable=name is not None,
+            )
+        )
+
+
 class LazyUDF(LazyArray):
     def __init__(
         self, func, inputs, dtype, shape=None, chunked_eval=True, jit=None, jit_backend=None, **kwargs
     ):
+        # A utf8 operand only duck-types as an array: convert_inputs() would wrap
+        # it in a SimpleProxy widened to a fixed <Un, and the output container is
+        # then allocated from a StringDType the NDArray dtype round-trip cannot
+        # parse -- an obscure "malformed node" ValueError, on every evaluation,
+        # whatever the kernel returns.  Refuse it here, where the operand is
+        # still recognizable, and name the conversion instead.
+        _guard_utf8_udf_inputs(inputs)
         # After this, all the inputs should be np.ndarray or NDArray objects
         self.inputs = convert_inputs(inputs)
         if isinstance(func, DSLKernel):
@@ -4636,6 +4771,12 @@ class LazyUDF(LazyArray):
                 )
         else:
             self._shape = shape
+
+        if dtype is None and isinstance(func, DSLKernel) and func.dsl_source is not None:
+            # A string-returning DSL kernel needs miniexpr's own width inference:
+            # the output container is allocated before evaluation, and nothing on
+            # the Python side can predict a concat/case-mapping width.
+            dtype = _dsl_kernel_string_dtype(func, self.inputs) or dtype
 
         self.kwargs = kwargs
         self.kwargs["dtype"] = dtype
@@ -4807,7 +4948,12 @@ class LazyUDF(LazyArray):
             # Convert to dictionary
             cparams = asdict(cparams)
         aux_cparams.update(cparams)
-        aux_kwargs["cparams"] = aux_cparams
+        if aux_cparams:
+            # Only when something was actually asked for: passing an empty dict
+            # still materializes CParams' defaults, whose all-zero filters_meta
+            # overrides the dtype-aware shuffle width (4 for <U, the UCS4 code
+            # unit) that the container would otherwise pick for itself.
+            aux_kwargs["cparams"] = aux_cparams
 
         aux_dparams = aux_kwargs.get("dparams", {})
         if isinstance(aux_dparams, blosc2.DParams):
@@ -5105,6 +5251,9 @@ def lazyudf(
     if isinstance(func, DSLKernel) and func.dsl_error is not None:
         udf_name = getattr(func.func, "__name__", func.__name__)
         raise DSLSyntaxError(f"Invalid DSL kernel '{udf_name}'.\n{func.dsl_error}") from None
+    # Ahead of the dtype inference below, which a StringDType operand fails with
+    # a bare NumPy promotion error naming neither the column nor the way out.
+    _guard_utf8_udf_inputs(inputs)
     if dtype is None:
         if isinstance(func, DSLKernel):
             dep_dtypes = [arr.dtype for arr in (inputs or []) if hasattr(arr, "dtype")]
@@ -5112,7 +5261,9 @@ def lazyudf(
                 raise TypeError(
                     "Cannot infer dtype for DSL kernel with no array inputs; pass dtype= explicitly."
                 )
-            dtype = np.result_type(*dep_dtypes)
+            # A string-returning kernel is not a promotion of its inputs: only
+            # miniexpr knows the concat/case-mapping width bound.
+            dtype = _dsl_kernel_string_dtype(func, inputs) or np.result_type(*dep_dtypes)
         else:
             raise TypeError("dtype is required for non-DSL UDFs.")
     return LazyUDF(func, inputs, dtype, shape, chunked_eval, jit, jit_backend, **kwargs)
@@ -5224,6 +5375,23 @@ def lazyexpr(
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
+    if operands is not None and isinstance(expression, str):
+        # A UTF8Array is variable-width, so it cannot be an expression operand.
+        # It only duck-types as one: LazyExpr would wrap it in a SimpleProxy,
+        # which converts it to a fixed-width <Un NumPy array, and evaluation
+        # would land in slices_eval -- correct-looking values down a path that
+        # never reaches miniexpr, ignores the span budget, and loses the utf8
+        # container.  Route it through the span driver instead.
+        from blosc2._utf8_array import UTF8Array, UTF8LazyExpr
+
+        if any(isinstance(v, UTF8Array) for v in operands.values()):
+            if out is not None or where is not None:
+                raise NotImplementedError(
+                    "'out' and 'where' are not supported for expressions over a bare "
+                    "UTF8Array; use a CTable column, which supports both."
+                )
+            return UTF8LazyExpr(expression, operands, ne_args=ne_args)
+
     if isinstance(expression, LazyExpr):
         if operands is not None:
             expression.operands.update(operands)

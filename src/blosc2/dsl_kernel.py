@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import inspect
+import keyword
 import os
 import textwrap
 import tokenize
@@ -37,6 +38,176 @@ _NUMPY_TO_DSL_FUNC_ALIASES = {
     "minimum": "fmin",
     "absolute": "abs",
 }
+
+
+# Python string methods the DSL grammar exposes as plain functions.  The DSL
+# parser has no attribute syntax, so `desc.lower()` has to become `lower(desc)`
+# before the source reaches miniexpr.
+_STRING_METHOD_TO_DSL_FUNC = {
+    "lower": "lower",
+    "upper": "upper",
+    "strip": "strip",
+    "lstrip": "lstrip",
+    "rstrip": "rstrip",
+    "removeprefix": "removeprefix",
+    "removesuffix": "removesuffix",
+    "replace": "replace",
+    "startswith": "startswith",
+    "endswith": "endswith",
+}
+
+
+class _StringSyntaxRewriter(ast.NodeTransformer):
+    """Make ordinary Python string syntax parseable by the DSL grammar.
+
+    Three rewrites, all shape-preserving:
+
+      ``s.lower()``        -> ``lower(s)``
+      ``x in s``           -> ``contains(s, x)``      (``not in`` negated)
+      ``a, b = s.split(sep, 1)``
+                           -> ``a = split_part(s, sep, 0)``
+                              ``b = split_part(s, sep, 1)``
+
+    The point is that a pandas UDF written in normal Python runs unmodified;
+    without this, `df.apply(f, axis=1, engine=blosc2.jit)` would require the
+    user to rewrite their function into function-call form first.
+    """
+
+    def __init__(self):
+        self.rewrote_any = False
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr in _STRING_METHOD_TO_DSL_FUNC:
+            # `np.foo(...)` is handled by _NumpyAttrCallRewriter; leave it alone.
+            dsl_name = _STRING_METHOD_TO_DSL_FUNC[func.attr]
+            new_call = ast.Call(
+                func=ast.Name(id=dsl_name, ctx=ast.Load()),
+                args=[func.value, *node.args],
+                keywords=node.keywords,
+            )
+            self.rewrote_any = True
+            return ast.copy_location(new_call, node)
+        return node
+
+    def visit_Compare(self, node: ast.Compare) -> ast.AST:
+        self.generic_visit(node)
+        if len(node.ops) != 1 or not isinstance(node.ops[0], (ast.In, ast.NotIn)):
+            return node
+        needle, haystack = node.left, node.comparators[0]
+        call = ast.Call(
+            func=ast.Name(id="contains", ctx=ast.Load()),
+            args=[haystack, needle],
+            keywords=[],
+        )
+        self.rewrote_any = True
+        if isinstance(node.ops[0], ast.NotIn):
+            call = ast.UnaryOp(op=ast.Not(), operand=call)
+        return ast.copy_location(call, node)
+
+    def visit_Assign(self, node: ast.Assign):
+        self.generic_visit(node)
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
+            return node
+        targets = node.targets[0].elts
+        parts = self._split_call_parts(node.value, len(targets))
+        if parts is None:
+            # Leave it for the validator to reject with a proper message.
+            return node
+        self.rewrote_any = True
+        out = []
+        for target, value in zip(targets, parts, strict=True):
+            assign = ast.Assign(targets=[target], value=value)
+            out.append(ast.copy_location(assign, node))
+        return out
+
+    @staticmethod
+    def _split_call_parts(value, count):
+        """Turn ``s.split(sep, 1)`` into ``count`` split_part() calls, or None.
+
+        Only the maxsplit=1 form is supported, which is what tuple unpacking can
+        consume; a general N-way split has no fixed arity to unpack into.
+        """
+        if count != 2 or not isinstance(value, ast.Call):
+            return None
+        func = value.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name != "split":
+            return None
+        if isinstance(func, ast.Attribute):
+            subject, args = func.value, list(value.args)
+        else:
+            if not value.args:
+                return None
+            subject, args = value.args[0], list(value.args[1:])
+        if len(args) != 2:
+            return None
+        sep, maxsplit = args
+        if not (isinstance(maxsplit, ast.Constant) and maxsplit.value == 1):
+            return None
+        return [
+            ast.Call(
+                func=ast.Name(id="split_part", ctx=ast.Load()),
+                args=[subject, sep, ast.Constant(value=k)],
+                keywords=[],
+            )
+            for k in range(count)
+        ]
+
+
+class _RowSubscriptRewriter(ast.NodeTransformer):
+    """Turn the ``df.apply(f, axis=1)`` row idiom into named DSL parameters.
+
+    ``def f(row): ... row["a"] ...`` becomes ``def f(a): ... a ...``, so a
+    kernel written the textbook way compiles as a DSL kernel.  Without this,
+    any such kernel containing control flow has nowhere to go: the tracing
+    route evaluates the `if` on a whole column ("truth value ... is ambiguous")
+    and the DSL parser rejects the subscript.  This is not string-specific --
+    numeric row kernels with an `if` hit exactly the same wall.
+
+    Applies only when the function takes one positional parameter and *every*
+    mention of it is ``param[<string literal>]``; anything else (positional
+    indexing, iteration, attribute access) is left for the validator to reject.
+
+    ``columns`` maps the generated parameter names back to the original column
+    labels, which need not be identifiers.
+    """
+
+    def __init__(self, param: str):
+        self.param = param
+        self.columns: dict[str, str] = {}
+        self.bailed = False
+        self._names: dict[str, str] = {}
+
+    def _param_for(self, label: str) -> str:
+        if label in self._names:
+            return self._names[label]
+        candidate = label if label.isidentifier() and not keyword.iskeyword(label) else ""
+        if not candidate or candidate in self.columns or candidate == self.param:
+            candidate = f"_col{len(self._names)}"
+        self._names[label] = candidate
+        self.columns[candidate] = label
+        return candidate
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        # Match before descending: visiting `node.value` would see the bare row
+        # name and trip the bail-out below.
+        if isinstance(node.value, ast.Name) and node.value.id == self.param:
+            key = node.slice
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                self.bailed = True
+                return node
+            return ast.copy_location(ast.Name(id=self._param_for(key.value), ctx=ast.Load()), node)
+        self.generic_visit(node)
+        return node
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        # Any surviving bare mention of the row parameter is a use we cannot
+        # turn into a column reference.
+        if node.id == self.param:
+            self.bailed = True
+        return node
 
 
 class _NumpyAttrCallRewriter(ast.NodeTransformer):
@@ -459,7 +630,7 @@ class DSLValidator:
             return
         if isinstance(node, ast.Constant):
             val = node.value
-            if isinstance(val, bool | int | float | str):
+            if isinstance(val, bool | int | float | str | bytes):
                 return
             self._err(node, "Unsupported constant in DSL expression")
         if isinstance(node, ast.UnaryOp):
@@ -558,6 +729,9 @@ class DSLKernel:
         self.dsl_source = None
         self.input_names = None
         self.dsl_error = None
+        # Set by _rewrite_row_subscripts when the kernel takes a row proxy.
+        self.row_param = None
+        self.row_columns = None
         try:
             dsl_source, input_names = self._extract_dsl(func)
         except DSLSyntaxError as e:
@@ -599,9 +773,19 @@ class DSLKernel:
             raise ValueError("No function definition found in sliced DSL source")
         input_names = self._input_names_from_signature(dsl_func)
 
+        dsl_source, dsl_tree, dsl_func, row_columns = self._rewrite_row_subscripts(
+            dsl_source, dsl_tree, dsl_func, input_names
+        )
+        if row_columns is not None:
+            self.row_param = input_names[0]
+            self.row_columns = row_columns
+            input_names = self._input_names_from_signature(dsl_func)
+
         dsl_source, dsl_tree, dsl_func = self._rewrite_numpy_attr_calls(
             func, dsl_source, dsl_tree, dsl_func, input_names
         )
+
+        dsl_source, dsl_tree, dsl_func = self._rewrite_string_syntax(dsl_source, dsl_tree, dsl_func)
 
         if validate:
             DSLValidator(dsl_source, input_names=input_names).validate(dsl_func)
@@ -610,6 +794,49 @@ class DSLKernel:
             print(f"[DSLKernel:{func_name}] dsl_source (full):")
             print(dsl_source)
         return dsl_source, input_names
+
+    @staticmethod
+    def _rewrite_row_subscripts(dsl_source, dsl_tree, dsl_func, input_names):
+        """Rewrite ``row["col"]`` into named parameters; see _RowSubscriptRewriter.
+
+        Returns ``(source, tree, func, columns)`` with *columns* mapping the new
+        parameter names to the original column labels, or None as the fourth
+        element when the rewrite does not apply and nothing was changed.
+        """
+        if len(input_names) != 1:
+            return dsl_source, dsl_tree, dsl_func, None
+        rewriter = _RowSubscriptRewriter(input_names[0])
+        rewritten = rewriter.visit(ast.parse(dsl_source))
+        if rewriter.bailed or not rewriter.columns:
+            return dsl_source, dsl_tree, dsl_func, None
+
+        new_func = next((n for n in rewritten.body if isinstance(n, ast.FunctionDef)), None)
+        if new_func is None:
+            return dsl_source, dsl_tree, dsl_func, None
+        new_func.args.args = [ast.arg(arg=name) for name in rewriter.columns]
+        new_func.args.posonlyargs = []
+        ast.fix_missing_locations(rewritten)
+        new_source = ast.unparse(rewritten)
+        new_tree = ast.parse(new_source)
+        new_func = next((n for n in new_tree.body if isinstance(n, ast.FunctionDef)), None)
+        return new_source, new_tree, new_func, dict(rewriter.columns)
+
+    @staticmethod
+    def _rewrite_string_syntax(dsl_source, dsl_tree, dsl_func):
+        """Lower Python string syntax to the DSL's function-call grammar.
+
+        No-op (returning the inputs unchanged) when there is nothing to rewrite.
+        """
+        rewriter = _StringSyntaxRewriter()
+        rewritten = rewriter.visit(ast.parse(dsl_source))
+        if not rewriter.rewrote_any:
+            return dsl_source, dsl_tree, dsl_func
+
+        ast.fix_missing_locations(rewritten)
+        new_source = ast.unparse(rewritten)
+        new_tree = ast.parse(new_source)
+        new_func = next((node for node in new_tree.body if isinstance(node, ast.FunctionDef)), None)
+        return new_source, new_tree, new_func
 
     @staticmethod
     def _rewrite_numpy_attr_calls(func, dsl_source, dsl_tree, dsl_func, input_names):

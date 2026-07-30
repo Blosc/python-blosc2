@@ -152,6 +152,35 @@ single whole-column call rather than a per-row Python loop. Add a `for` or
 `while` to that idiom and it raises a `TypeError` pointing back here — that
 shape can only be compiled, not traced.
 
+An `if`, on the other hand, is fine. `row["colname"]` references are rewritten
+into named parameters, so the function is compiled as a DSL kernel and every
+branch runs:
+
+```python
+def format_room_info(row):
+    result = "property_type=" + row["property_type"]
+    desc = row["name"].lower()
+    if " with " not in desc:
+        return result + ", room_type=" + desc.removesuffix(" room")
+    before, after = desc.split(" with ", 1)
+    r2 = result + ", room_type=" + before.removesuffix(" room")
+    return r2 + ", amenity=" + after
+
+
+df.apply(format_room_info, axis=1, engine=blosc2.jit)
+```
+
+String columns work here, and so do `.lower()`, `.removesuffix()` and
+`str.split(sep, 1)` with tuple unpacking — they are lowered to the DSL's
+function-call grammar for you. Two things to know:
+
+- A string local's width is fixed by its first assignment, so reassigning it
+  to a **longer** value is a compile error. Use a fresh name per step, as `r2`
+  does above.
+- Nulls in a string column are **rejected**, because a row-wise kernel over a
+  null raises in pandas too (`"p=" + row["x"]` is a `TypeError`). Fill them
+  first if you want a value.
+
 ## Gotchas
 
 **Your function normally runs only once.** The engine calls it a single time
@@ -187,7 +216,9 @@ if it matters.
 
 ## Limitations
 
-- Numeric dtypes only; anything else raises `ValueError`.
+- Numeric, boolean and fixed-width string (`str`, `bytes`) columns; anything
+  else raises `ValueError`. Variable-width `utf8()` columns are not supported
+  yet.
 - `na_action="ignore"` is not supported for `map` (`NotImplementedError`):
   there is no per-element step at which to skip a value.
 - Only `DataFrame.apply` and `Series.map` reach the engine. pandas 3's

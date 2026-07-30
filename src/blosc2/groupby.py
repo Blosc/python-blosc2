@@ -61,7 +61,7 @@ class _Utf8KeyChunk:
     ascending), so null detection, live-row masking, and per-chunk
     ``np.unique`` all run on int64 codes; only the (few) distinct strings are
     ever decoded.  Produced by :meth:`CTableGroupBy._read_key_chunk` via
-    ``Utf8Array.factorizer``.
+    ``UTF8Array.factorizer``.
     """
 
     codes: np.ndarray
@@ -151,7 +151,7 @@ class CTableGroupBy:
         self.dropna = bool(dropna)
         self.engine = engine
         self.chunk_size = chunk_size
-        # Per-key incremental Utf8Factorizer instances, shared across the
+        # Per-key incremental UTF8Factorizer instances, shared across the
         # chunk loop so the string vocabulary is built once (see
         # _read_key_chunk).
         self._utf8_factorizers: dict[str, Any] = {}
@@ -1567,7 +1567,7 @@ class CTableGroupBy:
             # is decoded, only the distinct values (codes flow through the
             # rest of the pipeline).  The factorizer is shared across chunks
             # so values seen before are hash-matched instead of re-sorted.
-            # Utf8Array is sized to the logical row count, not the physical
+            # UTF8Array is sized to the logical row count, not the physical
             # valid_rows capacity, so a chunk boundary can run past its end;
             # rows beyond it are never live (the row can't have been written
             # without this column), so the padding code is never read live.

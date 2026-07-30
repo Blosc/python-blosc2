@@ -146,14 +146,14 @@ append/extend, setitem, persistence, repr.
 **P3.a implementation notes (landed 2026-07-16, commit e5bbd559, branch
 `enhancing-ctable3`):**
 
-- What landed: `Utf8Spec`/`blosc2.utf8()` in `schema.py` (kind `"utf8"`,
+- What landed: `UTF8Spec`/`blosc2.utf8()` in `schema.py` (kind `"utf8"`,
   registered in `schema_compiler._KIND_TO_SPEC`); new `src/blosc2/utf8_array.py`
-  with the `Utf8Array` adapter; storage dispatch in all four `TableStorage`
+  with the `UTF8Array` adapter; storage dispatch in all four `TableStorage`
   backends; sentinel-null wiring; guards for the not-yet-supported operations;
   37 tests in `tests/ctable/test_utf8.py`.
 - **Key deviation from the plan text**: rather than a new column category
-  with its own ~50 dispatch sites (the `DictionaryColumn` route), `Utf8Spec`
-  joins the `_is_varlen_scalar_column` predicate and `Utf8Array` implements
+  with its own ~50 dispatch sites (the `DictionaryColumn` route), `UTF8Spec`
+  joins the `_is_varlen_scalar_column` predicate and `UTF8Array` implements
   the `_ScalarVarLenArray` row interface (`append`/`extend`/`flush`/getitem/
   setitem). That made create/open/save/load/copy/take/cframe/TreeStore paths
   work unmodified; utf8-specific branches exist only where semantics differ:
@@ -200,7 +200,7 @@ on a utf8 column, `from_arrow(pa_table)` ingest.
 
 **P3.b implementation notes (landed 2026-07-16, branch `enhancing-ctable3`):**
 
-- What landed: `_pa_type_from_spec` maps `Utf8Spec` → `pa.large_string()`
+- What landed: `_pa_type_from_spec` maps `UTF8Spec` → `pa.large_string()`
   (always large, per the plan); `iter_arrow_batches` builds a null mask from
   the sentinel and exports proper Arrow nulls; `_arrow_type_to_spec` now maps
   incoming Arrow `string`/`large_string` (when `string_max_length` is not
@@ -325,7 +325,7 @@ proves hard, the honest fallback is `np.unique` on the StringDType chunk
      object/list keys are still rejected.
   2. `_read_key_chunk` gained a utf8 branch that pads a chunk read past the
      column's logical length with `""`, mirroring the P3.a `iter_chunks` fix
-     — `Utf8Array` is sized to the logical row count, not the physical
+     — `UTF8Array` is sized to the logical row count, not the physical
      `valid_rows` capacity, and a chunk boundary can run past it; those rows
      are provably never live (a row can't be marked valid without every
      column, including this one, having been written), so the pad value is
@@ -342,7 +342,7 @@ proves hard, the honest fallback is `np.unique` on the StringDType chunk
   fixed-width dispatch and the single-key path already falls through to the
   correct `np.unique(arr, return_inverse=True)` for free. `_null_mask` already
   worked unmodified (`values == null_value` on a `StringDType` array is
-  correct). `_result_spec_for_key` deep-copies the source `Utf8Spec`
+  correct). `_result_spec_for_key` deep-copies the source `UTF8Spec`
   unmodified, so a groupby result's key column is itself a utf8 column
   (`Column.is_utf8` true). `_python_type_for_spec`/`_python_scalar` already
   produce plain `str` for utf8 (indexing a `StringDType` array yields
@@ -368,7 +368,7 @@ proves hard, the honest fallback is `np.unique` on the StringDType chunk
 
   Target was ≤3x; actual is ~17x (single key) / ~50x (two keys) — nowhere
   close. **Root cause, isolated with `cProfile`** (not guessed): 62% of
-  single-key wall time is `Utf8Array._read_persisted_span`, specifically its
+  single-key wall time is `UTF8Array._read_persisted_span`, specifically its
   per-row Python loop (`for i in range(n): out[i] = blob[...].decode("utf-8")`)
   — 1,998,848 individual `bytes.decode()` calls at 2e6 rows in the profile
   run. This is a P3.a artifact, not something specific to groupby: every bulk
@@ -404,7 +404,7 @@ after the post-review fixes below). Benchmark gate now PASSES.**
 
 - What landed — essentially the algorithm sketched above, plus two pipeline
   fixes the profiling surfaced along the way:
-  1. `Utf8Array.factorize_span(a, b)` / incremental `Utf8Factorizer`
+  1. `UTF8Array.factorize_span(a, b)` / incremental `UTF8Factorizer`
      (`utf8_array.py`): rows are grouped by raw byte length (vectorized
      `bincount`), each length group is gathered column-wise into a `(k, L)`
      byte matrix (column-wise gather with one reused index vector — ~2x
@@ -496,7 +496,7 @@ Reading of the numbers, recorded so the positioning is evidence-backed:
 - The utf8 read/filter gap is the documented `_read_persisted_span`
   per-row decode loop: ~1.8 s of the 1e7-row filter is decoding, not
   comparing.  **Natural follow-up (not started):** route comparisons
-  through the `Utf8Factorizer` the way groupby keys go — compare the D
+  through the `UTF8Factorizer` the way groupby keys go — compare the D
   distinct values against the operand, then map codes → boolean mask —
   which should make low-cardinality utf8 filters competitive with
   fixed-width.  Same idea would speed sort-key materialization.
@@ -521,7 +521,7 @@ Reading of the numbers, recorded so the positioning is evidence-backed:
      (introduced defensively in P3.a). It turned out to be unnecessary
      rather than merely lifted: `_col_dtype()` for a utf8 column already
      returns `numpy.dtypes.StringDType()` (not `None`, because
-     `Utf8Array.dtype` reports it — a P3.a design choice), so the existing
+     `UTF8Array.dtype` reports it — a P3.a design choice), so the existing
      `dtype is None` branch that rejects list/vlstring/vlbytes columns
      already skips utf8 columns for free, and
      `np.issubdtype(StringDType(), np.complexfloating)` returns `False`
@@ -536,7 +536,7 @@ Reading of the numbers, recorded so the positioning is evidence-backed:
      null-indicator-key logic (`raw == nv` for a non-float sentinel) was
      already dtype-generic.
   3. `_sort_by_inplace` and `_sorted_copy_from_positions` gained a utf8
-     branch that rebuilds the column via `Utf8Array.extend()` instead of
+     branch that rebuilds the column via `UTF8Array.extend()` instead of
      bulk slice-assignment (`arr[:n] = arr[sorted_pos]`), mirroring the
      existing list-column branch's `ListArray.extend()` pattern.
 - **Found and worked around a pre-existing, unrelated bug while verifying
@@ -551,7 +551,7 @@ Reading of the numbers, recorded so the positioning is evidence-backed:
   change, confirmed on the pre-P3 codebase. **Not fixed here** — out of
   scope for a utf8-only phase, and the acceptance criterion is
   "`vlstring`/`string` behavior byte-for-byte unchanged," not "fixed." Only
-  `Utf8Array` got the same treatment `ListArray` already has, since utf8
+  `UTF8Array` got the same treatment `ListArray` already has, since utf8
   sortability is what this item asks for; every utf8 column in a sorted
   table — key or bystander — must survive the rewrite, not only the one
   named in `sort_by(...)`. (Also found and left alone:
@@ -582,12 +582,12 @@ branch):**
 
 - **Correctness (data corruption, found by review, missed by the suite):**
   `sort_by(inplace=True)` and `compact()` on a *file-backed* table rebuilt
-  utf8 columns as fresh in-memory `Utf8Array`s and only rebound
+  utf8 columns as fresh in-memory `UTF8Array`s and only rebound
   `self._cols[name]` — the store never saw the rewritten rows, so after
   close/reopen the utf8 column was corrupted/misaligned with its
   on-disk-sorted siblings (reproduced: reopen raised `IndexError` on read).
   All utf8 sort/compact tests were in-memory only, which is why the suite
-  was green. Fix: new `Utf8Array.set_all(values)` bulk-rewrites through the
+  was green. Fix: new `UTF8Array.set_all(values)` bulk-rewrites through the
   *existing* backing offsets/data NDArrays (persistence preserved), used by
   both call sites; `compact()` also now gathers via the clustered
   fancy-index read instead of one scalar `__getitem__` (two chunk reads) per
@@ -601,7 +601,7 @@ branch):**
   (dunders pass the numpy ufunc directly). ~2x measured on a 1M-row
   nullable filter (419 → 203 ms).
 - **Arrow export:** dense root tables now export utf8 batches straight from
-  the offsets/bytes buffers via `Utf8Array.arrow_slice()`
+  the offsets/bytes buffers via `UTF8Array.arrow_slice()`
   (`pa.LargeStringArray.from_buffers`, sentinel-null mask matched on raw
   bytes) — no per-row decode, no `.tolist()`, no re-encode. Views/deleted
   tables use the materializing fallback, which now reuses
@@ -610,14 +610,14 @@ branch):**
   rest is the pre-existing 2048-row `iter_arrow_batches` batching, which
   re-decompresses each storage chunk many times — pre-existing, not
   utf8-specific). Tests: view/deleted-rows export and pending-rows export.
-- **`Utf8Array.__setitem__`:** the O(n−i) tail move now shifts raw bytes and
+- **`UTF8Array.__setitem__`:** the O(n−i) tail move now shifts raw bytes and
   adds a scalar delta to the tail offsets instead of decoding and
   re-encoding every following row (21 ms to overwrite row 100 of 1M).
   Test: grow/shrink/equal/empty replacements persisted across reopen.
-- **Cleanup:** `Utf8Spec` imported once at `ctable_storage.py` module top
+- **Cleanup:** `UTF8Spec` imported once at `ctable_storage.py` module top
   (was: six local imports); `FileTableStorage.create_varlen_scalar_column`
   hoists the column key.
-- **Review finding rejected on inspection:** removing `Utf8Spec.__init__`'s
+- **Review finding rejected on inspection:** removing `UTF8Spec.__init__`'s
   inline `null_value must be str` check (flagged as duplicating
   `_validate_null_value_for_spec`) would open a validation hole —
   `_resolve_nullable_specs` *skips* specs whose `null_value` is already set,

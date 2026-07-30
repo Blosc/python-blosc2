@@ -25,7 +25,7 @@ class PersistRow:
     a: int
 
 
-def test_dotted_column_attribute_namespace_and_where_string():
+def test_dotted_col_attribute_and_where_string():
     t = blosc2.CTable(AccessRow)
     t.append((1.0, 10.0))
     t.append((2.0, 30.0))
@@ -44,7 +44,7 @@ def test_dotted_column_attribute_namespace_and_where_string():
     assert view2.nrows == 2
 
 
-def test_dotted_column_persists_under_hierarchical_cols(tmp_path):
+def test_dotted_col_persists_hierarchical(tmp_path):
     t = blosc2.CTable(PersistRow)
     t.append((1,))
     t.rename_column("a", "trip.begin.lon")
@@ -69,7 +69,7 @@ def test_select_struct_prefix_expands_descendants():
     assert s.col_names == ["trip.begin.lon"]
 
 
-def test_from_arrow_flattens_struct_columns_to_dotted_leaves():
+def test_from_arrow_flattens_struct_to_dotted():
     trip_type = pa.struct([("begin", pa.struct([("lon", pa.float64()), ("lat", pa.float64())]))])
     schema = pa.schema([pa.field("trip", trip_type)])
     batch = pa.record_batch(
@@ -107,7 +107,7 @@ def test_from_arrow_flattens_struct_columns_to_dotted_leaves():
         row0["nope"]
 
 
-def test_nested_field_name_escaping_for_literal_dot_and_slash(tmp_path):
+def test_field_name_escaping_dot_and_slash(tmp_path):
     trip_type = pa.struct([pa.field("begin/point", pa.struct([pa.field("lon.deg", pa.float64())]))])
     schema = pa.schema([pa.field("trip.info", trip_type)])
     batch = pa.record_batch(

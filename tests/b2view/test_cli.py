@@ -39,14 +39,14 @@ def test_download_skipped_when_file_already_in_cwd():
     assert info_url is None
 
 
-def test_download_urls_keep_relative_path_dest_is_basename():
+def test_download_url_dest_is_basename():
     urlpath, url, info_url = resolve_source(None, "sub/dir/bundle.b2z", exists=lambda p: False)
     assert urlpath == "bundle.b2z"
     assert url == DOWNLOAD_BASE_URL + "sub/dir/bundle.b2z"
     assert info_url == INFO_BASE_URL + "sub/dir/bundle.b2z"
 
 
-def test_download_and_positional_are_mutually_exclusive():
+def test_download_and_positional_exclusive():
     with pytest.raises(ValueError, match="cannot be combined"):
         resolve_source("local.b2z", "foo.b2z")
 

@@ -185,7 +185,7 @@ async def _wait_for_table(pilot) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.tui
-async def test_sort_key_opens_screen_applies_and_escape_clears(sort_store):
+async def test_sort_key_applies_and_escape_clears(sort_store):
     path, _, _ = sort_store
     app = B2ViewApp(path, start_panel="data")
     async with app.run_test(size=TERM_SIZE) as pilot:

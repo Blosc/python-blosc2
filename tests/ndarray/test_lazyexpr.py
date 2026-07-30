@@ -1578,7 +1578,7 @@ def test_numpy_funcs(array_fixture, func):
         pytest.skip("NumPy version has no cumulative_sum function.")
 
 
-def test_lazyexpr_string_scalar_keeps_miniexpr_fast_path(monkeypatch):
+def test_string_scalar_keeps_miniexpr_path(monkeypatch):
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -1612,7 +1612,7 @@ def test_lazyexpr_string_scalar_keeps_miniexpr_fast_path(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-def test_lazyexpr_unary_negative_literal_matches_subtraction(monkeypatch):
+def test_unary_negative_literal_matches_sub(monkeypatch):
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -1647,7 +1647,7 @@ def test_lazyexpr_unary_negative_literal_matches_subtraction(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-def test_lazyexpr_miniexpr_failure_falls_back_by_default(monkeypatch):
+def test_miniexpr_failure_falls_back_default(monkeypatch):
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")

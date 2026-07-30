@@ -78,7 +78,7 @@ def test_null_value_property_set():
     assert t["score"].null_value == -1
 
 
-def test_numpy_nan_null_value_skips_scalar_validation_constraints():
+def test_nan_null_value_skips_validation():
     @dataclass
     class NumpyNaNFloatRow:
         value: float = blosc2.field(blosc2.float32(ge=0, null_value=np.float32(np.nan)))
@@ -127,7 +127,7 @@ def test_nullable_true_uses_default_null_policy():
     assert t["b"].dtype.itemsize >= len(b"__BLOSC2_NULL__")
 
 
-def test_nullable_true_uses_null_policy_context_and_column_null_values():
+def test_nullable_uses_policy_and_col_nulls():
     @dataclass
     class Row:
         i: int = blosc2.field(blosc2.int32(nullable=True))
@@ -163,7 +163,7 @@ def test_add_column_nullable_true_uses_null_policy():
     assert t["extra"].null_value == np.iinfo(np.int32).max
 
 
-def test_nullable_policy_rejects_out_of_range_integer_sentinel():
+def test_policy_rejects_out_of_range_sentinel():
     @dataclass
     class Row:
         x: int = blosc2.field(blosc2.int8(nullable=True))
@@ -173,7 +173,7 @@ def test_nullable_policy_rejects_out_of_range_integer_sentinel():
             CTable(Row)
 
 
-def test_nullable_policy_rejects_wrong_string_sentinel_type():
+def test_policy_rejects_wrong_sentinel_type():
     @dataclass
     class Row:
         s: str = blosc2.field(blosc2.string(nullable=True))
@@ -636,7 +636,7 @@ def test_all_nulls_value_counts_empty():
     assert len(vc) == 0
 
 
-def test_null_value_does_not_affect_non_nullable_column():
+def test_null_value_ignored_if_not_nullable():
     t = CTable(IntRow, new_data=[(1, 10), (2, 20)])
     # id column has no null_value — aggregates work normally
     assert t["id"].sum() == 3

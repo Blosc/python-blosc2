@@ -179,7 +179,7 @@ def test_reduc_std_kwargs(sample_data):
     assert d_jit.schunk.cparams.filters == [blosc2.Filter.BITSHUFFLE] + [blosc2.Filter.NOFILTER] * 5
 
 
-def test_jit_execution_tuning_kwarg_alone_keeps_numpy_return():
+def test_tuning_kwarg_alone_keeps_numpy_return():
     # jit/jit_backend/fp_accuracy tune *how* an expression runs, not what
     # container the result comes back in -- they must not by themselves flip
     # the return type from NumPy to NDArray (unlike storage kwargs).
@@ -194,7 +194,7 @@ def test_jit_execution_tuning_kwarg_alone_keeps_numpy_return():
     np.testing.assert_allclose(res, a * 2.0 + b)
 
 
-def test_jit_execution_tuning_kwarg_with_storage_kwarg_still_returns_ndarray():
+def test_tuning_plus_storage_kwarg_gives_ndarray():
     @blosc2.jit(jit=False, cparams=blosc2.CParams(clevel=2))
     def f(a, b):
         return a * 2.0 + b
@@ -205,3 +205,19 @@ def test_jit_execution_tuning_kwarg_with_storage_kwarg_still_returns_ndarray():
     assert isinstance(res, blosc2.NDArray)
     assert res.schunk.cparams.clevel == 2
     np.testing.assert_allclose(res[:], a * 2.0 + b)
+
+
+def test_numpy_return_with_both_kwarg_kinds():
+    # A traced function whose return is already a NumPy array takes the
+    # asarray() branch, which accepts storage kwargs only -- forwarding the
+    # execution-tuning ones there raised instead of returning an NDArray.
+    @blosc2.jit(jit=False, cparams=blosc2.CParams(clevel=2))
+    def f(a, b):
+        return np.sum(a * 2.0 + b, axis=0)
+
+    a = np.arange(1000, dtype=np.float64).reshape(10, 100)
+    b = np.arange(1000, dtype=np.float64).reshape(10, 100) * 0.5
+    res = f(a, b)
+    assert isinstance(res, blosc2.NDArray)
+    assert res.schunk.cparams.clevel == 2
+    np.testing.assert_allclose(res[:], np.sum(a * 2.0 + b, axis=0))

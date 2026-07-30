@@ -261,7 +261,7 @@ def test_objectarray_msgpack_supports_lazyexpr(tmp_path):
     np.testing.assert_array_equal(restored[:], expected)
 
 
-def test_objectarray_msgpack_supports_lazyudf_dslkernel(tmp_path):
+def test_msgpack_supports_lazyudf_dslkernel(tmp_path):
     udf, expected = _make_persistent_lazyudf(tmp_path)
 
     oarr = blosc2.ObjectArray()
@@ -272,7 +272,7 @@ def test_objectarray_msgpack_supports_lazyudf_dslkernel(tmp_path):
     np.testing.assert_allclose(restored[:], expected)
 
 
-def test_objectarray_msgpack_rejects_lazyexpr_with_in_memory_operands():
+def test_msgpack_rejects_in_memory_lazyexpr():
     expr = _make_in_memory_lazyexpr()
 
     oarr = blosc2.ObjectArray()
@@ -280,7 +280,7 @@ def test_objectarray_msgpack_rejects_lazyexpr_with_in_memory_operands():
         oarr.append(expr)
 
 
-def test_objectarray_msgpack_rejects_plain_python_lazyudf(tmp_path):
+def test_msgpack_rejects_plain_python_lazyudf(tmp_path):
     udf = _make_persistent_python_lazyudf(tmp_path)
 
     oarr = blosc2.ObjectArray()
@@ -337,7 +337,7 @@ def test_objectarray_zstd_uses_dict_by_default():
     assert oarr.cparams.use_dict is True
 
 
-def test_objectarray_respects_explicit_use_dict_and_non_zstd():
+def test_objectarray_use_dict_and_non_zstd():
     oarr = blosc2.ObjectArray(cparams={"codec": blosc2.Codec.LZ4, "clevel": 5})
     assert oarr.cparams.codec == blosc2.Codec.LZ4
     assert oarr.cparams.use_dict is False
@@ -535,3 +535,18 @@ def test_objectarray_delete_negative_step_slice():
     oarr2.extend(range(5))
     del oarr2[::-1]
     assert len(oarr2) == 0
+
+
+def test_varlen_scalar_cmp_is_elementwise():
+    """``column == value`` must not fall through to object identity."""
+    from dataclasses import make_dataclass
+
+    row_cls = make_dataclass("Row", [("c", str, blosc2.field(blosc2.vlstring()))])
+    t = blosc2.CTable(row_cls)
+    t.extend({"c": ["hello", "world", "hello"]}, validate=False)
+    t._flush_varlen_columns()
+    col = t._cols["c"]
+
+    np.testing.assert_array_equal(col == "hello", [True, False, True])
+    np.testing.assert_array_equal(col != "hello", [False, True, False])
+    assert isinstance(hash(col), int)

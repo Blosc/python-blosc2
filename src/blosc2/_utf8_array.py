@@ -33,6 +33,7 @@ which support vectorized comparison, ordering, and ``np.strings`` functions.
 from __future__ import annotations
 
 import itertools
+import operator
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -64,6 +65,241 @@ _GATHER_GAP = 1024
 # Multiplier for the byte-hash in factorize_span (same mixer as
 # groupby._factorize_fixed_width_str).
 _HASH_MIX = np.uint64(0x9E3779B97F4A7C15)
+
+#: Nominal row span for evaluating an expression over utf8 operands.
+UTF8_EXPR_SPAN = 65536
+
+#: Byte ceiling for one span's fixed-width ``<Un`` materialization.  A span is
+#: sized to the *longest* value in it, so a single 4 KB row among short ones
+#: would otherwise cost 65536 x 4096 x 4 = 1 GiB.
+UTF8_EXPR_BUDGET = 64 << 20
+
+
+def utf8_compute_error(lead: str, *, source: str, compute: str, assignable: bool = True) -> str:
+    """Message for every "utf8 does not compute here" refusal.
+
+    The rule (utf8 stores and filters; fixed-width computes) is deliberate, so
+    the error's job is to route rather than merely refuse: *lead* states what
+    was rejected, and the shared tail spells out the three-line conversion,
+    parameterized on how the caller got here.
+    """
+    write_back = (
+        f"    t.add_column('out', blosc2.utf8(), values=blosc2.to_utf8(res))   # or {source}.assign(res)"
+        if assignable
+        else "    out = blosc2.to_utf8(res)"
+    )
+    return (
+        f"{lead}\n"
+        "utf8 stores and filters; fixed-width computes. Convert, compute, write back:\n"
+        f"    fixed = blosc2.from_utf8({source})\n"
+        f"    res = {compute}\n"
+        f"{write_back}\n"
+        "See 'Computing strings on a utf8 column' in the CTable reference docs."
+    )
+
+
+def utf8_span_dtype(span: np.ndarray) -> np.dtype:
+    """Fixed-width ``U`` dtype wide enough for every value in *span*.
+
+    The width is span-local and data-dependent, whereas miniexpr bakes output
+    widths in at compile time, so round it up to a power of two: a column then
+    costs a handful of distinct compilations instead of one per span.
+    """
+    longest = max((len(s) for s in span), default=0)
+    return np.dtype(f"<U{1 << max(0, longest - 1).bit_length()}")
+
+
+def utf8_spans(arrays: dict, n_logical: int, span_rows: int, budget: int):
+    """Yield ``(start, stop)`` row spans to materialize, longest value first.
+
+    Splits the nominal *span_rows* further whenever the widest value in it
+    would push the ``<Un`` buffer past *budget*.  The widths come from the
+    offsets-derived byte lengths, which bound the codepoint count, so no span
+    is read twice to size it.
+    """
+    for start in range(0, n_logical, span_rows):
+        stop = min(start + span_rows, n_logical)
+        widest = max(a._span_max_bytes(start, stop) for a in arrays.values())
+        per_row = 4 * max(1, 1 << max(0, widest - 1).bit_length()) * len(arrays)
+        rows = max(1, min(stop - start, budget // per_row))
+        for a in range(start, stop, rows):
+            yield a, min(a + rows, stop)
+
+
+def utf8_span_eval(
+    expr: str,
+    operands: dict,
+    arrays: dict,
+    sentinels: dict,
+    n_phys: int,
+    *,
+    strict: bool = False,
+    span_rows: int = UTF8_EXPR_SPAN,
+    budget: int = UTF8_EXPR_BUDGET,
+):
+    """Evaluate *expr* in row spans, materializing utf8 operands per span.
+
+    *arrays* maps operand name to :class:`UTF8Array`, *sentinels* maps the same
+    names to each one's null sentinel (or ``None``), and *n_phys* is the length
+    of the result; rows past the utf8 operands' logical length keep the zero
+    value of the result dtype.  A bool or numeric result is a NumPy array; a
+    **string** result is a :class:`UTF8Array`, following the contagion rule --
+    a string-returning expression with a utf8 operand stays variable-width
+    rather than widening every row to miniexpr's compile-time bound.  It is
+    built by extending span by span, so only one span's ``<Un`` block is ever
+    live.
+
+    Nulls are materialized to ``""`` so no string kernel ever sees a sentinel,
+    and nullity is re-applied afterwards: a boolean result is forced ``False``
+    (SQL ``WHERE`` semantics), a string result gets the sentinel back.  A string
+    result therefore needs the operands to agree on one sentinel, and raises
+    ``ValueError`` when they do not.
+
+    Span operands are handed over as blosc2 arrays rather than NumPy ones: the
+    NumPy route evaluates through ``slices_eval``, which never reaches
+    miniexpr, so the string kernels would be bypassed for correct-looking
+    results.  *strict* (``strict_miniexpr``) is the assertion that pins that
+    down; tests set it, callers leave the numpy fallback in place.
+    """
+    import blosc2
+
+    n_logical = min(len(a) for a in arrays.values())
+    compute_kwargs = {"strict_miniexpr": True} if strict else {}
+    # One result column, so one sentinel.  Reading it off whichever operand came
+    # first would make the answer depend on the operand mapping's order, so a
+    # disagreement is refused instead -- but only where it shows, on a string
+    # result; a boolean one forces nulls False whatever they were spelled as.
+    distinct_sentinels = sorted({v for v in sentinels.values() if v is not None})
+    null_value = distinct_sentinels[0] if distinct_sentinels else None
+
+    out = None
+    utf8_out = None
+    for start, stop in utf8_spans(arrays, n_logical, span_rows, budget):
+        span = {k: blosc2.asarray(np.asarray(v[start:stop])) for k, v in operands.items()}
+        nulls = None
+        for name, arr in arrays.items():
+            raw = np.asarray(arr[start:stop])
+            nv = sentinels[name]
+            if nv is not None:
+                mask = raw == nv
+                if mask.any():
+                    nulls = mask if nulls is None else (nulls | mask)
+                    raw = np.where(mask, "", raw)
+            span[name] = blosc2.asarray(raw.astype(utf8_span_dtype(raw)))
+        res = np.asarray(blosc2.lazyexpr(expr, span).compute(**compute_kwargs))
+        if nulls is not None:
+            if res.dtype.kind == "b":
+                res = res & ~nulls
+            elif res.dtype.kind == "U":
+                # The sentinel may be wider than the computed values.
+                res = np.where(
+                    nulls,
+                    null_value,
+                    res.astype(f"<U{max(res.dtype.itemsize // 4, len(null_value))}"),
+                )
+        if res.dtype.kind == "U":
+            if len(distinct_sentinels) > 1:
+                raise ValueError(
+                    f"utf8 operands carry different null sentinels ({distinct_sentinels}); "
+                    "a string result can only have one, and picking one of them would "
+                    "silently relabel the other's nulls. Give the operands a common "
+                    "null_value, or compute on fixed-width arrays (blosc2.from_utf8)."
+                )
+            if utf8_out is None:
+                utf8_out = UTF8Array(blosc2.utf8(null_value=null_value))
+            # tolist() gives plain str, which is UTF8Array.extend's fast path.
+            utf8_out.extend(res.tolist())
+            continue
+        if out is None:
+            out = np.zeros(n_phys, dtype=res.dtype)
+        out[start:stop] = res
+    if utf8_out is not None:
+        # Rows past the utf8 operands' logical length: the string zero value.
+        utf8_out.extend([""] * (n_phys - len(utf8_out)))
+        utf8_out.flush()
+        return utf8_out
+    if out is None:  # no rows at all
+        out = np.zeros(n_phys, dtype=np.bool_)
+    return out
+
+
+class UTF8LazyExpr:
+    """A deferred expression with at least one :class:`UTF8Array` operand.
+
+    ``LazyExpr`` cannot hold one: a variable-width column is not an expression
+    operand, and wrapping it widens every row to a fixed ``<Un`` and drops
+    evaluation into the NumPy ``slices_eval`` path.  This evaluates through
+    :func:`utf8_span_eval` instead, so the span budget applies, miniexpr is
+    actually reached, and a string result comes back as a ``UTF8Array``
+    (the contagion rule) rather than a fixed-width array.
+
+    Only whole-array evaluation is offered — ``compute()``, ``[:]`` — matching
+    the DSL-kernel columns in :class:`~blosc2.CTable`, which materialize for
+    the same reason.  Slicing the *result* works normally.
+    """
+
+    def __init__(self, expression: str, operands: dict, *, ne_args: dict | None = None) -> None:
+        self.expression = expression
+        self.operands = dict(operands)
+        self._ne_args = ne_args
+        self._utf8 = {k: v for k, v in self.operands.items() if isinstance(v, UTF8Array)}
+        if not self._utf8:
+            raise ValueError("UTF8LazyExpr needs at least one UTF8Array operand")
+
+    def __len__(self) -> int:
+        return min(len(v) for v in self._utf8.values())
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return (len(self),)
+
+    def compute(self, item=(), **kwargs):
+        """Evaluate the whole expression.
+
+        Returns a :class:`UTF8Array` for a string result and a NumPy array for
+        a boolean or numeric one.  ``strict_miniexpr=True`` asserts that
+        evaluation really did reach miniexpr rather than a NumPy fallback.
+        """
+        if item not in ((), slice(None), Ellipsis):
+            raise NotImplementedError(
+                "expressions over a bare UTF8Array evaluate whole-array only; "
+                "call compute() and slice the result"
+            )
+        strict = kwargs.pop("strict_miniexpr", False)
+        if kwargs:
+            raise TypeError(f"unexpected keyword arguments: {sorted(kwargs)}")
+        return utf8_span_eval(
+            self.expression,
+            {k: v for k, v in self.operands.items() if k not in self._utf8},
+            self._utf8,
+            {k: v.spec.null_value for k, v in self._utf8.items()},
+            len(self),
+            strict=strict,
+            # Read at call time, not bound as a default, so both are tunable.
+            span_rows=UTF8_EXPR_SPAN,
+            budget=UTF8_EXPR_BUDGET,
+        )
+
+    def __getitem__(self, item):
+        result = self.compute()
+        return result[item]
+
+    def __str__(self) -> str:
+        return self.expression
+
+    def __repr__(self) -> str:
+        return f"UTF8LazyExpr({self.expression!r}, shape={self.shape})"
+
+
+# Fallback for comparisons against anything that is not a scalar str.
+_COMPARE_OPS = {
+    "==": operator.eq,
+    "!=": operator.ne,
+    "<": operator.lt,
+    "<=": operator.le,
+    ">": operator.gt,
+    ">=": operator.ge,
+}
 
 
 def _factorize_byte_rows(mat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -156,7 +392,7 @@ def _new_backend_arrays(cparams=None, dparams=None, *, offsets_urlpath=None, dat
     return offsets, data
 
 
-class Utf8Array:
+class UTF8Array:
     """Row-wise variable-length UTF-8 string array over offsets + bytes NDArrays.
 
     Provides the row-oriented interface expected by CTable columns:
@@ -170,12 +406,12 @@ class Utf8Array:
 
     This class is internal; obtain instances via
     ``storage.create_varlen_scalar_column()`` or
-    ``storage.open_varlen_scalar_column()`` with a ``Utf8Spec``.
+    ``storage.open_varlen_scalar_column()`` with a ``UTF8Spec``.
 
     Parameters
     ----------
     spec:
-        The :class:`~blosc2.schema.Utf8Spec` describing this column.
+        The :class:`~blosc2.schema.UTF8Spec` describing this column.
     offsets:
         ``int64`` NDArray of row offsets (length ``n + 1``).  Created fresh
         (in memory) when ``None``.
@@ -185,10 +421,10 @@ class Utf8Array:
     """
 
     def __init__(self, spec, offsets=None, data=None) -> None:
-        from blosc2.schema import Utf8Spec
+        from blosc2.schema import UTF8Spec
 
-        if not isinstance(spec, Utf8Spec):
-            raise TypeError(f"Utf8Array requires a Utf8Spec, got {type(spec)!r}")
+        if not isinstance(spec, UTF8Spec):
+            raise TypeError(f"UTF8Array requires a UTF8Spec, got {type(spec)!r}")
         self._dtype = string_dtype()
         self._spec = spec
         if (offsets is None) != (data is None):
@@ -251,6 +487,27 @@ class Utf8Array:
             out[i] = blob[rel[i] : rel[i + 1]].decode("utf-8")
         return out
 
+    def _span_max_bytes(self, a: int, b: int) -> int:
+        """Longest UTF-8 byte length among rows ``[a, b)``.
+
+        Read from the offsets alone -- no row is decoded.  A byte length bounds
+        the codepoint count, so callers sizing a fixed-width ``U`` buffer can
+        use this directly.
+        """
+        b = min(b, len(self))
+        if b <= a:
+            return 0
+        np_rows = self._persisted_rows
+        widest = 0
+        if a < np_rows:
+            offs = np.asarray(self._offsets[a : min(b, np_rows) + 1], dtype=np.int64)
+            if offs.size > 1:
+                widest = int(np.diff(offs).max())
+        if b > np_rows:
+            pending = self._pending[max(0, a - np_rows) : b - np_rows]
+            widest = max(widest, max((len(s.encode("utf-8")) for s in pending), default=0))
+        return widest
+
     def _gather_persisted(self, indices: np.ndarray) -> np.ndarray:
         """Gather persisted rows at *indices* (any order) as a StringDType array.
 
@@ -291,7 +548,7 @@ class Utf8Array:
         indices = np.where(indices < 0, indices + n, indices).astype(np.int64, copy=False)
         m = len(indices)
         if m and (indices.min() < 0 or indices.max() >= n):
-            raise IndexError("Utf8Array index out of range")
+            raise IndexError("UTF8Array index out of range")
         if m and indices[-1] - indices[0] == m - 1 and bool((np.diff(indices) == 1).all()):
             # A contiguous ascending run (e.g. a full-column read routed here
             # via an index array rather than a step-1 slice) is just a span
@@ -390,7 +647,7 @@ class Utf8Array:
 
         Writes through the existing backing offsets/data NDArrays, so a
         store-backed column stays persistent (unlike building a fresh
-        in-memory ``Utf8Array``).  Used by ``sort_by(inplace=True)`` and
+        in-memory ``UTF8Array``).  Used by ``sort_by(inplace=True)`` and
         ``compact()`` to rewrite a column in a new row order.
         """
         coerced = [self._coerce(v) for v in values]
@@ -415,7 +672,7 @@ class Utf8Array:
             if index < 0:
                 index += n
             if not (0 <= index < n):
-                raise IndexError("Utf8Array index out of range")
+                raise IndexError("UTF8Array index out of range")
             if index >= self._persisted_rows:
                 return self._pending[index - self._persisted_rows]
             return str(self._read_persisted_span(index, index + 1)[0])
@@ -434,7 +691,7 @@ class Utf8Array:
         if isinstance(index, (list, tuple, np.ndarray)):
             return self._get_many(np.asarray(index, dtype=np.int64))
 
-        raise TypeError(f"Utf8Array indices must be int, slice, or array; got {type(index)!r}")
+        raise TypeError(f"UTF8Array indices must be int, slice, or array; got {type(index)!r}")
 
     def __setitem__(self, index: int, value: Any) -> None:
         """Overwrite the value at *index*.
@@ -444,14 +701,14 @@ class Utf8Array:
         an O(n - index) operation.
         """
         if not isinstance(index, (int, np.integer)):
-            raise TypeError(f"Utf8Array assignment index must be int, got {type(index)!r}")
+            raise TypeError(f"UTF8Array assignment index must be int, got {type(index)!r}")
         value = self._coerce(value)
         n = len(self)
         index = int(index)
         if index < 0:
             index += n
         if not (0 <= index < n):
-            raise IndexError("Utf8Array index out of range")
+            raise IndexError("UTF8Array index out of range")
         if index >= self._persisted_rows:
             self._pending[index - self._persisted_rows] = value
             return
@@ -482,6 +739,58 @@ class Utf8Array:
             self._bytes_used_cache = new_used
 
     # ------------------------------------------------------------------
+    # Comparisons
+    # ------------------------------------------------------------------
+
+    def _compare(self, other: Any, op: str) -> np.ndarray:
+        """Element-wise comparison, returning a boolean mask.
+
+        A scalar ``str`` is answered by the raw-byte scanners, which never
+        decode a row.  Anything else (a list, an ndarray, another
+        :class:`UTF8Array`) is materialized and handed to NumPy.
+        """
+        if isinstance(other, str):
+            n = len(self)
+            if op in ("==", "!="):
+                mask = self.equal_mask_span(other, 0, n)
+                return ~mask if op == "!=" else mask
+            lt, gt = self.order_masks_span(other, 0, n)
+            return {"<": lt, ">": gt, "<=": ~gt, ">=": ~lt}[op]
+        right = other[:] if isinstance(other, UTF8Array) else other
+        return _COMPARE_OPS[op](np.asarray(self[:]), right)
+
+    # Identity hashing is kept: these objects were hashable before __eq__ was
+    # defined, and an element-wise __eq__ never returns a bool for the hash
+    # contract to apply to.
+    __hash__ = object.__hash__
+
+    def __eq__(self, other: Any, /):
+        import blosc2
+
+        if blosc2._disable_overloaded_equal:
+            return self is other
+        return self._compare(other, "==")
+
+    def __ne__(self, other: Any, /):
+        import blosc2
+
+        if blosc2._disable_overloaded_equal:
+            return self is not other
+        return self._compare(other, "!=")
+
+    def __lt__(self, other: Any, /):
+        return self._compare(other, "<")
+
+    def __le__(self, other: Any, /):
+        return self._compare(other, "<=")
+
+    def __gt__(self, other: Any, /):
+        return self._compare(other, ">")
+
+    def __ge__(self, other: Any, /):
+        return self._compare(other, ">=")
+
+    # ------------------------------------------------------------------
     # Properties mirroring the interface expected by CTable
     # ------------------------------------------------------------------
 
@@ -493,6 +802,32 @@ class Utf8Array:
     def dtype(self):
         """The ``StringDType`` used for materialized reads."""
         return self._dtype
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Row count as a 1-D shape.  Completes the :class:`blosc2.Array` protocol."""
+        return (len(self),)
+
+    @property
+    def ndim(self) -> int:
+        """Always 1: a utf8 array is a flat sequence of strings."""
+        return 1
+
+    @property
+    def size(self) -> int:
+        """Number of rows, matching NumPy's ``size`` for a 1-D array."""
+        return len(self)
+
+    def __array__(self, dtype=None, copy=None) -> np.ndarray:
+        """Materialize for NumPy, keeping ``StringDType`` unless asked otherwise.
+
+        Without this, ``np.asarray`` falls back to iterating the rows and infers
+        a fixed-width ``<Un`` from them -- a different dtype than ``arr[:]``
+        gives for the same object, and one that costs 4 bytes per character of
+        the *longest* row for every row.
+        """
+        out = self[:]
+        return out if dtype is None else out.astype(dtype)
 
     @property
     def offsets(self):
@@ -527,9 +862,9 @@ class Utf8Array:
             return float("inf")
         return self.nbytes / cb
 
-    def factorizer(self) -> Utf8Factorizer:
+    def factorizer(self) -> UTF8Factorizer:
         """Return a fresh incremental factorizer over this column's rows."""
-        return Utf8Factorizer(self)
+        return UTF8Factorizer(self)
 
     def factorize_span(self, a: int, b: int) -> tuple[np.ndarray, np.ndarray]:
         """Factorize rows ``[a, b)`` without decoding them.
@@ -538,7 +873,7 @@ class Utf8Array:
         array of the distinct values sorted ascending and ``codes`` (int64,
         length ``b - a``) maps each row to its value — the same contract as
         ``np.unique(values, return_inverse=True)``, but computed from the raw
-        offsets/bytes buffers via :class:`Utf8Factorizer`: only the distinct
+        offsets/bytes buffers via :class:`UTF8Factorizer`: only the distinct
         values are ever decoded to ``str``.  Pending rows are flushed first.
         """
         fact = self.factorizer()
@@ -648,18 +983,241 @@ class Utf8Array:
             n, pa.py_buffer(rel), pa.py_buffer(data), validity, null_count
         )
 
-    def copy(self, spec=None, **kwargs: Any) -> Utf8Array:
+    def _max_char_len(self, *, span_rows: int = UTF8_EXPR_SPAN) -> int:
+        """Longest value in codepoints, without decoding a row.
+
+        A UTF-8 codepoint starts at every byte that is *not* a continuation
+        byte (``0b10xxxxxx``), so counting those over a row's byte range gives
+        its length in characters -- the width a fixed-width ``U`` array needs.
+        Byte lengths alone would only bound it, over-allocating up to 4x on
+        non-ASCII text.
+
+        Byte lengths come from the offsets, so a span whose longest row cannot
+        beat the running best is skipped without reading any data at all, and
+        an all-ASCII span settles from the offsets alone.
+        """
+        self.flush()
+        n = len(self)
+        widest = 0
+        for start in range(0, n, span_rows):
+            stop = min(start + span_rows, n)
+            offs = np.asarray(self._offsets[start : stop + 1], dtype=np.int64)
+            byte_max = int(np.diff(offs).max(initial=0))
+            if byte_max <= widest:
+                continue  # bytes bound codepoints, so this span cannot win
+            raw = np.asarray(self._data[offs[0] : offs[-1]], dtype=np.uint8)
+            if not (raw & 0x80).any():
+                widest = byte_max  # pure ASCII: one byte per codepoint
+                continue
+            # Cumulative sums rather than reduceat: empty rows repeat an offset,
+            # which reduceat reads as "to the end" instead of as a zero count.
+            cumulative = np.concatenate(([0], np.cumsum((raw & 0xC0) != 0x80)))
+            rel = offs - offs[0]
+            widest = max(widest, int((cumulative[rel[1:]] - cumulative[rel[:-1]]).max(initial=0)))
+        return widest
+
+    def astype(self, dtype=None, *, span_rows: int = UTF8_EXPR_SPAN) -> np.ndarray:
+        """Materialize as a fixed-width NumPy ``U`` array.
+
+        This is the conversion half of the rule utf8 columns follow for
+        compute: they store and filter as variable-length text, and
+        string-returning expressions run on fixed-width arrays.  See
+        :func:`blosc2.to_utf8` for the way back.
+
+        Parameters
+        ----------
+        dtype:
+            Target dtype.  ``None`` or an unsized ``"<U"`` sizes the result to
+            the longest value, so nothing truncates.  An explicit width is used
+            as given and truncates longer values, exactly as NumPy's
+            ``astype`` does.
+        span_rows:
+            Rows materialized per iteration.  Bounds peak memory; the result
+            itself is always a single array.
+
+        Returns
+        -------
+        numpy.ndarray
+            A ``<Un`` array.  Nulls surface as the column's sentinel, the same
+            as a plain ``arr[:]`` read.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> arr = blosc2.utf8_array(["hello", "café", "日本語"])
+        >>> arr.astype().dtype
+        dtype('<U5')
+        """
+        self.flush()
+        if dtype is None or (isinstance(dtype, str) and dtype in ("U", "<U", ">U", "=U")):
+            dtype = np.dtype(f"<U{max(1, self._max_char_len(span_rows=span_rows))}")
+        else:
+            dtype = np.dtype(dtype)
+            if dtype.kind != "U":
+                raise ValueError(f"astype() on a UTF8Array needs a U dtype, got {dtype!r}.")
+            if dtype.itemsize == 0:
+                dtype = np.dtype(f"<U{max(1, self._max_char_len(span_rows=span_rows))}")
+        n = len(self)
+        out = np.empty(n, dtype=dtype)
+        for start in range(0, n, span_rows):
+            stop = min(start + span_rows, n)
+            out[start:stop] = self._read_span(start, stop)
+        return out
+
+    def copy(self, spec=None, **kwargs: Any) -> UTF8Array:
         """Return an in-memory copy."""
         if spec is None:
             spec = self._spec
-        out = Utf8Array(spec)
+        out = UTF8Array(spec)
         out.extend(self)
         out.flush()
         return out
 
 
-class Utf8Factorizer:
-    """Incremental factorizer over a :class:`Utf8Array`'s rows.
+def utf8_array(seq, spec=None, **kwargs) -> UTF8Array:
+    """Build a :class:`UTF8Array` from an iterable of strings.
+
+    Parameters
+    ----------
+    seq:
+        Iterable of ``str`` (or ``None`` for a nullable *spec*).
+    spec:
+        The :class:`~blosc2.schema.UTF8Spec` describing the array.  Defaults
+        to ``blosc2.utf8()`` (non-nullable).
+    kwargs:
+        Forwarded to :class:`UTF8Array` (``offsets``, ``data``).
+
+    Returns
+    -------
+    UTF8Array
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> arr = blosc2.utf8_array(["hello", "café", "日本語"])
+    >>> str(arr[1])
+    'café'
+    """
+    import blosc2
+
+    arr = UTF8Array(spec if spec is not None else blosc2.utf8(), **kwargs)
+    arr.extend(seq)
+    arr.flush()
+    return arr
+
+
+def from_utf8(arr, dtype=None) -> np.ndarray:
+    """Convert variable-length UTF-8 text to a fixed-width NumPy ``U`` array.
+
+    The outbound half of the utf8 compute rule: utf8 stores and filters text
+    compactly, while string-returning expressions and DSL kernels run on
+    fixed-width arrays.  :func:`to_utf8` is the way back.
+
+    Parameters
+    ----------
+    arr:
+        A :class:`UTF8Array`, a utf8 :class:`~blosc2.CTable` column, a NumPy
+        ``StringDType`` array, or any iterable of ``str``.
+    dtype:
+        Target dtype.  ``None`` (or an unsized ``"<U"``) sizes the result to
+        the longest value, so nothing truncates.  An explicit width truncates
+        longer values, as NumPy's ``astype`` does.
+
+    Returns
+    -------
+    numpy.ndarray
+        A ``<Un`` array.  Nulls surface as the column's sentinel.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> arr = blosc2.utf8_array(["hello", "café"])
+    >>> fixed = blosc2.from_utf8(arr)
+    >>> fixed.dtype
+    dtype('<U5')
+    >>> blosc2.to_utf8(fixed)[1]
+    'café'
+    """
+    raw = getattr(arr, "raw", arr)  # a CTable Column exposes its container here
+    if isinstance(raw, UTF8Array):
+        return raw.astype(dtype)
+    values = np.asarray(raw if isinstance(raw, np.ndarray) else list(raw))
+    if dtype is None or (isinstance(dtype, str) and dtype in ("U", "<U", ">U", "=U")):
+        if values.dtype.kind == "U":
+            return values
+        dtype = np.dtype(f"<U{max(1, max((len(v) for v in values), default=0))}")
+    return values.astype(dtype)
+
+
+def to_utf8(values, spec=None) -> UTF8Array:
+    """Build a :class:`UTF8Array` from fixed-width or otherwise decoded strings.
+
+    The inbound half of the pair described in :func:`from_utf8`, and the way a
+    computed string result becomes storable again::
+
+        fixed = blosc2.from_utf8(t["name"])
+        res = blosc2.lazyexpr("'x=' + a", {"a": fixed}).compute()[:]
+        t.add_column("prefixed", blosc2.utf8(), values=blosc2.to_utf8(res))
+
+    Parameters
+    ----------
+    values:
+        NumPy ``U``/``StringDType`` array, or any iterable of ``str`` (or
+        ``None`` for a nullable *spec*).
+    spec:
+        The :class:`~blosc2.schema.UTF8Spec` describing the result.  Defaults
+        to ``blosc2.utf8()`` (non-nullable).
+
+    Returns
+    -------
+    UTF8Array
+    """
+    if isinstance(values, np.ndarray):
+        # tolist() yields plain str, which is UTF8Array.extend's fast path;
+        # iterating the array yields np.str_, which is not.
+        values = values.tolist()
+    return utf8_array(values, spec)
+
+
+def is_string_dtype(dtype) -> bool:
+    """True for NumPy's variable-length ``StringDType`` (kind ``'T'``)."""
+    if dtype is None:
+        return False
+    try:
+        return np.dtype(dtype).kind == "T"
+    except TypeError:
+        # np.dtype() rejects StringDType passed as a class rather than instance.
+        return isinstance(dtype, type) and getattr(dtype, "kind", None) == "T"
+
+
+def asarray_utf8(array, copy=None, **kwargs) -> UTF8Array:
+    """Back :func:`blosc2.asarray` when the *target* dtype is ``StringDType``.
+
+    A ``StringDType`` array keeps its payload outside its own buffer (a 100
+    character string still reports ``nbytes == 16``) and offers no buffer
+    protocol at all, so an :class:`~blosc2.NDArray` -- which compresses that
+    buffer -- cannot hold one: it would persist pointers.  A
+    :class:`UTF8Array` holds the same text as offsets + UTF-8 bytes, the
+    layout Arrow uses for ``large_string``, so that is what this returns.
+    """
+    if kwargs:
+        raise TypeError(
+            f"blosc2.asarray() does not accept {sorted(kwargs)!r} for variable-length "
+            "text; use blosc2.utf8_array(values, spec) to control its storage."
+        )
+    ndim = getattr(array, "ndim", 1)
+    if ndim != 1:
+        raise ValueError(
+            f"Variable-length text is 1-D only, got a {ndim}-D array. Reshape it, or ask "
+            "for a fixed-width '<U' dtype to get an N-D NDArray."
+        )
+    if isinstance(array, UTF8Array):
+        return array.copy() if copy else array
+    return to_utf8(np.asarray(array))
+
+
+class UTF8Factorizer:
+    """Incremental factorizer over a :class:`UTF8Array`'s rows.
 
     Successive :meth:`codes_for_span` calls share a vocabulary: each row is
     hashed from its raw bytes and matched against the known values of its
@@ -679,7 +1237,7 @@ class Utf8Factorizer:
     guarantee that it is otherwise resolved.
     """
 
-    def __init__(self, arr: Utf8Array) -> None:
+    def __init__(self, arr: UTF8Array) -> None:
         arr.flush()
         self._arr = arr
         self._values: list[str] = []

@@ -458,6 +458,24 @@ For array-oriented grouped reductions without a :class:`CTable`, see
 Mutations
 ---------
 
+:meth:`CTable.add_column` adds a physical column, filled either from a default
+declared in the spec or from a ``values=`` sequence with one entry per live row::
+
+    t.add_column("weight", blosc2.field(blosc2.float64(), default=0.0))
+    t.add_column("label", blosc2.utf8(), values=[f"row-{i}" for i in range(len(t))])
+
+``values=`` is how a result computed outside the table lands back in it, which
+matters most for :func:`utf8` columns: string-returning expressions are
+evaluated on fixed-width arrays, so the result is written back explicitly rather
+than by :meth:`CTable.add_computed_column`::
+
+    arr = t["name"][:].astype("<U37")
+    res = blosc2.lazyexpr("'x=' + a", {"a": arr}).compute()[:]
+    t.add_column("prefixed", blosc2.utf8(), values=res)
+
+A declared default is still honoured for rows appended later, so ``values=`` and
+``blosc2.field(..., default=...)`` can be combined.
+
 In addition to physical schema changes such as :meth:`CTable.add_column`,
 CTables support two kinds of derived columns:
 
@@ -943,12 +961,19 @@ Text & binary
 
     string
     utf8
+    utf8_array
+    from_utf8
+    to_utf8
     bytes
     vlstring
     vlbytes
 
 .. autoclass:: string
 .. autofunction:: utf8
+.. autofunction:: utf8_array
+.. autofunction:: from_utf8
+.. autofunction:: to_utf8
+.. automethod:: UTF8Array.astype
 .. autoclass:: bytes
 .. autofunction:: vlstring
 .. autofunction:: vlbytes
@@ -958,16 +983,82 @@ Text & binary
 Choosing a string column type
 -----------------------------
 
-CTable offers four ways to store strings.  As a quick decision path:
+CTable offers four ways to store strings.  The question that decides it is
+**do you know a bound on the length, and is it small?**  Fixed-width storage
+is the fastest of the four whenever you can name that bound; the
+variable-length types exist for when you cannot.
 
 * Low-cardinality strings (categories, enumerations, repeated labels):
-  use :func:`dictionary` — repeated values are stored once as integer codes.
-* Everything else (names, free text, high-cardinality values):
-  use :func:`utf8` — the recommended default for variable-length text.
-* Short codes of near-uniform length, or columns that need
-  :meth:`CTable.create_index`: use :class:`string` (fixed-width).
-* NumPy < 2.0, or nullable columns where any string value can legally occur
-  (native ``None`` nulls, no sentinel): use :func:`vlstring`.
+  use :func:`dictionary` — repeated values are stored once as integer codes,
+  and it has the fastest ``group_by`` of any flavour.
+* **Bounded length, up to about 32 characters** (identifiers, ISO dates,
+  currency or country codes, hashes, SKUs): use :class:`string`.  It is the
+  fastest option to read and to filter, every index kind works on it, and
+  string-returning expressions run on it natively.
+* **Unbounded or long** (names, addresses, free text, URLs, log lines, user
+  content): use :func:`utf8`.  There is no width to declare and rows cost
+  what they weigh.
+* Nullable columns where *any* string value can legally occur, or NumPy
+  < 2.0: use :func:`vlstring` / :func:`vlbytes`.  These are the only types
+  with a native ``None`` null that cannot collide with a real value, and
+  :func:`vlbytes` is the only one that stores arbitrary (non-UTF-8) bytes.
+
+Why 32, and what happens past it.  A fixed-width column costs
+4 × ``max_length`` bytes per row **every time it is read**, not merely on
+disk — compression hides this from the file size but not from memory.  So the
+advantage decays as the declared width grows.  Measured on 500 000 rows of
+mean length 14:
+
+.. list-table::
+   :header-rows: 1
+   :stub-columns: 1
+
+   * -
+     - in-memory size
+     - full read
+     - ``where(startswith(...))``
+   * - ``string(max_length=32)``
+     - 64 MB
+     - **23 ms**
+     - **104 ms**
+   * - ``string(max_length=64)``
+     - 128 MB
+     - 30 ms
+     - 124 ms
+   * - ``string(max_length=128)``
+     - 256 MB
+     - 40 ms
+     - 154 ms
+   * - :func:`utf8`
+     - **4 MB**
+     - 35 ms
+     - 165 ms
+
+Fixed-width wins outright at 32, still leads at 48, and is overtaken between
+64 and 128 — by which point it is also using 60× the memory.  Treat 32 as a
+comfortable recommendation rather than a cliff: if your data is bounded at 40,
+:class:`string` is still the better choice.
+
+Declaring ``max_length`` too small is caught on the **validated** write paths
+— the constructor, :meth:`CTable.append` and :meth:`CTable.extend` — which
+raise ``ValueError`` naming the column and the offending value.  It is
+**not** caught on the paths that bypass validation: ``extend(validate=False)``,
+``col[i] = value`` and :meth:`Column.assign` fall through to NumPy's ``U``
+semantics and truncate the value at ``max_length`` with no error.  This is the
+same bypass the numeric constraints have — ``col[i] = 999`` on an
+``int64(le=100)`` column stores 999 — except that truncation destroys the
+value rather than merely storing a wrong one.
+
+So a bound you guessed from a sample can fail in two different ways depending
+on how the data arrives — rejected rows on one path, silently shortened
+strings on another.  When the bound is a guess rather than a fact, use
+:func:`utf8` instead of relying on the check.
+
+The compressed sizes of :class:`string` and :func:`utf8` are much closer than
+the in-memory sizes, but by how much depends entirely on the data: the UCS-4
+padding compresses away almost completely on low-entropy text (within ~30 %
+of utf8) and much less well on high-entropy values (~7× larger was measured
+above).  Do not plan storage on either figure without measuring your own data.
 
 .. list-table::
    :header-rows: 1
@@ -1005,7 +1096,7 @@ CTable offers four ways to store strings.  As a quick decision path:
      - native ``None``
    * - Filters (``==``, ``<``, …)
      - ✓ (incl. string expressions)
-     - ✓ operators only [#utf8expr]_
+     - ✓ (incl. string expressions) [#utf8expr]_
      - ``==`` / ``isin()`` only
      - ✗
    * - :meth:`CTable.group_by` key / :meth:`CTable.sort_by`
@@ -1015,8 +1106,13 @@ CTable offers four ways to store strings.  As a quick decision path:
      - ✗
    * - :meth:`CTable.create_index`
      - ✓
-     - not yet
-     - ✓ (rank-based)
+     - ✓ (rank-based) [#rankindex]_
+     - ✓ (rank-based) [#rankindex]_
+     - ✗
+   * - String-returning expressions
+     - ✓
+     - convert first [#utf8compute]_
+     - ✗
      - ✗
    * - Arrow / Parquet
      - ✓
@@ -1034,16 +1130,120 @@ CTable offers four ways to store strings.  As a quick decision path:
      - low-cardinality categories
      - NumPy < 2.0; native-``None`` nulls
 
-.. [#utf8expr] utf8 columns support the operator form ``t[t.name == "x"]``
-   (also ``!=``, ``<``, ``<=``, ``>``, ``>=``), but not the string-expression
-   form ``t.where("name == 'x'")`` yet.  :meth:`CTable.create_index` on utf8
-   columns is not supported yet either; both raise ``NotImplementedError``
-   with a clear message.
+.. [#rankindex] :func:`utf8` and :func:`dictionary` are indexed by the
+   *alphabetical rank* of each row's value: sorting by rank is sorting by the
+   decoded string, so an ``int32`` rank column drives the same index machinery
+   a numeric column uses.  This accelerates :meth:`CTable.sort_by`,
+   :meth:`CTable.sorted_slice` and scalar comparisons (``==``/``!=`` on both,
+   plus ordering comparisons on utf8).  It does **not** accelerate
+   ``startswith``/substring searches, which no index covers, and the ranks are
+   frozen at build time: a value inserted ahead of existing ones invalidates
+   all of them, so the index falls back to a full sort until rebuilt.
+   Only ``kind=IndexKind.FULL`` consults a rank index, so that is the default
+   for these two column kinds (elsewhere the default is ``BUCKET``) and any
+   other kind raises ``ValueError`` rather than building an unused index.
+
+.. [#utf8expr] utf8 columns support both the operator form
+   ``t[t.name == "x"]`` and the string-expression form
+   ``t.where("name == 'x'")``.  Because a variable-length column cannot be an
+   expression operand directly, string expressions are evaluated span by span,
+   with each span materialized to a fixed-width array first; results are
+   identical to the operator form, including that a null never satisfies any
+   predicate.  Nested (dotted) utf8 leaves are addressed by their dotted path
+   just like any other leaf.
+
+.. [#utf8compute] Expressions that *return* strings — concatenation,
+   ``upper``, ``replace``, DSL kernels — run on fixed-width arrays, so a utf8
+   column is converted first and the result written back.  See
+   :ref:`ComputingUtf8Strings` below.
 
 Note that a plain ``str`` annotation without an explicit :func:`field` spec
-still maps to fixed-width ``string(max_length=32)`` for backward
-compatibility; opt in to variable-length storage with
-``blosc2.field(blosc2.utf8())``.
+maps to fixed-width ``string(max_length=32)`` — the same width the decision
+path above recommends, so the default is the fast path rather than a
+compatibility accident.  Opt in to variable-length storage with
+``blosc2.field(blosc2.utf8())`` when the length is unbounded.
+
+.. _Utf8AndStringDType:
+
+utf8 and NumPy's ``StringDType``
+--------------------------------
+
+:func:`utf8` is blosc2's answer to the same problem NumPy 2.0 solved with
+``StringDType``, and the two interoperate on dtype: reads return
+``StringDType`` arrays, and the array constructors dispatch on it::
+
+    blosc2.asarray(np.array(["a", "bb"], dtype=StringDType()))  # -> UTF8Array
+    blosc2.zeros(3, dtype=StringDType())                        # -> UTF8Array
+    blosc2.full(3, "x", dtype=StringDType())                    # -> UTF8Array
+
+The fill values match NumPy's own (``''`` for ``zeros``/``empty``, ``'1'`` for
+``ones``, ``str(fill_value)`` for ``full``), and the result satisfies the
+:class:`blosc2.Array` protocol, so it can be used wherever a blosc2 array can.
+
+What blosc2 does **not** do is store ``StringDType`` in an
+:class:`~blosc2.NDArray`, and it cannot: that dtype keeps each row's payload
+outside the array buffer — a 100-character string still reports
+``nbytes == 16`` — and supports no buffer protocol, so compressing the buffer
+would persist pointers rather than text.  A :class:`UTF8Array` holds the same
+text as int64 offsets plus a UTF-8 blob, which is the layout Arrow uses for
+``large_string`` and what makes :meth:`CTable.to_arrow` zero-copy.
+
+The dispatch is on the *target* dtype, so asking for a fixed width still gets
+you a plain NDArray::
+
+    blosc2.asarray(utf8_source, dtype="<U8")   # -> NDArray, fixed width
+
+Note the schema layer keeps its own vocabulary: ``blosc2.field()`` takes a
+spec (:func:`utf8`, :func:`string`, :func:`int32`, ...) and not a raw NumPy
+dtype, for any column type, because a spec also carries nullability, the null
+sentinel, constraints and storage configuration.
+
+.. _ComputingUtf8Strings:
+
+Computing strings on a utf8 column
+----------------------------------
+
+The rule is: **utf8 stores and filters; fixed-width computes.**
+
+Everything on the *query* side works directly on a utf8 column — comparisons,
+``where()`` including ``startswith``/``contains``, ``sum(where=)``,
+``group_by``, ``sort_by`` and ``create_index``.  Expressions that **return
+strings** are different: miniexpr's string kernels need a compile-time output
+width, which a variable-length column does not have.  So those are converted,
+computed, and written back::
+
+    fixed = blosc2.from_utf8(t["name"])              # -> <Un ndarray
+    res = blosc2.lazyexpr("'x=' + a", {"a": fixed}).compute()[:]
+    t.add_column("prefixed", blosc2.utf8(), values=blosc2.to_utf8(res))
+
+:func:`from_utf8` sizes the result to the longest value, counted in
+codepoints, so nothing truncates and non-ASCII text does not over-allocate.
+Pass an explicit ``dtype`` to choose the width yourself, which truncates
+longer values exactly as NumPy's ``astype`` does.  :meth:`UTF8Array.astype`
+is the same conversion as a method.
+
+To overwrite an existing column rather than add one, use
+:meth:`Column.assign`::
+
+    t["name"].assign(res)
+
+Both write paths take one value per **live** row, so rows removed by
+:meth:`CTable.delete` are skipped.
+
+The compute surface refuses a utf8 column rather than converting behind your
+back, because the conversion's cost — a decode plus a widening copy — is worth
+being visible.  Every one of those refusals raises ``NotImplementedError``
+naming the column and printing the recipe above:
+
+* :meth:`CTable.add_computed_column`, :meth:`CTable.add_generated_column` and
+  :meth:`CTable.assign` with a string expression that references a utf8 column;
+* the same three with a :func:`blosc2.dsl_kernel`, plus :meth:`CTable.apply`
+  and :func:`blosc2.lazyudf` — note it is the utf8 **operand** that cannot
+  work, whatever the kernel returns, so a kernel producing a number or a
+  boolean is refused just the same.
+
+Only :func:`blosc2.lazyexpr` accepts a utf8 operand directly: it routes to the
+span driver and returns a :class:`UTF8Array`, evaluating span by span.
 
 Array, encoded, and compound specs
 ----------------------------------

@@ -351,7 +351,7 @@ def test_from_arrow_string_fixed_width_with_max_length():
     assert t["name"][:].tolist() == ["hi", "hello world", "!"]
 
 
-def test_from_arrow_list_struct_nullable_values_roundtrip():
+def test_from_arrow_list_struct_nullable():
     nutrient_type = pa.struct(
         [
             pa.field("name", pa.string()),
@@ -454,7 +454,7 @@ def test_from_arrow_dictionary_codes_use_aligned_grid():
     assert list(t["c"][:5]) == c.to_pylist()[:5]
 
 
-def test_to_arrow_dictionary_multi_batch_with_deletions():
+def test_to_arrow_dict_multi_batch_deletions():
     """Dictionary-column export across several batches, with holes in the
     live-row mask from a deletion, still maps each batch to the correct
     physical positions.

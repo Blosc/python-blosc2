@@ -15,6 +15,7 @@ import contextlib
 import contextvars
 import copy
 import dataclasses
+import itertools
 import json
 import operator
 import os
@@ -26,7 +27,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass
 from dataclasses import field as dataclass_field
 from textwrap import TextWrapper
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar
 
 import numpy as np
 
@@ -54,7 +55,7 @@ from blosc2.schema import (
     ObjectSpec,
     SchemaSpec,
     StructSpec,
-    Utf8Spec,
+    UTF8Spec,
     VLBytesSpec,
     VLStringSpec,
     complex64,
@@ -538,6 +539,33 @@ class ColumnViewIndexer:
 # ---------------------------------------------------------------------------
 # Internal row/indexing helpers (unchanged)
 # ---------------------------------------------------------------------------
+
+
+def _rank_index_row_lookup(values_path: str, positions_path: str, table, null_rank: int):
+    """Build ``rows_for_ranks(lo, hi)`` over a rank index's sorted sidecars.
+
+    Shared by the utf8 and dictionary rank indexes, which differ only in how a
+    literal becomes a rank.  Returns the physical rows whose rank lies in
+    ``[lo, hi)``; ``hi is None`` means "up to but excluding the nulls", which
+    carry the largest rank because a null satisfies no comparison.
+    """
+    from blosc2.indexing import _open_sidecar_file
+
+    vnd = _open_sidecar_file(values_path)
+    pnd = _open_sidecar_file(positions_path)
+
+    def rows_for_ranks(rank_lo, rank_hi) -> np.ndarray:
+        start = table._sidecar_bisect(vnd, rank_lo, "left")
+        stop = (
+            table._sidecar_bisect(vnd, null_rank, "left")
+            if rank_hi is None
+            else table._sidecar_bisect(vnd, rank_hi - 1, "right")
+        )
+        if stop <= start:
+            return np.empty(0, dtype=np.int64)
+        return np.asarray(pnd[start:stop], dtype=np.int64)
+
+    return rows_for_ranks
 
 
 def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
@@ -1090,14 +1118,14 @@ class Column:
         """True if this column holds variable-length scalar strings or bytes."""
         col = self._table._schema.columns_by_name.get(self._col_name)
         return col is not None and isinstance(
-            col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, Utf8Spec)
+            col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, UTF8Spec)
         )
 
     @property
     def is_utf8(self) -> bool:
         """True if this column stores variable-length UTF-8 strings (offsets + bytes)."""
         col = self._table._schema.columns_by_name.get(self._col_name)
-        return col is not None and isinstance(col.spec, Utf8Spec)
+        return col is not None and isinstance(col.spec, UTF8Spec)
 
     @property
     def is_dictionary(self) -> bool:
@@ -1227,7 +1255,7 @@ class Column:
             # letting NDArray's strided-gather fast path handle coarse steps.
             # Plain stored columns only; everything else falls through to the
             # position-gather path below.  utf8 is a varlen-scalar kind but
-            # Utf8Array slices itself efficiently (offsets+bytes span read),
+            # UTF8Array slices itself efficiently (offsets+bytes span read),
             # so it takes the fast path too instead of the index-gather one.
             if (
                 not (
@@ -2014,10 +2042,7 @@ class Column:
 
     def __ne__(self, other):
         if self.is_dictionary:
-            result = self._dictionary_eq(other)
-            if isinstance(result, np.ndarray):
-                return ~result
-            return ~np.asarray(result, dtype=bool)
+            return self._dictionary_eq(other, negate=True)
         if self.is_utf8:
             return self._utf8_compare(np.not_equal, other)
         self._ensure_comparable()
@@ -2029,7 +2054,7 @@ class Column:
         """Apply ``fn(chunk, start, stop)`` over this utf8 column's logical rows.
 
         *fn* returns a boolean array for each ``StringDType`` chunk read from
-        the underlying :class:`~blosc2.utf8_array.Utf8Array`.  Returns a
+        the underlying :class:`~blosc2._utf8_array.UTF8Array`.  Returns a
         physical-length (``_valid_rows``-length) boolean NumPy array; rows
         beyond the column's logical length are left ``False``.
         """
@@ -2046,7 +2071,7 @@ class Column:
         """Apply ``fn(arr, start, stop)`` over this utf8 column's logical rows.
 
         Like :meth:`_utf8_chunked_bool`, but *fn* operates directly on the
-        underlying :class:`~blosc2.utf8_array.Utf8Array` (raw offsets/bytes)
+        underlying :class:`~blosc2._utf8_array.UTF8Array` (raw offsets/bytes)
         instead of a materialized ``StringDType`` chunk, so no per-row decode
         happens.  Returns a physical-length boolean NumPy array; rows beyond
         the column's logical length are left ``False``.
@@ -2104,13 +2129,20 @@ class Column:
         raw = self._utf8_chunked_bool(fn)
         return blosc2.asarray(raw) & self._lazy_valid_rows()
 
-    def _utf8_compare_scalar(self, numpy_op, value: str):
-        """Scalar comparison, evaluated chunk by chunk directly on raw UTF-8
-        bytes (no decode to ``StringDType``) via
-        :meth:`~blosc2.utf8_array.Utf8Array.equal_mask_span` /
-        :meth:`~blosc2.utf8_array.Utf8Array.order_masks_span`.
+    def _utf8_scalar_mask(self, numpy_op, value: str) -> np.ndarray:
+        """Raw physical-length boolean mask for ``column <numpy_op> value``.
+
+        Compares raw UTF-8 bytes with no decode to ``StringDType``, via
+        :meth:`~blosc2._utf8_array.UTF8Array.equal_mask_span` /
+        :meth:`~blosc2._utf8_array.UTF8Array.order_masks_span`.  A null never
+        satisfies any comparison.  Not intersected with the live-row mask --
+        see :meth:`_utf8_compare_scalar` for that.
         """
         nv = self.null_value
+
+        indexed = self._utf8_index_mask(numpy_op, value)
+        if indexed is not None:
+            return indexed
 
         if numpy_op in (np.equal, np.not_equal):
 
@@ -2137,10 +2169,110 @@ class Column:
                     res = res & ~arr.equal_mask_span(nv, start, stop)
                 return res
 
-        raw = self._utf8_chunked_bytes(fn)
-        return blosc2.asarray(raw) & self._lazy_valid_rows()
+        return self._utf8_chunked_bytes(fn)
 
-    def _dictionary_eq(self, other):
+    #: Rank predicate implied by each comparison, given the literal's insertion
+    #: point ``lo`` and whether the literal is itself in the vocabulary.
+    _UTF8_RANK_PREDICATE: ClassVar[dict] = {
+        "equal": lambda lo, hit: (lo, lo + 1) if hit else None,
+        "not_equal": lambda lo, hit: (lo, lo + 1) if hit else None,  # inverted by caller
+        "less": lambda lo, hit: (0, lo),
+        "less_equal": lambda lo, hit: (0, lo + 1 if hit else lo),
+        "greater": lambda lo, hit: (lo + 1 if hit else lo, None),
+        "greater_equal": lambda lo, hit: (lo, None),
+    }
+
+    def _utf8_index_mask(self, numpy_op, value: str) -> np.ndarray | None:
+        """Answer ``column <numpy_op> value`` from the rank index, or ``None``.
+
+        The index sorts rows by alphabetical rank, so a literal is located by
+        one ``searchsorted`` over the stored vocabulary and the matching rows
+        are a contiguous run of the sorted-positions sidecar — no scan of the
+        column at all.  Returns ``None`` whenever the index cannot answer, and
+        the caller falls back to the raw-byte scan.
+        """
+        table = self._table
+        descriptor = table._get_index_catalog().get(self._col_name)
+        if not descriptor or descriptor.get("kind") != "full" or descriptor.get("stale", False):
+            return None
+        full = descriptor.get("full") or {}
+        meta = full.get("utf8_rank")
+        if meta is None or table._utf8_rank_index_stale(self._col_name, meta):
+            return None
+        positions_path = full.get("positions_path")
+        values_path = full.get("values_path")
+        if positions_path is None or values_path is None:  # in-memory sidecars
+            return None
+
+        vocab = table._utf8_index_vocab(self._col_name, meta)
+        if vocab is None:
+            return None
+        lo = int(np.searchsorted(vocab, value, side="left"))
+        hit = lo < len(vocab) and vocab[lo] == value
+        bounds = self._UTF8_RANK_PREDICATE[numpy_op.__name__](lo, hit)
+
+        null_rank = meta["null_rank"]
+        n_phys = len(table._valid_rows)
+        rows_for_ranks = _rank_index_row_lookup(values_path, positions_path, table, null_rank)
+
+        mask = np.zeros(n_phys, dtype=bool)
+        if numpy_op is np.not_equal:
+            # Invert over the column's own rows only: the physical mask is
+            # capacity-padded, and padded slots must stay False, as they do on
+            # the scan path.  Nulls are excluded rather than inverted into.
+            mask[: len(table._cols[self._col_name])] = True
+            if bounds is not None:
+                mask[rows_for_ranks(*bounds)] = False
+            mask[rows_for_ranks(null_rank, null_rank + 1)] = False
+        elif bounds is not None:
+            mask[rows_for_ranks(*bounds)] = True
+        return mask
+
+    def _utf8_compare_scalar(self, numpy_op, value: str):
+        """Scalar comparison as a live-row-intersected boolean NDArray."""
+        return blosc2.asarray(self._utf8_scalar_mask(numpy_op, value)) & self._lazy_valid_rows()
+
+    def _dictionary_index_mask(self, value: str) -> np.ndarray | None:
+        """Answer ``column == value`` from the dict-rank index, or ``None``.
+
+        The same lookup the utf8 rank index does, minus the persistence: a
+        dictionary already holds its own vocabulary in memory, so the literal's
+        rank is a ``searchsorted`` over the sorted dictionary.  Returns ``None``
+        whenever the index cannot answer, and the caller falls back to the
+        codes comparison.
+        """
+        table = self._table
+        descriptor = table._get_index_catalog().get(self._col_name)
+        if not descriptor or descriptor.get("kind") != "full" or descriptor.get("stale", False):
+            return None
+        full = descriptor.get("full") or {}
+        meta = full.get("dict_rank")
+        if meta is None or table._dict_rank_index_stale(self._col_name, meta):
+            return None
+        values_path, positions_path = full.get("values_path"), full.get("positions_path")
+        if positions_path is None or values_path is None:  # in-memory sidecars
+            return None
+
+        # Ranks were assigned by argsort over the dictionary, so the rank of a
+        # literal is its position in the sorted dictionary.
+        dc = self._raw_col
+        cache = table.__dict__.setdefault("_dict_vocab_cache", {})
+        key = (self._col_name, meta.get("dict_hash"))
+        sorted_vocab = cache.get(key)
+        if sorted_vocab is None:
+            cache.clear()
+            sorted_vocab = np.sort(np.asarray(list(dc.dictionary), dtype=np.str_))
+            cache[key] = sorted_vocab
+        lo = int(np.searchsorted(sorted_vocab, value, side="left"))
+        if lo >= len(sorted_vocab) or sorted_vocab[lo] != value:
+            return np.zeros(len(table._valid_rows), dtype=bool)
+
+        rows_for_ranks = _rank_index_row_lookup(values_path, positions_path, table, meta["null_rank"])
+        mask = np.zeros(len(table._valid_rows), dtype=bool)
+        mask[rows_for_ranks(lo, lo + 1)] = True
+        return mask
+
+    def _dictionary_eq(self, other, *, negate: bool = False):
         """Return a physical-slot boolean predicate for dictionary equality.
 
         Regular fixed-width columns build predicates against their raw physical
@@ -2148,25 +2280,37 @@ class Column:
         need to use the same coordinate system so they can be combined with
         regular predicates before aggregate/view code intersects them with
         ``_valid_rows``.
+
+        *negate* inverts the value test *before* the live-row intersection, so
+        ``!=`` stays a same-shaped predicate over live rows.  Negating the
+        returned value instead would turn every dead slot True.
         """
+        n_phys = len(self._table._valid_rows)
         dc = self._raw_col  # DictionaryColumn
         spec = self._table._schema.columns_by_name[self._col_name].spec
+        valid = self._lazy_valid_rows()
         if other is None:
             target_code = spec.null_code
         elif isinstance(other, str):
+            indexed = self._dictionary_index_mask(other)
+            if indexed is not None:
+                return blosc2.asarray(~indexed if negate else indexed) & valid
             try:
                 target_code = dc.value_to_code(other)
             except KeyError:
-                return blosc2.zeros(len(self._table._valid_rows), dtype=np.bool_)
+                # No row carries this value: nothing matches, everything differs.
+                if negate:
+                    return blosc2.ones(n_phys, dtype=np.bool_) & valid
+                return blosc2.zeros(n_phys, dtype=np.bool_)
         else:
             raise TypeError(
                 f"Dictionary column {self._col_name!r} can only be compared with str or None, "
                 f"got {type(other).__name__!r}."
             )
-        pred = dc.codes == np.int32(target_code)
-        valid = self._lazy_valid_rows()
-        if len(dc.codes) != len(self._table._valid_rows):
-            physical = blosc2.zeros(len(self._table._valid_rows), dtype=np.bool_)
+        code = np.int32(target_code)
+        pred = dc.codes != code if negate else dc.codes == code
+        if len(dc.codes) != n_phys:
+            physical = blosc2.zeros(n_phys, dtype=np.bool_)
             physical[: len(dc.codes)] = pred
             pred = physical
         return pred & valid
@@ -2396,6 +2540,12 @@ class Column:
             root._mark_generated_columns_stale(self._col_name)
             root._mark_all_indexes_stale()
             return
+        if self.is_varlen_scalar:
+            self._assign_varlen_scalar(data)
+            root = self._table._root_table
+            root._mark_generated_columns_stale(self._col_name)
+            root._mark_all_indexes_stale()
+            return
         n_live = len(self)
         arr = np.asarray(data)
         if len(arr) != n_live:
@@ -2409,6 +2559,30 @@ class Column:
         root = self._table._root_table
         root._mark_generated_columns_stale(self._col_name)
         root._mark_all_indexes_stale()
+
+    def _assign_varlen_scalar(self, data) -> None:
+        """``assign()`` for utf8/vlstring/vlbytes/struct/object columns.
+
+        These are rewritten whole rather than row by row: overwriting one row
+        of a utf8 column shifts every later offset, and one row of a batched
+        varlen column rewrites its whole batch, so the loop would be
+        quadratic.  Dead slots keep their current contents.
+        """
+        values = list(data)
+        n_live = len(self)
+        if len(values) != n_live:
+            raise ValueError(f"assign() requires {n_live} values (live rows), got {len(values)}.")
+        raw = self._raw_col
+        raw.flush()
+        n_phys = len(raw)
+        if n_live == n_phys:
+            raw.set_all(values)
+            return
+        current = list(raw[:])
+        live_pos = np.flatnonzero(self._valid_rows[:n_phys])
+        for pos, value in zip(live_pos, values, strict=True):
+            current[int(pos)] = value
+        raw.set_all(current)
 
     # ------------------------------------------------------------------
     # Null sentinel support
@@ -2580,10 +2754,13 @@ class Column:
         if where is None:
             return None
         if isinstance(where, str):
-            self._table._guard_varlen_scalar_expression(where)
+            self._table._guard_varlen_scalar_expression(where, allow_utf8=True)
+            utf8_names = self._table._utf8_names_in(where)
             operands = self._table._where_expression_operands(where)
             where, operands = self._table._rewrite_nested_expression(where, operands)
-            where = blosc2.lazyexpr(where, operands)
+            where = self._table._lazyexpr_over_cols(where, operands, utf8_names)
+            if isinstance(where, np.ndarray):
+                where = blosc2.asarray(where)
         if isinstance(where, np.ndarray) and where.dtype == np.bool_:
             where = blosc2.asarray(where)
         if isinstance(where, Column):
@@ -2825,17 +3002,27 @@ class Column:
         return NotImplemented
 
     def _summary_minmax_source(self):
-        """Return ``(sidecar_path, dtype, nullable)`` for a summary-readable
-        ``min``/``max``, or ``None`` when the index shortcut is not provably
-        correct.
+        """Return ``(sidecar_path, dtype, nullable, segment_len)`` for a
+        summary-readable ``min``/``max``, or ``None`` when the index shortcut is
+        not provably correct.
 
         Excluded: a view (its summary describes the base table); a column kind
         without numeric/string block extrema; a leaky null sentinel (only a
         non-nullable column, or a NaN-sentinel float — whose NaNs the summary
         drops — match the nulls-skipped contract of ``min()``); and a stale,
-        absent, or in-memory-only index.  Deletions/appends are covered by the
-        stale flag (every mutation marks the index stale; a rebuild re-summarises
-        only the live rows, and capacity padding never enters the summaries).
+        absent, or in-memory-only index.
+
+        Appends mark the index stale, so they are covered.  Deletions are *not*
+        (``delete()`` tombstones in place and leaves the index usable for
+        queries), and the summaries are built over the column's *physical*
+        array, where a tombstoned row keeps contributing its value to its
+        block — so any hole at all disqualifies the shortcut, whether it was
+        punched before or after the build.  With no holes the physical and
+        logical row numbers coincide, which is what lets the caller mix
+        summary blocks with a rescanned tail.  Capacity padding *does* enter
+        the summaries; ``segment_len`` is returned so the caller can drop the
+        padded tail and rescan the one block that straddles the live/padded
+        boundary.
         """
         table = self._table
         if table.base is not None:
@@ -2858,8 +3045,15 @@ class Column:
         is_nan_float = dtype.kind == "f" and isinstance(null_value, float) and np.isnan(null_value)
         if nullable and not is_nan_float:
             return None  # non-NaN sentinel leaks into the block extrema
-        desc = table._root_table._get_index_catalog().get(self._col_name)
+        root = table._root_table
+        desc = root._get_index_catalog().get(self._col_name)
         if not desc or desc.get("stale", False):
+            return None
+        # A tombstoned row still sits in its block and still contributes to that
+        # block's extrema, and the summaries index physical slots while min()
+        # reads logical rows.  Both only line up while every slot below the
+        # watermark is live.
+        if root._n_rows is None or root._n_rows != root._resolve_last_pos():
             return None
         levels = desc.get("levels") or {}
         level = "block" if "block" in levels else next(iter(levels), None)
@@ -2868,7 +3062,10 @@ class Column:
         path = levels[level].get("path")
         if path is None:
             return None  # in-memory sidecar: the scan is already fast
-        return path, dtype, nullable
+        segment_len = levels[level].get("segment_len")
+        if not segment_len:
+            return None
+        return path, dtype, nullable, int(segment_len)
 
     def _index_summary_minmax(self, op: str):
         """Exact ``min``/``max`` from the column index's block summaries, or
@@ -2878,11 +3075,21 @@ class Column:
         Every index kind (SUMMARY/FULL/PARTIAL/BUCKET/OPSI) persists per-block
         ``(min, max, flags)``, so reducing those is decompression-free (~240x
         faster than scanning tens of millions of rows).
+
+        The summaries cover the column's *physical* extent, which is padded out
+        to the slot capacity with zeros/empty strings — values that beat any real
+        datum on ``min``.  Only whole blocks below ``n_rows`` are read from the
+        sidecar; the single block straddling the boundary is rescanned (one block
+        decompression, so the shortcut is preserved) and blocks past it dropped.
         """
         source = self._summary_minmax_source()
         if source is None:
             return NotImplemented
-        path, dtype, nullable = source
+        path, dtype, nullable, segment_len = source
+        n_live = self._table._root_table._n_rows
+        if n_live is None or n_live == 0:
+            return NotImplemented
+        n_full = n_live // segment_len  # blocks entirely within the live rows
         try:
             from blosc2.indexing import _INDEX_MMAP_MODE, FLAG_ALL_NAN, FLAG_HAS_NAN, _open_sidecar_file
 
@@ -2897,14 +3104,37 @@ class Column:
             return NotImplemented
         if vals.shape[0] == 0:
             return NotImplemented
+        # Drop the padded tail: keep only blocks lying wholly below n_rows.
+        flags = flags[:n_full]
+        vals = vals[:n_full]
         # A non-nullable float with NaN *data* makes numpy min/max return NaN,
         # but the summary dropped those NaNs — they would disagree, so bail.
         if dtype.kind == "f" and not nullable and bool((flags & (FLAG_HAS_NAN | FLAG_ALL_NAN)).any()):
             return NotImplemented
         valid = (flags & FLAG_ALL_NAN) == 0
-        if not valid.any():
-            return NotImplemented  # whole column null → let the scan raise
         vals = vals[valid]
+
+        # The straddling block is not summarisable (its tail is padding), so read
+        # just its live rows.  This is also the whole answer when the column is
+        # shorter than one block, in which case no summary entry is usable.
+        tail = n_live - n_full * segment_len
+        if tail:
+            try:
+                seg = np.asarray(self[n_full * segment_len : n_live])
+            except Exception:
+                return NotImplemented
+            if dtype.kind == "f":
+                seg = seg[~np.isnan(seg)]
+                if not nullable and seg.shape[0] != tail:
+                    return NotImplemented  # NaN data: see above
+            if seg.shape[0]:
+                seg_val = min(seg) if dtype.kind in "US" else seg.min()
+                if op == "max":
+                    seg_val = max(seg) if dtype.kind in "US" else seg.max()
+                vals = np.concatenate([vals, np.asarray([seg_val], dtype=dtype)])
+
+        if vals.shape[0] == 0:
+            return NotImplemented  # nothing usable → let the scan decide/raise
         if dtype.kind in "US":
             return min(vals) if op == "min" else max(vals)
         return vals.min() if op == "min" else vals.max()
@@ -4050,11 +4280,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     @staticmethod
     def _is_varlen_scalar_column(col: CompiledColumn) -> bool:
-        return isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, Utf8Spec))
+        return isinstance(col.spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec, UTF8Spec))
 
     @staticmethod
     def _is_utf8_column(col: CompiledColumn) -> bool:
-        return isinstance(col.spec, Utf8Spec)
+        return isinstance(col.spec, UTF8Spec)
 
     @staticmethod
     def _is_dictionary_column(col: CompiledColumn) -> bool:
@@ -4069,13 +4299,59 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         from blosc2.ctable_indexing import _dict_rank_hash
 
-        col = self._root_table._cols.get(name)
+        root = self._root_table
+        col = root._cols.get(name)
         if col is None:
             return True
+        # Hashing the whole dictionary costs more than the scan this check is
+        # meant to let us skip (24 ms for 20k entries), so settle it from the
+        # value epoch first: unchanged epoch means nothing has been written
+        # since the index was built, so the ranks cannot have moved.
+        built_epoch = (root._get_index_catalog().get(name) or {}).get("built_value_epoch")
+        if built_epoch is not None and root._storage.get_epoch_counters()[0] == built_epoch:
+            return False
         dictionary = list(col.dictionary)
         if len(dictionary) != dict_rank_meta.get("dict_len"):
             return True
         return _dict_rank_hash(dictionary) != dict_rank_meta.get("dict_hash")
+
+    def _utf8_index_vocab(self, name: str, utf8_rank_meta: dict) -> np.ndarray | None:
+        """Rank-ordered vocabulary for a utf8 index, cached per table.
+
+        Small relative to the column (one entry per distinct value) and read
+        once, so a literal→rank lookup costs a ``searchsorted`` rather than a
+        re-factorization of the column.
+        """
+        cache = self.__dict__.setdefault("_utf8_vocab_cache", {})
+        key = (name, utf8_rank_meta.get("n_rows"), utf8_rank_meta.get("nbytes"))
+        if key in cache:
+            return cache[key]
+        inline = utf8_rank_meta.get("vocab")
+        if inline is not None:
+            vocab = np.array(inline, dtype=np.str_) if inline else np.empty(0, dtype=np.str_)
+        else:
+            path = utf8_rank_meta.get("vocab_path")
+            if path is None or not os.path.exists(path):
+                return None
+            vocab = np.asarray(blosc2.open(path, mode="r")[:])
+        cache.clear()  # only the current build's vocabulary is ever of interest
+        cache[key] = vocab
+        return vocab
+
+    def _utf8_rank_index_stale(self, name: str, utf8_rank_meta: dict) -> bool:
+        """True if a utf8-rank FULL index no longer matches the live column.
+
+        The index encodes alphabetical ranks frozen at build time, so a value
+        appended ahead of existing ones invalidates every rank, not just the new
+        rows'.  Checked with O(1) signals — re-deriving the vocabulary would mean
+        factorizing the column on every query.
+        """
+        col = self._root_table._cols.get(name)
+        if col is None:
+            return True
+        return len(col) != utf8_rank_meta.get("n_rows") or int(col._bytes_used) != utf8_rank_meta.get(
+            "nbytes"
+        )
 
     @staticmethod
     def _is_ndarray_column(col: CompiledColumn) -> bool:
@@ -4160,7 +4436,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return policy.float_value
         if isinstance(spec, b2_bool):
             return policy.bool_value
-        if isinstance(spec, (string, Utf8Spec)):
+        if isinstance(spec, (string, UTF8Spec)):
             return policy.string_value
         if isinstance(spec, b2_bytes):
             return policy.bytes_value
@@ -4210,7 +4486,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if null_value != 255:
                 raise ValueError(f"Null sentinel for nullable bool column {name!r} must be 255")
             return
-        if isinstance(spec, (string, Utf8Spec)):
+        if isinstance(spec, (string, UTF8Spec)):
             if not isinstance(null_value, str):
                 raise TypeError(f"Null sentinel for string column {name!r} must be str")
             return
@@ -6637,7 +6913,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _pa_type_from_spec(pa, spec):
         if isinstance(spec, DictionarySpec):
             return pa.dictionary(pa.int32(), pa.string(), ordered=spec.ordered)
-        if isinstance(spec, Utf8Spec):
+        if isinstance(spec, UTF8Spec):
             # Always large_string: 64-bit offsets match the int64 offsets array,
             # so multi-GB string columns export without int32-offset overflow.
             return pa.large_string()
@@ -7056,7 +7332,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         if _is_arrow_string_type(pa, pa_type):
             if string_max_length is None:
-                from blosc2.utf8_array import have_string_dtype
+                from blosc2._utf8_array import have_string_dtype
 
                 if not have_string_dtype():
                     # utf8 columns need numpy.dtypes.StringDType (NumPy >= 2.0).
@@ -7127,7 +7403,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             # only binary columns keep the native-None varlen treatment.
             # On NumPy < 2.0 (no StringDType) utf8 columns are unavailable and
             # scalar strings keep the historical vlstring treatment instead.
-            from blosc2.utf8_array import have_string_dtype
+            from blosc2._utf8_array import have_string_dtype
 
             field_is_varlen_scalar = (
                 not field_is_list
@@ -8770,8 +9046,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         self,
         name: str,
         spec: SchemaSpec | dataclasses.Field,
+        values=None,
     ) -> None:
-        """Add a new column filled from the default declared in *spec*.
+        """Add a new column filled from *values*, or from the default declared in *spec*.
 
         Parameters
         ----------
@@ -8780,16 +9057,30 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         spec:
             A schema descriptor such as ``b2.int64(ge=0)`` or a field
             descriptor such as ``b2.field(b2.int64(ge=0), default=0)``.
-            When the table already has live rows, use ``blosc2.field(...)``
-            with a default declared so those rows can be backfilled.
+            When the table already has live rows and no *values* are given,
+            use ``blosc2.field(...)`` with a default declared so those rows
+            can be backfilled.
+        values:
+            Optional sequence with one entry per **live** row, in row order,
+            used to fill the new column.  This is the supported way to land a
+            computed result back into the table::
+
+                res = blosc2.lazyexpr("'x=' + a", {"a": arr}).compute()
+                t.add_column("out", blosc2.utf8(), values=res[:])
+
+            A declared default is still honoured for rows appended later, so
+            *values* and ``blosc2.field(..., default=...)`` can be combined.
 
         Raises
         ------
         ValueError
             If the table is read-only, is a view, the column already exists,
-            or a non-empty table is given a column with no default declared.
+            a non-empty table is given a column with neither *values* nor a
+            default declared, or ``len(values)`` does not match the number of
+            live rows.
         TypeError
-            If a declared default cannot be coerced to *spec*'s dtype.
+            If a declared default, or *values*, cannot be coerced to *spec*'s
+            dtype.
         """
         if self._read_only:
             raise ValueError("Table is read-only (opened with mode='r').")
@@ -8804,10 +9095,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         spec, default, column_config = self._column_spec_default_and_config(spec)
 
         n_live = self.nrows
-        if default is MISSING and n_live > 0:
+        if values is None and default is MISSING and n_live > 0:
             raise ValueError(
                 "add_column() requires a default declared as blosc2.field(..., default=...) "
-                "when the table has live rows."
+                "or a values= sequence when the table has live rows."
             )
 
         compiled_col = self._compiled_column_from_spec(name, spec)
@@ -8817,9 +9108,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             validate_column_null_values=False,
         )
         spec = compiled_col.spec
+        if self._is_list_column(compiled_col):
+            raise TypeError(
+                "add_column() does not support list columns; use the constructor with a full schema."
+            )
+        if self._is_dictionary_column(compiled_col):
+            raise TypeError(
+                "add_column() does not support dictionary columns; use the constructor with a full schema."
+            )
+        if values is not None:
+            values = self._add_column_values(name, compiled_col, values, n_live)
 
         if self._is_varlen_scalar_column(compiled_col):
-            # Varlen scalar columns don't use fixed-width NDArray storage.
+            # Varlen scalar columns don't use fixed-width NDArray storage, but the
+            # table still indexes them by *physical* position, so a new one has to
+            # span the physical extent rather than just the live rows -- otherwise
+            # any table with deleted rows reads past its end.
             col_storage = self._resolve_column_storage(compiled_col, None, None)
             new_col = self._storage.create_varlen_scalar_column(
                 name,
@@ -8827,13 +9131,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 cparams=col_storage.get("cparams"),
                 dparams=col_storage.get("dparams"),
             )
-            for _ in range(n_live):
-                new_col.append(default)
+            n_phys = self._resolve_last_pos()
+            filler = self._varlen_filler(spec, default)
+            if values is None:
+                new_col.extend([filler] * n_phys)
+            elif n_live == n_phys:
+                new_col.extend(values)
+            else:
+                padded = [filler] * n_phys
+                live_pos = np.flatnonzero(self._valid_rows[:n_phys])
+                for pos, value in zip(live_pos, values, strict=True):
+                    padded[int(pos)] = value
+                new_col.extend(padded)
             new_col.flush()
-        elif self._is_list_column(compiled_col):
-            raise TypeError(
-                "add_column() does not support list columns; use the constructor with a full schema."
-            )
         else:
             if default is not MISSING:
                 try:
@@ -8862,7 +9172,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 dparams=col_storage.get("dparams"),
             )
             if n_live > 0:
-                if self._is_ndarray_column(compiled_col):
+                if values is not None:
+                    # No holes (the common case) means the live rows are the
+                    # leading slots, so a contiguous write beats a scatter.
+                    if n_live == self._resolve_last_pos():
+                        new_col[:n_live] = values
+                    else:
+                        new_col[np.where(self._valid_rows[:])[0]] = values
+                elif self._is_ndarray_column(compiled_col):
                     new_col[self._valid_rows] = np.broadcast_to(default_val, (n_live, *spec.item_shape))
                 else:
                     new_col[self._valid_rows] = default_val
@@ -8880,6 +9197,65 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         )
         if isinstance(self._storage, FileTableStorage):
             self._storage.save_schema(self._schema_dict_with_computed())
+
+    @staticmethod
+    def _varlen_filler(spec, default):
+        """Value written into the dead slots of a freshly added varlen column.
+
+        Never read back -- the table only ever indexes live positions -- so it
+        just has to be something the spec accepts.
+        """
+        if default is not MISSING:
+            return default
+        null_value = getattr(spec, "null_value", None)
+        if null_value is not None:
+            return null_value
+        if isinstance(spec, VLBytesSpec):
+            return b""
+        if isinstance(spec, (UTF8Spec, VLStringSpec)):
+            return ""
+        return None
+
+    def _add_column_values(self, name: str, col: CompiledColumn, values, n_live: int):
+        """Validate and coerce the ``values=`` argument of :meth:`add_column`.
+
+        Returns a list for varlen scalar columns (which are fed row by row) and
+        a dtype-coerced ndarray for the fixed-width ones.
+
+        Constraints declared on the spec are checked here, *before* the
+        ``astype`` below: coercing to a fixed-width dtype truncates a too-long
+        string to ``max_length`` instead of complaining, so skipping the check
+        would silently drop characters.
+        """
+        from blosc2.schema_vectorized import validate_column_values
+
+        if self._is_varlen_scalar_column(col):
+            values = list(values)
+            if len(values) != n_live:
+                raise ValueError(
+                    f"add_column() values= for {name!r} requires {n_live} entries "
+                    f"(live rows), got {len(values)}."
+                )
+            validate_column_values(col, values)
+            return values
+
+        arr = values[:] if isinstance(values, blosc2.NDArray) else np.asarray(values)
+        if len(arr) != n_live:
+            raise ValueError(
+                f"add_column() values= for {name!r} requires {n_live} entries (live rows), got {len(arr)}."
+            )
+        expected = (n_live, *col.spec.item_shape) if self._is_ndarray_column(col) else (n_live,)
+        if arr.shape != expected:
+            raise ValueError(
+                f"add_column() values= for {name!r} must have shape {expected}, got {arr.shape}."
+            )
+        validate_column_values(col, arr)
+        try:
+            return arr.astype(col.spec.dtype)
+        except (ValueError, OverflowError) as exc:
+            raise TypeError(
+                f"Cannot coerce values= for {name!r} to dtype {col.spec.dtype!r}: {exc}"
+            ) from exc
 
     def drop_column(self, name: str) -> None:
         """Remove a column from the table.
@@ -9841,6 +10217,31 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._validate_transformer_dep(d)
         return kernel, col_deps
 
+    def _guard_utf8_kernel_deps(self, col_deps) -> None:
+        """Refuse a UDF/DSL kernel that reads a utf8 column, naming the column.
+
+        :func:`blosc2.lazyudf` refuses the operand on its own, but only ever
+        sees the container, so it cannot say *which* column.  Called from the
+        column-registration paths as well, where the kernel would otherwise be
+        accepted and then fail on every read -- and on ``str(table)`` -- when
+        the output container is allocated from a ``StringDType`` the NDArray
+        dtype round-trip cannot parse.  It is the utf8 *operand* that does
+        this, whatever the kernel returns.
+        """
+        from blosc2._utf8_array import utf8_compute_error
+
+        for dep in col_deps:
+            col = self._schema.columns_by_name.get(dep)
+            if col is not None and self._is_utf8_column(col):
+                raise NotImplementedError(
+                    utf8_compute_error(
+                        f"Column {dep!r} is a variable-length utf8 column and cannot be a UDF "
+                        "or DSL kernel operand.",
+                        source=f"t[{dep!r}]",
+                        compute="blosc2.lazyudf(kernel, (fixed,)).compute()[:]",
+                    )
+                )
+
     def _normalize_transformer(self, expr, inputs=None) -> dict:
         """Resolve *expr* into a transformer descriptor.
 
@@ -9856,6 +10257,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if isinstance(expr, blosc2.DSLKernel):
             kernel, col_deps = self._resolve_dsl_kernel(expr, inputs)
+            self._guard_utf8_kernel_deps(col_deps)
             return {"kind": "dsl", "kernel": kernel, "col_deps": col_deps}
         # Resolve a callable once (a lambda may return a LazyExpr or a LazyUDF).
         obj = expr(self._cols) if (callable(expr) and not isinstance(expr, blosc2.LazyExpr)) else expr
@@ -9867,10 +10269,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             kernel = obj.func
             if kernel.dsl_error is not None:
                 raise blosc2.DSLSyntaxError(f"Invalid DSL kernel: {kernel.dsl_error}")
+            col_deps = self._dsl_deps_from_lazyudf(obj)
+            self._guard_utf8_kernel_deps(col_deps)
             return {
                 "kind": "dsl",
                 "kernel": kernel,
-                "col_deps": self._dsl_deps_from_lazyudf(obj),
+                "col_deps": col_deps,
                 "jit_backend": obj.kwargs.get("jit_backend"),
             }
         lazy, col_deps = self._normalize_expression_transformer(obj)
@@ -10109,6 +10513,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # inputs add_computed_column()/add_generated_column() pass to
         # lazyudf() for DSL/UDF columns -- so the live-row mask is applied
         # once, here, to the result rather than to every operand.
+        # lazyudf() refuses a utf8 operand too, but only sees the container, so
+        # settle it here where the column name is still known.
+        self._guard_utf8_kernel_deps(names)
         operands = tuple(self._cols[self._logical_to_physical_name(name)] for name in names)
         result = blosc2.lazyudf(func, operands, dtype=dtype, jit=jit).compute()
         return result[self._valid_rows]
@@ -11137,11 +11544,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 descriptor = None
             else:
                 dict_rank_meta = descriptor.get("full", {}).get("dict_rank")
+                utf8_rank_meta = descriptor.get("full", {}).get("utf8_rank")
                 if dict_rank_meta is not None:
                     if self._dict_rank_index_stale(name, dict_rank_meta):
                         descriptor = None  # ranks no longer match dictionary → lexsort
                     else:
                         is_dict_rank = True
+                elif utf8_rank_meta is not None and self._utf8_rank_index_stale(name, utf8_rank_meta):
+                    descriptor = None  # ranks no longer match the column → lexsort
         elif name in root._computed_cols:
             cc = root._computed_cols[name]
             for _lookup_key, candidate in catalog.items():
@@ -11249,13 +11659,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ascending: list[bool],
         live_pos: np.ndarray,
         n: int,
+        gathered: dict[str, np.ndarray] | None = None,
     ) -> list[np.ndarray]:
         """Build the key list for np.lexsort (innermost = last = primary key).
 
         For nullable columns a null-indicator key (0=non-null, 1=null) is
         inserted immediately after the value key, making it more significant.
         This ensures nulls sort last regardless of ascending/descending order.
+
+        *gathered* lets a caller that has already read the columns at
+        *live_pos* hand them over instead of paying for a second gather; a
+        dictionary column is expected there as its **codes**, which is what it
+        is cheap to gather.
         """
+        from blosc2.ctable_indexing import _dict_code_to_rank
+
+        gathered = gathered or {}
         lex_keys = []
         for name, asc in zip(reversed(cols), reversed(ascending), strict=True):
             cc = self._computed_cols.get(name)
@@ -11267,14 +11686,24 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 is_dict_col = col_info is not None and self._is_dictionary_column(col_info)
                 if is_dict_col:
-                    # Sort dictionary columns by decoded string values.
-                    decoded = self._cols[name][live_pos]
-                    raw = np.array(decoded, dtype=object)
-                    # Replace None with placeholder so lexsort never compares None.
-                    # Null indicator key (below) already places nulls last.
-                    raw[raw == None] = ""  # noqa: E711
+                    # Sort a dictionary column by the alphabetical rank of each
+                    # row's code -- the same trick the FULL index plays.  Ranks
+                    # order exactly as the decoded values do, and sorting int32
+                    # skips both the decode and lexsort's string comparisons.
+                    dict_col = self._cols[name]
+                    dictionary = list(dict_col.dictionary)
+                    code_to_rank = _dict_code_to_rank(dictionary)
+                    raw_codes = gathered[name] if name in gathered else dict_col.codes[live_pos]
+                    codes = np.asarray(raw_codes, dtype=np.int32)
+                    # The null code is reserved (-1), not a dictionary entry, so
+                    # it cannot be looked up; nulls take the largest rank.  The
+                    # null indicator key below is what actually places them.
+                    is_null = codes == col_info.spec.null_code
+                    raw = np.empty(len(codes), dtype=np.int32)
+                    raw[~is_null] = code_to_rank[codes[~is_null]]
+                    raw[is_null] = np.int32(len(dictionary))
                 else:
-                    raw = self._cols[name][live_pos]
+                    raw = gathered[name] if name in gathered else self._cols[name][live_pos]
             nv = getattr(col_info.spec, "null_value", None) if col_info else None
 
             # Value key
@@ -11293,10 +11722,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             # Null indicator key — more significant than the value key above,
             # so nulls always sort last (0 before 1 → non-null before null).
             if is_dict_col and col_info.spec.nullable:
-                null_code = col_info.spec.null_code
-                codes_at_pos = np.asarray(self._cols[name].codes[live_pos], dtype=np.int32)
-                null_ind = (codes_at_pos == null_code).astype(np.intp)
-                lex_keys.append(null_ind)
+                lex_keys.append(is_null.astype(np.intp))
             elif nv is not None:
                 if isinstance(nv, float) and np.isnan(nv):
                     null_ind = np.isnan(raw).astype(np.intp)
@@ -11454,12 +11880,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         col_info = self._schema.columns_by_name.get(name)
         null_value = getattr(col_info.spec, "null_value", None) if col_info is not None else None
-        # Dict-rank index: use null_rank (int32) as sentinel for null-block location.
+        # Rank index: the sidecar holds int32 ranks, so the null block is located
+        # by null_rank, not by the column's own sentinel (a string, for utf8).
         dict_rank = full.get("dict_rank")
         if dict_rank is not None:
             if self._dict_rank_index_stale(name, dict_rank):
                 return None  # ranks no longer match dictionary → lexsort
             null_value = dict_rank["null_rank"]
+        utf8_rank = full.get("utf8_rank")
+        if utf8_rank is not None:
+            if self._utf8_rank_index_stale(name, utf8_rank):
+                return None  # ranks no longer match the column → lexsort
+            null_value = utf8_rank["null_rank"] if null_value is not None else None
         # Numeric / NaN / string sentinels keep the null rows in one contiguous block
         # once sorted; other non-numeric sentinels (e.g. object) would need a
         # different locator.
@@ -11564,43 +11996,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 gathered[col.name] = arr[live_pos]
 
-        lex_keys = []
-        for name, asc in zip(reversed(cols), reversed(ascending), strict=True):
-            col_info = self._schema.columns_by_name.get(name)
-            is_dict_col = col_info is not None and self._is_dictionary_column(col_info)
-            if is_dict_col:
-                raw = np.array(self._cols[name][live_pos], dtype=object)
-                # Replace None with placeholder so lexsort never compares None.
-                raw[raw == None] = ""  # noqa: E711
-            else:
-                raw = gathered[name]
-
-            if not asc:
-                if raw.dtype.kind in "USO":
-                    rank = np.argsort(np.argsort(raw, kind="stable"), kind="stable")
-                    lex_keys.append((n - 1 - rank).astype(np.intp))
-                elif np.issubdtype(raw.dtype, np.unsignedinteger):
-                    lex_keys.append(-raw.astype(np.int64))
-                else:
-                    lex_keys.append(-raw)
-            else:
-                lex_keys.append(raw)
-
-            if is_dict_col and col_info.spec.nullable:
-                null_code = col_info.spec.null_code
-                codes_at_pos = np.asarray(self._cols[name].codes[live_pos], dtype=np.int32)
-                null_ind = (codes_at_pos == null_code).astype(np.intp)
-                lex_keys.append(null_ind)
-            else:
-                nv = getattr(col_info.spec, "null_value", None) if col_info else None
-                if nv is not None:
-                    if isinstance(nv, float) and np.isnan(nv):
-                        null_ind = np.isnan(raw).astype(np.intp)
-                    else:
-                        null_ind = (raw == nv).astype(np.intp)
-                    lex_keys.append(null_ind)
-
-        order = np.lexsort(lex_keys)
+        # The gather above already read every column at live_pos, dictionary
+        # columns as codes -- exactly what the key builder wants.
+        order = np.lexsort(self._build_lex_keys(cols, ascending, live_pos, n, gathered))
         result = self._empty_copy(capacity=n)
         for col in self._schema.columns:
             col_name = col.name
@@ -12167,7 +12565,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if isinstance(spec, DictionarySpec):
             ordered_tag = ", ordered" if spec.ordered else ""
             return f"dictionary[str{ordered_tag}]"
-        if isinstance(spec, Utf8Spec):
+        if isinstance(spec, UTF8Spec):
             return "utf8"
         if isinstance(spec, VLStringSpec):
             return "vlstring"
@@ -12587,6 +12985,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
             def eq_repl(match: re.Match, _dc=dc, _name=name) -> str:
                 value = ast.literal_eval(match.group(2))
+                # Deliberately *not* served from the rank index, unlike the
+                # operator form: rewriting to a code comparison keeps this a
+                # single fused numeric expression, and substituting a
+                # precomputed mask instead measured consistently slower
+                # (22.9 ms -> 28.7 ms at 1M rows) even though the mask itself
+                # costs only 4.8 ms.  Accelerating this form needs the planner
+                # to consume index positions, not a mask.
                 try:
                     code = int(_dc.value_to_code(value))
                 except KeyError:
@@ -12626,6 +13031,25 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 rewritten = new_expr
         return rewritten, new_operands
 
+    @staticmethod
+    def _alias_dotted(expr: str, names: list[str], prefix: str) -> tuple[str, dict[str, str]]:
+        """Replace each dotted name in *expr* with ``{prefix}{i}``.
+
+        Returns the rewritten expression and the ``alias -> original name``
+        map, holding only the names that actually occurred in *expr*.
+        """
+        rewritten = expr
+        aliases = {}
+        # Longest names first so trip.begin.lon is rewritten before trip.begin.
+        for i, name in enumerate(sorted((n for n in names if "." in n), key=len, reverse=True)):
+            alias = f"{prefix}{i}"
+            pattern = rf"(?<![\w.]){re.escape(name)}(?![\w.])"
+            replaced = re.sub(pattern, alias, rewritten)
+            if replaced != rewritten:
+                rewritten = replaced
+                aliases[alias] = name
+        return rewritten, aliases
+
     def _rewrite_nested_expression(
         self, expr: str, operands: dict[str, blosc2.NDArray | blosc2.LazyExpr]
     ) -> tuple[str, dict[str, blosc2.NDArray | blosc2.LazyExpr]]:
@@ -12635,28 +13059,27 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         columns are naturally addressed as dotted paths (e.g. ``trip.begin.lon``).
         This maps them to temporary aliases and returns rewritten expression and
         operand mapping.
+
+        Only names present in *operands* are rewritten; the flavours excluded
+        from the operand namespace (utf8, dictionary, ...) are aliased by
+        whichever driver evaluates them -- see :meth:`_lazyexpr_over_cols`.
         """
-        dotted = [name for name in operands if "." in name]
-        if not dotted:
+        rewritten, aliases = self._alias_dotted(expr, list(operands), "__nf")
+        if not aliases:
             return expr, operands
 
-        rewritten = expr
         new_operands = dict(operands)
-        # Longest names first so trip.begin.lon is rewritten before trip.begin.
-        for i, name in enumerate(sorted(dotted, key=len, reverse=True)):
-            alias = f"__nf{i}"
-            pattern = rf"(?<![\w.]){re.escape(name)}(?![\w.])"
-            replaced = re.sub(pattern, alias, rewritten)
-            if replaced != rewritten:
-                rewritten = replaced
-                new_operands[alias] = new_operands.pop(name)
+        for alias, name in aliases.items():
+            new_operands[alias] = new_operands.pop(name)
         return rewritten, new_operands
 
     @staticmethod
     def _expression_references_name(expr: str, name: str) -> bool:
         return re.search(rf"(?<![\w.]){re.escape(name)}(?![\w.])", expr) is not None
 
-    def _guard_scalar_expression(self, expr: str) -> None:
+    def _guard_scalar_expression(self, expr: str, *, allow_utf8: bool = False) -> None:
+        from blosc2._utf8_array import utf8_compute_error
+
         for name, meta in self._root_table._materialized_cols.items():
             if meta.get("stale", False) and self._expression_references_name(expr, name):
                 raise ValueError(
@@ -12671,9 +13094,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     "support scalar columns. Use an element projection or a row-wise reduction first."
                 )
             if self._is_utf8_column(col) and self._expression_references_name(expr, col.name):
+                if allow_utf8:
+                    continue
                 raise NotImplementedError(
-                    f"Column {col.name!r} is a variable-length utf8 column; "
-                    "string expressions on utf8 columns are not supported yet."
+                    utf8_compute_error(
+                        f"Column {col.name!r} is a variable-length utf8 column; string expressions "
+                        "that reference one are not supported here.",
+                        source=f"t[{col.name!r}]",
+                        compute=f"blosc2.lazyexpr({expr!r}, {{{col.name!r}: fixed}}).compute()[:]",
+                    )
                 )
             if self._is_varlen_scalar_column(col) and self._expression_references_name(expr, col.name):
                 raise NotImplementedError(
@@ -12681,8 +13110,160 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     "lazy expressions are not supported yet."
                 )
 
-    def _guard_varlen_scalar_expression(self, expr: str) -> None:
-        self._guard_scalar_expression(expr)
+    def _guard_varlen_scalar_expression(self, expr: str, *, allow_utf8: bool = False) -> None:
+        self._guard_scalar_expression(expr, allow_utf8=allow_utf8)
+
+    # ------------------------------------------------------------------
+    # utf8 string expressions: span-loop driver
+    # ------------------------------------------------------------------
+
+    #: Rows materialized per span by the utf8 expression driver.  Matches the
+    #: chunk size of :meth:`Column._utf8_chunked_bool`.
+    _UTF8_EXPR_SPAN = 65536
+
+    #: Byte ceiling for one span's fixed-width ``<Un`` materialization.  A span
+    #: is sized to the *longest* value in it, so a single 4 KB row among short
+    #: ones would otherwise cost 65536 x 4096 x 4 = 1 GiB.
+    _UTF8_EXPR_BUDGET = 64 << 20
+
+    def _utf8_spans(self, arrays: dict, n_logical: int):
+        """Row spans to materialize; see :func:`~blosc2._utf8_array.utf8_spans`."""
+        from blosc2._utf8_array import utf8_spans
+
+        return utf8_spans(arrays, n_logical, self._UTF8_EXPR_SPAN, self._UTF8_EXPR_BUDGET)
+
+    def _utf8_names_in(self, expr: str) -> list[str]:
+        """utf8 column names referenced by *expr*, in schema order.
+
+        Call this on the *original* expression, before the dictionary/nested
+        rewrites: a nested utf8 leaf is aliased away by
+        :meth:`_rewrite_nested_expression` and would no longer be findable.
+        """
+        return [
+            col.name
+            for col in self._schema.columns
+            if self._is_utf8_column(col) and self._expression_references_name(expr, col.name)
+        ]
+
+    #: Comparisons a utf8 column supports against a string literal, longest
+    #: spelling first so ``<=`` is not matched as ``<``.
+    _UTF8_CMP_OPS: ClassVar[dict] = {
+        "==": np.equal,
+        "!=": np.not_equal,
+        "<=": np.less_equal,
+        ">=": np.greater_equal,
+        "<": np.less,
+        ">": np.greater,
+    }
+    #: Mirrored operator for a reversed comparison (``'x' < name``).
+    _UTF8_CMP_MIRROR: ClassVar[dict] = {"==": "==", "!=": "!=", "<=": ">=", ">=": "<=", "<": ">", ">": "<"}
+
+    def _rewrite_utf8_predicates(
+        self, expr: str, operands: dict, utf8_names: list[str], aliases: dict[str, str] | None = None
+    ) -> tuple[str, dict, list[str]]:
+        """Replace ``utf8col <cmp> 'literal'`` terms with precomputed masks.
+
+        A scalar comparison is answered by a raw-byte scan of the offsets/data
+        pair (:meth:`Column._utf8_scalar_mask`) with no decode at all, which is
+        several times cheaper than the span driver's decode -> ``<Un`` ->
+        miniexpr round trip and is exactly what the operator form
+        ``t[t.name == "x"]`` already does.  Substituting the mask as a boolean
+        operand keeps the rest of the expression (``&``/``|``, numeric terms) a
+        single native expression.
+
+        Returns the rewritten expression, the extended operands, and the utf8
+        names still referenced -- a name drops out only when *every* one of its
+        occurrences was rewritten, so anything else (``startswith(name, 'x')``,
+        ``upper(name)``) still routes to the span driver.
+
+        Names are as they appear in *expr*; a nested leaf appears under an
+        alias and resolves to its column through *aliases*.
+        """
+        rewritten = expr
+        new_operands = dict(operands)
+        remaining = []
+        col_of = (aliases or {}).get
+        ops = "|".join(re.escape(o) for o in self._UTF8_CMP_OPS)
+        for i, name in enumerate(utf8_names):
+            column = self[col_of(name, name)]
+            counter = itertools.count()
+
+            def repl(match: re.Match, _col=column, _i=i, _c=counter, reverse=False) -> str:
+                op = match.group(1)
+                literal = ast.literal_eval(match.group(2) if not reverse else match.group(1))
+                if reverse:
+                    op = self._UTF8_CMP_MIRROR[match.group(2)]
+                alias = f"__u8{_i}_{next(_c)}"
+                new_operands[alias] = blosc2.asarray(_col._utf8_scalar_mask(self._UTF8_CMP_OPS[op], literal))
+                return alias
+
+            escaped = r"(?<![\w.])" + re.escape(name) + r"(?![\w.])"
+            forward = re.sub(escaped + r"\s*(" + ops + r")\s*" + self._STR_LITERAL, repl, rewritten)
+            reversed_ = re.sub(
+                self._STR_LITERAL + r"\s*(" + ops + r")\s*" + escaped,
+                lambda m: repl(m, reverse=True),
+                forward,
+            )
+            if self._expression_references_name(reversed_, name):
+                remaining.append(name)
+            rewritten = reversed_
+        return rewritten, new_operands, remaining
+
+    def _lazyexpr_over_cols(self, expr: str, operands: dict, utf8_names: list[str]):
+        """``blosc2.lazyexpr(expr, operands)``, or the utf8 span driver.
+
+        A variable-length utf8 column cannot be an expression operand: its
+        offsets and data live in separate NDArrays with independent chunk
+        grids, so the prefilter contract does not apply.  Scalar comparisons
+        are answered by a raw-byte scan and substituted as boolean operands
+        first; whatever still references a utf8 column is evaluated span by
+        span, materializing each span to a fixed-width ``<Un`` array that the
+        (Phase 1) string kernels accept.
+        """
+        if not utf8_names:
+            return blosc2.lazyexpr(expr, operands)
+        # utf8 columns are outside the operand namespace, so _rewrite_nested_expression
+        # never saw them; a nested leaf still carries its dotted name here, which
+        # neither miniexpr nor blosc2.lazyexpr can parse as an identifier.
+        expr, aliases = self._alias_dotted(expr, utf8_names, "__u8n")
+        renamed = {name: alias for alias, name in aliases.items()}
+        utf8_names = [renamed.get(name, name) for name in utf8_names]
+        expr, operands, utf8_names = self._rewrite_utf8_predicates(expr, operands, utf8_names, aliases)
+        if not utf8_names:
+            return blosc2.lazyexpr(expr, operands)
+        return self._utf8_span_eval(expr, operands, utf8_names, aliases=aliases)
+
+    def _utf8_span_eval(
+        self,
+        expr: str,
+        operands: dict,
+        utf8_names: list[str],
+        *,
+        aliases: dict[str, str] | None = None,
+        strict: bool = False,
+    ):
+        """Evaluate *expr* over this table's utf8 columns in row spans.
+
+        Thin wrapper over :func:`~blosc2._utf8_array.utf8_span_eval`; the result
+        uses the table's *physical* length, the coordinate system every other
+        predicate here works in.  Names in *utf8_names* are as they appear in
+        *expr*, which for a nested leaf is an alias -- *aliases* maps it back to
+        the column.
+        """
+        from blosc2._utf8_array import utf8_span_eval
+
+        col_of = (aliases or {}).get
+
+        return utf8_span_eval(
+            expr,
+            operands,
+            {name: self._cols[col_of(name, name)] for name in utf8_names},
+            {name: self[col_of(name, name)].null_value for name in utf8_names},
+            len(self._valid_rows),
+            strict=strict,
+            span_rows=self._UTF8_EXPR_SPAN,
+            budget=self._UTF8_EXPR_BUDGET,
+        )
 
     def _is_nullable_column(self, name: str) -> bool:
         col = self[name]
@@ -12801,11 +13382,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if isinstance(expr_result, ColExpr):
             expr_result = expr_result._bind(self)
         if isinstance(expr_result, str):
-            self._guard_varlen_scalar_expression(expr_result)
+            self._guard_varlen_scalar_expression(expr_result, allow_utf8=True)
+            utf8_names = self._utf8_names_in(expr_result)
             operands = self._where_expression_operands(expr_result)
             expr_result, operands = self._rewrite_dictionary_predicates(expr_result, operands)
             expr_result, operands = self._rewrite_nested_expression(expr_result, operands)
-            expr_result = blosc2.lazyexpr(expr_result, operands)
+            expr_result = self._lazyexpr_over_cols(expr_result, operands, utf8_names)
         if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:
             expr_result = blosc2.asarray(expr_result)
         if isinstance(expr_result, Column):

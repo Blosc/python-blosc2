@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import os
+import pathlib
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -25,7 +26,7 @@ from blosc2.schema import (
     NDArraySpec,
     ObjectSpec,
     StructSpec,
-    Utf8Spec,
+    UTF8Spec,
     VLBytesSpec,
     VLStringSpec,
 )
@@ -57,6 +58,22 @@ class _FakeSchunk:
         self.vlmeta = _FakeVlMeta()
 
 
+def _dict_code_to_rank(dictionary) -> np.ndarray:
+    """``code -> alphabetical rank`` lookup for a dictionary column.
+
+    Sorting by rank is sorting by decoded value, which is what lets an int32
+    array stand in for the strings — in the FULL index (:class:`_DictRankWrapper`)
+    and in ``CTable._build_lex_keys``.  The reserved null code is *not* a
+    dictionary entry, so callers assign nulls a rank of their own (``len``,
+    the largest, so nulls sort last).
+    """
+    n_entries = len(dictionary)
+    order = np.argsort(dictionary, kind="stable")
+    code_to_rank = np.empty(n_entries, dtype=np.int32)
+    code_to_rank[order] = np.arange(n_entries, dtype=np.int32)
+    return code_to_rank
+
+
 def _dict_rank_hash(dictionary) -> str:
     """Stable hash of a dictionary's entries (code position + value).
 
@@ -72,6 +89,79 @@ def _dict_rank_hash(dictionary) -> str:
     for i, value in enumerate(dictionary):
         h.update(repr((i, value)).encode("utf-8"))
     return h.hexdigest()
+
+
+#: Rows factorized per pass when building a utf8 rank index.  Bounds the
+#: transient code buffer without changing the result.
+_UTF8_RANK_SPAN = 1 << 20
+
+
+def _utf8_rank_arrays(col, n_phys: int, null_value: str | None):
+    """Alphabetical rank per row for a utf8 column, plus its staleness metadata.
+
+    Sorting by rank is sorting by decoded string, so an ``int32`` rank column
+    can drive the whole numeric index machinery unchanged — the same trick
+    :class:`_DictRankWrapper` plays for dictionary columns.  Unlike a dictionary
+    there is no stored code array, so the column is factorized here; the
+    factorizer hashes raw bytes and only ever decodes the distinct values.
+
+    Null rows carry a sentinel *string*, so the sentinel is just another
+    vocabulary entry; it is given the largest rank so nulls sort last, matching
+    both the dictionary index and ``_build_lex_keys``.
+    """
+    fact = col.factorizer()
+    codes = np.empty(n_phys, dtype=np.int64)
+    for start in range(0, n_phys, _UTF8_RANK_SPAN):
+        stop = min(start + _UTF8_RANK_SPAN, n_phys)
+        codes[start:stop] = fact.codes_for_span(start, stop)
+    uniques = fact.uniques()
+    n_entries = len(uniques)
+
+    is_null = uniques == null_value if null_value is not None else np.zeros(n_entries, dtype=bool)
+    non_null = np.flatnonzero(~is_null)
+    order = non_null[np.argsort(uniques[non_null], kind="stable")]
+    code_to_rank = np.empty(max(n_entries, 1), dtype=np.int32)
+    code_to_rank[order] = np.arange(len(order), dtype=np.int32)
+    null_rank = np.int32(len(order))
+    if is_null.any():
+        code_to_rank[is_null] = null_rank
+
+    # Rank order == alphabetical order, so this doubles as the lookup table that
+    # turns a query literal into a rank (np.searchsorted) without touching data.
+    sorted_vocab = uniques[order]
+    ranks = code_to_rank[codes] if n_entries else np.zeros(n_phys, dtype=np.int32)
+    # Staleness signals must be O(1) to check: re-deriving the vocabulary would
+    # mean factorizing the column again on every query.  Any write already marks
+    # every index stale, so these only have to catch a rebuilt-but-changed
+    # column, for which row count plus blob size is enough.
+    meta = {
+        "null_rank": int(null_rank),
+        "vocab_len": int(n_entries),
+        "n_rows": int(n_phys),
+        "nbytes": int(col._bytes_used),
+    }
+    return ranks.astype(np.int32, copy=False), meta, sorted_vocab
+
+
+def _persist_utf8_vocab(full: dict, meta: dict, sorted_vocab: np.ndarray) -> None:
+    """Store the rank-ordered vocabulary so a query literal can be turned into a rank.
+
+    Written beside the index's own sidecars when the table is persistent, and
+    inlined into the descriptor otherwise — the in-memory index path is for
+    small tables by construction.  Without it a literal→rank lookup would mean
+    factorizing the column again on every query.
+    """
+    if len(sorted_vocab) == 0:
+        meta["vocab"] = []
+        return
+    values_path = full.get("values_path")
+    if values_path is None:  # in-memory index
+        meta["vocab"] = sorted_vocab.tolist()
+        return
+    width = max(len(v) for v in sorted_vocab)
+    vocab_path = str(pathlib.Path(values_path).with_suffix("")) + ".utf8_vocab.b2nd"
+    blosc2.asarray(sorted_vocab.astype(f"<U{width}"), urlpath=vocab_path, mode="w")
+    meta["vocab_path"] = vocab_path
 
 
 class _DictRankWrapper:
@@ -91,7 +181,7 @@ class _DictRankWrapper:
         null_rank: np.int32,
         null_code: int,
         nullable: bool,
-        n_live: int,
+        n_phys: int,
     ):
         self._codes = codes  # int32 NDArray
         self._code_to_rank = code_to_rank  # int32 array mapping code -> rank
@@ -99,15 +189,17 @@ class _DictRankWrapper:
         self._null_code = null_code
         self._nullable = nullable
         self.dtype = np.dtype(np.int32)
-        # The codes array carries capacity padding beyond the live rows; expose only
-        # the live range so the index sidecars match n_rows (no padding → the
-        # zero-permutation window read engages instead of falling back).
-        self.shape = (n_live,)
+        # The codes array carries capacity padding beyond the written rows; expose
+        # only the physical extent so the index sidecars match n_rows (no padding →
+        # the zero-permutation window read engages instead of falling back).  It has
+        # to be the physical extent and not the live count: tombstoned rows keep
+        # their positions, so live rows can sit past the live count.
+        self.shape = (n_phys,)
         self.ndim = 1
-        chunk0 = codes.chunks[0] if codes.chunks else n_live
-        block0 = codes.blocks[0] if codes.blocks else n_live
-        self.chunks = (min(chunk0, n_live),)
-        self.blocks = (min(block0, n_live),)
+        chunk0 = codes.chunks[0] if codes.chunks else n_phys
+        block0 = codes.blocks[0] if codes.blocks else n_phys
+        self.chunks = (min(chunk0, n_phys),)
+        self.blocks = (min(block0, n_phys),)
 
     def __getitem__(self, key):
         codes_slice = np.asarray(self._codes[key], dtype=np.int32)
@@ -588,7 +680,7 @@ class _CTableIndexingMixin:
         field: str | None = None,
         expression: str | None = None,
         operands: dict | None = None,
-        kind: blosc2.IndexKind = blosc2.IndexKind.BUCKET,
+        kind: blosc2.IndexKind | None = None,
         optlevel: int = 5,
         name: str | None = None,
         build: str = "auto",
@@ -636,6 +728,12 @@ class _CTableIndexingMixin:
         lightest kind; it may still skip segments for broad range
         queries but cannot accelerate ``sort_by``.
 
+        When *kind* is omitted it defaults to ``BUCKET``, except on ``utf8()``
+        and ``dictionary()`` columns, which are indexed by alphabetical rank and
+        only ever consulted through a ``FULL`` index — there the default is
+        ``FULL``, and asking for any other kind raises ``ValueError`` rather
+        than building an index that nothing would use.
+
         .. rubric:: SUMMARY granularity
 
         For ``kind=SUMMARY``, ``granularity`` controls the segment size of the
@@ -676,6 +774,22 @@ class _CTableIndexingMixin:
             opsi_max_cycles = max(1, int(opsi_max_cycles))
         if kwargs:
             raise TypeError(f"unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+
+        # Rank-indexed flavours are only ever consulted through a FULL index, so
+        # the BUCKET default would hand them an index nothing can use.  Default
+        # per flavour, and remember whether the caller chose the kind: an
+        # explicit non-FULL request is an error rather than a silent promotion.
+        explicit_kind = kind is not None
+        if kind is None:
+            spec = None
+            if col_name is not None:
+                col_info = self._schema.columns_by_name.get(col_name)
+                spec = col_info.spec if col_info is not None else None
+            kind = (
+                blosc2.IndexKind.FULL
+                if isinstance(spec, (UTF8Spec, DictionarySpec))
+                else blosc2.IndexKind.BUCKET
+            )
 
         kind_str = _normalize_index_kind(kind)
         build_str = _normalize_build_mode(build)
@@ -750,12 +864,6 @@ class _CTableIndexingMixin:
             )
         if isinstance(self._schema.columns_by_name[col_name].spec, ListSpec):
             raise ValueError(f"Cannot create an index on list column {col_name!r} in V1.")
-        if isinstance(self._schema.columns_by_name[col_name].spec, Utf8Spec):
-            raise NotImplementedError(
-                f"Cannot create an index on variable-length utf8 column {col_name!r}: "
-                "indexing for utf8 columns is not supported yet. "
-                "Use a fixed-width string(max_length=N) column if you need an index."
-            )
         if isinstance(
             self._schema.columns_by_name[col_name].spec, (VLStringSpec, VLBytesSpec, StructSpec, ObjectSpec)
         ):
@@ -763,24 +871,54 @@ class _CTableIndexingMixin:
                 f"Cannot create an index on variable-length scalar column {col_name!r}: "
                 "indexing for vlstring/vlbytes/struct/object columns is not supported yet."
             )
+        # Rank-indexed flavours (utf8, dictionary) are queried through their own
+        # literal->rank lookup rather than through plan_query, and both that path
+        # and the ordering path require kind="full".  The other kinds build over
+        # the ranks without error and are then never consulted, so refuse them
+        # here rather than charge for an index nothing can use.
+        rank_spec = self._schema.columns_by_name[col_name].spec
+        if explicit_kind and kind_str != "full" and isinstance(rank_spec, (UTF8Spec, DictionarySpec)):
+            flavour = "utf8" if isinstance(rank_spec, UTF8Spec) else "dictionary"
+            raise ValueError(
+                f"Column {col_name!r} is a {flavour} column, which is indexed by alphabetical rank; "
+                f"only kind='full' consults that index, so kind={kind_str!r} would build but never "
+                "be used. Use kind='full'."
+            )
+        # utf8 columns: index the alphabetical rank of each row's value.  There is
+        # no stored code array to wrap lazily, so the ranks are materialized here
+        # (int32, 4 B/row) and handed to the builder as an ordinary array.
+        is_utf8 = isinstance(self._schema.columns_by_name[col_name].spec, UTF8Spec)
+        utf8_rank_meta = None
+        if is_utf8:
+            # Span the physical extent, not the live count: delete() tombstones in
+            # place, so live rows sit past _n_rows.  A utf8 column carries no
+            # capacity padding (__len__ is persisted + pending), and this is the
+            # same length _utf8_rank_index_stale() compares the meta against.
+            n_phys = len(col_arr)
+            ranks_arr, utf8_rank_meta, utf8_vocab = _utf8_rank_arrays(
+                col_arr, n_phys, self[col_name].null_value
+            )
+            col_arr = blosc2.asarray(ranks_arr)
+
         # Dictionary columns: index by alphabetical rank instead of insertion-order codes.
         is_dictionary = isinstance(self._schema.columns_by_name[col_name].spec, DictionarySpec)
         dict_rank_meta = None
         if is_dictionary:
             dict_col = col_arr
-            n_live = self._n_rows if self._n_rows is not None else len(self._valid_rows)
+            # Physical extent again, but len(dict_col) is the slot *capacity*, so
+            # take the live-data watermark instead: it covers every live row while
+            # still excluding the trailing padding.
+            n_phys = self._resolve_last_pos()
             dictionary = list(dict_col.dictionary)
             n_entries = len(dictionary)
-            order = np.argsort(dictionary, kind="stable")
-            code_to_rank = np.empty(n_entries, dtype=np.int32)
-            code_to_rank[order] = np.arange(n_entries, dtype=np.int32)
+            code_to_rank = _dict_code_to_rank(dictionary)
             null_code = dict_col.spec.null_code
             null_rank = np.int32(n_entries)
             # Hash for staleness detection.
             dict_hash = _dict_rank_hash(dictionary)
             dict_rank_meta = {"null_rank": int(null_rank), "dict_hash": dict_hash, "dict_len": n_entries}
             col_arr = _DictRankWrapper(
-                dict_col.codes, code_to_rank, null_rank, null_code, dict_col.spec.nullable, n_live
+                dict_col.codes, code_to_rank, null_rank, null_code, dict_col.spec.nullable, n_phys
             )
         is_persistent = self._storage.index_anchor_path(col_name) is not None
 
@@ -802,7 +940,7 @@ class _CTableIndexingMixin:
         else:
             # In-memory path: materialise ranks as a proper NDArray (small tables only).
             if is_dictionary:
-                codes = np.asarray(dict_col.codes[:n_live], dtype=np.int32)
+                codes = np.asarray(dict_col.codes[:n_phys], dtype=np.int32)
                 ranks_arr = code_to_rank[codes]
                 if dict_col.spec.nullable:
                     ranks_arr[codes == null_code] = null_rank
@@ -823,11 +961,15 @@ class _CTableIndexingMixin:
             )
             store = _IN_MEMORY_INDEXES[id(col_arr)]
             descriptor = _copy_descriptor(store["indexes"]["__self__"])
-        if dict_rank_meta is not None:
+        if dict_rank_meta is not None or utf8_rank_meta is not None:
             full = descriptor.setdefault("full", {})
             if full is None:
                 full = descriptor["full"] = {}
-            full["dict_rank"] = dict_rank_meta
+            if dict_rank_meta is not None:
+                full["dict_rank"] = dict_rank_meta
+            else:
+                _persist_utf8_vocab(full, utf8_rank_meta, utf8_vocab)
+                full["utf8_rank"] = utf8_rank_meta
 
         value_epoch, _ = self._storage.get_epoch_counters()
         descriptor["built_value_epoch"] = value_epoch

@@ -103,7 +103,7 @@ def test_asarray(a):
         np.testing.assert_allclose(a, b[:])
 
 
-def test_asarray_ndarray_persists_copy_when_urlpath_requested(tmp_path):
+def test_asarray_persists_copy_with_urlpath(tmp_path):
     array = blosc2.asarray(np.arange(10, dtype=np.int64), chunks=(5,), blocks=(2,))
     path = tmp_path / "persisted_copy.b2nd"
 
@@ -115,7 +115,8 @@ def test_asarray_ndarray_persists_copy_when_urlpath_requested(tmp_path):
     np.testing.assert_array_equal(persisted[:], array[:])
 
 
-def test_asarray_ndarray_copies_for_dtype_changes_and_rejects_copy_false(tmp_path):
+def test_asarray_dtype_change_copies_or_raises(tmp_path):
+    """A dtype change copies; asking for copy=False with one is an error."""
     array = blosc2.asarray(np.arange(10, dtype=np.int64), chunks=(5,), blocks=(2,))
 
     cast = blosc2.asarray(array, dtype=np.float32)
@@ -159,7 +160,7 @@ def test_array_copy_false_rejects_required_copy():
         blosc2.array(a, dtype=np.float64, copy=False)
 
 
-def test_array_copy_none_matches_asarray_for_compatible_ndarray():
+def test_array_copy_none_matches_asarray():
     a = blosc2.asarray([1, 2, 3])
 
     b = blosc2.array(a, copy=None)

@@ -82,7 +82,7 @@ def test_sort_accepts_nested_column_selector_from_view():
     np.testing.assert_array_equal(s["trip.sec"][:], [1, 2, 3, 4])
 
 
-def test_sort_projected_view_with_dictionary_column_above_default_capacity():
+def test_sort_projected_view_dict_over_capacity():
     n = 5000
     data = [(i, n - i, f"label-{i % 7}") for i in range(n)]
     t = CTable(DictSortRow, new_data=data)
@@ -97,7 +97,7 @@ def test_sort_projected_view_with_dictionary_column_above_default_capacity():
     assert "label" in str(sorted_view)
 
 
-def test_sort_accepts_column_selectors_in_multi_key_list():
+def test_sort_accepts_col_selectors_multi_key():
     t = CTable(Row, new_data=DATA)
 
     s = t.sort_by([t.score, t.id], ascending=[True, False])
@@ -377,7 +377,7 @@ def _loaded_columns(table) -> set[str]:
     return {name for name in table.col_names if dict.__contains__(table._cols, name)}
 
 
-def test_sort_unprojected_view_opens_only_needed_columns(tmp_path):
+def test_sort_unprojected_opens_needed_cols(tmp_path):
     """``where(cond).sort_by(key)`` without ``columns=`` used to gather every
     column of the view (~30x slower than projecting first).  It must open only
     the condition and sort-key columns, deferring the rest until read."""

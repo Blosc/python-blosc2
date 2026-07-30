@@ -40,7 +40,7 @@ def test_ndarray_column_metadata_and_tuple_indexing():
     np.testing.assert_array_equal(t.image[:, :, :, 0], np.stack([np.ones((2, 2)), np.full((2, 2), 2)]))
 
 
-def test_ndarray_column_comparison_and_scalar_operation_guards():
+def test_ndarray_col_comparison_scalar_guards():
     t = table()
 
     with pytest.raises(TypeError, match="Cannot compare ndarray column 'embedding' directly"):
@@ -55,7 +55,7 @@ def test_ndarray_column_comparison_and_scalar_operation_guards():
         t.create_index("embedding")
 
 
-def test_ndarray_column_axis_reductions_and_where_projection():
+def test_ndarray_col_axis_reductions_and_where():
     t = table()
 
     assert t.embedding.sum() == np.float32(21)
@@ -71,7 +71,8 @@ def test_ndarray_column_axis_reductions_and_where_projection():
     np.testing.assert_array_equal(filtered.id[:], np.array([2], dtype=np.int32))
 
 
-def test_generated_column_row_transformer_append_refresh_and_vector_output():
+def test_generated_col_transformer_lifecycle():
+    """Append, refresh, and a vector-returning transformer, in one lifecycle."""
     t = table()
 
     t.add_generated_column(
@@ -105,7 +106,7 @@ def test_generated_column_row_transformer_append_refresh_and_vector_output():
     np.testing.assert_allclose(t.image_mean_rgb[:], t.image[:].mean(axis=(1, 2)))
 
 
-def test_stale_generated_column_raises_and_read_stale_escape_hatch():
+def test_stale_generated_col_read_stale_hatch():
     t = table()
     t.add_generated_column(
         "embedding_sum",
@@ -141,7 +142,7 @@ class NullableNDArrayRow:
     codes: object = blosc2.field(blosc2.ndarray((2,), dtype=blosc2.int16(), nullable=True))
 
 
-def test_nullable_ndarray_columns_append_extend_assign_and_reduce():
+def test_nullable_ndarray_cols_write_and_reduce():
     t = blosc2.CTable(NullableNDArrayRow)
 
     t.append((1, np.array([1, 2, 3], dtype=np.float32), [4, 5]))
@@ -231,7 +232,7 @@ def test_nullable_ndarray_arrow_roundtrip():
     np.testing.assert_array_equal(rt.codes.is_null(), t.codes.is_null())
 
 
-def test_ndarray_column_setitem_blosc2_ndarray_no_holes():
+def test_ndarray_col_setitem_b2_no_holes():
     """col[:] = blosc2.NDArray fast path works for fixed-shape ndarray columns."""
     n = 50
 

@@ -66,7 +66,7 @@ def test_append_default_fill():
     assert t[0].id == 5
 
 
-def test_append_omitted_no_default_column_raises_clear_error():
+def test_append_omitted_no_default_raises():
     t = CTable(Row, expected_size=5)
     with pytest.raises(ValueError, match="no default declared"):
         t.append(())
@@ -109,14 +109,14 @@ def test_extend_le_violation():
         t.extend(data)
 
 
-def test_extend_omitted_columns_with_defaults_are_filled():
+def test_extend_omitted_defaults_are_filled():
     t = CTable(Row, expected_size=10)
     t.extend({"id": [1, 2]})
     assert list(t["score"][:]) == [0.0, 0.0]
     assert list(t["active"][:]) == [True, True]
 
 
-def test_extend_omitted_no_default_column_raises_clear_error():
+def test_extend_omitted_no_default_raises():
     t = CTable(Row, expected_size=10)
     with pytest.raises(ValueError, match="no default declared"):
         t.extend({"score": [1.0, 2.0]})

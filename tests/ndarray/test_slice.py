@@ -27,7 +27,7 @@ def test_detect_aligned_chunks_exact_multiple_shape():
     assert detect_aligned_chunks((slice(5, 10), slice(0, 10)), (10, 20), (5, 10)) == [2]
 
 
-def test_detect_aligned_chunks_non_exact_multiple_shape():
+def test_aligned_chunks_non_exact_multiple():
     # The bug repro: dim 1 (100_003) isn't a multiple of its chunk (40_000),
     # so its true chunk count is 3, not 100_003 // 40_000 == 2. Before the
     # fix this returned [2] (row 0, col chunk 2) instead of the correct [3]
@@ -35,14 +35,14 @@ def test_detect_aligned_chunks_non_exact_multiple_shape():
     assert detect_aligned_chunks((slice(1, 2), slice(0, 40_000)), (2, 100_003), (1, 40_000)) == [3]
 
 
-def test_detect_aligned_chunks_unaligned_slice_returns_empty():
+def test_aligned_chunks_unaligned_gives_empty():
     # A slice boundary that isn't a chunk multiple must short-circuit to [],
     # regardless of the n_chunks bug (this check runs before n_chunks is
     # even computed).
     assert detect_aligned_chunks((slice(1, 2), slice(0, 40_001)), (2, 100_003), (1, 40_000)) == []
 
 
-def test_detect_aligned_chunks_middle_dim_non_exact_multiple():
+def test_aligned_chunks_middle_dim_non_exact():
     # 3D, non-exact-multiple dim in the *middle* (not last) position, offset
     # in the first dim -- pins that the fix's multiplier chain is right in
     # general, not just for the 2D case (last dim == only non-first dim)
@@ -51,7 +51,7 @@ def test_detect_aligned_chunks_middle_dim_non_exact_multiple():
     assert detect_aligned_chunks(key, (4, 7, 5), (2, 3, 5)) == [3]
 
 
-def test_detect_aligned_chunks_multiple_non_exact_multiple_dims():
+def test_aligned_chunks_several_non_exact_dims():
     # Both non-first dims are non-exact-multiple at once.
     key = (slice(2, 4), slice(0, 3), slice(0, 4))
     assert detect_aligned_chunks(key, (4, 7, 11), (2, 3, 4)) == [9]
@@ -65,13 +65,13 @@ def test_detect_aligned_chunks_consecutive_true():
     assert detect_aligned_chunks(key, (10, 20), (5, 10), consecutive=True) == [0, 1, 2, 3]
 
 
-def test_detect_aligned_chunks_consecutive_true_not_consecutive():
+def test_aligned_chunks_consecutive_flag_false():
     # Same grid, a region whose chunks are NOT consecutive in flat order.
     key = (slice(0, 5), slice(0, 10))
     assert detect_aligned_chunks(key, (10, 30), (5, 10), consecutive=True) == [0]
 
 
-def test_detect_aligned_chunks_consecutive_true_non_exact_multiple_shape():
+def test_aligned_chunks_consecutive_non_exact():
     # The bug pattern (non-exact-multiple trailing dim) under
     # consecutive=True: before the fix, the corrupted flat indices could
     # come out consecutive when they shouldn't (or vice versa), since the

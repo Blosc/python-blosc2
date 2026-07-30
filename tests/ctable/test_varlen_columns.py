@@ -48,7 +48,7 @@ def test_list_column_display():
     assert "['x', 'y']" not in col_text
 
 
-def test_ctable_varlen_where_select_head_tail_and_compact():
+def test_varlen_where_select_head_tail_compact():
     t = blosc2.CTable(Product, new_data=DATA)
     view = t.where(t.qty >= 2)
     assert view.tags[:] == [[], None, ["z"]]

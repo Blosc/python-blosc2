@@ -107,7 +107,7 @@ def test_open(urlpath, shape, chunks, blocks, slices, dtype):
     blosc2.remove_urlpath(proxy_urlpath)
 
 
-def test_open_readonly_proxy_keeps_cache_and_source_readonly(tmp_path):
+def test_readonly_proxy_keeps_both_readonly(tmp_path):
     source_path = tmp_path / "source.b2nd"
     proxy_path = tmp_path / "proxy.b2nd"
     data = np.arange(120, dtype=np.int32).reshape(12, 10)

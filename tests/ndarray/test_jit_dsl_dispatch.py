@@ -34,7 +34,7 @@ def _mandel_grid():
     return cr, ci
 
 
-def test_jit_control_flow_dispatches_to_dsl_and_matches_numpy(monkeypatch, capsys):
+def test_control_flow_dispatches_to_dsl(monkeypatch, capsys):
     @blosc2.jit
     def mandel(cr, ci, max_iter):
         zr = 0.0
@@ -101,7 +101,7 @@ def test_jit_elementwise_function_still_traces(monkeypatch):
     assert calls == []  # no control flow -> never routed through the DSL/lazyudf path
 
 
-def test_jit_strict_true_on_elementwise_dsl_valid_function_uses_dsl(monkeypatch):
+def test_strict_true_elementwise_uses_dsl(monkeypatch):
     calls = []
     import blosc2.proxy as proxy_mod
 
@@ -124,7 +124,7 @@ def test_jit_strict_true_on_elementwise_dsl_valid_function_uses_dsl(monkeypatch)
     assert calls  # dispatched through the DSL wrapper
 
 
-def test_jit_strict_true_on_non_dsl_function_raises_at_decoration_time():
+def test_strict_true_non_dsl_raises_early():
     with pytest.raises(Exception, match="axis"):
 
         @blosc2.jit(strict=True)
@@ -145,7 +145,7 @@ def test_jit_strict_false_on_control_flow_traces():
     np.testing.assert_allclose(res, a + b)
 
 
-def test_jit_control_flow_on_python_scalar_flag_still_traces():
+def test_control_flow_scalar_flag_still_traces():
     @blosc2.jit
     def scalar_flag(a, b, flag):
         if flag:
@@ -156,6 +156,34 @@ def test_jit_control_flow_on_python_scalar_flag_still_traces():
     b = np.arange(100, dtype=np.float64) * 0.5
     np.testing.assert_allclose(scalar_flag(a, b, True), a + b)
     np.testing.assert_allclose(scalar_flag(a, b, False), a - b)
+
+
+def test_trace_hint_keeps_the_original_error():
+    """A hint must not replace the failure it annotates.
+
+    The hint used to be re-raised as ``type(e)(msg)``, which assumes a
+    one-argument constructor; anything needing more surfaced as a TypeError
+    about that constructor and the real error was lost.
+    """
+
+    class TwoArgError(Exception):
+        def __init__(self, code, detail):
+            super().__init__(f"{code}: {detail}")
+            self.code = code
+
+    @blosc2.jit
+    def cf_func(a, b, flag):
+        if flag:
+            raise TwoArgError(7, "boom")
+        return a - b
+
+    a = np.arange(10, dtype=np.float64)
+    with pytest.raises(TwoArgError) as excinfo:
+        cf_func(a, a, True)
+    assert excinfo.value.code == 7
+    assert "boom" in str(excinfo.value)
+    # The hint still reaches the user, as a note on the original exception.
+    assert any("control flow" in note for note in getattr(excinfo.value, "__notes__", []))
 
 
 def test_jit_dsl_route_rejects_broadcasting():
@@ -177,7 +205,7 @@ def _kernel_src(a, b, n):
     return acc
 
 
-def test_jit_dsl_route_out_numpy_c_contiguous_filled_in_place():
+def test_out_numpy_contiguous_filled_in_place():
     a = np.arange(1000, dtype=np.float64)
     b = np.arange(1000, dtype=np.float64) * 0.5
     out = np.empty(1000, dtype=np.float64)
@@ -187,7 +215,7 @@ def test_jit_dsl_route_out_numpy_c_contiguous_filled_in_place():
     np.testing.assert_allclose(out, (a + b) * 3)
 
 
-def test_jit_dsl_route_out_numpy_non_contiguous_uses_copyto_fallback():
+def test_out_numpy_non_contiguous_uses_copyto():
     a = np.arange(1000, dtype=np.float64)
     b = np.arange(1000, dtype=np.float64) * 0.5
     out = np.empty(2000, dtype=np.float64)[::2]
@@ -198,7 +226,7 @@ def test_jit_dsl_route_out_numpy_non_contiguous_uses_copyto_fallback():
     np.testing.assert_allclose(out, (a + b) * 3)
 
 
-def test_jit_dsl_route_out_mismatched_shape_or_dtype_raises_typeerror():
+def test_out_mismatched_shape_or_dtype_raises():
     a = np.arange(1000, dtype=np.float64)
     b = np.arange(1000, dtype=np.float64) * 0.5
 
@@ -209,7 +237,7 @@ def test_jit_dsl_route_out_mismatched_shape_or_dtype_raises_typeerror():
         blosc2.jit(out=np.empty(1000, dtype=np.float32))(_kernel_src)(a, b, 3)
 
 
-def test_jit_dsl_route_ndarray_out_raises_not_implemented_mentioning_urlpath():
+def test_ndarray_out_raises_and_names_urlpath():
     a = np.arange(1000, dtype=np.float64)
     b = np.arange(1000, dtype=np.float64) * 0.5
     nd_out = blosc2.zeros((1000,), dtype=np.float64)
@@ -228,7 +256,7 @@ def test_jit_dsl_route_compute_urlpath_persists_result(tmp_path):
     np.testing.assert_allclose(reopened[:], (a + b) * 3)
 
 
-def test_jit_dsl_route_ndarray_operands_match_numpy_operands():
+def test_ndarray_operands_match_numpy():
     a = np.arange(1000, dtype=np.float64)
     b = np.arange(1000, dtype=np.float64) * 0.5
     na = blosc2.asarray(a)
@@ -239,7 +267,7 @@ def test_jit_dsl_route_ndarray_operands_match_numpy_operands():
     np.testing.assert_array_equal(res_numpy, res_ndarray)
 
 
-def test_jit_dsl_route_execution_tuning_kwarg_alone_keeps_numpy_return():
+def test_tuning_kwarg_alone_keeps_numpy_return():
     # Same rule as the tracing route: jit/jit_backend/fp_accuracy tune execution,
     # not the return container, so they must not force an NDArray on their own.
     jit_f = blosc2.jit(jit=False)(_kernel_src)
@@ -250,7 +278,7 @@ def test_jit_dsl_route_execution_tuning_kwarg_alone_keeps_numpy_return():
     np.testing.assert_allclose(res, (a + b) * 3)
 
 
-def test_jit_dsl_route_execution_tuning_kwarg_with_storage_kwarg_still_returns_ndarray():
+def test_tuning_plus_storage_kwarg_gives_ndarray():
     jit_f = blosc2.jit(jit=False, cparams=blosc2.CParams(clevel=2))(_kernel_src)
     a = np.arange(1000, dtype=np.float64)
     b = np.arange(1000, dtype=np.float64) * 0.5

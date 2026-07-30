@@ -43,7 +43,7 @@ def test_where_column_arithmetic_can_be_composed():
     np.testing.assert_array_equal(view.value[:], np.array([20, 30, 2], dtype=np.int32))
 
 
-def test_where_column_expression_accepts_transcendental_functions():
+def test_where_col_expr_accepts_transcendentals():
     t = blosc2.CTable(Row, new_data=DATA)
 
     view = t.where(((t.value + 2) * blosc2.sin(t.category)) >= 10)
@@ -51,7 +51,7 @@ def test_where_column_expression_accepts_transcendental_functions():
     np.testing.assert_array_equal(view.value[:], np.array([10, 20], dtype=np.int32))
 
 
-def test_where_string_expression_accepts_transcendental_functions():
+def test_where_str_expr_accepts_transcendentals():
     t = blosc2.CTable(Row, new_data=DATA)
 
     view = t.where("(value + 2) * sin(category) >= 10")
@@ -59,7 +59,7 @@ def test_where_string_expression_accepts_transcendental_functions():
     np.testing.assert_array_equal(view.value[:], np.array([10, 20], dtype=np.int32))
 
 
-def test_where_string_expression_can_reference_computed_columns():
+def test_where_str_expr_uses_computed_cols():
     t = blosc2.CTable(Row, new_data=DATA)
     t.add_computed_column("score", "value * category")
 

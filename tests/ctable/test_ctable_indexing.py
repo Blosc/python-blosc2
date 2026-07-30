@@ -103,7 +103,7 @@ def test_where_with_index_matches_scan_in_memory():
 
 
 @pytest.mark.heavy
-def test_indexed_where_view_sort_by_reuses_cached_live_positions(monkeypatch):
+def test_indexed_where_sort_by_reuses_live_pos(monkeypatch):
     t = _make_table(200)
     t.create_index("id", kind=blosc2.IndexKind.FULL)
 
@@ -128,7 +128,7 @@ def test_create_expression_index_in_memory():
 
 
 @pytest.mark.heavy
-def test_where_with_expression_index_matches_scan_in_memory():
+def test_where_expr_index_matches_scan():
     t = _make_table(200)
     t.create_index(expression="value * category", kind=blosc2.IndexKind.FULL, name="vc")
     result_idx = t.where((t._cols["value"] * t._cols["category"]) >= 150)
@@ -196,7 +196,7 @@ def test_stale_on_column_assign_in_memory():
     assert t.index("id").stale
 
 
-def test_delete_bumps_visibility_epoch_not_stale_in_memory():
+def test_delete_bumps_epoch_not_stale():
     t = _make_table(20)
     t.create_index("id")
     t.delete(0)
@@ -226,7 +226,7 @@ def test_compact_index_in_memory():
 
 
 @pytest.mark.heavy
-def test_multi_column_conjunction_uses_multiple_indexes_in_memory():
+def test_conjunction_uses_multiple_indexes():
     t = _make_table(200)
     t.create_index("id", kind=blosc2.IndexKind.FULL)
     t.create_index("category", kind=blosc2.IndexKind.FULL)
@@ -240,7 +240,7 @@ def test_multi_column_conjunction_uses_multiple_indexes_in_memory():
     assert ids_idx == ids_scan
 
 
-def test_full_index_large_ctable_column_matches_scan_in_memory():
+def test_full_index_large_column_matches_scan():
     @dataclasses.dataclass
     class SensorRow:
         sensor_id: int = blosc2.field(blosc2.int32())
@@ -288,7 +288,7 @@ def test_create_index_persistent(tmpdir):
     assert sidecars, "No sidecar .b2nd files found"
 
 
-def test_create_index_persistent_does_not_cache_sidecar_handles(tmpdir):
+def test_create_index_does_not_cache_sidecars(tmpdir):
     import blosc2.indexing as indexing
 
     path = str(tmpdir / "table.b2d")
@@ -303,7 +303,7 @@ def test_create_index_persistent_does_not_cache_sidecar_handles(tmpdir):
     assert cached == []
 
 
-def test_persistent_ctable_releases_immediately_without_gc(tmpdir):
+def test_persistent_releases_without_gc(tmpdir):
     path = str(tmpdir / "table.b2d")
 
     def build_table():
@@ -372,7 +372,7 @@ def test_where_with_index_matches_scan_persistent(tmpdir):
 
 
 @pytest.mark.heavy
-def test_relative_b2d_ctable_index_sidecars_survive_reopen(tmp_path, monkeypatch):
+def test_relative_b2d_sidecars_survive_reopen(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     t = _make_table(200, persistent_path="table.b2d")
     t.create_index("id", kind=blosc2.IndexKind.BUCKET)
@@ -385,7 +385,7 @@ def test_relative_b2d_ctable_index_sidecars_survive_reopen(tmp_path, monkeypatch
 
 
 @pytest.mark.heavy
-def test_persistent_index_drop_releases_sidecars_without_gc(tmpdir):
+def test_index_drop_releases_sidecars_no_gc(tmpdir):
     import gc
 
     def run_query_and_drop():
@@ -434,7 +434,7 @@ def test_expression_index_persistent_roundtrip(tmpdir):
     assert len(result) > 0
 
 
-def test_sort_by_computed_column_with_expression_full_index():
+def test_sort_by_computed_col_full_index():
     t = _make_table(40)
     t.add_computed_column("score", "value * category")
     t.create_index(expression="value * category", kind=blosc2.IndexKind.FULL, name="score_expr")
@@ -462,7 +462,7 @@ def test_drop_index_persistent_catalog_cleared(tmpdir):
     assert len(t2.indexes) == 0
 
 
-def test_drop_indexed_column_removes_persistent_sidecars(tmpdir):
+def test_drop_indexed_col_removes_sidecars(tmpdir):
     path = str(tmpdir / "table.b2d")
     t = _make_table(30, persistent_path=path)
     t.create_index("id")
@@ -539,7 +539,7 @@ def test_query_after_reopen_persistent(tmpdir):
     assert ids == list(range(91, 100))
 
 
-def test_rename_indexed_column_rebuilds_catalog_persistent(tmpdir):
+def test_rename_indexed_col_rebuilds_catalog(tmpdir):
     path = str(tmpdir / "table.b2d")
     t = _make_table(40, persistent_path=path)
     t.create_index("id")
@@ -629,7 +629,7 @@ def test_indexes_multiple_columns():
     assert col_names == {"id", "category"}
 
 
-def test_indexed_ctable_b2z_double_open_append_no_corruption(tmp_path):
+def test_b2z_double_open_append_no_corruption(tmp_path):
     """Opening an indexed CTable .b2z in append mode twice must not corrupt it.
 
     Regression test: GC of a CTable opened from .b2z was calling close() →
@@ -688,7 +688,8 @@ def test_indexing_purges_stale_persistent_caches():
     assert all(tmpdir not in path for path in indexing._GATHER_MMAP_HANDLES)
 
 
-def test_indexing_purge_tolerates_reentrant_sidecar_handle_cache_mutation(monkeypatch):
+def test_purge_tolerates_reentrant_cache_change(monkeypatch):
+    """Purging survives a sidecar handle cache mutated re-entrantly mid-purge."""
     import blosc2.indexing as indexing
 
     stale_scope = ("persistent", "/tmp/stale-index.b2nd")
@@ -713,7 +714,7 @@ def test_indexing_purge_tolerates_reentrant_sidecar_handle_cache_mutation(monkey
     indexing._SIDECAR_HANDLE_CACHE.pop(injected_key, None)
 
 
-def test_summary_index_compact_store_no_cross_column_confusion(tmp_path):
+def test_summary_compact_no_cross_column_mixup(tmp_path):
     """Regression: a SUMMARY index on one column of a compact (.b2z) store must
     not be applied to a *different* column's predicate.
 
@@ -756,7 +757,7 @@ def test_summary_index_compact_store_no_cross_column_confusion(tmp_path):
     assert got == expected, f"index returned {got}, expected {expected} (scan)"
 
 
-def test_sidecar_handle_cache_no_cross_column_collision(tmp_path):
+def test_sidecar_cache_no_cross_col_collision(tmp_path):
     """Regression: in a compact (.b2z) multi-column store, reading the SUMMARY
     block sidecar handle for each column must return *that* column's data, not
     a sibling's.
@@ -900,7 +901,7 @@ def test_incremental_summary_matches_ooc_build(tmp_path):
         assert np.allclose(a["max"], b["max"], equal_nan=True)
 
 
-def test_incremental_summary_invalidated_by_inplace_update(tmp_path):
+def test_incremental_summary_stale_on_inplace(tmp_path):
     """An in-place column write before close must invalidate the accumulator so
     the builder falls back to a correct full rescan."""
     f, i = _build_incr_data(n=4000)
@@ -934,7 +935,7 @@ def test_granularity_only_valid_for_summary():
 
 @pytest.mark.heavy
 @pytest.mark.parametrize("threshold", [5.0, 50.0, 99.0, 99.99])
-def test_summary_cost_gate_correctness_across_selectivity(threshold):
+def test_summary_cost_gate_across_selectivity(threshold):
     """The SUMMARY cost gate may use the index (selective query) or fall back to
     a scan (broad query); both branches must return scan-correct results."""
     t, _ = _make_gran_table(n=6000)
@@ -1103,7 +1104,7 @@ def test_cross_column_or_prunes_segments_compact_b2z(tmp_path, monkeypatch):
     assert pruned, "cross-column OR fell back to a full scan instead of pruning"
 
 
-def test_cross_column_predicates_match_scan_compact_b2z(tmp_path):
+def test_cross_column_preds_match_scan_b2z(tmp_path):
     """Cross-column AND/OR over two SUMMARY-indexed columns must match the
     boolean-mask (no-index) result across selective, non-selective, empty, and
     mixed-direction predicates."""
@@ -1141,7 +1142,7 @@ def _seg_plan(units, *, base_nrows=1000, segment_len=250, level="block"):
     )
 
 
-def test_merge_segment_plans_intersection_union_and_fallback():
+def test_merge_segment_plans_and_fallback():
     """Unit-level guard for the cross-column merge semantics."""
     from blosc2.indexing import _merge_segment_plans
 
@@ -1160,3 +1161,318 @@ def test_merge_segment_plans_intersection_union_and_fallback():
     assert _merge_segment_plans(coarse, fine, "and") is fine  # fine prunes more
     assert _merge_segment_plans(fine, coarse, "and") is fine
     assert _merge_segment_plans(coarse, fine, "or") is None
+
+
+# ---------------------------------------------------------------------------
+# String index summaries wider than 255 bytes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("max_length", [16, 31, 32, 64, 100])
+@pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "full", "opsi"])
+def test_string_index_matches_unindexed_scan(max_length, kind):
+    """An index must never change a query's answer.
+
+    A segment summary is a ``(min, max, flags)`` record, so a ``<Un`` column
+    makes it ``8*n + 1`` bytes -- 257 for the *default* ``max_length=32``.
+    c-blosc2 caps a typesize above 255 to 1 in the chunk header, and the
+    sidecar reader asked ``blosc2_getitem_ctx()`` in element units, so those
+    summaries decoded to garbage and pruned every candidate away: indexed
+    queries returned zero rows, silently, on the default string width.
+    """
+
+    @dataclasses.dataclass
+    class StrRow:
+        name: str = blosc2.field(blosc2.string(max_length=max_length))
+        x: int = blosc2.field(blosc2.int64())
+
+    values = [f"c{i % 20:02d}" for i in range(5000)]
+    t = blosc2.CTable(StrRow, new_data={"name": values, "x": list(range(len(values)))})
+
+    queries = [
+        "name == 'c07'",
+        "name != 'c07'",
+        "name < 'c10'",
+        "name >= 'c10'",
+        "(name > 'c05') & (name <= 'c08')",
+    ]
+    expected = {q: sorted(int(v) for v in t.where(q)["x"][:]) for q in queries}
+    assert expected["name == 'c07'"], "fixture should match some rows"
+
+    t.create_index(col_name="name", kind=blosc2.IndexKind(kind))
+    for q in queries:
+        assert sorted(int(v) for v in t.where(q)["x"][:]) == expected[q], q
+
+
+def test_wide_sidecar_span_read_is_not_short():
+    """get_1d_span_numpy() must fill the whole destination, not part of it.
+
+    A short read used to leave the tail uninitialised rather than raise.
+    """
+    dtype = np.dtype([("min", "<U32"), ("max", "<U32"), ("flags", np.uint8)])
+    assert dtype.itemsize > 255, "the point of this test is a capped typesize"
+    values = np.zeros(500, dtype=dtype)
+    values["min"] = [f"lo-{i:04d}" for i in range(500)]
+    values["max"] = [f"hi-{i:04d}" for i in range(500)]
+    values["flags"] = np.arange(500) % 251
+
+    arr = blosc2.asarray(values, chunks=(128,))
+    out = np.empty(100, dtype=dtype)
+    arr.get_1d_span_numpy(out, 1, 5, 100)
+    assert out.tolist() == values[128 + 5 : 128 + 105].tolist()
+
+
+def test_coalesce_spans_merges_within_a_block():
+    """Spans closer than one block must merge: reading them apart re-reads the block."""
+    coalesce = blosc2.indexing._coalesce_spans
+    spans = [(0, 100), (200, 300), (50_000, 50_100)]
+    assert coalesce(spans, 1024) == [(0, 300), (50_000, 50_100)]
+    assert coalesce(spans, 0) == spans  # unknown block size → leave alone
+    assert coalesce([(0, 10)], 1024) == [(0, 10)]
+    # merged spans stay disjoint and ordered, so gathered positions stay unique
+    merged = coalesce([(0, 100), (10, 400), (401, 402)], 1024)
+    assert merged == [(0, 402)]
+
+
+def test_bucket_gate_counts_blocks_not_buckets():
+    """Selectivity in buckets overstates the saving; the read unit is the block."""
+    frac = blosc2.indexing._bucket_block_fraction
+    geom = {"nav_segment_len": 16384, "bucket_len": 256}  # 64 buckets per block
+
+    scattered = np.zeros((1, 640), dtype=bool)
+    scattered[0, ::64] = True  # 1.6% of buckets, but one in every block
+    assert frac(scattered, geom) == 1.0
+
+    clustered = np.zeros((1, 640), dtype=bool)
+    clustered[0, 0:64] = True  # 10% of buckets, all inside one block
+    assert frac(clustered, geom) == 0.1
+
+    assert frac(np.zeros((1, 640), dtype=bool), geom) == 0.0
+
+    # A bucket at least as wide as a block covers whole blocks, so the fraction of
+    # blocks read is just the fraction of buckets selected -- not, as it once was,
+    # the fraction of *chunks* touched (or a flat 1.0 for a 1-D mask), both of which
+    # overstate the cost and decline plans the index exists to serve.
+    for bucket_len in (16384, 32768):  # one block per bucket, and two
+        wide = {"nav_segment_len": 16384, "bucket_len": bucket_len}
+        selective = np.zeros((1, 10), dtype=bool)
+        selective[0, 0] = True
+        assert frac(selective, wide) == 0.1
+        assert frac(selective[0], wide) == 0.1  # 1-D mask, same answer
+
+
+def test_bucket_plan_gate_matches_block_fraction():
+    """The planner must take a bucket plan only when it prunes actual blocks."""
+    rng = np.random.default_rng(0)
+    n, card = 200_000, 5_000
+    pool = sorted(f"v-{i:05d}" for i in range(card))
+
+    @dataclasses.dataclass
+    class Row:
+        c: str = blosc2.field(blosc2.string(max_length=8))
+        v: float = blosc2.field(blosc2.float64())
+
+    def table(values, kind):
+        t = blosc2.CTable(Row)
+        t.extend({"c": values, "v": rng.random(n)}, validate=False)
+        if kind:
+            t.create_index("c", kind=kind)
+        return t
+
+    query = f"(c >= '{pool[100]}') & (c < '{pool[120]}')"
+    values = [pool[i] for i in rng.integers(0, card, n)]
+
+    seen = []
+    original = blosc2.indexing._plan_single_exact_query
+
+    def capture(exact_plan):
+        plan = original(exact_plan)
+        if plan.bucket_masks is not None:
+            fraction = blosc2.indexing._bucket_block_fraction(
+                plan.bucket_masks, exact_plan.descriptor["bucket"]
+            )
+            seen.append((plan.usable, fraction))
+        return plan
+
+    blosc2.indexing._plan_single_exact_query = capture
+    try:
+        indexed = sorted(table(values, "bucket").where(query)["c"][:].tolist())
+    finally:
+        blosc2.indexing._plan_single_exact_query = original
+
+    assert seen, "no bucket plan was considered"
+    for usable, fraction in seen:
+        gate = blosc2.indexing._BUCKET_MAX_BLOCK_FRACTION
+        assert usable == (fraction <= gate), f"took={usable} at block fraction {fraction}"
+
+    # Whichever way the gate goes, the answer is the same as an unindexed scan.
+    assert indexed == sorted(table(values, None).where(query)["c"][:].tolist())
+
+
+# ---------------------------------------------------------------------------
+# Summary min()/max() shortcut: live rows only
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class MinMaxRow:
+    c: str = blosc2.field(blosc2.string(max_length=11))
+    n: int = blosc2.field(blosc2.int64())
+    f: float = blosc2.field(blosc2.float64())
+
+
+def _minmax_table(path, n, kind="summary"):
+    t = blosc2.CTable(MinMaxRow, urlpath=str(path), mode="w")
+    strings = [f"taxi-{i % 997:05d}" for i in range(n)]
+    t.extend({"c": strings, "n": np.arange(n) + 5, "f": (np.arange(n) + 5) * 1.5})
+    if kind is not None:
+        for col in ("c", "n", "f"):
+            t.create_index(col, kind=kind)
+    return t, strings
+
+
+# 16384 is the block length these columns get, so these straddle, exactly fill,
+# and fall short of a block boundary respectively.
+@pytest.mark.parametrize("n", [5, 1000, 16384, 16385, 100_000])
+def test_summary_minmax_ignores_capacity_padding(tmpdir, n):
+    """Padded slots hold 0/'' and must not be reported as the column minimum."""
+    t, strings = _minmax_table(tmpdir / f"pad{n}.b2t", n)
+    assert len(t._valid_rows) > t._n_rows or n == len(t._valid_rows)  # padding present
+    assert t["c"].min() == min(strings)
+    assert t["c"].max() == max(strings)
+    assert t["n"].min() == 5
+    assert t["n"].max() == n + 4
+    assert t["f"].min() == 7.5
+
+
+@pytest.mark.parametrize("n", [5, 1000, 16385, 100_000])
+def test_summary_minmax_matches_unindexed_scan(tmpdir, n):
+    indexed, _ = _minmax_table(tmpdir / f"i{n}.b2t", n)
+    scan, _ = _minmax_table(tmpdir / f"s{n}.b2t", n, kind=None)
+    for col in ("c", "n", "f"):
+        assert indexed[col].min() == scan[col].min()
+        assert indexed[col].max() == scan[col].max()
+
+
+def test_summary_minmax_declines_after_delete(tmpdir):
+    """delete() leaves the index usable for queries but the deleted row still
+    sits in its block, so the summary shortcut must stand down."""
+    t, _ = _minmax_table(tmpdir / "del.b2t", 100_000)
+    assert t["n"].min() == 5
+    t.delete(0)  # drop the unique minimum
+    assert t["n"].min() == 6
+    t.delete(t._n_rows - 1)  # drop the unique maximum (values now run 6..100003)
+    assert t["n"].max() == 100_003
+    assert t["c"].min() == min(t["c"][:].tolist())
+
+
+def test_summary_minmax_declines_when_built_over_holes(tmpdir):
+    """A row deleted *before* the build is still in its block when the summary is
+    written, so a fresh index over a holey column must not enable the shortcut."""
+    t, _ = _minmax_table(tmpdir / "prebuilt.b2t", 100_000, kind=None)
+    t.delete(slice(0, 1000))  # drop the 1000 smallest
+    for col in ("c", "n", "f"):
+        t.create_index(col, kind="summary")
+    assert t["n"]._summary_minmax_source() is None
+    assert t["n"].min() == 1005
+    assert t["n"].max() == 100_004
+    assert t["c"].min() == min(t["c"][:].tolist())
+
+
+def test_summary_minmax_shortcut_still_taken(tmpdir):
+    """The padding fix must not disable the shortcut on the common padded table."""
+    t, _ = _minmax_table(tmpdir / "fast.b2t", 100_000)
+    assert t["n"]._summary_minmax_source() is not None
+    assert t["n"]._index_summary_minmax("min") is not NotImplemented
+    t.delete(0)
+    assert t["n"]._summary_minmax_source() is None
+
+
+def test_summary_minmax_nullable_nan_float(tmpdir):
+    """A NaN-sentinel float is the one nullable column the shortcut accepts;
+    padding is 0.0 there, which is not NaN and would pass as a real value."""
+
+    @dataclasses.dataclass
+    class NanRow:
+        f: float = blosc2.field(blosc2.float64(nullable=True, null_value=float("nan")))
+
+    t = blosc2.CTable(NanRow, urlpath=str(tmpdir / "nan.b2t"), mode="w")
+    vals = (np.arange(50_000) + 5) * 1.5
+    vals[:10] = np.nan  # leading nulls
+    t.extend({"f": vals})
+    t.create_index("f", kind="summary")
+    assert t["f"].min() == np.nanmin(vals)
+    assert t["f"].max() == np.nanmax(vals)
+
+
+# ---------------------------------------------------------------------------
+# Rank-indexed flavours accept kind="full" only
+# ---------------------------------------------------------------------------
+
+
+_needs_string_dtype = pytest.mark.skipif(
+    not hasattr(np.dtypes, "StringDType"),
+    reason="utf8 columns require NumPy >= 2.0 (StringDType)",
+)
+
+if hasattr(np.dtypes, "StringDType"):
+
+    @dataclasses.dataclass
+    class UTF8Row:
+        c: str = blosc2.field(blosc2.utf8())
+
+else:
+    # blosc2.utf8() raises on NumPy < 2.0, so the class cannot even be defined
+    # there.  Every parametrization using it carries _needs_string_dtype, so
+    # this placeholder is never dereferenced.
+    UTF8Row = None
+
+
+@dataclasses.dataclass
+class DictRow:
+    c: str = blosc2.field(blosc2.dictionary())
+
+
+#: The two flavours whose indexes are rank-based, utf8 skipped on NumPy 1.x.
+RANK_FLAVOURS = [
+    pytest.param(UTF8Row, "utf8", marks=_needs_string_dtype),
+    pytest.param(DictRow, "dictionary"),
+]
+
+
+@pytest.mark.parametrize(("row_cls", "flavour"), RANK_FLAVOURS)
+@pytest.mark.parametrize("kind", ["summary", "bucket", "partial", "opsi"])
+def test_rank_index_rejects_non_full_kind(tmpdir, row_cls, flavour, kind):
+    """These build over the int32 ranks without error and are then never
+    consulted, so they must be refused rather than silently useless."""
+    t = blosc2.CTable(row_cls, urlpath=str(tmpdir / f"{flavour}_{kind}.b2t"), mode="w")
+    t.extend({"c": [f"v{i % 50:03d}" for i in range(2000)]})
+    with pytest.raises(ValueError, match=f"{flavour} column.*kind='full'"):
+        t.create_index("c", kind=kind)
+    assert "c" not in t._get_index_catalog()
+
+
+@pytest.mark.parametrize(("row_cls", "flavour"), RANK_FLAVOURS)
+def test_rank_index_accepts_full_kind(tmpdir, row_cls, flavour):
+    t = blosc2.CTable(row_cls, urlpath=str(tmpdir / f"{flavour}_full.b2t"), mode="w")
+    values = [f"v{i % 50:03d}" for i in range(2000)]
+    t.extend({"c": values})
+    t.create_index("c", kind="full")
+    assert t._get_index_catalog()["c"]["kind"] == "full"
+    # and it still answers correctly through the rank path
+    assert sorted(t[t["c"] == "v007"]["c"][:]) == [v for v in values if v == "v007"]
+
+
+@pytest.mark.parametrize(("row_cls", "flavour"), RANK_FLAVOURS)
+def test_rank_index_default_kind_is_full(tmpdir, row_cls, flavour):
+    """The BUCKET default would hand these flavours an unusable index."""
+    t = blosc2.CTable(row_cls, urlpath=str(tmpdir / f"{flavour}_def.b2t"), mode="w")
+    t.extend({"c": [f"v{i % 50:03d}" for i in range(2000)]})
+    t.create_index("c")  # no kind
+    assert t._get_index_catalog()["c"]["kind"] == "full"
+
+
+def test_default_kind_unchanged_for_other_columns(tmpdir):
+    t = _make_table(200, persistent_path=str(tmpdir / "def.b2t"))
+    t.create_index("id")
+    assert t._get_index_catalog()["id"]["kind"] == "bucket"

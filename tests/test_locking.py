@@ -685,7 +685,7 @@ def test_cross_process_multiwriter_ndarray_append(tmp_path):
     blosc2.remove_urlpath(urlpath)
 
 
-def test_cross_process_multiwriter_ndarray_append_sparse_nonaligned(tmp_path):
+def test_multiwriter_append_sparse_nonaligned(tmp_path):
     # Same bug class as test_cross_process_multiwriter_ndarray_append, but
     # on the two physical layouts that test didn't touch: sparse storage
     # (contiguous=False, each chunk its own file, a different rewrite path

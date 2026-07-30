@@ -690,7 +690,7 @@ def test_external_batcharray_support(tmp_path):
 
 
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
-def test_metadata_discovery_reopens_renamed_batcharray_leaf(storage_type, tmp_path):
+def test_discovery_reopens_renamed_batcharray(storage_type, tmp_path):
     store_path = tmp_path / f"test_batcharray_renamed.{storage_type}"
 
     with TreeStore(str(store_path), mode="w", threshold=0) as tstore:
@@ -1075,7 +1075,7 @@ def test_to_b2d_from_readonly_b2z(tmp_path):
         assert tstore.vlmeta["description"] == "tree metadata"
 
 
-def test_extensionless_tree_store_defaults_to_directory(tmp_path):
+def test_extensionless_store_is_a_directory(tmp_path):
     path = tmp_path / "test_tstore_extless"
 
     with TreeStore(str(path), mode="w") as tstore:
@@ -1456,7 +1456,7 @@ def test_ctable_values_collapses_object_roots(tmp_path, storage_type):
 
 
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
-def test_ctable_delete_parent_subtree_removes_nested_object(tmp_path, storage_type):
+def test_delete_parent_subtree_removes_nested(tmp_path, storage_type):
     """Deleting a normal subtree also deletes nested object roots and physical leaves."""
     path = str(tmp_path / f"bundle.{storage_type}")
     with blosc2.TreeStore(path, mode="w") as ts:
@@ -1492,7 +1492,7 @@ def test_ctable_inline_index_roundtrip(tmp_path, storage_type):
 
 
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
-def test_ctable_registry_missing_fallback_hides_and_protects_internals(tmp_path, storage_type):
+def test_registry_fallback_hides_and_protects(tmp_path, storage_type):
     """Physical CTable manifests are enough to detect object roots if registry is missing."""
     path = str(tmp_path / f"bundle.{storage_type}")
     with blosc2.TreeStore(path, mode="w") as ts:

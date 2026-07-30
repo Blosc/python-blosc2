@@ -36,7 +36,7 @@ def make_table(n=8):
     return t
 
 
-def test_ctable_take_preserves_order_duplicates_and_negative_indices():
+def test_take_keeps_order_dups_and_negatives():
     t = make_table(8)
     t.delete(2)
     t.delete(5)
@@ -83,7 +83,7 @@ def test_ctable_take_handles_varlen_and_list_columns():
     assert list(result["tags"][:]) == [[2, 20], [0], [2, 20], None]
 
 
-def test_column_take_preserves_order_duplicates_and_negative_indices():
+def test_col_take_keeps_order_dups_and_negs():
     t = make_table(8)
     t.delete(2)
     t.delete(5)
@@ -152,7 +152,7 @@ def test_column_take_rejects_bad_indices():
         col.take([4])
 
 
-def test_top_level_take_rejects_axis_for_ctable_and_column():
+def test_top_level_take_rejects_axis():
     t = make_table(4)
 
     with pytest.raises(ValueError, match="axis"):
@@ -193,7 +193,7 @@ def test_slice_copy_false_is_a_zero_copy_view():
     np.testing.assert_array_equal(view["id"][:], np.arange(2, 6, dtype=np.int32))
 
 
-def test_slice_copy_true_is_an_independent_compact_table():
+def test_slice_copy_true_is_independent():
     t = make_table(8)
     sub = t.slice(2, 6)  # copy=True by default
     assert sub._cols is not t._cols

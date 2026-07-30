@@ -26,7 +26,7 @@ def test_column_logical_metadata():
     assert view.x.size == 3
 
 
-def test_column_boolean_operators_build_lazy_expressions():
+def test_boolean_operators_build_lazy_exprs():
     t = blosc2.CTable(Row, new_data=DATA)
 
     view = t.where(t.flag & (t.x > 0))
