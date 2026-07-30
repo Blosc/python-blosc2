@@ -3637,9 +3637,6 @@ class LazyExpr(LazyArray):
         involved.  Returns None when no string is involved or miniexpr cannot
         compile the expression, leaving the numpy path in charge.
         """
-        cached = getattr(self, "_me_str_dtype_", None)
-        if cached is not None and self._me_str_expr_ == self.expression:
-            return cached[0]
         try:
             operands = self.operands
             if not operands or any(v is None for v in operands.values()):
@@ -3652,6 +3649,14 @@ class LazyExpr(LazyArray):
                 dtypes[k] = dt
             if not any(np.dtype(dt).kind in "US" for dt in dtypes.values()):
                 return None
+            # The width follows the operand dtypes, not just the expression text, so
+            # both go in the key: rebinding the same expression to wider operands
+            # must not be answered from the narrower build's cache.  Collecting the
+            # dtypes is cheap; what the key protects is the miniexpr compile below.
+            key = (self.expression, tuple((k, str(dt)) for k, dt in dtypes.items()))
+            cached = getattr(self, "_me_str_dtype_", None)
+            if cached is not None and self._me_str_key_ == key:
+                return cached[0]
             from blosc2 import blosc2_ext
 
             out = blosc2_ext.me_output_dtype(self.expression, dtypes)
@@ -3660,7 +3665,7 @@ class LazyExpr(LazyArray):
         if out is not None and np.dtype(out).kind not in "US":
             out = None
         self._me_str_dtype_ = (out,)
-        self._me_str_expr_ = self.expression
+        self._me_str_key_ = key
         return out
 
     @property

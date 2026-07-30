@@ -246,3 +246,21 @@ def test_block_larger_than_the_eval_block():
 
     got = ("x=" + arr).compute(strict_miniexpr=True)
     assert list(got[:]) == list(np_add("x=", values))
+
+
+def test_rebinding_wider_operands_rewidens():
+    # lazyexpr(expr, operands) rebinds the operands in place and leaves the
+    # expression text alone.  The inferred width follows the operand dtypes, so a
+    # width cached under the expression alone would size the output from the first,
+    # narrower binding and the concat would truncate.
+    narrow = np.array(["ab"] * 16, dtype="<U2")
+    expr = blosc2.asarray(narrow) + blosc2.asarray(narrow)
+    assert list(expr.operands) == ["o0", "o1"]
+    assert expr.dtype.itemsize == np.dtype("<U4").itemsize  # primes the cache
+
+    wide = np.array(["abcdefgh"] * 16, dtype="<U8")
+    expr = blosc2.lazyexpr(expr, {"o0": blosc2.asarray(wide), "o1": blosc2.asarray(wide)})
+    expected = np_add(wide, wide)
+    assert expr.dtype.itemsize >= expected.dtype.itemsize
+    got = expr.compute(strict_miniexpr=True)
+    assert list(got[:]) == list(expected)
