@@ -3013,12 +3013,16 @@ class Column:
         absent, or in-memory-only index.
 
         Appends mark the index stale, so they are covered.  Deletions are *not*
-        (``delete()`` bumps the visibility epoch and leaves the index usable for
-        queries), and a deleted row keeps contributing its value to the block it
-        sits in — so a visibility epoch that has moved since the index was built
-        disqualifies the shortcut.  Capacity padding *does* enter the summaries;
-        ``segment_len`` is returned so the caller can drop the padded tail and
-        rescan the one block that straddles the live/padded boundary.
+        (``delete()`` tombstones in place and leaves the index usable for
+        queries), and the summaries are built over the column's *physical*
+        array, where a tombstoned row keeps contributing its value to its
+        block — so any hole at all disqualifies the shortcut, whether it was
+        punched before or after the build.  With no holes the physical and
+        logical row numbers coincide, which is what lets the caller mix
+        summary blocks with a rescanned tail.  Capacity padding *does* enter
+        the summaries; ``segment_len`` is returned so the caller can drop the
+        padded tail and rescan the one block that straddles the live/padded
+        boundary.
         """
         table = self._table
         if table.base is not None:
@@ -3045,10 +3049,11 @@ class Column:
         desc = root._get_index_catalog().get(self._col_name)
         if not desc or desc.get("stale", False):
             return None
-        # Deleted rows still sit in their block and still contribute to its
-        # extrema, so any deletion since the build invalidates the shortcut.
-        built_vis = desc.get("built_visibility_epoch")
-        if built_vis is None or root._storage.get_epoch_counters()[1] != built_vis:
+        # A tombstoned row still sits in its block and still contributes to that
+        # block's extrema, and the summaries index physical slots while min()
+        # reads logical rows.  Both only line up while every slot below the
+        # watermark is live.
+        if root._n_rows is None or root._n_rows != root._resolve_last_pos():
             return None
         levels = desc.get("levels") or {}
         level = "block" if "block" in levels else next(iter(levels), None)

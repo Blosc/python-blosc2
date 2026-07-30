@@ -1366,6 +1366,19 @@ def test_summary_minmax_declines_after_delete(tmpdir):
     assert t["c"].min() == min(t["c"][:].tolist())
 
 
+def test_summary_minmax_declines_when_built_over_holes(tmpdir):
+    """A row deleted *before* the build is still in its block when the summary is
+    written, so a fresh index over a holey column must not enable the shortcut."""
+    t, _ = _minmax_table(tmpdir / "prebuilt.b2t", 100_000, kind=None)
+    t.delete(slice(0, 1000))  # drop the 1000 smallest
+    for col in ("c", "n", "f"):
+        t.create_index(col, kind="summary")
+    assert t["n"]._summary_minmax_source() is None
+    assert t["n"].min() == 1005
+    assert t["n"].max() == 100_004
+    assert t["c"].min() == min(t["c"][:].tolist())
+
+
 def test_summary_minmax_shortcut_still_taken(tmpdir):
     """The padding fix must not disable the shortcut on the common padded table."""
     t, _ = _minmax_table(tmpdir / "fast.b2t", 100_000)

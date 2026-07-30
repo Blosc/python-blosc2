@@ -832,9 +832,8 @@ class _CTableIndexingMixin:
             descriptor["token"] = token
             descriptor["dtype"] = str(np.dtype(dtype))
             descriptor["expr_values_path"] = getattr(expr_arr, "urlpath", None)
-            value_epoch, visibility_epoch = self._storage.get_epoch_counters()
+            value_epoch, _ = self._storage.get_epoch_counters()
             descriptor["built_value_epoch"] = value_epoch
-            descriptor["built_visibility_epoch"] = visibility_epoch
             catalog[token] = descriptor
             self._storage.save_index_catalog(catalog)
             self._invalidate_index_catalog_cache()
@@ -972,9 +971,8 @@ class _CTableIndexingMixin:
                 _persist_utf8_vocab(full, utf8_rank_meta, utf8_vocab)
                 full["utf8_rank"] = utf8_rank_meta
 
-        value_epoch, visibility_epoch = self._storage.get_epoch_counters()
+        value_epoch, _ = self._storage.get_epoch_counters()
         descriptor["built_value_epoch"] = value_epoch
-        descriptor["built_visibility_epoch"] = visibility_epoch
 
         if is_persistent:
             # Use column name as token so sibling columns in compact stores get
@@ -1062,7 +1060,6 @@ class _CTableIndexingMixin:
             finally:
                 _PERSISTENT_INDEXES.pop(proxy_key, None)
             updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
-            updated_desc["built_visibility_epoch"] = descriptor.get("built_visibility_epoch")
             catalog[lookup_key] = updated_desc
             self._storage.save_index_catalog(catalog)
             self._invalidate_index_catalog_cache()
@@ -1074,7 +1071,6 @@ class _CTableIndexingMixin:
                 token = descriptor["token"]
                 updated_desc = _copy_descriptor(store["indexes"].get(token, descriptor))
                 updated_desc["built_value_epoch"] = descriptor.get("built_value_epoch", 0)
-                updated_desc["built_visibility_epoch"] = descriptor.get("built_visibility_epoch")
                 catalog[lookup_key] = updated_desc
                 self._storage.save_index_catalog(catalog)
                 self._invalidate_index_catalog_cache()
