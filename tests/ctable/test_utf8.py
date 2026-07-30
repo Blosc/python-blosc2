@@ -2265,21 +2265,33 @@ def test_constructors_string_dtype_do_not_materialize_a_fill_list():
     A list would hold shape[0] pointers to the same object before the packer
     sees any of them, which is what makes zeros(10_000_000, StringDType())
     expensive for no reason.
+
+    What gives that away is peak memory *scaling* with shape[0]: the streamed
+    build is flat in it.  Asserting a flat peak instead of an absolute ceiling
+    cancels the platform's baseline allocation, which is several MiB on Windows
+    and half that elsewhere -- a fixed bound only tracks that baseline.
     """
     import tracemalloc
 
-    n = 1_000_000
-    tracemalloc.start()
-    try:
-        arr = blosc2.zeros(n, dtype=STRING_DTYPE)
-        _, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
-    assert len(arr) == n
-    assert arr[0] == ""
-    # A list of n pointers alone is 8n bytes (~7.6 MiB here) on top of the
-    # array itself; the streamed build stays far below that.
-    assert peak < 4 * 2**20, f"peak {peak / 2**20:.1f} MiB suggests a materialized fill list"
+    def peak_for(n):
+        tracemalloc.start()
+        try:
+            arr = blosc2.zeros(n, dtype=STRING_DTYPE)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert len(arr) == n
+        assert arr[0] == ""
+        return peak
+
+    small = peak_for(500_000)
+    large = peak_for(4_000_000)
+    # 8x the rows is 8x the pointer list: materializing one adds ~27 MiB between
+    # these two sizes, where the streamed build does not move at all.  Both sizes
+    # are well past the point where the chunk size stops growing, so the transient
+    # buffer -- the whole of the peak -- is the same for each.
+    grown = (large - small) / 2**20
+    assert grown < 4.0, f"peak grew {grown:.1f} MiB with 8x the rows: a fill list was materialized"
 
 
 def test_utf8_dispatch_round_trips_conversion():
