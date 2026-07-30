@@ -869,8 +869,7 @@ def utf8(*, nullable: bool = False, null_value: str | None = None) -> UTF8Spec:
     :meth:`CTable.group_by` keys, :meth:`CTable.sort_by`, Arrow/Parquet
     interop, and :meth:`CTable.create_index`, which indexes the alphabetical
     rank of each value and accelerates sorting and scalar comparisons (but
-    not ``startswith``/substring searches, which no index covers).  Nested
-    (dotted) utf8 leaves in an expression are not supported yet.  See
+    not ``startswith``/substring searches, which no index covers).  See
     :ref:`ChoosingStringType` for a full comparison with :class:`string` and
     :func:`vlstring`.
 
