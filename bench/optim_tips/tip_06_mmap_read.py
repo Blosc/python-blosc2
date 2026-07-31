@@ -7,8 +7,12 @@
 
 # Tip 6: blosc2.open(path, mmap_mode="r") memory-maps a read-only container
 # instead of going through regular file I/O for every chunk access. For a
-# workload that touches many scattered chunks, mapping the file once avoids
-# repeated open/seek/read syscalls per chunk.
+# workload that touches many scattered chunks, the mapped pages are read
+# directly: no read syscall per block, and no copy out of the page cache into
+# an intermediate buffer.
+#
+# A single warm-cache reader is the *weakest* case for this tip -- see
+# tip_10_mmap_many_readers.py, where the advantage grows with reader count.
 
 from pathlib import Path
 

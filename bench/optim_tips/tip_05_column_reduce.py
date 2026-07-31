@@ -18,7 +18,7 @@ import numpy as np
 import blosc2
 from common import fmt_bytes, measure, save_plot
 
-N = 50_000_000
+N = 250_000_000
 URLPATH = str(Path(__file__).parent / "tip_05.b2d")
 
 

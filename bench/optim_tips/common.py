@@ -49,16 +49,39 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)  # runs the script's module-level setup once
 fn = getattr(mod, sys.argv[2])
 unit = 1 if platform.system() == "Darwin" else 1024
+# Pass 1 -- timing, with nothing attached.  tracemalloc hooks every Python
+# allocation, so leaving it on here inflates read-heavy tips several-fold and,
+# worse, adds run-to-run variance far larger than the difference being measured.
+#
+# Best of REPS rather than a single shot.  The first call is reliably the
+# slowest (cold allocator, lazy imports, first touch of a mapping), and it hits
+# the two variants unequally, so a single sample both adds noise and biases the
+# comparison.  Minimum is the right statistic: interference only ever makes a
+# run slower.  Measured convergence on tip_06 -- 1 rep 1.27x, 2 reps 1.13x,
+# 3 reps 1.12x, and no further movement out to 8.
+#
+# A tip whose point is a *one-shot* operation sets BENCH_REPS = 1 instead: when
+# one variant does real filesystem work every time and the other goes fully
+# page-cached on the second call, repeating flatters the second one and the
+# number stops describing what a user would see.  (Measured: tip_09 reads 2.8x
+# at one rep and 7.0x at three; tip_03b, 180x and 404x.)
+REPS = getattr(mod, "BENCH_REPS", 3)
 gc.collect()
 rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * unit
-tracemalloc.start()
-t0 = time.perf_counter()
-fn()
-elapsed = time.perf_counter() - t0
-_, py_peak = tracemalloc.get_traced_memory()
-tracemalloc.stop()
+elapsed = float("inf")
+for _ in range(REPS):
+    t0 = time.perf_counter()
+    fn()
+    elapsed = min(elapsed, time.perf_counter() - t0)
 rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * unit
 rss_delta = max(0, rss_after - rss_before)
+# Pass 2 -- memory only.  Costs a second call of fn(); that is the price of an
+# uncontaminated timing, and every measured function here is re-runnable.
+gc.collect()
+tracemalloc.start()
+fn()
+_, py_peak = tracemalloc.get_traced_memory()
+tracemalloc.stop()
 print(json.dumps({"elapsed": elapsed, "rss": max(py_peak, rss_delta)}))
 """
 
@@ -76,6 +99,15 @@ def measure(script_path, func_name):
     before/after snapshots) matters for (b): ru_maxrss is a high-water mark
     that never drops, so a same-process comparison would silently inherit
     whichever variant ran first's peak.
+
+    elapsed is the *best* of three calls with no profiler attached, then a
+    fourth call runs under tracemalloc for (a). Two separate reasons for that
+    shape. Measuring time and memory in one pass costs the timing --
+    tracemalloc's per-allocation hook dominates any tip whose work is
+    Python-side, and its overhead varies enough between runs to hide the effect
+    the tip is demonstrating. And timing a single call costs it again: the first
+    call is reliably the slowest, unequally so between the two variants, which
+    biases the comparison on top of the noise it adds.
     """
     proc = subprocess.run(
         [sys.executable, "-c", _DRIVER, str(Path(script_path).resolve()), func_name],

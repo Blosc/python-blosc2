@@ -27,6 +27,13 @@ _t.to_b2z(B2Z, overwrite=True)
 _t.close()
 
 
+# One-shot operation: measured with a single call (BENCH_REPS = 1).  Repeating
+# it lets the cheaper variant run entirely out of the page cache while the other
+# keeps doing real filesystem work, which inflates the ratio well past what a
+# user doing this once would see.
+BENCH_REPS = 1
+
+
 def naive():
     # the zip-file reflex: unpack, then open the extracted tree
     dest = Path(__file__).parent / "tip_09_extracted.b2d"

@@ -256,7 +256,7 @@ On a 20M-row table, the pushed-down form was **~1.9x faster** and used **~7x les
 
 ## Memory-map read-only opens
 
-{func}`blosc2.open(path, mmap_mode="r") <blosc2.open>` memory-maps the file instead of going through regular file I/O, so chunks are read directly from the mapped pages — no per-access open/seek/read syscalls, and no intermediate buffer copy. For workloads that touch many scattered chunks, this adds up.
+{func}`blosc2.open(path, mmap_mode="r") <blosc2.open>` memory-maps the file instead of going through regular file I/O, so chunks are read directly from the mapped pages — no read syscall per block, and no copy out of the page cache into an intermediate buffer. For workloads that touch many scattered chunks, this adds up.
 
 ```python
 # Avoid (for read-heavy, scattered access): regular I/O per chunk
