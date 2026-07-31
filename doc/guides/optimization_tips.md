@@ -18,7 +18,7 @@ a = blosc2.linspace(0, 1, N)
 
 ![blosc2.linspace() vs asarray(np.linspace())](optim_tips/tip_01_constructors.png)
 
-At 200M float64 elements, the two are comparable in speed, but the real win is memory: **~25x less peak memory**, and the gap widens with array size — the naive path's memory is O(N), while the constructor's stays roughly O(chunk size) for compressible enough data. The same applies to {func}`arange() <blosc2.arange>` and {func}`fromiter() <blosc2.fromiter>`.
+At 200M float64 elements, the constructor was **~1.6x faster** and used **~17x less peak memory**, and the memory gap widens with array size — the naive path's memory is O(N), while the constructor's stays roughly O(chunk size) for compressible enough data. The same applies to {func}`arange() <blosc2.arange>` and {func}`fromiter() <blosc2.fromiter>`.
 
 *Benchmark for this tip: [`tip_01_constructors.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_01_constructors.py)*
 
@@ -125,7 +125,9 @@ big.slice((slice(bl, 2 * bl), slice(None)))
 
 ![Aligned vs unaligned reads, chunk and block level](optim_tips/tip_02_chunk_aligned_slicing.png)
 
-On a 16000×2000 float64 array, 400 chunk-sized reads aligned with the chunk grid were **~2.2× faster** than the same reads shifted half a chunk off-grid, and a chunk-aligned `slice()` was **~4.9× faster** still (no decompression). At the block level (with larger 1.6 MB blocks), 400 block-sized reads aligned with the block grid were **~1.7× faster**. However, `slice()` at block granularity was no faster at all — `slice()` has to produce a valid compressed array with its own chunk layout, so it can only skip decompression when both boundaries land on *chunk* boundaries; at block granularity it still decompresses and recompresses.
+On a 16000×2000 float64 array, 400 chunk-sized reads aligned with the chunk grid were **~2.4× faster** than the same reads shifted half a chunk off-grid, and a chunk-aligned `slice()` was **~7× faster** again (no decompression), i.e. ~17× faster than the unaligned read. At the block level (with larger 1.6 MB blocks), 400 block-sized reads aligned with the block grid were **~1.9× faster**. However, `slice()` at block granularity was no faster at all — `slice()` has to produce a valid compressed array with its own chunk layout, so it can only skip decompression when both boundaries land on *chunk* boundaries; at block granularity it still decompresses and recompresses.
+
+Practically: reach for `slice()` when both boundaries land on chunk boundaries and you want a compressed result. Off that path it is strictly more work than `arr[...]` — and if you wanted NumPy at the end, you have paid to compress something you are about to throw away.
 
 *Benchmark for this tip: [`tip_02_chunk_aligned_slicing.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_02_chunk_aligned_slicing.py)*
 
@@ -155,7 +157,7 @@ top10 = t.sort_by("temperature", view=True)[:10]
 
 ![CTable.sort_by(view=True) top-10](optim_tips/tip_03_sort_by_view.png)
 
-On a 20M-row table, the view form took **~74× less time** and about 25% less
+On a 20M-row table, the view form took **~99× less time** and about 25% less
 peak memory than a full ``sort_by()``.  The larger the table relative to
 *k*, the bigger the gap, since the naive path's cost is dominated by sorting
 rows you're about to discard.
@@ -188,8 +190,8 @@ list(arr.iter_sorted(start=9, stop=None, step=-1))  # bottom-10 descending
 
 ![NDArray.iter_sorted(start=-10) top-10](optim_tips/tip_03b_ndarray_iter_sorted.png)
 
-On a 20M-element float64 array, ``iter_sorted(start=-10)`` was **~70× faster**
-and used **~300× less peak memory** than ``argsort()[-10:]`` — the latter
+On a 20M-element float64 array, ``iter_sorted(start=-10)`` was **~137× faster**
+and used **~130× less peak memory** than ``argsort()[-10:]`` — the latter
 still materialises the full 20M-element positions array even when backed by a
 FULL index.
 
@@ -210,7 +212,7 @@ hottest = t["temperature"].max()  # answered from the SUMMARY index
 
 ![Column.max() with vs without a SUMMARY index](optim_tips/tip_04_summary_index_where.png)
 
-On a 10M-row column, the indexed {meth}`max() <blosc2.Column.max>` took ~4x less time than without an index, and needed essentially no extra memory — it never touches the compressed column data at all.
+On a 10M-row column, the indexed {meth}`max() <blosc2.Column.max>` took ~5x less time than without an index, and needed essentially no extra memory — it never touches the compressed column data at all.
 
 The same SUMMARY indexes can also let a selective {meth}`where() <blosc2.CTable.where>` query skip whole blocks, but only when the column's values are ordered or clustered enough that a block's min/max range can exclude the predicate entirely. With independently random data every block spans nearly the full value range and there is nothing to skip — so the `min()`/`max()` speedup is the one you can always count on.
 
@@ -230,7 +232,7 @@ total = t["val"].sum()
 
 ![col.sum() vs col[:].sum()](optim_tips/tip_05_column_reduce.png)
 
-On a 50M-row column, `col.sum()` was 1.7x faster, but more importantly it used **~12x less peak memory**. For large tables the memory savings alone can be the deciding factor.
+On a 250M-row column, `col.sum()` was ~1.6x faster, but more importantly it used **~62x less peak memory**. For large tables the memory savings alone can be the deciding factor.
 
 *Benchmark for this tip: [`tip_05_column_reduce.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_05_column_reduce.py)*
 
@@ -250,7 +252,7 @@ total = t["temperature"].sum(where=t.region == 3)
 
 ![col.sum(where=...) vs NumPy-style masking](optim_tips/tip_08_where_pushdown.png)
 
-On a 20M-row table, the pushed-down form was **~1.9x faster** and used **~7x less peak memory**. Predicates can combine several columns too: `t["amount"].sum(where=(t.price < 300) & (t.qty > 0))`.
+On a 20M-row table, the pushed-down form was **~2.1x faster** and used **~7x less peak memory**. Predicates can combine several columns too: `t["amount"].sum(where=(t.price < 300) & (t.qty > 0))`.
 
 *Benchmark for this tip: [`tip_08_where_pushdown.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_08_where_pushdown.py)*
 
@@ -268,7 +270,7 @@ arr = blosc2.open(path, mmap_mode="r")
 
 ![open(mmap_mode='r') vs plain open()](optim_tips/tip_06_mmap_read.png)
 
-Across 8,000 scattered slice reads, `mmap_mode="r"` was **~1.1x faster**; peak memory was essentially identical for this single-process, single-open workload.
+Across 8,000 scattered slice reads, `mmap_mode="r"` was **~1.2x faster**; peak memory was essentially identical for this single-process, single-open workload.
 
 A single warm-cache process, as benchmarked here, is actually the *worst* case for showing mmap off — the payoff multiplies with several readers on the same file, which is the next tip.
 
@@ -288,7 +290,9 @@ arr = blosc2.open(path, mmap_mode="r")  # reader 1..N
 
 ![Concurrent readers: regular I/O vs mmap](optim_tips/tip_10_mmap_many_readers.png)
 
-With 8 concurrent readers doing random slice reads over a 269 MB array, mmap was **~4.5x faster** in wall time (2.5x for a single reader) and used less than half the total CPU. Don't be alarmed if mmap readers *look* heavier in RSS — each process charges the shared mapped pages it touched, but they exist once physically; per-process private memory is identical in both modes. The full discussion, including the measurement table, is in the [Sharing containers across processes](sharing_across_processes.md) guide's colophon; see that guide too for the multi-reader/NFS/Windows caveats.
+With 8 concurrent readers doing random slice reads over a 269 MB array, mmap was **~1.1x faster** in wall time and used ~5% less total CPU; with one reader the two are level. Don't be alarmed if mmap readers *look* heavier in RSS — each process charges the shared mapped pages it touched, but they exist once physically; per-process private memory is identical in both modes. The full discussion, including the measurement table, is in the [Sharing containers across processes](sharing_across_processes.md) guide's colophon; see that guide too for the multi-reader/NFS/Windows caveats.
+
+*That margin was much wider before C-Blosc2 3.3.1, which stopped reopening the frame file on every chunk access: the regular path caught up, mmap did not regress.*
 
 *Benchmark for this tip: [`tip_10_mmap_many_readers.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_10_mmap_many_readers.py)*
 
@@ -316,7 +320,7 @@ t = blosc2.open("data.b2z", mmap_mode="r")
 
 ![Reading a .b2z in place vs extracting it first](optim_tips/tip_09_b2z_read_in_place.png)
 
-On a 10M-row table, opening in place and summing a column was **~2x faster** than extract-then-open (identical peak memory), and it leaves no unpacked copy behind. The multi-reader advantages are the same as in the [memory-map tip above](#memory-map-read-only-opens), only with a single mapping serving the whole dataset.
+On a 10M-row table, opening in place and summing a column was **~3.4x faster** than extract-then-open (identical peak memory), and it leaves no unpacked copy behind. The multi-reader advantages are the same as in the [memory-map tip above](#memory-map-read-only-opens), only with a single mapping serving the whole dataset.
 
 One asymmetry to keep in mind: `.b2z` is optimized for reading, while a *writable* `.b2z` is staged in a temporary directory and rezipped on close — for write-heavy workloads, build the table as `.b2d` and pack it with {meth}`to_b2z() <blosc2.CTable.to_b2z>` when it's ready to publish.
 
@@ -338,6 +342,6 @@ t.extend({"val": src}, validate=False)
 
 ![CTable.extend(validate=False)](optim_tips/tip_07_chunked_writes.png)
 
-Extending a table with a 20M-row {class}`~blosc2.NDArray` column carrying a `ge=0` constraint, `validate=False` was **~1.4x faster**; peak memory was similar, since validation is chunk-wise anyway.
+Extending a table with a 20M-row {class}`~blosc2.NDArray` column carrying a `ge=0` constraint, `validate=False` was **~1.4x faster**; peak memory was within ~10%, since validation is chunk-wise anyway.
 
 *Benchmark for this tip: [`tip_07_chunked_writes.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_07_chunked_writes.py)*

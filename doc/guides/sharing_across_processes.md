@@ -161,14 +161,14 @@ Not supported in either mechanism: network filesystems (NFS). Locking additional
 
 The advice above to open shared files with `mmap_mode="r"` is easy to quantify. The chart below shows waves of concurrent reader processes, each performing 300 random ~1.6 MB slice reads over the same 269 MB on-disk `NDArray` (poorly compressible data, warm OS cache — Apple M4 Pro; run [`tip_10_mmap_many_readers.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_10_mmap_many_readers.py) to reproduce):
 
-![Grouped bars, wall time for 1, 4 and 8 concurrent readers: regular I/O grows from 0.52 s to 1.82 s, mmap_mode="r" stays between 0.21 s and 0.41 s.](optim_tips/tip_10_mmap_many_readers.png)
+![Grouped bars, wall time for 1, 4 and 8 concurrent readers: regular I/O grows from 0.28 s to 0.35 s, mmap_mode="r" from 0.27 s to 0.32 s.](optim_tips/tip_10_mmap_many_readers.png)
 
 | Readers | regular I/O (wall) | `mmap_mode="r"` (wall) | speedup |
 |---|---|---|---|
-| 1 | 0.52 s | 0.21 s | 2.5x |
-| 4 | 1.28 s | 0.29 s | 4.4x |
-| 8 | 1.82 s | 0.41 s | 4.5x |
+| 1 | 0.28 s | 0.27 s | 1.0x |
+| 4 | 0.32 s | 0.31 s | 1.0x |
+| 8 | 0.35 s | 0.32 s | 1.1x |
 
-Two things stand out. First, the speedup *grows* with the number of readers: every regular-I/O access pays a syscall plus a copy from the OS page cache into private buffers, and that per-access overhead compounds under kernel contention (total CPU time was more than 2x higher without mmap). Second, the memory side is just as favorable, though harder to see: all mmap readers are served by a *single* set of clean, file-backed pages — physical memory stays at roughly one copy of the file no matter how many readers attach, the transient private buffer copies of the I/O path disappear, and under memory pressure the OS can simply drop and re-fault mapped pages instead of swapping.
+Two things stand out. First, the wall-time gap is now small, and it closed from the *regular-I/O* side: earlier releases opened and closed the file on every chunk access in every reader, and that per-access cost compounded under kernel contention, so mmap led by several times at 8 readers. Since C-Blosc2 3.3.1 a frame keeps one read handle open and reads through it positionally, which removes most of it — set `BLOSC_MAX_CACHED_READERS=0` to disable the handle cache and watch the old gap reappear (1.1x, 1.3x, 1.6x at 1, 4 and 8 readers). mmap still avoids the remaining per-block read syscall and the copy out of the page cache, worth ~5% of total CPU here, and it is still the right default for shared read-only files. Second, the memory side is just as favorable, though harder to see: all mmap readers are served by a *single* set of clean, file-backed pages — physical memory stays at roughly one copy of the file no matter how many readers attach, the transient private buffer copies of the I/O path disappear, and under memory pressure the OS can simply drop and re-fault mapped pages instead of swapping.
 
 One measurement caveat when you check this yourself: mmap readers *look* heavier in `RSS` (each process charges the shared mapped pages it has touched), while regular-I/O readers look slim only because the page cache that serves them is invisible to per-process accounting. Per-process *private* memory (USS) is what to compare — it is essentially identical in both modes.
