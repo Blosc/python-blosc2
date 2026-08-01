@@ -302,6 +302,9 @@ def are_partitions_behaved(shape, chunks, blocks):
     Check if the partitions defined by chunks and blocks are well-behaved with respect to the shape.
 
     This function verifies that partitions are C-contiguous with respect the outer container.
+    This means an unsplit innermost dimension and outer dimensions that the partition divides
+    evenly; a partition that overhangs the container in some dimension pads it, so it is not
+    well-behaved either.
 
     Returns
     -------
@@ -309,27 +312,13 @@ def are_partitions_behaved(shape, chunks, blocks):
         True if the partitions are well-behaved, False otherwise.
     """
 
-    # Check C-contiguity among partitions
-    def check_contiguity(shape, part):
-        ndims = len(shape)
-        inner_dim = ndims - 1
-        for i, size, unit in zip(reversed(range(ndims)), reversed(shape), reversed(part), strict=True):
-            if size > unit:
-                if i < inner_dim:
-                    if size % unit != 0:
-                        return False
-                else:
-                    if size != unit:
-                        return False
-                inner_dim = i
-        return True
+    # Spanning the innermost dimension keeps whole container rows; outer dimensions just tile evenly
+    def check_contiguity(container, part):
+        if container and container[-1] != part[-1]:
+            return False
+        return builtins.all(size % unit == 0 for size, unit in zip(container[:-1], part[:-1], strict=True))
 
-    # Check C-contiguity for blocks inside chunks
-    if not check_contiguity(chunks, blocks):
-        return False
-
-    # Check C-contiguity for chunks inside shape
-    return check_contiguity(shape, chunks)
+    return check_contiguity(chunks, blocks) and check_contiguity(shape, chunks)
 
 
 def get_flat_slices_orig(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]:

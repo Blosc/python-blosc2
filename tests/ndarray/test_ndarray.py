@@ -103,6 +103,25 @@ def test_asarray(a):
         np.testing.assert_allclose(a, b[:])
 
 
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks"),
+    [
+        ((146, 23802), (147, 23802), (1, 23802)),
+        ((2200, 1000), (1100, 1024), (10, 1024)),
+        ((20, 300, 500), (21, 300, 500), (1, 300, 500)),
+    ],
+)
+def test_asarray_chunks_larger_than_shape(shape, chunks, blocks):
+    # Above 16 MB, asarray fills chunk by chunk; padded chunks must skip update_data
+    a = np.arange(math.prod(shape), dtype=np.float64).reshape(shape)
+    assert a.nbytes > 2**24
+
+    b = blosc2.asarray(a, chunks=chunks, blocks=blocks)
+
+    np.testing.assert_array_equal(b[:], a)
+    assert not blosc2.are_partitions_behaved(shape, chunks, blocks)
+
+
 def test_asarray_persists_copy_with_urlpath(tmp_path):
     array = blosc2.asarray(np.arange(10, dtype=np.int64), chunks=(5,), blocks=(2,))
     path = tmp_path / "persisted_copy.b2nd"
