@@ -244,6 +244,13 @@ def is_inside_new_expr() -> bool:
     return builtins.any(frame_info.function in {"_new_expr", "open_lazyarray"} for frame_info in stack)
 
 
+def _is_scalar_bool(k):
+    """True for Python/numpy scalar bools and 0-d bool arrays (numpy's scalar-bool indexing)."""
+    return isinstance(k, (bool, np.bool_)) or (
+        isinstance(k, np.ndarray) and k.ndim == 0 and k.dtype == np.bool_
+    )
+
+
 def make_key_hashable(key):
     if isinstance(key, slice):
         return (key.start, key.stop, key.step)
@@ -4505,6 +4512,29 @@ class NDArray(blosc2_ext.NDArray, Operand):
         # 1-D: axis=None (flat); ndim>1: axis=0 (row selection)
         return self._take_numpy(key_arr, axis=None if self.ndim == 1 else 0)
 
+    def _scalar_bool_key_to_newaxis(self, key):
+        """Rewrite a tuple key's scalar bools to numpy's single-newaxis semantics.
+
+        Scalar bools act as one np.newaxis-like dimension of length 1 (all True)
+        or 0 (any False), placed at the first bool's position.  Returns
+        ``(key, None)`` unchanged when there are no scalar bools, ``(new_key,
+        None)`` to continue processing, or ``(None, empty_shape)`` when any bool
+        is False and the result is an empty array of that shape.
+        """
+        if not builtins.any(_is_scalar_bool(k) for k in key):
+            return key, None
+        first = next(i for i, k in enumerate(key) if _is_scalar_bool(k))
+        new_key = key[:first] + (None,) + tuple(k for k in key[first + 1 :] if not _is_scalar_bool(k))
+        if builtins.all(k for k in key if _is_scalar_bool(k)):  # all True -> plain newaxis
+            return new_key, None
+        # any False -> the newaxis dim is empty; shape from the all-True form
+        key_idx = ndindex.ndindex(new_key).expand(self.shape)
+        shape = list(key_idx.newshape(self.shape))
+        raw = key_idx.raw
+        pos = builtins.sum(not isinstance(k, int) for k in raw[: raw.index(None)])
+        shape[pos] = 0
+        return None, tuple(shape)
+
     def _getitem_bool_mask(self, key):
         """Handle boolean array key with optional sparse-gather fast path.
 
@@ -4525,7 +4555,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         expr = blosc2.LazyExpr._new_expr("key", {"key": key}, guess=False).where(self)
         return expr[:]
 
-    def __getitem__(
+    def __getitem__(  # noqa: C901
         self,
         key: None
         | int
@@ -4595,6 +4625,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         key = key[()] if isinstance(key, NDArray) else key  # key not iterable
         key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
+
+        # Scalar bools inside a tuple act like a single np.newaxis dimension of
+        # length 1 (all True) or 0 (any False), placed at the first bool's
+        # position (numpy semantics); rewrite to the equivalent None form so the
+        # regular machinery handles them.  Bare scalar bools are handled below in
+        # the fancy branch.  (numpy rejects scalar-bool tuples in __setitem__, so
+        # this stays getitem-only.)
+        if isinstance(key, tuple):
+            key, empty_shape = self._scalar_bool_key_to_newaxis(key)
+            if empty_shape is not None:
+                return np.empty(empty_shape, dtype=self.dtype)
 
         # Check boolean array key early to avoid expensive process_key / nonzero
         result = self._getitem_bool_mask(key)

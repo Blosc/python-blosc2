@@ -855,3 +855,59 @@ def test_process_key_matches_numpy_1d(key):
     assert got_exc == want_exc
     if want_exc is None:
         np.testing.assert_array_equal(got, want)
+
+
+# Scalar bools inside a tuple act as a single newaxis-like dimension (length 1
+# if all True, 0 if any False) at the first bool's position -- numpy semantics
+# that used to raise ValueError in get_fselection_numpy.
+_BOOL_KEYS = [
+    (True,),
+    (False,),
+    (True, slice(None)),
+    (slice(None), True),
+    (False, slice(None)),
+    (slice(None), False),
+    (True, 1),
+    (1, True),
+    (True, True),
+    (True, False),
+    (False, True),
+    (False, False),
+    (True, None),
+    (None, True),
+    (True, slice(None), 1),
+    (slice(None), True, 1),
+    (slice(None), True, True),
+    (True, True, slice(None)),
+    (np.True_, slice(None)),
+    (np.False_,),
+    (np.array(True), slice(None)),  # 0-d bool array
+    (np.array(False),),
+    (Ellipsis, True),
+    (True, Ellipsis),
+    (Ellipsis, False),
+    (False, Ellipsis),
+    (True, Ellipsis, False),
+    (slice(1), False, 2),
+    (slice(1), True, 2),
+]
+
+
+@pytest.mark.parametrize("shape", [(2, 3, 4, 5), (10, 5)])
+@pytest.mark.parametrize("key", _BOOL_KEYS)
+def test_scalar_bool_key_matches_numpy(shape, key):
+    npa = np.arange(math.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa)
+    try:
+        want = npa[key]
+        want_exc = None
+    except Exception as e:
+        want, want_exc = None, type(e)
+    try:
+        got = a[key]
+        got_exc = None
+    except Exception as e:
+        got, got_exc = None, type(e)
+    assert got_exc == want_exc
+    if want_exc is None:
+        np.testing.assert_array_equal(got, want)
