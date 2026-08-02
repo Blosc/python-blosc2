@@ -777,6 +777,7 @@ _FAST_KEYS_2D = [
     np.s_[-1, :],
     np.s_[-5:-1, :],
     np.s_[12:20, :],  # OOB slice -> empty
+    np.s_[5:2, :],  # start > stop, in bounds -> empty
     np.s_[:, :],
     np.s_[:, 4],
     np.s_[:, -6],  # OOB int -> IndexError

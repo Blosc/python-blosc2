@@ -1006,7 +1006,10 @@ def process_key(key, shape):
                         raise IndexError(f"index {k} is out of bounds for axis {len(out)} with size {n}")
                     out.append(slice(k, k + 1, None))
                 else:
-                    out.append(slice(*k.indices(n)))
+                    start, stop, step = k.indices(n)
+                    if start >= stop:  # empty slice -> match ndindex's normalization
+                        start = stop = 0
+                    out.append(slice(start, stop, step))
             return tuple(out), mask
     key = ndindex.ndindex(key).expand(shape).raw
     mask = tuple(
