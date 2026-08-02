@@ -22,6 +22,30 @@ At 200M float64 elements, the constructor was **~1.6x faster** and used **~17x l
 
 *Benchmark for this tip: [`tip_01_constructors.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_01_constructors.py)*
 
+## Broadcast small operands into large arrays, straight to disk
+
+The same idea extends past the constructors: when a large array is a *combination* of smaller ones, build it as a lazy expression over broadcast blosc2 operands and {meth}`compute() <blosc2.LazyArray.compute>` it directly to a file. Blosc2 broadcasts chunk by chunk, so the full uncompressed result never exists anywhere — only the small operands and one chunk at a time. NumPy broadcasting, by contrast, materializes the whole thing before {func}`asarray() <blosc2.asarray>` gets a chance to compress it.
+
+```python
+# Avoid: an 800 MiB NumPy array exists before a single byte is compressed
+base = np.arange(COLS, dtype=np.float64)
+data = np.tile(base, (N, 1)) + np.arange(N, dtype=np.float64)[:, None] * 0.001
+a = blosc2.asarray(data, chunks=(CHUNK, COLS), urlpath="big.b2nd", mode="w")
+
+# Prefer: two small operands, broadcast and evaluated chunk by chunk to disk
+cols = blosc2.arange(COLS, dtype=np.float64, shape=(1, COLS))
+rows = blosc2.arange(0, N * 0.001, 0.001, dtype=np.float64, shape=(N, 1))
+a = (rows + cols).compute(chunks=(CHUNK, COLS), urlpath="big.b2nd", mode="w")
+```
+
+![Broadcast lazy expression vs NumPy staging](optim_tips/tip_12_broadcast_build.png)
+
+Both produce bit-identical files. For a 200,000x500 float64 array (~800 MiB uncompressed), the broadcast expression used **~55x less peak memory** — the peak is a handful of chunks, not the whole array — at roughly the same speed. Memory is the point here: the naive path is O(N) and stops working when the array outgrows RAM, while the broadcast path doesn't care how big the result is.
+
+This works for any expression over operands blosc2 can broadcast, not just two `arange()`s: an existing on-disk {class}`~blosc2.NDArray` times a per-column scale vector, a 2D field plus a 1D offset, and so on. The shape rules are NumPy's; the {doc}`lazy expressions tutorial <../getting_started/tutorials/02.lazyarray-expressions>` has a worked example.
+
+*Benchmark for this tip: [`tip_12_broadcast_build.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_12_broadcast_build.py)*
+
 ## Generate arrays with DSL kernels
 
 The constructors from the previous tip are not magic: internally, {func}`blosc2.arange() <blosc2.arange>` is a one-line DSL kernel (`start + _flat_idx * step`) that blosc2 compiles to native code and evaluates chunk by chunk, using multiple threads. The same machinery — a {func}`blosc2.dsl_kernel <blosc2.dsl_kernel>`-decorated function handed to {func}`blosc2.lazyudf() <blosc2.lazyudf>` — is open to you, for any array whose value is a function of its index.

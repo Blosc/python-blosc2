@@ -27,10 +27,12 @@ N_READS = 8000
 
 
 def _build():
-    Path(URLPATH).unlink(missing_ok=True)
-    base = np.arange(COLS, dtype=np.float64)
-    data = np.tile(base, (N, 1)) + np.arange(N, dtype=np.float64)[:, None] * 0.001
-    blosc2.asarray(data, chunks=(CHUNK, COLS), urlpath=URLPATH, mode="w")
+    # Built the way tip_12_broadcast_build.py recommends: two blosc2.arange()
+    # operands broadcast into a lazy expression, evaluated chunk by chunk
+    # straight to disk, so the 800 MiB NumPy staging array never exists.
+    cols = blosc2.arange(COLS, dtype=np.float64, shape=(1, COLS))
+    rows = blosc2.arange(0, N * 0.001, 0.001, dtype=np.float64, shape=(N, 1))
+    (rows + cols).compute(chunks=(CHUNK, COLS), urlpath=URLPATH, mode="w")
 
 
 _build()
