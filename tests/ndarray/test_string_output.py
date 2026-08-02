@@ -223,7 +223,10 @@ def test_wide_string_operands_match_numpy(width):
     # and predicates came back almost entirely False.  <U64 is 256 bytes, the
     # first width that trips it.
     values = np.array(["hello", "help", "world"] * 400, dtype=f"<U{width}")
-    arr = blosc2.asarray(values)
+    # Partition explicitly: the auto-computed blocks are sized from the CPU cache,
+    # and on a machine with enough of it the whole array lands in one block, which
+    # is exactly the case the bug did *not* affect.
+    arr = blosc2.asarray(values, chunks=(len(values),), blocks=(len(values) // 4,))
     assert arr.dtype.itemsize == width * 4
     assert arr.blocks[0] < len(values), "need several blocks to catch the bug"
 
