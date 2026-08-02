@@ -18,7 +18,7 @@ a = blosc2.linspace(0, 1, N)
 
 ![blosc2.linspace() vs asarray(np.linspace())](optim_tips/tip_01_constructors.png)
 
-At 200M float64 elements, the constructor was **~1.6x faster** and used **~17x less peak memory**, and the memory gap widens with array size — the naive path's memory is O(N), while the constructor's stays roughly O(chunk size) for compressible enough data. The same applies to {func}`arange() <blosc2.arange>` and {func}`fromiter() <blosc2.fromiter>`.
+At 200M float64 elements, the constructor was **~1.5x faster** and used **~16x less peak memory**, and the memory gap widens with array size — the naive path's memory is O(N), while the constructor's stays roughly O(chunk size) for compressible enough data. The same applies to {func}`arange() <blosc2.arange>` and {func}`fromiter() <blosc2.fromiter>`.
 
 *Benchmark for this tip: [`tip_01_constructors.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_01_constructors.py)*
 
@@ -40,7 +40,7 @@ a = (rows + cols).compute(chunks=(CHUNK, COLS), urlpath="big.b2nd", mode="w")
 
 ![Broadcast lazy expression vs NumPy staging](optim_tips/tip_12_broadcast_build.png)
 
-Both produce bit-identical files. For a 200,000x500 float64 array (~800 MiB uncompressed), the broadcast expression used **~55x less peak memory** — the peak is a handful of chunks, not the whole array — at roughly the same speed. Memory is the point here: the naive path is O(N) and stops working when the array outgrows RAM, while the broadcast path doesn't care how big the result is.
+Both produce bit-identical files. For a 200,000x500 float64 array (~800 MiB uncompressed), the broadcast expression used **~47x less peak memory** — the peak is a handful of chunks, not the whole array — at the same speed. Memory is the point here: the naive path is O(N) and stops working when the array outgrows RAM, while the broadcast path doesn't care how big the result is.
 
 This works for any expression over operands blosc2 can broadcast, not just two `arange()`s: an existing on-disk {class}`~blosc2.NDArray` times a per-column scale vector, a 2D field plus a 1D offset, and so on. The shape rules are NumPy's; the {doc}`lazy expressions tutorial <../getting_started/tutorials/02.lazyarray-expressions>` has a worked example.
 
@@ -76,7 +76,7 @@ a = lazy.compute(cparams={"clevel": 0})
 
 ![DSL random kernel vs asarray(rng.integers())](optim_tips/tip_11_dsl_random.png)
 
-At 200M int32 elements, the DSL kernel was **~3.6x faster** and used **~2x less peak memory** than generating with NumPy and compressing via {func}`asarray() <blosc2.asarray>` — the peak is just the result itself, since the full NumPy staging array never exists.
+At 200M int32 elements, the DSL kernel was **~3.7x faster** and used **~2x less peak memory** than generating with NumPy and compressing via {func}`asarray() <blosc2.asarray>` — the peak is just the result itself, since the full NumPy staging array never exists.
 
 The output passes light uniformity checks against NumPy's PCG64 (the benchmark script prints them) — good enough for synthetic data, benchmarks and test fixtures, but this hand-rolled hash is *not* a substitute for a real generator. For statistically rigorous work such as Monte Carlo, use {doc}`blosc2.random <../reference/random>`, which gives you NumPy-quality streams (one independent `SeedSequence` per chunk) and keeps the chunk-parallel generation. The benchmark source explains the hash design and the DSL integer-arithmetic rules it relies on; see also the [DSL syntax reference](../reference/dsl_syntax.md).
 
@@ -149,7 +149,7 @@ big.slice((slice(bl, 2 * bl), slice(None)))
 
 ![Aligned vs unaligned reads, chunk and block level](optim_tips/tip_02_chunk_aligned_slicing.png)
 
-On a 16000×2000 float64 array, 400 chunk-sized reads aligned with the chunk grid were **~2.4× faster** than the same reads shifted half a chunk off-grid, and a chunk-aligned `slice()` was **~7× faster** again (no decompression), i.e. ~17× faster than the unaligned read. At the block level (with larger 1.6 MB blocks), 400 block-sized reads aligned with the block grid were **~1.9× faster**. However, `slice()` at block granularity was no faster at all — `slice()` has to produce a valid compressed array with its own chunk layout, so it can only skip decompression when both boundaries land on *chunk* boundaries; at block granularity it still decompresses and recompresses.
+On a 16000×2000 float64 array, 400 chunk-sized reads aligned with the chunk grid were **~2.3× faster** than the same reads shifted half a chunk off-grid, and a chunk-aligned `slice()` was **~11× faster** again (no decompression), i.e. ~24× faster than the unaligned read. At the block level (with larger 1.6 MB blocks), 400 block-sized reads aligned with the block grid were **~1.6× faster**. However, `slice()` at block granularity was no faster at all — `slice()` has to produce a valid compressed array with its own chunk layout, so it can only skip decompression when both boundaries land on *chunk* boundaries; at block granularity it still decompresses and recompresses.
 
 Practically: reach for `slice()` when both boundaries land on chunk boundaries and you want a compressed result. Off that path it is strictly more work than `arr[...]` — and if you wanted NumPy at the end, you have paid to compress something you are about to throw away.
 
@@ -214,8 +214,8 @@ list(arr.iter_sorted(start=9, stop=None, step=-1))  # bottom-10 descending
 
 ![NDArray.iter_sorted(start=-10) top-10](optim_tips/tip_03b_ndarray_iter_sorted.png)
 
-On a 20M-element float64 array, ``iter_sorted(start=-10)`` was **~137× faster**
-and used **~130× less peak memory** than ``argsort()[-10:]`` — the latter
+On a 20M-element float64 array, ``iter_sorted(start=-10)`` was **~132× faster**
+and used **~180× less peak memory** than ``argsort()[-10:]`` — the latter
 still materialises the full 20M-element positions array even when backed by a
 FULL index.
 
@@ -276,7 +276,7 @@ total = t["temperature"].sum(where=t.region == 3)
 
 ![col.sum(where=...) vs NumPy-style masking](optim_tips/tip_08_where_pushdown.png)
 
-On a 20M-row table, the pushed-down form was **~2.1x faster** and used **~7x less peak memory**. Predicates can combine several columns too: `t["amount"].sum(where=(t.price < 300) & (t.qty > 0))`.
+On a 20M-row table, the pushed-down form was **~2.2x faster** and used **~7x less peak memory**. Predicates can combine several columns too: `t["amount"].sum(where=(t.price < 300) & (t.qty > 0))`.
 
 *Benchmark for this tip: [`tip_08_where_pushdown.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_08_where_pushdown.py)*
 
@@ -294,7 +294,7 @@ arr = blosc2.open(path, mmap_mode="r")
 
 ![open(mmap_mode='r') vs plain open()](optim_tips/tip_06_mmap_read.png)
 
-Across 8,000 scattered slice reads, `mmap_mode="r"` was **~1.2x faster**; peak memory was essentially identical for this single-process, single-open workload.
+Across 8,000 scattered slice reads, `mmap_mode="r"` was **~1.2x faster**. The higher peak on the mmap side is an accounting artifact, not extra memory: RSS charges the mapped pages the process touched, which are the same page-cache pages the plain-`open()` path reads through — just billed to the kernel there.
 
 A single warm-cache process, as benchmarked here, is actually the *worst* case for showing mmap off — the payoff multiplies with several readers on the same file, which is the next tip.
 
@@ -344,7 +344,7 @@ t = blosc2.open("data.b2z", mmap_mode="r")
 
 ![Reading a .b2z in place vs extracting it first](optim_tips/tip_09_b2z_read_in_place.png)
 
-On a 10M-row table, opening in place and summing a column was **~3.4x faster** than extract-then-open (identical peak memory), and it leaves no unpacked copy behind. The multi-reader advantages are the same as in the [memory-map tip above](#memory-map-read-only-opens), only with a single mapping serving the whole dataset.
+On a 10M-row table, opening in place and summing a column was **~2.8x faster** than extract-then-open (identical peak memory), and it leaves no unpacked copy behind. The multi-reader advantages are the same as in the [memory-map tip above](#memory-map-read-only-opens), only with a single mapping serving the whole dataset.
 
 One asymmetry to keep in mind: `.b2z` is optimized for reading, while a *writable* `.b2z` is staged in a temporary directory and rezipped on close — for write-heavy workloads, build the table as `.b2d` and pack it with {meth}`to_b2z() <blosc2.CTable.to_b2z>` when it's ready to publish.
 
