@@ -763,3 +763,95 @@ def test_setitem_strided_does_not_use_gather():
 
     npa[::1000] = vals
     np.testing.assert_array_equal(a[:], npa)
+
+
+# Keys exercising process_key's fast path (plain slices/ints) and its ndindex
+# fallback (steps, ellipsis, newaxis, fancy, bool).  Compared against NumPy,
+# the ground truth ndindex emulates.  Covers negative ints, OOB ints
+# (IndexError), OOB slices (empty), and padded (short) tuples.
+_FAST_KEYS_2D = [
+    np.s_[2:4, :],
+    np.s_[2:4, 1:3],
+    np.s_[2, :],
+    np.s_[2, 3],
+    np.s_[-1, :],
+    np.s_[-5:-1, :],
+    np.s_[12:20, :],  # OOB slice -> empty
+    np.s_[:, :],
+    np.s_[:, 4],
+    np.s_[:, -6],  # OOB int -> IndexError
+    np.s_[50, :],  # OOB int -> IndexError
+    np.s_[-50, :],  # OOB negative int -> IndexError
+    np.s_[:3],  # padded 1-tuple
+    np.s_[3],  # padded int
+]
+_FALLBACK_KEYS_2D = [
+    np.s_[::2, :],  # step -> ndindex path
+    np.s_[::-1, :],  # negative step -> ndindex path
+    np.s_[1:9:3],  # padded + step
+    np.s_[8:2:-1],  # padded + negative step
+    np.s_[1, 2, 3],  # too many -> IndexError
+    np.s_[np.array([0, 2]), :],  # fancy
+    np.s_[[0, 1], :],  # fancy list
+    np.s_[:, np.array([True, False, True, False, True])],  # bool array
+    np.s_[..., :],  # ellipsis
+    np.s_[None, :],  # newaxis
+]
+
+
+@pytest.mark.parametrize("shape", [(10, 5), (3, 7, 4)])
+@pytest.mark.parametrize("key", _FAST_KEYS_2D + _FALLBACK_KEYS_2D)
+def test_process_key_matches_numpy(shape, key):
+    npa = np.arange(math.prod(shape), dtype=np.float64).reshape(shape)
+    a = blosc2.asarray(npa)
+    try:
+        want = npa[key]
+        want_exc = None
+    except Exception as e:
+        want, want_exc = None, type(e)
+    try:
+        got = a[key]
+        got_exc = None
+    except Exception as e:
+        got, got_exc = None, type(e)
+    assert got_exc == want_exc
+    if want_exc is None:
+        np.testing.assert_array_equal(got, want)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        np.s_[3:10],
+        np.s_[3],
+        np.s_[-1],
+        np.s_[-5:-1],
+        np.s_[:30],
+        np.s_[50],
+        np.s_[:],
+        np.s_[::2],
+        np.s_[::-1],
+        np.s_[...],
+        np.s_[None],
+        3,
+        slice(3, 10),
+        slice(None),
+        -2,
+    ],
+)
+def test_process_key_matches_numpy_1d(key):
+    npa = np.arange(20, dtype=np.float64)
+    a = blosc2.asarray(npa)
+    try:
+        want = npa[key]
+        want_exc = None
+    except Exception as e:
+        want, want_exc = None, type(e)
+    try:
+        got = a[key]
+        got_exc = None
+    except Exception as e:
+        got, got_exc = None, type(e)
+    assert got_exc == want_exc
+    if want_exc is None:
+        np.testing.assert_array_equal(got, want)

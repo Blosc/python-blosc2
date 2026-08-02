@@ -977,6 +977,37 @@ def get_chunks_idx(shape, chunks):
 
 
 def process_key(key, shape):
+    # Fast path: a plain tuple (or scalar) of slices/ints, with no ellipsis,
+    # newaxis, arrays, or strided/negative steps, needs none of ndindex's
+    # general machinery, which is ~50x slower for this trivial-but-common
+    # case.  Handles negative ints, bounds checks, and clamps slices exactly
+    # like ndindex.expand does.
+    if isinstance(key, (tuple, slice, int)) and not isinstance(key, bool):
+        key = key if isinstance(key, tuple) else (key,)
+        if all(
+            isinstance(k, (slice, int))
+            and not isinstance(k, bool)
+            and (not isinstance(k, slice) or k.step in (None, 1))
+            for k in key
+        ):
+            if len(key) > len(shape):
+                raise IndexError(
+                    f"too many indices for array: array is {len(shape)}-dimensional, "
+                    f"but {len(key)} were indexed"
+                )
+            key = key + (slice(None),) * (len(shape) - len(key))
+            mask = tuple(isinstance(k, int) for k in key)  # dummy dims from int -> slice(k, k+1)
+            out = []
+            for k, n in zip(key, shape, strict=True):
+                if isinstance(k, int):
+                    if k < 0:
+                        k += n
+                    if not 0 <= k < n:
+                        raise IndexError(f"index {k} is out of bounds for axis {len(out)} with size {n}")
+                    out.append(slice(k, k + 1, None))
+                else:
+                    out.append(slice(*k.indices(n)))
+            return tuple(out), mask
     key = ndindex.ndindex(key).expand(shape).raw
     mask = tuple(
         isinstance(k, int) for k in key
