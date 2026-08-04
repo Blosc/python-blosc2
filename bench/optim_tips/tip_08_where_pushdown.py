@@ -23,14 +23,14 @@ make_table(N, URLPATH)
 
 def naive():
     t = blosc2.CTable.open(URLPATH)
-    temp = t["temperature"][:]  # whole column decompressed
-    reg = t["region"][:]  # and the predicate column too
+    temp = t.temperature[:]  # whole column decompressed
+    reg = t.region[:]  # and the predicate column too
     return temp[reg == 3].sum()
 
 
 def tip():
     t = blosc2.CTable.open(URLPATH)
-    return t["temperature"].sum(where=t.region == 3)  # pushed-down filter
+    return t.temperature.sum(where=t.region == 3)  # pushed-down filter
 
 
 if __name__ == "__main__":

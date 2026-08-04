@@ -40,7 +40,7 @@ def naive():
     shutil.rmtree(dest, ignore_errors=True)
     with zipfile.ZipFile(B2Z) as z:
         z.extractall(dest)
-    t = blosc2.open(str(dest))
+    t = blosc2.open(str(dest), mmap_mode="r")  # mmap on both sides: only the extraction differs
     return t["temperature"].sum()
 
 

@@ -30,7 +30,7 @@ def _build():
     # Built the way tip_12_broadcast_build.py recommends: two blosc2.arange()
     # operands broadcast into a lazy expression, evaluated chunk by chunk
     # straight to disk, so the 800 MiB NumPy staging array never exists.
-    cols = blosc2.arange(COLS, dtype=np.float64, shape=(1, COLS))
+    cols = blosc2.arange(COLS, dtype=np.float64)
     rows = blosc2.arange(0, N * 0.001, 0.001, dtype=np.float64, shape=(N, 1))
     (rows + cols).compute(chunks=(CHUNK, COLS), urlpath=URLPATH, mode="w")
 
