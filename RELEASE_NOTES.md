@@ -1,8 +1,14 @@
 # Release notes
 
-## Changes from 4.9.1 to 4.9.2
+## Changes from 4.9.1 to 4.10.0
 
-XXX version-specific blurb XXX
+This release is the string-support milestone: string expressions and DSL
+kernels now run on miniexpr, `utf8()` and `dictionary()` columns gain full
+indexing, comparisons, and a documented conversion pair, and NumPy's
+`StringDType` is understood by the array constructors. Alongside, slicing
+with plain keys is up to 1.7x faster, a new `blosc2.random` module provides
+chunk-parallel NumPy-quality random constructors, and the optimization-tips
+guide gained two new tips and refreshed figures.
 
 ### New features
 
@@ -137,6 +143,15 @@ XXX version-specific blurb XXX
   values. These are now rewritten whole (one write per backing batch) rather
   than row by row, which for the batched varlen columns would have rewritten a
   whole batch per row.
+- **`@blosc2.jit` dispatches control flow to the DSL, and the DSL engine
+  widened its operand and function coverage.** miniexpr's prefilter now
+  gathers blocks directly from raw NumPy buffers instead of converting
+  operands with `asarray()`, and `Series` are accepted as DSL operands.
+  `np.foo(...)` calls inside a jitted function are rewritten to the bare
+  names miniexpr recognizes, `np.sign` is supported, and `np.square`,
+  `np.negative`, `np.positive` and `np.reciprocal` are dispatched. A
+  configured `blosc2.jit(...)` is accepted as a pandas engine.
+- C-Blosc2 bumped to 3.3.1 (bundled; min version 3.3.0).
 
 ### Improvements
 
@@ -166,6 +181,16 @@ XXX version-specific blurb XXX
   where there is one. Two of those paths previously failed with a raw NumPy
   `DTypePromotionError` and a `ValueError: malformed node or string ...
   StringDType()`, neither of which named the column or the fix.
+- **Slicing with plain slice/int keys is up to 1.7x faster.** `process_key()`
+  used to route every key through ndindex's general index machinery, ~50x
+  slower than needed for the common `arr[2:7, :50]`-style tuple: in the
+  scattered-read benchmark it accounted for 43% of the loop. Plain tuples (and
+  bare scalars) of slices and ints are now normalized directly — padding short
+  tuples, converting ints to `slice(k, k+1)` with negative-index and
+  out-of-bounds handling identical to ndindex's — and everything else
+  (strided or negative steps, ellipsis, newaxis, fancy arrays) still falls
+  through to ndindex. The optimization-tips guide's scattered-read tip went
+  from 0.627 s to 0.363 s on the plain-open variant.
 
 ### Bug fixes
 
@@ -229,6 +254,66 @@ XXX version-specific blurb XXX
   namespace, so they never reached that rewrite; they are now aliased by the
   utf8 driver itself. Covers scalar comparisons, `startswith`/`upper` and
   friends, mixed numeric predicates and `sum(where=)`.
+- **`SChunk` slices were broken for typesizes above 255 bytes.** c-blosc2's
+  `blosc2_schunk_get_slice_buffer()` derives the `getitem` for a partially
+  covered chunk by dividing byte offsets by `schunk->typesize`, which the
+  chunk header contradicts once the typesize is capped: the unit changes
+  silently with the data, so blocks past the first could come back as
+  uninitialised memory. Reachable from ordinary data — an `<U64` NDArray is a
+  256-byte typesize, so `arr.schunk[1:4]` hit it. Partial reads now count in
+  bytes via `blosc2_getitem_bytes_ctx()` (upstream c-blosc2 fix for
+  Blosc/c-blosc2#796, included in the bundled 3.3.1), which is unambiguous at
+  any typesize.
+- **`create_index()` on a string column made every query on it return zero
+  rows.** Silently — adding an index, an optimization, changed the answer. A
+  segment summary is a `(min, max, flags)` record, so a `<Un` column makes it
+  `8n + 1` bytes: 257 for `max_length=32`, which is the **default** width for
+  a plain `str` annotation. Past 255 bytes c-blosc2 records the chunk typesize
+  as 1, and the sidecar reader asked for spans in element units, so summaries
+  decoded to garbage and pruned every candidate away. The boundary is exactly
+  `8*max_length + 1 > 255` (31 works, 32 does not); `summary`, `bucket`,
+  `partial` and `full` indexes were affected, `opsi` was not. A short span
+  read now raises instead of leaving the destination partly uninitialised.
+- **Scalar bools inside tuple keys now match NumPy.** `a[(True, :)]` raised
+  `ValueError` from the fancy-index path, which cannot handle the 0-d bool
+  array ndindex expands tuple bools to. NumPy treats them as a single
+  `np.newaxis`-like dimension of length 1 (all True) or 0 (any False), placed
+  at the first bool's position with multiple bools collapsing; `__getitem__`
+  now rewrites the first bool to `None` and drops the rest, covering `bool`,
+  `np.bool_` and 0-d bool arrays. Bare `a[True]` was already correct.
+- **Slices with `start > stop` crashed with `ValueError: negative dimensions
+  are not allowed`.** The slicing fast path normalized slices with
+  `slice.indices()`, which leaves `a[100:50]` as `(100, 50)`; ndindex clamps
+  any empty positive-step slice to `(0, 0)`, and without that clamp the
+  result shape went negative. The fast path now clamps empty slices exactly
+  like ndindex.
+- **`blosc2.pack_tensor()` failed on 0-dim arrays** (e.g. a scalar
+  `np.array(17)`); 0-dim inputs are now packed correctly.
+- **`SChunk.meta.get(key, default)` recursed forever** when the key was
+  absent; it now returns the default.
+- **Pinned miniexpr fixes:** complex division with a scalar operand returned
+  wrong results, expressions whose evaluation block was exactly 4096 elements
+  could be mis-evaluated, and prefilter reads for operands wider than 255
+  bytes read the wrong data. String expression results also keep the code-unit
+  shuffle width (the UCS4 shuffle for `<Un`, instead of silently falling back
+  to byte shuffle), `upper`/`lower` preserve the width, and a string result
+  containing the utf8 null sentinel is refused rather than corrupting null
+  masks.
+- **`blosc2.random` constructors with NumPy integer scalar arguments** (e.g.
+  `rng.integers(np.int64(3))`) no longer produce wrong shapes.
+- **`engine=blosc2.jit` with `Series` operands no longer crashes on
+  `axis=1`**, and an already-jitted function is not jitted a second time.
+
+### Documentation
+
+- **Two new optimization tips** joined `doc/guides/optimization_tips.md`:
+  generating arrays with DSL kernels, and broadcasting small operands into
+  large on-disk arrays; the guide's figures were regenerated against the
+  reference machine and the benchmark harness now checks c-blosc2's
+  pread/handle-cache work.
+- The pandas engine guide was rewritten around the readable-UDF pitch (with a
+  Kepler plot), the pandas guide around one question, and `blosc2.argsort` is
+  now documented.
 
 ## Changes from 4.9.0 to 4.9.1
 
