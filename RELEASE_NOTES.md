@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.10.0 to 4.10.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.9.1 to 4.10.0
 
 This release is the string-support milestone: string expressions and DSL
