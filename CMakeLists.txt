@@ -182,6 +182,21 @@ else()
     include_directories("${blosc2_SOURCE_DIR}/include")
     target_link_libraries(blosc2_ext PRIVATE blosc2_static)
 
+    # scikit-build-core's wheel writer follows symlinks, so each of the three
+    # names C-Blosc2 installs for the shared library (the VERSION real file
+    # plus the SOVERSION and bare symlinks) lands in the wheel as a full copy.
+    # Teaching the writer to preserve them would not help either: pip
+    # materialises a symlink stored in a wheel as a regular file holding the
+    # link target as text.
+    #
+    # Nothing references the fully versioned name -- it is only a symlink
+    # target -- so drop VERSION and keep the two that are used:
+    # libblosc2.<SOVERSION>, the SONAME a linked application loads, and the
+    # bare name that -lblosc2 resolves.  Two copies instead of three.
+    if(TARGET blosc2_shared)
+        set_property(TARGET blosc2_shared PROPERTY VERSION)
+    endif()
+
     # Overwrite the blosc2.pc that C-Blosc2 just installed with a relocatable
     # one; see cmake/blosc2-relocatable.pc.in.  Two things make this work:
     #  - it is declared after FetchContent_MakeAvailable(), so it runs after
