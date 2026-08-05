@@ -1507,3 +1507,74 @@ def test_registry_fallback_hides_and_protects(tmp_path, storage_type):
         assert "/table/_meta" not in ts
         with pytest.raises(ValueError, match="object root"):
             ts.get_subtree("/table")
+
+
+@dataclasses.dataclass
+class _CloseRow:
+    id: int = blosc2.field(blosc2.int64(), default=0)
+
+
+def _store_with_tables(path, names):
+    with TreeStore(path, mode="w") as ts:
+        for name in names:
+            table = blosc2.CTable(_CloseRow, expected_size=2)
+            table.append({"id": 1})
+            ts[f"/{name}"] = table
+
+
+def _boom(*args, **kwargs):
+    raise OSError("simulated close failure")
+
+
+def test_close_reports_a_failing_inline_handle(tmp_path):
+    """A handle that cannot flush must not be packed away silently.
+
+    CTable.close() re-raises so callers learn the table did not flush; the
+    store used to swallow that and pack anyway, leaving an archive whose row
+    count disagreed with its varlen columns.
+    """
+    path = str(tmp_path / "one.b2z")
+    _store_with_tables(path, ["a"])
+
+    ts = TreeStore(path, mode="a")
+    ts["/a"].close = _boom
+
+    with pytest.raises(OSError, match="simulated close failure"):
+        ts.close()
+
+    # The store is still packed and released, so the failure cannot leak resources.
+    assert ts._closed
+
+
+def test_close_gathers_every_failing_handle(tmp_path):
+    path = str(tmp_path / "many.b2z")
+    _store_with_tables(path, ["a", "b", "c"])
+
+    ts = TreeStore(path, mode="a")
+    handles = {name: ts[f"/{name}"] for name in ("a", "b", "c")}
+    for handle in handles.values():
+        handle.append({"id": 2})
+    handles["a"].close = _boom
+    handles["c"].close = _boom
+
+    with pytest.raises(BaseExceptionGroup) as excinfo:
+        ts.close()
+    assert len(excinfo.value.exceptions) == 2
+
+    # A broken handle must not stop the healthy ones from flushing.
+    with TreeStore(path, mode="r") as reopened:
+        assert reopened["/b"].nrows == 2
+
+
+def test_close_stays_quiet_when_handles_close_cleanly(tmp_path):
+    path = str(tmp_path / "ok.b2z")
+    _store_with_tables(path, ["a", "b"])
+
+    ts = TreeStore(path, mode="a")
+    for name in ("a", "b"):
+        ts[f"/{name}"].append({"id": 2})
+    ts.close()
+
+    with TreeStore(path, mode="r") as reopened:
+        assert reopened["/a"].nrows == 2
+        assert reopened["/b"].nrows == 2

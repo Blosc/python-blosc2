@@ -1025,20 +1025,39 @@ class TreeStore(DictStore):
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        """Flush inline object handles then delegate to DictStore.close()."""
+        """Flush inline object handles then delegate to DictStore.close().
+
+        Raises
+        ------
+        Exception
+            Whatever an inline handle raised while closing.  The failure is
+            reported *after* every handle has been given a chance to close and
+            the store itself has been packed, so resources are always released.
+        """
         if self._closed:
             return
         # Close any inline object handles (CTable etc.) before packing.
+        # A handle that fails to close has not flushed everything it holds, so
+        # the packed store is inconsistent -- CTable.close() re-raises for
+        # exactly this reason.  Swallowing it here produced archives whose row
+        # count disagreed with a varlen column, which only failed on read, long
+        # after close() reported success.  Collect instead, so one bad handle
+        # neither hides the problem nor stops the others from closing.
+        errors = []
         for handle in list(getattr(self, "_inline_handles", [])):
             try:
                 storage = getattr(handle, "_storage", None)
                 if storage is not None:
                     handle.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                errors.append(exc)
         if hasattr(self, "_inline_handles"):
             self._inline_handles.clear()
         super().close()
+        if errors:
+            if len(errors) == 1:
+                raise errors[0]
+            raise ExceptionGroup("failed to close inline object handles", errors)
 
     def discard(self) -> None:
         """Discard without repacking; also discard inline handle storage."""
