@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import copy
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -288,18 +288,11 @@ class EmbedStore:
 
     def __getitem__(self, key: str) -> blosc2.NDArray | SChunk | blosc2.ObjectArray | blosc2.BatchArray:
         """Retrieve a node from the embed store."""
-        if self._shared:
-            with self._backing_schunk.holding_lock():
-                self._sync_metadata()
-                if key not in self._embed_map:
-                    raise KeyError(f"Key '{key}' not found in the embed store.")
-                node_info = self._embed_map[key]
-                urlbase = node_info.get("urlbase", None)
-                if not urlbase:
-                    offset = node_info["offset"]
-                    length = node_info["length"]
-                    serialized_data = bytes(self._store[offset : offset + length])
-        else:
+        # Only a shared store needs the lock: it is the only mode where
+        # _sync_metadata() does real work and where the index/data race exists.
+        # holding_lock() also refreshes, which costs a filesystem poll, so the
+        # non-shared path takes neither.
+        with self._backing_schunk.holding_lock() if self._shared else nullcontext():
             self._sync_metadata()
             if key not in self._embed_map:
                 raise KeyError(f"Key '{key}' not found in the embed store.")
@@ -309,6 +302,7 @@ class EmbedStore:
                 offset = node_info["offset"]
                 length = node_info["length"]
                 serialized_data = bytes(self._store[offset : offset + length])
+
         if urlbase:
             # Outside the lock: opening a C2Array involves an HTTP round trip
             return blosc2.open(blosc2.URLPath(node_info["path"], urlbase=urlbase), mode="r")
