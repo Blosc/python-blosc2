@@ -1177,9 +1177,19 @@ def test_embed_store_cross_process_writers(tmp_path):
             assert "/seed" in keys
             for key in keys[-3:]:
                 node = estore.get(key)
-                if node is not None:  # a concurrent delete cannot happen here
-                    assert len(node[:]) == 10
-                    nreads += 1
+                if node is None:  # a concurrent delete cannot happen here
+                    continue
+                try:
+                    data = node[:]
+                except RuntimeError:
+                    # Same "listed before it is readable" window the None check
+                    # above covers, one step later: the key is in the index and
+                    # the node resolves, but the writer has not flushed its
+                    # chunk yet.  Tolerated only while the writers are running
+                    # -- every key is verified strictly once they have exited.
+                    continue
+                assert len(data) == 10
+                nreads += 1
     finally:
         for w in writers:
             if w.poll() is None:
