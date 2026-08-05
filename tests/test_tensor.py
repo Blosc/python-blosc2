@@ -249,3 +249,20 @@ def test_save_tensor_sparse(size, sparse, urlpath):
     assert os.path.isdir(urlpath) == sparse
     blosc2.remove_urlpath(urlpath)
     assert np.array_equal(nparray, a2)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        np.dtype([("f0", "i8"), ("f1", "u1")], align=True),
+        np.dtype([("f0", "u1"), ("f1", "f8"), ("f2", "u2")], align=True),
+        np.dtype({"names": ["a", "b"], "formats": ["<i4", "<f8"], "offsets": [0, 16], "itemsize": 32}),
+        np.dtype([("a", "<f8", (3,)), ("b", "u1")], align=True),
+    ],
+)
+def test_pack_tensor_padded_dtype(dtype):
+    # Padding must not come back as an extra field (issue #287)
+    nparray = np.zeros(10, dtype=dtype)
+    a2 = blosc2.unpack_tensor(blosc2.pack_tensor(nparray))
+    assert a2.dtype == dtype
+    assert np.array_equal(nparray, a2)

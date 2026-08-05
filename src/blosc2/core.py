@@ -682,7 +682,9 @@ def pack_tensor(
 
 def _unpack_tensor(schunk):
     kind, shape, dtype = schunk.vlmeta["__pack_tensor__"]
-    out = np.empty(shape, dtype=dtype)
+    # np.dtype() renames the empty-named padding fields in a descr ('' -> 'f2'),
+    # turning padding into a phantom column; descr_to_dtype restores them as padding.
+    out = np.empty(shape, dtype=np.lib.format.descr_to_dtype(dtype))
     schunk.get_slice(out=out)
 
     if kind == "torch":
