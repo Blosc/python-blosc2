@@ -4508,10 +4508,16 @@ class LazyExpr(LazyArray):
     def __getitem__(self, item):
         kwargs = {"_getitem": True}
         result = self.compute(item, **kwargs)
-        # Squeeze single-element dimensions when indexing with integers
+        # Drop the dimensions the integer indices consumed -- and only those;
+        # squeezing every length-1 axis also ate ones the index kept.
+        # broadcast_to allocates nothing, so NumPy's own shape algebra is free.
         # See e.g. examples/ndarray/animated_plot.py
         if isinstance(item, int) or (hasattr(item, "__iter__") and any(isinstance(i, int) for i in item)):
-            result = result.squeeze(axis=tuple(i for i in range(result.ndim) if result.shape[i] == 1))
+            shape = np.broadcast_to(np.empty((), dtype=bool), self.shape)[item].shape
+            # A where() result is filtered, so its length is data-dependent and
+            # self.shape says nothing about it; leave those alone.
+            if math.prod(shape) == result.size:
+                result = result.reshape(shape)
         return result
 
     def slice(self, item):
