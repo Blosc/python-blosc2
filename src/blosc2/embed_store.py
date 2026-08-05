@@ -288,17 +288,18 @@ class EmbedStore:
 
     def __getitem__(self, key: str) -> blosc2.NDArray | SChunk | blosc2.ObjectArray | blosc2.BatchArray:
         """Retrieve a node from the embed store."""
-        self._sync_metadata()
-        if key not in self._embed_map:
-            raise KeyError(f"Key '{key}' not found in the embed store.")
-        node_info = self._embed_map[key]
-        urlbase = node_info.get("urlbase", None)
-        if urlbase:
-            urlpath = blosc2.URLPath(node_info["path"], urlbase=urlbase)
-            return blosc2.open(urlpath, mode="r")
-        offset = node_info["offset"]
-        length = node_info["length"]
-        serialized_data = bytes(self._store[offset : offset + length])
+        with self._backing_schunk.holding_lock():
+            self._sync_metadata()
+            if key not in self._embed_map:
+                raise KeyError(f"Key '{key}' not found in the embed store.")
+            node_info = self._embed_map[key]
+            urlbase = node_info.get("urlbase", None)
+            if urlbase:
+                urlpath = blosc2.URLPath(node_info["path"], urlbase=urlbase)
+                return blosc2.open(urlpath, mode="r")
+            offset = node_info["offset"]
+            length = node_info["length"]
+            serialized_data = bytes(self._store[offset : offset + length])
         # It is safer to copy data here, as the reference to the SChunk may disappear
         # Use from_cframe so we can deserialize either an NDArray or an SChunk
         return blosc2.from_cframe(serialized_data, copy=True)
