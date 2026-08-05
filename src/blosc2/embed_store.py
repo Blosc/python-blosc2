@@ -294,12 +294,14 @@ class EmbedStore:
                 raise KeyError(f"Key '{key}' not found in the embed store.")
             node_info = self._embed_map[key]
             urlbase = node_info.get("urlbase", None)
-            if urlbase:
-                urlpath = blosc2.URLPath(node_info["path"], urlbase=urlbase)
-                return blosc2.open(urlpath, mode="r")
-            offset = node_info["offset"]
-            length = node_info["length"]
-            serialized_data = bytes(self._store[offset : offset + length])
+            if not urlbase:
+                offset = node_info["offset"]
+                length = node_info["length"]
+                serialized_data = bytes(self._store[offset : offset + length])
+
+        if urlbase:
+            # Outside the lock: opening a C2Array involves an HTTP round trip
+            return blosc2.open(blosc2.URLPath(node_info["path"], urlbase=urlbase), mode="r")
         # It is safer to copy data here, as the reference to the SChunk may disappear
         # Use from_cframe so we can deserialize either an NDArray or an SChunk
         return blosc2.from_cframe(serialized_data, copy=True)
