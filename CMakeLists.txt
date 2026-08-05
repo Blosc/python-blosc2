@@ -16,8 +16,8 @@ project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
 set(BLOSC2_MIN_VERSION 3.3.0)
-set(BLOSC2_BUNDLED_VERSION v3.3.1)
-# set(BLOSC2_BUNDLED_VERSION d30c76e386b011aedd859fb8f1dc0d60f565c9f0)
+# set(BLOSC2_BUNDLED_VERSION v3.3.1)
+set(BLOSC2_BUNDLED_VERSION a7f9a5be3527e87a7cbce1c16977835361d27033)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
@@ -96,12 +96,17 @@ set(MINIEXPR_BUILD_SHARED OFF CACHE BOOL "Build miniexpr shared library" FORCE)
 set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
 set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
 set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
-# Keep miniexpr's bundled libtcc and related files inside the blosc2 package.
-# Without this, miniexpr's install rules use the default CMAKE_INSTALL_LIBDIR
+# Keep miniexpr's and C-Blosc2's bundled files inside the blosc2 package.
+# Without this, their install rules use the default CMAKE_INSTALL_LIBDIR
 # ("lib"), which scikit-build places at site-packages/lib.
-set(CMAKE_INSTALL_INCLUDEDIR ${SKBUILD_PLATLIB_DIR}/blosc2/include)
-set(CMAKE_INSTALL_LIBDIR ${SKBUILD_PLATLIB_DIR}/blosc2/lib)
-set(CMAKE_INSTALL_DATADIR ${SKBUILD_PLATLIB_DIR}/blosc2/share)
+#
+# These must stay RELATIVE to CMAKE_INSTALL_PREFIX (scikit-build-core points it
+# at the wheel's platlib).  Both blosc2.pc.in and the exported Blosc2Targets
+# compose ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}, so an absolute value
+# here produces a doubled path that no consumer can use.
+set(CMAKE_INSTALL_INCLUDEDIR blosc2/include)
+set(CMAKE_INSTALL_LIBDIR blosc2/lib)
+set(CMAKE_INSTALL_DATADIR blosc2/share)
 
 if(EMSCRIPTEN)
   set(MINIEXPR_ENABLE_TCC_JIT ON CACHE BOOL "Enable TCC JIT in Emscripten builds" FORCE)
@@ -164,7 +169,7 @@ else()
     set(BUILD_FUZZERS OFF CACHE BOOL "Build C-Blosc2 fuzzers")
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     set(Blosc2_INSTALL_CMAKEDIR ${CMAKE_INSTALL_LIBDIR}/cmake/blosc2) # directory for cmake files
-    set(CMAKE_INSTALL_BINDIR ${SKBUILD_PLATLIB_DIR}/blosc2/lib) # directory for libblosc2.dll on windows
+    set(CMAKE_INSTALL_BINDIR blosc2/lib) # directory for libblosc2.dll on windows
     # we will put the binaries of the C-Blosc2 library into the wheels according to PEP
     set(BLOSC_INSTALL ON)
     include(FetchContent)
@@ -176,6 +181,27 @@ else()
     FetchContent_MakeAvailable(blosc2)
     include_directories("${blosc2_SOURCE_DIR}/include")
     target_link_libraries(blosc2_ext PRIVATE blosc2_static)
+
+    # Overwrite the blosc2.pc that C-Blosc2 just installed with a relocatable
+    # one; see cmake/blosc2-relocatable.pc.in.  Two things make this work:
+    #  - it is declared after FetchContent_MakeAvailable(), so it runs after
+    #    C-Blosc2's own install rule;
+    #  - it uses install(CODE) rather than install(FILES), because the latter
+    #    goes through file(INSTALL), which skips the copy when source and
+    #    destination share a timestamp -- and both .pc files are generated
+    #    within the same second, so the upstream one would silently survive.
+    # The version is read from the bundled header rather than from
+    # BLOSC2_BUNDLED_VERSION, which may be pinned to a bare commit hash.
+    file(STRINGS "${blosc2_SOURCE_DIR}/include/blosc2.h" _blosc2_version_line
+         REGEX "^#define[ \t]+BLOSC2_VERSION_STRING")
+    string(REGEX REPLACE ".*\"([^\"]+)\".*" "\\1" BLOSC2_PC_VERSION "${_blosc2_version_line}")
+    install(CODE "
+        set(BLOSC2_PC_VERSION \"${BLOSC2_PC_VERSION}\")
+        configure_file(
+            \"${PROJECT_SOURCE_DIR}/cmake/blosc2-relocatable.pc.in\"
+            \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/pkgconfig/blosc2.pc\"
+            @ONLY)
+    ")
 endif()
 
 # TODO
@@ -206,4 +232,18 @@ install(
 install(
   FILES "${miniexpr_SOURCE_DIR}/src/me_jit_glue.js"
   DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
+)
+
+# The wheel bundles miniexpr's libtcc (LGPL 2.1), so its license texts have to
+# travel with it.  miniexpr's own install rules put them under blosc2/share,
+# which keeps them next to the library for C consumers; mirror them into
+# .dist-info/licenses as well, which is where PEP 639 tooling looks.
+install(
+  FILES
+    "${miniexpr_SOURCE_DIR}/LICENSE"
+    "${miniexpr_SOURCE_DIR}/LICENSE-LIBTCC"
+    "${miniexpr_SOURCE_DIR}/LICENSE-SLEEF"
+    "${miniexpr_SOURCE_DIR}/LICENSE-TINYEXPR"
+    "${miniexpr_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+  DESTINATION ${SKBUILD_METADATA_DIR}/licenses/miniexpr
 )
