@@ -116,6 +116,27 @@ def _int64_datetime_operands(local_dict):
     return converted if units else None
 
 
+def _numpy_eval_datetime_aware(expression, _globals, local_dict):
+    """``eval`` an expression with NumPy, reading bare numbers as datetime counts.
+
+    NumPy refuses to compare a datetime64 against a plain number, but a string
+    expression has no way to spell a datetime literal, so blosc2 reads the
+    number as a count in the operand's own unit (see
+    `_int64_datetime_operands`).  Only comparisons are meant by this; anything
+    else keeps NumPy's error.
+    """
+    try:
+        return eval(expression, _globals, local_dict)
+    except TypeError:
+        int_dict = _int64_datetime_operands(local_dict)
+        if int_dict is None:
+            raise
+        res = eval(expression, _globals, int_dict)
+        if getattr(res, "dtype", None) != np.bool_:
+            raise
+        return res
+
+
 def ne_evaluate(expression, local_dict=None, **kwargs):
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
     if local_dict is None:
@@ -137,9 +158,9 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
         populate_safe_numpy_globals(expression)
         if "out" in kwargs:
             out = kwargs.pop("out")
-            out[:] = eval(expression, safe_numpy_globals, local_dict)
+            out[:] = _numpy_eval_datetime_aware(expression, safe_numpy_globals, local_dict)
             return out
-        res = eval(expression, safe_numpy_globals, local_dict)
+        res = _numpy_eval_datetime_aware(expression, safe_numpy_globals, local_dict)
         return np.asarray(res) if not hasattr(res, "shape") else res
     try:
         return numexpr.evaluate(expression, local_dict=local_dict, **kwargs)
@@ -5292,27 +5313,13 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
     else:
         _globals = safe_numpy_globals
     try:
-        _out = eval(expression, _globals, ops)
+        _out = _numpy_eval_datetime_aware(expression, _globals, ops)
     except RuntimeWarning:
         # Sometimes, numpy gets a RuntimeWarning when evaluating expressions
         # with synthetic operands (1's). Let's try with numexpr, which is not so picky
         # about this.
         ops = npops if blosc2.IS_WASM else ops
         _out = ne_evaluate(expression, local_dict=ops)
-    except TypeError:
-        # NumPy refuses to compare a datetime64 against a plain number, but a
-        # string expression has no way to spell a datetime literal, so blosc2
-        # reads the number as a count in the operand's own unit (see
-        # `_int64_datetime_operands`).  Only comparisons are meant by this;
-        # anything else keeps NumPy's error.
-        int_ops = _int64_datetime_operands(ops)
-        if int_ops is None:
-            raise
-        _out = eval(expression, _globals, int_ops)
-        if _out.dtype != np.bool_:
-            # Only comparisons read a number as a count; keep NumPy's error for
-            # everything else, exactly as `ne_evaluate` does.
-            raise
     return _out
 
 

@@ -753,6 +753,18 @@ def test_datetime_comparison_int_count(datetime_sarray):
     np.testing.assert_array_equal(sa["time < 10"][:], npa[expected])
 
 
+def test_datetime_comparison_wasm_path(datetime_sarray, monkeypatch):
+    # Pyodide evaluates with NumPy instead of numexpr, and NumPy is the one that
+    # refuses datetime64 against a plain number; that path needs the same
+    # count-in-the-operand's-unit reading (issue #409)
+    monkeypatch.setattr(blosc2, "IS_WASM", True)
+    npa, sa = datetime_sarray
+    t0 = np.datetime64(10, "s")
+    np.testing.assert_array_equal((sa["time"] < 10)[:], npa["time"].view("i8") < 10)
+    np.testing.assert_array_equal((sa["time"] < t0)[:], npa["time"] < t0)
+    np.testing.assert_array_equal(sa["time < 10"][:], npa[npa["time"].view("i8") < 10])
+
+
 def test_datetime_comparison_two_operands(datetime_sarray):
     npa, sa = datetime_sarray
     shifted = npa["time"] + np.timedelta64(5, "s")
