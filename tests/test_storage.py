@@ -9,9 +9,9 @@ from dataclasses import asdict, fields
 
 import numpy as np
 import pytest
-from conftest import expected_nthreads
 
 import blosc2
+from conftest import expected_nthreads
 
 
 @pytest.mark.parametrize(

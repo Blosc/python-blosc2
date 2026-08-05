@@ -9,10 +9,10 @@ import math
 
 import numpy as np
 import pytest
-from conftest import expected_nthreads
 
 import blosc2
 from blosc2.ndarray import get_chunks_idx
+from conftest import expected_nthreads
 
 
 def udf1p(inputs_tuple, output, offset):
