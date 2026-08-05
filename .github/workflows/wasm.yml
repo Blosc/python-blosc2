@@ -21,7 +21,7 @@ jobs:
     env:
       CIBW_BUILD: ${{ matrix.cibw_build }}
       CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
-      CIBW_TEST_COMMAND: "pytest {project}/tests"
+      CIBW_TEST_COMMAND: "pytest -n0 {project}/tests"  # -n0: Pyodide cannot spawn xdist workers
 
     strategy:
       matrix:

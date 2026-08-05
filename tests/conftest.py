@@ -52,7 +52,28 @@ def _fast_textual_idle():
     textual_wait.SLEEP_GRANULARITY = saved
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_cwd_per_worker(tmp_path_factory):
+    """Give each xdist worker its own cwd.
+
+    Many tests write fixed relative urlpaths ("a.b2nd", "b.b2nd", ...); under
+    ``-n`` those collide between workers.  Serial runs keep the repo cwd.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker is None:
+        yield
+        return
+    saved = os.getcwd()
+    os.chdir(tmp_path_factory.mktemp(worker))
+    yield
+    os.chdir(saved)
+
+
 def pytest_configure(config):
+    # The repr tests assert on column truncation, so they must not depend on
+    # the developer's terminal width (xdist workers have no tty and fall back
+    # to 80 columns, which hides columns the tests expect to see).
+    os.environ["COLUMNS"] = "120"
     blosc2.print_versions()
     if sys.platform != "emscripten":
         # Using the defaults for nthreads can be very time consuming for tests.
@@ -63,6 +84,7 @@ def pytest_configure(config):
         blosc2.set_nthreads(2)
         # This makes the worst time (242 sec)
         # blosc2.set_nthreads(blosc2.nthreads)  # worst runtime ()
+        blosc2.set_nthreads(2)
 
 
 @pytest.fixture(scope="session")

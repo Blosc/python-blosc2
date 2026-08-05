@@ -31,27 +31,27 @@ except ImportError:
 
 @pytest.mark.parametrize(
     ("ashape", "achunks", "ablocks"),
-    {
+    [
         ((12, 10), (7, 5), (3, 3)),
         ((10,), (9,), (7,)),
         ((0,), (0,), (0,)),
         ((4, 10, 10), (2, 3, 4), (1, 2, 2)),
-    },
+    ],
 )
 @pytest.mark.parametrize(
     ("bshape", "bchunks", "bblocks"),
-    {
+    [
         ((10,), (4,), (2,)),
         ((10, 5), (3, 4), (1, 3)),
         ((10, 12), (2, 4), (1, 2)),
         ((3, 10, 3), (2, 2, 4), (1, 1, 2)),
         ((0,), (0,), (0,)),
         ((6, 3, 10, 10), (5, 2, 3, 4), (2, 1, 2, 2)),
-    },
+    ],
 )
 @pytest.mark.parametrize(
     "dtype",
-    {np.float32, np.float64},
+    [np.float32, np.float64],
 )
 def test_matmul(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtype):
     a = blosc2.linspace(0, 1, dtype=dtype, shape=ashape, chunks=achunks, blocks=ablocks)
@@ -439,22 +439,22 @@ def test_matmul_fast_path_failure_falls_back(monkeypatch):
 
 @pytest.mark.parametrize(
     ("ashape", "achunks", "ablocks"),
-    {
+    [
         ((12, 10), (7, 5), (3, 3)),
         ((10,), (9,), (7,)),
-    },
+    ],
 )
 @pytest.mark.parametrize(
     ("bshape", "bchunks", "bblocks"),
-    {
+    [
         ((10,), (4,), (2,)),
         ((10, 5), (3, 4), (1, 3)),
         ((10, 12), (2, 4), (1, 2)),
-    },
+    ],
 )
 @pytest.mark.parametrize(
     "dtype",
-    {np.complex64, np.complex128},
+    [np.complex64, np.complex128],
 )
 def test_matmul_complex(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtype):
     real_part = blosc2.linspace(0, 1, shape=ashape, chunks=achunks, blocks=ablocks, dtype=dtype)
@@ -478,19 +478,19 @@ def test_matmul_complex(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtyp
 
 @pytest.mark.parametrize(
     ("ashape", "achunks", "ablocks"),
-    {
+    [
         ((12, 11), (7, 5), (3, 1)),
         ((0, 0), (0, 0), (0, 0)),
         ((10,), (4,), (2,)),
-    },
+    ],
 )
 @pytest.mark.parametrize(
     ("bshape", "bchunks", "bblocks"),
-    {
+    [
         ((1, 5), (1, 4), (1, 3)),
         ((4, 6), (2, 4), (1, 3)),
         ((5,), (4,), (2,)),
-    },
+    ],
 )
 def test_shapes(ashape, achunks, ablocks, bshape, bchunks, bblocks):
     a = blosc2.linspace(0, 10, shape=ashape, chunks=achunks, blocks=ablocks)
@@ -505,7 +505,7 @@ def test_shapes(ashape, achunks, ablocks, bshape, bchunks, bblocks):
 
 @pytest.mark.parametrize(
     "scalar",
-    {
+    [
         5,  # int
         5.3,  # float
         1 + 2j,  # complex
@@ -517,7 +517,7 @@ def test_shapes(ashape, achunks, ablocks, bshape, bchunks, bblocks):
         np.float64(5.3),  # NumPy float64
         np.complex64(1 + 2j),  # NumPy complex64
         np.complex128(1 + 2j),  # NumPy complex128
-    },
+    ],
 )
 def test_matmul_scalars(scalar):
     vector = blosc2.asarray(np.array([1, 2, 3]))
@@ -569,18 +569,18 @@ def test_dims(ashape, bshape):
 
 @pytest.mark.parametrize(
     ("ashape", "achunks", "ablocks", "adtype"),
-    {
+    [
         ((7, 10), (7, 5), (3, 5), np.float32),
         ((10,), (9,), (7,), np.complex64),
-    },
+    ],
 )
 @pytest.mark.parametrize(
     ("bshape", "bchunks", "bblocks", "bdtype"),
-    {
+    [
         ((10,), (4,), (2,), np.float64),
         ((10, 6), (9, 4), (2, 3), np.complex128),
         ((10, 12), (2, 4), (1, 2), np.complex128),
-    },
+    ],
 )
 def test_special_cases(ashape, achunks, ablocks, adtype, bshape, bchunks, bblocks, bdtype):
     a = blosc2.linspace(0, 10, dtype=adtype, shape=ashape, chunks=achunks, blocks=ablocks)
@@ -996,7 +996,7 @@ def shape_chunks_blocks_4d(request):
 
 @pytest.mark.parametrize(
     "scalar",
-    {
+    [
         1,  # int
         5.1,  # float
         1 + 2j,  # complex
@@ -1008,7 +1008,7 @@ def shape_chunks_blocks_4d(request):
         np.float64(5.3),  # NumPy float64
         np.complex64(0 + 3j),  # NumPy complex64
         np.complex128(2 - 4j),  # NumPy complex128
-    },
+    ],
 )
 def test_transpose_scalars(scalar):
     scalar_t = blosc2.permute_dims(scalar)
@@ -1079,7 +1079,7 @@ def test_4d_permute_dims(shape_chunks_blocks_4d, dtype_fixture, axes):
 )
 @pytest.mark.parametrize(
     "dtype",
-    {np.complex64, np.complex128},
+    [np.complex64, np.complex128],
 )
 def test_permutedims_complex(shape_chunks_blocks_3d, dtype, axes):
     shape, chunks, blocks = shape_chunks_blocks_3d

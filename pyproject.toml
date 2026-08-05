@@ -82,6 +82,8 @@ dev = [
 ]
 test = [
     "pytest",
+    # pytest.ini defaults to `-n auto`
+    "pytest-xdist",
     # for the b2view Pilot tests (run with `-m tui`; textual is otherwise opt-in)
     "pytest-asyncio",
     "textual; platform_machine != 'wasm32'",

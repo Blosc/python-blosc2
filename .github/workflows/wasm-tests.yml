@@ -19,7 +19,7 @@ jobs:
       # WASM/Pyodide has no SIMD/runtime CPU detection; disable optimised paths
       CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
       # cibuildwheel runs the suite automatically in the node/pyodide runtime
-      CIBW_TEST_COMMAND: "pytest {project}/tests"
+      CIBW_TEST_COMMAND: "pytest -n0 {project}/tests"  # -n0: Pyodide cannot spawn xdist workers
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
