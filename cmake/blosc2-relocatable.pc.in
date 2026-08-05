@@ -1,0 +1,23 @@
+# Relocatable replacement for the blosc2.pc that C-Blosc2 installs.
+#
+# Upstream's template bakes in @CMAKE_INSTALL_PREFIX@, which is correct for a
+# system install but useless inside a wheel: at build time the prefix is a
+# throwaway staging directory that no longer exists once the wheel is
+# installed.  ${pcfiledir} is expanded by pkg-config (and pkgconf) relative to
+# the directory holding this file, so these paths keep working wherever
+# site-packages happens to live.
+#
+# This file is installed at <site-packages>/blosc2/lib/pkgconfig/blosc2.pc,
+# hence ../.. resolves to <site-packages>/blosc2.
+prefix=${pcfiledir}/../..
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: blosc2
+Description: A blocking, shuffling and lossless compression library
+URL: https://blosc.org/
+Version: @BLOSC2_PC_VERSION@
+
+Requires:
+Libs: -L${libdir} -lblosc2
+Cflags: -I${includedir}
