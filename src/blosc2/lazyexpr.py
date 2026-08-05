@@ -17,6 +17,7 @@ import enum
 import inspect
 import linecache
 import math
+import operator
 import os
 import pathlib
 import re
@@ -83,6 +84,38 @@ global safe_blosc2_globals
 safe_blosc2_globals = {}
 
 
+def _int64_datetime_operands(local_dict):
+    """Return `local_dict` with datetime64/timedelta64 values viewed as int64.
+
+    numexpr has no datetime types, but both are int64 counts underneath, so a
+    comparison is exact in that representation -- and much faster than the
+    NumPy fallback.  Returns None when the substitution would not be faithful:
+
+    * mixed units, because the counts are then on different scales (NumPy
+      promotes to the finer unit instead);
+    * NaT, which views as INT64_MIN and would come out as the smallest value
+      rather than never comparing true.
+
+    Both cases are rare and correctly handled by the NumPy fallback, just more
+    slowly.
+    """
+    converted = {}
+    units = set()
+    for key, value in local_dict.items():
+        dtype = getattr(value, "dtype", None)
+        # Frame locals get merged in below, so `local_dict` also carries blosc2
+        # containers that numexpr could not consume in the first place; leave
+        # anything that is not a NumPy value alone.
+        if dtype is None or dtype.kind not in "Mm" or not isinstance(value, np.ndarray | np.generic):
+            converted[key] = value
+            continue
+        units.add(np.datetime_data(dtype)[0])
+        if len(units) > 1 or np.isnat(value).any():
+            return None
+        converted[key] = np.asarray(value).view("i8")
+    return converted if units else None
+
+
 def ne_evaluate(expression, local_dict=None, **kwargs):
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
     if local_dict is None:
@@ -111,8 +144,19 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
     try:
         return numexpr.evaluate(expression, local_dict=local_dict, **kwargs)
     except ValueError as e:
-        if e.args and e.args[0] == "NumExpr 2 does not support Unicode as a dtype.":
+        msg = e.args[0] if e.args else ""
+        if msg == "NumExpr 2 does not support Unicode as a dtype.":
             pass
+        elif msg.startswith(("unknown type datetime64", "unknown type timedelta64")):
+            int_dict = _int64_datetime_operands(local_dict)
+            if int_dict is not None:
+                with contextlib.suppress(Exception):
+                    result = numexpr.evaluate(expression, local_dict=int_dict, **kwargs)
+                    if result.dtype == np.bool_:
+                        return result
+            # Only comparisons are exact as raw int64 counts; arithmetic
+            # (datetime64 - datetime64 -> timedelta64) needs NumPy's own type
+            # rules, so let it reach the fallback below.
         else:
             raise  # unsafe expression
     except Exception:
@@ -260,6 +304,15 @@ def _find_constructor_call(expression: str, constructor: str) -> re.Match | None
 
 
 relational_ops = ["==", "!=", "<", "<=", ">", ">="]
+# Arithmetic whose result dtype NumPy defines specially for datetime operands
+_datetime_binops = {
+    "+": operator.add,
+    "-": operator.sub,
+    "*": operator.mul,
+    "/": operator.truediv,
+    "//": operator.floordiv,
+    "%": operator.mod,
+}
 logical_ops = ["&", "|", "^", "~"]
 not_complex_ops = ["maximum", "minimum", "<", "<=", ">", ">="]
 funcs_2args = (
@@ -3366,6 +3419,14 @@ def check_dtype(op, value1, value2):
         if np.issubdtype(v1_dtype, np.integer) and np.issubdtype(v2_dtype, np.integer):
             return blosc2.float64
 
+    if (v1_dtype.kind in "Mm" or v2_dtype.kind in "Mm") and op in _datetime_binops:
+        # result_type describes promotion, not operator semantics, and the two
+        # part ways for datetimes: subtracting two datetime64s gives a
+        # timedelta64, and adding a timedelta64 to one gives a datetime64.
+        # Ask NumPy on empty operands, which costs nothing.
+        with contextlib.suppress(TypeError, ValueError):
+            return _datetime_binops[op](np.empty(0, v1_dtype), np.empty(0, v2_dtype)).dtype
+
     # Follow NumPy rules for scalar-array operations
     return blosc2.result_type(value1, value2)
 
@@ -5171,6 +5232,20 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
         # about this.
         ops = npops if blosc2.IS_WASM else ops
         _out = ne_evaluate(expression, local_dict=ops)
+    except TypeError:
+        # NumPy refuses to compare a datetime64 against a plain number, but a
+        # string expression has no way to spell a datetime literal, so blosc2
+        # reads the number as a count in the operand's own unit (see
+        # `_int64_datetime_operands`).  Only comparisons are meant by this;
+        # anything else keeps NumPy's error.
+        int_ops = _int64_datetime_operands(ops)
+        if int_ops is None:
+            raise
+        _out = eval(expression, _globals, int_ops)
+        if _out.dtype != np.bool_:
+            # Only comparisons read a number as a count; keep NumPy's error for
+            # everything else, exactly as `ne_evaluate` does.
+            raise
     return _out
 
 

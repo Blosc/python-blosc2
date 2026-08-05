@@ -719,3 +719,78 @@ def test_query_cache_overwrite(tmp_path, same_filter):
 
     expected = nb[nb["A"] < (100 if same_filter else 6000)]
     np.testing.assert_array_equal(np.sort(res["A"].copy()), np.sort(expected["A"].copy()))
+
+
+@pytest.fixture
+def datetime_sarray():
+    N = 50
+    dt = np.dtype([("time", "<M8[s]"), ("A", "f8")])
+    npa = np.zeros(N, dtype=dt)
+    npa["time"] = np.arange(N).astype("M8[s]")
+    npa["A"] = np.arange(N, dtype="f8")
+    return npa, blosc2.asarray(npa)
+
+
+@pytest.mark.parametrize("op", ["<", "<=", ">", ">=", "==", "!="])
+def test_datetime_comparison_scalar(datetime_sarray, op):
+    # numexpr has no datetime types; comparisons must still work (issue #409)
+    npa, sa = datetime_sarray
+    t0 = np.datetime64(10, "s")
+    expected = eval(f"npa['time'] {op} t0")
+    result = eval(f"sa['time'] {op} t0")[:]
+    assert result.dtype == np.bool_
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_datetime_comparison_int_count(datetime_sarray):
+    # NumPy refuses datetime64 vs a plain number, but a string expression has
+    # no way to spell a datetime literal, so blosc2 reads it as a count in the
+    # operand's own unit (issue #409)
+    npa, sa = datetime_sarray
+    expected = npa["time"].view("i8") < 10
+    np.testing.assert_array_equal((sa["time"] < 10)[:], expected)
+    np.testing.assert_array_equal(blosc2.lazyexpr("time < 10", {"time": sa["time"]})[:], expected)
+    np.testing.assert_array_equal(sa["time < 10"][:], npa[expected])
+
+
+def test_datetime_comparison_two_operands(datetime_sarray):
+    npa, sa = datetime_sarray
+    shifted = npa["time"] + np.timedelta64(5, "s")
+    result = (sa["time"] < blosc2.asarray(shifted))[:]
+    np.testing.assert_array_equal(result, npa["time"] < shifted)
+
+
+def test_datetime_comparison_mixed_units(datetime_sarray):
+    # Different units cannot be compared as raw counts; NumPy promotes to the
+    # finer one, and the fallback must do the same
+    npa, sa = datetime_sarray
+    t0 = np.datetime64(10500, "ms")
+    np.testing.assert_array_equal((sa["time"] < t0)[:], npa["time"] < t0)
+
+
+def test_datetime_comparison_nat():
+    # NaT views as INT64_MIN, so the raw-count path must not be taken for it
+    npa = np.arange(10).astype("M8[s]")
+    npa[3] = np.datetime64("NaT", "s")
+    t0 = np.datetime64(5, "s")
+    result = (blosc2.asarray(npa) < t0)[:]
+    np.testing.assert_array_equal(result, npa < t0)
+    assert not result[3]
+
+
+def test_timedelta_comparison():
+    npa = np.arange(10).astype("m8[s]")
+    t0 = np.timedelta64(5, "s")
+    np.testing.assert_array_equal((blosc2.asarray(npa) < t0)[:], npa < t0)
+
+
+def test_datetime_arithmetic_dtype():
+    # result_type describes promotion, not operator semantics
+    npa = np.arange(10).astype("M8[s]")
+    t = blosc2.asarray(npa)
+    t0 = np.datetime64(3, "s")
+    assert (t - t0).dtype == (npa - t0).dtype == np.dtype("m8[s]")
+    np.testing.assert_array_equal((t - t0).compute()[:], npa - t0)
+    td = np.timedelta64(2, "s")
+    assert (t + td).dtype == (npa + td).dtype == np.dtype("M8[s]")
+    np.testing.assert_array_equal((t + td).compute()[:], npa + td)
