@@ -112,9 +112,12 @@ jobs:
     #
     # -n 8 on a 4-core runner: these tests wait on sockets rather than compute,
     # so workers well past the core count still help.  8 is the point of
-    # diminishing returns, not a round number -- 55 tests totalling ~400 s give
-    # ~50 s at 8 workers, and the floor is test_mix_operands at 56 s on its
-    # own, so more workers cannot beat it.
+    # diminishing returns, not a round number -- the floor is the single
+    # slowest test (test_mix_operands, ~42 s), which no amount of workers beats.
+    #
+    # The condition names one matrix entry rather than testing `runner.os`:
+    # three of the five jobs are ubuntu, so `runner.os == 'Linux'` ran this
+    # three times per push.
     - name: Test network access
-      if: runner.os == 'Linux'
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && !matrix.numpy-version
       run: python -m pytest -m "network and not heavy" -n 8 --dist load --durations=10
