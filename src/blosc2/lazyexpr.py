@@ -2540,10 +2540,56 @@ def _drop_indexed_axes(result, shape, item):
     """
     if not (isinstance(item, int) or (hasattr(item, "__iter__") and any(isinstance(i, int) for i in item))):
         return result
-    newshape = np.broadcast_to(np.empty((), dtype=bool), shape)[item].shape
+    try:
+        newshape = np.broadcast_to(np.empty((), dtype=bool), shape)[item].shape
+    except IndexError:
+        # `item` does not describe `shape` at all: a full reduction consumes the
+        # index while slicing its operands (see `_slice_operands_for_eager`), so
+        # by now the result is 0-d and there is nothing left to drop.
+        return result
     # A where() result is filtered, so its length is data-dependent and `shape`
     # says nothing about it; leave those alone.
     return result.reshape(newshape) if math.prod(newshape) == result.size else result
+
+
+def _slice_operands_for_eager(operands, item):
+    """Slice operands prior to eager evaluation of a full-reduction expression.
+
+    A full reduction (e.g. ``mean(a + b)``) yields a 0-d result, so there is
+    nothing to slice in it; slice the operands first instead, e.g.
+    ``lazyexpr("mean(a + b)")[:10]`` means ``mean((a + b)[:10])`` (issue #457).
+
+    An operand that only broadcasts cannot take `item` verbatim -- it has fewer
+    axes than the expression, or length-1 ones the index would overrun -- so it
+    gets the matching slice of itself instead.
+    """
+    sliceable = {
+        key: value
+        for key, value in operands.items()
+        if not np.isscalar(value) and hasattr(value, "__getitem__") and hasattr(value, "shape")
+    }
+    if not sliceable:
+        return operands
+    # The broadcast-slice machinery below pairs each entry of the index with one
+    # axis, so it only understands entries that keep an axis.  An integer or a
+    # fancy component (array, list, mask) does not, and every operand then has
+    # to take the index verbatim -- correct whenever the operands share a shape,
+    # and NumPy's own error when one of them only broadcasts.
+    if isinstance(item, tuple) and not all(isinstance(i, slice) or i is Ellipsis or i is None for i in item):
+        return {key: value[item] if key in sliceable else value for key, value in operands.items()}
+    shape = np.broadcast_shapes(*(value.shape for value in sliceable.values()))
+    _slice = ndindex.ndindex(item).expand(shape).raw
+    slice_shape = ndindex.ndindex(_slice).newshape(shape)
+
+    sliced = {}
+    for key, value in operands.items():
+        if key not in sliceable:
+            sliced[key] = value
+        elif check_smaller_shape(value.shape, shape, slice_shape, _slice):
+            sliced[key] = value[compute_smaller_slice(shape, value.shape, _slice)]
+        else:
+            sliced[key] = value[item]
+    return sliced
 
 
 def infer_reduction_dtype(dtype, operation):
@@ -4403,12 +4449,33 @@ class LazyExpr(LazyArray):
         plan = indexing.IndexPlan(usable=True, reason="mask-scan", base=target, exact_positions=flat_indices)
         return indexing.evaluate_full_query(self._where_args, plan)
 
-    def _compute_expr(self, item, kwargs):
+    def _compute_expr(self, item, kwargs):  # noqa: C901
         if any(method in self.expression for method in eager_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             # Also includes slice
             _globals = get_expr_globals(self.expression)
-            lazy_expr = eval(self.expression, _globals, self.operands)
+            operands = self.operands
+            # Test the type before the value: `item` can be an array (fancy
+            # indexing), and `==` against a slice would broadcast instead of
+            # answering yes or no.
+            is_sliced = isinstance(item, slice) or (
+                isinstance(item, tuple) and any(isinstance(i, slice) for i in item)
+            )
+            # Match chunked_eval: a bare full slice is a no-op.
+            if isinstance(item, slice) and item == slice(None, None, None):
+                item, is_sliced = (), False
+            if (
+                is_sliced
+                and self.shape == ()
+                # `.slice()` already carries its own index; do not apply ours twice
+                and ".slice(" not in self.expression
+            ):
+                # A full reduction yields a 0-d result, so there is nothing to slice
+                # in it; slice the operands first instead, e.g.
+                # lazyexpr("mean(a + b)")[:10] means mean((a + b)[:10]).
+                operands = _slice_operands_for_eager(operands, item)
+                item = ()
+            lazy_expr = eval(self.expression, _globals, operands)
             if not isinstance(lazy_expr, blosc2.LazyExpr):
                 key, mask = process_key(item, lazy_expr.shape)
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)

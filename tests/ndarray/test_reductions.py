@@ -799,6 +799,93 @@ def test_reduction_index():
         arr = blosc2.lazyexpr("sum(a, axis=(0, 0))", {"a": a})
 
 
+def test_reduction_scalar_getitem():
+    # Issue #457: slicing a full-reduction expression must slice the operands
+    # first, e.g. lazyexpr("mean(a + b)")[:10] means mean((a + b)[:10]).
+    na = np.arange(20, dtype=np.float64)
+    nb = na * 2
+    a = blosc2.asarray(na)
+    b = blosc2.asarray(nb)
+    for op in ("sum", "mean", "max", "min", "prod", "std", "var"):
+        lexpr = blosc2.lazyexpr(f"{op}(a + b)", {"a": a, "b": b})
+        expected = getattr(np, op)((na + nb)[:10])
+        np.testing.assert_allclose(lexpr[:10], expected)
+        np.testing.assert_allclose(lexpr.slice(slice(0, 10)), expected)
+    # Full slice and numpy operands
+    lexpr = blosc2.lazyexpr("mean(a + b)", {"a": a, "b": b})
+    np.testing.assert_allclose(lexpr[:], np.mean(na + nb))
+    lexpr = blosc2.lazyexpr("mean(a + b)", {"a": na, "b": nb})
+    np.testing.assert_allclose(lexpr[:10], np.mean((na + nb)[:10]))
+
+
+@pytest.mark.parametrize(
+    ("shape_x", "shape_y"),
+    [((10, 10), (10,)), ((10, 10), (10, 1)), ((10, 10), (1, 10)), ((2, 3, 4), (4,)), ((2, 3, 4), (3, 1))],
+)
+@pytest.mark.parametrize("item", [slice(0, 3), (slice(0, 3), slice(0, 2)), (Ellipsis, slice(0, 2))])
+def test_reduction_scalar_getitem_broadcast(shape_x, shape_y, item):
+    # An operand that only broadcasts has fewer axes than the expression, so it
+    # cannot take the index verbatim (issue #457)
+    nx = np.arange(math.prod(shape_x), dtype="f8").reshape(shape_x)
+    ny = (np.arange(math.prod(shape_y), dtype="f8") + 1).reshape(shape_y)
+    lexpr = blosc2.lazyexpr("mean(x + y)", {"x": blosc2.asarray(nx), "y": blosc2.asarray(ny)})
+    np.testing.assert_allclose(lexpr[item], np.mean((nx + ny)[item]))
+
+
+@pytest.mark.parametrize(
+    "item", [np.array([0, 1, 2]), np.array([True] * 5 + [False] * 5), np.int64(1), 1, slice(0, 3)]
+)
+def test_reduction_partial_getitem_fancy(item):
+    # Indexing a partial reduction slices its result, and the index may well be
+    # an array: deciding that must not compare an array against a slice
+    npa = np.arange(100, dtype="f8").reshape(10, 10)
+    lexpr = blosc2.lazyexpr("sum(x, axis=0)", {"x": blosc2.asarray(npa)})
+    np.testing.assert_allclose(lexpr[item], npa.sum(axis=0)[item])
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        (slice(0, 3), np.array([0, 1])),
+        (slice(0, 3), [0, 1]),
+        (slice(0, 3), np.array([True] * 5 + [False] * 5)),
+        (slice(0, 3), np.int64(1)),
+        (slice(0, 3), 1),
+        (1, slice(0, 3)),
+        (slice(0, 3), None),
+        (slice(0, 3), Ellipsis),
+    ],
+)
+def test_reduction_scalar_getitem_mixed_tuple(item):
+    # A tuple pairing a slice with a fancy component keeps NumPy's meaning when
+    # the operands share a shape; the broadcast machinery only knows slices
+    npa = np.arange(100, dtype="f8").reshape(10, 10)
+    npb = np.ones((10, 10), dtype="f8")
+    lexpr = blosc2.lazyexpr("mean(x + z)", {"x": blosc2.asarray(npa), "z": blosc2.asarray(npb)})
+    np.testing.assert_allclose(lexpr[item], np.mean((npa + npb)[item]))
+
+
+@pytest.mark.parametrize("item", [np.array([0, 1, 2]), np.int64(1), 1, [0, 1]])
+def test_reduction_scalar_getitem_non_slice(item):
+    # A full reduction is 0-d, so a non-slice index is as invalid as in NumPy
+    na = np.arange(20, dtype="f8")
+    lexpr = blosc2.lazyexpr("mean(a)", {"a": blosc2.asarray(na)})
+    with pytest.raises(IndexError):
+        lexpr[item]
+
+
+def test_reduction_scalar_getitem_mixed_index():
+    # A tuple mixing a slice with a fancy array indexes each operand directly;
+    # it cannot go through the broadcast-slice machinery (which assumes slices)
+    nx = np.arange(100, dtype="f8").reshape(10, 10)
+    lexpr = blosc2.lazyexpr("mean(x + y)", {"x": blosc2.asarray(nx), "y": blosc2.asarray(np.ones((1, 10)))})
+    np.testing.assert_allclose(lexpr[0:3, np.array([0, 1])], np.mean((nx + 1)[0:3, [0, 1]]))
+    # ... and a broadcast-only operand degrades to NumPy's own error
+    lexpr = blosc2.lazyexpr("mean(x + y)", {"x": nx, "y": np.ones(10)})
+    with pytest.raises(IndexError):
+        lexpr[0:3, np.array([0, 1])]
+
+
 @pytest.mark.parametrize("idx", [0, 1, (0,), slice(1, 2), (slice(0, 1),), slice(0, 4), (0, 2)])
 def test_reduction_index2(idx):
     N = 10
