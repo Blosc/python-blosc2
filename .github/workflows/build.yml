@@ -88,7 +88,7 @@ jobs:
 
     - name: Test (Windows)
       if: runner.os == 'Windows'
-      run: python -m pytest -m "not heavy and (network or not network)" --durations=25
+      run: python -m pytest -m "not heavy and not network" --durations=25
 #      env:
 #        BLOSC_NTHREADS: "1"
 #        NUMEXPR_NUM_THREADS: "1"
@@ -96,4 +96,25 @@ jobs:
 
     - name: Test (non-Windows)
       if: runner.os != 'Windows'
-      run: python -m pytest -m "not heavy and (network or not network)" --durations=25
+      run: python -m pytest -m "not heavy and not network" --durations=25
+
+    # The network tests talk to a live Caterva2 server and were 24 of the 25
+    # slowest tests in *both* the Windows and Linux jobs, with near-identical
+    # times -- so what they measure is server round-trip latency, not anything
+    # about the OS.  Running them on Linux alone therefore loses no signal, and
+    # stops five jobs per push hammering a third-party service.
+    #
+    # --dist load, not the loadfile default: these are latency-bound and
+    # independent, so per-file pinning parks ~165 s of test_c2array_expr.py on
+    # one worker while the rest idle.  `load` is unsafe for the suite at large
+    # (see pytest.ini) but the modules it breaks are not network-marked, so
+    # they are not in this selection at all.
+    #
+    # -n 8 on a 4-core runner: these tests wait on sockets rather than compute,
+    # so workers well past the core count still help.  8 is the point of
+    # diminishing returns, not a round number -- 55 tests totalling ~400 s give
+    # ~50 s at 8 workers, and the floor is test_mix_operands at 56 s on its
+    # own, so more workers cannot beat it.
+    - name: Test network access
+      if: runner.os == 'Linux'
+      run: python -m pytest -m "network and not heavy" -n 8 --dist load --durations=10
