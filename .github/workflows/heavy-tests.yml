@@ -1,0 +1,39 @@
+name: Heavy tests
+
+# The `heavy` marker exists to keep the push-time suite fast, and every
+# invocation in build.yml excludes it -- so ~11.7k tests, 58% of everything
+# collected, ran in no workflow at all.  They are not cheap-but-optional: the
+# bulk is real coverage (test_reductions.py alone has ~6k of them).  Running
+# them once a night closes that gap without slowing anything down per push.
+on:
+  schedule:
+    - cron: '0 3 * * *'  # 03:00 UTC daily
+  workflow_dispatch:      # ... and on demand, so it can be tried without waiting
+
+jobs:
+  heavy:
+    name: Heavy tests on ubuntu-latest
+    runs-on: ubuntu-latest
+    env:
+      CMAKE_GENERATOR: Ninja
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+
+    - name: Install Ninja
+      run: pip install ninja
+
+    - name: Build
+      run: pip install -e . --group test
+
+    # -m heavy, without the "not network" that build.yml applies: nightly is
+    # where the slow and the externally-dependent things belong.  ~140 s for
+    # the non-network part on a dev box; the durations report says what the
+    # network-marked heavy tests add on top.
+    - name: Test (heavy)
+      run: python -m pytest -m heavy --durations=25
