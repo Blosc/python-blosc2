@@ -1176,17 +1176,18 @@ def test_embed_store_cross_process_writers(tmp_path):
             keys = list(estore)
             assert "/seed" in keys
             for key in keys[-3:]:
-                node = estore.get(key)
-                if node is None:  # a concurrent delete cannot happen here
-                    continue
                 try:
+                    node = estore.get(key)  # a concurrent delete cannot happen here
+                    if node is None:
+                        continue
                     data = node[:]
                 except RuntimeError:
                     # Same "listed before it is readable" window the None check
-                    # above covers, one step later: the key is in the index and
-                    # the node resolves, but the writer has not flushed its
-                    # chunk yet.  Tolerated only while the writers are running
-                    # -- every key is verified strictly once they have exited.
+                    # covers, deeper in: the index already carries the key's
+                    # (offset, length) but the backing schunk has not grown to
+                    # cover it, so EmbedStore.__getitem__ raises "Error while
+                    # getting the slice".  Tolerated only while the writers are
+                    # running -- every key is verified strictly once they exit.
                     continue
                 assert len(data) == 10
                 nreads += 1
@@ -1276,14 +1277,14 @@ def test_dict_store_cross_process_writers(tmp_path):
             for key in keys:
                 if not key.endswith("ext3"):
                     continue
-                node = dstore.get(key)
-                if node is None:
-                    continue
                 try:
+                    node = dstore.get(key)
+                    if node is None:
+                        continue
                     data = node[:]
                 except RuntimeError:
-                    # See test_embed_store_cross_process_writers: listed and
-                    # resolvable, but the writer has not flushed the chunk yet.
+                    # See test_embed_store_cross_process_writers: the index
+                    # carries the key before its bytes are readable.
                     continue
                 assert len(data) == 100
                 nreads += 1
