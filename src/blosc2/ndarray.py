@@ -4557,13 +4557,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     def __getitem__(  # noqa: C901
         self,
-        key: None
-        | int
+        key: int
         | slice
         | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None]
         | NDArray[int | np.bool_]
         | blosc2.LazyExpr
-        | str,
+        | str
+        | None,
     ) -> np.ndarray | blosc2.LazyExpr:
         """
         Retrieve a (multidimensional) slice as specified by the key.

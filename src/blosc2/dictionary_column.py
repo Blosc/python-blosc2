@@ -228,7 +228,7 @@ class DictionaryColumn:
         """Return the physical slot capacity (same as the codes NDArray length)."""
         return len(self._codes)
 
-    def __getitem__(self, key) -> str | None | list:
+    def __getitem__(self, key) -> str | list | None:
         """Return decoded value(s) for the given index.
 
         - ``int``                → ``str | None``

@@ -5012,10 +5012,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     @staticmethod
     def _cell_text(value, float_precision: int | None = None) -> str:
         if isinstance(value, np.datetime64):
-            s = str(value).replace("T", " ")
-            if s.endswith(".000"):
-                s = s[:-4]
-            return s
+            return str(value).replace("T", " ").removesuffix(".000")
         if isinstance(value, np.ndarray):
             if value.ndim == 1 and value.size <= 6:
                 return np.array2string(value, separator=", ", max_line_width=10_000)

@@ -124,7 +124,16 @@ line-length = 109
 extend-exclude = ["bench"]
 
 [tool.ruff.lint]
-extend-select = [
+# Pin the rule set explicitly rather than extending ruff's defaults: those
+# defaults grow between releases (0.16 added BLE, PYI, PIE, TRY, S, PL*, ...,
+# which surfaced ~300 pre-existing findings overnight), so `extend-select`
+# quietly changes what CI enforces on a ruff upgrade.  The first four entries
+# are what ruff's default `select` used to be.
+select = [
+    "E4",
+    "E7",
+    "E9",
+    "F",
     "B",
     "C4",
     "C90",
