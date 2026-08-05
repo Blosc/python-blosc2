@@ -1274,11 +1274,19 @@ def test_dict_store_cross_process_writers(tmp_path):
             keys = list(dstore.keys())
             assert "/seed" in keys
             for key in keys:
-                if key.endswith("ext3"):
-                    node = dstore.get(key)
-                    if node is not None:
-                        assert len(node[:]) == 100
-                        nreads += 1
+                if not key.endswith("ext3"):
+                    continue
+                node = dstore.get(key)
+                if node is None:
+                    continue
+                try:
+                    data = node[:]
+                except RuntimeError:
+                    # See test_embed_store_cross_process_writers: listed and
+                    # resolvable, but the writer has not flushed the chunk yet.
+                    continue
+                assert len(data) == 100
+                nreads += 1
     finally:
         for w in writers:
             if w.poll() is None:
