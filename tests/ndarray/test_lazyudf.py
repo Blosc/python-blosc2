@@ -5,6 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import math
+
 import numpy as np
 import pytest
 from conftest import expected_nthreads
@@ -541,3 +543,51 @@ def test_get_chunk():
         assert chunksize <= chunksize_
         assert blocksize == blocksize_
     np.testing.assert_allclose(out[:], nres)
+
+
+def udf_add(inputs_tuple, output, offset):
+    output[:] = inputs_tuple[0] + inputs_tuple[1]
+
+
+@pytest.mark.parametrize("shape", [(10,), (10, 10), (2, 3, 4), (1, 10), (10, 1)])
+@pytest.mark.parametrize(
+    "item",
+    [
+        (None,),
+        (None, None),
+        (slice(None), None),
+        (None, slice(None), None),
+        (3, None),
+        (None, 3),
+        (Ellipsis, None),
+        (slice(None), 0),
+        (0, slice(None)),
+        (0, 0),
+    ],
+)
+def test_getitem_none_and_int(shape, item):
+    # None must insert axes and integers must drop them, exactly as NumPy does
+    # (issues #403 and #319)
+    npa = np.arange(math.prod(shape), dtype="f8").reshape(shape)
+    a = blosc2.asarray(npa)
+    try:
+        expected = (npa + 1)[item]
+    except IndexError:
+        pytest.skip("invalid index for this shape")
+    result = blosc2.lazyudf(udf1p, (a,), np.float64)[item]
+    assert result.shape == expected.shape
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("bshape", [(10,), (1, 10)])
+@pytest.mark.parametrize("item", [(None,), (slice(None), None), (None, 3), (3, None), (slice(None), 0)])
+def test_getitem_none_with_broadcast_operand(bshape, item):
+    # A None inserts an axis in the result, so it must insert one in the
+    # broadcasting operand too, rather than shifting its axes (issue #403)
+    npa = np.arange(100, dtype="f8").reshape(10, 10)
+    npb = (np.arange(math.prod(bshape), dtype="f8") + 100).reshape(bshape)
+    a, b = blosc2.asarray(npa), blosc2.asarray(npb)
+    expected = (npa + npb)[item]
+    result = blosc2.lazyudf(udf_add, (a, b), np.float64, shape=npa.shape)[item]
+    assert result.shape == expected.shape
+    np.testing.assert_array_equal(result, expected)

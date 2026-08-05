@@ -2420,6 +2420,13 @@ def slices_eval_getitem(
     _slice_bcast = tuple(slice(i, i + 1) if isinstance(i, int) else i for i in _slice)
     slice_shape = ndindex.ndindex(_slice_bcast).newshape(shape)  # includes dummy dimensions
 
+    # A UDF writes into an output of slice_shape, which keeps the integer-indexed
+    # axes as length 1; slicing its operands with the raw index would drop those
+    # axes and leave the kernel unable to write its result (e.g. `udf[:, 0]` on a
+    # 2-dim array: operand (10,) into output (10, 1)).  numexpr has no output
+    # buffer to agree with, so it keeps the raw index.
+    op_slice = _slice_bcast if callable(expression) else _slice
+
     # Get the slice of each operand
     slice_operands = {}
     for key, value in operands.items():
@@ -2431,11 +2438,11 @@ def slices_eval_getitem(
             continue
         if check_smaller_shape(value.shape, shape, slice_shape, _slice_bcast):
             # We need to fetch the part of the value that broadcasts with the operand
-            smaller_slice = compute_smaller_slice(shape, value.shape, _slice)
+            smaller_slice = compute_smaller_slice(shape, value.shape, op_slice)
             slice_operands[key] = value[smaller_slice]
             continue
 
-        slice_operands[key] = value[_slice]
+        slice_operands[key] = value[op_slice]
 
     # Evaluate the expression using slices of operands
     if callable(expression):
@@ -2465,6 +2472,25 @@ def slices_eval_getitem(
         # out should always have maximal shape
         out[_slice] = result
         return out
+
+
+def _drop_indexed_axes(result, shape, item):
+    """Reshape a ``__getitem__`` result to the shape NumPy would have produced.
+
+    Evaluation keeps integer-indexed axes as length 1 so that kernels always
+    see the array's own ndim; NumPy drops them.  Squeezing every length-1 axis
+    instead also ate ones the index kept, so ask NumPy for the answer:
+    ``broadcast_to`` has zero strides and allocates nothing, which makes its
+    shape algebra -- Ellipsis, ``None``, negative indices and all -- free.
+
+    See e.g. examples/ndarray/animated_plot.py
+    """
+    if not (isinstance(item, int) or (hasattr(item, "__iter__") and any(isinstance(i, int) for i in item))):
+        return result
+    newshape = np.broadcast_to(np.empty((), dtype=bool), shape)[item].shape
+    # A where() result is filtered, so its length is data-dependent and `shape`
+    # says nothing about it; leave those alone.
+    return result.reshape(newshape) if math.prod(newshape) == result.size else result
 
 
 def infer_reduction_dtype(dtype, operation):
@@ -4508,17 +4534,7 @@ class LazyExpr(LazyArray):
     def __getitem__(self, item):
         kwargs = {"_getitem": True}
         result = self.compute(item, **kwargs)
-        # Drop the dimensions the integer indices consumed -- and only those;
-        # squeezing every length-1 axis also ate ones the index kept.
-        # broadcast_to allocates nothing, so NumPy's own shape algebra is free.
-        # See e.g. examples/ndarray/animated_plot.py
-        if isinstance(item, int) or (hasattr(item, "__iter__") and any(isinstance(i, int) for i in item)):
-            shape = np.broadcast_to(np.empty((), dtype=bool), self.shape)[item].shape
-            # A where() result is filtered, so its length is data-dependent and
-            # self.shape says nothing about it; leave those alone.
-            if math.prod(shape) == result.size:
-                result = result.reshape(shape)
-        return result
+        return _drop_indexed_axes(result, self.shape, item)
 
     def slice(self, item):
         return self.compute(item)  # should do a slice since _getitem = False
@@ -4995,7 +5011,8 @@ class LazyUDF(LazyArray):
         return chunked_eval(self.func, self.inputs_dict, item, _getitem=False, **aux_kwargs)
 
     def __getitem__(self, item):
-        return chunked_eval(self.func, self.inputs_dict, item, _getitem=True, **self.kwargs)
+        result = chunked_eval(self.func, self.inputs_dict, item, _getitem=True, **self.kwargs)
+        return _drop_indexed_axes(result, self.shape, item)
 
     def save(self, urlpath=None, **kwargs):
         """

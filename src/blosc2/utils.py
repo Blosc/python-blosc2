@@ -1100,32 +1100,26 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
     """
     Returns the slice of the smaller array that corresponds to the slice of the larger array.
     """
+    # Broadcasting aligns the operand's axes to the right, so walk from the
+    # right and pair each real entry of larger_slice with one operand axis.
+    # A None inserts an axis in the result, so it must insert one in the
+    # operand too -- it consumes no operand axis, and aligning it as if it did
+    # shifted every axis to its left by one.
+    smaller_slice = []
     j_small = len(smaller_shape) - 1
-    j_large = len(larger_shape) - 1
-    smaller_shape_nones = []
-    larger_shape_nones = []
     for s in reversed(larger_slice):
         if s is None:
-            smaller_shape_nones.append(1)
-            larger_shape_nones.append(1)
-        else:
-            if j_small >= 0:
-                smaller_shape_nones.append(smaller_shape[j_small])
-                j_small -= 1
-            if j_large >= 0:
-                larger_shape_nones.append(larger_shape[j_large])
-                j_large -= 1
-    smaller_shape_nones.reverse()
-    larger_shape_nones.reverse()
-    diff_dims = len(larger_shape_nones) - len(smaller_shape_nones)
-    return tuple(
-        None
-        if larger_slice[i] is None
-        else (
-            larger_slice[i] if smaller_shape_nones[i - diff_dims] != 1 else slice(0, larger_shape_nones[i])
-        )
-        for i in range(diff_dims, len(larger_shape_nones))
-    )
+            smaller_slice.append(None)
+            continue
+        if j_small < 0:
+            # The operand has no such axis at all; broadcasting supplies it.
+            continue
+        # A length-1 axis broadcasts, so take its only entry whatever the
+        # larger slice asked for.
+        smaller_slice.append(s if smaller_shape[j_small] != 1 else slice(0, 1))
+        j_small -= 1
+    smaller_slice.reverse()
+    return tuple(smaller_slice)
 
 
 def get_chunk_operands(operands, cslice, chunk_operands, shape):
