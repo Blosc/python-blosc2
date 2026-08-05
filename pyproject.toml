@@ -82,8 +82,9 @@ dev = [
 ]
 test = [
     "pytest",
-    # pytest.ini defaults to `-n auto`
-    "pytest-xdist",
+    # pytest.ini defaults to `-n auto`; where xdist is absent (wasm32, or a
+    # bare `pip install pytest`) the root conftest.py degrades it to a serial run
+    "pytest-xdist; platform_machine != 'wasm32'",
     # for the b2view Pilot tests (run with `-m tui`; textual is otherwise opt-in)
     "pytest-asyncio",
     "textual; platform_machine != 'wasm32'",
