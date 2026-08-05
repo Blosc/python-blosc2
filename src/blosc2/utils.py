@@ -1115,8 +1115,14 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
             # The operand has no such axis at all; broadcasting supplies it.
             continue
         # A length-1 axis broadcasts, so take its only entry whatever the
-        # larger slice asked for.
-        smaller_slice.append(s if smaller_shape[j_small] != 1 else slice(0, 1))
+        # larger slice asked for -- but keep the entry's *kind*, because an
+        # integer drops the axis and a slice keeps it.  Substituting a slice
+        # for an integer here left the operand one rank too high, and numexpr
+        # then broadcast that phantom axis back into the result.
+        if smaller_shape[j_small] != 1:
+            smaller_slice.append(s)
+        else:
+            smaller_slice.append(0 if isinstance(s, int) else slice(0, 1))
         j_small -= 1
     smaller_slice.reverse()
     return tuple(smaller_slice)

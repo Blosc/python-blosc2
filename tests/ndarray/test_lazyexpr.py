@@ -2309,3 +2309,34 @@ def test_getitem_int_keeps_other_size1_dims(shape, item):
     result = blosc2.lazyexpr("a + 1", {"a": a})[item]
     assert result.shape == expected.shape
     np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "bshape"),
+    [
+        ((2, 3, 4), (2, 1, 1)),
+        ((2, 3, 4), (3, 1)),
+        ((2, 3, 4), (1, 3, 1)),
+        ((2, 3, 4), (4,)),
+        ((10, 10), (10,)),
+        ((5, 6), (1, 6)),
+    ],
+)
+@pytest.mark.parametrize(
+    "item",
+    [(slice(None), 0), (Ellipsis, 0), (0, slice(None)), (0, 0), (slice(0, 2), -1), (None, 0), (0, None)],
+)
+def test_getitem_int_with_broadcast_operand(shape, bshape, item):
+    # An integer index drops an axis in every operand, including one that only
+    # broadcasts; keeping it as length 1 there put a phantom axis back into the
+    # result (issue #688)
+    npa = np.arange(math.prod(shape), dtype="f8").reshape(shape)
+    npb = (np.arange(math.prod(bshape), dtype="f8") + 100).reshape(bshape)
+    a, b = blosc2.asarray(npa), blosc2.asarray(npb)
+    try:
+        expected = (npa + npb)[item]
+    except IndexError:
+        pytest.skip("invalid index for this shape")
+    result = blosc2.lazyexpr("a + b", {"a": a, "b": b})[item]
+    assert result.shape == expected.shape
+    np.testing.assert_array_equal(result, expected)
