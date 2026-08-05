@@ -755,3 +755,21 @@ def test_meshgrid(dtype, shapes, chunks, blocks, indexing):
         assert len(b2_grids) == len(np_grids)
         for g_b2, g_np in zip(b2_grids, np_grids, strict=False):
             assert np.array_equal(g_b2[:], g_np)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks"),
+    [
+        ((10, 10), (4, 4)),  # padded on both dims
+        ((7,), (3,)),  # padded on the only dim
+        ((5, 5, 5), (2, 3, 4)),
+        ((100,), (100,)),  # exact fit
+    ],
+)
+def test_nbytes_is_logical(shape, chunks):
+    # nbytes is the logical size, not the padded chunk total (issue #544)
+    a = blosc2.empty(shape, dtype="f8", chunks=chunks)
+    assert a.nbytes == a.size * a.dtype.itemsize
+    assert a.nbytes == np.empty(shape, dtype="f8").nbytes
+    # the padded figure is still reachable, and is what cratio measures
+    assert a.schunk.nbytes >= a.nbytes
