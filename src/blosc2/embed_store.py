@@ -288,7 +288,18 @@ class EmbedStore:
 
     def __getitem__(self, key: str) -> blosc2.NDArray | SChunk | blosc2.ObjectArray | blosc2.BatchArray:
         """Retrieve a node from the embed store."""
-        with self._backing_schunk.holding_lock():
+        if self._shared:
+            with self._backing_schunk.holding_lock():
+                self._sync_metadata()
+                if key not in self._embed_map:
+                    raise KeyError(f"Key '{key}' not found in the embed store.")
+                node_info = self._embed_map[key]
+                urlbase = node_info.get("urlbase", None)
+                if not urlbase:
+                    offset = node_info["offset"]
+                    length = node_info["length"]
+                    serialized_data = bytes(self._store[offset : offset + length])
+        else:
             self._sync_metadata()
             if key not in self._embed_map:
                 raise KeyError(f"Key '{key}' not found in the embed store.")
@@ -298,7 +309,6 @@ class EmbedStore:
                 offset = node_info["offset"]
                 length = node_info["length"]
                 serialized_data = bytes(self._store[offset : offset + length])
-
         if urlbase:
             # Outside the lock: opening a C2Array involves an HTTP round trip
             return blosc2.open(blosc2.URLPath(node_info["path"], urlbase=urlbase), mode="r")
