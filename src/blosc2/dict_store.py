@@ -517,6 +517,22 @@ class DictStore:
         if isinstance(value, np.ndarray):
             value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
         with self._mutation_bracket():
+            # Where this value is headed has to be known *before* the old one is
+            # dropped: when it lands on the same path, the old file must not be
+            # removed at all -- the new one is swapped over it atomically below.
+            # C2Array always goes to the embed store, and answers neither
+            # _value_nbytes() nor _is_external_value(); keep it out of both.
+            is_c2array = isinstance(value, C2Array)
+            exceeds_threshold = (
+                not is_c2array and self.threshold is not None and self._value_nbytes(value) >= self.threshold
+            )
+            external_file = not is_c2array and self._is_external_value(value)
+            goes_external = exceeds_threshold or (external_file and self.threshold is None)
+            dest_path = (
+                os.path.join(self.working_dir, key.lstrip("/") + self._external_ext(value))
+                if goes_external
+                else None
+            )
             # Dict-like overwrite: drop any previous value under this key, in
             # either tier.  Otherwise behavior depends on the *size* of old and
             # new values: embedded keys refused overwrite while external ones
@@ -525,27 +541,29 @@ class DictStore:
             if key in self.map_tree:
                 old_filepath = self.map_tree.pop(key)
                 old_full_path = os.path.join(self.working_dir, old_filepath)
-                if os.path.exists(old_full_path):
+                if old_full_path != dest_path and os.path.exists(old_full_path):
                     os.remove(old_full_path)
             if key in self._estore:
                 del self._estore[key]
             # C2Array should always go to embed store; let estore handle it directly
-            if isinstance(value, C2Array):
+            if is_c2array:
                 self._estore[key] = value
                 return
-            exceeds_threshold = self.threshold is not None and self._value_nbytes(value) >= self.threshold
-            external_file = self._is_external_value(value)
-            if exceeds_threshold or (external_file and self.threshold is None):
-                ext = self._external_ext(value)
-                # Convert key to a proper file path within the tree directory
-                rel_key = key.lstrip("/")
-                dest_path = os.path.join(self.working_dir, rel_key + ext)
-
+            if goes_external:
                 # Ensure the parent directory exists
                 parent_dir = os.path.dirname(dest_path)
                 if parent_dir and not os.path.exists(parent_dir):
                     os.makedirs(parent_dir, exist_ok=True)
 
+                # Build the leaf beside its final name and swap it in with a
+                # single os.replace().  A reader in another process re-opens the
+                # leaf *by path* on every chunk it decompresses -- the handle it
+                # got from __getitem__ holds no fd -- so writing in place would
+                # let it read a truncated or half-rewritten cframe (RuntimeError
+                # from the C layer), which no amount of locking on our side can
+                # prevent once __getitem__ has returned.  A rename is atomic, so
+                # every such re-open sees one complete file or the other.
+                tmp_path = f"{dest_path}.{os.getpid()}.tmp"
                 # Save the value to the destination path
                 if not external_file:
                     if isinstance(value, blosc2.NDArray) and "b2o" in value.schunk.meta:
@@ -555,21 +573,23 @@ class DictStore:
                             chunks=value.chunks,
                             blocks=value.blocks,
                             cparams=value.cparams,
-                            urlpath=dest_path,
+                            urlpath=tmp_path,
                             mode="w",
                             meta={"b2o": value.schunk.meta["b2o"]},
                         )
                         for meta_key, meta_value in value.schunk.vlmeta[:].items():
                             carrier.schunk.vlmeta[meta_key] = meta_value
+                        del carrier  # flush it before the file moves under it
                     elif hasattr(value, "save"):
-                        value.save(urlpath=dest_path)
+                        value.save(urlpath=tmp_path)
                     else:
                         # SChunk, ObjectArray and BatchArray can all be persisted via their cframe.
-                        with open(dest_path, "wb") as f:
+                        with open(tmp_path, "wb") as f:
                             f.write(value.to_cframe())
                 else:
                     # This should be faster than using value.save() ?
-                    shutil.copy2(value.urlpath, dest_path)
+                    shutil.copy2(value.urlpath, tmp_path)
+                os.replace(tmp_path, dest_path)
 
                 # Store relative path from tree directory
                 rel_path = os.path.relpath(dest_path, self.working_dir)

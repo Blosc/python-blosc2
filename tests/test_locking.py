@@ -1349,6 +1349,40 @@ def test_dict_store_read_during_overwrite(tmp_path, monkeypatch):
     dstore._closed = True
 
 
+def test_dict_store_overwrite_never_writes_the_live_leaf(tmp_path, monkeypatch):
+    # The handle __getitem__ returns holds no file descriptor: the C layer
+    # re-opens the leaf by path for every chunk it decompresses.  So an
+    # overwrite that builds the new value *at* the live path can be caught
+    # mid-flight by a read already in progress, which is the deterministic form
+    # of the race test_dict_store_read_during_overwrite chases with timing.
+    # The new leaf must be built beside its final name and swapped in, so the
+    # live path only ever holds a complete cframe.
+    path = str(tmp_path / "atomic.b2d")
+    dstore = blosc2.DictStore(path, mode="w", threshold=500, locking=True)
+    dstore["/hot"] = np.arange(100)
+    leaf = os.path.join(dstore.working_dir, dstore.map_tree["/hot"])
+
+    written = []
+    orig_save = blosc2.NDArray.save
+
+    def spy_save(self, urlpath, **kwargs):
+        written.append(urlpath)
+        return orig_save(self, urlpath, **kwargs)
+
+    monkeypatch.setattr(blosc2.NDArray, "save", spy_save)
+
+    handle = dstore["/hot"]
+    dstore["/hot"] = np.arange(1000, 1100)
+
+    assert written, "the overwrite did not go through NDArray.save; adjust the spy"
+    assert leaf not in written, f"new leaf built in place at the live path: {written}"
+    # The staging file is gone and the live path carries the new value, which a
+    # handle taken before the overwrite can still read whole.
+    assert not [f for f in os.listdir(os.path.dirname(leaf)) if f.endswith(".tmp")]
+    assert np.array_equal(handle[:], np.arange(1000, 1100))
+    dstore._closed = True
+
+
 # ---------------------------------------------------------------------------
 # Growth-SWMR: a reader handle follows a writer process resizing an on-disk
 # NDArray, both via implicit re-sync on data access and via explicit
