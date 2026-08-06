@@ -92,10 +92,22 @@ class DictStore:
     environment variable), a directory-backed store can be shared across
     processes: whole mutations (external files plus key maps) run under an
     exclusive lock, and every access re-syncs the key maps, so readers follow
-    keys added or removed by other processes.  Two caveats: a reader holding
+    keys added or removed by other processes.  Three caveats: a reader holding
     a value whose key another process deletes may get errors from that value
-    afterwards, and a crash mid-mutation can leave a partial external file
-    behind.  Not supported on network filesystems (NFS).
+    afterwards; a crash mid-mutation can leave a stray ``.tmp`` staging file
+    behind; and reading a value is not atomic against a concurrent overwrite
+    of that same key -- see below.  Not supported on network filesystems (NFS).
+
+    Reading an external leaf is not a snapshot.  The handle ``__getitem__``
+    returns holds no file descriptor: the leaf is re-opened by path for every
+    chunk decompressed.  So if another process overwrites that key meanwhile,
+    a single ``arr[:]`` spanning several chunks can take its first chunks from
+    the old value and the rest from the new one.  An overwrite swaps a fully
+    built leaf into place atomically, so every chunk read is complete and
+    correctly decompressed -- the result is not corrupt, just a combination
+    that was never stored.  Single-chunk leaves are unaffected (one open per
+    read).  Copy the value out under ``holding_lock()`` if you need a
+    whole-value snapshot.
 
     A ``.b2z`` file needs no locking: it is safe to share read-only across
     processes, and :meth:`to_b2z` replaces it atomically, so readers see
