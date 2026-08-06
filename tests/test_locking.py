@@ -1293,6 +1293,62 @@ def test_dict_store_cross_process_writers(tmp_path):
     dstore._closed = True
 
 
+DSTORE_OVERWRITER = """
+import sys
+import time
+import numpy as np
+import blosc2
+
+path, nrounds = sys.argv[1], int(sys.argv[2])
+dstore = blosc2.DictStore(path, mode="a", threshold=500, locking=True)
+for i in range(nrounds):
+    dstore["/hot"] = np.arange(i, i + 100)
+    time.sleep(0.005)
+dstore._closed = True
+"""
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the reader keeps the leaf file open, which Windows refuses to let the writer remove",
+)
+def test_dict_store_read_during_overwrite(tmp_path, monkeypatch):
+    # A writer process rewriting the *same* external leaf this process keeps
+    # reading.  The overwrite removes and rewrites that exact file, so resolving
+    # the leaf path and opening it must happen under one lock; otherwise the
+    # reader hits a missing file (KeyError) or a half-written cframe.
+    # The real gap is microseconds wide, so widen it deliberately: with the
+    # resolve and the open under the same lock this delay is harmless, without
+    # it the writer wins the gap within a handful of reads.
+    orig_sync = blosc2.DictStore._sync_store
+
+    def slow_sync(self):
+        orig_sync(self)
+        time.sleep(0.02)
+
+    monkeypatch.setattr(blosc2.DictStore, "_sync_store", slow_sync)
+
+    path = str(tmp_path / "hot.b2d")
+    dstore = blosc2.DictStore(path, mode="w", threshold=500, locking=True)
+    dstore["/hot"] = np.arange(100)
+
+    writer = subprocess.Popen([sys.executable, "-c", DSTORE_OVERWRITER, path, "300"])
+    try:
+        nreads = 0
+        while writer.poll() is None and nreads < 60:
+            data = dstore["/hot"][:]
+            # Each round writes arange(i, i + 100); a torn read breaks the run
+            assert np.array_equal(data, np.arange(data[0], data[0] + 100))
+            nreads += 1
+    finally:
+        if writer.poll() is None:
+            writer.kill()
+        writer.wait()
+
+    assert nreads == 60
+    dstore._closed = True
+
+
 # ---------------------------------------------------------------------------
 # Growth-SWMR: a reader handle follows a writer process resizing an on-disk
 # NDArray, both via implicit re-sync on data access and via explicit

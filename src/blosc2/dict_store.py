@@ -587,37 +587,43 @@ class DictStore:
         self, key: str
     ) -> blosc2.NDArray | SChunk | blosc2.ObjectArray | blosc2.BatchArray | C2Array:
         """Retrieve a node from the DictStore."""
-        self._sync_store()
-        # Check map_tree first
-        if key in self.map_tree:
-            filepath = self.map_tree[key]
-            if filepath in self.offsets:
-                offset = self.offsets[filepath]["offset"]
-                opened = blosc2.blosc2_ext.open(
-                    self.b2z_path,
-                    mode="r",
-                    offset=offset,
-                    mmap_mode=self.mmap_mode,
-                    dparams=self.dparams,
-                )
-                return self._annotate_external_value(key, process_opened_object(opened))
-            else:
-                urlpath = os.path.join(self.working_dir, filepath)
-                if os.path.exists(urlpath):
-                    return self._annotate_external_value(
-                        key,
-                        blosc2.open(
-                            urlpath,
-                            mode="r" if self.mode == "r" else "a",
-                            mmap_mode=self.mmap_mode if self.mode == "r" else None,
-                            dparams=self.dparams,
-                        ),
+        # Resolving the leaf path and opening it must happen under the same lock:
+        # a concurrent overwrite or delete of this key removes (and possibly
+        # rewrites) the very file we are about to open, so a resolve/open gap can
+        # hit a missing or half-written cframe.  Only a shared store needs it;
+        # holding_lock() is re-entrant, so the nested _sync_store() is free.
+        with self._estore._backing_schunk.holding_lock() if self._shared else contextlib.nullcontext():
+            self._sync_store()
+            # Check map_tree first
+            if key in self.map_tree:
+                filepath = self.map_tree[key]
+                if filepath in self.offsets:
+                    offset = self.offsets[filepath]["offset"]
+                    opened = blosc2.blosc2_ext.open(
+                        self.b2z_path,
+                        mode="r",
+                        offset=offset,
+                        mmap_mode=self.mmap_mode,
+                        dparams=self.dparams,
                     )
+                    return self._annotate_external_value(key, process_opened_object(opened))
                 else:
-                    raise KeyError(f"File for key '{key}' not found in offsets or temporary directory.")
+                    urlpath = os.path.join(self.working_dir, filepath)
+                    if os.path.exists(urlpath):
+                        return self._annotate_external_value(
+                            key,
+                            blosc2.open(
+                                urlpath,
+                                mode="r" if self.mode == "r" else "a",
+                                mmap_mode=self.mmap_mode if self.mode == "r" else None,
+                                dparams=self.dparams,
+                            ),
+                        )
+                    else:
+                        raise KeyError(f"File for key '{key}' not found in offsets or temporary directory.")
 
-        # Fall back to EmbedStore
-        return self._estore[key]
+            # Fall back to EmbedStore
+            return self._estore[key]
 
     def get(
         self, key: str, default: Any = None
