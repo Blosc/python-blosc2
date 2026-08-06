@@ -280,6 +280,57 @@ On a 20M-row table, the pushed-down form was **~2.2x faster** and used **~7x les
 
 *Benchmark for this tip: [`tip_08_where_pushdown.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_08_where_pushdown.py)*
 
+## Store unbounded text as `utf8()`, not fixed-width `string()`
+
+A {class}`string <blosc2.string>` column is fixed width because it uses NumPy's `<U` dtype, which is UCS-4, so every row costs `4 × max_length` bytes **every time it is read** — 800 bytes at `max_length=200`, whether the row holds three characters or two hundred. Compression hides the padding from the container, but not when materialized as a NumPy array. Now, you can use {func}`utf8() <blosc2.utf8>` which stores UTF-8 natively and reads back as `numpy.dtypes.StringDType`, NumPy 2.0's variable-width UTF-8 dtype; in this case rows cost what they weigh.
+
+```python
+# Avoid, for text you can't bound: 800 bytes per row in memory on every read
+title: str = blosc2.field(blosc2.string(max_length=200))
+
+# Prefer: no declared width
+title: str = blosc2.field(blosc2.utf8())
+```
+
+This also have important consequences in used resources during string handling:
+
+![utf8() vs fixed-width string()](optim_tips/tip_13_utf8_strings.png)
+
+On 5 Mrows of free text averaging 76 bytes, the full read was **~1.60x faster** and took **~4.1x less peak memory** — 925 MiB against 3.7 GiB, which is exactly 5 Mrows × 800 B. Anything that materializes the column inherits that gap; {meth}`where() <blosc2.CTable.where>` sidesteps it, scanning at O(chunk) memory in 0.117 s.
+
+Regarding on-disk sizes, UTF8 also has advanatges:
+
+| | on disk | ingest | read + compare in NumPy |
+|---|---|---|---|
+| `string(max_length=200)` | 128.6 MiB | 2.23 s | 0.403 s |
+| `utf8()` | 89.7 MiB | 2.39 s | 0.267 s |
+
+On disk, UTF8 is still 1.43x smaller.
+
+UTF-8 is also the ecosystem's common currency: a `utf8()` column *is* int64 offsets plus a UTF-8 blob — Arrow's `large_string` layout — so {meth}`to_arrow() <blosc2.CTable.to_arrow>` builds straight from the stored buffers, and pandas, Polars and DuckDB take it from there. Fixed width has to transcode UCS-4 on the way out. See {ref}`utf8 and NumPy's StringDType <Utf8AndStringDType>`.
+
+### A FULL index — up to a cardinality ceiling
+
+```python
+t.create_index("title", kind=blosc2.IndexKind.FULL)
+t.where("title == 'some exact title'")  # index probe, not a scan
+```
+
+`utf8()` values are indexed by *alphabetical rank*, and the rank table grows with cardinality:
+
+| distinct values | `utf8()`, no index | `utf8()` + FULL | `string(200)` + FULL |
+|---|---|---|---|
+| 20,000 | 0.117 s | **0.0148 s** | 0.0289 s |
+| ~4.5M (near-unique) | 0.116 s | 0.306 s | 0.0305 s |
+
+At 20k distinct the index is a 7.9x win and builds in 2.78 s against 17.2 s. Near-unique, it is *slower than no index at all*, while `string(200)` — whose index works on raw values at a known offset — holds its 0.0305 s. So index a `utf8()` column when its values repeat, and leave wide-open free text unindexed.
+
+Two caveats. Ranks are frozen at build time, so appending invalidates them: blosc2 falls back to a scan (correct results, no speedup) until you call {meth}`rebuild_index() <blosc2.CTable.rebuild_index>`. And no index accelerates `startswith` or substring search, on any flavour.
+
+That ceiling is why CTable keeps four string flavours rather than one: {func}`dictionary() <blosc2.dictionary>` owns heavily repeated values, {class}`string <blosc2.string>` owns bounded identifiers, {func}`vlstring() <blosc2.vlstring>` owns columns needing a true `None`, and `utf8()` is the default for text you cannot bound. See {ref}`Choosing a string column type <ChoosingStringType>`.
+
+*Benchmark for this tip: [`tip_13_utf8_strings.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_13_utf8_strings.py)*
+
 ## Memory-map read-only opens
 
 {func}`blosc2.open(path, mmap_mode="r") <blosc2.open>` memory-maps the file instead of going through regular file I/O, so chunks are read directly from the mapped pages — no read syscall per block, and no copy out of the page cache into an intermediate buffer. For workloads that touch many scattered chunks, this adds up.
