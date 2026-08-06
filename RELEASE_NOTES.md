@@ -2,7 +2,103 @@
 
 ## Changes from 4.10.0 to 4.10.1
 
-XXX version-specific blurb XXX
+A correctness release: lazy indexing and reductions now follow NumPy in a
+batch of cases where they quietly did not, the stores close several
+cross-process read races, and wheels finally ship usable C-Blosc2 development
+files.  Bundled C-Blosc2 moves to 3.3.2.
+
+### Bug fixes
+
+#### Lazy expressions and indexing
+
+- **Indexing a lazy expression with an integer squeezed too much.**
+  `expr[0]` dropped *every* length-1 axis of the result, including ones the
+  index kept, so a `(1, 4)` expression indexed at `[0]` came back as `(4,)`
+  where NumPy gives `(4,)` only for the consumed axis and keeps the rest.
+  Only the dimensions the integer indices actually consumed are dropped now.
+  `where()` results, whose length is data-dependent, are left alone.
+  Closes #319.
+- **`LazyUDF` and broadcast operands mis-indexed on `None`.** A `None` in the
+  key inserts an axis in the result but consumes none in the operand;
+  aligning it as if it did shifted every axis to its left by one, so
+  `expr[None, 2]` read the wrong operand region. Closes #403, #688.
+- **Indexing a full reduction materialized the whole operand.** `(a + b).sum()
+  [key]` evaluated the reduction over everything and then indexed; the
+  operands are sliced first now. Closes #457.
+- **Datetime comparisons in lazy expressions raised.** numexpr has no datetime
+  type, so `t1 < t2` on `datetime64`/`timedelta64` died with `unknown type
+  datetime64[s]` and the error was re-raised rather than letting the NumPy
+  fallback try. They are compared as their underlying int64 counts, which is
+  exact, keeping the fast path. Mixed units and `NaT` decline that route and
+  fall back to NumPy, since raw counts would silently lie about both.
+  Closes #409.
+- **`NDArray.nbytes` reported the padded size.** It now returns the logical
+  `size * itemsize`, matching NumPy, whenever the shape does not fill the
+  chunk grid exactly. `cratio` still measures the stored (padded) data, so
+  `nbytes / cbytes` need not equal `cratio`; use `.schunk.nbytes` for the
+  padded figure. Closes #544.
+
+#### Tables and stores
+
+- **`CTable.where()` applied a short boolean mask to the wrong rows.** A mask
+  shorter than the live-row count was padded out to the *physical* length,
+  which aligned it with the underlying column and selected rows outside the
+  view. A mask no longer than the live-row count is now treated as logical —
+  entry *i* selects the *i*-th live row — with a short one simply leaving the
+  trailing rows unselected. Closes #607.
+- **Cross-process read races in `EmbedStore` and `DictStore`.** Both resolved
+  a key under the store lock but read the data after releasing it, so a
+  concurrent writer could be caught mid-mutation: `EmbedStore.__getitem__`
+  returned bytes from a stale offset, and `DictStore.__getitem__` opened an
+  external leaf that a concurrent overwrite had just removed or half-rewritten
+  (`KeyError`, or `RuntimeError: Error while getting the buffer`). The
+  resolve, the existence check and the open now share one lock; non-shared
+  stores skip it entirely. Fixes #691, #692.
+- **Overwriting an external `DictStore` leaf is now atomic.** `__setitem__`
+  removed the old leaf and rebuilt it at the same path, and the handle
+  `__getitem__` returns holds no file descriptor — the C layer re-opens the
+  leaf by path for every chunk it decompresses — so a read already in flight
+  could open a truncated file. The new leaf is built beside its final name and
+  moved in with a single `os.replace()`, so every such re-open sees one
+  complete cframe or the other. A crash mid-write now leaves a stray `.tmp`
+  staging file rather than a partial leaf.
+- **`TreeStore.close()` swallowed inline handle failures.** A `CTable` that
+  failed to flush left an archive whose row count disagreed with a varlen
+  column, reported only on read, long after `close()` said it succeeded. Every
+  handle still gets a chance to close and the store is still packed; the
+  failure is then re-raised.
+
+#### Other
+
+- **`unpack_tensor()` turned padding into a phantom column.** `np.dtype()`
+  renames the empty-named padding fields of a structured descr (`''` -> `f2`),
+  so a packed tensor with padding came back with an extra field. Closes #287.
+
+### Packaging
+
+- **Wheels ship usable C-Blosc2 development files.** Install paths are now
+  relative to `CMAKE_INSTALL_PREFIX`; the absolute ones made C-Blosc2 generate
+  a `blosc2.pc` and exported targets pointing into the build tempdir, so
+  `pkg-config` and `find_package(Blosc2)` both failed against an installed
+  wheel. Verified by building and linking a C program against a wheel three
+  ways: `pkg-config`, `Blosc2::blosc2_shared` and `Blosc2::blosc2_static`.
+  miniexpr's license texts are mirrored into `.dist-info/licenses`, where PEP
+  639 tooling looks. Closes #627.
+- **Wheels carry two copies of `libblosc2` instead of three**, ~1.5 MB
+  smaller. C-Blosc2 set both `VERSION` and `SOVERSION`, and scikit-build-core
+  follows symlinks, so the fully versioned file — referenced by nothing but
+  the symlinks pointing at it — was shipped as a third full copy.
+
+### Development
+
+- The test suite runs in parallel by default (`-n auto --dist loadfile` in
+  `pytest.ini`), 130s -> 35s locally, falling back to a serial run when
+  pytest-xdist is absent. The `heavy` tests, 58% of everything collected and
+  excluded from every push-time job, now run in a nightly workflow. The
+  network tests run once per push on a single Linux job instead of five times.
+- The ruff rule set is spelled out with `select` rather than `extend-select`,
+  so a ruff release widening its defaults no longer redefines what CI
+  enforces.
 
 ## Changes from 4.9.1 to 4.10.0
 

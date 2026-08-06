@@ -1,44 +1,37 @@
-Announcing Python-Blosc2 4.10.0
-==============================
+Announcing Python-Blosc2 4.10.1
+===============================
 
-This is the string-support release: string expressions and DSL kernels now
-run on miniexpr, ``utf8()`` and ``dictionary()`` columns gain full indexing
-and comparisons, and NumPy's ``StringDType`` is understood by the array
-constructors. Alongside, slicing with plain keys is up to 1.7x faster and a
-new ``blosc2.random`` module brings chunk-parallel, NumPy-quality random
-constructors.
+A correctness release: lazy indexing and reductions now follow NumPy in a
+batch of cases where they quietly did not, the stores close several
+cross-process read races, and wheels finally ship usable C-Blosc2 development
+files. Bundled C-Blosc2 moves to 3.3.2.
 
-- **String expressions and DSL kernels over strings.** Concatenation,
-  ``lower``/``upper``/``strip``/``replace``/``substr``/``split_part`` and
-  friends now run on miniexpr over fixed-width ``<Un`` and bytes ``S``
-  arrays, producing string results sized by miniexpr itself. ``utf8()``
-  columns can be queried in expression form
-  (``t.where("name == 'x'")``), with scalar comparisons 5-6x faster via a
-  raw-byte scan, and new ``blosc2.utf8_array()`` builds variable-length
-  arrays directly.
+- **Lazy indexing now matches NumPy.** Integer indexing no longer squeezes
+  length-1 axes the index kept, a ``None`` in the key stops shifting operand
+  axes for ``LazyUDF`` and broadcast operands, indexing a full reduction
+  slices the operands instead of evaluating over everything, and
+  ``datetime64``/``timedelta64`` comparisons work in expressions rather than
+  raising.
 
-- **Full indexing for string columns.** ``create_index()`` now works on
-  ``utf8()`` and ``dictionary()`` columns via alphabetical ranks —
-  ``sort_by`` drops from 424 ms to 7 ms at 1M rows — and scalar comparisons
-  are served from the index.
+- **``NDArray.nbytes`` reports the logical size**, ``size * itemsize``, as
+  NumPy does. ``.schunk.nbytes`` still gives the padded figure, which is what
+  ``cratio`` keeps measuring.
 
-- **New ``blosc2.random`` module**: 42 of NumPy's 43 ``Generator`` methods,
-  each chunk generated in parallel with its own seeded ``PCG64`` stream
-  (~3x faster than the NumPy path on 100M elements).
+- **``CTable.where()`` applied a short boolean mask to the wrong rows.** A
+  mask no longer than the live-row count is now logical — entry *i* selects
+  the *i*-th live row — instead of being padded out to the physical length
+  and picking up rows outside the view.
 
-- **Slicing up to 1.7x faster.** Plain slice/int keys skip ndindex's general
-  machinery (it was 43% of a scattered-read loop); strided steps, ellipsis
-  and fancy indexing still use it.
+- **Cross-process store fixes.** ``EmbedStore`` and ``DictStore`` resolved a
+  key under the store lock but read the data after releasing it; the resolve
+  and the read now share one lock. Overwriting an external ``DictStore`` leaf
+  is atomic too — the new leaf is built beside its final name and moved into
+  place — so a concurrent reader can no longer open a half-rewritten file.
 
-- **String plumbing**: ``from_utf8()``/``to_utf8()`` conversions,
-  ``CTable.add_column(values=)``, ``Column.assign()`` on variable-length
-  columns, ``StringDType`` dispatch in the array constructors, and DSL
-  operands can be native NumPy arrays or pandas ``Series``.
-
-- **Important fixes**: string column indexes returning zero rows at the
-  default column width, ``SChunk`` slices for typesizes above 255 bytes
-  (upstream, via C-Blosc2 3.3.1), scalar bools in tuple keys now matching
-  NumPy, and a batch of miniexpr correctness fixes.
+- **Wheels ship working C-Blosc2 development files** (``pkg-config`` and
+  ``find_package(Blosc2)`` both failed against an installed wheel before),
+  and are ~1.5 MB smaller, carrying two copies of ``libblosc2`` rather than
+  three.
 
 Install it with::
 
