@@ -298,9 +298,9 @@ The measurements below use a 1 Mrow table of free text averaging 76 bytes per ro
 
 ![Full column read: utf8() vs string()](optim_tips/tip_13a_utf8_read.png)
 
-The time gap is real but modest — decompression dominates, and both flavours decompress about the same payload. The memory gap is the structural one: the fixed-width array is *rows × 800 B* whatever the text actually weighs, so it does not depend on the data at all, while the `utf8()` array pays for the bytes that are there. How often titles repeat makes no difference either — the padding is charged per row, not per different value. And it scales linearly: the same column at 100 Mrows would need 80 GB of RAM to be read whole as `string(200)`, against roughly a tenth of that as `utf8()`.
+The time gap is real but modest — decompression dominates, and both flavours decompress about the same payload. The memory gap is the important one: the fixed-width array is *rows × 800 B* whatever the text actually weighs, so it does not depend on the data at all, while the `utf8()` array pays for the bytes that are there. How often titles repeat makes no difference either — the padding is charged per row, not per different value. And it scales linearly: the same column at 100 Mrows would need 80 GB of RAM to be read whole as `string(200)`, against roughly a tenth of that as `utf8()`.
 
-Anything that materializes the column inherits that gap — a NumPy comparison, {meth}`to_pandas() <blosc2.CTable.to_pandas>`, a plot. UTF-8 is also the ecosystem's common currency: a `utf8()` column *is* int64 offsets plus a UTF-8 blob — Arrow's `large_string` layout — so {meth}`to_arrow() <blosc2.CTable.to_arrow>` builds straight from the stored buffers, and pandas, Polars and DuckDB take it from there. Fixed width has to transcode UCS-4 on the way out. See {ref}`utf8 and NumPy's StringDType <Utf8AndStringDType>`.
+Anything that materializes the column benefits from this — a NumPy comparison, {meth}`to_pandas() <blosc2.CTable.to_pandas>`, a plot. UTF-8 is also the ecosystem's common currency: a `utf8()` column *is* int64 offsets plus a UTF-8 blob — Arrow's `large_string` layout — so {meth}`to_arrow() <blosc2.CTable.to_arrow>` builds straight from the stored buffers, and pandas, Polars and DuckDB take it from there. Fixed width has to transcode UCS-4 on the way out. See {ref}`utf8 and NumPy's StringDType <Utf8AndStringDType>`.
 
 ### Querying columns, with and without a FULL index
 
@@ -316,7 +316,7 @@ t.where("title == 'some exact title'")  # looks it up, no scan
 
 A FULL index turns that scan into a direct lookup — but on a `utf8()` column it only pays off while the text repeats. The index sorts the *different* values alphabetically and stores each row's position in that sorted list, so the more different values there are, the bigger that list gets and the more work the lookup does. When titles repeat, the index is a clear win, and it costs a fraction of what the fixed-width one costs to build. When almost every title is different, the lookup ends up *slower than no index at all*, while `string(200)` — whose index reads raw values straight out of a known slot — keeps the same lookup time either way. So index a `utf8()` column when its text repeats, and leave wide-open free text unindexed.
 
-Two caveats. That sorted list is built once, so adding rows leaves it out of date: blosc2 falls back to a scan (correct results, no speedup) until you call {meth}`rebuild_index() <blosc2.CTable.rebuild_index>`. And no index accelerates `startswith` or substring search, on any flavour.
+Caveat emptor: that sorted list is built once, so adding rows leaves it out of date: blosc2 falls back to a scan (correct results, no speedup) until you call {meth}`rebuild_index() <blosc2.CTable.rebuild_index>`. Also, note how no index accelerates `startswith` or substring search, on any flavor.
 
 ### Bytes on disk
 
