@@ -292,42 +292,41 @@ title: str = blosc2.field(blosc2.string(max_length=200))
 title: str = blosc2.field(blosc2.utf8())
 ```
 
-This also have important consequences in used resources during string handling:
+The measurements below use a 1 Mrow table of free text averaging 76 bytes per row (a few rows reach the 200-codepoint limit), in two versions: one where titles repeat a lot — 20k different ones spread over the million rows — and one where almost every row is different.
 
-![utf8() vs fixed-width string()](optim_tips/tip_13_utf8_strings.png)
+### Reading full columns
 
-On 5 Mrows of free text averaging 76 bytes, the full read was **~1.60x faster** and took **~4.1x less peak memory** — 925 MiB against 3.7 GiB, which is exactly 5 Mrows × 800 B. Anything that materializes the column inherits that gap; {meth}`where() <blosc2.CTable.where>` sidesteps it, scanning at O(chunk) memory in 0.117 s.
+![Full column read: utf8() vs string()](optim_tips/tip_13a_utf8_read.png)
 
-Regarding on-disk sizes, UTF8 also has advanatges:
+The time gap is real but modest — decompression dominates, and both flavours decompress about the same payload. The memory gap is the structural one: the fixed-width array is *rows × 800 B* whatever the text actually weighs, so it does not depend on the data at all, while the `utf8()` array pays for the bytes that are there. How often titles repeat makes no difference either — the padding is charged per row, not per different value. And it scales linearly: the same column at 100 Mrows would need 80 GB of RAM to be read whole as `string(200)`, against roughly a tenth of that as `utf8()`.
 
-| | on disk | ingest | read + compare in NumPy |
-|---|---|---|---|
-| `string(max_length=200)` | 128.6 MiB | 2.23 s | 0.403 s |
-| `utf8()` | 89.7 MiB | 2.39 s | 0.267 s |
+Anything that materializes the column inherits that gap — a NumPy comparison, {meth}`to_pandas() <blosc2.CTable.to_pandas>`, a plot. UTF-8 is also the ecosystem's common currency: a `utf8()` column *is* int64 offsets plus a UTF-8 blob — Arrow's `large_string` layout — so {meth}`to_arrow() <blosc2.CTable.to_arrow>` builds straight from the stored buffers, and pandas, Polars and DuckDB take it from there. Fixed width has to transcode UCS-4 on the way out. See {ref}`utf8 and NumPy's StringDType <Utf8AndStringDType>`.
 
-On disk, UTF8 is still 1.43x smaller.
-
-UTF-8 is also the ecosystem's common currency: a `utf8()` column *is* int64 offsets plus a UTF-8 blob — Arrow's `large_string` layout — so {meth}`to_arrow() <blosc2.CTable.to_arrow>` builds straight from the stored buffers, and pandas, Polars and DuckDB take it from there. Fixed width has to transcode UCS-4 on the way out. See {ref}`utf8 and NumPy's StringDType <Utf8AndStringDType>`.
-
-### A FULL index — up to a cardinality ceiling
+### Querying columns, with and without a FULL index
 
 ```python
+t.where("title == 'some exact title'")  # scans, one chunk at a time
 t.create_index("title", kind=blosc2.IndexKind.FULL)
-t.where("title == 'some exact title'")  # index probe, not a scan
+t.where("title == 'some exact title'")  # looks it up, no scan
 ```
 
-`utf8()` values are indexed by *alphabetical rank*, and the rank table grows with cardinality:
+![Equality lookup and index build: utf8() vs string()](optim_tips/tip_13b_utf8_query.png)
 
-| distinct values | `utf8()`, no index | `utf8()` + FULL | `string(200)` + FULL |
-|---|---|---|---|
-| 20,000 | 0.117 s | **0.0148 s** | 0.0289 s |
-| ~4.5M (near-unique) | 0.116 s | 0.306 s | 0.0305 s |
+{meth}`where() <blosc2.CTable.where>` never materializes the column: it scans chunk by chunk, so the memory blow-up above simply does not happen on either flavour, and `utf8()`'s edge is just fewer bytes to decompress and compare.
 
-At 20k distinct the index is a 7.9x win and builds in 2.78 s against 17.2 s. Near-unique, it is *slower than no index at all*, while `string(200)` — whose index works on raw values at a known offset — holds its 0.0305 s. So index a `utf8()` column when its values repeat, and leave wide-open free text unindexed.
+A FULL index turns that scan into a direct lookup — but on a `utf8()` column it only pays off while the text repeats. The index sorts the *different* values alphabetically and stores each row's position in that sorted list, so the more different values there are, the bigger that list gets and the more work the lookup does. When titles repeat, the index is a clear win, and it costs a fraction of what the fixed-width one costs to build. When almost every title is different, the lookup ends up *slower than no index at all*, while `string(200)` — whose index reads raw values straight out of a known slot — keeps the same lookup time either way. So index a `utf8()` column when its text repeats, and leave wide-open free text unindexed.
 
-Two caveats. Ranks are frozen at build time, so appending invalidates them: blosc2 falls back to a scan (correct results, no speedup) until you call {meth}`rebuild_index() <blosc2.CTable.rebuild_index>`. And no index accelerates `startswith` or substring search, on any flavour.
+Two caveats. That sorted list is built once, so adding rows leaves it out of date: blosc2 falls back to a scan (correct results, no speedup) until you call {meth}`rebuild_index() <blosc2.CTable.rebuild_index>`. And no index accelerates `startswith` or substring search, on any flavour.
 
-That ceiling is why CTable keeps four string flavours rather than one: {func}`dictionary() <blosc2.dictionary>` owns heavily repeated values, {class}`string <blosc2.string>` owns bounded identifiers, {func}`vlstring() <blosc2.vlstring>` owns columns needing a true `None`, and `utf8()` is the default for text you cannot bound. See {ref}`Choosing a string column type <ChoosingStringType>`.
+### Bytes on disk
+
+![On-disk size with and without a FULL index](optim_tips/tip_13c_utf8_ondisk.png)
+
+Compression squeezes most of the UCS-4 padding away, so the on-disk gap is nothing like the in-memory one — but it does not close: UCS-4 interleaves every real byte with zeros, and the codec still has to encode that, whether or not the text repeats. The FULL index is a sidecar file whose size follows the number of *different* values rather than the declared width — negligible when the text repeats, comparable to the column itself when it does not; `utf8()` is the cheaper of the two there as well.
+
+The columns themselves barely differ between the two versions, which is worth knowing: compression works block by block, so repeated text only saves space when the repeats happen to sit close together, and here they are scattered at random. If your values repeat that heavily, {func}`dictionary() <blosc2.dictionary>` is the flavour built to exploit it — see {ref}`Choosing a string column type <ChoosingStringType>`.
+
+That last limit is why CTable keeps four string flavours rather than one: {func}`dictionary() <blosc2.dictionary>` owns heavily repeated values, {class}`string <blosc2.string>` owns bounded identifiers, and {func}`utf8() <blosc2.utf8>` is the default for text you cannot bound. The fourth, {func}`vlstring() <blosc2.vlstring>`, is the one that made truly variable-length text possible before `utf8()` existed — it predates NumPy's own variable-width dtype, and is still the only flavour on NumPy < 2.0 — and it keeps what `utf8()` cannot express: a real `None` that no string value can imitate, and, through {func}`vlbytes() <blosc2.vlbytes>`, arbitrary bytes that need not be valid UTF-8 at all. See {ref}`Choosing a string column type <ChoosingStringType>`.
 
 *Benchmark for this tip: [`tip_13_utf8_strings.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_13_utf8_strings.py)*
 

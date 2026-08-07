@@ -9,15 +9,20 @@
 # rather than string(max_length=L).
 #
 # A fixed-width column costs 4 * max_length bytes per row *every time it is
-# read*: NumPy's <U dtype is UCS-4 and pads to the declared width.  On disk
-# the padding compresses away, so the two flavours look similar there -- in
-# memory they do not.  utf8() rows cost what they weigh.
+# read*: NumPy's <U dtype is UCS-4 and pads to the declared width.  utf8()
+# rows cost what they weigh, in memory and on disk.
 #
-# The second half of the tip is the FULL index on a utf8() column, which
-# turns an equality lookup into a rank probe -- but only up to a cardinality
-# ceiling, since values are indexed by alphabetical rank and the rank table
-# grows with the number of distinct values.  Both cardinalities are measured
-# (20k distinct, and near-unique) so the ceiling is visible, not hidden.
+# Three figures, one per subsection of the tip:
+#
+#   (a) tip_13a_utf8_read.png   -- reading a full column: time, peak memory
+#   (b) tip_13b_utf8_query.png  -- equality lookup with and without a FULL
+#                                  index, plus what that index costs to build
+#   (c) tip_13c_utf8_ondisk.png -- bytes on disk, column and index
+#
+# Both cardinalities (20k distinct, near-unique) are measured throughout, so
+# the FULL index's cardinality ceiling on utf8() -- values are indexed by
+# alphabetical rank, and the rank table grows with the number of distinct
+# values -- is visible rather than hidden.
 #
 # Synthetic free-text catalogue, built once and reused: every measured
 # variant runs in a fresh subprocess that re-imports this module, so the
@@ -34,21 +39,23 @@ import numpy as np
 import blosc2
 from common import COLOR_NAIVE, COLOR_TIP, GRID, INK, MUTED, OUT_DIR, fmt_bytes, measure
 
-N = 5_000_000
+N = 1_000_000
 MAX_LENGTH = 200
 CARD_LOW = 20_000  # distinct titles in the low-cardinality tables
-EXTEND_ROWS = 500_000  # write in batches: a 5M-row <U200 staging array is 4 GB
+EXTEND_ROWS = 250_000  # write in batches: a 1M-row <U200 staging array is 800 MB
 HERE = Path(__file__).parent
 
-# Building ten 5M-row tables and five FULL indexes is minutes of work, and a
-# one-shot index build is not something repetition describes any better -- the
-# second run reuses a warm page cache the first one had to fill.
+# One call per measurement.  Peak RSS is the headline of the first figure, and
+# repeating the read inflates it for utf8() only: the variable-width arena is
+# many small allocations the allocator does not hand straight back, so three
+# reps report ~2x one call's real high-water mark, while the fixed-width array
+# is one big mmap'd block that is returned each time.  Index builds are
+# one-shot work anyway.
 BENCH_REPS = 1
 
-# 5M rows is as far as the fixed-width variant goes here: its FULL index build
-# already peaks at ~11 GiB and its full read materializes 3.7 GiB, so a bigger
-# table would swap on a 24 GB machine and the timings would stop measuring
-# blosc2 and start measuring the pager.  Every cost below is per-row anyway.
+# Lighter shades of the two series colours, for the "+ FULL index" bars.
+COLOR_NAIVE_IDX = "#9dc0ea"
+COLOR_TIP_IDX = "#8fd9bd"
 
 # A vocabulary with accented and CJK entries, so "UTF-8 bytes vs UCS-4
 # codepoints" is a real gap and not an ASCII artefact.
@@ -73,20 +80,9 @@ class RowString:
     price: float = blosc2.field(blosc2.float64())
 
 
-@dataclass
-class RowDict:
-    title: str = blosc2.field(blosc2.dictionary())
-    price: float = blosc2.field(blosc2.float64())
-
-
-FLAVOURS = {"utf8": RowUTF8, "string": RowString, "dict": RowDict}
+FLAVOURS = {"utf8": RowUTF8, "string": RowString}
 CARDS = {"20k": CARD_LOW, "uniq": N}
-
-# dictionary() is measured at low cardinality only -- it is the reference answer
-# for heavily repeated values, and a 5M-entry dictionary is not a schema anyone
-# should ship.  It stays out of the plot: this tip's axis is length, not
-# cardinality.
-COMBOS = [(f, c) for f in FLAVOURS for c in CARDS if not (f == "dict" and c == "uniq")]
+COMBOS = [(f, c) for f in FLAVOURS for c in CARDS]
 
 
 def path_for(flavour, card, indexed=False):
@@ -131,7 +127,7 @@ def _build_all():
             f"p99 {np.percentile(nbytes, 99):.0f} B/row"
         )
 
-        for flavour in (f for f, c in COMBOS if c == card):
+        for flavour in FLAVOURS:
             Row = FLAVOURS[flavour]
             base = path_for(flavour, card)
             shutil.rmtree(base, ignore_errors=True)
@@ -143,7 +139,8 @@ def _build_all():
             ingest[flavour, card] = time.perf_counter() - t0
 
             # The indexed twin is a copy: `where()` with and without an index
-            # has to be measurable in either order, from a fresh subprocess.
+            # has to be measurable in either order, from a fresh subprocess,
+            # and the two directories are what the on-disk figure compares.
             idx = path_for(flavour, card, indexed=True)
             shutil.rmtree(idx, ignore_errors=True)
             shutil.copytree(base, idx)
@@ -166,7 +163,7 @@ if not all(_is_built(path_for(f, c, i)) for f, c in COMBOS for i in (False, True
 
 # Deterministic needles read back from the tables themselves, so they survive
 # the module-level build being skipped.  Row 7 of the 20k table is one of
-# ~250 duplicates; row 7 of the near-unique table is (almost surely) alone.
+# ~50 duplicates; row 7 of the near-unique table is (almost surely) alone.
 NEEDLE = {c: str(blosc2.CTable.open(path_for("utf8", c))["title"][7]) for c in CARDS}
 
 
@@ -215,15 +212,10 @@ def index_string_uniq():  return _build_index("string", "uniq")
 
 def numpy_utf8_20k():     return _numpy("utf8", "20k")
 def numpy_string_20k():   return _numpy("string", "20k")
-
-def read_dict_20k():      return _read("dict", "20k")
-def where_dict_20k():     return _where("dict", "20k", False)
-def whereidx_dict_20k():  return _where("dict", "20k", True)
-def index_dict_20k():     return _build_index("dict", "20k")
 # fmt: on
 
 
-def grouped_bars(ax, title, groups, series, values, fmt, ylabel="Time (s)", legend_cols=1):
+def grouped_bars(ax, title, groups, series, values, fmt, ylabel="Time (s)", legend_cols=1, title_size=9.5):
     """One panel: len(groups) clusters of len(series) direct-labeled bars."""
     x = np.arange(len(groups), dtype=float)
     width = 0.8 / len(series)
@@ -235,7 +227,7 @@ def grouped_bars(ax, title, groups, series, values, fmt, ylabel="Time (s)", lege
             ax.bar(xi, h, width=width * 0.9, color=color, label=label if xi == offs[0] else None)
             ax.text(xi, h + top * 0.03, fmt(h), ha="center", va="bottom", fontsize=7.5, color=INK)
     ax.set_xticks(x, groups, fontsize=8)
-    ax.set_title(title, fontsize=9.5, color=INK)
+    ax.set_title(title, fontsize=title_size, color=INK)
     ax.set_ylabel(ylabel, color=INK, fontsize=9)
     ax.spines[["top", "right"]].set_visible(False)
     ax.spines[["left", "bottom"]].set_color(GRID)
@@ -247,6 +239,14 @@ def grouped_bars(ax, title, groups, series, values, fmt, ylabel="Time (s)", lege
     ax.legend(fontsize=8, frameon=False, loc="upper left", ncol=legend_cols)
 
 
+def save(fig, name, rect=(0, 0, 1, 0.9)):
+    fig.tight_layout(rect=rect)
+    out_path = OUT_DIR / name
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"plot saved to {out_path}")
+
+
 if __name__ == "__main__":
     names = [
         "read_string_20k", "read_utf8_20k", "read_string_uniq", "read_utf8_uniq",
@@ -254,7 +254,6 @@ if __name__ == "__main__":
         "whereidx_string_20k", "whereidx_utf8_20k", "whereidx_string_uniq", "whereidx_utf8_uniq",
         "index_string_20k", "index_utf8_20k", "index_string_uniq", "index_utf8_uniq",
         "numpy_string_20k", "numpy_utf8_20k",
-        "read_dict_20k", "where_dict_20k", "whereidx_dict_20k", "index_dict_20k",
     ]  # fmt: skip
     t, m = {}, {}
     for name in names:
@@ -267,55 +266,79 @@ if __name__ == "__main__":
         print(f"\n--- {card} ---")
         for label, key in rows:
             s, u = t[f"{key}_string_{card}"], t[f"{key}_utf8_{card}"]
-            print(f"{label:<14}: string {s:.3f}s  utf8 {u:.3f}s   ({s / u:.2f}x)")
+            print(f"{label:<14}: string {s:.4f}s  utf8 {u:.4f}s   ({s / u:.2f}x)")
+        print(
+            f"peak read mem : string {fmt_bytes(m[f'read_string_{card}'])}  "
+            f"utf8 {fmt_bytes(m[f'read_utf8_{card}'])}"
+            f"   ({m[f'read_string_{card}'] / m[f'read_utf8_{card}']:.2f}x)"
+        )
     print(
         f"\nNumPy read+compare (20k): string {t['numpy_string_20k']:.3f}s  utf8 {t['numpy_utf8_20k']:.3f}s"
     )
-    print(
-        f"peak read memory: string {fmt_bytes(m['read_string_20k'])}  utf8 {fmt_bytes(m['read_utf8_20k'])}"
-        f"   ({m['read_string_20k'] / m['read_utf8_20k']:.2f}x)"
-    )
-    print(
-        f"\ndictionary() at 20k distinct: read {t['read_dict_20k']:.3f}s "
-        f"(peak {fmt_bytes(m['read_dict_20k'])})  where== {t['where_dict_20k']:.3f}s  "
-        f"where==+FULL {t['whereidx_dict_20k']:.3f}s  index build {t['index_dict_20k']:.2f}s"
-    )
     for flavour, card in COMBOS:
-        print(f"on disk {flavour:>6} {card:>4}: {fmt_bytes(du(path_for(flavour, card)))}")
+        base, idx = du(path_for(flavour, card)), du(path_for(flavour, card, indexed=True))
+        print(
+            f"on disk {flavour:>6} {card:>4}: {fmt_bytes(base)}   "
+            f"+FULL {fmt_bytes(idx)} (index {fmt_bytes(idx - base)})"
+        )
 
     series = ((f"string(max_length={MAX_LENGTH})", COLOR_NAIVE), ("utf8()", COLOR_TIP))
-    groups = (f"{CARD_LOW // 1000}k distinct", "near-unique")
-    secs = lambda v: f"{v:.3g}s"  # noqa: E731
-
-    fig, axes = plt.subplots(2, 2, figsize=(9.5, 6.4))
-    fig.suptitle(
-        f"utf8() vs fixed-width string() — {N // 1_000_000} Mrows of free text (mean 76 B/row)",
-        fontsize=11.5,
-        color=INK,
+    series_short = ((f"string({MAX_LENGTH})", COLOR_NAIVE), ("utf8()", COLOR_TIP))
+    series_idx = (
+        (f"string({MAX_LENGTH})", COLOR_NAIVE),
+        ("utf8()", COLOR_TIP),
+        (f"string({MAX_LENGTH}) + FULL", COLOR_NAIVE_IDX),
+        ("utf8() + FULL", COLOR_TIP_IDX),
     )
+    groups = (f"titles repeat\n({CARD_LOW // 1000}k different ones)", "titles nearly\nall different")
+    mrows = f"{N // 1_000_000} Mrow"
+    secs = lambda v: f"{v:.2f}s"  # noqa: E731
+    # Milliseconds where the bars are milliseconds apart: "0.00898s" next to
+    # "0.00931s" is two labels that collide and neither of them is readable.
+    msecs = lambda v: f"{v * 1000:.1f}ms" if v < 0.01 else f"{v * 1000:.0f}ms"  # noqa: E731
 
-    grouped_bars(
-        axes[0][0], "Full column read  t['title'][:]", groups, series,
-        [[t[f"read_string_{c}"], t[f"read_utf8_{c}"]] for c in CARDS], secs,
+    # (a) Reading a full column.
+    fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.6))
+    fig.suptitle(
+        f"Reading a full text column — {mrows} of free text (mean 76 B/row)",
+        fontsize=11.5, color=INK,
     )  # fmt: skip
     grouped_bars(
-        axes[0][1], "Peak memory of that read", ("same at either cardinality",), series,
-        [[m["read_string_20k"], m["read_utf8_20k"]]], fmt_bytes, ylabel="Peak memory",
+        axes[0], "Time  t['title'][:]", groups, series,
+        [[t[f"read_string_{c}"], t[f"read_utf8_{c}"]] for c in CARDS], msecs,
+        ylabel="Time (ms)",
     )  # fmt: skip
     grouped_bars(
-        axes[1][0], "Equality lookup  where('title == ...')", groups,
-        (("string, no index", COLOR_NAIVE), ("utf8, no index", COLOR_TIP),
-         ("string + FULL", "#9dc0ea"), ("utf8 + FULL", "#8fd9bd")),
+        axes[1], "Peak memory of that read", groups, series,
+        [[m[f"read_string_{c}"], m[f"read_utf8_{c}"]] for c in CARDS], fmt_bytes,
+        ylabel="Peak memory",
+    )  # fmt: skip
+    save(fig, "tip_13a_utf8_read.png")
+
+    # (b) Querying, with and without a FULL index.
+    fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.6))
+    fig.suptitle(
+        f"Querying a text column — {mrows}, where('title == ...')",
+        fontsize=11.5, color=INK,
+    )  # fmt: skip
+    grouped_bars(
+        axes[0], "Equality lookup", groups, series_idx,
         [[t[f"where_string_{c}"], t[f"where_utf8_{c}"],
           t[f"whereidx_string_{c}"], t[f"whereidx_utf8_{c}"]] for c in CARDS],
-        secs, legend_cols=2,
+        msecs, ylabel="Time (ms)", legend_cols=2,
     )  # fmt: skip
     grouped_bars(
-        axes[1][1], "FULL index build", groups, series,
+        axes[1], "FULL index build", groups, series_short,
         [[t[f"index_string_{c}"], t[f"index_utf8_{c}"]] for c in CARDS], secs,
     )  # fmt: skip
+    save(fig, "tip_13b_utf8_query.png")
 
-    fig.tight_layout(rect=[0, 0, 1, 0.93])
-    out_path = OUT_DIR / "tip_13_utf8_strings.png"
-    fig.savefig(out_path, dpi=150)
-    print(f"plot saved to {out_path}")
+    # (c) Bytes on disk, column and column + FULL index.
+    fig, ax = plt.subplots(1, 1, figsize=(6.6, 3.6))
+    grouped_bars(
+        ax, f"Bytes on disk — {mrows}, with and without a FULL index", groups, series_idx,
+        [[du(path_for("string", c)), du(path_for("utf8", c)),
+          du(path_for("string", c, True)), du(path_for("utf8", c, True))] for c in CARDS],
+        fmt_bytes, ylabel="On disk", legend_cols=2, title_size=11.5,
+    )  # fmt: skip
+    save(fig, "tip_13c_utf8_ondisk.png", rect=(0, 0, 1, 1))
