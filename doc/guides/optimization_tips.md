@@ -324,11 +324,59 @@ Caveat emptor: that sorted list is built once, so adding rows leaves it out of d
 
 Compression squeezes most of the UCS-4 padding away, so the on-disk gap is nothing like the in-memory one — but it does not close: UCS-4 interleaves every real byte with zeros, and the codec still has to encode that, whether or not the text repeats. The FULL index is a sidecar file whose size follows the number of *different* values rather than the declared width — negligible when the text repeats, comparable to the column itself when it does not; `utf8()` is the cheaper of the two there as well.
 
-The columns themselves barely differ between the two versions, which is worth knowing: compression works block by block, so repeated text only saves space when the repeats happen to sit close together, and here they are scattered at random. If your values repeat that heavily, {func}`dictionary() <blosc2.dictionary>` is the flavour built to exploit it — see {ref}`Choosing a string column type <ChoosingStringType>`.
+The columns themselves barely differ between the two versions, which is worth knowing: compression works block by block, so repeated text only saves space when the repeats happen to sit close together, and here they are scattered at random. If your values repeat that heavily, {func}`dictionary() <blosc2.dictionary>` is the flavour built to exploit it — see {ref}`the next tip <DictionaryTip>`.
 
 That last limit is why CTable keeps four string flavours rather than one: {func}`dictionary() <blosc2.dictionary>` owns heavily repeated values, {class}`string <blosc2.string>` owns bounded identifiers, and {func}`utf8() <blosc2.utf8>` is the default for text you cannot bound. The fourth, {func}`vlstring() <blosc2.vlstring>`, is the one that made truly variable-length text possible before `utf8()` existed — it predates NumPy's own variable-width dtype, and is still the only flavour on NumPy < 2.0 — and it keeps what `utf8()` cannot express: a real `None` that no string value can imitate, and, through {func}`vlbytes() <blosc2.vlbytes>`, arbitrary bytes that need not be valid UTF-8 at all. See {ref}`Choosing a string column type <ChoosingStringType>`.
 
 *Benchmark for this tip: [`tip_13_utf8_strings.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_13_utf8_strings.py)*
+
+(DictionaryTip)=
+
+## Repeated text? Store it as `dictionary()`, not `utf8()`
+
+The previous tip picks a flavour by *length*; this one corrects the choice by *repetition*. A {func}`dictionary() <blosc2.dictionary>` column stores one `int32` code per row plus a single copy of each distinct value — Arrow's dictionary encoding — so the text is written once and everything downstream works on integers.
+
+```python
+# Fine for free text, but each row carries its own bytes
+title: str = blosc2.field(blosc2.utf8())
+
+# Prefer, when values repeat: one int32 code per row, one copy of each value
+title: str = blosc2.field(blosc2.dictionary())
+```
+
+Same 1 Mrow column as the previous tip, now at three levels of repetition: 100 different titles, 20k different titles, and nearly all different.
+
+### Grouping
+
+![group_by on dictionary() vs utf8()](optim_tips/tip_14a_dict_groupby.png)
+
+Grouping is what category columns are for, and it is where the layout pays off most: the codes *are* the group keys, so blosc2 tallies integers, while the utf8 column has to decode and hash every row's text first. Note the log scale — at 100 different titles the gap is more than an order of magnitude, and it narrows as the number of groups grows. {meth}`size() <blosc2.CTableGroupBy.size>` behaves just like `sum()` here; the shape of the aggregation is not what makes the difference.
+
+### Membership tests
+
+![isin() and where(==) on dictionary() vs utf8()](optim_tips/tip_14b_dict_membership.png)
+
+{meth}`isin() <blosc2.Column.isin>` is the clear win: the wanted values are translated to codes once, and the rest is an integer membership test, where utf8 must decode every row to compare it — which also explains the memory gap between them.
+
+Plain `==` is a different story, and the figure says so: a single-value equality scan is already fast on a utf8 column, so there is nothing left for the codes to save. Switch flavour for grouping and `isin()`, not for `==`.
+
+### Storing and reading
+
+![On-disk size and full-column read](optim_tips/tip_14c_dict_storage.png)
+
+On disk, one `int32` per row plus a single copy of each value beats storing every row's bytes — and unlike compression, this does not depend on the repeats being clustered, which is exactly the limitation the previous tip ran into.
+
+Reading the whole column back is the one place `dictionary()` is slower, since the codes have to become strings again. What you get is a Python `list` whose entries are *shared* `str` objects — one per distinct value, not one per row — which is why its peak memory is several times lower than utf8's. It is also not a NumPy array, so vectorized string operations are not available on it. If your workload materializes the column far more often than it groups or filters, that trade may not be one you want.
+
+### When it stops paying
+
+All three figures agree on where the flavour runs out, and for a single reason: opening a dictionary column builds its value→code map by decoding the whole dictionary, which at a million distinct values costs about half a second and hundreds of MB *before any work starts*. That one cost is what turns the reads, the `==` scans and the `isin()` tests around at once — and by then the codes are dead weight too, leaving the column slightly larger on disk than plain utf8. Writing is affected as well, since almost every incoming row adds a new entry. So `dictionary()` is for columns whose values repeat; when nearly every row is different, {func}`utf8() <blosc2.utf8>` is the right home for it.
+
+Two limits worth knowing before you switch. Filters are `==` and `isin()` only — ordering comparisons, `startswith`/substring searches, and string-returning expressions are not available on a dictionary column, so a column you need to search by prefix is not a dictionary column. And the values measured here are long free text, which flatters the storage figures; real category columns (`"pending"`, `"NYC"`) are short, where utf8 already costs little per row. The grouping and membership wins do not depend on value length.
+
+Together with the previous tip, that is the whole decision: {class}`string <blosc2.string>` for short bounded identifiers, `dictionary()` when the values repeat, `utf8()` for everything else. See {ref}`Choosing a string column type <ChoosingStringType>`.
+
+*Benchmark for this tip: [`tip_14_dictionary.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_14_dictionary.py)*
 
 ## Memory-map read-only opens
 
