@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 4.10.1 to 4.10.2
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 4.10.0 to 4.10.1
 
 A correctness release: lazy indexing and reductions now follow NumPy in a
