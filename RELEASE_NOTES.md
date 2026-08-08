@@ -45,9 +45,26 @@ is also `bool_value`'s default, and `NullPolicy(bool_value=255)` carries no
 information to act on. A bool column that wants a sentinel has to say so with
 `null_storage` or `column_null_values`.
 
-A table containing a mask column records **schema version 3**; readers older than
-4.10.2 refuse it with a clear error rather than misreading it. Pass
-`null_storage="sentinel"` for data that has to stay readable by them.
+A table containing a mask column records **schema version 3**. Only such tables do:
+a table with no nullable column still records version 1, exactly as before, and a
+sentinel one does too. Readers older than 4.10.2 refuse a version-3 table rather
+than misreading it, but their message is a bare `ValueError: Unsupported schema
+version 3` — the hint naming `convert_nulls(to='sentinel')` ships in 4.10.2, so
+only readers that can already open the file will print it.
+
+If some of your data has to stay readable by an earlier release, pin the storage
+rather than discovering this downstream. Per column with
+`null_storage="sentinel"` (or any explicit `null_value=`), or process-wide,
+including for schemas inferred from Arrow, Parquet and CSV:
+
+```python
+with blosc2.null_policy(blosc2.NullPolicy(null_storage="sentinel")):
+    t = blosc2.CTable.from_parquet("data.parquet")
+```
+
+That reinstates the sentinel's lossiness — a float column's nulls become `NaN`
+again, and a type with no value to spare still cannot be imported — which is the
+trade being made.
 
 `Column.null_storage` reports where a column keeps its nulls and `info` tags each
 column (`int64 nullable[mask]`), so `CTable.convert_nulls()` can move columns
