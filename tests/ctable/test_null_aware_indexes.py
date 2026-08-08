@@ -265,7 +265,15 @@ def test_a_null_written_after_the_build_takes_the_shortcut_away(tmp_path):
 
 def or_table(tmp_path, name, spec, sentinel=None):
     """Two int columns whose large values are clustered, so a summary index has
-    something to prune and the planner prefers it to a scan."""
+    something to prune and the planner prefers it to a scan.
+
+    The row count is load-bearing and cannot be trimmed much: the planner's
+    cost model only prefers the index once the scan it would replace is big
+    enough, and measured here the switch happens between 200k and 400k rows.
+    Two million keeps a comfortable margin.  It is not expensive despite the
+    size -- the values are deliberately repetitive, so the whole table plus
+    both indexes come to about 90 KB on disk.
+    """
     n = 2_000_000
     idx = np.arange(n)
     a = np.where((idx >= 1000) & (idx < 1100), 5000 + idx, idx % 100).astype(np.int64)

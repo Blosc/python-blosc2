@@ -509,12 +509,16 @@ AGGS = {
 def grouped(t, keys, dropna):
     """``{key tuple -> {agg -> value}}``, nulls spelled ``None`` throughout."""
     g = t.group_by(keys, dropna=dropna, sort=True).agg(**AGGS)
+    # Each column is read once, not once per row: as_list is O(rows), so
+    # calling it inside the loop below made this O(rows^2 * columns) and cost
+    # more than every other test in the file put together.
+    cols = {name: as_list(g[name]) for name in (*keys, *AGGS)}
     out = {}
     for i in range(len(g)):
-        key = tuple(as_list(g[name])[i] for name in keys)
+        key = tuple(cols[name][i] for name in keys)
         row = {}
         for name in AGGS:
-            value = as_list(g[name])[i]
+            value = cols[name][i]
             if isinstance(value, float) and np.isnan(value):
                 value = None  # a non-nullable float output spells "missing" NaN
             row[name] = value
