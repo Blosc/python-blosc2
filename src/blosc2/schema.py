@@ -64,6 +64,13 @@ class _NullableSpecMixin:
 
     supports_sentinel = True
 
+    #: True once ``__init__`` has physically widened a boolean column to
+    #: ``uint8`` to make room for the reserved ``255``.  Only that flip may be
+    #: undone (``CTable._unflip_mask_bool_dtype``): a column whose *declared*
+    #: dtype is ``uint8`` is carrying real byte values, and turning it into
+    #: ``np.bool_`` would truncate every one of them to a flag.
+    bool_widened_to_uint8 = False
+
     def _init_nulls(self, *, nullable, null_value, null_storage) -> None:
         if null_storage is not None and null_storage not in _EXPLICIT_NULL_STORAGES:
             raise ValueError(
@@ -431,7 +438,8 @@ class bool(_NullableSpecMixin, SchemaSpec):
         # persisted as uint8 has to come back as uint8 from its metadata
         # alone.  When storage is still unresolved (plain ``nullable=True``,
         # policy decides later) the resolver corrects this both ways.
-        self.dtype = np.dtype(np.uint8) if self.nullable and not self.uses_mask else np.dtype(np.bool_)
+        self.bool_widened_to_uint8 = _builtin_bool(self.nullable and not self.uses_mask)
+        self.dtype = np.dtype(np.uint8) if self.bool_widened_to_uint8 else np.dtype(np.bool_)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         return {}
@@ -954,7 +962,9 @@ class NDArraySpec(_NullableSpecMixin, SchemaSpec):
         if self.nullable and not self.uses_mask and self.dtype == np.dtype(np.bool_):
             # Same reasoning as bool: opening a stored table rebuilds the spec
             # without running the resolver, so the uint8 flip has to survive
-            # from metadata alone.
+            # from metadata alone.  Recorded, because a *declared* uint8 ndarray
+            # column holds real byte values and must never be unflipped.
+            self.bool_widened_to_uint8 = True
             self.dtype = np.dtype(np.uint8)
         self.itemsize = self.dtype.itemsize
         self.kind = self.dtype.kind

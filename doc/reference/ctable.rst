@@ -118,13 +118,82 @@ the original unnamed root-list grouping, row groups, encoding choices, or file
 metadata exactly.
 
 
+Where nulls are stored
+----------------------
+
+A nullable column keeps its nulls in one of two places, and
+:attr:`Column.null_storage` says which::
+
+    t["price"].null_storage     # 'sentinel', 'mask', 'code', 'native' or 'none'
+    t.info                      # tags every column: int64 nullable[mask]
+
+``"sentinel"``
+    A value reserved from the column's own range — ``255`` for a nullable
+    ``bool`` (which is therefore physically ``uint8``), ``INT64_MIN`` for an
+    ``int64``, ``NaN`` for a float, the literal ``"__BLOSC2_NULL__"`` for a
+    string.  Nothing extra is stored, and every reader understands it.
+
+``"mask"``
+    A per-column ``.notnull`` validity array, one byte per row, ``True`` where
+    the value is present — Arrow's own model.  Nullity lives outside the value
+    range, so the column keeps every value its dtype can hold, and a nullable
+    ``bool`` stays a real ``np.bool_``.
+
+The two other values are the only representation their kind has: ``"code"`` for
+a dictionary column, which reserves ``-1``; ``"native"`` for the
+variable-length container kinds, whose cells simply hold ``None``.
+
+Sentinel storage is the default and is supported indefinitely.  Mask storage is
+what makes nullability **lossless**, so it is worth asking for whenever data
+comes from — or is going to — Arrow or Parquet:
+
+.. code-block:: python
+
+    blosc2.bool(null_storage="mask")  # no reserved 255; dtype stays np.bool_
+    blosc2.int8(null_storage="mask")  # all 256 values usable, plus nulls
+    blosc2.utf8(null_storage="mask")  # any string, including "" and "\x00"
+    blosc2.complex128(null_storage="mask")  # nullable at all, for the first time
+
+Under mask storage ``None`` is the way to write a null — ``t.append((None,))``,
+``t["price"][3] = None`` — which a fixed-width sentinel column cannot accept at
+all (there you write the sentinel yourself).  Reads are unchanged: ``col[:]``
+returns values with a deterministic fill in the null slots, and
+:meth:`Column.is_null` is what tells you which those are.
+
+One semantic difference is deliberate: in a **mask** column ``NaN`` is a
+*value*, following Arrow, and only ``mask=False`` is a null.  A sentinel float
+column keeps NaN-as-null.  So ``dropna``, ``group_by`` and ``min``/``max`` can
+differ between the two for float columns holding a real NaN.
+
+Converting between them
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Nothing migrates on its own: opening, copying and saving a table all preserve
+each column's storage.  :meth:`CTable.convert_nulls` is the only thing that
+changes it::
+
+    lossless = t.convert_nulls()                  # every convertible column -> mask
+    lossless.copy(urlpath="out.b2d")              # land it back on disk
+    t.convert_nulls("flag", to="mask", inplace=True)
+
+Going back to ``"sentinel"`` refuses what it cannot represent — a column whose
+data already contains the proposed sentinel, or one with no value left to
+reserve — and says which value is in the way, rather than silently relabelling
+a real row as null.
+
+.. autosummary::
+
+    CTable.convert_nulls
+
+.. automethod:: CTable.convert_nulls
+
+
 Null policy
 -----------
 
-Nullable scalar CTable columns are represented with per-column sentinel values,
-not native validity bitmaps.  When CTable has to infer those sentinels, the
-selection can be customized with :class:`NullPolicy` and scoped with
-:func:`null_policy`::
+:class:`NullPolicy` decides what a bare ``nullable=True`` resolves to when the
+schema does not say: which sentinel to reserve, or whether to use a mask at
+all.  Scope it with :func:`null_policy`::
 
     policy = blosc2.NullPolicy(
         signed_int_strategy="max",
@@ -148,10 +217,21 @@ The same policy is used by explicit nullable schema specs when no
     with blosc2.null_policy(policy):
         table = blosc2.CTable(Row)
 
-Sentinels are resolved in this order: explicit ``null_value`` in the schema,
-``NullPolicy.column_null_values`` for a matching column, then the type-wide
-``NullPolicy`` default.  Columns without ``nullable=True`` or an explicit
-``null_value`` are not nullable.
+Storage is resolved in this order, first match winning: an explicit
+``null_storage=`` on the spec; an explicit ``null_value=`` (which *is* a request
+for in-band storage); a ``NullPolicy.column_null_values`` entry for the column;
+a type-wide ``NullPolicy`` sentinel field covering the column's kind; and
+finally ``NullPolicy.null_storage``.  Once sentinel storage is chosen, the
+sentinel itself comes from ``column_null_values`` if listed and from the
+type-wide default otherwise.
+
+Setting any type-wide sentinel field therefore *implies* sentinel storage for
+the kinds it covers, so ``NullPolicy(float_value=-1.0)`` keeps working as it
+always has.  Passing ``null_storage="mask"`` alongside one is the one
+combination that raises, because it contradicts itself.
+
+Columns without ``nullable=True``, an explicit ``null_value`` or an explicit
+``null_storage`` are not nullable.
 
 .. autosummary::
 
@@ -198,9 +278,15 @@ expression:
   To exclude them, write the complementary comparison instead
   (``t.price <= 0``), which never matches nulls.
 
+All of this applies to mask-storage columns unchanged: propagation reads an
+opaque boolean "is null" predicate, which a sidecar supplies as directly as a
+sentinel comparison does.
+
 Kleene three-valued logic (where ``null > 0`` evaluates to null rather than
-``False``) is intentionally out of scope — it needs a validity channel on
-boolean intermediates, i.e. masks, which CTable does not use.
+``False``) remains intentionally out of scope.  Mask storage supplies the
+validity channel it needs, but it also requires comparison *results* to carry
+one, so that ``~`` can invert three states rather than two — a change to the
+expression layer rather than to storage.
 
 Reductions on derived expressions skip nulls too: arithmetic involving a
 nullable column returns a ``NullableExpr`` — a thin wrapper that remembers
@@ -737,10 +823,12 @@ Attributes
 
     Column.dtype
     Column.null_value
+    Column.null_storage
     Column.row_transformer
 
 .. autoproperty:: Column.dtype
 .. autoproperty:: Column.null_value
+.. autoproperty:: Column.null_storage
 .. autoproperty:: Column.row_transformer
 
 

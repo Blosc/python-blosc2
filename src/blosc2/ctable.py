@@ -36,6 +36,7 @@ from blosc2 import compute_chunks_blocks
 from blosc2.ctable_indexing import _CTableIndexingMixin
 from blosc2.ctable_nulls import (
     NULL_MASK,
+    NULL_NONE,
     NULL_SENTINEL,
     NullChannel,
     fill_value_for,
@@ -604,6 +605,15 @@ class ColumnViewIndexer:
 # ---------------------------------------------------------------------------
 # Internal row/indexing helpers (unchanged)
 # ---------------------------------------------------------------------------
+
+
+def _refresh_ndarray_dtype_fields(spec) -> None:
+    """Re-derive the dtype mirrors an :class:`NDArraySpec` caches beside ``dtype``."""
+    spec.itemsize = spec.dtype.itemsize
+    spec.kind = spec.dtype.kind
+    spec.type = spec.dtype.type
+    spec.str = spec.dtype.str
+    spec.name = spec.dtype.name
 
 
 def _rank_index_row_lookup(values_path: str, positions_path: str, table, null_rank: int):
@@ -2757,8 +2767,11 @@ class Column:
     def null_storage(self) -> str:
         """How this column represents its nulls.
 
-        One of ``"none"``, ``"sentinel"``, ``"code"`` (dictionary) or
-        ``"native"`` (variable-length containers holding ``None`` cells).
+        One of ``"none"``, ``"mask"`` (a ``.notnull`` sidecar validity array,
+        Arrow's model), ``"sentinel"`` (a reserved in-band value), ``"code"``
+        (dictionary) or ``"native"`` (variable-length containers holding ``None``
+        cells).  The first two are the ones :meth:`CTable.convert_nulls` moves
+        between; the last two are the only representation their kind has.
         """
         return self._nulls.kind
 
@@ -3757,9 +3770,10 @@ class NestedColumn:
                 )
             else:
                 col_meta = table._schema.columns_by_name.get(name)
+                spec = col_meta.spec if col_meta else None
                 dtype_label = table._dtype_info_label(
-                    getattr(table._cols[name], "dtype", None), col_meta.spec if col_meta else None
-                )
+                    getattr(table._cols[name], "dtype", None), spec
+                ) + table._null_info_tag(spec)
                 cbytes = getattr(table._cols[name], "cbytes", None)
                 if cbytes is not None:
                     nbytes = getattr(table._cols[name], "nbytes", None)
@@ -4781,18 +4795,29 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         *opening* a stored table -- which rebuilds specs without running this
         resolver -- brings a persisted uint8 column back as uint8.  Once the
         policy has spoken for mask, the column is a real ``np.bool_`` again.
+
+        Keyed off ``bool_widened_to_uint8``, not off the dtype: an **ndarray**
+        column may be ``uint8`` because that is what the user declared, and
+        turning that into ``np.bool_`` would truncate every byte to a flag.
         """
-        if spec.dtype != np.dtype(np.uint8):
+        if not getattr(spec, "bool_widened_to_uint8", False):
             return
-        if isinstance(spec, b2_bool):
-            spec.dtype = np.dtype(np.bool_)
-        elif isinstance(spec, NDArraySpec):
-            spec.dtype = np.dtype(np.bool_)
-            spec.itemsize = spec.dtype.itemsize
-            spec.kind = spec.dtype.kind
-            spec.type = spec.dtype.type
-            spec.str = spec.dtype.str
-            spec.name = spec.dtype.name
+        spec.bool_widened_to_uint8 = False
+        spec.dtype = np.dtype(np.bool_)
+        if isinstance(spec, NDArraySpec):
+            _refresh_ndarray_dtype_fields(spec)
+
+    @staticmethod
+    def _widen_bool_dtype_to_uint8(spec) -> None:
+        """Make room for the reserved ``255`` a sentinel-backed bool needs.
+
+        The inverse of :meth:`_unflip_mask_bool_dtype`, and it records the flip
+        so that inverse knows it may be undone.
+        """
+        spec.bool_widened_to_uint8 = True
+        spec.dtype = np.dtype(np.uint8)
+        if isinstance(spec, NDArraySpec):
+            _refresh_ndarray_dtype_fields(spec)
 
     @classmethod
     def _resolve_nullable_specs(
@@ -4809,12 +4834,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if isinstance(spec, NDArraySpec) and getattr(spec, "null_value", None) is not None:
                 cls._validate_null_value_for_spec(col.name, spec, spec.null_value)
                 if spec.dtype == np.dtype(np.bool_):
-                    spec.dtype = np.dtype(np.uint8)
-                    spec.itemsize = spec.dtype.itemsize
-                    spec.kind = spec.dtype.kind
-                    spec.type = spec.dtype.type
-                    spec.str = spec.dtype.str
-                    spec.name = spec.dtype.name
+                    cls._widen_bool_dtype_to_uint8(spec)
                 col.dtype = getattr(spec, "dtype", None)
                 col.display_width = compute_display_width(spec)
                 continue
@@ -4851,15 +4871,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             elif isinstance(spec, b2_bytes):
                 spec.max_length = max(spec.max_length, len(null_value), 1)
                 spec.dtype = np.dtype(f"S{spec.max_length}")
-            elif isinstance(spec, b2_bool):
-                spec.dtype = np.dtype(np.uint8)
-            elif isinstance(spec, NDArraySpec) and spec.dtype == np.dtype(np.bool_):
-                spec.dtype = np.dtype(np.uint8)
-                spec.itemsize = spec.dtype.itemsize
-                spec.kind = spec.dtype.kind
-                spec.type = spec.dtype.type
-                spec.str = spec.dtype.str
-                spec.name = spec.dtype.name
+            elif isinstance(spec, b2_bool) or (
+                isinstance(spec, NDArraySpec) and spec.dtype == np.dtype(np.bool_)
+            ):
+                cls._widen_bool_dtype_to_uint8(spec)
             col.dtype = getattr(spec, "dtype", None)
             col.display_width = compute_display_width(spec)
 
@@ -6901,7 +6916,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         result._valid_rows[:n] = True
         result._valid_rows[n:] = False
         result._n_rows = n
-        result._last_pos = n - 1 if n > 0 else None
+        # Exclusive bound, the convention _resolve_last_pos() documents and every
+        # other writer follows -- n - 1 here made add_column() on a copied table
+        # backfill one row short (and raise, for a varlen column).
+        result._last_pos = n if n > 0 else None
         return result
 
     def slice(self, start, stop=None, /, *, copy: bool = True) -> CTable:
@@ -10031,6 +10049,434 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return renamed_col
 
     # ------------------------------------------------------------------
+    # Null-storage migration
+    # ------------------------------------------------------------------
+
+    #: Rows scanned per pass by :meth:`convert_nulls`.  Bounds the transient
+    #: value and validity buffers without changing the result.
+    _CONVERT_NULLS_SPAN: ClassVar[int] = 1 << 20
+
+    def convert_nulls(
+        self,
+        columns: str | list[str] | None = None,
+        *,
+        to: str = "mask",
+        null_value: Any = None,
+        inplace: bool = False,
+    ) -> CTable:
+        """Convert nullable columns between sentinel and validity-mask storage.
+
+        **Never called implicitly.**  Opening, copying and saving a table all
+        preserve each column's existing null storage, so this is the only way a
+        column changes where it keeps its nulls.
+
+        Parameters
+        ----------
+        columns:
+            Column name, or list of names, to convert.  ``None`` (default)
+            converts every column that *can* be converted and is not already in
+            the target storage.  Naming a column that cannot be converted is an
+            error; an implicit sweep skips it silently.
+        to:
+            ``"mask"`` (default) moves nullity into a ``.notnull`` sidecar --
+            Arrow's model, and the only one that is lossless for every type.
+            ``"sentinel"`` moves it back in band, and **refuses what it cannot
+            represent**: a column whose data already contains the proposed
+            sentinel, or one with no value left to reserve.
+        null_value:
+            The sentinel to reserve, for ``to="sentinel"``.  Only accepted when
+            converting exactly one column, since a single value cannot be right
+            for several kinds at once; otherwise the active
+            :class:`NullPolicy`'s type-wide default is used.
+        inplace:
+            If ``True``, rewrite this table and return ``self``.  If ``False``
+            (default, and recommended) return a new **in-memory** table, leaving
+            this one untouched -- pass the result to ``copy(urlpath=...)`` to
+            land it back on disk.
+
+            ``inplace=True`` on a *persistent* table cannot change a column's
+            dtype, which rules out ``bool`` (``uint8`` <-> ``np.bool_``) and a
+            ``string``/``bytes`` column too narrow for the sentinel it is being
+            given.  Replacing a stored array means there is a moment when the
+            values and the schema disagree, and no ordering of the two survives
+            a crash in between; ``inplace=False`` has no such moment because it
+            builds a new table.  Those columns raise, naming themselves.
+
+        Notes
+        -----
+        Everything else *is* crash-safe, and the ordering is the argument:
+
+        ``to="mask"`` writes the complete sidecar first, then flips the schema,
+        then normalizes the null slots to the fill.  A crash before the flip
+        leaves an orphan ``.notnull`` key that a sentinel column never reads; a
+        crash after it leaves a correct mask column whose null slots happen to
+        still hold the old sentinel -- which is unobservable except as raw
+        values, and the fill is explicitly not part of the format contract.
+
+        ``to="sentinel"`` runs the same argument backwards: it writes the
+        sentinel into the null slots *first* (harmless while the sidecar is
+        still authoritative), then flips the schema, then drops the sidecar.
+
+        A **null-free** column converts as a pure schema update in either
+        direction: nothing is scanned twice, and to="mask" writes no sidecar at
+        all, since an absent one already means "every row is valid".
+
+        ``string``/``bytes`` columns keep the ``max_length`` a sentinel forced on
+        them -- shrinking it is a dtype change, so use ``copy()`` to reclaim the
+        width.  Dictionary columns (reserved code) and the variable-length
+        container kinds (native ``None`` cells) have only one representation and
+        are never converted.
+
+        Examples
+        --------
+        >>> lossless = t.convert_nulls()                     # doctest: +SKIP
+        >>> lossless.copy(urlpath="out.b2d")                 # doctest: +SKIP
+        >>> t.convert_nulls("flag", to="mask", inplace=True)  # doctest: +SKIP
+        """
+        if to not in (NULL_MASK, NULL_SENTINEL):
+            raise ValueError(f"to must be 'mask' or 'sentinel', got {to!r}")
+        if null_value is not None and to != NULL_SENTINEL:
+            raise ValueError("null_value only applies to to='sentinel'")
+        if isinstance(columns, str):
+            columns = [columns]
+        # A dtype change means replacing an array, which only an in-memory table
+        # can do safely; inplace=False lands there by construction, since it
+        # converts the copy.
+        targets = self._convert_null_targets(
+            columns,
+            to,
+            null_value,
+            allow_recast=not (inplace and isinstance(self._storage, FileTableStorage)),
+        )
+
+        if not inplace:
+            # copy() preserves each column's null storage (decision 7), so the
+            # conversion happens exactly once, on a table nobody else holds --
+            # and in memory, where replacing an array costs nothing.
+            result = self.copy()
+            result._convert_nulls_inplace(targets, to)
+            return result
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
+        if self.base is not None:
+            raise ValueError(
+                "Cannot convert a view's null storage inplace (it shares the base table's "
+                "columns). Use convert_nulls(inplace=False) to get a converted copy."
+            )
+        self._convert_nulls_inplace(targets, to)
+        return self
+
+    def _convert_null_targets(
+        self, columns: list[str] | None, to: str, null_value: Any, *, allow_recast: bool
+    ) -> list[tuple[str, Any]]:
+        """Resolve the columns to convert into ``[(name, sentinel)]``.
+
+        *sentinel* is the value to reserve (``to="sentinel"``) or ``None``.
+        Everything that can make a conversion impossible is decided here, before
+        a single byte is written -- an unavailable sentinel, one the data already
+        uses, a dtype change a persistent table cannot make -- so a refusal
+        leaves the table exactly as it was rather than half converted.
+        """
+        if columns is None:
+            names = [
+                col.name
+                for col in self._schema.columns
+                if kind_of_spec(col.spec) in (NULL_MASK, NULL_SENTINEL) and kind_of_spec(col.spec) != to
+            ]
+        else:
+            names = []
+            for name in columns:
+                col_info = self._schema.columns_by_name.get(name)
+                if col_info is None:
+                    raise KeyError(f"Column {name!r} not found.")
+                kind = kind_of_spec(col_info.spec)
+                if kind == NULL_NONE:
+                    raise ValueError(f"Column {name!r} is not nullable, so it has no nulls to convert.")
+                if kind not in (NULL_MASK, NULL_SENTINEL):
+                    raise ValueError(
+                        f"Column {name!r} stores its nulls as {kind!r}, which is the only "
+                        f"representation its kind has -- a dictionary column reserves a code and "
+                        f"the variable-length kinds hold native None. There is nothing to convert."
+                    )
+                if kind != to:
+                    names.append(name)  # already converted: skip, so this stays idempotent
+        if null_value is not None and len(names) != 1:
+            raise ValueError(
+                f"null_value applies to a single column, but {len(names)} would be converted; "
+                "name one column, or drop null_value to use the NullPolicy default for each kind."
+            )
+        if to == NULL_MASK:
+            targets = [(name, None) for name in names]
+        else:
+            targets = [(name, self._sentinel_for_conversion(name, null_value)) for name in names]
+        if not allow_recast:
+            for name, sentinel in targets:
+                spec = self._schema.columns_by_name[name].spec
+                if self._convert_changes_dtype(spec, to, sentinel):
+                    raise ValueError(
+                        f"Converting column {name!r} changes its physical dtype (a nullable bool is "
+                        f"{'uint8 under sentinel storage' if to == NULL_SENTINEL else 'np.bool_ under mask storage'}"
+                        f"; a string or bytes column too narrow for its sentinel has to grow), which "
+                        f"means replacing the stored array -- and there is no ordering of that write "
+                        f"and the schema update that a crash cannot land between. Use "
+                        f"convert_nulls(inplace=False), then copy(urlpath=...) to store the result."
+                    )
+        return targets
+
+    def _sentinel_for_conversion(self, name: str, null_value: Any):
+        """Pick and vet the sentinel column *name* will reserve.
+
+        Rejects, before any write, the two ways a sentinel can be unavailable:
+        a kind with no value to spare at all, and a value the column's own data
+        already uses -- which would silently relabel real rows as null, the very
+        loss mask storage exists to avoid.
+        """
+        spec = self._schema.columns_by_name[name].spec
+        if not getattr(spec, "supports_sentinel", True):
+            raise ValueError(
+                f"Column {name!r} has dtype {spec.dtype}, for which no value can be reserved as a "
+                f"null sentinel. It can only use mask storage."
+            )
+        if null_value is None:
+            null_value = self._policy_null_value_for_spec(spec, get_null_policy())
+            if null_value is None:
+                raise ValueError(
+                    f"No null policy sentinel is available for column {name!r}; pass "
+                    f"null_value= explicitly, or keep the column on mask storage."
+                )
+        self._validate_null_value_for_spec(name, spec, null_value)
+        col = self[name]
+        clash = self._convert_sentinel_clash(col, spec, null_value)
+        if clash is not None:
+            raise ValueError(
+                f"Column {name!r} already contains {null_value!r} at row {clash} as a real value, "
+                f"so reserving it as the null sentinel would relabel that row as null. Pass a "
+                f"different null_value=, or keep the column on mask storage."
+            )
+        return null_value
+
+    def _convert_sentinel_clash(self, col: Column, spec, null_value) -> int | None:
+        """The first non-null row already holding *null_value*, or ``None``.
+
+        A NaN sentinel never clashes: under mask storage NaN is a value, but it
+        is one the sentinel model has always spelled "null", so folding the two
+        together is the documented semantic change rather than data loss.
+        """
+        if is_nan_sentinel(null_value):
+            return None
+        valid_arr = self._null_mask(col._col_name)
+        item_ndim = col.item_ndim if col.is_ndarray else 0
+        for start, stop, raw in self._iter_convert_spans(col._col_name):
+            hit = sentinel_mask(raw, null_value, item_ndim=item_ndim)
+            if valid_arr is not None:
+                hit &= np.asarray(valid_arr[start:stop], dtype=bool)
+            if hit.any():
+                return start + int(np.flatnonzero(hit)[0])
+        return None
+
+    def _iter_convert_spans(self, name: str):
+        """Yield ``(start, stop, values)`` over column *name*'s written slots.
+
+        Physical, and bounded to the write watermark rather than the capacity:
+        the padding past it holds no row, and a utf8 column is not even that
+        long.
+        """
+        arr = self._cols[name]
+        n_phys = min(self._resolve_last_pos(), len(arr))
+        span = self._CONVERT_NULLS_SPAN
+        for start in range(0, n_phys, span):
+            stop = min(start + span, n_phys)
+            yield start, stop, np.asarray(arr[start:stop])
+
+    def _detach_schema(self) -> None:
+        """Give this table its own copy of every column spec.
+
+        ``_empty_copy`` hands the copy the *same* :class:`CompiledSchema` object,
+        which is right for everything that only reads it -- and wrong for the one
+        thing that does not.  Conversion rewrites specs **in place**, and without
+        this a converted copy would reach back and relabel its source's columns
+        too, leaving that table reporting a storage its data does not use.
+        """
+        columns = [dataclasses.replace(c, spec=copy.deepcopy(c.spec)) for c in self._schema.columns]
+        self._schema = CompiledSchema(
+            row_cls=self._schema.row_cls,
+            columns=columns,
+            columns_by_name={c.name: c for c in columns},
+        )
+
+    def _convert_nulls_inplace(self, targets: list[tuple[str, Any]], to: str) -> None:
+        """Rewrite each target column's null channel, one column at a time.
+
+        Per column rather than per phase, so an interrupted conversion leaves
+        every other column exactly as it was.
+        """
+        self._detach_schema()
+        for name, sentinel in targets:
+            if to == NULL_MASK:
+                self._convert_column_to_mask(name)
+            else:
+                self._convert_column_to_sentinel(name, sentinel)
+
+    def _convert_column_to_mask(self, name: str) -> None:
+        col_info = self._schema.columns_by_name[name]
+        spec = col_info.spec
+        sentinel = spec.null_value
+        item_ndim = self[name].item_ndim if self[name].is_ndarray else 0
+
+        # 1. The sidecar, complete, before the schema mentions it.
+        mask_arr = None
+        for start, stop, raw in self._iter_convert_spans(name):
+            null = sentinel_mask(raw, sentinel, item_ndim=item_ndim)
+            if not null.any():
+                continue
+            if mask_arr is None:
+                mask_arr = self._ensure_null_mask(name)
+                # create_null_mask zero-fills, and zero is *invalid*; start from
+                # all-valid and punch the nulls out below.
+                mask_arr[:] = True
+            mask_arr[start:stop] = ~null
+
+        # 2. The schema.  A column with no null needs nothing else: an absent
+        #    sidecar already says every row is valid (decision 9).
+        self._retype_converted_column(name, to=NULL_MASK, null_value=None)
+        if mask_arr is None:
+            return
+
+        # 3. Normalize the null slots to the fill.  Purely cosmetic -- what sits
+        #    under valid=False is unobservable through the Column API -- so it
+        #    runs last, where an interruption costs nothing.  A bool column
+        #    *needs* it: step 2 recast uint8 to np.bool_, turning the old 255
+        #    sentinel into True.
+        self._write_at_invalid(name, mask_arr, self[name]._nulls.fill_value)
+
+    def _write_at_invalid(self, name: str, mask_arr, value) -> None:
+        """Overwrite the values under ``mask_arr == False`` with *value*."""
+        col = self[name]
+        arr = self._cols[name]
+        n_phys = min(self._resolve_last_pos(), len(arr))
+        span = self._CONVERT_NULLS_SPAN
+        for start in range(0, n_phys, span):
+            stop = min(start + span, n_phys)
+            invalid = ~np.asarray(mask_arr[start:stop], dtype=bool)
+            if not invalid.any():
+                continue
+            positions = np.flatnonzero(invalid) + start
+            if col.is_utf8:
+                # A UTF8Array assigns one row at a time; the null rows are a
+                # small subset by construction.
+                for pos in positions:
+                    arr[int(pos)] = value
+            elif isinstance(value, np.ndarray):
+                # An ndarray column's fill is a whole *item*; the fancy-index
+                # setitem wants one item per selected row rather than something
+                # to broadcast across them.
+                arr[positions] = np.broadcast_to(value, (len(positions), *value.shape))
+            else:
+                arr[positions] = value
+
+    def _convert_column_to_sentinel(self, name: str, sentinel) -> None:
+        spec = self._schema.columns_by_name[name].spec
+        mask_arr = self._null_mask(name)
+        # A bool column's 255 does not fit np.bool_, and a widened string's
+        # sentinel does not fit the old itemsize, so those have to be recast
+        # before the sentinel can be written at all.  Both are in-memory-only
+        # (see _recast_converted_column), where the ordering below buys nothing.
+        recast_first = self._convert_changes_dtype(spec, NULL_SENTINEL, sentinel)
+
+        if recast_first:
+            self._retype_converted_column(name, to=NULL_SENTINEL, null_value=sentinel)
+        if mask_arr is not None:
+            # The sentinel goes into the null slots while the sidecar is still
+            # what says which those are, so this write cannot lose anything.
+            self._write_at_invalid(name, mask_arr, sentinel)
+        if not recast_first:
+            # The schema last, which is what makes those slots mean "null".
+            self._retype_converted_column(name, to=NULL_SENTINEL, null_value=sentinel)
+        if mask_arr is not None:
+            # Now dead weight: a sentinel column never reads a sidecar.
+            self._drop_null_mask(name)
+
+    @staticmethod
+    def _convert_changes_dtype(spec, to: str, null_value) -> bool:
+        """Whether this conversion also changes the column's physical dtype.
+
+        Only three ways it can: a bool column loses or regains the ``uint8``
+        widening, and a ``string``/``bytes`` column too narrow for its new
+        sentinel has to grow.
+        """
+        if to == NULL_MASK:
+            return getattr(spec, "bool_widened_to_uint8", False) is True
+        if isinstance(spec, (string, b2_bytes)):
+            return len(null_value) > spec.max_length
+        if isinstance(spec, b2_bool):
+            return spec.dtype != np.dtype(np.uint8)
+        return isinstance(spec, NDArraySpec) and spec.dtype == np.dtype(np.bool_)
+
+    def _retype_converted_column(self, name: str, *, to: str, null_value) -> None:
+        """Rewrite column *name*'s spec for its new null channel, and persist it.
+
+        The dtype consequences are the same ones ``_resolve_nullable_specs``
+        applies at creation, run in the other direction: mask storage undoes the
+        ``bool -> uint8`` flip, and sentinel storage reapplies it and widens a
+        ``string``/``bytes`` column that cannot hold its sentinel.  A dtype
+        change means a new array, which is why it is refused for a persistent
+        in-place conversion.
+        """
+        col_info = self._schema.columns_by_name[name]
+        spec = col_info.spec
+        before = spec.dtype
+        spec.nullable = True
+        spec.null_storage = to
+        spec.null_value = null_value
+        if to == NULL_MASK:
+            self._unflip_mask_bool_dtype(spec)
+        elif isinstance(spec, string):
+            spec.max_length = max(spec.max_length, len(null_value), 1)
+            spec.dtype = np.dtype(f"U{spec.max_length}")
+        elif isinstance(spec, b2_bytes):
+            spec.max_length = max(spec.max_length, len(null_value), 1)
+            spec.dtype = np.dtype(f"S{spec.max_length}")
+        elif isinstance(spec, b2_bool) or (
+            isinstance(spec, NDArraySpec) and spec.dtype == np.dtype(np.bool_)
+        ):
+            self._widen_bool_dtype_to_uint8(spec)
+        if spec.dtype != before:
+            self._recast_converted_column(name, col_info, before)
+        col_info.dtype = getattr(spec, "dtype", None)
+        col_info.display_width = compute_display_width(spec)
+        self._col_widths[name] = max(len(name), col_info.display_width)
+        if isinstance(self._storage, FileTableStorage):
+            self._storage.save_schema(self._schema_dict_with_computed())
+
+    def _recast_converted_column(self, name: str, col_info, before: np.dtype) -> None:
+        """Replace column *name*'s array so it matches its new dtype.
+
+        In-memory only, and :meth:`_convert_null_targets` has already refused the
+        persistent case: there the values and the schema would disagree for as
+        long as the write takes, and no ordering of the two survives a crash in
+        between.  Here there is no crash window to protect, so the values are
+        simply cast across.
+        """
+        spec = col_info.spec
+        old = self._cols[name]
+        shape = self._column_physical_shape(col_info, len(self._valid_rows))
+        new = self._storage.create_column(
+            name,
+            dtype=spec.dtype,
+            shape=shape,
+            chunks=old.chunks,
+            blocks=old.blocks,
+            cparams=None,
+            dparams=None,
+        )
+        n_phys = min(self._resolve_last_pos(), len(old))
+        span = self._CONVERT_NULLS_SPAN
+        for start in range(0, n_phys, span):
+            stop = min(start + span, n_phys)
+            new[start:stop] = np.asarray(old[start:stop]).astype(spec.dtype, copy=False)
+        self._cols[name] = new
+
+    # ------------------------------------------------------------------
     # Computed / virtual columns
     # ------------------------------------------------------------------
 
@@ -12879,7 +13325,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if compact:
             result._valid_rows[:n] = True
             result._n_rows = n
-            result._last_pos = n - 1 if n > 0 else None
+            # Exclusive bound, the convention _resolve_last_pos() documents and
+            # every other writer follows -- n - 1 here made add_column() on a
+            # copied table backfill one row short (and raise, for a varlen one).
+            result._last_pos = n if n > 0 else None
         else:
             result._valid_rows[:n] = valid_np[:n]
             result._n_rows = n_live
@@ -13141,9 +13590,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 )
             else:
                 col_meta = self._schema.columns_by_name.get(name)
+                spec = col_meta.spec if col_meta else None
                 dtype_label = self._dtype_info_label(
-                    getattr(self._cols[name], "dtype", None), col_meta.spec if col_meta else None
-                )
+                    getattr(self._cols[name], "dtype", None), spec
+                ) + self._null_info_tag(spec)
                 cbytes = getattr(self._cols[name], "cbytes", None)
                 if cbytes is not None:
                     nbytes = getattr(self._cols[name], "nbytes", None)
@@ -13208,6 +13658,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if nbytes is not None and cbytes:
             detail += f", cratio: {nbytes / cbytes:.2f}x"
         return f"{dtype_label} ({detail})"
+
+    @staticmethod
+    def _null_info_tag(spec: SchemaSpec | None) -> str:
+        """``" nullable[mask]"`` and friends, or ``""`` for a non-nullable column.
+
+        Appended to a column's dtype in :attr:`info`'s per-column summary, which
+        is where a whole table's null storage becomes visible at a glance -- what
+        you read before deciding whether to run :meth:`convert_nulls`.
+        """
+        kind = kind_of_spec(spec)
+        return "" if kind == NULL_NONE else f" nullable[{kind}]"
 
     @staticmethod
     def _dtype_info_label(dtype: np.dtype | None, spec: SchemaSpec | None = None) -> str:

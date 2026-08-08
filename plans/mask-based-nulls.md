@@ -1,16 +1,19 @@
 # Mask-based nullable columns for CTable
 
-> **Status: IN PROGRESS — Phases 0–7 landed 2026-08-08.** Lossless Arrow/Parquet round-trip works
-> for every V1 kind and sort/groupby/query now honour a sidecar, all **opt-in** via
-> `null_storage="mask"`; next up is Phase 8 (migration + docs). Six premises were disproven during
+> **Status: IN PROGRESS — Phases 0–8 landed 2026-08-08.** Lossless Arrow/Parquet round-trip works
+> for every V1 kind, sort/groupby/query honour a sidecar, and `convert_nulls` migrates columns in
+> either direction — all **opt-in** via `null_storage="mask"`; next up is Phase 9 (the default
+> flip). Six premises were disproven during
 > implementation and are corrected in place, each in a blockquote beside the text it corrects: the
 > index path cannot be fixed by a null-aware expression (§Expression layer), the bool dtype-flip
 > cannot move out of `__init__` (§Schema layer), ndarray columns do not get lazy null propagation
 > for free (§Expression layer), the "free" summary min/max fast path is unsound (§Reductions),
 > `np.packbits` is not needed and avoiding it is safer (§Arrow/Parquet), and `.equals()` cannot
-> express the round-trip contract (§Arrow/Parquet). Phase 7 added a seventh: **Phase 1 left the
-> mask half of the query path undone** and nobody noticed until sort work went looking
-> (§Expression layer, "Addendum 2"). Drafted 2026-08-08.
+> express the round-trip contract (§Arrow/Parquet). Phase 7 added a seventh — **Phase 1 left the
+> mask half of the query path undone**, and nobody noticed until sort work went looking
+> (§Expression layer, "Addendum 2") — and Phase 8 an eighth: the in-place migration ordering
+> recorded below is **wrong at its middle step**, and moving that step last makes every
+> intermediate state correct rather than merely recoverable (§Migration). Drafted 2026-08-08.
 > Revised 2026-08-08 after review: lazy sidecar materialization (decision 9), `NullPolicy`
 > inference instead of raising, staged default flip (Phase 9), null-predicate rewrite pulled
 > forward to Phase 1, sidecar suffix renamed `.notnull`.
@@ -777,6 +780,45 @@ the table intact. `inplace=False` (default, recommended) builds a new table via 
 
 Detection is `Column.null_storage` plus an `info()` column — no separate report function.
 
+> **Correction and as-built (2026-08-08).** The ordering above is **wrong at step 2, and the fix is
+> to move it rather than to accept the window.** After (2) the table is *not* intact: the null slots
+> now hold the fill, and a schema still saying `sentinel` reads a fill `0` as the value `0`. What
+> shipped is **(1) sidecar, (2) schema, (3) fill** — and every intermediate state is then correct,
+> not merely recoverable. A crash before (2) leaves an orphan `.notnull` key that a sentinel column
+> never opens; a crash before (3) leaves a correct mask column whose null slots happen to still hold
+> the old sentinel, which is unobservable through the `Column` API and which decision 5 explicitly
+> excludes from the format contract. `to="sentinel"` runs the same argument backwards: sentinel into
+> the null slots first (harmless while the sidecar is still authoritative), then the schema, then
+> drop the sidecar. Both orderings are asserted in `test_null_migration.py`.
+>
+> Four further departures:
+>
+> - **A dtype change is refused for a persistent in-place conversion**, and this is the one real
+>   capability limit. `bool` (`uint8` ↔ `np.bool_`) and a `string`/`bytes` column too narrow for its
+>   sentinel need the stored array *replaced*, and there is no ordering of that write and the schema
+>   update a crash cannot land between. `inplace=False` has no such window — it builds a new
+>   table — so those columns raise, naming themselves and pointing at it. In-memory `inplace=True` is
+>   allowed: there is nothing to crash into. The check runs in `_convert_null_targets`, before any
+>   write, alongside the sentinel-availability checks, so a refusal never leaves litter.
+> - **`copy()` shares its schema object with the source**, which conversion — the one operation that
+>   mutates a spec in place — cannot live with: a converted copy relabelled its *source's* columns
+>   too, leaving that table reporting a storage its data does not use. `_detach_schema()` deep-copies
+>   the specs first, and `_convert_nulls_inplace` always calls it, so `copy()` followed by an
+>   in-place conversion is safe as well.
+> - **The all-elements ndarray rule needs no special handling.** `sentinel_mask(item_ndim=)` already
+>   implements it, and the sentinel direction writes the scalar sentinel across every element of a
+>   null row, which is the same rule read backwards.
+> - **`Column.null_storage` and the `info()` rows already existed**, from Phases 0 and 4. What Phase
+>   8 added is the *table-level* tag (`int64 nullable[mask]` in `info`'s per-column summary), which is
+>   what you actually read to decide whether a table needs converting.
+>
+> Also fixed here, storage-independent and pre-existing: `copy()` recorded its write watermark as
+> `n - 1` where `_resolve_last_pos()` and every other writer mean an exclusive bound, so
+> `add_column()` on a copied table backfilled one row short — and *raised* for a variable-length
+> column. And `_unflip_mask_bool_dtype` keyed off the dtype rather than off whether the flip had
+> happened, so a nullable **`uint8` ndarray** column under mask storage came back as `bool_`, every
+> byte truncated to a flag; the specs now record `bool_widened_to_uint8`.
+
 ## Verification
 
 **Differential oracle — the single highest-value test.** New
@@ -846,7 +888,7 @@ default-created tables require them.
 | 5 | ✅ **Expressions + reductions.** `_ndarray_values_for_reduction`, argmin/argmax (both were reducing over the *fill*), `_reduction_null_mask` as the one storage-agnostic entry point. `_raw_null_pred`/`_lazy_nonnull_mask`/`_is_nullable_bool` needed nothing — Phases 0–4 had already made them storage-agnostic. **The ndarray-propagation gain is not real and was not done**, and the free summary fast path is unsound; both corrections are above. `tests/ctable/test_null_mask_expressions.py` (39 tests). | S (was M) | Low (was Med) |
 | 6 | ✅ **Arrow/Parquet.** Import + export for all V1 kinds; `arrow_slice(valid=)`; `null_storage=` on `from_arrow`/`from_parquet`; the "no sentinel available" import error now names the way out instead of being deleted (it still fires for sentinel storage, which still cannot represent those types). No `packbits` — pyarrow's own packing is borrowed instead. Ships **opt-in**; the default stays `"sentinel"`. `tests/ctable/test_null_mask_arrow.py` (42 tests). | M | Med |
 | 7 | ✅ **Sort + groupby.** `_build_lex_keys` (the indicator key is nulls-last *entirely*, not a refinement), `_sorted_positions_from_full_index` (3.0x for `U16`, 1.2x for `int64` — the I/O win is in bytes, not proportionally in time), `_utf8_rank_arrays(valid=)` plus a `null_aware` staleness rule no O(1) signal could replace, `_sorted_slice_positions` bails, groupby `_null_mask(valid=)` **plus `_CodedKeyChunk`**, which this section had not anticipated: a mask *key* column needs a reserved null code, not a threaded flag. **Plus the mask half of Phase 1**, which had never been done — `where()` leaked nulls on both the scan and the index (see §Expression layer, Addendum 2). Three pre-existing storage-independent bugs fixed on the way: descending sort of `bool` (raised) and of full-range signed ints (wrong order), and groupby `min`/`max` over `bool` (always `False`). `tests/ctable/test_null_mask_sort_groupby.py` (75 tests). | **L** (was M) | Med-High |
-| 8 | **Migration + docs.** `convert_nulls`, `Column.null_storage`, `info()`, `doc/reference/ctable.rst` null-policy rewrite, release notes. | S–M | Low |
+| 8 | ✅ **Migration + docs.** `convert_nulls` both directions for every V1 kind, refusing what a sentinel cannot represent; the crash ordering **corrected** (fill after the schema flip, not before) and asserted; a persistent in-place dtype change refused with a reason; `_detach_schema` so a converted copy stops relabelling its source; the table-level `info` null tag (`Column.null_storage` and the per-column `info` rows already existed). `doc/reference/ctable.rst` gains a "Where nulls are stored" section and a rewritten null-policy resolution order; release notes. Three storage-independent bugs fixed on the way: `copy()`'s off-by-one write watermark (which *raised* in `add_column`), and a nullable `uint8` ndarray column coming back as `bool_`. `tests/ctable/test_null_migration.py` (50 tests). | M (was S–M) | Low |
 | 9 | **Default flips to `"mask"`.** A one-line `NullPolicy` change plus release notes — lossless round-trip is why the default exists. Lands **no earlier than one release after Phase 6** so older readers in the wild already understand schema version 3. | S | Low |
 | 10 | **Index null-awareness remainder** *(independent)*. Mask-aware summary builder; `null_aware`/`null_order` descriptors; re-enable `_summary_minmax_source` for mask and sentinel columns alike. | **L** | High |
 
