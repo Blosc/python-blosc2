@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pytest
+from utf8_compat import needs_utf8, utf8_spec
 
 import blosc2
 from blosc2 import CTable
@@ -57,8 +58,8 @@ from blosc2.ctable_nulls import (
         (blosc2.bool(nullable=True, null_value=255), NULL_SENTINEL),
         (blosc2.bool(), NULL_NONE),
         # utf8 is a variable-length kind but stores nulls as a sentinel string.
-        (blosc2.utf8(), NULL_NONE),
-        (blosc2.utf8(null_value="__NULL__"), NULL_SENTINEL),
+        pytest.param(utf8_spec(), NULL_NONE, marks=needs_utf8),
+        pytest.param(utf8_spec(null_value="__NULL__"), NULL_SENTINEL, marks=needs_utf8),
         # Dictionary and native-None kinds report a channel either way: their
         # storage can represent a null regardless of the nullable flag.
         (blosc2.dictionary(), NULL_CODE),
@@ -223,7 +224,7 @@ def test_is_null_value():
         (blosc2.int64(null_value=-1), int, [1, 2, 3], -1),
         (blosc2.float64(null_value=float("nan")), float, [1.0, 2.0, 3.0], float("nan")),
         (blosc2.string(max_length=8, null_value=""), str, ["a", "b", "c"], ""),
-        (blosc2.utf8(null_value="__NULL__"), str, ["a", "b", "c"], "__NULL__"),
+        pytest.param(utf8_spec(null_value="__NULL__"), str, ["a", "b", "c"], "__NULL__", marks=needs_utf8),
     ],
 )
 def test_channel_agrees_with_column_api(spec, annotation, values, null):

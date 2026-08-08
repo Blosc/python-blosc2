@@ -25,6 +25,7 @@ import dataclasses
 
 import numpy as np
 import pytest
+from utf8_compat import needs_utf8
 
 import blosc2
 
@@ -69,7 +70,7 @@ V1_KINDS = [
     ("bool", blosc2.bool, {}, [True, None, False]),
     ("string", blosc2.string, {"max_length": 4}, ["ab", None, "cd"]),
     ("bytes", blosc2.bytes, {"max_length": 4}, [b"ab", None, b"cd"]),
-    ("utf8", blosc2.utf8, {}, ["ab", None, "cdefgh"]),
+    pytest.param("utf8", blosc2.utf8, {}, ["ab", None, "cdefgh"], marks=needs_utf8),
     (
         "timestamp",
         blosc2.timestamp,
@@ -193,12 +194,14 @@ def test_to_sentinel_refuses_a_full_range_int8():
         t.convert_nulls("a", to="sentinel")
 
 
+@needs_utf8
 def test_to_sentinel_refuses_utf8_holding_the_sentinel_string():
     t = one_col(["__BLOSC2_NULL__", None], blosc2.utf8(null_storage="mask"))
     with pytest.raises(ValueError, match="already contains"):
         t.convert_nulls("a", to="sentinel")
 
 
+@needs_utf8
 def test_to_sentinel_accepts_a_different_sentinel_instead():
     """The refusal names the offending value, and a free one is accepted."""
     t = one_col(["__BLOSC2_NULL__", None], blosc2.utf8(null_storage="mask"))

@@ -33,6 +33,7 @@ import dataclasses
 
 import numpy as np
 import pytest
+from utf8_compat import needs_utf8, utf8_spec
 
 import blosc2
 
@@ -64,7 +65,7 @@ KEY_KINDS = [
     ("int64", blosc2.int64, {}, -(2**62)),
     ("float64", blosc2.float64, {}, np.nan),
     ("string", blosc2.string, {"max_length": 4}, "\x7f\x7f"),
-    ("utf8", blosc2.utf8, {}, "__BLOSC2_NULL__"),
+    pytest.param("utf8", blosc2.utf8, {}, "__BLOSC2_NULL__", marks=needs_utf8),
 ]
 
 
@@ -280,6 +281,7 @@ def test_sorted_slice_keeps_its_window_read_when_there_are_no_nulls(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@needs_utf8
 def test_utf8_rank_index_separates_nulls_from_genuine_empty_strings(tmp_path):
     """The landmine this phase was warned about, and it is a real one.
 
@@ -297,6 +299,7 @@ def test_utf8_rank_index_separates_nulls_from_genuine_empty_strings(tmp_path):
     assert as_list(t.sort_by("a")["a"]) == ["", "", "a", "b", None, None]
 
 
+@needs_utf8
 def test_utf8_rank_arrays_stamps_nulls_with_the_null_rank():
     """Directly, since this is where the recoding happens."""
     from blosc2.ctable_indexing import _utf8_rank_arrays
@@ -311,6 +314,7 @@ def test_utf8_rank_arrays_stamps_nulls_with_the_null_rank():
     assert int(ranks[2]) == 0  # the genuine "" keeps rank 0
 
 
+@needs_utf8
 def test_a_pre_mask_utf8_rank_index_is_treated_as_stale(tmp_path):
     """An index built before nulls got their own rank cannot be trusted.
 
@@ -327,6 +331,7 @@ def test_a_pre_mask_utf8_rank_index_is_treated_as_stale(tmp_path):
     assert t._utf8_rank_index_stale("a", meta) is True
 
 
+@needs_utf8
 def test_a_sentinel_utf8_rank_index_stays_fresh_without_the_flag(tmp_path):
     """The staleness rule must not fire for sentinel columns.
 
@@ -467,12 +472,14 @@ def test_a_guard_is_only_emitted_where_the_fill_could_match():
     "query",
     ["a < 'b'", "a > 'b'", "a != 'a'", "a == ''", "startswith(a, 'a')"],
 )
+@needs_utf8
 def test_utf8_predicates_agree_between_storages(query):
     values = ["e", None, "a", "z", "", "b"]
     mask, sent = pair(values, blosc2.utf8, {}, "__BLOSC2_NULL__")
     assert as_list(mask.where(query)["a"]) == as_list(sent.where(query)["a"])
 
 
+@needs_utf8
 def test_utf8_span_driver_excludes_mask_nulls():
     """The span driver materializes nulls to ``""`` and re-applies nullity.
 
@@ -484,6 +491,7 @@ def test_utf8_span_driver_excludes_mask_nulls():
     assert as_list(t.where("startswith(a, '')")["a"]) == ["ax", "bx"]
 
 
+@needs_utf8
 def test_utf8_column_vs_column_comparison_excludes_nulls():
     t = table(
         [("a", "a"), (None, "a"), ("b", None), ("c", "c")],
@@ -651,6 +659,7 @@ def test_group_by_a_mask_float_key_groups_nan_with_the_nulls():
     assert as_list(g["total"]) == [6, 1]
 
 
+@needs_utf8
 def test_group_by_utf8_mask_key_separates_nulls_from_empty_strings():
     t = table(
         [("", 1), (None, 2), ("", 4)],
@@ -669,7 +678,7 @@ def test_group_by_utf8_mask_key_separates_nulls_from_empty_strings():
         (blosc2.uint8(null_storage="mask"), [255, None, 0, 255]),
         (blosc2.bool(null_storage="mask"), [True, None, False, True]),
         (blosc2.bytes(max_length=2, null_storage="mask"), [b"aa", None, b"", b"aa"]),
-        (blosc2.utf8(null_storage="mask"), ["aa", None, "", "aa"]),
+        pytest.param(utf8_spec(null_storage="mask"), ["aa", None, "", "aa"], marks=needs_utf8),
     ],
 )
 def test_group_by_a_mask_key_of_every_v1_kind(spec, values):

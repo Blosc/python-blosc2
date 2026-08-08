@@ -29,6 +29,7 @@ import os
 
 import numpy as np
 import pytest
+from utf8_compat import needs_utf8
 
 import blosc2
 from blosc2.ctable_storage import _NOTNULL_SUFFIX, FileTableStorage
@@ -171,6 +172,7 @@ def test_sidecar_grid_survives_a_chunk_override(tmp_path):
         copied.close()
 
 
+@needs_utf8
 def test_utf8_sidecar_falls_back_to_the_table_grid():
     """utf8 offsets carry ``n + 1`` entries, so they are not the grid to pin to."""
     Row = dataclasses.make_dataclass("Utf8Row", [("u", str, blosc2.field(blosc2.utf8(null_storage="mask")))])

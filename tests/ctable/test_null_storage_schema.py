@@ -21,6 +21,7 @@ import dataclasses
 
 import numpy as np
 import pytest
+from utf8_compat import HAVE_UTF8, needs_utf8, utf8_spec
 
 import blosc2
 from blosc2 import CTable
@@ -40,7 +41,7 @@ MASKABLE_SPECS = [
     ("timestamp", blosc2.timestamp, {}),
     ("string", blosc2.string, {"max_length": 4}),
     ("bytes", blosc2.bytes, {"max_length": 4}),
-    ("utf8", blosc2.utf8, {}),
+    pytest.param("utf8", blosc2.utf8, {}, marks=needs_utf8),
 ]
 
 
@@ -350,7 +351,7 @@ def test_sentinel_storage_is_unchanged_when_asked_for():
         (blosc2.bool(), False),
         (blosc2.string(max_length=4), ""),
         (blosc2.bytes(max_length=4), b""),
-        (blosc2.utf8(), ""),
+        pytest.param(utf8_spec(), "", marks=needs_utf8),
     ],
 )
 def test_fill_value_for(spec, expected):
@@ -442,7 +443,7 @@ def test_a_bare_nullable_column_gets_a_mask():
         (blosc2.bool(nullable=True), bool),
         (blosc2.string(max_length=4, nullable=True), str),
         (blosc2.bytes(max_length=4, nullable=True), bytes),
-        (blosc2.utf8(nullable=True), str),
+        *([(blosc2.utf8(nullable=True), str)] if HAVE_UTF8 else []),
         (blosc2.timestamp(nullable=True), object),
     ]:
         col = _resolved(spec, annotation)

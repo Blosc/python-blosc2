@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from utf8_compat import needs_utf8, utf8_spec
 
 import blosc2
 
@@ -168,11 +169,15 @@ def test_ndarray_column_round_trip():
     [
         # -128 is the sentinel int8 picks, so real -128 data reads back as null.
         ("int8_min", pa.array([-128, None, 127], type=pa.int8()), [None, None, 127]),
-        # "__BLOSC2_NULL__" is literally the utf8 sentinel.
-        (
+        # "__BLOSC2_NULL__" is literally the utf8 sentinel.  Only on NumPy >= 2:
+        # without StringDType an Arrow string column imports as vlstring, whose
+        # nulls are native None, so there is no sentinel to collide with and
+        # nothing is lost.
+        pytest.param(
             "utf8_sentinel_literal",
             pa.array(["", "__BLOSC2_NULL__", None], type=pa.string()),
             ["", None, None],
+            marks=needs_utf8,
         ),
     ],
 )
@@ -375,11 +380,12 @@ EXPORT_CASES = [
         [b"abcd", None, b""],
         [b"abcd", None, b""],
     ),
-    (
+    pytest.param(
         "utf8",
-        blosc2.utf8(null_storage="mask"),
+        utf8_spec(null_storage="mask"),
         ["", "\x00", None],
         ["", "\x00", None],
+        marks=needs_utf8,
     ),
 ]
 

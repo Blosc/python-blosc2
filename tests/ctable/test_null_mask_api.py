@@ -28,6 +28,7 @@ import dataclasses
 
 import numpy as np
 import pytest
+from utf8_compat import needs_utf8, utf8_spec
 
 import blosc2
 
@@ -76,7 +77,7 @@ WRITEABLE_SPECS = [
     ("bool", blosc2.bool(null_storage="mask"), True),
     ("string", blosc2.string(max_length=4, null_storage="mask"), "abcd"),
     ("bytes", blosc2.bytes(max_length=4, null_storage="mask"), b"abcd"),
-    ("utf8", blosc2.utf8(null_storage="mask"), "hello"),
+    pytest.param("utf8", utf8_spec(null_storage="mask"), "hello", marks=needs_utf8),
 ]
 
 
@@ -131,6 +132,7 @@ def test_string_keeps_its_declared_width():
     assert t["a"].dtype == np.dtype("U4")
 
 
+@needs_utf8
 def test_utf8_accepts_text_no_sentinel_could_survive():
     tricky = ["", "\x00", "__BLOSC2_NULL__", "🎉x"]
     t = simple([*tricky, None], spec=blosc2.utf8(null_storage="mask"))
