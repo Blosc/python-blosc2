@@ -35,6 +35,7 @@ import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.ctable_indexing import _CTableIndexingMixin
 from blosc2.ctable_nulls import (
+    NULL_MASK,
     NULL_SENTINEL,
     NullChannel,
     is_nan_sentinel,
@@ -170,6 +171,53 @@ class NullPolicy:
     unsigned_int_strategy: Literal["min", "max"] = "max"
     timestamp_value: int = int(np.iinfo(np.int64).min)
     column_null_values: Mapping[str, Any] = dataclass_field(default_factory=dict)
+    null_storage: Literal["mask", "sentinel"] = "sentinel"
+
+    #: Type-wide sentinel fields, paired with the spec attribute that says
+    #: which columns each one covers.  Setting any of them is what makes a
+    #: policy imply sentinel storage for those types (see __post_init__).
+    _SENTINEL_FIELDS: ClassVar[tuple[str, ...]] = (
+        "string_value",
+        "bytes_value",
+        "float_value",
+        "bool_value",
+        "signed_int_strategy",
+        "unsigned_int_strategy",
+        "timestamp_value",
+    )
+
+    def __post_init__(self):
+        if self.null_storage not in ("mask", "sentinel"):
+            raise ValueError(f"null_storage must be 'mask' or 'sentinel', got {self.null_storage!r}")
+        # Setting a type-wide sentinel field alongside an explicit
+        # null_storage="mask" is a contradiction the caller wrote down, so say
+        # so.  Setting one *without* an explicit null_storage is not: it simply
+        # means "use sentinels for the types I named", which is what
+        # _resolve_nullable_specs does with it.  Raising on that instead would
+        # break existing NullPolicy(float_value=...) code on the very release
+        # that flips the default.
+        if self.null_storage == "mask":
+            explicit = [f for f in self._SENTINEL_FIELDS if self._sentinel_field_is_set(f)]
+            if explicit:
+                raise ValueError(
+                    f"null_storage='mask' contradicts the type-wide sentinel field(s) "
+                    f"{', '.join(explicit)}: a mask column has no sentinel to choose. "
+                    f"Drop the sentinel field(s), or use column_null_values to force "
+                    f"sentinel storage on specific columns."
+                )
+
+    def _sentinel_field_is_set(self, field_name: str) -> bool:
+        """True when *field_name* was given a non-default value.
+
+        Used by :meth:`CTable._resolve_nullable_specs` to infer sentinel
+        storage for the types a field covers.
+        """
+        current = getattr(self, field_name)
+        default = _POLICY_DEFAULTS[field_name]
+        if is_nan_sentinel(current) and is_nan_sentinel(default):
+            # float_value defaults to NaN, which never equals itself.
+            return False
+        return current != default
 
     def sentinel_for_arrow_type(self, pa, pa_type):
         """Return the default sentinel for *pa_type*, or ``None`` if unsupported."""
@@ -205,6 +253,13 @@ class NullPolicy:
             return self.timestamp_value
         return None
 
+
+#: The as-declared defaults, so a policy can tell "left alone" from
+#: "explicitly set to the same value".  Read from the dataclass fields rather
+#: than duplicated, so it cannot drift from the declarations above.
+_POLICY_DEFAULTS = {
+    f.name: f.default for f in dataclasses.fields(NullPolicy) if f.default is not dataclasses.MISSING
+}
 
 DEFAULT_NULL_POLICY = NullPolicy()
 _NULL_POLICY = contextvars.ContextVar("blosc2_null_policy", default=DEFAULT_NULL_POLICY)
@@ -4467,6 +4522,76 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if isinstance(spec, b2_bytes) and not isinstance(null_value, bytes):
             raise TypeError(f"Null sentinel for bytes column {name!r} must be bytes")
 
+    #: Which policy sentinel field governs which spec kinds.  Setting one of
+    #: these implies sentinel storage for the kinds it covers, so existing
+    #: ``NullPolicy(float_value=...)`` code keeps working once the default
+    #: flips to mask.
+    _POLICY_SENTINEL_FIELD_KINDS: ClassVar[tuple[tuple[str, tuple], ...]] = (
+        ("string_value", (string, UTF8Spec)),
+        ("bytes_value", (b2_bytes,)),
+        ("bool_value", (b2_bool,)),
+        ("timestamp_value", (timestamp,)),
+    )
+
+    @classmethod
+    def _policy_implies_sentinel(cls, spec, policy) -> bool:
+        """True when a type-wide policy sentinel field covers *spec*'s kind."""
+        for field_name, kinds in cls._POLICY_SENTINEL_FIELD_KINDS:
+            if isinstance(spec, kinds) and policy._sentinel_field_is_set(field_name):
+                return True
+        dtype = getattr(spec, "dtype", None)
+        kind = np.dtype(dtype).kind if dtype is not None else ""
+        if kind == "f" and policy._sentinel_field_is_set("float_value"):
+            return True
+        if kind == "i" and policy._sentinel_field_is_set("signed_int_strategy"):
+            return True
+        return bool(kind == "u" and policy._sentinel_field_is_set("unsigned_int_strategy"))
+
+    @classmethod
+    def _resolved_null_storage(cls, name: str, spec, policy) -> str:
+        """Decide where *spec*'s nulls live.  The single decision point.
+
+        In order: an explicit ``spec.null_storage`` wins; then an explicit
+        ``null_value`` (which *is* a request for in-band storage); then a
+        per-column ``policy.column_null_values`` entry; then a type-wide
+        policy sentinel field covering this kind; and finally the policy's
+        own ``null_storage`` default.
+        """
+        if spec.null_storage is not None:
+            return spec.null_storage
+        if getattr(spec, "null_value", None) is not None:
+            return NULL_SENTINEL
+        if name in policy.column_null_values:
+            return NULL_SENTINEL
+        if not getattr(spec, "supports_sentinel", True):
+            # Complex has no representable sentinel, so it is mask or nothing.
+            return NULL_MASK
+        if cls._policy_implies_sentinel(spec, policy):
+            return NULL_SENTINEL
+        return policy.null_storage
+
+    @staticmethod
+    def _unflip_mask_bool_dtype(spec) -> None:
+        """Undo the conservative uint8 flip that ``__init__`` applies to bools.
+
+        ``bool.__init__`` cannot know whether a bare ``nullable=True`` will
+        resolve to mask or sentinel, and it has to assume sentinel so that
+        *opening* a stored table -- which rebuilds specs without running this
+        resolver -- brings a persisted uint8 column back as uint8.  Once the
+        policy has spoken for mask, the column is a real ``np.bool_`` again.
+        """
+        if spec.dtype != np.dtype(np.uint8):
+            return
+        if isinstance(spec, b2_bool):
+            spec.dtype = np.dtype(np.bool_)
+        elif isinstance(spec, NDArraySpec):
+            spec.dtype = np.dtype(np.bool_)
+            spec.itemsize = spec.dtype.itemsize
+            spec.kind = spec.dtype.kind
+            spec.type = spec.dtype.type
+            spec.str = spec.dtype.str
+            spec.name = spec.dtype.name
+
     @classmethod
     def _resolve_nullable_specs(
         cls, schema: CompiledSchema, *, validate_column_null_values: bool = True
@@ -4501,6 +4626,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 continue
             if not getattr(spec, "nullable", False):
                 continue
+            if cls._resolved_null_storage(col.name, spec, policy) == NULL_MASK:
+                # Mask storage keeps nullity out of band, so none of the
+                # sentinel machinery below applies: no sentinel is chosen, no
+                # max_length widening for string/bytes, no bool -> uint8 flip.
+                spec.null_storage = NULL_MASK
+                cls._unflip_mask_bool_dtype(spec)
+                col.dtype = getattr(spec, "dtype", None)
+                col.display_width = compute_display_width(spec)
+                continue
+            spec.null_storage = NULL_SENTINEL
             null_value = policy.column_null_values.get(col.name)
             if null_value is None:
                 null_value = cls._policy_null_value_for_spec(spec, policy)
@@ -7253,9 +7388,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         for arrow_t, spec_cls in mapping:
             if pa_type == arrow_t:
-                if null_value is not None and hasattr(spec_cls(), "null_value"):
-                    return spec_cls(null_value=null_value)
-                if null_value is not None and spec_cls is b2s.bool:
+                if null_value is not None and getattr(spec_cls, "supports_sentinel", False):
                     return spec_cls(null_value=null_value)
                 return spec_cls()
 

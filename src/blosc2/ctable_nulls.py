@@ -32,23 +32,37 @@ import numpy as np
 
 import blosc2
 from blosc2.schema import (
+    NULL_CODE,
+    NULL_MASK,
+    NULL_NATIVE,
+    NULL_NONE,
+    NULL_SENTINEL,
     DictionarySpec,
     ObjectSpec,
     StructSpec,
     VLBytesSpec,
     VLStringSpec,
+    fill_value_for,
 )
 
-#: The column stores no nulls at all.
-NULL_NONE = "none"
-#: Nullity lives in a sidecar ``.notnull`` validity array (Arrow's model).
-NULL_MASK = "mask"
-#: Nullity is an in-band sentinel value taken out of the dtype's range.
-NULL_SENTINEL = "sentinel"
-#: Nullity is a reserved dictionary code (``DictionarySpec.null_code``).
-NULL_CODE = "code"
-#: Nullity is a native ``None`` cell in a variable-length container.
-NULL_NATIVE = "native"
+# The NULL_* constants and fill_value_for are defined in blosc2.schema -- the
+# lower layer, since this module imports the spec classes from it -- and
+# re-exported here, which is where the null machinery otherwise lives.
+__all__ = [
+    "NULL_CODE",
+    "NULL_MASK",
+    "NULL_NATIVE",
+    "NULL_NONE",
+    "NULL_SENTINEL",
+    "NullChannel",
+    "fill_value_for",
+    "is_nan_sentinel",
+    "is_null_value",
+    "kind_of_spec",
+    "rewrite_null_predicates",
+    "sentinel_guard_expr",
+    "sentinel_mask",
+]
 
 # Specs whose cells can hold a native ``None``.  ``ListSpec`` is deliberately
 # absent: it matches ``Column.is_varlen_scalar``, which is what the null API
