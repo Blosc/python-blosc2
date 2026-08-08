@@ -519,6 +519,43 @@ class NullChannel:
             return np.array([v is None for v in col], dtype=np.bool_)
         return self.mask_for_values(col[:])
 
+    def valid_slice(self, start: int, stop: int):
+        """Physical validity for rows ``[start, stop)``, or ``None`` if all valid.
+
+        Physical, not logical: this serves the export paths that read straight
+        from the storage buffers, which only run on a dense root table where
+        the two coincide.  Use :meth:`null_mask_slice` everywhere else.
+        """
+        valid = self.valid_array()
+        return None if valid is None else np.asarray(valid[start:stop])
+
+    def null_mask_slice(self, values, start: int, stop: int):
+        """Null flags for the logical rows ``[start, stop)``, or ``None``.
+
+        ``None`` -- rather than an all-False array -- is the answer when
+        nothing in the range is null, because that is what pyarrow wants for
+        "this array needs no validity buffer".
+
+        *values* is whatever ``col[start:stop]`` already returned, so the
+        sentinel kinds answer from it instead of reading the column a second
+        time; the mask kind ignores it and reads its sidecar at the same rows.
+        """
+        kind = self.kind
+        col = self._col
+        if kind == NULL_MASK:
+            valid = self.valid_array()
+            if valid is None:
+                return None
+            if col._has_identity_positions():
+                null = ~np.asarray(valid[start:stop])
+            else:
+                null = ~np.asarray(valid[col._resolve_live_positions()[start:stop]])
+        elif kind == NULL_SENTINEL:
+            null = sentinel_mask(values, self.sentinel, item_ndim=col.item_ndim if col.is_ndarray else 0)
+        else:
+            return None
+        return null if null.any() else None
+
     def is_null_at(self, index: int) -> builtin_bool:
         """Whether the value at *logical* row *index* is null.
 

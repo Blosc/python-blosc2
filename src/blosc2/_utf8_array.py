@@ -452,8 +452,16 @@ class UTF8Array:
         return self._bytes_used_cache
 
     def _coerce(self, value: Any) -> str:
-        """Coerce *value* to ``str``, mapping ``None`` to the null sentinel."""
+        """Coerce *value* to ``str``, mapping ``None`` to whatever fills a null slot.
+
+        Under sentinel storage that is the sentinel string itself.  Under mask
+        storage it is the zero-length fill, and what actually records the null
+        is the column's validity sidecar — written by the caller alongside this
+        value, not here.
+        """
         if value is None:
+            if getattr(self._spec, "uses_mask", False):
+                return ""
             null_value = getattr(self._spec, "null_value", None)
             if null_value is None:
                 raise TypeError("Column of utf8 strings is not nullable; received None.")
@@ -958,14 +966,25 @@ class UTF8Array:
             gt[rows] = row_gt
         return lt, gt
 
-    def arrow_slice(self, pa, a: int, b: int, null_value: str | None = None):
+    def arrow_slice(self, pa, a: int, b: int, null_value: str | None = None, *, valid=None):
         """Persisted rows ``[a, b)`` as a ``pyarrow.LargeStringArray``.
 
         The storage layout (int64 offsets + UTF-8 byte blob) is exactly
         Arrow's ``large_string`` layout, so the array is built directly from
         the raw buffers with no per-row decode or Python string objects.
-        When *null_value* is given, rows equal to the sentinel become Arrow
-        nulls (matched on raw bytes, still without decoding).
+
+        Nullity comes from whichever channel the column uses.  Pass *valid* --
+        a boolean array over rows ``[a, b)``, ``True`` where the row is not
+        null -- for mask storage; pass *null_value* for sentinel storage, where
+        rows equal to the sentinel become Arrow nulls, matched on raw bytes and
+        still without decoding.
+
+        The validity bitmap is produced by handing the booleans to pyarrow and
+        taking the resulting array's data buffer, rather than packing the bits
+        here.  Arrow packs booleans and validity bitmaps the same way (LSB
+        first), so this borrows pyarrow's own packing and removes any chance of
+        emitting the bitmap in the wrong bit order -- a bug a round-trip test
+        cannot catch, because import would unpack it the same wrong way.
         """
         n = b - a
         offs = np.ascontiguousarray(self._offsets[a : b + 1], dtype=np.int64)
@@ -974,11 +993,17 @@ class UTF8Array:
         data = np.ascontiguousarray(self._data[start:end]) if end > start else np.empty(0, dtype=np.uint8)
         validity = None
         null_count = 0
-        if null_value is not None and n > 0:
-            mask = self.equal_mask_span(null_value, a, b)
-            null_count = int(mask.sum())
-            if null_count:
-                validity = pa.array(~mask).buffers()[1]
+        if n > 0:
+            if valid is not None:
+                valid = np.ascontiguousarray(valid, dtype=np.bool_)
+                null_count = n - int(np.count_nonzero(valid))
+                if null_count:
+                    validity = pa.array(valid).buffers()[1]
+            elif null_value is not None:
+                mask = self.equal_mask_span(null_value, a, b)
+                null_count = int(mask.sum())
+                if null_count:
+                    validity = pa.array(~mask).buffers()[1]
         return pa.LargeStringArray.from_buffers(
             n, pa.py_buffer(rel), pa.py_buffer(data), validity, null_count
         )

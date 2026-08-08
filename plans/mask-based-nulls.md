@@ -1,13 +1,14 @@
 # Mask-based nullable columns for CTable
 
-> **Status: IN PROGRESS — Phases 0–5 landed 2026-08-08.** Mask columns are fully usable in memory
-> and on disk, and correct through expressions and reductions; next up is Phase 6 (Arrow/Parquet),
-> which is what the whole design is *for*. Four premises were disproven during implementation and
+> **Status: IN PROGRESS — Phases 0–6 landed 2026-08-08.** Lossless Arrow/Parquet round-trip now
+> works for every V1 kind, **opt-in** via `null_storage="mask"`; next up is Phase 7 (sort +
+> groupby), then Phase 8 (migration + docs). Six premises were disproven during implementation and
 > are corrected in place, each in a blockquote beside the text it corrects: the index path cannot
 > be fixed by a null-aware expression (§Expression layer), the bool dtype-flip cannot move out of
 > `__init__` (§Schema layer), ndarray columns do not get lazy null propagation for free
-> (§Expression layer), and the "free" summary min/max fast path is unsound (§Reductions).
-> Drafted 2026-08-08.
+> (§Expression layer), the "free" summary min/max fast path is unsound (§Reductions), `np.packbits`
+> is not needed and avoiding it is safer (§Arrow/Parquet), and `.equals()` cannot express the
+> round-trip contract (§Arrow/Parquet). Drafted 2026-08-08.
 > Revised 2026-08-08 after review: lazy sidecar materialization (decision 9), `NullPolicy`
 > inference instead of raising, staged default flip (Phase 9), null-predicate rewrite pulled
 > forward to Phase 1, sidecar suffix renamed `.notnull`.
@@ -439,6 +440,15 @@ Arrow validity bitmaps are LSB-first. This is the easiest bug in the plan to int
 hardest to catch — a round-trip test passes with **either** bit order if import unpacks the same
 way. Pin it with a test asserting the literal packed bytes for a known pattern.
 
+> **As built (2026-08-08): `np.packbits` is not needed at all, and avoiding it is strictly safer.**
+> `arrow_slice` already had the answer for its sentinel path — `pa.array(~mask).buffers()[1]`.
+> Arrow packs booleans and validity bitmaps identically (LSB-first), so handing pyarrow the
+> booleans and taking the resulting array's *data* buffer borrows its packing and makes the bit
+> order unrepresentable-as-wrong rather than merely tested. The mask path does the same with
+> `pa.array(valid).buffers()[1]`. The literal-bytes test was still worth writing and is the useful
+> half of the advice above: `test_utf8_validity_bitmap_is_lsb_first` pins
+> `[valid, null, valid, valid, valid, null, valid, valid]` to `0xDD`, not the MSB-first `0xBB`.
+
 **Import** — in `_compiled_columns_from_arrow` (`:7369-7482`), when the resolved storage is
 `"mask"` the entire sentinel-selection block is skipped and **the `"no null_value sentinel is
 available"` error at `:7457` never fires**. That single deletion is what makes nullable bool,
@@ -460,6 +470,23 @@ nullable `bool`; `int8`/`uint8` using **all 256 values** plus nulls; `float64` c
 `"__BLOSC2_NULL__"`, 4-byte UTF-8 plus nulls; `timestamp` with `int64.min` as a value plus
 separate nulls; `string(max_length=4)`/`bytes(max_length=4)` fully occupying the width. **None of
 these round-trip under sentinels.** Same list for Parquet.
+
+> **Correction (2026-08-08): `.equals()` cannot express this contract.** `pyarrow.Array.equals`
+> compares floats with IEEE semantics, so two *identical* arrays containing NaN compare unequal —
+> the float case of the list above fails by construction, whatever the implementation does. The
+> tests use `assert_same_logical` instead, which compares what is actually observable: the validity
+> bitmap, and the values under valid rows, with NaN equal to NaN and signed zeros kept distinct.
+> Values under `valid=False` are deliberately **not** compared — the fill is explicitly not part of
+> the format contract (decision 5), so asserting on it would pin something the design says may
+> change.
+>
+> **The "none of these round-trip under sentinels" claim is understated, and now measured.** The
+> sentinel path does not fail — it *silently returns different data*. `pa.array([-128, None, 127],
+> int8)` imports and re-exports as `[None, None, 127]`, because `-128` is the sentinel `int8`
+> picks; `["", "__BLOSC2_NULL__", None]` comes back as `["", None, None]`, because that literal is
+> the utf8 sentinel. Both are pinned side by side against the mask result in
+> `test_sentinel_storage_is_lossy_where_mask_storage_is_not`, which is the single most direct
+> statement of why this project exists.
 
 ### Reductions and summary indexes
 
@@ -676,6 +703,16 @@ file, round-trip it, and assert `pq.read_table(out).equals(pq.read_table(in))` �
 impossible today. Also re-run the OFF importer round-trip (`plans/ctable-nulls.md` §Tests) and
 confirm the `nullable_scalar_wrapped_as_singleton_list` workaround can be deleted.
 
+> **Correction (2026-08-08).** The smoke test is now a real test rather than a manual one —
+> `test_parquet_round_trip_is_lossless`, parametrized over the whole contract list.
+>
+> The `nullable_scalar_wrapped_as_singleton_list` workaround **cannot be deleted, and does not need
+> to be.** `src/blosc2/cli/parquet_to_blosc2.py` stopped *producing* it before this work began — the
+> conversion table at `:410-496` emits `nullable_scalar_sentinel` for that case now. The two
+> surviving references (`:1405-1406`) are in the *export* path, which reads the tag out of archive
+> metadata to unwrap what an older version wrote. That is a permanent backward-compatibility reader,
+> in the same category as `_is_nullable_bool` and its rewrite sites: it stays forever.
+
 ## Phasing
 
 Each phase is independently landable. **The default does not flip until Phase 9**, which is a
@@ -690,7 +727,7 @@ default-created tables require them.
 | 3 | ✅ **Storage sidecar.** 5 methods × 4 backends, lazy creation (absent key = all valid); `_grow`/`trim_capacity`/`compact`/`_save_to_storage`/`to_cframe`/`load`, **plus `copy()`'s in-memory path**, which the section above had missed; companion-suffix loop in delete/rename. `tests/ctable/test_null_persistence.py` (38 tests) drives it with a hand-built mask. | M | Low |
 | 4 | ✅ **Read/write + null API.** `extend`/`append`/`_coerce_row_to_storage`/`__setitem__`/`assign`; `is_null`/`notnull`/`null_count`/`fillna`/`_nonnull_chunks`/`to_numpy(masked=)`/`dropna`; **plus every gather-and-rebuild path** (`sort_by` ×3, `take`, `slice`), which this section had not listed. Mask columns fully usable. `tests/ctable/test_null_mask_api.py` (90 tests). | **L** | **High** (turned out to be the reference cycle, not `__setitem__`) |
 | 5 | ✅ **Expressions + reductions.** `_ndarray_values_for_reduction`, argmin/argmax (both were reducing over the *fill*), `_reduction_null_mask` as the one storage-agnostic entry point. `_raw_null_pred`/`_lazy_nonnull_mask`/`_is_nullable_bool` needed nothing — Phases 0–4 had already made them storage-agnostic. **The ndarray-propagation gain is not real and was not done**, and the free summary fast path is unsound; both corrections are above. `tests/ctable/test_null_mask_expressions.py` (39 tests). | S (was M) | Low (was Med) |
-| 6 | **Arrow/Parquet.** Import + export for all V1 kinds, `packbits`/`unpackbits` LSB-first, `arrow_slice(validity=)`, delete the "no sentinel available" import error. Ships **opt-in** (`null_storage="mask"`); the default stays `"sentinel"`. | M | Med |
+| 6 | ✅ **Arrow/Parquet.** Import + export for all V1 kinds; `arrow_slice(valid=)`; `null_storage=` on `from_arrow`/`from_parquet`; the "no sentinel available" import error now names the way out instead of being deleted (it still fires for sentinel storage, which still cannot represent those types). No `packbits` — pyarrow's own packing is borrowed instead. Ships **opt-in**; the default stays `"sentinel"`. `tests/ctable/test_null_mask_arrow.py` (42 tests). | M | Med |
 | 7 | **Sort + groupby.** `_build_lex_keys`, `_sorted_positions_from_full_index` (big I/O win), `_utf8_rank_arrays(valid=)`, groupby `_null_mask` threading. | M | Med-High |
 | 8 | **Migration + docs.** `convert_nulls`, `Column.null_storage`, `info()`, `doc/reference/ctable.rst` null-policy rewrite, release notes. | S–M | Low |
 | 9 | **Default flips to `"mask"`.** A one-line `NullPolicy` change plus release notes — lossless round-trip is why the default exists. Lands **no earlier than one release after Phase 6** so older readers in the wild already understand schema version 3. | S | Low |

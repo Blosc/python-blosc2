@@ -38,6 +38,7 @@ from blosc2.ctable_nulls import (
     NULL_MASK,
     NULL_SENTINEL,
     NullChannel,
+    fill_value_for,
     is_nan_sentinel,
     kind_of_spec,
     rewrite_null_predicates,
@@ -7522,15 +7523,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         # Dense root table: logical rows == persisted rows, so
                         # export straight from the offsets/bytes buffers with
                         # no per-row decode (storage is already Arrow layout).
-                        arrays.append(arr8.arrow_slice(pa, start, stop, nv))
+                        arrays.append(
+                            arr8.arrow_slice(pa, start, stop, nv, valid=col._nulls.valid_slice(start, stop))
+                        )
                         continue
-                    values = col[start:stop]  # StringDType array with sentinel nulls
-                    null_mask = col._null_mask_for(values) if nv is not None else None
+                    values = col[start:stop]  # StringDType array; nulls per this column's channel
+                    null_mask = col._nulls.null_mask_slice(values, start, stop)
                     arrays.append(
                         pa.array(
                             values.astype(object),
                             type=self._pa_type_from_spec(pa, spec),
-                            mask=null_mask if null_mask is not None and null_mask.any() else None,
+                            mask=null_mask,
                         )
                     )
                     continue
@@ -7569,7 +7572,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if col.is_ndarray:
                     spec = self._schema.columns_by_name[name].spec
                     values = np.asarray(col[start:stop])
-                    null_mask = col._null_mask_for(values) if col.null_value is not None else None
+                    # Row-level under mask storage.  A sentinel ndarray column
+                    # keeps the older, lossier rule -- a row is null only when
+                    # *every* element equals the sentinel -- because that is the
+                    # only thing its storage can express.
+                    null_mask = col._nulls.null_mask_slice(values, start, stop)
                     pa_type = self._pa_type_from_spec(pa, spec)
                     flat_values = np.ascontiguousarray(values.reshape(-1))
                     pa_values = pa.array(flat_values, type=pa_type.value_type)
@@ -7577,33 +7584,28 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         pa.FixedSizeListArray.from_arrays(
                             pa_values,
                             type=pa_type,
-                            mask=(
-                                pa.array(null_mask, type=pa.bool_())
-                                if null_mask is not None and null_mask.any()
-                                else None
-                            ),
+                            mask=(pa.array(null_mask, type=pa.bool_()) if null_mask is not None else None),
                         )
                     )
                     continue
                 arr = np.asarray(col[start:stop])
-                nv = col.null_value
-                null_mask = col._null_mask_for(arr) if nv is not None else None
-                has_nulls = null_mask is not None and bool(null_mask.any())
-                if arr.dtype.kind == "U":
-                    values = arr.tolist()
-                    if has_nulls:
-                        values = [None if null_mask[i] else v for i, v in enumerate(values)]
-                    arrays.append(pa.array(values, type=pa.string()))
-                elif arr.dtype.kind == "S":
-                    values = arr.tolist()
-                    if has_nulls:
-                        values = [None if null_mask[i] else v for i, v in enumerate(values)]
-                    arrays.append(pa.array(values, type=pa.large_binary()))
+                null_mask = col._nulls.null_mask_slice(arr, start, stop)
+                if arr.dtype.kind in "US":
+                    # pyarrow reads the mask alongside the values, so the null
+                    # slots need no substitution here — under mask storage they
+                    # already hold the fill, and under a sentinel the mask says
+                    # to ignore whatever is there.
+                    pa_type = pa.string() if arr.dtype.kind == "U" else pa.large_binary()
+                    arrays.append(pa.array(arr.tolist(), type=pa_type, mask=null_mask))
                 elif (
                     self._schema.columns_by_name.get(name) is not None
                     and self._schema.columns_by_name[name].spec.to_metadata_dict().get("kind") == "bool"
                 ):
-                    arrays.append(pa.array(arr == 1, mask=null_mask if has_nulls else None, type=pa.bool_()))
+                    # A sentinel bool is physically uint8 (0/1/255) and needs the
+                    # compare; a mask bool is already np.bool_ and must not get
+                    # one, since `arr == 1` would be a no-op at best.
+                    values = arr == 1 if col._is_nullable_bool else arr
+                    arrays.append(pa.array(values, mask=null_mask, type=pa.bool_()))
                 elif self._schema.columns_by_name.get(name) is not None and isinstance(
                     self._schema.columns_by_name[name].spec, timestamp
                 ):
@@ -7612,12 +7614,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     arrays.append(
                         pa.array(
                             values,
-                            mask=null_mask if has_nulls else None,
+                            mask=null_mask,
                             type=pa.timestamp(spec.unit, tz=spec.timezone),
                         )
                     )
                 else:
-                    arrays.append(pa.array(arr, mask=null_mask if has_nulls else None))
+                    arrays.append(pa.array(arr, mask=null_mask))
             yield pa.RecordBatch.from_arrays(arrays, names=arrow_names)
 
     def to_arrow(self):
@@ -7688,6 +7690,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         field_metadata=None,
         string_max_length=None,
         null_value=None,
+        null_storage=None,
         nullable=False,
         object_fallback: bool = False,
     ):
@@ -7716,7 +7719,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     f"Arrow fixed-size-list metadata shape {shape} has size {int(np.prod(shape))}, "
                     f"but the Arrow list size is {pa_type.list_size}."
                 )
-            return b2s.ndarray(shape, dtype=value_dtype, nullable=nullable, null_value=null_value)
+            return b2s.ndarray(
+                shape,
+                dtype=value_dtype,
+                nullable=nullable,
+                null_value=null_value,
+                null_storage=null_storage,
+            )
 
         if pa.types.is_dictionary(pa_type):
             vt = pa_type.value_type
@@ -7773,13 +7782,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         ]
         if pa.types.is_timestamp(pa_type):
             return b2s.timestamp(
-                unit=pa_type.unit, timezone=pa_type.tz, nullable=nullable, null_value=null_value
+                unit=pa_type.unit,
+                timezone=pa_type.tz,
+                nullable=nullable,
+                null_value=null_value,
+                null_storage=null_storage,
             )
 
         for arrow_t, spec_cls in mapping:
             if pa_type == arrow_t:
                 if null_value is not None and getattr(spec_cls, "supports_sentinel", False):
                     return spec_cls(null_value=null_value)
+                if null_storage is not None:
+                    return spec_cls(null_storage=null_storage)
                 return spec_cls()
 
         if pa.types.is_list(pa_type) or pa.types.is_large_list(pa_type):
@@ -7835,16 +7850,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     return b2s.vlstring(nullable=nullable)
                 # No fixed-width threshold given: store as a variable-length
                 # utf8 column (offsets + bytes, StringDType reads).
-                return b2s.utf8(nullable=nullable, null_value=null_value)
+                return b2s.utf8(nullable=nullable, null_value=null_value, null_storage=null_storage)
             max_length = max(string_max_length, len(null_value) if null_value is not None else 1, 1)
-            return b2s.string(max_length=max_length, null_value=null_value)
+            return b2s.string(max_length=max_length, null_value=null_value, null_storage=null_storage)
 
         if _is_arrow_binary_type(pa, pa_type):
             if string_max_length is None:
                 # No fixed-width threshold given: store as variable-length scalar bytes.
                 return b2s.vlbytes(nullable=nullable)
             max_length = max(string_max_length, len(null_value) if null_value is not None else 1, 1)
-            return b2s.bytes(max_length=max_length, null_value=null_value)
+            return b2s.bytes(max_length=max_length, null_value=null_value, null_storage=null_storage)
 
         if object_fallback:
             return b2s.object(nullable=nullable)
@@ -7872,8 +7887,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         *,
         auto_null_sentinels: bool,
         object_fallback: bool = False,
+        null_storage: str | None = None,
     ):
         null_policy = get_null_policy()
+        # Only inferred schemas consult the policy; extending an existing table
+        # never reaches here, so its stored null_storage always wins.
+        storage_pref = null_storage if null_storage is not None else null_policy.null_storage
         column_null_values = null_policy.column_null_values
         schema_names = set(schema.names)
         unknown_null_values = set(column_null_values) - schema_names
@@ -7926,36 +7945,42 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     f"column_null_values is not supported for vlbytes/vlstring column {name!r}; "
                     "these columns represent nulls as native None."
                 )
+            # Kinds that carry their own nullity (native None, a reserved code,
+            # a nested layout) and so never take either scalar null channel.
+            handles_own_nulls = (
+                field_is_list
+                or field_is_struct
+                or field_is_dictionary
+                or field_is_varlen_scalar
+                or field_is_object_fallback
+            )
+            # Mask storage needs no sentinel, so none of the selection below
+            # applies — and neither does its failure mode.  This is what makes
+            # nullable bool, full-range int8/uint8 and free-text utf8
+            # importable at all.
+            use_mask = (
+                storage_pref == NULL_MASK
+                and field.nullable
+                and not handles_own_nulls
+                and not has_null_value_override
+            )
             if has_null_value_override:
                 null_value = column_null_values[name]
-            elif (
-                auto_null_sentinels
-                and field.nullable
-                and not (
-                    field_is_list
-                    or field_is_struct
-                    or field_is_dictionary
-                    or field_is_varlen_scalar
-                    or field_is_object_fallback
-                )
-            ):
+            elif not use_mask and auto_null_sentinels and field.nullable and not handles_own_nulls:
                 arrow_type_for_null = field.type.value_type if field_is_ndarray else field.type
                 null_value = cls._auto_null_sentinel(pa, arrow_type_for_null, null_policy=null_policy)
             if (
                 arrow_col is not None
                 and arrow_col.null_count
-                and not (
-                    field_is_list
-                    or field_is_struct
-                    or field_is_dictionary
-                    or field_is_varlen_scalar
-                    or field_is_object_fallback
-                )
+                and not handles_own_nulls
                 and null_value is None
+                and not use_mask
             ):
                 raise TypeError(
-                    f"Column {name!r} contains Parquet nulls. Provide a CTable schema with a "
-                    "null_value sentinel for this column."
+                    f"Column {name!r} contains Parquet nulls, and no null_value sentinel is "
+                    f"available for its type. Provide a CTable schema with a null_value sentinel "
+                    f"for this column, or import with null_storage='mask' to keep nullity in a "
+                    f"sidecar validity array (which every type supports)."
                 )
             spec = cls._arrow_type_to_spec(
                 pa,
@@ -7964,6 +7989,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 field_metadata=field.metadata,
                 string_max_length=column_string_max_length,
                 null_value=null_value,
+                null_storage=NULL_MASK if use_mask else None,
                 nullable=field.nullable,
                 object_fallback=object_fallback,
             )
@@ -8235,7 +8261,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             while end > len(new_valid):
                 obj._grow()
                 new_valid = obj._valid_rows
-            pos = cls._write_arrow_batch(batch, columns, new_cols, new_valid, pos, list_normalizers, writers)
+            pos = cls._write_arrow_batch(
+                obj, batch, columns, new_cols, new_valid, pos, list_normalizers, writers
+            )
         for writer in writers.values():
             writer.flush()
         # All imported rows are valid; mark them in a single aligned write.
@@ -8254,7 +8282,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     @classmethod
     def _write_arrow_batch(
-        cls, batch, columns, new_cols, new_valid, pos: int, list_normalizers, writers
+        cls, obj, batch, columns, new_cols, new_valid, pos: int, list_normalizers, writers
     ) -> int:
         m = len(batch)
         if m == 0:
@@ -8274,6 +8302,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     values = [normalizer(value) for value in values]
                 new_cols[col.name].extend(values, validate=False)
             elif cls._is_varlen_scalar_column(col):
+                # utf8 is a varlen kind that can still use a sidecar; the other
+                # varlen kinds keep their native None cells and need nothing.
+                if getattr(col.spec, "uses_mask", False) and arrow_col.null_count:
+                    obj._ensure_null_mask(col.name)[pos : pos + m] = arrow_col.is_valid().to_numpy(
+                        zero_copy_only=False
+                    )
                 new_cols[col.name].extend(arrow_col.to_pylist())
             elif cls._is_dictionary_column(col):
                 import pyarrow as _pa
@@ -8284,6 +8318,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 else:
                     # Plain string array: encode values into the dictionary.
                     new_cols[col.name][pos : pos + m] = arrow_col.to_pylist()
+            elif getattr(col.spec, "uses_mask", False):
+                values, valid = cls._arrow_column_to_numpy_masked(arrow_col, col)
+                if valid is not None:
+                    # A batch with no nulls writes nothing, so a nullable-but
+                    # -null-free column still ends up with no sidecar at all.
+                    # A fresh sidecar is created all-True, so the rows already
+                    # written before this first null need no back-fill.
+                    #
+                    # No chunk-aligned writer here, unlike the values: the
+                    # sidecar is one byte per row and compresses to almost
+                    # nothing, so a straddling write is not worth avoiding.
+                    obj._ensure_null_mask(col.name)[pos : pos + m] = valid
+                writers[col.name].append(values)
             else:
                 writers[col.name].append(cls._arrow_column_to_numpy(arrow_col, col))
         return pos + m
@@ -8291,10 +8338,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     @staticmethod
     def _arrow_column_to_numpy(arrow_col, col: CompiledColumn) -> np.ndarray:
         nv = getattr(col.spec, "null_value", None)
+        uses_mask = getattr(col.spec, "uses_mask", False)
+        # What a null slot ends up holding in storage.  Under a sentinel that
+        # value *is* the null marker; under mask storage it is an arbitrary,
+        # unobservable fill and the sidecar carries the nullity instead.
+        fill = fill_value_for(col.spec) if uses_mask else nv
         if col.spec.to_metadata_dict().get("kind") == "bool" and col.dtype == np.dtype(np.uint8):
-            return np.array([nv if v is None else int(v) for v in arrow_col.to_pylist()], dtype=np.uint8)
+            return np.array([fill if v is None else int(v) for v in arrow_col.to_pylist()], dtype=np.uint8)
         if isinstance(col.spec, NDArraySpec):
             values = arrow_col.to_pylist()
+            if uses_mask and arrow_col.null_count:
+                item = np.full(col.spec.item_shape, fill, dtype=col.spec.dtype)
+                values = [item if v is None else v for v in values]
             arr = CTable._coerce_ndarray_batch(col.name, col.spec, values, len(values))
             return arr.reshape((len(values), *col.spec.item_shape))
         if isinstance(col.spec, timestamp):
@@ -8303,26 +8358,43 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 .astype(f"datetime64[{col.spec.unit}]")
                 .astype(np.int64)
             )
+            # NaT already decodes to int64.min, which is exactly the mask fill,
+            # so only a sentinel that differs from it needs remapping.
             if arrow_col.null_count and nv is not None and int(nv) != int(np.iinfo(np.int64).min):
                 arr[arr == np.iinfo(np.int64).min] = int(nv)
             return arr.astype(col.dtype, copy=False)
         if col.dtype.kind in "US":
             values = arrow_col.to_pylist()
-            if nv is not None:
-                values = [nv if v is None else v for v in values]
+            if fill is not None:
+                values = [fill if v is None else v for v in values]
             max_len = col.spec.max_length
             too_long = [v for v in values if v is not None and len(v) > max_len]
             if too_long:
                 raise ValueError(f"Column {col.name!r} contains values longer than max_length={max_len}.")
             return np.array(values, dtype=col.dtype)
         if arrow_col.null_count:
-            if nv is None:
+            if fill is None:
                 raise TypeError(
                     f"Column {col.name!r} contains Arrow/Parquet nulls. Provide a CTable schema "
-                    "with a null_value sentinel for this column."
+                    "with a null_value sentinel for this column, or import with "
+                    "null_storage='mask'."
                 )
-            arrow_col = arrow_col.fill_null(nv)
+            arrow_col = arrow_col.fill_null(fill)
         return arrow_col.to_numpy(zero_copy_only=False).astype(col.dtype)
+
+    @staticmethod
+    def _arrow_column_to_numpy_masked(arrow_col, col: CompiledColumn):
+        """Split an Arrow column into ``(values, valid)`` for a mask column.
+
+        The source's own validity is authoritative — no value is inspected to
+        decide what is null, which is precisely why a mask import can accept
+        types no sentinel could represent.  *valid* is ``None`` when the batch
+        contained no nulls, so the caller writes no sidecar for it.
+        """
+        values = CTable._arrow_column_to_numpy(arrow_col, col)
+        if not arrow_col.null_count:
+            return values, None
+        return values, arrow_col.is_valid().to_numpy(zero_copy_only=False)
 
     @staticmethod
     def _arrow_schema_metadata(schema) -> dict[str, Any]:
@@ -8502,6 +8574,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         capacity_hint: int | None = None,
         string_max_length: int | Mapping[str, int] | None = None,
         auto_null_sentinels: bool = True,
+        null_storage: Literal["mask", "sentinel"] | None = None,
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
         blosc2_items_per_block: int | None = None,
         list_serializer: Literal["msgpack", "arrow"] = "msgpack",
@@ -8653,6 +8726,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             string_max_length,
             auto_null_sentinels=auto_null_sentinels,
             object_fallback=object_fallback,
+            null_storage=null_storage,
         )
         cls._apply_arrow_column_cparams(columns, column_cparams)
         for col in columns:
@@ -8772,6 +8846,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         dparams=None,
         validate: bool = False,
         auto_null_sentinels: bool = True,
+        null_storage: Literal["mask", "sentinel"] | None = None,
         blosc2_batch_size: int | None = _BATCH_SIZE_DEFAULT,
         blosc2_items_per_block: int | None = None,
         list_serializer: Literal["msgpack", "arrow"] = "arrow",
@@ -9025,6 +9100,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 capacity_hint=max_rows,
                 string_max_length=string_max_length,
                 auto_null_sentinels=auto_null_sentinels,
+                null_storage=null_storage,
                 blosc2_batch_size=blosc2_batch_size,
                 blosc2_items_per_block=blosc2_items_per_block,
                 list_serializer=list_serializer,
@@ -9061,6 +9137,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             capacity_hint=_capacity_hint,
             string_max_length=string_max_length,
             auto_null_sentinels=auto_null_sentinels,
+            null_storage=null_storage,
             blosc2_batch_size=blosc2_batch_size,
             blosc2_items_per_block=blosc2_items_per_block,
             list_serializer=list_serializer,
