@@ -1,8 +1,10 @@
 # Mask-based nullable columns for CTable
 
-> **Status: IN PROGRESS.** Phases 0 and 1 landed 2026-08-08; Phase 1's premise about the index
-> path was disproven during implementation and is corrected in place (see §Expression layer).
-> Drafted 2026-08-08.
+> **Status: IN PROGRESS — Phases 0, 1 and 2 landed 2026-08-08.** Next up is Phase 3 (storage
+> sidecar). Two premises were disproven during implementation and are corrected in place, each in
+> a blockquote beside the text it corrects: the index path cannot be fixed by a null-aware
+> expression (§Expression layer), and the bool dtype-flip cannot move out of `__init__`
+> (§Schema layer). Drafted 2026-08-08.
 > Revised 2026-08-08 after review: lazy sidecar materialization (decision 9), `NullPolicy`
 > inference instead of raising, staged default flip (Phase 9), null-predicate rewrite pulled
 > forward to Phase 1, sidecar suffix renamed `.notnull`.
@@ -134,6 +136,30 @@ until then `valid_array()`/`null_pred()` return `None` and the column reads as n
 This module is what keeps the work from becoming a 50-site grep, so **it lands first,
 sentinel-only, with zero behavior change** (Phase 0).
 
+> **As built (2026-08-08).** Three departures from the sketch above, all in the same direction —
+> away from snapshotting state that can go stale:
+>
+> - **Bound to a `Column`, not to `(table, name)`.** Logical reads (`is_null()`, `null_count()`)
+>   have to honour the column's view — sorted order, row filter — and `Column` already carries
+>   that. `Column._nulls` builds one on first use and keeps it; a table-level accessor can be
+>   added in Phase 3 for the physical write paths, which have no `Column`.
+> - **`kind` and `fill_value` are properties, not `__slots__` entries.** `_resolve_nullable_specs`
+>   mutates `spec.null_value` *in place* (`ctable.py:4536`), so a channel that snapshotted at
+>   construction would report the wrong kind afterwards. Everything reads through to the live
+>   schema. Pinned by `test_channel_reads_through_to_live_schema`.
+> - **`null_mask()` takes no `key` yet.** Dictionary columns answer through `_dictionary_eq`,
+>   which is whole-column, so a `key` argument would have been silently ignored for them. It
+>   arrives in Phase 4, when masks make it meaningful.
+>
+> The `NULL_*` constants and `fill_value_for` ended up **defined in `schema.py`** and re-exported
+> here, because this module imports the spec classes from `schema.py` — that is the lower layer.
+> Import them from either place.
+>
+> Also landed here, not in the sketch: `sentinel_mask`, `is_nan_sentinel`, `is_null_value`,
+> `kind_of_spec`, `sentinel_guard_expr` and `rewrite_null_predicates` (Phase 1). Unifying the
+> "is this sentinel a NaN" test incidentally fixed several sites that spelled it
+> `isinstance(nv, float)` and so missed a `float32` NaN sentinel.
+
 ### Schema layer — `src/blosc2/schema.py`, `schema_compiler.py`
 
 Every spec re-declares `nullable`/`null_value` today (`_NumericSpec:94`, `timestamp:251`,
@@ -152,6 +178,28 @@ Two spec fixes fall out:
   move the `bool_ → uint8` dtype flip **out of `__init__`** into `_resolve_nullable_specs`, which
   already flips there (`ctable.py:4543`). Same for `NDArraySpec` bool (`ctable.py:4510-4516`, `4545-4551`).
 - **`complex64`/`complex128`** (`schema.py:208-238`): gain nullability via the mixin, fill `0j`.
+
+> **Correction (implemented 2026-08-08).** The dtype-flip relocation above is wrong as stated and
+> **was not done**. `_resolve_nullable_specs` runs only on the *creation* paths; **opening a stored
+> table never calls it** — `open()` rebuilds each spec through `spec_cls(**data)`
+> (`schema_compiler.py:447`) and that is the whole of it. Moving the flip out of `__init__` would
+> therefore bring every persisted nullable-bool column back as `np.bool_` while its bytes are
+> `uint8`, silently misreading `255` as `True`. Verified by instrumenting the resolver across a
+> save/open cycle.
+>
+> What shipped instead splits the responsibility by what each site can know. `__init__` resolves as
+> far as metadata alone allows — `nullable and not uses_mask → uint8` — which is exactly the
+> information a reopened table carries, so persisted columns come back correct with no resolver
+> involved. `_resolve_nullable_specs` then corrects it **in both directions** once the policy has
+> spoken, via `_unflip_mask_bool_dtype`: a bare `nullable=True` that resolves to mask gets its
+> `uint8` undone. Same split for `NDArraySpec` bool. Regression-pinned by
+> `test_stored_uint8_bool_reopens_as_uint8_without_the_resolver`.
+>
+> Also implemented, beyond what this section specified: **complex is mask-only**. There is no
+> complex value safe to reserve, so `complex64(null_value=...)` raises and `nullable=True` resolves
+> to mask regardless of the policy default. The spec classes carry a `supports_sentinel` class flag
+> for this, which also replaced a `hasattr(spec_cls(), "null_value")` duck-type test in the Arrow
+> importer (`ctable.py:7256`) that the mixin would otherwise have made answer True for complex.
 
 **Version gating** — `schema_to_dict` (`schema_compiler.py:487`) computes the version as an
 explicit feature max:
@@ -419,6 +467,19 @@ Phase 1**, landing right after the `NullChannel` refactor and before any mask wo
 > conservative in one three-valued corner: `not (a > 10 and b == 999)` with a false second term
 > makes SQL's `NULL AND FALSE` collapse to `FALSE`, so the row should survive, while the guard drops
 > it. Rows are only ever dropped, never wrongly returned.
+>
+> **Addendum (2026-08-08): the *operator* form has its own negation leak — a pre-existing bug, not
+> a Phase 1 artifact.** `_null_aware_compare` collapses null → False at the comparison leaf and
+> returns a plain `LazyExpr`, so `~(t.a > 10)` inverts the collapsed False and **wrongly returns
+> null rows** — the failure direction the guarantee above rules out for the string form. Measured:
+> `[0, 2]` where SQL and the string form both give `[0]`. It also means the operator form's SQL-
+> exact answer in the three-valued corner above is accidental (plain booleans at `~`, not Kleene
+> logic). Both behaviors are pinned in `tests/ctable/test_null_predicate_rewrite.py`:
+> `test_negation_over_and_corner_is_conservative` (the intentional string/operator divergence) and
+> a `strict=True` xfail, `test_operator_form_negation_drops_nulls` (the leak). A real fix needs
+> comparison results to carry their null predicate through `~` — a boolean analogue of
+> `NullableExpr` with `__invert__` — and folds naturally into decision 8's deferred Kleene
+> follow-up rather than Phase 1.
 
 ### Groupby
 
@@ -534,7 +595,7 @@ default-created tables require them.
 |---|---|---|---|
 | 0 | ✅ **`NullChannel` refactor, sentinel-only.** New `ctable_nulls.py`; route the ~40 `getattr(spec, "null_value")` sites through it across `ctable.py`, `groupby.py`, `ctable_indexing.py`, `schema_validation.py`, `schema_vectorized.py`. Test suite must pass **unmodified**. | M | Low |
 | 1 | ✅ **Per-leaf null-predicate rewrite** *(storage-independent — pulled forward because it fixes sentinel tables that exist today)*. `_rewrite_null_predicates`, guards emitted inline and only where the sentinel could satisfy the leaf; validity pushed to the negation point. **`_exclude_null_positions` and the indexed-OR bail are retained** — see the correction above; an ordered index never evaluates the predicate, so a null-aware expression cannot fix it. Real payoff: string predicates become null-aware at all. | M | Med |
-| 2 | **Schema plumbing.** `_NullableSpecMixin`, `null_storage` kwarg on ~9 specs, conditional version 3, `NullPolicy.null_storage` (**still defaulting to `"sentinel"`**) with sentinel-field inference, `_resolve_nullable_specs` branch, bool/ndarray dtype-flip relocation, `fill_value_for`, complex nullable. | S | Low |
+| 2 | ✅ **Schema plumbing.** `_NullableSpecMixin`, `null_storage` kwarg on ~9 specs, conditional version 3, `NullPolicy.null_storage` (**still defaulting to `"sentinel"`**) with sentinel-field inference, `_resolved_null_storage` as the single decision point, `fill_value_for`, complex nullable (mask-only). Dtype-flip relocation **not** done — see the correction above. | S | Low |
 | 3 | **Storage sidecar.** 5 methods × 4 backends, lazy creation (absent key = all valid); `_grow`/`trim_capacity`/`compact`/`_save_to_storage`/`to_cframe`/`load`; companion-suffix loop in delete/rename. Testable with a hand-built mask, no semantics yet. | M | Low |
 | 4 | **Read/write + null API.** `extend`/`append`/`_coerce_row_to_storage`/`__setitem__`/`assign`; `is_null`/`notnull`/`null_count`/`fillna`/`_nonnull_chunks`/`to_numpy(masked=)`/`dropna`. Mask columns fully usable. | **L** | **High** (`__setitem__`) |
 | 5 | **Expressions + reductions.** `_raw_null_pred`, `_lazy_nonnull_mask`, `_ndarray_values_for_reduction`, argmin/argmax, `_is_nullable_bool`. Includes the ndarray-propagation gain. | M | Med |

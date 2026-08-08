@@ -179,6 +179,44 @@ def test_string_form_agrees_with_operator_form(label, spec, annotation, values, 
     )
 
 
+def test_negation_over_and_corner_is_conservative():
+    """The one known corner where the two query forms disagree -- pinned.
+
+    ``~((a > 10) & (b == 999))`` with ``a`` null and the second term False:
+    SQL collapses ``NULL AND FALSE`` to ``FALSE``, so the negation is True and
+    the row qualifies.  The string form guards at the negation point
+    (``... & (a != -1)``) and drops it.  That is by design -- pushing validity
+    to the negation point is exact for every simpler form, and errs only by
+    *dropping*: a null row is never wrongly returned (see
+    plans/mask-based-nulls.md, "Negation caveat, resolved").
+
+    The operator form returns the SQL answer here, but not by reasoning in
+    three values: ``_null_aware_compare`` collapses null to False at the leaf,
+    so ``~`` sees plain booleans -- which is also why it leaks nulls on a bare
+    negation (the xfail below).  If either assertion starts failing, the two
+    forms moved; make sure they moved *toward* SQL, together.
+    """
+    t = _table(blosc2.int64(null_value=-1), int, [1, 20, -1, 30], -1)
+
+    got = sorted(t.where("~((a > 10) & (b == 999))")["b"][:].tolist())
+    assert got == [0, 1, 3]  # null row dropped; SQL would keep it
+
+    got = sorted(t.where(~((t["a"] > 10) & (t["b"] == 999)))["b"][:].tolist())
+    assert got == [0, 1, 2, 3]  # SQL-exact
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="operator-form negation is not null-aware: `a > 10` collapses null to "
+    "False at the leaf, so ~ turns the null row into a match. The string form "
+    "gets this right via the negation-point guard. Fixing it needs the "
+    "comparison result to carry its null predicate through ~.",
+)
+def test_operator_form_negation_drops_nulls():
+    t = _table(blosc2.int64(null_value=-1), int, [1, 20, -1, 30], -1)
+    assert sorted(t.where(~(t["a"] > 10))["b"][:].tolist()) == [0]
+
+
 def test_comparing_against_the_sentinel_matches_nothing():
     """The sentinel is not a value: SQL has no row whose `a` equals NULL."""
     t = _table(blosc2.int64(null_value=-1), int, [1, 20, -1, 30], -1)

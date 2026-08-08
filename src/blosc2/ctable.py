@@ -13146,9 +13146,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         a lazy expression over the same raw array, so it fuses into the same
         pass rather than materializing anything.
 
-        Making the expression itself null-aware is what lets the index path
-        drop its own null post-filtering: index and scan now answer from the
-        same predicate instead of the index correcting for the scan.
+        This makes the *scan* path correct — including the scan that an
+        indexed OR over a nullable column bails to.  It does not replace the
+        index path's null post-filtering: an ordered index answers by taking
+        a range of the sorted column without ever evaluating the predicate,
+        so ``_exclude_null_positions`` in ``ctable_indexing.py`` stays
+        load-bearing regardless of how null-aware the expression is.
 
         Run this *before* :meth:`_rewrite_nested_expression`, while names in
         *expr* are still real column names; the injected operand names carry no
