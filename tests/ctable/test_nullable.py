@@ -109,7 +109,7 @@ def test_null_value_string():
 def test_nullable_true_uses_default_null_policy():
     """The type-wide sentinels a policy picks, once sentinel storage is asked for.
 
-    A bare ``nullable=True`` resolves to a mask since 4.10.2, so this pins the
+    A bare ``nullable=True`` resolves to a mask since 4.11.0, so this pins the
     *sentinel* half of the resolution -- which is still what
     ``null_storage="sentinel"`` and any type-wide policy field select.
     """

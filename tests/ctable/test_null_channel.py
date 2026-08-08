@@ -78,7 +78,7 @@ def test_kind_of_spec_none():
 def test_kind_of_spec_resolves_on_compile():
     """``nullable=True`` only picks a channel once the table compiles it.
 
-    Bare, it resolves to a mask -- the default since 4.10.2 -- and only an
+    Bare, it resolves to a mask -- the default since 4.11.0 -- and only an
     explicit request keeps the sentinel.  Either way the spec alone cannot say:
     it is the resolver that decides.
     """

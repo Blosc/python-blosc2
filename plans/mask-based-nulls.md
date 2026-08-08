@@ -68,7 +68,7 @@ answers.
    the capability ships opt-in first (Phase 6), and the default flips no earlier than one
    release later (Phase 9), so version-3-capable readers are in circulation before
    default-created tables require them. *(The two-step staging was not kept — both shipped in
-   4.10.2; see the deviation note under §Phasing.)* Sentinel remains fully supported and readable forever,
+   4.11.0; see the deviation note under §Phasing.)* Sentinel remains fully supported and readable forever,
    selectable per column (`null_value=...`, `null_storage="sentinel"`) or globally via
    `NullPolicy`. Existing on-disk tables keep working unchanged.
 2. **V1 scope** = fixed-width scalars + utf8: numeric (incl. **complex**, which gains nullability

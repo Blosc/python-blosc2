@@ -1,6 +1,6 @@
 # Release notes
 
-## Changes from 4.10.1 to 4.10.2
+## Changes from 4.10.1 to 4.11.0
 
 XXX version-specific blurb XXX
 
@@ -47,9 +47,9 @@ information to act on. A bool column that wants a sentinel has to say so with
 
 A table containing a mask column records **schema version 3**. Only such tables do:
 a table with no nullable column still records version 1, exactly as before, and a
-sentinel one does too. Readers older than 4.10.2 refuse a version-3 table rather
+sentinel one does too. Readers older than 4.11.0 refuse a version-3 table rather
 than misreading it, but their message is a bare `ValueError: Unsupported schema
-version 3` — the hint naming `convert_nulls(to='sentinel')` ships in 4.10.2, so
+version 3` — the hint naming `convert_nulls(to='sentinel')` ships in 4.11.0, so
 only readers that can already open the file will print it.
 
 If some of your data has to stay readable by an earlier release, pin the storage

@@ -135,7 +135,7 @@ class NullPolicy:
     written into the resulting schema, so a stored table stays self-describing
     and is never re-resolved on open.
 
-    Since 4.10.2 the default is a **validity sidecar** (``null_storage="mask"``),
+    Since 4.11.0 the default is a **validity sidecar** (``null_storage="mask"``),
     which is what makes nullability lossless.  Setting any type-wide sentinel
     field below asks for in-band storage for the kinds that field covers, so
     existing ``NullPolicy(float_value=...)`` code keeps its sentinels; passing
@@ -192,7 +192,7 @@ class NullPolicy:
     null_storage: Literal["mask", "sentinel"] | None = None
 
     #: What an unspecified ``null_storage`` resolves to.  ``"mask"`` since
-    #: 4.10.2: lossless nullability is why the sidecar exists, so it is what a
+    #: 4.11.0: lossless nullability is why the sidecar exists, so it is what a
     #: newly created nullable column should get.  Sentinel storage stays fully
     #: supported and is one kwarg away.
     DEFAULT_NULL_STORAGE: ClassVar[str] = NULL_MASK

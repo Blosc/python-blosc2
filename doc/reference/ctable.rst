@@ -143,7 +143,7 @@ The two other values are the only representation their kind has: ``"code"`` for
 a dictionary column, which reserves ``-1``; ``"native"`` for the
 variable-length container kinds, whose cells simply hold ``None``.
 
-**Mask storage is the default** since 4.10.2, because it is what makes
+**Mask storage is the default** since 4.11.0, because it is what makes
 nullability lossless.  A bare ``nullable=True`` — and every nullable column
 inferred from Arrow, Parquet or CSV — keeps its nulls in a sidecar, so:
 
@@ -157,9 +157,12 @@ inferred from Arrow, Parquet or CSV — keeps its nulls in a sidecar, so:
 Sentinel storage is supported indefinitely and is one keyword away, per column
 (``null_storage="sentinel"``, or any explicit ``null_value=``) or globally
 through :class:`NullPolicy`.  It is the right choice when a column has to stay
-readable by a Blosc2 release older than 4.10.2: a table containing a mask column
-records **schema version 3**, which earlier readers refuse with a clear error
-rather than misreading.
+readable by a Blosc2 release older than 4.11.0: a table containing a mask column
+records **schema version 3**, which earlier readers refuse — with a bare
+``ValueError: Unsupported schema version 3``, since the hint naming
+:meth:`CTable.convert_nulls` ships in 4.11.0 — rather than misreading.  Only a
+table that actually contains a mask column is affected; one with no nullable
+column still records version 1.
 
 Nothing on disk changes.  The flip governs *creation* only — opening a stored
 table never re-resolves anything, so every existing table keeps the storage,
@@ -702,7 +705,7 @@ Choosing an index kind
     back to a full scan to avoid per‑segment evaluation overhead.
 
 Indexes on nullable columns
-    Every index kind stores per‑segment ``min``/``max``, and since 4.10.2 those
+    Every index kind stores per‑segment ``min``/``max``, and since 4.11.0 those
     extrema are taken over the rows that carry a **value**: a column's nulls are
     read from its validity channel — the ``.notnull`` sidecar of a mask column,
     the reserved value of a sentinel one — and left out.  A segment with no
