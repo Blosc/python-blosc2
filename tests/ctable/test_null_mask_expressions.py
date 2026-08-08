@@ -278,12 +278,15 @@ def test_mask_bool_filters_directly():
 # ---------------------------------------------------------------------------
 
 
-def test_summary_minmax_shortcut_stays_disabled_for_mask_columns(tmp_path):
-    """Enabling it would make min() answer differently depending on the index.
+def test_a_genuine_nan_still_keeps_a_mask_float_column_off_the_shortcut(tmp_path):
+    """Phase 5 disabled the whole column here; Phase 10 narrows that to the NaN.
 
-    A mask float column's fill is NaN, which the summary builder drops — but so
-    is a *genuine* NaN, which decision 6 makes a value.  The scan therefore
-    poisons to NaN while the summaries would report a real extremum.
+    Null-aware summaries let a mask float column qualify as a *source* — its
+    nulls are excluded from the extrema like anything else.  What cannot be
+    shortcut is a genuine NaN, which decision 6 makes a value: the scan poisons
+    to NaN while the summaries would report a real extremum.  ``FLAG_HAS_NAN``
+    is raised over the valid rows only, so it now marks exactly that case, and
+    ``_index_summary_minmax`` declines on it while the source stays usable.
     """
     spec = blosc2.float64(null_storage="mask")
     Row = dataclasses.make_dataclass("R", [("v", float, blosc2.field(spec))])
@@ -294,9 +297,28 @@ def test_summary_minmax_shortcut_stays_disabled_for_mask_columns(tmp_path):
 
     reopened = blosc2.CTable.open(path, mode="a")
     try:
-        assert reopened["v"]._summary_minmax_source() is None
+        assert reopened["v"]._summary_minmax_source() is not None
+        assert reopened["v"]._index_summary_minmax("min") is NotImplemented
         # The scanned answer, which the shortcut would have contradicted.
         assert np.isnan(reopened["v"].min())
+    finally:
+        reopened.close()
+
+
+def test_a_nan_free_mask_float_column_now_takes_the_shortcut(tmp_path):
+    """The other half: with no NaN in the data there is nothing to disagree on."""
+    spec = blosc2.float64(null_storage="mask")
+    Row = dataclasses.make_dataclass("R", [("v", float, blosc2.field(spec))])
+    path = str(tmp_path / "nn.b2d")
+    t = blosc2.CTable(Row, expected_size=5, urlpath=path, mode="w")
+    t.extend([(1.0,), (2.0,), (5.0,), (None,), (3.0,)])
+    t.close()
+
+    reopened = blosc2.CTable.open(path, mode="a")
+    try:
+        assert reopened["v"]._index_summary_minmax("min") == 1.0
+        assert reopened["v"].min() == 1.0
+        assert reopened["v"].max() == 5.0
     finally:
         reopened.close()
 

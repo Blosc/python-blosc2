@@ -1,9 +1,10 @@
 # Mask-based nullable columns for CTable
 
-> **Status: Phases 0–9 landed 2026-08-08; only Phase 10 remains.** Lossless Arrow/Parquet
+> **Status: complete — Phases 0–10 landed 2026-08-08.** Lossless Arrow/Parquet
 > round-trip works for every V1 kind, sort/groupby/query honour a sidecar, `convert_nulls` migrates
-> columns in either direction, and **mask storage is now the default** — a bare `nullable=True`
-> resolves to it. Six premises were disproven during
+> columns in either direction, **mask storage is now the default** — a bare `nullable=True`
+> resolves to it — and column indexes summarise only the rows that carry a value, so `min`/`max`
+> and indexed `OR` no longer fall back on a nullable column. Six premises were disproven during
 > implementation and are corrected in place, each in a blockquote beside the text it corrects: the
 > index path cannot be fixed by a null-aware expression (§Expression layer), the bool dtype-flip
 > cannot move out of `__init__` (§Schema layer), ndarray columns do not get lazy null propagation
@@ -13,7 +14,13 @@
 > mask half of the query path undone**, and nobody noticed until sort work went looking
 > (§Expression layer, "Addendum 2") — and Phase 8 an eighth: the in-place migration ordering
 > recorded below is **wrong at its middle step**, and moving that step last makes every
-> intermediate state correct rather than merely recoverable (§Migration). Drafted 2026-08-08.
+> intermediate state correct rather than merely recoverable (§Migration). Phase 10 added a ninth,
+> which is a partial retraction of the fourth: the summary fast path is unsound only for a *genuine*
+> NaN, not for a whole mask float column, and `null_order` — planned beside `null_aware` — records
+> a promise no index kind keeps (§Reductions, §Sort and indexes). It also narrows the first: an
+> ordered index cannot be fixed by a null-aware expression, but the *segment* index was never
+> ordered and needed no fixing, which is what lets indexed `OR` work
+> (§Expression layer, "Addendum 3"). Drafted 2026-08-08.
 > Revised 2026-08-08 after review: lazy sidecar materialization (decision 9), `NullPolicy`
 > inference instead of raising, staged default flip (Phase 9), null-predicate rewrite pulled
 > forward to Phase 1, sidecar suffix renamed `.notnull`.
@@ -525,6 +532,41 @@ never consults a side channel. Two honest routes:
 Until (2) lands, mask columns take the same bail as sentinel columns. **Do not ship a fast path
 that is silently wrong.**
 
+> **As built (2026-08-08, Phase 10).** Route 2, and it lands in `indexing.py` rather than
+> `ctable_indexing.py` — the summary builder lives there; what `ctable_indexing.py` contributes is
+> the validity channel to build with. Five notes:
+>
+> - **The builder takes a callable, not an array.** `validity(values, start, stop) -> valid | None`
+>   is threaded through `_build_levels_descriptor{,_ooc}` and called per chunk. That shape is what
+>   lets a *sentinel* column answer for free from the values the builder already decompressed
+>   (`~sentinel_mask(values, nv)`) while a mask column reads one byte per row off its sidecar —
+>   the same split every other phase made, arriving here unchanged.
+> - **`FLAG_ALL_NULL` is set together with `FLAG_ALL_NAN`, deliberately.** The established meaning
+>   of `FLAG_ALL_NAN` at every consumer is "the extrema are placeholders, skip this segment", which
+>   is exactly what an all-null segment needs; riding along with it means the pruning path
+>   (`_candidate_units_from_summary`) and the min/max path both got it right with no edit.
+> - **The prediction that this is not a mask feature is confirmed, and pinned by a test that was
+>   already there.** `test_minmax_matches_reference`'s `k` column — an `INT64_MIN`-sentinel `int64`
+>   — was the suite's canonical *fallback* case, on the grounds that the sentinel **is** the block
+>   minimum. It takes the shortcut now, and the parametrization flipped from `False` to `True`.
+> - **`FLAG_HAS_NAN` computed over the valid rows is what makes decision 6 expressible.** Phase 5
+>   disabled the shortcut for the whole mask-float column because a NaN fill and a NaN value were
+>   indistinguishable to the summary. They are distinguishable to a *null-aware* summary: the flag
+>   marks only a NaN among valid rows, so a mask float column qualifies as a source and declines
+>   only when it actually holds a NaN — where the scan poisons to NaN and the summaries must not
+>   contradict it. `test_summary_minmax_shortcut_stays_disabled_for_mask_columns` was rewritten in
+>   place as `test_a_genuine_nan_still_keeps_a_mask_float_column_off_the_shortcut`, with its
+>   converse beside it.
+> - **Measured: 236.89x** for `min()` on a 20M-row nullable `int64` (39.32 ms → 0.17 ms), which is
+>   the same order as the ~240x the non-nullable path already claimed. The cost is on the build
+>   side: the per-block summaries folded incrementally during writes carry no validity, so a
+>   nullable column holding a null cannot use them and pays one decompression pass at `close()`
+>   (1.8 ms → 33.2 ms for that column). A nullable column with **no** nulls keeps the fast path
+>   untouched — it needs no validity provider, and is marked `null_aware` anyway. Threading
+>   validity into `_ColumnSummaryAccumulator` is the named follow-up; it was left out because it
+>   reaches into `extend`'s write loop and one of its two feed sites (the Arrow writer's
+>   `on_write=` callback) has no validity to give.
+
 ### Sort and indexes
 
 `_build_lex_keys` (`:11653-11730`): the null-indicator key becomes `(~valid[live_pos]).astype(np.intp)` —
@@ -545,6 +587,19 @@ in the returned meta. Comment the hazard in place. `_DictRankWrapper` (`:167-209
 Index descriptors gain `{"null_aware": true, "null_order": "last"}` (anticipated by
 `plans/ctable-nulls.md:614-623`, present in neither `plans/ctable-indexes-opsi.md` nor the code).
 Read with `.get("null_aware", False)`; bump the build token so stale indexes rebuild.
+
+> **As built (2026-08-08, Phase 10): `null_aware` yes, `null_order` no, and no token bump.**
+> `null_order` would have recorded something untrue. No index kind *reorders* nulls: a FULL index
+> sorts them wherever their sentinel or fill lands, which is why `_sorted_slice_positions` bails
+> (Phase 7) rather than locating a null run. The nulls-last contract lives in `_build_lex_keys`,
+> not in a descriptor. Recording `"null_order": "last"` beside it would have read as a promise the
+> index does not keep — see the follow-up on a null-run FULL index below for what would earn it.
+>
+> The token bump is not needed either, and skipping it is the safer choice: `.get("null_aware",
+> False)` already makes an older index take the old bail, so it is *correct* rather than stale, and
+> a bump would rebuild every stored index in the wild to buy a shortcut. This is the same
+> distinction Phase 7 drew for `_utf8_rank_arrays`, whose pre-mask indexes were genuinely *wrong*
+> and did have to be invalidated. `rebuild_index()` promotes an old index on request.
 
 > **As built (2026-08-08).** All four items, plus one more site and two pre-existing sort bugs that
 > only mask storage can reach.
@@ -685,6 +740,29 @@ Phase 1**, landing right after the `NullChannel` refactor and before any mask wo
 >
 > Verified against a NumPy SQL oracle over 32 combinations — {mask, sentinel} × {indexed,
 > unindexed} × 8 expression shapes including `|` and `~` — all agreeing exactly.
+>
+> **Addendum 3 (2026-08-08, Phase 10): the indexed-OR bail is lifted for the path that evaluates,
+> and kept for the paths that do not.** The correction above is right that a null-aware expression
+> cannot fix an index which never evaluates it — but it over-generalized from there to "OR over a
+> nullable indexed column must fall back to the scan". Only *some* index paths answer without
+> evaluating. The segment/candidate-unit path prunes blocks by their summaries and then runs the
+> predicate through miniexpr over the survivors, so its result is exact and
+> `_exclude_null_positions` there was not merely wrong for OR — it was unnecessary. That path now
+> serves OR with the filter skipped. The exact-position paths (FULL/PARTIAL/BUCKET), which answer
+> by slicing the sorted column, still bail.
+>
+> Two details:
+>
+> - **Those three bails are unreachable today, and are kept as a guard.** `_plan_exact_conjunction`
+>   declines any expression containing an OR, so an exact plan cannot coexist with one. They exist
+>   so a planner that learns to build one cannot silently reintroduce the bug.
+> - **The OR test now parses.** `"|" in expression` also fires on a string literal that contains
+>   one (`name == 'a|b'`), which took the index away from a query with no OR in it at all;
+>   `_expression_has_or` walks the AST for `ast.Or`/`ast.BitOr` instead.
+>
+> Measured on a 20M-row two-column probe, `(a > 4000) | (b > 6000)` with SUMMARY indexes on both:
+> **1.61x** (12.35 ms → 7.65 ms). Modest, and honestly so — the miniexpr scan it was falling back
+> to is already fast; the win is proportional to how much the summaries prune.
 
 ### Groupby
 
@@ -857,6 +935,13 @@ New files:
   preserves storage under a mask-default policy.
 - A version-gate test: hand-build a `version: 3` schema dict and assert a simulated old accept-list
   `(1, 2)` raises a clear `ValueError` naming the version.
+- `tests/ctable/test_null_aware_indexes.py` (Phase 10): the summaries at unit level (extrema over
+  the valid rows, `FLAG_ALL_NULL`, `FLAG_HAS_NAN` marking a value and not a fill); the `null_aware`
+  claim, including the null-free mask column that earns it without a sidecar and the older index
+  that must not be trusted with it; `min`/`max` against the scan for every V1 kind and both
+  storages, plus full-range `int8`, the straddling tail block, an all-null column, and a null
+  written *after* the build; and indexed `OR`, asserted to use the index rather than only to be
+  right.
 
 End-to-end smoke, run manually: import a nullable-bool + full-range-`int8` + free-text-utf8 Parquet
 file, round-trip it, and assert `pq.read_table(out).equals(pq.read_table(in))` — the case that is
@@ -891,11 +976,15 @@ default-created tables require them.
 | 7 | ✅ **Sort + groupby.** `_build_lex_keys` (the indicator key is nulls-last *entirely*, not a refinement), `_sorted_positions_from_full_index` (3.0x for `U16`, 1.2x for `int64` — the I/O win is in bytes, not proportionally in time), `_utf8_rank_arrays(valid=)` plus a `null_aware` staleness rule no O(1) signal could replace, `_sorted_slice_positions` bails, groupby `_null_mask(valid=)` **plus `_CodedKeyChunk`**, which this section had not anticipated: a mask *key* column needs a reserved null code, not a threaded flag. **Plus the mask half of Phase 1**, which had never been done — `where()` leaked nulls on both the scan and the index (see §Expression layer, Addendum 2). Three pre-existing storage-independent bugs fixed on the way: descending sort of `bool` (raised) and of full-range signed ints (wrong order), and groupby `min`/`max` over `bool` (always `False`). `tests/ctable/test_null_mask_sort_groupby.py` (75 tests). | **L** (was M) | Med-High |
 | 8 | ✅ **Migration + docs.** `convert_nulls` both directions for every V1 kind, refusing what a sentinel cannot represent; the crash ordering **corrected** (fill after the schema flip, not before) and asserted; a persistent in-place dtype change refused with a reason; `_detach_schema` so a converted copy stops relabelling its source; the table-level `info` null tag (`Column.null_storage` and the per-column `info` rows already existed). `doc/reference/ctable.rst` gains a "Where nulls are stored" section and a rewritten null-policy resolution order; release notes. Three storage-independent bugs fixed on the way: `copy()`'s off-by-one write watermark (which *raised* in `add_column`), and a nullable `uint8` ndarray column coming back as `bool_`. `tests/ctable/test_null_migration.py` (50 tests). | M (was S–M) | Low |
 | 9 | ✅ **Default flips to `"mask"`.** Not a one-line change: `null_storage` had to become tri-state (`None` = unspecified) so that a type-wide sentinel field can still imply sentinel storage without contradicting the new default, and ~65 tests that wrote a sentinel literally to mean "null" had to say `null_storage="sentinel"` and mean it. Three real gaps the flip exposed, all fixed: **CSV import/export was sentinel-only** (`from_csv` raised on an empty field, `to_csv` wrote the fill as data), **`~` on a mask bool column selected its nulls**, and **the Arrow importer ignored the type-wide sentinel inference**, so `NullPolicy(signed_int_strategy="max")` meant one thing for a declared schema and another for an inferred one. Landed in the **same** session as Phase 6, not a release later — see the note below. | M (was S) | Med (was Low) |
-| 10 | **Index null-awareness remainder** *(independent)*. Mask-aware summary builder; `null_aware`/`null_order` descriptors; re-enable `_summary_minmax_source` for mask and sentinel columns alike. | **L** | High |
+| 10 | ✅ **Index null-awareness remainder** *(independent)*. Summary builder takes a per-column validity provider (one callable, both storages); `FLAG_ALL_NULL` riding on `FLAG_ALL_NAN`; `null_aware` in the descriptor, **`null_order` deliberately not recorded** and **no token bump** — see the corrections above. `_summary_minmax_source` re-enabled for mask *and* sentinel columns (**236.89x** on a 20M-row `int64` `min()`), with `FLAG_HAS_NAN` over the valid rows narrowing Phase 5's whole-column bail down to the one genuine-NaN case it was really about. Plus the **indexed-OR lift**, which this row did not anticipate: the segment path evaluates the predicate, so it never needed the global post-filter that forced the bail (1.61x on a 20M-row probe). One cost, recorded: an index over a nullable column holding nulls can no longer use the incremental write-time summaries and pays a decompression pass at `close()`. `tests/ctable/test_null_aware_indexes.py` (22 tests). | M (was L) | Med (was High) |
 
 The riskiest, most-coupled work is isolated into Phases 4, 7 and 10, each of which can slip
 without blocking the others. Phase 9 is a policy change, not code — its only prerequisite is
 that Phases 2–8 have soaked for a release.
+
+Phase 10 came in smaller than budgeted for the same reason Phase 5 did: Phases 0–7 had already
+made every consumer read nullity through one channel, so the remaining work was to *supply* that
+channel to one more builder rather than to teach a new subsystem about nulls.
 
 > **Deviation from decision 1 (2026-08-08), recorded deliberately.** Phase 9 landed in the same
 > session as Phase 6, not a release later. The staging existed so that version-3-capable readers
@@ -919,5 +1008,15 @@ that Phases 2–8 have soaked for a release.
 - **`__setitem__`'s fast paths** for mask columns (deferred in Phase 4, still unmeasured).
 - **Kleene three-valued logic**, decision 8 — which now also owns the operator-form negation leak
   pinned as a `strict=True` xfail in `tests/ctable/test_null_predicate_rewrite.py`.
-- **Phase 10** as listed above: mask-aware summary builder, `null_aware`/`null_order` descriptors,
-  and with them a genuinely indexed `OR` over a nullable column.
+- **Validity through `_ColumnSummaryAccumulator`** (Phase 10). The per-block summaries folded
+  during writes carry no validity, so a nullable column holding a null cannot use them and pays a
+  decompression pass at `close()` — 1.8 ms → 33.2 ms for a 20M-row `int64`. `extend`'s feed site
+  already has the validity in hand (`batch_valid`); the Arrow writer's `on_write=` callback does
+  not, so the accumulator would need a "nullable columns must be fed validity or invalidate" rule
+  and that path would keep today's cost.
+- **A null-run FULL index**, which is what would earn a truthful `"null_order": "last"`. Sorting
+  nulls last *within ties* makes them a contiguous range of the sorted array, so a range query
+  could subtract it in sorted space — exact, per leaf, no I/O. That would let
+  `_exclude_null_positions` go away entirely, put `OR` on the exact-position paths, and give
+  `_sorted_slice_positions` (which bails since Phase 7) its window read back. It needs the sort key
+  and the external-merge builder to carry validity, in every index kind.

@@ -58,6 +58,31 @@ One deliberate semantic difference: in a mask column `NaN` is a **value**,
 following Arrow, and only the sidecar marks a null. Sentinel float columns keep
 NaN-as-null. See "Where nulls are stored" in the CTable reference.
 
+#### Column indexes are null-aware
+
+Every index kind stores per-segment `min`/`max`, and those extrema are now taken
+over the rows that carry a **value**: a column's nulls are read from its
+validity channel and left out, and a segment with no value at all is flagged
+rather than summarised. This applies to both storages — an `INT64_MIN` sentinel
+is exactly as invisible to a summary as a mask column's fill.
+
+Two things follow. `Column.min`/`Column.max` answer from the index for a
+nullable column (**236x** on a 20M-row `int64`, measured) where before every
+nullable column but a NaN-sentinel float had to scan; and `where()` with an `OR`
+over a nullable indexed column uses the index instead of falling back to a full
+scan (**1.6x** on a 20M-row two-column probe). The `OR` fallback existed because
+the only null filtering available was global, and a global filter drops a row
+that is null in one branch but matches the other; the segment path never needed
+it, because it *evaluates* the predicate, which has been null-aware per leaf
+since the string-predicate fix below.
+
+Indexes written by an earlier release are read as not null-aware and keep the
+old fallback, so nothing silently changes meaning; `rebuild_index()` promotes
+them. Building an index over a nullable column that actually holds nulls now
+costs one decompression pass (33 ms for a 20M-row `int64` column) because the
+incremental per-block summaries folded during writes carry no validity; a
+nullable column with no nulls keeps that fast path untouched.
+
 ### Bug fixes
 
 - **`group_by` returned the wrong `min` for a `bool` value column.** The

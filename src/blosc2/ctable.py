@@ -3218,15 +3218,16 @@ class Column:
         return NotImplemented
 
     def _summary_minmax_source(self):
-        """Return ``(sidecar_path, dtype, nullable, segment_len)`` for a
-        summary-readable ``min``/``max``, or ``None`` when the index shortcut is
-        not provably correct.
+        """Return ``(sidecar_path, dtype, nullable, nan_is_data, segment_len)``
+        for a summary-readable ``min``/``max``, or ``None`` when the index
+        shortcut is not provably correct.
 
         Excluded: a view (its summary describes the base table); a column kind
-        without numeric/string block extrema; a leaky null sentinel (only a
-        non-nullable column, or a NaN-sentinel float — whose NaNs the summary
-        drops — match the nulls-skipped contract of ``min()``); and a stale,
-        absent, or in-memory-only index.
+        without numeric/string block extrema; a nullable column whose index was
+        built without a validity channel — its per-segment extrema cover the
+        sentinel or the fill as if it were data, and only a NaN-sentinel float
+        (whose nulls the summary drops as NaNs anyway) escapes that; and a
+        stale, absent, or in-memory-only index.
 
         Appends mark the index stale, so they are covered.  Deletions are *not*
         (``delete()`` tombstones in place and leaves the index usable for
@@ -3259,24 +3260,26 @@ class Column:
         nullable = getattr(spec, "nullable", False)
         null_value = getattr(spec, "null_value", None)
         is_nan_float = dtype.kind == "f" and is_nan_sentinel(null_value)
-        if nullable and not is_nan_float:
-            # A non-NaN sentinel leaks into the block extrema.
-            #
-            # It is tempting to let mask-backed float columns through here too,
-            # on the grounds that their fill is NaN and the summary builder
-            # drops NaNs.  That is wrong, and precisely *because* NaN is a value
-            # in a mask column (Arrow semantics): a genuine NaN poisons the
-            # scanned min()/max() to NaN, while the summary silently drops it
-            # and answers with a real extremum.  Measured on
-            # ``[1.0, nan, 5.0, null, 3.0]``: scan gives nan, summaries would
-            # give 1.0/5.0.  Making the index null-aware is the real fix
-            # (plans/mask-based-nulls.md, phase 10); until then mask columns
-            # take the same bail as sentinel ones.
-            return None
         root = table._root_table
         desc = root._get_index_catalog().get(self._col_name)
         if not desc or desc.get("stale", False):
             return None
+        if nullable and not is_nan_float and not desc.get("null_aware", False):
+            # Both a non-NaN sentinel and a mask column's fill leak into the
+            # block extrema of an index built without a validity channel — the
+            # summary builder reads the physical array and cannot tell either
+            # from data.  ``null_aware`` says the extrema were taken over the
+            # valid rows only, which is what makes them agree with a scan that
+            # skips nulls.  Indexes built before Phase 10 carry no such key, so
+            # they keep the old bail and rebuild into the shortcut.
+            return None
+        # Whether a NaN in this column is a *value* rather than a null.  It is
+        # for a non-nullable float and for a mask column (Arrow semantics,
+        # decision 6 of plans/mask-based-nulls.md), and it is not for a
+        # NaN-sentinel float.  Where NaN is data it poisons a scanned
+        # min()/max() to NaN while the summaries drop it, so the caller must
+        # decline rather than answer with a real extremum.
+        nan_is_data = dtype.kind == "f" and not is_nan_float
         # A tombstoned row still sits in its block and still contributes to that
         # block's extrema, and the summaries index physical slots while min()
         # reads logical rows.  Both only line up while every slot below the
@@ -3293,7 +3296,38 @@ class Column:
         segment_len = levels[level].get("segment_len")
         if not segment_len:
             return None
-        return path, dtype, nullable, int(segment_len)
+        return path, dtype, nullable, nan_is_data, int(segment_len)
+
+    def _summary_minmax_tail(self, tail_start, n_live, dtype, nullable, nan_is_data, op):
+        """Reduce by hand the one block the summaries could not cover.
+
+        Its tail is capacity padding, so it has no usable summary entry.  The
+        rescan has to apply exactly the rules the summaries applied: skip the
+        nulls, and decline where a NaN is data and would poison the answer the
+        summaries gave.
+
+        Returns the block's extremum, ``None`` when it holds nothing usable, or
+        ``NotImplemented`` to abandon the shortcut altogether.
+        """
+        try:
+            seg = np.asarray(self[tail_start:n_live])
+        except Exception:
+            return NotImplemented
+        if nullable:
+            null = self._nulls.null_mask_slice(seg, tail_start, n_live)
+            if null is not None:
+                seg = seg[~null]
+        if dtype.kind == "f" and seg.shape[0]:
+            nan = np.isnan(seg)
+            if nan.any():
+                if nan_is_data:
+                    return NotImplemented
+                seg = seg[~nan]
+        if not seg.shape[0]:
+            return None
+        if dtype.kind in "US":
+            return min(seg) if op == "min" else max(seg)
+        return seg.min() if op == "min" else seg.max()
 
     def _index_summary_minmax(self, op: str):
         """Exact ``min``/``max`` from the column index's block summaries, or
@@ -3313,7 +3347,7 @@ class Column:
         source = self._summary_minmax_source()
         if source is None:
             return NotImplemented
-        path, dtype, nullable, segment_len = source
+        path, dtype, nullable, nan_is_data, segment_len = source
         n_live = self._table._root_table._n_rows
         if n_live is None or n_live == 0:
             return NotImplemented
@@ -3335,30 +3369,26 @@ class Column:
         # Drop the padded tail: keep only blocks lying wholly below n_rows.
         flags = flags[:n_full]
         vals = vals[:n_full]
-        # A non-nullable float with NaN *data* makes numpy min/max return NaN,
+        # A float column where NaN is *data* makes numpy min/max return NaN,
         # but the summary dropped those NaNs — they would disagree, so bail.
-        if dtype.kind == "f" and not nullable and bool((flags & (FLAG_HAS_NAN | FLAG_ALL_NAN)).any()):
+        # On a null-aware index FLAG_HAS_NAN is raised over the valid rows
+        # only, so a mask column's NaN fill does not trip this; a genuine NaN
+        # value does, which is exactly the distinction decision 6 draws.
+        if nan_is_data and bool((flags & FLAG_HAS_NAN).any()):
             return NotImplemented
-        valid = (flags & FLAG_ALL_NAN) == 0
+        valid = (flags & FLAG_ALL_NAN) == 0  # also clear on all-null segments
         vals = vals[valid]
 
         # The straddling block is not summarisable (its tail is padding), so read
         # just its live rows.  This is also the whole answer when the column is
         # shorter than one block, in which case no summary entry is usable.
-        tail = n_live - n_full * segment_len
-        if tail:
-            try:
-                seg = np.asarray(self[n_full * segment_len : n_live])
-            except Exception:
+        if n_live - n_full * segment_len:
+            seg_val = self._summary_minmax_tail(
+                n_full * segment_len, n_live, dtype, nullable, nan_is_data, op
+            )
+            if seg_val is NotImplemented:
                 return NotImplemented
-            if dtype.kind == "f":
-                seg = seg[~np.isnan(seg)]
-                if not nullable and seg.shape[0] != tail:
-                    return NotImplemented  # NaN data: see above
-            if seg.shape[0]:
-                seg_val = min(seg) if dtype.kind in "US" else seg.min()
-                if op == "max":
-                    seg_val = max(seg) if dtype.kind in "US" else seg.max()
+            if seg_val is not None:
                 vals = np.concatenate([vals, np.asarray([seg_val], dtype=dtype)])
 
         if vals.shape[0] == 0:
@@ -10894,7 +10924,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     def _precomputed_summary_for(self, name: str):
         """Return ``{"block": summaries}`` for *name* if a valid accumulator
-        fully covers the column's physical extent, else None."""
+        fully covers the column's physical extent, else None.
+
+        These are folded as rows are written, with no validity in hand, so the
+        index builder ignores them for a column that has nulls and decompresses
+        instead (see ``_build_levels_descriptor_ooc``).  A nullable column with
+        no nulls keeps the fast path.
+        """
         accs = self.__dict__.get("_summary_accumulators")
         if not accs:
             return None

@@ -182,6 +182,26 @@ def _persist_utf8_vocab(full: dict, meta: dict, sorted_vocab: np.ndarray) -> Non
     meta["vocab_path"] = vocab_path
 
 
+def _expression_has_or(expression: str) -> bool:
+    """Whether *expression* really contains a boolean OR.
+
+    A substring test for ``"|"`` also fires on a string literal that happens to
+    contain one (``name == 'a|b'``), and the answer decides whether a nullable
+    indexed column may keep its index -- so it is worth parsing for.
+    Unparseable input answers True, which is the conservative side.
+    """
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError:
+        return True
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+            return True
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            return True
+    return False
+
+
 class _DictRankWrapper:
     """Wrap a dictionary column's codes NDArray, translating codes to alphabetical ranks on read.
 
@@ -526,6 +546,54 @@ class _CTableIndexingMixin:
             return matches[0]
         raise TypeError("must specify col_name, expression, or name")
 
+    def _index_validity_provider(self, col_name: str):
+        """``(provider, null_aware)`` for *col_name*'s summary build.
+
+        *provider* is a ``(values, start, stop) -> valid`` callable, or ``None``
+        when every row is valid.  It is what makes an index null-aware: the
+        segment-summary builder calls it per chunk and keeps null rows out of
+        the per-segment extrema.  Without it a nullable column's summaries
+        describe its fill (or its sentinel) as if it were data, which is why
+        the ``min()``/``max()`` shortcut had to decline them.
+
+        *null_aware* is the claim recorded in the descriptor, and it is true in
+        one case where *provider* is ``None``: a mask column that has never
+        held a null (no sidecar, per decision 9 of plans/mask-based-nulls.md).
+        Its summaries agree with a null-skipping scan for free, so it should
+        not pay the bail.
+        """
+        col = self._schema.columns_by_name.get(col_name)
+        spec = col.spec if col is not None else None
+        if spec is None:
+            return None, False
+        kind = kind_of_spec(spec)
+        if kind == NULL_MASK:
+            mask = self._null_mask(col_name)
+            if mask is None:
+                return None, True
+
+            def _valid_from_sidecar(values, start, stop, _mask=mask):
+                # One byte per row off the sidecar, and the values are not
+                # consulted at all.
+                valid = np.asarray(_mask[start:stop], dtype=bool)
+                if valid.shape[0] < stop - start:
+                    # Capacity the sidecar has not been grown over yet: those
+                    # rows hold no data, and _grow() writes True over new tail
+                    # rows, so "valid" is the consistent answer for them.
+                    pad = np.ones(stop - start - valid.shape[0], dtype=bool)
+                    valid = np.concatenate([valid, pad])
+                return valid
+
+            return _valid_from_sidecar, True
+        if kind == NULL_SENTINEL:
+            null_value = spec.null_value
+
+            def _valid_from_sentinel(values, start, stop, _nv=null_value):
+                return ~sentinel_mask(values, _nv)
+
+            return _valid_from_sentinel, True
+        return None, False
+
     def _build_index_persistent(
         self,
         col_name: str,
@@ -541,6 +609,7 @@ class _CTableIndexingMixin:
         opsi_max_cycles: int | None = None,
         summary_levels: tuple[str, ...] | None = None,
         precomputed_summaries: dict | None = None,
+        validity=None,
     ) -> dict:
         """Build index sidecar files for a persistent-table column; return the descriptor."""
         import tempfile
@@ -593,6 +662,7 @@ class _CTableIndexingMixin:
                 cparams_obj,
                 summary_levels=summary_levels,
                 precomputed_summaries=precomputed_summaries,
+                validity=validity,
             )
             bucket = (
                 _build_bucket_descriptor_ooc(
@@ -636,6 +706,7 @@ class _CTableIndexingMixin:
                 full,
                 cparams_obj,
                 opsi,
+                validity is not None,
             )
         else:
             values = _values_for_target(proxy, target)
@@ -649,6 +720,7 @@ class _CTableIndexingMixin:
                 persistent,
                 cparams_obj,
                 summary_levels=summary_levels,
+                validity=validity,
             )
             bucket = (
                 _build_bucket_descriptor(proxy, token, kind, values, optlevel, persistent, cparams_obj)
@@ -685,6 +757,7 @@ class _CTableIndexingMixin:
                 full,
                 cparams_obj,
                 opsi,
+                validity is not None,
             )
 
         result = _copy_descriptor(descriptor)
@@ -938,6 +1011,15 @@ class _CTableIndexingMixin:
             col_arr = _DictRankWrapper(
                 dict_col.codes, code_to_rank, null_rank, null_code, dict_col.spec.nullable, n_phys
             )
+        # utf8 and dictionary columns are indexed by *rank*, and a null already
+        # has a rank of its own there (``null_rank``, sorting last), so their
+        # summaries are null-aware by construction and there is nothing for a
+        # validity channel to add -- nor would it line up, the ranks array being
+        # a different array from the column's payload.
+        validity, null_aware = (
+            (None, False) if (is_utf8 or is_dictionary) else self._index_validity_provider(col_name)
+        )
+
         is_persistent = self._storage.index_anchor_path(col_name) is not None
 
         if is_persistent:
@@ -954,6 +1036,7 @@ class _CTableIndexingMixin:
                 opsi_max_cycles=opsi_max_cycles,
                 summary_levels=summary_levels,
                 precomputed_summaries=precomputed_summaries if kind_str == "summary" else None,
+                validity=validity,
             )
         else:
             # In-memory path: materialise ranks as a proper NDArray (small tables only).
@@ -976,6 +1059,7 @@ class _CTableIndexingMixin:
                 opsi_max_cycles=opsi_max_cycles,
                 summary_levels=summary_levels,
                 precomputed_summaries=precomputed_summaries if kind_str == "summary" else None,
+                validity=validity,
             )
             store = _IN_MEMORY_INDEXES[id(col_arr)]
             descriptor = _copy_descriptor(store["indexes"]["__self__"])
@@ -988,6 +1072,10 @@ class _CTableIndexingMixin:
             else:
                 _persist_utf8_vocab(full, utf8_rank_meta, utf8_vocab)
                 full["utf8_rank"] = utf8_rank_meta
+
+        # A null-free mask column builds with no validity provider (there is
+        # nothing to exclude) yet its summaries are null-aware all the same.
+        descriptor["null_aware"] = bool(descriptor.get("null_aware") or null_aware)
 
         value_epoch, _ = self._storage.get_epoch_counters()
         descriptor["built_value_epoch"] = value_epoch
@@ -1494,12 +1582,26 @@ class _CTableIndexingMixin:
 
         # Global null post-filtering is not correct for OR expressions: it would
         # drop a row that is null in one column but matches the other branch.
-        # (The per-leaf rewrite makes the *expression* handle OR correctly; it
-        # cannot fix an index that never evaluates the expression, so an OR over
-        # a nullable indexed column still falls back to the scan -- which is now
-        # itself null-aware, and so now returns the right answer.)
-        if nullable_indexed and ("|" in expr_result.expression or " or " in expr_result.expression):
-            return None
+        # Which paths that rules out depends on *how* each one answers.
+        #
+        # The segment/candidate-unit path evaluates the predicate through
+        # miniexpr over the surviving blocks, and the predicate is null-aware
+        # per leaf by the time it gets here (CTable._rewrite_null_predicates for
+        # the string form, Column._null_aware_compare for the operator one), so
+        # its result is already exact and the post-filter is not merely
+        # incorrect for OR but unnecessary.  That path therefore serves OR, with
+        # the filter skipped.
+        #
+        # The exact-position paths (FULL/PARTIAL/BUCKET) answer by taking an
+        # ordered *range* of the sorted column and never evaluate anything, so
+        # the post-filter is load-bearing there and an OR over a nullable
+        # indexed column still falls back to the scan -- which is itself
+        # null-aware, and so returns the right answer.  Those bails are
+        # belt-and-braces today: the planner declines an exact plan for any
+        # expression containing an OR, so such a plan cannot reach them.  They
+        # are what stops a planner that learns to build one from silently
+        # reintroducing the bug.
+        skip_null_filter = bool(nullable_indexed) and _expression_has_or(expr_result.expression)
 
         # Inject every usable table-owned descriptor so plan_query can combine them.
         # In .b2z read mode all columns share the same urlpath, so _array_key()
@@ -1552,9 +1654,13 @@ class _CTableIndexingMixin:
             return positions
 
         if plan.exact_positions is not None:
+            if skip_null_filter:
+                return None  # ordered range, no per-leaf null handling: see above
             return _exclude_null_positions(plan.exact_positions)
 
         if plan.partial_exact_positions is not None:
+            if skip_null_filter:
+                return None  # ditto, and its refinement filter is global too
             # Cross-column refinement: the FULL index on one column gave us
             # exact positions, but the expression has additional predicates on
             # other columns.  Refinement reads every operand column at those
@@ -1610,6 +1716,8 @@ class _CTableIndexingMixin:
             # Fall through to full scan if refinement fails
 
         if plan.bucket_masks is not None:
+            if skip_null_filter:
+                return None  # bucket masks are precomputed, not evaluated
             # When bucket pruning covers all units (100 % of chunks are
             # candidates), the per‑chunk evaluation overhead outweighs the
             # benefit over a plain scan.  Fall back to the scan path.
@@ -1656,7 +1764,7 @@ class _CTableIndexingMixin:
                 # lazily.  Only columns whose null sentinel can satisfy the
                 # predicate (non-NaN) require the positions fall-back; NaN
                 # sentinels are already excluded by the predicate itself.
-                if not nullable_needs_exclude:
+                if skip_null_filter or not nullable_needs_exclude:
                     try:
                         mask = expr_result.compute(_candidate_blocks=bitmap)
                     except Exception:
@@ -1665,10 +1773,10 @@ class _CTableIndexingMixin:
                         return mask
                 positions = self._block_pruned_positions(expr_result, bitmap, primary_col_arr)
                 if positions is not None:
-                    return _exclude_null_positions(positions)
+                    return positions if skip_null_filter else _exclude_null_positions(positions)
             _, positions = evaluate_segment_query(
                 expression, merged_operands, {}, where_dict, plan, return_positions=True
             )
-            return _exclude_null_positions(positions)
+            return positions if skip_null_filter else _exclude_null_positions(positions)
 
         return None

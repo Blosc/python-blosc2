@@ -176,6 +176,10 @@ One semantic difference is deliberate: in a **mask** column ``NaN`` is a
 column keeps NaN-as-null.  So ``dropna``, ``group_by`` and ``min``/``max`` can
 differ between the two for float columns holding a real NaN.
 
+Indexes understand both storages: a column index summarises only the rows that
+carry a value, so ``min``/``max`` and ``where`` are as fast on a nullable
+column as on a plain one.  See `Indexes`_.
+
 Converting between them
 ~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -696,6 +700,23 @@ Choosing an index kind
     When a segment‑level index (``SUMMARY``, ``BUCKET``) would prune fewer
     than 50 % of candidate segments, the planner skips the index and falls
     back to a full scan to avoid per‑segment evaluation overhead.
+
+Indexes on nullable columns
+    Every index kind stores per‑segment ``min``/``max``, and since 4.10.2 those
+    extrema are taken over the rows that carry a **value**: a column's nulls are
+    read from its validity channel — the ``.notnull`` sidecar of a mask column,
+    the reserved value of a sentinel one — and left out.  A segment with no
+    value at all is flagged rather than summarised.
+
+    Two things follow.  :meth:`Column.min` and :meth:`Column.max` answer from
+    the summaries for a nullable column instead of scanning it (~240x on a
+    20M‑row column), where before any nullable column except a NaN‑sentinel
+    float had to fall back; and segment pruning is tighter, because a block
+    whose only large values are nulls no longer looks like a candidate.
+
+    Indexes built by an earlier release are read as *not* null‑aware and keep
+    the old fallback, so nothing silently changes meaning;
+    :meth:`CTable.rebuild_index` promotes them.
 
 .. autosummary::
 
