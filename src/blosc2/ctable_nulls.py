@@ -721,9 +721,17 @@ class NullChannel:
         sidecar" -- the latter meaning never-null, which the expression layer
         already handles by skipping the operand.
 
-        Fixed-shape ndarray columns are excluded for now: their values array
-        is N-D while the sidecar is one flag per row, so the two do not
-        broadcast against each other in a lazy expression.
+        **Fixed-shape ndarray columns are excluded**, and not merely because a
+        row-level flag is a different shape from an ``(n, *item_shape)`` values
+        array.  Reshaping the sidecar to ``(n, 1, ...)`` looks like it should
+        fix that, and does not: ``blosc2.where`` returns the *predicate's*
+        shape rather than broadcasting, so the item dimension is silently
+        dropped from the values, and combining an ``(n, 1)`` predicate with the
+        ``(n,)`` row mask that :class:`NullableExpr` reductions use explodes
+        into ``(n, n)``.  Row-level null propagation for ndarray columns needs
+        broadcasting support in the lazy layer; until then those columns get
+        their null handling from the NumPy-based reduction paths
+        (``Column._reduction_null_mask``), which are row-level throughout.
         """
         if self.kind != NULL_MASK or self._col.is_ndarray:
             return None

@@ -2964,9 +2964,25 @@ class Column:
         except Exception:
             return NotImplemented
 
+    def _reduction_null_mask(self, arr: np.ndarray) -> np.ndarray | None:
+        """Per-live-row null flags for already-materialized values *arr*.
+
+        ``None`` when this column can hold no nulls at all, which lets the
+        caller skip the filtering entirely.  A sentinel column answers from
+        *arr* itself; a mask column reads its sidecar, which is why this cannot
+        simply be :meth:`_null_mask_for`.  Both answers are one flag per row,
+        including for a fixed-shape ndarray column.
+        """
+        channel = self._nulls
+        if channel.uses_mask:
+            return channel.null_mask()
+        if self.null_value is None:
+            return None
+        return channel.mask_for_values(arr)
+
     def _ndarray_values_for_reduction(self, where=None) -> np.ndarray:
         arr = np.asarray(self[:])
-        null_mask = self._null_mask_for(arr) if self.null_value is not None else None
+        null_mask = self._reduction_null_mask(arr)
         if null_mask is not None and null_mask.any():
             arr = arr[~null_mask]
         if where is None:
@@ -3168,7 +3184,19 @@ class Column:
         null_value = getattr(spec, "null_value", None)
         is_nan_float = dtype.kind == "f" and is_nan_sentinel(null_value)
         if nullable and not is_nan_float:
-            return None  # non-NaN sentinel leaks into the block extrema
+            # A non-NaN sentinel leaks into the block extrema.
+            #
+            # It is tempting to let mask-backed float columns through here too,
+            # on the grounds that their fill is NaN and the summary builder
+            # drops NaNs.  That is wrong, and precisely *because* NaN is a value
+            # in a mask column (Arrow semantics): a genuine NaN poisons the
+            # scanned min()/max() to NaN, while the summary silently drops it
+            # and answers with a real extremum.  Measured on
+            # ``[1.0, nan, 5.0, null, 3.0]``: scan gives nan, summaries would
+            # give 1.0/5.0.  Making the index null-aware is the real fix
+            # (plans/mask-based-nulls.md, phase 10); until then mask columns
+            # take the same bail as sentinel ones.
+            return None
         root = table._root_table
         desc = root._get_index_catalog().get(self._col_name)
         if not desc or desc.get("stale", False):
@@ -3358,9 +3386,9 @@ class Column:
         arr = np.asarray(self[:])
         if arr.size == 0:
             raise ValueError("argmin() called on an empty column.")
-        mask = (
-            self._null_mask_for(arr) if self.null_value is not None else np.zeros(len(arr), dtype=np.bool_)
-        )
+        mask = self._reduction_null_mask(arr)
+        if mask is None:
+            mask = np.zeros(len(arr), dtype=np.bool_)
         if mask.all():
             raise ValueError("argmin() called on a column where all values are null.")
         positions = np.where(~mask)[0]
@@ -3385,9 +3413,9 @@ class Column:
         arr = np.asarray(self[:])
         if arr.size == 0:
             raise ValueError("argmax() called on an empty column.")
-        mask = (
-            self._null_mask_for(arr) if self.null_value is not None else np.zeros(len(arr), dtype=np.bool_)
-        )
+        mask = self._reduction_null_mask(arr)
+        if mask is None:
+            mask = np.zeros(len(arr), dtype=np.bool_)
         if mask.all():
             raise ValueError("argmax() called on a column where all values are null.")
         positions = np.where(~mask)[0]

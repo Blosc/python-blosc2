@@ -1,11 +1,13 @@
 # Mask-based nullable columns for CTable
 
-> **Status: IN PROGRESS — Phases 0–4 landed 2026-08-08.** Mask columns are now fully usable
-> in memory and on disk; next up is Phase 5 (expressions + reductions), then Phase 6
-> (Arrow/Parquet). Two premises were disproven during implementation and are corrected in place,
-> each in a blockquote beside the text it corrects: the index path cannot be fixed by a null-aware
-> expression (§Expression layer), and the bool dtype-flip cannot move out of `__init__`
-> (§Schema layer). Drafted 2026-08-08.
+> **Status: IN PROGRESS — Phases 0–5 landed 2026-08-08.** Mask columns are fully usable in memory
+> and on disk, and correct through expressions and reductions; next up is Phase 6 (Arrow/Parquet),
+> which is what the whole design is *for*. Four premises were disproven during implementation and
+> are corrected in place, each in a blockquote beside the text it corrects: the index path cannot
+> be fixed by a null-aware expression (§Expression layer), the bool dtype-flip cannot move out of
+> `__init__` (§Schema layer), ndarray columns do not get lazy null propagation for free
+> (§Expression layer), and the "free" summary min/max fast path is unsound (§Reductions).
+> Drafted 2026-08-08.
 > Revised 2026-08-08 after review: lazy sidecar materialization (decision 9), `NullPolicy`
 > inference instead of raising, staged default flip (Phase 9), null-predicate rewrite pulled
 > forward to Phase 1, sidecar suffix renamed `.notnull`.
@@ -399,6 +401,20 @@ gain null propagation in expressions for free**. And `_lazy_nonnull_mask` (`:277
 stored array instead of synthesizing a comparison, keeping the miniexpr reduction fast path with
 one fewer computed operand.
 
+> **Correction (measured 2026-08-08).** The second gain is real and landed. **The first is not,
+> and was not done.** Row-level is necessary but not sufficient: the values array is
+> `(n, *item_shape)` and the sidecar is `(n,)`, and reshaping it to `(n, 1, …)` — the obvious fix —
+> fails twice. `blosc2.where(pred_(n,1), nan, values_(n,3))` returns shape `(n, 1)`, silently
+> **dropping the item dimension from the values** rather than broadcasting; and `NullableExpr`'s
+> reduction mask combines the predicate with the `(n,)` `_valid_rows`, where `(n,) & (n,1)` explodes
+> to `(n, n)`. Row-level null propagation for ndarray columns needs broadcasting support in the lazy
+> layer, not a reshape at this call site.
+>
+> What ndarray columns *do* gain in this phase is null-aware **reductions**, which are NumPy-based
+> and row-level throughout: `min`/`max`/`sum`/`mean`/`argmin`/`argmax` now skip null rows instead of
+> reducing over the fill item. Pinned by `test_ndarray_columns_still_get_no_lazy_null_predicate`,
+> which asserts both halves — no predicate, working reduction — so the gap stays deliberate.
+
 `_is_nullable_bool` (`:1824-1831`) becomes `kind == "bool" and channel.kind == NULL_SENTINEL`;
 the `raw_col == 1` rewrites (`:2039`, `:2049`, `:2767`, `:13392`) go dead for mask bools and stay
 alive forever for sentinel ones.
@@ -458,6 +474,17 @@ never consults a side channel. Two honest routes:
 1. *Free, partial*: with the NaN float fill (decision 5), mask-backed float columns qualify under
    the existing `is_nan_float` escape hatch at `:3045` with a one-condition change. Floats only —
    `int64.min` **is** the block minimum, so timestamps get nothing free.
+
+   > **Correction (measured 2026-08-08). Route 1 is unsound and was not taken.** It is defeated by
+   > decision 6, three sections up: the summary builder drops NaNs, and under mask storage a NaN is
+   > a *value*, so it drops real data too. On `[1.0, nan, 5.0, null, 3.0]` the scan gives `nan`
+   > (NumPy semantics, NaN participates) while the summaries would answer `1.0`/`5.0` — the same
+   > query returning different answers depending on whether an index happens to exist. Contrast the
+   > sentinel-NaN column the hatch was written for, where NaN *is* the null, so dropping it is
+   > exactly right and the two paths agree. Mask columns keep the bail; the reasoning is now a
+   > comment at the bail site so nobody re-derives the one-liner. Both halves pinned by
+   > `test_summary_minmax_shortcut_stays_disabled_for_mask_columns` and
+   > `test_sentinel_nan_float_keeps_its_summary_shortcut`.
 2. *Real fix (Phase 10)*: make the summary builder in `ctable_indexing.py` mask-aware — extrema over
    `values[valid]`, a per-segment `all_null` flag, `"null_aware": true` in the descriptor. This
    retroactively enables the fast path for **sentinel** columns too.
@@ -662,7 +689,7 @@ default-created tables require them.
 | 2 | ✅ **Schema plumbing.** `_NullableSpecMixin`, `null_storage` kwarg on ~9 specs, conditional version 3, `NullPolicy.null_storage` (**still defaulting to `"sentinel"`**) with sentinel-field inference, `_resolved_null_storage` as the single decision point, `fill_value_for`, complex nullable (mask-only). Dtype-flip relocation **not** done — see the correction above. | S | Low |
 | 3 | ✅ **Storage sidecar.** 5 methods × 4 backends, lazy creation (absent key = all valid); `_grow`/`trim_capacity`/`compact`/`_save_to_storage`/`to_cframe`/`load`, **plus `copy()`'s in-memory path**, which the section above had missed; companion-suffix loop in delete/rename. `tests/ctable/test_null_persistence.py` (38 tests) drives it with a hand-built mask. | M | Low |
 | 4 | ✅ **Read/write + null API.** `extend`/`append`/`_coerce_row_to_storage`/`__setitem__`/`assign`; `is_null`/`notnull`/`null_count`/`fillna`/`_nonnull_chunks`/`to_numpy(masked=)`/`dropna`; **plus every gather-and-rebuild path** (`sort_by` ×3, `take`, `slice`), which this section had not listed. Mask columns fully usable. `tests/ctable/test_null_mask_api.py` (90 tests). | **L** | **High** (turned out to be the reference cycle, not `__setitem__`) |
-| 5 | **Expressions + reductions.** `_raw_null_pred`, `_lazy_nonnull_mask`, `_ndarray_values_for_reduction`, argmin/argmax, `_is_nullable_bool`. Includes the ndarray-propagation gain. *(The base `null_pred`/`valid_pred` mask support landed in Phase 4 — see the note above.)* | M | Med |
+| 5 | ✅ **Expressions + reductions.** `_ndarray_values_for_reduction`, argmin/argmax (both were reducing over the *fill*), `_reduction_null_mask` as the one storage-agnostic entry point. `_raw_null_pred`/`_lazy_nonnull_mask`/`_is_nullable_bool` needed nothing — Phases 0–4 had already made them storage-agnostic. **The ndarray-propagation gain is not real and was not done**, and the free summary fast path is unsound; both corrections are above. `tests/ctable/test_null_mask_expressions.py` (39 tests). | S (was M) | Low (was Med) |
 | 6 | **Arrow/Parquet.** Import + export for all V1 kinds, `packbits`/`unpackbits` LSB-first, `arrow_slice(validity=)`, delete the "no sentinel available" import error. Ships **opt-in** (`null_storage="mask"`); the default stays `"sentinel"`. | M | Med |
 | 7 | **Sort + groupby.** `_build_lex_keys`, `_sorted_positions_from_full_index` (big I/O win), `_utf8_rank_arrays(valid=)`, groupby `_null_mask` threading. | M | Med-High |
 | 8 | **Migration + docs.** `convert_nulls`, `Column.null_storage`, `info()`, `doc/reference/ctable.rst` null-policy rewrite, release notes. | S–M | Low |
