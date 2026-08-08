@@ -32,7 +32,7 @@ class Row:
 
 @dataclass
 class NullableRow:
-    name: str = blosc2.field(blosc2.utf8(nullable=True))
+    name: str = blosc2.field(blosc2.utf8(nullable=True, null_storage="sentinel"))
     x: int = blosc2.field(blosc2.int64())
 
 
@@ -712,8 +712,8 @@ def test_ctable_utf8_comparison_excludes_null_rows():
 def test_ctable_utf8_column_vs_column_comparison():
     @dataclass
     class TwoCols:
-        a: str = blosc2.field(blosc2.utf8(nullable=True))
-        b: str = blosc2.field(blosc2.utf8(nullable=True))
+        a: str = blosc2.field(blosc2.utf8(nullable=True, null_storage="sentinel"))
+        b: str = blosc2.field(blosc2.utf8(nullable=True, null_storage="sentinel"))
 
     t = CTable(TwoCols, new_data={"a": ["x", "y", None, "z"], "b": ["x", "z", "q", None]})
     eq = t[t.a == t.b]
@@ -1296,12 +1296,28 @@ def test_utf8_from_arrow_large_string_ingest():
 
 
 def test_utf8_from_arrow_nulls_use_sentinel():
+    """Importing under an explicitly sentinel policy still reserves a string.
+
+    The *default* is mask storage now, which is what makes a free-text utf8
+    column round-trip at all (any string is a legal value, so no sentinel is
+    safe); this pins that asking for the old behaviour still gets it.
+    """
     pa = pytest.importorskip("pyarrow")
     at = pa.table({"name": pa.array(["a", None, "c"], type=pa.string())})
-    t = CTable.from_arrow(at.schema, at.to_batches())
+    t = CTable.from_arrow(at.schema, at.to_batches(), null_storage="sentinel")
     nv = t["name"].null_value
     assert nv is not None
     assert list(t["name"][:]) == ["a", nv, "c"]
+    assert t["name"].null_count() == 1
+
+
+def test_utf8_from_arrow_nulls_default_to_a_mask():
+    pa = pytest.importorskip("pyarrow")
+    at = pa.table({"name": pa.array(["a", None, "c"], type=pa.string())})
+    t = CTable.from_arrow(at.schema, at.to_batches())
+    assert t["name"].null_storage == "mask"
+    assert t["name"].null_value is None
+    assert t["name"].is_null().tolist() == [False, True, False]
     assert t["name"].null_count() == 1
 
 
@@ -1759,7 +1775,9 @@ def test_ctable_utf8_index_reopen_nulls_last(tmp_path):
     from dataclasses import make_dataclass
 
     path = str(tmp_path / "utf8_index.b2t")
-    row_cls = make_dataclass("Row", [("name", str, blosc2.field(blosc2.utf8(nullable=True)))])
+    row_cls = make_dataclass(
+        "Row", [("name", str, blosc2.field(blosc2.utf8(nullable=True, null_storage="sentinel")))]
+    )
     values = ["pear", "apple", None, "banana"]
     t = blosc2.CTable(row_cls, urlpath=path, mode="w")
     t.extend({"name": values}, validate=False)
@@ -1817,7 +1835,7 @@ def test_ctable_utf8_index_answers_scalar_predicates(nullable, tmp_path):
     values = ["pear", "apple", "café", "banana", "apple", "pear"]
     if nullable:
         values = [*values, None]
-    spec = blosc2.utf8(nullable=True) if nullable else blosc2.utf8()
+    spec = blosc2.utf8(nullable=True, null_storage="sentinel") if nullable else blosc2.utf8()
     row_cls = make_dataclass("Row", [("c", str, blosc2.field(spec))])
 
     masks = {}
@@ -1902,7 +1920,9 @@ def test_ctable_utf8_index_ne_on_all_null_column(tmp_path):
     """
     from dataclasses import make_dataclass
 
-    row_cls = make_dataclass("Row", [("c", str, blosc2.field(blosc2.utf8(nullable=True)))])
+    row_cls = make_dataclass(
+        "Row", [("c", str, blosc2.field(blosc2.utf8(nullable=True, null_storage="sentinel")))]
+    )
     t = blosc2.CTable(row_cls, urlpath=str(tmp_path / "t.b2t"), mode="w")
     t.extend({"c": [None] * 6}, validate=False)
     t._flush_varlen_columns()

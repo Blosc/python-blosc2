@@ -6,17 +6,18 @@ XXX version-specific blurb XXX
 
 ### New features
 
-#### Mask-based nullable columns for CTable
+#### Mask-based nullable columns for CTable, and they are now the default
 
-A nullable CTable column can now keep its nulls in a per-column **validity
-sidecar** — Arrow's own model — instead of reserving a value from its own range.
-Pass `null_storage="mask"` on any scalar spec:
+A nullable CTable column keeps its nulls in a per-column **validity sidecar** —
+Arrow's own model — instead of reserving a value from its own range. This is now
+what a bare `nullable=True` resolves to, and what every nullable column inferred
+from Arrow, Parquet or CSV gets:
 
 ```python
-blosc2.bool(null_storage="mask")  # no reserved 255; dtype stays np.bool_
-blosc2.int8(null_storage="mask")  # all 256 values usable, plus nulls
-blosc2.utf8(null_storage="mask")  # any string, including "" and "\x00"
-blosc2.complex128(null_storage="mask")  # nullable at all, for the first time
+blosc2.bool(nullable=True)  # no reserved 255; dtype stays np.bool_
+blosc2.int8(nullable=True)  # all 256 values usable, plus nulls
+blosc2.utf8(nullable=True)  # any string, including "" and "\x00"
+blosc2.complex128(nullable=True)  # nullable at all, for the first time
 ```
 
 This is what makes nullability **lossless**: a sentinel steals a value from the
@@ -31,13 +32,27 @@ Under mask storage `None` is how you write a null (`t.append((None,))`,
 `t["price"][3] = None`), which a fixed-width sentinel column cannot accept at
 all. `is_null()` is unchanged and remains the uniform API across every kind.
 
-Sentinel storage stays the **default** and is supported indefinitely; existing
-tables open and behave exactly as before. `Column.null_storage` reports where a
-column keeps its nulls and `info` tags each column (`int64 nullable[mask]`), so
-`CTable.convert_nulls()` can move columns between the two in either direction —
-never implicitly, and refusing rather than silently relabelling data when a
-sentinel is unavailable. A table with a mask column records schema version 3, so
-only such tables need a current reader.
+**Nothing on disk changes.** The new default governs *creation* only: opening a
+stored table never re-resolves anything, so every existing table keeps the
+storage, dtype and sentinel it was written with, and every rewrite rule for the
+reserved `255` stays permanently in place. Sentinel storage is supported
+indefinitely and is one keyword away, per column (`null_storage="sentinel"`, or
+any explicit `null_value=`) or globally through `NullPolicy`. Setting a type-wide
+`NullPolicy` sentinel field still implies sentinel storage for the kinds it
+covers, so existing `NullPolicy(float_value=...)` code is unaffected — with one
+unavoidable exception: `255` is the only value a nullable bool may reserve, so it
+is also `bool_value`'s default, and `NullPolicy(bool_value=255)` carries no
+information to act on. A bool column that wants a sentinel has to say so with
+`null_storage` or `column_null_values`.
+
+A table containing a mask column records **schema version 3**; readers older than
+4.10.2 refuse it with a clear error rather than misreading it. Pass
+`null_storage="sentinel"` for data that has to stay readable by them.
+
+`Column.null_storage` reports where a column keeps its nulls and `info` tags each
+column (`int64 nullable[mask]`), so `CTable.convert_nulls()` can move columns
+between the two in either direction — never implicitly, and refusing rather than
+silently relabelling data when a sentinel is unavailable.
 
 One deliberate semantic difference: in a mask column `NaN` is a **value**,
 following Arrow, and only the sidecar marks a null. Sentinel float columns keep
@@ -64,6 +79,15 @@ NaN-as-null. See "Where nulls are stored" in the CTable reference.
   widening that sentinel storage needs was undone by dtype rather than by
   whether it had been applied, so a column declared `uint8` was truncated to
   flags.
+- **`~` on a nullable bool column selected its nulls.** SQL `WHERE` semantics
+  say a null satisfies neither a predicate nor its negation; the mask path
+  inverted the stored `False` fill instead. (The sentinel path was already
+  correct, via its `== 0` rewrite.)
+- **CSV import and export ignored a validity sidecar.** `to_csv` compared
+  against the sentinel to find nulls, so a mask column wrote its fill as if it
+  were data, and `from_csv` had nothing to put in an empty field and raised.
+  Both go through the sidecar now: an empty CSV field is a null in either
+  direction. Sentinel columns keep writing their sentinel, unchanged.
 
 
 ## Changes from 4.10.0 to 4.10.1

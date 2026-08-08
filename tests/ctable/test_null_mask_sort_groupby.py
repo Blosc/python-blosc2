@@ -543,7 +543,7 @@ def groupby_pair():
         capacity=n,
         k=blosc2.int64(nullable=True, null_value=-1),
         s=blosc2.string(max_length=2, nullable=True, null_value="ZZ"),
-        v=blosc2.float64(nullable=True),
+        v=blosc2.float64(nullable=True, null_value=np.nan),
     )
     return mask, sent
 

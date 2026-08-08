@@ -25,6 +25,7 @@ import blosc2
 from blosc2 import CTable
 from blosc2.ctable_nulls import (
     NULL_CODE,
+    NULL_MASK,
     NULL_NATIVE,
     NULL_NONE,
     NULL_SENTINEL,
@@ -75,13 +76,27 @@ def test_kind_of_spec_none():
 
 
 def test_kind_of_spec_resolves_on_compile():
-    """``nullable=True`` only becomes a sentinel once the table compiles it."""
+    """``nullable=True`` only picks a channel once the table compiles it.
+
+    Bare, it resolves to a mask -- the default since 4.10.2 -- and only an
+    explicit request keeps the sentinel.  Either way the spec alone cannot say:
+    it is the resolver that decides.
+    """
 
     @dataclass
-    class Row:
+    class MaskRow:
         flag: bool = blosc2.field(blosc2.bool(nullable=True))
 
-    t = CTable(Row)
+    t = CTable(MaskRow)
+    t.append({"flag": True})
+    assert t["flag"].null_storage == NULL_MASK
+    assert t["flag"].null_value is None
+
+    @dataclass
+    class SentinelRow:
+        flag: bool = blosc2.field(blosc2.bool(nullable=True, null_storage="sentinel"))
+
+    t = CTable(SentinelRow)
     t.append({"flag": True})
     assert t["flag"].null_storage == NULL_SENTINEL
     assert t["flag"].null_value == 255

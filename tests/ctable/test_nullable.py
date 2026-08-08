@@ -107,14 +107,21 @@ def test_null_value_string():
 
 
 def test_nullable_true_uses_default_null_policy():
+    """The type-wide sentinels a policy picks, once sentinel storage is asked for.
+
+    A bare ``nullable=True`` resolves to a mask since 4.10.2, so this pins the
+    *sentinel* half of the resolution -- which is still what
+    ``null_storage="sentinel"`` and any type-wide policy field select.
+    """
+
     @dataclass
     class Row:
-        i: int = blosc2.field(blosc2.int32(nullable=True))
-        u: int = blosc2.field(blosc2.uint32(nullable=True))
-        f: float = blosc2.field(blosc2.float64(nullable=True))
-        flag: bool = blosc2.field(blosc2.bool(nullable=True))
-        s: str = blosc2.field(blosc2.string(max_length=4, nullable=True))
-        b: bytes = blosc2.field(blosc2.bytes(max_length=4, nullable=True))
+        i: int = blosc2.field(blosc2.int32(nullable=True, null_storage="sentinel"))
+        u: int = blosc2.field(blosc2.uint32(nullable=True, null_storage="sentinel"))
+        f: float = blosc2.field(blosc2.float64(nullable=True, null_storage="sentinel"))
+        flag: bool = blosc2.field(blosc2.bool(nullable=True, null_storage="sentinel"))
+        s: str = blosc2.field(blosc2.string(max_length=4, nullable=True, null_storage="sentinel"))
+        b: bytes = blosc2.field(blosc2.bytes(max_length=4, nullable=True, null_storage="sentinel"))
 
     t = CTable(Row)
     assert t["i"].null_value == np.iinfo(np.int32).min

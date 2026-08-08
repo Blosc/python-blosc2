@@ -361,7 +361,7 @@ def test_inplace_conversion_back_to_sentinel_survives_a_reopen(tmp_path):
 
 def test_inplace_on_a_persistent_table_refuses_a_dtype_change(tmp_path):
     """No ordering of "replace the array" and "update the schema" is crash-safe."""
-    t = one_col([1, 255, 0], blosc2.bool(nullable=True), urlpath=tmp_path / "t.b2t")
+    t = one_col([1, 255, 0], blosc2.bool(nullable=True, null_value=255), urlpath=tmp_path / "t.b2t")
     with pytest.raises(ValueError, match="changes its physical dtype"):
         t.convert_nulls("a", to="mask", inplace=True)
     assert t["a"].null_storage == "sentinel"
@@ -369,7 +369,7 @@ def test_inplace_on_a_persistent_table_refuses_a_dtype_change(tmp_path):
 
 
 def test_the_same_column_converts_fine_out_of_place(tmp_path):
-    t = one_col([1, 255, 0], blosc2.bool(nullable=True), urlpath=tmp_path / "t.b2t")
+    t = one_col([1, 255, 0], blosc2.bool(nullable=True, null_value=255), urlpath=tmp_path / "t.b2t")
     converted = t.convert_nulls("a", to="mask")
     assert converted["a"].dtype == np.dtype(np.bool_)
     assert as_list(converted["a"]) == [True, None, False]
@@ -380,7 +380,7 @@ def test_the_same_column_converts_fine_out_of_place(tmp_path):
 
 def test_inplace_on_an_in_memory_table_may_change_dtype():
     """There is no crash window in memory, so the restriction does not apply."""
-    t = one_col([1, 255, 0], blosc2.bool(nullable=True))
+    t = one_col([1, 255, 0], blosc2.bool(nullable=True, null_value=255))
     t.convert_nulls("a", to="mask", inplace=True)
     assert t["a"].dtype == np.dtype(np.bool_)
     assert as_list(t["a"]) == [True, None, False]
@@ -447,7 +447,7 @@ def test_copy_preserves_each_columns_null_storage():
     t = table(
         [(5, "ab"), (None, "__BLOSC2_NULL__")],
         k=blosc2.int64(null_storage="mask"),
-        s=blosc2.string(max_length=2, nullable=True),
+        s=blosc2.string(max_length=2, nullable=True, null_value="__BLOSC2_NULL__"),
     )
     c = t.copy()
     assert c["k"].null_storage == "mask"
@@ -465,7 +465,7 @@ def test_saving_preserves_null_storage_under_a_mask_default_policy(tmp_path):
 
 
 def test_opening_an_old_table_changes_nothing(tmp_path):
-    t = one_col([1, 255, 0], blosc2.bool(nullable=True), urlpath=tmp_path / "t.b2t")
+    t = one_col([1, 255, 0], blosc2.bool(nullable=True, null_value=255), urlpath=tmp_path / "t.b2t")
     del t
     with blosc2.null_policy(blosc2.NullPolicy(null_storage="mask")):
         reopened = blosc2.open(str(tmp_path / "t.b2t"))
@@ -483,7 +483,7 @@ def test_null_storage_is_reported_per_column():
     t = table(
         [(5, "ab", 1, "x")],
         k=blosc2.int64(null_storage="mask"),
-        s=blosc2.string(max_length=2, nullable=True),
+        s=blosc2.string(max_length=2, nullable=True, null_value="__BLOSC2_NULL__"),
         plain=blosc2.int64(),
         d=blosc2.dictionary(),
     )
@@ -498,7 +498,7 @@ def test_info_tags_each_column_with_where_its_nulls_live():
     t = table(
         [(5, "ab", 1)],
         k=blosc2.int64(null_storage="mask"),
-        s=blosc2.string(max_length=2, nullable=True),
+        s=blosc2.string(max_length=2, nullable=True, null_value="__BLOSC2_NULL__"),
         plain=blosc2.int64(),
     )
     summary = dict(t.info_items)["columns"]
@@ -540,7 +540,7 @@ def test_a_converted_column_still_sorts_groups_and_queries(to):
 def test_a_converted_column_round_trips_through_arrow():
     """The point of converting to mask in the first place."""
     pa = pytest.importorskip("pyarrow")
-    t = one_col([True, 255, False], blosc2.bool(nullable=True))
+    t = one_col([True, 255, False], blosc2.bool(nullable=True, null_value=255))
     converted = t.convert_nulls("a", to="mask")
     arrow = converted.to_arrow()
     assert arrow.column("a").type == pa.bool_()

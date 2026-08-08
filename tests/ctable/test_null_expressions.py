@@ -39,7 +39,7 @@ class TsRow:
 @dataclass
 class FloatRow:
     id: int = blosc2.field(blosc2.int64())
-    f: float = blosc2.field(blosc2.float64(nullable=True))
+    f: float = blosc2.field(blosc2.float64(nullable=True, null_storage="sentinel"))
 
 
 # ===========================================================================

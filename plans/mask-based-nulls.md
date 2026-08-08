@@ -1,9 +1,9 @@
 # Mask-based nullable columns for CTable
 
-> **Status: IN PROGRESS — Phases 0–8 landed 2026-08-08.** Lossless Arrow/Parquet round-trip works
-> for every V1 kind, sort/groupby/query honour a sidecar, and `convert_nulls` migrates columns in
-> either direction — all **opt-in** via `null_storage="mask"`; next up is Phase 9 (the default
-> flip). Six premises were disproven during
+> **Status: Phases 0–9 landed 2026-08-08; only Phase 10 remains.** Lossless Arrow/Parquet
+> round-trip works for every V1 kind, sort/groupby/query honour a sidecar, `convert_nulls` migrates
+> columns in either direction, and **mask storage is now the default** — a bare `nullable=True`
+> resolves to it. Six premises were disproven during
 > implementation and are corrected in place, each in a blockquote beside the text it corrects: the
 > index path cannot be fixed by a null-aware expression (§Expression layer), the bool dtype-flip
 > cannot move out of `__init__` (§Schema layer), ndarray columns do not get lazy null propagation
@@ -60,7 +60,8 @@ answers.
 1. **Mask becomes the default** for `nullable=True` on newly created tables — in two steps:
    the capability ships opt-in first (Phase 6), and the default flips no earlier than one
    release later (Phase 9), so version-3-capable readers are in circulation before
-   default-created tables require them. Sentinel remains fully supported and readable forever,
+   default-created tables require them. *(The two-step staging was not kept — both shipped in
+   4.10.2; see the deviation note under §Phasing.)* Sentinel remains fully supported and readable forever,
    selectable per column (`null_value=...`, `null_storage="sentinel"`) or globally via
    `NullPolicy`. Existing on-disk tables keep working unchanged.
 2. **V1 scope** = fixed-width scalars + utf8: numeric (incl. **complex**, which gains nullability
@@ -889,12 +890,22 @@ default-created tables require them.
 | 6 | ✅ **Arrow/Parquet.** Import + export for all V1 kinds; `arrow_slice(valid=)`; `null_storage=` on `from_arrow`/`from_parquet`; the "no sentinel available" import error now names the way out instead of being deleted (it still fires for sentinel storage, which still cannot represent those types). No `packbits` — pyarrow's own packing is borrowed instead. Ships **opt-in**; the default stays `"sentinel"`. `tests/ctable/test_null_mask_arrow.py` (42 tests). | M | Med |
 | 7 | ✅ **Sort + groupby.** `_build_lex_keys` (the indicator key is nulls-last *entirely*, not a refinement), `_sorted_positions_from_full_index` (3.0x for `U16`, 1.2x for `int64` — the I/O win is in bytes, not proportionally in time), `_utf8_rank_arrays(valid=)` plus a `null_aware` staleness rule no O(1) signal could replace, `_sorted_slice_positions` bails, groupby `_null_mask(valid=)` **plus `_CodedKeyChunk`**, which this section had not anticipated: a mask *key* column needs a reserved null code, not a threaded flag. **Plus the mask half of Phase 1**, which had never been done — `where()` leaked nulls on both the scan and the index (see §Expression layer, Addendum 2). Three pre-existing storage-independent bugs fixed on the way: descending sort of `bool` (raised) and of full-range signed ints (wrong order), and groupby `min`/`max` over `bool` (always `False`). `tests/ctable/test_null_mask_sort_groupby.py` (75 tests). | **L** (was M) | Med-High |
 | 8 | ✅ **Migration + docs.** `convert_nulls` both directions for every V1 kind, refusing what a sentinel cannot represent; the crash ordering **corrected** (fill after the schema flip, not before) and asserted; a persistent in-place dtype change refused with a reason; `_detach_schema` so a converted copy stops relabelling its source; the table-level `info` null tag (`Column.null_storage` and the per-column `info` rows already existed). `doc/reference/ctable.rst` gains a "Where nulls are stored" section and a rewritten null-policy resolution order; release notes. Three storage-independent bugs fixed on the way: `copy()`'s off-by-one write watermark (which *raised* in `add_column`), and a nullable `uint8` ndarray column coming back as `bool_`. `tests/ctable/test_null_migration.py` (50 tests). | M (was S–M) | Low |
-| 9 | **Default flips to `"mask"`.** A one-line `NullPolicy` change plus release notes — lossless round-trip is why the default exists. Lands **no earlier than one release after Phase 6** so older readers in the wild already understand schema version 3. | S | Low |
+| 9 | ✅ **Default flips to `"mask"`.** Not a one-line change: `null_storage` had to become tri-state (`None` = unspecified) so that a type-wide sentinel field can still imply sentinel storage without contradicting the new default, and ~65 tests that wrote a sentinel literally to mean "null" had to say `null_storage="sentinel"` and mean it. Three real gaps the flip exposed, all fixed: **CSV import/export was sentinel-only** (`from_csv` raised on an empty field, `to_csv` wrote the fill as data), **`~` on a mask bool column selected its nulls**, and **the Arrow importer ignored the type-wide sentinel inference**, so `NullPolicy(signed_int_strategy="max")` meant one thing for a declared schema and another for an inferred one. Landed in the **same** session as Phase 6, not a release later — see the note below. | M (was S) | Med (was Low) |
 | 10 | **Index null-awareness remainder** *(independent)*. Mask-aware summary builder; `null_aware`/`null_order` descriptors; re-enable `_summary_minmax_source` for mask and sentinel columns alike. | **L** | High |
 
 The riskiest, most-coupled work is isolated into Phases 4, 7 and 10, each of which can slip
 without blocking the others. Phase 9 is a policy change, not code — its only prerequisite is
 that Phases 2–8 have soaked for a release.
+
+> **Deviation from decision 1 (2026-08-08), recorded deliberately.** Phase 9 landed in the same
+> session as Phase 6, not a release later. The staging existed so that version-3-capable readers
+> would be in circulation before default-created tables required them; shipping both at once means
+> the first release carrying the flip is also the first release able to read what it writes. The
+> mitigation is unchanged and was always the real safety net: the version bump is **conditional on a
+> mask column existing**, so an older reader meets a clear `ValueError: Unsupported schema version 3`
+> rather than misreading anything, and `null_storage="sentinel"` remains one keyword away for data
+> that has to stay readable by them. Flagged to the maintainer at the time as a release-scheduling
+> call rather than a technical one.
 
 ## Named follow-ups (not blocking any phase)
 

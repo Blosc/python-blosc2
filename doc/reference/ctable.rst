@@ -143,16 +143,27 @@ The two other values are the only representation their kind has: ``"code"`` for
 a dictionary column, which reserves ``-1``; ``"native"`` for the
 variable-length container kinds, whose cells simply hold ``None``.
 
-Sentinel storage is the default and is supported indefinitely.  Mask storage is
-what makes nullability **lossless**, so it is worth asking for whenever data
-comes from — or is going to — Arrow or Parquet:
+**Mask storage is the default** since 4.10.2, because it is what makes
+nullability lossless.  A bare ``nullable=True`` — and every nullable column
+inferred from Arrow, Parquet or CSV — keeps its nulls in a sidecar, so:
 
 .. code-block:: python
 
-    blosc2.bool(null_storage="mask")  # no reserved 255; dtype stays np.bool_
-    blosc2.int8(null_storage="mask")  # all 256 values usable, plus nulls
-    blosc2.utf8(null_storage="mask")  # any string, including "" and "\x00"
-    blosc2.complex128(null_storage="mask")  # nullable at all, for the first time
+    blosc2.bool(nullable=True)  # no reserved 255; dtype stays np.bool_
+    blosc2.int8(nullable=True)  # all 256 values usable, plus nulls
+    blosc2.utf8(nullable=True)  # any string, including "" and "\x00"
+    blosc2.complex128(nullable=True)  # nullable at all, for the first time
+
+Sentinel storage is supported indefinitely and is one keyword away, per column
+(``null_storage="sentinel"``, or any explicit ``null_value=``) or globally
+through :class:`NullPolicy`.  It is the right choice when a column has to stay
+readable by a Blosc2 release older than 4.10.2: a table containing a mask column
+records **schema version 3**, which earlier readers refuse with a clear error
+rather than misreading.
+
+Nothing on disk changes.  The flip governs *creation* only — opening a stored
+table never re-resolves anything, so every existing table keeps the storage,
+dtype and sentinel it was written with.
 
 Under mask storage ``None`` is the way to write a null — ``t.append((None,))``,
 ``t["price"][3] = None`` — which a fixed-width sentinel column cannot accept at
@@ -192,8 +203,8 @@ Null policy
 -----------
 
 :class:`NullPolicy` decides what a bare ``nullable=True`` resolves to when the
-schema does not say: which sentinel to reserve, or whether to use a mask at
-all.  Scope it with :func:`null_policy`::
+schema does not say: whether to use a mask at all, and if not, which sentinel to
+reserve.  Scope it with :func:`null_policy`::
 
     policy = blosc2.NullPolicy(
         signed_int_strategy="max",
@@ -226,9 +237,15 @@ sentinel itself comes from ``column_null_values`` if listed and from the
 type-wide default otherwise.
 
 Setting any type-wide sentinel field therefore *implies* sentinel storage for
-the kinds it covers, so ``NullPolicy(float_value=-1.0)`` keeps working as it
-always has.  Passing ``null_storage="mask"`` alongside one is the one
-combination that raises, because it contradicts itself.
+the kinds it covers, so ``NullPolicy(float_value=-1.0)`` keeps working exactly as
+it did before the default flipped.  Passing ``null_storage="mask"`` alongside one
+is the one combination that raises, because it contradicts itself.
+
+``bool_value`` is the exception, and unavoidably so: ``255`` is the only value a
+nullable bool may reserve, so it is also the field's default, and
+``NullPolicy(bool_value=255)`` carries no information to act on.  A bool column
+that wants sentinel storage has to say so with ``null_storage`` or
+``column_null_values``.
 
 Columns without ``nullable=True``, an explicit ``null_value`` or an explicit
 ``null_storage`` are not nullable.

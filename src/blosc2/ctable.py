@@ -128,13 +128,18 @@ def _is_arrow_binary_type(pa, pa_type) -> bool:
 
 @dataclass(frozen=True)
 class NullPolicy:
-    """Default sentinels for inferred CTable scalar nulls.
+    """Where a nullable CTable column keeps its nulls, and which sentinel if in band.
 
-    CTable nullable scalar columns are represented with per-column sentinel
-    values. This policy is used when CTable has to infer those sentinels, such
-    as when importing nullable scalar Arrow or Parquet columns without an
-    explicit column-level null sentinel. The selected sentinel is stored in the
-    resulting CTable schema, so existing tables remain self-describing.
+    Consulted whenever a schema does not say -- a bare ``nullable=True``, or a
+    nullable Arrow/Parquet/CSV column being inferred.  Whatever it decides is
+    written into the resulting schema, so a stored table stays self-describing
+    and is never re-resolved on open.
+
+    Since 4.10.2 the default is a **validity sidecar** (``null_storage="mask"``),
+    which is what makes nullability lossless.  Setting any type-wide sentinel
+    field below asks for in-band storage for the kinds that field covers, so
+    existing ``NullPolicy(float_value=...)`` code keeps its sentinels; passing
+    ``null_storage="mask"`` alongside one is a contradiction and raises.
 
     Examples
     --------
@@ -163,6 +168,12 @@ class NullPolicy:
     ``column_null_values`` takes precedence over the type-wide defaults in the
     policy.  This is useful when a particular column needs a sentinel that is
     known not to collide with its real values.
+
+    ``bool_value`` cannot imply sentinel storage the way the other fields do:
+    ``255`` is the only value a nullable bool may reserve, so it is also this
+    field's default, and ``NullPolicy(bool_value=255)`` states the default rather
+    than choosing anything.  A bool column that wants a sentinel says so with
+    ``null_storage="sentinel"`` or ``column_null_values``.
     """
 
     string_value: str = "__BLOSC2_NULL__"
@@ -173,7 +184,18 @@ class NullPolicy:
     unsigned_int_strategy: Literal["min", "max"] = "max"
     timestamp_value: int = int(np.iinfo(np.int64).min)
     column_null_values: Mapping[str, Any] = dataclass_field(default_factory=dict)
-    null_storage: Literal["mask", "sentinel"] = "sentinel"
+    #: Where a bare ``nullable=True`` keeps its nulls.  ``None`` means *not
+    #: specified*, which resolves to :attr:`DEFAULT_NULL_STORAGE` -- and which
+    #: has to stay distinct from an explicit ``"mask"``, so that setting a
+    #: type-wide sentinel field can imply sentinel storage for the kinds it
+    #: covers without contradicting anything the caller wrote.
+    null_storage: Literal["mask", "sentinel"] | None = None
+
+    #: What an unspecified ``null_storage`` resolves to.  ``"mask"`` since
+    #: 4.10.2: lossless nullability is why the sidecar exists, so it is what a
+    #: newly created nullable column should get.  Sentinel storage stays fully
+    #: supported and is one kwarg away.
+    DEFAULT_NULL_STORAGE: ClassVar[str] = NULL_MASK
 
     #: Type-wide sentinel fields, paired with the spec attribute that says
     #: which columns each one covers.  Setting any of them is what makes a
@@ -188,16 +210,27 @@ class NullPolicy:
         "timestamp_value",
     )
 
+    def resolve_null_storage(self) -> str:
+        """Where a bare ``nullable=True`` puts its nulls under this policy.
+
+        An unspecified :attr:`null_storage` resolves to
+        :attr:`DEFAULT_NULL_STORAGE` here rather than at construction, so that
+        ``NullPolicy()`` keeps meaning "whatever this version's default is"
+        however the policy is copied around.
+        """
+        return self.DEFAULT_NULL_STORAGE if self.null_storage is None else self.null_storage
+
     def __post_init__(self):
-        if self.null_storage not in ("mask", "sentinel"):
-            raise ValueError(f"null_storage must be 'mask' or 'sentinel', got {self.null_storage!r}")
+        if self.null_storage is not None and self.null_storage not in ("mask", "sentinel"):
+            raise ValueError(f"null_storage must be 'mask', 'sentinel' or None, got {self.null_storage!r}")
         # Setting a type-wide sentinel field alongside an explicit
         # null_storage="mask" is a contradiction the caller wrote down, so say
         # so.  Setting one *without* an explicit null_storage is not: it simply
         # means "use sentinels for the types I named", which is what
         # _resolve_nullable_specs does with it.  Raising on that instead would
         # break existing NullPolicy(float_value=...) code on the very release
-        # that flips the default.
+        # that flipped the default -- which is exactly why an unspecified
+        # null_storage stays None rather than being resolved here.
         if self.null_storage == "mask":
             explicit = [f for f in self._SENTINEL_FIELDS if self._sentinel_field_is_set(f)]
             if explicit:
@@ -2141,7 +2174,18 @@ class Column:
         self._ensure_queryable()
         if self._is_nullable_bool:
             return self._raw_col == 0
-        return ~self._raw_col
+        inverted = ~self._raw_col
+        if self.dtype == np.dtype(np.bool_):
+            valid = self._nulls.valid_pred()
+            if valid is not None:
+                # A mask-backed nullable bool holds the ``False`` fill in its
+                # null rows, and ``~False`` is True -- so without this, negating
+                # a nullable flag *selects* its nulls.  SQL WHERE semantics: a
+                # null satisfies neither the predicate nor its negation.  The
+                # sentinel branch above gets this from ``== 0``, which excludes
+                # the reserved 255 as well as the true rows.
+                return inverted & valid
+        return inverted
 
     def __lt__(self, other):
         if self.is_utf8:
@@ -4784,7 +4828,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return NULL_MASK
         if cls._policy_implies_sentinel(spec, policy):
             return NULL_SENTINEL
-        return policy.null_storage
+        return policy.resolve_null_storage()
 
     @staticmethod
     def _unflip_mask_bool_dtype(spec) -> None:
@@ -7935,7 +7979,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         null_policy = get_null_policy()
         # Only inferred schemas consult the policy; extending an existing table
         # never reaches here, so its stored null_storage always wins.
-        storage_pref = null_storage if null_storage is not None else null_policy.null_storage
+        storage_pref = null_storage if null_storage is not None else null_policy.resolve_null_storage()
         column_null_values = null_policy.column_null_values
         schema_names = set(schema.names)
         unknown_null_values = set(column_null_values) - schema_names
@@ -8007,6 +8051,24 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 and not handles_own_nulls
                 and not has_null_value_override
             )
+            if use_mask and null_storage is None:
+                # A type-wide policy sentinel field is a request for in-band
+                # storage for the kinds it covers, and has to be honoured here
+                # too -- otherwise NullPolicy(signed_int_strategy="max") would
+                # mean one thing for a declared schema and another for an
+                # inferred one.  Asking needs a spec, so build a throwaway with
+                # no null decision in it; an explicit null_storage= argument
+                # has already won by this point.
+                probe = cls._arrow_type_to_spec(
+                    pa,
+                    field.type,
+                    arrow_col,
+                    field_metadata=field.metadata,
+                    string_max_length=column_string_max_length,
+                    nullable=field.nullable,
+                    object_fallback=object_fallback,
+                )
+                use_mask = not cls._policy_implies_sentinel(probe, null_policy)
             if has_null_value_override:
                 null_value = column_null_values[name]
             elif not use_mask and auto_null_sentinels and field.nullable and not handles_own_nulls:
@@ -9223,7 +9285,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             col = self[name]
             if col.is_ndarray:
                 arr = col[:]
-                null_mask = col._null_mask_for(arr)
+                # is_null(), not a sentinel comparison: a mask column's nulls are
+                # not in its values at all, and its fill is an ordinary item.
+                null_mask = col.is_null()
                 json_strings: list[str] = []
                 for i in range(n):
                     if null_mask[i]:
@@ -9231,6 +9295,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     else:
                         json_strings.append(json.dumps(arr[i].tolist()))
                 arrays.append(json_strings)
+            elif col.null_storage == NULL_MASK and col.null_count():
+                # An empty field is CSV for missing, and for a mask column it is
+                # the *only* way to say it -- writing the fill would come back as
+                # a real 0 or "".  A sentinel column keeps writing its sentinel,
+                # which from_csv maps back, so its output is unchanged.
+                arrays.append(
+                    ["" if is_null else v for v, is_null in zip(col[:], col.is_null(), strict=True)]
+                )
             else:
                 arrays.append(col[:])
 
@@ -9250,19 +9322,32 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return None
 
     @staticmethod
-    def _csv_ndarray_col_to_array(raw: list[str], col) -> np.ndarray:
-        """Convert a list of JSON-array CSV strings to a stacked ndarray for an ndarray column."""
+    def _csv_ndarray_col_to_array(raw: list[str], col) -> tuple[np.ndarray, np.ndarray | None]:
+        """Convert JSON-array CSV strings to ``(values, valid)`` for an ndarray column.
+
+        Same split as :meth:`_csv_col_to_array`: an empty field is missing, and a
+        mask column reports that in *valid* rather than in the item it stores.
+        """
         spec = col.spec
         null_value = getattr(spec, "null_value", None)
+        uses_mask = getattr(spec, "uses_mask", False)
         item_shape = spec.item_shape
         dtype = spec.dtype
+        fill = None if not uses_mask else np.full(item_shape, fill_value_for(spec), dtype=dtype)
 
+        valid = None
         rows = []
-        for val in raw:
+        for i, val in enumerate(raw):
             stripped = val.strip()
             if stripped == "":
                 if null_value is not None:
                     rows.append(np.full(item_shape, null_value, dtype=dtype))
+                    continue
+                if fill is not None:
+                    if valid is None:
+                        valid = np.ones(len(raw), dtype=np.bool_)
+                    valid[i] = False
+                    rows.append(fill)
                     continue
                 raise ValueError(f"Column {col.name!r}: non-nullable column got empty cell")
 
@@ -9275,25 +9360,42 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 raise ValueError(f"Column {col.name!r}: expected item shape {item_shape}, got {arr.shape}")
             rows.append(arr)
 
-        return np.ascontiguousarray(rows, dtype=dtype)
+        return np.ascontiguousarray(rows, dtype=dtype), valid
 
     @staticmethod
-    def _csv_col_to_array(raw: list[str], col, nv) -> np.ndarray:
-        """Convert a list of raw CSV strings to a numpy array for *col*."""
+    def _csv_col_to_array(raw: list[str], col, nv) -> tuple[np.ndarray, np.ndarray | None]:
+        """Convert raw CSV strings to ``(values, valid)`` for *col*.
+
+        An empty field is CSV for "missing".  A sentinel column stores *nv*
+        there and is done; a **mask** column has no in-band value to store, so
+        it takes the column's fill and reports the validity separately -- and
+        without that a bare ``""`` would be cast straight to the column's dtype
+        and raise.  *valid* is ``None`` when nothing was missing, or when the
+        column is not nullable at all.
+        """
+        missing = np.array([v.strip() == "" for v in raw], dtype=np.bool_)
+        placeholder = nv
+        valid = None
+        if nv is None and getattr(col.spec, "uses_mask", False) and missing.any():
+            placeholder = fill_value_for(col.spec)
+            valid = ~missing
+
         if col.dtype == np.bool_:
 
-            def _parse(v, _nv=nv):
+            def _parse(v, _fill=placeholder):
                 stripped = v.strip()
-                if stripped == "" and _nv is not None:
-                    return _nv
+                if stripped == "" and _fill is not None:
+                    return _fill
                 return stripped in ("True", "true", "1")
 
-            return np.array([_parse(v) for v in raw], dtype=np.bool_)
+            return np.array([_parse(v) for v in raw], dtype=np.bool_), valid
         if col.dtype.kind == "S":
-            prepared: list = [nv if (v.strip() == "" and nv is not None) else v.encode() for v in raw]
-            return np.array(prepared, dtype=col.dtype)
-        prepared2 = [nv if (v.strip() == "" and nv is not None) else v for v in raw]
-        return np.array(prepared2, dtype=col.dtype)
+            prepared: list = [
+                placeholder if (v.strip() == "" and placeholder is not None) else v.encode() for v in raw
+            ]
+            return np.array(prepared, dtype=col.dtype), valid
+        prepared2 = [placeholder if (v.strip() == "" and placeholder is not None) else v for v in raw]
+        return np.array(prepared2, dtype=col.dtype), valid
 
     @classmethod
     def from_csv(
@@ -9410,11 +9512,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if n > 0:
             for i, col in enumerate(schema.columns):
                 if isinstance(col.spec, NDArraySpec):
-                    arr = cls._csv_ndarray_col_to_array(col_data[i], col)
+                    arr, valid = cls._csv_ndarray_col_to_array(col_data[i], col)
                 else:
                     nv = getattr(col.spec, "null_value", None)
-                    arr = cls._csv_col_to_array(col_data[i], col, nv)
+                    arr, valid = cls._csv_col_to_array(col_data[i], col, nv)
                 new_cols[col.name][:n] = arr
+                if valid is not None:
+                    # A mask column's empty cells: the values above hold the
+                    # fill, and this is the only record that they were missing.
+                    obj._ensure_null_mask(col.name)[:n] = valid
             new_valid[:n] = True
             obj._n_rows = n
             obj._last_pos = n

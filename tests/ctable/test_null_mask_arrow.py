@@ -200,10 +200,22 @@ def test_nullable_bool_imports_without_the_255_reservation():
 # ---------------------------------------------------------------------------
 
 
-def test_default_is_still_sentinel():
-    """Phase 6 ships opt-in; the default flip is Phase 9."""
+def test_default_is_a_mask():
+    """Lossless round-trip is why the sidecar exists, so imports get one.
+
+    Which is the point of the flip: an Arrow column carries a validity bitmap,
+    and reading it into a sidecar preserves it exactly, where a sentinel has to
+    steal a value from the range to stand in for it.
+    """
     table = pa.table({"v": pa.array([1, None, 3], type=pa.int64())})
-    assert blosc2.CTable.from_arrow(table)["v"].null_storage == "sentinel"
+    assert blosc2.CTable.from_arrow(table)["v"].null_storage == "mask"
+
+
+def test_sentinel_storage_is_one_parameter_away():
+    table = pa.table({"v": pa.array([1, None, 3], type=pa.int64())})
+    ct = blosc2.CTable.from_arrow(table, null_storage="sentinel")
+    assert ct["v"].null_storage == "sentinel"
+    assert ct["v"].null_value == np.iinfo(np.int64).min
 
 
 def test_explicit_parameter_selects_mask():
@@ -265,7 +277,7 @@ def test_import_error_now_points_at_mask_storage():
     table = pa.table({"v": pa.array([1.0, None], type=pa.float64())})
     with blosc2.null_policy(blosc2.NullPolicy(float_value=None)):
         with pytest.raises(TypeError, match="null_storage='mask'"):
-            blosc2.CTable.from_arrow(table)
+            blosc2.CTable.from_arrow(table, null_storage="sentinel")
 
 
 def test_mask_storage_imports_what_no_sentinel_could():

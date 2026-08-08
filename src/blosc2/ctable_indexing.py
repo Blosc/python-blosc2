@@ -173,7 +173,10 @@ def _persist_utf8_vocab(full: dict, meta: dict, sorted_vocab: np.ndarray) -> Non
     if values_path is None:  # in-memory index
         meta["vocab"] = sorted_vocab.tolist()
         return
-    width = max(len(v) for v in sorted_vocab)
+    # max(1, ...): a mask-storage column's ``""`` fill is an ordinary vocabulary
+    # entry, so an all-null column factorizes to exactly ``[""]`` -- and ``<U0``
+    # is not a dtype NumPy will cast a StringDType array into.
+    width = max(1, max(len(v) for v in sorted_vocab))
     vocab_path = str(pathlib.Path(values_path).with_suffix("")) + ".utf8_vocab.b2nd"
     blosc2.asarray(sorted_vocab.astype(f"<U{width}"), urlpath=vocab_path, mode="w")
     meta["vocab_path"] = vocab_path

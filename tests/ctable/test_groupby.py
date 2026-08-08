@@ -19,7 +19,7 @@ from blosc2 import CTable
 class SalesRow:
     city: str = blosc2.field(blosc2.string(max_length=16))
     category: int = blosc2.field(blosc2.int32())
-    sales: float = blosc2.field(blosc2.float64(nullable=True), default=0.0)
+    sales: float = blosc2.field(blosc2.float64(nullable=True, null_storage="sentinel"), default=0.0)
     qty: int = blosc2.field(blosc2.int32(), default=0)
 
 
@@ -479,7 +479,7 @@ def test_groupby_cython_int_key_null_aggs():
         "IntKeyNullableFloatAggsRow",
         [
             ("key", int, blosc2.field(blosc2.uint16())),
-            ("value", float, blosc2.field(blosc2.float64(nullable=True))),
+            ("value", float, blosc2.field(blosc2.float64(nullable=True, null_storage="sentinel"))),
         ],
     )
     t = CTable(row_type, new_data=[(0, 1.5), (1, np.nan), (0, 2.5), (1, np.nan), (2, 10.0)])
@@ -531,7 +531,7 @@ def test_groupby_cython_float_key_nan_and_zero():
 class TwoIntKeyFloatRow:
     key0: int = blosc2.field(blosc2.int16())
     key1: int = blosc2.field(blosc2.uint16())
-    value: float = blosc2.field(blosc2.float64(nullable=True), default=0.0)
+    value: float = blosc2.field(blosc2.float64(nullable=True, null_storage="sentinel"), default=0.0)
 
 
 def test_groupby_cython_two_integer_key_hash_aggs():
