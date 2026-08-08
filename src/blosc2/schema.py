@@ -33,6 +33,127 @@ def _normalize_scalar_value(value):
     return value
 
 
+# How a column represents its nulls.  Defined here rather than in
+# ``ctable_nulls``, which is where the null machinery otherwise lives, only
+# because that module imports the spec classes from this one -- this is the
+# lower layer.  ``ctable_nulls`` re-exports these names.
+NULL_NONE = "none"
+NULL_MASK = "mask"
+NULL_SENTINEL = "sentinel"
+NULL_CODE = "code"
+NULL_NATIVE = "native"
+
+#: The storages a spec may ask for explicitly.  ``None`` means "let the null
+#: policy decide when the schema is compiled".
+_EXPLICIT_NULL_STORAGES = (NULL_MASK, NULL_SENTINEL)
+
+
+class _NullableSpecMixin:
+    """Shared nullability plumbing for specs that can carry a null channel.
+
+    ``supports_sentinel`` says whether this kind can represent nulls in band
+    at all.  Complex is the one that cannot -- there is no value to steal from
+    the complex plane -- so it is mask-only.
+
+    Every such spec declares the same three things: whether it is nullable,
+    which sentinel stands for its nulls, and where nullity is *stored* --
+    in band as that sentinel, or in a sidecar validity array.  Routing all
+    of them through one mixin is what lets ``null_storage`` reach nine specs
+    through a single kwarg and a single call each.
+    """
+
+    supports_sentinel = True
+
+    #: True once ``__init__`` has physically widened a boolean column to
+    #: ``uint8`` to make room for the reserved ``255``.  Only that flip may be
+    #: undone (``CTable._unflip_mask_bool_dtype``): a column whose *declared*
+    #: dtype is ``uint8`` is carrying real byte values, and turning it into
+    #: ``np.bool_`` would truncate every one of them to a flag.
+    bool_widened_to_uint8 = False
+
+    def _init_nulls(self, *, nullable, null_value, null_storage) -> None:
+        if null_storage is not None and null_storage not in _EXPLICIT_NULL_STORAGES:
+            raise ValueError(
+                f"null_storage must be one of {_EXPLICIT_NULL_STORAGES} or None, got {null_storage!r}"
+            )
+        if null_storage == NULL_MASK and null_value is not None:
+            raise ValueError(
+                "null_storage='mask' keeps nullity out of band, so it cannot be combined with an "
+                "explicit null_value (which is what in-band 'sentinel' storage means). "
+                "Drop one of the two."
+            )
+        self.nullable = _builtin_bool(nullable or null_value is not None or null_storage is not None)
+        self.null_value = _normalize_scalar_value(null_value)
+        self.null_storage = null_storage
+
+    @property
+    def uses_mask(self) -> _builtin_bool:
+        """True when nullity lives in a sidecar validity array."""
+        return self.null_storage == NULL_MASK
+
+    @property
+    def uses_sentinel(self) -> _builtin_bool:
+        """True when nullity is an in-band sentinel value.
+
+        Note this is about *resolved* storage: a spec built as
+        ``nullable=True`` under the default policy has no sentinel yet, and
+        answers False until :meth:`CTable._resolve_nullable_specs` picks one.
+        """
+        return self.null_value is not None
+
+    def _null_metadata(self) -> dict[str, Any]:
+        """The nullability entries this spec contributes to its metadata dict.
+
+        ``"sentinel"`` is deliberately never emitted: it is the original and
+        still the default storage, so a sentinel table serializes exactly as
+        it did before mask storage existed, and keeps opening in readers that
+        predate it.  Only ``"mask"`` is recorded, and only that raises the
+        schema version.
+        """
+        d: dict[str, Any] = {}
+        if self.nullable:
+            d["nullable"] = True
+        if self.null_value is not None:
+            d["null_value"] = self.null_value
+        if self.null_storage == NULL_MASK:
+            d["null_storage"] = NULL_MASK
+        return d
+
+
+def fill_value_for(spec):
+    """The value written into a mask-backed column's null slots.
+
+    Chosen to be *loud* where the dtype allows it -- ``NaN`` for floats,
+    ``int64.min`` for timestamps, which ``_maybe_decode_timestamp_values``
+    already surfaces as ``NaT`` -- and the dtype's zero otherwise.
+
+    This is **not** part of the format contract and is deliberately not
+    recorded in the schema: recording it would recreate the very sentinel
+    collisions that mask storage exists to avoid.  Values under ``mask=False``
+    are unobservable through the ``Column`` API, so the fill is an
+    implementation detail that may change.
+    """
+    from blosc2.schema import timestamp as _timestamp  # local: class defined below
+
+    if isinstance(spec, _timestamp):
+        return int(np.iinfo(np.int64).min)
+    dtype = getattr(spec, "dtype", None)
+    if dtype is None:  # utf8 and other dtype-less specs
+        return ""
+    dtype = np.dtype(dtype)
+    if dtype.kind == "f":
+        return float("nan")
+    if dtype.kind == "c":
+        return 0j
+    if dtype.kind == "U":
+        return ""
+    if dtype.kind == "S":
+        return b""
+    if dtype.kind == "b":
+        return False
+    return dtype.type(0)
+
+
 # ---------------------------------------------------------------------------
 # Base spec class
 # ---------------------------------------------------------------------------
@@ -81,23 +202,32 @@ class SchemaSpec:
 # and `_kind` as class attributes.
 
 
-class _NumericSpec(SchemaSpec):
-    """Mixin for numeric specs that support constraints and null sentinels.
+class _NumericSpec(_NullableSpecMixin, SchemaSpec):
+    """Mixin for numeric specs that support constraints and nulls.
 
-    ``nullable=True`` asks CTable to choose a null sentinel from the current
-    null policy when the schema is compiled.  An explicit ``null_value`` takes
-    precedence.
+    ``nullable=True`` asks CTable to resolve the null representation from the
+    current null policy when the schema is compiled.  An explicit
+    ``null_value`` (in-band sentinel) or ``null_storage`` takes precedence.
     """
 
     _kind: str  # set by each concrete subclass
 
-    def __init__(self, *, ge=None, gt=None, le=None, lt=None, nullable: bool = False, null_value=None):
+    def __init__(
+        self,
+        *,
+        ge=None,
+        gt=None,
+        le=None,
+        lt=None,
+        nullable: bool = False,
+        null_value=None,
+        null_storage: str | None = None,
+    ):
         self.ge = ge
         self.gt = gt
         self.le = le
         self.lt = lt
-        self.nullable = nullable or null_value is not None
-        self.null_value = _normalize_scalar_value(null_value)
+        self._init_nulls(nullable=nullable, null_value=null_value, null_storage=null_storage)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         # null_value is not a Pydantic constraint — exclude it from Pydantic kwargs.
@@ -108,12 +238,7 @@ class _NumericSpec(SchemaSpec):
         }
 
     def to_metadata_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {"kind": self._kind, **self.to_pydantic_kwargs()}
-        if self.nullable:
-            d["nullable"] = True
-        if self.null_value is not None:
-            d["null_value"] = self.null_value
-        return d
+        return {"kind": self._kind, **self.to_pydantic_kwargs(), **self._null_metadata()}
 
 
 # ── Signed integers ──────────────────────────────────────────────────────────
@@ -205,39 +330,54 @@ class float64(_NumericSpec):
     _kind = "float64"
 
 
-class complex64(SchemaSpec):
+class _ComplexSpec(_NullableSpecMixin, SchemaSpec):
+    """Shared body for the complex specs.
+
+    Complex columns gain nullability here for the first time, and only with
+    ``null_storage="mask"``: there is no sensible in-band sentinel to steal
+    from the complex plane, which is precisely the argument for a side
+    channel.  ``nullable=True`` alone therefore resolves to mask storage
+    regardless of the policy's default.
+    """
+
+    python_type = complex
+    supports_sentinel = False
+    _kind: str
+
+    def __init__(self, *, nullable: bool = False, null_value=None, null_storage: str | None = None):
+        if null_value is not None:
+            raise ValueError(
+                "complex columns cannot use an in-band null sentinel: no complex value is safe to "
+                "reserve. Use null_storage='mask' instead."
+            )
+        if nullable and null_storage is None:
+            null_storage = NULL_MASK
+        self._init_nulls(nullable=nullable, null_value=None, null_storage=null_storage)
+        if not self.uses_mask and self.nullable:
+            raise ValueError("complex columns support null_storage='mask' only")
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        return {"kind": self._kind, **self._null_metadata()}
+
+
+class complex64(_ComplexSpec):
     """64-bit complex number column (two 32-bit floats)."""
 
     dtype = np.dtype(np.complex64)
-    python_type = complex
-
-    def __init__(self):
-        pass
-
-    def to_pydantic_kwargs(self) -> dict[str, Any]:
-        return {}
-
-    def to_metadata_dict(self) -> dict[str, Any]:
-        return {"kind": "complex64"}
+    _kind = "complex64"
 
 
-class complex128(SchemaSpec):
+class complex128(_ComplexSpec):
     """128-bit complex number column (two 64-bit floats)."""
 
     dtype = np.dtype(np.complex128)
-    python_type = complex
-
-    def __init__(self):
-        pass
-
-    def to_pydantic_kwargs(self) -> dict[str, Any]:
-        return {}
-
-    def to_metadata_dict(self) -> dict[str, Any]:
-        return {"kind": "complex128"}
+    _kind = "complex128"
 
 
-class timestamp(SchemaSpec):
+class timestamp(_NullableSpecMixin, SchemaSpec):
     """Timestamp column stored as signed 64-bit epoch offsets.
 
     The physical storage dtype is ``int64``.  ``unit`` follows Arrow/NumPy
@@ -249,14 +389,19 @@ class timestamp(SchemaSpec):
     python_type = _builtin_object
 
     def __init__(
-        self, *, unit: str = "us", timezone: str | None = None, nullable: bool = False, null_value=None
+        self,
+        *,
+        unit: str = "us",
+        timezone: str | None = None,
+        nullable: bool = False,
+        null_value=None,
+        null_storage: str | None = None,
     ):
         if unit not in {"s", "ms", "us", "ns"}:
             raise ValueError("timestamp unit must be one of: 's', 'ms', 'us', 'ns'")
         self.unit = unit
         self.timezone = timezone
-        self.nullable = nullable or null_value is not None
-        self.null_value = _normalize_scalar_value(null_value)
+        self._init_nulls(nullable=nullable, null_value=null_value, null_storage=null_storage)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         return {}
@@ -265,39 +410,42 @@ class timestamp(SchemaSpec):
         d: dict[str, Any] = {"kind": "timestamp", "unit": self.unit}
         if self.timezone is not None:
             d["timezone"] = self.timezone
-        if self.nullable:
-            d["nullable"] = True
-        if self.null_value is not None:
-            d["null_value"] = self.null_value
+        d.update(self._null_metadata())
         return d
 
 
-class bool(SchemaSpec):
+class bool(_NullableSpecMixin, SchemaSpec):
     """Boolean column.
 
-    Nullable bool columns use uint8 physical storage with values
-    ``0`` (false), ``1`` (true), and ``255`` (null).
+    Under sentinel storage a nullable bool column is physically ``uint8``,
+    with ``0`` (false), ``1`` (true) and ``255`` (null) -- the reserved
+    ``255`` is why raw reads and predicates need special handling.  Under
+    mask storage it stays a real ``np.bool_`` column and nullity lives in
+    the sidecar, so none of that applies.
     """
 
     dtype = np.dtype(np.bool_)
     python_type = _builtin_bool
 
-    def __init__(self, *, nullable: bool = False, null_value=None):
-        if null_value is not None and null_value != 255:
+    def __init__(self, *, nullable: bool = False, null_value=None, null_storage: str | None = None):
+        if null_value is not None and null_value != 255 and null_storage != NULL_MASK:
             raise ValueError("Nullable bool null_value must be 255")
-        self.nullable = nullable or null_value is not None
-        self.null_value = _normalize_scalar_value(null_value)
-        self.dtype = np.dtype(np.uint8) if self.nullable else np.dtype(np.bool_)
+        self._init_nulls(nullable=nullable, null_value=null_value, null_storage=null_storage)
+        # Resolve the physical dtype as far as it can be resolved here.  This
+        # must happen in __init__ and not only in _resolve_nullable_specs,
+        # because *opening* a stored table rebuilds specs through
+        # ``spec_cls(**data)`` and never runs the resolver: a nullable bool
+        # persisted as uint8 has to come back as uint8 from its metadata
+        # alone.  When storage is still unresolved (plain ``nullable=True``,
+        # policy decides later) the resolver corrects this both ways.
+        self.bool_widened_to_uint8 = _builtin_bool(self.nullable and not self.uses_mask)
+        self.dtype = np.dtype(np.uint8) if self.bool_widened_to_uint8 else np.dtype(np.bool_)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         return {}
 
     def to_metadata_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {"kind": "bool"}
-        if self.nullable:
-            d["nullable"] = True
-            d["null_value"] = self.null_value
-        return d
+        return {"kind": "bool", **self._null_metadata()}
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +453,7 @@ class bool(SchemaSpec):
 # ---------------------------------------------------------------------------
 
 
-class string(SchemaSpec):
+class string(_NullableSpecMixin, SchemaSpec):
     """Fixed-width Unicode string column.
 
     Values longer than *max_length* are rejected at validation time (and
@@ -327,19 +475,29 @@ class string(SchemaSpec):
         the current CTable null policy when the schema is compiled.
     null_value:
         Explicit null sentinel.  Takes precedence over ``nullable=True``.
+    null_storage:
+        ``"sentinel"`` to reserve a value from the dtype's range for nulls, or
+        ``"mask"`` to keep nullity in a sidecar validity array so the whole
+        range stays usable.  Defaults to the current null policy.
     """
 
     python_type = str
     _DEFAULT_MAX_LENGTH = 32
 
     def __init__(
-        self, *, min_length=None, max_length=None, pattern=None, nullable: bool = False, null_value=None
+        self,
+        *,
+        min_length=None,
+        max_length=None,
+        pattern=None,
+        nullable: bool = False,
+        null_value=None,
+        null_storage: str | None = None,
     ):
         self.min_length = min_length
         self.max_length = max_length if max_length is not None else self._DEFAULT_MAX_LENGTH
         self.pattern = pattern
-        self.nullable = nullable or null_value is not None
-        self.null_value = _normalize_scalar_value(null_value)
+        self._init_nulls(nullable=nullable, null_value=null_value, null_storage=null_storage)
         self.dtype = np.dtype(f"U{self.max_length}")
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -353,15 +511,10 @@ class string(SchemaSpec):
         return d
 
     def to_metadata_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {"kind": "string", **self.to_pydantic_kwargs()}
-        if self.nullable:
-            d["nullable"] = True
-        if self.null_value is not None:
-            d["null_value"] = self.null_value
-        return d
+        return {"kind": "string", **self.to_pydantic_kwargs(), **self._null_metadata()}
 
 
-class bytes(SchemaSpec):
+class bytes(_NullableSpecMixin, SchemaSpec):
     """Fixed-width bytes column.
 
     Parameters
@@ -376,16 +529,27 @@ class bytes(SchemaSpec):
         the current CTable null policy when the schema is compiled.
     null_value:
         Explicit null sentinel.  Takes precedence over ``nullable=True``.
+    null_storage:
+        ``"sentinel"`` to reserve a value from the dtype's range for nulls, or
+        ``"mask"`` to keep nullity in a sidecar validity array so the whole
+        range stays usable.  Defaults to the current null policy.
     """
 
     python_type = _builtin_bytes
     _DEFAULT_MAX_LENGTH = 32
 
-    def __init__(self, *, min_length=None, max_length=None, nullable: bool = False, null_value=None):
+    def __init__(
+        self,
+        *,
+        min_length=None,
+        max_length=None,
+        nullable: bool = False,
+        null_value=None,
+        null_storage: str | None = None,
+    ):
         self.min_length = min_length
         self.max_length = max_length if max_length is not None else self._DEFAULT_MAX_LENGTH
-        self.nullable = nullable or null_value is not None
-        self.null_value = _normalize_scalar_value(null_value)
+        self._init_nulls(nullable=nullable, null_value=null_value, null_storage=null_storage)
         self.dtype = np.dtype(f"S{self.max_length}")
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
@@ -397,12 +561,7 @@ class bytes(SchemaSpec):
         return d
 
     def to_metadata_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {"kind": "bytes", **self.to_pydantic_kwargs()}
-        if self.nullable:
-            d["nullable"] = True
-        if self.null_value is not None:
-            d["null_value"] = self.null_value
-        return d
+        return {"kind": "bytes", **self.to_pydantic_kwargs(), **self._null_metadata()}
 
 
 # ---------------------------------------------------------------------------
@@ -597,7 +756,7 @@ class VLStringSpec(SchemaSpec):
         return d
 
 
-class UTF8Spec(SchemaSpec):
+class UTF8Spec(_NullableSpecMixin, SchemaSpec):
     """Variable-length UTF-8 string column stored Arrow-style as offsets + bytes.
 
     Unlike :class:`string`, this spec does not use a fixed-width NumPy dtype:
@@ -619,7 +778,13 @@ class UTF8Spec(SchemaSpec):
     python_type = str
     dtype = None
 
-    def __init__(self, *, nullable: _builtin_bool = False, null_value: str | None = None):
+    def __init__(
+        self,
+        *,
+        nullable: _builtin_bool = False,
+        null_value: str | None = None,
+        null_storage: str | None = None,
+    ):
         if null_value is not None and not isinstance(null_value, str):
             raise TypeError(f"utf8 null_value must be str, got {type(null_value).__name__!r}")
         if null_value == "\x00":
@@ -633,19 +798,13 @@ class UTF8Spec(SchemaSpec):
                 "match it against StringDType arrays, so nulls would go undetected. "
                 "Use a longer sentinel (the default is '__BLOSC2_NULL__')."
             )
-        self.nullable = nullable or null_value is not None
-        self.null_value = _normalize_scalar_value(null_value)
+        self._init_nulls(nullable=nullable, null_value=null_value, null_storage=null_storage)
 
     def to_pydantic_kwargs(self) -> dict[str, Any]:
         return {}
 
     def to_metadata_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {"kind": "utf8"}
-        if self.nullable:
-            d["nullable"] = True
-        if self.null_value is not None:
-            d["null_value"] = self.null_value
-        return d
+        return {"kind": "utf8", **self._null_metadata()}
 
     def display_label(self) -> str:
         return "utf8"
@@ -771,7 +930,7 @@ class VLBytesSpec(SchemaSpec):
 # ---------------------------------------------------------------------------
 
 
-class NDArraySpec(SchemaSpec):
+class NDArraySpec(_NullableSpecMixin, SchemaSpec):
     """Fixed-shape N-D array column for CTable.
 
     Each row stores a NumPy-compatible array with shape ``item_shape`` and
@@ -781,7 +940,15 @@ class NDArraySpec(SchemaSpec):
 
     python_type = _builtin_object
 
-    def __init__(self, item_shape, dtype=np.float64, *, nullable: bool = False, null_value=None):
+    def __init__(
+        self,
+        item_shape,
+        dtype=np.float64,
+        *,
+        nullable: bool = False,
+        null_value=None,
+        null_storage: str | None = None,
+    ):
         if isinstance(item_shape, int):
             item_shape = (item_shape,)
         item_shape = tuple(int(s) for s in item_shape)
@@ -791,9 +958,14 @@ class NDArraySpec(SchemaSpec):
             raise ValueError("All NDArraySpec item_shape dimensions must be positive.")
         self.item_shape = item_shape
         self.dtype = np.dtype(dtype)
-        self.nullable = nullable or null_value is not None
-        if null_value is not None:
-            self.null_value = _normalize_scalar_value(null_value)
+        self._init_nulls(nullable=nullable, null_value=null_value, null_storage=null_storage)
+        if self.nullable and not self.uses_mask and self.dtype == np.dtype(np.bool_):
+            # Same reasoning as bool: opening a stored table rebuilds the spec
+            # without running the resolver, so the uint8 flip has to survive
+            # from metadata alone.  Recorded, because a *declared* uint8 ndarray
+            # column holds real byte values and must never be unflipped.
+            self.bool_widened_to_uint8 = True
+            self.dtype = np.dtype(np.uint8)
         self.itemsize = self.dtype.itemsize
         self.kind = self.dtype.kind
         self.type = self.dtype.type
@@ -809,19 +981,29 @@ class NDArraySpec(SchemaSpec):
             "item_shape": _builtin_list(self.item_shape),
             "dtype_str": self.dtype.str,
         }
-        if self.nullable:
-            d["nullable"] = True
-        if hasattr(self, "null_value"):
-            d["null_value"] = self.null_value
+        d.update(self._null_metadata())
         return d
 
     def display_label(self) -> str:
         return f"ndarray{_builtin_list(self.item_shape)}[{self.dtype}]"
 
 
-def ndarray(item_shape, dtype=np.float64, *, nullable: bool = False, null_value=None) -> NDArraySpec:
+def ndarray(
+    item_shape,
+    dtype=np.float64,
+    *,
+    nullable: bool = False,
+    null_value=None,
+    null_storage: str | None = None,
+) -> NDArraySpec:
     """Build a fixed-shape N-D array descriptor for CTable columns."""
-    return NDArraySpec(item_shape=item_shape, dtype=dtype, nullable=nullable, null_value=null_value)
+    return NDArraySpec(
+        item_shape=item_shape,
+        dtype=dtype,
+        nullable=nullable,
+        null_value=null_value,
+        null_storage=null_storage,
+    )
 
 
 def vlstring(
@@ -850,7 +1032,9 @@ def vlstring(
     )
 
 
-def utf8(*, nullable: bool = False, null_value: str | None = None) -> UTF8Spec:
+def utf8(
+    *, nullable: bool = False, null_value: str | None = None, null_storage: str | None = None
+) -> UTF8Spec:
     """Build a variable-length UTF-8 string schema descriptor.
 
     Use this for high-cardinality or free-text string columns: values are
@@ -880,6 +1064,11 @@ def utf8(*, nullable: bool = False, null_value: str | None = None) -> UTF8Spec:
         the current CTable null policy when the schema is compiled.
     null_value:
         Explicit null sentinel string.  Takes precedence over ``nullable=True``.
+    null_storage:
+        ``"sentinel"`` to reserve a string value for nulls, or ``"mask"`` to
+        keep nullity in a sidecar validity array so that every string --
+        including ``""`` and the default sentinel text -- stays an ordinary
+        value.  Defaults to the current null policy.
 
     Examples
     --------
@@ -893,7 +1082,7 @@ def utf8(*, nullable: bool = False, null_value: str | None = None) -> UTF8Spec:
     from blosc2._utf8_array import string_dtype
 
     string_dtype()  # fail early with a clear error on NumPy < 2.0
-    return UTF8Spec(nullable=nullable, null_value=null_value)
+    return UTF8Spec(nullable=nullable, null_value=null_value, null_storage=null_storage)
 
 
 def object(

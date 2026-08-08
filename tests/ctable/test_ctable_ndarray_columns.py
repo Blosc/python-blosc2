@@ -138,8 +138,12 @@ def test_stale_generated_col_read_stale_hatch():
 @dataclass
 class NullableNDArrayRow:
     id: int = blosc2.field(blosc2.int32())
-    embedding: object = blosc2.field(blosc2.ndarray((3,), dtype=blosc2.float32(), nullable=True))
-    codes: object = blosc2.field(blosc2.ndarray((2,), dtype=blosc2.int16(), nullable=True))
+    embedding: object = blosc2.field(
+        blosc2.ndarray((3,), dtype=blosc2.float32(), nullable=True, null_storage="sentinel")
+    )
+    codes: object = blosc2.field(
+        blosc2.ndarray((2,), dtype=blosc2.int16(), nullable=True, null_storage="sentinel")
+    )
 
 
 def test_nullable_ndarray_cols_write_and_reduce():
@@ -183,7 +187,9 @@ def test_nullable_ndarray_explicit_null_value(null_value):
 def test_nullable_bool_ndarray_uses_uint8_sentinel():
     @dataclass
     class BoolRows:
-        flags: object = blosc2.field(blosc2.ndarray((2,), dtype=np.bool_, nullable=True))
+        flags: object = blosc2.field(
+            blosc2.ndarray((2,), dtype=np.bool_, nullable=True, null_storage="sentinel")
+        )
 
     t = blosc2.CTable(BoolRows, new_data=[(None,), ([True, False],)])
     assert t.flags.dtype == np.dtype(np.uint8)

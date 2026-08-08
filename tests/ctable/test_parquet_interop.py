@@ -430,8 +430,7 @@ class TestParquetRoundTrip:
         out = t.to_arrow()
         if HAVE_STRING_DTYPE:
             assert t["txt"].is_utf8
-            nv = t["txt"].null_value
-            assert list(t["txt"][:]) == ["short", long_str, nv, "end"]
+            assert t["txt"].is_null().tolist() == [False, False, True, False]
             # Export back to Arrow → still a scalar string column, not list<string>
             assert pa.types.is_large_string(out.schema.field("txt").type)
         else:
@@ -467,8 +466,7 @@ class TestParquetRoundTrip:
         assert t["txt"].is_varlen_scalar
         if HAVE_STRING_DTYPE:
             assert t["txt"].is_utf8
-            nv = t["txt"].null_value
-            assert list(t["txt"][:]) == ["short", long_str, nv, "end"]
+            assert t["txt"].is_null().tolist() == [False, False, True, False]
         else:
             assert not t["txt"].is_utf8  # vlstring fallback, native-None nulls
             assert list(t["txt"][:]) == ["short", long_str, None, "end"]
@@ -507,12 +505,25 @@ class TestNullHandling:
         assert t2["vals"][2] == [3]
 
     def test_scalar_null_no_sentinel_raises(self, tmp_path):
-        """Importing Parquet scalar nulls without a null_value sentinel fails."""
+        """Under *sentinel* storage, nulls with no sentinel available still fail.
+
+        The default is mask storage, which needs no sentinel and so has no such
+        failure mode -- see :meth:`test_scalar_null_defaults_to_a_mask`.
+        """
         at = pa.table({"score": pa.array([1.0, None, 3.0], type=pa.float64())})
         path = tmp_path / "nulls.parquet"
         pq.write_table(at, path)
         with pytest.raises(TypeError, match="null_value sentinel"):
-            CTable.from_parquet(path, auto_null_sentinels=False)
+            CTable.from_parquet(path, auto_null_sentinels=False, null_storage="sentinel")
+
+    def test_scalar_null_defaults_to_a_mask(self, tmp_path):
+        """No sentinel to choose, and none needed: nullity goes in the sidecar."""
+        at = pa.table({"score": pa.array([1.0, None, 3.0], type=pa.float64())})
+        path = tmp_path / "nulls.parquet"
+        pq.write_table(at, path)
+        t = CTable.from_parquet(path, auto_null_sentinels=False)
+        assert t["score"].null_storage == "mask"
+        assert t["score"].is_null().tolist() == [False, True, False]
 
     def test_scalar_null_exported_as_parquet_null(self, tmp_path):
         """Sentinel values become Parquet nulls on export."""
@@ -546,7 +557,10 @@ class TestNullHandling:
         assert t["s"].null_count() == 1
         assert t["b"].null_count() == 1
         assert t["flag"].null_count() == 1
-        assert t["flag"][:].tolist() == [1, 255, 0]
+        # A mask-backed nullable bool is a real np.bool_ column: no reserved 255,
+        # and the null slot holds the (unobservable) False fill.
+        assert t["flag"].dtype == np.dtype(np.bool_)
+        assert t["flag"].is_null().tolist() == [False, True, False]
         out = tmp_path / "nullable_scalars_out.parquet"
         t.to_parquet(out)
         rt = pq.read_table(out)
@@ -653,13 +667,25 @@ class TestNullHandling:
         at = pa.table({"flag": pa.array([True, None, False], type=pa.bool_())})
         path = tmp_path / "nullable_bool.parquet"
         pq.write_table(at, path)
-        t = CTable.from_parquet(path)
+        t = CTable.from_parquet(path, null_storage="sentinel")
         assert t.where(t.flag).flag[:].tolist() == [1]
         assert t.where(~t.flag).flag[:].tolist() == [0]
         assert t.where(t.flag == True).flag[:].tolist() == [1]  # noqa: E712
         assert t.where(t.flag == False).flag[:].tolist() == [0]  # noqa: E712
         assert t.where(t.flag != True).flag[:].tolist() == [0]  # noqa: E712
         assert t.where(t.flag != False).flag[:].tolist() == [1]  # noqa: E712
+
+    def test_nullable_bool_filter_semantics_under_a_mask(self, tmp_path):
+        """The same semantics with no reserved 255 and no rewrite to get there."""
+        at = pa.table({"flag": pa.array([True, None, False], type=pa.bool_())})
+        path = tmp_path / "nullable_bool_mask.parquet"
+        pq.write_table(at, path)
+        t = CTable.from_parquet(path)
+        assert t["flag"].dtype == np.dtype(np.bool_)
+        assert t.where(t.flag).flag[:].tolist() == [True]
+        assert t.where(~t.flag).flag[:].tolist() == [False]
+        assert t.where(t.flag == True).flag[:].tolist() == [True]  # noqa: E712
+        assert t.where(t.flag == False).flag[:].tolist() == [False]  # noqa: E712
 
 
 # ---------------------------------------------------------------------------

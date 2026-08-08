@@ -484,7 +484,17 @@ def schema_to_dict(schema: CompiledSchema) -> dict[str, Any]:
             entry["blocks"] = list(col.config.blocks)
         cols.append(entry)
 
-    schema_version = 2 if schema.metadata.get("nested") is not None else 1
+    # Computed as an explicit feature max rather than a running counter, so
+    # each version says which feature demands it.  The bump is *conditional on
+    # a mask column existing*: sentinel tables keep serializing as version 1/2
+    # and stay readable by everything that came before mask storage.
+    uses_mask = any(getattr(col.spec, "null_storage", None) == "mask" for col in schema.columns)
+    if uses_mask:
+        schema_version = 3
+    elif schema.metadata.get("nested") is not None:
+        schema_version = 2
+    else:
+        schema_version = 1
     result = {
         "version": schema_version,
         "columns": cols,
@@ -507,8 +517,12 @@ def schema_from_dict(data: dict[str, Any]) -> CompiledSchema:
         If *data* uses an unknown schema version or an unknown column kind.
     """
     version = data.get("version", 1)
-    if version not in (1, 2):
-        raise ValueError(f"Unsupported schema version {version!r}")
+    if version not in (1, 2, 3):
+        raise ValueError(
+            f"Unsupported schema version {version!r}. Version 3 is written only when a column uses "
+            f"validity-mask null storage; an older reader can be given a readable copy with "
+            f"table.convert_nulls(to='sentinel')."
+        )
 
     columns: list[CompiledColumn] = []
     for entry in data["columns"]:

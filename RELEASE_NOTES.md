@@ -1,8 +1,135 @@
 # Release notes
 
-## Changes from 4.10.1 to 4.10.2
+## Changes from 4.10.1 to 4.11.0
 
 XXX version-specific blurb XXX
+
+### New features
+
+#### Mask-based nullable columns for CTable, and they are now the default
+
+A nullable CTable column keeps its nulls in a per-column **validity sidecar** —
+Arrow's own model — instead of reserving a value from its own range. This is now
+what a bare `nullable=True` resolves to, and what every nullable column inferred
+from Arrow, Parquet or CSV gets:
+
+```python
+blosc2.bool(nullable=True)  # no reserved 255; dtype stays np.bool_
+blosc2.int8(nullable=True)  # all 256 values usable, plus nulls
+blosc2.utf8(nullable=True)  # any string, including "" and "\x00"
+blosc2.complex128(nullable=True)  # nullable at all, for the first time
+```
+
+This is what makes nullability **lossless**: a sentinel steals a value from the
+dtype, so a nullable `int8` could not hold `-128`, a free-text `utf8` column had
+no safe sentinel at all, and Arrow columns whose type had no value to spare could
+not be imported. `to_arrow(from_arrow(x))` now returns `x` for nullable `bool`,
+full-range `int8`/`uint8`, `float64` containing `nan`/`±inf`/`-0.0` as values,
+`utf8` containing `""` and `"__BLOSC2_NULL__"`, and `timestamp` with `int64.min`
+as a value — none of which round-trip through a sentinel.
+
+Under mask storage `None` is how you write a null (`t.append((None,))`,
+`t["price"][3] = None`), which a fixed-width sentinel column cannot accept at
+all. `is_null()` is unchanged and remains the uniform API across every kind.
+
+**Nothing on disk changes.** The new default governs *creation* only: opening a
+stored table never re-resolves anything, so every existing table keeps the
+storage, dtype and sentinel it was written with, and every rewrite rule for the
+reserved `255` stays permanently in place. Sentinel storage is supported
+indefinitely and is one keyword away, per column (`null_storage="sentinel"`, or
+any explicit `null_value=`) or globally through `NullPolicy`. Setting a type-wide
+`NullPolicy` sentinel field still implies sentinel storage for the kinds it
+covers, so existing `NullPolicy(float_value=...)` code is unaffected — with one
+unavoidable exception: `255` is the only value a nullable bool may reserve, so it
+is also `bool_value`'s default, and `NullPolicy(bool_value=255)` carries no
+information to act on. A bool column that wants a sentinel has to say so with
+`null_storage` or `column_null_values`.
+
+A table containing a mask column records **schema version 3**. Only such tables do:
+a table with no nullable column still records version 1, exactly as before, and a
+sentinel one does too. Readers older than 4.11.0 refuse a version-3 table rather
+than misreading it, but their message is a bare `ValueError: Unsupported schema
+version 3` — the hint naming `convert_nulls(to='sentinel')` ships in 4.11.0, so
+only readers that can already open the file will print it.
+
+If some of your data has to stay readable by an earlier release, pin the storage
+rather than discovering this downstream. Per column with
+`null_storage="sentinel"` (or any explicit `null_value=`), or process-wide,
+including for schemas inferred from Arrow, Parquet and CSV:
+
+```python
+with blosc2.null_policy(blosc2.NullPolicy(null_storage="sentinel")):
+    t = blosc2.CTable.from_parquet("data.parquet")
+```
+
+That reinstates the sentinel's lossiness — a float column's nulls become `NaN`
+again, and a type with no value to spare still cannot be imported — which is the
+trade being made.
+
+`Column.null_storage` reports where a column keeps its nulls and `info` tags each
+column (`int64 nullable[mask]`), so `CTable.convert_nulls()` can move columns
+between the two in either direction — never implicitly, and refusing rather than
+silently relabelling data when a sentinel is unavailable.
+
+One deliberate semantic difference: in a mask column `NaN` is a **value**,
+following Arrow, and only the sidecar marks a null. Sentinel float columns keep
+NaN-as-null. See "Where nulls are stored" in the CTable reference.
+
+#### Column indexes are null-aware
+
+Every index kind stores per-segment `min`/`max`, and those extrema are now taken
+over the rows that carry a **value**: a column's nulls are read from its
+validity channel and left out, and a segment with no value at all is flagged
+rather than summarised. This applies to both storages — an `INT64_MIN` sentinel
+is exactly as invisible to a summary as a mask column's fill.
+
+Two things follow. `Column.min`/`Column.max` answer from the index for a
+nullable column (**236x** on a 20M-row `int64`, measured) where before every
+nullable column but a NaN-sentinel float had to scan; and `where()` with an `OR`
+over a nullable indexed column uses the index instead of falling back to a full
+scan (**1.6x** on a 20M-row two-column probe). The `OR` fallback existed because
+the only null filtering available was global, and a global filter drops a row
+that is null in one branch but matches the other; the segment path never needed
+it, because it *evaluates* the predicate, which has been null-aware per leaf
+since the string-predicate fix below.
+
+Indexes written by an earlier release are read as not null-aware and keep the
+old fallback, so nothing silently changes meaning; `rebuild_index()` promotes
+them. Building an index over a nullable column that actually holds nulls now
+costs one decompression pass (33 ms for a 20M-row `int64` column) because the
+incremental per-block summaries folded during writes carry no validity; a
+nullable column with no nulls keeps that fast path untouched.
+
+### Bug fixes
+
+- **`group_by` returned the wrong `min` for a `bool` value column.** The
+  per-group accumulator was seeded from the dtype's opposite identity, and `bool`
+  had none, so an all-`True` group reduced to `False`. Reachable with any plain
+  non-nullable bool column on the generic aggregation path.
+- **Descending `sort_by` on a `bool` column raised**, and on a signed-integer
+  column holding its dtype's minimum (`-128` for `int8`) that row sorted as if it
+  were the largest. The descending key negated in the column's own dtype, where
+  `bool` has no unary minus and a narrow signed type wraps.
+- **`add_column()` after `copy()` backfilled one row short**, and raised for a
+  variable-length column: the copy recorded its write watermark one below the
+  convention every other writer follows.
+- **A string predicate over a nullable column returned its nulls as matches.**
+  `t.where("a > 10")` compared the stored sentinel, so any sentinel satisfying
+  the predicate (`null_value=999` against `> 10`) came back as a match. The
+  operator form (`t.where(t.a > 10)`) was always correct. Fixed for both storages.
+- **A nullable `uint8` ndarray column came back as `bool`.** The `bool → uint8`
+  widening that sentinel storage needs was undone by dtype rather than by
+  whether it had been applied, so a column declared `uint8` was truncated to
+  flags.
+- **`~` on a nullable bool column selected its nulls.** SQL `WHERE` semantics
+  say a null satisfies neither a predicate nor its negation; the mask path
+  inverted the stored `False` fill instead. (The sentinel path was already
+  correct, via its `== 0` rewrite.)
+- **CSV import and export ignored a validity sidecar.** `to_csv` compared
+  against the sentinel to find nulls, so a mask column wrote its fill as if it
+  were data, and `from_csv` had nothing to put in an empty field and raised.
+  Both go through the sidecar now: an empty CSV field is a null in either
+  direction. Sentinel columns keep writing their sentinel, unchanged.
 
 
 ## Changes from 4.10.0 to 4.10.1

@@ -19,7 +19,13 @@ def _table_with_empty_root_alias():
 
 
 def test_schema_v2_nested_metadata_roundtrip():
-    schema = pa.schema([pa.field("x.y", pa.float64())])
+    """Nested metadata alone asks for version 2, not 3.
+
+    The version is a feature max, so the field is declared non-nullable to
+    isolate it: an Arrow field is nullable by default, and a nullable column now
+    resolves to mask storage, which is what raises the version to 3.
+    """
+    schema = pa.schema([pa.field("x.y", pa.float64(), nullable=False)])
     batch = pa.record_batch([pa.array([1.0, 2.0])], schema=schema)
     t = blosc2.CTable.from_arrow(schema, [batch])
 
@@ -29,6 +35,18 @@ def test_schema_v2_nested_metadata_roundtrip():
 
     restored = schema_from_dict(d)
     assert restored.metadata["nested"]["logical_to_physical"]["x.y"] == "x.y"
+
+
+def test_a_mask_column_raises_the_nested_schema_to_v3():
+    """The version is the max of the features present, not a per-feature tag."""
+    schema = pa.schema([pa.field("x.y", pa.float64())])  # nullable by default
+    batch = pa.record_batch([pa.array([1.0, 2.0])], schema=schema)
+    t = blosc2.CTable.from_arrow(schema, [batch])
+
+    d = schema_to_dict(t._schema)
+    assert d["version"] == 3
+    assert "nested" in d["metadata"]
+    assert t["x.y"].null_storage == "mask"
 
 
 def test_empty_root_exports_empty_arrow_name():

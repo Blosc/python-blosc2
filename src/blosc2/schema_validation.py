@@ -14,13 +14,14 @@ schema layer never import from Pydantic directly.
 
 from __future__ import annotations
 
-import math
 from dataclasses import MISSING
 from typing import Any
 
 import numpy as np
 from pydantic import BaseModel, Field, ValidationError, create_model
 
+from blosc2.ctable_nulls import is_null_value as _null_value_matches
+from blosc2.ctable_nulls import sentinel_mask
 from blosc2.list_array import _coerce_struct_item, coerce_list_cell
 from blosc2.schema import ListSpec, NDArraySpec, StructSpec
 from blosc2.schema_compiler import CompiledSchema  # noqa: TC001
@@ -71,16 +72,7 @@ def build_validator_model(schema: CompiledSchema) -> type[BaseModel]:
 
 def _is_null_value(val, null_value) -> bool:
     """Return True if *val* equals the null sentinel, handling NaN correctly."""
-    import math
-
-    if null_value is None:
-        return False
-    try:
-        if isinstance(null_value, (float, np.floating)) and math.isnan(null_value):
-            return isinstance(val, (float, np.floating)) and math.isnan(val)
-    except TypeError:
-        pass
-    return val == null_value
+    return _null_value_matches(val, null_value)
 
 
 def _mask_nulls(schema: CompiledSchema, row: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -104,9 +96,7 @@ def _mask_nulls(schema: CompiledSchema, row: dict[str, Any]) -> tuple[dict[str, 
             try:
                 arr = np.asarray(val, dtype=col.spec.dtype)
                 is_null = arr.shape == col.spec.item_shape and bool(
-                    np.isnan(arr).all()
-                    if isinstance(nv, (float, np.floating)) and math.isnan(nv)
-                    else (arr == nv).all()
+                    sentinel_mask(arr, nv, item_ndim=len(col.spec.item_shape))[0]
                 )
             except Exception:
                 is_null = val is None
