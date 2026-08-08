@@ -207,9 +207,20 @@ def test_numpy_float_array_input_has_no_nulls():
 
 
 def test_nat_reads_as_null_in_a_timestamp_column():
+    # The NaT carries a unit: NumPy 2.5 deprecated the *generic* one, so a bare
+    # np.datetime64("NaT") warns in the caller.  Taking the unit from the spec
+    # keeps this pinned to the column rather than to a literal.
     spec = blosc2.timestamp(null_storage="mask")
-    t = simple([np.datetime64("2020-01-01"), np.datetime64("NaT")], spec=spec)
+    t = simple([np.datetime64("2020-01-01"), np.datetime64("NaT", spec.unit)], spec=spec)
     assert t["a"].is_null().tolist() == [False, True]
+
+
+def test_a_nat_of_any_unit_reads_as_null():
+    """Detection is np.isnat, so it does not care which unit the caller used."""
+    spec = blosc2.timestamp(null_storage="mask")
+    for unit in ("s", "ms", "us", "ns"):
+        t = simple([np.datetime64("2020-01-01"), np.datetime64("NaT", unit)], spec=spec)
+        assert t["a"].is_null().tolist() == [False, True], unit
 
 
 # ---------------------------------------------------------------------------
