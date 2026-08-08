@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from blosc2.ctable_nulls import sentinel_mask
+from blosc2.ctable_nulls import is_na_marker, sentinel_mask
 from blosc2.list_array import _coerce_struct_item, coerce_list_cell
 from blosc2.schema import ListSpec, NDArraySpec, ObjectSpec, StructSpec
 from blosc2.schema_compiler import CompiledColumn, CompiledSchema  # noqa: TC001
@@ -48,7 +48,18 @@ def _validate_string_lengths(col: CompiledColumn, arr: Any) -> None:
 
 
 def _null_mask_for_spec(arr: np.ndarray, spec) -> np.ndarray | None:
-    """Return a boolean mask True where values are the null sentinel, or None if no null_value."""
+    """Return a boolean mask True where values are null, or ``None`` if none can be.
+
+    A null cell has no value to constrain, so it must bypass the checks below
+    however the column spells it.  Under sentinel storage that is the in-band
+    sentinel.  Under mask storage validation runs *before* the batch is split
+    into values and validity, so what is still in the array is the caller's
+    ``None``/NA markers -- and only an object array can be carrying any.
+    """
+    if getattr(spec, "uses_mask", False):
+        if arr.dtype.kind != "O" or arr.ndim != 1:
+            return None
+        return np.fromiter((is_na_marker(v) for v in arr), dtype=np.bool_, count=len(arr))
     null_value = getattr(spec, "null_value", None)
     if null_value is None:
         return None
@@ -83,12 +94,17 @@ def validate_column_values(col: CompiledColumn, values: Any) -> None:  # noqa: C
     if isinstance(spec, ObjectSpec):
         return
     if isinstance(spec, NDArraySpec):
-        if getattr(spec, "null_value", None) is not None and not (
-            isinstance(values, np.ndarray) and values.dtype != object
-        ):
+        uses_mask = getattr(spec, "uses_mask", False)
+        nullable = uses_mask or getattr(spec, "null_value", None) is not None
+        if nullable and not (isinstance(values, np.ndarray) and values.dtype != object):
             from blosc2.ctable import CTable
 
             for value in values:
+                # Under mask storage a null row is still a bare ``None`` here --
+                # validation runs before the batch is split into values and
+                # validity -- and a null row has no item to shape-check.
+                if uses_mask and is_na_marker(value):
+                    continue
                 CTable._coerce_ndarray_value(col.name, spec, value)
             return
         arr = np.asarray(values, dtype=spec.dtype)

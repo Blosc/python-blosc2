@@ -56,6 +56,7 @@ __all__ = [
     "NULL_SENTINEL",
     "NullChannel",
     "fill_value_for",
+    "is_na_marker",
     "is_nan_sentinel",
     "is_null_value",
     "kind_of_spec",
@@ -83,6 +84,10 @@ def kind_of_spec(spec) -> str:
         return NULL_NONE
     if isinstance(spec, DictionarySpec):
         return NULL_CODE
+    if getattr(spec, "uses_mask", False):
+        # Checked before the native-None kinds so that a mask-storage utf8
+        # column reports its sidecar rather than its container kind.
+        return NULL_MASK
     if isinstance(spec, _NATIVE_NULL_SPECS):
         return NULL_NATIVE
     # UTF8Spec is a variable-length kind but represents nulls with a sentinel
@@ -90,6 +95,30 @@ def kind_of_spec(spec) -> str:
     if getattr(spec, "null_value", None) is not None:
         return NULL_SENTINEL
     return NULL_NONE
+
+
+# Types whose instances mean "missing" without being ``None``.  Matched by
+# name so that neither pandas nor pyarrow has to be importable: ``pandas.NA``
+# is a ``NAType``, ``pyarrow.NA`` a ``NullScalar``, ``pandas.NaT`` a
+# ``NaTType``.  ``float('nan')`` is deliberately absent -- under mask storage
+# NaN is a value, not a null (decision 6).
+_NA_TYPE_NAMES = frozenset({"NAType", "NullScalar", "NaTType"})
+
+
+def is_na_marker(value) -> builtin_bool:
+    """True when *value* is a way of writing "this cell is null".
+
+    ``None`` is the canonical spelling; the library NA singletons and a
+    ``datetime64`` ``NaT`` are accepted too, since each is unambiguously a
+    missing marker rather than a representable value.  A float ``NaN`` is
+    **not** -- see :func:`~blosc2.schema.fill_value_for` and decision 6 of the
+    mask-storage design: keeping NaN a value is the point of a side channel.
+    """
+    if value is None:
+        return True
+    if type(value).__name__ in _NA_TYPE_NAMES:
+        return True
+    return isinstance(value, np.datetime64) and builtin_bool(np.isnat(value))
 
 
 def is_nan_sentinel(value) -> bool:
@@ -347,14 +376,21 @@ def rewrite_null_predicates(expr: str, guards: dict[str, tuple[str, object]]) ->
 class NullChannel:
     """Uniform read accessor for one column's validity channel.
 
-    Subsumes the representations CTable uses -- in-band sentinel, dictionary
-    null code, native ``None``, and (once it lands) a sidecar validity array
-    -- so callers ask *what is null* without knowing which one a column uses.
+    Subsumes the four representations CTable uses -- sidecar validity array,
+    in-band sentinel, dictionary null code, native ``None`` -- so callers ask
+    *what is null* without knowing which one a column uses.
 
     Bound to a :class:`~blosc2.ctable.Column`, so it sees that column's view
     (sorted order, row filter) the same way the column itself does.  Nothing
     is snapshotted: every property reads through to the live schema, which
-    keeps a cached channel correct across in-place spec mutation.
+    keeps a channel correct across in-place spec mutation.
+
+    A channel holds its ``Column`` strongly and the ``Column`` does **not**
+    cache the channel back: the pair would otherwise be a reference cycle that
+    refcounting alone can never break, and since a ``Column`` also holds its
+    ``CTable``, every channel built on a write path would pin a whole table
+    until the next gc pass.  Construction is one slot assignment, so rebuilding
+    a channel per access costs nothing worth caching.
     """
 
     __slots__ = ("_col",)
@@ -395,6 +431,63 @@ class NullChannel:
         """The reserved dictionary code, or ``None`` for the other kinds."""
         return getattr(self.spec, "null_code", None)
 
+    @property
+    def uses_mask(self) -> builtin_bool:
+        """True when nullity lives in a sidecar validity array."""
+        return self.kind == NULL_MASK
+
+    @property
+    def fill_value(self):
+        """The value occupying this column's null slots under mask storage.
+
+        Unobservable through the ``Column`` API and not part of the format
+        contract -- see :func:`~blosc2.schema.fill_value_for`.  Widened to a
+        whole item for a fixed-shape ndarray column, whose null rows still
+        have to hold something of the right shape.
+        """
+        base = fill_value_for(self.spec)
+        col = self._col
+        if col.is_ndarray:
+            return np.full(col.item_shape, base, dtype=col.dtype)
+        return base
+
+    # ------------------------------------------------------------------
+    # The sidecar (mask kind only)
+    # ------------------------------------------------------------------
+
+    def valid_array(self):
+        """The physical validity sidecar, or ``None`` when there is none.
+
+        ``None`` for every non-mask kind, and also for a mask column that has
+        never been given a null: an absent sidecar means *all rows valid*, so
+        callers read that as never-null rather than as unknown.
+        """
+        if self.kind != NULL_MASK:
+            return None
+        return self._col._table._null_mask(self._col._col_name)
+
+    def _ensure_valid_array(self):
+        """The sidecar, materializing it if this is the column's first null."""
+        return self._col._table._ensure_null_mask(self._col._col_name)
+
+    def set_valid(self, key, valid) -> None:
+        """Record validity at *physical* positions *key*.
+
+        A no-op for the non-mask kinds, whose nullity travels in band with the
+        values the caller has already written.
+
+        Marking rows *valid* in a column with no sidecar is skipped rather
+        than made to materialize one: that is already what the column says.
+        """
+        if self.kind != NULL_MASK:
+            return
+        arr = self.valid_array()
+        if arr is None:
+            if valid is True or (valid is not False and np.all(valid)):
+                return
+            arr = self._ensure_valid_array()
+        arr[key] = valid
+
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------
@@ -413,17 +506,55 @@ class NullChannel:
         """True where this column's live values are null, one flag per live row."""
         col = self._col
         kind = self.kind
+        if kind == NULL_MASK:
+            valid = self.valid_array()
+            if valid is None:
+                return np.zeros(len(col), dtype=np.bool_)
+            # Gathering at the live positions is what makes this honour the
+            # column's view -- sorted order and row filters alike.
+            return ~np.asarray(valid[col._resolve_live_positions()])
         if kind == NULL_CODE:
             return col._dictionary_eq(None)
         if kind == NULL_NATIVE:
             return np.array([v is None for v in col], dtype=np.bool_)
         return self.mask_for_values(col[:])
 
+    def is_null_at(self, index: int) -> builtin_bool:
+        """Whether the value at *logical* row *index* is null.
+
+        Single-row form of :meth:`null_mask`, kept separate so the mask and
+        sentinel kinds can answer without materializing a whole column.
+        """
+        col = self._col
+        kind = self.kind
+        if kind == NULL_NONE:
+            return False
+        if kind == NULL_MASK:
+            valid = self.valid_array()
+            if valid is None:
+                return False
+            return not builtin_bool(valid[int(col._physical_index(index))])
+        if kind == NULL_SENTINEL:
+            return builtin_bool(self.mask_for_values(np.asarray([col[index]]))[0])
+        return col[index] is None
+
     def null_count(self) -> int:
         """Number of live rows that are null; ``0`` in O(1) when never null."""
         kind = self.kind
         if kind == NULL_NONE:
             return 0
+        if kind == NULL_MASK:
+            valid = self.valid_array()
+            if valid is None:
+                return 0
+            col = self._col
+            if col._has_identity_positions():
+                # Hole-free base table: count straight off the compressed
+                # sidecar.  Bool NDArrays compress to almost nothing, so this
+                # is effectively O(chunks) rather than O(rows).
+                n = len(col)
+                return n - int(blosc2.count_nonzero(valid if n == valid.shape[0] else valid[:n]))
+            return int(self.null_mask().sum())
         if kind == NULL_NATIVE:
             return sum(1 for v in self._col if v is None)
         return int(self.null_mask().sum())
@@ -431,6 +562,23 @@ class NullChannel:
     def nonnull_chunks(self):
         """Yield chunks of live values with the null ones removed."""
         col = self._col
+        if self.kind == NULL_MASK:
+            valid = self.valid_array()
+            if valid is None:
+                yield from col.iter_chunks()
+                return
+            # Zip values against validity chunk for chunk.  The sidecar shares
+            # the column's row grid (see CTable._null_mask_grid), so the two
+            # streams stay aligned without any re-chunking.
+            null = self.null_mask()
+            offset = 0
+            for chunk in col.iter_chunks():
+                keep = ~null[offset : offset + len(chunk)]
+                offset += len(chunk)
+                filtered = chunk[keep]
+                if len(filtered) > 0:
+                    yield filtered
+            return
         sentinel = self.sentinel
         if sentinel is None:
             yield from col.iter_chunks()
@@ -441,6 +589,82 @@ class NullChannel:
             filtered = chunk[mask]
             if len(filtered) > 0:
                 yield filtered
+
+    # ------------------------------------------------------------------
+    # Writes
+    # ------------------------------------------------------------------
+
+    def coerce_scalar(self, value):
+        """Split one incoming cell into ``(storage_value, is_valid)``.
+
+        Under mask storage ``None`` becomes the canonical way to write a null.
+        Fixed-width scalar columns could not accept it at all before -- users
+        had to write the sentinel literally -- so this is new capability, not
+        re-plumbing.
+        """
+        if self.kind != NULL_MASK or not is_na_marker(value):
+            return value, True
+        return self.fill_value, False
+
+    def coerce_batch(self, values, n: int):
+        """Split an incoming batch into ``(storage_values, valid)``.
+
+        *valid* is ``None`` when nothing in the batch was null -- the common
+        case, and the one that lets the caller skip the sidecar write entirely
+        and so never materialize one.  Otherwise it is a length-*n* bool array
+        in Arrow polarity (``True`` = not null), and *storage_values* has this
+        column's fill substituted into the null slots, so what sits under
+        ``valid=False`` is deterministic rather than whatever NumPy made of a
+        ``None``.
+
+        Null detection follows what the input is able to express:
+
+        * ``np.ma.MaskedArray`` -- ``~arr.mask`` is the validity, verbatim;
+        * an object array or Python sequence -- ``None`` and the library NA
+          singletons are null (:func:`is_na_marker`);
+        * a ``datetime64`` array -- ``NaT`` is null;
+        * a float array -- **NaN is a value, not a null** (decision 6).  A
+          mask column's whole point is that nullity lives outside the value
+          range, so nothing in a typed numeric array reads as missing.
+        """
+        if self.kind != NULL_MASK:
+            return values, None
+        fill = self.fill_value
+
+        if isinstance(values, np.ma.MaskedArray):
+            valid = ~np.ma.getmaskarray(values)
+            if valid.ndim > 1:  # ndarray column: a row is null only if wholly masked
+                valid = valid.any(axis=tuple(range(1, valid.ndim)))
+            filled = np.ma.filled(values, fill)
+            return filled, (None if valid.all() else valid)
+
+        if isinstance(values, blosc2.NDArray):
+            # Already in typed storage; there is no way for it to carry a None.
+            return values, None
+
+        arr = values if isinstance(values, np.ndarray) else np.asarray(values, dtype=object)
+        if arr.dtype.kind == "M":
+            invalid = np.isnat(arr)
+        elif arr.dtype.kind == "O":
+            # Row-level: for an ndarray column each entry is a whole item, and
+            # only a wholesale None makes the row null.
+            invalid = np.fromiter((is_na_marker(v) for v in arr), dtype=np.bool_, count=len(arr))
+        else:
+            # Typed numeric/bool/U/S input has no in-band way to say "null".
+            return values, None
+
+        if not invalid.any():
+            return values, None
+        out = np.asarray(arr, dtype=object).copy()
+        if isinstance(fill, np.ndarray):
+            # An ndarray column's fill is a whole item: assigning it through a
+            # boolean mask would broadcast its elements across the selected
+            # slots instead of storing one item in each.
+            for i in np.flatnonzero(invalid):
+                out[i] = fill
+        else:
+            out[invalid] = fill
+        return out.tolist(), ~invalid
 
     # ------------------------------------------------------------------
     # Lazy predicates over the raw physical array
@@ -459,6 +683,9 @@ class NullChannel:
         ``Column._ensure_queryable`` rejects them for arithmetic and
         comparisons before any predicate is built.
         """
+        valid = self._mask_pred()
+        if valid is not None:
+            return ~valid
         col = self._col
         if col.is_ndarray:
             return None
@@ -474,6 +701,9 @@ class NullChannel:
 
         Returns ``None`` under the same conditions as :meth:`null_pred`.
         """
+        valid = self._mask_pred()
+        if valid is not None:
+            return valid
         col = self._col
         if col.is_ndarray:
             return None
@@ -483,3 +713,19 @@ class NullChannel:
         if _is_nan(sentinel):
             return ~blosc2.isnan(col._raw_col)
         return col._raw_col != sentinel
+
+    def _mask_pred(self):
+        """The sidecar as a physical validity operand, or ``None``.
+
+        ``None`` covers both "not a mask column" and "a mask column with no
+        sidecar" -- the latter meaning never-null, which the expression layer
+        already handles by skipping the operand.
+
+        Fixed-shape ndarray columns are excluded for now: their values array
+        is N-D while the sidecar is one flag per row, so the two do not
+        broadcast against each other in a lazy expression.
+        """
+        if self.kind != NULL_MASK or self._col.is_ndarray:
+            return None
+        valid = self.valid_array()
+        return None if valid is None else blosc2.asarray(valid)

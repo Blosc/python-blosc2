@@ -1,10 +1,11 @@
 # Mask-based nullable columns for CTable
 
-> **Status: IN PROGRESS — Phases 0–3 landed 2026-08-08.** Next up is Phase 4 (read/write + null
-> API), the large, high-risk one. Two premises were disproven during implementation and are
-> corrected in place, each in a blockquote beside the text it corrects: the index path cannot be
-> fixed by a null-aware expression (§Expression layer), and the bool dtype-flip cannot move out of
-> `__init__` (§Schema layer). Drafted 2026-08-08.
+> **Status: IN PROGRESS — Phases 0–4 landed 2026-08-08.** Mask columns are now fully usable
+> in memory and on disk; next up is Phase 5 (expressions + reductions), then Phase 6
+> (Arrow/Parquet). Two premises were disproven during implementation and are corrected in place,
+> each in a blockquote beside the text it corrects: the index path cannot be fixed by a null-aware
+> expression (§Expression layer), and the bool dtype-flip cannot move out of `__init__`
+> (§Schema layer). Drafted 2026-08-08.
 > Revised 2026-08-08 after review: lazy sidecar materialization (decision 9), `NullPolicy`
 > inference instead of raising, staged default flip (Phase 9), null-predicate rewrite pulled
 > forward to Phase 1, sidecar suffix renamed `.notnull`.
@@ -336,6 +337,39 @@ explicitly, coerce once, write values and mask together — and skip the fast pa
 re-add them in a follow-up. Threading mask writes through all six paths at once is where this
 project would break.
 
+> **As built (2026-08-08).** `__setitem__` was not the hard part; the reroute was one added
+> condition on the NDArray fast path plus one `_assign_validity` call per branch. Four things that
+> were not in this section turned out to matter more:
+>
+> - **`NullChannel` must not be cached on its `Column`.** The pair was a two-object reference cycle
+>   (`Column._null_channel → NullChannel._col → Column`), and since a `Column` also holds its
+>   `CTable`, the moment `extend` started building a channel per column *every* write pinned a whole
+>   table until the next gc pass. Caught by `test_persistent_releases_without_gc`, which had been
+>   passing since long before this work. A weakref back to the column is the wrong fix — the channel
+>   is often the only owner (`table._null_channel(name)` builds a throwaway `Column`) — so the cache
+>   is gone instead and `_nulls` builds a fresh one-slot object per access. Pinned by
+>   `test_a_table_is_freed_without_a_gc_pass`.
+> - **Validation runs before coercion**, so `schema_vectorized` and its ndarray branch had to learn
+>   that a bare `None` in the batch is a null for a mask column: a null cell has no value to
+>   constrain. Without this, `extend` raised out of `_validate_string_lengths` before reaching any
+>   of the new code.
+> - **An overwrite replaces validity, it does not merge it.** `assign`/`__setitem__` must write
+>   `True` back over rows that were null before, which means `coerce_batch` returning `valid=None`
+>   ("nothing null in this batch") cannot simply be skipped there the way it can on append.
+>   `Column._assign_validity` is that distinction, and the one exception it keeps is a column with
+>   no sidecar at all, which is already all-valid.
+> - **Every materialization path had to be found, not just the write paths.** `sort_by` (all three
+>   forms), `take`, `slice`, and `_sorted_small_copy_from_live_positions` each rebuild a table from
+>   gathered rows and silently dropped the sidecar. Factored into `_permute_null_masks` (in-place,
+>   shared with `compact`) and `_gather_null_masks_into` (copy). The latter skips columns whose
+>   gathered selection happens to be all-valid, so a copy that contains no null stays sidecar-free.
+>
+> Also landed here rather than in Phase 5: `null_pred`/`valid_pred` return the sidecar for mask
+> columns. It is six lines inside `NullChannel`, and `_lazy_nonnull_mask` already consumes them, so
+> leaving it out would have shipped aggregates that silently counted fill values. Fixed-shape
+> ndarray columns still return `None` (an N-D values array does not broadcast against a
+> one-flag-per-row sidecar) — that part stays Phase 5.
+
 ### Null API — `ctable.py:2587-2721`
 
 `is_null()` (`:2627`) becomes `~channel.null_mask(...)`, i.e. O(1 byte/row) instead of
@@ -627,8 +661,8 @@ default-created tables require them.
 | 1 | ✅ **Per-leaf null-predicate rewrite** *(storage-independent — pulled forward because it fixes sentinel tables that exist today)*. `_rewrite_null_predicates`, guards emitted inline and only where the sentinel could satisfy the leaf; validity pushed to the negation point. **`_exclude_null_positions` and the indexed-OR bail are retained** — see the correction above; an ordered index never evaluates the predicate, so a null-aware expression cannot fix it. Real payoff: string predicates become null-aware at all. | M | Med |
 | 2 | ✅ **Schema plumbing.** `_NullableSpecMixin`, `null_storage` kwarg on ~9 specs, conditional version 3, `NullPolicy.null_storage` (**still defaulting to `"sentinel"`**) with sentinel-field inference, `_resolved_null_storage` as the single decision point, `fill_value_for`, complex nullable (mask-only). Dtype-flip relocation **not** done — see the correction above. | S | Low |
 | 3 | ✅ **Storage sidecar.** 5 methods × 4 backends, lazy creation (absent key = all valid); `_grow`/`trim_capacity`/`compact`/`_save_to_storage`/`to_cframe`/`load`, **plus `copy()`'s in-memory path**, which the section above had missed; companion-suffix loop in delete/rename. `tests/ctable/test_null_persistence.py` (38 tests) drives it with a hand-built mask. | M | Low |
-| 4 | **Read/write + null API.** `extend`/`append`/`_coerce_row_to_storage`/`__setitem__`/`assign`; `is_null`/`notnull`/`null_count`/`fillna`/`_nonnull_chunks`/`to_numpy(masked=)`/`dropna`. Mask columns fully usable. | **L** | **High** (`__setitem__`) |
-| 5 | **Expressions + reductions.** `_raw_null_pred`, `_lazy_nonnull_mask`, `_ndarray_values_for_reduction`, argmin/argmax, `_is_nullable_bool`. Includes the ndarray-propagation gain. | M | Med |
+| 4 | ✅ **Read/write + null API.** `extend`/`append`/`_coerce_row_to_storage`/`__setitem__`/`assign`; `is_null`/`notnull`/`null_count`/`fillna`/`_nonnull_chunks`/`to_numpy(masked=)`/`dropna`; **plus every gather-and-rebuild path** (`sort_by` ×3, `take`, `slice`), which this section had not listed. Mask columns fully usable. `tests/ctable/test_null_mask_api.py` (90 tests). | **L** | **High** (turned out to be the reference cycle, not `__setitem__`) |
+| 5 | **Expressions + reductions.** `_raw_null_pred`, `_lazy_nonnull_mask`, `_ndarray_values_for_reduction`, argmin/argmax, `_is_nullable_bool`. Includes the ndarray-propagation gain. *(The base `null_pred`/`valid_pred` mask support landed in Phase 4 — see the note above.)* | M | Med |
 | 6 | **Arrow/Parquet.** Import + export for all V1 kinds, `packbits`/`unpackbits` LSB-first, `arrow_slice(validity=)`, delete the "no sentinel available" import error. Ships **opt-in** (`null_storage="mask"`); the default stays `"sentinel"`. | M | Med |
 | 7 | **Sort + groupby.** `_build_lex_keys`, `_sorted_positions_from_full_index` (big I/O win), `_utf8_rank_arrays(valid=)`, groupby `_null_mask` threading. | M | Med-High |
 | 8 | **Migration + docs.** `convert_nulls`, `Column.null_storage`, `info()`, `doc/reference/ctable.rst` null-policy rewrite, release notes. | S–M | Low |

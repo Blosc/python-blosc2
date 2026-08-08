@@ -1131,19 +1131,18 @@ class Column:
         self._table = table
         self._col_name = col_name
         self._mask = mask
-        self._null_channel = None
 
     @property
     def _nulls(self) -> NullChannel:
         """This column's validity channel (see :mod:`blosc2.ctable_nulls`).
 
-        Built on first use and kept for this ``Column``'s lifetime.  The
-        channel reads through to the live schema on every access, so it stays
-        correct even if the column's spec is mutated in place.
+        Built fresh on each access and deliberately **not** cached: the channel
+        holds this ``Column``, and caching it here would close a reference
+        cycle that keeps the whole table alive until a gc pass.  The channel is
+        a one-slot object and reads through to the live schema, so building one
+        is both cheap and always current.
         """
-        if self._null_channel is None:
-            self._null_channel = NullChannel(self)
-        return self._null_channel
+        return NullChannel(self)
 
     @property
     def _raw_col(self):
@@ -1263,6 +1262,20 @@ class Column:
         if slp is not None and self._table.base is not None:
             return slp
         return np.where(self._valid_rows[:])[0]
+
+    def _physical_index(self, key: int) -> int:
+        """Physical position of logical row *key*, honouring the view's order."""
+        n_rows = len(self)
+        if key < 0:
+            key += n_rows
+        if not (0 <= key < n_rows):
+            raise IndexError(f"index {key} is out of bounds for column with size {n_rows}")
+        # A sorted view holds its positions in sorted, not physical-ascending,
+        # order, so the key-th entry is the answer directly.
+        cached = getattr(self._table, "_cached_live_positions", None)
+        if cached is not None and self._table.base is not None:
+            return int(cached[key])
+        return int(_find_physical_index(self._valid_rows, key))
 
     def _has_identity_positions(self) -> bool:
         """True when logical row ``k`` maps to physical row ``k`` for every row.
@@ -1494,10 +1507,13 @@ class Column:
             if not (0 <= key < n_rows):
                 raise IndexError(f"index {key} is out of bounds for column with size {n_rows}")
             pos_true = _find_physical_index(self._valid_rows, key)
+            value, is_valid = self._nulls.coerce_scalar(value)
             if self.is_ndarray:
                 spec = self._table._schema.columns_by_name[self._col_name].spec
                 value = CTable._coerce_ndarray_value(self._col_name, spec, value)
             self._raw_col[int(pos_true)] = value
+            if self._nulls.uses_mask and not (is_valid and self._nulls.valid_array() is None):
+                self._nulls.set_valid(int(pos_true), is_valid)
 
         elif isinstance(key, np.ndarray) and key.dtype == np.bool_:
             n_live = len(self)
@@ -1507,6 +1523,7 @@ class Column:
                 )
             all_pos = np.where(self._valid_rows[:])[0]
             phys_indices = all_pos[key]
+            value, valid = self._nulls.coerce_batch(value, len(phys_indices))
             if self.is_list or self.is_varlen_scalar:
                 if len(value) != len(phys_indices):
                     raise ValueError("Length mismatch in list-column assignment")
@@ -1519,6 +1536,7 @@ class Column:
                 elif isinstance(value, (list, tuple)):
                     value = np.array(value, dtype=self._raw_col.dtype)
                 self._raw_col[phys_indices] = value
+            self._assign_validity(phys_indices, valid)
 
         elif isinstance(key, (slice, list, tuple, np.ndarray)):
             # Fast path: slice of a blosc2.NDArray into a scalar or ndarray column when
@@ -1533,6 +1551,11 @@ class Column:
                 and isinstance(value, blosc2.NDArray)
                 and not self.is_list
                 and not self.is_varlen_scalar
+                # Mask columns take the unified path below, which writes values
+                # and validity from one explicit phys_indices.  Threading the
+                # sidecar through all the fast paths as well is a follow-up;
+                # correctness first.
+                and not self._nulls.uses_mask
                 and _tbl.base is None
                 and _tbl._resolve_last_pos() == _tbl._n_rows
             ):
@@ -1573,6 +1596,7 @@ class Column:
                 else:
                     phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
 
+                value, valid = self._nulls.coerce_batch(value, len(phys_indices))
                 if self.is_list or self.is_varlen_scalar:
                     if len(value) != len(phys_indices):
                         raise ValueError("Length mismatch in list-column assignment")
@@ -1595,6 +1619,7 @@ class Column:
                             self._raw_col[phys_indices[c:c_end]] = chunk
                     else:
                         self._raw_col[phys_indices] = value
+                self._assign_validity(phys_indices, valid)
 
         else:
             raise TypeError(f"Invalid index type: {type(key)}")
@@ -1757,6 +1782,23 @@ class Column:
         """
         return _CTableInfoReporter(self)
 
+    def _null_info_items(self, spec) -> list[tuple[str, object]]:
+        """The nullability rows of :attr:`info_items`.
+
+        Beyond the plain flag, a nullable column reports *where* it keeps its
+        nulls, and a mask column also reports whether it has actually had to
+        write a sidecar yet — the visible difference between "nullable" and
+        "has ever held a null".
+        """
+        nullable = self.null_value is not None or getattr(spec, "nullable", False)
+        items: list[tuple[str, object]] = [("nullable", nullable)]
+        if nullable:
+            channel = self._nulls
+            items.append(("null_storage", channel.kind))
+            if channel.uses_mask:
+                items.append(("null_sidecar", channel.valid_array() is not None))
+        return items
+
     @property
     def info_items(self) -> list[tuple[str, object]]:
         """Structured summary items used by :attr:`info`."""
@@ -1812,7 +1854,7 @@ class Column:
         if cratio is not None:
             items.append(("cratio", f"{cratio:.2f}x"))
 
-        items.append(("nullable", self.null_value is not None or getattr(spec, "nullable", False)))
+        items.extend(self._null_info_items(spec))
         if self.is_dictionary:
             items.append(("dictionary_size", len(raw.dictionary)))
 
@@ -2619,6 +2661,9 @@ class Column:
             root._mark_all_indexes_stale()
             return
         n_live = len(self)
+        # Split nullity off before the astype below, which has no way to
+        # represent a None in a typed array.
+        data, valid = self._nulls.coerce_batch(data, n_live)
         arr = np.asarray(data)
         if len(arr) != n_live:
             raise ValueError(f"assign() requires {n_live} values (live rows), got {len(arr)}.")
@@ -2628,9 +2673,30 @@ class Column:
             raise TypeError(f"Cannot coerce data to column dtype {self.dtype!r}: {exc}") from exc
         live_pos = np.where(self._valid_rows[:])[0]
         self._raw_col[live_pos] = arr
+        # assign() replaces every live value, so validity is replaced wholesale
+        # too: rows this batch did not mark null must come back valid even if a
+        # previous assign had nulled them.
+        self._assign_validity(live_pos, valid)
         root = self._table._root_table
         root._mark_generated_columns_stale(self._col_name)
         root._mark_all_indexes_stale()
+
+    def _assign_validity(self, positions: np.ndarray, valid: np.ndarray | None) -> None:
+        """Overwrite the validity of *positions* after a wholesale value write.
+
+        *valid* is what ``coerce_batch`` returned: ``None`` when nothing in the
+        batch was null.  That still has to be *written* here rather than
+        skipped, because the rows may have been null before -- unlike an
+        append, an assign replaces what was there.  A column with no sidecar is
+        the one exception: it is already all-valid.
+        """
+        if not self._nulls.uses_mask:
+            return
+        if valid is None:
+            if self._nulls.valid_array() is None:
+                return
+            valid = True
+        self._nulls.set_valid(positions, valid)
 
     def _assign_varlen_scalar(self, data) -> None:
         """``assign()`` for utf8/vlstring/vlbytes/struct/object columns.
@@ -2640,8 +2706,9 @@ class Column:
         varlen column rewrites its whole batch, so the loop would be
         quadratic.  Dead slots keep their current contents.
         """
-        values = list(data)
         n_live = len(self)
+        cells, valid = self._nulls.coerce_batch(list(data), n_live)
+        values = list(cells)
         if len(values) != n_live:
             raise ValueError(f"assign() requires {n_live} values (live rows), got {len(values)}.")
         raw = self._raw_col
@@ -2649,12 +2716,14 @@ class Column:
         n_phys = len(raw)
         if n_live == n_phys:
             raw.set_all(values)
+            self._assign_validity(np.arange(n_phys, dtype=np.intp), valid)
             return
         current = list(raw[:])
         live_pos = np.flatnonzero(self._valid_rows[:n_phys])
         for pos, value in zip(live_pos, values, strict=True):
             current[int(pos)] = value
         raw.set_all(current)
+        self._assign_validity(live_pos, valid)
 
     # ------------------------------------------------------------------
     # Null sentinel support
@@ -2709,13 +2778,38 @@ class Column:
         Dictionary and variable-length scalar columns (whose nulls are
         native ``None`` cells) return a list; other columns return a NumPy
         array.
+
+        Under mask storage this is correct even when *value* equals data the
+        column really holds, because which rows are null is read from the
+        sidecar rather than inferred from the values.  A sentinel column
+        cannot make that distinction, by construction.
         """
         if (self.is_dictionary or self.is_varlen_scalar) and not self.is_utf8:
             return [value if v is None else v for v in self[:]]
         arr = np.array(self[:], copy=True)
-        if self._nulls.kind == NULL_SENTINEL:
+        kind = self._nulls.kind
+        if kind == NULL_SENTINEL:
             arr[self._nulls.mask_for_values(arr)] = value
+        elif kind == NULL_MASK:
+            arr[self._nulls.null_mask()] = value
         return arr
+
+    def to_numpy(self, *, masked: bool = False):
+        """Return this column's live values as a NumPy array.
+
+        Parameters
+        ----------
+        masked:
+            When ``True``, return a :class:`numpy.ma.MaskedArray` whose mask
+            marks the null rows.  Works for **both** null storages -- a
+            sentinel column derives the mask from its sentinel -- so callers
+            get one uniform way to ask for values-plus-validity regardless of
+            how the column happens to store its nulls.
+        """
+        arr = np.asarray(self[:])
+        if not masked:
+            return arr
+        return np.ma.MaskedArray(arr, mask=self.is_null())
 
     def _nonnull_chunks(self):
         """Yield chunks of live, non-null values.
@@ -3470,13 +3564,10 @@ class _StructPathColumn:
 
     def _leaf_is_null_at_logical(self, leaf: str, idx: int) -> bool:
         col = self._table[leaf]
-        v = col[idx]
-        if col._nulls.kind != NULL_SENTINEL:
-            return v is None
         try:
-            return bool(col._nulls.mask_for_values(np.asarray([v]))[0])
+            return col._nulls.is_null_at(idx)
         except Exception:
-            return v is None
+            return col[idx] is None
 
     def _row_value_at_logical(self, idx: int):
         # If every descendant leaf is null at this row, represent the struct as None.
@@ -4961,11 +5052,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # Fallback: try positional indexing
         return {name: data[i] for i, name in enumerate(stored)}
 
-    def _coerce_row_to_storage(self, row: dict[str, Any]) -> dict[str, Any]:
-        """Coerce each value in *row* to the column's storage representation."""
+    def _coerce_row_to_storage(self, row: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
+        """Coerce each value in *row* to the column's storage representation.
+
+        Returns ``(storage_row, null_names)``, where *null_names* is the set of
+        mask-storage columns the caller must mark invalid.  Their entry in
+        *storage_row* is this column's fill, so the write itself is an ordinary
+        typed one -- ``None`` never reaches the value array.
+        """
         result = {}
+        null_names: set[str] = set()
         for col in self._schema.columns:
             val = row[col.name]
+            channel = self._null_channel(col.name)
+            if channel.uses_mask:
+                val, is_valid = channel.coerce_scalar(val)
+                if not is_valid:
+                    null_names.add(col.name)
             if self._is_list_column(col):
                 result[col.name] = coerce_list_cell(col.spec, val)
             elif self._is_varlen_scalar_column(col):
@@ -4987,7 +5090,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     result[col.name] = np.array(val, dtype=col.dtype).item()
             else:
                 result[col.name] = np.array(val, dtype=col.dtype).item()
-        return result
+        return result, null_names
 
     def _open_column_from_storage(self, storage: TableStorage, name: str):
         """Open one stored column from *storage*."""
@@ -5020,6 +5123,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             cache = _NullMaskCache(self._storage)
             self.__dict__["_null_mask_cache"] = cache
         return cache
+
+    def _null_channel(self, name: str) -> NullChannel:
+        """The null channel for column *name*.
+
+        The physical write paths (``append``, ``extend``) have no ``Column`` of
+        their own; this gives them the same accessor the read paths use, over a
+        base-table column where logical and physical positions coincide.
+        """
+        return self[name]._nulls
 
     @property
     def _null_mask_names(self) -> list[str]:
@@ -5096,6 +5208,33 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if mask is not None:
                 found[name] = mask
         return found
+
+    def _permute_null_masks(self, positions: np.ndarray, n: int) -> None:
+        """Reorder every validity sidecar in place by *positions*, as the columns were.
+
+        The tail past *n* becomes all-valid: those slots hold no live row, and
+        "valid" is what an absent sidecar would say of them.
+        """
+        for mask in self._existing_null_masks().values():
+            mask[:n] = mask[positions[:n]]
+            mask[n:] = True
+
+    def _gather_null_masks_into(self, target: CTable, positions: np.ndarray, n: int) -> None:
+        """Gather this table's sidecars into *target*'s, under *positions*.
+
+        A column with no sidecar here gets none there: nothing in it is null,
+        and materializing one in the copy would invent storage the source never
+        needed (decision 9).
+        """
+        if n <= 0:
+            return
+        for name, mask in self._existing_null_masks().items():
+            gathered = np.asarray(mask[positions])
+            if gathered.all():
+                # The selection happens to contain no null, so the copy needs
+                # no sidecar -- "absent" already says exactly this.
+                continue
+            target._ensure_null_mask(name)[:n] = gathered
 
     def _drop_null_mask(self, name: str) -> None:
         """Forget and (for persistent tables) delete column *name*'s sidecar."""
@@ -6704,6 +6843,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 result._cols[col_name][:n] = arr._take_numpy(physical_pos, axis=0)
 
+        self._gather_null_masks_into(result, physical_pos, n)
         result._valid_rows[:n] = True
         result._valid_rows[n:] = False
         result._n_rows = n
@@ -11787,11 +11927,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 end = min(end + block_size, self._n_rows)
 
         # Shuffle the validity sidecars by the same gather, so mask and values
-        # stay row-aligned.  The freed tail becomes all-valid: those slots hold
-        # no live row, and "valid" is what an absent sidecar would say of them.
-        for mask in self._existing_null_masks().values():
-            mask[: self._n_rows] = mask[real_poss[: self._n_rows]]
-            mask[self._n_rows :] = True
+        # stay row-aligned.
+        self._permute_null_masks(real_poss, self._n_rows)
 
         self._valid_rows[: self._n_rows] = True
         self._valid_rows[self._n_rows :] = False
@@ -12344,6 +12481,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 result._cols[col_name].codes[:n] = gathered[col_name][order]
             else:
                 result._cols[col_name][:n] = gathered[col_name][order]
+        self._gather_null_masks_into(result, live_pos[order], n)
         result._valid_rows[:n] = True
         result._valid_rows[n:] = False
         result._n_rows = n
@@ -12367,6 +12505,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 arr.set_all(arr[sorted_pos])
             else:
                 arr[:n] = arr[sorted_pos]
+        self._permute_null_masks(sorted_pos, n)
         self._valid_rows[:n] = True
         self._valid_rows[n:] = False
         self._n_rows = n
@@ -12392,6 +12531,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 result._cols[col_name].set_all(arr[sorted_pos])
             else:
                 result._cols[col_name][:n] = arr[sorted_pos]
+        self._gather_null_masks_into(result, sorted_pos, n)
         result._valid_rows[:n] = True
         result._valid_rows[n:] = False
         result._n_rows = n
@@ -13008,7 +13148,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             from blosc2.schema_validation import validate_row
 
             row = validate_row(self._schema, row)
-        row = self._coerce_row_to_storage(row)
+        row, null_names = self._coerce_row_to_storage(row)
 
         pos = self._resolve_last_pos()
         if pos >= len(self._valid_rows):
@@ -13027,7 +13167,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if acc is not None and acc.valid:
                     acc.feed(pos, np.asarray([row[name]], dtype=col_array.dtype))
 
+        for name in null_names:
+            self._null_channel(name).set_valid(pos, False)
+
         n_rows = self.nrows
+        # As in extend(): the row only becomes visible on the next line, so
+        # both the values and the validity above are written under its cover.
         self._valid_rows[pos] = True
         self._last_pos = pos + 1
         self._n_rows = n_rows + 1
@@ -13190,16 +13335,30 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         list_processed_cols: dict[str, list] = {}
         varlen_scalar_processed_cols: dict[str, list] = {}
         dict_processed_cols: dict[str, list] = {}
+        # Validity for the mask-storage columns whose batch actually contained a
+        # null.  Absent means "nothing was null", which needs no sidecar write.
+        batch_valid: dict[str, np.ndarray] = {}
         for name in current_col_names:
             col_meta = self._schema.columns_by_name[name]
             if self._is_list_column(col_meta):
                 list_processed_cols[name] = list(raw_columns[name])
             elif self._is_varlen_scalar_column(col_meta):
-                varlen_scalar_processed_cols[name] = list(raw_columns[name])
+                channel = self._null_channel(name)
+                cells, valid = channel.coerce_batch(raw_columns[name], new_nrows)
+                if valid is not None:
+                    batch_valid[name] = valid
+                varlen_scalar_processed_cols[name] = list(cells)
             elif self._is_dictionary_column(col_meta):
                 dict_processed_cols[name] = list(raw_columns[name])
             else:
                 target_dtype = self._cols[name].dtype
+                # Split nullity out *before* NumPy sees the batch: a None in a
+                # float column would otherwise become a NaN, which under mask
+                # storage is a value (decision 6), not a null.
+                channel = self._null_channel(name)
+                raw_columns[name], valid = channel.coerce_batch(raw_columns[name], new_nrows)
+                if valid is not None:
+                    batch_valid[name] = valid
                 if isinstance(col_meta.spec, timestamp):
                     values = np.asarray(raw_columns[name])
                     if np.issubdtype(values.dtype, np.datetime64):
@@ -13267,7 +13426,16 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     self._cols[name][start_pos:end_pos] = values[:]
                     self._feed_summary(name, start_pos, values)
 
+        # Validity sidecars, written before the rows go live below.  Only the
+        # columns whose batch actually held a null appear here, so a null-free
+        # nullable column still never materializes a sidecar.
+        for name, valid in batch_valid.items():
+            self._null_channel(name).set_valid(slice(start_pos, end_pos), valid)
+
         n_rows = self.nrows
+        # Crash safety is inherited, not added: everything above -- values and
+        # validity alike -- is invisible until this line flips the rows live.
+        # Do not move any column write below it.
         self._valid_rows[start_pos:end_pos] = True
         self._last_pos = end_pos
         self._n_rows = n_rows + new_nrows
