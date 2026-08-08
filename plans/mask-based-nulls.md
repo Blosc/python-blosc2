@@ -1,14 +1,16 @@
 # Mask-based nullable columns for CTable
 
-> **Status: IN PROGRESS — Phases 0–6 landed 2026-08-08.** Lossless Arrow/Parquet round-trip now
-> works for every V1 kind, **opt-in** via `null_storage="mask"`; next up is Phase 7 (sort +
-> groupby), then Phase 8 (migration + docs). Six premises were disproven during implementation and
-> are corrected in place, each in a blockquote beside the text it corrects: the index path cannot
-> be fixed by a null-aware expression (§Expression layer), the bool dtype-flip cannot move out of
-> `__init__` (§Schema layer), ndarray columns do not get lazy null propagation for free
-> (§Expression layer), the "free" summary min/max fast path is unsound (§Reductions), `np.packbits`
-> is not needed and avoiding it is safer (§Arrow/Parquet), and `.equals()` cannot express the
-> round-trip contract (§Arrow/Parquet). Drafted 2026-08-08.
+> **Status: IN PROGRESS — Phases 0–7 landed 2026-08-08.** Lossless Arrow/Parquet round-trip works
+> for every V1 kind and sort/groupby/query now honour a sidecar, all **opt-in** via
+> `null_storage="mask"`; next up is Phase 8 (migration + docs). Six premises were disproven during
+> implementation and are corrected in place, each in a blockquote beside the text it corrects: the
+> index path cannot be fixed by a null-aware expression (§Expression layer), the bool dtype-flip
+> cannot move out of `__init__` (§Schema layer), ndarray columns do not get lazy null propagation
+> for free (§Expression layer), the "free" summary min/max fast path is unsound (§Reductions),
+> `np.packbits` is not needed and avoiding it is safer (§Arrow/Parquet), and `.equals()` cannot
+> express the round-trip contract (§Arrow/Parquet). Phase 7 added a seventh: **Phase 1 left the
+> mask half of the query path undone** and nobody noticed until sort work went looking
+> (§Expression layer, "Addendum 2"). Drafted 2026-08-08.
 > Revised 2026-08-08 after review: lazy sidecar materialization (decision 9), `NullPolicy`
 > inference instead of raising, staged default flip (Phase 9), null-predicate rewrite pulled
 > forward to Phase 1, sidecar suffix renamed `.notnull`.
@@ -540,6 +542,44 @@ Index descriptors gain `{"null_aware": true, "null_order": "last"}` (anticipated
 `plans/ctable-nulls.md:614-623`, present in neither `plans/ctable-indexes-opsi.md` nor the code).
 Read with `.get("null_aware", False)`; bump the build token so stale indexes rebuild.
 
+> **As built (2026-08-08).** All four items, plus one more site and two pre-existing sort bugs that
+> only mask storage can reach.
+>
+> - **`_build_lex_keys`: the indicator key is not a refinement here, it is the whole of nulls-last.**
+>   For a sentinel the value key already groups the nulls together and the indicator only decides
+>   *where* that group goes; for a mask column the fill sorts wherever an ordinary `0` or `""` would,
+>   so without the key nulls came out **first** ascending and last descending — the contract exactly
+>   inverted, and silently. `valid[live_pos]` is one byte per row and needs no string comparison for
+>   `U`/`S`.
+> - **`_sorted_positions_from_full_index`: real, and smaller than advertised.** The three
+>   partition branches (dict rank / mask / sentinel) collapsed into one shared body. Measured on 2M
+>   rows: **3.0x** faster for a `U16` string column (17.1 ms → 5.7 ms) but only **1.2x** for `int64`
+>   (8.5 → 6.9 ms). The 8x–64x is real as *bytes read*; both arrays compress well, so wall time
+>   tracks it only where the itemsize gap is wide. Still the best line-for-line change in the phase,
+>   just not by the margin the paragraph above claims.
+> - **`_sorted_slice_positions` had to be found, and it bails.** Not in this section's list. The
+>   window read locates the null block by bisecting the *sorted values* sidecar for the null's stored
+>   value; under mask storage that value is the fill, which genuine rows share, and the validity
+>   sidecar is indexed by *physical* position where the window is indexed by sorted position — so the
+>   window cannot tell them apart at all. It declines for a mask column that has a sidecar and falls
+>   back to the full sorted view, which is now mask-aware. A null-free mask column keeps the window
+>   path: there is no null block to locate.
+> - **`_utf8_rank_arrays` is the landmine this section promised, and the staleness rule matters more
+>   than the fix.** The fix is three lines (`ranks[~valid] = null_rank`, after the gather — the fill
+>   is a legitimate vocabulary entry other rows may share, so it has to be per row). The subtlety is
+>   that an index built *before* those three lines is wrong and **neither O(1) staleness signal can
+>   see it**: the column's row count and byte size are exactly what they were. `null_aware` absent
+>   from the meta is what marks it, and only for a column that has a sidecar — a sentinel column's
+>   nulls have always carried `null_rank`, so invalidating those would rebuild every stored utf8
+>   index in the wild for nothing.
+> - **Two pre-existing sort bugs, neither about nulls, both newly reachable.** The descending value
+>   key is built by negating the values, which breaks on the two dtypes a *nullable* column could not
+>   previously be: `bool` has no unary minus (`TypeError`, and this fires for a plain non-nullable
+>   bool column today), and a narrow signed dtype wraps on its own minimum — `-(-128)` is `-128` in
+>   int8 — so that row sorts as if it were the largest. A sentinel had to reserve int8's `-128` and a
+>   nullable bool was physically `uint8`, which is why the combination never came up. Fixed by
+>   negating in int64 for `b`/`u`/`i` alike.
+
 **The indexed-OR bail (`ctable_indexing.py:1459-1461`) is not fixed by masks either** — the problem
 is that global post-filtering (`_exclude_null_positions:1498-1509`) drops rows that legitimately
 match via the *other* branch. The right fix is per-leaf and **independent of storage**: add
@@ -598,6 +638,49 @@ Phase 1**, landing right after the `NullChannel` refactor and before any mask wo
 > comparison results to carry their null predicate through `~` — a boolean analogue of
 > `NullableExpr` with `__invert__` — and folds naturally into decision 8's deferred Kleene
 > follow-up rather than Phase 1.
+>
+> **Addendum 2 (2026-08-08): Phase 1 only did the sentinel half, and Phase 6 shipped the gap.**
+> `_rewrite_null_predicates` tested `kind_of_spec(spec) != NULL_SENTINEL` and skipped everything
+> else, so a mask column got no guard at all — and the same one-kind test in
+> `ctable_indexing.py:1453` left it out of `nullable_indexed`, so no post-filter either. Both were
+> measured on a 2000-row table with 1 % nulls, and both leaked:
+>
+> - **Scan.** `t.where("a < 500")` returned **every null**, because the int fill is `0`. Same shape
+>   of bug Phase 1 fixed for sentinels, read the other way round: there the stored value was a
+>   sentinel that happened to satisfy the leaf, here it is a fill that does.
+> - **Index.** `t.where("f > 0.5")` over a float column returned **every null** even after the scan
+>   was fixed, because an ordered index answers by taking a range of the sorted column and the NaN
+>   fill sorts to the end of it. This is precisely the correction above — a null-aware expression
+>   cannot fix an index that never evaluates the expression — arriving a second time for a second
+>   storage.
+>
+> Fixed by giving mask storage the same two mechanisms:
+>
+> - the guard is `valid_pred()` injected as a `__nv{i}` operand, since there is no in-band literal
+>   to compare against, and **the fill stands in for the sentinel in `_sentinel_can_match`** — which
+>   is exactly right, being what a null row actually holds. `0` cannot satisfy `a > 10` and NaN
+>   cannot satisfy any ordered comparison, so those leaves stay unguarded and stay on their index;
+> - a mask column with a sidecar joins `nullable_indexed`, so `_exclude_null_positions` filters it —
+>   reading **one byte per candidate off the sidecar**, without touching the values at all, which is
+>   the cheaper half of what masks buy. It stays out of `nullable_needs_exclude` for the same reason
+>   a NaN sentinel does: that fall-back exists for the mask-direct path, which evaluates the
+>   (guarded) predicate through miniexpr.
+>
+> Two more sites the one-kind test had hidden, both utf8, both fixed in place rather than through
+> the expression layer: `_utf8_scalar_mask`/`_utf8_compare_column` compared away the sentinel string
+> and so let the `""` fill through, and `utf8_span_eval` derived its per-span nulls by looking for
+> the sentinel in the values — it now takes a `valids=` dict alongside `sentinels=`. A **string**
+> result keeps the fill rather than a sentinel: there is nothing to write back, and a bare
+> `UTF8Array` has nowhere to carry a validity channel.
+>
+> One drive-by fix falls out of the `partial_exact_positions` refinement block, which narrowed
+> `pos` column by column while trimming the prefetched primary values only for the primary column's
+> own filter: with two nullable indexed columns and nulls in the non-primary one, `prefetched` came
+> out **misaligned with `candidates`**. Rewritten as one combined keep-mask applied once, which is
+> both correct and shorter.
+>
+> Verified against a NumPy SQL oracle over 32 combinations — {mask, sentinel} × {indexed,
+> unindexed} × 8 expression shapes including `|` and `~` — all agreeing exactly.
 
 ### Groupby
 
@@ -610,6 +693,40 @@ after `__setitem__`** — budget accordingly.
 
 One semantic improvement follows from decision 6: NaN in a float *value* column is no longer
 missing. Keep the `is_key` NaN coercion at `:2131-2134` for keys (dropna semantics).
+
+> **As built (2026-08-08).** It was not the messiest integration — that was the *key* side, which
+> this section does not mention at all.
+>
+> - **A mask key column needs recoding, not a threaded flag.** Threading `valid=` fixes value
+>   columns, and that part is as described (`_null_mask` grows the kwarg; the generic path and the
+>   dense single-key path gather validity by the same `live_mask` as the values). But a *key* column
+>   has a second problem no validity flag solves: with `dropna=False` the null rows have to form a
+>   group of their own, and their fill is a value a genuine row may hold, so they would merge into
+>   the `0` group of an int key or the `""` group of a string one. The fix is to give them a reserved
+>   code — exactly what a dictionary column gets for free from `null_code`. `_Utf8KeyChunk` was
+>   already the right shape for that, so it became `_CodedKeyChunk` with a `null_code` field, and
+>   `_coded_chunk_with_nulls` recodes any mask key chunk into one. `uniques[null_code] is None`, so
+>   the null group comes out keyed **`None`** and a mask-storage output column writes it back as a
+>   real null — where a sentinel column can only offer its sentinel (`group_by(dropna=False)` over
+>   one returns a group keyed `-1`).
+> - **`_null_output_value` returns `None` for a mask output spec**, which is the same point one layer
+>   up: a group with no non-null input no longer has to come back as `0` and hope nobody reads it as
+>   data. Note `sum`'s output spec is a fresh non-nullable `float64`/`int64`, so *that* aggregate
+>   still spells missing as `NaN` — unchanged, and the same for both storages.
+> - **The fast paths bail, but not all of them, and the difference is 4.5x.** Every path reads
+>   nullity out of the values; a Cython kernel is handed a `skip_nan` flag, not a validity array, so
+>   the four Cython paths defer to the generic path whenever a mask column in play holds a null. The
+>   dense single-int-key path is plain NumPy and already routes value columns through `_null_mask`,
+>   so it only needed the sidecar — and keeping it matters: 2M-row `sum` grouped by an int key went
+>   91.8 ms → 20.4 ms once it stayed, against 10.8 ms for the sentinel equivalent. A mask *key*
+>   column still has to leave it, since a `_CodedKeyChunk` is not the array of dense non-negative
+>   ints that path indexes with. Threading validity into the kernels is the named follow-up.
+> - **One pre-existing bug, storage-independent.** `min`/`max` seed a per-group accumulator with the
+>   dtype's opposite identity, and `_max_identity`/`_min_identity` had no `bool` case — so
+>   `np.full(n, None, dtype=bool)` gave `False`, a min accumulator could never rise above it, and
+>   every all-`True` group reduced to `False`. Reachable today with a plain non-nullable bool column
+>   on any generic-path aggregation (a string key is enough); a nullable one was `uint8`, whose
+>   identities are fine, which is why mask storage is what surfaced it.
 
 ### Nullable-bool cleanup
 
@@ -728,7 +845,7 @@ default-created tables require them.
 | 4 | ✅ **Read/write + null API.** `extend`/`append`/`_coerce_row_to_storage`/`__setitem__`/`assign`; `is_null`/`notnull`/`null_count`/`fillna`/`_nonnull_chunks`/`to_numpy(masked=)`/`dropna`; **plus every gather-and-rebuild path** (`sort_by` ×3, `take`, `slice`), which this section had not listed. Mask columns fully usable. `tests/ctable/test_null_mask_api.py` (90 tests). | **L** | **High** (turned out to be the reference cycle, not `__setitem__`) |
 | 5 | ✅ **Expressions + reductions.** `_ndarray_values_for_reduction`, argmin/argmax (both were reducing over the *fill*), `_reduction_null_mask` as the one storage-agnostic entry point. `_raw_null_pred`/`_lazy_nonnull_mask`/`_is_nullable_bool` needed nothing — Phases 0–4 had already made them storage-agnostic. **The ndarray-propagation gain is not real and was not done**, and the free summary fast path is unsound; both corrections are above. `tests/ctable/test_null_mask_expressions.py` (39 tests). | S (was M) | Low (was Med) |
 | 6 | ✅ **Arrow/Parquet.** Import + export for all V1 kinds; `arrow_slice(valid=)`; `null_storage=` on `from_arrow`/`from_parquet`; the "no sentinel available" import error now names the way out instead of being deleted (it still fires for sentinel storage, which still cannot represent those types). No `packbits` — pyarrow's own packing is borrowed instead. Ships **opt-in**; the default stays `"sentinel"`. `tests/ctable/test_null_mask_arrow.py` (42 tests). | M | Med |
-| 7 | **Sort + groupby.** `_build_lex_keys`, `_sorted_positions_from_full_index` (big I/O win), `_utf8_rank_arrays(valid=)`, groupby `_null_mask` threading. | M | Med-High |
+| 7 | ✅ **Sort + groupby.** `_build_lex_keys` (the indicator key is nulls-last *entirely*, not a refinement), `_sorted_positions_from_full_index` (3.0x for `U16`, 1.2x for `int64` — the I/O win is in bytes, not proportionally in time), `_utf8_rank_arrays(valid=)` plus a `null_aware` staleness rule no O(1) signal could replace, `_sorted_slice_positions` bails, groupby `_null_mask(valid=)` **plus `_CodedKeyChunk`**, which this section had not anticipated: a mask *key* column needs a reserved null code, not a threaded flag. **Plus the mask half of Phase 1**, which had never been done — `where()` leaked nulls on both the scan and the index (see §Expression layer, Addendum 2). Three pre-existing storage-independent bugs fixed on the way: descending sort of `bool` (raised) and of full-range signed ints (wrong order), and groupby `min`/`max` over `bool` (always `False`). `tests/ctable/test_null_mask_sort_groupby.py` (75 tests). | **L** (was M) | Med-High |
 | 8 | **Migration + docs.** `convert_nulls`, `Column.null_storage`, `info()`, `doc/reference/ctable.rst` null-policy rewrite, release notes. | S–M | Low |
 | 9 | **Default flips to `"mask"`.** A one-line `NullPolicy` change plus release notes — lossless round-trip is why the default exists. Lands **no earlier than one release after Phase 6** so older readers in the wild already understand schema version 3. | S | Low |
 | 10 | **Index null-awareness remainder** *(independent)*. Mask-aware summary builder; `null_aware`/`null_order` descriptors; re-enable `_summary_minmax_source` for mask and sentinel columns alike. | **L** | High |
@@ -736,3 +853,18 @@ default-created tables require them.
 The riskiest, most-coupled work is isolated into Phases 4, 7 and 10, each of which can slip
 without blocking the others. Phase 9 is a policy change, not code — its only prerequisite is
 that Phases 2–8 have soaked for a release.
+
+## Named follow-ups (not blocking any phase)
+
+- **Validity through the Cython groupby kernels.** A mask column holding a null costs ~1.9x on a
+  2M-row grouped `sum` against the sentinel equivalent, because the four Cython paths bail; the
+  kernels take a `skip_nan` flag where they would need a `values_valid` array. Two of them
+  (`groupby_hash_i64x2_f64`, `groupby_dense_int_count_checked`) already accept one, so this is
+  partly a matter of using what is there.
+- **A mask *key* column back on the dense single-key path.** It leaves because
+  `_CodedKeyChunk.codes` are chunk-local, not the dense global ints that path indexes with.
+- **`__setitem__`'s fast paths** for mask columns (deferred in Phase 4, still unmeasured).
+- **Kleene three-valued logic**, decision 8 — which now also owns the operator-form negation leak
+  pinned as a `strict=True` xfail in `tests/ctable/test_null_predicate_rewrite.py`.
+- **Phase 10** as listed above: mask-aware summary builder, `null_aware`/`null_order` descriptors,
+  and with them a genuinely indexed `OR` over a nullable column.

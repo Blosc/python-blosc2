@@ -2231,6 +2231,11 @@ class Column:
         other_arr = other._raw_col
         nv = self.null_value
         other_nv = other.null_value
+        # Mask storage keeps nullity out of the values, so the side channel is
+        # the only thing that can exclude a null here; the fill it left behind
+        # ("" for utf8) is an ordinary string that compares like any other.
+        valid = self._nulls.valid_array()
+        other_valid = other._nulls.valid_array()
 
         def fn(chunk, start, stop):
             rhs = other_arr[start:stop]
@@ -2239,6 +2244,10 @@ class Column:
                 res &= chunk != nv
             if other_nv is not None:
                 res &= rhs != other_nv
+            if valid is not None:
+                res &= np.asarray(valid[start:stop], dtype=bool)
+            if other_valid is not None:
+                res &= np.asarray(other_valid[start:stop], dtype=bool)
             return res
 
         raw = self._utf8_chunked_bool(fn)
@@ -2254,6 +2263,11 @@ class Column:
         see :meth:`_utf8_compare_scalar` for that.
         """
         nv = self.null_value
+        # Under mask storage there is no sentinel string to compare away: a null
+        # row holds the empty-string fill, which is a perfectly ordinary value
+        # here (and one other rows may legitimately share).  The sidecar is the
+        # only thing that can tell the two apart.
+        valid = self._nulls.valid_array()
 
         indexed = self._utf8_index_mask(numpy_op, value)
         if indexed is not None:
@@ -2267,6 +2281,8 @@ class Column:
                     res = ~res
                 if nv is not None:
                     res &= ~arr.equal_mask_span(nv, start, stop)
+                if valid is not None:
+                    res &= np.asarray(valid[start:stop], dtype=bool)
                 return res
         else:
 
@@ -2282,6 +2298,8 @@ class Column:
                     res = ~lt
                 if nv is not None:
                     res = res & ~arr.equal_mask_span(nv, start, stop)
+                if valid is not None:
+                    res = res & np.asarray(valid[start:stop], dtype=bool)
                 return res
 
         return self._utf8_chunked_bytes(fn)
@@ -4554,6 +4572,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         col = self._root_table._cols.get(name)
         if col is None:
+            return True
+        if not utf8_rank_meta.get("null_aware", False) and self._root_table._null_mask(name) is not None:
+            # Built before mask nulls were stamped with null_rank, so its ranks
+            # place them wherever the empty-string fill factorized -- rank 0,
+            # where a genuine "" is indistinguishable from a null.  The column's
+            # bytes need not have changed for that to be wrong, so neither
+            # signal below can catch it: rebuild rather than trust it.
             return True
         return len(col) != utf8_rank_meta.get("n_rows") or int(col._bytes_used) != utf8_rank_meta.get(
             "nbytes"
@@ -12117,6 +12142,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         null_value = None
         null_code = None
+        valid_arr = None
         is_dict_rank = False
         if name in root._cols:
             col_info = root._schema.columns_by_name.get(name)
@@ -12124,6 +12150,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 null_value = getattr(col_info.spec, "null_value", None)
                 if isinstance(col_info.spec, DictionarySpec):
                     null_code = col_info.spec.null_code
+                elif getattr(col_info.spec, "uses_mask", False):
+                    valid_arr = root._null_mask(name)
             descriptor = catalog.get(name)
             if descriptor is None or descriptor.get("kind") != "full" or descriptor.get("stale", False):
                 descriptor = None
@@ -12196,40 +12224,39 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             current_valid = self._valid_rows[:]
             positions = positions[current_valid[positions]]
 
+        # The index sorts by stored value, but sort_by's contract is nulls-last.
+        # Partition explicitly so it holds for either order and for any way of
+        # spelling a null -- a NaN sentinel sorts last on its own, an integer
+        # sentinel like INT64_MIN sorts first, and a mask column's fill sorts
+        # wherever an ordinary 0 or "" would.  Free each 24M-element temporary
+        # as soon as it is consumed to keep peak memory near the size of the
+        # permutation itself.
+        null_phys = None
         if is_dict_rank:
-            # Dict-rank index: positions sorted by rank (int32), nulls have sentinel null_rank.
-            # Partition null rows using codes (int32), not decoded strings.
+            # Positions are sorted by rank (int32), nulls carrying null_rank.
+            # Partition using the codes, not the decoded strings.
             codes = np.asarray(root._cols[name].codes[:], dtype=np.int32)
             null_phys = codes == null_code
             del codes
-            if null_phys.any():
-                is_null = null_phys[positions]
-                del null_phys
-                nulls = positions[is_null]
-                nonnull = positions[~is_null]
-                del is_null, positions
-                if not ascending:
-                    nonnull = nonnull[::-1]
-                return np.concatenate([nonnull, nulls])
-            # No nulls: fall through to simple reverse
+        elif valid_arr is not None:
+            # Mask storage: one byte per row off the sidecar rather than the
+            # whole raw column, which is where this path used to spend most of
+            # its I/O -- 8x for int64, 64x for a U16 string column.
+            null_phys = ~np.asarray(valid_arr[:])
         elif null_value is not None:
-            # The index sorts by raw value, but sort_by's contract is nulls-last.
-            # Partition explicitly so it holds for any sentinel (NaN sorts last,
-            # an integer sentinel like INT64_MIN sorts first) and either order.
-            # Free each 24M-element temporary as soon as it is consumed to keep
-            # peak memory near the size of the permutation itself.
             raw = np.asarray(root._cols[name][:])
             null_phys = sentinel_mask(raw, null_value)
             del raw
-            if null_phys.any():
-                is_null = null_phys[positions]
-                del null_phys
-                nulls = positions[is_null]
-                nonnull = positions[~is_null]
-                del is_null, positions
-                if not ascending:
-                    nonnull = nonnull[::-1]
-                return np.concatenate([nonnull, nulls])
+
+        if null_phys is not None and null_phys.any():
+            is_null = null_phys[positions]
+            del null_phys
+            nulls = positions[is_null]
+            nonnull = positions[~is_null]
+            del is_null, positions
+            if not ascending:
+                nonnull = nonnull[::-1]
+            return np.concatenate([nonnull, nulls])
 
         if not ascending:
             positions = positions[::-1]
@@ -12287,6 +12314,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 else:
                     raw = gathered[name] if name in gathered else self._cols[name][live_pos]
             nv = getattr(col_info.spec, "null_value", None) if col_info else None
+            valid = (
+                self._null_mask(name)
+                if col_info is not None and getattr(col_info.spec, "uses_mask", False)
+                else None
+            )
 
             # Value key
             if not asc:
@@ -12294,7 +12326,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     # strings can't be negated — invert via rank
                     rank = np.argsort(np.argsort(raw, kind="stable"), kind="stable")
                     lex_keys.append((n - 1 - rank).astype(np.intp))
-                elif np.issubdtype(raw.dtype, np.unsignedinteger):
+                elif raw.dtype.kind in "bui":
+                    # Negate in int64, never in the column's own dtype.  bool has
+                    # no unary minus at all, and a narrow signed dtype wraps on
+                    # its own minimum -- ``-(-128)`` is ``-128`` in int8 -- which
+                    # silently leaves that row sorted as if it were the largest.
+                    # Mask storage is what made both reachable in a *nullable*
+                    # column: a sentinel had to reserve int8's -128, and a
+                    # nullable bool was physically uint8.
                     lex_keys.append(-raw.astype(np.int64))
                 else:
                     lex_keys.append(-raw)
@@ -12305,6 +12344,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             # so nulls always sort last (0 before 1 → non-null before null).
             if is_dict_col and col_info.spec.nullable:
                 lex_keys.append(is_null.astype(np.intp))
+            elif valid is not None:
+                # Mask storage: the fill occupying a null slot is an ordinary
+                # value as far as lexsort is concerned (0 and "" both sort
+                # first), so this key is the whole of nulls-last here -- not
+                # just a refinement of the value key as it is for a sentinel.
+                # One byte per row, and no string comparison for U/S.
+                lex_keys.append((~np.asarray(valid[live_pos])).astype(np.intp))
             elif nv is not None:
                 lex_keys.append(sentinel_mask(raw, nv).astype(np.intp))
 
@@ -12457,6 +12503,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return None
 
         col_info = self._schema.columns_by_name.get(name)
+        if (
+            col_info is not None
+            and getattr(col_info.spec, "uses_mask", False)
+            and self._null_mask(name) is not None
+        ):
+            # Mask storage with at least one null: the null rows hold this
+            # column's fill, which is an ordinary value in the sorted sidecar,
+            # so bisecting for it would sweep up genuine fill-valued rows as
+            # well.  Only the sidecar can tell the two apart, and it is indexed
+            # by physical position, not by sorted position, so the window read
+            # cannot consult it.  Fall back to the full sorted view, which is
+            # mask-aware.  A mask column that has never held a null keeps this
+            # path: with no sidecar there is no null block to locate.
+            return None
         null_value = getattr(col_info.spec, "null_value", None) if col_info is not None else None
         # Rank index: the sidecar holds int32 ranks, so the null block is located
         # by null_rank, not by the column's own sentinel (a string, for utf8).
@@ -13662,10 +13722,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         Each nullable column referenced by the expression contributes a
         validity operand (``a != null_value``, or ``~isnan(a)`` for a NaN
-        sentinel), which :func:`~blosc2.ctable_nulls.rewrite_null_predicates`
-        conjoins onto every comparison that reads it.  The validity operand is
-        a lazy expression over the same raw array, so it fuses into the same
-        pass rather than materializing anything.
+        sentinel; the ``.notnull`` sidecar for a mask-storage column), which
+        :func:`~blosc2.ctable_nulls.rewrite_null_predicates` conjoins onto every
+        comparison that reads it.  The validity operand is a lazy expression
+        over the same raw array, so it fuses into the same pass rather than
+        materializing anything.
+
+        A **mask-storage** column needs this just as much as a sentinel one, and
+        for the same reason read the other way round: its nulls hold the
+        column's fill, and a fill is a value like any other to miniexpr, so
+        ``a < 10`` over an int column matched every null (fill ``0``) before
+        this ran.
 
         This makes the *scan* path correct — including the scan that an
         indexed OR over a nullable column bails to.  It does not replace the
@@ -13684,9 +13751,27 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if name in self._computed_cols:
                 continue
             col_info = self._schema.columns_by_name.get(name)
-            if col_info is None or kind_of_spec(col_info.spec) != NULL_SENTINEL:
+            if col_info is None:
+                continue
+            kind = kind_of_spec(col_info.spec)
+            if kind not in (NULL_SENTINEL, NULL_MASK):
                 continue
             if not self._expression_references_name(expr, name):
+                continue
+            if kind == NULL_MASK:
+                # No in-band value to compare against, so the guard can only be
+                # the sidecar, injected as an operand.  The *fill* stands in for
+                # the sentinel in the can-match test, and correctly so: it is
+                # what a null row actually holds, so a leaf the fill cannot
+                # satisfy cannot return a null either.  That keeps ``a > 10`` on
+                # an int column (fill 0) and every ordered comparison on a float
+                # one (fill NaN) unguarded, and so still on their index.
+                valid_pred = self[name]._nulls.valid_pred()
+                if valid_pred is None:
+                    continue  # no sidecar: the column has never held a null
+                guard = f"__nv{i}"
+                new_operands[guard] = valid_pred
+                valid_exprs[name] = (guard, fill_value_for(col_info.spec))
                 continue
             guard = sentinel_guard_expr(name, col_info.spec.null_value)
             if guard is None:
@@ -13935,6 +14020,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             {name: self._cols[col_of(name, name)] for name in utf8_names},
             {name: self[col_of(name, name)].null_value for name in utf8_names},
             len(self._valid_rows),
+            # A mask-storage operand carries no sentinel for the driver to find,
+            # so it hands over its validity sidecar instead.
+            valids={name: self._null_mask(col_of(name, name)) for name in utf8_names},
             strict=strict,
             span_rows=self._UTF8_EXPR_SPAN,
             budget=self._UTF8_EXPR_BUDGET,

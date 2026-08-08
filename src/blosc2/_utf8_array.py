@@ -126,6 +126,19 @@ def utf8_spans(arrays: dict, n_logical: int, span_rows: int, budget: int):
             yield a, min(a + rows, stop)
 
 
+def _span_null_mask(raw: np.ndarray, sentinel, valid, start: int, stop: int) -> np.ndarray | None:
+    """Which rows of one span are null, or ``None`` when the operand has no nulls.
+
+    Whichever channel the operand uses: a sentinel found among *raw*'s values,
+    or a slice of a mask-storage column's validity sidecar.
+    """
+    if sentinel is not None:
+        return raw == sentinel
+    if valid is not None:
+        return ~np.asarray(valid[start:stop], dtype=bool)
+    return None
+
+
 def utf8_span_eval(
     expr: str,
     operands: dict,
@@ -133,6 +146,7 @@ def utf8_span_eval(
     sentinels: dict,
     n_phys: int,
     *,
+    valids: dict | None = None,
     strict: bool = False,
     span_rows: int = UTF8_EXPR_SPAN,
     budget: int = UTF8_EXPR_BUDGET,
@@ -154,6 +168,14 @@ def utf8_span_eval(
     (SQL ``WHERE`` semantics), a string result gets the sentinel back.  A string
     result therefore needs the operands to agree on one sentinel, and raises
     ``ValueError`` when they do not.
+
+    A **mask-storage** operand has no sentinel to find in its values -- its null
+    rows already hold the ``""`` fill, which other rows may legitimately share --
+    so it names its validity sidecar in *valids* instead (physical, ``True`` =
+    not null).  Either channel feeds the same per-span *nulls*, so a boolean
+    result is forced ``False`` for those rows just the same.  A **string** result
+    keeps the fill: there is no sentinel to write back, and a bare
+    :class:`UTF8Array` has nowhere to carry a validity channel of its own.
 
     Span operands are handed over as blosc2 arrays rather than NumPy ones: the
     NumPy route evaluates through ``slices_eval``, which never reaches
@@ -179,18 +201,18 @@ def utf8_span_eval(
         nulls = None
         for name, arr in arrays.items():
             raw = np.asarray(arr[start:stop])
-            nv = sentinels[name]
-            if nv is not None:
-                mask = raw == nv
-                if mask.any():
-                    nulls = mask if nulls is None else (nulls | mask)
-                    raw = np.where(mask, "", raw)
+            mask = _span_null_mask(
+                raw, sentinels[name], None if valids is None else valids.get(name), start, stop
+            )
+            if mask is not None and mask.any():
+                nulls = mask if nulls is None else (nulls | mask)
+                raw = np.where(mask, "", raw)
             span[name] = blosc2.asarray(raw.astype(utf8_span_dtype(raw)))
         res = np.asarray(blosc2.lazyexpr(expr, span).compute(**compute_kwargs))
         if nulls is not None:
             if res.dtype.kind == "b":
                 res = res & ~nulls
-            elif res.dtype.kind == "U":
+            elif res.dtype.kind == "U" and null_value is not None:
                 # The sentinel may be wider than the computed values.
                 res = np.where(
                     nulls,

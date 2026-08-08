@@ -20,7 +20,7 @@ import numpy as np
 
 import blosc2
 from blosc2 import compute_chunks_blocks
-from blosc2.ctable_nulls import NULL_SENTINEL, is_nan_sentinel, kind_of_spec, sentinel_mask
+from blosc2.ctable_nulls import NULL_MASK, NULL_SENTINEL, is_nan_sentinel, kind_of_spec, sentinel_mask
 from blosc2.schema import (
     DictionarySpec,
     ListSpec,
@@ -97,7 +97,7 @@ def _dict_rank_hash(dictionary) -> str:
 _UTF8_RANK_SPAN = 1 << 20
 
 
-def _utf8_rank_arrays(col, n_phys: int, null_value: str | None):
+def _utf8_rank_arrays(col, n_phys: int, null_value: str | None, *, valid=None):
     """Alphabetical rank per row for a utf8 column, plus its staleness metadata.
 
     Sorting by rank is sorting by decoded string, so an ``int32`` rank column
@@ -106,9 +106,17 @@ def _utf8_rank_arrays(col, n_phys: int, null_value: str | None):
     there is no stored code array, so the column is factorized here; the
     factorizer hashes raw bytes and only ever decodes the distinct values.
 
-    Null rows carry a sentinel *string*, so the sentinel is just another
-    vocabulary entry; it is given the largest rank so nulls sort last, matching
-    both the dictionary index and ``_build_lex_keys``.
+    Under sentinel storage null rows carry a sentinel *string*, so the sentinel
+    is just another vocabulary entry; it is given the largest rank so nulls sort
+    last, matching both the dictionary index and ``_build_lex_keys``.
+
+    Under mask storage there is **no sentinel in the vocabulary**: a null row
+    holds the empty-string fill, which factorizes as an ordinary entry with rank
+    0 — so nulls would sort *first* and be indistinguishable from genuine ``""``
+    rows in every rank comparison the index answers.  *valid* (physical, one
+    flag per row) is what closes that hole: null rows are stamped with
+    ``null_rank`` after the rank gather, exactly where the sentinel path would
+    have put them.
     """
     fact = col.factorizer()
     codes = np.empty(n_phys, dtype=np.int64)
@@ -131,12 +139,18 @@ def _utf8_rank_arrays(col, n_phys: int, null_value: str | None):
     # turns a query literal into a rank (np.searchsorted) without touching data.
     sorted_vocab = uniques[order]
     ranks = code_to_rank[codes] if n_entries else np.zeros(n_phys, dtype=np.int32)
+    if valid is not None:
+        # Mask storage: after the gather, not before.  The fill in a null row is
+        # a legitimate vocabulary entry that other rows may share, so the
+        # rewrite has to be per row rather than per vocabulary entry.
+        ranks = np.where(np.asarray(valid[:n_phys], dtype=bool), ranks, null_rank)
     # Staleness signals must be O(1) to check: re-deriving the vocabulary would
     # mean factorizing the column again on every query.  Any write already marks
     # every index stale, so these only have to catch a rebuilt-but-changed
     # column, for which row count plus blob size is enough.
     meta = {
         "null_rank": int(null_rank),
+        "null_aware": null_value is not None or valid is not None,
         "vocab_len": int(n_entries),
         "n_rows": int(n_phys),
         "nbytes": int(col._bytes_used),
@@ -897,7 +911,7 @@ class _CTableIndexingMixin:
             # same length _utf8_rank_index_stale() compares the meta against.
             n_phys = len(col_arr)
             ranks_arr, utf8_rank_meta, utf8_vocab = _utf8_rank_arrays(
-                col_arr, n_phys, self[col_name].null_value
+                col_arr, n_phys, self[col_name].null_value, valid=self._null_mask(col_name)
             )
             col_arr = blosc2.asarray(ranks_arr)
 
@@ -1450,18 +1464,29 @@ class _CTableIndexingMixin:
         # a NaN sentinel sorts last, so every NaN row comes back for any
         # ``>`` query.  The expression being correct therefore does not make the
         # index result correct, and these positions must still be filtered.
-        nullable_indexed = [
-            name
-            for name, _arr, _descriptor in indexed_columns
-            if kind_of_spec(root._schema.columns_by_name[name].spec) == NULL_SENTINEL
-        ]
+        # Mask storage is in the same position as a sentinel here, with the fill
+        # playing the sentinel's part: the ordered range that answers ``f > 0.5``
+        # contains the NaN fill of every null row, so a mask column's nulls come
+        # back too unless they are filtered out.  A mask column with no sidecar
+        # has no nulls at all, so there is nothing for it to contribute.
+        null_kinds = {}
+        for name, _arr, _descriptor in indexed_columns:
+            kind = kind_of_spec(root._schema.columns_by_name[name].spec)
+            if kind == NULL_SENTINEL or (kind == NULL_MASK and root._null_mask(name) is not None):
+                null_kinds[name] = kind
+        nullable_indexed = list(null_kinds)
         # Only non-NaN sentinels need the *positions* fall-back below; for a NaN
         # sentinel the mask-direct path can stay, because that path evaluates the
-        # predicate through miniexpr rather than reading an ordered range.
+        # predicate through miniexpr rather than reading an ordered range.  A
+        # mask column is in the same position: whatever its fill, the predicate
+        # miniexpr evaluates carries the sidecar guard that
+        # ``CTable._rewrite_null_predicates`` conjoined onto every leaf the fill
+        # could have satisfied.
         nullable_needs_exclude = [
             name
-            for name in nullable_indexed
-            if not is_nan_sentinel(root._schema.columns_by_name[name].spec.null_value)
+            for name, kind in null_kinds.items()
+            if kind == NULL_SENTINEL
+            and not is_nan_sentinel(root._schema.columns_by_name[name].spec.null_value)
         ]
 
         # Global null post-filtering is not correct for OR expressions: it would
@@ -1510,10 +1535,17 @@ class _CTableIndexingMixin:
 
         def _exclude_null_positions(positions):
             positions = np.asarray(positions, dtype=np.int64)
-            for name in nullable_indexed:
-                nv = root._schema.columns_by_name[name].spec.null_value
-                raw = root._cols[name][positions]
-                positions = positions[~sentinel_mask(raw, nv)]
+            for name, kind in null_kinds.items():
+                if positions.size == 0:
+                    break
+                if kind == NULL_MASK:
+                    # One byte per candidate off the sidecar, and the values are
+                    # not read at all -- the cheaper half of what masks buy.
+                    keep = np.asarray(root._null_mask(name)[positions], dtype=bool)
+                else:
+                    nv = root._schema.columns_by_name[name].spec.null_value
+                    keep = ~sentinel_mask(root._cols[name][positions], nv)
+                positions = positions[keep]
             return positions
 
         if plan.exact_positions is not None:
@@ -1548,17 +1580,23 @@ class _CTableIndexingMixin:
             if nullable_indexed and primary_op_name is not None:
                 raw = primary_col_arr[candidates]
                 raw = np.asarray(raw) if hasattr(raw, "__array__") else raw
-                pos = candidates
-                for name in nullable_indexed:
+                # One combined keep-mask over the full candidate set, so the
+                # prefetched primary values stay aligned with the positions
+                # however many columns contribute nulls.  Narrowing the
+                # positions column by column while trimming ``raw`` only for the
+                # primary would silently misalign the two.
+                keep = np.ones(len(candidates), dtype=bool)
+                for name, kind in null_kinds.items():
+                    if kind == NULL_MASK:
+                        keep &= np.asarray(root._null_mask(name)[candidates], dtype=bool)
+                        continue
                     nv = root._schema.columns_by_name[name].spec.null_value
-                    if name == primary_col_name:
-                        keep = ~sentinel_mask(raw, nv)
-                        pos = pos[keep]
-                        raw = raw[keep]  # already filtered for refinement reuse
-                    else:
-                        pos = pos[~sentinel_mask(root._cols[name][pos], nv)]
-                candidates = pos
-                prefetched = {primary_op_name: raw}
+                    values = raw if name == primary_col_name else root._cols[name][candidates]
+                    keep &= ~sentinel_mask(values, nv)
+                candidates = candidates[keep]
+                # Reuse the primary read for refinement, saving a second sparse
+                # gather -- but only when it survived as an aligned array.
+                prefetched = {primary_op_name: raw[keep]} if isinstance(raw, np.ndarray) else None
             else:
                 candidates = _exclude_null_positions(candidates)
 
