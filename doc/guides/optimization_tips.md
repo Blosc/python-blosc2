@@ -330,7 +330,7 @@ The columns themselves barely differ between the two versions, which is worth kn
 
 (DictionaryTip)=
 
-## Repeated text? Store it as `dictionary()`, not `utf8()`
+## Repeated text? Store it as `dictionary()`
 
 The previous tip picks a flavour by *length*; this one corrects the choice by *repetition*. A {func}`dictionary() <blosc2.dictionary>` column stores one `int32` code per row plus a single copy of each distinct value — Arrow's dictionary encoding — so the text is written once and everything downstream works on integers.
 
