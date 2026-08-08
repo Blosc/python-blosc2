@@ -1,10 +1,10 @@
 # Mask-based nullable columns for CTable
 
-> **Status: IN PROGRESS — Phases 0, 1 and 2 landed 2026-08-08.** Next up is Phase 3 (storage
-> sidecar). Two premises were disproven during implementation and are corrected in place, each in
-> a blockquote beside the text it corrects: the index path cannot be fixed by a null-aware
-> expression (§Expression layer), and the bool dtype-flip cannot move out of `__init__`
-> (§Schema layer). Drafted 2026-08-08.
+> **Status: IN PROGRESS — Phases 0–3 landed 2026-08-08.** Next up is Phase 4 (read/write + null
+> API), the large, high-risk one. Two premises were disproven during implementation and are
+> corrected in place, each in a blockquote beside the text it corrects: the index path cannot be
+> fixed by a null-aware expression (§Expression layer), and the bool dtype-flip cannot move out of
+> `__init__` (§Schema layer). Drafted 2026-08-08.
 > Revised 2026-08-08 after review: lazy sidecar materialization (decision 9), `NullPolicy`
 > inference instead of raising, staged default flip (Phase 9), null-predicate rewrite pulled
 > forward to Phase 1, sidecar suffix renamed `.notnull`.
@@ -277,6 +277,36 @@ at `:5952` and the `create_column` path at `:5964`), `to_cframe` (`:5754`, per-c
 and **`CTable.load` (`:6099`), a second parallel open path that is easy to miss**. All of these
 operate only on masks that exist — an absent sidecar needs no growing, trimming, or copying,
 which is most of the lazy-materialization payoff.
+
+> **As built (2026-08-08).** All five storage methods, four backends, both companion-suffix loops,
+> and every capacity/persistence site above. Six notes, the first two of which are corrections:
+>
+> - **The site list was incomplete.** `copy()`'s in-memory path (`ctable.py:12563`) builds its
+>   result through `_empty_copy` + a per-column gather and never touches `_save_to_storage`, so a
+>   copied table would have silently dropped its sidecars. It gathers them by the same `live_pos`
+>   now. `to_b2z`/`to_b2d` need nothing: their physical-pack fast paths zip the TreeStore leaves
+>   as-is, and `.notnull` is one of them.
+> - **`resize()` zero-fills, i.e. *invalid*.** `_grow` must write `True` over the new tail
+>   explicitly, or every appended row past the old capacity reads as null. Same for the freed tail
+>   in `compact`. This is the one place where "absent means all-valid" and "present means read the
+>   bytes" have to be reconciled by hand. Pinned by `test_grow_extends_the_sidecar_as_all_valid`.
+> - **Iteration must consult storage, not just the cache.** `_existing_null_masks()` asks the
+>   storage backend per mask-storage column rather than iterating what happens to be open;
+>   `_grow`/`trim_capacity` on a *freshly reopened* table have opened nothing yet, and skipping an
+>   unopened sidecar would leave it out of step with its column. Pinned by
+>   `test_capacity_paths_find_an_unopened_sidecar`.
+> - **Chunk pinning has a documented fallback.** `_null_mask_grid` pins to the value column's
+>   `chunks[0]`/`blocks[0]`, dictionary columns to their `codes`, and anything whose payload is not
+>   a plain row-indexed NDArray — utf8, whose offsets array carries `n + 1` entries — to the
+>   table-wide `_valid_rows` grid, which is the same shared grid the fixed-width columns use.
+>   `_save_to_storage` records the grid each column *actually landed on* (`dest_grids`) rather than
+>   re-deriving it, because `chunks_override` and the reblock fast path can both change it.
+> - **`_null_masks` is a property that resolves through `base`**, so the six view-construction
+>   sites that build a `CTable` via `__new__` needed no edits: a view shares its base's sidecars
+>   exactly as it already shares its `_cols` NDArrays.
+> - **Rename drops the cached handle on disk, carries it in memory.** `storage.rename_column`
+>   re-keys the sidecar, so a cached handle points at a key that no longer exists; in-memory
+>   storage re-keys nothing, so there the handle *is* the sidecar and must be carried.
 
 ### Read / write paths
 
@@ -596,7 +626,7 @@ default-created tables require them.
 | 0 | ✅ **`NullChannel` refactor, sentinel-only.** New `ctable_nulls.py`; route the ~40 `getattr(spec, "null_value")` sites through it across `ctable.py`, `groupby.py`, `ctable_indexing.py`, `schema_validation.py`, `schema_vectorized.py`. Test suite must pass **unmodified**. | M | Low |
 | 1 | ✅ **Per-leaf null-predicate rewrite** *(storage-independent — pulled forward because it fixes sentinel tables that exist today)*. `_rewrite_null_predicates`, guards emitted inline and only where the sentinel could satisfy the leaf; validity pushed to the negation point. **`_exclude_null_positions` and the indexed-OR bail are retained** — see the correction above; an ordered index never evaluates the predicate, so a null-aware expression cannot fix it. Real payoff: string predicates become null-aware at all. | M | Med |
 | 2 | ✅ **Schema plumbing.** `_NullableSpecMixin`, `null_storage` kwarg on ~9 specs, conditional version 3, `NullPolicy.null_storage` (**still defaulting to `"sentinel"`**) with sentinel-field inference, `_resolved_null_storage` as the single decision point, `fill_value_for`, complex nullable (mask-only). Dtype-flip relocation **not** done — see the correction above. | S | Low |
-| 3 | **Storage sidecar.** 5 methods × 4 backends, lazy creation (absent key = all valid); `_grow`/`trim_capacity`/`compact`/`_save_to_storage`/`to_cframe`/`load`; companion-suffix loop in delete/rename. Testable with a hand-built mask, no semantics yet. | M | Low |
+| 3 | ✅ **Storage sidecar.** 5 methods × 4 backends, lazy creation (absent key = all valid); `_grow`/`trim_capacity`/`compact`/`_save_to_storage`/`to_cframe`/`load`, **plus `copy()`'s in-memory path**, which the section above had missed; companion-suffix loop in delete/rename. `tests/ctable/test_null_persistence.py` (38 tests) drives it with a hand-built mask. | M | Low |
 | 4 | **Read/write + null API.** `extend`/`append`/`_coerce_row_to_storage`/`__setitem__`/`assign`; `is_null`/`notnull`/`null_count`/`fillna`/`_nonnull_chunks`/`to_numpy(masked=)`/`dropna`. Mask columns fully usable. | **L** | **High** (`__setitem__`) |
 | 5 | **Expressions + reductions.** `_raw_null_pred`, `_lazy_nonnull_mask`, `_ndarray_values_for_reduction`, argmin/argmax, `_is_nullable_bool`. Includes the ndarray-propagation gain. | M | Med |
 | 6 | **Arrow/Parquet.** Import + export for all V1 kinds, `packbits`/`unpackbits` LSB-first, `arrow_slice(validity=)`, delete the "no sentinel available" import error. Ships **opt-in** (`null_storage="mask"`); the default stays `"sentinel"`. | M | Med |

@@ -141,6 +141,46 @@ class TableStorage:
     def open_valid_rows(self) -> blosc2.NDArray:
         raise NotImplementedError
 
+    # -- Per-column validity sidecars ----------------------------------------
+    #
+    # A mask-storage nullable column keeps its nullity in a bool NDArray beside
+    # the values (``True`` = not null).  The sidecar is materialized on the
+    # first null actually written, never at column creation, so
+    # ``has_null_mask(name) is False`` is the common case and means *all rows
+    # valid* -- a null-free nullable column costs nothing on disk and nothing
+    # on the read path.
+
+    def create_null_mask(
+        self,
+        name: str,
+        *,
+        shape: tuple[int, ...],
+        chunks: tuple[int, ...],
+        blocks: tuple[int, ...],
+    ) -> blosc2.NDArray:
+        """Create column *name*'s validity sidecar, initialized all-valid.
+
+        Filled with ``True`` rather than zeros so that a freshly materialized
+        sidecar says exactly what its absence said.
+        """
+        raise NotImplementedError
+
+    def install_null_mask(self, name: str, ndarray: blosc2.NDArray) -> blosc2.NDArray:
+        """Store a pre-built bool NDArray as column *name*'s validity sidecar."""
+        raise NotImplementedError
+
+    def open_null_mask(self, name: str) -> blosc2.NDArray:
+        """Open column *name*'s validity sidecar.  Call only if it exists."""
+        raise NotImplementedError
+
+    def has_null_mask(self, name: str) -> bool:
+        """Whether column *name* has a stored validity sidecar."""
+        raise NotImplementedError
+
+    def delete_null_mask(self, name: str) -> None:
+        """Remove column *name*'s validity sidecar if it has one."""
+        raise NotImplementedError
+
     def save_schema(self, schema_dict: dict[str, Any]) -> None:
         raise NotImplementedError
 
@@ -285,6 +325,23 @@ class InMemoryTableStorage(TableStorage):
     def open_valid_rows(self):
         raise RuntimeError("In-memory tables have no on-disk representation to open.")
 
+    def create_null_mask(self, name, *, shape, chunks, blocks):
+        return blosc2.full(shape, True, dtype=np.bool_, chunks=chunks, blocks=blocks)
+
+    def install_null_mask(self, name, ndarray: blosc2.NDArray) -> blosc2.NDArray:
+        return ndarray
+
+    def open_null_mask(self, name):
+        raise RuntimeError("In-memory tables have no on-disk representation to open.")
+
+    def has_null_mask(self, name) -> bool:
+        # In-memory sidecars are held by the CTable, not by this storage, so
+        # there is never one to discover here — mirroring open_column.
+        return False
+
+    def delete_null_mask(self, name) -> None:
+        pass  # nothing persisted to remove
+
     def save_schema(self, schema_dict):
         pass  # nothing to persist
 
@@ -409,6 +466,23 @@ _DICT_SUFFIX = "_dict"
 # dots are percent-encoded, so no column name maps to a key containing ".".
 _UTF8_DATA_SUFFIX = ".utf8"
 
+# Key suffix for the validity sidecar of a mask-storage nullable column: a
+# plain bool NDArray, one byte per physical row, ``True`` where the value is
+# *not* null (Arrow's polarity, which the name states).  Deliberately not
+# ``.valid``: ``/_valid_rows`` already exists and means row liveness, not
+# per-column nullity, and two bool arrays with near-identical names would
+# invite conflating them.  Collision-free by the same argument as
+# ``_UTF8_DATA_SUFFIX`` above.
+#
+# The sidecar is created lazily, on the first write that actually contains a
+# null, so its *absence* is a valid -- and, for a nullable column that has
+# never seen a null, the expected -- state meaning "every row is valid".
+_NOTNULL_SUFFIX = ".notnull"
+
+# Per-column companion keys that live beside a column's own key and must be
+# carried along by any operation that moves or removes the column.
+_COMPANION_KEY_SUFFIXES = (_UTF8_DATA_SUFFIX, _NOTNULL_SUFFIX)
+
 
 class EmbedStoreTableStorage(TableStorage):
     """Read-only :class:`CTable` storage backed by an in-memory :class:`blosc2.EmbedStore`.
@@ -505,6 +579,14 @@ class EmbedStoreTableStorage(TableStorage):
     def open_valid_rows(self) -> blosc2.NDArray:
         return self._estore[_VALID_ROWS_KEY]
 
+    # -- per-column validity sidecars --------------------------------------
+
+    def open_null_mask(self, name: str) -> blosc2.NDArray:
+        return self._estore[self._col_key(name) + _NOTNULL_SUFFIX]
+
+    def has_null_mask(self, name: str) -> bool:
+        return (self._col_key(name) + _NOTNULL_SUFFIX) in self._estore
+
     # -- status -----------------------------------------------------------
 
     def table_exists(self) -> bool:
@@ -531,6 +613,9 @@ class EmbedStoreTableStorage(TableStorage):
     create_varlen_scalar_column = _not_supported
     create_dictionary_column = _not_supported
     create_valid_rows = _not_supported
+    create_null_mask = _not_supported
+    install_null_mask = _not_supported
+    delete_null_mask = _not_supported
     save_schema = _not_supported
     save_vlmeta = _not_supported
     delete_column = _not_supported
@@ -820,6 +905,32 @@ class FileTableStorage(TableStorage):
     def open_valid_rows(self) -> blosc2.NDArray:
         return self._open_store()[_VALID_ROWS_KEY]
 
+    def _notnull_key(self, name: str) -> str:
+        return self._col_key(name) + _NOTNULL_SUFFIX
+
+    def create_null_mask(self, name, *, shape, chunks, blocks) -> blosc2.NDArray:
+        mask = blosc2.full(shape, True, dtype=np.bool_, chunks=chunks, blocks=blocks)
+        store = self._open_store()
+        store[self._notnull_key(name)] = mask
+        return store[self._notnull_key(name)]
+
+    def install_null_mask(self, name, ndarray: blosc2.NDArray) -> blosc2.NDArray:
+        store = self._open_store()
+        store[self._notnull_key(name)] = ndarray
+        return store[self._notnull_key(name)]
+
+    def open_null_mask(self, name: str) -> blosc2.NDArray:
+        return self._open_store()[self._notnull_key(name)]
+
+    def has_null_mask(self, name: str) -> bool:
+        return self._notnull_key(name) in self._open_store()
+
+    def delete_null_mask(self, name: str) -> None:
+        store = self._open_store()
+        key = self._notnull_key(name)
+        if key in store:
+            del store[key]
+
     def save_schema(self, schema_dict: dict[str, Any]) -> None:
         """Write *schema_dict* (plus kind/version markers) to ``/_meta``."""
         meta = blosc2.SChunk()
@@ -899,12 +1010,13 @@ class FileTableStorage(TableStorage):
         return [c["name"] for c in d["columns"]]
 
     def delete_column(self, name: str) -> None:
+        store = self._open_store()
         key = self._col_key(name)
-        if key in self._open_store():
-            del self._open_store()[key]
-            data_key = key + _UTF8_DATA_SUFFIX
-            if data_key in self._open_store():
-                del self._open_store()[data_key]
+        if key in store:
+            del store[key]
+            for suffix in _COMPANION_KEY_SUFFIXES:
+                if key + suffix in store:
+                    del store[key + suffix]
             return
         list_path = self._list_col_path(name)
         if os.path.exists(list_path):
@@ -919,10 +1031,10 @@ class FileTableStorage(TableStorage):
         if old_key in store:
             store[new_key] = store[old_key]
             del store[old_key]
-            old_data_key = old_key + _UTF8_DATA_SUFFIX
-            if old_data_key in store:
-                store[new_key + _UTF8_DATA_SUFFIX] = store[old_data_key]
-                del store[old_data_key]
+            for suffix in _COMPANION_KEY_SUFFIXES:
+                if old_key + suffix in store:
+                    store[new_key + suffix] = store[old_key + suffix]
+                    del store[old_key + suffix]
             return store[new_key]
         old_path = self._list_col_path(old)
         new_path = self._list_col_path(new)
@@ -1426,6 +1538,58 @@ class TreeStoreTableStorage(TableStorage):
     def open_valid_rows(self) -> blosc2.NDArray:
         return self._open_leaf("/_valid_rows")
 
+    # -- per-column validity sidecars --------------------------------------
+
+    def _notnull_logical_key(self, name: str) -> str:
+        return self._col_logical_key(name) + _NOTNULL_SUFFIX
+
+    def _register_leaf(self, logical_key: str, dest_path: str) -> None:
+        """Point the outer store's map_tree at an external leaf file."""
+        rel_path = os.path.relpath(dest_path, self._working_dir()).replace(os.sep, "/")
+        self._store.map_tree[self._table_key(logical_key)] = rel_path
+        self._store._modified = True
+
+    def create_null_mask(self, name, *, shape, chunks, blocks) -> blosc2.NDArray:
+        logical_key = self._notnull_logical_key(name)
+        dest_path = self._dest_path(logical_key, ".b2nd")
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        mask = blosc2.full(
+            shape,
+            True,
+            dtype=np.bool_,
+            chunks=chunks,
+            blocks=blocks,
+            urlpath=dest_path,
+            mode="w",
+        )
+        self._register_leaf(logical_key, dest_path)
+        return mask
+
+    def install_null_mask(self, name, ndarray: blosc2.NDArray) -> blosc2.NDArray:
+        logical_key = self._notnull_logical_key(name)
+        dest_path = self._dest_path(logical_key, ".b2nd")
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        saved = ndarray.copy(urlpath=dest_path)
+        self._register_leaf(logical_key, dest_path)
+        return saved
+
+    def open_null_mask(self, name: str) -> blosc2.NDArray:
+        return self._open_leaf(self._notnull_logical_key(name))
+
+    def has_null_mask(self, name: str) -> bool:
+        full_key = self._table_key(self._notnull_logical_key(name))
+        return full_key in self._store.map_tree or full_key in self._store._estore
+
+    def delete_null_mask(self, name: str) -> None:
+        full_key = self._table_key(self._notnull_logical_key(name))
+        if full_key not in self._store.map_tree:
+            return
+        filepath = self._store.map_tree.pop(full_key)
+        full_path = os.path.join(self._working_dir(), filepath)
+        if os.path.exists(full_path):
+            os.remove(full_path)
+        self._store._modified = True
+
     # ------------------------------------------------------------------
     # TableStorage interface — schema and manifest
     # ------------------------------------------------------------------
@@ -1497,9 +1661,10 @@ class TreeStoreTableStorage(TableStorage):
         full_key = self._table_key(self._col_logical_key(name))
         if full_key in self._store.map_tree:
             keys = [full_key]
-            data_key = self._table_key(self._col_logical_key(name) + _UTF8_DATA_SUFFIX)
-            if data_key in self._store.map_tree:
-                keys.append(data_key)
+            for suffix in _COMPANION_KEY_SUFFIXES:
+                companion = self._table_key(self._col_logical_key(name) + suffix)
+                if companion in self._store.map_tree:
+                    keys.append(companion)
             for key in keys:
                 filepath = self._store.map_tree.pop(key)
                 full_path = os.path.join(self._working_dir(), filepath)
@@ -1516,9 +1681,10 @@ class TreeStoreTableStorage(TableStorage):
         old_key = self._table_key(self._col_logical_key(old))
         if old_key in self._store.map_tree:
             moves = [(old_key, self._col_logical_key(new))]
-            old_data_key = self._table_key(self._col_logical_key(old) + _UTF8_DATA_SUFFIX)
-            if old_data_key in self._store.map_tree:
-                moves.append((old_data_key, self._col_logical_key(new) + _UTF8_DATA_SUFFIX))
+            for suffix in _COMPANION_KEY_SUFFIXES:
+                companion = self._table_key(self._col_logical_key(old) + suffix)
+                if companion in self._store.map_tree:
+                    moves.append((companion, self._col_logical_key(new) + suffix))
             new_dest = None
             for src_key, dst_logical in moves:
                 dst_dest = self._dest_path(dst_logical, ".b2nd")

@@ -3773,6 +3773,63 @@ class _LazyColumnDict(dict):
             dict.__delitem__(self, name)
 
 
+class _NullMaskCache:
+    """Open-on-demand cache of the per-column ``.notnull`` validity sidecars.
+
+    Mirrors :class:`_LazyColumnDict`: a wide table should not pay one
+    ``storage.open_null_mask()`` per nullable column just to be opened.
+
+    A miss is a normal state, not an error.  A mask-storage column that has
+    never held a null has no sidecar at all -- an absent one means *every row
+    is valid* -- so :meth:`get` answers ``None`` there and callers read the
+    column as never-null.  Negative answers are remembered too, so a null-free
+    column costs one membership test for the life of the table rather than one
+    per access.
+    """
+
+    __slots__ = ("_absent", "_masks", "_storage")
+
+    def __init__(self, storage: TableStorage) -> None:
+        self._storage = storage
+        self._masks: dict[str, blosc2.NDArray] = {}
+        self._absent: set[str] = set()
+
+    def get(self, name: str) -> blosc2.NDArray | None:
+        """The sidecar for column *name*, or ``None`` when it has none."""
+        mask = self._masks.get(name)
+        if mask is not None or name in self._absent:
+            return mask
+        try:
+            present = self._storage.has_null_mask(name)
+        except (NotImplementedError, RuntimeError):
+            present = False
+        if not present:
+            self._absent.add(name)
+            return None
+        mask = self._storage.open_null_mask(name)
+        self._masks[name] = mask
+        return mask
+
+    def set(self, name: str, mask: blosc2.NDArray) -> None:
+        self._masks[name] = mask
+        self._absent.discard(name)
+
+    def pop(self, name: str) -> None:
+        self._masks.pop(name, None)
+        self._absent.discard(name)
+
+    def rename(self, old: str, new: str) -> None:
+        mask = self._masks.pop(old, None)
+        self._absent.discard(old)
+        self._absent.discard(new)
+        if mask is not None:
+            self._masks[new] = mask
+
+    def materialized(self) -> dict[str, blosc2.NDArray]:
+        """The sidecars opened so far, without opening any more."""
+        return dict(self._masks)
+
+
 class _ChunkAlignedWriter:
     """Buffer writes to a fixed-size NDArray and flush them chunk-aligned.
 
@@ -4943,6 +5000,109 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return storage.open_dictionary_column(name, cc.spec)
         return storage.open_column(name)
 
+    # ------------------------------------------------------------------
+    # Per-column validity sidecars
+    # ------------------------------------------------------------------
+
+    @property
+    def _null_masks(self) -> _NullMaskCache:
+        """Open-on-demand cache of this table's ``.notnull`` validity sidecars.
+
+        A view shares its base table's cache: sidecars are physical,
+        row-indexed arrays, exactly like the ``_cols`` NDArrays a view already
+        shares with its base.
+        """
+        base = self.base
+        if base is not None:
+            return base._null_masks
+        cache = self.__dict__.get("_null_mask_cache")
+        if cache is None:
+            cache = _NullMaskCache(self._storage)
+            self.__dict__["_null_mask_cache"] = cache
+        return cache
+
+    @property
+    def _null_mask_names(self) -> list[str]:
+        """Columns whose schema says their nulls live in a sidecar.
+
+        Being listed here says nothing about whether a sidecar *exists*: one
+        is written only once a null actually is, so most entries answer
+        ``None`` from :meth:`_null_mask`.
+        """
+        return [c.name for c in self._schema.columns if getattr(c.spec, "uses_mask", False)]
+
+    def _null_mask(self, name: str) -> blosc2.NDArray | None:
+        """Column *name*'s validity sidecar, or ``None`` when it has none.
+
+        ``None`` means *every row is valid*, not "unknown" — see
+        :class:`_NullMaskCache`.
+        """
+        return self._null_masks.get(name)
+
+    def _null_mask_grid(self, name: str, capacity: int) -> tuple[tuple[int], tuple[int]]:
+        """Chunk/block grid for column *name*'s validity sidecar.
+
+        **Pinned to the value column's row grid**, not to whatever
+        ``compute_chunks_blocks`` would pick for a one-byte bool dtype.  A
+        sidecar on its own grid would make every paired read — the
+        chunk-aligned writers, ``_nonnull_chunks``, index-segment alignment —
+        re-align mask against values on each pass.
+
+        Falls back to the table-wide ``_valid_rows`` grid (which is the same
+        shared grid the fixed-width columns use) for columns whose payload is
+        not a plain row-indexed NDArray, such as utf8, whose offsets array
+        carries ``n + 1`` entries.
+        """
+        cc = self._schema.columns_by_name[name]
+        arr = self._cols[name]
+        if self._is_dictionary_column(cc):
+            arr = arr.codes
+        elif not isinstance(arr, blosc2.NDArray):
+            arr = self._valid_rows
+        chunks = (max(1, min(int(arr.chunks[0]), capacity)),)
+        blocks = (max(1, min(int(arr.blocks[0]), chunks[0])),)
+        return chunks, blocks
+
+    def _ensure_null_mask(self, name: str) -> blosc2.NDArray:
+        """Return column *name*'s validity sidecar, materializing it if absent.
+
+        This is the one place that turns a null-free mask column into one with
+        bytes on disk: creation is deferred to the first null actually
+        written, since until then the column's absent sidecar already says
+        exactly the right thing.
+        """
+        if self.base is not None:
+            return self.base._ensure_null_mask(name)
+        mask = self._null_masks.get(name)
+        if mask is not None:
+            return mask
+        capacity = len(self._valid_rows)
+        chunks, blocks = self._null_mask_grid(name, capacity)
+        mask = self._storage.create_null_mask(name, shape=(capacity,), chunks=chunks, blocks=blocks)
+        self._null_masks.set(name, mask)
+        return mask
+
+    def _existing_null_masks(self) -> dict[str, blosc2.NDArray]:
+        """Every validity sidecar this table actually has, opening as needed.
+
+        Unlike ``_null_masks.materialized()`` this consults storage for each
+        mask-storage column, so it is the iterator the capacity and
+        persistence paths must use: they cannot miss a sidecar merely because
+        nothing has read that column yet.
+        """
+        found = {}
+        for name in self._null_mask_names:
+            mask = self._null_masks.get(name)
+            if mask is not None:
+                found[name] = mask
+        return found
+
+    def _drop_null_mask(self, name: str) -> None:
+        """Forget and (for persistent tables) delete column *name*'s sidecar."""
+        self._null_masks.pop(name)
+        with contextlib.suppress(NotImplementedError, RuntimeError, KeyError):
+            self._storage.delete_null_mask(name)
+
     def _resolve_last_pos(self) -> int:
         """Return the physical index of the next write slot.
 
@@ -5005,6 +5165,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 col_arr.resize((target,))
                 continue
             col_arr.resize(self._column_physical_shape(cc, target))
+        # Only sidecars that exist need trimming; an absent one has no bytes to
+        # reclaim, which is most of the payoff of materializing them lazily.
+        for mask in self._existing_null_masks().values():
+            mask.resize((target,))
         self._valid_rows.resize((target,))
         self._last_pos = target
 
@@ -5021,6 +5185,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 col_arr.resize((new_capacity,))
                 continue
             col_arr.resize(self._column_physical_shape(cc, new_capacity))
+        # Grow the validity sidecars alongside their columns.  resize() zero-fills,
+        # i.e. *invalid*, so the new tail must be marked valid explicitly to keep
+        # the "no null written yet" reading of those rows.
+        for mask in self._existing_null_masks().values():
+            old_capacity = mask.shape[0]
+            mask.resize((new_capacity,))
+            mask[old_capacity:new_capacity] = True
         self._valid_rows.resize((new_capacity,))
 
     # ------------------------------------------------------------------
@@ -5894,6 +6065,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         from blosc2.ctable_storage import (
             _DICT_SUFFIX,
+            _NOTNULL_SUFFIX,
             _UTF8_DATA_SUFFIX,
             _column_name_to_relpath,
         )
@@ -5931,6 +6103,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 # Scalar NDArray or ListArray — both serialize via to_cframe().
                 estore[key] = arr
 
+        # Validity sidecars travel beside their columns; a column without one
+        # simply contributes no entry, which reconstructs as all-valid.
+        for name, mask in src._existing_null_masks().items():
+            estore[f"/_cols/{_column_name_to_relpath(name)}{_NOTNULL_SUFFIX}"] = mask
+
         return estore.to_cframe()
 
     def _save_to_storage(  # noqa: C901
@@ -5965,13 +6142,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         )
 
         # --- valid_rows (all True, compacted) ---
+        valid_chunks = shared_chunks if shared_chunks is not None else default_chunks
+        valid_blocks = shared_blocks if shared_blocks is not None else default_blocks
         disk_valid = storage.create_valid_rows(
             shape=(capacity,),
-            chunks=shared_chunks if shared_chunks is not None else default_chunks,
-            blocks=shared_blocks if shared_blocks is not None else default_blocks,
+            chunks=valid_chunks,
+            blocks=valid_blocks,
         )
         if n_live > 0:
             disk_valid[:n_live] = True
+
+        # Row grid each fixed-width column actually landed on, so its validity
+        # sidecar below can be pinned to that same grid rather than re-derived
+        # (chunk overrides and the reblock path can both change it).
+        dest_grids: dict[str, tuple[tuple[int], tuple[int]]] = {}
 
         # --- columns ---
         for col in self._schema.columns:
@@ -6060,6 +6244,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     copy_kwargs["cparams"] = cparams_override
                 new_arr = src_arr.copy(**copy_kwargs)
                 storage.install_column(name, new_arr)
+                dest_grids[name] = ((int(new_arr.chunks[0]),), (int(new_arr.blocks[0]),))
             else:
                 eff_chunks = chunks_override if chunks_override is not None else col_storage["chunks"]
                 if chunks_override is not None and blocks_override is None:
@@ -6079,9 +6264,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     cparams=cparams_override if cparams_override is not None else col_storage.get("cparams"),
                     dparams=col_storage.get("dparams"),
                 )
+                dest_grids[name] = ((int(disk_col.chunks[0]),), (int(disk_col.blocks[0]),))
                 if n_live > 0:
                     # Slice is ~30x faster than fancy-index for sequential no-deletion access.
                     disk_col[:n_live] = src_arr[:n_live] if no_deletions else src_arr[live_pos]
+
+        # --- validity sidecars (compacted alongside their columns) ---
+        # Written after the columns so each can be pinned to the grid its column
+        # actually landed on.  A column whose sidecar is absent stays absent:
+        # no nulls, no bytes, and nothing to copy.
+        for name, mask in self._existing_null_masks().items():
+            mask_chunks, mask_blocks = dest_grids.get(name, (valid_chunks, valid_blocks))
+            disk_mask = storage.create_null_mask(
+                name, shape=(capacity,), chunks=mask_chunks, blocks=mask_blocks
+            )
+            if n_live > 0:
+                disk_mask[:n_live] = mask[:n_live] if no_deletions else mask[live_pos]
 
         storage.save_schema(self._schema_dict_with_computed())
 
@@ -6305,6 +6503,28 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 mem_col[:phys_size] = disk_cols[name][:]
             mem_cols[name] = mem_col
 
+        # Validity sidecars, pinned to the grid their in-memory column got.
+        # Columns with no stored sidecar are left without one — that already
+        # means all-valid, so there is nothing to load.
+        mem_masks: dict[str, blosc2.NDArray] = {}
+        for col in schema.columns:
+            name = col.name
+            if not getattr(col.spec, "uses_mask", False) or not file_storage.has_null_mask(name):
+                continue
+            src_mask = file_storage.open_null_mask(name)
+            payload = mem_cols[name]
+            grid_src = payload if isinstance(payload, blosc2.NDArray) else mem_valid
+            mask_chunks = max(1, min(int(grid_src.chunks[0]), capacity))
+            mem_mask = mem_storage.create_null_mask(
+                name,
+                shape=(capacity,),
+                chunks=(mask_chunks,),
+                blocks=(max(1, min(int(grid_src.blocks[0]), mask_chunks)),),
+            )
+            if phys_size > 0:
+                mem_mask[:phys_size] = src_mask[:phys_size]
+            mem_masks[name] = mem_mask
+
         file_storage.close()
 
         obj = cls.__new__(cls)
@@ -6323,6 +6543,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         obj._summary_indexes_built = schema_dict.get("summary_indexes_built", False)
         obj.base = None
         obj._valid_rows = mem_valid
+        for mask_name, mask in mem_masks.items():
+            obj._null_masks.set(mask_name, mask)
         obj._n_rows = n_live
         obj._last_pos = None  # resolve lazily on first write
         obj._computed_cols = {}
@@ -9404,7 +9626,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._invalidate_index_catalog_cache()
 
         if isinstance(self._storage, FileTableStorage):
+            # delete_column already removes the column's companion keys, the
+            # validity sidecar among them; drop the cached handle to match.
             self._storage.delete_column(name)
+        self._null_masks.pop(name)
 
         self._materialized_cols.pop(name, None)
         del self._cols[name]
@@ -9484,8 +9709,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         if isinstance(self._storage, FileTableStorage):
             self._cols[new] = self._rename_stored_column(old, new)
+            # storage.rename_column re-keyed the validity sidecar too, leaving
+            # any cached handle pointing at a key that no longer exists.  Drop
+            # it and let the cache reopen under the new name.
+            self._null_masks.pop(old)
+            self._null_masks.pop(new)
         else:
             self._cols[new] = self._cols[old]
+            # Nothing was re-keyed on disk (there is no disk): carry the handle.
+            self._null_masks.rename(old, new)
         del self._cols[old]
 
         idx = self.col_names.index(old)
@@ -11554,6 +11786,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 start += block_size
                 end = min(end + block_size, self._n_rows)
 
+        # Shuffle the validity sidecars by the same gather, so mask and values
+        # stay row-aligned.  The freed tail becomes all-valid: those slots hold
+        # no live row, and "valid" is what an absent sidecar would say of them.
+        for mask in self._existing_null_masks().values():
+            mask[: self._n_rows] = mask[real_poss[: self._n_rows]]
+            mask[self._n_rows :] = True
+
         self._valid_rows[: self._n_rows] = True
         self._valid_rows[self._n_rows :] = False
         self._last_pos = self._n_rows
@@ -12321,6 +12560,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             else:
                 result._cols[col_name][:n] = (
                     arr[:n_live] if is_dense else (arr[live_pos] if compact else arr[:n])
+                )
+
+        # Validity sidecars follow their columns through the same gather.  A
+        # column with no sidecar gets none: nothing in it is null, and copying
+        # must not invent storage the source never needed (decision 9).
+        if n > 0:
+            for col_name, mask in self._existing_null_masks().items():
+                result._ensure_null_mask(col_name)[:n] = (
+                    mask[:n_live] if is_dense else (mask[live_pos] if compact else mask[:n])
                 )
 
         if compact:
