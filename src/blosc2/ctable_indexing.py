@@ -20,6 +20,7 @@ import numpy as np
 
 import blosc2
 from blosc2 import compute_chunks_blocks
+from blosc2.ctable_nulls import NULL_SENTINEL, is_nan_sentinel, kind_of_spec, sentinel_mask
 from blosc2.schema import (
     DictionarySpec,
     ListSpec,
@@ -1440,23 +1441,35 @@ class _CTableIndexingMixin:
             return None
 
         primary_col_name, primary_col_arr, _ = indexed_columns[0]
+        # Null exclusion still happens here, even though every predicate that
+        # reaches this point is null-aware (CTable._rewrite_null_predicates for
+        # the string form, Column._null_aware_compare for the operator one).
+        # An ordered index does not *evaluate* the predicate: it answers
+        # ``a > 90`` by taking a range of the sorted column, and the sentinel
+        # lives in that range whether or not it would satisfy the comparison --
+        # a NaN sentinel sorts last, so every NaN row comes back for any
+        # ``>`` query.  The expression being correct therefore does not make the
+        # index result correct, and these positions must still be filtered.
         nullable_indexed = [
             name
             for name, _arr, _descriptor in indexed_columns
-            if getattr(root._schema.columns_by_name[name].spec, "null_value", None) is not None
+            if kind_of_spec(root._schema.columns_by_name[name].spec) == NULL_SENTINEL
         ]
-        # A NaN null sentinel can never satisfy a comparison (every comparison
-        # with NaN is False), so the predicate itself already drops those rows;
-        # only non-NaN sentinels (which *can* match a predicate) need explicit
-        # position-based exclusion.  This lets the fast mask-direct path apply to
-        # NaN-nullable columns instead of falling back to the positions path.
-        nullable_needs_exclude = []
-        for name in nullable_indexed:
-            nv = getattr(root._schema.columns_by_name[name].spec, "null_value", None)
-            if not (isinstance(nv, float) and np.isnan(nv)):
-                nullable_needs_exclude.append(name)
+        # Only non-NaN sentinels need the *positions* fall-back below; for a NaN
+        # sentinel the mask-direct path can stay, because that path evaluates the
+        # predicate through miniexpr rather than reading an ordered range.
+        nullable_needs_exclude = [
+            name
+            for name in nullable_indexed
+            if not is_nan_sentinel(root._schema.columns_by_name[name].spec.null_value)
+        ]
 
-        # Global null post-filtering is not correct for OR expressions.
+        # Global null post-filtering is not correct for OR expressions: it would
+        # drop a row that is null in one column but matches the other branch.
+        # (The per-leaf rewrite makes the *expression* handle OR correctly; it
+        # cannot fix an index that never evaluates the expression, so an OR over
+        # a nullable indexed column still falls back to the scan -- which is now
+        # itself null-aware, and so now returns the right answer.)
         if nullable_indexed and ("|" in expr_result.expression or " or " in expr_result.expression):
             return None
 
@@ -1498,14 +1511,9 @@ class _CTableIndexingMixin:
         def _exclude_null_positions(positions):
             positions = np.asarray(positions, dtype=np.int64)
             for name in nullable_indexed:
-                col = root._schema.columns_by_name[name]
+                nv = root._schema.columns_by_name[name].spec.null_value
                 raw = root._cols[name][positions]
-                nv = getattr(col.spec, "null_value", None)
-                if isinstance(nv, float) and np.isnan(nv):
-                    keep = ~np.isnan(raw)
-                else:
-                    keep = raw != nv
-                positions = positions[keep]
+                positions = positions[~sentinel_mask(raw, nv)]
             return positions
 
         if plan.exact_positions is not None:
@@ -1542,23 +1550,13 @@ class _CTableIndexingMixin:
                 raw = np.asarray(raw) if hasattr(raw, "__array__") else raw
                 pos = candidates
                 for name in nullable_indexed:
+                    nv = root._schema.columns_by_name[name].spec.null_value
                     if name == primary_col_name:
-                        nv = getattr(root._schema.columns_by_name[name].spec, "null_value", None)
-                        if isinstance(nv, float) and np.isnan(nv):
-                            keep = ~np.isnan(raw)
-                        else:
-                            keep = raw != nv
+                        keep = ~sentinel_mask(raw, nv)
                         pos = pos[keep]
                         raw = raw[keep]  # already filtered for refinement reuse
                     else:
-                        col = root._schema.columns_by_name[name]
-                        vals = root._cols[name][pos]
-                        nv = getattr(col.spec, "null_value", None)
-                        if isinstance(nv, float) and np.isnan(nv):
-                            keep = ~np.isnan(vals)
-                        else:
-                            keep = vals != nv
-                        pos = pos[keep]
+                        pos = pos[~sentinel_mask(root._cols[name][pos], nv)]
                 candidates = pos
                 prefetched = {primary_op_name: raw}
             else:

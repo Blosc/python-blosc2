@@ -34,6 +34,15 @@ import numpy as np
 import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.ctable_indexing import _CTableIndexingMixin
+from blosc2.ctable_nulls import (
+    NULL_SENTINEL,
+    NullChannel,
+    is_nan_sentinel,
+    kind_of_spec,
+    rewrite_null_predicates,
+    sentinel_guard_expr,
+    sentinel_mask,
+)
 from blosc2.ctable_storage import (
     FileTableStorage,
     InMemoryTableStorage,
@@ -1067,6 +1076,19 @@ class Column:
         self._table = table
         self._col_name = col_name
         self._mask = mask
+        self._null_channel = None
+
+    @property
+    def _nulls(self) -> NullChannel:
+        """This column's validity channel (see :mod:`blosc2.ctable_nulls`).
+
+        Built on first use and kept for this ``Column``'s lifetime.  The
+        channel reads through to the live schema on every access, so it stays
+        correct even if the column's spec is mutated in place.
+        """
+        if self._null_channel is None:
+            self._null_channel = NullChannel(self)
+        return self._null_channel
 
     @property
     def _raw_col(self):
@@ -1823,11 +1845,17 @@ class Column:
 
     @property
     def _is_nullable_bool(self) -> bool:
-        col = self._table._schema.columns_by_name.get(self._col_name)
+        """True for a bool column whose nulls are the in-band ``255`` sentinel.
+
+        Such a column is physically ``uint8``, so predicates over it must be
+        rewritten (``flag == True`` -> ``raw == 1``) to keep the sentinel from
+        reading as truthy.
+        """
+        spec = self._nulls.spec
         return (
-            col is not None
-            and col.spec.to_metadata_dict().get("kind") == "bool"
-            and getattr(col.spec, "null_value", None) is not None
+            spec is not None
+            and spec.to_metadata_dict().get("kind") == "bool"
+            and self._nulls.kind == NULL_SENTINEL
         )
 
     @property
@@ -1862,23 +1890,12 @@ class Column:
 
     def _raw_null_pred(self):
         """Boolean lazy predicate over the raw physical array, True where the
-        value is this column's null sentinel.
+        value is null.
 
-        Returns ``None`` when there is nothing to propagate: no ``null_value``
-        configured, or a fixed-shape ndarray column (whose per-item sentinel
-        mask does not align 1:1 with the row-level predicates built here;
-        see ``Column.is_null()`` for those instead). Dictionary and
-        variable-length scalar columns never reach here because
-        ``_ensure_queryable`` already rejects them for arithmetic/comparisons.
+        Returns ``None`` when there is nothing to propagate; see
+        :meth:`NullChannel.null_pred` for exactly when.
         """
-        if self.is_ndarray:
-            return None
-        nv = self.null_value
-        if nv is None:
-            return None
-        if isinstance(nv, (float, np.floating)) and np.isnan(nv):
-            return blosc2.isnan(self._raw_col)
-        return self._raw_col == nv
+        return self._nulls.null_pred()
 
     def _combined_null_pred(self, other):
         """OR of self's and other's raw null predicates; ``None`` if neither
@@ -2591,10 +2608,16 @@ class Column:
     @property
     def null_value(self):
         """The sentinel value that represents NULL for this column, or ``None``."""
-        col_info = self._table._schema.columns_by_name.get(self._col_name)
-        if col_info is None:
-            return None
-        return getattr(col_info.spec, "null_value", None)
+        return self._nulls.sentinel
+
+    @property
+    def null_storage(self) -> str:
+        """How this column represents its nulls.
+
+        One of ``"none"``, ``"sentinel"``, ``"code"`` (dictionary) or
+        ``"native"`` (variable-length containers holding ``None`` cells).
+        """
+        return self._nulls.kind
 
     def _null_mask_for(self, arr: np.ndarray) -> np.ndarray:
         """Return a bool array True where *arr* contains the null sentinel.
@@ -2602,62 +2625,31 @@ class Column:
         Always returns an array of the same length as *arr*; all False when
         no null_value is configured.
         """
-        nv = self.null_value
-        if nv is None:
-            return np.zeros(len(arr), dtype=np.bool_)
-        arr = np.asarray(arr)
-        if self.is_ndarray:
-            if arr.ndim <= self.item_ndim:
-                arr = arr.reshape((1, *arr.shape))
-            if isinstance(nv, (float, np.floating)) and np.isnan(nv):
-                elem_mask = np.isnan(arr)
-            else:
-                elem_mask = arr == nv
-            inner_axes = tuple(range(1, elem_mask.ndim))
-            return elem_mask.all(axis=inner_axes) if inner_axes else elem_mask.astype(np.bool_)
-        if np.issubdtype(arr.dtype, np.datetime64):
-            # Timestamp columns materialize with the int64 sentinel already
-            # decoded into np.datetime64('NaT') (they share the same bit
-            # pattern), so the sentinel value itself never appears in arr.
-            return np.isnat(arr)
-        if isinstance(nv, (float, np.floating)) and np.isnan(nv):
-            return np.isnan(arr)
-        return arr == nv
+        return self._nulls.mask_for_values(arr)
 
     def is_null(self) -> np.ndarray:
-        """Return a boolean array True where the live value is the null sentinel.
+        """Return a boolean array True where the live value is null.
 
         For varlen scalar columns (vlstring/vlbytes) nullability is represented
         as native ``None`` values, so this returns True wherever the value is
         ``None``.  For dictionary columns, returns True where the code equals
         the null_code (``-1`` by default).
         """
-        if self.is_dictionary:
-            return self._dictionary_eq(None)
-        if self.is_varlen_scalar and not self.is_utf8:
-            return np.array([v is None for v in self], dtype=np.bool_)
-        return self._null_mask_for(self[:])
+        return self._nulls.null_mask()
 
     def notnull(self) -> np.ndarray:
-        """Return a boolean array True where the live value is *not* the null sentinel."""
+        """Return a boolean array True where the live value is *not* null."""
         return ~self.is_null()
 
     def null_count(self) -> int:
-        """Return the number of live rows whose value equals the null sentinel.
+        """Return the number of live rows whose value is null.
 
-        Returns ``0`` in O(1) if no ``null_value`` is configured for this column
-        and the column is not a varlen scalar column.
+        Returns ``0`` in O(1) if this column has no null channel at all.
         """
-        if self.is_dictionary:
-            return int(self.is_null().sum())
-        if self.is_varlen_scalar and not self.is_utf8:
-            return sum(1 for v in self if v is None)
-        if self.null_value is None:
-            return 0
-        return int(self.is_null().sum())
+        return self._nulls.null_count()
 
     def fillna(self, value):
-        """Return live values with null sentinels replaced by *value*.
+        """Return live values with nulls replaced by *value*.
 
         Dictionary and variable-length scalar columns (whose nulls are
         native ``None`` cells) return a list; other columns return a NumPy
@@ -2666,30 +2658,17 @@ class Column:
         if (self.is_dictionary or self.is_varlen_scalar) and not self.is_utf8:
             return [value if v is None else v for v in self[:]]
         arr = np.array(self[:], copy=True)
-        if self.null_value is not None:
-            arr[self._null_mask_for(arr)] = value
+        if self._nulls.kind == NULL_SENTINEL:
+            arr[self._nulls.mask_for_values(arr)] = value
         return arr
 
     def _nonnull_chunks(self):
         """Yield chunks of live, non-null values.
 
-        Each yielded array has the null sentinel values removed.  If no
-        null_value is configured this behaves identically to
-        :meth:`iter_chunks`.
+        Each yielded array has the null values removed.  If this column has no
+        null channel this behaves identically to :meth:`iter_chunks`.
         """
-        nv = self.null_value
-        if nv is None:
-            yield from self.iter_chunks()
-            return
-        is_nan_nv = isinstance(nv, float) and np.isnan(nv)
-        for chunk in self.iter_chunks():
-            if is_nan_nv:
-                mask = ~np.isnan(chunk)
-            else:
-                mask = chunk != nv
-            filtered = chunk[mask]
-            if len(filtered) > 0:
-                yield filtered
+        yield from self._nulls.nonnull_chunks()
 
     def unique(self) -> np.ndarray:
         """Return sorted array of unique live, non-null values.
@@ -2791,12 +2770,8 @@ class Column:
         mask = None if all_rows_visible else self._lazy_valid_rows()
         if where is not None:
             mask = where if mask is None else mask & where
-        nv = self.null_value
-        if nv is not None:
-            if isinstance(nv, (float, np.floating)) and np.isnan(nv):
-                nonnull = ~blosc2.isnan(raw)
-            else:
-                nonnull = raw != nv
+        nonnull = self._nulls.valid_pred()
+        if nonnull is not None:
             mask = nonnull if mask is None else mask & nonnull
         return mask
 
@@ -3042,7 +3017,7 @@ class Column:
         spec = col.spec if col is not None else None
         nullable = getattr(spec, "nullable", False)
         null_value = getattr(spec, "null_value", None)
-        is_nan_float = dtype.kind == "f" and isinstance(null_value, float) and np.isnan(null_value)
+        is_nan_float = dtype.kind == "f" and is_nan_sentinel(null_value)
         if nullable and not is_nan_float:
             return None  # non-NaN sentinel leaks into the block extrema
         root = table._root_table
@@ -3441,11 +3416,10 @@ class _StructPathColumn:
     def _leaf_is_null_at_logical(self, leaf: str, idx: int) -> bool:
         col = self._table[leaf]
         v = col[idx]
-        nv = col.null_value
-        if nv is None:
+        if col._nulls.kind != NULL_SENTINEL:
             return v is None
         try:
-            return bool(col._null_mask_for(np.asarray([v]))[0])
+            return bool(col._nulls.mask_for_values(np.asarray([v]))[0])
         except Exception:
             return v is None
 
@@ -11631,10 +11605,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             # Free each 24M-element temporary as soon as it is consumed to keep
             # peak memory near the size of the permutation itself.
             raw = np.asarray(root._cols[name][:])
-            if isinstance(null_value, float) and np.isnan(null_value):
-                null_phys = np.isnan(raw)
-            else:
-                null_phys = raw == null_value
+            null_phys = sentinel_mask(raw, null_value)
             del raw
             if null_phys.any():
                 is_null = null_phys[positions]
@@ -11721,11 +11692,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if is_dict_col and col_info.spec.nullable:
                 lex_keys.append(is_null.astype(np.intp))
             elif nv is not None:
-                if isinstance(nv, float) and np.isnan(nv):
-                    null_ind = np.isnan(raw).astype(np.intp)
-                else:
-                    null_ind = (raw == nv).astype(np.intp)
-                lex_keys.append(null_ind)
+                lex_keys.append(sentinel_mask(raw, nv).astype(np.intp))
 
         return lex_keys
 
@@ -11947,7 +11914,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         from blosc2.indexing import _open_sidecar_file
 
         vnd = _open_sidecar_file(full["values_path"])
-        if isinstance(null_value, float) and np.isnan(null_value):
+        if is_nan_sentinel(null_value):
             # NaN sorts last and breaks ordered comparisons, so count the trailing
             # block directly, one chunk at a time (peak memory = a single chunk).
             chunk = int(vnd.chunks[0]) if vnd.chunks else len(vnd)
@@ -13028,6 +12995,60 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 rewritten = new_expr
         return rewritten, new_operands
 
+    def _rewrite_null_predicates(
+        self, expr: str, operands: dict[str, blosc2.NDArray | blosc2.LazyExpr]
+    ) -> tuple[str, dict[str, blosc2.NDArray | blosc2.LazyExpr]]:
+        """Make a string predicate reject the nulls of the columns it reads.
+
+        The operator form (``t.where(t.a > 10)``) has always been null-aware:
+        :meth:`Column._null_aware_compare` forces null rows to False.  The
+        string form was not -- ``t.where("a > 10")`` compared the raw sentinel,
+        so a column whose sentinel happens to satisfy the predicate (say
+        ``null_value=999`` against ``> 10``) returned its nulls as matches.
+
+        Each nullable column referenced by the expression contributes a
+        validity operand (``a != null_value``, or ``~isnan(a)`` for a NaN
+        sentinel), which :func:`~blosc2.ctable_nulls.rewrite_null_predicates`
+        conjoins onto every comparison that reads it.  The validity operand is
+        a lazy expression over the same raw array, so it fuses into the same
+        pass rather than materializing anything.
+
+        Making the expression itself null-aware is what lets the index path
+        drop its own null post-filtering: index and scan now answer from the
+        same predicate instead of the index correcting for the scan.
+
+        Run this *before* :meth:`_rewrite_nested_expression`, while names in
+        *expr* are still real column names; the injected operand names carry no
+        dot, so the nested rewrite passes over them.
+        """
+        valid_exprs: dict[str, tuple[str, object]] = {}
+        new_operands = dict(operands)
+        for i, name in enumerate(operands):
+            if name in self._computed_cols:
+                continue
+            col_info = self._schema.columns_by_name.get(name)
+            if col_info is None or kind_of_spec(col_info.spec) != NULL_SENTINEL:
+                continue
+            if not self._expression_references_name(expr, name):
+                continue
+            guard = sentinel_guard_expr(name, col_info.spec.null_value)
+            if guard is None:
+                # A sentinel with no literal form: fall back to an injected
+                # boolean operand.  Correct, but opaque to the index planner.
+                valid_pred = self[name]._nulls.valid_pred()
+                if valid_pred is None:
+                    continue
+                guard = f"__nv{i}"
+                new_operands[guard] = valid_pred
+            valid_exprs[name] = (guard, col_info.spec.null_value)
+
+        rewritten = rewrite_null_predicates(expr, valid_exprs)
+        if rewritten is None:
+            return expr, operands
+        return rewritten, {
+            k: v for k, v in new_operands.items() if not k.startswith("__nv") or k in rewritten
+        }
+
     @staticmethod
     def _alias_dotted(expr: str, names: list[str], prefix: str) -> tuple[str, dict[str, str]]:
         """Replace each dotted name in *expr* with ``{prefix}{i}``.
@@ -13263,8 +13284,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         )
 
     def _is_nullable_column(self, name: str) -> bool:
-        col = self[name]
-        return col.null_value is not None or col.is_dictionary or col.is_varlen_scalar
+        return self[name]._nulls.is_nullable
 
     def dropna(self, subset: list[str] | None = None) -> CTable:
         """Return a view excluding rows where any column in *subset* is null.
@@ -13383,6 +13403,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             utf8_names = self._utf8_names_in(expr_result)
             operands = self._where_expression_operands(expr_result)
             expr_result, operands = self._rewrite_dictionary_predicates(expr_result, operands)
+            expr_result, operands = self._rewrite_null_predicates(expr_result, operands)
             expr_result, operands = self._rewrite_nested_expression(expr_result, operands)
             expr_result = self._lazyexpr_over_cols(expr_result, operands, utf8_names)
         if isinstance(expr_result, np.ndarray) and expr_result.dtype == np.bool_:

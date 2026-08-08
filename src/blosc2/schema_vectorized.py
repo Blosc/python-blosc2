@@ -19,6 +19,7 @@ from typing import Any
 
 import numpy as np
 
+from blosc2.ctable_nulls import sentinel_mask
 from blosc2.list_array import _coerce_struct_item, coerce_list_cell
 from blosc2.schema import ListSpec, NDArraySpec, ObjectSpec, StructSpec
 from blosc2.schema_compiler import CompiledColumn, CompiledSchema  # noqa: TC001
@@ -51,14 +52,7 @@ def _null_mask_for_spec(arr: np.ndarray, spec) -> np.ndarray | None:
     null_value = getattr(spec, "null_value", None)
     if null_value is None:
         return None
-    try:
-        import math
-
-        if isinstance(null_value, float) and math.isnan(null_value):
-            return np.isnan(arr)
-    except TypeError:
-        pass
-    return arr == null_value
+    return sentinel_mask(arr, null_value)
 
 
 def validate_column_values(col: CompiledColumn, values: Any) -> None:  # noqa: C901

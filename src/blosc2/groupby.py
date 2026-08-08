@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
+from blosc2.ctable_nulls import is_nan_sentinel, sentinel_mask
 from blosc2.dsl_kernel import DSLKernel
 from blosc2.schema import DictionarySpec, NDArraySpec, SchemaSpec, float64, int64
 from blosc2.schema import bool as b2_bool
@@ -598,7 +599,7 @@ class CTableGroupBy:
             if value_dtype is None or np.dtype(value_dtype).kind != "f":
                 return None
             null_value = getattr(value_info.spec, "null_value", None)
-            if null_value is not None and not (isinstance(null_value, float) and math.isnan(null_value)):
+            if null_value is not None and not is_nan_sentinel(null_value):
                 return None
 
         try:
@@ -749,7 +750,7 @@ class CTableGroupBy:
                 desc.update({"kernel": kernel, "state_kind": "counts", "value_dtype": value_dtype})
             elif spec.op in {"sum", "mean", "min", "max"}:
                 if value_dtype.kind == "f":
-                    skip_nan = isinstance(null_value, float) and math.isnan(null_value)
+                    skip_nan = is_nan_sentinel(null_value)
                     if null_value is not None and not skip_nan:
                         return None
                     suffix = "sum" if spec.op == "sum" else spec.op
@@ -1108,7 +1109,7 @@ class CTableGroupBy:
                 if value_dtype is None or np.dtype(value_dtype).kind != "f":
                     return None
                 null_value = getattr(value_info.spec, "null_value", None)
-                nullable_nan_value = isinstance(null_value, float) and math.isnan(null_value)
+                nullable_nan_value = is_nan_sentinel(null_value)
                 if null_value is not None and not nullable_nan_value:
                     return None
 
@@ -2116,24 +2117,23 @@ class CTableGroupBy:
     def _null_mask(self, name: str, values: np.ndarray, *, is_key: bool) -> np.ndarray:
         col_info = self.table._schema.columns_by_name[name]
         spec = col_info.spec
+        null_value = getattr(spec, "null_value", None)
         if isinstance(values, _Utf8KeyChunk):
-            null_value = getattr(spec, "null_value", None)
             if null_value is None:
                 return np.zeros(len(values), dtype=bool)
             return values.codes == values.code_of(null_value)
         if isinstance(spec, DictionarySpec):
             mask = values == np.int32(spec.null_code)
             return mask if is_key or getattr(spec, "nullable", False) else np.zeros(len(values), dtype=bool)
-        null_value = getattr(spec, "null_value", None)
         mask = np.zeros(len(values), dtype=bool)
         # For keys, treat all NaNs as missing so dropna behaves predictably.
         # For values, only nullable NaN sentinels are skipped.
-        if values.dtype.kind == "f" and (
-            is_key or (isinstance(null_value, float) and math.isnan(null_value))
-        ):
+        nan_sentinel = is_nan_sentinel(null_value)
+        if values.dtype.kind == "f" and (is_key or nan_sentinel):
             mask |= np.isnan(values)
-        if null_value is not None and not (isinstance(null_value, float) and math.isnan(null_value)):
-            mask |= values == null_value
+        if null_value is not None and not nan_sentinel:
+            # A float key column with a non-NaN sentinel gets both tests.
+            mask |= sentinel_mask(values, null_value)
         return mask
 
 
