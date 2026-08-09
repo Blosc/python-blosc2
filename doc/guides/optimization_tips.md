@@ -84,12 +84,12 @@ The output passes light uniformity checks against NumPy's PCG64 (the benchmark s
 
 ## Understanding `@blosc2.jit` compile control flow
 
-There are two routes the {func}`jit <blosc2.jit>` decorator can take because they are good at different things:
+There are two routes the {func}`@blosc2.jit <blosc2.jit>` decorator can take because they are good at different things:
 
 - **No control flow → tracing (the default).** `jit` calls your function once with proxy operands, records the `LazyExpr` it builds, and evaluates that expression vectorized over whole chunks. This is the faster route for plain elementwise math.
-- **Control flow → the whole function is compiled.** A traced call only ever walks *one* path through an `if` or a loop, so the other paths would be silently lost. So when `jit` sees control flow and the body fits the DSL grammar, it compiles the entire function with the same miniexpr engine that powers `@blosc2.dsl_kernel` and runs the compiled kernel chunk by chunk.
+- **Control flow → the whole function is compiled.** A traced call only ever walks *one* path through an `if` or a loop, so the other paths would be silently lost. So when `jit` sees control flow and the body fits the DSL grammar, it compiles the entire function with the same miniexpr engine that enables the {func}`@blosc2.dsl_kernel <blosc2.dsl_kernel>` decorator and runs the compiled kernel chunk by chunk.
 
-In short: you can write `if`, `for` and `while` inside a {func}`@blosc2.jit <blosc2.jit>`-decorated function and they will work as intended, provided the body sticks to the [DSL grammar](../reference/dsl_syntax.md). But you need to know that this route is different from tracing.
+In short: you can write `if`, `for` and `while` inside a {func}`@blosc2.jit <blosc2.jit>`-decorated function and they will work as intended, provided the body sticks to the [DSL grammar](../reference/dsl_syntax.md). But be aware that this route is different from tracing.
 
 Why the two routes? Because tracing is usually faster when it works: the traced expression is evaluated as one vectorized miniexpr over whole chunks, while a compiled kernel has to loop element by element.  Keep reading for examples of both, and the knobs to force one route or the other.
 
