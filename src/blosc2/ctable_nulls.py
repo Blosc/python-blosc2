@@ -38,6 +38,7 @@ from blosc2.schema import (
     NULL_NONE,
     NULL_SENTINEL,
     DictionarySpec,
+    NDArraySpec,
     ObjectSpec,
     StructSpec,
     VLBytesSpec,
@@ -55,6 +56,7 @@ __all__ = [
     "NULL_NONE",
     "NULL_SENTINEL",
     "NullChannel",
+    "fill_item_for",
     "fill_value_for",
     "is_na_marker",
     "is_nan_sentinel",
@@ -63,6 +65,7 @@ __all__ = [
     "rewrite_null_predicates",
     "sentinel_guard_expr",
     "sentinel_mask",
+    "split_batch_validity",
 ]
 
 # Specs whose cells can hold a native ``None``.  ``ListSpec`` is deliberately
@@ -119,6 +122,79 @@ def is_na_marker(value) -> builtin_bool:
     if type(value).__name__ in _NA_TYPE_NAMES:
         return True
     return isinstance(value, np.datetime64) and builtin_bool(np.isnat(value))
+
+
+def fill_item_for(spec):
+    """The whole cell written into one of *spec*'s null slots.
+
+    :func:`~blosc2.schema.fill_value_for` gives the scalar; a fixed-shape
+    ndarray column's null rows still have to hold something of the right
+    shape, so it is widened to a full item there.
+    """
+    base = fill_value_for(spec)
+    if isinstance(spec, NDArraySpec):
+        return np.full(spec.item_shape, base, dtype=spec.dtype)
+    return base
+
+
+def split_batch_validity(values, fill):
+    """Split an incoming batch into ``(storage_values, valid)``.
+
+    *valid* is ``None`` when nothing in the batch was null -- the common case,
+    and the one that lets a caller skip the sidecar write entirely and so never
+    materialize one.  Otherwise it is a bool array in Arrow polarity (``True``
+    = not null), and *storage_values* has *fill* substituted into the null
+    slots, so what sits under ``valid=False`` is deterministic rather than
+    whatever NumPy made of a ``None``.
+
+    Null detection follows what the input is able to express:
+
+    * ``np.ma.MaskedArray`` -- ``~arr.mask`` is the validity, verbatim;
+    * an object array or Python sequence -- ``None`` and the library NA
+      singletons are null (:func:`is_na_marker`);
+    * a ``datetime64`` array -- ``NaT`` is null;
+    * a float array -- **NaN is a value, not a null** (decision 6).  A mask
+      column's whole point is that nullity lives outside the value range, so
+      nothing in a typed numeric array reads as missing.
+
+    Shared by :meth:`NullChannel.coerce_batch` and ``CTable.add_column``, which
+    have to agree on all of the above but reach it from different directions:
+    the channel has a live column to ask, ``add_column`` only has a spec.
+    """
+    if isinstance(values, np.ma.MaskedArray):
+        valid = ~np.ma.getmaskarray(values)
+        if valid.ndim > 1:  # ndarray column: a row is null only if wholly masked
+            valid = valid.any(axis=tuple(range(1, valid.ndim)))
+        filled = np.ma.filled(values, fill)
+        return filled, (None if valid.all() else valid)
+
+    if isinstance(values, blosc2.NDArray):
+        # Already in typed storage; there is no way for it to carry a None.
+        return values, None
+
+    arr = values if isinstance(values, np.ndarray) else np.asarray(values, dtype=object)
+    if arr.dtype.kind == "M":
+        invalid = np.isnat(arr)
+    elif arr.dtype.kind == "O":
+        # Row-level: for an ndarray column each entry is a whole item, and only
+        # a wholesale None makes the row null.
+        invalid = np.fromiter((is_na_marker(v) for v in arr), dtype=np.bool_, count=len(arr))
+    else:
+        # Typed numeric/bool/U/S input has no in-band way to say "null".
+        return values, None
+
+    if not invalid.any():
+        return values, None
+    out = np.asarray(arr, dtype=object).copy()
+    if isinstance(fill, np.ndarray):
+        # An ndarray column's fill is a whole item: assigning it through a
+        # boolean mask would broadcast its elements across the selected slots
+        # instead of storing one item in each.
+        for i in np.flatnonzero(invalid):
+            out[i] = fill
+    else:
+        out[invalid] = fill
+    return out.tolist(), ~invalid
 
 
 def is_nan_sentinel(value) -> bool:
@@ -445,11 +521,7 @@ class NullChannel:
         whole item for a fixed-shape ndarray column, whose null rows still
         have to hold something of the right shape.
         """
-        base = fill_value_for(self.spec)
-        col = self._col
-        if col.is_ndarray:
-            return np.full(col.item_shape, base, dtype=col.dtype)
-        return base
+        return fill_item_for(self.spec)
 
     # ------------------------------------------------------------------
     # The sidecar (mask kind only)
@@ -644,64 +716,16 @@ class NullChannel:
         return self.fill_value, False
 
     def coerce_batch(self, values, n: int):
-        """Split an incoming batch into ``(storage_values, valid)``.
+        """Split an incoming batch into ``(storage_values, valid)`` for this column.
 
-        *valid* is ``None`` when nothing in the batch was null -- the common
-        case, and the one that lets the caller skip the sidecar write entirely
-        and so never materialize one.  Otherwise it is a length-*n* bool array
-        in Arrow polarity (``True`` = not null), and *storage_values* has this
-        column's fill substituted into the null slots, so what sits under
-        ``valid=False`` is deterministic rather than whatever NumPy made of a
-        ``None``.
-
-        Null detection follows what the input is able to express:
-
-        * ``np.ma.MaskedArray`` -- ``~arr.mask`` is the validity, verbatim;
-        * an object array or Python sequence -- ``None`` and the library NA
-          singletons are null (:func:`is_na_marker`);
-        * a ``datetime64`` array -- ``NaT`` is null;
-        * a float array -- **NaN is a value, not a null** (decision 6).  A
-          mask column's whole point is that nullity lives outside the value
-          range, so nothing in a typed numeric array reads as missing.
+        Thin wrapper over :func:`split_batch_validity`, which carries the null
+        detection rules and the reasoning behind them; all this adds is the
+        column's own fill, and the short-circuit for a column whose nulls do
+        not live in a sidecar at all.
         """
         if self.kind != NULL_MASK:
             return values, None
-        fill = self.fill_value
-
-        if isinstance(values, np.ma.MaskedArray):
-            valid = ~np.ma.getmaskarray(values)
-            if valid.ndim > 1:  # ndarray column: a row is null only if wholly masked
-                valid = valid.any(axis=tuple(range(1, valid.ndim)))
-            filled = np.ma.filled(values, fill)
-            return filled, (None if valid.all() else valid)
-
-        if isinstance(values, blosc2.NDArray):
-            # Already in typed storage; there is no way for it to carry a None.
-            return values, None
-
-        arr = values if isinstance(values, np.ndarray) else np.asarray(values, dtype=object)
-        if arr.dtype.kind == "M":
-            invalid = np.isnat(arr)
-        elif arr.dtype.kind == "O":
-            # Row-level: for an ndarray column each entry is a whole item, and
-            # only a wholesale None makes the row null.
-            invalid = np.fromiter((is_na_marker(v) for v in arr), dtype=np.bool_, count=len(arr))
-        else:
-            # Typed numeric/bool/U/S input has no in-band way to say "null".
-            return values, None
-
-        if not invalid.any():
-            return values, None
-        out = np.asarray(arr, dtype=object).copy()
-        if isinstance(fill, np.ndarray):
-            # An ndarray column's fill is a whole item: assigning it through a
-            # boolean mask would broadcast its elements across the selected
-            # slots instead of storing one item in each.
-            for i in np.flatnonzero(invalid):
-                out[i] = fill
-        else:
-            out[invalid] = fill
-        return out.tolist(), ~invalid
+        return split_batch_validity(values, self.fill_value)
 
     # ------------------------------------------------------------------
     # Lazy predicates over the raw physical array

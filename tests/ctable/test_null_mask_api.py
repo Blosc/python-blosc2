@@ -599,3 +599,135 @@ def test_extend_from_a_null_free_table_writes_no_sidecar():
     dst.extend(simple([1, 2, 3]))
     assert dst["a"].is_null().tolist() == [False, False, False]
     assert dst._null_mask("a") is None
+
+
+# ---------------------------------------------------------------------------
+# add_column
+# ---------------------------------------------------------------------------
+#
+# A mask column is the only kind that can say "this row has no value" without
+# reserving one, so it is the only way to add a column to a populated table
+# and be honest about the rows that predate it.  A sentinel column has to
+# spell that with its sentinel, and says so.
+
+
+def test_add_column_values_accept_none():
+    t = simple([1, 2, 3], spec=blosc2.int64())
+    t.add_column("b", blosc2.int64(nullable=True), values=[10, None, 30])
+    assert t["b"][:].tolist() == [10, 0, 30]
+    assert t["b"].is_null().tolist() == [False, True, False]
+    assert t["b"].null_count() == 1
+
+
+def test_add_column_default_none_backfills_nulls():
+    """The rows that predate the column have no value, and now can say so."""
+    t = simple([1, 2, 3], spec=blosc2.int64())
+    t.add_column("b", blosc2.field(blosc2.int64(nullable=True), default=None))
+    assert t["b"].is_null().tolist() == [True, True, True]
+
+
+def test_add_column_default_none_still_applies_to_later_rows():
+    t = simple([1, 2], spec=blosc2.int64())
+    t.add_column("b", blosc2.field(blosc2.int64(nullable=True), default=None))
+    t.append((3, 9))
+    t.extend([(4, None)])
+    assert t["b"][:].tolist() == [0, 0, 9, 0]
+    assert t["b"].is_null().tolist() == [True, True, False, True]
+
+
+def test_add_column_without_a_null_writes_no_sidecar():
+    """Decision 9 again: the lazy sidecar must stay lazy here too."""
+    t = simple([1, 2, 3], spec=blosc2.int64())
+    t.add_column("b", blosc2.int64(nullable=True), values=[10, 20, 30])
+    assert t["b"].is_null().tolist() == [False, False, False]
+    assert t._null_mask("b") is None
+
+
+def test_add_column_scatters_nulls_past_deleted_rows():
+    """values= is one entry per *live* row, so validity has to scatter with them."""
+    t = simple([0, 1, 2, 3], spec=blosc2.int64())
+    t.delete(1)
+    t.add_column("b", blosc2.int64(nullable=True), values=[10, None, 30])
+    assert t["b"].is_null().tolist() == [False, True, False]
+    t.compact()
+    assert t["b"].is_null().tolist() == [False, True, False]
+    assert t["b"][:].tolist() == [10, 0, 30]
+
+
+@needs_utf8
+def test_add_column_utf8_values_accept_none():
+    """The fill is "" here, which a genuine row may also hold."""
+    t = simple([1, 2, 3], spec=blosc2.int64())
+    t.add_column("s", utf8_spec(null_storage="mask"), values=["p", None, ""])
+    assert list(t["s"][:]) == ["p", "", ""]
+    assert t["s"].is_null().tolist() == [False, True, False]
+
+
+def test_add_column_ndarray_values_accept_none():
+    t = simple([1, 2], spec=blosc2.int64())
+    t.add_column(
+        "v",
+        blosc2.ndarray((3,), dtype=blosc2.int64(), nullable=True),
+        values=[np.array([1, 2, 3]), None],
+    )
+    assert t["v"][:].tolist() == [[1, 2, 3], [0, 0, 0]]
+    assert t["v"].is_null().tolist() == [False, True]
+
+
+def test_add_column_nulls_survive_a_reopen(tmp_path):
+    t = simple([1, 2, 3], spec=blosc2.int64())
+    urlpath = str(tmp_path / "added.b2t")
+    t.save(urlpath)
+    live = blosc2.CTable.open(urlpath, mode="a")
+    try:
+        live.add_column("b", blosc2.int64(nullable=True), values=[10, None, 30])
+    finally:
+        live.close()
+    reopened = blosc2.CTable.open(urlpath)
+    try:
+        assert reopened["b"].null_storage == "mask"
+        assert reopened["b"].is_null().tolist() == [False, True, False]
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize(
+    ("spec", "match"),
+    [
+        (blosc2.int64(), "nullable"),
+        (blosc2.int64(nullable=True, null_value=-1), r"null_value \(-1\)"),
+    ],
+)
+def test_add_column_says_why_a_null_will_not_fit(spec, match):
+    """Not NumPy's "int() argument must be ...", which names neither the column nor the way out."""
+    t = simple([1, 2, 3], spec=blosc2.int64())
+    with pytest.raises(TypeError, match=match):
+        t.add_column("b", spec, values=[10, None, 30])
+
+
+# A timestamp column stores int64 in the spec's unit, so add_column has to
+# convert through that unit exactly as extend does.  It did not, which put a
+# datetime64[s] value in a microsecond column and read it back as 1970.
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+def test_add_column_timestamps_keep_their_unit(nullable):
+    when = np.datetime64("2020-01-01T00:00:00", "s")
+    t = simple([1, 2], spec=blosc2.int64())
+    t.add_column("ts", blosc2.timestamp(nullable=nullable), values=[when, when])
+    assert t["ts"][:].tolist() == [when.astype("datetime64[us]").item()] * 2
+
+
+def test_add_column_timestamp_default_keeps_its_unit():
+    when = np.datetime64("2020-01-01T00:00:00", "s")
+    t = simple([1, 2], spec=blosc2.int64())
+    t.add_column("ts", blosc2.field(blosc2.timestamp(), default=when))
+    assert t["ts"][:].tolist() == [when.astype("datetime64[us]").item()] * 2
+
+
+def test_add_column_timestamp_null_reads_as_nat():
+    when = np.datetime64("2020-01-01T00:00:00", "s")
+    t = simple([1, 2], spec=blosc2.int64())
+    t.add_column("ts", blosc2.timestamp(nullable=True), values=[when, None])
+    assert t["ts"].is_null().tolist() == [False, True]
+    assert np.isnat(t["ts"][:][1])

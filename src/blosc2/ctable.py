@@ -39,12 +39,15 @@ from blosc2.ctable_nulls import (
     NULL_NONE,
     NULL_SENTINEL,
     NullChannel,
+    fill_item_for,
     fill_value_for,
+    is_na_marker,
     is_nan_sentinel,
     kind_of_spec,
     rewrite_null_predicates,
     sentinel_guard_expr,
     sentinel_mask,
+    split_batch_validity,
 )
 from blosc2.ctable_storage import (
     FileTableStorage,
@@ -9939,6 +9942,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             A declared default is still honoured for rows appended later, so
             *values* and ``blosc2.field(..., default=...)`` can be combined.
 
+            For a column whose nulls live in a validity sidecar
+            (``null_storage="mask"``, the default for ``nullable=True``), a
+            ``None`` entry writes a real null.  Declaring ``default=None``
+            likewise backfills every existing row as null, which is the only
+            way to say "this column has no value for the rows that predate
+            it" -- a sentinel column has to spell that with its sentinel.
+
         Raises
         ------
         ValueError
@@ -9984,8 +9994,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise TypeError(
                 "add_column() does not support dictionary columns; use the constructor with a full schema."
             )
+        # Validity for the live rows, from either the values= batch or a
+        # default=None backfill.  Written once at the end, when the column and
+        # its schema entry are both in place -- _ensure_null_mask needs both to
+        # pin the sidecar to the column's own row grid.
+        live_valid = None
+        uses_mask = getattr(spec, "uses_mask", False)
         if values is not None:
-            values = self._add_column_values(name, compiled_col, values, n_live)
+            values, live_valid = self._add_column_values(name, compiled_col, values, n_live)
+        # A declared default of None means "no value for the rows that predate
+        # this column", which only a sidecar can record; a sentinel column falls
+        # through to the coercion below and reports it cannot hold a None.
+        default_is_null = uses_mask and default is not MISSING and is_na_marker(default)
+        if default_is_null and values is None and n_live > 0:
+            live_valid = np.zeros(n_live, dtype=np.bool_)
 
         if self._is_varlen_scalar_column(compiled_col):
             # Varlen scalar columns don't use fixed-width NDArray storage, but the
@@ -10013,13 +10035,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 new_col.extend(padded)
             new_col.flush()
         else:
-            if default is not MISSING:
+            if default_is_null:
+                # The stored cell is the fill; live_valid above is what records
+                # that nothing is there to read.
+                default_val = fill_item_for(spec)
+            elif default is not MISSING:
                 try:
                     if self._is_ndarray_column(compiled_col):
                         default_val = self._coerce_ndarray_value(name, spec, default)
+                    elif isinstance(spec, timestamp):
+                        # Through the unit, as the values= path above does.
+                        default_val = self._timestamps_to_stored_int64(
+                            spec, [default], np.dtype(spec.dtype)
+                        )[0]
                     else:
                         default_val = spec.dtype.type(default)
-                except (ValueError, OverflowError) as exc:
+                except (ValueError, OverflowError, TypeError) as exc:
                     raise TypeError(
                         f"Cannot coerce default {default!r} to dtype {spec.dtype!r}: {exc}"
                     ) from exc
@@ -10063,6 +10094,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             columns=new_columns,
             columns_by_name={**self._schema.columns_by_name, name: compiled_col},
         )
+        # Last, because _ensure_null_mask reads both self._cols[name] and the
+        # schema entry to pin the sidecar to the column's own row grid.  A batch
+        # that held no null leaves live_valid None and writes nothing, so a
+        # null-free column stays sidecar-free (decision 9).
+        if live_valid is not None:
+            self._ensure_null_mask(name)[np.flatnonzero(self._valid_rows[:])] = live_valid
         if isinstance(self._storage, FileTableStorage):
             self._storage.save_schema(self._schema_dict_with_computed())
 
@@ -10074,6 +10111,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         just has to be something the spec accepts.
         """
         if default is not MISSING:
+            # A None default is the caller asking for nulls, not for a literal
+            # None cell: under mask storage the stored cell is the fill, and the
+            # sidecar is what says the row is missing.
+            if getattr(spec, "uses_mask", False) and is_na_marker(default):
+                return fill_item_for(spec)
             return default
         null_value = getattr(spec, "null_value", None)
         if null_value is not None:
@@ -10084,11 +10126,72 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return ""
         return None
 
+    @staticmethod
+    def _timestamps_to_stored_int64(spec, values, target_dtype):
+        """Convert a batch of timestamps to the int64 the column actually stores.
+
+        The conversion has to go **through the spec's unit**: a bare
+        ``astype(int64)`` on a ``datetime64[s]`` array yields seconds, which a
+        microsecond column then reads back as a date in 1970.  Shared by
+        ``extend`` and ``add_column``, which both have to store the same
+        encoding and only one of which used to.
+
+        Values that are already integers pass through, which is what lets a
+        mask column's fill (``int64.min``, decoded as ``NaT``) survive the
+        object branch untouched.
+        """
+        arr = np.asarray(values)
+        if np.issubdtype(arr.dtype, np.datetime64):
+            return arr.astype(f"datetime64[{spec.unit}]").astype(np.int64)
+        if arr.dtype.kind in "OUS":
+            return np.array(
+                [
+                    spec.null_value
+                    if v is None
+                    else np.datetime64(v).astype(f"datetime64[{spec.unit}]").astype(np.int64)
+                    if isinstance(v, (np.datetime64, str)) or hasattr(v, "isoformat")
+                    else v
+                    for v in arr
+                ],
+                dtype=target_dtype,
+            )
+        return arr
+
+    @staticmethod
+    def _reject_nulls_this_column_cannot_store(name: str, col: CompiledColumn, values) -> None:
+        """Say why a ``None`` in ``values=`` cannot be stored, and what to do instead.
+
+        Only a fixed-width column whose nulls live in a sidecar can take a bare
+        ``None``.  Called from the ``astype`` failure path, where NumPy's own
+        ``int() argument must be ...`` names neither the column nor the way
+        out; returns quietly when the batch held no null, leaving the caller to
+        report whatever else went wrong.
+        """
+        _, invalid = split_batch_validity(values, None)
+        if invalid is None:
+            return
+        sentinel = getattr(col.spec, "null_value", None)
+        remedy = (
+            f"write its null_value ({sentinel!r}) instead"
+            if sentinel is not None
+            else 'declare the column nullable, e.g. nullable=True (or null_storage="mask")'
+        )
+        raise TypeError(
+            f"add_column() values= for {name!r} contains a null, which this column cannot store: {remedy}."
+        )
+
     def _add_column_values(self, name: str, col: CompiledColumn, values, n_live: int):
         """Validate and coerce the ``values=`` argument of :meth:`add_column`.
 
-        Returns a list for varlen scalar columns (which are fed row by row) and
-        a dtype-coerced ndarray for the fixed-width ones.
+        Returns ``(values, valid)``: a list for varlen scalar columns (which are
+        fed row by row) or a dtype-coerced ndarray for the fixed-width ones,
+        plus the validity of a mask-storage column whose batch held a null
+        (``None`` when nothing was, exactly as ``coerce_batch`` reports it).
+
+        Nullity is split out **before** validation and the ``astype`` below, for
+        the same reason ``extend`` does it: a null cell has no value to
+        constrain, and ``np.asarray([1, None, 3]).astype(int64)`` raises rather
+        than yielding anything to store.
 
         Constraints declared on the spec are checked here, *before* the
         ``astype`` below: coercing to a fixed-width dtype truncates a too-long
@@ -10097,6 +10200,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         from blosc2.schema_vectorized import validate_column_values
 
+        uses_mask = getattr(col.spec, "uses_mask", False)
+
         if self._is_varlen_scalar_column(col):
             values = list(values)
             if len(values) != n_live:
@@ -10104,8 +10209,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     f"add_column() values= for {name!r} requires {n_live} entries "
                     f"(live rows), got {len(values)}."
                 )
+            valid = None
+            if uses_mask:
+                values, valid = split_batch_validity(values, fill_item_for(col.spec))
+                values = list(values)
+            # No null check for the other varlen kinds: the container ones hold
+            # a native None, and a sentinel utf8 column maps None onto its
+            # sentinel in _ScalarVarLenArray._coerce.  Only the fixed-width
+            # branch below has nowhere to put one.
             validate_column_values(col, values)
-            return values
+            return values, valid
+
+        valid = None
+        if uses_mask:
+            values, valid = split_batch_validity(values, fill_item_for(col.spec))
 
         arr = values[:] if isinstance(values, blosc2.NDArray) else np.asarray(values)
         if len(arr) != n_live:
@@ -10118,9 +10235,17 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 f"add_column() values= for {name!r} must have shape {expected}, got {arr.shape}."
             )
         validate_column_values(col, arr)
+        if isinstance(col.spec, timestamp):
+            # After validation, which sees the datetimes the caller passed, and
+            # before the astype, which would otherwise drop the unit.
+            arr = self._timestamps_to_stored_int64(col.spec, arr, np.dtype(col.spec.dtype))
         try:
-            return arr.astype(col.spec.dtype)
-        except (ValueError, OverflowError) as exc:
+            return arr.astype(col.spec.dtype), valid
+        except (ValueError, OverflowError, TypeError) as exc:
+            # Only on the failure path, so a well-formed batch never pays for
+            # the scan: a null is the likeliest reason a batch will not cast,
+            # and NumPy's own message names neither the column nor the way out.
+            self._reject_nulls_this_column_cannot_store(name, col, values)
             raise TypeError(
                 f"Cannot coerce values= for {name!r} to dtype {col.spec.dtype!r}: {exc}"
             ) from exc
@@ -14290,23 +14415,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if valid is not None:
                     batch_valid[name] = valid
                 if isinstance(col_meta.spec, timestamp):
-                    values = np.asarray(raw_columns[name])
-                    if np.issubdtype(values.dtype, np.datetime64):
-                        values = values.astype(f"datetime64[{col_meta.spec.unit}]").astype(np.int64)
-                    elif values.dtype.kind in "OUS":
-                        values = np.array(
-                            [
-                                col_meta.spec.null_value
-                                if v is None
-                                else np.datetime64(v)
-                                .astype(f"datetime64[{col_meta.spec.unit}]")
-                                .astype(np.int64)
-                                if isinstance(v, (np.datetime64, str)) or hasattr(v, "isoformat")
-                                else v
-                                for v in values
-                            ],
-                            dtype=target_dtype,
-                        )
+                    values = self._timestamps_to_stored_int64(col_meta.spec, raw_columns[name], target_dtype)
                     scalar_processed_cols[name] = np.ascontiguousarray(values, dtype=target_dtype)
                 elif self._is_ndarray_column(col_meta):
                     scalar_processed_cols[name] = self._coerce_ndarray_batch(
