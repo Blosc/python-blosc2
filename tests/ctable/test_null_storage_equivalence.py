@@ -499,6 +499,7 @@ def test_a_null_never_satisfies_a_predicate(kind):
 @pytest.mark.parametrize("kind", ALL_KINDS)
 def test_to_arrow_agrees(kind):
     """Arrow has a validity bitmap of its own, so this is the exact comparison."""
+    pytest.importorskip("pyarrow")
     m, s = both(kind)
     got, want = m.to_arrow()["a"], s.to_arrow()["a"]
     assert_same(got.null_count, want.null_count, "to_arrow null_count")
@@ -697,4 +698,5 @@ def test_a_mask_float_cannot_round_trip_through_pandas(kind):
     )
     assert sentinel_back["a"].null_count() == 1
     # to_arrow is the export that keeps the distinction for both storages.
+    pytest.importorskip("pyarrow")
     assert build(kind, "mask").to_arrow()["a"].null_count == 1
