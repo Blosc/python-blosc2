@@ -82,26 +82,91 @@ The output passes light uniformity checks against NumPy's PCG64 (the benchmark s
 
 *Benchmark for this tip: [`tip_11_dsl_random.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_11_dsl_random.py)*
 
-## Let `@blosc2.jit` compile control flow instead of tracing it
+## Understanding `@blosc2.jit` compile control flow
 
 {func}`@blosc2.jit <blosc2.jit>` normally works by *tracing*: it calls your function once with proxy operands to record a `LazyExpr` string, so an `if`/`for`/`while` in the body only ever sees one (traced) path — the rest is silently lost. When the body contains control flow **and** it fits the [DSL grammar](../reference/dsl_syntax.md), `jit` detects this at decoration time and instead compiles the whole function with the same miniexpr engine that powers `@blosc2.dsl_kernel`, so every branch and loop runs as written, once per chunk, on NumPy or NDArray operands directly (no conversion copy).
 
+### An example: Mandelbrot escape times
+
+Escape-time counting is a per-pixel loop with an early `break` — exactly the shape tracing cannot represent. Let's compute the escape count of a 512×512 patch of the Mandelbrot set (`max_iter=64`) and compare the ways of running it:
+
 ```python
-# Without this detection, jit would call the function once, record only the
-# branch that one call happened to take, and reuse it for every pixel — not
-# a real per-pixel escape-time loop.
-@blosc2.jit
-def mandelbrot(cr, ci, max_iter):
-    zr, zi, n = 0.0, 0.0, 0
+def mandel_py(cr, ci, max_iter):  # plain Python: one loop per pixel
+    zr = zi = 0.0
+    n = 0
+    while zr * zr + zi * zi <= 4.0 and n < max_iter:
+        zr, zi = zr * zr - zi * zi + cr, 2 * zr * zi + ci
+        n += 1
+    return n
+
+
+@blosc2.jit  # the same loop, written the natural way — jit detects the
+# ^^^^^^^^^   # control flow at decoration time and compiles this kernel whole
+def mandel_jit(cr, ci, max_iter):
+    zr = 0.0
+    zi = 0.0
+    n = 0
     for _ in range(max_iter):
         if zr * zr + zi * zi > 4.0:
             break
-        zr, zi = zr * zr - zi * zi + cr, 2 * zr * zi + ci
+        zr2 = zr * zr - zi * zi + cr
+        zi = 2 * zr * zi + ci
+        zr = zr2
         n += 1
-    return n  # jit detects the control flow and compiles this kernel whole
+    return n
+
+
+iterations = mandel_jit(CR, CI, 64)  # CR, CI: the two float32 grids
 ```
 
-Functions **without** control flow always trace, even when they happen to be DSL-valid: tracing plus vectorized `ne_evaluate`/miniexpr is faster than whole-kernel miniexpr for pure elementwise expressions, so `jit` only takes the DSL route when tracing would silently lose branches/loops. Use `jit(strict=True)` to force the DSL route regardless (raises at decoration time if the function can't be compiled), or `jit(strict=False)` to force tracing even with control flow (only correct when branches depend on plain Python values, not on the arrays themselves).
+All five variants below return bit-identical escape counts (the benchmark script verifies each against the pure-Python reference); the plot shows the four timed ones:
+
+- `mandel_py(CR, CI, 64)` — plain Python, one loop per pixel
+- `mandel_numpy(CR, CI, 64)` — vectorized NumPy mask iteration
+- `@blosc2.jit` on `mandel_jit` — auto-detects the control flow and compiles the kernel whole
+- `@blosc2.jit(jit_backend="cc")` on `mandel_cc` — same, but compiled with the system C compiler instead of the bundled tcc (tradeoffs in a section of their own below)
+- `@blosc2.jit(strict=True)` on `mandel_strict` — forces the DSL route, raising at decoration time if the function cannot be compiled as a DSL kernel; `strict=False` forces tracing even with control flow, which is only correct when branches depend on plain Python values, not the arrays (see below)
+
+![Mandelbrot escape times across jit modes](optim_tips/tip_15a_jit_control_flow.png)
+
+The default `@blosc2.jit` is **~140x faster than the Python loop** and **~2x faster than the best plain-NumPy version** — and the NumPy version is the one that costs you 15 lines of `alive`/`escaped` mask bookkeeping plus an overflow trap (the `zr, zi` values keep growing after escape and go `inf`/`nan` in float32, so the mask loop must not rely on them). The jit kernel is the loop you would have written anyway. `strict=True` is the same route, forced: it raises `DSLSyntaxError` at *decoration* time if the function cannot be compiled as a DSL kernel, which is useful when you want the guarantee instead of a silent fallback (it is also the only way to reach the DSL route through `df.apply(..., engine=blosc2.jit(strict=True))`).
+
+Two DSL-form rules bite in this example: use **simple assignments** only (the tuple assignment `zr, zi = ...` in the Python reference is not valid DSL, so `jit` would silently fall back to tracing and then raise at call time), and keep **docstrings out of the kernel body**. The [DSL syntax reference](../reference/dsl_syntax.md) has the full grammar.
+
+`strict=False` forces tracing even with control flow, and on this function it fails *loudly*: tracing calls the function once with proxy arrays, and `if zr * zr + zi * zi > 4.0` on a proxy raises `ValueError` — a branch on the array cannot be traced at all. The *silent* failure mode appears when branches depend on plain Python values instead (say `if max_iter > 100`): the traced call records only the one path that call happened to take, and that path is then reused for every element. So `strict=False` is only correct when branches/loops depend on plain Python values, never on the arrays themselves.
+
+On-disk {class}`~blosc2.NDArray` operands work too, with no conversion copy: the same kernel over `blosc2.asarray()` views of the two grids runs at the same speed and returns a plain NumPy array.
+
+### Element-wise functions still trace by default
+
+The same machinery raises the obvious question: if compiling the whole function is this good, why doesn't `jit` do it for everything? Because for functions **without** control flow, tracing is the faster route — the traced expression is evaluated as one vectorized miniexpr over whole chunks, while the compiled kernel has to loop. The measured expression is a heavy elementwise mix of transcendental functions:
+
+```python
+@blosc2.jit
+def heavy(x):
+    return (
+        np.sin(x)
+        + np.cos(x * 2)
+        + np.exp(x * 0.5) * np.sin(x * 3)
+        + np.sqrt(np.abs(x))
+        + np.log1p(np.abs(x))
+    )
+
+
+# The same body decorated with @blosc2.jit(strict=True) forces the DSL route.
+```
+
+Measured over 8M float32 values:
+
+![Elementwise: tracing vs forced DSL](optim_tips/tip_15b_jit_elementwise.png)
+
+The default `@blosc2.jit` (traces) is the faster route here: the tcc-compiled DSL kernel is **~1.8x slower** (the plots show the exact times). `jit_backend="cc"` closes the gap — the system-C-compiled kernel matches tracing. One nuance: elementwise functions still need `strict=True` to take the compiled route at all — `jit_backend="cc"` alone leaves them tracing, at the same speed. So `jit` only takes the DSL route when tracing would silently lose branches/loops, and `strict=True` is for when you want the compiled-kernel guarantee (or the decoration-time check) at that price.
+
+### Pros/cons of forcing the system compiler
+
+The `jit_backend="cc"` entry in the demo is roughly **2x faster** in steady state on both kernels (mandelbrot and elementwise alike, as the plots show), with the same results — bit-identical escape counts, float32-precision on the elementwise kernel (the script verifies both). The price is the one-time compile: the first call pays **hundreds of milliseconds** while the system compiler builds a shared object, where tcc takes only **tens of milliseconds**; that artifact is cached on disk, so later processes load it in milliseconds. The backend also requires a C compiler and a writable cache directory. The same switch is available globally via the `ME_DSL_JIT_COMPILER=cc` (miniexpr) or `BLOSC_ME_JIT=cc` (blosc2) environment variables — the env var wins over the kwarg.
+
+*Benchmark for this tip: [`tip_15_jit_control_flow.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_15_jit_control_flow.py)*
 
 ## Align your reads with the double partition
 
