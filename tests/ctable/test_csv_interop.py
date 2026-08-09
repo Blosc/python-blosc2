@@ -538,5 +538,21 @@ def test_from_pandas_multi_dim_ndarray_roundtrip():
     assert t2["label"][:].tolist() == t["label"][:].tolist()
 
 
+@dataclass
+class MaskTextRow:
+    text: str = blosc2.field(blosc2.string(max_length=16, nullable=True, null_storage="mask"), default="")
+
+
+def test_csv_mask_text_roundtrip_empty_vs_null(tmp_csv):
+    """A mask-backed text column keeps "" apart from a null (and from whitespace)."""
+    values = ["", "  ", None, "ok", "\\N", "\\E", "\\\\N", "N"]
+    t = CTable(MaskTextRow, new_data=[(v,) for v in values])
+    t.to_csv(tmp_csv)
+    t2 = CTable.from_csv(tmp_csv, MaskTextRow)
+
+    assert [None if n else v for v, n in zip(t2["text"][:], t2["text"].is_null(), strict=True)] == values
+    assert t2["text"].null_count() == 1
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

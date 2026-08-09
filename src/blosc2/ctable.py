@@ -4308,6 +4308,34 @@ def col(name: str) -> ColExpr:
     return ColExpr(lambda t: t[name], name)
 
 
+# CSV text escapes: an empty field is CSV for "missing", which leaves a valid ""
+# in a mask-backed text column with nothing to write.  \N marks a null and \E a
+# valid "", and a value already shaped like one grows a backslash (\N -> \\N).
+_CSV_TEXT_TOKEN = re.compile(r"^\\+[NE]$")
+
+
+def _csv_text_escape(value, is_null: bool) -> str:
+    """Encode one text cell (and its validity) as an unambiguous CSV field."""
+    if is_null:
+        return "\\N"
+    if isinstance(value, bytes):
+        value = value.decode()
+    else:
+        value = str(value)
+    if value == "":
+        return "\\E"
+    return "\\" + value if _CSV_TEXT_TOKEN.match(value) else value
+
+
+def _csv_text_unescape(field: str) -> str | None:
+    """Inverse of :func:`_csv_text_escape`; ``None`` means the cell is missing."""
+    if field in ("", "\\N"):
+        return None
+    if field == "\\E":
+        return ""
+    return field[1:] if _CSV_TEXT_TOKEN.match(field) else field
+
+
 class CTable(_CTableIndexingMixin, Generic[RowT]):
     """Columnar compressed table with typed columns and row-oriented access."""
 
@@ -9290,6 +9318,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         Fixed-shape ndarray column cells are serialised as JSON arrays for
         readability and shape safety (e.g. ``"[1.0, 2.0, 3.0]"``).
 
+        Nulls are written as empty fields, except in a mask-backed **text**
+        column, where an empty field cannot mean both ``""`` and missing: there
+        a null is written as ``\\N`` and a valid ``""`` as ``\\E`` (a value that
+        already looks like either grows a backslash).  :meth:`from_csv` reads
+        both back, so ``""`` and ``None`` survive a round trip.
+
         Parameters
         ----------
         path:
@@ -9325,6 +9359,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     else:
                         json_strings.append(json.dumps(arr[i].tolist()))
                 arrays.append(json_strings)
+            elif col.null_storage == NULL_MASK and col.dtype.kind in ("U", "S"):
+                # An empty field cannot mean both "" and missing, so a mask-backed
+                # text column writes \N for a null and \E for a valid "", escaping
+                # any value that would collide (\N -> \\N).  from_csv undoes both.
+                arrays.append(
+                    [_csv_text_escape(v, is_null) for v, is_null in zip(col[:], col.is_null(), strict=True)]
+                )
             elif col.null_storage == NULL_MASK and col.null_count():
                 # An empty field is CSV for missing, and for a mask column it is
                 # the *only* way to say it -- writing the fill would come back as
@@ -9403,29 +9444,33 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         and raise.  *valid* is ``None`` when nothing was missing, or when the
         column is not nullable at all.
         """
-        missing = np.array([v.strip() == "" for v in raw], dtype=np.bool_)
+        uses_mask = getattr(col.spec, "uses_mask", False)
+        if col.dtype.kind in ("U", "S"):
+            # Text: only an exactly empty field is missing (whitespace-only text
+            # is a real value), plus the \N / \E escapes to_csv writes for a mask
+            # column, where "" and missing would otherwise look the same.
+            decoded = [_csv_text_unescape(v) if uses_mask else (None if v == "" else v) for v in raw]
+            missing = np.array([v is None for v in decoded], dtype=np.bool_)
+            raw = ["" if v is None else v for v in decoded]
+        else:
+            missing = np.array([v.strip() == "" for v in raw], dtype=np.bool_)
         placeholder = nv
         valid = None
-        if nv is None and getattr(col.spec, "uses_mask", False) and missing.any():
+        if nv is None and uses_mask and missing.any():
             placeholder = fill_value_for(col.spec)
             valid = ~missing
 
+        def _fill_missing(values):
+            if placeholder is None:
+                return values
+            return [placeholder if m else v for v, m in zip(values, missing, strict=True)]
+
         if col.dtype == np.bool_:
-
-            def _parse(v, _fill=placeholder):
-                stripped = v.strip()
-                if stripped == "" and _fill is not None:
-                    return _fill
-                return stripped in ("True", "true", "1")
-
-            return np.array([_parse(v) for v in raw], dtype=np.bool_), valid
+            parsed = [v.strip() in ("True", "true", "1") for v in raw]
+            return np.array(_fill_missing(parsed), dtype=np.bool_), valid
         if col.dtype.kind == "S":
-            prepared: list = [
-                placeholder if (v.strip() == "" and placeholder is not None) else v.encode() for v in raw
-            ]
-            return np.array(prepared, dtype=col.dtype), valid
-        prepared2 = [placeholder if (v.strip() == "" and placeholder is not None) else v for v in raw]
-        return np.array(prepared2, dtype=col.dtype), valid
+            return np.array(_fill_missing([v.encode() for v in raw]), dtype=col.dtype), valid
+        return np.array(_fill_missing(raw), dtype=col.dtype), valid
 
     @classmethod
     def from_csv(
