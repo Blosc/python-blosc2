@@ -179,9 +179,9 @@ So, use `strict=True` when you want the compiled-kernel guarantee, even if somet
 
 ### Pros and cons of forcing the system compiler
 
-`jit_backend="cc"` is roughly **2x faster** in steady state on both kernels above (mandelbrot and elementwise alike), with identical results — bit-identical escape counts and float32-precision elementwise values, both verified by the script.
+`jit_backend="cc"` is roughly **2x faster** in steady state on both kernels above (mandelbrot and elementwise alike), with identical results.
 
-The price is the one-time compile: the first call pays **hundreds of milliseconds** while the system compiler builds a shared object, where tcc (the default) takes only **tens of milliseconds**. The artifact is cached on disk, so later processes load it in milliseconds. So `cc` pays off for kernels you call repeatedly (or across runs), or when run time is much larger than compile time. It also requires a C compiler and a writable cache directory.
+The price is the one-time compile: the first call pays **hundreds of milliseconds** while the system compiler builds a shared object, where [tcc](https://bellard.org/tcc/) (the default) takes only **tens of milliseconds**. The artifact for the `cc` backend is cached on disk, so later processes load it in milliseconds. So `cc` pays off for kernels you call repeatedly in the same run (or across runs), or when run time is much larger than compile time. It also requires a C compiler and a writable cache directory.
 
 The same switch is available globally through the `BLOSC_ME_JIT=cc` environment variable, which wins over the keyword argument.
 
