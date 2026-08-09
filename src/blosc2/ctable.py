@@ -9711,6 +9711,22 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         columns become ``object``-dtype columns whose cells hold NumPy arrays
         of per-row shape *item_shape*.
 
+        A **null becomes pandas NA**, never the value that stands in for it in
+        storage.  A column holding one is therefore given a dtype that can say
+        so -- ``Int64``/``UInt8``/… for integers, ``boolean`` for bools,
+        ``NaN``/``NaT`` where the NumPy dtype already has one, and ``object``
+        with ``None`` for text, bytes, complex and ndarray cells.  A column
+        with **no** null keeps the dtype it has always had here.
+
+        .. note::
+
+           A **float** column is the one lossy case, in one direction: pandas
+           spells missing as ``NaN`` in every float dtype it has (even
+           ``Float64`` folds ``NaN`` into ``NA``), so a mask-backed float
+           column, where ``NaN`` is an ordinary value, cannot distinguish its
+           nulls from its NaNs once converted.  :meth:`to_arrow` has a
+           validity bitmap and is exact for this case.
+
         Returns
         -------
         pandas.DataFrame
@@ -9740,12 +9756,123 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         data = {}
         for name in self.col_names:
             col = self[name]
-            if col.is_ndarray:
-                data[name] = list(col)
-            else:
-                data[name] = col[:]
+            values = list(col) if col.is_ndarray else col[:]
+            data[name] = self._pandas_values(pd, col, values)
 
         return pd.DataFrame(data)
+
+    @staticmethod
+    def _pandas_scalar_series_values(series, col):
+        """One pandas Series as something :meth:`extend` can write to *col*.
+
+        The plain ``to_numpy(dtype=...)`` is kept as the fast path, so a
+        DataFrame that converted before converts identically now.  It cannot
+        represent a missing value, though, and raises on any of pandas' NA
+        carrying extension dtypes -- which is exactly what :meth:`to_pandas`
+        emits for a nullable column that holds a null, so without the fallback
+        below a table would not survive its own round trip.
+
+        The fallback hands the cells over one by one and lets the write path
+        split nullity out, as it already does for a list of rows containing
+        ``None``.  A sentinel column takes its sentinel there, having nowhere
+        else to put a null.
+
+        A float ``NaN`` stays a **value** (decision 6), not a null: pandas
+        spells missing in a float column as NaN and cannot tell the two apart,
+        so the round trip through a float column is lossy under mask storage
+        in that one direction.  Reading it as a value is what keeps every
+        NaN-free DataFrame converting exactly as it did before.
+        """
+        kind = np.dtype(col.dtype).kind if col.dtype is not None else "O"
+        # A float column is exempt from the missing-value check: pandas spells
+        # missing as NaN there and cannot tell it from a NaN value, and
+        # decision 6 says value.  Everywhere else a missing cell has to leave
+        # the fast path, which does not merely fail on it -- ``to_numpy`` on a
+        # text column coerces it to the *string* "None"/"nan".
+        forces_cells = kind != "f" and bool(series.isna().any())
+        if not forces_cells:
+            try:
+                return series.to_numpy(dtype=col.dtype)
+            except (ValueError, TypeError):
+                pass
+
+        def missing(value):
+            if is_na_marker(value):
+                return True
+            # A float NaN is pandas' missing marker in a text or object column,
+            # and such a column cannot hold a float as data anyway.  Decision
+            # 6's "NaN is a value" is about *float* columns, which took the
+            # fast path above and never reach here.
+            return isinstance(value, float) and value != value
+
+        cells = [None if missing(value) else value for value in series.tolist()]
+        null_value = getattr(col.spec, "null_value", None)
+        if null_value is not None:
+            cells = [null_value if value is None else value for value in cells]
+        return cells
+
+    @staticmethod
+    def _pandas_values(pd, col, values):
+        """*values*, with this column's nulls turned into something pandas reads as NA.
+
+        A null slot holds the fill under mask storage and the sentinel under a
+        sentinel one, and neither is the row's value, so writing either into a
+        DataFrame states something the column does not say.  Each becomes the
+        NA of a dtype that has one.
+
+        A column with **no null is returned untouched**, so the dtype a caller
+        already gets never moves under them.  Only a column that actually holds
+        a null can change, and only to a dtype able to express it -- the same
+        data-dependent widening ``pyarrow.Table.to_pandas`` does, and for the
+        same reason: NumPy has no missing value for most kinds.
+        """
+        channel = col._nulls
+        kind = channel.kind
+        if kind == NULL_MASK:
+            nulls = channel.null_mask()  # one byte per row, off the sidecar
+        elif kind == NULL_SENTINEL:
+            nulls = channel.mask_for_values(values)  # in band, from what we just read
+        else:
+            # NULL_NONE has no nulls at all, and the dictionary and
+            # native-None kinds already materialize theirs as None, which is
+            # exactly what pandas wants.
+            return values
+        if not nulls.any():
+            return values
+
+        dtype = getattr(values, "dtype", None)
+        dtype_kind = "O" if dtype is None else dtype.kind
+        if dtype_kind == "f":
+            out = np.asarray(values).copy()
+            out[nulls] = np.nan
+            return out
+        if dtype_kind == "M":
+            out = np.asarray(values).copy()
+            # With the column's own unit: a bare np.datetime64("NaT") carries
+            # the generic unit, which NumPy deprecates.
+            out[nulls] = np.datetime64("NaT", np.datetime_data(out.dtype)[0])
+            return out
+        if dtype_kind == "b" or getattr(channel.spec, "bool_widened_to_uint8", False):
+            # A sentinel bool is physically uint8 to make room for its 255, so
+            # it arrives here as an integer; either way the column is logically
+            # bool, and pandas' "boolean" is the dtype that admits NA.
+            out = pd.array(np.asarray(values).astype(np.bool_), dtype="boolean")
+            out[nulls] = pd.NA
+            return out
+        if dtype_kind in "iu":
+            # pandas' nullable integer dtypes keep the width, where letting the
+            # column widen to float would silently round a large int64.
+            prefix = "Int" if dtype_kind == "i" else "UInt"
+            out = pd.array(np.asarray(values), dtype=f"{prefix}{dtype.itemsize * 8}")
+            out[nulls] = pd.NA
+            return out
+        # Text, bytes, complex and ndarray cells have no NA-capable NumPy
+        # dtype, so they go to object with None -- which is what the dictionary
+        # and variable-length kinds already produce.
+        out = list(values)
+        for i in np.flatnonzero(nulls):
+            out[i] = None
+        return out
 
     @classmethod
     def from_pandas(cls, df, row_cls) -> CTable:  # noqa: C901
@@ -9895,7 +10022,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 ):
                     raw_columns[col.name] = [normalize_pandas_missing(value) for value in series.tolist()]
                 else:
-                    raw_columns[col.name] = series.to_numpy(dtype=col.dtype)
+                    raw_columns[col.name] = cls._pandas_scalar_series_values(series, col)
             obj.extend(raw_columns, validate=True)
 
         return obj

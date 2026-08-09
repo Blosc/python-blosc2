@@ -33,9 +33,12 @@ papered over:
 * **complex is mask-only**: no complex value is safe to reserve, so there is no
   sentinel column to compare against.
 
-One more difference is **not** deliberate -- ``to_pandas`` emits whatever
-stands in for a null instead of NA -- and is pinned below as a strict xfail, so
-that fixing it trips this suite and the marker comes off.
+Everything else agrees, and there are no known unintentional divergences left:
+the ``isin`` and ``to_pandas`` leaks this suite was first written to pin are
+both fixed, and their tests are now plain assertions.  The one remaining
+inexactness is not a divergence but a limit of the destination format --
+pandas has no float dtype separating NaN from missing, so a mask float column
+cannot round-trip through it (:func:`test_a_mask_float_cannot_round_trip_through_pandas`).
 """
 
 from __future__ import annotations
@@ -90,30 +93,6 @@ ALL_KINDS = sorted(KINDS)
 NUMERIC_KINDS = [k for k in ALL_KINDS if k.startswith(("int", "uint", "float"))]
 #: The row that is null in every table this module builds.
 NULL_ROW = 1
-
-#: Kinds whose *fill* and *sentinel* happen to be the same value, so an API
-#: that leaks what stands in for a null leaks something indistinguishable
-#: either way.  A float column fills with NaN and reserves NaN; a timestamp
-#: fills with ``int64.min`` and reserves ``int64.min``.  They are the kinds
-#: where the bug below is invisible -- not the kinds where it is fixed -- so
-#: they still assert the correct behaviour, just without the xfail.
-INDISTINGUISHABLE_FILL = ("float32", "float64", "timestamp")
-
-
-def leaks_its_fill(kind: str) -> bool:
-    """Whether a raw read of *kind*'s null slot exposes an ordinary-looking value."""
-    return kind not in INDISTINGUISHABLE_FILL
-
-
-def kinds_xfailing_on_leak(reason: str):
-    """``ALL_KINDS``, with the fill-leaking ones marked ``xfail(strict=True)``."""
-    return [
-        pytest.param(
-            kind,
-            marks=pytest.mark.xfail(strict=True, reason=reason) if leaks_its_fill(kind) else (),
-        )
-        for kind in ALL_KINDS
-    ]
 
 
 def annotation_for(spec):
@@ -550,26 +529,105 @@ def test_isin_none_beside_a_real_value(kind):
     assert s["a"].isin([present, None]).tolist() == want
 
 
-# ---------------------------------------------------------------------------
-# Divergences that are bugs
-# ---------------------------------------------------------------------------
-
-
-TO_PANDAS_LEAK = (
-    "to_pandas() writes the raw values, so a null arrives as the fill under mask storage "
-    "and as the sentinel under a sentinel one. Neither is NA, and to_arrow() on the same "
-    "data is already exact."
-)
-
-
-@pytest.mark.parametrize("kind", kinds_xfailing_on_leak(TO_PANDAS_LEAK))
+@pytest.mark.parametrize("kind", ALL_KINDS)
 def test_to_pandas_agrees(kind):
-    pd = pytest.importorskip("pandas")
+    """A null reaches pandas as NA, not as whatever stands in for it."""
+    pytest.importorskip("pandas")
     m, s = both(kind)
     got, want = m.to_pandas()["a"], s.to_pandas()["a"]
     assert_same(got.isna().tolist(), want.isna().tolist(), "to_pandas isna")
+    assert_same(got.isna().tolist(), m["a"].is_null().tolist(), "to_pandas isna vs is_null")
     assert got.isna()[NULL_ROW], "the null row should read as NA"
+
+
+@pytest.mark.parametrize("kind", ALL_KINDS)
+def test_to_pandas_keeps_the_values_it_does_have(kind):
+    """Expressing the nulls must not disturb the rows that are not null."""
+    pytest.importorskip("pandas")
+    for t in both(kind):
+        series = t.to_pandas()["a"]
+        for i, value in enumerate(logical(t["a"])):
+            if value is None:
+                continue
+            got = series[i]
+            got = got.item() if hasattr(got, "item") else got
+            assert got == value, f"row {i}: {got!r} != {value!r}"
 
 
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
+
+
+# ---------------------------------------------------------------------------
+# The pandas round trip
+# ---------------------------------------------------------------------------
+
+
+def row_cls_for(kind: str, storage: str):
+    """A one-column dataclass matching what :func:`build` produces."""
+    factory, _values, sentinel = KINDS[kind]
+    spec = (
+        factory(nullable=True, null_storage="mask")
+        if storage == "mask"
+        else factory(nullable=True, null_value=sentinel)
+    )
+    return dataclasses.make_dataclass("RoundTripRow", [("a", annotation_for(spec), blosc2.field(spec))])
+
+
+#: Float is excluded: pandas spells missing as NaN in every float dtype it
+#: has, and a mask float column keeps NaN a value (decision 6), so the two
+#: cannot survive the trip.  :func:`test_a_mask_float_cannot_round_trip_through_pandas`
+#: pins that limitation rather than leaving it implicit.
+ROUND_TRIP_KINDS = [k for k in ALL_KINDS if not k.startswith("float")]
+
+
+@pytest.mark.parametrize("kind", ROUND_TRIP_KINDS)
+@pytest.mark.parametrize("storage", ["mask", "sentinel"])
+def test_pandas_round_trip_keeps_the_nulls(kind, storage):
+    """to_pandas must emit something from_pandas can read back unchanged."""
+    pytest.importorskip("pandas")
+    t = build(kind, storage)
+    back = blosc2.CTable.from_pandas(t.to_pandas()[["a"]], row_cls_for(kind, storage))
+    assert_same(logical(back["a"]), logical(t["a"]), f"{storage} round trip")
+    assert logical(back["a"])[NULL_ROW] is None
+
+
+@pytest.mark.parametrize("storage", ["mask", "sentinel"])
+def test_pandas_round_trip_of_a_null_free_column(storage):
+    """The common case must not be disturbed by any of the above."""
+    pytest.importorskip("pandas")
+    spec = (
+        blosc2.int64(nullable=True, null_storage="mask")
+        if storage == "mask"
+        else blosc2.int64(nullable=True, null_value=-9)
+    )
+    row_cls = dataclasses.make_dataclass("PlainRow", [("a", int, blosc2.field(spec))])
+    t = blosc2.CTable(row_cls, expected_size=16)
+    t.extend([(1,), (2,), (3,)])
+    df = t.to_pandas()
+    # No null, so nothing widens: the dtype is what it has always been here.
+    assert df["a"].dtype == np.dtype(np.int64)
+    back = blosc2.CTable.from_pandas(df, row_cls)
+    assert logical(back["a"]) == [1, 2, 3]
+
+
+@pytest.mark.parametrize("kind", ["float32", "float64"])
+def test_a_mask_float_cannot_round_trip_through_pandas(kind):
+    """The one stated limitation, pinned so it stays a known quantity.
+
+    pandas has no float dtype that distinguishes NaN from missing -- even
+    ``Float64`` folds a NaN into ``NA`` -- so a mask float column's null comes
+    back as a NaN *value*.  A sentinel float column is lossless precisely
+    because NaN is what it means by null in the first place.
+    """
+    pytest.importorskip("pandas")
+    mask_back = blosc2.CTable.from_pandas(build(kind, "mask").to_pandas()[["a"]], row_cls_for(kind, "mask"))
+    assert mask_back["a"].null_count() == 0, "the null came back as a NaN value"
+    assert np.isnan(mask_back["a"][:][NULL_ROW])
+
+    sentinel_back = blosc2.CTable.from_pandas(
+        build(kind, "sentinel").to_pandas()[["a"]], row_cls_for(kind, "sentinel")
+    )
+    assert sentinel_back["a"].null_count() == 1
+    # to_arrow is the export that keeps the distinction for both storages.
+    assert build(kind, "mask").to_arrow()["a"].null_count == 1
