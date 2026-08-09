@@ -518,3 +518,84 @@ def test_a_table_is_freed_without_a_gc_pass():
         assert ref() is None
     finally:
         gc.enable()
+
+
+# ---------------------------------------------------------------------------
+# Extending from another CTable
+# ---------------------------------------------------------------------------
+#
+# A CTable source is the one input shape whose nulls do not travel with its
+# values: under mask storage nullity lives in a sidecar, so copying the raw
+# column alone turns every null into its fill -- a plausible-looking 0 or "",
+# not an error.  The sentinel and list-of-rows forms below are the controls
+# that say what the answer has to be.
+
+
+def test_extend_from_a_table_carries_the_nulls_over():
+    src = simple([1, None, 3])
+    dst = simple([])
+    dst.extend(src)
+    assert dst["a"][:].tolist() == [1, 0, 3]
+    assert dst["a"].is_null().tolist() == [False, True, False]
+    assert dst["a"].null_count() == 1
+
+
+def test_extend_from_a_table_agrees_with_the_other_input_shapes():
+    """The same rows, spelled three ways, must land identically."""
+    from_table = simple([])
+    from_table.extend(simple([1, None, 3]))
+
+    from_rows = simple([])
+    from_rows.extend([(1,), (None,), (3,)])
+
+    sentinel = table([], a=blosc2.int64(nullable=True, null_value=-9))
+    sentinel.extend(table([(1,), (-9,), (3,)], a=blosc2.int64(nullable=True, null_value=-9)))
+
+    assert from_table["a"].is_null().tolist() == from_rows["a"].is_null().tolist()
+    assert from_table["a"].is_null().tolist() == sentinel["a"].is_null().tolist()
+
+
+@needs_utf8
+def test_extend_from_a_table_carries_utf8_nulls():
+    """The fill is "" here, which is also a legal value -- so it has to be the sidecar."""
+    src = table([("x",), (None,), ("",)], s=utf8_spec(null_storage="mask"))
+    dst = table([], s=utf8_spec(null_storage="mask"))
+    dst.extend(src)
+    assert list(dst["s"][:]) == ["x", "", ""]
+    assert dst["s"].is_null().tolist() == [False, True, False]
+
+
+def test_extend_from_a_table_with_deleted_rows_copies_the_live_ones():
+    """Live rows scatter through the physical extent, so a leading slice is the wrong rows."""
+    src = simple([10, 11, 12, 13])
+    src.delete(0)
+    dst = simple([])
+    dst.extend(src)
+    assert dst["a"][:].tolist() == [11, 12, 13]
+    assert dst.nrows == 3
+
+
+def test_extend_from_a_table_with_holes_keeps_values_and_nulls_aligned():
+    src = simple([10, None, 12, None, 14])
+    src.delete(0)
+    dst = simple([])
+    dst.extend(src)
+    assert dst["a"].is_null().tolist() == src["a"].is_null().tolist()
+    assert dst["a"][:].tolist() == src["a"][:].tolist()
+
+
+def test_extend_from_a_sorted_view_copies_it_in_sorted_order():
+    src = simple([3, None, 1, 2])
+    dst = simple([])
+    dst.extend(src.sort_by("a", view=True))
+    # Nulls sort last, in both directions, and the copy has to agree.
+    assert dst["a"][:].tolist() == [1, 2, 3, 0]
+    assert dst["a"].is_null().tolist() == [False, False, False, True]
+
+
+def test_extend_from_a_null_free_table_writes_no_sidecar():
+    """Decision 9: an absent sidecar is the common state and must stay absent."""
+    dst = simple([])
+    dst.extend(simple([1, 2, 3]))
+    assert dst["a"].is_null().tolist() == [False, False, False]
+    assert dst._null_mask("a") is None

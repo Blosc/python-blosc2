@@ -8,11 +8,13 @@
 """Tests for CTable.to_csv() and CTable.from_csv()."""
 
 import csv
+import dataclasses
 import os
 from dataclasses import dataclass
 
 import numpy as np
 import pytest
+from utf8_compat import needs_utf8, utf8_spec
 
 import blosc2
 from blosc2 import CTable
@@ -552,6 +554,54 @@ def test_csv_mask_text_roundtrip_empty_vs_null(tmp_csv):
 
     assert [None if n else v for v, n in zip(t2["text"][:], t2["text"].is_null(), strict=True)] == values
     assert t2["text"].null_count() == 1
+
+
+# ---------------------------------------------------------------------------
+# utf8 columns
+# ---------------------------------------------------------------------------
+#
+# utf8 reports StringDType(), whose kind is "T" -- not the "U"/"S" a fixed-width
+# text column reports, and not a fixed element dtype at all on the schema side.
+# Both halves of the CSV path used to key off that dtype, so utf8 was the one
+# text kind that neither escaped its empty cells nor could be read back.
+
+
+def utf8_row(**kwargs):
+    """A one-utf8-column dataclass.  Only ever called from a ``needs_utf8`` test."""
+    return dataclasses.make_dataclass("Utf8Row", [("text", str, blosc2.field(utf8_spec(**kwargs)))])
+
+
+@needs_utf8
+def test_csv_utf8_column_roundtrips(tmp_csv):
+    """A plain utf8 column could not be read back at all -- from_csv raised."""
+    row_cls = utf8_row()
+    values = ["x", "", "  ", "unicode: \u00e9\u4e2d"]
+    t = CTable(row_cls, new_data=[(v,) for v in values])
+    t.to_csv(tmp_csv)
+    t2 = CTable.from_csv(tmp_csv, row_cls)
+    assert list(t2["text"][:]) == values
+
+
+@needs_utf8
+def test_csv_mask_utf8_keeps_empty_apart_from_null(tmp_csv):
+    """Same contract as the fixed-width text column above, for utf8."""
+    row_cls = utf8_row(null_storage="mask")
+    values = ["", "  ", None, "ok", "\\N", "\\E", "\\\\N", "N"]
+    t = CTable(row_cls, new_data=[(v,) for v in values])
+    t.to_csv(tmp_csv)
+    t2 = CTable.from_csv(tmp_csv, row_cls)
+
+    assert [None if n else v for v, n in zip(t2["text"][:], t2["text"].is_null(), strict=True)] == values
+    assert t2["text"].null_count() == 1
+
+
+def test_csv_rejects_a_kind_it_cannot_read(tmp_csv):
+    """A clear refusal, not an AttributeError from deep inside the conversion."""
+    row_cls = dataclasses.make_dataclass("VlRow", [("v", str, blosc2.field(blosc2.vlstring()))])
+    with open(tmp_csv, "w") as f:
+        f.write("v\nq\n")
+    with pytest.raises(ValueError, match="does not support"):
+        CTable.from_csv(tmp_csv, row_cls)
 
 
 if __name__ == "__main__":

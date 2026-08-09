@@ -4336,6 +4336,18 @@ def _csv_text_unescape(field: str) -> str | None:
     return field[1:] if _CSV_TEXT_TOKEN.match(field) else field
 
 
+def _csv_is_text_column(col) -> bool:
+    """True when *col* holds text, so an empty CSV field would be ambiguous.
+
+    Takes a :class:`Column`, and must ask ``is_utf8`` rather than only reading
+    the dtype: a utf8 column reports ``StringDType()``, whose kind is ``"T"``
+    and not the ``"U"``/``"S"`` a fixed-width text column reports.  Testing the
+    kind alone left utf8 -- the one text kind with no safe sentinel, and so the
+    kind that most needs the escapes -- writing ``""`` and a null identically.
+    """
+    return col.is_utf8 or col.dtype.kind in ("U", "S")
+
+
 class CTable(_CTableIndexingMixin, Generic[RowT]):
     """Columnar compressed table with typed columns and row-oriented access."""
 
@@ -9359,7 +9371,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     else:
                         json_strings.append(json.dumps(arr[i].tolist()))
                 arrays.append(json_strings)
-            elif col.null_storage == NULL_MASK and col.dtype.kind in ("U", "S"):
+            elif col.null_storage == NULL_MASK and _csv_is_text_column(col):
                 # An empty field cannot mean both "" and missing, so a mask-backed
                 # text column writes \N for a null and \E for a valid "", escaping
                 # any value that would collide (\N -> \\N).  from_csv undoes both.
@@ -9446,12 +9458,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         uses_mask = getattr(col.spec, "uses_mask", False)
         if col.dtype.kind in ("U", "S"):
-            # Text: only an exactly empty field is missing (whitespace-only text
-            # is a real value), plus the \N / \E escapes to_csv writes for a mask
-            # column, where "" and missing would otherwise look the same.
-            decoded = [_csv_text_unescape(v) if uses_mask else (None if v == "" else v) for v in raw]
-            missing = np.array([v is None for v in decoded], dtype=np.bool_)
-            raw = ["" if v is None else v for v in decoded]
+            raw, missing = CTable._csv_decode_text(raw, uses_mask)
         else:
             missing = np.array([v.strip() == "" for v in raw], dtype=np.bool_)
         placeholder = nv
@@ -9472,6 +9479,43 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return np.array(_fill_missing([v.encode() for v in raw]), dtype=col.dtype), valid
         return np.array(_fill_missing(raw), dtype=col.dtype), valid
 
+    @staticmethod
+    def _csv_decode_text(raw: list[str], uses_mask: bool) -> tuple[list[str], np.ndarray]:
+        """Split raw text fields into ``(texts, missing)``.
+
+        Only an *exactly* empty field is missing -- whitespace-only text stays a
+        real value -- plus the ``\\N``/``\\E`` escapes :meth:`to_csv` writes for a
+        mask column, where ``""`` and missing would otherwise look the same.
+
+        *texts* carries ``""`` wherever *missing* is True; what a null slot ends
+        up holding is the caller's decision, since it differs per storage.
+        """
+        decoded = [_csv_text_unescape(v) if uses_mask else (None if v == "" else v) for v in raw]
+        missing = np.array([v is None for v in decoded], dtype=np.bool_)
+        return ["" if v is None else v for v in decoded], missing
+
+    @staticmethod
+    def _csv_text_col_to_cells(raw: list[str], col, nv) -> tuple[list[str], np.ndarray | None]:
+        """Convert raw CSV fields to ``(cells, valid)`` for a **utf8** column.
+
+        The same missing/fill/validity split as :meth:`_csv_col_to_array`, but
+        utf8 is fed a list of Python strings instead of a typed array: it has no
+        fixed element dtype to cast through, which is exactly why it cannot go
+        through that method at all.
+        """
+        uses_mask = getattr(col.spec, "uses_mask", False)
+        texts, missing = CTable._csv_decode_text(raw, uses_mask)
+        if not missing.any():
+            return texts, None
+        if nv is not None:
+            # Sentinel storage: the null travels in band, as it does on export.
+            return [nv if m else v for v, m in zip(texts, missing, strict=True)], None
+        if not uses_mask:
+            # Not nullable at all, so an empty field is a genuine empty string.
+            return texts, None
+        fill = fill_value_for(col.spec)
+        return [fill if m else v for v, m in zip(texts, missing, strict=True)], ~missing
+
     @classmethod
     def from_csv(
         cls,
@@ -9487,6 +9531,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         All rows are read in a single pass into per-column Python lists, then
         each column is bulk-written into a pre-allocated NDArray (one slice
         assignment per column, no ``extend()``).
+
+        Supported column kinds are the fixed-width scalars, :func:`~blosc2.utf8`,
+        and fixed-shape :func:`~blosc2.ndarray`; anything else raises rather than
+        being read as something it is not.
 
         Parameters
         ----------
@@ -9511,7 +9559,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         TypeError
             If *row_cls* is not a dataclass.
         ValueError
-            If a row has a different number of fields than the schema.
+            If a row has a different number of fields than the schema, or if
+            *row_cls* declares a column kind CSV cannot represent.
         """
         import csv
 
@@ -9547,6 +9596,23 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         )
         new_cols: dict[str, blosc2.NDArray] = {}
         for col in schema.columns:
+            if cls._is_utf8_column(col):
+                # utf8 has no fixed element dtype, so it cannot be created (or
+                # written) as a plain NDArray the way every other CSV-supported
+                # kind is.  Its own storage handles both.
+                new_cols[col.name] = mem_storage.create_varlen_scalar_column(
+                    col.name, spec=col.spec, cparams=None, dparams=None
+                )
+                continue
+            if col.dtype is None:
+                # Everything below indexes off a fixed element dtype; a kind
+                # without one would otherwise fail deep in the conversion with
+                # an AttributeError on None.
+                raise ValueError(
+                    f"Column {col.name!r}: from_csv() does not support "
+                    f"{type(col.spec).__name__} columns. Supported kinds are the "
+                    f"fixed-width scalars, utf8, and fixed-shape ndarray."
+                )
             shape = cls._column_physical_shape(col, capacity)
             if col.name in aligned_names:
                 chunks, blocks = shared_chunks, shared_blocks
@@ -9586,12 +9652,19 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         if n > 0:
             for i, col in enumerate(schema.columns):
+                nv = getattr(col.spec, "null_value", None)
                 if isinstance(col.spec, NDArraySpec):
                     arr, valid = cls._csv_ndarray_col_to_array(col_data[i], col)
+                    new_cols[col.name][:n] = arr
+                elif cls._is_utf8_column(col):
+                    cells, valid = cls._csv_text_col_to_cells(col_data[i], col, nv)
+                    # Appended, not slice-assigned: a utf8 column grows to its
+                    # logical length rather than being pre-sized to capacity.
+                    new_cols[col.name].extend(cells)
+                    new_cols[col.name].flush()
                 else:
-                    nv = getattr(col.spec, "null_value", None)
                     arr, valid = cls._csv_col_to_array(col_data[i], col, nv)
-                new_cols[col.name][:n] = arr
+                    new_cols[col.name][:n] = arr
                 if valid is not None:
                     # A mask column's empty cells: the values above hold the
                     # fill, and this is the only record that they were missing.
@@ -14021,6 +14094,49 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             self._last_pos = None  # last live row deleted; recalculate on next write
         self._storage.bump_visibility_epoch()
 
+    def _batch_columns_from_table(self, source: CTable, names) -> tuple[dict, dict]:
+        """Read *source*'s live rows as ``(raw_columns, source_valid)`` for :meth:`extend`.
+
+        Two things a plain ``source._cols[name][:n_rows]`` slice gets wrong, both
+        of which turn into silently altered data rather than an error:
+
+        * **The rows.** A source with deleted rows -- or a sorted/filtered view --
+          keeps its live rows scattered through the physical extent, so the
+          leading ``n_rows`` physical slots are not the rows being copied.  The
+          dense case still takes the plain slice, which is the common one and
+          costs no position scan.
+        * **The nulls.** Under mask storage nullity lives beside the values, not
+          in them, so a raw slice copies a null's *fill* -- an ordinary-looking
+          ``0`` / ``""`` / ``NaT`` -- and drops the fact that it was missing.
+          Sentinel and native-``None`` sources need nothing here: their nulls
+          travel with the values.
+
+        *source_valid* maps a column to its validity only where something was
+        actually null, matching what ``NullChannel.coerce_batch`` returns.
+        """
+        # Dense means every live row sits at its own index below the write
+        # watermark, so the slice and the gather agree.  Both terms are O(1).
+        dense = source.base is None and source._resolve_last_pos() == source._n_rows
+        positions = None if dense else source._live_positions_from_valid_rows_chunks()
+
+        raw_columns: dict = {}
+        source_valid: dict = {}
+        for name in names:
+            if name not in source._cols:
+                continue
+            arr = source._cols[name]
+            raw_columns[name] = arr[: source._n_rows] if dense else arr[positions]
+            spec = source._schema.columns_by_name[name].spec
+            if not getattr(spec, "uses_mask", False):
+                continue
+            mask = source._null_mask(name)
+            if mask is None:
+                continue  # no sidecar means the column has never held a null
+            valid = np.asarray(mask[: source._n_rows] if dense else mask[positions])
+            if not valid.all():
+                source_valid[name] = valid
+        return raw_columns, source_valid
+
     def extend(self, data: list | CTable | Any, *, validate: bool | None = None) -> None:  # noqa: C901
         """Append multiple rows at once.
 
@@ -14069,14 +14185,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         input_col_names = self._append_input_col_names
         new_nrows = 0
         provided_names: set[str] = set()
+        # Validity carried over from a CTable source, whose nullity does not
+        # travel with its raw values under mask storage.  Empty for every other
+        # input shape, which spells its nulls in band or as ``None`` cells.
+        source_valid: dict[str, np.ndarray] = {}
 
         if hasattr(data, "_cols") and hasattr(data, "_n_rows"):
             new_nrows = data._n_rows
-            raw_columns = {}
-            for name in current_col_names:
-                if name in data._cols:
-                    raw_columns[name] = data._cols[name][: data._n_rows]
-                    provided_names.add(name)
+            raw_columns, source_valid = self._batch_columns_from_table(data, current_col_names)
+            provided_names = set(raw_columns)
         else:
             if isinstance(data, dict):
                 if any(isinstance(v, dict) for v in data.values()):
@@ -14204,6 +14321,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         scalar_processed_cols[name] = raw
                     else:
                         scalar_processed_cols[name] = np.ascontiguousarray(raw, dtype=target_dtype)
+
+        # A CTable source hands over its validity separately, because its raw
+        # values carry none: coerce_batch sees a fully typed array and rightly
+        # reports nothing null.  setdefault, not update, so an input that *did*
+        # express its own nulls keeps them.
+        for name, valid in source_valid.items():
+            batch_valid.setdefault(name, valid)
 
         end_pos = start_pos + new_nrows
 
