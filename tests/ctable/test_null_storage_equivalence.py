@@ -33,8 +33,9 @@ papered over:
 * **complex is mask-only**: no complex value is safe to reserve, so there is no
   sentinel column to compare against.
 
-Two more differences are **not** deliberate; they are open bugs, pinned below
-as strict xfails so that fixing either one trips this suite.
+One more difference is **not** deliberate -- ``to_pandas`` emits whatever
+stands in for a null instead of NA -- and is pinned below as a strict xfail, so
+that fixing it trips this suite and the marker comes off.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ import pytest
 from utf8_compat import HAVE_UTF8, needs_utf8, utf8_spec
 
 import blosc2
+from blosc2.ctable_nulls import is_na_marker
 
 T0 = np.datetime64("2021-03-04T05:06:07", "s")
 
@@ -93,8 +95,8 @@ NULL_ROW = 1
 #: that leaks what stands in for a null leaks something indistinguishable
 #: either way.  A float column fills with NaN and reserves NaN; a timestamp
 #: fills with ``int64.min`` and reserves ``int64.min``.  They are the kinds
-#: where the two bugs below are invisible -- not the kinds where they are
-#: fixed -- so they still assert the correct behaviour, just without the xfail.
+#: where the bug below is invisible -- not the kinds where it is fixed -- so
+#: they still assert the correct behaviour, just without the xfail.
 INDISTINGUISHABLE_FILL = ("float32", "float64", "timestamp")
 
 
@@ -512,33 +514,52 @@ def test_complex_has_no_sentinel_to_compare_against():
     assert blosc2.complex128(nullable=True).null_storage == "mask"
 
 
+@pytest.mark.parametrize("kind", ALL_KINDS)
+def test_isin_agrees(kind):
+    """A null matches nothing -- not even the value that stands in for it."""
+    m, s = both(kind)
+    # Probe with each storage's own stand-in for a null.  Neither should match,
+    # because neither stand-in is the row's value: the fill is not part of the
+    # format contract, and the sentinel is reserved.
+    for probe in (m["a"][:][NULL_ROW], s["a"][:][NULL_ROW]):
+        got, want = m["a"].isin([probe]).tolist(), s["a"].isin([probe]).tolist()
+        assert_same(got, want, f"isin([{probe!r}])")
+        if is_na_marker(probe):
+            # A timestamp's fill decodes to NaT, which *is* a way of spelling
+            # "missing", so probing with it is asking for the nulls.
+            assert got[NULL_ROW], f"{probe!r} is a null marker, so it selects nulls"
+        else:
+            assert not got[NULL_ROW], "a null row is not a member of anything"
+
+
+@pytest.mark.parametrize("kind", ALL_KINDS)
+def test_isin_none_selects_the_nulls(kind):
+    """``None`` is how you ask for them, and it agrees with is_null exactly."""
+    for t in both(kind):
+        assert_same(t["a"].isin([None]).tolist(), t["a"].is_null().tolist(), "isin([None]) vs is_null")
+
+
+@pytest.mark.parametrize("kind", ALL_KINDS)
+def test_isin_none_beside_a_real_value(kind):
+    """Asking for a value *and* the nulls gets both, and nothing else."""
+    m, s = both(kind)
+    rows = logical(m["a"])
+    present = rows[0]
+    want = [v is None or v == present for v in rows]
+    assert m["a"].isin([present, None]).tolist() == want
+    assert s["a"].isin([present, None]).tolist() == want
+
+
 # ---------------------------------------------------------------------------
 # Divergences that are bugs
 # ---------------------------------------------------------------------------
 
 
-ISIN_LEAK = (
-    "isin() reads col[:] and tests membership on the raw values, so it matches whatever "
-    "stands in for a null -- the fill under mask storage, the sentinel under a sentinel "
-    "one. A null row should match nothing."
-)
 TO_PANDAS_LEAK = (
     "to_pandas() writes the raw values, so a null arrives as the fill under mask storage "
     "and as the sentinel under a sentinel one. Neither is NA, and to_arrow() on the same "
     "data is already exact."
 )
-
-
-@pytest.mark.parametrize("kind", kinds_xfailing_on_leak(ISIN_LEAK))
-def test_isin_agrees(kind):
-    m, s = both(kind)
-    # Probe with each storage's own stand-in for a null: neither should match.
-    mask_stand_in = m["a"][:][NULL_ROW]
-    sentinel_stand_in = s["a"][:][NULL_ROW]
-    for probe in (mask_stand_in, sentinel_stand_in):
-        got, want = m["a"].isin([probe]).tolist(), s["a"].isin([probe]).tolist()
-        assert_same(got, want, f"isin([{probe!r}])")
-        assert not got[NULL_ROW], "a null row is not a member of anything"
 
 
 @pytest.mark.parametrize("kind", kinds_xfailing_on_leak(TO_PANDAS_LEAK))

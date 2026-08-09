@@ -2508,6 +2508,19 @@ class Column:
     def isin(self, values) -> np.ndarray:
         """Return a boolean array True where the live value is in *values*.
 
+        A **null row matches nothing**, whichever way this column stores its
+        nulls.  Testing membership against the raw values would instead match
+        whatever stands in for a null -- the fill under mask storage, the
+        sentinel under a sentinel one -- and those are not the row's value:
+        the fill is explicitly not part of the format contract, and a sentinel
+        is a reserved value the column promises never to mean literally.
+
+        To select the nulls, put ``None`` in *values*: it matches exactly the
+        rows :meth:`is_null` reports, and nothing else.  ``pandas.NA`` and a
+        ``NaT`` are accepted as spellings of the same request.  A float
+        ``NaN`` is **not** one of them -- under mask storage NaN is an ordinary
+        value (decision 6 of the mask-nulls design), so it is matched as data.
+
         For dictionary columns this performs efficient integer-code membership
         testing (no decoding of all values).  Values absent from the
         dictionary are treated as not-present.
@@ -2516,12 +2529,21 @@ class Column:
         membership in a set.
         """
         if self.is_dictionary:
+            # Its own path already answers None with the reserved null code.
             return self._dictionary_isin(values)
+        values = list(values)
+        wants_null = any(is_na_marker(v) for v in values)
+        test_set = {v for v in values if not is_na_marker(v)}
+
         live_values = self[:]
-        test_set = set(values)
         if isinstance(live_values, np.ndarray):
-            return np.array([v in test_set for v in live_values.tolist()], dtype=bool)
-        return np.array([v in test_set for v in live_values], dtype=bool)
+            live_values = live_values.tolist()
+        found = np.array([v in test_set for v in live_values], dtype=bool)
+
+        nulls = self._nulls.null_mask()
+        if nulls.any():
+            found[nulls] = wants_null
+        return found
 
     def _dictionary_isin(self, values) -> np.ndarray:
         """Return a boolean array for in-membership tests against a dictionary column."""

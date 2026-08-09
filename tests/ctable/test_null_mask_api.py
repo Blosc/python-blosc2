@@ -731,3 +731,62 @@ def test_add_column_timestamp_null_reads_as_nat():
     t.add_column("ts", blosc2.timestamp(nullable=True), values=[when, None])
     assert t["ts"].is_null().tolist() == [False, True]
     assert np.isnat(t["ts"][:][1])
+
+
+# ---------------------------------------------------------------------------
+# isin
+# ---------------------------------------------------------------------------
+#
+# Membership is asked of the row's *value*, and a null row has none.  Testing
+# the raw values instead matched whatever stands in for a null -- the fill
+# here, a sentinel elsewhere -- neither of which the column ever means
+# literally.  Cross-storage agreement is pinned in
+# test_null_storage_equivalence.py; these are the mask-only corners.
+
+
+def test_isin_does_not_match_the_fill():
+    t = simple([1, None, 0])
+    # Rows 1 and 2 both hold a physical 0; only row 2 holds it as a value.
+    assert t["a"][:].tolist() == [1, 0, 0]
+    assert t["a"].isin([0]).tolist() == [False, False, True]
+
+
+def test_isin_none_selects_the_nulls():
+    t = simple([1, None, 3, None])
+    assert t["a"].isin([None]).tolist() == t["a"].is_null().tolist()
+
+
+def test_isin_none_can_be_combined_with_values():
+    t = simple([1, None, 3])
+    assert t["a"].isin([3, None]).tolist() == [False, True, True]
+
+
+def test_isin_pandas_na_spells_the_same_request():
+    pd = pytest.importorskip("pandas")
+    t = simple([1, None, 3])
+    assert t["a"].isin([pd.NA]).tolist() == [False, True, False]
+
+
+@needs_utf8
+def test_isin_does_not_match_the_empty_string_fill():
+    """The utf8 fill is "", which a genuine row may hold -- so it has to be the sidecar."""
+    t = table([("x",), (None,), ("",)], s=utf8_spec(null_storage="mask"))
+    assert list(t["s"][:]) == ["x", "", ""]
+    assert t["s"].isin([""]).tolist() == [False, False, True]
+
+
+def test_isin_on_a_view_uses_the_views_rows():
+    t = simple([1, None, 3, None, 5])
+    assert t.sort_by("a", view=True)["a"].isin([None]).tolist() == [False, False, False, True, True]
+    assert t.take([1, 2])["a"].isin([None]).tolist() == [True, False]
+
+
+def test_isin_keeps_nan_a_value():
+    """Decision 6: only mask=False is missing, so a NaN row is not a null row."""
+    t = simple([1.0, float("nan"), None], spec=blosc2.float64(null_storage="mask"))
+    assert t["a"].is_null().tolist() == [False, False, True]
+    assert t["a"].isin([None]).tolist() == [False, False, True]
+
+
+def test_isin_on_an_empty_column():
+    assert simple([])["a"].isin([1, None]).tolist() == []
