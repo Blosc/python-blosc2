@@ -7458,6 +7458,13 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         cast to int (0/1) before computation.  Complex columns raise
         :exc:`TypeError`.
 
+        Nulls are dropped **listwise**: a row that is null in any column is
+        excluded from every column, so all entries of the result are computed
+        over the same rows and the matrix stays consistent with itself.  This
+        differs from ``pandas.DataFrame.cov()``, which drops pairwise.  Rows
+        are dropped by what :meth:`Column.is_null` reports, never by the value
+        standing in for a null, so both null storages give the same answer.
+
         Returns
         -------
         numpy.ndarray
@@ -7469,7 +7476,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         TypeError
             If any column has an unsupported dtype (complex, string, …).
         ValueError
-            If the table has fewer than 2 live rows (covariance undefined).
+            If the table has fewer than 2 live rows (covariance undefined), or
+            fewer than 2 rows survive the listwise null drop.
         """
         for name in self.col_names:
             col_info = self._schema.columns_by_name.get(name)
@@ -7498,7 +7506,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         for name in self.col_names:
             col = self[name]
             arr = col[:]
-            nm = col._null_mask_for(arr)
+            channel = col._nulls
+            if channel.kind == NULL_MASK:
+                # Off the sidecar.  The in-band test below cannot see these:
+                # a mask column has no sentinel, so it would call every null
+                # row an ordinary value and average in the fill.
+                nm = channel.null_mask()
+            else:
+                # In band, answered from the values already read rather than
+                # by reading the column a second time.  All-False for a column
+                # with no nulls at all; the dictionary and variable-length
+                # kinds cannot reach here, having been rejected on dtype.
+                nm = channel.mask_for_values(arr)
             if nm.any():
                 null_union = nm if null_union is None else (null_union | nm)
             raw_arrays.append(arr)

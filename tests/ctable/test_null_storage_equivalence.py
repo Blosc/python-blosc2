@@ -289,6 +289,73 @@ def test_ordered_non_numeric_reductions_agree(kind, op):
     assert_same(getattr(m["a"], op)(), getattr(s["a"], op)(), op)
 
 
+@pytest.mark.parametrize("kind", [*NUMERIC_KINDS, "bool"])
+def test_cov_agrees(kind):
+    """cov() drops a null row listwise, and must learn which rows those are.
+
+    It asked the values, which for a mask column means asking a fill that
+    looks like ordinary data, so the null was averaged in.  The reference is a
+    table holding the same rows with the null one simply absent.
+    """
+    m, s = both(kind)
+    factory, values, _sentinel = KINDS[kind]
+    kept = [(v, i) for i, v in enumerate(values) if v is not None]
+    row_cls = dataclasses.make_dataclass(
+        "CovRef",
+        [
+            ("a", annotation_for(factory()), blosc2.field(factory())),
+            ("n", int, blosc2.field(blosc2.int64())),
+        ],
+    )
+    reference = blosc2.CTable(row_cls, expected_size=16)
+    reference.extend(kept)
+
+    # Column "g" is text, which cov() rejects, so pair "a" with a numeric one.
+    got = np.asarray(m.select(["a"]).cov())
+    want = np.asarray(s.select(["a"]).cov())
+    np.testing.assert_allclose(got, want, err_msg="mask and sentinel disagree")
+    np.testing.assert_allclose(
+        got, np.asarray(reference.select(["a"]).cov()), err_msg="neither matches a null-free table"
+    )
+
+
+def test_cov_drops_a_null_row_from_every_column():
+    """Listwise: a null in one column removes the row from the others too."""
+    row_cls = dataclasses.make_dataclass(
+        "CovRow",
+        [
+            ("a", int, blosc2.field(blosc2.int64(nullable=True, null_storage="mask"))),
+            ("b", int, blosc2.field(blosc2.int64())),
+        ],
+    )
+    t = blosc2.CTable(row_cls, expected_size=16)
+    t.extend([(1, 2), (None, 7), (3, 6), (5, 1)])
+
+    plain_cls = dataclasses.make_dataclass(
+        "PlainCovRow",
+        [("a", int, blosc2.field(blosc2.int64())), ("b", int, blosc2.field(blosc2.int64()))],
+    )
+    reference = blosc2.CTable(plain_cls, expected_size=16)
+    reference.extend([(1, 2), (3, 6), (5, 1)])
+
+    np.testing.assert_allclose(np.asarray(t.cov()), np.asarray(reference.cov()))
+
+
+def test_cov_keeps_a_mask_floats_nan_as_data():
+    """Decision 6 again: only mask=False is dropped, so a NaN poisons the result."""
+    row_cls = dataclasses.make_dataclass(
+        "NanCovRow",
+        [
+            ("a", float, blosc2.field(blosc2.float64(nullable=True, null_storage="mask"))),
+            ("b", float, blosc2.field(blosc2.float64())),
+        ],
+    )
+    t = blosc2.CTable(row_cls, expected_size=16)
+    t.extend([(1.0, 2.0), (float("nan"), 7.0), (3.0, 6.0)])
+    assert t["a"].null_count() == 0
+    assert np.isnan(np.asarray(t.cov())[0, 0])
+
+
 # ---------------------------------------------------------------------------
 # Grouping
 # ---------------------------------------------------------------------------
