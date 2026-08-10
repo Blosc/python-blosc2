@@ -25,6 +25,7 @@ Two consequences are load-bearing and tested here:
 from __future__ import annotations
 
 import dataclasses
+import datetime
 
 import numpy as np
 import pytest
@@ -905,3 +906,64 @@ def test_isin_keeps_nan_a_value():
 
 def test_isin_on_an_empty_column():
     assert simple([])["a"].isin([1, None]).tolist() == []
+
+
+# ---------------------------------------------------------------------------
+# Writing to a timestamp column, which never worked through __setitem__
+# ---------------------------------------------------------------------------
+
+
+def timestamp_table(storage="mask"):
+    spec = blosc2.timestamp(null_storage=storage, nullable=True)
+    return table([(datetime.datetime(2020, 1, 1),)] * 4, ts=spec)
+
+
+@pytest.mark.parametrize("storage", ["mask", "sentinel"])
+@pytest.mark.parametrize(
+    ("label", "key", "value"),
+    [
+        ("single", 0, datetime.datetime(2021, 1, 1)),
+        ("slice_batch", slice(1, 3), [datetime.datetime(2023, 1, 1), datetime.datetime(2024, 1, 1)]),
+        ("broadcast", slice(0, 2), datetime.datetime(2025, 6, 1)),
+        ("bool_mask", np.array([False, False, False, True]), datetime.datetime(2026, 1, 1)),
+        ("iso_string", 0, "2027-03-04"),
+        ("datetime64", 1, np.datetime64("2028-05-06")),
+    ],
+)
+def test_setitem_accepts_datetimes_for_every_key_form(storage, label, key, value):
+    """A datetime had to be encoded to the stored int64, and nothing did it.
+
+    ``extend`` gets this from the schema validators, but ``__setitem__`` wrote
+    what it was handed straight to the NDArray -- and NumPy has no conversion
+    from a Python ``datetime`` to an ``int64`` buffer to fall back on, so every
+    key form failed under both storages.
+    """
+    t = timestamp_table(storage)
+    t["ts"][key] = value
+    assert t["ts"].null_count() == 0
+
+
+def test_a_timestamp_batch_may_mix_values_and_nulls():
+    t = timestamp_table()
+    t["ts"][0:3] = [datetime.datetime(2030, 1, 1), None, datetime.datetime(2031, 1, 1)]
+    assert t["ts"].is_null().tolist() == [False, True, False, False]
+
+
+def test_broadcasting_none_over_a_timestamp_column():
+    t = timestamp_table()
+    t["ts"][0:2] = None
+    assert t["ts"].is_null().tolist() == [True, True, False, False]
+
+
+# ---------------------------------------------------------------------------
+# assign() takes one value per row, and says so
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", [5, None])
+def test_assign_rejects_a_single_value_with_the_documented_error(value):
+    """``len()`` of a 0-d array raises TypeError, where assign documents a
+    ValueError naming the count -- and points at the spelling that does work."""
+    t = simple([1, 2, 3])
+    with pytest.raises(ValueError, match=r"requires 3 values.*single value"):
+        t["a"].assign(value)

@@ -4346,7 +4346,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 new_shape = sel_idx.newshape(out.shape)
                 out[sel_idx.raw] = chunk[sub_idx].reshape(new_shape)
             else:
-                chunk[sub_idx] = value if np.isscalar(value) else value[sel_idx.raw]
+                # A 0-d array is a scalar for broadcasting, but np.isscalar()
+                # says otherwise and indexing one raises.  It is what a scalar
+                # of a dtype NumPy has no Python scalar for -- a datetime64,
+                # say -- arrives as.
+                scalar = np.isscalar(value) or getattr(value, "ndim", None) == 0
+                chunk[sub_idx] = value if scalar else value[sel_idx.raw]
                 out = super().set_slice((start, stop), chunk)
         return out
 

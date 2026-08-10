@@ -1775,6 +1775,7 @@ class Column:
                 raise IndexError(f"index {key} is out of bounds for column with size {n_rows}")
             pos_true = _find_physical_index(self._valid_rows, key)
             value, is_valid = self._nulls.coerce_scalar(value)
+            value = self._coerce_timestamp_write(value)
             if self.is_ndarray:
                 spec = self._table._schema.columns_by_name[self._col_name].spec
                 value = CTable._coerce_ndarray_value(self._col_name, spec, value)
@@ -1791,6 +1792,7 @@ class Column:
             all_pos = np.where(self._valid_rows[:])[0]
             phys_indices = all_pos[key]
             value, valid = self._nulls.coerce_batch(value, len(phys_indices))
+            value = self._coerce_timestamp_write(value)
             if self.is_list or self.is_varlen_scalar:
                 if len(value) != len(phys_indices):
                     raise ValueError("Length mismatch in list-column assignment")
@@ -1864,6 +1866,7 @@ class Column:
                     phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
 
                 value, valid = self._nulls.coerce_batch(value, len(phys_indices))
+                value = self._coerce_timestamp_write(value)
                 if self.is_list or self.is_varlen_scalar:
                     if len(value) != len(phys_indices):
                         raise ValueError("Length mismatch in list-column assignment")
@@ -2234,6 +2237,33 @@ class Column:
         if np.isscalar(values):
             return np.datetime64(int(values), spec.unit)
         return np.asarray(values).astype(f"datetime64[{spec.unit}]")
+
+    def _coerce_timestamp_write(self, value):
+        """Encode datetime-ish input to the ``int64`` a timestamp column stores.
+
+        A pass-through for every other kind.  ``extend`` has had this since the
+        beginning by way of the schema validators, but ``__setitem__`` wrote
+        whatever it was handed straight to the NDArray, so assigning a
+        ``datetime`` through ``col[key] = ...`` failed for *every* key form and
+        both null storages -- there is no conversion between a Python
+        ``datetime`` and an ``int64`` buffer for NumPy to fall back on.
+
+        The fill for a null slot is already the stored ``int64``
+        (``int64.min``, which reads back as ``NaT``), and it survives the
+        ``datetime64`` round trip below unchanged, so a batch mixing values with
+        nulls encodes in one pass.
+        """
+        spec = self._timestamp_spec
+        if spec is None:
+            return value
+        dt64 = f"datetime64[{spec.unit}]"
+        if isinstance(value, np.ndarray) and value.dtype.kind in "OM":
+            return value.astype(dt64).astype(np.int64)
+        if isinstance(value, (list, tuple)):
+            return np.asarray(value, dtype=dt64).astype(np.int64)
+        if isinstance(value, (np.datetime64, str)) or hasattr(value, "isoformat"):
+            return np.datetime64(value).astype(dt64).astype(np.int64)
+        return value
 
     def _coerce_timestamp_operand(self, other):
         spec = self._timestamp_spec
@@ -3115,6 +3145,15 @@ class Column:
         # represent a None in a typed array.
         data, valid = self._nulls.coerce_batch(data, n_live)
         arr = np.asarray(data)
+        if arr.ndim == 0:
+            # A single cell, which len() cannot measure -- it raises "len() of
+            # unsized object" where this method documents a ValueError naming
+            # the count.  assign() replaces every live value and takes one per
+            # row by contract; ``col[:] = value`` is the broadcasting spelling.
+            raise ValueError(
+                f"assign() requires {n_live} values (live rows), got a single value. "
+                f"Use col[:] = value to write one value to every row."
+            )
         if len(arr) != n_live:
             raise ValueError(f"assign() requires {n_live} values (live rows), got {len(arr)}.")
         try:
