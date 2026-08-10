@@ -183,6 +183,41 @@ Indexes understand both storages: a column index summarises only the rows that
 carry a value, so ``min``/``max`` and ``where`` are as fast on a nullable
 column as on a plain one.  See `Indexes`_.
 
+.. _kleene-logic:
+
+Predicates over nulls: three-valued logic
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A comparison against a null is neither true nor false.  SQL and Arrow call
+that third value **unknown**, and Blosc2 follows the same (Kleene) rules, for
+both query forms::
+
+    t.where(t.price > 10)     # rows where the price is definitely above 10
+    t.where("price > 10")     # the same rows
+    t.where(~(t.price > 10))  # rows definitely *not* above 10 — nulls excluded
+
+A null row satisfies neither a predicate nor its negation: ``where()`` keeps
+what is **true**, so the unknown rows are dropped exactly like the false ones.
+That is what makes ``~`` behave — a naive bitwise negation of "null compares
+False" would *select* every null.
+
+``&`` and ``|`` follow the same logic, which is not simply "drop any row a null
+touched"::
+
+    (t.price > 10) & (t.qty == 0)   # false where qty != 0, even if price is null
+    (t.price > 10) | (t.qty == 0)   # true  where qty == 0, even if price is null
+
+The unknown rows are not lost, and a predicate can be asked about them::
+
+    p = t.price > 10
+    p.is_null()        # boolean array: rows the predicate cannot answer for
+    p.null_count()     # how many
+    t.where(p.fillna(True))   # keep the rows that cannot be ruled out
+
+A predicate over a non-nullable column has no unknown rows and costs nothing
+extra; ``isin()`` is deliberately two-valued and has its own spelling for
+nulls (put ``None`` in the values).
+
 Converting between them
 ~~~~~~~~~~~~~~~~~~~~~~~
 

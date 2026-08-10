@@ -23,6 +23,7 @@ comparison should go through here instead.
 from __future__ import annotations
 
 import ast
+import copy
 import math
 import operator
 from builtins import bool as builtin_bool
@@ -324,48 +325,90 @@ def _sentinel_can_match(node: ast.Compare, name: str, sentinel) -> bool:
         return True
 
 
+def _and(left: ast.AST, right: ast.AST) -> ast.AST:
+    return ast.BinOp(left=copy.deepcopy(left), op=ast.BitAnd(), right=copy.deepcopy(right))
+
+
+def _or(left: ast.AST, right: ast.AST) -> ast.AST:
+    return ast.BinOp(left=copy.deepcopy(left), op=ast.BitOr(), right=copy.deepcopy(right))
+
+
+def _invert(node: ast.AST) -> ast.AST:
+    # Fold ``~~x`` away: a guard reaches here already negated once (the unknown
+    # channel of a leaf is ``~guard``), and negating it back is common enough
+    # that leaving the pair in would show up in every rewritten negation.
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
+        return copy.deepcopy(node.operand)
+    return ast.UnaryOp(op=ast.Invert(), operand=copy.deepcopy(node))
+
+
+def _is_negation(node: ast.AST) -> builtin_bool:
+    return isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.Not, ast.Invert))
+
+
+def _boolean_parts(node: ast.AST):
+    """``(op, values)`` for a boolean combination, or ``None``.
+
+    Reads ``and``/``or`` and ``&``/``|`` as the same two operators, since the
+    rewrite normalizes the first pair into the second anyway.
+    """
+    if isinstance(node, ast.BoolOp):
+        return ("&" if isinstance(node.op, ast.And) else "|"), list(node.values)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.BitAnd, ast.BitOr)):
+        return ("&" if isinstance(node.op, ast.BitAnd) else "|"), [node.left, node.right]
+    return None
+
+
 class _NullPredicateRewriter(ast.NodeTransformer):
-    """Conjoin a validity guard onto every predicate over a nullable column."""
+    """Conjoin a validity guard onto every predicate over a nullable column.
+
+    Outside a negation that is the whole job, and the result is the plain
+    ``(a > 10) & (a != 999)`` the index planner already knows how to serve.
+    Under a negation the rewriter switches to :meth:`_channels`, which carries
+    a second, *unknown* channel alongside the truth one so that ``~`` can tell
+    a null row from a false one -- Kleene's logic, spelled out in AST.
+    """
 
     def __init__(self, guards: dict[str, tuple[str, object]]) -> None:
         self._guards = guards
-        self._in_negation = 0
         self.changed = False
 
+    def _guard_text(self, name: str) -> ast.AST:
+        """Freshly parsed guard AST for *name* (nodes must never be shared)."""
+        return ast.parse(self._guards[name][0], mode="eval").body
+
     def _guard(self, node: ast.AST, names: set[str]) -> ast.AST:
-        for guard in sorted({self._guards[n][0] for n in names if n in self._guards}):
-            # Re-parse per insertion: the same guard can appear at several
-            # leaves, and an AST node must not be shared between them.
-            right = ast.parse(guard, mode="eval").body
-            node = ast.BinOp(left=node, op=ast.BitAnd(), right=right)
+        for name in sorted(names):
+            node = ast.BinOp(left=node, op=ast.BitAnd(), right=self._guard_text(name))
             self.changed = True
         return node
 
-    def visit_Compare(self, node: ast.Compare) -> ast.AST:
-        if self._in_negation:
-            # The enclosing negation already conjoins validity for every column
-            # in its subtree, and that outer conjunct dominates whatever this
-            # leaf evaluates to for a null row.  Guarding here as well would be
-            # redundant, and it would put the guard on the wrong side of the
-            # ``~`` (see the note in :func:`rewrite_null_predicates`).  It would
-            # also be wrong to skip it via _sentinel_can_match: a sentinel that
-            # fails ``a > 10`` *passes* ``not (a > 10)``.
-            return node
-        names = {
+    def _guarded_names(self, node: ast.Compare) -> set[str]:
+        """Nullable columns whose null could satisfy this leaf, so it needs a guard.
+
+        The others are left alone deliberately: an unguarded single-predicate
+        expression is the shape the index planner recognizes, so a needless
+        guard costs a query its index (see :func:`_sentinel_can_match`).
+        """
+        return {
             n
             for n in _collect_names(node)
             if n in self._guards and _sentinel_can_match(node, n, self._guards[n][1])
         }
-        return self._guard(node, names)
+
+    def visit_Compare(self, node: ast.Compare) -> ast.AST:
+        return self._guard(node, self._guarded_names(node))
 
     def visit_UnaryOp(self, node: ast.UnaryOp) -> ast.AST:
-        if not isinstance(node.op, (ast.Not, ast.Invert)):
+        if not _is_negation(node):
             return self.generic_visit(node)
-        names = _collect_names(node.operand)
-        self._in_negation += 1
-        node = self.generic_visit(node)
-        self._in_negation -= 1
-        return self._guard(node, names)
+        true, null = self._channels(node)
+        if null is not None:
+            # ``~unknown`` is unknown, and an unknown row is not a match: the
+            # negation's own truth channel already excludes it, so nothing more
+            # is conjoined here.  Returning the truth channel *is* the answer.
+            self.changed = True
+        return true
 
     def visit_BoolOp(self, node: ast.BoolOp) -> ast.AST:
         """Normalize ``and``/``or`` to ``&``/``|``.
@@ -381,6 +424,96 @@ class _NullPredicateRewriter(ast.NodeTransformer):
         for value in node.values[1:]:
             combined = ast.BinOp(left=combined, op=op, right=value)
         return combined
+
+    # ------------------------------------------------------------------
+    # Kleene channels -- built only under a negation
+    # ------------------------------------------------------------------
+
+    def _channels(self, node: ast.AST) -> tuple[ast.AST, ast.AST | None]:
+        """``(definitely-true, unknown)`` ASTs for a boolean subtree.
+
+        The unknown channel is ``None`` when no nullable column takes part,
+        and every rule below reads that as "no row is unknown" -- which
+        collapses the whole construction back to two-valued logic, so an
+        expression that meets no null pays nothing for this.
+        """
+        if _is_negation(node):
+            if isinstance(node.operand, ast.Compare):
+                # ``~(leaf & guard) & guard`` is just ``~leaf & guard``: where
+                # the guard holds it is redundant, and where it does not the
+                # outer conjunct decides.  Worth the special case -- negating a
+                # single leaf is the common shape, and this keeps it the short
+                # form the index planner has always seen.
+                null = self._leaf_null(node.operand)
+                negated = ast.UnaryOp(op=node.op, operand=node.operand)
+                return (negated, None) if null is None else (_and(negated, _invert(null)), null)
+            true, null = self._channels(node.operand)
+            negated = ast.UnaryOp(op=node.op, operand=true)
+            if null is None:
+                return negated, None
+            # A row that was unknown stays unknown, and so is not a match:
+            # ``~true & ~unknown``.  This is where two-valued negation went
+            # wrong -- it inverted a null that had already been collapsed to
+            # False and turned it into a match.
+            return _and(negated, _invert(null)), null
+
+        parts = _boolean_parts(node)
+        if parts is not None:
+            op, values = parts
+            true, null = self._channels(values[0])
+            for value in values[1:]:
+                true, null = self._combine(op, true, null, *self._channels(value))
+            return true, null
+
+        if isinstance(node, ast.Compare):
+            return self._guard(node, self._guarded_names(node)), self._leaf_null(node)
+
+        # Anything else (a bare boolean column, a function call): two-valued as
+        # far as this rewrite can tell, and visited so nested leaves still get
+        # their guards.
+        return self.visit(node), None
+
+    def _leaf_null(self, node: ast.Compare) -> ast.AST | None:
+        """The *unknown* channel of one comparison: null in any operand it reads.
+
+        Every nullable operand contributes, including the ones whose guard the
+        truth channel is allowed to skip (:meth:`_guarded_names`): a leaf a
+        sentinel could never satisfy is still *unknown* for that row rather
+        than false, and under a negation that is exactly the difference.
+        """
+        null = None
+        for name in sorted(_collect_names(node) & set(self._guards)):
+            term = _invert(self._guard_text(name))
+            null = term if null is None else _or(null, term)
+        return null
+
+    @staticmethod
+    def _combine(op, ta, na, tb, nb):
+        """One Kleene ``&``/``|`` step over two ``(true, unknown)`` pairs."""
+        if op == "&":
+            true = _and(ta, tb)
+            if na is None and nb is None:
+                null = None
+            elif nb is None:
+                # ``unknown & false`` is false: only a true other side leaves
+                # the conjunction unknown.
+                null = _and(na, tb)
+            elif na is None:
+                null = _and(nb, ta)
+            else:
+                null = _or(_and(na, _or(tb, nb)), _and(nb, _or(ta, na)))
+            return true, null
+        true = _or(ta, tb)
+        if na is None and nb is None:
+            null = None
+        elif nb is None:
+            # Dual: ``unknown | true`` is true.
+            null = _and(na, _invert(tb))
+        elif na is None:
+            null = _and(nb, _invert(ta))
+        else:
+            null = _or(_and(na, _invert(tb)), _and(nb, _invert(ta)))
+        return true, null
 
 
 def sentinel_guard_expr(name: str, null_value) -> str | None:
@@ -422,14 +555,15 @@ def rewrite_null_predicates(expr: str, guards: dict[str, tuple[str, object]]) ->
     is null in ``a`` but matches the other branch of ``(a > 10) | (b == 0)``,
     where SQL says the row qualifies.
 
-    Under a negation the guard is attached at the negation itself, not inside
-    it: ``not (a > 10)`` must be False for a null ``a``, but ``~((a > 10) &
-    guard)`` would yield True.  Guarding outside -- ``(~(a > 10)) & guard`` --
-    gives False.  This is exact for every form the tests cover, and
-    conservative in one three-valued corner: ``not (a > 10 and b == 999)``
-    where the second term is False makes SQL's ``NULL AND FALSE`` collapse to
-    ``FALSE``, so the row should survive the negation, while the guard drops
-    it.  Rows are only ever dropped, never wrongly returned.
+    Under a negation the rewrite switches to Kleene's three-valued logic,
+    carrying an *unknown* channel beside the truth one (see
+    :meth:`_NullPredicateRewriter._channels`).  ``~`` cannot be handled by
+    conjoining a guard anywhere: put it inside and ``~((a > 10) & guard)``
+    turns the null into a match; put it outside and ``(~(a > 10)) & guard``
+    drops rows SQL keeps, because ``NULL AND FALSE`` is ``FALSE`` and its
+    negation is therefore true.  The two channels give the exact answer for
+    both, at the cost of a longer expression -- paid only where a negation
+    actually meets a nullable column.
 
     Returns the rewritten expression, or ``None`` when nothing was rewritten --
     including when *expr* does not parse, which leaves the caller's original

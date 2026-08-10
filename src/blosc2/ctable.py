@@ -1092,34 +1092,51 @@ class NullableExpr:
 
     # ---- comparisons: IEEE NaN already gives SQL False, except for != ----
 
-    def __lt__(self, other):
-        return NotImplemented if self._defer(other) else self._expr < self._operand(other)
+    def _compare(self, other, raw_result):
+        """Three-valued comparison result, carrying the nulls of both sides.
 
-    def __le__(self, other):
-        return NotImplemented if self._defer(other) else self._expr <= self._operand(other)
-
-    def __gt__(self, other):
-        return NotImplemented if self._defer(other) else self._expr > self._operand(other)
-
-    def __ge__(self, other):
-        return NotImplemented if self._defer(other) else self._expr >= self._operand(other)
-
-    def __eq__(self, other):
-        return NotImplemented if self._defer(other) else self._expr == self._operand(other)
-
-    def __ne__(self, other):
-        # IEEE says nan != x is True; SQL null semantics say a null satisfies
-        # no comparison. Guard both sides (Column and NullableExpr operands
-        # carry their own null predicates).
-        result = (self._expr != Column._unwrap_operand(other)) & ~self._null_pred
+        The truth channel is the collapsed predicate — IEEE already gives False
+        for every ordered comparison against a NaN null, and ``~pred`` covers
+        ``!=``, which IEEE says is True — and the null channel is what makes
+        ``~`` able to tell a null row from a false one.
+        """
+        pred = self._null_pred
         other_pred = None
         if isinstance(other, Column):
             other_pred = other._raw_null_pred()
         elif isinstance(other, NullableExpr):
             other_pred = other._null_pred
         if other_pred is not None:
-            result = result & ~other_pred
-        return result
+            pred = pred | other_pred
+        return NullableBoolExpr(raw_result & ~pred, self._table, pred)
+
+    def __lt__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._compare(other, self._expr < self._operand(other))
+
+    def __le__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._compare(other, self._expr <= self._operand(other))
+
+    def __gt__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._compare(other, self._expr > self._operand(other))
+
+    def __ge__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._compare(other, self._expr >= self._operand(other))
+
+    def __eq__(self, other):
+        if self._defer(other):
+            return NotImplemented
+        return self._compare(other, self._expr == self._operand(other))
+
+    def __ne__(self, other):
+        return self._compare(other, self._expr != Column._unwrap_operand(other))
 
     # ---- reductions: skip nulls and dead physical rows ----
 
@@ -1130,6 +1147,7 @@ class NullableExpr:
         t = self._table
         n_rows = t._known_n_rows()
         mask = None if (n_rows is not None and n_rows == len(t._valid_rows)) else t._valid_rows
+        where = _sql_predicate(where)
         if where is not None:
             mask = where if mask is None else mask & where
         nonnull = ~self._null_pred
@@ -1167,6 +1185,204 @@ class NullableExpr:
     def max(self, *, where=None):
         """Maximum of live, non-null values; raises ``ValueError`` if all are null."""
         return self._minmax("max", where)
+
+
+class NullableBoolExpr(blosc2.LazyExpr):
+    """A predicate whose value may be *unknown* — Kleene three-valued logic.
+
+    Comparing against a null yields neither true nor false.  SQL and Arrow
+    both call that third value **unknown**, and Kleene's logic is what ``&``,
+    ``|`` and ``~`` do once it exists.  This class is that value made
+    representable: two disjoint boolean channels over the same raw physical
+    arrays the predicate was built from.
+
+    * :attr:`_true` — True exactly where the predicate is **definitely true**;
+    * :attr:`_null` — True where it is **unknown**, a null having taken part.
+
+    Rows that are definitely false are simply in neither channel.
+
+    Keeping the truth channel *already collapsed* — rather than storing a raw
+    comparison beside a null flag — is what lets every existing consumer stay
+    untouched.  ``WHERE`` keeps the rows a predicate is true for, so anything
+    reading only ``_true`` gets exactly the answer it got before three-valued
+    logic existed.  What changes is ``~``: two-valued negation turns *unknown*
+    into a match, which is the bug this class fixes at the source rather than
+    at each consumer.
+
+    ==========  ==========  ============  ===========  ==========
+    ``a``       ``b``       ``a & b``     ``a | b``    ``~a``
+    ==========  ==========  ============  ===========  ==========
+    true        unknown     unknown       true         false
+    false       unknown     **false**     unknown      true
+    unknown     unknown     unknown       unknown      unknown
+    ==========  ==========  ============  ===========  ==========
+
+    The second row is the whole reason three values need their own algebra:
+    ``false & unknown`` is *false*, not unknown, because no value of the
+    missing operand could make the conjunction true.  A design that dropped
+    every row touched by a null would get that one wrong.
+
+    An operand with no null channel (a plain :class:`blosc2.LazyExpr`, a
+    non-nullable column) is two-valued and combines as such — the tables above
+    with the *unknown* column removed — so a predicate that never meets a null
+    costs nothing.
+
+    The two channels live in **physical** coordinates, like the lazy
+    predicates they are built from; :meth:`is_null` converts to logical rows.
+
+    **It is a** :class:`blosc2.LazyExpr` — subclassing rather than wrapping.
+    The truth channel is not something this object *holds*, it is what this
+    object *is*: an instance adopts the state of the collapsed predicate, so
+    every consumer that computes it, indexes with it, plans an index around it
+    or type-checks it goes on working with no idea a third value exists.  Only
+    the four boolean operators are overridden, and Python's subclass rule for
+    reflected operators means ``plain_expr & three_valued`` reaches them too.
+    """
+
+    #: Class-level defaults, so an instance that arrives without them (a copy,
+    #: an unpickle) degrades to the two-valued predicate it already is rather
+    #: than raising deep inside an operator.
+    _table = None
+    _null_src = None
+
+    def __init__(self, true_expr, table, null_pred):
+        if not isinstance(true_expr, blosc2.LazyExpr):
+            true_expr = blosc2.lazyexpr(true_expr)
+        self.__dict__.update(true_expr.__dict__)
+        self._true = true_expr
+        self._table = table
+        # May be a zero-argument callable, resolved on first use: for utf8 and
+        # dictionary columns building the null channel costs a scan of its own,
+        # and only ``~``/:meth:`is_null` ever needs it.
+        self._null_src = null_pred
+
+    @property
+    def _null(self):
+        """The unknown channel, materializing a deferred one on first use."""
+        src = self._null_src
+        if callable(src):
+            src = src()
+            self._null_src = src
+        return src
+
+    def __repr__(self):
+        return f"NullableBoolExpr({self.expression!r})"
+
+    # ------------------------------------------------------------------
+    # Kleene algebra
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _channels(operand):
+        """``(definitely-true, unknown)`` for any boolean operand.
+
+        *unknown* is ``None`` for a two-valued operand, which every rule below
+        reads as "no row is unknown".
+        """
+        if isinstance(operand, (NullableBoolExpr, Column)):
+            return operand._kleene_channels()
+        return Column._unwrap_operand(operand), None
+
+    def _kleene_channels(self):
+        return self._true, self._null
+
+    def _wrap(self, true_expr, null_pred):
+        return NullableBoolExpr(true_expr, self._table, null_pred)
+
+    def __and__(self, other):
+        ta, na = self._true, self._null
+        tb, nb = self._channels(other)
+        if nb is None:
+            # ``unknown & false`` is false, so a row stays unknown only where
+            # the two-valued side is true.
+            null = na & tb
+        else:
+            null = (na & (tb | nb)) | (nb & (ta | na))
+        return self._wrap(ta & tb, null)
+
+    def __rand__(self, other):
+        return self.__and__(other)
+
+    def __or__(self, other):
+        ta, na = self._true, self._null
+        tb, nb = self._channels(other)
+        # Dual of ``&``: ``unknown | true`` is true, so a row stays unknown
+        # only where the other side is not definitely true.
+        null = na & ~tb if nb is None else (na & ~tb) | (nb & ~ta)
+        return self._wrap(ta | tb, null)
+
+    def __ror__(self, other):
+        return self.__or__(other)
+
+    def __xor__(self, other):
+        ta, na = self._true, self._null
+        tb, nb = self._channels(other)
+        # Neither operand can be ignored: an unknown always makes the result
+        # unknown, whatever the other side is.
+        null = na if nb is None else na | nb
+        return self._wrap((ta ^ tb) & ~null, null)
+
+    def __rxor__(self, other):
+        return self.__xor__(other)
+
+    def __invert__(self):
+        na = self._null
+        return self._wrap(~self._true & ~na, na)
+
+    # ------------------------------------------------------------------
+    # Reading the third value
+    # ------------------------------------------------------------------
+
+    def _logical(self, pred) -> np.ndarray:
+        """A physical boolean channel as one flag per live row."""
+        arr = pred.compute() if isinstance(pred, blosc2.LazyExpr) else pred
+        return np.asarray(arr[:])[_live_positions(self._table)]
+
+    def is_null(self) -> np.ndarray:
+        """Boolean array, True where this predicate's value is unknown.
+
+        One flag per live row, matching :meth:`Column.is_null`.  These are
+        exactly the rows ``where()`` drops without them being false.
+        """
+        return self._logical(self._null)
+
+    def notnull(self) -> np.ndarray:
+        """Boolean array, True where this predicate has a definite value."""
+        return ~self.is_null()
+
+    def null_count(self) -> int:
+        """How many live rows this predicate is unknown for."""
+        return int(self.is_null().sum())
+
+    def fillna(self, value: bool):
+        """Resolve the unknown rows to *value*, giving a two-valued predicate.
+
+        ``fillna(False)`` is what ``where()`` does implicitly (SQL ``WHERE``
+        keeps only definite matches); ``fillna(True)`` is the opposite reading,
+        useful for "keep the rows I cannot rule out".  The result is a plain
+        lazy predicate with no null channel left to propagate.
+        """
+        if value:
+            return self._true | self._null
+        return self._true
+
+
+def _sql_predicate(value):
+    """Collapse a three-valued predicate to the two-valued one ``WHERE`` wants.
+
+    Every consumer of a boolean predicate goes through this: SQL ``WHERE``
+    keeps the rows a predicate is *true* for and drops both the false and the
+    unknown ones, so the truth channel is the answer as-is.
+    """
+    return value._true if isinstance(value, NullableBoolExpr) else value
+
+
+def _live_positions(table) -> np.ndarray:
+    """Physical positions of *table*'s live rows, honouring a sorted view's order."""
+    slp = getattr(table, "_cached_live_positions", None)
+    if slp is not None and table.base is not None:
+        return slp
+    return np.where(table._valid_rows[:])[0]
 
 
 class Column:
@@ -1304,7 +1520,11 @@ class Column:
         return self._table._valid_rows & self._mask
 
     def _resolve_live_positions(self) -> np.ndarray:
-        """Physical positions for all live rows, respecting sorted-view order."""
+        """Physical positions for all live rows, respecting sorted-view order.
+
+        Column-level, not table-level: a filtered column view carries its own
+        ``_mask``, which :func:`_live_positions` knows nothing about.
+        """
         slp = getattr(self._table, "_cached_live_positions", None)
         if slp is not None and self._table.base is not None:
             return slp
@@ -2072,14 +2292,43 @@ class Column:
         return NullableExpr(blosc2.where(null_pred, np.nan, raw_result), self._table, null_pred)
 
     def _null_aware_compare(self, other, raw_result):
-        """SQL ``WHERE`` semantics for comparisons: a null
-        operand never satisfies any comparison, so null rows are forced to
-        False. Costs nothing when neither operand is nullable.
+        """Three-valued semantics for comparisons: a null operand makes the
+        comparison *unknown*, which SQL ``WHERE`` treats as no match.
+
+        The returned :class:`NullableBoolExpr` reads as exactly that two-valued
+        predicate everywhere a boolean is wanted, and additionally remembers
+        which rows were unknown rather than false — so ``~`` can tell them
+        apart, which is the whole of Kleene logic here.  Costs nothing when
+        neither operand is nullable: *raw_result* comes back unchanged.
         """
         null_pred = self._combined_null_pred(other)
         if null_pred is None:
             return raw_result
-        return raw_result & ~null_pred
+        return NullableBoolExpr(raw_result & ~null_pred, self._table, null_pred)
+
+    def _kleene_channels(self):
+        """``(definitely-true, unknown)`` channels for this column as a boolean
+        operand — what ``t.flag & (t.a > 10)`` combines.
+
+        A nullable bool column has all three values in one array: the sentinel
+        one keeps them in band (``1``/``0``/``255``), the mask one puts the
+        third in its sidecar and leaves the ``False`` fill behind.  Both are
+        read here so neither leaks a null into the truth channel.
+        """
+        self._ensure_queryable()
+        raw = self._raw_col
+        if self._is_nullable_bool:
+            return raw == 1, self._nulls.null_pred()
+        if self.dtype != np.dtype(np.bool_):
+            # Not a boolean column: ``&`` on it is bitwise arithmetic, not
+            # logic, so there is no third value to look for.  Tested before
+            # asking the null channel, which would otherwise build a predicate
+            # for every ``t.flags & 0x04``.
+            return raw, None
+        valid = self._nulls.valid_pred()
+        if valid is None:
+            return raw, None  # non-nullable, or a mask column with no nulls yet
+        return raw & valid, ~valid
 
     def __neg__(self):
         self._ensure_queryable()
@@ -2149,46 +2398,67 @@ class Column:
         self._ensure_queryable()
         return self._null_aware_arith(other, self._unwrap_operand(other) ** self._raw_col)
 
+    def _as_kleene(self):
+        """This column as a three-valued predicate, or ``None`` if it is not one.
+
+        Only a *nullable boolean* column carries a third value of its own; for
+        anything else the raw array is the whole story and the boolean
+        operators below stay exactly as cheap as they were.
+        """
+        true, null = self._kleene_channels()
+        return None if null is None else NullableBoolExpr(true, self._table, null)
+
     def __and__(self, other):
         self._ensure_queryable()
+        kleene = self._as_kleene()
+        if kleene is not None:
+            return kleene & other
         return self._raw_col & self._unwrap_operand(other)
 
     def __rand__(self, other):
         self._ensure_queryable()
+        kleene = self._as_kleene()
+        if kleene is not None:
+            return kleene & other
         return self._unwrap_operand(other) & self._raw_col
 
     def __or__(self, other):
         self._ensure_queryable()
+        kleene = self._as_kleene()
+        if kleene is not None:
+            return kleene | other
         return self._raw_col | self._unwrap_operand(other)
 
     def __ror__(self, other):
         self._ensure_queryable()
+        kleene = self._as_kleene()
+        if kleene is not None:
+            return kleene | other
         return self._unwrap_operand(other) | self._raw_col
 
     def __xor__(self, other):
         self._ensure_queryable()
+        kleene = self._as_kleene()
+        if kleene is not None:
+            return kleene ^ other
         return self._raw_col ^ self._unwrap_operand(other)
 
     def __rxor__(self, other):
         self._ensure_queryable()
+        kleene = self._as_kleene()
+        if kleene is not None:
+            return kleene ^ other
         return self._unwrap_operand(other) ^ self._raw_col
 
     def __invert__(self):
         self._ensure_queryable()
-        if self._is_nullable_bool:
-            return self._raw_col == 0
-        inverted = ~self._raw_col
-        if self.dtype == np.dtype(np.bool_):
-            valid = self._nulls.valid_pred()
-            if valid is not None:
-                # A mask-backed nullable bool holds the ``False`` fill in its
-                # null rows, and ``~False`` is True -- so without this, negating
-                # a nullable flag *selects* its nulls.  SQL WHERE semantics: a
-                # null satisfies neither the predicate nor its negation.  The
-                # sentinel branch above gets this from ``== 0``, which excludes
-                # the reserved 255 as well as the true rows.
-                return inverted & valid
-        return inverted
+        kleene = self._as_kleene()
+        if kleene is not None:
+            # A null flag negates to a null, not to a match -- both storages
+            # would otherwise say True for it: the mask one holds the ``False``
+            # fill, and the sentinel one holds 255, which is neither 0 nor 1.
+            return ~kleene
+        return ~self._raw_col
 
     def __lt__(self, other):
         if self.is_utf8:
@@ -2308,7 +2578,7 @@ class Column:
             return res
 
         raw = self._utf8_chunked_bool(fn)
-        return blosc2.asarray(raw) & self._lazy_valid_rows()
+        return self._utf8_kleene(blosc2.asarray(raw) & self._lazy_valid_rows(), other)
 
     def _utf8_scalar_mask(self, numpy_op, value: str) -> np.ndarray:
         """Raw physical-length boolean mask for ``column <numpy_op> value``.
@@ -2420,7 +2690,48 @@ class Column:
 
     def _utf8_compare_scalar(self, numpy_op, value: str):
         """Scalar comparison as a live-row-intersected boolean NDArray."""
-        return blosc2.asarray(self._utf8_scalar_mask(numpy_op, value)) & self._lazy_valid_rows()
+        true = blosc2.asarray(self._utf8_scalar_mask(numpy_op, value)) & self._lazy_valid_rows()
+        return self._utf8_kleene(true)
+
+    def _utf8_null_phys(self) -> np.ndarray | None:
+        """Physical-length boolean array, True where this utf8 column is null.
+
+        ``None`` when the column has no nulls to find.  Unlike the other kinds,
+        utf8 cannot answer this as a lazy predicate — neither a
+        ``StringDType`` comparison nor a raw-bytes span scan is something the
+        lazy layer evaluates — so it is a materialized array, and one the
+        caller pays a scan for.  That is why :class:`NullableBoolExpr` accepts
+        a deferred null channel: only ``~`` and :meth:`is_null` need this.
+        """
+        n_phys = len(self._table._valid_rows)
+        valid = self._nulls.valid_array()
+        if valid is not None:
+            out = np.ones(n_phys, dtype=bool)
+            flags = np.asarray(valid[:], dtype=bool)[:n_phys]
+            out[: len(flags)] = flags
+            return ~out
+        nv = self.null_value
+        if nv is None:
+            return None
+        return self._utf8_chunked_bytes(lambda arr, start, stop: arr.equal_mask_span(nv, start, stop))
+
+    def _utf8_kleene(self, true_pred, other: Column | None = None):
+        """Attach the deferred null channel to a utf8 comparison result."""
+        columns = [c for c in (self, other) if c is not None and c._nulls.is_nullable]
+        if not columns:
+            return true_pred
+
+        def null_channel():
+            combined = None
+            for col in columns:
+                part = col._utf8_null_phys()
+                if part is not None:
+                    combined = part if combined is None else (combined | part)
+            if combined is None:
+                combined = np.zeros(len(self._table._valid_rows), dtype=bool)
+            return blosc2.asarray(combined)
+
+        return NullableBoolExpr(true_pred, self._table, null_channel)
 
     def _dictionary_index_mask(self, value: str) -> np.ndarray | None:
         """Answer ``column == value`` from the dict-rank index, or ``None``.
@@ -2474,24 +2785,49 @@ class Column:
         *negate* inverts the value test *before* the live-row intersection, so
         ``!=`` stays a same-shaped predicate over live rows.  Negating the
         returned value instead would turn every dead slot True.
+
+        ``other is None`` is the *is-null* test rather than a comparison
+        against a value, so it alone answers two-valued; every other form
+        returns a three-valued :class:`NullableBoolExpr`, because a row with
+        the reserved null code equals no string and differs from none either.
         """
         n_phys = len(self._table._valid_rows)
         dc = self._raw_col  # DictionaryColumn
         spec = self._table._schema.columns_by_name[self._col_name].spec
         valid = self._lazy_valid_rows()
+
+        def kleene(pred, *, exclude_nulls: bool):
+            """Wrap a value test, whose null rows are neither true nor false.
+
+            *exclude_nulls* says whether the truth channel still has to have
+            them taken out.  It is False for a positive test — no null row
+            carries the code being looked for, so ``==`` is already exact —
+            and True for every negated one, where the reserved code differs
+            from the target like any other and would otherwise read as a
+            match.  The null channel itself is deferred, so a query that only
+            ever asks ``==`` never reads the codes for it.
+            """
+
+            def null():
+                return self._dictionary_null_pred(dc, spec, n_phys)
+
+            if exclude_nulls:
+                pred = pred & ~null()
+            return NullableBoolExpr(pred, self._table, null)
+
         if other is None:
             target_code = spec.null_code
         elif isinstance(other, str):
             indexed = self._dictionary_index_mask(other)
             if indexed is not None:
-                return blosc2.asarray(~indexed if negate else indexed) & valid
+                return kleene(blosc2.asarray(~indexed if negate else indexed) & valid, exclude_nulls=negate)
             try:
                 target_code = dc.value_to_code(other)
             except KeyError:
                 # No row carries this value: nothing matches, everything differs.
                 if negate:
-                    return blosc2.ones(n_phys, dtype=np.bool_) & valid
-                return blosc2.zeros(n_phys, dtype=np.bool_)
+                    return kleene(blosc2.ones(n_phys, dtype=np.bool_) & valid, exclude_nulls=True)
+                return kleene(blosc2.zeros(n_phys, dtype=np.bool_), exclude_nulls=False)
         else:
             raise TypeError(
                 f"Dictionary column {self._col_name!r} can only be compared with str or None, "
@@ -2503,7 +2839,17 @@ class Column:
             physical = blosc2.zeros(n_phys, dtype=np.bool_)
             physical[: len(dc.codes)] = pred
             pred = physical
-        return pred & valid
+        pred = pred & valid
+        return pred if other is None else kleene(pred, exclude_nulls=negate)
+
+    def _dictionary_null_pred(self, dc, spec, n_phys: int):
+        """Physical-slot predicate, True where this dictionary column is null."""
+        null = dc.codes == np.int32(spec.null_code)
+        if len(dc.codes) != n_phys:
+            physical = blosc2.zeros(n_phys, dtype=np.bool_)
+            physical[: len(dc.codes)] = null
+            null = physical
+        return null
 
     def isin(self, values) -> np.ndarray:
         """Return a boolean array True where the live value is in *values*.
@@ -2520,6 +2866,12 @@ class Column:
         ``NaT`` are accepted as spellings of the same request.  A float
         ``NaN`` is **not** one of them -- under mask storage NaN is an ordinary
         value (decision 6 of the mask-nulls design), so it is matched as data.
+
+        Deliberately **two-valued**, unlike a comparison (see
+        :class:`NullableBoolExpr`): this returns a materialized array, and the
+        ``None`` spelling above already answers the question a third value
+        would.  So ``~col.isin([...])`` includes the null rows, where
+        ``~(col == x)`` excludes them.
 
         For dictionary columns this performs efficient integer-code membership
         testing (no decoding of all values).  Values absent from the
@@ -2980,6 +3332,7 @@ class Column:
 
     def _normalize_sum_where(self, where):
         """Normalize an optional ``sum(where=...)`` predicate to a boolean array/expression."""
+        where = _sql_predicate(where)
         if where is None:
             return None
         if isinstance(where, str):
@@ -12613,6 +12966,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         machinery accepts: a LazyExpr, DSLKernel, callable, or string."""
         if isinstance(value, NullableExpr):
             return value._expr
+        if isinstance(value, NullableBoolExpr):
+            # A computed column is a stored array of values: it has nowhere to
+            # carry a third one, so the unknown rows land as False -- the same
+            # collapse ``where()`` makes.
+            return value._true
         if isinstance(value, Column):
             value._ensure_queryable()
             raw = value._raw_col
@@ -12890,6 +13248,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if isinstance(key, ColExpr):
             key = key._bind(self)
+        key = _sql_predicate(key)
         if isinstance(key, str):
             physical = self._logical_to_physical_name(key)
             if physical in self._cols or physical in self._computed_cols:
@@ -15174,6 +15533,15 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         Notes
         -----
+        A predicate over a **nullable** column is three-valued: a comparison
+        against a null is *unknown*, not false, and ``&``/``|``/``~`` combine
+        that third value by Kleene's rules (see :class:`NullableBoolExpr`).
+        ``where()`` keeps the rows a predicate is **true** for, so an unknown
+        row is dropped just like a false one -- which is what makes
+        ``t.where(~(t.a > 10))`` exclude the nulls rather than select them.
+        Both spellings below agree, and either predicate can be asked which
+        rows it could not answer for (``p.is_null()``).
+
         Use bitwise operators (``&``, ``|``, ``~``) or string expressions for
         element-wise boolean logic.  Python's logical operators ``and``, ``or``
         and ``not`` cannot be overloaded and therefore do not build lazy column
@@ -15192,6 +15560,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if isinstance(expr_result, ColExpr):
             expr_result = expr_result._bind(self)
+        # SQL WHERE keeps the rows a predicate is *true* for: a three-valued
+        # predicate contributes its truth channel and drops the unknown rows,
+        # which is what makes ``~`` correct without any change here.
+        expr_result = _sql_predicate(expr_result)
         if isinstance(expr_result, str):
             self._guard_varlen_scalar_expression(expr_result, allow_utf8=True)
             utf8_names = self._utf8_names_in(expr_result)

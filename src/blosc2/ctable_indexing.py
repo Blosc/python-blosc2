@@ -182,8 +182,17 @@ def _persist_utf8_vocab(full: dict, meta: dict, sorted_vocab: np.ndarray) -> Non
     meta["vocab_path"] = vocab_path
 
 
-def _expression_has_or(expression: str) -> bool:
-    """Whether *expression* really contains a boolean OR.
+def _expression_defeats_global_null_filter(expression: str) -> bool:
+    """Whether *expression* really contains a boolean OR, or a negation.
+
+    Both make a *global* null post-filter wrong, for the same underlying
+    reason: the predicate's answer for a null row is not simply "no match".
+    Under OR a row that is null in one column can still match the other
+    branch; under Kleene negation ``~(unknown & false)`` is *true*, so a row
+    the filter would drop qualifies (see
+    ``blosc2.ctable_nulls._NullPredicateRewriter._channels``).  Where the
+    predicate is actually evaluated -- the segment path -- both are already
+    exact per leaf and the filter is not merely wrong but unnecessary.
 
     A substring test for ``"|"`` also fires on a string literal that happens to
     contain one (``name == 'a|b'``), and the answer decides whether a nullable
@@ -198,6 +207,8 @@ def _expression_has_or(expression: str) -> bool:
         if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
             return True
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            return True
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.Not, ast.Invert)):
             return True
     return False
 
@@ -1580,28 +1591,32 @@ class _CTableIndexingMixin:
             and not is_nan_sentinel(root._schema.columns_by_name[name].spec.null_value)
         ]
 
-        # Global null post-filtering is not correct for OR expressions: it would
-        # drop a row that is null in one column but matches the other branch.
-        # Which paths that rules out depends on *how* each one answers.
+        # Global null post-filtering is not correct for an OR expression -- it
+        # would drop a row that is null in one column but matches the other
+        # branch -- nor for a negation, where ``~(unknown & false)`` is true and
+        # the row it would drop qualifies.  Which paths that rules out depends
+        # on *how* each one answers.
         #
         # The segment/candidate-unit path evaluates the predicate through
         # miniexpr over the surviving blocks, and the predicate is null-aware
         # per leaf by the time it gets here (CTable._rewrite_null_predicates for
         # the string form, Column._null_aware_compare for the operator one), so
         # its result is already exact and the post-filter is not merely
-        # incorrect for OR but unnecessary.  That path therefore serves OR, with
-        # the filter skipped.
+        # incorrect for those shapes but unnecessary.  That path therefore
+        # serves them, with the filter skipped.
         #
         # The exact-position paths (FULL/PARTIAL/BUCKET) answer by taking an
         # ordered *range* of the sorted column and never evaluate anything, so
-        # the post-filter is load-bearing there and an OR over a nullable
-        # indexed column still falls back to the scan -- which is itself
-        # null-aware, and so returns the right answer.  Those bails are
-        # belt-and-braces today: the planner declines an exact plan for any
-        # expression containing an OR, so such a plan cannot reach them.  They
-        # are what stops a planner that learns to build one from silently
-        # reintroducing the bug.
-        skip_null_filter = bool(nullable_indexed) and _expression_has_or(expr_result.expression)
+        # the post-filter is load-bearing there and such an expression over a
+        # nullable indexed column still falls back to the scan -- which is
+        # itself null-aware, and so returns the right answer.  Those bails are
+        # belt-and-braces today: the planner declines an exact plan for an
+        # expression containing an OR or a negation, so such a plan cannot reach
+        # them.  They are what stops a planner that learns to build one from
+        # silently reintroducing the bug.
+        skip_null_filter = bool(nullable_indexed) and _expression_defeats_global_null_filter(
+            expr_result.expression
+        )
 
         # Inject every usable table-owned descriptor so plan_query can combine them.
         # In .b2z read mode all columns share the same urlpath, so _array_key()

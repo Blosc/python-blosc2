@@ -15,6 +15,11 @@ comparison leaf that reads a nullable column.
 Per *leaf*, not once over the whole expression: a global ``result & valid_a``
 would drop a row that is null in ``a`` but matches the other branch of
 ``(a > 10) | (b == 0)``, which SQL says qualifies.
+
+Under a negation a guard is not enough in either position, and the rewrite
+switches to three-valued logic there; ``tests/ctable/test_kleene_logic.py``
+covers that side, and the two negation tests here pin the string form against
+the operator one.
 """
 
 from __future__ import annotations
@@ -179,42 +184,32 @@ def test_string_form_agrees_with_operator_form(label, spec, annotation, values, 
     )
 
 
-def test_negation_over_and_corner_is_conservative():
-    """The one known corner where the two query forms disagree -- pinned.
+def test_negation_over_and_corner_agrees_with_sql():
+    """The corner the two query forms used to disagree on -- now both exact.
 
     ``~((a > 10) & (b == 999))`` with ``a`` null and the second term False:
     SQL collapses ``NULL AND FALSE`` to ``FALSE``, so the negation is True and
-    the row qualifies.  The string form guards at the negation point
-    (``... & (a != -1)``) and drops it.  That is by design -- pushing validity
-    to the negation point is exact for every simpler form, and errs only by
-    *dropping*: a null row is never wrongly returned (see
-    plans/mask-based-nulls.md, "Negation caveat, resolved").
-
-    The operator form returns the SQL answer here, but not by reasoning in
-    three values: ``_null_aware_compare`` collapses null to False at the leaf,
-    so ``~`` sees plain booleans -- which is also why it leaks nulls on a bare
-    negation (the xfail below).  If either assertion starts failing, the two
-    forms moved; make sure they moved *toward* SQL, together.
+    the row qualifies.  Getting that right needs three values, because it
+    hinges on ``unknown & false`` being *false* rather than unknown -- no
+    amount of conjoining a validity guard onto the negation can express it
+    (the string form dropped the row until Kleene logic landed).
     """
     t = _table(blosc2.int64(null_value=-1), int, [1, 20, -1, 30], -1)
 
-    got = sorted(t.where("~((a > 10) & (b == 999))")["b"][:].tolist())
-    assert got == [0, 1, 3]  # null row dropped; SQL would keep it
-
-    got = sorted(t.where(~((t["a"] > 10) & (t["b"] == 999)))["b"][:].tolist())
-    assert got == [0, 1, 2, 3]  # SQL-exact
+    assert sorted(t.where("~((a > 10) & (b == 999))")["b"][:].tolist()) == [0, 1, 2, 3]
+    assert sorted(t.where(~((t["a"] > 10) & (t["b"] == 999)))["b"][:].tolist()) == [0, 1, 2, 3]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="operator-form negation is not null-aware: `a > 10` collapses null to "
-    "False at the leaf, so ~ turns the null row into a match. The string form "
-    "gets this right via the negation-point guard. Fixing it needs the "
-    "comparison result to carry its null predicate through ~.",
-)
 def test_operator_form_negation_drops_nulls():
+    """``~(a > 10)`` is unknown for a null ``a``, so the row is not a match.
+
+    Was a strict xfail: the comparison collapsed the null to False at the leaf
+    and ``~`` inverted it into a match.  Fixed at the source -- the comparison
+    now carries its null predicate through ``~`` (:class:`NullableBoolExpr`).
+    """
     t = _table(blosc2.int64(null_value=-1), int, [1, 20, -1, 30], -1)
     assert sorted(t.where(~(t["a"] > 10))["b"][:].tolist()) == [0]
+    assert sorted(t.where("~(a > 10)")["b"][:].tolist()) == [0]
 
 
 def test_comparing_against_the_sentinel_matches_nothing():

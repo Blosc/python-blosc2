@@ -348,11 +348,21 @@ def test_a_row_null_in_one_branch_still_matches_the_other(tmp_path):
 
 
 def test_a_pipe_inside_a_string_literal_is_not_an_or():
-    """The OR test decides whether a nullable column keeps its index, so it
+    """The test decides whether a nullable column keeps its index, so it
     parses rather than searching for a character that string data may contain."""
-    from blosc2.ctable_indexing import _expression_has_or
+    from blosc2.ctable_indexing import _expression_defeats_global_null_filter
 
-    assert _expression_has_or("(a > 1) | (b < 2)")
-    assert _expression_has_or("a > 1 or b < 2")
-    assert not _expression_has_or("name == 'a|b'")
-    assert not _expression_has_or("(a > 1) & (b < 2)")
+    assert _expression_defeats_global_null_filter("(a > 1) | (b < 2)")
+    assert _expression_defeats_global_null_filter("a > 1 or b < 2")
+    assert not _expression_defeats_global_null_filter("name == 'a|b'")
+    assert not _expression_defeats_global_null_filter("(a > 1) & (b < 2)")
+
+
+def test_a_negation_also_defeats_the_global_null_filter():
+    """Kleene negation is the second shape a global filter cannot express:
+    ``~(unknown & false)`` is true, so the null row it would drop qualifies."""
+    from blosc2.ctable_indexing import _expression_defeats_global_null_filter
+
+    assert _expression_defeats_global_null_filter("~(a > 1)")
+    assert _expression_defeats_global_null_filter("not (a > 1)")
+    assert _expression_defeats_global_null_filter("~((a > 1) & (b < 2))")

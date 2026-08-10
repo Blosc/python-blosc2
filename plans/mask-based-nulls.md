@@ -93,7 +93,12 @@ answers.
 8. **Kleene three-valued logic stays out of scope.** Masks make it possible (they supply the
    validity channel `plans/enhancing-ctable.md` §Gap C named as the blocker), but
    `_null_aware_compare` deliberately collapses null → `False` (SQL `WHERE` semantics).
-   Named deferred follow-up.
+   Named deferred follow-up. *(Discharged 2026-08-10 — see `plans/kleene-logic.md`. The collapse
+   stays, as the **truth channel** of a three-valued result; what changed is that the null
+   channel now survives alongside it, which is what `~` needs. `WHERE` semantics are unchanged.
+   That work also reverses this document's ruling that a conservative string-form negation is
+   good enough, and corrects two things recorded below: the negation caveat under §Expression
+   layer, and the divergence pinned by `test_negation_over_and_corner_is_conservative`.)*
 9. **An absent sidecar means all-valid.** The `.notnull` array is materialized lazily, on the
    first write that actually contains a null; a mask-storage column with no `.notnull` key on
    disk is a valid — and expected common — state meaning "no nulls so far". Null-free nullable
@@ -698,6 +703,14 @@ Phase 1**, landing right after the `NullChannel` refactor and before any mask wo
 > `NullableExpr` with `__invert__` — and folds naturally into decision 8's deferred Kleene
 > follow-up rather than Phase 1.
 >
+> **Resolved 2026-08-10 (`plans/kleene-logic.md`).** The predicted fix is what shipped, with one
+> departure: the boolean analogue **subclasses** `LazyExpr` instead of wrapping it, because
+> `isinstance` checks at three consumers (and in user-shaped test code) took the wrong branch for a
+> wrapper. The xfail is now a plain test. The "intentional divergence" pinned beside it did **not**
+> survive: with the operator form exact, a conservative string form would have meant the two
+> spellings of one predicate returning different rows, which is worse than either error alone —
+> so the string rewrite carries two channels under a negation and both forms are now SQL-exact.
+>
 > **Addendum 2 (2026-08-08): Phase 1 only did the sentinel half, and Phase 6 shipped the gap.**
 > `_rewrite_null_predicates` tested `kind_of_spec(spec) != NULL_SENTINEL` and skipped everything
 > else, so a mask column got no guard at all — and the same one-kind test in
@@ -1006,8 +1019,12 @@ channel to one more builder rather than to teach a new subsystem about nulls.
 - **A mask *key* column back on the dense single-key path.** It leaves because
   `_CodedKeyChunk.codes` are chunk-local, not the dense global ints that path indexes with.
 - **`__setitem__`'s fast paths** for mask columns (deferred in Phase 4, still unmeasured).
-- **Kleene three-valued logic**, decision 8 — which now also owns the operator-form negation leak
-  pinned as a `strict=True` xfail in `tests/ctable/test_null_predicate_rewrite.py`.
+- ~~**Kleene three-valued logic**, decision 8 — which now also owns the operator-form negation leak
+  pinned as a `strict=True` xfail in `tests/ctable/test_null_predicate_rewrite.py`.~~
+  **Done 2026-08-10**, `plans/kleene-logic.md`: the xfail is a passing test, the string form's
+  conservative negation became exact, and a dictionary `!=` stopped returning its nulls. Cost of
+  the exact answer, measured: 1.15x on a negated two-column conjunction over 20M rows; every other
+  predicate shape unchanged.
 - **Validity through `_ColumnSummaryAccumulator`** (Phase 10). The per-block summaries folded
   during writes carry no validity, so a nullable column holding a null cannot use them and pays a
   decompression pass at `close()` — 1.8 ms → 33.2 ms for a 20M-row `int64`. `extend`'s feed site

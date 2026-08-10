@@ -551,6 +551,20 @@ def _normalize_expr_operand(value: Any) -> Any:
     return raw_col if raw_col is not None else value
 
 
+def _defers_boolean_op(value: Any) -> bool:
+    """True when *value* implements a richer boolean algebra than two values.
+
+    A CTable predicate over a nullable column is three-valued (see
+    :class:`blosc2.ctable.NullableBoolExpr`): besides true and false it has
+    *unknown*, and ``&``/``|``/``^`` combine that third value by Kleene's
+    rules rather than bitwise ones.  Returning ``NotImplemented`` from the
+    two-valued operator hands the operation to the operand that knows those
+    rules, so ``lazy_expr & nullable_predicate`` stays three-valued instead of
+    silently collapsing to whichever side Python happened to evaluate first.
+    """
+    return hasattr(value, "_kleene_channels")
+
+
 def _check_allowed_dtypes(
     value: bool | int | float | str | blosc2.Array,
 ):
@@ -3485,6 +3499,8 @@ class Operand:
 
     @is_documented_by(bitwise_and)
     def __and__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
+        if _defers_boolean_op(value):
+            return NotImplemented
         value = _normalize_expr_operand(value)
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "&", value))
@@ -3497,6 +3513,8 @@ class Operand:
 
     @is_documented_by(bitwise_xor)
     def __xor__(self, other) -> blosc2.LazyExpr:
+        if _defers_boolean_op(other):
+            return NotImplemented
         other = _normalize_expr_operand(other)
         _check_allowed_dtypes(other)
         return blosc2.LazyExpr(new_op=(self, "^", other))
@@ -3509,6 +3527,8 @@ class Operand:
 
     @is_documented_by(bitwise_or)
     def __or__(self, other) -> blosc2.LazyExpr:
+        if _defers_boolean_op(other):
+            return NotImplemented
         other = _normalize_expr_operand(other)
         _check_allowed_dtypes(other)
         return blosc2.LazyExpr(new_op=(self, "|", other))

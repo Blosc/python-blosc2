@@ -100,6 +100,49 @@ costs one decompression pass (33 ms for a 20M-row `int64` column) because the
 incremental per-block summaries folded during writes carry no validity; a
 nullable column with no nulls keeps that fast path untouched.
 
+#### Predicates over nulls follow three-valued (Kleene) logic
+
+A comparison against a null is neither true nor false. It is now **unknown**,
+the third value SQL and Arrow both use, and `&`, `|`, `^` and `~` combine it by
+Kleene's rules instead of collapsing it to `False` at the leaf:
+
+```python
+t.where(t.price > 10)  # rows definitely above 10
+t.where(~(t.price > 10))  # rows definitely *not* above 10 — nulls in neither
+```
+
+`where()` keeps what a predicate is **true** for, so the rows it returns for a
+plain comparison are unchanged. What this fixes is everything built on top of
+one. `~(t.price > 10)` used to invert a null that had already been collapsed to
+`False` and so returned every null row — the exact opposite of the intent — and
+`~((a > 10) & (b == 999))` dropped rows that qualify, because `unknown & false`
+is *false*, not unknown, and only a real third value can express that. Both
+query forms are covered, and both now agree with SQL: the string form carries
+the second channel through an AST rewrite under negation.
+
+A predicate can be asked about its unknown rows rather than only filtered with:
+
+```python
+p = t.price > 10
+p.is_null()  # boolean array: the rows it cannot answer for
+p.null_count()
+t.where(p.fillna(True))  # keep what cannot be ruled out
+```
+
+`fillna(False)` is the other reading, and is what `where()` applies implicitly.
+
+Predicates over non-nullable columns are untouched and cost nothing extra; the
+result of a nullable comparison is still a `blosc2.LazyExpr`, so it computes,
+indexes and plans exactly as before. Measured cost of the exact answer: a
+negated two-column conjunction over a 20M-row nullable table runs 1.15x slower
+than the wrong answer it replaces; every other predicate shape is unchanged.
+
+Two consequences worth knowing. `t.where(dict_col != "x")` no longer returns the
+rows where `dict_col` is null (its reserved code differs from every value's, so
+it used to match); `dict_col == None` remains how to ask for them. And
+`Column.isin()` stays deliberately two-valued — it returns a materialized array
+and has its own spelling for nulls (`None` among the values).
+
 ### Bug fixes
 
 - **`group_by` returned the wrong `min` for a `bool` value column.** The
