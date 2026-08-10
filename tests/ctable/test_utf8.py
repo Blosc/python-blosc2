@@ -2311,9 +2311,14 @@ def test_constructors_string_dtype_do_not_materialize_a_fill_list():
     cancels the platform's baseline allocation, which is several MiB on Windows
     and half that elsewhere -- a fixed bound only tracks that baseline.
     """
+    import gc
     import tracemalloc
 
     def peak_for(n):
+        # Collect first: tracemalloc reports the peak of everything the process
+        # allocates while it is running, so garbage left by earlier tests lands
+        # in this measurement and has nothing to do with the fill.
+        gc.collect()
         tracemalloc.start()
         try:
             arr = blosc2.zeros(n, dtype=STRING_DTYPE)
@@ -2330,8 +2335,15 @@ def test_constructors_string_dtype_do_not_materialize_a_fill_list():
     # these two sizes, where the streamed build does not move at all.  Both sizes
     # are well past the point where the chunk size stops growing, so the transient
     # buffer -- the whole of the peak -- is the same for each.
+    #
+    # The bound is well below that 27 MiB but well above the streamed build's
+    # own figure, which measures ~0 MiB in isolation on every NumPy tested: a
+    # tighter one turned this into an order-dependent failure, passing alone and
+    # failing in a full serial run under NumPy 2.2 (which is what Pyodide ships)
+    # as unrelated allocations moved the peak around.  What is being detected
+    # here scales with shape[0]; noise does not.
     grown = (large - small) / 2**20
-    assert grown < 4.0, f"peak grew {grown:.1f} MiB with 8x the rows: a fill list was materialized"
+    assert grown < 12.0, f"peak grew {grown:.1f} MiB with 8x the rows: a fill list was materialized"
 
 
 def test_utf8_dispatch_round_trips_conversion():
