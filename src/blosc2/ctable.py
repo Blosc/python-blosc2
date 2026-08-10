@@ -9797,7 +9797,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             buf = io.StringIO(newline="")
             _write(buf)
             return buf.getvalue()
-        with open(path, "w", newline="") as f:
+        # UTF-8 explicitly, never the locale's codec: text a column can hold is
+        # not text every platform default can encode, and cp1252 -- Python's
+        # default on Windows -- raises on the first non-Latin-1 character.  The
+        # file has to mean the same thing wherever it is written and read.
+        with open(path, "w", newline="", encoding="utf-8") as f:
             _write(f)
         return None
 
@@ -9968,7 +9972,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # Accumulate values per column as Python lists (one pass through file)
         col_data: list[list] = [[] for _ in range(ncols)]
 
-        with open(path, newline="") as f:
+        # UTF-8 explicitly, matching to_csv: see the note there.  utf-8-sig
+        # strips a byte-order mark if one is present, which is what Excel and
+        # several Windows tools write, and is a no-op otherwise.
+        with open(path, newline="", encoding="utf-8-sig") as f:
             reader = csv.reader(f, delimiter=sep)
             if header:
                 next(reader)

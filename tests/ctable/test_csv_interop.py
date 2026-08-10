@@ -10,6 +10,7 @@
 import csv
 import dataclasses
 import os
+import pathlib
 from dataclasses import dataclass
 
 import numpy as np
@@ -580,6 +581,37 @@ def test_csv_utf8_column_roundtrips(tmp_csv):
     t.to_csv(tmp_csv)
     t2 = CTable.from_csv(tmp_csv, row_cls)
     assert list(t2["text"][:]) == values
+
+
+def test_csv_is_utf_8_whatever_the_platform_locale(tmp_csv):
+    """The bytes on disk are UTF-8, not whatever codec the locale prefers.
+
+    ``open()`` defaults to the locale encoding, which on Windows is cp1252 and
+    cannot encode most of what a text column may hold -- writing a CJK
+    character raised ``UnicodeEncodeError`` there while passing everywhere
+    else.  A CSV has to mean the same thing wherever it is written and read, so
+    both halves name the encoding.  Asserted on the raw bytes, since the
+    process running this test may well have a UTF-8 locale that would hide a
+    regression.
+    """
+    row_cls = dataclasses.make_dataclass(
+        "TextRow", [("text", str, blosc2.field(blosc2.string(max_length=16)))]
+    )
+    values = ["ascii", "caf\u00e9", "\u4e2d\u6587"]
+    CTable(row_cls, new_data=[(v,) for v in values]).to_csv(tmp_csv)
+
+    raw = pathlib.Path(tmp_csv).read_bytes()
+    assert "\u4e2d\u6587".encode() in raw
+    assert list(CTable.from_csv(tmp_csv, row_cls)["text"][:]) == values
+
+
+def test_csv_reads_back_a_file_carrying_a_byte_order_mark(tmp_csv):
+    """Excel and several Windows tools prefix a BOM; utf-8-sig absorbs it."""
+    row_cls = dataclasses.make_dataclass(
+        "BomRow", [("text", str, blosc2.field(blosc2.string(max_length=8)))]
+    )
+    pathlib.Path(tmp_csv).write_text("text\ncaf\u00e9\n", encoding="utf-8-sig")
+    assert list(CTable.from_csv(tmp_csv, row_cls)["text"][:]) == ["caf\u00e9"]
 
 
 @needs_utf8
