@@ -1071,9 +1071,19 @@ sweep later is worth it). Two confirmed defects, both reproduced against this tr
    > including one asserting the two storages agree cell for cell on a broadcast write; all 17 fail
    > when the branch is reverted.
    >
-   > Not fixed, and out of scope: a **timestamp** column rejects a broadcast scalar under *both*
-   > storages (`IndexError: too many indices for array: array is 0-dimensional`), which predates
-   > this work and lives in the timestamp coercion path, not the null one.
+   > A **timestamp** column rejected a broadcast scalar under *both* storages
+   > (`IndexError: array is 0-dimensional`), which predates this work. **Fixed 2026-08-10**, and it
+   > was larger than "broadcast": writing a `datetime` through `col[key] = ...` failed for *every*
+   > key form, because nothing encoded it to the stored `int64` — `extend` gets that from the schema
+   > validators and `__setitem__` wrote what it was handed. `Column._coerce_timestamp_write` is the
+   > write-side counterpart to the `_coerce_timestamp_operand` comparisons already use. The
+   > `IndexError` had a second cause, fixed where it lives: `ndarray.py`'s fancy-index write tested
+   > `np.isscalar(value)` to decide whether to index the value per chunk, and a 0-d array answers
+   > `False` while raising on the index — which is exactly what a `datetime64` scalar arrives as.
+   >
+   > `assign(scalar)` reported `len() of unsized object` where the method documents a `ValueError`
+   > naming the count; it now raises that and points at `col[:] = value`. Its contract is unchanged —
+   > one value per live row.
 
 2. **`convert_nulls(to="sentinel")` falsely refuses on a value that lives only in a dead slot.**
    `_convert_sentinel_clash` (`ctable.py:11158`) intersects its hit mask with the validity sidecar
@@ -1122,10 +1132,15 @@ further defects, **all reproduced against the tree and none fixed yet**, ordered
    > parents, and that is what flattened the table. The fix preserves every key, reusing the new
    > column object where there is one and deep-copying the parents.
    >
-   > One thing found while verifying and **left alone as out of scope**: reopening a persisted
-   > nested table flattens it *with no conversion involved at all* — `schema_from_dict` does not
-   > rebuild the struct parent. Confirmed identical before and after this change, so it predates the
-   > branch and belongs to the nested-metadata work, not here.
+   > One thing found while verifying and at first left alone: reopening a persisted nested table
+   > flattens it *with no conversion involved at all* — `schema_from_dict` did not rebuild the
+   > struct parent either. Confirmed identical before and after that change, so it predates the
+   > branch entirely. **Fixed 2026-08-10 all the same**, since it is the same defect one layer down:
+   > `schema_to_dict` walks `columns`, so the parent was never written out. The parent specs now
+   > travel inside the `metadata` blob — additive, so a reader that predates them copies them
+   > through and needs no version bump — and are consumed on load rather than left as user-visible
+   > metadata, and re-derived on the next save so a second round trip does not decay. A file written
+   > before this keeps its flat export instead of failing to open, which is asserted.
 
 4. **`nonnull_chunks()` pairs sorted-order nullity with physical-order values.**
    `ctable_nulls.py:846` zips `self.null_mask()` — gathered through

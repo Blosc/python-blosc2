@@ -173,12 +173,34 @@ and has its own spelling for nulls (`None` among the values).
   were data, and `from_csv` had nothing to put in an empty field and raised.
   Both go through the sidecar now: an empty CSV field is a null in either
   direction. Sentinel columns keep writing their sentinel, unchanged.
+- **Reductions on a sorted view of a mask column read the wrong rows.** The
+  null flags were gathered in the view's order and the values in physical
+  order, so `sum()` on a sorted view could return `NaN` from a column whose
+  nulls are not `NaN`, and `unique()` could report the fill as data while
+  dropping a real value. Sentinel columns were unaffected.
+- **`convert_nulls()` flattened a nested column**, even when it had nothing to
+  convert: the schema copy it makes dropped both the table metadata and the
+  logical parent of a nested group, so a struct column came back as its leaves.
+  An in-place conversion on a persistent table wrote that flattened schema to
+  disk. Saving and reopening a nested table dropped the same parent, which is
+  fixed alongside it.
+- **Descending `sort_by` mis-ordered the widest integers.** The key was built
+  by negating, and negation has a fixed point: `int64`'s minimum sorted as if
+  it were the largest, and a `uint64` above 2**63 wrapped negative and sorted
+  below small values.
+- **CSV was written and read in the platform's locale encoding**, so text a
+  column can hold but cp1252 cannot encode — anything outside Latin-1 — raised
+  `UnicodeEncodeError` on Windows. Both directions are UTF-8 now, and reading
+  absorbs a byte-order mark if one is present.
+- **A timestamp column could not be written through `col[key] = value`.** A
+  `datetime` was never encoded to the stored `int64`, so every key form failed;
+  `extend()` was unaffected. ISO strings and `datetime64` are accepted too.
 - **Assigning one value to many rows raised on a mask-storage column.**
-  `t.a[0:2] = 7` — and the same write through a boolean mask or an index list —
+  `col[0:2] = 7` — and the same write through a boolean mask or an index list —
   failed with `TypeError: iteration over a 0-d array`, because the write path
   looked for nulls *inside* a value that was a single cell rather than a batch.
-  Scalar broadcast has always worked for fixed-width columns and works again
-  here. `t.a[0:2] = None` broadcasts too, making every selected row null.
+  Scalar broadcast works again, and `col[0:2] = None` now makes every selected
+  row null.
 - **`convert_nulls(to="sentinel")` refused over a value in a deleted row.** The
   collision check scanned physical slots, so a proposed sentinel present only in
   a row already deleted — unreadable, and dropped by the next `compact()` —
