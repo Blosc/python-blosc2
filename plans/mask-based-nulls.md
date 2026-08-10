@@ -1094,6 +1094,127 @@ sweep later is worth it). Two confirmed defects, both reproduced against this tr
    > block, and the live value that must still block *and* name a row the caller can index — which
    > fail independently when each half is reverted.
 
+### Second pass — the full multi-angle sweep (2026-08-10)
+
+The sweep that had been cut short was re-run to completion after the two fixes above landed. Four
+further defects, **all reproduced against the tree and none fixed yet**, ordered by severity:
+
+3. **`convert_nulls()` destroys nested-column metadata — even as a no-op.** `_detach_schema`
+   (`ctable.py:11204`) rebuilds `CompiledSchema` from `row_cls`/`columns`/`columns_by_name` only,
+   dropping `metadata` and `validator_model`. `metadata["nested"]` is what drives nested
+   reconstruction and is serialized by `schema_to_dict`, so a struct column comes back **flattened**:
+   `trip` → `trip.lon`, `trip.lat`. `_convert_nulls_inplace` calls `_detach_schema()`
+   unconditionally, *before* looking at whether there is anything to convert, so
+   `t.convert_nulls()` on a table with **no nullable columns at all** flattens it. Verified on an
+   Arrow-imported struct column: the `nested` and `arrow` metadata keys are present before and
+   `None` after. With `inplace=True` on a persistent table it is worse than transient —
+   `_retype_converted_column` then calls `save_schema(...)`, writing the metadata-less schema to
+   disk permanently. Fix: `dataclasses.replace(self._schema, columns=..., columns_by_name=...)`,
+   which keeps every field the deep copy was not meant to touch. This is the most damaging of the
+   four: it is silent, it is reachable without opting into anything, and one variant persists.
+
+   > **Fixed 2026-08-10, and the diagnosis was incomplete.** `dataclasses.replace` restores
+   > `metadata` and `validator_model`, but on its own it **did not fix the flattening** — the export
+   > still came back `trip.lon`/`trip.lat`. The second half: `columns_by_name` is *not*
+   > `{c.name for c in columns}`. It also carries the logical **parent** of a nested group — a
+   > `StructSpec` entry for `trip` beside its leaves — which `_export_arrow_names` looks up precisely
+   > *because* it is absent from `col_names`. Rebuilding the dict from `columns` dropped those
+   > parents, and that is what flattened the table. The fix preserves every key, reusing the new
+   > column object where there is one and deep-copying the parents.
+   >
+   > One thing found while verifying and **left alone as out of scope**: reopening a persisted
+   > nested table flattens it *with no conversion involved at all* — `schema_from_dict` does not
+   > rebuild the struct parent. Confirmed identical before and after this change, so it predates the
+   > branch and belongs to the nested-metadata work, not here.
+
+4. **`nonnull_chunks()` pairs sorted-order nullity with physical-order values.**
+   `ctable_nulls.py:846` zips `self.null_mask()` — gathered through
+   `Column._resolve_live_positions()`, i.e. **view order** — against `col.iter_chunks()`, which
+   walks the chunks in **physical** order. On an ordered view the two disagree and the wrong rows
+   are dropped. Every reduction routed through `_nonnull_chunks` is affected. Measured on a 5-row
+   sorted view of a mask `float64` column holding `[10.0, None, 30.0, None, 50.0]`: `sum()` returns
+   `nan` instead of `90.0` and `unique()` returns `[50., nan, 30.]` instead of `[10., 30., 50.]` —
+   the NaN fill leaks out as data *and* a real value disappears. The sentinel path is
+   order-independent (`chunk != nv`) and is correct on the same data, so this is a mask-only
+   regression. Filtered (unsorted) views are fine; only ordered ones break. The chunk-pinning
+   invariant in §Architecture guarantees the sidecar shares the column's *physical* grid, which is
+   exactly why the mask must be taken in physical order here — the comment at the site claims the
+   alignment it then breaks.
+
+   > **Fixed 2026-08-10.** The flags are gathered at `np.flatnonzero(col._valid_rows[:])`, i.e. the
+   > live rows in physical order, which is the order `iter_chunks` yields. Reading *the same*
+   > `_valid_rows` both streams already agree on is what keeps a filtered view in step as well.
+   > Pinned by five tests in `test_null_mask_api.py`, parametrized over both storages so the
+   > differential that would have caught it originally now exists: an ordered view, a descending
+   > one, and one combining deletions with ordering.
+
+5. **Descending `sort_by` still wraps on the `int64` minimum.** `ctable.py:13708` negates the
+   descending value key as `-raw.astype(np.int64)`, which fixed `bool` and the narrow signed dtypes
+   but not `int64` itself: `-(-2**63)` is `-2**63` in int64, so that row sorts as if it were the
+   largest. Verified: `[5, INT64_MIN, 7, None, 1]` sorts descending to
+   `[INT64_MIN, 7, 5, 1, null]`. Ascending is correct, and `int8`'s `-128` is correct, so this is
+   the residue of the Phase 7 fix rather than a new bug — but mask storage is what makes it
+   *reachable*, since sentinel `int64` reserved `INT64_MIN` and it was never data. The comment above
+   the line claims this class of bug is fixed.
+
+   > **Fixed 2026-08-10, by complementing rather than negating.** `np.bitwise_not(raw)` is `-x - 1`
+   > in two's complement, so it reverses the total order of every integer width **exactly and with no
+   > fixed point** — which is the actual defect, since `-x` maps a dtype's minimum to itself. It also
+   > costs the same single pass, where the rank-inversion the string branch uses would have added an
+   > `argsort`.
+   >
+   > It turned up a case the finding did not mention: **`uint64` above `2**63` was already broken**,
+   > because `.astype(np.int64)` wrapped it negative — `[1, UINT64_MAX, UINT64_MAX - 1]` sorted
+   > descending as `[1, UINT64_MAX, UINT64_MAX - 1]`, putting the smallest first. Verified against
+   > the pre-fix code. Both are pinned by `test_descending_sort_over_the_widest_integers`, with
+   > `test_ascending_sort_of_the_widest_integers_is_unchanged` beside it, since ascending never
+   > negated and was always right.
+
+6. **The null-aware operator form is misread as a user negation.**
+   `_expression_defeats_global_null_filter` (`ctable_indexing.py:185`) treats any `ast.Invert` as a
+   user negation, but `Column._null_aware_compare` *builds* one: `(t.a > 990).expression` is
+   `((o0 > 990) & ~((o0 == -1)))`. So the guard fires on the ordinary operator form, and
+   `exact_positions`/`partial_exact_positions`/`bucket_masks` all decline. Results stay correct —
+   the scan fallback is null-aware — so this is a planning defect, not a wrong answer. The negation
+   that needs the bail is a *user-written* one; the guard cannot currently tell it from the one the
+   rewrite injects.
+
+   > **Correction (2026-08-10): the 19.83x first reported here is not real, and the mechanism was
+   > only half right.** That figure came from a benchmark harness that materialized rows with
+   > `len(list(t.where(...)))`; re-measured with `t.where(...)["a"][:]` the two forms are within
+   > noise of each other (2.55 ms vs 3.02 ms), before *and* after the fix. Tracing the planner
+   > explains why: the string form plans to `exact_positions` and the operator form to
+   > **`partial_exact_positions`** — the injected guard is a second conjunct, so the plan needs
+   > cross-column refinement either way — and that path has its own cost heuristic which, for this
+   > shape, chooses the sequential miniexpr scan on its own merits (the comment at the site says so).
+   > The unconditional bail was therefore masking a decision that the cost model would have made
+   > anyway *here*; the misclassification is still a genuine bug, and fixing it hands the choice back
+   > to the planner rather than pre-empting it. **No speedup is claimed.**
+
+   > **Fixed 2026-08-10.** The guard now asks what a negation *wraps*.
+   > `_negates_a_simple_leaf` accepts a comparison, a bare operand, or `isnan(...)` — the shapes a
+   > validity guard is ever built from — and everything else keeps the conservative answer. That is
+   > sound rather than merely convenient: the Kleene shape that lets a null match is
+   > `~(unknown & false)`, which is always a negation of a boolean *combination*; negating a single
+   > leaf leaves a null excluded either way, since SQL says a null satisfies neither a predicate nor
+   > its negation. An unrecognized call is deliberately not trusted, because the string rewriter
+   > treats one as two-valued and emits no guard for it, so a null could satisfy `~f(a)` and a global
+   > filter would then drop a row the scan keeps.
+   >
+   > `test_a_negation_also_defeats_the_global_null_filter` asserted the old conservatism for
+   > `~(a > 1)` and `not (a > 1)`; it was pinning the implementation, not a requirement, and is
+   > rewritten as `test_a_negation_over_a_combination_defeats_the_global_null_filter` with the
+   > rewriter's own unknown channel added as a case. Its converse,
+   > `test_an_injected_validity_guard_is_not_a_user_negation`, pins the other side. Correctness was
+   > checked against a NumPy SQL oracle over 24 combinations — {mask, sentinel} × {indexed,
+   > unindexed} × 6 expression shapes including `|` and the string form — all agreeing exactly.
+
+Checked and reported clean by the sweep: the Kleene channels and their reflected operators, the
+masked min/max row-extremum substitution, the `FLAG_HAS_NAN` bail, `_sentinel_can_match`'s guard
+elision, CSV `\N`/`\E` round-trip, Arrow/persistence/`extend`-from-table round-trips,
+`__setitem__`/`assign`/`add_column(default=None)` validity bookkeeping, groupby null keys, and
+`copy()`'s watermark fix.
+
 Checked and clean, for the record: the full `tests/ctable` suite (2629 tests) passes on the
 branch; the `extend()` crash-safety ordering carries its do-not-reorder comment; the conditional
 version-3 gate matches the design; Arrow export of sorted views, filtered views, and holed tables

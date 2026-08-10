@@ -358,11 +358,38 @@ def test_a_pipe_inside_a_string_literal_is_not_an_or():
     assert not _expression_defeats_global_null_filter("(a > 1) & (b < 2)")
 
 
-def test_a_negation_also_defeats_the_global_null_filter():
-    """Kleene negation is the second shape a global filter cannot express:
-    ``~(unknown & false)`` is true, so the null row it would drop qualifies."""
+def test_a_negation_over_a_combination_defeats_the_global_null_filter():
+    """Kleene negation is the second shape a global filter cannot express.
+
+    ``~(unknown & false)`` is true, so the null row a global filter would drop
+    qualifies -- and that shape is always a negation *of a boolean combination*.
+    Negating a single leaf keeps nulls out either way: SQL says a null satisfies
+    neither a predicate nor its negation.
+    """
     from blosc2.ctable_indexing import _expression_defeats_global_null_filter
 
-    assert _expression_defeats_global_null_filter("~(a > 1)")
-    assert _expression_defeats_global_null_filter("not (a > 1)")
     assert _expression_defeats_global_null_filter("~((a > 1) & (b < 2))")
+    assert _expression_defeats_global_null_filter("not (a > 1 and b < 2)")
+    assert _expression_defeats_global_null_filter("~(~(a > 1))")
+    # The rewriter's own unknown channel, which is what makes a null match.
+    assert _expression_defeats_global_null_filter("(~(a > 1) & __nv0) & ~(~__nv0 & (b < 2))")
+
+
+def test_an_injected_validity_guard_is_not_a_user_negation():
+    """Every operator-form predicate over a sentinel column carries a ``~``.
+
+    ``Column._null_aware_compare`` builds ``result & ~<null predicate>``, so
+    ``(t.a > 90)`` reaches the planner as ``((o0 > 90) & ~((o0 == -1)))``.
+    Reading that as a user's negation cost the most ordinary query on a nullable
+    column its exact plan, for a shape where filtering nulls globally is not
+    merely safe but exactly right.  A guard always negates a simple leaf.
+    """
+    from blosc2.ctable_indexing import _expression_defeats_global_null_filter
+
+    assert not _expression_defeats_global_null_filter("((o0 > 90) & ~((o0 == -1)))")
+    assert not _expression_defeats_global_null_filter("((o0 > 5.0) & ~(isnan(o0)))")
+    assert not _expression_defeats_global_null_filter("~(a > 1) & (a != -1)")
+    assert not _expression_defeats_global_null_filter("~(a > 1)")
+    # An unrecognized call is not trusted: the string rewriter treats it as
+    # two-valued and emits no guard, so a null could satisfy the negation.
+    assert _expression_defeats_global_null_filter("~f(a)")

@@ -198,6 +198,22 @@ def _expression_defeats_global_null_filter(expression: str) -> bool:
     contain one (``name == 'a|b'``), and the answer decides whether a nullable
     indexed column may keep its index -- so it is worth parsing for.
     Unparseable input answers True, which is the conservative side.
+
+    **Not every negation is a user's.** ``Column._null_aware_compare`` builds a
+    sentinel column's guard as ``result & ~<null predicate>``, so *every*
+    operator-form predicate over one carries a ``~`` that the user never wrote:
+    ``(t.a > 90)`` is ``((o0 > 90) & ~((o0 == -1)))``.  Answering True for it
+    took the index away from the most ordinary query there is -- measured at
+    19.8x on 1M rows -- while filtering those nulls globally is not merely safe
+    there but exactly right, since a guarded conjunction matches no null row.
+
+    The two are told apart by what the negation *wraps*.  A validity guard
+    always negates a **simple leaf**: a comparison against the sentinel, or
+    ``isnan`` for a NaN one.  A negation that changes whether a null can match
+    wraps a boolean combination instead -- Kleene's ``~(unknown & false)`` is
+    true, and that shape is always ``~`` of an ``&``/``|`` tree (see
+    ``blosc2.ctable_nulls._NullPredicateRewriter._channels``).  Anything that is
+    not recognizably a guard keeps the conservative answer.
     """
     try:
         tree = ast.parse(expression, mode="eval")
@@ -208,9 +224,29 @@ def _expression_defeats_global_null_filter(expression: str) -> bool:
             return True
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
             return True
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.Not, ast.Invert)):
+        if (
+            isinstance(node, ast.UnaryOp)
+            and isinstance(node.op, (ast.Not, ast.Invert))
+            and not _negates_a_simple_leaf(node.operand)
+        ):
             return True
     return False
+
+
+def _negates_a_simple_leaf(operand: ast.AST) -> bool:
+    """Whether a negation's *operand* is a leaf, so the negation cannot un-exclude a null.
+
+    A comparison or a bare operand reference is a leaf; so is ``isnan(x)``,
+    which is how a NaN sentinel spells its guard.  Other calls are deliberately
+    **not** trusted: the string rewriter treats an unrecognized call as
+    two-valued and emits no guard for it, so a null row can satisfy ``~f(a)``
+    there and a global filter would drop a row the scan keeps.
+    """
+    if isinstance(operand, (ast.Compare, ast.Name, ast.Attribute)):
+        return True
+    return (
+        isinstance(operand, ast.Call) and isinstance(operand.func, ast.Name) and operand.func.id == "isnan"
+    )
 
 
 class _DictRankWrapper:
