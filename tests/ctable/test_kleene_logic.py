@@ -33,6 +33,7 @@ import dataclasses
 
 import numpy as np
 import pytest
+from utf8_compat import needs_utf8
 
 import blosc2
 from blosc2.ctable import NullableBoolExpr
@@ -316,7 +317,17 @@ KIND_CASES = [
         b"mm",
         b"ZZZZZZZZ",
     ),
-    ("utf8", blosc2.utf8, str, ["aa", "zz", None, "yy"], "mm", "__BLOSC2_NULL__"),
+    # The factory is passed uncalled, so collection survives on NumPy 1.x and it
+    # is the test body that would raise; the mark is what keeps it from running.
+    pytest.param(
+        "utf8",
+        blosc2.utf8,
+        str,
+        ["aa", "zz", None, "yy"],
+        "mm",
+        "__BLOSC2_NULL__",
+        marks=needs_utf8,
+    ),
 ]
 
 
@@ -360,6 +371,7 @@ def test_dictionary_inequality_no_longer_returns_nulls():
     assert (t.v != "Uber").is_null().tolist() == [False, False, True, False]
 
 
+@needs_utf8
 def test_utf8_negation_drops_nulls():
     Row = dataclasses.make_dataclass(
         "R",
