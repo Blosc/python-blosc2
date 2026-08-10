@@ -582,6 +582,61 @@ def test_a_converted_column_round_trips_through_arrow():
     assert arrow.column("a").to_pylist() == [True, None, False]
 
 
+def nested_table(null_storage="mask"):
+    """A table with a struct column beside a nullable scalar one."""
+    pa = pytest.importorskip("pyarrow")
+    return blosc2.CTable.from_arrow(
+        pa.table(
+            {
+                "a": pa.array([1, None, 3], pa.int64()),
+                "trip": pa.array([{"lon": 1.0, "lat": 2.0}] * 3),
+            }
+        ),
+        null_storage=null_storage,
+    )
+
+
+def test_converting_keeps_a_struct_column_nested():
+    """Conversion must not reach outside the column it converts.
+
+    ``_detach_schema`` deep-copies the specs so an in-place rewrite cannot
+    relabel the source table's columns, and it has to leave everything *else*
+    the schema carries alone: ``metadata["nested"]``, which drives the
+    reconstruction, and the logical ``trip`` parent in ``columns_by_name``,
+    which is absent from ``columns`` precisely because it is not a physical
+    column.
+    """
+    t = nested_table()
+    assert t.to_arrow().schema.names == ["a", "trip"]
+
+    converted = t.convert_nulls("a", to="sentinel", null_value=-1)
+    assert converted.to_arrow().schema.names == ["a", "trip"]
+    assert converted.to_arrow().column("a").to_pylist() == [1, None, 3]
+    assert converted.to_arrow().column("trip").to_pylist()[0] == {"lon": 1.0, "lat": 2.0}
+
+
+def test_a_no_op_conversion_leaves_a_nested_table_alone():
+    """The damaging shape: nothing to convert, so nothing may change.
+
+    ``_convert_nulls_inplace`` detaches the schema before it looks at whether
+    there is any work, so a table with no nullable column at all went through
+    the same path -- and came back flattened.
+    """
+    pa = pytest.importorskip("pyarrow")
+    t = blosc2.CTable.from_arrow(
+        pa.table({"id": pa.array([1, 2, 3], pa.int64()), "trip": pa.array([{"lon": 1.0, "lat": 2.0}] * 3)})
+    )
+    assert t.convert_nulls().to_arrow().schema.names == ["id", "trip"]
+
+
+def test_converting_does_not_relabel_the_source_schema():
+    """The guarantee _detach_schema exists for, still holding after the fix."""
+    t = nested_table()
+    converted = t.convert_nulls("a", to="sentinel", null_value=-1)
+    assert converted["a"].null_storage == "sentinel"
+    assert t["a"].null_storage == "mask"
+
+
 def test_extending_a_converted_column_accepts_none():
     t = one_col([5, -1], blosc2.int64(nullable=True, null_value=-1))
     converted = t.convert_nulls("a", to="mask")

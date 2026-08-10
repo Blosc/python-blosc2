@@ -11209,13 +11209,32 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         thing that does not.  Conversion rewrites specs **in place**, and without
         this a converted copy would reach back and relabel its source's columns
         too, leaving that table reporting a storage its data does not use.
+
+        Only the specs are replaced, and *nothing else about the schema moves*.
+        Two things made that harder than it looks, and both flattened a struct
+        column -- ``trip`` exported as ``trip.lon``/``trip.lat`` -- when a
+        conversion, or merely a no-op request for one, ran over a nested table:
+
+        - ``dataclasses.replace`` rather than a fresh ``CompiledSchema``, which
+          would drop ``metadata`` (``metadata["nested"]`` drives the
+          reconstruction and is serialized with the schema) and
+          ``validator_model``.
+        - ``columns_by_name`` is **not** ``{c.name for c in columns}``.  It also
+          carries the logical parent of a nested group -- a ``StructSpec`` entry
+          for ``trip`` beside its ``trip.lon``/``trip.lat`` leaves -- which
+          ``_export_arrow_names`` looks up precisely because it is absent from
+          ``col_names``.  Rebuilding the dict from ``columns`` silently dropped
+          those parents.
+
+        An in-place conversion then persisted the damage through ``save_schema``.
         """
         columns = [dataclasses.replace(c, spec=copy.deepcopy(c.spec)) for c in self._schema.columns]
-        self._schema = CompiledSchema(
-            row_cls=self._schema.row_cls,
-            columns=columns,
-            columns_by_name={c.name: c for c in columns},
-        )
+        detached = {c.name: c for c in columns}
+        columns_by_name = {
+            name: detached.get(name) or dataclasses.replace(cc, spec=copy.deepcopy(cc.spec))
+            for name, cc in self._schema.columns_by_name.items()
+        }
+        self._schema = dataclasses.replace(self._schema, columns=columns, columns_by_name=columns_by_name)
 
     def _convert_nulls_inplace(self, targets: list[tuple[str, Any]], to: str) -> None:
         """Rewrite each target column's null channel, one column at a time.
