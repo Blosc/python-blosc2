@@ -843,7 +843,17 @@ class NullChannel:
             # Zip values against validity chunk for chunk.  The sidecar shares
             # the column's row grid (see CTable._null_mask_grid), so the two
             # streams stay aligned without any re-chunking.
-            null = self.null_mask()
+            #
+            # The flags must be gathered in **physical** order, because that is
+            # the order the values arrive in: ``iter_chunks`` walks the validity
+            # array chunk by chunk and never consults a view's ordering.
+            # ``null_mask()`` answers in *view* order, so using it here paired
+            # each value with a different row's nullity on any sorted view --
+            # dropping live values and letting the fill through as data.  Both
+            # streams read the same ``_valid_rows``, which is what keeps a
+            # filtered view's rows in step too.
+            live = np.flatnonzero(np.asarray(col._valid_rows[:]))
+            null = ~np.asarray(valid[live]) if len(live) else np.zeros(0, dtype=np.bool_)
             offset = 0
             for chunk in col.iter_chunks():
                 keep = ~null[offset : offset + len(chunk)]

@@ -425,6 +425,57 @@ def test_reductions_skip_nulls():
     assert t["a"].mean() == 3.0
 
 
+def ordered_pair(storage):
+    """A table whose sorted order differs from its physical order.
+
+    The key column is deliberately shuffled, so a reduction that reads nullity
+    in one order and values in the other pairs the wrong rows.
+    """
+    spec = blosc2.float64(null_storage=storage)
+    return table(
+        list(zip([5, 1, 4, 2, 3], [10.0, None, 30.0, None, 50.0], strict=True)),
+        k=blosc2.int64(),
+        v=spec,
+    )
+
+
+@pytest.mark.parametrize("storage", ["mask", "sentinel"])
+def test_reductions_on_an_ordered_view_pair_the_right_rows(storage):
+    """Values arrive physically ordered, so the null flags must too.
+
+    ``iter_chunks`` walks the validity array chunk by chunk and never consults a
+    view's ordering, while ``null_mask()`` answers in view order.  Reading the
+    second against the first dropped live values and let the fill through as
+    data -- ``sum()`` came back ``nan`` from a column whose nulls are not NaN.
+    """
+    t = ordered_pair(storage)
+    view = t.sort_by("k", view=True)
+    assert view["v"].sum() == 90.0
+    assert sorted(view["v"].unique().tolist()) == [10.0, 30.0, 50.0]
+    assert view["v"].mean() == 30.0
+
+
+@pytest.mark.parametrize("storage", ["mask", "sentinel"])
+def test_the_two_storages_reduce_an_ordered_view_alike(storage):
+    """The differential that would have caught this: mask must match sentinel."""
+    view = ordered_pair(storage).sort_by("k", view=True)
+    reference = ordered_pair("sentinel").sort_by("k", view=True)
+    assert view["v"].sum() == reference["v"].sum()
+    assert sorted(view["v"].unique().tolist()) == sorted(reference["v"].unique().tolist())
+
+
+def test_reductions_on_a_descending_view_pair_the_right_rows():
+    view = ordered_pair("mask").sort_by("k", ascending=False, view=True)
+    assert view["v"].sum() == 90.0
+
+
+def test_reductions_on_an_ordered_view_with_deletions():
+    """Deletions and ordering at once: both streams read the same _valid_rows."""
+    t = ordered_pair("mask")
+    t.delete(0)  # drops the row holding 10.0
+    assert t.sort_by("k", view=True)["v"].sum() == 80.0
+
+
 def test_null_count_with_deletions():
     t = simple([None, 1, None, 3])
     t.delete(0)
