@@ -170,9 +170,10 @@ dtype and sentinel it was written with.
 
 Under mask storage ``None`` is the way to write a null — ``t.append((None,))``,
 ``t["price"][3] = None`` — which a fixed-width sentinel column cannot accept at
-all (there you write the sentinel yourself).  Reads are unchanged: ``col[:]``
-returns values with a deterministic fill in the null slots, and
-:meth:`Column.is_null` is what tells you which those are.
+all (there you write the sentinel yourself).  It broadcasts like any other
+value, so ``t["price"][2:5] = None`` marks three rows null in one write.  Reads
+are unchanged: ``col[:]`` returns values with a deterministic fill in the null
+slots, and :meth:`Column.is_null` is what tells you which those are.
 
 One semantic difference is deliberate: in a **mask** column ``NaN`` is a
 *value*, following Arrow, and only ``mask=False`` is a null.  A sentinel float
