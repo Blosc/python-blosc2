@@ -303,6 +303,70 @@ def test_setitem_index_list_replaces_validity():
 
 
 # ---------------------------------------------------------------------------
+# One value for many rows.  Assigning a scalar to a selection has always
+# broadcast it, the way NumPy does, and mask storage must not take that away --
+# it is the default now, so ``t.a[i:j] = value`` on a plain nullable column
+# goes through here.  ``None`` broadcasts the same way, which is the mask
+# spelling of "make these rows null".
+# ---------------------------------------------------------------------------
+
+
+def keys_for(t):
+    """The three multi-row key forms, each selecting rows 0 and 1."""
+    return [slice(0, 2), np.array([True, True, False]), [0, 1]]
+
+
+@pytest.mark.parametrize("key_index", [0, 1, 2], ids=["slice", "bool_mask", "index_list"])
+def test_setitem_broadcasts_a_scalar_over_every_key_form(key_index):
+    t = simple([1, 2, 3])
+    t["a"][keys_for(t)[key_index]] = 7
+    assert t["a"][:].tolist() == [7, 7, 3]
+    assert t["a"].is_null().tolist() == [False, False, False]
+
+
+@pytest.mark.parametrize("key_index", [0, 1, 2], ids=["slice", "bool_mask", "index_list"])
+def test_setitem_broadcasts_none_over_every_key_form(key_index):
+    t = simple([1, 2, 3])
+    t["a"][keys_for(t)[key_index]] = None
+    assert t["a"].is_null().tolist() == [True, True, False]
+
+
+@pytest.mark.parametrize(("label", "spec", "value"), WRITEABLE_SPECS)
+def test_setitem_broadcasts_one_cell_for_every_kind(label, spec, value):
+    t = table([(value,), (value,), (value,)], a=spec)
+    if label == "utf8":
+        # A varlen column has never accepted a broadcast value -- it says so in
+        # its own words, and a sentinel utf8 column says exactly the same.
+        with pytest.raises(ValueError, match="Length mismatch"):
+            t["a"][0:2] = value
+    else:
+        t["a"][0:2] = value
+        assert t["a"].is_null().tolist() == [False, False, False]
+    t["a"][0:2] = None
+    assert t["a"].is_null().tolist() == [True, True, False]
+
+
+def test_broadcasting_a_scalar_matches_sentinel_storage():
+    """The two storages agree on a broadcast write, value and validity alike."""
+    mask = simple([1, 2, 3])
+    sentinel = simple([1, 2, 3], spec=blosc2.int64(null_storage="sentinel", null_value=-9))
+    mask["a"][0:2] = 7
+    sentinel["a"][0:2] = 7
+    assert mask["a"][:].tolist() == sentinel["a"][:].tolist()
+    assert mask["a"].is_null().tolist() == sentinel["a"].is_null().tolist()
+
+
+def test_broadcasting_none_clears_a_previously_written_value():
+    """A broadcast null replaces validity rather than merging with it."""
+    t = simple([1, None, 3])
+    t["a"][0:3] = None
+    assert t["a"].null_count() == 3
+    t["a"][0:3] = 5
+    assert t["a"].null_count() == 0
+    assert t["a"][:].tolist() == [5, 5, 5]
+
+
+# ---------------------------------------------------------------------------
 # The null API
 # ---------------------------------------------------------------------------
 

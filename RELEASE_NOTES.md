@@ -173,6 +173,18 @@ and has its own spelling for nulls (`None` among the values).
   were data, and `from_csv` had nothing to put in an empty field and raised.
   Both go through the sidecar now: an empty CSV field is a null in either
   direction. Sentinel columns keep writing their sentinel, unchanged.
+- **Assigning one value to many rows raised on a mask-storage column.**
+  `t.a[0:2] = 7` — and the same write through a boolean mask or an index list —
+  failed with `TypeError: iteration over a 0-d array`, because the write path
+  looked for nulls *inside* a value that was a single cell rather than a batch.
+  Scalar broadcast has always worked for fixed-width columns and works again
+  here. `t.a[0:2] = None` broadcasts too, making every selected row null.
+- **`convert_nulls(to="sentinel")` refused over a value in a deleted row.** The
+  collision check scanned physical slots, so a proposed sentinel present only in
+  a row already deleted — unreadable, and dropped by the next `compact()` —
+  blocked the conversion. Only live rows are consulted now, and the row named in
+  the refusal is the logical one the caller can index rather than a physical
+  slot.
 
 
 ## Changes from 4.10.0 to 4.10.1

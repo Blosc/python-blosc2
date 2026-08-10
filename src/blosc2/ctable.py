@@ -11156,22 +11156,35 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         return null_value
 
     def _convert_sentinel_clash(self, col: Column, spec, null_value) -> int | None:
-        """The first non-null row already holding *null_value*, or ``None``.
+        """The first live non-null row already holding *null_value*, or ``None``.
 
         A NaN sentinel never clashes: under mask storage NaN is a value, but it
         is one the sentinel model has always spelled "null", so folding the two
         together is the documented semantic change rather than data loss.
+
+        Only **live** rows are consulted, and the answer is a *logical* row
+        number.  A deleted row's slot keeps whatever it held until the next
+        ``compact()``, but no API can read it and the next compaction drops it,
+        so a value confined to dead slots is not data the conversion could
+        relabel -- which is the whole reason this check exists.
         """
         if is_nan_sentinel(null_value):
             return None
         valid_arr = self._null_mask(col._col_name)
+        live = self._valid_rows
+        # Dense: no deletions, so every physical slot is a live row and its
+        # position is already the logical one.
+        dense = self._resolve_last_pos() == self._n_rows
         item_ndim = col.item_ndim if col.is_ndarray else 0
         for start, stop, raw in self._iter_convert_spans(col._col_name):
             hit = sentinel_mask(raw, null_value, item_ndim=item_ndim)
             if valid_arr is not None:
                 hit &= np.asarray(valid_arr[start:stop], dtype=bool)
+            if not dense:
+                hit &= np.asarray(live[start:stop], dtype=bool)
             if hit.any():
-                return start + int(np.flatnonzero(hit)[0])
+                phys = start + int(np.flatnonzero(hit)[0])
+                return phys if dense else int(np.count_nonzero(np.asarray(live[:phys])))
         return None
 
     def _iter_convert_spans(self, name: str):

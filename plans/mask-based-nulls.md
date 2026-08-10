@@ -1037,3 +1037,66 @@ channel to one more builder rather than to teach a new subsystem about nulls.
   `_exclude_null_positions` go away entirely, put `OR` on the exact-position paths, and give
   `_sorted_slice_positions` (which bails since Phase 7) its window read back. It needs the sort key
   and the external-merge builder to carry validity, in every index kind.
+
+## Post-landing review findings (2026-08-10)
+
+A review pass over the whole branch, cut short before the multi-angle `/code-review` sweep could
+finish (stopped for credit reasons — only its line-by-line angle reported, and re-running the full
+sweep later is worth it). Two confirmed defects, both reproduced against this tree, **both fixed
+2026-08-10** — see the as-built note after each:
+
+1. **Scalar broadcast writes crash on a mask column — every key shape.** `col[0:2] = 7`,
+   `col[bool_mask] = 5`, `col[[1]] = 9` and `col[0:2] = None` all raise
+   `TypeError: iteration over a 0-d array`; the same writes on a sentinel column broadcast fine,
+   and list-valued writes (`col[0:2] = [None, 5]`) work on both storages. The mask write path hands
+   the scalar to batch coercion, where `np.asarray(scalar)` is 0-d and the null-detection
+   iteration dies on it. Since mask is now the **default** storage, this breaks a plain
+   `t.a[i:j] = value` on any freshly created nullable column. Fix by broadcasting the scalar to the
+   key's length before `coerce_batch` (or teaching `split_batch_validity` the 0-d case), and note
+   the test gap that hid it: the `__setitem__` suites always assign list values, never a bare
+   scalar. *(Found by the review's line-by-line angle; verified by hand.)*
+
+   > **Fixed 2026-08-10.** `NullChannel.coerce_batch` now recognizes a **broadcast cell** before it
+   > looks for nulls inside the value, via a new `is_broadcast_cell` in `ctable_nulls.py`. A
+   > non-NA cell is passed through untouched, so the value write broadcasts exactly as it does for
+   > a non-mask column; `None` returns the fill plus an all-invalid array, which makes
+   > `t.a[i:j] = None` the broadcast spelling of "null these rows" — new capability that only mask
+   > storage can offer. Two details decided by looking at what sentinel storage already does rather
+   > than by inventing behavior: **utf8 keeps raising `ValueError: Length mismatch`** for a
+   > broadcast value, because a varlen column has never accepted one and a sentinel utf8 column
+   > says the same thing today (only the `None` form is made to work there, by spelling the fill
+   > out *n* times); and a **1-d array handed to a fixed-shape ndarray column stays a batch**,
+   > since one item and a batch of items differ by dimension alone and misreading one as the other
+   > would write the wrong thing rather than raise. Pinned by 17 tests in `test_null_mask_api.py`,
+   > including one asserting the two storages agree cell for cell on a broadcast write; all 17 fail
+   > when the branch is reverted.
+   >
+   > Not fixed, and out of scope: a **timestamp** column rejects a broadcast scalar under *both*
+   > storages (`IndexError: too many indices for array: array is 0-dimensional`), which predates
+   > this work and lives in the timestamp coercion path, not the null one.
+
+2. **`convert_nulls(to="sentinel")` falsely refuses on a value that lives only in a dead slot.**
+   `_convert_sentinel_clash` (`ctable.py:11158`) intersects its hit mask with the validity sidecar
+   but not with `_valid_rows`, so a proposed sentinel present only in a *deleted* row's physical
+   slot — unobservable, and removed for good by the next `compact()` — refuses the conversion.
+   Repro: mask `int64` `[1, -9, 3, None]`, `delete(1)`, then `convert_nulls(to="sentinel",
+   null_value=-9)` → refused, though no live row holds `-9`. The message also reports the
+   *physical* slot as "row 1", which on a holed table is not the row number the user sees. The fix
+   is one more `&` against `_valid_rows` in the clash scan, plus a logical row number in the
+   message. Low severity — needs deletions plus a collision confined to dead slots — but the
+   refusal contradicts the check's own rationale, which is about *relabelling live rows*.
+
+   > **Fixed 2026-08-10.** Both halves, as described: the scan intersects with `_valid_rows`, and
+   > the reported row is converted to a logical one with `count_nonzero(live[:phys])`. Both are
+   > skipped on a dense table (`_resolve_last_pos() == _n_rows`), where every physical slot is a
+   > live row and its position already *is* the logical one, so the common case reads no extra
+   > array. Pinned by two tests in `test_null_migration.py` — the dead-slot value that must not
+   > block, and the live value that must still block *and* name a row the caller can index — which
+   > fail independently when each half is reverted.
+
+Checked and clean, for the record: the full `tests/ctable` suite (2629 tests) passes on the
+branch; the `extend()` crash-safety ordering carries its do-not-reorder comment; the conditional
+version-3 gate matches the design; Arrow export of sorted views, filtered views, and holed tables
+places nulls on the right rows; overwrite-replaces-validity holds across slice, boolean-mask and
+fancy keys (with list values — see finding 1); and sentinel→mask conversion of a table with
+deleted rows is correct, including a deleted row that held the sentinel.

@@ -230,6 +230,38 @@ def test_a_nan_already_present_does_not_block_the_nan_sentinel():
     assert converted["a"].is_null().tolist() == [False, True, True]
 
 
+def test_a_value_only_in_a_deleted_row_does_not_block_the_conversion():
+    """A dead slot holds no data the conversion could relabel.
+
+    Deleting a row leaves its physical slot untouched until the next
+    ``compact()``, but nothing can read it and compaction drops it, so refusing
+    the conversion over it would block a migration on a value that no longer
+    exists.  The check is about relabelling **live** rows as null.
+    """
+    t = one_col([1, -9, 3, None], blosc2.int64(null_storage="mask"))
+    t.delete(1)
+    assert as_list(t["a"]) == [1, 3, None]
+
+    converted = t.convert_nulls("a", to="sentinel", null_value=-9)
+    assert converted["a"].null_storage == "sentinel"
+    assert as_list(converted["a"]) == [1, 3, None]
+
+
+def test_a_live_value_still_blocks_it_and_the_row_is_the_logical_one():
+    """The refusal survives deletions, and reports a row the caller can index.
+
+    A physical slot number would name a different row than ``col[row]`` on a
+    table with holes, sending the reader to a value that is not the offending
+    one.
+    """
+    t = one_col([1, 2, -9, None], blosc2.int64(null_storage="mask"))
+    t.delete(0)
+    assert as_list(t["a"]) == [2, -9, None]  # the -9 is logical row 1, physical slot 2
+
+    with pytest.raises(ValueError, match="already contains -9 at row 1"):
+        t.convert_nulls("a", to="sentinel", null_value=-9)
+
+
 def test_the_refusal_leaves_the_column_alone():
     t = one_col([*range(-128, 128), None], blosc2.int8(null_storage="mask"), capacity=300)
     with pytest.raises(ValueError):

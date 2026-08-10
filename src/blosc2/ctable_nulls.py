@@ -59,6 +59,7 @@ __all__ = [
     "NullChannel",
     "fill_item_for",
     "fill_value_for",
+    "is_broadcast_cell",
     "is_na_marker",
     "is_nan_sentinel",
     "is_null_value",
@@ -136,6 +137,35 @@ def fill_item_for(spec):
     if isinstance(spec, NDArraySpec):
         return np.full(spec.item_shape, base, dtype=spec.dtype)
     return base
+
+
+def is_broadcast_cell(values) -> builtin_bool:
+    """True when *values* is one cell to spread over every selected row.
+
+    ``col[0:2] = 7`` has always broadcast a scalar across the selection, the
+    same way assigning to a NumPy slice does, and ``col[0:2] = None`` is the
+    mask-storage spelling of the same thing for a null.  Batch coercion has to
+    recognize both before it starts looking for nulls *inside* the value:
+    ``np.asarray(7)`` is 0-d, and iterating it raises rather than yielding one
+    element.
+
+    Only unambiguous single cells qualify.  A list, tuple or array is a batch,
+    including a 1-d array handed to a fixed-shape ndarray column -- there one
+    item and a batch of items differ by dimension alone, and misreading a batch
+    as a cell would write the wrong thing rather than raise.
+    """
+    if is_na_marker(values):
+        return True
+    if isinstance(values, np.ndarray):
+        return values.ndim == 0
+    if isinstance(values, (list, tuple, blosc2.NDArray)):
+        return False
+    # str/bytes are sized but are single cells; the rest are the scalar types a
+    # column can hold -- NumPy scalars (np.generic covers datetime64) and the
+    # Python ones, including datetime for a timestamp column.
+    return isinstance(values, (str, builtin_bytes, builtin_bool, int, float, complex, np.generic)) or (
+        not hasattr(values, "__len__") and not hasattr(values, "__iter__")
+    )
 
 
 def split_batch_validity(values, fill):
@@ -854,11 +884,26 @@ class NullChannel:
 
         Thin wrapper over :func:`split_batch_validity`, which carries the null
         detection rules and the reasoning behind them; all this adds is the
-        column's own fill, and the short-circuit for a column whose nulls do
-        not live in a sidecar at all.
+        column's own fill, the short-circuit for a column whose nulls do not
+        live in a sidecar at all, and the single-cell case below.
+
+        A **broadcast cell** (:func:`is_broadcast_cell`) is one value for all
+        *n* rows rather than a batch of them.  ``None`` there makes every
+        selected row null; anything else is passed through untouched, so the
+        value write broadcasts exactly as it does for a non-mask column and a
+        kind that never accepted a broadcast keeps saying so in its own words.
         """
         if self.kind != NULL_MASK:
             return values, None
+        if is_broadcast_cell(values):
+            if not is_na_marker(values):
+                return values, None
+            fill = self.fill_value
+            if self._col.is_varlen_scalar or self._col.is_list:
+                # These are written cell by cell, so they need the fill spelled
+                # out n times where the fixed-width kinds broadcast one.
+                fill = [fill] * n
+            return fill, np.zeros(n, dtype=np.bool_)
         return split_batch_validity(values, self.fill_value)
 
     # ------------------------------------------------------------------
