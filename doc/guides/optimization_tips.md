@@ -82,26 +82,110 @@ The output passes light uniformity checks against NumPy's PCG64 (the benchmark s
 
 *Benchmark for this tip: [`tip_11_dsl_random.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_11_dsl_random.py)*
 
-## Let `@blosc2.jit` compile control flow instead of tracing it
+## Understanding `@blosc2.jit` compile control flow
 
-{func}`@blosc2.jit <blosc2.jit>` normally works by *tracing*: it calls your function once with proxy operands to record a `LazyExpr` string, so an `if`/`for`/`while` in the body only ever sees one (traced) path — the rest is silently lost. When the body contains control flow **and** it fits the [DSL grammar](../reference/dsl_syntax.md), `jit` detects this at decoration time and instead compiles the whole function with the same miniexpr engine that powers `@blosc2.dsl_kernel`, so every branch and loop runs as written, once per chunk, on NumPy or NDArray operands directly (no conversion copy).
+There are two routes the {func}`@blosc2.jit <blosc2.jit>` decorator can take because they are good at different things:
+
+- **No control flow → tracing (the default).** `jit` calls your function once with proxy operands, records the `LazyExpr` it builds, and evaluates that expression vectorized over whole chunks. This is the faster route for plain elementwise math.
+- **Control flow → the whole function is compiled.** A traced call only ever walks *one* path through an `if` or a loop, so the other paths would be silently lost. So when `jit` sees control flow and the body fits the DSL grammar, it compiles the entire function with the same miniexpr engine that enables the {func}`@blosc2.dsl_kernel <blosc2.dsl_kernel>` decorator and runs the compiled kernel chunk by chunk.
+
+In short: you can write `if`, `for` and `while` inside a {func}`@blosc2.jit <blosc2.jit>`-decorated function and they will work as intended, provided the body sticks to the [DSL grammar](../reference/dsl_syntax.md). But be aware that this route is different from tracing.
+
+Why the two routes? Because tracing is usually faster when it works: the traced expression is evaluated as one vectorized miniexpr over whole chunks, while a compiled kernel has to loop element by element.  Keep reading for examples of both, and the knobs to force one route or the other.
+
+### An example: Mandelbrot escape times
+
+Escape-time counting is a per-pixel loop with an early `break` — exactly the shape tracing cannot represent. Let's compute the escape count of a 512×512 patch of the Mandelbrot set (`max_iter=64`) and compare the ways of running it:
 
 ```python
-# Without this detection, jit would call the function once, record only the
-# branch that one call happened to take, and reuse it for every pixel — not
-# a real per-pixel escape-time loop.
-@blosc2.jit
-def mandelbrot(cr, ci, max_iter):
-    zr, zi, n = 0.0, 0.0, 0
+def mandel_py(cr, ci, max_iter):  # plain Python: one loop per pixel
+    zr = zi = 0.0
+    n = 0
+    while zr * zr + zi * zi <= 4.0 and n < max_iter:
+        zr, zi = zr * zr - zi * zi + cr, 2 * zr * zi + ci
+        n += 1
+    return n
+
+
+@blosc2.jit  # the same loop, written the natural way — jit detects the
+# ^^^^^^^^^   # control flow at decoration time and compiles this kernel whole
+def mandel_jit(cr, ci, max_iter):
+    zr = 0.0
+    zi = 0.0
+    n = 0
     for _ in range(max_iter):
         if zr * zr + zi * zi > 4.0:
             break
-        zr, zi = zr * zr - zi * zi + cr, 2 * zr * zi + ci
+        zr2 = zr * zr - zi * zi + cr
+        zi = 2 * zr * zi + ci
+        zr = zr2
         n += 1
-    return n  # jit detects the control flow and compiles this kernel whole
+    return n
+
+
+iterations = mandel_jit(CR, CI, 64)  # CR, CI: the two float32 grids
 ```
 
-Functions **without** control flow always trace, even when they happen to be DSL-valid: tracing plus vectorized `ne_evaluate`/miniexpr is faster than whole-kernel miniexpr for pure elementwise expressions, so `jit` only takes the DSL route when tracing would silently lose branches/loops. Use `jit(strict=True)` to force the DSL route regardless (raises at decoration time if the function can't be compiled), or `jit(strict=False)` to force tracing even with control flow (only correct when branches depend on plain Python values, not on the arrays themselves).
+The benchmark times these four variants, and checks that every one of them returns escape counts bit-identical to the pure-Python reference (a fifth, `@blosc2.jit(strict=True)`, is checked too; it is the same route as `mandel_jit`, just forced):
+
+- `mandel_py` — plain Python, one loop per pixel
+- `mandel_numpy` — vectorized NumPy mask iteration
+- `mandel_jit` — the `@blosc2.jit` above: control flow detected, kernel compiled whole
+- `mandel_cc` — same, with `@blosc2.jit(jit_backend="cc")`: the system C compiler instead of the bundled tcc (tradeoffs in a section of their own below)
+
+![Mandelbrot escape times across jit modes](optim_tips/tip_15a_jit_control_flow.png)
+
+The default `@blosc2.jit` is **~140x faster than the Python loop** and **~2x faster than the best plain-NumPy version**, and it is simply the loop you would have written anyway. The NumPy version, by contrast, costs 15 lines of `alive`/`escaped` mask bookkeeping plus an overflow trap (after a pixel escapes, its `zr, zi` keep growing and go `inf`/`nan` in float32, so the mask loop must not rely on them).
+
+Operands may equally be on-disk {class}`~blosc2.NDArray` objects: the same kernel over `blosc2.asarray()` views of the two grids runs at the same speed and returns a plain NumPy array.
+
+#### Gotcha: silent fallback to tracing
+
+The DSL grammar is narrower than Python, and a body that misses it falls back to tracing *silently* — you only find out when the call fails. Two rules bite in this example:
+
+- **Simple assignments only.** The tuple assignment `zr, zi = ...` of the Python reference is not valid DSL; that is why the jit version uses a `zr2` temporary.
+- **No docstring in the kernel body.**
+
+The [DSL syntax reference](../reference/dsl_syntax.md) has the full grammar. To turn that silent fallback into a hard error, decorate with `@blosc2.jit(strict=True)`: it forces the DSL route and raises `DSLSyntaxError` at *decoration* time if the function cannot be compiled. It is also the only way to reach the DSL route through `df.apply(..., engine=blosc2.jit(strict=True))`.
+
+The opposite knob, `strict=False`, forces tracing even when there is control flow. On this function it fails loudly — tracing evaluates `if zr * zr + zi * zi > 4.0` on an array, which raises `ValueError`. The dangerous case is a branch on a plain Python value instead (say `if max_iter > 100`): tracing records only the path that one call happened to take, and that path is then reused for every element, quietly. So use `strict=False` only when the branches depend on Python values, never on the arrays.
+
+### Element-wise functions still trace by default
+
+If compiling the whole function is this good, why doesn't `jit` do it for everything? Because without control flow, tracing wins: the traced expression is evaluated as one vectorized miniexpr over whole chunks, while a compiled kernel has to loop element by element. Here is a heavy elementwise mix of transcendental functions:
+
+```python
+@blosc2.jit
+def heavy(x):
+    return (
+        np.sin(x)
+        + np.cos(x * 2)
+        + np.exp(x * 0.5) * np.sin(x * 3)
+        + np.sqrt(np.abs(x))
+        + np.log1p(np.abs(x))
+    )
+
+
+# The same body decorated with @blosc2.jit(strict=True) forces the DSL route.
+```
+
+Measured over 8M float32 values:
+
+![Elementwise: tracing vs forced DSL](optim_tips/tip_15b_jit_elementwise.png)
+
+The default `@blosc2.jit` (which traces) is the faster route here: forcing the DSL route with `strict=True` is **~1.8x slower** with the bundled tcc, and only matches tracing when compiled with `jit_backend="cc"` (the plots show the exact times). Note that `jit_backend="cc"` alone does *not* switch an elementwise function to the compiled route; it keeps tracing, at the same speed.
+
+So, use `strict=True` when you want the compiled-kernel guarantee, even if sometimes it may cost you speed.
+
+### Pros and cons of forcing the system compiler
+
+`jit_backend="cc"` is roughly **2x faster** in steady state on both kernels above (mandelbrot and elementwise alike), with identical results.
+
+The price is the one-time compile: the first call pays **hundreds of milliseconds** while the system compiler builds a shared object, where [tcc](https://bellard.org/tcc/) (the default) takes only **tens of milliseconds**. The artifact for the `cc` backend is cached on disk, so later processes load it in milliseconds. So `cc` pays off for kernels you call repeatedly in the same run (or across runs), or when run time is much larger than compile time. It also requires a C compiler and a writable cache directory.
+
+The same switch is available globally through the `BLOSC_ME_JIT=cc` environment variable, which wins over the keyword argument.
+
+*Benchmark for this tip: [`tip_15_jit_control_flow.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_15_jit_control_flow.py)*
 
 ## Align your reads with the double partition
 
@@ -326,13 +410,11 @@ Compression squeezes most of the UCS-4 padding away, so the on-disk gap is nothi
 
 The columns themselves barely differ between the two versions, which is worth knowing: compression works block by block, so repeated text only saves space when the repeats happen to sit close together, and here they are scattered at random. If your values repeat that heavily, {func}`dictionary() <blosc2.dictionary>` is the flavour built to exploit it — see {ref}`the next tip <DictionaryTip>`.
 
-That last limit is why CTable keeps four string flavours rather than one: {func}`dictionary() <blosc2.dictionary>` owns heavily repeated values, {class}`string <blosc2.string>` owns bounded identifiers, and {func}`utf8() <blosc2.utf8>` is the default for text you cannot bound. The fourth, {func}`vlstring() <blosc2.vlstring>`, is the one that made truly variable-length text possible before `utf8()` existed — it predates NumPy's own variable-width dtype, and is still the only flavour on NumPy < 2.0 — and it keeps what `utf8()` cannot express: a real `None` that no string value can imitate, and, through {func}`vlbytes() <blosc2.vlbytes>`, arbitrary bytes that need not be valid UTF-8 at all. See {ref}`Choosing a string column type <ChoosingStringType>`.
-
 *Benchmark for this tip: [`tip_13_utf8_strings.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_13_utf8_strings.py)*
 
 (DictionaryTip)=
 
-## Repeated text? Store it as `dictionary()`, not `utf8()`
+## Repeated text? Store it as `dictionary()`
 
 The previous tip picks a flavour by *length*; this one corrects the choice by *repetition*. A {func}`dictionary() <blosc2.dictionary>` column stores one `int32` code per row plus a single copy of each distinct value — Arrow's dictionary encoding — so the text is written once and everything downstream works on integers.
 
@@ -368,13 +450,19 @@ On disk, one `int32` per row plus a single copy of each value beats storing ever
 
 Reading the whole column back is the one place `dictionary()` is slower, since the codes have to become strings again. What you get is a Python `list` whose entries are *shared* `str` objects — one per distinct value, not one per row — which is why its peak memory is several times lower than utf8's. It is also not a NumPy array, so vectorized string operations are not available on it. If your workload materializes the column far more often than it groups or filters, that trade may not be one you want.
 
-### When it stops paying
+### When `dictionary()` is not the right choice
 
-All three figures agree on where the flavour runs out, and for a single reason: opening a dictionary column builds its value→code map by decoding the whole dictionary, which at a million distinct values costs about half a second and hundreds of MB *before any work starts*. That one cost is what turns the reads, the `==` scans and the `isin()` tests around at once — and by then the codes are dead weight too, leaving the column slightly larger on disk than plain utf8. Writing is affected as well, since almost every incoming row adds a new entry. So `dictionary()` is for columns whose values repeat; when nearly every row is different, {func}`utf8() <blosc2.utf8>` is the right home for it.
+All three figures clearly show that high-cardinality is not a good fit for `dictionary()`, and for a single reason: opening a dictionary column builds its value→code map by decoding the whole dictionary, which at a million distinct values costs about half a second and hundreds of MB *before any work starts*.
 
-Two limits worth knowing before you switch. Filters are `==` and `isin()` only — ordering comparisons, `startswith`/substring searches, and string-returning expressions are not available on a dictionary column, so a column you need to search by prefix is not a dictionary column. And the values measured here are long free text, which flatters the storage figures; real category columns (`"pending"`, `"NYC"`) are short, where utf8 already costs little per row. The grouping and membership wins do not depend on value length.
+Also, have in mind that filters shown here are `==` and `isin()` only — ordering comparisons, `startswith`/substring searches, and string-returning expressions are not available on a dictionary column. Furthermore, the values measured here are long free text, but real category columns (`"pending"`, `"NYC"`) are short, so `string()` may have an advantage wrt `utf8()` / `dictionary()`.
 
-Together with the previous tip, that is the whole decision: {class}`string <blosc2.string>` for short bounded identifiers, `dictionary()` when the values repeat, `utf8()` for everything else. See {ref}`Choosing a string column type <ChoosingStringType>`.
+### Recommended usage summary
+
+By combining the tips here, we see why CTable keeps four string flavours rather than one: {func}`dictionary() <blosc2.dictionary>` for dealing with heavily repeated values, {class}`string <blosc2.string>` owns short bounded identifiers, and {func}`utf8() <blosc2.utf8>` is the default for text you cannot bound. The fourth, {func}`vlstring() <blosc2.vlstring>`, is the one that made truly variable-length text possible before `utf8()` existed — it predates NumPy's 2.0 own variable-width dtype, and is still the only flavour that can do that on NumPy < 2.0.
+
+Finally, and you can also store arbitrary bytes that need not be valid UTF-8 at all through {func}`vlbytes() <blosc2.vlbytes>`. See {ref}`Choosing a string column type <ChoosingStringType>`.
+
+But remember, if you need best efficiency, nothing replaces your own experimentation. For more info, see {ref}`Choosing a string column type <ChoosingStringType>`.
 
 *Benchmark for this tip: [`tip_14_dictionary.py`](https://github.com/Blosc/python-blosc2/blob/main/bench/optim_tips/tip_14_dictionary.py)*
 

@@ -14,9 +14,14 @@ env:
   # Skip testing on aarch64 for now, as it is emulated on GitHub Actions and takes too long
   # Now that github provides native arm64 runners, we can enable tests again
   # CIBW_TEST_SKIP: "*linux*aarch64*"
-  # Skip PyPy wheels for now (numexpr needs some adjustments first)
   # musllinux takes too long to build, and it's not worth it for now
-  CIBW_SKIP: "pp* *musllinux* *-win32"
+  # (PyPy needs opting in via `enable` since cibuildwheel 4, so no pp* here)
+  CIBW_SKIP: "*musllinux* *-win32"
+  # Intel Macs are EOL and Rust-based deps (pydantic-core) publish no cp315
+  # x86_64 wheels yet, so `pip install` of the test venv would cross-compile
+  # them from the arm64 runner -- which lacks the x86_64-apple-darwin Rust
+  # target.  The wheel itself builds fine, so ship it and skip only its test.
+  CIBW_TEST_SKIP: "cp315-macosx_x86_64"
   # Use explicit generator/compiler env vars; CMAKE_ARGS with spaces is not split on Windows.
   CIBW_ENVIRONMENT_WINDOWS: >-
     CMAKE_GENERATOR=Ninja
@@ -31,7 +36,7 @@ jobs:
     permissions:
       contents: write
     env:
-      CIBW_BUILD: ${{ matrix.cibw_build }}
+      CIBW_BUILD: ${{ matrix.cibw_pattern }}
       CIBW_ARCHS_LINUX: ${{ matrix.arch }}
       CIBW_ARCHS_MACOS: "x86_64 arm64"
     strategy:
@@ -41,13 +46,13 @@ jobs:
           # Linux x86_64 builds
           - os: ubuntu-latest
             arch: x86_64
-            cibw_pattern: "cp3{11,12,13,14}-manylinux*"
+            cibw_pattern: "cp3{11,12,13,14,15}-manylinux*"
             artifact_name: "linux-x86_64"
 
           # Linux ARM64 builds (native runners)
           - os: ubuntu-24.04-arm
             arch: aarch64
-            cibw_pattern: "cp3{11,12,13,14}-manylinux*"
+            cibw_pattern: "cp3{11,12,13,14,15}-manylinux*"
             artifact_name: "linux-aarch64"
             # Don't use native runners for now (looks like wait times are too long)
             #runs-on: ["ubuntu-latest", "arm64"]
@@ -55,13 +60,13 @@ jobs:
           # Windows builds
           - os: windows-latest
             arch: x86_64
-            cibw_pattern: "cp3{11,12,13,14}-win64"
+            cibw_pattern: "cp3{11,12,13,14,15}-win_amd64"
             artifact_name: "windows-x86_64"
 
           # macOS builds (universal2)
           - os: macos-latest
             arch: x86_64
-            cibw_pattern: "cp3{11,12,13,14}-macosx*"
+            cibw_pattern: "cp3{11,12,13,14,15}-macosx*"
             artifact_name: "macos-universal2"
     steps:
       - name: Checkout repo
@@ -92,7 +97,7 @@ jobs:
           arch: amd64
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v4.1
+        uses: pypa/cibuildwheel@v4.2
 
       - name: Make sdist
         if: ${{ matrix.os == 'ubuntu-latest' }}
