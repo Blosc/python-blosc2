@@ -26,6 +26,8 @@ import blosc2
 if blosc2.IS_WASM:
     pytest.skip("Textual apps need a terminal driver (termios)", allow_module_level=True)
 
+from tui_wait import wait_for_screen
+
 from blosc2.b2view.app import B2ViewApp, SortByScreen
 from blosc2.b2view.model import StoreBrowser
 
@@ -195,8 +197,7 @@ async def test_sort_key_applies_and_escape_clears(sort_store):
 
         # 'S' opens the sort dropdown listing the FULL-indexed columns.
         await pilot.press("S")
-        await pilot.pause()
-        assert isinstance(app.screen, SortByScreen)
+        await wait_for_screen(pilot, SortByScreen)
 
         # Enter applies the highlighted column ascending; grid reorders.
         await pilot.press("enter")

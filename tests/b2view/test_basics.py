@@ -47,6 +47,7 @@ if blosc2.IS_WASM:
 
 import tree_store_gen as gen
 from textual.widgets import DataTable, Input, SelectionList, Tree
+from tui_wait import wait_for_screen, wait_until
 
 from blosc2.b2view.app import (
     B2ViewApp,
@@ -108,20 +109,6 @@ async def wait_for_dim_mode(pilot, expected: bool) -> None:
         if pilot.app._dim_mode is expected:
             return
     raise AssertionError(f"dim mode never became {expected}")
-
-
-async def wait_until(pilot, predicate, *, message="condition not met in time") -> None:
-    """Pump the event loop until *predicate* holds.
-
-    Setting ``Input.value`` posts an ``Input.Changed`` that rebuilds dependent widgets
-    asynchronously; a single ``pilot.pause()`` is not always enough on slower/loaded CI
-    (e.g. Windows), so poll until the resulting state settles.
-    """
-    for _ in range(100):
-        await pilot.pause()
-        if predicate():
-            return
-    raise AssertionError(message)
 
 
 async def focus_data_table(pilot) -> DataTable:
@@ -210,11 +197,9 @@ async def test_tree_and_panel_focus(store_path):
 
         # '?' opens the help screen; escape closes it
         await pilot.press("question_mark")
-        await pilot.pause()
-        assert isinstance(app.screen, HelpScreen)
+        await wait_for_screen(pilot, HelpScreen)
         await pilot.press("escape")
-        await pilot.pause()
-        assert not isinstance(app.screen, HelpScreen)
+        await wait_for_screen(pilot, HelpScreen, present=False)
 
 
 # ── 1-D array: row paging beyond the viewport ────────────────────────────
@@ -334,8 +319,7 @@ async def test_2d_paging(store_path):
         # modal pre-fills the current index and pre-selects it, so typing a new
         # index replaces it (not appends, e.g. "0" + "97" -> "097").
         await pilot.press("c")
-        await pilot.pause()
-        assert isinstance(app.screen, GoToColumnScreen)
+        await wait_for_screen(pilot, GoToColumnScreen)
         gotocol_input = app.screen.query_one("#gotocol-input", Input)
         assert gotocol_input.value == "0"  # pre-filled with current column
         for ch in "97":
@@ -447,8 +431,7 @@ async def test_ctable_row_paging_and_goto(store_path):
 
         # 'g' opens the goto modal; submit a row in the middle
         await pilot.press("g")
-        await pilot.pause()
-        assert isinstance(app.screen, GoToRowScreen)
+        await wait_for_screen(pilot, GoToRowScreen)
         app.screen.query_one("#goto-input", Input).value = "250"
         await pilot.press("enter")
         await wait_for_table(pilot)
@@ -553,8 +536,7 @@ async def test_ctable_column_paging(store_path):
         # 'c' opens a searchable column picker (type to filter, ↑/↓, Enter);
         # the row position is kept.  Pick v12 by typing its name.
         await pilot.press("c")
-        await pilot.pause()
-        assert isinstance(app.screen, ColumnSelectScreen)
+        await wait_for_screen(pilot, ColumnSelectScreen)
         for ch in "v12":
             await pilot.press(ch)
         await pilot.pause()
@@ -569,8 +551,7 @@ async def test_ctable_column_paging(store_path):
 
         # ↑/↓ drive the highlight: filter to the v1x family, then arrow to v12
         await pilot.press("c")
-        await pilot.pause()
-        assert isinstance(app.screen, ColumnSelectScreen)
+        await wait_for_screen(pilot, ColumnSelectScreen)
         for ch in "v1":  # matches v10, v11, ..., v19 in column order
             await pilot.press(ch)
         await pilot.pause()
@@ -583,8 +564,7 @@ async def test_ctable_column_paging(store_path):
 
         # escape cancels the picker without moving
         await pilot.press("c")
-        await pilot.pause()
-        assert isinstance(app.screen, ColumnSelectScreen)
+        await wait_for_screen(pilot, ColumnSelectScreen)
         await pilot.press("escape")
         await wait_for_table(pilot)
         assert app.table_page["col_start"] == all_names.index("v12")
@@ -624,8 +604,7 @@ async def test_ctable_filtering(store_path):
 
         async def submit_filter(expr: str) -> None:
             await pilot.press("f")
-            await pilot.pause()
-            assert isinstance(app.screen, FilterScreen)
+            await wait_for_screen(pilot, FilterScreen)
             app.screen.query_one("#filter-input", Input).value = expr
             await pilot.press("enter")
             await wait_for_table(pilot)
@@ -675,8 +654,7 @@ async def test_ctable_filtering(store_path):
 
         # '/' opens the picker with the currently-shown columns pre-checked.
         await pilot.press("slash")
-        await pilot.pause()
-        assert isinstance(app.screen, ColumnFilterScreen)
+        await wait_for_screen(pilot, ColumnFilterScreen)
         sel = app.screen.query_one("#colfilter-list", SelectionList)
         assert sel.option_count == ncols
         assert len(sel.selected) == ncols  # all checked initially
@@ -706,8 +684,7 @@ async def test_ctable_filtering(store_path):
 
         # The goto-column picker lists names within the visible set.
         await pilot.press("c")
-        await pilot.pause()
-        assert isinstance(app.screen, ColumnSelectScreen)
+        await wait_for_screen(pilot, ColumnSelectScreen)
         for ch in "v15":
             await pilot.press(ch)
         await pilot.pause()
@@ -726,8 +703,7 @@ async def test_ctable_filtering(store_path):
 
         # Re-opening pre-checks the visible set; Escape cancels (no change).
         await pilot.press("slash")
-        await pilot.pause()
-        assert isinstance(app.screen, ColumnFilterScreen)
+        await wait_for_screen(pilot, ColumnFilterScreen)
         assert len(app.screen.query_one("#colfilter-list", SelectionList).selected) == ncols - 1
         await pilot.press("escape")
         await wait_for_table(pilot)
@@ -759,8 +735,7 @@ async def test_plot_column(store_path):
         await focus_data_table(pilot)
 
         await pilot.press("p")
-        await pilot.pause()
-        assert isinstance(app.screen, PlotScreen)
+        await wait_for_screen(pilot, PlotScreen)
         screen = app.screen
 
         # Bucketed envelope covering the whole leaf; bracketed by true extremes
@@ -806,12 +781,10 @@ async def test_plot_column(store_path):
 
         # 'g' opens a range modal; an exact range zooms there and reads it exactly.
         await pilot.press("g")
-        await pilot.pause()
-        assert isinstance(app.screen, PlotRangeScreen)
+        await wait_for_screen(pilot, PlotRangeScreen)
         app.screen.query_one("#range-input", Input).value = "1000:2000"
         await pilot.press("enter")
-        await pilot.pause()
-        assert isinstance(app.screen, PlotScreen)
+        await wait_for_screen(pilot, PlotScreen)
         screen = app.screen
         assert (screen.row_start, screen.row_stop) == (1000, 2000)
         sub = leaf1_values()[1000:2000]
@@ -849,11 +822,9 @@ async def test_plot_column(store_path):
 
         # 'p' re-opens the plot; 'escape' is the only way to close it
         await pilot.press("p")
-        await pilot.pause()
-        assert isinstance(app.screen, PlotScreen)
+        await wait_for_screen(pilot, PlotScreen)
         await pilot.press("escape")
-        await pilot.pause()
-        assert not isinstance(app.screen, PlotScreen)
+        await wait_for_screen(pilot, PlotScreen, present=False)
 
 
 async def test_plot_view_locks_ctable_window(store_path):
@@ -878,8 +849,7 @@ async def test_plot_view_locks_ctable_window(store_path):
         # Plot column 'b' (== row index), then zoom to an exact 100:110 range.
         table.move_cursor(column=app.table_page["columns"].index("b"))
         await pilot.press("p")
-        await pilot.pause()
-        assert isinstance(app.screen, PlotScreen)
+        await wait_for_screen(pilot, PlotScreen)
         await pilot.press("g")
         await pilot.pause()
         app.screen.query_one("#range-input", Input).value = "100:110"
@@ -934,15 +904,13 @@ async def test_plot_hires_view(store_path):
         table.move_cursor(column=app.table_page["columns"].index("b"))
 
         await pilot.press("p")
-        await pilot.pause()
-        assert isinstance(app.screen, PlotScreen)
+        await wait_for_screen(pilot, PlotScreen)
         plot = app.screen
 
         # 'h' opens the hi-res view in envelope mode over the whole range — no
         # zoom gate; it reuses the on-screen envelope, so it always renders.
         await pilot.press("h")
-        await pilot.pause()
-        assert isinstance(app.screen, HiResPlotScreen)
+        await wait_for_screen(pilot, HiResPlotScreen)
         hires = app.screen
         assert hires._mode == "envelope"
         assert "min/max envelope" in hires._current_title()
@@ -986,8 +954,7 @@ async def test_plot_scatter_col_vs_col(store_path):
         # Plot column 'b' (== row index), then zoom to a small range.
         table.move_cursor(column=app.table_page["columns"].index("b"))
         await pilot.press("p")
-        await pilot.pause()
-        assert isinstance(app.screen, PlotScreen)
+        await wait_for_screen(pilot, PlotScreen)
         plot = app.screen
         await pilot.press("g")
         await pilot.pause()
@@ -998,8 +965,7 @@ async def test_plot_scatter_col_vs_col(store_path):
 
         # 's' opens the searchable Y-column picker over all visible columns.
         await pilot.press("s")
-        await pilot.pause()
-        assert isinstance(app.screen, ColumnSelectScreen)
+        await wait_for_screen(pilot, ColumnSelectScreen)
         from textual.widgets import OptionList
 
         picker = app.screen
@@ -1019,8 +985,7 @@ async def test_plot_scatter_col_vs_col(store_path):
         picker.query_one("#colselect-input", Input).value = "c"
         await pilot.pause()  # let the live filter repopulate the list
         await pilot.press("enter")
-        await pilot.pause()
-        assert isinstance(app.screen, ScatterPlotScreen)
+        await wait_for_screen(pilot, ScatterPlotScreen)
         scatter = app.screen
         # Row-aligned over the framed range: b == row index, c == row * 1.5.
         assert scatter.xcol == "b"
@@ -1035,8 +1000,7 @@ async def test_plot_scatter_col_vs_col(store_path):
             from blosc2.b2view.app import HiResPlotScreen, TextualImage
 
             await pilot.press("h")
-            await pilot.pause()
-            assert isinstance(app.screen, HiResPlotScreen)
+            await wait_for_screen(pilot, HiResPlotScreen)
             assert app.screen.query_one("#hires-image", TextualImage) is not None
             await pilot.press("escape")
             await pilot.pause()
@@ -1079,21 +1043,18 @@ async def test_enter_decodes_skipped_cell(tmp_path):
         # Enter on the cheap 'id' column does nothing special (no modal).
         table.move_cursor(row=2, column=app.table_page["columns"].index("id"))
         await pilot.press("enter")
-        await pilot.pause()
-        assert not isinstance(app.screen, CellDetailScreen)
+        await wait_for_screen(pilot, CellDetailScreen, present=False)
 
         # Enter on the skipped 'tags' cell decodes just that row into a modal.
         table.move_cursor(row=2, column=app.table_page["columns"].index("tags"))
         await pilot.press("enter")
-        await pilot.pause()
-        assert isinstance(app.screen, CellDetailScreen)
+        await wait_for_screen(pilot, CellDetailScreen)
         assert app.screen._value == [0, 1, 2]  # row 2 of the generator above
         assert app.screen._row == 2
 
         # esc returns to the table with its position intact.
         await pilot.press("escape")
-        await pilot.pause()
-        assert not isinstance(app.screen, CellDetailScreen)
+        await wait_for_screen(pilot, CellDetailScreen, present=False)
         assert table.cursor_row == 2
 
 
@@ -1183,10 +1144,9 @@ async def test_download_then_browse(store_path, tmp_path, monkeypatch):
         info_url="https://cat2.cloud/demo/api/info/@public/large/fetched.b2z",
     )
     async with app.run_test(size=TERM_SIZE) as pilot:
-        await pilot.pause()
         # The bundle is not opened yet: the download screen is up, and the info
         # endpoint's size made the progress bar determinate.
-        assert isinstance(app.screen, DownloadScreen)
+        await wait_for_screen(pilot, DownloadScreen)
         assert app.browser is None
         assert app.screen.query_one("#download-bar", ProgressBar).total == size
 
