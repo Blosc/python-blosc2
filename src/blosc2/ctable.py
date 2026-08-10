@@ -9759,7 +9759,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     # CSV interop
     # ------------------------------------------------------------------
 
-    def to_csv(self, path: str | None = None, *, header: bool = True, sep: str = ",") -> str | None:
+    def to_csv(
+        self,
+        path: str | None = None,
+        *,
+        header: bool = True,
+        sep: str = ",",
+        encoding: str = "utf-8",
+    ) -> str | None:
         """Write all live rows to CSV.
 
         Uses Python's stdlib ``csv`` module — no extra dependency required.
@@ -9782,6 +9789,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             If ``True`` (default), write column names as the first row.
         sep:
             Field delimiter.  Defaults to ``","``; use ``"\\t"`` for TSV.
+        encoding:
+            Text encoding of the written file.  Defaults to ``"utf-8"`` rather
+            than the platform's, which cannot encode most of what a text column
+            may hold: Python's default on Windows is cp1252, which rejects
+            anything outside Latin-1.  Pass another codec only to satisfy a
+            consumer that requires one.
 
         Returns
         -------
@@ -9836,11 +9849,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             buf = io.StringIO(newline="")
             _write(buf)
             return buf.getvalue()
-        # UTF-8 explicitly, never the locale's codec: text a column can hold is
-        # not text every platform default can encode, and cp1252 -- Python's
-        # default on Windows -- raises on the first non-Latin-1 character.  The
-        # file has to mean the same thing wherever it is written and read.
-        with open(path, "w", newline="", encoding="utf-8") as f:
+        # Named, never the locale's codec: text a column can hold is not text
+        # every platform default can encode, and cp1252 -- Python's default on
+        # Windows -- raises on the first non-Latin-1 character.  The file has to
+        # mean the same thing wherever it is written and read.
+        with open(path, "w", newline="", encoding=encoding) as f:
             _write(f)
         return None
 
@@ -9964,6 +9977,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         *,
         header: bool = True,
         sep: str = ",",
+        encoding: str = "utf-8-sig",
     ) -> CTable:
         """Build a :class:`CTable` from a CSV file.
 
@@ -9988,6 +10002,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             order regardless.
         sep:
             Field delimiter.  Defaults to ``","``; use ``"\\t"`` for TSV.
+        encoding:
+            Text encoding of the file.  Defaults to ``"utf-8-sig"``, which
+            reads UTF-8 and strips a byte-order mark if one is present (Excel
+            and several Windows tools write one).  Pass e.g. ``"cp1252"`` for a
+            file written in a legacy platform codec.
 
         Returns
         -------
@@ -10011,10 +10030,10 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         # Accumulate values per column as Python lists (one pass through file)
         col_data: list[list] = [[] for _ in range(ncols)]
 
-        # UTF-8 explicitly, matching to_csv: see the note there.  utf-8-sig
-        # strips a byte-order mark if one is present, which is what Excel and
-        # several Windows tools write, and is a no-op otherwise.
-        with open(path, newline="", encoding="utf-8-sig") as f:
+        # Named, matching to_csv: see the note there.  The default reads
+        # utf-8-sig, which strips a byte-order mark if one is present -- what
+        # Excel and several Windows tools write -- and is plain UTF-8 otherwise.
+        with open(path, newline="", encoding=encoding) as f:
             reader = csv.reader(f, delimiter=sep)
             if header:
                 next(reader)

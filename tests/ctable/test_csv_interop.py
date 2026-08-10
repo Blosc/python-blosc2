@@ -638,3 +638,20 @@ def test_csv_rejects_a_kind_it_cannot_read(tmp_csv):
 
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
+
+
+def test_csv_encoding_is_overridable_for_a_legacy_file(tmp_csv):
+    """Defaulting to UTF-8 must not strand a file written in a platform codec.
+
+    Naming the encoding is what makes the default deterministic; it would be a
+    poor trade if it also made a cp1252 file -- which a Windows user's existing
+    data may well be -- unreadable.
+    """
+    row_cls = dataclasses.make_dataclass(
+        "LegacyRow", [("text", str, blosc2.field(blosc2.string(max_length=16)))]
+    )
+    values = ["café", "naïve"]
+    CTable(row_cls, new_data=[(v,) for v in values]).to_csv(tmp_csv, encoding="cp1252")
+
+    assert pathlib.Path(tmp_csv).read_bytes().count(b"\xe9") == 1  # cp1252, not UTF-8
+    assert list(CTable.from_csv(tmp_csv, row_cls, encoding="cp1252")["text"][:]) == values
