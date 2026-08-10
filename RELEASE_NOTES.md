@@ -201,6 +201,22 @@ and has its own spelling for nulls (`None` among the values).
   looked for nulls *inside* a value that was a single cell rather than a batch.
   Scalar broadcast works again, and `col[0:2] = None` now makes every selected
   row null.
+- **`extend()` from another table lost nulls between storages.** Copying rows
+  from a mask-backed column into a sentinel-backed one (or the reverse, or
+  between two sentinels reserving different values) wrote whatever stood in for
+  the null as real data. Nullity is translated now.
+- **A row read showed a mask column's fill instead of `None`.** `t[i]`,
+  iteration and `repr` surfaced the placeholder that occupies a null slot, which
+  is not part of the format contract — and disagreed with a `vlstring` column in
+  the same row, which already read `None`. Sentinel columns still show their
+  sentinel, which is the value you chose.
+- **`to_numpy(masked=True)` and `dropna()` raised on a nullable dictionary
+  column**, which reported its nulls per physical slot rather than per live row.
+- **A null in a complex column reached pandas as `nan+0j`** rather than as
+  missing.
+- **A nullable `ndarray` of `bool` forgot it had been widened when reopened**, so
+  converting it to mask storage left it `uint8`, and the guard against a
+  dtype-changing in-place conversion on a persistent table stopped firing.
 - **`convert_nulls(to="sentinel")` refused over a value in a deleted row.** The
   collision check scanned physical slots, so a proposed sentinel present only in
   a row already deleted — unreadable, and dropped by the next `compact()` —

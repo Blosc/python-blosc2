@@ -1224,6 +1224,41 @@ further defects, **all reproduced against the tree and none fixed yet**, ordered
    > checked against a NumPy SQL oracle over 24 combinations — {mask, sentinel} × {indexed,
    > unindexed} × 6 expression shapes including `|` and the string form — all agreeing exactly.
 
+### Third pass — the sweep re-run after the fixes (2026-08-10)
+
+Five more, all reproduced and all fixed the same day:
+
+7. **`extend()` from another table did not translate nullity.** It carried a validity sidecar
+   across only when the *source* used mask storage, so any pair of tables that spelled nulls
+   differently lost them outright. Mask into sentinel wrote the fill as real data; sentinel into
+   mask wrote the reserved value as real data; two sentinel columns with different reserved values
+   had the same problem. Fixed by reading the source's nullity through its own channel and writing
+   it the way the destination spells it, replacing the stand-in either way — which also has to be
+   *storable*, since a source sentinel string can exceed the destination's `max_length` and would
+   fail validation. The substitution promotes the dtype rather than casting to either side's:
+   writing `__BLOSC2_NULL__` into a `U4` truncated it to `__BL`, and casting the other way would
+   truncate real values the wider column was entitled to hold. Verified over 24 combinations.
+
+8. **A row read showed the fill.** `t[i]`, iteration and `repr` read the values array and nothing
+   else, so a mask null surfaced as `0` / `""` / epoch `NaT` — the one thing the fill must never be,
+   and inconsistent inside a single row beside a `vlstring` already reading `None`. Both row paths
+   (`_rows_to_dicts`, `_physical_row_value`) needed it. **Sentinel columns are deliberately left
+   alone**: there the stand-in *is* the contract.
+
+9. **`NDArraySpec.bool_widened_to_uint8` was never serialized.** `dtype_str` stores the *already
+   widened* `uint8`, byte-identical to a declared `uint8` column, so a reopened column looked
+   declared: `_unflip_mask_bool_dtype` stopped firing and `_convert_changes_dtype` reported no
+   change, disabling the guard that refuses a dtype-changing in-place conversion on a persistent
+   table. The flag is now written, and only when set.
+
+10. **A dictionary column answered `null_mask()` per physical slot**, where the contract — and every
+    other kind — is one flag per live row. `to_numpy(masked=True)` raised `MaskError` and `dropna()`
+    raised "shape mismatch", the latter since long before this branch.
+
+11. **A complex null reached pandas as `nan+0j`.** The object-cell branch returned a Python list, and
+    pandas re-inferred `complex128` from it, folding the `None` back into a value indistinguishable
+    from a genuine NaN. Returning an object array pins it.
+
 Checked and reported clean by the sweep: the Kleene channels and their reflected operators, the
 masked min/max row-extremum substitution, the `FLAG_HAS_NAN` bail, `_sentinel_can_match`'s guard
 elision, CSV `\N`/`\E` round-trip, Arrow/persistence/`extend`-from-table round-trips,
