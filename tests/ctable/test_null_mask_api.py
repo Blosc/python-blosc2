@@ -967,3 +967,88 @@ def test_assign_rejects_a_single_value_with_the_documented_error(value):
     t = simple([1, 2, 3])
     with pytest.raises(ValueError, match=r"requires 3 values.*single value"):
         t["a"].assign(value)
+
+
+# ---------------------------------------------------------------------------
+# extend() from another table has to *translate* nullity, not copy it
+# ---------------------------------------------------------------------------
+
+CROSS_STORAGE_KINDS = [
+    ("int64", blosc2.int64, int, [1, None, 3]),
+    ("int8", blosc2.int8, int, [5, None, -3]),
+    ("float64", blosc2.float64, float, [1.0, None, 3.0]),
+    ("bool", blosc2.bool, bool, [True, None, False]),
+    ("string", lambda **k: blosc2.string(max_length=4, **k), str, ["x", None, "z"]),
+    ("bytes", lambda **k: blosc2.bytes(max_length=4, **k), bytes, [b"x", None, b"z"]),
+]
+
+
+def one_col_table(factory, annotation, values, storage):
+    """A one-column table holding *values*, with ``None`` meaning null.
+
+    A sentinel column cannot be handed a ``None`` -- there you write the
+    reserved value yourself -- so it is substituted here, which is exactly the
+    asymmetry the translation under test has to bridge.
+    """
+    Row = dataclasses.make_dataclass(
+        "XRow", [("n", annotation, blosc2.field(factory(nullable=True, null_storage=storage)))]
+    )
+    t = blosc2.CTable(Row, expected_size=16)
+    if values:
+        if storage == "sentinel":
+            sentinel = t["n"].null_value
+            values = [sentinel if v is None else v for v in values]
+        t.extend([(v,) for v in values])
+    return t
+
+
+@pytest.mark.parametrize(("label", "factory", "annotation", "values"), CROSS_STORAGE_KINDS)
+@pytest.mark.parametrize("src_storage", ["mask", "sentinel"])
+@pytest.mark.parametrize("dst_storage", ["mask", "sentinel"])
+def test_extend_between_storages_keeps_the_nulls(
+    label, factory, annotation, values, src_storage, dst_storage
+):
+    """What stands in for a null differs per column, so it has to be translated.
+
+    A raw copy carries the source's stand-in -- a mask column's fill, or a
+    sentinel column's reserved value -- into the destination as ordinary data.
+    Both directions lost the null silently: mask to sentinel wrote a real ``0``,
+    and sentinel to mask wrote the reserved ``int64`` minimum.
+    """
+    source = one_col_table(factory, annotation, values, src_storage)
+    dest = one_col_table(factory, annotation, [], dst_storage)
+    dest.extend(source)
+
+    assert dest["n"].is_null().tolist() == [v is None for v in values]
+    kept = [None if dest["n"].is_null()[i] else dest["n"][i] for i in range(len(dest))]
+    assert all(a == b for a, b in zip(kept, values, strict=True) if b is not None)
+
+
+def test_extend_between_two_different_sentinels_translates_the_value():
+    """Same storage is not the same spelling: each column reserves its own."""
+    left = dataclasses.make_dataclass(
+        "L", [("n", int, blosc2.field(blosc2.int64(nullable=True, null_value=-1)))]
+    )
+    right = dataclasses.make_dataclass(
+        "R", [("n", int, blosc2.field(blosc2.int64(nullable=True, null_value=-9)))]
+    )
+    src = blosc2.CTable(left, expected_size=8)
+    src.extend([(1,), (-1,), (3,)])
+    dest = blosc2.CTable(right, expected_size=8)
+    dest.extend(src)
+
+    assert dest["n"].is_null().tolist() == [False, True, False]
+    assert dest["n"][1] == -9  # the destination's own reserved value, not -1
+
+
+def test_extend_to_a_narrower_text_column_does_not_truncate_a_sentinel():
+    """A sentinel column is widened to fit its sentinel; the source may not be.
+
+    Writing ``__BLOSC2_NULL__`` into the source's ``U4`` left ``__BL`` behind,
+    which reads back as data rather than as a null.
+    """
+    source = one_col_table(lambda **k: blosc2.string(max_length=4, **k), str, ["x", None, "z"], "mask")
+    dest = one_col_table(lambda **k: blosc2.string(max_length=4, **k), str, [], "sentinel")
+    dest.extend(source)
+    assert dest["n"].is_null().tolist() == [False, True, False]
+    assert list(dest["n"][:])[0] == "x"

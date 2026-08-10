@@ -14858,11 +14858,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
           leading ``n_rows`` physical slots are not the rows being copied.  The
           dense case still takes the plain slice, which is the common one and
           costs no position scan.
-        * **The nulls.** Under mask storage nullity lives beside the values, not
-          in them, so a raw slice copies a null's *fill* -- an ordinary-looking
-          ``0`` / ``""`` / ``NaT`` -- and drops the fact that it was missing.
-          Sentinel and native-``None`` sources need nothing here: their nulls
-          travel with the values.
+        * **The nulls.** Nullity has to be *translated*, because the two tables
+          need not spell it the same way.  A raw slice copies whatever stands
+          in for a null in the source -- a mask column's fill, an
+          ordinary-looking ``0`` / ``""`` / ``NaT``, or a sentinel column's
+          reserved value -- and lands it in the destination as real data.  So
+          the source's nullity is read through its own channel, whichever that
+          is, and then written the way the *destination* spells it: as validity
+          for a mask column, as that column's own sentinel for a sentinel one.
+          Two sentinel columns with different reserved values need this too.
+
+          Dictionary and native-``None`` columns are left alone: their nulls
+          genuinely do travel with the values.
 
         *source_valid* maps a column to its validity only where something was
         actually null, matching what ``NullChannel.coerce_batch`` returns.
@@ -14879,16 +14886,54 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 continue
             arr = source._cols[name]
             raw_columns[name] = arr[: source._n_rows] if dense else arr[positions]
-            spec = source._schema.columns_by_name[name].spec
-            if not getattr(spec, "uses_mask", False):
+
+            src_spec = source._schema.columns_by_name[name].spec
+            dst_info = self._schema.columns_by_name.get(name)
+            dst_spec = None if dst_info is None else dst_info.spec
+            in_band = (NULL_MASK, NULL_SENTINEL)
+            if kind_of_spec(src_spec) not in in_band or kind_of_spec(dst_spec) not in in_band:
                 continue
+
+            null = self._source_null_flags(source, name, src_spec, dense, positions)
+            if null is None or not null.any():
+                continue
+            # Whatever stood in for a null in the source is meaningless in the
+            # destination and must not be copied through: it becomes the
+            # destination's own sentinel, or its fill under a mask (which the
+            # validity below makes unobservable, but which still has to be
+            # storable -- a source sentinel string can be longer than the
+            # destination's max_length and would fail validation).
+            if getattr(dst_spec, "uses_mask", False):
+                source_valid[name] = ~null
+                filler = fill_item_for(dst_spec)
+            else:
+                filler = dst_spec.null_value
+            values = np.asarray(raw_columns[name])
+            # Promote so neither side is truncated: a sentinel column is widened
+            # to fit its own sentinel, so writing ``__BLOSC2_NULL__`` into the
+            # source's ``U4`` would leave ``__BL`` behind -- read back as data,
+            # not as a null -- while casting the other way would truncate real
+            # values that the wider column was entitled to hold.
+            if values.dtype.kind != "O":
+                values = values.astype(np.result_type(values.dtype, np.asarray(filler).dtype))
+            else:
+                values = values.copy()
+            values[null] = filler
+            raw_columns[name] = values
+        return raw_columns, source_valid
+
+    @staticmethod
+    def _source_null_flags(source: CTable, name, spec, dense, positions):
+        """One flag per row being copied, True where *source* says it is null."""
+        if getattr(spec, "uses_mask", False):
             mask = source._null_mask(name)
             if mask is None:
-                continue  # no sidecar means the column has never held a null
+                return None  # no sidecar means the column has never held a null
             valid = np.asarray(mask[: source._n_rows] if dense else mask[positions])
-            if not valid.all():
-                source_valid[name] = valid
-        return raw_columns, source_valid
+            return ~valid
+        values = source._cols[name][: source._n_rows] if dense else source._cols[name][positions]
+        item_ndim = len(spec.item_shape) if isinstance(spec, NDArraySpec) else 0
+        return sentinel_mask(np.asarray(values), spec.null_value, item_ndim=item_ndim)
 
     def extend(self, data: list | CTable | Any, *, validate: bool | None = None) -> None:  # noqa: C901
         """Append multiple rows at once.
