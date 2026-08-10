@@ -461,3 +461,42 @@ def test_sidecar_leaf_lands_on_disk(tmp_path):
     path = str(tmp_path / "leaf.b2d")
     make_table().save(path)
     assert os.path.exists(os.path.join(path, "_cols", "a.notnull.b2nd"))
+
+
+def test_a_widened_bool_ndarray_column_remembers_that_it_was_widened(tmp_path):
+    """The flag cannot be re-derived on load, so it has to be written down.
+
+    A nullable-sentinel ``ndarray(bool)`` column is stored as ``uint8`` to make
+    room for its sentinel, and ``dtype_str`` therefore serializes *already
+    widened* -- byte-identical to what a **declared** ``uint8`` column writes.
+    Without the flag the reopened column looks declared, so
+    ``_unflip_mask_bool_dtype`` no longer fires and ``convert_nulls(to="mask")``
+    leaves it ``uint8`` where the same conversion before the save gave
+    ``np.bool_``.  The persistent dtype-change guard was misled the same way.
+    """
+    spec = blosc2.ndarray((2,), dtype=np.bool_, nullable=True, null_storage="sentinel")
+    Row = dataclasses.make_dataclass("NdBoolRow", [("a", object, blosc2.field(spec))])
+    path = tmp_path / "ndbool.b2t"
+    t = blosc2.CTable(Row, expected_size=8, urlpath=str(path), mode="w")
+    t.extend([(np.array([True, False]),), (np.array([False, False]),)])
+    before = t.copy().convert_nulls("a", to="mask")._schema.columns_by_name["a"].spec.dtype
+    del t
+
+    reopened = blosc2.CTable.open(str(path), mode="a")
+    assert reopened._schema.columns_by_name["a"].spec.bool_widened_to_uint8 is True
+    after = reopened.convert_nulls("a", to="mask")._schema.columns_by_name["a"].spec.dtype
+    assert after == before == np.dtype(np.bool_)
+
+
+def test_a_declared_uint8_ndarray_column_is_not_treated_as_widened(tmp_path):
+    """The distinction the flag exists for: real bytes must never be unflipped."""
+    spec = blosc2.ndarray((2,), dtype=np.uint8, nullable=True)
+    Row = dataclasses.make_dataclass("NdU8Row", [("a", object, blosc2.field(spec))])
+    path = tmp_path / "ndu8.b2t"
+    t = blosc2.CTable(Row, expected_size=8, urlpath=str(path), mode="w")
+    t.extend([(np.array([200, 7], dtype=np.uint8),), (np.array([1, 2], dtype=np.uint8),)])
+    del t
+
+    reopened = blosc2.CTable.open(str(path))
+    assert reopened._schema.columns_by_name["a"].spec.bool_widened_to_uint8 is False
+    assert [x.tolist() for x in reopened["a"][:]] == [[200, 7], [1, 2]]

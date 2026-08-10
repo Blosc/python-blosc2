@@ -948,6 +948,7 @@ class NDArraySpec(_NullableSpecMixin, SchemaSpec):
         nullable: bool = False,
         null_value=None,
         null_storage: str | None = None,
+        bool_widened_to_uint8: bool = False,
     ):
         if isinstance(item_shape, int):
             item_shape = (item_shape,)
@@ -959,7 +960,16 @@ class NDArraySpec(_NullableSpecMixin, SchemaSpec):
         self.item_shape = item_shape
         self.dtype = np.dtype(dtype)
         self._init_nulls(nullable=nullable, null_value=null_value, null_storage=null_storage)
-        if self.nullable and not self.uses_mask and self.dtype == np.dtype(np.bool_):
+        if bool_widened_to_uint8:
+            # Reconstructed from stored metadata, where dtype_str is already the
+            # widened uint8 -- so the branch below cannot re-derive it and the
+            # flag has to be carried explicitly.  Without it a reopened column
+            # is indistinguishable from a *declared* uint8 one, and
+            # ``_unflip_mask_bool_dtype`` and ``_convert_changes_dtype`` both
+            # answer wrongly for it.
+            self.bool_widened_to_uint8 = True
+            self.dtype = np.dtype(np.uint8)
+        elif self.nullable and not self.uses_mask and self.dtype == np.dtype(np.bool_):
             # Same reasoning as bool: opening a stored table rebuilds the spec
             # without running the resolver, so the uint8 flip has to survive
             # from metadata alone.  Recorded, because a *declared* uint8 ndarray
@@ -981,6 +991,12 @@ class NDArraySpec(_NullableSpecMixin, SchemaSpec):
             "item_shape": _builtin_list(self.item_shape),
             "dtype_str": self.dtype.str,
         }
+        if self.bool_widened_to_uint8:
+            # Emitted only when set, so a table that never widened a bool
+            # serializes exactly as before.  It cannot be re-derived on load:
+            # dtype_str is the widened uint8, which is byte-identical to what a
+            # *declared* uint8 column writes.
+            d["bool_widened_to_uint8"] = True
         d.update(self._null_metadata())
         return d
 
