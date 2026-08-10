@@ -109,3 +109,61 @@ def test_nested_ops_compat_matrix_smoke():
 
     proj = t.select(["trip"])
     assert proj.col_names == ["trip.begin.lon", "trip.begin.lat"]
+
+
+def _struct_table(urlpath=None):
+    tbl = pa.table(
+        {
+            "a": pa.array([1, 2, 3], pa.int64()),
+            "trip": pa.array([{"lon": 1.0, "lat": 2.0}] * 3),
+        }
+    )
+    kwargs = {"urlpath": str(urlpath), "mode": "w"} if urlpath is not None else {}
+    return blosc2.CTable.from_arrow(tbl, **kwargs)
+
+
+def test_a_struct_column_survives_save_and_reopen(tmp_path):
+    """The logical parent of a nested group has to be serialized too.
+
+    ``columns_by_name`` carries a ``StructSpec`` for ``trip`` beside its
+    physical ``trip.lon``/``trip.lat``, and it is *not* one of ``columns`` --
+    which is exactly why ``_export_arrow_names`` looks it up there.  Nothing
+    wrote it out, so a reopened table exported the leaves flat while the table
+    it was saved from exported the struct.
+    """
+    path = tmp_path / "nested.b2t"
+    t = _struct_table(path)
+    assert t.to_arrow().schema.names == ["a", "trip"]
+    del t
+
+    reopened = blosc2.CTable.open(str(path))
+    assert reopened.to_arrow().schema.names == ["a", "trip"]
+    assert reopened.to_arrow().column("trip").to_pylist()[0] == {"lon": 1.0, "lat": 2.0}
+
+
+def test_the_struct_parent_survives_a_second_round_trip(tmp_path):
+    """Restored on load and re-derived on save, so it does not decay."""
+    first = tmp_path / "one.b2t"
+    second = tmp_path / "two.b2t"
+    t = _struct_table(first)
+    del t
+    blosc2.CTable.open(str(first)).copy(urlpath=str(second))
+    assert blosc2.CTable.open(str(second)).to_arrow().schema.names == ["a", "trip"]
+
+
+def test_the_parent_specs_do_not_leak_into_user_metadata(tmp_path):
+    """Carried inside the metadata blob, but consumed on the way back in."""
+    path = tmp_path / "meta.b2t"
+    t = _struct_table(path)
+    del t
+    reopened = blosc2.CTable.open(str(path))
+    assert "struct_parents" in schema_to_dict(reopened._schema).get("metadata", {})
+    assert "struct_parents" not in reopened._schema.metadata
+
+
+def test_a_file_saved_before_struct_parents_still_loads():
+    """Older tables simply keep their flat export rather than failing to open."""
+    data = schema_to_dict(_struct_table()._schema)
+    data["metadata"].pop("struct_parents")
+    schema = schema_from_dict(data)
+    assert sorted(schema.columns_by_name) == ["a", "trip.lat", "trip.lon"]
