@@ -6498,8 +6498,14 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         cc = self._computed_cols.get(col_name)
         if cc is not None:
             return self._normalize_scalar_value(np.asarray(self._build_computed_lazy(cc)[pos]).ravel()[0])
-        value = self._normalize_scalar_value(self._cols[col_name][pos])
         spec = self._schema.columns_by_name[col_name].spec
+        if getattr(spec, "uses_mask", False):
+            # Same reasoning as _row_values_with_nulls: the fill is not part of
+            # the format contract and must not surface as a row's value.
+            mask = self._null_mask(col_name)
+            if mask is not None and not bool(mask[pos]):
+                return None
+        value = self._normalize_scalar_value(self._cols[col_name][pos])
         if isinstance(spec, timestamp):
             return np.datetime64(int(value), spec.unit)
         return value
@@ -11619,8 +11625,36 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return col[positions]
         values = col[positions]
         if isinstance(spec, timestamp):
-            return np.asarray(values).astype(f"datetime64[{spec.unit}]")
-        return values
+            values = np.asarray(values).astype(f"datetime64[{spec.unit}]")
+        return self._row_values_with_nulls(name, spec, positions, values)
+
+    def _row_values_with_nulls(self, name: str, spec, positions: np.ndarray, values):
+        """*values*, with a mask column's nulls spelled ``None`` for row reads.
+
+        Row-oriented reads -- ``t[i]``, iteration, ``repr`` -- would otherwise
+        show the fill, which is the one thing it must never be: it is explicitly
+        not part of the format contract and is meant to be unobservable through
+        the API.  It was also inconsistent within a single row, since a
+        ``vlstring`` beside it already showed ``None`` for the same missing cell.
+
+        **Sentinel columns are left alone.** There the stand-in *is* the
+        contract -- the user chose the value, writes it, and reads it back --
+        so substituting would change long-established behaviour rather than
+        hide an implementation detail.  ``is_null()`` remains the uniform test
+        across both.
+        """
+        if not getattr(spec, "uses_mask", False):
+            return values
+        mask = self._null_mask(name)
+        if mask is None:  # no sidecar: the column has never held a null
+            return values
+        null = ~np.asarray(mask[positions], dtype=bool)
+        if not null.any():
+            return values
+        out = list(values)
+        for i in np.flatnonzero(null):
+            out[i] = None
+        return out
 
     def _schema_dict_with_computed(self) -> dict:
         """Return the schema dict extended with computed/materialized metadata."""

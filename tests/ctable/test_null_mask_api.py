@@ -1096,3 +1096,68 @@ def test_a_complex_null_reaches_pandas_as_missing():
     assert series.dtype == object
     assert series[1] is None
     assert bool(pd.isna(series[1]))
+
+
+# ---------------------------------------------------------------------------
+# Row-oriented reads must not show the fill
+# ---------------------------------------------------------------------------
+
+
+def mixed_null_table():
+    Row = dataclasses.make_dataclass(
+        "MixRow",
+        [
+            ("n", int, blosc2.field(blosc2.int64(null_storage="mask"))),
+            ("v", str, blosc2.field(blosc2.vlstring(nullable=True))),
+            ("t", str, blosc2.field(blosc2.string(max_length=4, null_storage="mask"))),
+            ("ts", object, blosc2.field(blosc2.timestamp(null_storage="mask"))),
+        ],
+    )
+    t = blosc2.CTable(Row, expected_size=16)
+    t.extend(
+        [
+            (1, "a", "p", datetime.datetime(2020, 1, 1)),
+            (None, None, None, None),
+            (3, "c", "r", datetime.datetime(2022, 1, 1)),
+        ]
+    )
+    return t
+
+
+def test_a_row_shows_none_for_a_null_not_the_fill():
+    """The fill is explicitly not part of the format contract.
+
+    It was observable here and indistinguishable from data -- and inconsistent
+    within a single row, since the ``vlstring`` beside it already read ``None``
+    for the same missing cell.
+    """
+    row = mixed_null_table()[1]
+    assert (row.n, row.v, row.t, row.ts) == (None, None, None, None)
+
+
+def test_iteration_and_repr_agree_with_indexing():
+    t = mixed_null_table()
+    assert [r.n for r in t] == [1, None, 3]
+    assert "None" in repr(t)
+
+
+def test_row_reads_stay_aligned_after_a_deletion():
+    t = mixed_null_table()
+    t.delete(0)
+    assert t[0].n is None
+    assert [r.n for r in t] == [None, 3]
+
+
+def test_a_sentinel_column_still_shows_its_sentinel_in_a_row():
+    """There the stand-in *is* the contract: the user chose it and writes it.
+
+    Substituting would change long-standing behaviour rather than hide an
+    implementation detail; ``is_null()`` is the uniform test across both.
+    """
+    Row = dataclasses.make_dataclass(
+        "SentRow", [("n", int, blosc2.field(blosc2.int64(nullable=True, null_value=-1)))]
+    )
+    t = blosc2.CTable(Row, expected_size=8)
+    t.extend([(1,), (-1,), (3,)])
+    assert t[1].n == -1
+    assert t["n"].is_null().tolist() == [False, True, False]
