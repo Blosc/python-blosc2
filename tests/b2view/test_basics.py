@@ -96,6 +96,20 @@ async def wait_for_table(pilot) -> None:
     raise AssertionError("data table never finished loading")
 
 
+async def wait_for_dim_mode(pilot, expected: bool) -> None:
+    """Wait until dim mode has actually toggled.
+
+    ``pilot.press`` delivers the key, but the app settles its own state on a
+    later frame -- so asserting straight after the press is a race that a loaded
+    CI runner loses.  Same shape as :func:`wait_for_table`, and the same reason.
+    """
+    for _ in range(100):
+        await pilot.pause()
+        if pilot.app._dim_mode is expected:
+            return
+    raise AssertionError(f"dim mode never became {expected}")
+
+
 async def wait_until(pilot, predicate, *, message="condition not met in time") -> None:
     """Pump the event loop until *predicate* holds.
 
@@ -345,12 +359,12 @@ async def test_2d_paging(store_path):
         # In dim mode the active (row) dim scrolls by one row, nudging the
         # window off the page grid.
         await pilot.press("d")
-        assert app._dim_mode
+        await wait_for_dim_mode(pilot, True)
         await pilot.press("up")
         await wait_for_table(pilot)
         assert app.table_page["start"] == 1  # off-grid by one row
         await pilot.press("escape")
-        assert not app._dim_mode
+        await wait_for_dim_mode(pilot, False)
 
         # An explicit page down now snaps back onto the page grid instead of
         # carrying the one-row offset (the bug), and page up returns to 0.
@@ -379,7 +393,7 @@ async def test_3d_dim_mode_fixed_value(store_path):
         assert layout.navigable_dims == [1, 2]
 
         await pilot.press("d")  # enter dim mode (active dim is d0, fixed)
-        assert app._dim_mode
+        await wait_for_dim_mode(pilot, True)
 
         await pilot.press("up")  # d0: 0 -> 1
         await wait_for_table(pilot)
@@ -391,7 +405,7 @@ async def test_3d_dim_mode_fixed_value(store_path):
             np.testing.assert_allclose(page["data"][str(c)], expected[page["start"] : page["stop"], c])
 
         await pilot.press("escape")
-        assert not app._dim_mode
+        await wait_for_dim_mode(pilot, False)
 
 
 # ── CTable: row paging, goto, and wide tables ────────────────────────────
