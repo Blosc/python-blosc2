@@ -750,7 +750,12 @@ class NullChannel:
             # column's view -- sorted order and row filters alike.
             return ~np.asarray(valid[col._resolve_live_positions()])
         if kind == NULL_CODE:
-            return col._dictionary_eq(None)
+            # _dictionary_eq answers over the *physical* extent, which every
+            # other branch here does not: this method's contract is one flag per
+            # live row.  Gathering brings it in line, and without it a consumer
+            # that zips the result against the values -- to_numpy(masked=True),
+            # dropna() -- gets a length mismatch rather than an answer.
+            return np.asarray(col._dictionary_eq(None))[col._resolve_live_positions()]
         if kind == NULL_NATIVE:
             return np.array([v is None for v in col], dtype=np.bool_)
         return self.mask_for_values(col[:])

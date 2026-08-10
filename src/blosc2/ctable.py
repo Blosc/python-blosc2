@@ -10309,7 +10309,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         out = list(values)
         for i in np.flatnonzero(nulls):
             out[i] = None
-        return out
+        # As an object *array*, not a list: pandas re-infers a list, and for
+        # complex it infers back to complex128 and turns the None into
+        # ``nan+0j`` -- a value indistinguishable from a genuine NaN, which is
+        # the confusion mask storage exists to prevent.  Pinning the dtype keeps
+        # the None a None.
+        return np.asarray(out, dtype=object)
 
     @classmethod
     def from_pandas(cls, df, row_cls) -> CTable:  # noqa: C901

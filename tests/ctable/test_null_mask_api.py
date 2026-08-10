@@ -1052,3 +1052,47 @@ def test_extend_to_a_narrower_text_column_does_not_truncate_a_sentinel():
     dest.extend(source)
     assert dest["n"].is_null().tolist() == [False, True, False]
     assert list(dest["n"][:])[0] == "x"
+
+
+def test_a_dictionary_null_mask_is_one_flag_per_live_row():
+    """Every other kind answers per live row; the dictionary answered per slot.
+
+    ``_dictionary_eq`` works over the physical extent, so consumers that zip the
+    result against the values -- ``to_numpy(masked=True)``, ``dropna()`` -- got a
+    length mismatch instead of an answer.
+    """
+    Row = dataclasses.make_dataclass(
+        "DRow",
+        [
+            ("d", str, blosc2.field(blosc2.dictionary(nullable=True))),
+            ("i", int, blosc2.field(blosc2.int64())),
+        ],
+    )
+    t = blosc2.CTable(Row, expected_size=16)
+    t.extend([("x", 1), (None, 2), ("y", 3)])
+
+    assert t["d"].is_null().tolist() == [False, True, False]
+    assert t["d"].to_numpy(masked=True).mask.tolist() == [False, True, False]
+    assert t.dropna()["i"][:].tolist() == [1, 3]
+
+    t.delete(0)
+    assert t["d"].is_null().tolist() == [True, False]
+
+
+def test_a_complex_null_reaches_pandas_as_missing():
+    """A list lets pandas re-infer complex128 and fold the None into nan+0j.
+
+    That is indistinguishable from a genuine NaN value, which is the confusion
+    mask storage exists to prevent -- so the object dtype is pinned.
+    """
+    pd = pytest.importorskip("pandas")
+    Row = dataclasses.make_dataclass(
+        "CRow", [("c", complex, blosc2.field(blosc2.complex128(nullable=True)))]
+    )
+    t = blosc2.CTable(Row, expected_size=8)
+    t.extend([(1 + 2j,), (None,)])
+
+    series = t.to_pandas()["c"]
+    assert series.dtype == object
+    assert series[1] is None
+    assert bool(pd.isna(series[1]))
