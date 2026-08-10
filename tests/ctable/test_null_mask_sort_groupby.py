@@ -37,6 +37,10 @@ from utf8_compat import needs_utf8, utf8_spec
 
 import blosc2
 
+INT64_MIN = int(np.iinfo(np.int64).min)
+INT64_MAX = int(np.iinfo(np.int64).max)
+UINT64_MAX = int(np.iinfo(np.uint64).max)
+
 
 def annotation_for(spec):
     if isinstance(spec, (blosc2.schema.NDArraySpec, blosc2.schema.timestamp)):
@@ -167,6 +171,55 @@ def test_descending_sort_of_a_plain_bool_column():
     """The same fix, stated for the case that was broken with no nulls at all."""
     t = one_col([True, False, True], blosc2.bool())
     assert as_list(t.sort_by("a", ascending=False)["a"]) == [True, True, False]
+
+
+@pytest.mark.parametrize(
+    ("spec", "values", "expected"),
+    [
+        (
+            blosc2.int64(null_storage="mask"),
+            [5, INT64_MIN, 7, None, 1],
+            [7, 5, 1, INT64_MIN, None],
+        ),
+        (
+            blosc2.int64(null_storage="mask"),
+            [INT64_MAX, INT64_MIN, 0, None],
+            [INT64_MAX, 0, INT64_MIN, None],
+        ),
+        (
+            blosc2.uint64(null_storage="mask"),
+            [1, UINT64_MAX, UINT64_MAX - 1, None],
+            [UINT64_MAX, UINT64_MAX - 1, 1, None],
+        ),
+    ],
+)
+def test_descending_sort_over_the_widest_integers(spec, values, expected):
+    """The two extremes narrowing to int64 could not express.
+
+    The descending key used to negate in int64, which has a fixed point of its
+    own -- ``-(-2**63)`` is ``-2**63`` -- so the smallest ``int64`` sorted as if
+    it were the largest, exactly the bug the narrow dtypes were fixed for.  A
+    ``uint64`` above ``2**63`` was worse: casting it to int64 to negate wrapped
+    it negative, so the two largest values sorted below ``1``.  Complementing
+    instead of negating reverses every width exactly, having no fixed point.
+
+    Mask storage is what makes these reachable in a nullable column, since a
+    sentinel had to reserve the very value each case turns on.
+    """
+    assert as_list(one_col(values, spec).sort_by("a", ascending=False)["a"]) == expected
+
+
+@pytest.mark.parametrize(
+    ("spec", "values"),
+    [
+        (blosc2.int64(null_storage="mask"), [5, INT64_MIN, 7, None, 1]),
+        (blosc2.uint64(null_storage="mask"), [1, UINT64_MAX, UINT64_MAX - 1, None]),
+    ],
+)
+def test_ascending_sort_of_the_widest_integers_is_unchanged(spec, values):
+    """Ascending never negated, so it was always right; keep it that way."""
+    live = sorted(v for v in values if v is not None)
+    assert as_list(one_col(values, spec).sort_by("a")["a"]) == [*live, None]
 
 
 # ---------------------------------------------------------------------------

@@ -13717,14 +13717,18 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     rank = np.argsort(np.argsort(raw, kind="stable"), kind="stable")
                     lex_keys.append((n - 1 - rank).astype(np.intp))
                 elif raw.dtype.kind in "bui":
-                    # Negate in int64, never in the column's own dtype.  bool has
-                    # no unary minus at all, and a narrow signed dtype wraps on
-                    # its own minimum -- ``-(-128)`` is ``-128`` in int8 -- which
-                    # silently leaves that row sorted as if it were the largest.
-                    # Mask storage is what made both reachable in a *nullable*
-                    # column: a sentinel had to reserve int8's -128, and a
-                    # nullable bool was physically uint8.
-                    lex_keys.append(-raw.astype(np.int64))
+                    # Reverse the order by complement, not by negation.  ``~x``
+                    # is ``-x - 1`` in two's complement, so it reverses the total
+                    # order of *every* integer width exactly, with no value that
+                    # can overflow: int8's -128 maps to 127, int64's minimum to
+                    # its maximum, and a uint64 above 2**63 stays put instead of
+                    # wrapping negative.  Negation has no such fixed point --
+                    # ``-x`` maps a dtype's minimum to itself, leaving that row
+                    # sorted as if it were the largest -- and bool has no unary
+                    # minus at all.  Mask storage is what made these reachable in
+                    # a *nullable* column: a sentinel had to reserve int8's -128
+                    # and int64's minimum, and a nullable bool was uint8.
+                    lex_keys.append(np.bitwise_not(raw))
                 else:
                     lex_keys.append(-raw)
             else:
