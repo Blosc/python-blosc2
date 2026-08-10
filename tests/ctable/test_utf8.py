@@ -2299,6 +2299,12 @@ def test_constructors_string_dtype_reject_nd():
         blosc2.zeros(3, dtype=STRING_DTYPE, urlpath="unused.b2nd")
 
 
+@pytest.mark.skipif(
+    blosc2.IS_WASM,
+    reason="peak-memory scaling is not measurable under Pyodide: its noise floor "
+    "(~4 MiB observed) is close to the 4-byte-pointer signal this looks for, and "
+    "the property itself is architecture-independent",
+)
 def test_constructors_string_dtype_do_not_materialize_a_fill_list():
     """The fill is one string repeated; building a list of it is pure overhead.
 
@@ -2331,19 +2337,25 @@ def test_constructors_string_dtype_do_not_materialize_a_fill_list():
 
     small = peak_for(500_000)
     large = peak_for(4_000_000)
-    # 8x the rows is 8x the pointer list: materializing one adds ~27 MiB between
-    # these two sizes, where the streamed build does not move at all.  Both sizes
-    # are well past the point where the chunk size stops growing, so the transient
-    # buffer -- the whole of the peak -- is the same for each.
+    # 8x the rows is 8x the pointer list, where the streamed build does not move
+    # at all.  Both sizes are well past the point where the chunk size stops
+    # growing, so the transient buffer -- the whole of the peak -- is the same
+    # for each.
     #
-    # The bound is well below that 27 MiB but well above the streamed build's
-    # own figure, which measures ~0 MiB in isolation on every NumPy tested: a
-    # tighter one turned this into an order-dependent failure, passing alone and
-    # failing in a full serial run under NumPy 2.2 (which is what Pyodide ships)
+    # The bound is derived rather than guessed, because the thing being detected
+    # is one pointer per row and a pointer is not the same size everywhere: 8
+    # bytes here, 4 on wasm32, so materializing costs ~27 MiB on a 64-bit box
+    # and ~13 MiB under Pyodide.  Half of that keeps a real regression caught on
+    # both while leaving room for the noise floor, which is what a fixed bound
+    # kept tripping over -- this passed alone and failed in a full serial run,
     # as unrelated allocations moved the peak around.  What is being detected
-    # here scales with shape[0]; noise does not.
+    # scales with shape[0]; noise does not.
+    pointer_list_mib = (4_000_000 - 500_000) * np.dtype(np.intp).itemsize / 2**20
     grown = (large - small) / 2**20
-    assert grown < 12.0, f"peak grew {grown:.1f} MiB with 8x the rows: a fill list was materialized"
+    assert grown < pointer_list_mib / 2, (
+        f"peak grew {grown:.1f} MiB with 8x the rows (a materialized fill list "
+        f"would cost ~{pointer_list_mib:.0f} MiB here): a fill list was materialized"
+    )
 
 
 def test_utf8_dispatch_round_trips_conversion():
