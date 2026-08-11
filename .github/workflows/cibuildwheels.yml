@@ -21,7 +21,8 @@ env:
   # x86_64 wheels yet, so `pip install` of the test venv would cross-compile
   # them from the arm64 runner -- which lacks the x86_64-apple-darwin Rust
   # target.  The wheel itself builds fine, so ship it and skip only its test.
-  CIBW_TEST_SKIP: "cp315-macosx_x86_64"
+  # (`cp315*` so the free-threaded cp315t build is skipped for the same reason)
+  CIBW_TEST_SKIP: "cp315*-macosx_x86_64"
   # Use explicit generator/compiler env vars; CMAKE_ARGS with spaces is not split on Windows.
   CIBW_ENVIRONMENT_WINDOWS: >-
     CMAKE_GENERATOR=Ninja
@@ -42,17 +43,36 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Three builds per platform, not one per Python version:
+        #
+        #   cp311   -> a single `cp311-abi3` wheel serving CPython 3.11+, via
+        #              `wheel.py-api` in pyproject.toml.  Building it on any
+        #              other version would emit the *same* filename, so only
+        #              the floor version is built.
+        #   cp314t  -> free-threaded 3.14.  Cannot use abi3: the free-threaded
+        #   cp315t     ABI is distinct, and its stable variant (abi3t, PEP 803)
+        #              starts at 3.15 and needs a PEP 793 module export hook
+        #              that Cython does not emit yet.  These stay
+        #              version-specific until that lands upstream.
+        #
+        # cp313t is deliberately absent: 3.13's free-threaded build was still
+        # experimental (PEP 703 phase I) with a large single-thread penalty.
+        # cibuildwheel keeps it behind CIBW_ENABLE: cpython-freethreading.
+        #
+        # NOTE: cibuildwheel only tests a wheel on the interpreter that built
+        # it, so the abi3 wheel is exercised on 3.11 alone here.  The
+        # test_abi3_matrix job below installs it on every supported version.
         include:
           # Linux x86_64 builds
           - os: ubuntu-latest
             arch: x86_64
-            cibw_pattern: "cp3{11,12,13,14,15}-manylinux*"
+            cibw_pattern: "cp311-manylinux* cp314t-manylinux* cp315t-manylinux*"
             artifact_name: "linux-x86_64"
 
           # Linux ARM64 builds (native runners)
           - os: ubuntu-24.04-arm
             arch: aarch64
-            cibw_pattern: "cp3{11,12,13,14,15}-manylinux*"
+            cibw_pattern: "cp311-manylinux* cp314t-manylinux* cp315t-manylinux*"
             artifact_name: "linux-aarch64"
             # Don't use native runners for now (looks like wait times are too long)
             #runs-on: ["ubuntu-latest", "arm64"]
@@ -60,13 +80,13 @@ jobs:
           # Windows builds
           - os: windows-latest
             arch: x86_64
-            cibw_pattern: "cp3{11,12,13,14,15}-win_amd64"
+            cibw_pattern: "cp311-win_amd64 cp314t-win_amd64 cp315t-win_amd64"
             artifact_name: "windows-x86_64"
 
           # macOS builds (universal2)
           - os: macos-latest
             arch: x86_64
-            cibw_pattern: "cp3{11,12,13,14,15}-macosx*"
+            cibw_pattern: "cp311-macosx* cp314t-macosx* cp315t-macosx*"
             artifact_name: "macos-universal2"
     steps:
       - name: Checkout repo
@@ -187,8 +207,85 @@ jobs:
           path: ./wheelhouse/*.whl
 
 
+  # The abi3 wheel is built once, on 3.11, and cibuildwheel only tests a wheel
+  # on the interpreter that produced it.  Every other supported version would
+  # therefore ship untested, so install the one wheel on each of them and run a
+  # slice of the suite.  This is also the job that would catch a CPython release
+  # breaking the stable ABI -- the failure mode abi3 trades away rebuilds for.
+  test_abi3_matrix:
+    name: Test abi3 wheel on ${{ matrix.python-version }} (${{ matrix.os }})
+    needs: [ build_wheels ]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both are real matrix dimensions so they cross-product (15 short jobs).
+        # The `include` entries key on `os`, which is an existing dimension, so
+        # they attach artifact_name to the matching combinations rather than
+        # being appended as extra jobs.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+        include:
+          - os: ubuntu-latest
+            artifact_name: "linux-x86_64"
+          - os: windows-latest
+            artifact_name: "windows-x86_64"
+          - os: macos-latest
+            artifact_name: "macos-universal2"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          # 3.15 is still a pre-release until October
+          allow-prereleases: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ./wheelhouse
+
+      # Pin the exact version so pip resolves blosc2 from ./wheelhouse (picking
+      # the arch-compatible file) while still pulling dependencies from PyPI.
+      - name: Install the abi3 wheel
+        shell: bash
+        run: |
+          WHL=$(ls wheelhouse/blosc2-*abi3*.whl | head -1)
+          echo "Installing $WHL on $(python -V)"
+          python -m pip install --upgrade pip
+          python -m pip install --find-links ./wheelhouse "blosc2==$(basename "$WHL" | cut -d- -f2)"
+
+      # Check that the module is not version-tagged, rather than looking for a
+      # literal ".abi3." -- that infix is a POSIX convention.  On Windows a
+      # limited-API module is just `blosc2_ext.pyd`, versus
+      # `blosc2_ext.cp314-win_amd64.pyd` for a version-specific build.
+      # EXTENSION_SUFFIXES[0] is the version-tagged suffix on every platform,
+      # so "does not end with it" is the portable way to say "this is abi3".
+      - name: Confirm the abi3 module was the one loaded
+        shell: bash
+        run: |
+          python -c "
+          import importlib.machinery as machinery, os
+          import blosc2, blosc2.blosc2_ext as ext
+          name = os.path.basename(ext.__file__)
+          tagged = machinery.EXTENSION_SUFFIXES[0]
+          print('module:', name, '| version-tagged suffix:', tagged)
+          assert not name.endswith(tagged), f'version-specific module: {name}'
+          print('OK: loaded a version-independent (abi3) module')
+          blosc2.print_versions()
+          "
+
+      - name: Run a slice of the test suite
+        shell: bash
+        run: |
+          python -m pip install pytest
+          python -m pytest tests/test_open.py tests/test_vlmeta.py \
+                           tests/ndarray/test_evaluate.py -q -p no:cacheprovider
+
+
   upload_pypi:
-    needs: [ build_wheels, build_wheels_wasm ]
+    needs: [ build_wheels, build_wheels_wasm, test_abi3_matrix ]
     runs-on: ubuntu-latest
     # Only upload wheels when tagging (typically a release)
     if: startsWith(github.event.ref, 'refs/tags')
