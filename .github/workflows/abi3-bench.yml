@@ -99,13 +99,18 @@ jobs:
           done
 
       # Interleaved so a slow patch on a shared runner hits both builds rather
-      # than biasing whichever ran first.
+      # than biasing whichever ran first.  Five rounds rather than three: at
+      # three, one macOS/3.14 cell flagged the 4M-element compute benchmarks
+      # (where() at 1.287x) while the call-overhead-bound ones on the same cell
+      # were clean -- backwards from how abi3 can possibly work, and contradicted
+      # by the same benchmark on four other cells.  More rounds gives `min` a
+      # larger sample to find an uncontaminated one in.
       - name: Run interleaved benchmark rounds
         shell: bash
         run: |
           mkdir -p results/bench-${{ matrix.os }}-${{ matrix.python-version }}
           OUT=results/bench-${{ matrix.os }}-${{ matrix.python-version }}
-          for round in 1 2 3; do
+          for round in 1 2 3 4 5; do
             for v in abi3 base; do
               if [ -x "venv-$v/bin/python" ]; then
                 PY="venv-$v/bin/python"
