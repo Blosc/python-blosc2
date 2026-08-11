@@ -118,13 +118,136 @@ the original unnamed root-list grouping, row groups, encoding choices, or file
 metadata exactly.
 
 
+Where nulls are stored
+----------------------
+
+A nullable column keeps its nulls in one of two places, and
+:attr:`Column.null_storage` says which::
+
+    t["price"].null_storage     # 'sentinel', 'mask', 'code', 'native' or 'none'
+    t.info                      # tags every column: int64 nullable[mask]
+
+``"sentinel"``
+    A value reserved from the column's own range — ``255`` for a nullable
+    ``bool`` (which is therefore physically ``uint8``), ``INT64_MIN`` for an
+    ``int64``, ``NaN`` for a float, the literal ``"__BLOSC2_NULL__"`` for a
+    string.  Nothing extra is stored, and every reader understands it.
+
+``"mask"``
+    A per-column ``.notnull`` validity array, one byte per row, ``True`` where
+    the value is present — Arrow's own model.  Nullity lives outside the value
+    range, so the column keeps every value its dtype can hold, and a nullable
+    ``bool`` stays a real ``np.bool_``.
+
+The two other values are the only representation their kind has: ``"code"`` for
+a dictionary column, which reserves ``-1``; ``"native"`` for the
+variable-length container kinds, whose cells simply hold ``None``.
+
+**Mask storage is the default** since 4.11.0, because it is what makes
+nullability lossless.  A bare ``nullable=True`` — and every nullable column
+inferred from Arrow, Parquet or CSV — keeps its nulls in a sidecar, so:
+
+.. code-block:: python
+
+    blosc2.bool(nullable=True)  # no reserved 255; dtype stays np.bool_
+    blosc2.int8(nullable=True)  # all 256 values usable, plus nulls
+    blosc2.utf8(nullable=True)  # any string, including "" and "\x00"
+    blosc2.complex128(nullable=True)  # nullable at all, for the first time
+
+Sentinel storage is supported indefinitely and is one keyword away, per column
+(``null_storage="sentinel"``, or any explicit ``null_value=``) or globally
+through :class:`NullPolicy`.  It is the right choice when a column has to stay
+readable by a Blosc2 release older than 4.11.0: a table containing a mask column
+records **schema version 3**, which earlier readers refuse — with a bare
+``ValueError: Unsupported schema version 3``, since the hint naming
+:meth:`CTable.convert_nulls` ships in 4.11.0 — rather than misreading.  Only a
+table that actually contains a mask column is affected; one with no nullable
+column still records version 1.
+
+Nothing on disk changes.  The flip governs *creation* only — opening a stored
+table never re-resolves anything, so every existing table keeps the storage,
+dtype and sentinel it was written with.
+
+Under mask storage ``None`` is the way to write a null — ``t.append((None,))``,
+``t["price"][3] = None`` — which a fixed-width sentinel column cannot accept at
+all (there you write the sentinel yourself).  It broadcasts like any other
+value, so ``t["price"][2:5] = None`` marks three rows null in one write.  Reads
+are unchanged: ``col[:]`` returns values with a deterministic fill in the null
+slots, and :meth:`Column.is_null` is what tells you which those are.
+
+One semantic difference is deliberate: in a **mask** column ``NaN`` is a
+*value*, following Arrow, and only ``mask=False`` is a null.  A sentinel float
+column keeps NaN-as-null.  So ``dropna``, ``group_by`` and ``min``/``max`` can
+differ between the two for float columns holding a real NaN.
+
+Indexes understand both storages: a column index summarises only the rows that
+carry a value, so ``min``/``max`` and ``where`` are as fast on a nullable
+column as on a plain one.  See `Indexes`_.
+
+.. _kleene-logic:
+
+Predicates over nulls: three-valued logic
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A comparison against a null is neither true nor false.  SQL and Arrow call
+that third value **unknown**, and Blosc2 follows the same (Kleene) rules, for
+both query forms::
+
+    t.where(t.price > 10)     # rows where the price is definitely above 10
+    t.where("price > 10")     # the same rows
+    t.where(~(t.price > 10))  # rows definitely *not* above 10 — nulls excluded
+
+A null row satisfies neither a predicate nor its negation: ``where()`` keeps
+what is **true**, so the unknown rows are dropped exactly like the false ones.
+That is what makes ``~`` behave — a naive bitwise negation of "null compares
+False" would *select* every null.
+
+``&`` and ``|`` follow the same logic, which is not simply "drop any row a null
+touched"::
+
+    (t.price > 10) & (t.qty == 0)   # false where qty != 0, even if price is null
+    (t.price > 10) | (t.qty == 0)   # true  where qty == 0, even if price is null
+
+The unknown rows are not lost, and a predicate can be asked about them::
+
+    p = t.price > 10
+    p.is_null()        # boolean array: rows the predicate cannot answer for
+    p.null_count()     # how many
+    t.where(p.fillna(True))   # keep the rows that cannot be ruled out
+
+A predicate over a non-nullable column has no unknown rows and costs nothing
+extra; ``isin()`` is deliberately two-valued and has its own spelling for
+nulls (put ``None`` in the values).
+
+Converting between them
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Nothing migrates on its own: opening, copying and saving a table all preserve
+each column's storage.  :meth:`CTable.convert_nulls` is the only thing that
+changes it::
+
+    lossless = t.convert_nulls()                  # every convertible column -> mask
+    lossless.copy(urlpath="out.b2d")              # land it back on disk
+    t.convert_nulls("flag", to="mask", inplace=True)
+
+Going back to ``"sentinel"`` refuses what it cannot represent — a column whose
+data already contains the proposed sentinel, or one with no value left to
+reserve — and says which value is in the way, rather than silently relabelling
+a real row as null.
+
+.. autosummary::
+
+    CTable.convert_nulls
+
+.. automethod:: CTable.convert_nulls
+
+
 Null policy
 -----------
 
-Nullable scalar CTable columns are represented with per-column sentinel values,
-not native validity bitmaps.  When CTable has to infer those sentinels, the
-selection can be customized with :class:`NullPolicy` and scoped with
-:func:`null_policy`::
+:class:`NullPolicy` decides what a bare ``nullable=True`` resolves to when the
+schema does not say: whether to use a mask at all, and if not, which sentinel to
+reserve.  Scope it with :func:`null_policy`::
 
     policy = blosc2.NullPolicy(
         signed_int_strategy="max",
@@ -148,10 +271,27 @@ The same policy is used by explicit nullable schema specs when no
     with blosc2.null_policy(policy):
         table = blosc2.CTable(Row)
 
-Sentinels are resolved in this order: explicit ``null_value`` in the schema,
-``NullPolicy.column_null_values`` for a matching column, then the type-wide
-``NullPolicy`` default.  Columns without ``nullable=True`` or an explicit
-``null_value`` are not nullable.
+Storage is resolved in this order, first match winning: an explicit
+``null_storage=`` on the spec; an explicit ``null_value=`` (which *is* a request
+for in-band storage); a ``NullPolicy.column_null_values`` entry for the column;
+a type-wide ``NullPolicy`` sentinel field covering the column's kind; and
+finally ``NullPolicy.null_storage``.  Once sentinel storage is chosen, the
+sentinel itself comes from ``column_null_values`` if listed and from the
+type-wide default otherwise.
+
+Setting any type-wide sentinel field therefore *implies* sentinel storage for
+the kinds it covers, so ``NullPolicy(float_value=-1.0)`` keeps working exactly as
+it did before the default flipped.  Passing ``null_storage="mask"`` alongside one
+is the one combination that raises, because it contradicts itself.
+
+``bool_value`` is the exception, and unavoidably so: ``255`` is the only value a
+nullable bool may reserve, so it is also the field's default, and
+``NullPolicy(bool_value=255)`` carries no information to act on.  A bool column
+that wants sentinel storage has to say so with ``null_storage`` or
+``column_null_values``.
+
+Columns without ``nullable=True``, an explicit ``null_value`` or an explicit
+``null_storage`` are not nullable.
 
 .. autosummary::
 
@@ -198,9 +338,15 @@ expression:
   To exclude them, write the complementary comparison instead
   (``t.price <= 0``), which never matches nulls.
 
+All of this applies to mask-storage columns unchanged: propagation reads an
+opaque boolean "is null" predicate, which a sidecar supplies as directly as a
+sentinel comparison does.
+
 Kleene three-valued logic (where ``null > 0`` evaluates to null rather than
-``False``) is intentionally out of scope — it needs a validity channel on
-boolean intermediates, i.e. masks, which CTable does not use.
+``False``) remains intentionally out of scope.  Mask storage supplies the
+validity channel it needs, but it also requires comparison *results* to carry
+one, so that ``~`` can invert three states rather than two — a change to the
+expression layer rather than to storage.
 
 Reductions on derived expressions skip nulls too: arithmetic involving a
 nullable column returns a ``NullableExpr`` — a thin wrapper that remembers
@@ -594,6 +740,23 @@ Choosing an index kind
     than 50 % of candidate segments, the planner skips the index and falls
     back to a full scan to avoid per‑segment evaluation overhead.
 
+Indexes on nullable columns
+    Every index kind stores per‑segment ``min``/``max``, and since 4.11.0 those
+    extrema are taken over the rows that carry a **value**: a column's nulls are
+    read from its validity channel — the ``.notnull`` sidecar of a mask column,
+    the reserved value of a sentinel one — and left out.  A segment with no
+    value at all is flagged rather than summarised.
+
+    Two things follow.  :meth:`Column.min` and :meth:`Column.max` answer from
+    the summaries for a nullable column instead of scanning it (~240x on a
+    20M‑row column), where before any nullable column except a NaN‑sentinel
+    float had to fall back; and segment pruning is tighter, because a block
+    whose only large values are nulls no longer looks like a candidate.
+
+    Indexes built by an earlier release are read as *not* null‑aware and keep
+    the old fallback, so nothing silently changes meaning;
+    :meth:`CTable.rebuild_index` promotes them.
+
 .. autosummary::
 
     CTable.create_index
@@ -737,10 +900,12 @@ Attributes
 
     Column.dtype
     Column.null_value
+    Column.null_storage
     Column.row_transformer
 
 .. autoproperty:: Column.dtype
 .. autoproperty:: Column.null_value
+.. autoproperty:: Column.null_storage
 .. autoproperty:: Column.row_transformer
 
 

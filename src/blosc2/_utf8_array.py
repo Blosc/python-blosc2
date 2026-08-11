@@ -126,6 +126,19 @@ def utf8_spans(arrays: dict, n_logical: int, span_rows: int, budget: int):
             yield a, min(a + rows, stop)
 
 
+def _span_null_mask(raw: np.ndarray, sentinel, valid, start: int, stop: int) -> np.ndarray | None:
+    """Which rows of one span are null, or ``None`` when the operand has no nulls.
+
+    Whichever channel the operand uses: a sentinel found among *raw*'s values,
+    or a slice of a mask-storage column's validity sidecar.
+    """
+    if sentinel is not None:
+        return raw == sentinel
+    if valid is not None:
+        return ~np.asarray(valid[start:stop], dtype=bool)
+    return None
+
+
 def utf8_span_eval(
     expr: str,
     operands: dict,
@@ -133,6 +146,7 @@ def utf8_span_eval(
     sentinels: dict,
     n_phys: int,
     *,
+    valids: dict | None = None,
     strict: bool = False,
     span_rows: int = UTF8_EXPR_SPAN,
     budget: int = UTF8_EXPR_BUDGET,
@@ -154,6 +168,14 @@ def utf8_span_eval(
     (SQL ``WHERE`` semantics), a string result gets the sentinel back.  A string
     result therefore needs the operands to agree on one sentinel, and raises
     ``ValueError`` when they do not.
+
+    A **mask-storage** operand has no sentinel to find in its values -- its null
+    rows already hold the ``""`` fill, which other rows may legitimately share --
+    so it names its validity sidecar in *valids* instead (physical, ``True`` =
+    not null).  Either channel feeds the same per-span *nulls*, so a boolean
+    result is forced ``False`` for those rows just the same.  A **string** result
+    keeps the fill: there is no sentinel to write back, and a bare
+    :class:`UTF8Array` has nowhere to carry a validity channel of its own.
 
     Span operands are handed over as blosc2 arrays rather than NumPy ones: the
     NumPy route evaluates through ``slices_eval``, which never reaches
@@ -179,18 +201,18 @@ def utf8_span_eval(
         nulls = None
         for name, arr in arrays.items():
             raw = np.asarray(arr[start:stop])
-            nv = sentinels[name]
-            if nv is not None:
-                mask = raw == nv
-                if mask.any():
-                    nulls = mask if nulls is None else (nulls | mask)
-                    raw = np.where(mask, "", raw)
+            mask = _span_null_mask(
+                raw, sentinels[name], None if valids is None else valids.get(name), start, stop
+            )
+            if mask is not None and mask.any():
+                nulls = mask if nulls is None else (nulls | mask)
+                raw = np.where(mask, "", raw)
             span[name] = blosc2.asarray(raw.astype(utf8_span_dtype(raw)))
         res = np.asarray(blosc2.lazyexpr(expr, span).compute(**compute_kwargs))
         if nulls is not None:
             if res.dtype.kind == "b":
                 res = res & ~nulls
-            elif res.dtype.kind == "U":
+            elif res.dtype.kind == "U" and null_value is not None:
                 # The sentinel may be wider than the computed values.
                 res = np.where(
                     nulls,
@@ -452,8 +474,16 @@ class UTF8Array:
         return self._bytes_used_cache
 
     def _coerce(self, value: Any) -> str:
-        """Coerce *value* to ``str``, mapping ``None`` to the null sentinel."""
+        """Coerce *value* to ``str``, mapping ``None`` to whatever fills a null slot.
+
+        Under sentinel storage that is the sentinel string itself.  Under mask
+        storage it is the zero-length fill, and what actually records the null
+        is the column's validity sidecar — written by the caller alongside this
+        value, not here.
+        """
         if value is None:
+            if getattr(self._spec, "uses_mask", False):
+                return ""
             null_value = getattr(self._spec, "null_value", None)
             if null_value is None:
                 raise TypeError("Column of utf8 strings is not nullable; received None.")
@@ -958,14 +988,25 @@ class UTF8Array:
             gt[rows] = row_gt
         return lt, gt
 
-    def arrow_slice(self, pa, a: int, b: int, null_value: str | None = None):
+    def arrow_slice(self, pa, a: int, b: int, null_value: str | None = None, *, valid=None):
         """Persisted rows ``[a, b)`` as a ``pyarrow.LargeStringArray``.
 
         The storage layout (int64 offsets + UTF-8 byte blob) is exactly
         Arrow's ``large_string`` layout, so the array is built directly from
         the raw buffers with no per-row decode or Python string objects.
-        When *null_value* is given, rows equal to the sentinel become Arrow
-        nulls (matched on raw bytes, still without decoding).
+
+        Nullity comes from whichever channel the column uses.  Pass *valid* --
+        a boolean array over rows ``[a, b)``, ``True`` where the row is not
+        null -- for mask storage; pass *null_value* for sentinel storage, where
+        rows equal to the sentinel become Arrow nulls, matched on raw bytes and
+        still without decoding.
+
+        The validity bitmap is produced by handing the booleans to pyarrow and
+        taking the resulting array's data buffer, rather than packing the bits
+        here.  Arrow packs booleans and validity bitmaps the same way (LSB
+        first), so this borrows pyarrow's own packing and removes any chance of
+        emitting the bitmap in the wrong bit order -- a bug a round-trip test
+        cannot catch, because import would unpack it the same wrong way.
         """
         n = b - a
         offs = np.ascontiguousarray(self._offsets[a : b + 1], dtype=np.int64)
@@ -974,11 +1015,17 @@ class UTF8Array:
         data = np.ascontiguousarray(self._data[start:end]) if end > start else np.empty(0, dtype=np.uint8)
         validity = None
         null_count = 0
-        if null_value is not None and n > 0:
-            mask = self.equal_mask_span(null_value, a, b)
-            null_count = int(mask.sum())
-            if null_count:
-                validity = pa.array(~mask).buffers()[1]
+        if n > 0:
+            if valid is not None:
+                valid = np.ascontiguousarray(valid, dtype=np.bool_)
+                null_count = n - int(np.count_nonzero(valid))
+                if null_count:
+                    validity = pa.array(valid).buffers()[1]
+            elif null_value is not None:
+                mask = self.equal_mask_span(null_value, a, b)
+                null_count = int(mask.sum())
+                if null_count:
+                    validity = pa.array(~mask).buffers()[1]
         return pa.LargeStringArray.from_buffers(
             n, pa.py_buffer(rel), pa.py_buffer(data), validity, null_count
         )

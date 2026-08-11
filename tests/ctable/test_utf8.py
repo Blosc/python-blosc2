@@ -32,7 +32,7 @@ class Row:
 
 @dataclass
 class NullableRow:
-    name: str = blosc2.field(blosc2.utf8(nullable=True))
+    name: str = blosc2.field(blosc2.utf8(nullable=True, null_storage="sentinel"))
     x: int = blosc2.field(blosc2.int64())
 
 
@@ -712,8 +712,8 @@ def test_ctable_utf8_comparison_excludes_null_rows():
 def test_ctable_utf8_column_vs_column_comparison():
     @dataclass
     class TwoCols:
-        a: str = blosc2.field(blosc2.utf8(nullable=True))
-        b: str = blosc2.field(blosc2.utf8(nullable=True))
+        a: str = blosc2.field(blosc2.utf8(nullable=True, null_storage="sentinel"))
+        b: str = blosc2.field(blosc2.utf8(nullable=True, null_storage="sentinel"))
 
     t = CTable(TwoCols, new_data={"a": ["x", "y", None, "z"], "b": ["x", "z", "q", None]})
     eq = t[t.a == t.b]
@@ -1296,12 +1296,28 @@ def test_utf8_from_arrow_large_string_ingest():
 
 
 def test_utf8_from_arrow_nulls_use_sentinel():
+    """Importing under an explicitly sentinel policy still reserves a string.
+
+    The *default* is mask storage now, which is what makes a free-text utf8
+    column round-trip at all (any string is a legal value, so no sentinel is
+    safe); this pins that asking for the old behaviour still gets it.
+    """
     pa = pytest.importorskip("pyarrow")
     at = pa.table({"name": pa.array(["a", None, "c"], type=pa.string())})
-    t = CTable.from_arrow(at.schema, at.to_batches())
+    t = CTable.from_arrow(at.schema, at.to_batches(), null_storage="sentinel")
     nv = t["name"].null_value
     assert nv is not None
     assert list(t["name"][:]) == ["a", nv, "c"]
+    assert t["name"].null_count() == 1
+
+
+def test_utf8_from_arrow_nulls_default_to_a_mask():
+    pa = pytest.importorskip("pyarrow")
+    at = pa.table({"name": pa.array(["a", None, "c"], type=pa.string())})
+    t = CTable.from_arrow(at.schema, at.to_batches())
+    assert t["name"].null_storage == "mask"
+    assert t["name"].null_value is None
+    assert t["name"].is_null().tolist() == [False, True, False]
     assert t["name"].null_count() == 1
 
 
@@ -1759,7 +1775,9 @@ def test_ctable_utf8_index_reopen_nulls_last(tmp_path):
     from dataclasses import make_dataclass
 
     path = str(tmp_path / "utf8_index.b2t")
-    row_cls = make_dataclass("Row", [("name", str, blosc2.field(blosc2.utf8(nullable=True)))])
+    row_cls = make_dataclass(
+        "Row", [("name", str, blosc2.field(blosc2.utf8(nullable=True, null_storage="sentinel")))]
+    )
     values = ["pear", "apple", None, "banana"]
     t = blosc2.CTable(row_cls, urlpath=path, mode="w")
     t.extend({"name": values}, validate=False)
@@ -1817,7 +1835,7 @@ def test_ctable_utf8_index_answers_scalar_predicates(nullable, tmp_path):
     values = ["pear", "apple", "café", "banana", "apple", "pear"]
     if nullable:
         values = [*values, None]
-    spec = blosc2.utf8(nullable=True) if nullable else blosc2.utf8()
+    spec = blosc2.utf8(nullable=True, null_storage="sentinel") if nullable else blosc2.utf8()
     row_cls = make_dataclass("Row", [("c", str, blosc2.field(spec))])
 
     masks = {}
@@ -1902,7 +1920,9 @@ def test_ctable_utf8_index_ne_on_all_null_column(tmp_path):
     """
     from dataclasses import make_dataclass
 
-    row_cls = make_dataclass("Row", [("c", str, blosc2.field(blosc2.utf8(nullable=True)))])
+    row_cls = make_dataclass(
+        "Row", [("c", str, blosc2.field(blosc2.utf8(nullable=True, null_storage="sentinel")))]
+    )
     t = blosc2.CTable(row_cls, urlpath=str(tmp_path / "t.b2t"), mode="w")
     t.extend({"c": [None] * 6}, validate=False)
     t._flush_varlen_columns()
@@ -2279,6 +2299,12 @@ def test_constructors_string_dtype_reject_nd():
         blosc2.zeros(3, dtype=STRING_DTYPE, urlpath="unused.b2nd")
 
 
+@pytest.mark.skipif(
+    blosc2.IS_WASM,
+    reason="peak-memory scaling is not measurable under Pyodide: its noise floor "
+    "(~4 MiB observed) is close to the 4-byte-pointer signal this looks for, and "
+    "the property itself is architecture-independent",
+)
 def test_constructors_string_dtype_do_not_materialize_a_fill_list():
     """The fill is one string repeated; building a list of it is pure overhead.
 
@@ -2291,9 +2317,14 @@ def test_constructors_string_dtype_do_not_materialize_a_fill_list():
     cancels the platform's baseline allocation, which is several MiB on Windows
     and half that elsewhere -- a fixed bound only tracks that baseline.
     """
+    import gc
     import tracemalloc
 
     def peak_for(n):
+        # Collect first: tracemalloc reports the peak of everything the process
+        # allocates while it is running, so garbage left by earlier tests lands
+        # in this measurement and has nothing to do with the fill.
+        gc.collect()
         tracemalloc.start()
         try:
             arr = blosc2.zeros(n, dtype=STRING_DTYPE)
@@ -2306,12 +2337,25 @@ def test_constructors_string_dtype_do_not_materialize_a_fill_list():
 
     small = peak_for(500_000)
     large = peak_for(4_000_000)
-    # 8x the rows is 8x the pointer list: materializing one adds ~27 MiB between
-    # these two sizes, where the streamed build does not move at all.  Both sizes
-    # are well past the point where the chunk size stops growing, so the transient
-    # buffer -- the whole of the peak -- is the same for each.
+    # 8x the rows is 8x the pointer list, where the streamed build does not move
+    # at all.  Both sizes are well past the point where the chunk size stops
+    # growing, so the transient buffer -- the whole of the peak -- is the same
+    # for each.
+    #
+    # The bound is derived rather than guessed, because the thing being detected
+    # is one pointer per row and a pointer is not the same size everywhere: 8
+    # bytes here, 4 on wasm32, so materializing costs ~27 MiB on a 64-bit box
+    # and ~13 MiB under Pyodide.  Half of that keeps a real regression caught on
+    # both while leaving room for the noise floor, which is what a fixed bound
+    # kept tripping over -- this passed alone and failed in a full serial run,
+    # as unrelated allocations moved the peak around.  What is being detected
+    # scales with shape[0]; noise does not.
+    pointer_list_mib = (4_000_000 - 500_000) * np.dtype(np.intp).itemsize / 2**20
     grown = (large - small) / 2**20
-    assert grown < 4.0, f"peak grew {grown:.1f} MiB with 8x the rows: a fill list was materialized"
+    assert grown < pointer_list_mib / 2, (
+        f"peak grew {grown:.1f} MiB with 8x the rows (a materialized fill list "
+        f"would cost ~{pointer_list_mib:.0f} MiB here): a fill list was materialized"
+    )
 
 
 def test_utf8_dispatch_round_trips_conversion():

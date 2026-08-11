@@ -528,7 +528,7 @@ INT_MIN = np.iinfo(np.int64).min
 class MinMaxRow:
     i: int = blosc2.field(blosc2.int64())  # non-nullable int → fast path
     f: float = blosc2.field(blosc2.float64(null_value=float("nan")))  # NaN float → fast path
-    k: int = blosc2.field(blosc2.int64(null_value=INT_MIN))  # INT64_MIN sentinel → fallback
+    k: int = blosc2.field(blosc2.int64(null_value=INT_MIN))  # INT64_MIN sentinel → fast since null-aware
     s: str = blosc2.field(blosc2.string(max_length=8))  # non-nullable string → fast path
 
 
@@ -560,10 +560,17 @@ def indexed_minmax(tmp_path_factory):
     return path, refs
 
 
-@pytest.mark.parametrize(("col", "fast"), [("i", True), ("f", True), ("s", True), ("k", False)])
+@pytest.mark.parametrize(("col", "fast"), [("i", True), ("f", True), ("s", True), ("k", True)])
 def test_minmax_matches_reference(indexed_minmax, col, fast):
     """min()/max() equal the live non-null reference, whether or not the
-    summary fast path is used."""
+    summary fast path is used.
+
+    ``k`` used to be the fallback case: its ``INT64_MIN`` sentinel *is* the
+    block minimum, so the summaries answered with the null.  Null-aware
+    summaries (plans/mask-based-nulls.md, phase 10) take the extrema over the
+    valid rows only, so it now takes the shortcut like the rest — the payoff
+    that phase promised for sentinel columns, not only for mask ones.
+    """
     path, refs = indexed_minmax
     t = blosc2.open(path, mode="r")
     try:

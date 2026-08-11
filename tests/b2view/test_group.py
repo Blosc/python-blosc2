@@ -18,6 +18,7 @@ import dataclasses
 
 import numpy as np
 import pytest
+from tui_wait import wait_for_screen
 
 import blosc2
 
@@ -251,8 +252,7 @@ async def test_group_key_applies_and_escape_clears(group_store):
         await pilot.pause()
 
         await pilot.press("G")
-        await pilot.pause()
-        assert isinstance(pilot.app.screen, GroupByScreen)
+        await wait_for_screen(pilot, GroupByScreen)
         await pilot.press("enter")  # key list -> operation list
         await pilot.press("enter")  # "count rows" (first op) applies, no value col
         await _wait_table(pilot)
@@ -277,8 +277,7 @@ async def test_group_key_applies_and_escape_clears(group_store):
 
         # Sort the grouped result by one of its columns via 'S'.
         await pilot.press("S")
-        await pilot.pause()
-        assert isinstance(pilot.app.screen, SortByScreen)
+        await wait_for_screen(pilot, SortByScreen)
         await pilot.press("enter")  # apply the highlighted column
         await _wait_table(pilot)
         assert pilot.app.browser.get_group_sort("/ctable") is not None
@@ -362,8 +361,7 @@ async def test_group_config_cached_and_reused(group_store):
         pilot.app.query_one("#data-table", DataTable).focus()
         await pilot.pause()
         await pilot.press("G")
-        await pilot.pause()
-        assert isinstance(pilot.app.screen, GroupByScreen)
+        await wait_for_screen(pilot, GroupByScreen)
         assert pilot.app.screen._current == ("region", "mean", "amount")
 
 
@@ -388,19 +386,15 @@ async def test_group_bar_chart_and_hires(group_store):
         await pilot.press("down", "enter")  # value: amount -> apply
         await _wait_table(pilot)
         await pilot.press("p")
-        await pilot.pause()
-        assert isinstance(pilot.app.screen, GroupBarScreen)
+        await wait_for_screen(pilot, GroupBarScreen)
         assert pilot.app.screen.numeric is False
 
         # 'h' opens the hi-res matplotlib bar chart; esc returns to the plotext bars.
         await pilot.press("h")
-        await pilot.pause()
-        await pilot.pause()
-        assert isinstance(pilot.app.screen, HiResPlotScreen)
+        await wait_for_screen(pilot, HiResPlotScreen)
         assert pilot.app.screen._mode == "bar"
         await pilot.press("escape")
-        await pilot.pause()
-        assert isinstance(pilot.app.screen, GroupBarScreen)
+        await wait_for_screen(pilot, GroupBarScreen)
 
 
 @pytest.mark.asyncio
@@ -424,12 +418,9 @@ async def test_group_numeric_key_plots_as_line(group_store):
         await pilot.press("down", "enter")  # value: amount -> apply
         await _wait_table(pilot)
         await pilot.press("p")
-        await pilot.pause()
-        assert isinstance(pilot.app.screen, GroupBarScreen)
+        await wait_for_screen(pilot, GroupBarScreen)
         assert pilot.app.screen.numeric is True
 
         await pilot.press("h")  # hi-res is a stem/impulse plot, not bars
-        await pilot.pause()
-        await pilot.pause()
-        assert isinstance(pilot.app.screen, HiResPlotScreen)
+        await wait_for_screen(pilot, HiResPlotScreen)
         assert pilot.app.screen._mode == "stem"

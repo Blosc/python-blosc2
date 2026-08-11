@@ -39,7 +39,7 @@ class TsRow:
 @dataclass
 class FloatRow:
     id: int = blosc2.field(blosc2.int64())
-    f: float = blosc2.field(blosc2.float64(nullable=True))
+    f: float = blosc2.field(blosc2.float64(nullable=True, null_storage="sentinel"))
 
 
 # ===========================================================================
@@ -124,14 +124,27 @@ def test_timestamp_comparisons_exclude_nulls():
     assert t[t.ts > 1500]["id"][:].tolist() == [3]
 
 
-def test_inverted_comparison_selects_null_rows():
-    """Documented consequence of SQL False-semantics (not Kleene): a null
-    compares False, so negating a comparison *selects* null rows. The
-    escape hatch is the complementary comparison, which never matches
-    nulls."""
+def test_inverted_comparison_drops_null_rows():
+    """Negation is Kleene, not bitwise: ``~unknown`` is unknown, so a null row
+    is no more a match for ``~(score > 0)`` than it was for ``score > 0``.
+
+    This is what the two spellings below being *equal* means -- before
+    three-valued logic the negation collapsed the null to False first and then
+    inverted it, so it selected exactly the rows it should have excluded."""
     t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0), (3, -20, 0)])
-    assert t[~(t.score > 0)]["id"][:].tolist() == [2, 3]
+    assert t[~(t.score > 0)]["id"][:].tolist() == [3]
     assert t[t.score <= 0]["id"][:].tolist() == [3]
+
+
+def test_negation_keeps_the_null_recoverable():
+    """The unknown rows are not lost, just not matches: ``fillna(True)`` is the
+    other reading, and ``is_null()`` names them."""
+    t = CTable(IntRow, new_data=[(1, 10, 0), (2, NULL_I64, 0), (3, -20, 0)])
+    negated = ~(t.score > 0)
+    assert negated.is_null().tolist() == [False, True, False]
+    assert negated.null_count() == 1
+    assert t[negated.fillna(True)]["id"][:].tolist() == [2, 3]
+    assert t[negated.fillna(False)]["id"][:].tolist() == [3]
 
 
 # ===========================================================================

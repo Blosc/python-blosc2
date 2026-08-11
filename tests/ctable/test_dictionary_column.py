@@ -247,10 +247,26 @@ class TestCTableBehavior:
         assert all(not v for v in mask.tolist())
 
     def test_is_null(self):
+        """Already one flag per live row, unlike a raw comparison predicate.
+
+        ``is_null()`` reports what the *user* sees, so it needs no
+        physical-to-logical conversion -- and every other column kind has always
+        answered that way.  A comparison such as ``col == "Uber"`` is the
+        physical predicate ``_logical_mask_values`` exists for.
+        """
         ct = CTable(TripRow)
         ct.extend(DATA_TUPLES)
         ct.append({"vendor": None, "fare": 0.0})
-        assert _logical_mask_values(ct, ct["vendor"].is_null()) == [False, False, False, False, True]
+        assert ct["vendor"].is_null().tolist() == [False, False, False, False, True]
+
+    def test_is_null_survives_deletions_and_views(self):
+        """The gather is what keeps it aligned with the rows it describes."""
+        ct = CTable(TripRow)
+        ct.extend(DATA_TUPLES)
+        ct.append({"vendor": None, "fare": 0.0})
+        ct.delete(0)
+        assert ct["vendor"].is_null().tolist() == [False, False, False, True]
+        assert ct["vendor"].to_numpy(masked=True).mask.tolist() == [False, False, False, True]
 
     def test_null_count(self):
         ct = CTable(TripRow)

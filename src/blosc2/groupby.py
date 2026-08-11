@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
+from blosc2.ctable_nulls import is_nan_sentinel, sentinel_mask
 from blosc2.dsl_kernel import DSLKernel
 from blosc2.schema import DictionarySpec, NDArraySpec, SchemaSpec, float64, int64
 from blosc2.schema import bool as b2_bool
@@ -54,24 +55,31 @@ class _AggState:
 
 
 @dataclasses.dataclass
-class _Utf8KeyChunk:
-    """A utf8 key-column chunk, factorized to chunk-local integer codes.
+class _CodedKeyChunk:
+    """A key-column chunk factorized to chunk-local integer codes.
 
-    ``codes[i]`` indexes ``uniques`` (a ``StringDType`` array sorted
-    ascending), so null detection, live-row masking, and per-chunk
-    ``np.unique`` all run on int64 codes; only the (few) distinct strings are
-    ever decoded.  Produced by :meth:`CTableGroupBy._read_key_chunk` via
-    ``UTF8Array.factorizer``.
+    ``codes[i]`` indexes ``uniques``, so null detection, live-row masking, and
+    per-chunk ``np.unique`` all run on int64 codes; for a utf8 column, only the
+    (few) distinct strings are ever decoded.  Produced by
+    :meth:`CTableGroupBy._read_key_chunk` -- for utf8 via
+    ``UTF8Array.factorizer``, whose ``uniques`` are ``StringDType`` sorted
+    ascending, and for a mask-storage column via :func:`_coded_chunk_with_nulls`.
+
+    *null_code* is the code reserved for null rows, or ``-1`` when this chunk's
+    nulls are in band (a sentinel string among the ``uniques``).  When it is set,
+    ``uniques[null_code] is None``, so the null group is displayed and written
+    as a null rather than as whatever value the storage left in those slots.
     """
 
     codes: np.ndarray
     uniques: np.ndarray
+    null_code: int = -1
 
     def __len__(self) -> int:
         return len(self.codes)
 
-    def take(self, mask: np.ndarray) -> _Utf8KeyChunk:
-        return _Utf8KeyChunk(self.codes[mask], self.uniques)
+    def take(self, mask: np.ndarray) -> _CodedKeyChunk:
+        return _CodedKeyChunk(self.codes[mask], self.uniques, self.null_code)
 
     def code_of(self, value: str) -> int:
         """Code of *value* in this chunk, or -1 when absent (uniques are sorted)."""
@@ -79,6 +87,37 @@ class _Utf8KeyChunk:
         if i < len(self.uniques) and self.uniques[i] == value:
             return i
         return -1
+
+
+def _coded_chunk_with_nulls(chunk, valid: np.ndarray) -> _CodedKeyChunk:
+    """Recode a mask-storage key chunk so its nulls get a code of their own.
+
+    A mask-storage column has no value that *means* null: its null rows hold the
+    column's fill, and genuine rows may hold the same thing, so grouping on the
+    values alone silently merges the two -- every null row landing in the ``0``
+    group of an int key, or the ``""`` group of a string one.  Recoding to
+    chunk-local integers with one reserved code is what a dictionary column gets
+    for free from its ``null_code``; this gives it to the other kinds.
+
+    The reserved code maps to ``None`` in the vocabulary, so with
+    ``dropna=False`` the null group comes out keyed ``None`` -- which a
+    mask-storage output column can write back as a real null, where a sentinel
+    column can only offer its sentinel.
+    """
+    if isinstance(chunk, _CodedKeyChunk):
+        # Already coded by the utf8 factorizer; the null rows only need to be
+        # moved off their fill's code and onto one of their own.
+        codes, uniques = chunk.codes, chunk.uniques
+    else:
+        uniques, inverse = np.unique(chunk[valid], return_inverse=True)
+        codes = np.empty(len(chunk), dtype=np.int64)
+        codes[valid] = inverse
+    null_code = len(uniques)
+    vocab = np.empty(null_code + 1, dtype=object)
+    vocab[:null_code] = list(uniques)
+    vocab[null_code] = None
+    codes = np.where(valid, codes, null_code)
+    return _CodedKeyChunk(codes, vocab, null_code)
 
 
 def _is_column_like(value: Any) -> bool:
@@ -480,10 +519,25 @@ class CTableGroupBy:
         UDF aggregations always fall through to the generic
         chunked path below, which is the only one that accumulates raw
         per-group values instead of a mergeable scalar state.
+
+        The **Cython** paths do too whenever a mask-storage column in play holds
+        a null: each reads nullity out of the values -- a kernel is told a
+        ``skip_nan`` flag, not given a validity array -- and a mask column's
+        values say nothing about which rows are null.  Threading a sidecar
+        through six kernels is a performance follow-up; getting the answer right
+        is not.  The dense single-key path is plain NumPy and already routes its
+        value columns through :meth:`_null_mask`, so a mask *value* column need
+        only hand over its sidecar there; only a mask *key* column has to leave,
+        since its recoded chunk is a :class:`_CodedKeyChunk` rather than the
+        array of dense non-negative ints that path indexes with.
+
+        A mask column with no sidecar has never held a null and stays on every
+        fast path.
         """
         if any(s.op == "udf" for s in specs):
             return None
-        if not use_arg_positions:
+        mask_null = self._mask_null_columns(specs)
+        if not use_arg_positions and not mask_null:
             for attempt in (
                 self._try_execute_cython_dense_int_key,
                 self._try_execute_cython_two_int_key_hash,
@@ -498,10 +552,11 @@ class CTableGroupBy:
         # before the generic float hash path, which is markedly slower.  Unlike
         # the Cython kernels above, it tracks row positions, so it also serves
         # argmin/argmax — keeping them off the slow generic hash+merge path.
-        fast = self._try_execute_dense_single_int_key(specs)
-        if fast is not None:
-            return fast
-        if not use_arg_positions:
+        if not any(name in self.keys for name in mask_null):
+            fast = self._try_execute_dense_single_int_key(specs)
+            if fast is not None:
+                return fast
+        if not use_arg_positions and not mask_null:
             return self._try_execute_cython_float_hash(specs)
         return None
 
@@ -537,7 +592,7 @@ class CTableGroupBy:
 
             keys_live = [
                 values.take(live_mask)
-                if isinstance(values, _Utf8KeyChunk)
+                if isinstance(values, _CodedKeyChunk)
                 else np.asarray(values)[live_mask]
                 for values in raw_keys
             ]
@@ -549,9 +604,16 @@ class CTableGroupBy:
             value_chunks = {
                 name: np.asarray(self.table._cols[name][start:stop])[live_mask] for name in value_cols
             }
+            # Gathered by the same live_mask as the values, so a validity flag
+            # stays beside the row it belongs to.
+            valid_chunks = {
+                name: valid_slice[live_mask]
+                for name in value_cols
+                if (valid_slice := self._valid_chunk(name, start, stop)) is not None
+            }
 
             partials = self._compute_partials(
-                specs, unique_keys, inverse, value_chunks, logical_positions[live_mask]
+                specs, unique_keys, inverse, value_chunks, logical_positions[live_mask], valid_chunks
             )
             display_keys = self._display_keys(unique_keys)
             normalized_keys = self._normalized_keys(display_keys)
@@ -598,7 +660,7 @@ class CTableGroupBy:
             if value_dtype is None or np.dtype(value_dtype).kind != "f":
                 return None
             null_value = getattr(value_info.spec, "null_value", None)
-            if null_value is not None and not (isinstance(null_value, float) and math.isnan(null_value)):
+            if null_value is not None and not is_nan_sentinel(null_value):
                 return None
 
         try:
@@ -749,7 +811,7 @@ class CTableGroupBy:
                 desc.update({"kernel": kernel, "state_kind": "counts", "value_dtype": value_dtype})
             elif spec.op in {"sum", "mean", "min", "max"}:
                 if value_dtype.kind == "f":
-                    skip_nan = isinstance(null_value, float) and math.isnan(null_value)
+                    skip_nan = is_nan_sentinel(null_value)
                     if null_value is not None and not skip_nan:
                         return None
                     suffix = "sum" if spec.op == "sum" else spec.op
@@ -1108,7 +1170,7 @@ class CTableGroupBy:
                 if value_dtype is None or np.dtype(value_dtype).kind != "f":
                     return None
                 null_value = getattr(value_info.spec, "null_value", None)
-                nullable_nan_value = isinstance(null_value, float) and math.isnan(null_value)
+                nullable_nan_value = is_nan_sentinel(null_value)
                 if null_value is not None and not nullable_nan_value:
                     return None
 
@@ -1419,6 +1481,13 @@ class CTableGroupBy:
             value_chunks = {
                 name: np.asarray(self.table._cols[name][start:stop])[live_mask] for name in value_cols
             }
+            # Gathered by the same live_mask as the values, so a validity flag
+            # stays beside the row it belongs to.
+            valid_chunks = {
+                name: valid_slice[live_mask]
+                for name in value_cols
+                if (valid_slice := self._valid_chunk(name, start, stop)) is not None
+            }
             row_positions = logical_chunk[live_mask] if need_positions else None
 
             for spec in specs:
@@ -1427,7 +1496,12 @@ class CTableGroupBy:
                     continue
                 assert spec.input_col is not None
                 values = value_chunks[spec.input_col]
-                non_null = ~self._null_mask(spec.input_col, values, is_key=False)
+                non_null = ~self._null_mask(
+                    spec.input_col,
+                    values,
+                    is_key=False,
+                    valid=valid_chunks.get(spec.input_col),
+                )
                 if spec.op == "count":
                     states[spec.output_col] += np.bincount(
                         keys, weights=non_null.astype(np.int64), minlength=len(present)
@@ -1558,7 +1632,48 @@ class CTableGroupBy:
         # column).
         return base * -(-target // base)
 
+    def _mask_null_columns(self, specs: list[_AggSpec]) -> list[str]:
+        """The key and value columns in play that have a validity sidecar.
+
+        Non-empty means this aggregation has to take the generic chunked path;
+        see :meth:`_try_fast_paths`.  Only mask-storage columns are probed, and
+        only those the schema names -- an absent sidecar is the common case and
+        means the column has never held a null.
+        """
+        names = [*self.keys, *(s.input_col for s in specs if s.input_col is not None)]
+        candidates = set(self.table._null_mask_names)
+        return [
+            name
+            for name in dict.fromkeys(names)
+            if name in candidates and self.table._null_mask(name) is not None
+        ]
+
+    def _valid_chunk(self, name: str, start: int, stop: int) -> np.ndarray | None:
+        """Physical validity for rows ``[start, stop)`` of *name*, or ``None``.
+
+        ``None`` is the answer for every column whose nulls travel in band with
+        its values, and equally for a mask-storage column that has never held a
+        null -- both mean "nothing here to look up on the side".  Groupby reads
+        physical windows throughout, so the sidecar slices straight across.
+        """
+        mask = self.table._null_mask(name)
+        return None if mask is None else np.asarray(mask[start:stop], dtype=bool)
+
     def _read_key_chunk(self, name: str, start: int, stop: int) -> np.ndarray:
+        chunk = self._read_raw_key_chunk(name, start, stop)
+        valid = self._valid_chunk(name, start, stop)
+        if valid is None:
+            return chunk
+        if getattr(chunk, "dtype", None) is not None and chunk.dtype.kind == "f":
+            # A float *key* keeps NaN-as-missing so dropna stays predictable,
+            # as it does for a sentinel column -- see _null_mask.  Folding it in
+            # here puts NaN keys in the same group as the nulls rather than
+            # leaving _null_mask to re-derive it from recoded values it can no
+            # longer see.
+            valid = valid & ~np.isnan(chunk)
+        return _coded_chunk_with_nulls(chunk, valid)
+
+    def _read_raw_key_chunk(self, name: str, start: int, stop: int) -> np.ndarray:
         col_info = self.table._schema.columns_by_name[name]
         if self.table._is_dictionary_column(col_info):
             return np.asarray(self.table._cols[name].codes[start:stop], dtype=np.int32)
@@ -1586,7 +1701,7 @@ class CTableGroupBy:
             codes = rank[codes] if len(order) else codes
             if stop > n:
                 codes = np.concatenate([codes, np.zeros(stop - max(start, n), dtype=np.int64)])
-            return _Utf8KeyChunk(codes, uniques[order])
+            return _CodedKeyChunk(codes, uniques[order])
         return np.asarray(self.table._cols[name][start:stop])
 
     def _factorize_keys(
@@ -1594,7 +1709,7 @@ class CTableGroupBy:
     ) -> tuple[np.ndarray | list[np.ndarray], np.ndarray]:
         if len(keys_live) == 1:
             arr = keys_live[0]
-            if isinstance(arr, _Utf8KeyChunk):
+            if isinstance(arr, _CodedKeyChunk):
                 # The chunk is already factorized to dense string-rank codes;
                 # dedupe them with an O(n) bincount instead of a sort.  The
                 # np.unique contract — uniques ascending by string — holds
@@ -1612,7 +1727,7 @@ class CTableGroupBy:
         # order); the codes in the deduped rows are mapped back to strings
         # below, into object fields (StringDType cannot be a structured-array
         # field).
-        pack_arrs = [arr.codes if isinstance(arr, _Utf8KeyChunk) else arr for arr in keys_live]
+        pack_arrs = [arr.codes if isinstance(arr, _CodedKeyChunk) else arr for arr in keys_live]
         composite = self._composite_int_factorize(pack_arrs)
         if composite is not None:
             unique_fields, inverse = composite
@@ -1624,13 +1739,13 @@ class CTableGroupBy:
             packed_unique, inverse = np.unique(packed, return_inverse=True)
             unique_fields = [packed_unique[f"k{i}"] for i in range(len(pack_arrs))]
         out_dtype = [
-            (f"k{i}", object if isinstance(arr, _Utf8KeyChunk) else pack_arrs[i].dtype)
+            (f"k{i}", object if isinstance(arr, _CodedKeyChunk) else pack_arrs[i].dtype)
             for i, arr in enumerate(keys_live)
         ]
         unique = np.empty(len(unique_fields[0]), dtype=out_dtype)
         for i, arr in enumerate(keys_live):
             field = unique_fields[i]
-            unique[f"k{i}"] = arr.uniques[field] if isinstance(arr, _Utf8KeyChunk) else field
+            unique[f"k{i}"] = arr.uniques[field] if isinstance(arr, _CodedKeyChunk) else field
         return unique, inverse
 
     @staticmethod
@@ -1744,6 +1859,7 @@ class CTableGroupBy:
         inverse: np.ndarray,
         value_chunks: dict[str, np.ndarray],
         row_positions: np.ndarray,
+        valid_chunks: dict[str, np.ndarray] | None = None,
     ) -> dict[str, Any]:
         n_groups = len(unique_keys)
         partials: dict[str, Any] = {}
@@ -1754,7 +1870,12 @@ class CTableGroupBy:
 
             assert spec.input_col is not None
             values = value_chunks[spec.input_col]
-            non_null = ~self._null_mask(spec.input_col, values, is_key=False)
+            non_null = ~self._null_mask(
+                spec.input_col,
+                values,
+                is_key=False,
+                valid=None if valid_chunks is None else valid_chunks.get(spec.input_col),
+            )
 
             if spec.op == "count":
                 partials[spec.output_col] = np.bincount(
@@ -2113,27 +2234,43 @@ class CTableGroupBy:
                 return float64()
         return copy.deepcopy(input_spec)
 
-    def _null_mask(self, name: str, values: np.ndarray, *, is_key: bool) -> np.ndarray:
+    def _null_mask(
+        self, name: str, values: np.ndarray, *, is_key: bool, valid: np.ndarray | None = None
+    ) -> np.ndarray:
+        """True where this chunk of *name* is null, one flag per row.
+
+        *values* is the chunk the caller already read, which is enough for the
+        in-band kinds.  A mask-storage column's nullity is not in its values at
+        all, so it arrives separately: as *valid* for a value column, or already
+        folded into a reserved code for a key column (:meth:`_read_key_chunk`).
+        """
         col_info = self.table._schema.columns_by_name[name]
         spec = col_info.spec
-        if isinstance(values, _Utf8KeyChunk):
-            null_value = getattr(spec, "null_value", None)
+        null_value = getattr(spec, "null_value", None)
+        if valid is not None:
+            # The fill under a null must not be tested as a value: a 0 fill
+            # would look non-null and a NaN one doubly null.  The sidecar is the
+            # whole answer here, and for a *value* column that includes leaving
+            # a genuine NaN alone -- in a mask column NaN is a value.
+            return ~np.asarray(valid, dtype=bool)
+        if isinstance(values, _CodedKeyChunk):
+            if values.null_code >= 0:
+                return values.codes == values.null_code
             if null_value is None:
                 return np.zeros(len(values), dtype=bool)
             return values.codes == values.code_of(null_value)
         if isinstance(spec, DictionarySpec):
             mask = values == np.int32(spec.null_code)
             return mask if is_key or getattr(spec, "nullable", False) else np.zeros(len(values), dtype=bool)
-        null_value = getattr(spec, "null_value", None)
         mask = np.zeros(len(values), dtype=bool)
         # For keys, treat all NaNs as missing so dropna behaves predictably.
         # For values, only nullable NaN sentinels are skipped.
-        if values.dtype.kind == "f" and (
-            is_key or (isinstance(null_value, float) and math.isnan(null_value))
-        ):
+        nan_sentinel = is_nan_sentinel(null_value)
+        if values.dtype.kind == "f" and (is_key or nan_sentinel):
             mask |= np.isnan(values)
-        if null_value is not None and not (isinstance(null_value, float) and math.isnan(null_value)):
-            mask |= values == null_value
+        if null_value is not None and not nan_sentinel:
+            # A float key column with a non-NaN sentinel gets both tests.
+            mask |= sentinel_mask(values, null_value)
         return mask
 
 
@@ -2214,6 +2351,12 @@ def _python_type_for_spec(spec: SchemaSpec):
 
 def _max_identity(dtype: np.dtype):
     dtype = np.dtype(dtype)
+    if dtype.kind == "b":
+        # bool needs its own case: np.full(n, None, dtype=bool) is *False*, so a
+        # min accumulator seeded with it can never rise above False and every
+        # all-True group reduced to False.  (Storage-independent -- reachable
+        # with any plain bool column on the generic chunked path.)
+        return True
     if dtype.kind in "iu":
         return np.iinfo(dtype).max
     if dtype.kind == "f":
@@ -2225,6 +2368,8 @@ def _max_identity(dtype: np.dtype):
 
 def _min_identity(dtype: np.dtype):
     dtype = np.dtype(dtype)
+    if dtype.kind == "b":
+        return False  # see _max_identity
     if dtype.kind in "iu":
         return np.iinfo(dtype).min
     if dtype.kind == "f":
@@ -2235,7 +2380,16 @@ def _min_identity(dtype: np.dtype):
 
 
 def _null_output_value(spec: SchemaSpec):
+    """The value to write for a group whose aggregate is missing.
+
+    A mask-storage output column answers ``None``: nullity goes in its sidecar,
+    so the result is a *real* null rather than a value standing in for one --
+    which is the whole reason a group with no non-null input no longer has to
+    come back as ``0`` or ``NaN`` and hope nobody reads it as data.
+    """
     dtype = getattr(spec, "dtype", None)
+    if getattr(spec, "uses_mask", False):
+        return None
     null_value = getattr(spec, "null_value", None)
     if null_value is not None:
         return null_value

@@ -484,14 +484,45 @@ def schema_to_dict(schema: CompiledSchema) -> dict[str, Any]:
             entry["blocks"] = list(col.config.blocks)
         cols.append(entry)
 
-    schema_version = 2 if schema.metadata.get("nested") is not None else 1
+    # Computed as an explicit feature max rather than a running counter, so
+    # each version says which feature demands it.  The bump is *conditional on
+    # a mask column existing*: sentinel tables keep serializing as version 1/2
+    # and stay readable by everything that came before mask storage.
+    uses_mask = any(getattr(col.spec, "null_storage", None) == "mask" for col in schema.columns)
+    if uses_mask:
+        schema_version = 3
+    elif schema.metadata.get("nested") is not None:
+        schema_version = 2
+    else:
+        schema_version = 1
     result = {
         "version": schema_version,
         "columns": cols,
     }
-    if schema.metadata:
-        result["metadata"] = schema.metadata
+    metadata = schema.metadata
+    parents = _struct_parent_specs(schema)
+    if parents:
+        # The logical parent of a nested group -- a StructSpec for ``trip``
+        # beside its physical ``trip.lon``/``trip.lat`` -- lives only in
+        # columns_by_name, so the loop above never sees it and it was lost on
+        # every save.  A reopened table then exported the leaves flat.  Carried
+        # inside ``metadata`` rather than as a new top-level key so that older
+        # readers, which copy the metadata blob through untouched, neither
+        # choke on it nor need a version bump to skip it.
+        metadata = {**metadata, "struct_parents": parents}
+    if metadata:
+        result["metadata"] = metadata
     return result
+
+
+def _struct_parent_specs(schema: CompiledSchema) -> dict[str, Any]:
+    """Serialized specs for the ``columns_by_name`` entries that are not columns."""
+    physical = {col.name for col in schema.columns}
+    return {
+        name: cc.spec.to_metadata_dict()
+        for name, cc in schema.columns_by_name.items()
+        if name not in physical
+    }
 
 
 def schema_from_dict(data: dict[str, Any]) -> CompiledSchema:
@@ -507,8 +538,12 @@ def schema_from_dict(data: dict[str, Any]) -> CompiledSchema:
         If *data* uses an unknown schema version or an unknown column kind.
     """
     version = data.get("version", 1)
-    if version not in (1, 2):
-        raise ValueError(f"Unsupported schema version {version!r}")
+    if version not in (1, 2, 3):
+        raise ValueError(
+            f"Unsupported schema version {version!r}. Version 3 is written only when a column uses "
+            f"validity-mask null storage; an older reader can be given a readable copy with "
+            f"table.convert_nulls(to='sentinel')."
+        )
 
     columns: list[CompiledColumn] = []
     for entry in data["columns"]:
@@ -535,9 +570,29 @@ def schema_from_dict(data: dict[str, Any]) -> CompiledSchema:
             )
         )
 
+    metadata = dict(data.get("metadata", {}))
+    columns_by_name = {col.name: col for col in columns}
+    # Restore the logical parents of any nested group (see _struct_parent_specs).
+    # They are not physical columns, so they are absent from ``columns`` by
+    # design; without them a reopened table exports ``trip.lon``/``trip.lat``
+    # where the table it was saved from exported ``trip``.
+    for name, entry in metadata.pop("struct_parents", {}).items():
+        if name in columns_by_name:
+            continue
+        spec = spec_from_metadata_dict(dict(entry))
+        columns_by_name[name] = CompiledColumn(
+            name=name,
+            py_type=spec.python_type,
+            spec=spec,
+            dtype=getattr(spec, "dtype", None),
+            default=MISSING,
+            config=ColumnConfig(cparams=None, dparams=None, chunks=None, blocks=None),
+            display_width=compute_display_width(spec),
+        )
+
     return CompiledSchema(
         row_cls=None,
         columns=columns,
-        columns_by_name={col.name: col for col in columns},
-        metadata=dict(data.get("metadata", {})),
+        columns_by_name=columns_by_name,
+        metadata=metadata,
     )

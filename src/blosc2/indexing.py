@@ -18,7 +18,7 @@ import sys
 import tempfile
 import warnings
 import weakref
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -40,6 +40,11 @@ _INDEX_MMAP_MODE = None if sys.platform == "win32" else "r"
 
 FLAG_ALL_NAN = np.uint8(1 << 0)
 FLAG_HAS_NAN = np.uint8(1 << 1)
+# No row in the segment carries a value: every one of them is null.  Set
+# together with FLAG_ALL_NAN, whose established meaning -- "min/max are
+# placeholders, skip this segment" -- is exactly what a reader that predates
+# null-aware summaries needs to do with it.
+FLAG_ALL_NULL = np.uint8(1 << 2)
 
 SEGMENT_LEVELS_BY_KIND = {
     # SUMMARY stores per-segment min/max.  Block granularity prunes far more
@@ -1154,8 +1159,48 @@ def _boundary_dtype(dtype: np.dtype) -> np.dtype:
     return np.dtype([("start", dtype), ("end", dtype)])
 
 
-def _segment_summary(segment: np.ndarray, dtype: np.dtype):
+def _rowwise_str_minmax(data_2d: np.ndarray, dtype: np.dtype, valid_2d: np.ndarray | None):
+    """Per-row min/max for ``U``/``S`` rows; numpy's ufuncs lack a loop for them.
+
+    Rows with no valid entry get the dtype's zero and are flagged by the
+    caller, which is the same convention the float path uses for all-NaN rows.
+    """
+    n = data_2d.shape[0]
+    mins = np.empty(n, dtype=dtype)
+    maxs = np.empty(n, dtype=dtype)
+    empty = np.zeros((), dtype=dtype)[()]
+    for i in range(n):
+        row = data_2d[i]
+        if valid_2d is not None:
+            row = row[valid_2d[i]]
+        if row.shape[0] == 0:
+            mins[i] = empty
+            maxs[i] = empty
+            continue
+        mn = row[0]
+        mx = row[0]
+        for v in row[1:]:
+            if v < mn:
+                mn = v
+            if v > mx:
+                mx = v
+        mins[i] = mn
+        maxs[i] = mx
+    return mins, maxs
+
+
+def _segment_summary(segment: np.ndarray, dtype: np.dtype, valid: np.ndarray | None = None):
     flags = np.uint8(0)
+    if valid is not None:
+        valid = np.asarray(valid, dtype=bool)
+        if not valid.all():
+            if not valid.any():
+                # Nothing to summarise.  FLAG_ALL_NAN rides along so that a
+                # reader which knows only the two NaN flags still skips the
+                # segment instead of trusting the placeholder extrema.
+                zero = np.zeros((), dtype=dtype)[()]
+                return zero, zero, np.uint8(flags | FLAG_ALL_NULL | FLAG_ALL_NAN)
+            segment = segment[valid]
     if dtype.kind == "f":
         valid = ~np.isnan(segment)
         if not np.all(valid):
@@ -1178,7 +1223,9 @@ def _segment_summary(segment: np.ndarray, dtype: np.dtype):
     return segment.min(), segment.max(), flags
 
 
-def _compute_segment_summaries(values: np.ndarray, dtype: np.dtype, segment_len: int) -> np.ndarray:
+def _compute_segment_summaries(
+    values: np.ndarray, dtype: np.dtype, segment_len: int, valid: np.ndarray | None = None
+) -> np.ndarray:
     nsegments = math.ceil(values.shape[0] / segment_len)
     summary_dtype = _summary_dtype(dtype)
     summaries = np.empty(nsegments, dtype=summary_dtype)
@@ -1187,7 +1234,7 @@ def _compute_segment_summaries(values: np.ndarray, dtype: np.dtype, segment_len:
         start = idx * segment_len
         stop = min(start + segment_len, values.shape[0])
         segment = values[start:stop]
-        summaries[idx] = _segment_summary(segment, dtype)
+        summaries[idx] = _segment_summary(segment, dtype, None if valid is None else valid[start:stop])
     return summaries
 
 
@@ -1196,21 +1243,35 @@ def _fill_summaries_from_2d(
     summaries_arr: np.ndarray,
     offset: int,
     dtype: np.dtype,
+    valid_2d: np.ndarray | None = None,
 ) -> None:
-    """Fill summaries_arr[offset:offset+n] from data_2d (shape n×segment_len) with vectorized ops."""
+    """Fill summaries_arr[offset:offset+n] from data_2d (shape n×segment_len) with vectorized ops.
+
+    *valid_2d*, when given, has the same shape and excludes null rows from the
+    extrema, so a nullable column's summaries describe only the values a query
+    can actually match.  Rows with no valid entry at all are flagged
+    ``FLAG_ALL_NULL``.
+    """
     n = data_2d.shape[0]
     if n == 0:
         return
+    all_null = None if valid_2d is None else ~valid_2d.any(axis=1)
     if dtype.kind == "f":
         # All-NaN blocks make np.nanmin/nanmax emit "All-NaN slice encountered";
         # their results are immediately overwritten with zero below, so silence
         # the (purely cosmetic) RuntimeWarning.
+        # NaN under a null row is the *fill*, not data, so the flags are taken
+        # over the valid rows only: FLAG_HAS_NAN must keep meaning "a real NaN
+        # value lives here", which is what makes the min()/max() shortcut safe
+        # to disable on exactly the columns that need it.
+        masked = data_2d if valid_2d is None else np.where(valid_2d, data_2d, np.nan)
         with np.errstate(all="ignore"), warnings.catch_warnings():
             warnings.filterwarnings("ignore", r"All-NaN slice encountered", RuntimeWarning)
-            has_nan = np.any(np.isnan(data_2d), axis=1)
-            all_nan = np.all(np.isnan(data_2d), axis=1)
-            mins = np.nanmin(data_2d, axis=1)
-            maxs = np.nanmax(data_2d, axis=1)
+            is_nan = np.isnan(masked)
+            has_nan = np.any(is_nan if valid_2d is None else (is_nan & valid_2d), axis=1)
+            all_nan = np.all(is_nan, axis=1)
+            mins = np.nanmin(masked, axis=1)
+            maxs = np.nanmax(masked, axis=1)
         flags = np.where(has_nan, FLAG_HAS_NAN, np.uint8(0)).astype(np.uint8)
         flags = np.where(all_nan, np.uint8(FLAG_ALL_NAN | FLAG_HAS_NAN), flags)
         zero = dtype.type(0)
@@ -1220,23 +1281,25 @@ def _fill_summaries_from_2d(
         if dtype.kind in "US":
             # String dtypes: numpy ufunc 'minimum'/'maximum' lack a loop for <U/S.
             # Use manual per-row comparison (cheap for small segment_len).
-            mins = np.empty(n, dtype=dtype)
-            maxs = np.empty(n, dtype=dtype)
-            for i in range(n):
-                row = data_2d[i]
-                mn = row[0]
-                mx = row[0]
-                for v in row[1:]:
-                    if v < mn:
-                        mn = v
-                    if v > mx:
-                        mx = v
-                mins[i] = mn
-                maxs[i] = mx
-        else:
+            mins, maxs = _rowwise_str_minmax(data_2d, dtype, valid_2d)
+        elif valid_2d is None:
             mins = data_2d.min(axis=1)
             maxs = data_2d.max(axis=1)
+        else:
+            # Substitute each row's *own* extremum for its null slots: it can
+            # never win the opposite reduction, so one masked pass gives the
+            # extrema over the valid rows.  Using the row rather than the
+            # dtype's limits keeps this working for any orderable kind --
+            # including datetime64, which has no np.iinfo.  An all-null row
+            # degenerates to the row's own min/max and is overwritten below.
+            mins = np.where(valid_2d, data_2d, data_2d.max(axis=1, keepdims=True)).min(axis=1)
+            maxs = np.where(valid_2d, data_2d, data_2d.min(axis=1, keepdims=True)).max(axis=1)
         flags = np.zeros(n, dtype=np.uint8)
+    if all_null is not None and all_null.any():
+        zero = np.zeros((), dtype=dtype)[()]
+        mins = np.where(all_null, zero, mins)
+        maxs = np.where(all_null, zero, maxs)
+        flags = np.where(all_null, np.uint8(FLAG_ALL_NULL | FLAG_ALL_NAN), flags).astype(np.uint8)
     summaries_arr["min"][offset : offset + n] = mins
     summaries_arr["max"][offset : offset + n] = maxs
     summaries_arr["flags"][offset : offset + n] = flags
@@ -1429,12 +1492,14 @@ def _build_levels_descriptor(
     persistent: bool,
     cparams: dict | None = None,
     summary_levels: tuple[str, ...] | None = None,
+    validity: Callable[[np.ndarray, int, int], np.ndarray | None] | None = None,
 ) -> dict:
     levels = {}
     levels_to_build = summary_levels if summary_levels is not None else SEGMENT_LEVELS_BY_KIND[kind]
+    valid = None if validity is None else validity(values, 0, int(values.shape[0]))
     for level in levels_to_build:
         segment_len = _segment_len(array, level)
-        summaries = _compute_segment_summaries(values, dtype, segment_len)
+        summaries = _compute_segment_summaries(values, dtype, segment_len, valid)
         sidecar = _store_array_sidecar(
             array, token, kind, "summary", level, summaries, persistent, cparams=cparams
         )
@@ -1457,6 +1522,7 @@ def _build_levels_descriptor_ooc(
     cparams: dict | None = None,
     summary_levels: tuple[str, ...] | None = None,
     precomputed_summaries: dict[str, np.ndarray] | None = None,
+    validity: Callable[[np.ndarray, int, int], np.ndarray | None] | None = None,
 ) -> dict:
     size = int(array.shape[0])
     summary_dtype = _summary_dtype(dtype)
@@ -1472,11 +1538,21 @@ def _build_levels_descriptor_ooc(
     # column back just to recompute min/max.  Only trusted when every requested
     # level is present with the exact expected segment count and dtype; otherwise
     # fall through to the decompression pass below.
-    use_precomputed = precomputed_summaries is not None and all(
-        level in precomputed_summaries
-        and precomputed_summaries[level].dtype == summary_dtype
-        and len(precomputed_summaries[level]) == nsegments_total[level]
-        for level in levels_to_build
+    # A validity provider always wins: the accumulator that produced the
+    # precomputed summaries folded min/max as rows were written, with no
+    # validity in hand, so trusting them would silently hand back extrema over
+    # the fill values.  The caller keeps the two mutually exclusive
+    # (CTable._precomputed_summary_for declines for a column with nulls); the
+    # guard here makes that a property of the builder rather than of its caller.
+    use_precomputed = (
+        validity is None
+        and precomputed_summaries is not None
+        and all(
+            level in precomputed_summaries
+            and precomputed_summaries[level].dtype == summary_dtype
+            and len(precomputed_summaries[level]) == nsegments_total[level]
+            for level in levels_to_build
+        )
     )
     if use_precomputed:
         for level in levels_to_build:
@@ -1496,6 +1572,7 @@ def _build_levels_descriptor_ooc(
             chunk_stop = min(chunk_start + chunk_len, size)
             chunk_values = _slice_values_for_target(array, target, chunk_start, chunk_stop)
             chunk_size = chunk_stop - chunk_start
+            chunk_valid = None if validity is None else validity(chunk_values, chunk_start, chunk_stop)
             for level in levels_to_build:
                 slen = segment_lens[level]
                 summaries_arr = all_summaries[level]
@@ -1504,10 +1581,17 @@ def _build_levels_descriptor_ooc(
                 remainder = chunk_size % slen
                 if n_complete > 0:
                     data_2d = chunk_values[: n_complete * slen].reshape(n_complete, slen)
-                    _fill_summaries_from_2d(data_2d, summaries_arr, offset, dtype)
+                    valid_2d = (
+                        None
+                        if chunk_valid is None
+                        else chunk_valid[: n_complete * slen].reshape(n_complete, slen)
+                    )
+                    _fill_summaries_from_2d(data_2d, summaries_arr, offset, dtype, valid_2d)
                 if remainder > 0:
                     summaries_arr[offset + n_complete] = _segment_summary(
-                        chunk_values[n_complete * slen :], dtype
+                        chunk_values[n_complete * slen :],
+                        dtype,
+                        None if chunk_valid is None else chunk_valid[n_complete * slen :],
                     )
                     seg_offsets[level] = offset + n_complete + 1
                 else:
@@ -1519,8 +1603,9 @@ def _build_levels_descriptor_ooc(
             for idx in range(nsegments_total[level]):
                 start = idx * slen
                 stop = min(start + slen, size)
+                seg_values = _slice_values_for_target(array, target, start, stop)
                 all_summaries[level][idx] = _segment_summary(
-                    _slice_values_for_target(array, target, start, stop), dtype
+                    seg_values, dtype, None if validity is None else validity(seg_values, start, stop)
                 )
 
     levels = {}
@@ -3990,6 +4075,7 @@ def _build_descriptor(
     full: dict | None,
     cparams: dict | None = None,
     opsi: dict | None = None,
+    null_aware: bool = False,
 ) -> dict:
     return {
         "name": name
@@ -4013,6 +4099,11 @@ def _build_descriptor(
         "full": full,
         "opsi": opsi,
         "cparams": _plain_index_cparams(cparams),
+        # True when the segment summaries were built with a validity channel,
+        # so their extrema cover only rows that carry a value.  Absent on every
+        # index built before null-aware summaries existed, which is why readers
+        # must spell this ``.get("null_aware", False)``.
+        "null_aware": bool(null_aware),
     }
 
 
@@ -4042,6 +4133,7 @@ def create_index(
     opsi_max_cycles_arg = kwargs.pop("opsi_max_cycles", None)
     summary_levels = kwargs.pop("summary_levels", None)
     precomputed_summaries = kwargs.pop("precomputed_summaries", None)
+    validity = kwargs.pop("validity", None)
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"unexpected keyword argument(s): {unexpected}")
@@ -4074,6 +4166,7 @@ def create_index(
             cparams,
             summary_levels=summary_levels,
             precomputed_summaries=precomputed_summaries,
+            validity=validity,
         )
         bucket = (
             _build_bucket_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, cparams)
@@ -4115,11 +4208,21 @@ def create_index(
             full,
             cparams,
             opsi,
+            validity is not None,
         )
     else:
         values = _values_for_target(array, target)
         levels = _build_levels_descriptor(
-            array, target, token, kind, dtype, values, persistent, cparams, summary_levels=summary_levels
+            array,
+            target,
+            token,
+            kind,
+            dtype,
+            values,
+            persistent,
+            cparams,
+            summary_levels=summary_levels,
+            validity=validity,
         )
         bucket = (
             _build_bucket_descriptor(array, token, kind, values, optlevel, persistent, cparams)
@@ -4156,6 +4259,7 @@ def create_index(
             full,
             cparams,
             opsi,
+            validity is not None,
         )
 
     store = _load_store(array)

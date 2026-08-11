@@ -8,11 +8,14 @@
 """Tests for CTable.to_csv() and CTable.from_csv()."""
 
 import csv
+import dataclasses
 import os
+import pathlib
 from dataclasses import dataclass
 
 import numpy as np
 import pytest
+from utf8_compat import needs_utf8, utf8_spec
 
 import blosc2
 from blosc2 import CTable
@@ -538,5 +541,117 @@ def test_from_pandas_multi_dim_ndarray_roundtrip():
     assert t2["label"][:].tolist() == t["label"][:].tolist()
 
 
+@dataclass
+class MaskTextRow:
+    text: str = blosc2.field(blosc2.string(max_length=16, nullable=True, null_storage="mask"), default="")
+
+
+def test_csv_mask_text_roundtrip_empty_vs_null(tmp_csv):
+    """A mask-backed text column keeps "" apart from a null (and from whitespace)."""
+    values = ["", "  ", None, "ok", "\\N", "\\E", "\\\\N", "N"]
+    t = CTable(MaskTextRow, new_data=[(v,) for v in values])
+    t.to_csv(tmp_csv)
+    t2 = CTable.from_csv(tmp_csv, MaskTextRow)
+
+    assert [None if n else v for v, n in zip(t2["text"][:], t2["text"].is_null(), strict=True)] == values
+    assert t2["text"].null_count() == 1
+
+
+# ---------------------------------------------------------------------------
+# utf8 columns
+# ---------------------------------------------------------------------------
+#
+# utf8 reports StringDType(), whose kind is "T" -- not the "U"/"S" a fixed-width
+# text column reports, and not a fixed element dtype at all on the schema side.
+# Both halves of the CSV path used to key off that dtype, so utf8 was the one
+# text kind that neither escaped its empty cells nor could be read back.
+
+
+def utf8_row(**kwargs):
+    """A one-utf8-column dataclass.  Only ever called from a ``needs_utf8`` test."""
+    return dataclasses.make_dataclass("Utf8Row", [("text", str, blosc2.field(utf8_spec(**kwargs)))])
+
+
+@needs_utf8
+def test_csv_utf8_column_roundtrips(tmp_csv):
+    """A plain utf8 column could not be read back at all -- from_csv raised."""
+    row_cls = utf8_row()
+    values = ["x", "", "  ", "unicode: \u00e9\u4e2d"]
+    t = CTable(row_cls, new_data=[(v,) for v in values])
+    t.to_csv(tmp_csv)
+    t2 = CTable.from_csv(tmp_csv, row_cls)
+    assert list(t2["text"][:]) == values
+
+
+def test_csv_is_utf_8_whatever_the_platform_locale(tmp_csv):
+    """The bytes on disk are UTF-8, not whatever codec the locale prefers.
+
+    ``open()`` defaults to the locale encoding, which on Windows is cp1252 and
+    cannot encode most of what a text column may hold -- writing a CJK
+    character raised ``UnicodeEncodeError`` there while passing everywhere
+    else.  A CSV has to mean the same thing wherever it is written and read, so
+    both halves name the encoding.  Asserted on the raw bytes, since the
+    process running this test may well have a UTF-8 locale that would hide a
+    regression.
+    """
+    row_cls = dataclasses.make_dataclass(
+        "TextRow", [("text", str, blosc2.field(blosc2.string(max_length=16)))]
+    )
+    values = ["ascii", "caf\u00e9", "\u4e2d\u6587"]
+    CTable(row_cls, new_data=[(v,) for v in values]).to_csv(tmp_csv)
+
+    raw = pathlib.Path(tmp_csv).read_bytes()
+    assert "\u4e2d\u6587".encode() in raw
+    assert list(CTable.from_csv(tmp_csv, row_cls)["text"][:]) == values
+
+
+def test_csv_reads_back_a_file_carrying_a_byte_order_mark(tmp_csv):
+    """Excel and several Windows tools prefix a BOM; utf-8-sig absorbs it."""
+    row_cls = dataclasses.make_dataclass(
+        "BomRow", [("text", str, blosc2.field(blosc2.string(max_length=8)))]
+    )
+    pathlib.Path(tmp_csv).write_text("text\ncaf\u00e9\n", encoding="utf-8-sig")
+    assert list(CTable.from_csv(tmp_csv, row_cls)["text"][:]) == ["caf\u00e9"]
+
+
+@needs_utf8
+def test_csv_mask_utf8_keeps_empty_apart_from_null(tmp_csv):
+    """Same contract as the fixed-width text column above, for utf8."""
+    row_cls = utf8_row(null_storage="mask")
+    values = ["", "  ", None, "ok", "\\N", "\\E", "\\\\N", "N"]
+    t = CTable(row_cls, new_data=[(v,) for v in values])
+    t.to_csv(tmp_csv)
+    t2 = CTable.from_csv(tmp_csv, row_cls)
+
+    assert [None if n else v for v, n in zip(t2["text"][:], t2["text"].is_null(), strict=True)] == values
+    assert t2["text"].null_count() == 1
+
+
+def test_csv_rejects_a_kind_it_cannot_read(tmp_csv):
+    """A clear refusal, not an AttributeError from deep inside the conversion."""
+    row_cls = dataclasses.make_dataclass("VlRow", [("v", str, blosc2.field(blosc2.vlstring()))])
+    with open(tmp_csv, "w") as f:
+        f.write("v\nq\n")
+    with pytest.raises(ValueError, match="does not support"):
+        CTable.from_csv(tmp_csv, row_cls)
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
+
+
+def test_csv_encoding_is_overridable_for_a_legacy_file(tmp_csv):
+    """Defaulting to UTF-8 must not strand a file written in a platform codec.
+
+    Naming the encoding is what makes the default deterministic; it would be a
+    poor trade if it also made a cp1252 file -- which a Windows user's existing
+    data may well be -- unreadable.
+    """
+    row_cls = dataclasses.make_dataclass(
+        "LegacyRow", [("text", str, blosc2.field(blosc2.string(max_length=16)))]
+    )
+    values = ["café", "naïve"]
+    CTable(row_cls, new_data=[(v,) for v in values]).to_csv(tmp_csv, encoding="cp1252")
+
+    assert pathlib.Path(tmp_csv).read_bytes().count(b"\xe9") == 1  # cp1252, not UTF-8
+    assert list(CTable.from_csv(tmp_csv, row_cls, encoding="cp1252")["text"][:]) == values
