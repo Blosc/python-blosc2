@@ -308,8 +308,6 @@ def are_partitions_behaved(shape, chunks, blocks):
     bool
         True if the partitions are well-behaved, False otherwise.
     """
-
-    # Spanning the innermost dimension keeps whole container rows; outer dimensions just tile evenly
     def check_contiguity(container, part):
         if container and container[-1] != part[-1]:
             return False
