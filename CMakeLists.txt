@@ -27,7 +27,27 @@ endif()
 # does not include a python symbolic link to python3.
 # find_package(Python 3.12 COMPONENTS Interpreter NumPy Development.Module REQUIRED)
 # IMO, this would need to be solved in Fedora, so we can just use the following line:
-find_package(Python COMPONENTS Interpreter NumPy Development.Module REQUIRED)
+find_package(Python COMPONENTS Interpreter NumPy Development.Module
+             ${SKBUILD_SABI_COMPONENT} REQUIRED)
+
+# abi3 (Stable ABI) support.  scikit-build-core sets SKBUILD_SABI_COMPONENT to
+# "Development.SABIModule" and SKBUILD_SABI_VERSION to e.g. "3.11" when
+# `wheel.py-api` requests a limited-API build; both are empty otherwise, so a
+# plain CMake invocation keeps the version-specific behaviour.  Passing
+# USE_SABI to Python_add_library defines Py_LIMITED_API for the target (which
+# is what flips Cython into CYTHON_LIMITED_API mode) and, together with
+# WITH_SOABI, names the module `<name>.abi3.so` instead of
+# `<name>.cpython-3XY-<plat>.so`.
+#
+# Note scikit-build-core silently ignores py-api on free-threaded
+# interpreters, so cp3XXt builds fall back to version-specific wheels on their
+# own -- abi3t (PEP 803) is a separate ABI that Cython cannot emit yet.
+if(SKBUILD_SABI_VERSION)
+  set(B2_SABI USE_SABI ${SKBUILD_SABI_VERSION})
+  message(STATUS "Building limited-API (abi3) modules for Python ${SKBUILD_SABI_VERSION}+")
+else()
+  set(B2_SABI "")
+endif()
 
 # Add custom command to generate the version file
 add_custom_command(
@@ -68,15 +88,15 @@ add_custom_command(
   VERBATIM)
 
 # ...and add it to the target
-Python_add_library(blosc2_ext MODULE blosc2_ext.c WITH_SOABI)
+Python_add_library(blosc2_ext MODULE ${B2_SABI} WITH_SOABI blosc2_ext.c)
 target_sources(blosc2_ext PRIVATE src/blosc2/matmul_kernels.c)
 target_include_directories(blosc2_ext PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2)
 if(UNIX)
   target_link_libraries(blosc2_ext PRIVATE ${CMAKE_DL_LIBS})
 endif()
-Python_add_library(indexing_ext MODULE indexing_ext.c WITH_SOABI)
-Python_add_library(groupby_ext MODULE groupby_ext.c WITH_SOABI)
-Python_add_library(utf8_ext MODULE utf8_ext.c WITH_SOABI)
+Python_add_library(indexing_ext MODULE ${B2_SABI} WITH_SOABI indexing_ext.c)
+Python_add_library(groupby_ext MODULE ${B2_SABI} WITH_SOABI groupby_ext.c)
+Python_add_library(utf8_ext MODULE ${B2_SABI} WITH_SOABI utf8_ext.c)
 # NpyString_pack() and friends are part of NumPy's 2.0 C API; opt in
 # explicitly since numpy/*.h otherwise targets an older API version by
 # default for source compatibility.
