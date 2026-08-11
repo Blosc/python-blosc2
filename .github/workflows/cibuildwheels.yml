@@ -21,7 +21,8 @@ env:
   # x86_64 wheels yet, so `pip install` of the test venv would cross-compile
   # them from the arm64 runner -- which lacks the x86_64-apple-darwin Rust
   # target.  The wheel itself builds fine, so ship it and skip only its test.
-  CIBW_TEST_SKIP: "cp315-macosx_x86_64"
+  # (`cp315*` so the free-threaded cp315t build is skipped for the same reason)
+  CIBW_TEST_SKIP: "cp315*-macosx_x86_64"
   # Use explicit generator/compiler env vars; CMAKE_ARGS with spaces is not split on Windows.
   CIBW_ENVIRONMENT_WINDOWS: >-
     CMAKE_GENERATOR=Ninja
@@ -42,17 +43,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The `*` after the version list is what lets the free-threaded builds
+        # through: their identifiers are `cp314t-...`, so a bare `cp314-...`
+        # pattern silently drops them.  cibuildwheel enables free-threading by
+        # default from 3.14 on, so cp314t/cp315t are selected while cp313t is
+        # not -- deliberate, as 3.13's free-threaded build was still marked
+        # experimental (PEP 703 phase I) and carried a large single-thread
+        # penalty.  Opting into it would need CIBW_ENABLE: cpython-freethreading.
         include:
           # Linux x86_64 builds
           - os: ubuntu-latest
             arch: x86_64
-            cibw_pattern: "cp3{11,12,13,14,15}-manylinux*"
+            cibw_pattern: "cp3{11,12,13,14,15}*-manylinux*"
             artifact_name: "linux-x86_64"
 
           # Linux ARM64 builds (native runners)
           - os: ubuntu-24.04-arm
             arch: aarch64
-            cibw_pattern: "cp3{11,12,13,14,15}-manylinux*"
+            cibw_pattern: "cp3{11,12,13,14,15}*-manylinux*"
             artifact_name: "linux-aarch64"
             # Don't use native runners for now (looks like wait times are too long)
             #runs-on: ["ubuntu-latest", "arm64"]
@@ -60,13 +68,13 @@ jobs:
           # Windows builds
           - os: windows-latest
             arch: x86_64
-            cibw_pattern: "cp3{11,12,13,14,15}-win_amd64"
+            cibw_pattern: "cp3{11,12,13,14,15}*-win_amd64"
             artifact_name: "windows-x86_64"
 
           # macOS builds (universal2)
           - os: macos-latest
             arch: x86_64
-            cibw_pattern: "cp3{11,12,13,14,15}-macosx*"
+            cibw_pattern: "cp3{11,12,13,14,15}*-macosx*"
             artifact_name: "macos-universal2"
     steps:
       - name: Checkout repo
