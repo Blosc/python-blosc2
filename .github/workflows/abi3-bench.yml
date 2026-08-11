@@ -1,0 +1,158 @@
+# THROWAWAY -- delete before merging.
+#
+# Measures the cost of the Limited API build against a version-specific one on
+# every platform we ship.  The local benchmarking behind the abi3 switch only
+# covered macOS arm64 / CPython 3.14; the interesting unmeasured cell is
+# Windows, where an abi3 extension links `python3.dll` (a forwarder DLL) rather
+# than `python3XY.dll`, so every libpython call takes an extra thunk.  There is
+# no POSIX equivalent of that indirection, and abi3 shifts work *onto* those
+# calls: the compiled objects shrink 3-10% because Cython's inlined fast paths
+# become function calls.
+#
+# 3.11 and 3.14 are the ends of the supported range: one abi3 binary serves
+# both, but the interpreter-side handling of these paths differs by version.
+name: abi3 perf check (throwaway)
+
+on:
+  push:
+    branches: [abi3]
+  workflow_dispatch:
+
+jobs:
+  bench:
+    name: bench ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    env:
+      CMAKE_GENERATOR: Ninja
+      CMAKE_BUILD_PARALLEL_LEVEL: 8
+      SKBUILD_PARALLEL_LEVEL: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Ninja
+        run: pip install ninja
+
+      - name: Add LLVM to PATH (Windows)
+        if: runner.os == 'Windows'
+        run: echo "C:\\Program Files\\LLVM\\bin" >> $env:GITHUB_PATH
+
+      - name: Install MSVC amd64 (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: amd64
+
+      # pyproject sets wheel.py-api = "cp311", so the plain build is the abi3
+      # one and the control has to override py-api back to empty.
+      - name: Build both wheels (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          CC: clang-cl
+          CXX: clang-cl
+        run: |
+          python -m pip install --upgrade pip
+          pip wheel . --no-deps -w wheels-abi3
+          pip wheel . --no-deps -w wheels-base -C wheel.py-api=
+          ls -l wheels-abi3 wheels-base
+
+      - name: Build both wheels (non-Windows)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip wheel . --no-deps -w wheels-abi3
+          pip wheel . --no-deps -w wheels-base -C wheel.py-api=
+          ls -l wheels-abi3 wheels-base
+
+      - name: Create both environments
+        shell: bash
+        run: |
+          for v in abi3 base; do
+            python -m venv "venv-$v"
+            PY=$(ls venv-$v/bin/python venv-$v/Scripts/python.exe 2>/dev/null | head -1)
+            "$PY" -m pip install --quiet --upgrade pip
+            "$PY" -m pip install --quiet wheels-$v/*.whl
+            echo "-- $v --"
+            "$PY" -c "
+          import os, importlib.machinery as m, blosc2.blosc2_ext as ext
+          name = os.path.basename(ext.__file__)
+          print(name, '| abi3:', not name.endswith(m.EXTENSION_SUFFIXES[0]))
+          "
+          done
+
+      # Interleaved so a slow patch on a shared runner hits both builds rather
+      # than biasing whichever ran first.
+      - name: Run interleaved benchmark rounds
+        shell: bash
+        run: |
+          mkdir -p results/bench-${{ matrix.os }}-${{ matrix.python-version }}
+          OUT=results/bench-${{ matrix.os }}-${{ matrix.python-version }}
+          for round in 1 2 3; do
+            for v in abi3 base; do
+              PY=$(ls venv-$v/bin/python venv-$v/Scripts/python.exe 2>/dev/null | head -1)
+              echo "== round $round / $v =="
+              "$PY" .github/bench-abi3/bench.py > "$OUT/$v-$round.json"
+            done
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bench-${{ matrix.os }}-${{ matrix.python-version }}
+          path: results/bench-${{ matrix.os }}-${{ matrix.python-version }}
+
+  summarize:
+    name: Summarize abi3 benchmark
+    needs: [bench]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: results
+          pattern: bench-*
+
+      - name: Build the report
+        id: report
+        continue-on-error: true
+        run: python .github/bench-abi3/compare.py results
+
+      # The step summary is not reliably readable through the public API, so
+      # also post the table to the PR, where it definitely is.
+      - name: Post the report to the PR
+        if: github.event_name == 'push'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR=$(gh pr list --head "${{ github.ref_name }}" --json number --jq '.[0].number')
+          if [ -n "$PR" ]; then
+            gh pr comment "$PR" --body-file abi3-bench-report.md
+          else
+            echo "no open PR for ${{ github.ref_name }}"
+          fi
+
+      - name: Fail if a benchmark regressed past threshold
+        if: steps.report.outcome == 'failure'
+        run: |
+          echo "See the report above: at least one benchmark regressed past threshold."
+          exit 1
