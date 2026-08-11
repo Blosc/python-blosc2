@@ -302,9 +302,6 @@ def are_partitions_behaved(shape, chunks, blocks):
     Check if the partitions defined by chunks and blocks are well-behaved with respect to the shape.
 
     This function verifies that partitions are C-contiguous with respect the outer container.
-    This means an unsplit innermost dimension and outer dimensions that the partition divides
-    evenly; a partition that overhangs the container in some dimension pads it, so it is not
-    well-behaved either.
 
     Returns
     -------
