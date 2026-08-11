@@ -130,16 +130,13 @@ The benchmark times four variants — the Python loop above, a vectorized NumPy 
 
 ![Mandelbrot escape times across jit modes](optim_tips/tip_15a_jit_control_flow.png)
 
-The default `@blosc2.jit` is **~155x faster than the Python loop** and **~2.3x faster than the best plain-NumPy version** (with `jit_backend="cc"`, ~317x and ~4.7x), and it is simply the loop you would have written anyway. The NumPy version, by contrast, costs ~15 lines of `alive`/`escaped` mask bookkeeping plus an overflow trap for the pixels that already escaped.
+The default `@blosc2.jit` is **~160x faster than the Python loop** and **~2.3x faster than the best plain-NumPy version** (with `jit_backend="cc"`, ~320x and ~4.7x).
 
 Operands may equally be on-disk {class}`~blosc2.NDArray` objects: the same kernel over `blosc2.asarray()` views of the two grids runs at the same speed and returns a plain NumPy array.
 
 #### Gotcha: silent fallback to tracing
 
-The DSL grammar is narrower than Python, and a body that misses it falls back to tracing *silently* — you only find out when the call fails. Two rules bite in this example:
-
-- **Simple assignments only.** The tuple assignment `zr, zi = ...` of the Python reference is not valid DSL; that is why the jit version uses a `zr2` temporary.
-- **No docstring in the kernel body.**
+The DSL grammar is narrower than Python, and a body that misses it falls back to tracing *silently* — you only find out when the call fails. For example, the tuple assignment `zr, zi = ...` of the Python reference is not valid DSL program; that is why the jit version uses a `zr2` temporary.
 
 The [DSL syntax reference](../reference/dsl_syntax.md) has the full grammar. To turn that silent fallback into a hard error, decorate with `@blosc2.jit(strict=True)`: it forces the DSL route and raises `DSLSyntaxError` at *decoration* time if the function cannot be compiled.
 
@@ -147,10 +144,12 @@ The opposite knob, `strict=False`, forces tracing even when there is control flo
 
 ### Element-wise functions still trace by default
 
-If compiling the whole function is this good, why doesn't `jit` do it for everything? Because without control flow, tracing wins: the traced expression is evaluated as one vectorized miniexpr over whole chunks, while a compiled kernel has to loop element by element. Here is a heavy elementwise mix of transcendental functions:
+If compiling the whole function is this good, why doesn't `jit` do it for everything? Because without control flow, tracing usually wins: the traced expression is evaluated as one vectorized miniexpr over whole chunks, while a compiled kernel has to loop element by element.
+
+Here is a heavy elementwise mix of transcendental functions:
 
 ```python
-@blosc2.jit
+@blosc2.jit  # using jit(strict=True) forces the DSL route
 def heavy(x):
     return (
         np.sin(x)
@@ -159,9 +158,6 @@ def heavy(x):
         + np.sqrt(np.abs(x))
         + np.log1p(np.abs(x))
     )
-
-
-# The same body decorated with @blosc2.jit(strict=True) forces the DSL route.
 ```
 
 Measured over 8M float32 values:
@@ -172,7 +168,7 @@ The first bar is the same expression in plain NumPy, as a scale anchor: all thre
 
 Among the three, the default `@blosc2.jit` (which traces) is the faster route here: forcing the DSL route with `strict=True` is **~1.37x slower** with the bundled tcc, and gets close to tracing when compiled with `jit_backend="cc"` (still ~1.07x slower; the plot shows the exact times). Note that `jit_backend="cc"` alone does *not* switch an elementwise function to the compiled route; it keeps tracing, at the same speed.
 
-So, use `strict=True` when you want the compiled-kernel guarantee, even if sometimes it may cost you speed.
+So, use `strict=True` when you want the compiled-kernel guarantee; but be aware that usually it may cost you speed.
 
 ### Pros and cons of forcing the system compiler
 
@@ -185,7 +181,7 @@ The price is the one-time compile. The benchmark measures it as the first call m
 | mandelbrot | 3.2 ms | 233 ms | 1.3 ms |
 | elementwise | 4.0 ms | 253 ms | 2.9 ms |
 
-[tcc](https://bellard.org/tcc/) compiles in memory, so every process pays those few milliseconds again. `cc` writes a shared object into `$TMPDIR/miniexpr-jit`, keyed by a fingerprint of the kernel, its dtypes and the toolchain: only the *first* process on a machine pays the compiler, and later ones just load the cached artifact — cheaper even than tcc's in-memory compile. And that cold compile is repaid by the faster steady state after ~54 calls of the mandelbrot kernel (~42 of the elementwise one).
+[tcc](https://bellard.org/tcc/) compiles in memory, so every process pays those few milliseconds again. `cc` writes a shared object into `$TMPDIR/miniexpr-jit`, keyed by a fingerprint of the kernel, its dtypes and the toolchain: only the *first* process on a machine pays the compiler.
 
 So `cc` pays off for kernels you call repeatedly in the same run (or across runs), or when run time is much larger than compile time. It also requires a C compiler and a writable cache directory.
 
