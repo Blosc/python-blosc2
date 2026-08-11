@@ -86,16 +86,16 @@ The output passes light uniformity checks against NumPy's PCG64 (the benchmark s
 
 There are two routes the {func}`@blosc2.jit <blosc2.jit>` decorator can take because they are good at different things:
 
-- **No control flow → tracing (the default).** `jit` calls your function once with proxy operands, records the `LazyExpr` it builds, and evaluates that expression vectorized over whole chunks. This is the faster route for plain elementwise math.
-- **Control flow → the whole function is compiled.** A traced call only ever walks *one* path through an `if` or a loop, so the other paths would be silently lost. So when `jit` sees control flow and the body fits the DSL grammar, it compiles the entire function with the same miniexpr engine that enables the {func}`@blosc2.dsl_kernel <blosc2.dsl_kernel>` decorator and runs the compiled kernel chunk by chunk.
+- **No control flow → tracing (the default).** `jit` calls your function once with proxy operands, records the `LazyExpr` it builds, and evaluates that expression *vectorized* over whole chunks. This is the faster route for plain elementwise math.
+- **Control flow → the whole function is compiled.** A traced call only ever walks *one* path through an `if` or a loop, so the other paths would be silently lost. So when `jit` sees control flow *and* the body fits the DSL grammar, it compiles the entire function with the same miniexpr engine that enables the {func}`@blosc2.dsl_kernel <blosc2.dsl_kernel>` decorator and runs the *compiled* kernel chunk by chunk.
 
-In short: you can write `if`, `for` and `while` inside a {func}`@blosc2.jit <blosc2.jit>`-decorated function and they will work as intended, provided the body sticks to the [DSL grammar](../reference/dsl_syntax.md). But be aware that this route is different from tracing.
-
-Why the two routes? Because tracing is usually faster when it works: the traced expression is evaluated as one vectorized miniexpr over whole chunks, while a compiled kernel has to loop element by element.  Keep reading for examples of both, and the knobs to force one route or the other.
+In short: you can write `if`, `for` and `while` inside a {func}`@blosc2.jit <blosc2.jit>`-decorated function and they will work as intended, provided the body sticks to the [DSL grammar](../reference/dsl_syntax.md).
 
 ### An example: Mandelbrot escape times
 
-Escape-time counting is a per-pixel loop with an early `break` — exactly the shape tracing cannot represent. Let's compute the escape count of a 512×512 patch of the Mandelbrot set (`max_iter=64`) and compare the ways of running it:
+Escape-time counting is a per-pixel loop with an early `break` — exactly the scenario that tracing/vectorizing cannot represent.
+
+Let's compute the escape count of a 512×512 patch of the Mandelbrot set (`max_iter=64`) and compare the ways of running it:
 
 ```python
 def mandel_py(cr, ci, max_iter):  # plain Python: one loop per pixel
@@ -126,16 +126,11 @@ def mandel_jit(cr, ci, max_iter):
 iterations = mandel_jit(CR, CI, 64)  # CR, CI: the two float32 grids
 ```
 
-The benchmark times these four variants, and checks that every one of them returns escape counts bit-identical to the pure-Python reference (a fifth, `@blosc2.jit(strict=True)`, is checked too; it is the same route as `mandel_jit`, just forced):
-
-- `mandel_py` — plain Python, one loop per pixel
-- `mandel_numpy` — vectorized NumPy mask iteration
-- `mandel_jit` — the `@blosc2.jit` above: control flow detected, kernel compiled whole
-- `mandel_cc` — same, with `@blosc2.jit(jit_backend="cc")`: the system C compiler instead of the bundled tcc (tradeoffs in a section of their own below)
+The benchmark times four variants — the Python loop above, a vectorized NumPy mask iteration, the `@blosc2.jit` above, and the same kernel with `@blosc2.jit(jit_backend="cc")` (the system C compiler instead of the bundled tcc, with tradeoffs of its own below) — and checks that all of them return escape counts bit-identical to the pure-Python reference:
 
 ![Mandelbrot escape times across jit modes](optim_tips/tip_15a_jit_control_flow.png)
 
-The default `@blosc2.jit` is **~140x faster than the Python loop** and **~2x faster than the best plain-NumPy version**, and it is simply the loop you would have written anyway. The NumPy version, by contrast, costs 15 lines of `alive`/`escaped` mask bookkeeping plus an overflow trap (after a pixel escapes, its `zr, zi` keep growing and go `inf`/`nan` in float32, so the mask loop must not rely on them).
+The default `@blosc2.jit` is **~155x faster than the Python loop** and **~2.3x faster than the best plain-NumPy version** (with `jit_backend="cc"`, ~317x and ~4.7x), and it is simply the loop you would have written anyway. The NumPy version, by contrast, costs ~15 lines of `alive`/`escaped` mask bookkeeping plus an overflow trap for the pixels that already escaped.
 
 Operands may equally be on-disk {class}`~blosc2.NDArray` objects: the same kernel over `blosc2.asarray()` views of the two grids runs at the same speed and returns a plain NumPy array.
 
@@ -146,7 +141,7 @@ The DSL grammar is narrower than Python, and a body that misses it falls back to
 - **Simple assignments only.** The tuple assignment `zr, zi = ...` of the Python reference is not valid DSL; that is why the jit version uses a `zr2` temporary.
 - **No docstring in the kernel body.**
 
-The [DSL syntax reference](../reference/dsl_syntax.md) has the full grammar. To turn that silent fallback into a hard error, decorate with `@blosc2.jit(strict=True)`: it forces the DSL route and raises `DSLSyntaxError` at *decoration* time if the function cannot be compiled. It is also the only way to reach the DSL route through `df.apply(..., engine=blosc2.jit(strict=True))`.
+The [DSL syntax reference](../reference/dsl_syntax.md) has the full grammar. To turn that silent fallback into a hard error, decorate with `@blosc2.jit(strict=True)`: it forces the DSL route and raises `DSLSyntaxError` at *decoration* time if the function cannot be compiled.
 
 The opposite knob, `strict=False`, forces tracing even when there is control flow. On this function it fails loudly — tracing evaluates `if zr * zr + zi * zi > 4.0` on an array, which raises `ValueError`. The dangerous case is a branch on a plain Python value instead (say `if max_iter > 100`): tracing records only the path that one call happened to take, and that path is then reused for every element, quietly. So use `strict=False` only when the branches depend on Python values, never on the arrays.
 
@@ -173,15 +168,26 @@ Measured over 8M float32 values:
 
 ![Elementwise: tracing vs forced DSL](optim_tips/tip_15b_jit_elementwise.png)
 
-The default `@blosc2.jit` (which traces) is the faster route here: forcing the DSL route with `strict=True` is **~1.8x slower** with the bundled tcc, and only matches tracing when compiled with `jit_backend="cc"` (the plots show the exact times). Note that `jit_backend="cc"` alone does *not* switch an elementwise function to the compiled route; it keeps tracing, at the same speed.
+The first bar is the same expression in plain NumPy, as a scale anchor: all three jit routes beat it — the traced default by **~3.2x**, and even the slowest of them, the forced DSL kernel on tcc, by ~2.3x.
+
+Among the three, the default `@blosc2.jit` (which traces) is the faster route here: forcing the DSL route with `strict=True` is **~1.37x slower** with the bundled tcc, and gets close to tracing when compiled with `jit_backend="cc"` (still ~1.07x slower; the plot shows the exact times). Note that `jit_backend="cc"` alone does *not* switch an elementwise function to the compiled route; it keeps tracing, at the same speed.
 
 So, use `strict=True` when you want the compiled-kernel guarantee, even if sometimes it may cost you speed.
 
 ### Pros and cons of forcing the system compiler
 
-`jit_backend="cc"` is roughly **2x faster** in steady state on both kernels above (mandelbrot and elementwise alike), with identical results.
+`jit_backend="cc"` is faster in steady state on both kernels above — **~2.05x** on the mandelbrot kernel and **~1.28x** on the elementwise one — with identical results.
 
-The price is the one-time compile: the first call pays **hundreds of milliseconds** while the system compiler builds a shared object, where [tcc](https://bellard.org/tcc/) (the default) takes only **tens of milliseconds**. The artifact for the `cc` backend is cached on disk, so later processes load it in milliseconds. So `cc` pays off for kernels you call repeatedly in the same run (or across runs), or when run time is much larger than compile time. It also requires a C compiler and a writable cache directory.
+The price is the one-time compile. The benchmark measures it as the first call minus the steady state of the calls that follow it, in a fresh process:
+
+| kernel | tcc (the default) | cc, cold cache | cc, warm cache |
+| --- | --- | --- | --- |
+| mandelbrot | 3.2 ms | 233 ms | 1.3 ms |
+| elementwise | 4.0 ms | 253 ms | 2.9 ms |
+
+[tcc](https://bellard.org/tcc/) compiles in memory, so every process pays those few milliseconds again. `cc` writes a shared object into `$TMPDIR/miniexpr-jit`, keyed by a fingerprint of the kernel, its dtypes and the toolchain: only the *first* process on a machine pays the compiler, and later ones just load the cached artifact — cheaper even than tcc's in-memory compile. And that cold compile is repaid by the faster steady state after ~54 calls of the mandelbrot kernel (~42 of the elementwise one).
+
+So `cc` pays off for kernels you call repeatedly in the same run (or across runs), or when run time is much larger than compile time. It also requires a C compiler and a writable cache directory.
 
 The same switch is available globally through the `BLOSC_ME_JIT=cc` environment variable, which wins over the keyword argument.
 

@@ -11,8 +11,9 @@
 # the whole kernel as DSL), and @blosc2.jit(strict=True) (forces that route) --
 # plus the elementwise contrast that explains why functions *without* control
 # flow still trace: tracing is faster than the forced DSL route for pure
-# elementwise expressions.  A final pair measures the same DSL kernels compiled
-# with jit_backend="cc" (system C compiler) instead of the bundled tcc.
+# elementwise expressions (measured against plain NumPy too, as the scale
+# anchor for all three jit routes).  A final pair measures the same DSL kernels
+# compiled with jit_backend="cc" (system C compiler) instead of the bundled tcc.
 #
 # Peak memory is the same story for every variant here (the result array plus
 # a few temporaries), so the plot is time-only. The script prints a
@@ -20,6 +21,14 @@
 # shows that strict=False cannot even trace this function: the loop condition
 # depends on the traced arrays, so tracing raises instead of recording one
 # path for every element.
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
 import numpy as np
 from common import COLOR_NAIVE, COLOR_TIP, GRID, INK, MUTED, OUT_DIR, measure
@@ -186,6 +195,19 @@ def elementwise_dsl_cc(x):
     )
 
 
+def numpy_route():
+    # The same expression in plain NumPy: the scale anchor for the three jit
+    # routes below, and the first bar of the elementwise plot.
+    x = X
+    return (
+        np.sin(x)
+        + np.cos(x * 2)
+        + np.exp(x * 0.5) * np.sin(x * 3)
+        + np.sqrt(np.abs(x))
+        + np.log1p(np.abs(x))
+    )
+
+
 def trace_route():
     return elementwise(X)
 
@@ -196,6 +218,66 @@ def dsl_route():
 
 def dsl_route_cc():
     return elementwise_dsl_cc(X)
+
+
+# --- One-time compile cost -------------------------------------------------
+#
+# The timings above are steady state: measure() reports the best of three
+# calls, so the compile that happens on the *first* call is excluded. This
+# section measures that first call instead -- the penalty a user actually pays
+# -- as (first call) - (best of the five that follow).
+#
+# The two backends amortize it very differently, which is why "cold" and "warm"
+# are measured separately. tcc compiles in memory, every process, every time.
+# cc writes a shared object into $TMPDIR/miniexpr-jit keyed by a fingerprint of
+# the kernel IR + dtypes + toolchain, so only the first process on a machine
+# pays the compiler; later ones dlopen the cached artifact. Each measurement
+# therefore runs in a fresh subprocess with TMPDIR pointed at a scratch dir
+# that is either wiped first (cold) or kept from the previous run (warm) -- and
+# never at the user's real cache, which the steady-state timings above rely on.
+_COMPILE_DRIVER = """\
+import importlib.util, json, os, sys, time
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+spec = importlib.util.spec_from_file_location("_bench_mod", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)  # module-level setup, and the @jit decorators
+fn = getattr(mod, sys.argv[2])
+t0 = time.perf_counter()
+fn()
+first = time.perf_counter() - t0
+steady = float("inf")
+for _ in range(5):
+    t0 = time.perf_counter()
+    fn()
+    steady = min(steady, time.perf_counter() - t0)
+print(json.dumps({"first": first, "steady": steady}))
+"""
+
+
+def measure_compile(func_name, cache_dir, cold, reps=3):
+    """First-call penalty of func_name(), in a fresh process with its own JIT cache.
+
+    Best of `reps` processes, for the same reason common.measure() takes the best
+    of three calls: the very first cc compile of a session runs ~1.5x slower than
+    the settled one (the compiler binary itself is cold), and that is an artifact
+    of the harness, not of the backend.
+    """
+    best = float("inf")
+    for _ in range(reps):
+        if cold:
+            shutil.rmtree(cache_dir, ignore_errors=True)
+        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        proc = subprocess.run(
+            [sys.executable, "-c", _COMPILE_DRIVER, str(Path(__file__).resolve()), func_name],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "TMPDIR": str(cache_dir)},
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"{func_name} failed:\n{proc.stderr}")
+        data = json.loads(proc.stdout.strip().splitlines()[-1])
+        best = min(best, data["first"] - data["steady"])
+    return best
 
 
 def bars(ax, title, labels, values, fmt, log=False, colors=None):
@@ -280,7 +362,7 @@ if __name__ == "__main__":
     # --- Timings ---
     mandel_names = ("py_loop", "numpy_masked", "jit_default", "jit_strict", "jit_cc")
     t = {}
-    for name in mandel_names + ("trace_route", "dsl_route", "dsl_route_cc"):
+    for name in mandel_names + ("numpy_route", "trace_route", "dsl_route", "dsl_route_cc"):
         t[name], rss = measure(__file__, name)
         print(f"{name:<13} {t[name]:8.4f}s   peak {rss / 1e6:6.1f} MB")
 
@@ -288,9 +370,35 @@ if __name__ == "__main__":
     for name in mandel_names[1:]:
         print(f"  {name:<13} {t['py_loop'] / t[name]:6.1f}x faster than py_loop")
     print(f"  elementwise: trace {t['dsl_route'] / t['trace_route']:.2f}x faster than forced DSL")
+
+    print("\nelementwise vs plain NumPy:")
+    for name in ("trace_route", "dsl_route", "dsl_route_cc"):
+        print(f"  {name:<13} {t['numpy_route'] / t[name]:.2f}x faster than numpy_route")
     print("\njit_backend='cc' vs default tcc (steady state):")
     print(f"  mandel:      {t['jit_default'] / t['jit_cc']:.2f}x faster with cc")
     print(f"  elementwise: {t['dsl_route'] / t['dsl_route_cc']:.2f}x faster with cc")
+
+    # --- One-time compile cost (first call minus steady state) ---
+    print("\none-time compile cost (first call - steady state), fresh process:")
+    with tempfile.TemporaryDirectory(prefix="tip15-jitcache-") as cache_dir:
+        c = {}
+        for label, func_name in (
+            ("mandel  tcc", "jit_default"),
+            ("mandel  cc ", "jit_cc"),
+            ("elemwise tcc", "dsl_route"),
+            ("elemwise cc ", "dsl_route_cc"),
+        ):
+            cold = measure_compile(func_name, cache_dir, cold=True)
+            warm = measure_compile(func_name, cache_dir, cold=False)
+            c[func_name] = (cold, warm)
+            print(f"  {label}   cold {cold * 1000:7.1f} ms   warm cache {warm * 1000:6.1f} ms")
+    # How many calls it takes for cc's steady-state win to repay its cold compile.
+    for label, tcc_name, cc_name in (
+        ("mandel", "jit_default", "jit_cc"),
+        ("elementwise", "dsl_route", "dsl_route_cc"),
+    ):
+        saved = t[tcc_name] - t[cc_name]
+        print(f"  {label}: cc repays its cold compile after {c[cc_name][0] / saved:.0f} calls")
 
     msecs = lambda v: f"{v * 1000:.0f}ms"  # noqa: E731
 
@@ -313,8 +421,8 @@ if __name__ == "__main__":
     )  # fmt: skip
     bars(
         ax, "Time",
-        ("@jit\n(default)", '@jit(strict=True)\n(jit_backend="tcc")', '@jit(strict=True)\n(jit_backend="cc")'),
-        [t["trace_route"], t["dsl_route"], t["dsl_route_cc"]], msecs,
-        colors=(COLOR_NAIVE, COLOR_TIP, COLOR_TIP),
+        ("NumPy", "@jit\n(default)", '@jit(strict=True)\n(jit_backend="tcc")', '@jit(strict=True)\n(jit_backend="cc")'),
+        [t["numpy_route"], t["trace_route"], t["dsl_route"], t["dsl_route_cc"]], msecs,
+        colors=(COLOR_NAIVE, COLOR_TIP, COLOR_TIP, COLOR_TIP),
     )  # fmt: skip
     save(fig, "tip_15b_jit_elementwise.png")
