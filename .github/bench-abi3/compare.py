@@ -28,6 +28,28 @@ THRESHOLD = 1.25
 NOISE_FLOOR_MS = 5.0
 
 
+def emit(report, *, status, failures):
+    """Publish the report everywhere, and report `status` rather than exiting.
+
+    "no data" and "a real regression" are different outcomes and the workflow
+    needs to tell them apart, so this always exits 0 and hands the verdict to
+    the caller through GITHUB_OUTPUT.
+    """
+    print(report)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as fh:
+            fh.write(report + "\n")
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a") as fh:
+            fh.write(f"status={status}\n")
+            fh.write(f"failures={failures}\n")
+    # Always written, so the PR-comment step has a file even when there is no data.
+    with open("abi3-bench-report.md", "w") as fh:
+        fh.write(report + "\n")
+
+
 def load_cell(cell_dir):
     out = {}
     for build in ("base", "abi3"):
@@ -47,8 +69,10 @@ def best(runs, name):
 def main(root):
     cells = sorted(d for d in glob.glob(os.path.join(root, "bench-*")) if os.path.isdir(d))
     if not cells:
-        print(f"no result directories under {root}", file=sys.stderr)
-        return 1
+        msg = f"No benchmark results were produced under `{root}` (the bench jobs did not upload artifacts)."
+        print(msg, file=sys.stderr)
+        emit(msg + "\n", status="nodata", failures=0)
+        return 0
 
     lines = ["## abi3 vs. version-specific build\n"]
     lines.append(
@@ -107,22 +131,12 @@ def main(root):
     else:
         lines.append("\nNo regression past threshold on any platform. ✅\n")
 
-    report = "\n".join(lines)
-    print(report)
-
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a") as fh:
-            fh.write(report + "\n")
-    out = os.environ.get("GITHUB_OUTPUT")
-    if out:
-        with open(out, "a") as fh:
-            fh.write(f"failures={len(failures)}\n")
-
-    with open("abi3-bench-report.md", "w") as fh:
-        fh.write(report + "\n")
-
-    return 1 if failures else 0
+    emit(
+        "\n".join(lines),
+        status="regressed" if failures else "ok",
+        failures=len(failures),
+    )
+    return 0
 
 
 if __name__ == "__main__":

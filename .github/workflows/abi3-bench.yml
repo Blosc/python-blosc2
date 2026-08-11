@@ -80,7 +80,14 @@ jobs:
         run: |
           for v in abi3 base; do
             python -m venv "venv-$v"
-            PY=$(ls venv-$v/bin/python venv-$v/Scripts/python.exe 2>/dev/null | head -1)
+            # Not `ls a b | head -1`: GitHub runs bash with `set -eo pipefail`,
+            # and ls exits non-zero when one of the two paths is absent,
+            # which is always the case -- it is one layout or the other.
+            if [ -x "venv-$v/bin/python" ]; then
+              PY="venv-$v/bin/python"
+            else
+              PY="venv-$v/Scripts/python.exe"
+            fi
             "$PY" -m pip install --quiet --upgrade pip
             "$PY" -m pip install --quiet wheels-$v/*.whl
             echo "-- $v --"
@@ -100,7 +107,11 @@ jobs:
           OUT=results/bench-${{ matrix.os }}-${{ matrix.python-version }}
           for round in 1 2 3; do
             for v in abi3 base; do
-              PY=$(ls venv-$v/bin/python venv-$v/Scripts/python.exe 2>/dev/null | head -1)
+              if [ -x "venv-$v/bin/python" ]; then
+                PY="venv-$v/bin/python"
+              else
+                PY="venv-$v/Scripts/python.exe"
+              fi
               echo "== round $round / $v =="
               "$PY" .github/bench-abi3/bench.py > "$OUT/$v-$round.json"
             done
@@ -133,7 +144,6 @@ jobs:
 
       - name: Build the report
         id: report
-        continue-on-error: true
         run: python .github/bench-abi3/compare.py results
 
       # The step summary is not reliably readable through the public API, so
@@ -152,7 +162,13 @@ jobs:
           fi
 
       - name: Fail if a benchmark regressed past threshold
-        if: steps.report.outcome == 'failure'
+        if: steps.report.outputs.status == 'regressed'
         run: |
-          echo "See the report above: at least one benchmark regressed past threshold."
+          echo "${{ steps.report.outputs.failures }} benchmark(s) past threshold; see the report above."
+          exit 1
+
+      - name: Fail if no benchmark data was produced
+        if: steps.report.outputs.status == 'nodata'
+        run: |
+          echo "The bench jobs uploaded no artifacts -- this is a workflow failure, not a regression."
           exit 1
