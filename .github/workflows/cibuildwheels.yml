@@ -256,13 +256,23 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --find-links ./wheelhouse "blosc2==$(basename "$WHL" | cut -d- -f2)"
 
+      # Check that the module is not version-tagged, rather than looking for a
+      # literal ".abi3." -- that infix is a POSIX convention.  On Windows a
+      # limited-API module is just `blosc2_ext.pyd`, versus
+      # `blosc2_ext.cp314-win_amd64.pyd` for a version-specific build.
+      # EXTENSION_SUFFIXES[0] is the version-tagged suffix on every platform,
+      # so "does not end with it" is the portable way to say "this is abi3".
       - name: Confirm the abi3 module was the one loaded
         shell: bash
         run: |
           python -c "
+          import importlib.machinery as machinery, os
           import blosc2, blosc2.blosc2_ext as ext
-          assert '.abi3.' in ext.__file__, f'not an abi3 module: {ext.__file__}'
-          print('OK:', ext.__file__)
+          name = os.path.basename(ext.__file__)
+          tagged = machinery.EXTENSION_SUFFIXES[0]
+          print('module:', name, '| version-tagged suffix:', tagged)
+          assert not name.endswith(tagged), f'version-specific module: {name}'
+          print('OK: loaded a version-independent (abi3) module')
           blosc2.print_versions()
           "
 
