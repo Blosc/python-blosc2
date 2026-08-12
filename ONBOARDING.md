@@ -67,7 +67,7 @@ multi-operand passes over compressed data.
 
 ---
 
-## Before you start coding
+## Before you start coding / documenting
 
 1. **Set up pre-commit** — the project uses Ruff for formatting and linting,
    enforced via pre-commit hooks.  See [README_DEVELOPERS.md](README_DEVELOPERS.md)
@@ -111,7 +111,7 @@ public API, update the corresponding `.rst` file.  See
 ## Getting help
 
 - Open a GitHub issue for bugs or design questions.
-- Check `RELEASE_NOTES.md` and `ROADMAP-TO-4.0.md` to understand recent
-  history and near-term direction before proposing large changes.
+- Check `RELEASE_NOTES.md` to understand recent history and near-term direction
+  before proposing large changes.
 - The `bench/` scripts are useful for sanity-checking performance impact of
   your changes, but they are not part of CI.
