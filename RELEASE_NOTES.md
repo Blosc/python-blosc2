@@ -2,149 +2,172 @@
 
 ## Changes from 4.10.1 to 4.11.0
 
-XXX version-specific blurb XXX
+Nullability in `CTable` is rebuilt on Arrow's own model. A nullable column now
+keeps its nulls in a per-column validity sidecar instead of reserving a value
+from its own range, which is what makes it lossless — an `int8` column can hold
+`-128`, a `utf8` one can hold `""`, and a `float64` one can tell `NaN` from
+missing. That is the new default for columns created from now on; nothing on
+disk changes, and sentinel storage remains supported indefinitely, one keyword
+away. Built on top of it: predicates follow three-valued (Kleene) logic, so
+`~(t.price > 10)` no longer returns the null rows, and column indexes are
+null-aware, which makes `min`/`max` over a nullable column answer from the
+index instead of scanning.
+
+On the packaging side, wheels are now a single Stable ABI (abi3) build per
+platform covering CPython 3.11+, with free-threaded 3.14 and 3.15 shipping
+alongside.
 
 ### New features
 
 #### Mask-based nullable columns for CTable, and they are now the default
 
-A nullable CTable column keeps its nulls in a per-column **validity sidecar** —
-Arrow's own model — instead of reserving a value from its own range. This is now
-what a bare `nullable=True` resolves to, and what every nullable column inferred
-from Arrow, Parquet or CSV gets:
-
-```python
-blosc2.bool(nullable=True)  # no reserved 255; dtype stays np.bool_
-blosc2.int8(nullable=True)  # all 256 values usable, plus nulls
-blosc2.utf8(nullable=True)  # any string, including "" and "\x00"
-blosc2.complex128(nullable=True)  # nullable at all, for the first time
-```
-
-This is what makes nullability **lossless**: a sentinel steals a value from the
-dtype, so a nullable `int8` could not hold `-128`, a free-text `utf8` column had
-no safe sentinel at all, and Arrow columns whose type had no value to spare could
-not be imported. `to_arrow(from_arrow(x))` now returns `x` for nullable `bool`,
-full-range `int8`/`uint8`, `float64` containing `nan`/`±inf`/`-0.0` as values,
-`utf8` containing `""` and `"__BLOSC2_NULL__"`, and `timestamp` with `int64.min`
-as a value — none of which round-trip through a sentinel.
-
-Under mask storage `None` is how you write a null (`t.append((None,))`,
-`t["price"][3] = None`), which a fixed-width sentinel column cannot accept at
-all. `is_null()` is unchanged and remains the uniform API across every kind.
-
-**Nothing on disk changes.** The new default governs *creation* only: opening a
-stored table never re-resolves anything, so every existing table keeps the
-storage, dtype and sentinel it was written with, and every rewrite rule for the
-reserved `255` stays permanently in place. Sentinel storage is supported
-indefinitely and is one keyword away, per column (`null_storage="sentinel"`, or
-any explicit `null_value=`) or globally through `NullPolicy`. Setting a type-wide
-`NullPolicy` sentinel field still implies sentinel storage for the kinds it
-covers, so existing `NullPolicy(float_value=...)` code is unaffected — with one
-unavoidable exception: `255` is the only value a nullable bool may reserve, so it
-is also `bool_value`'s default, and `NullPolicy(bool_value=255)` carries no
-information to act on. A bool column that wants a sentinel has to say so with
-`null_storage` or `column_null_values`.
-
-A table containing a mask column records **schema version 3**. Only such tables do:
-a table with no nullable column still records version 1, exactly as before, and a
-sentinel one does too. Readers older than 4.11.0 refuse a version-3 table rather
-than misreading it, but their message is a bare `ValueError: Unsupported schema
-version 3` — the hint naming `convert_nulls(to='sentinel')` ships in 4.11.0, so
-only readers that can already open the file will print it.
-
-If some of your data has to stay readable by an earlier release, pin the storage
-rather than discovering this downstream. Per column with
-`null_storage="sentinel"` (or any explicit `null_value=`), or process-wide,
-including for schemas inferred from Arrow, Parquet and CSV:
-
-```python
-with blosc2.null_policy(blosc2.NullPolicy(null_storage="sentinel")):
-    t = blosc2.CTable.from_parquet("data.parquet")
-```
-
-That reinstates the sentinel's lossiness — a float column's nulls become `NaN`
-again, and a type with no value to spare still cannot be imported — which is the
-trade being made.
-
-`Column.null_storage` reports where a column keeps its nulls and `info` tags each
-column (`int64 nullable[mask]`), so `CTable.convert_nulls()` can move columns
-between the two in either direction — never implicitly, and refusing rather than
-silently relabelling data when a sentinel is unavailable.
-
-One deliberate semantic difference: in a mask column `NaN` is a **value**,
-following Arrow, and only the sidecar marks a null. Sentinel float columns keep
-NaN-as-null. See "Where nulls are stored" in the CTable reference.
+- **A nullable column keeps its nulls in a per-column validity sidecar** —
+  Arrow's own model — instead of reserving a value from its own range. This is
+  what a bare `nullable=True` resolves to, and what every nullable column
+  inferred from Arrow, Parquet or CSV gets: `blosc2.bool(nullable=True)` no
+  longer reserves `255` and keeps `np.bool_`, `blosc2.int8(nullable=True)` has
+  all 256 values usable, `blosc2.utf8(nullable=True)` accepts any string
+  including `""` and `"\x00"`, and `blosc2.complex128(nullable=True)` is
+  nullable at all for the first time.
+- **This is what makes nullability lossless.** A sentinel steals a value from
+  the dtype, so a nullable `int8` could not hold `-128`, a free-text `utf8`
+  column had no safe sentinel at all, and Arrow columns whose type had no value
+  to spare could not be imported. `to_arrow(from_arrow(x))` now returns `x` for
+  nullable `bool`, full-range `int8`/`uint8`, `float64` containing
+  `nan`/`±inf`/`-0.0` as values, `utf8` containing `""` and
+  `"__BLOSC2_NULL__"`, and `timestamp` with `int64.min` as a value — none of
+  which round-trip through a sentinel.
+- **`None` is how you write a null** under mask storage (`t.append((None,))`,
+  `t["price"][3] = None`), which a fixed-width sentinel column cannot accept at
+  all. `is_null()` is unchanged and remains the uniform API across every kind.
+- **Nothing on disk changes.** The new default governs *creation* only: opening
+  a stored table never re-resolves anything, so every existing table keeps the
+  storage, dtype and sentinel it was written with, and every rewrite rule for
+  the reserved `255` stays permanently in place.
+- **Sentinel storage is supported indefinitely and is one keyword away**, per
+  column (`null_storage="sentinel"`, or any explicit `null_value=`) or globally
+  through `NullPolicy`. Setting a type-wide `NullPolicy` sentinel field still
+  implies sentinel storage for the kinds it covers, so existing
+  `NullPolicy(float_value=...)` code is unaffected — with one unavoidable
+  exception: `255` is the only value a nullable bool may reserve, so it is also
+  `bool_value`'s default, and `NullPolicy(bool_value=255)` carries no
+  information to act on. A bool column that wants a sentinel has to say so with
+  `null_storage` or `column_null_values`.
+- **A table containing a mask column records schema version 3.** Only such
+  tables do: a table with no nullable column still records version 1, exactly
+  as before, and a sentinel one does too. Readers older than 4.11.0 refuse a
+  version-3 table rather than misreading it, but their message is a bare
+  `ValueError: Unsupported schema version 3` — the hint naming
+  `convert_nulls(to='sentinel')` ships in 4.11.0, so only readers that can
+  already open the file will print it.
+- **If some of your data has to stay readable by an earlier release, pin the
+  storage** rather than discovering this downstream. Per column as above, or
+  process-wide — including for schemas inferred from Arrow, Parquet and CSV —
+  with `blosc2.null_policy(blosc2.NullPolicy(null_storage="sentinel"))`. That
+  reinstates the sentinel's lossiness (a float column's nulls become `NaN`
+  again, and a type with no value to spare still cannot be imported), which is
+  the trade being made.
+- **`Column.null_storage` reports where a column keeps its nulls** and `info`
+  tags each column (`int64 nullable[mask]`), so `CTable.convert_nulls()` can
+  move columns between the two in either direction — never implicitly, and
+  refusing rather than silently relabelling data when a sentinel is
+  unavailable.
+- **One deliberate semantic difference:** in a mask column `NaN` is a *value*,
+  following Arrow, and only the sidecar marks a null. Sentinel float columns
+  keep NaN-as-null. See "Where nulls are stored" in the CTable reference.
 
 #### Column indexes are null-aware
 
-Every index kind stores per-segment `min`/`max`, and those extrema are now taken
-over the rows that carry a **value**: a column's nulls are read from its
-validity channel and left out, and a segment with no value at all is flagged
-rather than summarised. This applies to both storages — an `INT64_MIN` sentinel
-is exactly as invisible to a summary as a mask column's fill.
-
-Two things follow. `Column.min`/`Column.max` answer from the index for a
-nullable column (**236x** on a 20M-row `int64`, measured) where before every
-nullable column but a NaN-sentinel float had to scan; and `where()` with an `OR`
-over a nullable indexed column uses the index instead of falling back to a full
-scan (**1.6x** on a 20M-row two-column probe). The `OR` fallback existed because
-the only null filtering available was global, and a global filter drops a row
-that is null in one branch but matches the other; the segment path never needed
-it, because it *evaluates* the predicate, which has been null-aware per leaf
-since the string-predicate fix below.
-
-Indexes written by an earlier release are read as not null-aware and keep the
-old fallback, so nothing silently changes meaning; `rebuild_index()` promotes
-them. Building an index over a nullable column that actually holds nulls now
-costs one decompression pass (33 ms for a 20M-row `int64` column) because the
-incremental per-block summaries folded during writes carry no validity; a
-nullable column with no nulls keeps that fast path untouched.
+- **Per-segment `min`/`max` are taken over the rows that carry a value.** A
+  column's nulls are read from its validity channel and left out, and a segment
+  with no value at all is flagged rather than summarised. This applies to both
+  storages — an `INT64_MIN` sentinel is exactly as invisible to a summary as a
+  mask column's fill.
+- **`Column.min`/`Column.max` answer from the index for a nullable column**
+  (**236x** on a 20M-row `int64`, measured), where before every nullable column
+  but a NaN-sentinel float had to scan.
+- **`where()` with an `OR` over a nullable indexed column uses the index**
+  instead of falling back to a full scan (**1.6x** on a 20M-row two-column
+  probe). The fallback existed because the only null filtering available was
+  global, and a global filter drops a row that is null in one branch but
+  matches the other; the segment path never needed it, because it *evaluates*
+  the predicate, which has been null-aware per leaf since the string-predicate
+  fix below.
+- **Indexes written by an earlier release are read as not null-aware** and keep
+  the old fallback, so nothing silently changes meaning; `rebuild_index()`
+  promotes them.
+- **Building an index over a nullable column that holds nulls costs one
+  decompression pass** (33 ms for a 20M-row `int64` column), because the
+  incremental per-block summaries folded during writes carry no validity; a
+  nullable column with no nulls keeps that fast path untouched.
 
 #### Predicates over nulls follow three-valued (Kleene) logic
 
-A comparison against a null is neither true nor false. It is now **unknown**,
-the third value SQL and Arrow both use, and `&`, `|`, `^` and `~` combine it by
-Kleene's rules instead of collapsing it to `False` at the leaf:
+- **A comparison against a null is now unknown**, the third value SQL and Arrow
+  both use, and `&`, `|`, `^` and `~` combine it by Kleene's rules instead of
+  collapsing it to `False` at the leaf. `t.where(t.price > 10)` gives the rows
+  definitely above 10, `t.where(~(t.price > 10))` the rows definitely *not*
+  above 10 — nulls in neither.
+- **`where()` keeps what a predicate is true for**, so the rows it returns for
+  a plain comparison are unchanged. What this fixes is everything built on top
+  of one: `~(t.price > 10)` used to invert a null that had already been
+  collapsed to `False` and so returned every null row — the exact opposite of
+  the intent — and `~((a > 10) & (b == 999))` dropped rows that qualify,
+  because `unknown & false` is *false*, not unknown, and only a real third
+  value can express that. Both query forms are covered and both now agree with
+  SQL: the string form carries the second channel through an AST rewrite under
+  negation.
+- **A predicate can be asked about its unknown rows** rather than only filtered
+  with: `p.is_null()` gives the rows it cannot answer for, `p.null_count()`
+  counts them, and `t.where(p.fillna(True))` keeps what cannot be ruled out.
+  `fillna(False)` is the other reading, and is what `where()` applies
+  implicitly.
+- **Predicates over non-nullable columns are untouched and cost nothing
+  extra**; the result of a nullable comparison is still a `blosc2.LazyExpr`, so
+  it computes, indexes and plans exactly as before. Measured cost of the exact
+  answer: a negated two-column conjunction over a 20M-row nullable table runs
+  1.15x slower than the wrong answer it replaces; every other predicate shape
+  is unchanged.
+- **Two consequences worth knowing.** `t.where(dict_col != "x")` no longer
+  returns the rows where `dict_col` is null (its reserved code differs from
+  every value's, so it used to match); `dict_col == None` remains how to ask
+  for them. And `Column.isin()` stays deliberately two-valued — it returns a
+  materialized array and has its own spelling for nulls (`None` among the
+  values).
 
-```python
-t.where(t.price > 10)  # rows definitely above 10
-t.where(~(t.price > 10))  # rows definitely *not* above 10 — nulls in neither
-```
+#### Packaging and other changes
 
-`where()` keeps what a predicate is **true** for, so the rows it returns for a
-plain comparison are unchanged. What this fixes is everything built on top of
-one. `~(t.price > 10)` used to invert a null that had already been collapsed to
-`False` and so returned every null row — the exact opposite of the intent — and
-`~((a > 10) & (b == 999))` dropped rows that qualify, because `unknown & false`
-is *false*, not unknown, and only a real third value can express that. Both
-query forms are covered, and both now agree with SQL: the string form carries
-the second channel through an AST rewrite under negation.
-
-A predicate can be asked about its unknown rows rather than only filtered with:
-
-```python
-p = t.price > 10
-p.is_null()  # boolean array: the rows it cannot answer for
-p.null_count()
-t.where(p.fillna(True))  # keep what cannot be ruled out
-```
-
-`fillna(False)` is the other reading, and is what `where()` applies implicitly.
-
-Predicates over non-nullable columns are untouched and cost nothing extra; the
-result of a nullable comparison is still a `blosc2.LazyExpr`, so it computes,
-indexes and plans exactly as before. Measured cost of the exact answer: a
-negated two-column conjunction over a 20M-row nullable table runs 1.15x slower
-than the wrong answer it replaces; every other predicate shape is unchanged.
-
-Two consequences worth knowing. `t.where(dict_col != "x")` no longer returns the
-rows where `dict_col` is null (its reserved code differs from every value's, so
-it used to match); `dict_col == None` remains how to ask for them. And
-`Column.isin()` stays deliberately two-valued — it returns a materialized array
-and has its own spelling for nulls (`None` among the values).
+- **Wheels are a single Stable ABI (abi3) build per platform.** Instead of one
+  wheel per CPython minor version, each platform ships one `cp311-abi3` wheel
+  that serves CPython 3.11 and every later version, including ones released
+  after this one. Nothing changes for `pip install blosc2`; what changes is
+  that a new CPython no longer has to wait for a blosc2 release to be
+  installable from a wheel. CI installs that one wheel on 3.11 through 3.15 and
+  runs a slice of the suite on each, since cibuildwheel only tests a wheel on
+  the interpreter that built it.
+- **Free-threaded builds are shipped too**, as version-specific `cp314t` and
+  `cp315t` wheels — the free-threaded stable ABI (abi3t, PEP 803) starts at
+  3.15 and Cython cannot emit it yet. The limited API costs nothing measurable
+  here: across the Linux and Windows cells of a throwaway benchmark matrix the
+  worst ratio over every benchmark was 1.075x and 1.054x respectively,
+  including the call-heavy ones where an ABI cost would show up first.
+- **CSV reads and writes take an `encoding=`.** `from_csv()` defaults to
+  `utf-8-sig` (plain UTF-8, absorbing a byte-order mark if present) and
+  `to_csv()` to `utf-8`, but either can be given another codec, which is what
+  an existing file written in a platform codec needs.
+- **Three new [optimization tips](https://www.blosc.org/python-blosc2/guides/optimization_tips.html)**:
+  `utf8` versus fixed-width string columns, when a `dictionary` column pays
+  off, and what the `@jit` decorator actually buys you (with a worked
+  Mandelbrot benchmark, including the compilation cost).
 
 ### Bug fixes
 
+- **`asarray()` corrupted arrays whose chunks overhang the shape.** Above 16 MB
+  the fill goes chunk by chunk through `SChunk.update_data()`, and its guard
+  only rejected partitions *smaller* than their container — so a chunk sticking
+  out of the shape (e.g. shape `(146, 23802)` with chunks `(147, 23802)`) passed
+  and got a slice one row short, after which reading the array back failed with
+  "Error while getting the buffer". Thanks to @Zentrik.
 - **`group_by` returned the wrong `min` for a `bool` value column.** The
   per-group accumulator was seeded from the dtype's opposite identity, and `bool`
   had none, so an all-`True` group reduced to `False`. Reachable with any plain

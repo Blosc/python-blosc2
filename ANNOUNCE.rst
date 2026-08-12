@@ -1,37 +1,45 @@
-Announcing Python-Blosc2 4.10.1
+Announcing Python-Blosc2 4.11.0
 ===============================
 
-A correctness release: lazy indexing and reductions now follow NumPy in a
-batch of cases where they quietly did not, the stores close several
-cross-process read races, and wheels finally ship usable C-Blosc2 development
-files. Bundled C-Blosc2 moves to 3.3.2.
+Nullability in ``CTable`` is rebuilt on Arrow's own model: a nullable column
+keeps its nulls in a validity sidecar instead of reserving a value from its own
+range. That makes it lossless, and everything above it — predicates, indexes,
+Arrow/Parquet/CSV round-trips — follows. Wheels become a single Stable ABI
+build per platform.
 
-- **Lazy indexing now matches NumPy.** Integer indexing no longer squeezes
-  length-1 axes the index kept, a ``None`` in the key stops shifting operand
-  axes for ``LazyUDF`` and broadcast operands, indexing a full reduction
-  slices the operands instead of evaluating over everything, and
-  ``datetime64``/``timedelta64`` comparisons work in expressions rather than
-  raising.
+- **Mask-based nullable columns, and they are the default.** A bare
+  ``nullable=True`` no longer steals a value from the dtype, so an ``int8``
+  column can hold ``-128``, a ``utf8`` one can hold ``""``, a ``float64`` one
+  can tell ``NaN`` from missing, and ``complex128`` is nullable at all for the
+  first time. ``None`` is how you write a null. Note that a table with a
+  mask column records schema version 3, which readers older than 4.11.0 refuse
+  to open.
 
-- **``NDArray.nbytes`` reports the logical size**, ``size * itemsize``, as
-  NumPy does. ``.schunk.nbytes`` still gives the padded figure, which is what
-  ``cratio`` keeps measuring.
+- **Predicates over nulls follow three-valued (Kleene) logic.** A comparison
+  against a null is now *unknown* rather than ``False``, so ``~(t.price > 10)``
+  returns the rows definitely not above 10 instead of every null row, and
+  ``~((a > 10) & (b == 999))`` stops dropping rows that qualify. Both the
+  operator and the string query form agree with SQL. A predicate can also be
+  asked about its unknown rows: ``p.is_null()``, ``p.null_count()``,
+  ``p.fillna(True)``.
 
-- **``CTable.where()`` applied a short boolean mask to the wrong rows.** A
-  mask no longer than the live-row count is now logical — entry *i* selects
-  the *i*-th live row — instead of being padded out to the physical length
-  and picking up rows outside the view.
+- **Column indexes are null-aware.** Per-segment ``min``/``max`` are taken over
+  the rows that carry a value, so ``Column.min``/``Column.max`` answer from the
+  index for a nullable column instead of scanning, and ``where()`` with an ``OR``
+  over a nullable indexed column no longer falls back to a full scan (**1.6x**).
+  ``rebuild_index()`` promotes indexes written by an earlier release.
 
-- **Cross-process store fixes.** ``EmbedStore`` and ``DictStore`` resolved a
-  key under the store lock but read the data after releasing it; the resolve
-  and the read now share one lock. Overwriting an external ``DictStore`` leaf
-  is atomic too — the new leaf is built beside its final name and moved into
-  place — so a concurrent reader can no longer open a half-rewritten file.
+- **A single Stable ABI (abi3) wheel per platform**, serving CPython 3.11 and
+  every later version — so a new CPython is installable from a wheel without
+  waiting for a blosc2 release. Free-threaded 3.14 and 3.15 ship alongside as
+  version-specific wheels. No measurable performance cost.
 
-- **Wheels ship working C-Blosc2 development files** (``pkg-config`` and
-  ``find_package(Blosc2)`` both failed against an installed wheel before),
-  and are ~1.5 MB smaller, carrying two copies of ``libblosc2`` rather than
-  three.
+- **Plus a long list of fixes** around nullable columns: CSV import/export,
+  ``extend()`` between storages, sorted-view reductions, descending sorts of
+  the widest integers, timestamp writes through ``col[key] = value``, scalar
+  broadcast on mask columns, nested columns surviving ``convert_nulls()`` and a
+  save/reopen cycle, and more. Outside ``CTable``, ``asarray()`` no longer
+  corrupts arrays whose chunks overhang the shape.
 
 Install it with::
 
