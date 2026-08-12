@@ -111,6 +111,7 @@ public API, update the corresponding `.rst` file.  See
 ## Getting help
 
 - Open a GitHub issue for bugs or design questions.
+- We have a [discussions](https://github.com/Blosc/python-blosc2/discussions) forum for more direct interaction.
 - Check `RELEASE_NOTES.md` to understand recent history and near-term direction
   before proposing large changes.
 - The `bench/` scripts are useful for sanity-checking performance impact of
