@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.11.0 to 4.11.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.10.1 to 4.11.0
 
 Nullability in `CTable` is rebuilt on Arrow's own model. A nullable column now
