@@ -143,3 +143,6 @@ doc/reference/autofiles/
 
 
 .*.swp
+# pixi environments
+.pixi/*
+!.pixi/config.toml
