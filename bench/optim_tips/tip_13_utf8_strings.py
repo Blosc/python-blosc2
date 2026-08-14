@@ -20,9 +20,11 @@
 #   (c) tip_13c_utf8_ondisk.png -- bytes on disk, column and index
 #
 # Both cardinalities (20k distinct, near-unique) are measured throughout, so
-# the FULL index's cardinality ceiling on utf8() -- values are indexed by
-# alphabetical rank, and the rank table grows with the number of distinct
-# values -- is visible rather than hidden.
+# any cardinality sensitivity of the FULL index is visible rather than hidden:
+# a utf8 column is indexed by alphabetical rank, and a query literal becomes a
+# rank by bisecting the index's vocabulary sidecar.  The first lookup in a
+# process opens that sidecar and the ones after it reuse the handle, which is
+# what the "1st lookup" and "warm" bars separate.
 #
 # Synthetic free-text catalogue, built once and reused: every measured
 # variant runs in a fresh subprocess that re-imports this module, so the
@@ -53,9 +55,12 @@ HERE = Path(__file__).parent
 # one-shot work anyway.
 BENCH_REPS = 1
 
-# Lighter shades of the two series colours, for the "+ FULL index" bars.
+# Lighter shades of the two series colours, for the "+ FULL index" bars:
+# _IDX is the first lookup in a process, _WARM every lookup after it.
 COLOR_NAIVE_IDX = "#9dc0ea"
 COLOR_TIP_IDX = "#8fd9bd"
+COLOR_NAIVE_WARM = "#5b9bd5"
+COLOR_TIP_WARM = "#45bf94"
 
 # A vocabulary with accented and CJK entries, so "UTF-8 bytes vs UCS-4
 # codepoints" is a real gap and not an ASCII artefact.
@@ -215,6 +220,26 @@ def numpy_string_20k():   return _numpy("string", "20k")
 # fmt: on
 
 
+def warm_lookup(flavour, card, reps=5):
+    """Steady-state indexed lookup: repeated calls on one open table.
+
+    ``measure()`` runs every variant in a fresh process, and ``_where()`` opens
+    the table anew on each rep, so its "+ FULL" numbers are all *first* lookups
+    -- which pay for opening the index sidecars (the vocabulary among them, on
+    utf8) before answering.  Timed here rather than through the harness because
+    the whole point is to reuse one table object across calls; peak memory is
+    not of interest.
+    """
+    t = blosc2.CTable.open(path_for(flavour, card, indexed=True))
+    needle = NEEDLE[card]
+    best = float("inf")
+    for _ in range(reps):
+        t0 = time.perf_counter()
+        len(t.where(f"title == {needle!r}")[:])
+        best = min(best, time.perf_counter() - t0)
+    return best
+
+
 def grouped_bars(ax, title, groups, series, values, fmt, ylabel="Time (s)", legend_cols=1, title_size=9.5):
     """One panel: len(groups) clusters of len(series) direct-labeled bars."""
     x = np.arange(len(groups), dtype=float)
@@ -272,6 +297,16 @@ if __name__ == "__main__":
             f"utf8 {fmt_bytes(m[f'read_utf8_{card}'])}"
             f"   ({m[f'read_string_{card}'] / m[f'read_utf8_{card}']:.2f}x)"
         )
+    warm = {(f, c): warm_lookup(f, c) for f, c in COMBOS}
+    print("\nindexed lookup, warm (same open table):")
+    for card in CARDS:
+        s, u = warm["string", card], warm["utf8", card]
+        print(
+            f"  {card:>4}: string {s * 1000:6.1f}ms  utf8 {u * 1000:6.1f}ms   "
+            f"(1st lookup: {t[f'whereidx_string_{card}'] * 1000:.1f}ms / "
+            f"{t[f'whereidx_utf8_{card}'] * 1000:.1f}ms)"
+        )
+
     print(
         f"\nNumPy read+compare (20k): string {t['numpy_string_20k']:.3f}s  utf8 {t['numpy_utf8_20k']:.3f}s"
     )
@@ -289,6 +324,14 @@ if __name__ == "__main__":
         ("utf8()", COLOR_TIP),
         (f"string({MAX_LENGTH}) + FULL", COLOR_NAIVE_IDX),
         ("utf8() + FULL", COLOR_TIP_IDX),
+    )
+    series_query = (
+        (f"string({MAX_LENGTH})", COLOR_NAIVE),
+        ("utf8()", COLOR_TIP),
+        (f"string({MAX_LENGTH}) + FULL, 1st lookup", COLOR_NAIVE_IDX),
+        ("utf8() + FULL, 1st lookup", COLOR_TIP_IDX),
+        (f"string({MAX_LENGTH}) + FULL, warm", COLOR_NAIVE_WARM),
+        ("utf8() + FULL, warm", COLOR_TIP_WARM),
     )
     groups = (f"titles repeat\n({CARD_LOW // 1000}k different ones)", "titles nearly\nall different")
     mrows = f"{N // 1_000_000} Mrow"
@@ -315,23 +358,34 @@ if __name__ == "__main__":
     )  # fmt: skip
     save(fig, "tip_13a_utf8_read.png")
 
-    # (b) Querying, with and without a FULL index.
-    fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.6))
+    # (b) Querying, with and without a FULL index.  Six bars per cluster need
+    # the full width, so the lookup panel takes a row of its own and the two
+    # index-build panels share the one below it.
+    fig, axd = plt.subplot_mosaic(
+        [["lookup", "lookup"], ["build_t", "build_m"]],
+        figsize=(9.5, 6.6), height_ratios=(1.2, 0.8),
+    )  # fmt: skip
     fig.suptitle(
         f"Querying a text column — {mrows}, where('title == ...')",
         fontsize=11.5, color=INK,
     )  # fmt: skip
     grouped_bars(
-        axes[0], "Equality lookup", groups, series_idx,
+        axd["lookup"], "Equality lookup", groups, series_query,
         [[t[f"where_string_{c}"], t[f"where_utf8_{c}"],
-          t[f"whereidx_string_{c}"], t[f"whereidx_utf8_{c}"]] for c in CARDS],
-        msecs, ylabel="Time (ms)", legend_cols=2,
+          t[f"whereidx_string_{c}"], t[f"whereidx_utf8_{c}"],
+          warm["string", c], warm["utf8", c]] for c in CARDS],
+        msecs, ylabel="Time (ms)", legend_cols=3,
     )  # fmt: skip
     grouped_bars(
-        axes[1], "FULL index build", groups, series_short,
+        axd["build_t"], "FULL index build — time", groups, series_short,
         [[t[f"index_string_{c}"], t[f"index_utf8_{c}"]] for c in CARDS], secs,
     )  # fmt: skip
-    save(fig, "tip_13b_utf8_query.png")
+    grouped_bars(
+        axd["build_m"], "FULL index build — peak memory", groups, series_short,
+        [[m[f"index_string_{c}"], m[f"index_utf8_{c}"]] for c in CARDS], fmt_bytes,
+        ylabel="Peak memory",
+    )  # fmt: skip
+    save(fig, "tip_13b_utf8_query.png", rect=(0, 0, 1, 0.95))
 
     # (c) Bytes on disk, column and column + FULL index.
     fig, ax = plt.subplots(1, 1, figsize=(6.6, 3.6))

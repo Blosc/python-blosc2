@@ -384,11 +384,13 @@ The measurements below use a 1 Mrow table of free text averaging 76 bytes per ro
 
 ![Full column read: utf8() vs string()](optim_tips/tip_13a_utf8_read.png)
 
-The time gap is real but modest — decompression dominates, and both flavours decompress about the same payload. The memory gap is the important one: the fixed-width array is *rows × 800 B* whatever the text actually weighs, so it does not depend on the data at all, while the `utf8()` array pays for the bytes that are there. How often titles repeat makes no difference either — the padding is charged per row, not per different value. And it scales linearly: the same column at 100 Mrows would need 80 GB of RAM to be read whole as `string(200)`, against roughly a tenth of that as `utf8()`.
+The time gap is real but modest — decompression dominates, and both flavours decompress about the same payload. The memory gap is the important one: the fixed-width array is *rows × 800 B* whatever the text actually weighs, so it does not depend on the data at all, while the `utf8()` array pays for the bytes that are there. How often titles repeat makes no difference either — the padding is charged per row, not per different value. And it scales linearly: the same column at 100 Mrows would need 80 GB of RAM to be read whole as `string(200)`, against roughly a quarter of that as `utf8()`.
 
 Anything that materializes the column benefits from this — a NumPy comparison, {meth}`to_pandas() <blosc2.CTable.to_pandas>`, a plot. UTF-8 is also the ecosystem's common currency: a `utf8()` column *is* int64 offsets plus a UTF-8 blob — Arrow's `large_string` layout — so {meth}`to_arrow() <blosc2.CTable.to_arrow>` builds straight from the stored buffers, and pandas, Polars and DuckDB take it from there. Fixed width has to transcode UCS-4 on the way out. See {ref}`utf8 and NumPy's StringDType <Utf8AndStringDType>`.
 
 ### Querying columns, with and without a FULL index
+
+Reading a column whole is one thing; finding values on it is another. {meth}`where() <blosc2.CTable.where>` never materializes the column — it scans chunk by chunk — so the memory blow-up above does not happen here at all. A FULL index replaces that scan with a direct lookup, on either flavour.
 
 ```python
 t.where("title == 'some exact title'")  # scans, one chunk at a time
@@ -398,9 +400,9 @@ t.where("title == 'some exact title'")  # looks it up, no scan
 
 ![Equality lookup and index build: utf8() vs string()](optim_tips/tip_13b_utf8_query.png)
 
-{meth}`where() <blosc2.CTable.where>` never materializes the column: it scans chunk by chunk, so the memory blow-up above simply does not happen on either flavour, and `utf8()`'s edge is just fewer bytes to decompress and compare.
+A `utf8()` column is indexed by *alphabetical rank*: the query literal is located by bisecting the index's vocabulary, and the rows that match are a contiguous run of the sorted-positions sidecar. None of that depends on how many different values the column holds, so the index is worth having at either cardinality — a scan costs tens of milliseconds, a lookup a few. The first lookup of a session is the dearer one only because it opens the sidecars; later ones reuse them.
 
-A FULL index turns that scan into a direct lookup — but on a `utf8()` column it only pays off while the text repeats. The index sorts the *different* values alphabetically and stores each row's position in that sorted list, so the more different values there are, the bigger that list gets and the more work the lookup does. When titles repeat, the index is a clear win, and it costs a fraction of what the fixed-width one costs to build. When almost every title is different, the lookup ends up *slower than no index at all*, while `string(200)` — whose index reads raw values straight out of a known slot — keeps the same lookup time either way. So index a `utf8()` column when its text repeats, and leave wide-open free text unindexed.
+`string(200)` answers just as directly, from the values themselves. `utf8()` is the faster of the two — comparing ranks is integer work — and by far the cheaper to build: ~4.6x faster when titles repeat, 1.3x when they do not, and 2.4 GiB of peak memory for the fixed-width build whatever the data, against 200 MiB / 1.2 GiB.
 
 Caveat emptor: that sorted list is built once, so adding rows leaves it out of date: blosc2 falls back to a scan (correct results, no speedup) until you call {meth}`rebuild_index() <blosc2.CTable.rebuild_index>`. Also, note how no index accelerates `startswith` or substring search, on any flavor.
 
