@@ -402,6 +402,10 @@ t.where("title == 'some exact title'")  # looks it up, no scan
 
 A `utf8()` column is indexed by *alphabetical rank*: the query literal is located by bisecting the index's vocabulary, and the rows that match are a contiguous run of the sorted-positions sidecar. None of that depends on how many different values the column holds, so the index is worth having at either cardinality — a scan costs tens of milliseconds, a lookup a few. The first lookup of a session is the dearer one only because it opens the sidecars; later ones reuse them.
 
+```{versionchanged} 4.11.1
+The literal is bisected out of the vocabulary sidecar. Earlier versions materialized the whole vocabulary on the first lookup, which on the near-unique column here cost ~62 ms and 739 MiB of peak memory instead of the new ~12 ms and 5.5 MiB.
+```
+
 `string(200)` answers just as directly, from the values themselves. `utf8()` is the faster of the two — comparing ranks is integer work — and by far the cheaper to build: ~4.6x faster when titles repeat, 1.3x when they do not, and 2.4 GiB of peak memory for the fixed-width build whatever the data, against 200 MiB / 1.2 GiB.
 
 Caveat emptor: that sorted list is built once, so adding rows leaves it out of date: blosc2 falls back to a scan (correct results, no speedup) until you call {meth}`rebuild_index() <blosc2.CTable.rebuild_index>`. Also, note how no index accelerates `startswith` or substring search, on any flavor.
