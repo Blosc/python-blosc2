@@ -1464,6 +1464,26 @@ def test_rank_index_accepts_full_kind(tmpdir, row_cls, flavour):
 
 
 @pytest.mark.parametrize(("row_cls", "flavour"), RANK_FLAVOURS)
+def test_rank_index_rebuild_sees_new_values(tmpdir, row_cls, flavour):
+    """A rebuilt index must never be answered out of the previous build's vocabulary.
+
+    The literal→rank step keeps the vocabulary sidecar open across queries, so a
+    value that only exists after the rebuild is what catches a stale handle: the
+    old vocabulary would report it absent and the query would come back empty.
+    """
+    t = blosc2.CTable(row_cls, urlpath=str(tmpdir / f"{flavour}_rebuild.b2t"), mode="w")
+    values = [f"v{i % 50:03d}" for i in range(2000)]
+    t.extend({"c": values})
+    t.create_index("c", kind="full")
+    assert len(t[t["c"] == "v007"]["c"][:]) == 40
+
+    t.extend({"c": ["zz-added-later"] * 10})
+    t.rebuild_index("c")
+    assert len(t[t["c"] == "zz-added-later"]["c"][:]) == 10
+    assert len(t[t["c"] == "v007"]["c"][:]) == 40
+
+
+@pytest.mark.parametrize(("row_cls", "flavour"), RANK_FLAVOURS)
 def test_rank_index_default_kind_is_full(tmpdir, row_cls, flavour):
     """The BUCKET default would hand these flavours an unusable index."""
     t = blosc2.CTable(row_cls, urlpath=str(tmpdir / f"{flavour}_def.b2t"), mode="w")

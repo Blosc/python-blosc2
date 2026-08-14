@@ -4,6 +4,15 @@
 
 XXX version-specific blurb XXX
 
+### Improvements
+
+* Querying a `utf8()` column through its FULL index no longer materializes the
+  index vocabulary. The query literal is turned into an alphabetical rank by
+  bisecting the vocabulary sidecar instead, so a lookup reads a few blocks
+  rather than one fixed-width entry per distinct value. On a 1 Mrow column of
+  near-unique free text, the first lookup goes from ~62 ms and 739 MiB of peak
+  memory to ~12 ms and 5.5 MiB.
+
 ## Changes from 4.10.1 to 4.11.0
 
 Nullability in `CTable` is rebuilt on Arrow's own model. A nullable column now

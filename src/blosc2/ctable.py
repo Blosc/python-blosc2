@@ -2676,10 +2676,10 @@ class Column:
         """Answer ``column <numpy_op> value`` from the rank index, or ``None``.
 
         The index sorts rows by alphabetical rank, so a literal is located by
-        one ``searchsorted`` over the stored vocabulary and the matching rows
-        are a contiguous run of the sorted-positions sidecar — no scan of the
-        column at all.  Returns ``None`` whenever the index cannot answer, and
-        the caller falls back to the raw-byte scan.
+        one bisection of the stored vocabulary and the matching rows are a
+        contiguous run of the sorted-positions sidecar — no scan of the column
+        at all.  Returns ``None`` whenever the index cannot answer, and the
+        caller falls back to the raw-byte scan.
         """
         table = self._table
         descriptor = table._get_index_catalog().get(self._col_name)
@@ -2694,11 +2694,10 @@ class Column:
         if positions_path is None or values_path is None:  # in-memory sidecars
             return None
 
-        vocab = table._utf8_index_vocab(self._col_name, meta)
-        if vocab is None:
+        rank = table._utf8_literal_rank(meta, value)
+        if rank is None:
             return None
-        lo = int(np.searchsorted(vocab, value, side="left"))
-        hit = lo < len(vocab) and vocab[lo] == value
+        lo, hit = rank
         bounds = self._UTF8_RANK_PREDICATE[numpy_op.__name__](lo, hit)
 
         null_rank = meta["null_rank"]
@@ -5084,28 +5083,41 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             return True
         return _dict_rank_hash(dictionary) != dict_rank_meta.get("dict_hash")
 
-    def _utf8_index_vocab(self, name: str, utf8_rank_meta: dict) -> np.ndarray | None:
-        """Rank-ordered vocabulary for a utf8 index, cached per table.
+    def _utf8_literal_rank(self, utf8_rank_meta: dict, value: str) -> tuple[int, bool] | None:
+        """``(rank, present)`` for *value* in a utf8 index's vocabulary.
 
-        Small relative to the column (one entry per distinct value) and read
-        once, so a literal→rank lookup costs a ``searchsorted`` rather than a
-        re-factorization of the column.
+        *rank* is where *value* sorts among the index's distinct values, and
+        *present* whether it is one of them; that pair is all a rank query
+        needs.  ``None`` when the vocabulary cannot be located, and the caller
+        falls back to a scan.
+
+        The vocabulary is bisected in place — about twenty single-element
+        probes, each decompressing one block — rather than materialized: it is
+        stored fixed-width, so a million distinct values are hundreds of MB in
+        memory (17.8 MiB of them on disk) and a query needs exactly one entry.
         """
-        cache = self.__dict__.setdefault("_utf8_vocab_cache", {})
-        key = (name, utf8_rank_meta.get("n_rows"), utf8_rank_meta.get("nbytes"))
-        if key in cache:
-            return cache[key]
         inline = utf8_rank_meta.get("vocab")
-        if inline is not None:
+        if inline is not None:  # in-memory index: the vocabulary rides in the descriptor
             vocab = np.array(inline, dtype=np.str_) if inline else np.empty(0, dtype=np.str_)
-        else:
-            path = utf8_rank_meta.get("vocab_path")
-            if path is None or not os.path.exists(path):
-                return None
-            vocab = np.asarray(blosc2.open(path, mode="r")[:])
-        cache.clear()  # only the current build's vocabulary is ever of interest
-        cache[key] = vocab
-        return vocab
+            lo = int(np.searchsorted(vocab, value, side="left"))
+            return lo, bool(lo < len(vocab) and vocab[lo] == value)
+        path = utf8_rank_meta.get("vocab_path")
+        if path is None or not os.path.exists(path):
+            return None
+        # The open handle is cached, not its contents: reopening the sidecar on
+        # every query costs more than the bisection does.  Keyed by the build's
+        # size so a rebuilt index opens the new file rather than the old handle.
+        key = (path, utf8_rank_meta.get("n_rows"), utf8_rank_meta.get("nbytes"))
+        cache = self.__dict__.setdefault("_utf8_vocab_handles", {})
+        vnd = cache.get(key)
+        if vnd is None:
+            from blosc2.indexing import _INDEX_MMAP_MODE, _open_sidecar_file
+
+            for stale in [k for k in cache if k[0] == path]:
+                del cache[stale]
+            vnd = cache[key] = _open_sidecar_file(path, _INDEX_MMAP_MODE)
+        lo = self._sidecar_bisect(vnd, value, "left")
+        return lo, bool(lo < len(vnd) and vnd[lo : lo + 1][0] == value)
 
     def _utf8_rank_index_stale(self, name: str, utf8_rank_meta: dict) -> bool:
         """True if a utf8-rank FULL index no longer matches the live column.
