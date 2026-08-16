@@ -14,9 +14,12 @@ sections concretise, but nothing in the implementation is S3-specific: the
 dispatch is a single protocol-agnostic branch, so every fsspec driver comes
 along at no extra cost.
 
-This plan is for later consideration. It is staged so that each phase is
-independently shippable and each one is useful on its own; phase 1 alone
-already covers the common case.
+It is staged so that each phase is independently shippable and each one is
+useful on its own; phase 1 alone already covers the common case.
+
+**Status: phase 1 is implemented** (2026-08-16, branch `fsspec-support-plan`).
+Phases 2 and 3 remain unstarted and unscheduled — see the recommendation at the
+end for why that is the intended resting point rather than an unfinished one.
 
 ## Motivation
 
@@ -82,9 +85,30 @@ Relevant facts established while scoping this:
   rename and no file locks; `mode="a"` on a remote URL is out of scope for
   every phase below and should raise.
 
-## Phase 1 — Whole-object read and write
+## Phase 1 — Whole-object read and write — DONE
 
 The minimum that is genuinely useful.
+
+**As implemented**, with the two places it departs from the sketch below:
+
+- `is_fsspec_url()` and `fsspec_open()` live in
+  [src/blosc2/core.py](/Users/faltet/blosc/python-blosc2/src/blosc2/core.py);
+  `open()` dispatches to `_open_fsspec_url()` in
+  [src/blosc2/schunk.py](/Users/faltet/blosc/python-blosc2/src/blosc2/schunk.py).
+  The read branch became its own function only because inlining it pushed
+  `open()` past ruff's complexity limit.
+- The write branch went into `pack_tensor()` rather than into `save_array` and
+  `save_tensor` separately: both delegate to it, so one branch serves all three
+  entry points (plus `pack_array2`) instead of three copies.
+- `.b2d` raises `NotImplementedError`; sparse frames are not detected up front
+  and fail on the `from_cframe` instead. Cheap to detect properly only once
+  phase 2 exists, so it was left alone.
+- Tests: `tests/test_fsspec.py`, 12 tests over `memory://` plus one chained
+  `zip://…::file://` URL, in the default suite behind `importorskip("fsspec")`.
+  No tier-2 network test, per the open question below.
+
+The rest of this section is the original design, kept as the record of why the
+code looks the way it does.
 
 **Dependency.** A new optional extra in
 [pyproject.toml](/Users/faltet/blosc/python-blosc2/pyproject.toml), so nothing
@@ -374,7 +398,8 @@ branch; one filesystem exercising it is enough.
 
 **Ship phase 1 and stop.** It is roughly ten lines plus the extra plus the
 tier-1 tests, it covers "my arrays are in S3 and I want to read them", and it is
-the only phase whose value is certain today.
+the only phase whose value is certain today. *Done; the "and stop" half still
+holds.*
 
 Note the asymmetry that argues for the pause: every open question below except
 the last two is a *phase 2* question. The caching layer is where the design

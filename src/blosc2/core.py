@@ -534,7 +534,9 @@ def save_array(arr: np.ndarray, urlpath: str, chunksize: int | None = None, **kw
         The NumPy array to be saved.
 
     urlpath: str
-        The path for the file where the array will be saved.
+        The path for the file where the array will be saved.  An fsspec URL
+        (``s3://``, ``gs://``, ``memory://``...) writes the whole container in one
+        shot; it needs the ``fsspec`` extra and the protocol driver installed.
 
     chunksize: int
         The size (in bytes) for the chunks during compression. If not provided,
@@ -612,6 +614,33 @@ def load_array(urlpath: str, dparams: dict | None = None) -> np.ndarray:
     return load_tensor(urlpath, dparams=dparams)
 
 
+def is_fsspec_url(urlpath: object) -> bool:
+    """Whether *urlpath* should be routed through fsspec.
+
+    Any URL with a scheme qualifies, except `file://` (which the local path
+    handles better, with mmap and every container format) and `http(s)://`
+    (reserved for :ref:`C2Array`).  Chained URLs such as
+    `zip://x.b2nd::s3://bucket/a.zip` qualify too, as fsspec resolves them.
+    """
+    return (
+        isinstance(urlpath, str)
+        and "://" in urlpath
+        and not urlpath.startswith(("file://", "http://", "https://"))
+    )
+
+
+def fsspec_open(urlpath: str, mode: str):
+    """`fsspec.open()` with an actionable error when the extra is not installed."""
+    try:
+        import fsspec
+    except ImportError:
+        raise ImportError(
+            f'Reading or writing {urlpath} requires fsspec: pip install "blosc2[fsspec]"'
+        ) from None
+    # Missing protocol backends (s3fs, gcsfs...) are fsspec's error to raise.
+    return fsspec.open(urlpath, mode)
+
+
 def pack_tensor(
     tensor: tensorflow.Tensor | torch.Tensor | np.ndarray, chunksize: int | None = None, **kwargs: dict
 ) -> bytes | int:
@@ -656,6 +685,13 @@ def pack_tensor(
     """
     arr = np.asarray(tensor)
 
+    # Object stores cannot be written incrementally, so build the whole cframe in
+    # memory and PUT it in one go.
+    remote_urlpath = kwargs.get("urlpath") if is_fsspec_url(kwargs.get("urlpath")) else None
+    if remote_urlpath is not None:
+        del kwargs["urlpath"]
+        kwargs.pop("mode", None)
+
     schunk = blosc2.SChunk(chunksize=chunksize, data=arr, **kwargs)
 
     # Guess the kind of tensor / array
@@ -673,6 +709,12 @@ def pack_tensor(
     dtype = arr.dtype.descr if arr.dtype.kind == "V" else arr.dtype.str
 
     schunk.vlmeta["__pack_tensor__"] = (kind, arr.shape, dtype)
+
+    if remote_urlpath is not None:
+        cframe = schunk.to_cframe()
+        with fsspec_open(remote_urlpath, "wb") as f:
+            f.write(cframe)
+        return len(cframe)
 
     if schunk.urlpath is None:
         return schunk.to_cframe()
@@ -762,7 +804,9 @@ def save_tensor(
         The tensor or array to be saved.
 
     urlpath: str
-        The file path where the tensor or array will be saved.
+        The file path where the tensor or array will be saved.  An fsspec URL
+        (``s3://``, ``gs://``, ``memory://``...) writes the whole container in one
+        shot; it needs the ``fsspec`` extra and the protocol driver installed.
 
     chunksize: int
         The size (in bytes) for the chunks during compression. If not provided,

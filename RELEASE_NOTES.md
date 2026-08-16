@@ -6,6 +6,14 @@ XXX version-specific blurb XXX
 
 ### Improvements
 
+* New `blosc2[fsspec]` extra: `blosc2.open()`, `save_array()` and
+  `save_tensor()` now accept any [fsspec](https://filesystem-spec.readthedocs.io)
+  URL (`s3://`, `gs://`, `abfs://`, `zip://`, `memory://`, and chained ones like
+  `zip://inner.b2nd::s3://bucket/archive.zip`). The container is transferred
+  whole, so this covers single-file containers in read mode; the driver for each
+  protocol (`s3fs`, `gcsfs`...) and its credentials stay the caller's install and
+  configuration.
+
 * Querying a `utf8()` column through its FULL index no longer materializes the
   index vocabulary. The query literal is turned into an alphabetical rank by
   bisecting the vocabulary sidecar instead, so a lookup reads a few blocks

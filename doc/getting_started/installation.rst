@@ -40,6 +40,12 @@ grouped into *extras* that you opt into with the ``blosc2[extra]`` syntax:
    * - ``parquet``
      - The ``parquet-to-blosc2`` converter (``pyarrow``); see
        :doc:`../guides/parquet_to_blosc2`.
+   * - ``fsspec``
+     - Reading and writing single-file containers through any `fsspec
+       <https://filesystem-spec.readthedocs.io>`_ URL.  The driver for each
+       protocol is a separate install (``s3fs`` for ``s3://``, ``gcsfs`` for
+       ``gs://``, ``adlfs`` for ``abfs://``...), and credentials are configured
+       through the driver, not through blosc2.
 
 Install one or more extras by listing them in brackets (quote the
 argument in shells like ``zsh`` that treat brackets specially):
@@ -49,7 +55,17 @@ argument in shells like ``zsh`` that treat brackets specially):
     pip install "blosc2[tui]"             # the b2view terminal browser
     pip install "blosc2[hires]"           # b2view + its high-res view (h key)
     pip install "blosc2[parquet]"         # the Parquet converter
+    pip install "blosc2[fsspec]" s3fs     # fsspec URLs, plus the S3 driver
     pip install "blosc2[tui,parquet]"     # several at once
+
+With the ``fsspec`` extra, :func:`blosc2.open` and :func:`blosc2.save_array`
+accept any fsspec URL, including chained ones::
+
+    blosc2.open("s3://bucket/array.b2nd")
+    blosc2.open("zip://inner.b2nd::s3://bucket/archive.zip")
+
+The whole object is transferred in one go, so this covers single-file
+containers (``.b2nd``, ``.b2f``, ``.b2e``, ``.b2z``) in read mode.
 
 Source code
 +++++++++++

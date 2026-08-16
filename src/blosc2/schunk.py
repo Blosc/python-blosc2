@@ -22,6 +22,7 @@ import numpy as np
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
+from blosc2.core import fsspec_open, is_fsspec_url
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
@@ -1930,6 +1931,25 @@ def _finalize_special_open(special, urlpath, mode):
     return special
 
 
+def _open_fsspec_url(urlpath: str, mode: str, offset: int):
+    """Read a whole container from an fsspec URL and rebuild it in memory.
+
+    Object stores have no incremental read or append, so this is a single GET of
+    the complete object; only single-file containers can work this way.
+    """
+    if mode != "r":
+        raise NotImplementedError(f"fsspec URLs can only be opened with mode='r', not {mode!r}")
+    if offset != 0:
+        raise NotImplementedError("offset is not supported for fsspec URLs")
+    if urlpath.endswith(".b2d"):
+        raise NotImplementedError(
+            "directory containers (.b2d, sparse frames) are not supported for fsspec URLs; "
+            "copy the directory locally and open that"
+        )
+    with fsspec_open(urlpath, "rb") as f:
+        return blosc2.from_cframe(f.read())
+
+
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath,
     mode: str = "r",
@@ -1956,7 +1976,9 @@ def open(
     ----------
     urlpath: str | pathlib.Path | :ref:`URLPath`
         The path where the :ref:`SChunk` (or :ref:`NDArray`)
-        is stored. If it is a remote array, a :ref:`URLPath` must be passed.
+        is stored. If it is a remote Caterva2 array, a :ref:`URLPath` must be passed.
+        Any other URL with a scheme (``s3://``, ``gs://``, ``zip://``, ``memory://``...)
+        is opened through fsspec; see the `Notes` section for the limits.
     mode: str, optional
         Persistence mode: 'r' means read only (must exist);
         'a' means read/write (create if it doesn't exist);
@@ -2013,6 +2035,14 @@ def open(
 
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
       must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
+
+    * fsspec URLs require the ``fsspec`` extra (``pip install "blosc2[fsspec]"``)
+      plus the driver for the protocol (``s3fs`` for S3, ``gcsfs`` for GCS...),
+      which fsspec asks for by name if it is missing.  Credentials are configured
+      through those drivers, not through blosc2.  The whole object is read into
+      memory, so only single-file containers (``.b2nd``, ``.b2f``, ``.b2e``,
+      ``.b2z``) work; directory containers and sparse frames raise
+      ``NotImplementedError``, as do ``mode != 'r'`` and ``offset != 0``.
 
     * Persistent data handling follows a strict no-hidden-writes rule:
 
@@ -2075,6 +2105,9 @@ def open(
 
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
+
+    if is_fsspec_url(urlpath):
+        return _open_fsspec_url(urlpath, mode, offset)
 
     # Keep explicit store paths on the direct dispatch path.  For regular
     # Blosc containers, try the standard open first and only fall back to the
