@@ -288,8 +288,9 @@ def test_unknown_protocol():
         blosc2.open("nosuchproto://bucket/key.b2nd")
 
 
-def test_http_still_goes_to_c2array():
-    # http(s) is reserved for Caterva2, so it must not reach fsspec
+def test_http_does_not_reach_fsspec():
+    # http(s) is reserved for Caterva2, which is entered through blosc2.URLPath;
+    # a bare URL keeps failing as a missing local path rather than being fetched
     with pytest.raises(FileNotFoundError):
         blosc2.open("http://localhost:1/foo.b2nd")
 
