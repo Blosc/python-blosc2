@@ -7,6 +7,7 @@
 #######################################################################
 
 import pathlib
+import threading
 
 import numpy as np
 import pytest
@@ -316,6 +317,40 @@ def test_lazy_afetch():
     p = blosc2.open(_put("afetch.b2nd", a), lazy=True)
     cache = asyncio.run(p.afetch(slice(150, 250)))
     assert np.array_equal(cache[150:250], a[150:250])
+
+
+def test_lazy_fetch_is_serial_by_default(monkeypatch):
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    p = blosc2.open(_put("serial.b2nd", a), lazy=True)
+
+    threads = []
+    orig = blosc2.FsspecNDSource.get_chunk
+    monkeypatch.setattr(
+        blosc2.FsspecNDSource,
+        "get_chunk",
+        lambda self, nchunk: (threads.append(threading.get_ident()), orig(self, nchunk))[1],
+    )
+
+    assert np.array_equal(p[:], a[:])
+    assert len(threads) == 10
+    assert set(threads) == {threading.get_ident()}
+
+
+def test_lazy_max_concurrency_overlaps_fetches(monkeypatch):
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    p = blosc2.open(_put("concurrent.b2nd", a), lazy=True, max_concurrency=4)
+
+    # Each fetch waits for another one to be in flight, so this deadlocks into a
+    # BrokenBarrierError if the fetches are actually serial
+    barrier = threading.Barrier(2, timeout=10)
+    orig = blosc2.FsspecNDSource.get_chunk
+    monkeypatch.setattr(
+        blosc2.FsspecNDSource,
+        "get_chunk",
+        lambda self, nchunk: (barrier.wait(), orig(self, nchunk))[1],
+    )
+
+    assert np.array_equal(p[:], a[:])
 
 
 def test_lazy_persistent_proxy_cache(tmp_path, monkeypatch):

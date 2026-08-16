@@ -318,6 +318,16 @@ friends), and falls back to the blocking path elsewhere. Only the fallback is
 covered by tests — `memory://` is not async — so the concurrent path is the one
 piece of this work that a real S3 endpoint would exercise first.
 
+Later, the batching the plan wanted from `aget_chunk` was given to the *sync*
+path as well, since that is the one ordinary slicing uses: `get_chunk` became a
+single stateless range read (it cost two, one for the chunk header), which made
+it thread-safe, and `Proxy.fetch` grew a `max_concurrency=` thread pool.
+Threads rather than asyncio, because driving `afetch` from `__getitem__` would
+mean `asyncio.run()` inside a sync method — a `RuntimeError` in any notebook,
+and the first sync-over-async in the library. Opt-in at 1 by default: the
+benefit is unmeasurable against `memory://`, so it ships on reasoning, and the
+test asserts overlap with a barrier rather than a stopwatch.
+
 `lazy=True` and `cache_storage=` compose rather than excluding each other, which
 is a departure from how phase 2 framed the choice: `cache_storage` means "where
 this container's local copy lives", and `lazy` decides whether that copy is the

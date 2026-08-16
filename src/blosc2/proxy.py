@@ -13,6 +13,7 @@ import struct
 import textwrap
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     from numpy.typing import DTypeLike
@@ -338,7 +339,9 @@ class Proxy(blosc2.Operand):
         """
         return False
 
-    def fetch(self, item: slice | list[slice] | None = ()) -> blosc2.NDArray | blosc2.schunk.SChunk:
+    def fetch(
+        self, item: slice | list[slice] | None = (), max_concurrency: int | None = None
+    ) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
         Get the container used as cache with the requested data updated.
 
@@ -347,6 +350,12 @@ class Proxy(blosc2.Operand):
         item: slice or list of slices, optional
             If not None, only the chunks that intersect with the slices
             in items will be retrieved if they have not been already.
+        max_concurrency: int, optional
+            Maximum number of `get_chunk` calls to run at once, in a thread
+            pool. Only worth raising for sources whose fetches are dominated by
+            round-trip latency, and only safe for sources whose `get_chunk` is
+            thread-safe, such as :ref:`FsspecNDSource`. Defaults to the source's
+            own `max_concurrency` attribute if it has one, else 1 (serial).
 
         Returns
         -------
@@ -366,21 +375,30 @@ class Proxy(blosc2.Operand):
         [2 3]
         [4 5]]
         """
-        if item == ():
-            # Full realization
-            for info in self._schunk_cache.iterchunks_info():
-                if info.special != blosc2.SpecialValue.NOT_SPECIAL:
-                    chunk = self.src.get_chunk(info.nchunk)
-                    self._schunk_cache.update_chunk(info.nchunk, chunk)
-        else:
-            # Get only a slice
-            nchunks = blosc2.get_slice_nchunks(self._cache, item)
-            for info in self._schunk_cache.iterchunks_info():
-                if info.nchunk in nchunks and info.special != blosc2.SpecialValue.NOT_SPECIAL:
-                    chunk = self.src.get_chunk(info.nchunk)
-                    self._schunk_cache.update_chunk(info.nchunk, chunk)
+        # Full realization when item is (), else only the chunks it intersects
+        wanted = None if item == () else blosc2.get_slice_nchunks(self._cache, item)
+        missing = [
+            info.nchunk
+            for info in self._schunk_cache.iterchunks_info()
+            if info.special != blosc2.SpecialValue.NOT_SPECIAL and (wanted is None or info.nchunk in wanted)
+        ]
+
+        for nchunk, chunk in self._get_chunks(missing, max_concurrency):
+            self._schunk_cache.update_chunk(nchunk, chunk)
 
         return self._cache
+
+    def _get_chunks(self, nchunks: list[int], max_concurrency: int | None):
+        """Yield (nchunk, chunk) pairs, overlapping the fetches when asked to."""
+        if max_concurrency is None:
+            max_concurrency = getattr(self.src, "max_concurrency", 1)
+        if max_concurrency <= 1 or len(nchunks) < 2:
+            for nchunk in nchunks:
+                yield nchunk, self.src.get_chunk(nchunk)
+            return
+        # Writing to the cache stays on this thread; only the fetches fan out
+        with ThreadPoolExecutor(max_workers=min(max_concurrency, len(nchunks))) as pool:
+            yield from zip(nchunks, pool.map(self.src.get_chunk, nchunks), strict=True)
 
     async def afetch(
         self, item: slice | list[slice] | None = (), max_concurrency: int | None = None
@@ -479,7 +497,11 @@ class Proxy(blosc2.Operand):
         ]
 
         if max_concurrency is None:
-            max_concurrency = REMOTE_MAX_CONCURRENCY if isinstance(self.src, blosc2.C2Array) else 1
+            max_concurrency = getattr(
+                self.src,
+                "max_concurrency",
+                REMOTE_MAX_CONCURRENCY if isinstance(self.src, blosc2.C2Array) else 1,
+            )
         semaphore = asyncio.Semaphore(max(1, max_concurrency))
 
         async def _fetch_one(nchunk):
@@ -697,11 +719,23 @@ class FsspecNDSource(ProxyNDSource):
     Contiguous frames carrying a ``b2nd`` metalayer only, which is what
     :func:`blosc2.asarray` and friends write to a single file.  Sparse frames and
     ``.b2d`` stores are directories; open those with ``cache_storage=``.
+
+    Parameters
+    ----------
+    urlpath: str
+        The fsspec URL of the frame.
+    max_concurrency: int, optional
+        How many chunk fetches the enclosing :ref:`Proxy` may run at once.  Each
+        chunk costs one range request, so against an object store a slice is
+        almost entirely round-trip latency and overlapping the requests is the
+        whole win; against a local file it buys nothing.  Defaults to 1, i.e.
+        serial.
     """
 
-    def __init__(self, urlpath: str):
+    def __init__(self, urlpath: str, max_concurrency: int = 1):
         from blosc2.core import _import_fsspec
 
+        self.max_concurrency = max_concurrency
         fsspec = _import_fsspec(urlpath)
         fs, path = fsspec.url_to_fs(urlpath)
         if fs.isdir(path):

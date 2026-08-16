@@ -22,6 +22,12 @@ XXX version-specific blurb XXX
   which an object store has no way to serve), so constructors given a URL now say
   that instead of failing deep in C.
 
+* `Proxy.fetch()` takes a `max_concurrency=` argument, and reads it from the
+  source when the source has one, so `blosc2.open(url, lazy=True,
+  max_concurrency=8)` overlaps its chunk fetches in a thread pool. Ordinary
+  slicing benefits, not just the async `afetch()`. Defaults to 1 (serial), and
+  is only safe for sources whose `get_chunk` is thread-safe.
+
 * `blosc2.Proxy(src, urlpath=..., mode="a")` now adopts the cache left by an
   earlier run instead of failing on the existing file, so a proxy's cache can
   outlive the process. The cache must come from a proxy over a source of the same

@@ -1936,14 +1936,14 @@ def _finalize_special_open(special, urlpath, mode):
     return special
 
 
-def _lazy_fsspec_proxy(urlpath: str, cache_storage: str | pathlib.Path | None):
+def _lazy_fsspec_proxy(urlpath: str, cache_storage: str | pathlib.Path | None, max_concurrency: int = 1):
     """Wrap a remote frame in a Proxy that fetches chunks on demand.
 
     Without `cache_storage` the fetched chunks live in memory and die with the
     proxy; with it they go to a container under that directory, so a later run
     starts from what this one pulled.
     """
-    src = blosc2.FsspecNDSource(urlpath)
+    src = blosc2.FsspecNDSource(urlpath, max_concurrency=max_concurrency)
     if cache_storage is None:
         return blosc2.Proxy(src)
 
@@ -1977,12 +1977,13 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
 
     cache_storage = kwargs.pop("cache_storage", None)
     if kwargs.pop("lazy", False):
+        max_concurrency = kwargs.pop("max_concurrency", 1)
         if offset != 0:
             raise NotImplementedError("offset is not supported with lazy=True")
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
-        return _lazy_fsspec_proxy(urlpath, cache_storage)
+        return _lazy_fsspec_proxy(urlpath, cache_storage, max_concurrency)
 
     if cache_storage is not None:
         return open(localize_fsspec_url(urlpath, cache_storage), mode, offset, **kwargs)
@@ -2054,6 +2055,12 @@ def open(
             each, instead of transferring the whole thing. Contiguous frames
             holding an :ref:`NDArray` only. The fetched chunks are kept in memory,
             or in ``cache_storage`` when that is given as well.
+        max_concurrency: int, optional
+            Only with ``lazy``: how many chunk fetches to run at once, in a
+            thread pool. A slice against an object store is almost entirely
+            round-trip latency, so overlapping the requests is what makes a wide
+            slice bearable; against a local file it buys nothing. Defaults to 1,
+            i.e. serial.
         cache_storage: str | pathlib.Path, optional
             Only for fsspec URLs: a directory holding this container's local
             copy — the whole thing, or just the chunks ``lazy`` has fetched so
