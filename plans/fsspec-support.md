@@ -324,9 +324,15 @@ single stateless range read (it cost two, one for the chunk header), which made
 it thread-safe, and `Proxy.fetch` grew a `max_concurrency=` thread pool.
 Threads rather than asyncio, because driving `afetch` from `__getitem__` would
 mean `asyncio.run()` inside a sync method — a `RuntimeError` in any notebook,
-and the first sync-over-async in the library. Opt-in at 1 by default: the
-benefit is unmeasurable against `memory://`, so it ships on reasoning, and the
-test asserts overlap with a barrier rather than a stopwatch.
+and the first sync-over-async in the library. The test asserts overlap with a
+barrier rather than a stopwatch, since `memory://` has no latency to hide.
+
+It defaults to 8 rather than to serial. The speedup itself is still unmeasured,
+but the *cost of being wrong* is measurable and small: over `memory://`, where
+the pool can only lose, a 100-chunk read goes from 1.1 ms to 2.2 ms, about 10 µs
+per chunk, against the ~30 ms an S3 round trip costs. That asymmetry, plus
+`afetch` already defaulting to 8 for remote sources, made serial-by-default the
+inconsistent choice rather than the conservative one.
 
 `lazy=True` and `cache_storage=` compose rather than excluding each other, which
 is a departure from how phase 2 framed the choice: `cache_storage` means "where

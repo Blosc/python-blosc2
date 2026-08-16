@@ -24,9 +24,12 @@ XXX version-specific blurb XXX
 
 * `Proxy.fetch()` takes a `max_concurrency=` argument, and reads it from the
   source when the source has one, so `blosc2.open(url, lazy=True,
-  max_concurrency=8)` overlaps its chunk fetches in a thread pool. Ordinary
-  slicing benefits, not just the async `afetch()`. Defaults to 1 (serial), and
-  is only safe for sources whose `get_chunk` is thread-safe.
+  max_concurrency=...)` overlaps its chunk fetches in a thread pool. Ordinary
+  slicing benefits, not just the async `afetch()`. A lazy fsspec proxy defaults
+  to 8, matching what `afetch()` already used for remote sources; pass 1 for a
+  protocol with no latency to hide, where the pool costs ~10 µs per chunk and
+  saves nothing. Other sources stay serial unless asked, since this is only safe
+  for a thread-safe `get_chunk`.
 
 * `blosc2.Proxy(src, urlpath=..., mode="a")` now adopts the cache left by an
   earlier run instead of failing on the existing file, so a proxy's cache can

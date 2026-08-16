@@ -728,11 +728,12 @@ class FsspecNDSource(ProxyNDSource):
         How many chunk fetches the enclosing :ref:`Proxy` may run at once.  Each
         chunk costs one range request, so against an object store a slice is
         almost entirely round-trip latency and overlapping the requests is the
-        whole win; against a local file it buys nothing.  Defaults to 1, i.e.
-        serial.
+        whole win.  Defaults to 8, the same figure :meth:`Proxy.afetch` uses for
+        remote sources.  Pass 1 for a protocol with no latency to hide, where
+        the thread pool costs about 10 microseconds per chunk and saves nothing.
     """
 
-    def __init__(self, urlpath: str, max_concurrency: int = 1):
+    def __init__(self, urlpath: str, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
         from blosc2.core import _import_fsspec
 
         self.max_concurrency = max_concurrency

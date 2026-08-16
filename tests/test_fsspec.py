@@ -319,9 +319,9 @@ def test_lazy_afetch():
     assert np.array_equal(cache[150:250], a[150:250])
 
 
-def test_lazy_fetch_is_serial_by_default(monkeypatch):
+def test_lazy_fetch_is_serial_when_asked(monkeypatch):
     a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
-    p = blosc2.open(_put("serial.b2nd", a), lazy=True)
+    p = blosc2.open(_put("serial.b2nd", a), lazy=True, max_concurrency=1)
 
     threads = []
     orig = blosc2.FsspecNDSource.get_chunk
@@ -336,9 +336,10 @@ def test_lazy_fetch_is_serial_by_default(monkeypatch):
     assert set(threads) == {threading.get_ident()}
 
 
-def test_lazy_max_concurrency_overlaps_fetches(monkeypatch):
+@pytest.mark.parametrize("kwargs", [{}, {"max_concurrency": 4}], ids=["default", "explicit"])
+def test_lazy_overlaps_fetches(monkeypatch, kwargs):
     a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
-    p = blosc2.open(_put("concurrent.b2nd", a), lazy=True, max_concurrency=4)
+    p = blosc2.open(_put("concurrent.b2nd", a), lazy=True, **kwargs)
 
     # Each fetch waits for another one to be in flight, so this deadlocks into a
     # BrokenBarrierError if the fetches are actually serial
