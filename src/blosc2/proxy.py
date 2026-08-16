@@ -696,10 +696,11 @@ class FsspecNDSource(ProxyNDSource):
             )
         self.urlpath = urlpath
         self._fs, self._path = fs, path
-        info = fs.info(path)
         # Identifies the remote bytes, so a cache built against them can tell it
-        # has gone stale -- and chunk offsets from a replaced frame are garbage
-        self.stamp = [info.get("size"), str(info.get("mtime") or info.get("LastModified") or "")]
+        # has gone stale -- and chunk offsets from a replaced frame are garbage.
+        # fsspec's own token, rather than a tuple of the metadata fields we guess
+        # a backend exposes: memory:// has no mtime, which left it size-only.
+        self.stamp = fs.ukey(path)
         # One handle for the whole life of the source: fsspec reads ranges out of
         # it, and its own block cache keeps the two reads per chunk to one fetch
         self._file = fs.open(path, "rb")

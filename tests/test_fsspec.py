@@ -311,7 +311,13 @@ def test_lazy_with_cache_storage(tmp_path, monkeypatch):
 
 
 def test_lazy_cache_rebuilt_when_remote_changes(tmp_path):
-    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    # Uncompressed, so both frames are byte-for-byte the same size: the stamp
+    # cannot fall back to comparing sizes and get this right by luck
+    cparams = blosc2.CParams(clevel=0)
+    a = blosc2.asarray(np.arange(1000, dtype="i4"), chunks=(100,), cparams=cparams)
+    b = blosc2.asarray(np.arange(7000, 8000, dtype="i4"), chunks=(100,), cparams=cparams)
+    assert len(a.to_cframe()) == len(b.to_cframe())
+
     url = _put("lazystale.b2nd", a)
     p = blosc2.open(url, lazy=True, cache_storage=tmp_path)
     assert np.array_equal(p[0:100], a[0:100])
@@ -319,7 +325,6 @@ def test_lazy_cache_rebuilt_when_remote_changes(tmp_path):
 
     # Replacing the frame invalidates both the cached chunks and the offsets
     # they were fetched by, so the cache must be thrown away rather than reused
-    b = blosc2.arange(1000, 2000, dtype="i4", chunks=(100,))
     _put("lazystale.b2nd", b)
     p = blosc2.open(url, lazy=True, cache_storage=tmp_path)
     assert np.array_equal(p[0:100], b[0:100])
