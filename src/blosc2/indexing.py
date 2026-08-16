@@ -153,10 +153,10 @@ def _cleanup_in_memory_store(key: int) -> None:
     _IN_MEMORY_INDEXES.pop(key, None)
     _IN_MEMORY_INDEX_FINALIZERS.pop(key, None)
     scope = ("memory", key)
-    stale_data = [cache_key for cache_key in _DATA_CACHE if cache_key[0] == scope]
+    stale_data = [cache_key for cache_key in tuple(_DATA_CACHE) if cache_key[0] == scope]
     for cache_key in stale_data:
         _DATA_CACHE.pop(cache_key, None)
-    stale_handles = [cache_key for cache_key in _SIDECAR_HANDLE_CACHE if cache_key[0] == scope]
+    stale_handles = [cache_key for cache_key in tuple(_SIDECAR_HANDLE_CACHE) if cache_key[0] == scope]
     for cache_key in stale_handles:
         _SIDECAR_HANDLE_CACHE.pop(cache_key, None)
     _hot_cache_clear(scope=("memory", key))
@@ -755,10 +755,10 @@ def _hot_cache_clear(scope: tuple[str, str | int] | None = None) -> None:
     """Clear all in-process hot cache entries for *scope* (or all scopes)."""
     global _HOT_CACHE_BYTES
     if scope is not None:
-        keys = [key for key in _HOT_CACHE if key[0] == scope]
+        keys = [key for key in tuple(_HOT_CACHE) if key[0] == scope]
         for key in keys:
             _HOT_CACHE_BYTES -= _HOT_CACHE.pop(key).nbytes
-        _HOT_CACHE_ORDER[:] = [key for key in _HOT_CACHE_ORDER if key[0] != scope]
+        _HOT_CACHE_ORDER[:] = [key for key in list(_HOT_CACHE_ORDER) if key[0] != scope]
         return
     _HOT_CACHE.clear()
     _HOT_CACHE_ORDER.clear()
@@ -1068,10 +1068,10 @@ def _data_cache_key(array: blosc2.NDArray, token: str, category: str, name: str)
 
 def _clear_cached_data(array: blosc2.NDArray, token: str) -> None:
     prefix = (_array_key(array), token)
-    keys = [key for key in _DATA_CACHE if key[:2] == prefix]
+    keys = [key for key in tuple(_DATA_CACHE) if key[:2] == prefix]
     for key in keys:
         _DATA_CACHE.pop(key, None)
-    handle_keys = [key for key in _SIDECAR_HANDLE_CACHE if key[:2] == prefix]
+    handle_keys = [key for key in tuple(_SIDECAR_HANDLE_CACHE) if key[:2] == prefix]
     for key in handle_keys:
         _SIDECAR_HANDLE_CACHE.pop(key, None)
 
@@ -1093,7 +1093,7 @@ def _invalidate_sidecar_cache_entries(array: blosc2.NDArray, token: str, categor
     for cache_category in categories:
         _DATA_CACHE.pop(_data_cache_key(array, token, cache_category, name), None)
         prefix = _sidecar_handle_cache_key(array, token, cache_category, name)
-        for key in [k for k in _SIDECAR_HANDLE_CACHE if k[:4] == prefix[:4]]:
+        for key in [k for k in tuple(_SIDECAR_HANDLE_CACHE) if k[:4] == prefix[:4]]:
             _SIDECAR_HANDLE_CACHE.pop(key, None)
 
 
