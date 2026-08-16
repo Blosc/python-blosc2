@@ -629,6 +629,10 @@ def normalize_urlpath(urlpath: object) -> object:
         parsed = urllib.parse.urlparse(urlpath)
         netloc = "" if parsed.netloc.lower() in ("", "localhost") else parsed.netloc
         if re.fullmatch("[A-Za-z]:", netloc):
+            if os.name != "nt":
+                raise ValueError(
+                    f"{urlpath} names the host {netloc!r}; only Windows can reach one, as a drive"
+                )
             # A Windows drive lands in netloc for the two-slash form, `file://C:/x`
             prefix = netloc
         elif not netloc:

@@ -2019,7 +2019,7 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     requested = [k for k, v in kwargs.items() if v is not None]
     if requested:
         raise NotImplementedError(f"{', '.join(requested)} on an fsspec URL requires passing cache_storage=")
-    if urlpath.endswith(".b2d"):
+    if urlpath.split("?", 1)[0].split("#", 1)[0].endswith(".b2d"):
         raise NotImplementedError(
             "directory containers (.b2d, sparse frames) on an fsspec URL require "
             "passing cache_storage= to fetch them locally first"

@@ -136,6 +136,11 @@ def test_dir_container_needs_cache():
         blosc2.open("memory://store.b2d")
 
 
+def test_dir_container_with_query_needs_cache():
+    with pytest.raises(NotImplementedError, match="cache_storage"):
+        blosc2.open("memory://store.b2d?version=1")
+
+
 def test_cached_open(tmp_path):
     a = blosc2.arange(10, dtype="i4")
     with fsspec.open("memory://c.b2nd", "wb") as f:
@@ -554,13 +559,21 @@ def test_zip_store_needs_cache(tmp_path):
     [
         ("file:///tmp/a.b2nd", "/tmp/a.b2nd"),
         ("file://localhost/tmp/a.b2nd", "/tmp/a.b2nd"),
-        # A Windows drive lands in the netloc for the two-slash form
-        ("file://C:/data/a.b2nd", "C:"),
     ],
 )
 def test_normalize_file_url(url, expected):
     # as_posix() because the separator is the platform's, the layout is not
     assert expected in pathlib.PurePath(blosc2.core.normalize_urlpath(url)).as_posix()
+
+
+def test_normalize_windows_drive_url():
+    # file://C:/x names the host C:, which only Windows can reach, as a drive
+    url = "file://C:/data/a.b2nd"
+    if os.name == "nt":
+        assert pathlib.PurePath(blosc2.core.normalize_urlpath(url)).as_posix() == "C:/data/a.b2nd"
+    else:
+        with pytest.raises(ValueError, match="C:"):
+            blosc2.core.normalize_urlpath(url)
 
 
 def test_normalize_file_url_with_a_host():
