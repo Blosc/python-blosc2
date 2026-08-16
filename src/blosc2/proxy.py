@@ -322,12 +322,24 @@ class Proxy(blosc2.Operand):
             raise ValueError(
                 f"{urlpath} is not a proxy cache; pass mode='w' to overwrite it or choose another urlpath"
             )
-        if hasattr(self.src, "shape") and (
-            tuple(cached.shape) != tuple(self.src.shape) or cached.dtype != self.src.dtype
-        ):
+        # Chunk *numbers* are the currency between cache and source, so the
+        # partitioning has to match, not just the logical shape: fetch() would
+        # otherwise ask the source for chunk n meaning something else entirely
+        if hasattr(self.src, "shape"):
+            here = (tuple(cached.shape), cached.dtype, tuple(cached.chunks), tuple(cached.blocks))
+            there = (
+                tuple(self.src.shape),
+                np.dtype(self.src.dtype),
+                tuple(self.src.chunks),
+                tuple(self.src.blocks),
+            )
+        else:
+            here = (schunk.nbytes, schunk.chunksize, schunk.typesize)
+            there = (self.src.nbytes, self.src.chunksize, self.src.typesize)
+        if here != there:
             raise ValueError(
-                f"the cache at {urlpath} holds a {cached.shape} {cached.dtype} array, which "
-                f"does not fit the {self.src.shape} {self.src.dtype} source"
+                f"the cache at {urlpath} was built for a different source: it holds {here}, "
+                f"the source is {there} (shape, dtype, chunks, blocks)"
             )
         return cached
 

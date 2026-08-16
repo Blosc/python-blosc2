@@ -32,7 +32,7 @@ import numpy as np
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
-from blosc2.core import fsspec_open, is_fsspec_url
+from blosc2.core import fsspec_open, is_fsspec_url, normalize_urlpath
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.schunk import SChunk
 
@@ -5078,6 +5078,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> # Save the array to a file
         >>> a.save("array.b2frame")
         """
+        urlpath = normalize_urlpath(urlpath)
         if is_fsspec_url(urlpath):
             if not contiguous:
                 raise NotImplementedError(
@@ -7020,6 +7021,11 @@ def astype(
 
 
 def _check_ndarray_kwargs(**kwargs):  # noqa: C901
+    if kwargs.get("urlpath") is not None:
+        # A Storage instance normalizes its own; a bare kwarg has to be done here,
+        # since it takes precedence over the defaults built from it below
+        kwargs["urlpath"] = normalize_urlpath(kwargs["urlpath"])
+
     storage = kwargs.get("storage")
     if storage is not None:
         for key in kwargs:

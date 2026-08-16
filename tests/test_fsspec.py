@@ -480,6 +480,38 @@ def test_http_does_not_reach_fsspec():
         blosc2.open("http://localhost:1/foo.b2nd")
 
 
+def test_file_url_uses_the_local_path(tmp_path):
+    # file:// is kept off the fsspec branch so it can use mmap and every
+    # container format, which only works if the scheme is stripped first
+    a = blosc2.arange(10, dtype="i4")
+    url = (tmp_path / "f.b2nd").as_uri()
+
+    a.save(url)
+    assert (tmp_path / "f.b2nd").is_file()
+    assert np.array_equal(blosc2.open(url)[:], a[:])
+    assert np.array_equal(blosc2.open(url, mmap_mode="r")[:], a[:])
+
+
+def test_file_url_backs_a_container(tmp_path):
+    url = (tmp_path / "c.b2nd").as_uri()
+    a = blosc2.arange(10, dtype="i4", urlpath=url, mode="w")
+    a[0:5] = 7
+    assert np.array_equal(blosc2.open(url)[:], a[:])
+
+
+def test_cached_dir_refetches_on_same_size_change(tmp_path):
+    # Sizes and names alone cannot see this, and memory:// has no mtime to fall
+    # back on, so the manifest has to use each backend's own identity token
+    memfs = fsspec.filesystem("memory")
+    memfs.pipe_file("/samesize.b2d/a.bin", b"A" * 100)
+    localdir = blosc2.core.localize_fsspec_url("memory://samesize.b2d", tmp_path)
+    assert pathlib.Path(localdir, "a.bin").read_bytes() == b"A" * 100
+
+    memfs.pipe_file("/samesize.b2d/a.bin", b"B" * 100)
+    localdir = blosc2.core.localize_fsspec_url("memory://samesize.b2d", tmp_path)
+    assert pathlib.Path(localdir, "a.bin").read_bytes() == b"B" * 100
+
+
 def test_local_path_untouched(tmp_path):
     urlpath = str(tmp_path / "local.b2nd")
     a = blosc2.arange(10, dtype="i4", urlpath=urlpath, mode="w")

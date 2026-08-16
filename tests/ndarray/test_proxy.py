@@ -155,14 +155,25 @@ def test_reuse_cache_rejects_foreign_container(tmp_path):
         blosc2.Proxy(source, urlpath=path, mode="a")
 
 
-def test_reuse_cache_rejects_mismatched_source(tmp_path):
+@pytest.mark.parametrize(
+    "other",
+    [
+        lambda data: blosc2.asarray(np.arange(50, dtype=np.float64)),
+        # Same shape and dtype, different partitioning: chunk numbers are what
+        # the proxy passes to the source, so this would silently fetch the
+        # wrong chunk or run off the end
+        lambda data: blosc2.asarray(data, chunks=(2, 5), blocks=(1, 5)),
+    ],
+    ids=["shape", "chunks"],
+)
+def test_reuse_cache_rejects_mismatched_source(tmp_path, other):
     proxy_path = str(tmp_path / "proxy.b2nd")
     data = np.arange(120, dtype=np.int32).reshape(12, 10)
-    blosc2.Proxy(blosc2.asarray(data), urlpath=proxy_path, mode="a").fetch()
+    source = blosc2.asarray(data, chunks=(4, 5), blocks=(2, 5))
+    blosc2.Proxy(source, urlpath=proxy_path, mode="a").fetch()
 
-    other = blosc2.asarray(np.arange(50, dtype=np.float64))
-    with pytest.raises(ValueError, match="does not fit"):
-        blosc2.Proxy(other, urlpath=proxy_path, mode="a")
+    with pytest.raises(ValueError, match="different source"):
+        blosc2.Proxy(other(data), urlpath=proxy_path, mode="a")
 
 
 # Test the ProxyNDSources interface

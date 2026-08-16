@@ -21,6 +21,8 @@ import platform
 import shutil
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from dataclasses import asdict
 from functools import lru_cache
 from typing import TYPE_CHECKING, ClassVar
@@ -616,6 +618,17 @@ def load_array(urlpath: str, dparams: dict | None = None) -> np.ndarray:
     return load_tensor(urlpath, dparams=dparams)
 
 
+def normalize_urlpath(urlpath: object) -> object:
+    """Turn a `file://` URL into the native path it names, leaving anything else alone.
+
+    Local URLs are kept off the fsspec branch so they can use mmap and every
+    container format, which only works if the scheme is stripped first.
+    """
+    if isinstance(urlpath, str) and urlpath.startswith("file://"):
+        return urllib.request.url2pathname(urllib.parse.urlparse(urlpath).path)
+    return urlpath
+
+
 def is_fsspec_url(urlpath: object) -> bool:
     """Whether *urlpath* should be routed through fsspec.
 
@@ -665,6 +678,8 @@ def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
     matching the manifest written at download time.
     """
     fsspec = _import_fsspec(urlpath)
+    from fsspec.utils import tokenize
+
     cache_storage = str(cache_storage)
     fs, path = fsspec.url_to_fs(urlpath)
 
@@ -678,12 +693,11 @@ def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
 
     localdir = fsspec_cache_path(urlpath, cache_storage)
     manifest = pathlib.Path(localdir + ".json")
+    # tokenize(info) is what fs.ukey() hashes, so this asks each backend what
+    # identifies a file rather than guessing which fields it exposes -- size and
+    # mtime miss a same-size rewrite, and memory:// has no mtime at all
     listing = json.dumps(
-        {
-            name: (entry.get("size"), entry.get("mtime") or entry.get("LastModified"))
-            for name, entry in sorted(fs.find(path, detail=True).items())
-        },
-        default=str,
+        {name: tokenize(entry) for name, entry in sorted(fs.find(path, detail=True).items())}
     )
     if not manifest.exists() or manifest.read_text() != listing:
         shutil.rmtree(localdir, ignore_errors=True)

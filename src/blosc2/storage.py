@@ -10,7 +10,7 @@ import warnings
 from dataclasses import asdict, dataclass, field, fields
 
 import blosc2
-from blosc2.core import is_fsspec_url
+from blosc2.core import is_fsspec_url, normalize_urlpath
 
 
 def default_nthreads():
@@ -249,6 +249,7 @@ class Storage:
     meta: dict = None
 
     def __post_init__(self):
+        self.urlpath = normalize_urlpath(self.urlpath)
         if is_fsspec_url(self.urlpath):
             # The C layer writes a container incrementally, rewriting its header
             # and offsets as chunks land; an object store has no partial writes

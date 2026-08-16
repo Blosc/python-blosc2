@@ -22,7 +22,13 @@ import numpy as np
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
-from blosc2.core import fsspec_cache_path, fsspec_open, is_fsspec_url, localize_fsspec_url
+from blosc2.core import (
+    fsspec_cache_path,
+    fsspec_open,
+    is_fsspec_url,
+    localize_fsspec_url,
+    normalize_urlpath,
+)
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
@@ -367,7 +373,9 @@ class SChunk(blosc2_ext.SChunk):
         if isinstance(kwargs.get("dparams"), blosc2.DParams):
             kwargs["dparams"] = asdict(kwargs.get("dparams"))
 
-        urlpath = kwargs.get("urlpath")
+        urlpath = normalize_urlpath(kwargs.get("urlpath"))
+        if urlpath is not None:
+            kwargs["urlpath"] = urlpath
         if is_fsspec_url(urlpath):
             raise ValueError(
                 f"{urlpath} is an fsspec URL, which cannot back a container as it is written; "
@@ -2181,6 +2189,7 @@ def open(
 
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
+    urlpath = normalize_urlpath(urlpath)
 
     if is_fsspec_url(urlpath):
         return _open_fsspec_url(urlpath, mode, offset, kwargs)

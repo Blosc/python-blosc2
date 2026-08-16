@@ -181,6 +181,10 @@ Notes on the details:
 
 - The `file://` exclusion lets fsspec-style local URLs keep working through
   the normal local path, which supports mmap and every container format.
+  *(This turned out to need more than the exclusion: nothing downstream stripped
+  the scheme, so a `file://` URL was taken as a literal filename and failed. It
+  is normalized to a native path now, in `open()`, `NDArray.save()`, `Storage`
+  and the two constructor paths that bypass `Storage`.)*
 - `offset != 0` should raise for now; the embedded-object case is a phase-3
   concern.
 - `copy=False` on `from_cframe` is tempting (it pins the read buffer instead of
