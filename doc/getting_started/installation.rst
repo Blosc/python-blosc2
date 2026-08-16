@@ -63,7 +63,8 @@ ones included, and reads it whole, through a local cache (``cache_storage=``) or
 one chunk at a time (``lazy=True``); see :func:`blosc2.open` and
 :ref:`FsspecNDSource` for what each mode supports.
 ``examples/ndarray/rw-fsspec.py`` walks through all three plus the write side,
-over ``memory://`` so it runs with no network or credentials.
+and ``examples/ndarray/concurrent-fsspec.py`` shows what overlapping the chunk
+fetches buys; both run with no network or credentials.
 
 Source code
 +++++++++++
