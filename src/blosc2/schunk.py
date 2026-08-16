@@ -1968,9 +1968,16 @@ def _lazy_fsspec_proxy(
 
 
 def _cache_stamp(path: str):
-    """The remote stamp a cached proxy container was built against, if any."""
+    """The remote stamp a cached proxy container was built against, if any.
+
+    None for a cache that cannot be read at all, which an interrupted run can
+    leave behind: the caller throws those away just like a stale one.
+    """
     _set_default_dparams(kwargs := {})
-    cache = blosc2_ext.open(path, "r", 0, **kwargs)
+    try:
+        cache = blosc2_ext.open(path, "r", 0, **kwargs)
+    except RuntimeError:
+        return None
     return getattr(cache, "schunk", cache).vlmeta.get("fsspec-stamp")
 
 
@@ -1988,14 +1995,18 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
         raise NotImplementedError(f"fsspec URLs can only be opened with mode='r', not {mode!r}")
 
     cache_storage = kwargs.pop("cache_storage", None)
+    max_concurrency = kwargs.pop("max_concurrency", None)
     if kwargs.pop("lazy", False):
-        max_concurrency = kwargs.pop("max_concurrency", None)
         if offset != 0:
             raise NotImplementedError("offset is not supported with lazy=True")
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
             raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
         return _lazy_fsspec_proxy(urlpath, cache_storage, max_concurrency)
+
+    if max_concurrency is not None:
+        # Nothing is fetched chunk by chunk here, so there is nothing to overlap
+        raise NotImplementedError("max_concurrency is only supported with lazy=True")
 
     if cache_storage is not None:
         return open(localize_fsspec_url(urlpath, cache_storage), mode, offset, **kwargs)

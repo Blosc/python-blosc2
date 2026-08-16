@@ -5084,8 +5084,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 raise NotImplementedError(
                     "a sparse frame is a directory, so it cannot be saved to an fsspec URL"
                 )
-            # An object store takes the whole thing at once, and always replaces
-            kwargs.pop("mode", None)
+            # An object store takes the whole thing at once, and always replaces,
+            # but reading mode still forbids a write
+            blosc2_ext.check_access_mode(urlpath, kwargs.pop("mode", "w"))
             array = self.copy(**kwargs) if kwargs else self
             with fsspec_open(urlpath, "wb") as f:
                 f.write(array.to_cframe())
@@ -7021,11 +7022,6 @@ def astype(
 
 
 def _check_ndarray_kwargs(**kwargs):  # noqa: C901
-    if kwargs.get("urlpath") is not None:
-        # A Storage instance normalizes its own; a bare kwarg has to be done here,
-        # since it takes precedence over the defaults built from it below
-        kwargs["urlpath"] = normalize_urlpath(kwargs["urlpath"])
-
     storage = kwargs.get("storage")
     if storage is not None:
         for key in kwargs:
@@ -7042,6 +7038,11 @@ def _check_ndarray_kwargs(**kwargs):  # noqa: C901
         storage_dflts = asdict(blosc2.Storage(urlpath=kwargs.get("urlpath")))  # urlpath can affect defaults
         # If a key appears in both operands, the one from the right-hand operand wins
         kwargs = storage_dflts | kwargs
+
+    if kwargs.get("urlpath") is not None:
+        # A Storage instance normalized (and vetted) its own on construction; a bare
+        # kwarg or a `storage=` mapping never reached __post_init__, so borrow it here
+        kwargs["urlpath"] = blosc2.Storage(urlpath=kwargs["urlpath"]).urlpath
 
     supported_keys = [
         "chunks",

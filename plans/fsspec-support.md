@@ -24,11 +24,11 @@ kept as written and annotated where reality diverged from them.
 ## Motivation
 
 Today there is no S3 support at all. `s3fs` appears in the repo only in
-[bench/ndarray/download_data.py](/Users/faltet/blosc/python-blosc2/bench/ndarray/download_data.py)
+[bench/ndarray/download_data.py](bench/ndarray/download_data.py)
 and in the `dev` dependency group of
-[pyproject.toml](/Users/faltet/blosc/python-blosc2/pyproject.toml). Passing
+[pyproject.toml](pyproject.toml). Passing
 `s3://...` to `blosc2.open()` falls through the store-probing branches in
-[src/blosc2/schunk.py](/Users/faltet/blosc/python-blosc2/src/blosc2/schunk.py)
+[src/blosc2/schunk.py](src/blosc2/schunk.py)
 and ends in a `FileNotFoundError`.
 
 Users who keep data in object storage therefore have to write the
@@ -36,7 +36,7 @@ download-to-tempfile dance themselves, which is both boilerplate and, for the
 whole-file case, exactly what a five-line branch in `open()` would do.
 
 The remote story that *does* exist — `blosc2.URLPath` / `C2Array`, see
-[src/blosc2/c2array.py](/Users/faltet/blosc/python-blosc2/src/blosc2/c2array.py)
+[src/blosc2/c2array.py](src/blosc2/c2array.py)
 — is specific to a Caterva2 server speaking HTTP with a chunk-fetch endpoint.
 It is not a generic object-store client and should stay untouched by this work.
 
@@ -62,7 +62,7 @@ Relevant facts established while scoping this:
   (`blosc2_register_io_cb` / `blosc2_get_io_cb`, blosc2.h:1058) and
   python-blosc2 already routes opens through it:
   `blosc2_schunk_open_offset_udio` is called at
-  [src/blosc2/blosc2_ext.pyx](/Users/faltet/blosc/python-blosc2/src/blosc2/blosc2_ext.pyx):1747,
+  [src/blosc2/blosc2_ext.pyx](src/blosc2/blosc2_ext.pyx):1747,
   3406 and 3422, for the mmap backend (`BLOSC2_IO_FILESYSTEM_MMAP`) and for the
   locking `blosc2_io`. What python-blosc2 does *not* do today is register a
   callback set of its own — both existing users are backends c-blosc2 ships.
@@ -70,7 +70,7 @@ Relevant facts established while scoping this:
   - `.b2nd`, `.b2f`, `.b2e` (`EmbedStore`), `.b2z` (zip-backed store) — single
     file, so a single object in S3.
   - `.b2d` (`DictStore`/`TreeStore` directory format) — a *directory* of files
-    ([src/blosc2/dict_store.py](/Users/faltet/blosc/python-blosc2/src/blosc2/dict_store.py):209),
+    ([src/blosc2/dict_store.py](src/blosc2/dict_store.py):209),
     so it needs prefix-level sync, not a single GET.
   - Sparse frames (`contiguous=False`) are likewise directories.
 
@@ -92,9 +92,9 @@ The minimum that is genuinely useful.
 **As implemented**, with the two places it departs from the sketch below:
 
 - `is_fsspec_url()` and `fsspec_open()` live in
-  [src/blosc2/core.py](/Users/faltet/blosc/python-blosc2/src/blosc2/core.py);
+  [src/blosc2/core.py](src/blosc2/core.py);
   `open()` dispatches to `_open_fsspec_url()` in
-  [src/blosc2/schunk.py](/Users/faltet/blosc/python-blosc2/src/blosc2/schunk.py).
+  [src/blosc2/schunk.py](src/blosc2/schunk.py).
   The read branch became its own function only because inlining it pushed
   `open()` past ruff's complexity limit.
 - The write branch went into `pack_tensor()` rather than into `save_array` and
@@ -128,7 +128,7 @@ The rest of this section is the original design, kept as the record of why the
 code looks the way it does.
 
 **Dependency.** A new optional extra in
-[pyproject.toml](/Users/faltet/blosc/python-blosc2/pyproject.toml), so nothing
+[pyproject.toml](pyproject.toml), so nothing
 changes for users who do not want it:
 
 ```toml
@@ -173,7 +173,7 @@ should be covered by a negative test in tier 1.
 an `ImportError` rather than an import-time cost for everybody.
 
 **Read.** One branch in `blosc2.open()`
-([src/blosc2/schunk.py](/Users/faltet/blosc/python-blosc2/src/blosc2/schunk.py):2075,
+([src/blosc2/schunk.py](src/blosc2/schunk.py):2075,
 immediately after the `pathlib.PurePath` normalisation and before the
 `.b2d`/`.b2z`/`.b2e` dispatch):
 
@@ -204,7 +204,7 @@ Notes on the details:
 
 **Write.** The mirror, in the save helpers rather than in `open()`:
 `blosc2.save_array` / `save_tensor`
-([src/blosc2/core.py](/Users/faltet/blosc/python-blosc2/src/blosc2/core.py):528,
+([src/blosc2/core.py](src/blosc2/core.py):528,
 750) grow the same URL test and become
 `fsspec.open(urlpath, "wb").write(arr.to_cframe())`. `NDArray.copy(urlpath=...)`
 and friends keep rejecting remote URLs — the C layer writes incrementally and
@@ -226,7 +226,7 @@ writing a byte-range reader.
 
 **As implemented:** `blosc2.open(url, cache_storage=...)`, backed by
 `localize_fsspec_url()` in
-[src/blosc2/core.py](/Users/faltet/blosc/python-blosc2/src/blosc2/core.py), which
+[src/blosc2/core.py](src/blosc2/core.py), which
 returns a local path that `open()` then re-enters with. All four open questions
 below were settled as recommended, plus these decisions taken while building it:
 
@@ -297,7 +297,7 @@ should not be smuggled in with the read work.
 
 **As implemented:** `blosc2.open(url, lazy=True)` returns a `Proxy` over the new
 `blosc2.FsspecNDSource`
-([src/blosc2/proxy.py](/Users/faltet/blosc/python-blosc2/src/blosc2/proxy.py)),
+([src/blosc2/proxy.py](src/blosc2/proxy.py)),
 which reads the frame's header and offsets at open (three small reads) and then
 one range read per chunk a slice touches. Measured on a 36 KB frame over
 `memory://`: 276 bytes at open, 2 KB for a 50-element slice.
@@ -345,7 +345,7 @@ It defaults to 8 rather than to serial. The *cost of being wrong* is small and
 measured: over `memory://`, where the pool can only lose, a 100-chunk read goes
 from 1.1 ms to 2.2 ms, about 10 µs per chunk. The gain is 7.4x on a 100-chunk
 read against a 5 ms simulated round trip
-([examples/ndarray/concurrent-fsspec.py](/Users/faltet/blosc/python-blosc2/examples/ndarray/concurrent-fsspec.py)),
+([examples/ndarray/concurrent-fsspec.py](examples/ndarray/concurrent-fsspec.py)),
 and unmeasured against a real endpoint. That asymmetry, plus `afetch` already
 defaulting to 8 for remote sources, made serial-by-default the inconsistent
 choice rather than the conservative one.
@@ -357,7 +357,7 @@ reachable either. It subclasses fsspec's in-memory filesystem with a fixed delay
 and says so, rather than implying a benchmark it cannot run.
 
 Two examples cover the feature:
-[rw-fsspec.py](/Users/faltet/blosc/python-blosc2/examples/ndarray/rw-fsspec.py)
+[rw-fsspec.py](examples/ndarray/rw-fsspec.py)
 for the three read modes and the write, and `concurrent-fsspec.py` for
 `max_concurrency`.
 
@@ -384,10 +384,10 @@ strictly ranked: 3b is correct and complete, 3a is the one that can be fast.
 ### 3a — `ProxyNDSource` over byte ranges
 
 Implement the
-[src/blosc2/proxy.py](/Users/faltet/blosc/python-blosc2/src/blosc2/proxy.py):38
+[src/blosc2/proxy.py](src/blosc2/proxy.py):38
 interface with `get_chunk(nchunk)` doing `fs.read_block(url, offset, length)`,
 mirroring what `C2Array.get_chunk` does over HTTP
-([src/blosc2/c2array.py](/Users/faltet/blosc/python-blosc2/src/blosc2/c2array.py):372).
+([src/blosc2/c2array.py](src/blosc2/c2array.py):372).
 The `Proxy` machinery then caches decompressed chunks locally, and the async
 `aget_chunk` hook can prefetch several ranges at once — which, per the latency
 discussion below, is the whole reason this design stays on the table.
@@ -413,7 +413,7 @@ then does its own range reads, no format knowledge leaks into Python, and
   Nothing bypasses the callback table.
 - The python-blosc2 side is already plumbed: `blosc2_schunk_open_offset_udio`
   is called at
-  [src/blosc2/blosc2_ext.pyx](/Users/faltet/blosc/python-blosc2/src/blosc2/blosc2_ext.pyx):1747,
+  [src/blosc2/blosc2_ext.pyx](src/blosc2/blosc2_ext.pyx):1747,
   3406 and 3422. A new backend only has to supply the `blosc2_io{id, name,
   params}` struct.
 
@@ -511,7 +511,7 @@ network.
 Skip condition: `pytest.importorskip("fsspec")`, since fsspec is optional.
 
 **Tier 2 — real S3, opt-in.** One test against a public anonymous bucket,
-marked `network`. [pytest.ini](/Users/faltet/blosc/python-blosc2/pytest.ini)
+marked `network`. [pytest.ini](pytest.ini)
 already excludes that marker from the default run
 (`-m "not network and not heavy and not tui"`), so CI stays offline and the
 test is run deliberately:

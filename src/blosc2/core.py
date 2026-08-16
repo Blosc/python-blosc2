@@ -18,6 +18,7 @@ import os
 import pathlib
 import pickle
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -626,8 +627,19 @@ def normalize_urlpath(urlpath: object) -> object:
     """
     if isinstance(urlpath, str) and urlpath.startswith("file://"):
         parsed = urllib.parse.urlparse(urlpath)
-        # A Windows drive lands in netloc for the two-slash form, `file://C:/x`
-        prefix = parsed.netloc if parsed.netloc.lower() not in ("", "localhost") else ""
+        netloc = "" if parsed.netloc.lower() in ("", "localhost") else parsed.netloc
+        if re.fullmatch("[A-Za-z]:", netloc):
+            # A Windows drive lands in netloc for the two-slash form, `file://C:/x`
+            prefix = netloc
+        elif not netloc:
+            prefix = ""
+        elif os.name == "nt":
+            # A real authority is a UNC host, which keeps its two slashes
+            prefix = "//" + netloc
+        else:
+            raise ValueError(
+                f"{urlpath} names the host {netloc!r}; only Windows can reach one, as a UNC path"
+            )
         return urllib.request.url2pathname(prefix + parsed.path)
     return urlpath
 
@@ -671,6 +683,22 @@ def fsspec_cache_path(urlpath: str, cache_storage: str | pathlib.Path, suffix: s
     return os.path.join(str(cache_storage), name + suffix)
 
 
+@lru_cache(maxsize=1)
+def _suffixed_cache_mapper():
+    """fsspec's cache naming, plus the extension `blosc2.open()` dispatches on.
+
+    A `.b2e` store is told apart from a bare SChunk by its name alone, so a cached
+    copy under fsspec's plain hash would silently open as the wrong type.
+    """
+    from fsspec.implementations.cache_mapper import AbstractCacheMapper
+
+    class SuffixedCacheMapper(AbstractCacheMapper):
+        def __call__(self, path: str) -> str:
+            return hashlib.sha256(path.encode()).hexdigest() + pathlib.PurePosixPath(path).suffix
+
+    return SuffixedCacheMapper()
+
+
 def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
     """Materialize the container at *urlpath* under *cache_storage*, return its local path.
 
@@ -690,7 +718,11 @@ def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
         # check_files is off by default in fsspec, which would happily serve a
         # cached copy of an array that changed remotely -- the worst failure mode
         # this feature has, and worth one HEAD per open to avoid.
-        opts = {"cache_storage": cache_storage, "check_files": True}
+        opts = {
+            "cache_storage": cache_storage,
+            "check_files": True,
+            "cache_mapper": _suffixed_cache_mapper(),
+        }
         with fsspec.open(f"filecache::{urlpath}", "rb", filecache=opts) as f:
             return f.name
 
@@ -758,7 +790,8 @@ def pack_tensor(
     remote_urlpath = kwargs.get("urlpath") if is_fsspec_url(kwargs.get("urlpath")) else None
     if remote_urlpath is not None:
         del kwargs["urlpath"]
-        kwargs.pop("mode", None)
+        # A remote write always replaces, but reading mode still forbids one
+        blosc2_ext.check_access_mode(remote_urlpath, kwargs.pop("mode", "a"))
 
     schunk = blosc2.SChunk(chunksize=chunksize, data=arr, **kwargs)
 

@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import os
 import pathlib
 import threading
 
@@ -529,7 +530,19 @@ def test_zip_store_needs_cache(tmp_path):
     ],
 )
 def test_normalize_file_url(url, expected):
-    assert expected in blosc2.core.normalize_urlpath(url)
+    # as_posix() because the separator is the platform's, the layout is not
+    assert expected in pathlib.PurePath(blosc2.core.normalize_urlpath(url)).as_posix()
+
+
+def test_normalize_file_url_with_a_host():
+    # A host authority is a UNC path, which only Windows can reach; concatenating
+    # it without its two slashes would silently make it a relative path instead
+    url = "file://server/share/a.b2nd"
+    if os.name == "nt":
+        assert pathlib.PurePath(blosc2.core.normalize_urlpath(url)).as_posix() == ("//server/share/a.b2nd")
+    else:
+        with pytest.raises(ValueError, match="server"):
+            blosc2.core.normalize_urlpath(url)
 
 
 def test_file_url_uses_the_local_path(tmp_path):
@@ -568,3 +581,82 @@ def test_local_path_untouched(tmp_path):
     urlpath = str(tmp_path / "local.b2nd")
     a = blosc2.arange(10, dtype="i4", urlpath=urlpath, mode="w")
     assert np.array_equal(blosc2.open(urlpath)[:], a[:])
+
+
+def test_cached_container_keeps_its_extension(tmp_path):
+    # An .b2e store is told apart from a bare SChunk by its name, so a cached copy
+    # under fsspec's plain hash would come back as the wrong type
+    localpath = str(tmp_path / "e.b2e")
+    estore = blosc2.EmbedStore(urlpath=localpath, mode="w")
+    estore["/a"] = blosc2.arange(10, dtype="i4")
+    del estore
+    fsspec.filesystem("memory").pipe_file("/e.b2e", pathlib.Path(localpath).read_bytes())
+
+    opened = blosc2.open("memory://e.b2e", cache_storage=tmp_path / "cache")
+    assert isinstance(opened, blosc2.EmbedStore)
+    assert np.array_equal(opened["/a"][:], np.arange(10, dtype="i4"))
+
+
+def test_lazy_empty_array(tmp_path):
+    # A frame with no chunks has no offsets chunk either, so the index read has
+    # nothing to decompress and used to fail with a decompression error
+    a = blosc2.asarray(np.zeros((0,), dtype="i4"))
+    fsspec.filesystem("memory").pipe_file("/empty.b2nd", a.to_cframe())
+
+    b = blosc2.open("memory://empty.b2nd", lazy=True)
+    assert b.shape == (0,)
+    assert np.array_equal(b[:], np.zeros((0,), dtype="i4"))
+
+
+def test_lazy_cache_rebuilt_when_corrupt(tmp_path):
+    # An interrupted run can leave a half-written cache behind; the whole point of
+    # cache_storage is surviving across runs, so it has to be discarded, not fatal
+    a = blosc2.arange(100, dtype="i4", chunks=(10,))
+    fsspec.filesystem("memory").pipe_file("/c.b2nd", a.to_cframe())
+
+    with blosc2.open("memory://c.b2nd", lazy=True, cache_storage=tmp_path) as b:
+        assert np.array_equal(b[:10], a[:10])
+    cache = next(p for p in tmp_path.iterdir() if p.suffix == ".b2nd")
+    cache.write_bytes(cache.read_bytes()[:50])
+
+    with blosc2.open("memory://c.b2nd", lazy=True, cache_storage=tmp_path) as b:
+        assert np.array_equal(b[:], a[:])
+
+
+def test_max_concurrency_needs_lazy(tmp_path):
+    fsspec.filesystem("memory").pipe_file("/m.b2nd", blosc2.arange(10, dtype="i4").to_cframe())
+    with pytest.raises(NotImplementedError, match="max_concurrency"):
+        blosc2.open("memory://m.b2nd", cache_storage=tmp_path, max_concurrency=4)
+
+
+def test_storage_mapping_is_normalized(tmp_path):
+    # A mapping never reaches Storage.__post_init__, which is where both the
+    # file:// normalization and the fsspec rejection live
+    url = (tmp_path / "s.b2nd").as_uri()
+    a = blosc2.zeros((10,), dtype="i4", storage={"urlpath": url, "mode": "w"})
+    assert (tmp_path / "s.b2nd").is_file()
+    assert np.array_equal(blosc2.open(url)[:], a[:])
+
+    with pytest.raises(ValueError, match="fsspec URL"):
+        blosc2.zeros((10,), dtype="i4", storage={"urlpath": "memory://s.b2nd", "mode": "w"})
+
+
+def test_save_to_url_rejects_reading_mode():
+    a = blosc2.arange(10, dtype="i4")
+    with pytest.raises(ValueError, match="reading mode"):
+        a.save("memory://ro.b2nd", mode="r")
+    with pytest.raises(ValueError, match="reading mode"):
+        blosc2.pack_tensor(np.arange(10), urlpath="memory://ro.b2nd", mode="r")
+
+
+def test_lazy_open_never_opens_a_handle(monkeypatch):
+    # A buffered handle reads a whole block per seek (50 MiB on s3fs by default),
+    # so the index has to come out of exact range reads instead
+    a = blosc2.arange(1000, dtype="i4", chunks=(100,))
+    fsspec.filesystem("memory").pipe_file("/ranges.b2nd", a.to_cframe())
+
+    memfs = type(fsspec.filesystem("memory"))
+    monkeypatch.setattr(memfs, "_open", lambda *args, **kwargs: pytest.fail("opened a handle"))
+
+    b = blosc2.open("memory://ranges.b2nd", lazy=True)
+    assert np.array_equal(b[100:200], a[100:200])

@@ -146,6 +146,17 @@ def test_reuse_cache_across_runs(tmp_path):
     np.testing.assert_array_equal(proxy[:], data)
 
 
+def test_reuse_cache_rejects_construction_kwargs(tmp_path):
+    # The container already exists, so contiguous= (and any other kwarg meant for
+    # the constructor) would be quietly dropped instead of doing anything
+    proxy_path = str(tmp_path / "proxy.b2nd")
+    source = blosc2.asarray(np.arange(120, dtype=np.int32).reshape(12, 10), chunks=(4, 5))
+
+    blosc2.Proxy(source, urlpath=proxy_path, mode="a")
+    with pytest.raises(ValueError, match="contiguous"):
+        blosc2.Proxy(source, urlpath=proxy_path, mode="a", contiguous=False)
+
+
 def test_reuse_cache_rejects_other_kind(tmp_path):
     proxy_path = str(tmp_path / "proxy.b2f")
 

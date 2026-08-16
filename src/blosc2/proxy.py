@@ -256,18 +256,25 @@ class Proxy(blosc2.Operand):
             kwargs = {}
         self._cache = kwargs.pop("_cache", None)
         vlmeta = kwargs.pop("vlmeta", None)
+        caterva2_env = kwargs.pop("caterva2_env", False)
 
         if self._cache is None and mode == "a" and urlpath is not None and os.path.exists(urlpath):
             # Reuse the cache left by an earlier run: whatever was fetched then is
             # still in there, and the creation path below would refuse to build
             # over an existing container anyway
+            if kwargs:
+                # The container already exists, so these would be quietly dropped
+                raise ValueError(
+                    f"{', '.join(kwargs)} cannot be applied to the existing cache at {urlpath}; "
+                    f"pass mode='w' to build it anew"
+                )
             self._cache = self._reopen_cache(urlpath)
 
         if self._cache is None:
             meta_val = {
                 "local_abspath": None,
                 "urlpath": None,
-                "caterva2_env": kwargs.pop("caterva2_env", False),
+                "caterva2_env": caterva2_env,
             }
             container = getattr(self.src, "schunk", self.src)
             if hasattr(container, "urlpath"):
@@ -333,6 +340,7 @@ class Proxy(blosc2.Operand):
                 f"{type(self.src).__name__} source"
             )
         if hasattr(self.src, "shape"):
+            fields = "shape, dtype, chunks, blocks"
             here = (tuple(cached.shape), cached.dtype, tuple(cached.chunks), tuple(cached.blocks))
             there = (
                 tuple(self.src.shape),
@@ -341,12 +349,13 @@ class Proxy(blosc2.Operand):
                 tuple(self.src.blocks),
             )
         else:
+            fields = "nbytes, chunksize, typesize"
             here = (schunk.nbytes, schunk.chunksize, schunk.typesize)
             there = (self.src.nbytes, self.src.chunksize, self.src.typesize)
         if here != there:
             raise ValueError(
                 f"the cache at {urlpath} was built for a different source: it holds {here}, "
-                f"the source is {there} (shape, dtype, chunks, blocks)"
+                f"the source is {there} ({fields})"
             )
         return cached
 
@@ -395,7 +404,7 @@ class Proxy(blosc2.Operand):
         [4 5]]
         """
         # Full realization when item is (), else only the chunks it intersects
-        wanted = None if item == () else blosc2.get_slice_nchunks(self._cache, item)
+        wanted = None if item == () else set(blosc2.get_slice_nchunks(self._cache, item))
         missing = [
             info.nchunk
             for info in self._schunk_cache.iterchunks_info()
@@ -692,6 +701,11 @@ def _read_frame_index(f) -> tuple[bytes, list, np.ndarray]:
     # that byte is not valid UTF-8 and decoding the header blows up
     header = msgpack.unpackb(raw, raw=True, strict_map_key=False)
 
+    # An empty frame has no chunks, so it has no offsets chunk either: what sits
+    # at index_pos is the trailer, and reading it as one fails obscurely
+    if header[8] == 0:  # chunksize
+        return raw, header, np.empty(0, dtype=np.int64)
+
     # The offsets live in a Blosc2 chunk of their own, right after the data ones
     index_pos = header[1] + header[5]
     f.seek(index_pos)
@@ -700,6 +714,21 @@ def _read_frame_index(f) -> tuple[bytes, list, np.ndarray]:
     offsets = np.frombuffer(blosc2.decompress2(f.read(index_cbytes)), dtype=np.int64)
     # Offsets are relative to the end of the header
     return raw, header, np.where(offsets >= 0, offsets + header_len, offsets)
+
+
+class _RangeReader:
+    """The seek/read pair `_read_frame_index` needs, served by exact range requests."""
+
+    def __init__(self, fs, path: str):
+        self._fs, self._path, self._pos = fs, path, 0
+
+    def seek(self, pos: int) -> None:
+        self._pos = pos
+
+    def read(self, size: int) -> bytes:
+        data = self._fs.cat_file(self._path, start=self._pos, end=self._pos + size)
+        self._pos += len(data)
+        return data
 
 
 def _frame_metalayer(raw: bytes, header: list, name: str):
@@ -773,10 +802,10 @@ class FsspecNDSource(ProxyNDSource):
         # fsspec's own token, rather than a tuple of the metadata fields we guess
         # a backend exposes: memory:// has no mtime, which left it size-only.
         self.stamp = fs.ukey(path)
-        # The handle is only for reading the index: chunk reads are stateless, so
-        # the source holds no file position that two threads could fight over
-        with fs.open(path, "rb") as f:
-            raw, header, self._offsets = _read_frame_index(f)
+        # Exact ranges, not fs.open(): a buffered handle reads a whole block per
+        # seek (50 MiB on s3fs by default), which would undo the point of a lazy
+        # open. Chunk reads are stateless, so nothing here is shared between threads
+        raw, header, self._offsets = _read_frame_index(_RangeReader(fs, path))
         self._chunksize = header[8]
         self._extents = _chunk_extents(self._offsets, header)
         try:
