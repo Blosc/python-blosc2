@@ -368,6 +368,11 @@ class SChunk(blosc2_ext.SChunk):
             kwargs["dparams"] = asdict(kwargs.get("dparams"))
 
         urlpath = kwargs.get("urlpath")
+        if is_fsspec_url(urlpath):
+            raise ValueError(
+                f"{urlpath} is an fsspec URL, which cannot back a container as it is written; "
+                f"build it in memory and write to_cframe() there, or use NDArray.save()"
+            )
         if "contiguous" not in kwargs:
             # Make contiguous true for disk, else sparse (for in-memory performance)
             kwargs["contiguous"] = urlpath is not None

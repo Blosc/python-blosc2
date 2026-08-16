@@ -42,6 +42,51 @@ def test_save_tensor_to_url():
     assert np.array_equal(blosc2.load_tensor("memory://z.b2nd"), a)
 
 
+def test_save_ndarray_to_url():
+    a = blosc2.arange(0, 100, dtype="i4", shape=(10, 10), chunks=(5, 10))
+    a.save("memory://sv.b2nd")
+    b = blosc2.open("memory://sv.b2nd")
+    assert np.array_equal(b[:], a[:])
+    assert b.chunks == a.chunks
+
+
+def test_module_save_to_url():
+    a = blosc2.arange(0, 50, dtype="f8")
+    blosc2.save(a, "memory://sv2.b2nd")
+    assert np.array_equal(blosc2.open("memory://sv2.b2nd")[:], a[:])
+
+
+def test_save_to_url_honours_cparams():
+    a = blosc2.arange(0, 100, dtype="i4", shape=(10, 10), chunks=(5, 10))
+    a.save("memory://sv3.b2nd", cparams=blosc2.CParams(codec=blosc2.Codec.LZ4))
+    b = blosc2.open("memory://sv3.b2nd")
+    assert b.schunk.cparams.codec == blosc2.Codec.LZ4
+    assert np.array_equal(b[:], a[:])
+
+
+def test_save_sparse_to_url():
+    a = blosc2.arange(10, dtype="i4")
+    with pytest.raises(NotImplementedError, match="sparse frame"):
+        a.save("memory://sv4.b2nd", contiguous=False)
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: blosc2.zeros((10,), urlpath="memory://c.b2nd", mode="w"),
+        lambda: blosc2.asarray(np.arange(10), urlpath="memory://c.b2nd", mode="w"),
+        lambda: blosc2.arange(10).copy(urlpath="memory://c.b2nd", mode="w"),
+        lambda: blosc2.SChunk(chunksize=100, urlpath="memory://c.b2f", mode="w"),
+    ],
+    ids=["zeros", "asarray", "copy", "schunk"],
+)
+def test_container_cannot_be_backed_by_url(make):
+    # These write incrementally through the C layer, which an object store
+    # cannot serve; the error has to say so rather than fail deep in C
+    with pytest.raises(ValueError, match="save"):
+        make()
+
+
 def test_schunk_roundtrip():
     schunk = blosc2.SChunk(chunksize=1000)
     schunk.append_data(np.arange(1000, dtype="u1"))

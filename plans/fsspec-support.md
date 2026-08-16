@@ -106,6 +106,13 @@ The minimum that is genuinely useful.
 - Tests: `tests/test_fsspec.py`, 12 tests over `memory://` plus one chained
   `zip://…::file://` URL, in the default suite behind `importorskip("fsspec")`.
   No tier-2 network test, per the open question below.
+- Later addition: `NDArray.save()` and `blosc2.save()` write to a URL the same
+  way, since the plan's write story covered only the `save_array`/`save_tensor`
+  helpers and left `save()` — the natural call for a container that already
+  exists — failing in C. The rejection this section predicted for
+  `copy(urlpath=...)` is now an explicit `ValueError` from `Storage` and
+  `SChunk.__init__`, naming `save()`, rather than a `RuntimeError` from the C
+  layer.
 
 The rest of this section is the original design, kept as the record of why the
 code looks the way it does.

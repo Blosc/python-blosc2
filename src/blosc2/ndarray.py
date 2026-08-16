@@ -32,6 +32,7 @@ import numpy as np
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
+from blosc2.core import fsspec_open, is_fsspec_url
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.schunk import SChunk
 
@@ -315,6 +316,7 @@ def are_partitions_behaved(shape, chunks, blocks):
     bool
         True if the partitions are well-behaved, False otherwise.
     """
+
     def check_contiguity(container, part):
         if container and container[-1] != part[-1]:
             return False
@@ -5046,9 +5048,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Parameters
         ----------
         urlpath: str
-            The path where the array will be saved.
+            The path where the array will be saved. An fsspec URL (needing the
+            ``fsspec`` extra) uploads the whole array as a single object, which
+            replaces whatever was there: object stores have no partial write, so
+            this is the only shape a remote write can take, and two writers to
+            the same key silently lose one.
         contiguous: bool, optional
-            Whether to save the array contiguously.
+            Whether to save the array contiguously. A sparse frame is a directory
+            and so cannot be saved to an fsspec URL.
 
         Other Parameters
         ----------------
@@ -5071,6 +5078,18 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> # Save the array to a file
         >>> a.save("array.b2frame")
         """
+        if is_fsspec_url(urlpath):
+            if not contiguous:
+                raise NotImplementedError(
+                    "a sparse frame is a directory, so it cannot be saved to an fsspec URL"
+                )
+            # An object store takes the whole thing at once, and always replaces
+            kwargs.pop("mode", None)
+            array = self.copy(**kwargs) if kwargs else self
+            with fsspec_open(urlpath, "wb") as f:
+                f.write(array.to_cframe())
+            return
+
         blosc2_ext.check_access_mode(urlpath, "w")
         # Add urlpath to kwargs
         kwargs["urlpath"] = urlpath
@@ -6746,7 +6765,8 @@ def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     array: :ref:`NDArray`
         The array to be saved.
     urlpath: str
-        The path to the file where the array will be saved.
+        The path to the file where the array will be saved, or an fsspec URL to
+        upload it to as a single object. See :meth:`NDArray.save`.
     contiguous: bool, optional
         Whether to store the array contiguously.
 

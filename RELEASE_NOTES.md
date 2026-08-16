@@ -16,7 +16,11 @@ XXX version-specific blurb XXX
   through the new `blosc2.FsspecNDSource`. The two combine: `lazy=True` with a
   `cache_storage=` keeps the fetched chunks there, so a later run starts from
   them. Protocol drivers (`s3fs`, `gcsfs`...) and credentials stay the caller's
-  business.
+  business. On the write side `NDArray.save()` and `blosc2.save()` upload the
+  whole array as one object; containers cannot be *backed* by a URL while they
+  are written (the C layer rewrites a frame's header and offsets as chunks land,
+  which an object store has no way to serve), so constructors given a URL now say
+  that instead of failing deep in C.
 
 * `blosc2.Proxy(src, urlpath=..., mode="a")` now adopts the cache left by an
   earlier run instead of failing on the existing file, so a proxy's cache can
