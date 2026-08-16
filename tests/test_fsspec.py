@@ -247,13 +247,38 @@ def test_lazy_multidim():
     [
         blosc2.zeros((1000,), dtype="f8", chunks=(100,)),
         blosc2.full((1000,), np.nan, dtype="f8", chunks=(100,)),
+        # blocks != chunks: a rebuilt run-length chunk must carry the container's
+        # blocksize, not whatever blosc2 picks when left to choose
+        blosc2.zeros((1000,), dtype="f8", chunks=(100,), blocks=(10,)),
+        blosc2.zeros((4_000_000,), dtype="f8", chunks=(1_000_000,)),
+        blosc2.uninit((1000,), dtype="i4", chunks=(100,), blocks=(10,)),
     ],
-    ids=["zeros", "nan"],
+    ids=["zeros", "nan", "small-blocks", "auto-blocks", "uninit"],
 )
 def test_lazy_special_chunks(arr):
     # Run-length chunks live in the offset itself, with no bytes in the file
     p = blosc2.open(_put("special.b2nd", arr), lazy=True)
-    assert np.allclose(p[:], arr[:], equal_nan=True)
+    assert p[:].shape == arr.shape
+    if arr.dtype.kind == "f":
+        assert np.allclose(p[:], arr[:], equal_nan=True)
+
+
+@pytest.mark.parametrize("clevel", [1, 5, 8, 9])
+def test_lazy_any_clevel(clevel):
+    # The frame header's flags are a msgpack *string* of raw bytes, and clevel
+    # rides in the high nibble of one of them: from 8 up it is not valid UTF-8
+    a = blosc2.arange(0, 10000, dtype="i4", chunks=(1000,), cparams={"clevel": clevel})
+    p = blosc2.open(_put(f"clevel{clevel}.b2nd", a), lazy=True)
+    assert np.array_equal(p[:], a[:])
+
+
+def test_lazy_structured_dtype():
+    data = np.zeros(1000, dtype=[("a", "<i4"), ("b", "<f8")])
+    data["a"] = np.arange(1000)
+    a = blosc2.asarray(data, chunks=(100,), blocks=(10,))
+    p = blosc2.open(_put("struct.b2nd", a), lazy=True)
+    assert p.dtype == data.dtype
+    assert np.array_equal(p[150:250], data[150:250])
 
 
 def test_lazy_one_request_per_chunk(monkeypatch):
@@ -478,6 +503,33 @@ def test_http_does_not_reach_fsspec():
     # a bare URL keeps failing as a missing local path rather than being fetched
     with pytest.raises(FileNotFoundError):
         blosc2.open("http://localhost:1/foo.b2nd")
+
+
+def test_zip_store_needs_cache(tmp_path):
+    # A .b2z store is a zip archive, not a cframe, so there is nothing for the
+    # in-memory read to rebuild
+    localpath = str(tmp_path / "t.b2z")
+    with blosc2.TreeStore(localpath, mode="w") as tstore:
+        tstore["/a"] = blosc2.arange(10, dtype="i4")
+    fsspec.filesystem("memory").pipe_file("/t.b2z", pathlib.Path(localpath).read_bytes())
+
+    with pytest.raises(RuntimeError):
+        blosc2.open("memory://t.b2z")
+    with blosc2.open("memory://t.b2z", cache_storage=tmp_path / "cache") as tstore:
+        assert np.array_equal(tstore["/a"][:], np.arange(10, dtype="i4"))
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("file:///tmp/a.b2nd", "/tmp/a.b2nd"),
+        ("file://localhost/tmp/a.b2nd", "/tmp/a.b2nd"),
+        # A Windows drive lands in the netloc for the two-slash form
+        ("file://C:/data/a.b2nd", "C:"),
+    ],
+)
+def test_normalize_file_url(url, expected):
+    assert expected in blosc2.core.normalize_urlpath(url)
 
 
 def test_file_url_uses_the_local_path(tmp_path):

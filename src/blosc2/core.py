@@ -625,7 +625,10 @@ def normalize_urlpath(urlpath: object) -> object:
     container format, which only works if the scheme is stripped first.
     """
     if isinstance(urlpath, str) and urlpath.startswith("file://"):
-        return urllib.request.url2pathname(urllib.parse.urlparse(urlpath).path)
+        parsed = urllib.parse.urlparse(urlpath)
+        # A Windows drive lands in netloc for the two-slash form, `file://C:/x`
+        prefix = parsed.netloc if parsed.netloc.lower() not in ("", "localhost") else ""
+        return urllib.request.url2pathname(prefix + parsed.path)
     return urlpath
 
 

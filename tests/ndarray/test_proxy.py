@@ -146,6 +146,20 @@ def test_reuse_cache_across_runs(tmp_path):
     np.testing.assert_array_equal(proxy[:], data)
 
 
+def test_reuse_cache_rejects_other_kind(tmp_path):
+    proxy_path = str(tmp_path / "proxy.b2f")
+
+    class Source(blosc2.ProxySource):
+        nbytes, chunksize, typesize = 1000, 100, 1
+
+        def get_chunk(self, nchunk):
+            raise NotImplementedError
+
+    blosc2.Proxy(Source(), urlpath=proxy_path, mode="a")
+    with pytest.raises(ValueError, match="does not fit"):
+        blosc2.Proxy(blosc2.asarray(np.arange(1000, dtype=np.int32)), urlpath=proxy_path, mode="a")
+
+
 def test_reuse_cache_rejects_foreign_container(tmp_path):
     path = str(tmp_path / "plain.b2nd")
     blosc2.arange(0, 120, dtype=np.int32, shape=(12, 10), urlpath=path, mode="w")

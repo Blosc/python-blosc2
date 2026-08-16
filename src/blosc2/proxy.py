@@ -325,6 +325,13 @@ class Proxy(blosc2.Operand):
         # Chunk *numbers* are the currency between cache and source, so the
         # partitioning has to match, not just the logical shape: fetch() would
         # otherwise ask the source for chunk n meaning something else entirely
+        # A cache of the other kind is a mismatch in itself, and asking it for a
+        # shape it does not have would raise AttributeError instead of saying so
+        if hasattr(self.src, "shape") != hasattr(cached, "shape"):
+            raise ValueError(
+                f"the cache at {urlpath} is a {type(cached).__name__}, which does not fit a "
+                f"{type(self.src).__name__} source"
+            )
         if hasattr(self.src, "shape"):
             here = (tuple(cached.shape), cached.dtype, tuple(cached.chunks), tuple(cached.blocks))
             there = (
@@ -680,7 +687,10 @@ def _read_frame_index(f) -> tuple[bytes, list, np.ndarray]:
     header_len = struct.unpack(">i", prefix[11:15])[0]
     f.seek(0)
     raw = f.read(header_len)
-    header = msgpack.unpackb(raw, raw=False, strict_map_key=False)
+    # raw=True because the flags field is a msgpack *string* holding four raw
+    # bytes, and codec_flags packs clevel into its high nibble: from clevel 8 up
+    # that byte is not valid UTF-8 and decoding the header blows up
+    header = msgpack.unpackb(raw, raw=True, strict_map_key=False)
 
     # The offsets live in a Blosc2 chunk of their own, right after the data ones
     index_pos = header[1] + header[5]
@@ -694,7 +704,7 @@ def _read_frame_index(f) -> tuple[bytes, list, np.ndarray]:
 
 def _frame_metalayer(raw: bytes, header: list, name: str):
     """Decode the *name* metalayer out of an already-read frame header."""
-    offset = header[13][1][name]  # KeyError if the frame has no such metalayer
+    offset = header[13][1][name.encode()]  # KeyError if there is no such metalayer
     nbytes = struct.unpack(">I", raw[offset + 1 : offset + 5])[0]  # msgpack bin32
     import msgpack
 
@@ -779,7 +789,11 @@ class FsspecNDSource(ProxyNDSource):
         if dtype_format != 0:
             raise NotImplementedError(f"unsupported dtype format {dtype_format} in {urlpath}")
         self._shape, self._chunks, self._blocks = tuple(shape), tuple(chunks), tuple(blocks)
-        self._dtype = np.dtype(dtype)
+        try:
+            self._dtype = np.dtype(dtype)
+        except TypeError:
+            # Structured dtypes are stored as their repr, as blosc2_ext does too
+            self._dtype = np.dtype(ast.literal_eval(dtype))
 
     @property
     def shape(self) -> tuple:
@@ -835,7 +849,13 @@ class FsspecNDSource(ProxyNDSource):
             # A run of zeros (1); uninitialized chunks (4) have no defined
             # content, and zeros is what reading them locally hands back too
             data = np.zeros(nitems, dtype=self._dtype)
-        return blosc2.compress2(data, typesize=self._dtype.itemsize)
+        # The blocksize has to be the container's: left to choose, blosc2 takes
+        # the whole chunk, and the cache then rejects the chunk we hand it
+        return blosc2.compress2(
+            data,
+            typesize=self._dtype.itemsize,
+            blocksize=int(np.prod(self._blocks)) * self._dtype.itemsize,
+        )
 
 
 class ProxyNDField(blosc2.Operand):

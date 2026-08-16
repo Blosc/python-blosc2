@@ -2124,9 +2124,11 @@ def open(
       the driver for the protocol (``s3fs``, ``gcsfs``...), which fsspec asks for
       by name when it is missing; credentials are configured there, not here.
       ``mode != 'r'`` always raises, as object stores have no rename and no locks.
-      A plain URL read holds the whole object in memory, so it covers single-file
-      containers (``.b2nd``, ``.b2f``, ``.b2e``, ``.b2z``) only; ``cache_storage``
-      and ``lazy`` above lift that, each in its own way.
+      A plain URL read rebuilds the object from a cframe held in memory, so it
+      covers ``.b2nd``, ``.b2f`` and ``.b2e`` only -- a ``.b2z`` store is a zip
+      archive rather than a cframe, and needs ``cache_storage`` like the
+      directory formats do.  ``cache_storage`` and ``lazy`` above lift that, each
+      in its own way.
 
     * Persistent data handling follows a strict no-hidden-writes rule:
 

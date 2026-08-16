@@ -103,6 +103,16 @@ The minimum that is genuinely useful.
 - `.b2d` raises `NotImplementedError`; sparse frames are not detected up front
   and fail on the `from_cframe` instead. Both messages now point at phase 2's
   `cache_storage=`, which is the actual fix.
+- What the frame parser got wrong, found in review rather than by tests, because
+  every test had used default parameters: the header must be unpacked with
+  `raw=True` (the flags field is a msgpack *string* of raw bytes, and `clevel`
+  rides in the high nibble of one of them, so from `clevel=8` up it is not valid
+  UTF-8 and `lazy=True` raised `UnicodeDecodeError`); structured dtypes are
+  stored as their `repr` and need the same `ast.literal_eval` fallback
+  `blosc2_ext` uses; and a rebuilt run-length chunk must carry the container's
+  blocksize, since `compress2` left to itself takes the whole chunk and the
+  cache then rejects the chunk. Parametrising the tests over `clevel`, over
+  `blocks != chunks` and over a structured dtype is what pins these.
 - Tests: `tests/test_fsspec.py`, 12 tests over `memory://` plus one chained
   `zip://…::file://` URL, in the default suite behind `importorskip("fsspec")`.
   No tier-2 network test, per the open question below.
