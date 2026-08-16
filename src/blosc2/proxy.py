@@ -341,20 +341,27 @@ class Proxy(blosc2.Operand):
         # A cache filled before the bitmap existed, or one handed over through
         # `_cache=`: everything that is not a special chunk was surely fetched
         fetched = bytearray((nchunks + 7) // 8)
+        self._fetched = fetched
         for info in self._schunk_cache.iterchunks_info():
             if info.special == blosc2.SpecialValue.NOT_SPECIAL:
-                fetched[info.nchunk // 8] |= 1 << (info.nchunk % 8)
+                self._mark_fetched(info.nchunk)
         return fetched
+
+    def _mark_fetched(self, nchunk: int) -> None:
+        self._fetched[nchunk // 8] |= 1 << (nchunk % 8)
 
     def _missing_chunks(self, item) -> list[int]:
         """The chunks *item* touches, minus those already in the cache."""
         nchunks = self._schunk_cache.nchunks
         # Full realization when item is (), else only the chunks it intersects
-        wanted = range(nchunks) if item == () else sorted(set(blosc2.get_slice_nchunks(self._cache, item)))
+        wanted = range(nchunks) if item == () else list(blosc2.get_slice_nchunks(self._cache, item))
         return [int(n) for n in wanted if not self._fetched[n // 8] >> (n % 8) & 1]
 
     def _save_fetched(self) -> None:
-        """Persist the bitmap, so a later run does not fetch these chunks again."""
+        """Persist the bitmap, so a later run does not fetch these chunks again.
+
+        Called even when a fetch failed partway: whatever did arrive is kept.
+        """
         self._schunk_cache.vlmeta["proxy-fetched"] = bytes(self._fetched)
 
     def _reopen_cache(self, urlpath: str):
@@ -459,9 +466,8 @@ class Proxy(blosc2.Operand):
         try:
             for nchunk, chunk in self._get_chunks(missing, max_concurrency):
                 self._schunk_cache.update_chunk(nchunk, chunk)
-                self._fetched[nchunk // 8] |= 1 << (nchunk % 8)
+                self._mark_fetched(nchunk)
         finally:
-            # Keep hold of whatever did arrive, even if a later chunk blew up
             if missing:
                 self._save_fetched()
 
@@ -586,13 +592,12 @@ class Proxy(blosc2.Operand):
                 chunk = await self.src.aget_chunk(nchunk)
             # Runs to completion between awaits, so concurrent writers can't interleave.
             self._schunk_cache.update_chunk(nchunk, chunk)
-            self._fetched[nchunk // 8] |= 1 << (nchunk % 8)
+            self._mark_fetched(nchunk)
 
         if to_fetch:
             try:
                 await asyncio.gather(*(_fetch_one(nchunk) for nchunk in to_fetch))
             finally:
-                # Keep hold of whatever did arrive, even if a later chunk blew up
                 self._save_fetched()
 
         return self._cache

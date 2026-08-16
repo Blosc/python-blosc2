@@ -25,7 +25,7 @@ import sys
 import urllib.parse
 import urllib.request
 from dataclasses import asdict
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
@@ -687,7 +687,7 @@ def fsspec_cache_path(urlpath: str, cache_storage: str | pathlib.Path, suffix: s
     return os.path.join(str(cache_storage), name + suffix)
 
 
-@lru_cache(maxsize=1)
+@cache
 def _suffixed_cache_mapper():
     """fsspec's cache naming, plus the extension `blosc2.open()` dispatches on.
 
