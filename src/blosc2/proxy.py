@@ -702,6 +702,10 @@ class Proxy(blosc2.Operand):
         This method is only available if the :ref:`ProxySource` or :ref:`ProxyNDSource`
         have an async `aget_chunk` method.
 
+        Whole chunks, even from a source that can serve single blocks: a chunk
+        the cache holds only part of is fetched in full here, where `fetch()`
+        would ask only for the blocks it is missing.
+
         Examples
         --------
         >>> import numpy as np

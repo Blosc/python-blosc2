@@ -26,9 +26,23 @@ Usage
     # touch ratios only, on any local array
     python fsspec-block-granularity.py mydata.b2nd
 
+    # ... and time real slices against a local S3 server (pip install "moto[server]")
+    python fsspec-block-granularity.py mydata.b2nd --moto
+
     # ... and time both request patterns against real S3
     python fsspec-block-granularity.py mydata.b2nd \\
         --replay s3://noaa-goes16/ABI-L1b-RadF/2020/001/00/OR_ABI-L1b-RadF-M6C02_G16_s20200010000216_e20200010009524_c20200010009570.nc --anon
+
+``--moto`` is the end-to-end one: it uploads the array and slices it back through
+``blosc2.open(url, lazy=True)`` twice, once with block fetching and once with it
+turned off, so what is timed is the shipped code on a real HTTP object store.
+Its request and byte counts are exact.  Its *times* are not S3's: moto answers
+over loopback in a millisecond and at ~700 MB/s, where an object store takes tens
+to hundreds of milliseconds at a few MB/s per stream, which is the regime the
+whole trade lives in.  ``--latency-ms`` and ``--bandwidth-mbs`` put a stated
+network back in front of each request; measured against S3 from Europe, that is
+about ``--latency-ms 240 --bandwidth-mbs 3.5``, and in-region more like
+``--latency-ms 15 --bandwidth-mbs 90``.
 
 The replay target is *any* object at least as large as the biggest request; its
 contents are never used.  What is being timed is the request shape — how many
@@ -175,6 +189,100 @@ def default_patterns(shape):
     ]
 
 
+def moto_endpoint():
+    """A local S3 server, and fsspec pointed at it. Needs ``pip install moto[server]``."""
+    import logging
+
+    import fsspec
+    from moto.server import ThreadedMotoServer
+
+    logging.getLogger("werkzeug").setLevel(logging.ERROR)
+    server = ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
+    server.start()
+    host, port = server.get_host_and_port()
+    fsspec.config.conf["s3"] = {
+        "endpoint_url": f"http://{host}:{port}",
+        "key": "testing",
+        "secret": "testing",
+        # Not us-east-1: creating a bucket there must carry no location constraint
+        "client_kwargs": {"region_name": "eu-west-1"},
+    }
+    fsspec.filesystem("s3", **fsspec.config.conf["s3"]).mkdir("blosc2-bench")
+    return server, "s3://blosc2-bench/bench.b2nd"
+
+
+def timed_open(urlpath, item, concurrency, blocks, latency=0.0, bandwidth=0.0):
+    """Time one cold slice, counting what crossed the wire.
+
+    Blocks are turned off by pushing the size threshold out of reach, which is
+    exactly the decision `wants_blocks` makes, so the comparison is the shipped
+    code against itself rather than against a reimplementation of the old path.
+
+    A request the source makes is exactly one range GET, so that is where the
+    network moto does not have is put back: *latency* seconds before it, and
+    *bandwidth* bytes per second across it.  Both waits happen inside the
+    proxy's thread pool, so they overlap the way real ones would.
+    """
+    old = blosc2.proxy.BLOCK_MIN_CBYTES
+    blosc2.proxy.BLOCK_MIN_CBYTES = old if blocks else 1 << 62
+    try:
+        array = blosc2.open(urlpath, lazy=True, max_concurrency=concurrency)
+        traffic = [0, 0]
+        for name in ("read_range", "get_chunk"):
+            original = getattr(array.src, name)
+
+            def counted(*args, _o=original):
+                if latency:
+                    time.sleep(latency)
+                data = _o(*args)
+                if bandwidth:
+                    time.sleep(len(data) / bandwidth)
+                traffic[0] += 1
+                traffic[1] += len(data)
+                return data
+
+            setattr(array.src, name, counted)
+        t0 = time.perf_counter()
+        array[item]
+        return time.perf_counter() - t0, traffic[0], traffic[1]
+    finally:
+        blosc2.proxy.BLOCK_MIN_CBYTES = old
+
+
+def run_moto(local, concurrency, reps, latency, bandwidth):
+    """Slice a real array out of a real S3 server, with and without blocks."""
+    server, urlpath = moto_endpoint()
+    try:
+        array = blosc2.open(local)
+        print(f"\nuploading {array.schunk.cbytes / 1e6:.1f} MB to {urlpath} ...", flush=True)
+        array.save(urlpath, mode="w")
+        if latency or bandwidth:
+            print(
+                f"simulating a network: {latency * 1e3:.0f} ms per request"
+                + (f", {bandwidth / 1e6:.1f} MB/s across it" if bandwidth else "")
+            )
+        print(f"{'pattern':22s} {'chunk mode':>26s} {'block mode':>26s}   speedup")
+        for name, item in default_patterns(array.shape):
+            runs = {
+                mode: [
+                    timed_open(urlpath, item, concurrency, mode == "blocks", latency, bandwidth)
+                    for _ in range(reps)
+                ]
+                for mode in ("chunks", "blocks")
+            }
+            out = {}
+            for mode, results in runs.items():
+                out[mode] = (statistics.median(r[0] for r in results), results[0][1], results[0][2])
+            print(
+                f"{name:22s} "
+                f"{out['chunks'][1]:4d} req {out['chunks'][2] / 1e6:7.2f} MB {out['chunks'][0]:6.3f}s "
+                f"{out['blocks'][1]:5d} req {out['blocks'][2] / 1e6:7.2f} MB {out['blocks'][0]:6.3f}s "
+                f"{out['chunks'][0] / out['blocks'][0]:6.1f}x"
+            )
+    finally:
+        server.stop()
+
+
 class Replayer:
     """Issues the request pattern of a plan against a real object store."""
 
@@ -213,6 +321,21 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("urlpath", help="a local .b2nd array to take the geometry from")
     p.add_argument("--replay", help="URL of any large object to replay the request pattern against")
+    p.add_argument(
+        "--moto", action="store_true", help="upload to a local moto S3 server and time real slices"
+    )
+    p.add_argument(
+        "--latency-ms",
+        type=float,
+        default=0,
+        help="with --moto: round-trip latency to simulate per request (moto has none)",
+    )
+    p.add_argument(
+        "--bandwidth-mbs",
+        type=float,
+        default=0,
+        help="with --moto: MB/s to simulate per request (loopback has ~700, S3 has 3-10)",
+    )
     p.add_argument("--anon", action="store_true", help="anonymous access to the replay target")
     p.add_argument("--endpoint-url", help="for S3-compatible endpoints (R2, B2, MinIO...)")
     p.add_argument("--concurrency", type=int, default=8, help="parallel requests (default: 8)")
@@ -242,6 +365,9 @@ def main():
             f"{len(header_sizes) + len(block_sizes):5d} req {block_bytes / 1e6:7.2f} MB {ratio * 100:6.1f}%"
         )
         plans.append((name, chunk_sizes, header_sizes, block_sizes, chunk_bytes, block_bytes))
+
+    if args.moto:
+        run_moto(args.urlpath, args.concurrency, args.reps, args.latency_ms / 1e3, args.bandwidth_mbs * 1e6)
 
     if not args.replay:
         return

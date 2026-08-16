@@ -115,3 +115,30 @@ def test_lazy_expression(stored):
     urlpath, a = stored
     p = blosc2.open(urlpath, lazy=True)
     assert np.array_equal((p * 2)[150:250], a[150:250] * 2)
+
+
+@pytest.fixture(scope="module")
+def blocky(s3_endpoint):
+    """An array whose chunks are big enough to be worth reading block by block."""
+    data = np.random.default_rng(0).random((600, 600))
+    a = blosc2.asarray(data, chunks=(300, 600), blocks=(30, 600))
+    assert a.schunk.cbytes / a.schunk.nchunks > blosc2.proxy.BLOCK_MIN_CBYTES
+    urlpath = f"s3://{BUCKET}/blocky.b2nd"
+    a.save(urlpath, mode="w")
+    return urlpath, data
+
+
+@pytest.mark.parametrize("max_concurrency", [1, 8])
+def test_lazy_block_reads(blocky, max_concurrency):
+    urlpath, data = blocky
+    p = blosc2.open(urlpath, lazy=True, max_concurrency=max_concurrency)
+    traffic = []
+    original = p.src.read_range
+    p.src.read_range = lambda *args: (out := original(*args), traffic.append(len(out)))[0]
+
+    assert np.array_equal(p[10:12, 30:40], data[10:12, 30:40])
+    # The offsets and one block, against 1.4 MB of chunk
+    assert len(traffic) == 2
+    assert sum(traffic) < 200_000
+    # And the array still reads back whole, over the blocks already cached
+    assert np.array_equal(p[...], data)
