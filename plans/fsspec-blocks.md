@@ -1,8 +1,36 @@
 # Block-Granular Downloads For `blosc2.open(url, lazy=True)`
 
-Analysis only — nothing implemented. Written 2026-08-16 on branch
-`fsspec-support-plan`, after
+Written 2026-08-16 on branch `fsspec-support-plan`, after
 [plans/fsspec-support.md](fsspec-support.md) phase 3 shipped.
+
+**Status: route A is implemented** (2026-08-17, branch `fsspec-blocks`), with
+A.3a as recommended. What the code does differently from the design below:
+
+- **The whole-chunk fallback needs no header read at all.** The plan put the
+  wanted-bytes test after the layout read; measuring made it clear that the
+  case worth avoiding — a slice wanting every block of a chunk — is decided by
+  geometry alone. `FsspecNDSource.wants_blocks()` answers from the block count
+  and from the chunk extent the frame's offsets already give, so a chunk that
+  does not want blocks costs exactly one request, as before. That is what makes
+  block fetching the default rather than a flag.
+- **Mitigation 2 (persist the layouts) is not in.** The layouts are memoized on
+  the source, which covers repeated slicing within a session; keeping them in
+  the cache's vlmeta across runs is a `ponytail:` note in the code, to do when
+  someone reopens the same array often enough to care.
+- **`afetch()` stays chunk-granular.** Driving two dependent waves through
+  `asyncio.gather` buys nothing that the sync path does not already have, and
+  the sync path is what `__getitem__` uses. Documented rather than hidden.
+- **A cache with no usable bitmap is refetched, not guessed at.** The chunk path
+  reconstructs "what is already here" by scanning for non-special chunks; a
+  spliced chunk is not special, so in block mode that guess would serve zeros
+  for blocks that never arrived. Found by a test that reopened a cache and read
+  a new slice out of an already-touched chunk.
+- Measured end to end afterwards with `--moto`: on 13 MB chunks of 134 blocks, a
+  point read moves 0.10 MB instead of 13.15 MB — 3.1x faster over an in-region
+  network, 7.0x over a transatlantic one, 1.0x when the slice wants every block.
+
+Route B (the io-callback bridge) stays unbuilt, and stays the answer for the
+formats route A cannot reach.
 
 ## The question
 
