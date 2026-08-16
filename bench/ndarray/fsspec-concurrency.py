@@ -38,6 +38,24 @@ has no ``storage_options=`` passthrough of its own.  The equivalent without this
 script is a ``~/.config/fsspec/s3.json`` holding ``{"anon": true}``, or the
 ``FSSPEC_S3_ANON`` / ``FSSPEC_S3_ENDPOINT_URL`` environment variables.
 
+Checking it works, without an account
+-------------------------------------
+``moto[server]`` gives a local S3 endpoint over real HTTP, which is enough to
+prove the async path runs at all before spending anything on a real bucket::
+
+    pip install "moto[server]"
+    moto_server -p 5000 &
+    export AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x AWS_DEFAULT_REGION=us-east-1
+    python -c "import s3fs; s3fs.S3FileSystem(endpoint_url='http://127.0.0.1:5000').mkdir('bench')"
+    python fsspec-concurrency.py s3://bench/bench.b2nd --endpoint-url http://127.0.0.1:5000
+
+Do not read the timings from that run.  moto is a single-process Python mock:
+it has no network latency for concurrency to hide, and it may well serialize the
+requests it receives, so the sweep can show a flat or inverted curve while the
+client side is behaving perfectly.  It answers "does this work", not "how fast".
+MinIO is the better local endpoint if you want a genuinely concurrent server,
+and neither substitutes for a real bucket on a real network.
+
 Reading the output
 ------------------
 Wall time should fall roughly as 1/concurrency while requests are the
