@@ -48,8 +48,9 @@ with tempfile.TemporaryDirectory() as cachedir:
     np.testing.assert_array_equal(c[:], a[:])
 
     # Read lazily.  Nothing is transferred up front: the array stays where it
-    # is and each slice fetches only the chunks it touches, one range request
-    # each.  This is what you want for an array too big to download.
+    # is and each slice fetches only what it touches -- the chunks it lands in,
+    # or just the blocks inside them when the chunks are large enough for that
+    # to pay.  This is what you want for an array too big to download.
     d = blosc2.open(urlpath, lazy=True, cache_storage=cachedir)
     print(f"read lazy: {type(d).__name__} {d.shape} {d.dtype}")
 
@@ -60,7 +61,7 @@ with tempfile.TemporaryDirectory() as cachedir:
     np.testing.assert_array_equal(d[15:25], a[15:25])
 
     # A lazy handle is an ordinary operand, so expressions work on it, and
-    # slicing one still fetches only the chunks that slice needs
+    # slicing one still fetches only what that slice needs
     expr = d * 2
     print(f"lazy expression: {type(expr).__name__} -> {expr[15:17, 0]}")
     np.testing.assert_array_equal(expr[15:25], a[15:25] * 2)

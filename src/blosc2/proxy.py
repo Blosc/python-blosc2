@@ -1065,16 +1065,24 @@ def _chunk_extents(offsets: np.ndarray, header: list) -> np.ndarray:
 
 
 class FsspecNDSource(ProxyNDSource):
-    """A :ref:`Proxy` source that serves the chunks of a remote Blosc2 frame.
+    """A :ref:`Proxy` source that serves parts of a remote Blosc2 frame.
 
-    The frame stays where it is: only its header, its chunk offsets, and the
-    chunks a slice actually touches ever cross the network.  This is what
+    The frame stays where it is: only its header, its chunk offsets, and what a
+    slice actually touches ever cross the network.  This is what
     ``blosc2.open(url, lazy=True)`` builds; wrap it in a :ref:`Proxy` by hand
     when the cache belongs at a path of your choosing rather than inside
     ``cache_storage``::
 
         src = blosc2.FsspecNDSource("s3://bucket/big.b2nd")
         a = blosc2.Proxy(src, urlpath="big-cache.b2nd", mode="a")
+
+    A chunk large enough to be worth taking apart is read block by block --
+    :meth:`chunk_layout` fetches the offsets of its blocks, :meth:`block_plan`
+    turns the wanted ones into as few range reads as they fit in -- so a slice
+    landing in a corner of a multi-megabyte chunk costs a few kilobytes.  Small
+    chunks, memcpyed ones and run-length ones come whole, since there is nothing
+    to save there; :meth:`wants_blocks` decides which is which without reading
+    anything.
 
     Contiguous frames carrying a ``b2nd`` metalayer only, which is what
     :func:`blosc2.asarray` and friends write to a single file.  Sparse frames and
@@ -1085,8 +1093,8 @@ class FsspecNDSource(ProxyNDSource):
     urlpath: str
         The fsspec URL of the frame.
     max_concurrency: int, optional
-        How many chunk fetches the enclosing :ref:`Proxy` may run at once.  Each
-        chunk costs one range request, so against an object store a slice is
+        How many fetches the enclosing :ref:`Proxy` may run at once.  Every chunk
+        or block costs one range request, so against an object store a slice is
         almost entirely round-trip latency and overlapping the requests is the
         whole win.  Defaults to 8, the same figure :meth:`Proxy.afetch` uses for
         remote sources.  Pass 1 for a protocol with no latency to hide, where

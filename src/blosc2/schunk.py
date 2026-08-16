@@ -2076,23 +2076,28 @@ def open(
     kwargs: dict, optional
         lazy: bool, optional
             Only for fsspec URLs: return a :ref:`Proxy` that leaves the container
-            where it is and reads the chunks a slice touches, one range request
-            each, instead of transferring the whole thing. Contiguous frames
-            holding an :ref:`NDArray` only. The fetched chunks are kept in memory,
-            or in ``cache_storage`` when that is given as well.
+            where it is and reads what a slice touches, in range requests,
+            instead of transferring the whole thing. Contiguous frames holding an
+            :ref:`NDArray` only. A slice landing in a small part of a large chunk
+            costs only the *blocks* it touches, which for the partitions
+            :func:`blosc2.asarray` picks by default can be a hundredth of the
+            chunk; chunks small enough to be one cheap request are still fetched
+            whole. What arrives is kept in memory, or in ``cache_storage`` when
+            that is given as well.
         max_concurrency: int, optional
-            Only with ``lazy``: how many chunk fetches to run at once, in a
-            thread pool. A slice against an object store is almost entirely
-            round-trip latency, so overlapping the requests is what makes a wide
-            slice bearable. Defaults to 8; pass 1 for a protocol with no latency
-            to hide, where the pool costs about 10 microseconds per chunk and
-            saves nothing.
+            Only with ``lazy``: how many fetches to run at once, in a thread
+            pool. A slice against an object store is almost entirely round-trip
+            latency, so overlapping the requests is what makes a wide slice
+            bearable. Defaults to 8; pass 1 for a protocol with no latency to
+            hide, where the pool costs about 10 microseconds per chunk and saves
+            nothing.
         cache_storage: str | pathlib.Path, optional
             Only for fsspec URLs: a directory holding this container's local
-            copy — the whole thing, or just the chunks ``lazy`` has fetched so
-            far. Either way a later run starts from what is already there, and
-            the copy is discarded when the remote no longer matches it. There is
-            no default on purpose, so nothing writes to a disk you did not name.
+            copy — the whole thing, or just the chunks and blocks ``lazy`` has
+            fetched so far. Either way a later run starts from what is already
+            there, and the copy is discarded when the remote no longer matches
+            it. There is no default on purpose, so nothing writes to a disk you
+            did not name.
         mmap_mode: str, optional
             If set, the file will be memory-mapped instead of using the default
             I/O functions and the `mode` argument will be ignored.
