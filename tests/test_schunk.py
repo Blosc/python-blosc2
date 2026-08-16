@@ -347,3 +347,34 @@ def test_schunk_update_special():
 
     with pytest.raises(IndexError):
         schunk2.update_special(5, blosc2.SpecialValue.UNINIT)
+
+
+def test_get_lazychunk_sections(tmp_path):
+    """A lazy chunk keeps its block offsets and trailer; other chunks stay capped."""
+    urlpath = tmp_path / "lazy.b2nd"
+    a = blosc2.arange(
+        0, 100_000, dtype=np.int32, chunks=(50_000,), blocks=(5_000,), urlpath=urlpath, mode="w"
+    )
+    lazychunk = a.schunk.get_lazychunk(0)
+    nbytes, cbytes, blocksize = blosc2.get_cbuffer_sizes(lazychunk)
+    nblocks = nbytes // blocksize
+    assert nblocks == 10
+    # Marked lazy, and long enough for header + bstarts + trailer, rather than
+    # truncated to the header alone
+    assert lazychunk[31] & 0x08
+    assert len(lazychunk) == 32 + 4 * nblocks + 4 + 8 + 4 * nblocks
+
+    # The sections say where every block of the chunk lives, and account for it
+    bstarts = np.frombuffer(lazychunk[32 : 32 + 4 * nblocks], dtype="<i4")
+    block_csizes = np.frombuffer(lazychunk[-4 * nblocks :], dtype="<i4")
+    assert (bstarts >= 32 + 4 * nblocks).all()
+    assert 32 + 4 * nblocks + block_csizes.sum() == cbytes
+
+    # A chunk that is already in memory is not lazy: only its header comes back,
+    # since copying the whole thing is what asking for a lazy chunk avoids
+    b = blosc2.arange(0, 100_000, dtype=np.int32, chunks=(50_000,), blocks=(5_000,))
+    assert len(b.schunk.get_lazychunk(0)) == blosc2.MAX_OVERHEAD
+
+    # ... but a special chunk still carries the value it repeats
+    c = blosc2.full((100,), fill_value=np.int32(7))
+    assert next(c.schunk.iterchunks_info()).repeated_value == np.int32(7).tobytes()
