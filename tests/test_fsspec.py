@@ -6,6 +6,8 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import pathlib
+
 import numpy as np
 import pytest
 
@@ -251,6 +253,40 @@ def test_lazy_special_chunks(arr):
     # Run-length chunks live in the offset itself, with no bytes in the file
     p = blosc2.open(_put("special.b2nd", arr), lazy=True)
     assert np.allclose(p[:], arr[:], equal_nan=True)
+
+
+def test_lazy_one_request_per_chunk(monkeypatch):
+    from fsspec.implementations.memory import MemoryFileSystem
+
+    a = blosc2.arange(0, 10000, dtype="i4", shape=(100, 100), chunks=(10, 100))
+    p = blosc2.open(_put("req.b2nd", a), lazy=True)
+
+    calls = []
+    orig = MemoryFileSystem.cat_file
+    monkeypatch.setattr(
+        MemoryFileSystem,
+        "cat_file",
+        lambda self, path, start=None, end=None, **kw: (
+            calls.append((start, end)),
+            orig(self, path, start, end, **kw),
+        )[1],
+    )
+
+    assert np.array_equal(p[15:25], a[15:25])
+    assert len(calls) == 2  # one range read per chunk, not one per chunk header too
+
+
+def test_lazy_reads_updated_chunks(tmp_path):
+    # An updated chunk is appended at the end of the frame, so offsets stop
+    # being ascending and a chunk's extent has to come from the next one *in
+    # file order*, not the next by index
+    localpath = str(tmp_path / "upd.b2nd")
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,), urlpath=localpath, mode="w")
+    a[250:350] = 7
+
+    fsspec.filesystem("memory").pipe_file("/upd.b2nd", pathlib.Path(localpath).read_bytes())
+    p = blosc2.open("memory://upd.b2nd", lazy=True)
+    assert np.array_equal(p[:], a[:])
 
 
 def test_lazy_fetches_only_touched_chunks(monkeypatch):

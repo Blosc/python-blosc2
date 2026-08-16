@@ -667,6 +667,21 @@ def _frame_metalayer(raw: bytes, header: list, name: str):
     return msgpack.unpackb(raw[offset + 5 : offset + 5 + nbytes], raw=False)
 
 
+def _chunk_extents(offsets: np.ndarray, header: list) -> np.ndarray:
+    """How many bytes to read at each chunk offset to be sure of covering it.
+
+    A chunk carries its own compressed size in its header, but asking for that
+    first would cost a second request per chunk.  The next thing stored after a
+    chunk bounds it instead -- another chunk, or the offsets chunk -- capped by
+    what a chunk can possibly weigh, so a hole left by an updated chunk cannot
+    turn into an absurd read.  The caller truncates to the real size.
+    """
+    index_pos = header[1] + header[5]
+    bounds = np.sort(np.append(offsets[offsets >= 0], index_pos))
+    extents = bounds[np.searchsorted(bounds, offsets, side="right")] - offsets
+    return np.minimum(extents, header[8] + blosc2.MAX_OVERHEAD)
+
+
 class FsspecNDSource(ProxyNDSource):
     """A :ref:`Proxy` source that serves the chunks of a remote Blosc2 frame.
 
@@ -701,11 +716,12 @@ class FsspecNDSource(ProxyNDSource):
         # fsspec's own token, rather than a tuple of the metadata fields we guess
         # a backend exposes: memory:// has no mtime, which left it size-only.
         self.stamp = fs.ukey(path)
-        # One handle for the whole life of the source: fsspec reads ranges out of
-        # it, and its own block cache keeps the two reads per chunk to one fetch
-        self._file = fs.open(path, "rb")
-        raw, header, self._offsets = _read_frame_index(self._file)
+        # The handle is only for reading the index: chunk reads are stateless, so
+        # the source holds no file position that two threads could fight over
+        with fs.open(path, "rb") as f:
+            raw, header, self._offsets = _read_frame_index(f)
         self._chunksize = header[8]
+        self._extents = _chunk_extents(self._offsets, header)
         try:
             _, _, shape, chunks, blocks, dtype_format, dtype = _frame_metalayer(raw, header, "b2nd")
         except KeyError:
@@ -738,13 +754,8 @@ class FsspecNDSource(ProxyNDSource):
         offset = int(self._offsets[nchunk])
         if offset < 0:
             return self._special_chunk(offset)
-        # The chunk carries its own compressed size, so ask for the 16-byte chunk
-        # header first.  fsspec's block cache usually serves the second read from
-        # what the first one already fetched.
-        self._file.seek(offset)
-        cbytes = struct.unpack("<i", self._file.read(16)[12:16])[0]
-        self._file.seek(offset)
-        return self._file.read(cbytes)
+        data = self._fs.cat_file(self._path, start=offset, end=offset + int(self._extents[nchunk]))
+        return data[: struct.unpack("<i", data[12:16])[0]]
 
     async def aget_chunk(self, nchunk: int) -> bytes:
         """Same as :meth:`get_chunk`, but letting several fetches overlap.
@@ -759,9 +770,9 @@ class FsspecNDSource(ProxyNDSource):
             return self._special_chunk(offset)
         if not getattr(self._fs, "async_impl", False):
             return self.get_chunk(nchunk)
-        head = await self._fs._cat_file(self._path, start=offset, end=offset + 16)
-        cbytes = struct.unpack("<i", head[12:16])[0]
-        return await self._fs._cat_file(self._path, start=offset, end=offset + cbytes)
+        end = offset + int(self._extents[nchunk])
+        data = await self._fs._cat_file(self._path, start=offset, end=end)
+        return data[: struct.unpack("<i", data[12:16])[0]]
 
     def _special_chunk(self, offset: int) -> bytes:
         """Rebuild a run-length chunk, which lives in its offset instead of the file."""
