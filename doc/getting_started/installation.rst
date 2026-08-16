@@ -58,37 +58,10 @@ argument in shells like ``zsh`` that treat brackets specially):
     pip install "blosc2[fsspec]" s3fs     # fsspec URLs, plus the S3 driver
     pip install "blosc2[tui,parquet]"     # several at once
 
-With the ``fsspec`` extra, :func:`blosc2.open` and :func:`blosc2.save_array`
-accept any fsspec URL, including chained ones::
-
-    blosc2.open("s3://bucket/array.b2nd")
-    blosc2.open("zip://inner.b2nd::s3://bucket/archive.zip")
-
-The whole object is transferred in one go, so this covers single-file
-containers (``.b2nd``, ``.b2f``, ``.b2e``, ``.b2z``) in read mode.  Passing a
-cache directory downloads the container instead and opens it locally, which
-additionally covers directory containers (``.b2d`` stores, sparse frames),
-``offset`` and ``mmap_mode``, and makes repeated opens cheap::
-
-    blosc2.open("s3://bucket/store.b2d", cache_storage="~/.cache/blosc2")
-
-There is no default cache directory on purpose, so nothing writes to your disk
-unless you name the place.
-
-For a container too big to transfer at all, ``lazy=True`` leaves the frame where
-it is and reads only the chunks a slice touches, one range request each::
-
-    a = blosc2.open("s3://bucket/huge.b2nd", lazy=True)
-    a[1000:1010]   # fetches one or two chunks, not the array
-
-This returns a :ref:`Proxy` over the remote frame, so what it fetched stays
-cached in it for as long as the object lives.  For a cache that survives the
-process, build the proxy over a :ref:`FsspecNDSource` and give it a urlpath::
-
-    src = blosc2.FsspecNDSource("s3://bucket/huge.b2nd")
-    a = blosc2.Proxy(src, urlpath="huge-cache.b2nd", mode="a")
-
-Either way it needs a contiguous frame holding an :ref:`NDArray`.
+With the ``fsspec`` extra, :func:`blosc2.open` accepts any fsspec URL, chained
+ones included, and reads it whole, through a local cache (``cache_storage=``) or
+one chunk at a time (``lazy=True``); see :func:`blosc2.open` and
+:ref:`FsspecNDSource` for what each mode supports.
 
 Source code
 +++++++++++
