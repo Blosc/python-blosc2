@@ -721,3 +721,184 @@ def test_handbuilt_proxy_rejects_a_stale_cache(tmp_path):
 
     p = blosc2.Proxy(blosc2.FsspecNDSource("memory://hand.b2nd"), urlpath=cache, mode="w")
     assert np.array_equal(p[:], other[:])
+
+
+# Block-granular fetching -------------------------------------------------
+
+
+@pytest.fixture
+def any_chunk_wants_blocks(monkeypatch):
+    """Take the size threshold out of the way, so small test arrays exercise blocks."""
+    monkeypatch.setattr(blosc2.proxy, "BLOCK_MIN_CBYTES", 0)
+
+
+def _traffic(monkeypatch):
+    """Record every range read and whole-chunk read a source makes."""
+    reads, chunks = [], []
+    for name, log in (("read_range", reads), ("get_chunk", chunks)):
+        orig = getattr(blosc2.FsspecNDSource, name)
+        monkeypatch.setattr(
+            blosc2.FsspecNDSource,
+            name,
+            lambda self, *args, _o=orig, _log=log: (
+                data := _o(self, *args),
+                _log.append(len(data)),
+            )[0],
+        )
+    return reads, chunks
+
+
+def _incompressible(shape, chunks, blocks, seed=0):
+    data = np.random.default_rng(seed).random(shape)
+    return data, blosc2.asarray(data, chunks=chunks, blocks=blocks)
+
+
+def test_lazy_fetches_only_touched_blocks(monkeypatch):
+    # Chunks big enough to be worth taking apart, at the real threshold
+    data, a = _incompressible((600, 600), (300, 600), (30, 600))
+    cbytes = a.schunk.cbytes // a.schunk.nchunks
+    assert cbytes > blosc2.proxy.BLOCK_MIN_CBYTES
+    reads, chunks = _traffic(monkeypatch)
+
+    p = blosc2.open(_put("blocks.b2nd", a), lazy=True)
+    assert np.array_equal(p[10:12, 30:40], data[10:12, 30:40])
+    # One read for the block offsets, one for the single block the slice lands in
+    assert len(reads) == 2
+    assert not chunks
+    assert sum(reads) < cbytes / 5
+
+
+def test_lazy_small_chunks_are_fetched_whole(monkeypatch):
+    # Below the threshold a chunk is one cheap request, so blocks would only add
+    # a round trip; nothing must go looking for block offsets
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    reads, chunks = _traffic(monkeypatch)
+
+    p = blosc2.open(_put("smallblocks.b2nd", a), lazy=True)
+    assert np.array_equal(p[150:250], a[150:250])
+    assert not reads
+    assert len(chunks) == 2
+
+
+def test_lazy_whole_array_skips_the_block_path(monkeypatch, any_chunk_wants_blocks):
+    # Wanting every block of a chunk is what fetching the chunk already does
+    data, a = _incompressible((200, 200), (100, 200), (10, 200))
+    reads, chunks = _traffic(monkeypatch)
+
+    p = blosc2.open(_put("wholeblocks.b2nd", a), lazy=True)
+    assert np.array_equal(p[:], data)
+    assert not reads
+    assert len(chunks) == 2
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "item"),
+    [
+        ((1000,), (500,), (50,), slice(120, 140)),
+        ((200, 200), (100, 200), (10, 20), (slice(5, 7), slice(30, 90))),
+        ((20, 60, 60), (10, 30, 60), (5, 10, 20), (3, slice(10, 20), slice(10, 20))),
+        ((200, 200), (100, 200), (10, 20), (5, 5)),
+        ((200, 200), (100, 200), (10, 20), (slice(None), 7)),
+    ],
+    ids=["1d", "2d", "3d", "point", "column"],
+)
+def test_lazy_block_reads_are_correct(monkeypatch, any_chunk_wants_blocks, shape, chunks, blocks, item):
+    data, a = _incompressible(shape, chunks, blocks)
+    p = blosc2.open(_put("geom.b2nd", a), lazy=True)
+    assert np.array_equal(p[item], data[item])
+    # ... and the rest of the array still arrives correctly afterwards
+    assert np.array_equal(p[...], data)
+
+
+def test_lazy_blocks_accumulate_in_a_chunk(monkeypatch, any_chunk_wants_blocks):
+    data, a = _incompressible((200, 200), (100, 200), (10, 20))
+    reads, _ = _traffic(monkeypatch)
+    p = blosc2.open(_put("accum.b2nd", a), lazy=True)
+
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    after_first = len(reads)
+    # A different block of the same chunk: what is already cached stays cached
+    assert np.array_equal(p[0:5, 100:110], data[0:5, 100:110])
+    assert len(reads) > after_first
+    after_second = len(reads)
+    # Both are now cached in the same chunk, and both are still right
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert np.array_equal(p[0:5, 100:110], data[0:5, 100:110])
+    assert len(reads) == after_second
+
+
+def test_lazy_block_cache_survives_reopen(tmp_path, monkeypatch, any_chunk_wants_blocks):
+    data, a = _incompressible((200, 200), (100, 200), (10, 20))
+    url = _put("blockcache.b2nd", a)
+    cache = str(tmp_path / "blocks-cache.b2nd")
+    reads, _ = _traffic(monkeypatch)
+
+    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    fetched = len(reads)
+    del p
+
+    # A partly filled chunk survives, so the blocks in it do not travel again
+    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert len(reads) == fetched
+    # ... and the ones missing from it still do
+    assert np.array_equal(p[0:5, 100:110], data[0:5, 100:110])
+    assert len(reads) > fetched
+    assert np.array_equal(p[...], data)
+
+
+def test_lazy_blocks_merge_adjacent_reads(monkeypatch, any_chunk_wants_blocks):
+    # Neighbouring blocks are near-adjacent in the file, so a slice spanning many
+    # of them must not cost one request each
+    data, a = _incompressible((200, 200), (200, 200), (2, 200))
+    reads, _ = _traffic(monkeypatch)
+    p = blosc2.open(_put("merge.b2nd", a), lazy=True)
+
+    assert np.array_equal(p[0:40], data[0:40])
+    assert len(reads) < 1 + 20  # the offsets, plus fewer requests than blocks
+
+
+def test_lazy_blocks_fall_back_for_memcpyed_chunks(monkeypatch, any_chunk_wants_blocks):
+    # A memcpyed chunk stores its blocks raw and has no offsets section to read
+    data = np.random.default_rng(0).integers(0, 256, (300, 300), dtype="u1")
+    a = blosc2.asarray(data, chunks=(150, 300), blocks=(15, 300), cparams={"clevel": 0})
+    reads, chunks = _traffic(monkeypatch)
+
+    p = blosc2.open(_put("memcpyed.b2nd", a), lazy=True)
+    assert np.array_equal(p[10:12, 30:40], data[10:12, 30:40])
+    assert len(reads) == 1  # the offsets are read, and say there is nothing to skip
+    assert len(chunks) == 1
+
+
+def test_lazy_blocks_with_run_length_chunks(monkeypatch, any_chunk_wants_blocks):
+    # A chunk that is a run of a single value has no bytes in the file at all
+    data = np.zeros((200, 200))
+    data[100:] = np.random.default_rng(0).random((100, 200))
+    a = blosc2.asarray(data, chunks=(100, 200), blocks=(10, 20))
+    p = blosc2.open(_put("runlen.b2nd", a), lazy=True)
+
+    assert np.array_equal(p[0:2, 0:10], data[0:2, 0:10])
+    assert np.array_equal(p[100:102, 0:10], data[100:102, 0:10])
+    assert np.array_equal(p[...], data)
+
+
+def test_lazy_blocks_of_a_structured_array(monkeypatch, any_chunk_wants_blocks):
+    data = np.empty(10_000, dtype=[("a", "i4"), ("b", "f8")])
+    rng = np.random.default_rng(0)
+    data["a"], data["b"] = rng.integers(0, 1000, 10_000), rng.random(10_000)
+    a = blosc2.asarray(data, chunks=(5_000,), blocks=(500,))
+    p = blosc2.open(_put("structured.b2nd", a), lazy=True)
+
+    assert np.array_equal(p[10:20], data[10:20])
+    assert np.array_equal(p[...], data)
+
+
+def test_lazy_blocks_serve_a_single_block_chunk(monkeypatch, any_chunk_wants_blocks):
+    # A chunk of one block is its own block: nothing to take apart
+    data, a = _incompressible((200, 200), (100, 200), (100, 200))
+    reads, chunks = _traffic(monkeypatch)
+    p = blosc2.open(_put("oneblock.b2nd", a), lazy=True)
+
+    assert np.array_equal(p[0:2], data[0:2])
+    assert len(chunks) == 1
