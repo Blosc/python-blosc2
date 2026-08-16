@@ -22,7 +22,7 @@ import numpy as np
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
-from blosc2.core import fsspec_open, is_fsspec_url
+from blosc2.core import fsspec_open, is_fsspec_url, localize_fsspec_url
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
@@ -1931,20 +1931,32 @@ def _finalize_special_open(special, urlpath, mode):
     return special
 
 
-def _open_fsspec_url(urlpath: str, mode: str, offset: int):
-    """Read a whole container from an fsspec URL and rebuild it in memory.
+def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
+    """Open a container living behind an fsspec URL.
 
-    Object stores have no incremental read or append, so this is a single GET of
-    the complete object; only single-file containers can work this way.
+    Without `cache_storage`, the whole object is fetched in one go and rebuilt in
+    memory, which is the right thing for a one-shot read of a small container but
+    only works for single-file ones.  With `cache_storage`, the container is
+    materialized under that directory and opened as an ordinary local path, so
+    every format, `mmap_mode` and `offset` work.
     """
     if mode != "r":
         raise NotImplementedError(f"fsspec URLs can only be opened with mode='r', not {mode!r}")
+
+    cache_storage = kwargs.pop("cache_storage", None)
+    if cache_storage is not None:
+        return open(localize_fsspec_url(urlpath, cache_storage), mode, offset, **kwargs)
+
     if offset != 0:
-        raise NotImplementedError("offset is not supported for fsspec URLs")
+        raise NotImplementedError("offset on an fsspec URL requires passing cache_storage=")
+    # Unset options (dparams=None and friends) are not a request for anything
+    requested = [k for k, v in kwargs.items() if v is not None]
+    if requested:
+        raise NotImplementedError(f"{', '.join(requested)} on an fsspec URL requires passing cache_storage=")
     if urlpath.endswith(".b2d"):
         raise NotImplementedError(
-            "directory containers (.b2d, sparse frames) are not supported for fsspec URLs; "
-            "copy the directory locally and open that"
+            "directory containers (.b2d, sparse frames) on an fsspec URL require "
+            "passing cache_storage= to fetch them locally first"
         )
     with fsspec_open(urlpath, "rb") as f:
         return blosc2.from_cframe(f.read())
@@ -1996,6 +2008,13 @@ def open(
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
     kwargs: dict, optional
+        cache_storage: str | pathlib.Path, optional
+            Only for fsspec URLs: a directory where the container is downloaded
+            before being opened as an ordinary local path. This lifts every
+            limitation of the direct URL read (see the `Notes` section) at the
+            price of writing to that directory, and makes repeated opens cheap.
+            There is no default on purpose: an implicit cache that silently fills
+            a disk with multi-GB arrays is not a good surprise.
         mmap_mode: str, optional
             If set, the file will be memory-mapped instead of using the default
             I/O functions and the `mode` argument will be ignored.
@@ -2039,10 +2058,18 @@ def open(
     * fsspec URLs require the ``fsspec`` extra (``pip install "blosc2[fsspec]"``)
       plus the driver for the protocol (``s3fs`` for S3, ``gcsfs`` for GCS...),
       which fsspec asks for by name if it is missing.  Credentials are configured
-      through those drivers, not through blosc2.  The whole object is read into
-      memory, so only single-file containers (``.b2nd``, ``.b2f``, ``.b2e``,
-      ``.b2z``) work; directory containers and sparse frames raise
-      ``NotImplementedError``, as do ``mode != 'r'`` and ``offset != 0``.
+      through those drivers, not through blosc2.  ``mode != 'r'`` always raises:
+      object stores have no rename and no locks, so append semantics would be a
+      trap rather than a feature.
+
+    * Without ``cache_storage``, an fsspec URL is read whole into memory, so only
+      single-file containers (``.b2nd``, ``.b2f``, ``.b2e``, ``.b2z``) work, and
+      directory containers, sparse frames, ``offset`` and ``mmap_mode`` raise
+      ``NotImplementedError`` pointing at ``cache_storage``.  With it, the
+      container is downloaded into that directory and opened locally, which
+      supports every format and option.  Single files are then staleness-checked
+      on each open (one HEAD); directories are re-fetched whenever the remote
+      listing changes.
 
     * Persistent data handling follows a strict no-hidden-writes rule:
 
@@ -2107,7 +2134,7 @@ def open(
         urlpath = str(urlpath)
 
     if is_fsspec_url(urlpath):
-        return _open_fsspec_url(urlpath, mode, offset)
+        return _open_fsspec_url(urlpath, mode, offset, kwargs)
 
     # Keep explicit store paths on the direct dispatch path.  For regular
     # Blosc containers, try the standard open first and only fall back to the

@@ -65,7 +65,15 @@ accept any fsspec URL, including chained ones::
     blosc2.open("zip://inner.b2nd::s3://bucket/archive.zip")
 
 The whole object is transferred in one go, so this covers single-file
-containers (``.b2nd``, ``.b2f``, ``.b2e``, ``.b2z``) in read mode.
+containers (``.b2nd``, ``.b2f``, ``.b2e``, ``.b2z``) in read mode.  Passing a
+cache directory downloads the container instead and opens it locally, which
+additionally covers directory containers (``.b2d`` stores, sparse frames),
+``offset`` and ``mmap_mode``, and makes repeated opens cheap::
+
+    blosc2.open("s3://bucket/store.b2d", cache_storage="~/.cache/blosc2")
+
+There is no default cache directory on purpose, so nothing writes to your disk
+unless you name the place.
 
 Source code
 +++++++++++

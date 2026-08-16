@@ -69,17 +69,110 @@ def test_chained_url(tmp_path):
 @pytest.mark.parametrize("mode", ["a", "w"])
 def test_mode_not_supported(mode):
     with pytest.raises(NotImplementedError):
-        blosc2.open("memory://x.b2nd", mode=mode)
+        blosc2.open("memory://x.b2nd", mode=mode, cache_storage="/tmp/nope")
 
 
-def test_offset_not_supported():
-    with pytest.raises(NotImplementedError):
+def test_offset_needs_cache():
+    with pytest.raises(NotImplementedError, match="cache_storage"):
         blosc2.open("memory://x.b2nd", offset=32)
 
 
-def test_dir_container_not_supported():
-    with pytest.raises(NotImplementedError):
+def test_mmap_needs_cache():
+    with pytest.raises(NotImplementedError, match="cache_storage"):
+        blosc2.open("memory://x.b2nd", mmap_mode="r")
+
+
+def test_dir_container_needs_cache():
+    with pytest.raises(NotImplementedError, match="cache_storage"):
         blosc2.open("memory://store.b2d")
+
+
+def test_cached_open(tmp_path):
+    a = blosc2.arange(10, dtype="i4")
+    with fsspec.open("memory://c.b2nd", "wb") as f:
+        f.write(a.to_cframe())
+
+    b = blosc2.open("memory://c.b2nd", cache_storage=tmp_path)
+    assert np.array_equal(b[:], a[:])
+    assert any(tmp_path.iterdir())
+
+
+def test_cached_open_is_local(tmp_path):
+    # The cached container is a real local file, so mmap works on it
+    a = blosc2.arange(10, dtype="i4")
+    with fsspec.open("memory://m.b2nd", "wb") as f:
+        f.write(a.to_cframe())
+
+    b = blosc2.open("memory://m.b2nd", cache_storage=tmp_path, mmap_mode="r")
+    assert np.array_equal(b[:], a[:])
+
+
+def test_cache_hit_avoids_refetch(tmp_path, monkeypatch):
+    a = blosc2.arange(10, dtype="i4")
+    with fsspec.open("memory://h.b2nd", "wb") as f:
+        f.write(a.to_cframe())
+
+    fetches = []
+    memfs = type(fsspec.filesystem("memory"))
+    orig = memfs._open
+    monkeypatch.setattr(
+        memfs, "_open", lambda self, path, *a, **kw: (fetches.append(path), orig(self, path, *a, **kw))[1]
+    )
+
+    blosc2.open("memory://h.b2nd", cache_storage=tmp_path)
+    assert len(fetches) == 1
+    blosc2.open("memory://h.b2nd", cache_storage=tmp_path)
+    assert len(fetches) == 1
+
+
+def test_cache_refetches_when_remote_changes(tmp_path):
+    with fsspec.open("memory://s.b2nd", "wb") as f:
+        f.write(blosc2.arange(10, dtype="i4").to_cframe())
+    assert blosc2.open("memory://s.b2nd", cache_storage=tmp_path).shape == (10,)
+
+    with fsspec.open("memory://s.b2nd", "wb") as f:
+        f.write(blosc2.arange(20, dtype="i4").to_cframe())
+    assert blosc2.open("memory://s.b2nd", cache_storage=tmp_path).shape == (20,)
+
+
+def test_cached_dict_store(tmp_path):
+    # A .b2d store is a directory, so it only works through the cache
+    localstore = str(tmp_path / "local.b2d")
+    with blosc2.DictStore(localstore, mode="w") as dstore:
+        dstore["/a"] = blosc2.arange(10, dtype="i4")
+        dstore["/b"] = blosc2.arange(5, dtype="f8")
+    fsspec.filesystem("memory").put(localstore, "memory://store.b2d", recursive=True)
+
+    with blosc2.open("memory://store.b2d", cache_storage=tmp_path / "cache") as dstore:
+        assert sorted(dstore.keys()) == ["/a", "/b"]
+        assert np.array_equal(dstore["/a"][:], np.arange(10, dtype="i4"))
+
+
+def test_cached_dir_refetches_when_remote_changes(tmp_path):
+    memfs = fsspec.filesystem("memory")
+    cache = tmp_path / "cache"
+    localstore = str(tmp_path / "d.b2d")
+    with blosc2.DictStore(localstore, mode="w") as dstore:
+        dstore["/a"] = blosc2.arange(10, dtype="i4")
+    memfs.put(localstore, "memory://d.b2d", recursive=True)
+    with blosc2.open("memory://d.b2d", cache_storage=cache) as dstore:
+        assert list(dstore.keys()) == ["/a"]
+
+    with blosc2.DictStore(localstore, mode="a") as dstore:
+        dstore["/b"] = blosc2.arange(5, dtype="i4")
+    memfs.rm("/d.b2d", recursive=True)
+    memfs.put(localstore, "memory://d.b2d", recursive=True)
+    with blosc2.open("memory://d.b2d", cache_storage=cache) as dstore:
+        assert sorted(dstore.keys()) == ["/a", "/b"]
+
+
+def test_cached_sparse_frame(tmp_path):
+    localpath = str(tmp_path / "sparse.b2nd")
+    a = blosc2.arange(1000, dtype="i4", chunks=(100,), urlpath=localpath, mode="w", contiguous=False)
+    fsspec.filesystem("memory").put(localpath, "memory://sparse.b2nd", recursive=True)
+
+    b = blosc2.open("memory://sparse.b2nd", cache_storage=tmp_path / "cache")
+    assert np.array_equal(b[:], a[:])
 
 
 def test_unknown_protocol():

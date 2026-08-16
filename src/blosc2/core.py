@@ -11,12 +11,14 @@ from __future__ import annotations
 import copy
 import ctypes
 import ctypes.util
+import hashlib
 import json
 import math
 import os
 import pathlib
 import pickle
 import platform
+import shutil
 import subprocess
 import sys
 from dataclasses import asdict
@@ -629,8 +631,8 @@ def is_fsspec_url(urlpath: object) -> bool:
     )
 
 
-def fsspec_open(urlpath: str, mode: str):
-    """`fsspec.open()` with an actionable error when the extra is not installed."""
+def _import_fsspec(urlpath: str):
+    """Import fsspec with an actionable error when the extra is not installed."""
     try:
         import fsspec
     except ImportError:
@@ -638,7 +640,50 @@ def fsspec_open(urlpath: str, mode: str):
             f'Reading or writing {urlpath} requires fsspec: pip install "blosc2[fsspec]"'
         ) from None
     # Missing protocol backends (s3fs, gcsfs...) are fsspec's error to raise.
-    return fsspec.open(urlpath, mode)
+    return fsspec
+
+
+def fsspec_open(urlpath: str, mode: str):
+    """`fsspec.open()`, but complaining properly when fsspec is missing."""
+    return _import_fsspec(urlpath).open(urlpath, mode)
+
+
+def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
+    """Materialize the container at *urlpath* under *cache_storage*, return its local path.
+
+    Single-file containers go through fsspec's ``filecache``, which downloads
+    once and afterwards pays one HEAD per open to check staleness.  Directory
+    containers (``.b2d`` stores, sparse frames) have no such layer in fsspec, so
+    the whole prefix is fetched and re-fetched whenever the remote listing stops
+    matching the manifest written at download time.
+    """
+    fsspec = _import_fsspec(urlpath)
+    cache_storage = str(cache_storage)
+    fs, path = fsspec.url_to_fs(urlpath)
+
+    if not fs.isdir(path):
+        # check_files is off by default in fsspec, which would happily serve a
+        # cached copy of an array that changed remotely -- the worst failure mode
+        # this feature has, and worth one HEAD per open to avoid.
+        opts = {"cache_storage": cache_storage, "check_files": True}
+        with fsspec.open(f"filecache::{urlpath}", "rb", filecache=opts) as f:
+            return f.name
+
+    localdir = os.path.join(cache_storage, hashlib.sha256(urlpath.encode()).hexdigest())
+    manifest = pathlib.Path(localdir + ".json")
+    listing = json.dumps(
+        {
+            name: (entry.get("size"), entry.get("mtime") or entry.get("LastModified"))
+            for name, entry in sorted(fs.find(path, detail=True).items())
+        },
+        default=str,
+    )
+    if not manifest.exists() or manifest.read_text() != listing:
+        shutil.rmtree(localdir, ignore_errors=True)
+        os.makedirs(cache_storage, exist_ok=True)
+        fs.get(path.rstrip("/") + "/", localdir, recursive=True)
+        manifest.write_text(listing)
+    return localdir
 
 
 def pack_tensor(

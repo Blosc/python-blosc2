@@ -17,9 +17,9 @@ along at no extra cost.
 It is staged so that each phase is independently shippable and each one is
 useful on its own; phase 1 alone already covers the common case.
 
-**Status: phase 1 is implemented** (2026-08-16, branch `fsspec-support-plan`).
-Phases 2 and 3 remain unstarted and unscheduled — see the recommendation at the
-end for why that is the intended resting point rather than an unfinished one.
+**Status: phases 1 and 2 are implemented** (2026-08-16, branch
+`fsspec-support-plan`). Phase 3 remains unstarted and unscheduled — see its
+recommendation for why.
 
 ## Motivation
 
@@ -101,8 +101,8 @@ The minimum that is genuinely useful.
   `save_tensor` separately: both delegate to it, so one branch serves all three
   entry points (plus `pack_array2`) instead of three copies.
 - `.b2d` raises `NotImplementedError`; sparse frames are not detected up front
-  and fail on the `from_cframe` instead. Cheap to detect properly only once
-  phase 2 exists, so it was left alone.
+  and fail on the `from_cframe` instead. Both messages now point at phase 2's
+  `cache_storage=`, which is the actual fix.
 - Tests: `tests/test_fsspec.py`, 12 tests over `memory://` plus one chained
   `zip://…::file://` URL, in the default suite behind `importorskip("fsspec")`.
   No tier-2 network test, per the open question below.
@@ -198,10 +198,42 @@ discovered by users:
 - single-file formats only (`.b2nd`, `.b2f`, `.b2e`, `.b2z`); `.b2d` and sparse
   frames raise a clear `NotImplementedError` naming phase 2.
 
-## Phase 2 — Local cache, full format coverage
+## Phase 2 — Local cache, full format coverage — DONE
 
 The lazy way to get every container format, mmap, and repeat-run speed without
 writing a byte-range reader.
+
+**As implemented:** `blosc2.open(url, cache_storage=...)`, backed by
+`localize_fsspec_url()` in
+[src/blosc2/core.py](/Users/faltet/blosc/python-blosc2/src/blosc2/core.py), which
+returns a local path that `open()` then re-enters with. All four open questions
+below were settled as recommended, plus these decisions taken while building it:
+
+- **One knob, not two.** `cache_storage=` alone turns caching on; there is no
+  separate `cache=True`, since an explicit directory already says everything a
+  boolean would. No module-level `set_remote_cache()` either — add it if someone
+  asks.
+- **`check_files=True` is mandatory, and was not free.** fsspec's `filecache`
+  does *not* check staleness by default (`check_files=False`), contrary to what
+  this plan assumed: it served a cached array whose remote bytes had changed.
+  Caught by a test that mutates the object between two opens. `simplecache` was
+  not added as a flag; it is what fsspec's own default already behaved like, and
+  nobody has asked for it.
+- **Directory containers carry their own manifest.** fsspec has no `filecache`
+  equivalent for a prefix, so `.b2d` stores and sparse frames are fetched with
+  one `fs.get(recursive=True)` into a URL-hashed subdirectory, alongside a JSON
+  manifest of the remote `fs.find(detail=True)` listing. A changed listing
+  re-fetches the whole prefix; no per-file delta sync.
+- **Unset kwargs are not a request.** The no-cache path rejects `mmap_mode`,
+  `offset` and friends by pointing at `cache_storage=`, but ignores kwargs whose
+  value is `None` — `load_tensor()` passes `dparams=None` unconditionally.
+- Tests grew to 20, still `memory://` only: cache hit (no refetch), staleness
+  re-fetch for both files and directories, mmap over a cached file, a `.b2d`
+  `DictStore`, and a sparse frame.
+
+Write-back stayed out, as the section below says it should.
+
+The rest of this section is the original design.
 
 fsspec's `filecache` downloads an object once into a local cache directory and
 hands back a real local file path. `blosc2.open()` on that path is the ordinary
@@ -398,8 +430,13 @@ branch; one filesystem exercising it is enough.
 
 **Ship phase 1 and stop.** It is roughly ten lines plus the extra plus the
 tier-1 tests, it covers "my arrays are in S3 and I want to read them", and it is
-the only phase whose value is certain today. *Done; the "and stop" half still
-holds.*
+the only phase whose value is certain today.
+
+*Superseded: phase 1 shipped, and phase 2 followed immediately after rather than
+waiting for someone to hit the memory ceiling — it turned out to be about forty
+lines and it closes the format gap (`.b2d`, sparse frames, mmap, offset), which
+is worth more than the pause was. The "and stop" now applies at phase 3, where
+the reasoning below is unchanged.*
 
 Note the asymmetry that argues for the pause: every open question below except
 the last two is a *phase 2* question. The caching layer is where the design
@@ -414,7 +451,13 @@ user who has not shown up yet.
 ## Open Questions, With Recommendations
 
 Each of these is stated in context in the phase it belongs to; this is the
-summary and the current leaning, none of it decided.
+summary and the current leaning.
+
+The four phase-2 questions are now **settled, each the way it was recommended**:
+explicit `cache_storage=` with no default, staleness-checked on every open
+(which took `check_files=True`, see the phase 2 notes), caching opt-in so
+`open(url)` is unchanged, and no tier-2 network test. The two phase-3 ones stay
+open because phase 3 does.
 
 - **Phase 2 cache location and lifetime.** *Recommendation: require an explicit
   `cache_storage=`, no implicit default.* An implicit `platformdirs` cache that

@@ -14,6 +14,14 @@ XXX version-specific blurb XXX
   protocol (`s3fs`, `gcsfs`...) and its credentials stay the caller's install and
   configuration.
 
+* `blosc2.open()` also accepts `cache_storage=` for fsspec URLs, which downloads
+  the container into that directory and opens it as an ordinary local path. That
+  covers the formats the in-memory read cannot — directory containers (`.b2d`
+  stores, sparse frames) — plus `offset` and `mmap_mode`, and makes repeated
+  opens cheap. Caching is opt-in and has no default location: an implicit cache
+  filling a disk with multi-GB arrays is not a good surprise. Cached copies are
+  staleness-checked against the remote on every open.
+
 * Querying a `utf8()` column through its FULL index no longer materializes the
   index vocabulary. The query literal is turned into an alphabetical rank by
   bisecting the vocabulary sidecar instead, so a lookup reads a few blocks
