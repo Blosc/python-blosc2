@@ -82,7 +82,13 @@ it is and reads only the chunks a slice touches, one range request each::
     a[1000:1010]   # fetches one or two chunks, not the array
 
 This returns a :ref:`Proxy` over the remote frame, so what it fetched stays
-cached in it.  It needs a contiguous frame holding an :ref:`NDArray`.
+cached in it for as long as the object lives.  For a cache that survives the
+process, build the proxy over a :ref:`FsspecNDSource` and give it a urlpath::
+
+    src = blosc2.FsspecNDSource("s3://bucket/huge.b2nd")
+    a = blosc2.Proxy(src, urlpath="huge-cache.b2nd", mode="a")
+
+Either way it needs a contiguous frame holding an :ref:`NDArray`.
 
 Source code
 +++++++++++

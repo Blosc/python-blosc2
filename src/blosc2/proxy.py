@@ -8,6 +8,7 @@
 import ast
 import asyncio
 import inspect
+import os
 import struct
 import textwrap
 from abc import ABC, abstractmethod
@@ -226,6 +227,12 @@ class Proxy(blosc2.Operand):
         mode: str, optional
             "a" means read/write (create if it doesn't exist); "w" means create
             (overwrite if it exists). Default is "a".
+
+            With "a" and an existing :paramref:`urlpath`, the cache written by an
+            earlier run is adopted as is, so whatever it already holds is not
+            fetched from the source again. It must be a cache from a proxy over a
+            source of the same shape and dtype; anything else raises rather than
+            being silently reused or overwritten.
         kwargs: dict, optional
             Keyword arguments supported:
 
@@ -248,6 +255,12 @@ class Proxy(blosc2.Operand):
             kwargs = {}
         self._cache = kwargs.pop("_cache", None)
         vlmeta = kwargs.pop("vlmeta", None)
+
+        if self._cache is None and mode == "a" and urlpath is not None and os.path.exists(urlpath):
+            # Reuse the cache left by an earlier run: whatever was fetched then is
+            # still in there, and the creation path below would refuse to build
+            # over an existing container anyway
+            self._cache = self._reopen_cache(urlpath)
 
         if self._cache is None:
             meta_val = {
@@ -293,6 +306,29 @@ class Proxy(blosc2.Operand):
     def __enter__(self) -> "Proxy":
         """Enter a context manager and return this proxy."""
         return self
+
+    def _reopen_cache(self, urlpath: str):
+        """Adopt the cache container stored at *urlpath*, checking it fits the source."""
+        from blosc2.schunk import _set_default_dparams
+
+        # Not blosc2.open(): that would rebuild the source we already hold, and
+        # raise outright for sources it cannot reconstruct from the cache metadata
+        kwargs = {}
+        _set_default_dparams(kwargs)
+        cached = blosc2.blosc2_ext.open(str(urlpath), "a", 0, **kwargs)
+        schunk = getattr(cached, "schunk", cached)
+        if "proxy-source" not in schunk.meta:
+            raise ValueError(
+                f"{urlpath} is not a proxy cache; pass mode='w' to overwrite it or choose another urlpath"
+            )
+        if hasattr(self.src, "shape") and (
+            tuple(cached.shape) != tuple(self.src.shape) or cached.dtype != self.src.dtype
+        ):
+            raise ValueError(
+                f"the cache at {urlpath} holds a {cached.shape} {cached.dtype} array, which "
+                f"does not fit the {self.src.shape} {self.src.dtype} source"
+            )
+        return cached
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         """Exit a context manager.
@@ -639,7 +675,8 @@ class FsspecNDSource(ProxyNDSource):
     The frame stays where it is: only its header, its chunk offsets, and the
     chunks a slice actually touches ever cross the network.  This is what
     ``blosc2.open(url, lazy=True)`` builds, and it can also be wrapped in a
-    :ref:`Proxy` by hand to give the fetched chunks a persistent cache::
+    :ref:`Proxy` by hand to give the fetched chunks a cache that outlives the
+    process, since ``mode="a"`` picks an existing one back up::
 
         src = blosc2.FsspecNDSource("s3://bucket/big.b2nd")
         a = blosc2.Proxy(src, urlpath="big-cache.b2nd", mode="a")

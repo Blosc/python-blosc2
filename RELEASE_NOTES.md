@@ -29,6 +29,12 @@ XXX version-specific blurb XXX
   wrapped in a `Proxy` by hand to give that cache a file of its own. Contiguous
   frames holding an `NDArray` only.
 
+* `blosc2.Proxy(src, urlpath=..., mode="a")` now adopts the cache left by an
+  earlier run instead of failing on the existing file, so a proxy's cache can
+  outlive the process and chunks fetched yesterday are not fetched again today.
+  The cache must come from a proxy over a source of the same shape and dtype;
+  anything else at that path raises rather than being reused or overwritten.
+
 * Querying a `utf8()` column through its FULL index no longer materializes the
   index vocabulary. The query literal is turned into an alphabetical rank by
   bisecting the vocabulary sidecar instead, so a lookup reads a few blocks

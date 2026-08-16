@@ -131,6 +131,40 @@ def test_readonly_proxy_keeps_both_readonly(tmp_path):
         np.testing.assert_array_equal(readonly_ctx[:], data)
 
 
+def test_reuse_cache_across_runs(tmp_path):
+    proxy_path = str(tmp_path / "proxy.b2nd")
+    data = np.arange(120, dtype=np.int32).reshape(12, 10)
+    source = blosc2.asarray(data, chunks=(4, 5), blocks=(2, 5))
+
+    proxy = blosc2.Proxy(source, urlpath=proxy_path, mode="a")
+    np.testing.assert_array_equal(proxy[0:4, 0:5], data[0:4, 0:5])
+    del proxy
+
+    # mode="a" over an existing cache picks up what the previous run fetched
+    proxy = blosc2.Proxy(source, urlpath=proxy_path, mode="a")
+    assert proxy._cache.schunk.urlpath == proxy_path
+    np.testing.assert_array_equal(proxy[:], data)
+
+
+def test_reuse_cache_rejects_foreign_container(tmp_path):
+    path = str(tmp_path / "plain.b2nd")
+    blosc2.arange(0, 120, dtype=np.int32, shape=(12, 10), urlpath=path, mode="w")
+    source = blosc2.asarray(np.arange(120, dtype=np.int32).reshape(12, 10))
+
+    with pytest.raises(ValueError, match="not a proxy cache"):
+        blosc2.Proxy(source, urlpath=path, mode="a")
+
+
+def test_reuse_cache_rejects_mismatched_source(tmp_path):
+    proxy_path = str(tmp_path / "proxy.b2nd")
+    data = np.arange(120, dtype=np.int32).reshape(12, 10)
+    blosc2.Proxy(blosc2.asarray(data), urlpath=proxy_path, mode="a").fetch()
+
+    other = blosc2.asarray(np.arange(50, dtype=np.float64))
+    with pytest.raises(ValueError, match="does not fit"):
+        blosc2.Proxy(other, urlpath=proxy_path, mode="a")
+
+
 # Test the ProxyNDSources interface
 @pytest.mark.parametrize(
     ("shape", "chunks", "blocks"),

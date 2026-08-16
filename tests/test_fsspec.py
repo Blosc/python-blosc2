@@ -237,16 +237,30 @@ def test_lazy_afetch():
     assert np.array_equal(cache[150:250], a[150:250])
 
 
-def test_lazy_persistent_proxy_cache(tmp_path):
+def test_lazy_persistent_proxy_cache(tmp_path, monkeypatch):
     a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
     url = _put("persist.b2nd", a)
     cache = str(tmp_path / "proxy.b2nd")
 
-    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="w")
+    fetched = []
+    orig = blosc2.FsspecNDSource.get_chunk
+    monkeypatch.setattr(
+        blosc2.FsspecNDSource,
+        "get_chunk",
+        lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
+    )
+
+    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
     assert np.array_equal(p[0:100], a[0:100])
+    assert fetched == [0]
     del p
-    # The cache is an ordinary local container, readable without any network
-    assert np.array_equal(blosc2.open(cache)[0:100], a[0:100])
+
+    # A later run picks the cache up and only fetches what is missing from it
+    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
+    assert np.array_equal(p[0:100], a[0:100])
+    assert fetched == [0]
+    assert np.array_equal(p[500:600], a[500:600])
+    assert fetched == [0, 5]
 
 
 def test_lazy_needs_an_ndarray():
