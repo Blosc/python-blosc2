@@ -327,19 +327,34 @@ mean `asyncio.run()` inside a sync method — a `RuntimeError` in any notebook,
 and the first sync-over-async in the library. The test asserts overlap with a
 barrier rather than a stopwatch, since `memory://` has no latency to hide.
 
-It defaults to 8 rather than to serial. The speedup itself is still unmeasured,
-but the *cost of being wrong* is measurable and small: over `memory://`, where
-the pool can only lose, a 100-chunk read goes from 1.1 ms to 2.2 ms, about 10 µs
-per chunk, against the ~30 ms an S3 round trip costs. That asymmetry, plus
-`afetch` already defaulting to 8 for remote sources, made serial-by-default the
-inconsistent choice rather than the conservative one.
+It defaults to 8 rather than to serial. The *cost of being wrong* is small and
+measured: over `memory://`, where the pool can only lose, a 100-chunk read goes
+from 1.1 ms to 2.2 ms, about 10 µs per chunk. The gain is 7.4x on a 100-chunk
+read against a 5 ms simulated round trip
+([examples/ndarray/concurrent-fsspec.py](/Users/faltet/blosc/python-blosc2/examples/ndarray/concurrent-fsspec.py)),
+and unmeasured against a real endpoint. That asymmetry, plus `afetch` already
+defaulting to 8 for remote sources, made serial-by-default the inconsistent
+choice rather than the conservative one.
+
+That example had to invent its own latency: nothing that runs offline has any.
+`memory://`, `zip://` and `tar://` are local reads, the regime where the pool
+only costs, and `http://` is reserved for Caterva2 so a local server is not
+reachable either. It subclasses fsspec's in-memory filesystem with a fixed delay
+and says so, rather than implying a benchmark it cannot run.
+
+Two examples cover the feature:
+[rw-fsspec.py](/Users/faltet/blosc/python-blosc2/examples/ndarray/rw-fsspec.py)
+for the three read modes and the write, and `concurrent-fsspec.py` for
+`max_concurrency`.
 
 `lazy=True` and `cache_storage=` compose rather than excluding each other, which
 is a departure from how phase 2 framed the choice: `cache_storage` means "where
 this container's local copy lives", and `lazy` decides whether that copy is the
 whole thing or only the chunks touched so far. A persistent chunk cache is
-stamped with the remote size and mtime and thrown away when they change, since
-chunks fetched by offsets from a replaced frame are not merely stale but wrong.
+stamped with `fs.ukey()` and thrown away when that changes, since chunks fetched
+by offsets from a replaced frame are not merely stale but wrong. The stamp
+started as a hand-rolled `[size, mtime or LastModified]` tuple and was wrong:
+see the testing note below.
 
 Not done: `lazy=True` needs a contiguous frame carrying a `b2nd` metalayer.
 Plain SChunks, sparse frames and `.b2d` stores raise and point at
@@ -501,6 +516,24 @@ S3-compatible endpoint that `s3fs` can be pointed at with `endpoint_url`. This
 is a new dev dependency and it is only worth adding once phase 3 exists, since
 `memory://` cannot exercise range requests and `moto` can. Not before.
 
+*Decided after phase 3 shipped: still no.* Three things `memory://` cannot
+reach — the async `aget_chunk` path (memory is not an async backend), reads
+through a buffered/block-caching file object, and the actual latency win — and
+`moto` only buys the first two. That is not worth a dev dependency plus a local
+HTTP server, and `blockcache::memory://` covers the second for free. Revisit if
+the async path is ever to be locked down before someone runs this against real
+S3.
+
+**What `memory://` gets wrong, and it is not what you would expect.** It is not
+too *unrealistic* — it is **poorer in metadata than any real backend**, exposing
+no `mtime` or `LastModified`. That silently degraded the hand-rolled cache stamp
+to size-only, so a frame replaced by one of identical size was served from a
+stale chunk cache; and the staleness test passed anyway, because compression had
+made the two frames different sizes. `moto` would have *hidden* this bug, not
+caught it. The fixes were `fs.ukey()`, which asks fsspec what identifies these
+bytes rather than guessing which fields a backend exposes, and a test that
+writes both frames uncompressed so only a real content check can pass.
+
 **What not to build:** no `boto3` stubbing, no fixture framework, no
 per-protocol parametrisation across `s3`/`gcs`/`az`. The code path is one
 branch; one filesystem exercising it is enough.
@@ -541,9 +574,15 @@ explicit `cache_storage=` with no default, staleness-checked on every open
 `open(url)` is unchanged, and no tier-2 network test.
 
 The two phase-3 questions are **moot**: 3a needs no I/O plugin, so no registry id
-was burned and no upstream change is on the table. What replaces them is a
-narrower question — whether `aget_chunk`'s concurrent path performs as expected
-against a real S3 endpoint, which is untestable with `memory://` and unanswered.
+was burned and no upstream change is on the table.
+
+What replaces them is one open question, the only one left in this document:
+**how the concurrent fetch behaves against a real endpoint.** Both paths that
+overlap requests — the thread pool the sync path uses by default, and
+`aget_chunk`'s async one, which `memory://` never even enters — are correct by
+test and plausible by arithmetic, and neither has met real S3. The first thing
+to do with a bucket in hand is check that 8 in flight is a sensible default
+rather than one that trips throttling.
 
 - **Phase 2 cache location and lifetime.** *Recommendation: require an explicit
   `cache_storage=`, no implicit default.* An implicit `platformdirs` cache that
