@@ -232,8 +232,14 @@ class Proxy(blosc2.Operand):
             With "a" and an existing :paramref:`urlpath`, the cache written by an
             earlier run is adopted as is, so whatever it already holds is not
             fetched from the source again. It must be a cache from a proxy over a
-            source of the same shape and dtype; anything else raises rather than
-            being silently reused or overwritten.
+            source of the same geometry (shape, dtype and partitioning); anything
+            else raises rather than being silently reused or overwritten.
+
+            Geometry is all that is checked unless the source can name the exact
+            bytes it reads, as :ref:`FsspecNDSource` does with its ``stamp``: a
+            source whose contents changed underneath while its geometry did not
+            is adopted, and the cache keeps serving what the earlier run fetched.
+            Pass ``mode="w"`` when the source may have been rewritten.
         kwargs: dict, optional
             Keyword arguments supported:
 
@@ -270,7 +276,8 @@ class Proxy(blosc2.Operand):
                 )
             self._cache = self._reopen_cache(urlpath)
 
-        if self._cache is None:
+        fresh = self._cache is None
+        if fresh:
             meta_val = {
                 "local_abspath": None,
                 "urlpath": None,
@@ -305,6 +312,12 @@ class Proxy(blosc2.Operand):
                 )
                 self._cache.fill_special(self.src.nbytes // self.src.typesize, blosc2.SpecialValue.UNINIT)
         self._schunk_cache = getattr(self._cache, "schunk", self._cache)
+        # What is already cached cannot be read off the cache itself: a chunk that
+        # is a run of a single value (zeros, NaNs, whatever blosc2.full() writes)
+        # is stored as a special chunk once fetched, telling it apart from the
+        # empty ones the cache starts life with. Hence an explicit bitmap.
+        nchunks = self._schunk_cache.nchunks
+        self._fetched = bytearray((nchunks + 7) // 8) if fresh else self._load_fetched(nchunks)
         if self.urlpath is None:
             self.urlpath = getattr(self._schunk_cache, "urlpath", None)
         # Geometry alone cannot tell a replaced source from the one the cache was
@@ -319,6 +332,30 @@ class Proxy(blosc2.Operand):
     def __enter__(self) -> "Proxy":
         """Enter a context manager and return this proxy."""
         return self
+
+    def _load_fetched(self, nchunks: int) -> bytearray:
+        """The bitmap of already fetched chunks that a previous run left behind."""
+        stored = self._schunk_cache.vlmeta.get("proxy-fetched")
+        if stored is not None and len(stored) == (nchunks + 7) // 8:
+            return bytearray(stored)
+        # A cache filled before the bitmap existed, or one handed over through
+        # `_cache=`: everything that is not a special chunk was surely fetched
+        fetched = bytearray((nchunks + 7) // 8)
+        for info in self._schunk_cache.iterchunks_info():
+            if info.special == blosc2.SpecialValue.NOT_SPECIAL:
+                fetched[info.nchunk // 8] |= 1 << (info.nchunk % 8)
+        return fetched
+
+    def _missing_chunks(self, item) -> list[int]:
+        """The chunks *item* touches, minus those already in the cache."""
+        nchunks = self._schunk_cache.nchunks
+        # Full realization when item is (), else only the chunks it intersects
+        wanted = range(nchunks) if item == () else sorted(set(blosc2.get_slice_nchunks(self._cache, item)))
+        return [int(n) for n in wanted if not self._fetched[n // 8] >> (n % 8) & 1]
+
+    def _save_fetched(self) -> None:
+        """Persist the bitmap, so a later run does not fetch these chunks again."""
+        self._schunk_cache.vlmeta["proxy-fetched"] = bytes(self._fetched)
 
     def _reopen_cache(self, urlpath: str):
         """Adopt the cache container stored at *urlpath*, checking it fits the source."""
@@ -418,16 +455,15 @@ class Proxy(blosc2.Operand):
         [2 3]
         [4 5]]
         """
-        # Full realization when item is (), else only the chunks it intersects
-        wanted = None if item == () else set(blosc2.get_slice_nchunks(self._cache, item))
-        missing = [
-            info.nchunk
-            for info in self._schunk_cache.iterchunks_info()
-            if info.special != blosc2.SpecialValue.NOT_SPECIAL and (wanted is None or info.nchunk in wanted)
-        ]
-
-        for nchunk, chunk in self._get_chunks(missing, max_concurrency):
-            self._schunk_cache.update_chunk(nchunk, chunk)
+        missing = self._missing_chunks(item)
+        try:
+            for nchunk, chunk in self._get_chunks(missing, max_concurrency):
+                self._schunk_cache.update_chunk(nchunk, chunk)
+                self._fetched[nchunk // 8] |= 1 << (nchunk % 8)
+        finally:
+            # Keep hold of whatever did arrive, even if a later chunk blew up
+            if missing:
+                self._save_fetched()
 
         return self._cache
 
@@ -440,8 +476,14 @@ class Proxy(blosc2.Operand):
                 yield nchunk, self.src.get_chunk(nchunk)
             return
         # Writing to the cache stays on this thread; only the fetches fan out
-        with ThreadPoolExecutor(max_workers=min(max_concurrency, len(nchunks))) as pool:
+        pool = ThreadPoolExecutor(max_workers=min(max_concurrency, len(nchunks)))
+        try:
             yield from zip(nchunks, pool.map(self.src.get_chunk, nchunks), strict=True)
+        finally:
+            # map() queues every chunk up front, so without cancel_futures an error
+            # here (or a Ctrl-C) would first sit through thousands of pending
+            # requests; only the handful already running are waited for
+            pool.shutdown(cancel_futures=True)
 
     async def afetch(
         self, item: slice | list[slice] | None = (), max_concurrency: int | None = None
@@ -529,15 +571,7 @@ class Proxy(blosc2.Operand):
         if not callable(getattr(self.src, "aget_chunk", None)):
             raise NotImplementedError("afetch is only available if the source has an aget_chunk method")
 
-        if item == ():
-            wanted = None  # every missing chunk
-        else:
-            wanted = set(blosc2.get_slice_nchunks(self._cache, item))
-        to_fetch = [
-            info.nchunk
-            for info in self._schunk_cache.iterchunks_info()
-            if info.special != blosc2.SpecialValue.NOT_SPECIAL and (wanted is None or info.nchunk in wanted)
-        ]
+        to_fetch = self._missing_chunks(item)
 
         if max_concurrency is None:
             max_concurrency = getattr(
@@ -552,9 +586,14 @@ class Proxy(blosc2.Operand):
                 chunk = await self.src.aget_chunk(nchunk)
             # Runs to completion between awaits, so concurrent writers can't interleave.
             self._schunk_cache.update_chunk(nchunk, chunk)
+            self._fetched[nchunk // 8] |= 1 << (nchunk % 8)
 
         if to_fetch:
-            await asyncio.gather(*(_fetch_one(nchunk) for nchunk in to_fetch))
+            try:
+                await asyncio.gather(*(_fetch_one(nchunk) for nchunk in to_fetch))
+            finally:
+                # Keep hold of whatever did arrive, even if a later chunk blew up
+                self._save_fetched()
 
         return self._cache
 

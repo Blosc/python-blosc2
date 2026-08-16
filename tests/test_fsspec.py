@@ -420,6 +420,35 @@ def test_lazy_persistent_proxy_cache(tmp_path, monkeypatch):
     assert fetched == [0, 5]
 
 
+def test_lazy_cache_converges_for_run_length_chunks(tmp_path, monkeypatch):
+    # A fetched chunk that is a run of a single value is stored in the cache as a
+    # special chunk, just like the empty ones it was created with, so whether it
+    # is there cannot be read off the cache itself
+    a = blosc2.full((1000,), 3.0, dtype="f8", chunks=(100,))
+    url = _put("runlength.b2nd", a)
+    cache = str(tmp_path / "runlength-cache.b2nd")
+
+    fetched = []
+    orig = blosc2.FsspecNDSource.get_chunk
+    monkeypatch.setattr(
+        blosc2.FsspecNDSource,
+        "get_chunk",
+        lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
+    )
+
+    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
+    assert np.array_equal(p[:], a[:])
+    assert len(fetched) == 10
+    assert np.array_equal(p[:], a[:])
+    assert len(fetched) == 10
+    del p
+
+    # And the same across runs, which is what the persistent cache promises
+    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
+    assert np.array_equal(p[:], a[:])
+    assert len(fetched) == 10
+
+
 def test_lazy_needs_an_ndarray():
     schunk = blosc2.SChunk(chunksize=1000)
     schunk.append_data(np.arange(1000, dtype="u1"))
