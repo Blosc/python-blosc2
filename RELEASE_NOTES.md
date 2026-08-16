@@ -13,8 +13,10 @@ XXX version-specific blurb XXX
   with `cache_storage=` (which is what covers `.b2d` stores, sparse frames,
   `offset` and `mmap_mode`), or one chunk at a time with `lazy=True`, which
   leaves a huge frame where it is and fetches only the chunks a slice touches
-  through the new `blosc2.FsspecNDSource`. Protocol drivers (`s3fs`, `gcsfs`...)
-  and credentials stay the caller's business.
+  through the new `blosc2.FsspecNDSource`. The two combine: `lazy=True` with a
+  `cache_storage=` keeps the fetched chunks there, so a later run starts from
+  them. Protocol drivers (`s3fs`, `gcsfs`...) and credentials stay the caller's
+  business.
 
 * `blosc2.Proxy(src, urlpath=..., mode="a")` now adopts the cache left by an
   earlier run instead of failing on the existing file, so a proxy's cache can

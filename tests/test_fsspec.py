@@ -285,9 +285,44 @@ def test_lazy_not_a_frame():
         blosc2.open("memory://junk.b2nd", lazy=True)
 
 
-def test_lazy_excludes_cache_storage(tmp_path):
-    with pytest.raises(ValueError, match="only one"):
-        blosc2.open("memory://x.b2nd", lazy=True, cache_storage=tmp_path)
+def test_lazy_with_cache_storage(tmp_path, monkeypatch):
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    url = _put("lazycache.b2nd", a)
+
+    fetched = []
+    orig = blosc2.FsspecNDSource.get_chunk
+    monkeypatch.setattr(
+        blosc2.FsspecNDSource,
+        "get_chunk",
+        lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
+    )
+
+    p = blosc2.open(url, lazy=True, cache_storage=tmp_path)
+    assert np.array_equal(p[0:100], a[0:100])
+    assert fetched == [0]
+    del p
+
+    # A later run starts from the chunks the previous one pulled
+    p = blosc2.open(url, lazy=True, cache_storage=tmp_path)
+    assert np.array_equal(p[0:100], a[0:100])
+    assert fetched == [0]
+    assert np.array_equal(p[500:600], a[500:600])
+    assert fetched == [0, 5]
+
+
+def test_lazy_cache_rebuilt_when_remote_changes(tmp_path):
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    url = _put("lazystale.b2nd", a)
+    p = blosc2.open(url, lazy=True, cache_storage=tmp_path)
+    assert np.array_equal(p[0:100], a[0:100])
+    del p
+
+    # Replacing the frame invalidates both the cached chunks and the offsets
+    # they were fetched by, so the cache must be thrown away rather than reused
+    b = blosc2.arange(1000, 2000, dtype="i4", chunks=(100,))
+    _put("lazystale.b2nd", b)
+    p = blosc2.open(url, lazy=True, cache_storage=tmp_path)
+    assert np.array_equal(p[0:100], b[0:100])
 
 
 def test_lazy_offset_not_supported():

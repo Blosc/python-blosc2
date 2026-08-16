@@ -22,7 +22,7 @@ import numpy as np
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
-from blosc2.core import fsspec_open, is_fsspec_url, localize_fsspec_url
+from blosc2.core import fsspec_cache_path, fsspec_open, is_fsspec_url, localize_fsspec_url
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
@@ -1931,6 +1931,32 @@ def _finalize_special_open(special, urlpath, mode):
     return special
 
 
+def _lazy_fsspec_proxy(urlpath: str, cache_storage: str | pathlib.Path | None):
+    """Wrap a remote frame in a Proxy that fetches chunks on demand.
+
+    Without `cache_storage` the fetched chunks live in memory and die with the
+    proxy; with it they go to a container under that directory, so a later run
+    starts from what this one pulled.
+    """
+    src = blosc2.FsspecNDSource(urlpath)
+    if cache_storage is None:
+        return blosc2.Proxy(src)
+
+    path = fsspec_cache_path(urlpath, cache_storage, ".b2nd")
+    if os.path.exists(path) and _cache_stamp(path) != src.stamp:
+        # The remote frame was replaced, which makes every cached chunk -- and
+        # every offset they were fetched by -- meaningless
+        blosc2.remove_urlpath(path)
+    return blosc2.Proxy(src, urlpath=path, mode="a", vlmeta={"fsspec-stamp": src.stamp})
+
+
+def _cache_stamp(path: str):
+    """The remote stamp a cached proxy container was built against, if any."""
+    _set_default_dparams(kwargs := {})
+    cache = blosc2_ext.open(path, "r", 0, **kwargs)
+    return getattr(cache, "schunk", cache).vlmeta.get("fsspec-stamp")
+
+
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     """Open a container living behind an fsspec URL.
 
@@ -1946,21 +1972,12 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
 
     cache_storage = kwargs.pop("cache_storage", None)
     if kwargs.pop("lazy", False):
-        if cache_storage is not None:
-            raise ValueError(
-                "lazy= fetches chunks on demand and cache_storage= downloads the whole "
-                "container; pass only one of them"
-            )
         if offset != 0:
             raise NotImplementedError("offset is not supported with lazy=True")
         requested = [k for k, v in kwargs.items() if v is not None]
         if requested:
-            # A Proxy built by hand takes urlpath=/mode= for a persistent cache
-            raise NotImplementedError(
-                f"{', '.join(requested)} is not supported with lazy=True; build a "
-                "blosc2.Proxy over a blosc2.FsspecNDSource to configure its cache"
-            )
-        return blosc2.Proxy(blosc2.FsspecNDSource(urlpath))
+            raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
+        return _lazy_fsspec_proxy(urlpath, cache_storage)
 
     if cache_storage is not None:
         return open(localize_fsspec_url(urlpath, cache_storage), mode, offset, **kwargs)
@@ -2030,15 +2047,14 @@ def open(
             Only for fsspec URLs: return a :ref:`Proxy` that leaves the container
             where it is and reads the chunks a slice touches, one range request
             each, instead of transferring the whole thing. Contiguous frames
-            holding an :ref:`NDArray` only, and mutually exclusive with
-            ``cache_storage``. For a chunk cache that outlives the process, build
-            the proxy by hand over a :ref:`FsspecNDSource`.
+            holding an :ref:`NDArray` only. The fetched chunks are kept in memory,
+            or in ``cache_storage`` when that is given as well.
         cache_storage: str | pathlib.Path, optional
-            Only for fsspec URLs: a directory where the container is downloaded
-            before being opened as an ordinary local path, which supports every
-            format and option and makes repeated opens cheap. Cached copies are
-            staleness-checked against the remote on each open. There is no
-            default on purpose, so nothing writes to a disk you did not name.
+            Only for fsspec URLs: a directory holding this container's local
+            copy — the whole thing, or just the chunks ``lazy`` has fetched so
+            far. Either way a later run starts from what is already there, and
+            the copy is discarded when the remote no longer matches it. There is
+            no default on purpose, so nothing writes to a disk you did not name.
         mmap_mode: str, optional
             If set, the file will be memory-mapped instead of using the default
             I/O functions and the `mode` argument will be ignored.

@@ -311,6 +311,13 @@ friends), and falls back to the blocking path elsewhere. Only the fallback is
 covered by tests — `memory://` is not async — so the concurrent path is the one
 piece of this work that a real S3 endpoint would exercise first.
 
+`lazy=True` and `cache_storage=` compose rather than excluding each other, which
+is a departure from how phase 2 framed the choice: `cache_storage` means "where
+this container's local copy lives", and `lazy` decides whether that copy is the
+whole thing or only the chunks touched so far. A persistent chunk cache is
+stamped with the remote size and mtime and thrown away when they change, since
+chunks fetched by offsets from a replaced frame are not merely stale but wrong.
+
 Not done: `lazy=True` needs a contiguous frame carrying a `b2nd` metalayer.
 Plain SChunks, sparse frames and `.b2d` stores raise and point at
 `cache_storage=`. `offset != 0` likewise raises.

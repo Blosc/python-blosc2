@@ -648,6 +648,13 @@ def fsspec_open(urlpath: str, mode: str):
     return _import_fsspec(urlpath).open(urlpath, mode)
 
 
+def fsspec_cache_path(urlpath: str, cache_storage: str | pathlib.Path, suffix: str = "") -> str:
+    """The local path under *cache_storage* reserved for *urlpath*, creating the directory."""
+    os.makedirs(cache_storage, exist_ok=True)
+    name = hashlib.sha256(urlpath.encode()).hexdigest()
+    return os.path.join(str(cache_storage), name + suffix)
+
+
 def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
     """Materialize the container at *urlpath* under *cache_storage*, return its local path.
 
@@ -669,7 +676,7 @@ def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
         with fsspec.open(f"filecache::{urlpath}", "rb", filecache=opts) as f:
             return f.name
 
-    localdir = os.path.join(cache_storage, hashlib.sha256(urlpath.encode()).hexdigest())
+    localdir = fsspec_cache_path(urlpath, cache_storage)
     manifest = pathlib.Path(localdir + ".json")
     listing = json.dumps(
         {
@@ -680,7 +687,6 @@ def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
     )
     if not manifest.exists() or manifest.read_text() != listing:
         shutil.rmtree(localdir, ignore_errors=True)
-        os.makedirs(cache_storage, exist_ok=True)
         fs.get(path.rstrip("/") + "/", localdir, recursive=True)
         manifest.write_text(listing)
     return localdir

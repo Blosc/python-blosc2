@@ -672,9 +672,9 @@ class FsspecNDSource(ProxyNDSource):
 
     The frame stays where it is: only its header, its chunk offsets, and the
     chunks a slice actually touches ever cross the network.  This is what
-    ``blosc2.open(url, lazy=True)`` builds, and it can also be wrapped in a
-    :ref:`Proxy` by hand to give the fetched chunks a cache that outlives the
-    process, since ``mode="a"`` picks an existing one back up::
+    ``blosc2.open(url, lazy=True)`` builds; wrap it in a :ref:`Proxy` by hand
+    when the cache belongs at a path of your choosing rather than inside
+    ``cache_storage``::
 
         src = blosc2.FsspecNDSource("s3://bucket/big.b2nd")
         a = blosc2.Proxy(src, urlpath="big-cache.b2nd", mode="a")
@@ -696,6 +696,10 @@ class FsspecNDSource(ProxyNDSource):
             )
         self.urlpath = urlpath
         self._fs, self._path = fs, path
+        info = fs.info(path)
+        # Identifies the remote bytes, so a cache built against them can tell it
+        # has gone stale -- and chunk offsets from a replaced frame are garbage
+        self.stamp = [info.get("size"), str(info.get("mtime") or info.get("LastModified") or "")]
         # One handle for the whole life of the source: fsspec reads ranges out of
         # it, and its own block cache keeps the two reads per chunk to one fetch
         self._file = fs.open(path, "rb")
