@@ -2035,11 +2035,10 @@ def open(
             the proxy by hand over a :ref:`FsspecNDSource`.
         cache_storage: str | pathlib.Path, optional
             Only for fsspec URLs: a directory where the container is downloaded
-            before being opened as an ordinary local path. This lifts every
-            limitation of the direct URL read (see the `Notes` section) at the
-            price of writing to that directory, and makes repeated opens cheap.
-            There is no default on purpose: an implicit cache that silently fills
-            a disk with multi-GB arrays is not a good surprise.
+            before being opened as an ordinary local path, which supports every
+            format and option and makes repeated opens cheap. Cached copies are
+            staleness-checked against the remote on each open. There is no
+            default on purpose, so nothing writes to a disk you did not name.
         mmap_mode: str, optional
             If set, the file will be memory-mapped instead of using the default
             I/O functions and the `mode` argument will be ignored.
@@ -2080,27 +2079,13 @@ def open(
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
       must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
 
-    * fsspec URLs require the ``fsspec`` extra (``pip install "blosc2[fsspec]"``)
-      plus the driver for the protocol (``s3fs`` for S3, ``gcsfs`` for GCS...),
-      which fsspec asks for by name if it is missing.  Credentials are configured
-      through those drivers, not through blosc2.  ``mode != 'r'`` always raises:
-      object stores have no rename and no locks, so append semantics would be a
-      trap rather than a feature.
-
-    * Without ``cache_storage``, an fsspec URL is read whole into memory, so only
-      single-file containers (``.b2nd``, ``.b2f``, ``.b2e``, ``.b2z``) work, and
-      directory containers, sparse frames, ``offset`` and ``mmap_mode`` raise
-      ``NotImplementedError`` pointing at ``cache_storage``.  With it, the
-      container is downloaded into that directory and opened locally, which
-      supports every format and option.  Single files are then staleness-checked
-      on each open (one HEAD); directories are re-fetched whenever the remote
-      listing changes.
-
-    * ``lazy=True`` is the third option, for a container too big to transfer at
-      all: the frame stays remote and only the chunks a slice touches are read,
-      one range request each.  It returns a :ref:`Proxy`, which caches what it
-      fetched for the life of the object, and needs a contiguous frame holding an
-      :ref:`NDArray`.
+    * fsspec URLs need the ``fsspec`` extra (``pip install "blosc2[fsspec]"``) and
+      the driver for the protocol (``s3fs``, ``gcsfs``...), which fsspec asks for
+      by name when it is missing; credentials are configured there, not here.
+      ``mode != 'r'`` always raises, as object stores have no rename and no locks.
+      A plain URL read holds the whole object in memory, so it covers single-file
+      containers (``.b2nd``, ``.b2f``, ``.b2e``, ``.b2z``) only; ``cache_storage``
+      and ``lazy`` above lift that, each in its own way.
 
     * Persistent data handling follows a strict no-hidden-writes rule:
 

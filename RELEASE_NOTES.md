@@ -6,34 +6,20 @@ XXX version-specific blurb XXX
 
 ### Improvements
 
-* New `blosc2[fsspec]` extra: `blosc2.open()`, `save_array()` and
-  `save_tensor()` now accept any [fsspec](https://filesystem-spec.readthedocs.io)
-  URL (`s3://`, `gs://`, `abfs://`, `zip://`, `memory://`, and chained ones like
-  `zip://inner.b2nd::s3://bucket/archive.zip`). The container is transferred
-  whole, so this covers single-file containers in read mode; the driver for each
-  protocol (`s3fs`, `gcsfs`...) and its credentials stay the caller's install and
-  configuration.
-
-* `blosc2.open()` also accepts `cache_storage=` for fsspec URLs, which downloads
-  the container into that directory and opens it as an ordinary local path. That
-  covers the formats the in-memory read cannot — directory containers (`.b2d`
-  stores, sparse frames) — plus `offset` and `mmap_mode`, and makes repeated
-  opens cheap. Caching is opt-in and has no default location: an implicit cache
-  filling a disk with multi-GB arrays is not a good surprise. Cached copies are
-  staleness-checked against the remote on every open.
-
-* `blosc2.open(url, lazy=True)` reads a remote frame chunk by chunk instead of
-  transferring it: the container stays where it is and each slice pulls only the
-  chunks it touches, one range request each. It returns a `Proxy`, so fetched
-  chunks stay cached; the new `blosc2.FsspecNDSource` behind it can also be
-  wrapped in a `Proxy` by hand to give that cache a file of its own. Contiguous
-  frames holding an `NDArray` only.
+* New `blosc2[fsspec]` extra: `blosc2.open()`, `save_array()` and `save_tensor()`
+  accept any [fsspec](https://filesystem-spec.readthedocs.io) URL — `s3://`,
+  `gs://`, `zip://`, chained ones like `zip://inner.b2nd::s3://bucket/a.zip`.
+  `open()` reads the container whole, or through a staleness-checked local copy
+  with `cache_storage=` (which is what covers `.b2d` stores, sparse frames,
+  `offset` and `mmap_mode`), or one chunk at a time with `lazy=True`, which
+  leaves a huge frame where it is and fetches only the chunks a slice touches
+  through the new `blosc2.FsspecNDSource`. Protocol drivers (`s3fs`, `gcsfs`...)
+  and credentials stay the caller's business.
 
 * `blosc2.Proxy(src, urlpath=..., mode="a")` now adopts the cache left by an
   earlier run instead of failing on the existing file, so a proxy's cache can
-  outlive the process and chunks fetched yesterday are not fetched again today.
-  The cache must come from a proxy over a source of the same shape and dtype;
-  anything else at that path raises rather than being reused or overwritten.
+  outlive the process. The cache must come from a proxy over a source of the same
+  shape and dtype; anything else at that path raises.
 
 * Querying a `utf8()` column through its FULL index no longer materializes the
   index vocabulary. The query literal is turned into an alphabetical rank by

@@ -634,8 +634,6 @@ def _read_frame_index(f) -> tuple[bytes, list, np.ndarray]:
     and the absolute position of every chunk.  A negative position is not a
     position at all: it encodes a run-length chunk that was never written to the
     file.  See ``README_CFRAME_FORMAT.rst`` in c-blosc2 for the layout.
-
-    Only three reads happen here, so this stays cheap over a network filesystem.
     """
     import msgpack
 
