@@ -77,6 +77,7 @@ dev = [
     "matplotlib",
     "pandas",
     "plotly",
+    "moto[server]",
     "pre-commit",
     "pyarrow",
     "ruff",
@@ -87,10 +88,15 @@ dev = [
 test = [
     "pytest",
     # tests/test_fsspec.py importorskips fsspec, so without this the whole fsspec
-    # feature silently skips in CI.  Protocol backends (s3fs, gcsfs...) stay out:
-    # the tests run on memory:// and a local zip, which is also the configuration
-    # most users installing [fsspec] are in.
+    # feature silently skips in CI.  memory:// covers the protocol-generic paths,
+    # and is also the configuration most users installing [fsspec] are in.
     "fsspec; platform_machine != 'wasm32'",
+    # tests/test_fsspec_s3.py needs a real S3 endpoint (moto, served locally, so
+    # still offline) and a real *async* backend (s3fs).  memory:// is neither, and
+    # cannot see the class of bug that lives there: awaiting an async filesystem's
+    # own coroutine fails on s3fs and passes silently on memory://.  Runs in ~3 s.
+    "moto[server]; platform_machine != 'wasm32'",
+    "s3fs; platform_machine != 'wasm32'",
     # pytest.ini defaults to `-n auto`; where xdist is absent (wasm32, or a
     # bare `pip install pytest`) the root conftest.py degrades it to a serial run
     "pytest-xdist; platform_machine != 'wasm32'",
