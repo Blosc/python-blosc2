@@ -2067,12 +2067,17 @@ cdef class SChunk:
         cbytes = blosc2_schunk_get_lazychunk(self.schunk, nchunk, &chunk, &needs_free)
         if cbytes < 0:
            raise RuntimeError("Error while getting the lazychunk")
-        # The next does not always work (bug)
-        # cdef uint8_t is_lazy = chunk[BLOSC2_MAX_OVERHEAD - 1] & 0x08
-        # Workaround
-        cdef uint8_t is_lazy = chunk[BLOSC2_MAX_OVERHEAD - 1] & 0x70
-        if not is_lazy:
-            # Put a cap on the buffer size for the non-lazy chunk
+        if chunk == NULL:
+            raise RuntimeError(f"Chunk {nchunk} holds no data")
+        # Two kinds of chunk carry something past the header that the caller needs:
+        # a lazy one (0x08), whose bstarts and trailer say where its blocks are on
+        # disk, and a special one (0x70), whose repeated value follows the header.
+        # Anything else is a whole chunk sitting in memory, and copying it here
+        # would defeat the point of asking for a lazy one: cap it at the header.
+        # Testing only 0x70, as this did for a while, capped every lazy chunk of a
+        # file-backed frame down to its header and threw the block offsets away.
+        cdef uint8_t blosc2_flags = chunk[BLOSC2_MAX_OVERHEAD - 1]
+        if not (blosc2_flags & (0x08 | 0x70)):
             cbytes = MAX_OVERHEAD
         ret_chunk = PyBytes_FromStringAndSize(<char*>chunk, cbytes)
         if needs_free:
