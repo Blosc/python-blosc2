@@ -8,6 +8,7 @@
 import ast
 import asyncio
 import inspect
+import struct
 import textwrap
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -585,6 +586,154 @@ class Proxy(blosc2.Operand):
         if _fields is None:
             return None
         return {key: ProxyNDField(self, key) for key in _fields}
+
+
+_FRAME_MAGIC = b"b2frame\0"
+
+
+def _read_frame_index(f) -> tuple[bytes, list, np.ndarray]:
+    """Read the header and the chunk offsets of a contiguous frame from *f*.
+
+    Returns the raw header bytes, the header decoded as the msgpack array it is,
+    and the absolute position of every chunk.  A negative position is not a
+    position at all: it encodes a run-length chunk that was never written to the
+    file.  See ``README_CFRAME_FORMAT.rst`` in c-blosc2 for the layout.
+
+    Only three reads happen here, so this stays cheap over a network filesystem.
+    """
+    import msgpack
+
+    f.seek(0)
+    prefix = f.read(24)
+    if prefix[2:10] != _FRAME_MAGIC:
+        raise ValueError("not a Blosc2 contiguous frame")
+    # header_len is the one field that must be located by hand; everything after
+    # it comes out of unpacking the header, which is plain msgpack
+    header_len = struct.unpack(">i", prefix[11:15])[0]
+    f.seek(0)
+    raw = f.read(header_len)
+    header = msgpack.unpackb(raw, raw=False, strict_map_key=False)
+
+    # The offsets live in a Blosc2 chunk of their own, right after the data ones
+    index_pos = header[1] + header[5]
+    f.seek(index_pos)
+    index_cbytes = struct.unpack("<i", f.read(16)[12:16])[0]
+    f.seek(index_pos)
+    offsets = np.frombuffer(blosc2.decompress2(f.read(index_cbytes)), dtype=np.int64)
+    # Offsets are relative to the end of the header
+    return raw, header, np.where(offsets >= 0, offsets + header_len, offsets)
+
+
+def _frame_metalayer(raw: bytes, header: list, name: str):
+    """Decode the *name* metalayer out of an already-read frame header."""
+    offset = header[13][1][name]  # KeyError if the frame has no such metalayer
+    nbytes = struct.unpack(">I", raw[offset + 1 : offset + 5])[0]  # msgpack bin32
+    import msgpack
+
+    return msgpack.unpackb(raw[offset + 5 : offset + 5 + nbytes], raw=False)
+
+
+class FsspecNDSource(ProxyNDSource):
+    """A :ref:`Proxy` source that serves the chunks of a remote Blosc2 frame.
+
+    The frame stays where it is: only its header, its chunk offsets, and the
+    chunks a slice actually touches ever cross the network.  This is what
+    ``blosc2.open(url, lazy=True)`` builds, and it can also be wrapped in a
+    :ref:`Proxy` by hand to give the fetched chunks a persistent cache::
+
+        src = blosc2.FsspecNDSource("s3://bucket/big.b2nd")
+        a = blosc2.Proxy(src, urlpath="big-cache.b2nd", mode="a")
+
+    Contiguous frames carrying a ``b2nd`` metalayer only, which is what
+    :func:`blosc2.asarray` and friends write to a single file.  Sparse frames and
+    ``.b2d`` stores are directories; open those with ``cache_storage=``.
+    """
+
+    def __init__(self, urlpath: str):
+        from blosc2.core import _import_fsspec
+
+        fsspec = _import_fsspec(urlpath)
+        fs, path = fsspec.url_to_fs(urlpath)
+        if fs.isdir(path):
+            raise NotImplementedError(
+                f"{urlpath} is a directory (a sparse frame or a store), which cannot be read "
+                "chunk by chunk; open it with cache_storage= instead"
+            )
+        self.urlpath = urlpath
+        self._fs, self._path = fs, path
+        # One handle for the whole life of the source: fsspec reads ranges out of
+        # it, and its own block cache keeps the two reads per chunk to one fetch
+        self._file = fs.open(path, "rb")
+        raw, header, self._offsets = _read_frame_index(self._file)
+        self._chunksize = header[8]
+        try:
+            _, _, shape, chunks, blocks, dtype_format, dtype = _frame_metalayer(raw, header, "b2nd")
+        except KeyError:
+            raise NotImplementedError(
+                f"{urlpath} has no b2nd metalayer, so it is a plain SChunk rather than an "
+                "NDArray; read it whole or with cache_storage= instead"
+            ) from None
+        if dtype_format != 0:
+            raise NotImplementedError(f"unsupported dtype format {dtype_format} in {urlpath}")
+        self._shape, self._chunks, self._blocks = tuple(shape), tuple(chunks), tuple(blocks)
+        self._dtype = np.dtype(dtype)
+
+    @property
+    def shape(self) -> tuple:
+        return self._shape
+
+    @property
+    def chunks(self) -> tuple:
+        return self._chunks
+
+    @property
+    def blocks(self) -> tuple:
+        return self._blocks
+
+    @property
+    def dtype(self) -> np.dtype:
+        return self._dtype
+
+    def get_chunk(self, nchunk: int) -> bytes:
+        offset = int(self._offsets[nchunk])
+        if offset < 0:
+            return self._special_chunk(offset)
+        # The chunk carries its own compressed size, so ask for the 16-byte chunk
+        # header first.  fsspec's block cache usually serves the second read from
+        # what the first one already fetched.
+        self._file.seek(offset)
+        cbytes = struct.unpack("<i", self._file.read(16)[12:16])[0]
+        self._file.seek(offset)
+        return self._file.read(cbytes)
+
+    async def aget_chunk(self, nchunk: int) -> bytes:
+        """Same as :meth:`get_chunk`, but letting several fetches overlap.
+
+        This is what makes :meth:`Proxy.afetch` worth using against an object
+        store, where a slice spanning many chunks is nearly all round-trip
+        latency.  Backends without an async implementation fall back to the
+        blocking path, which costs nothing but gains nothing either.
+        """
+        offset = int(self._offsets[nchunk])
+        if offset < 0:
+            return self._special_chunk(offset)
+        if not getattr(self._fs, "async_impl", False):
+            return self.get_chunk(nchunk)
+        head = await self._fs._cat_file(self._path, start=offset, end=offset + 16)
+        cbytes = struct.unpack("<i", head[12:16])[0]
+        return await self._fs._cat_file(self._path, start=offset, end=offset + cbytes)
+
+    def _special_chunk(self, offset: int) -> bytes:
+        """Rebuild a run-length chunk, which lives in its offset instead of the file."""
+        kind = ((offset & 0xFFFFFFFFFFFFFFFF) >> 56) & 0x7
+        nitems = self._chunksize // self._dtype.itemsize
+        if kind == 2:
+            data = np.full(nitems, np.nan, dtype=self._dtype)
+        else:
+            # A run of zeros (1); uninitialized chunks (4) have no defined
+            # content, and zeros is what reading them locally hands back too
+            data = np.zeros(nitems, dtype=self._dtype)
+        return blosc2.compress2(data, typesize=self._dtype.itemsize)
 
 
 class ProxyNDField(blosc2.Operand):

@@ -1938,12 +1938,30 @@ def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
     memory, which is the right thing for a one-shot read of a small container but
     only works for single-file ones.  With `cache_storage`, the container is
     materialized under that directory and opened as an ordinary local path, so
-    every format, `mmap_mode` and `offset` work.
+    every format, `mmap_mode` and `offset` work.  With `lazy`, nothing is fetched
+    up front and each slice pulls just the chunks it needs.
     """
     if mode != "r":
         raise NotImplementedError(f"fsspec URLs can only be opened with mode='r', not {mode!r}")
 
     cache_storage = kwargs.pop("cache_storage", None)
+    if kwargs.pop("lazy", False):
+        if cache_storage is not None:
+            raise ValueError(
+                "lazy= fetches chunks on demand and cache_storage= downloads the whole "
+                "container; pass only one of them"
+            )
+        if offset != 0:
+            raise NotImplementedError("offset is not supported with lazy=True")
+        requested = [k for k, v in kwargs.items() if v is not None]
+        if requested:
+            # A Proxy built by hand takes urlpath=/mode= for a persistent cache
+            raise NotImplementedError(
+                f"{', '.join(requested)} is not supported with lazy=True; build a "
+                "blosc2.Proxy over a blosc2.FsspecNDSource to configure its cache"
+            )
+        return blosc2.Proxy(blosc2.FsspecNDSource(urlpath))
+
     if cache_storage is not None:
         return open(localize_fsspec_url(urlpath, cache_storage), mode, offset, **kwargs)
 
@@ -2008,6 +2026,13 @@ def open(
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
     kwargs: dict, optional
+        lazy: bool, optional
+            Only for fsspec URLs: return a :ref:`Proxy` that leaves the container
+            where it is and reads the chunks a slice touches, one range request
+            each, instead of transferring the whole thing. Contiguous frames
+            holding an :ref:`NDArray` only, and mutually exclusive with
+            ``cache_storage``. For a chunk cache that outlives the process, build
+            the proxy by hand over a :ref:`FsspecNDSource`.
         cache_storage: str | pathlib.Path, optional
             Only for fsspec URLs: a directory where the container is downloaded
             before being opened as an ordinary local path. This lifts every
@@ -2070,6 +2095,12 @@ def open(
       supports every format and option.  Single files are then staleness-checked
       on each open (one HEAD); directories are re-fetched whenever the remote
       listing changes.
+
+    * ``lazy=True`` is the third option, for a container too big to transfer at
+      all: the frame stays remote and only the chunks a slice touches are read,
+      one range request each.  It returns a :ref:`Proxy`, which caches what it
+      fetched for the life of the object, and needs a contiguous frame holding an
+      :ref:`NDArray`.
 
     * Persistent data handling follows a strict no-hidden-writes rule:
 

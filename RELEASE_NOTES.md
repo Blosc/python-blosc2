@@ -22,6 +22,13 @@ XXX version-specific blurb XXX
   filling a disk with multi-GB arrays is not a good surprise. Cached copies are
   staleness-checked against the remote on every open.
 
+* `blosc2.open(url, lazy=True)` reads a remote frame chunk by chunk instead of
+  transferring it: the container stays where it is and each slice pulls only the
+  chunks it touches, one range request each. It returns a `Proxy`, so fetched
+  chunks stay cached; the new `blosc2.FsspecNDSource` behind it can also be
+  wrapped in a `Proxy` by hand to give that cache a file of its own. Contiguous
+  frames holding an `NDArray` only.
+
 * Querying a `utf8()` column through its FULL index no longer materializes the
   index vocabulary. The query literal is turned into an alphabetical rank by
   bisecting the vocabulary sidecar instead, so a lookup reads a few blocks

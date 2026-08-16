@@ -175,6 +175,112 @@ def test_cached_sparse_frame(tmp_path):
     assert np.array_equal(b[:], a[:])
 
 
+def _put(name, arr):
+    fsspec.filesystem("memory").pipe_file("/" + name, arr.to_cframe())
+    return "memory://" + name
+
+
+@pytest.mark.parametrize("chunks", [(100,), (37,)])
+def test_lazy_roundtrip(chunks):
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=chunks, blocks=(11,))
+    p = blosc2.open(_put("lazy.b2nd", a), lazy=True)
+    assert (p.shape, p.chunks, p.blocks, p.dtype) == (a.shape, a.chunks, a.blocks, a.dtype)
+    assert np.array_equal(p[:], a[:])
+
+
+def test_lazy_multidim():
+    a = blosc2.arange(0, 10000, dtype="f4", shape=(100, 100), chunks=(10, 100))
+    p = blosc2.open(_put("lazy2d.b2nd", a), lazy=True)
+    assert np.array_equal(p[3:7, 20:30], a[3:7, 20:30])
+
+
+@pytest.mark.parametrize(
+    "arr",
+    [
+        blosc2.zeros((1000,), dtype="f8", chunks=(100,)),
+        blosc2.full((1000,), np.nan, dtype="f8", chunks=(100,)),
+    ],
+    ids=["zeros", "nan"],
+)
+def test_lazy_special_chunks(arr):
+    # Run-length chunks live in the offset itself, with no bytes in the file
+    p = blosc2.open(_put("special.b2nd", arr), lazy=True)
+    assert np.allclose(p[:], arr[:], equal_nan=True)
+
+
+def test_lazy_fetches_only_touched_chunks(monkeypatch):
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    url = _put("touched.b2nd", a)
+
+    fetched = []
+    orig = blosc2.FsspecNDSource.get_chunk
+    monkeypatch.setattr(
+        blosc2.FsspecNDSource,
+        "get_chunk",
+        lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
+    )
+
+    p = blosc2.open(url, lazy=True)
+    assert np.array_equal(p[150:250], a[150:250])
+    assert fetched == [1, 2]
+    # The proxy caches what it fetched, so asking again costs nothing
+    assert np.array_equal(p[150:250], a[150:250])
+    assert fetched == [1, 2]
+
+
+def test_lazy_afetch():
+    import asyncio
+
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    p = blosc2.open(_put("afetch.b2nd", a), lazy=True)
+    cache = asyncio.run(p.afetch(slice(150, 250)))
+    assert np.array_equal(cache[150:250], a[150:250])
+
+
+def test_lazy_persistent_proxy_cache(tmp_path):
+    a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
+    url = _put("persist.b2nd", a)
+    cache = str(tmp_path / "proxy.b2nd")
+
+    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="w")
+    assert np.array_equal(p[0:100], a[0:100])
+    del p
+    # The cache is an ordinary local container, readable without any network
+    assert np.array_equal(blosc2.open(cache)[0:100], a[0:100])
+
+
+def test_lazy_needs_an_ndarray():
+    schunk = blosc2.SChunk(chunksize=1000)
+    schunk.append_data(np.arange(1000, dtype="u1"))
+    fsspec.filesystem("memory").pipe_file("/plain.b2f", schunk.to_cframe())
+    with pytest.raises(NotImplementedError, match="b2nd metalayer"):
+        blosc2.open("memory://plain.b2f", lazy=True)
+
+
+def test_lazy_rejects_directories(tmp_path):
+    localpath = str(tmp_path / "sparse.b2nd")
+    blosc2.arange(0, 1000, dtype="i4", chunks=(100,), urlpath=localpath, mode="w", contiguous=False)
+    fsspec.filesystem("memory").put(localpath, "memory://sparse.b2nd", recursive=True)
+    with pytest.raises(NotImplementedError, match="cache_storage"):
+        blosc2.open("memory://sparse.b2nd", lazy=True)
+
+
+def test_lazy_not_a_frame():
+    fsspec.filesystem("memory").pipe_file("/junk.b2nd", b"not a frame at all" * 4)
+    with pytest.raises(ValueError, match="contiguous frame"):
+        blosc2.open("memory://junk.b2nd", lazy=True)
+
+
+def test_lazy_excludes_cache_storage(tmp_path):
+    with pytest.raises(ValueError, match="only one"):
+        blosc2.open("memory://x.b2nd", lazy=True, cache_storage=tmp_path)
+
+
+def test_lazy_offset_not_supported():
+    with pytest.raises(NotImplementedError, match="offset"):
+        blosc2.open("memory://x.b2nd", lazy=True, offset=32)
+
+
 def test_unknown_protocol():
     # fsspec owns this error; we only check that we do not swallow it into a
     # misleading FileNotFoundError

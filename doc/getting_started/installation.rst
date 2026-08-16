@@ -75,6 +75,15 @@ additionally covers directory containers (``.b2d`` stores, sparse frames),
 There is no default cache directory on purpose, so nothing writes to your disk
 unless you name the place.
 
+For a container too big to transfer at all, ``lazy=True`` leaves the frame where
+it is and reads only the chunks a slice touches, one range request each::
+
+    a = blosc2.open("s3://bucket/huge.b2nd", lazy=True)
+    a[1000:1010]   # fetches one or two chunks, not the array
+
+This returns a :ref:`Proxy` over the remote frame, so what it fetched stays
+cached in it.  It needs a contiguous frame holding an :ref:`NDArray`.
+
 Source code
 +++++++++++
 

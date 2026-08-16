@@ -17,9 +17,9 @@ along at no extra cost.
 It is staged so that each phase is independently shippable and each one is
 useful on its own; phase 1 alone already covers the common case.
 
-**Status: phases 1 and 2 are implemented** (2026-08-16, branch
-`fsspec-support-plan`). Phase 3 remains unstarted and unscheduled — see its
-recommendation for why.
+**Status: all three phases are implemented** (2026-08-16, branch
+`fsspec-support-plan`), phase 3 by route 3a. The recommendation sections are
+kept as written and annotated where reality diverged from them.
 
 ## Motivation
 
@@ -272,7 +272,51 @@ Phase 2 also unlocks write-back for single-file containers — write locally,
 `fs.put()` on close — but that is a separate, opt-in `mode="w"` story and
 should not be smuggled in with the read work.
 
-## Phase 3 — Byte-range chunk access
+## Phase 3 — Byte-range chunk access — DONE, via 3a
+
+**As implemented:** `blosc2.open(url, lazy=True)` returns a `Proxy` over the new
+`blosc2.FsspecNDSource`
+([src/blosc2/proxy.py](/Users/faltet/blosc/python-blosc2/src/blosc2/proxy.py)),
+which reads the frame's header and offsets at open (three small reads) and then
+one range read per chunk a slice touches. Measured on a 36 KB frame over
+`memory://`: 276 bytes at open, 2 KB for a 50-element slice.
+
+Route 3a was chosen over the plan's recommendation of prototyping 3b first,
+because **the offset-table blocker turned out to be much smaller than this plan
+assumed**:
+
+- The frame header *is* a msgpack array. `msgpack.unpackb(header)` yields
+  `header_len`, the compressed size, the chunk size and the metalayer map with no
+  byte arithmetic at all. Exactly one field has to be located by hand —
+  `header_len`, at byte 0x0B — because it is needed to know how much to unpack.
+- The `b2nd` metalayer then gives shape, chunks, blocks and dtype, so no sparse
+  local skeleton or C accessor is needed to describe the array.
+- The offsets are one Blosc2 chunk at `header_len + compressed_size`, decompressed
+  with `blosc2.decompress2`. Two corrections to what this plan and the format doc
+  say: the offsets are relative to the **end of the header**, not to its
+  beginning; and a *negative* offset is not a position but a run-length chunk
+  (zeros, NaN, uninitialized) that was never written, which the source rebuilds
+  locally.
+
+That is about 45 lines of format knowledge, against 3b's Cython callback bridge,
+its permanent registry id and its per-block `open()`. The judgement stands that
+3b is the architecturally cleaner one — if the frame format ever grows a variant
+this parser does not know, it will be 3b that survives it — but at this size 3a
+was not worth deferring for it. Everything the parser reads is validated by the
+tests decompressing real chunks through it.
+
+`aget_chunk` is implemented too, since it is the reason the plan kept 3a on the
+table: `Proxy.afetch` overlaps up to 8 chunk fetches on async backends (s3fs and
+friends), and falls back to the blocking path elsewhere. Only the fallback is
+covered by tests — `memory://` is not async — so the concurrent path is the one
+piece of this work that a real S3 endpoint would exercise first.
+
+Not done: `lazy=True` needs a contiguous frame carrying a `b2nd` metalayer.
+Plain SChunks, sparse frames and `.b2d` stores raise and point at
+`cache_storage=`. `offset != 0` likewise raises.
+
+The rest of this section is the original design, including 3b, which stays
+unbuilt.
 
 Only worth doing when someone actually has a container too large to download
 and wants to slice a small part of it. Two candidate designs. They are *not*
@@ -373,6 +417,11 @@ architecturally correct one and needs no upstream change to work — and measure
 against a real S3 endpoint before deciding whether the per-block round trips
 justify the extra machinery of 3a.
 
+*Superseded: 3a shipped instead, and without waiting for the user. See the notes
+at the top of this section — the offset table cost 45 lines of msgpack reading
+rather than the C accessor this plan feared, which changed the arithmetic. 3b
+stays unbuilt and its analysis below stays valid.*
+
 ## Testing
 
 The point here is that **almost none of this needs AWS, credentials, or a new
@@ -448,6 +497,9 @@ justified: it needs either a frame-offset parser we do not have (3a) or a C
 callback bridge constrained by the GIL and per-block `open()` (3b), to serve a
 user who has not shown up yet.
 
+*Superseded: 3a shipped. The frame-offset parser we "do not have" was 45 lines,
+which is what changed the answer — not a user showing up.*
+
 ## Open Questions, With Recommendations
 
 Each of these is stated in context in the phase it belongs to; this is the
@@ -456,8 +508,12 @@ summary and the current leaning.
 The four phase-2 questions are now **settled, each the way it was recommended**:
 explicit `cache_storage=` with no default, staleness-checked on every open
 (which took `check_files=True`, see the phase 2 notes), caching opt-in so
-`open(url)` is unchanged, and no tier-2 network test. The two phase-3 ones stay
-open because phase 3 does.
+`open(url)` is unchanged, and no tier-2 network test.
+
+The two phase-3 questions are **moot**: 3a needs no I/O plugin, so no registry id
+was burned and no upstream change is on the table. What replaces them is a
+narrower question — whether `aget_chunk`'s concurrent path performs as expected
+against a real S3 endpoint, which is untestable with `memory://` and unanswered.
 
 - **Phase 2 cache location and lifetime.** *Recommendation: require an explicit
   `cache_storage=`, no implicit default.* An implicit `platformdirs` cache that

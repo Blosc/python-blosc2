@@ -588,7 +588,16 @@ from .lazyexpr import (
     result_type,
     can_cast,
 )
-from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit, as_simpleproxy
+from .proxy import (
+    Proxy,
+    ProxySource,
+    ProxyNDSource,
+    ProxyNDField,
+    FsspecNDSource,
+    SimpleProxy,
+    jit,
+    as_simpleproxy,
+)
 from .indexing import Index
 
 from .schunk import SChunk, load, open
@@ -870,6 +879,7 @@ __all__ = [  # noqa : RUF022
     "NDArray",
     "NDField",
     "Operand",
+    "FsspecNDSource",
     "Proxy",
     "ProxyNDField",
     "ProxyNDSource",
