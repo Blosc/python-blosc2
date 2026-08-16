@@ -86,6 +86,11 @@ dev = [
 ]
 test = [
     "pytest",
+    # tests/test_fsspec.py importorskips fsspec, so without this the whole fsspec
+    # feature silently skips in CI.  Protocol backends (s3fs, gcsfs...) stay out:
+    # the tests run on memory:// and a local zip, which is also the configuration
+    # most users installing [fsspec] are in.
+    "fsspec; platform_machine != 'wasm32'",
     # pytest.ini defaults to `-n auto`; where xdist is absent (wasm32, or a
     # bare `pip install pytest`) the root conftest.py degrades it to a serial run
     "pytest-xdist; platform_machine != 'wasm32'",
