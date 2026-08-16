@@ -793,21 +793,25 @@ class FsspecNDSource(ProxyNDSource):
         return data[: struct.unpack("<i", data[12:16])[0]]
 
     async def aget_chunk(self, nchunk: int) -> bytes:
-        """Same as :meth:`get_chunk`, but letting several fetches overlap.
+        """Same as :meth:`get_chunk`, but without blocking the caller's event loop.
 
         This is what makes :meth:`Proxy.afetch` worth using against an object
         store, where a slice spanning many chunks is nearly all round-trip
-        latency.  Backends without an async implementation fall back to the
-        blocking path, which costs nothing but gains nothing either.
+        latency.
+
+        The fetch goes to a worker thread rather than being awaited directly.
+        Awaiting an async filesystem's coroutine looks like the obvious thing to
+        do and does not work: fsspec drives those on a private event loop of its
+        own, so a client created there and awaited here raises "got Future
+        attached to a different loop" (seen with s3fs).  Its blocking API is the
+        supported way in, and it hands off to that same private loop, so the
+        thread parks on a queue rather than on a socket.
         """
         offset = int(self._offsets[nchunk])
         if offset < 0:
             return self._special_chunk(offset)
-        if not getattr(self._fs, "async_impl", False):
-            return self.get_chunk(nchunk)
-        end = offset + int(self._extents[nchunk])
-        data = await self._fs._cat_file(self._path, start=offset, end=end)
-        return data[: struct.unpack("<i", data[12:16])[0]]
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.get_chunk, nchunk)
 
     def _special_chunk(self, offset: int) -> bytes:
         """Rebuild a run-length chunk, which lives in its offset instead of the file."""

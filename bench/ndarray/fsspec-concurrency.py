@@ -15,9 +15,9 @@ of the thread pool was measured (~10 us per chunk, where there is no latency to
 hide) but the gain never was, because nothing that runs offline has a round trip
 to hide.  This script answers it against a real endpoint.
 
-It also runs ``afetch()``, whose async path (``aget_chunk`` -> ``fs._cat_file``)
-has never executed at all: ``memory://`` is not an async backend, so only its
-blocking fallback is covered by the test suite.
+It also runs ``afetch()``, which is worth keeping in the sweep: the first time
+this script was pointed at a real S3 endpoint, that path failed outright, and
+``memory://`` cannot reproduce it because it is not an async backend.
 
 Usage
 -----
@@ -159,8 +159,7 @@ def main():
     )
 
     if not args.skip_afetch:
-        # The async path, which no test has ever run: aget_chunk reaches
-        # fs._cat_file directly rather than falling back to the blocking read
+        # The async path, which only a real async backend exercises
         report(
             "slice, afetch (async path)",
             {c: timed(args.urlpath, item, c, use_afetch=True) for c in levels},

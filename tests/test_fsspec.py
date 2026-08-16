@@ -310,13 +310,27 @@ def test_lazy_fetches_only_touched_chunks(monkeypatch):
     assert fetched == [1, 2]
 
 
-def test_lazy_afetch():
+def test_lazy_afetch(monkeypatch):
     import asyncio
 
     a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
     p = blosc2.open(_put("afetch.b2nd", a), lazy=True)
+
+    # aget_chunk must go through the blocking get_chunk in a worker thread.
+    # Awaiting an async filesystem's own coroutine instead raises "got Future
+    # attached to a different loop" on s3fs, which memory:// cannot reproduce
+    # because it is not an async backend at all
+    fetched = []
+    orig = blosc2.FsspecNDSource.get_chunk
+    monkeypatch.setattr(
+        blosc2.FsspecNDSource,
+        "get_chunk",
+        lambda self, nchunk: (fetched.append(nchunk), orig(self, nchunk))[1],
+    )
+
     cache = asyncio.run(p.afetch(slice(150, 250)))
     assert np.array_equal(cache[150:250], a[150:250])
+    assert fetched == [1, 2]
 
 
 def test_lazy_fetch_is_serial_when_asked(monkeypatch):
