@@ -660,3 +660,22 @@ def test_lazy_open_never_opens_a_handle(monkeypatch):
 
     b = blosc2.open("memory://ranges.b2nd", lazy=True)
     assert np.array_equal(b[100:200], a[100:200])
+
+
+def test_handbuilt_proxy_rejects_a_stale_cache(tmp_path):
+    # The FsspecNDSource docstring recommends wrapping it in a Proxy by hand, which
+    # bypasses the refetch blosc2.open() does; same geometry is not the same bytes
+    memfs = fsspec.filesystem("memory")
+    cache = str(tmp_path / "hand.b2nd")
+    memfs.pipe_file("/hand.b2nd", blosc2.arange(100, dtype="i4", chunks=(10,)).to_cframe())
+    p = blosc2.Proxy(blosc2.FsspecNDSource("memory://hand.b2nd"), urlpath=cache, mode="a")
+    assert np.array_equal(p[:10], np.arange(10, dtype="i4"))
+    del p
+
+    other = blosc2.arange(100, 200, dtype="i4", chunks=(10,))
+    memfs.pipe_file("/hand.b2nd", other.to_cframe())
+    with pytest.raises(ValueError, match="different remote bytes"):
+        blosc2.Proxy(blosc2.FsspecNDSource("memory://hand.b2nd"), urlpath=cache, mode="a")
+
+    p = blosc2.Proxy(blosc2.FsspecNDSource("memory://hand.b2nd"), urlpath=cache, mode="w")
+    assert np.array_equal(p[:], other[:])

@@ -1964,7 +1964,9 @@ def _lazy_fsspec_proxy(
         # The remote frame was replaced, which makes every cached chunk -- and
         # every offset they were fetched by -- meaningless
         blosc2.remove_urlpath(path)
-    return blosc2.Proxy(src, urlpath=path, mode="a", vlmeta={"fsspec-stamp": src.stamp})
+    # Proxy stamps the cache with src.stamp itself, and refuses one built against
+    # other bytes; removing it above is what turns that refusal into a refetch
+    return blosc2.Proxy(src, urlpath=path, mode="a")
 
 
 def _cache_stamp(path: str):

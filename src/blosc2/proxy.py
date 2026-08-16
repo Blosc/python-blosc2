@@ -307,6 +307,11 @@ class Proxy(blosc2.Operand):
         self._schunk_cache = getattr(self._cache, "schunk", self._cache)
         if self.urlpath is None:
             self.urlpath = getattr(self._schunk_cache, "urlpath", None)
+        # Geometry alone cannot tell a replaced source from the one the cache was
+        # filled from, so record whatever identity the source can name itself by
+        stamp = getattr(self.src, "stamp", None)
+        if stamp is not None:
+            self._schunk_cache.vlmeta["fsspec-stamp"] = stamp
         if vlmeta:
             for key in vlmeta:
                 self._schunk_cache.vlmeta[key] = vlmeta[key]
@@ -356,6 +361,16 @@ class Proxy(blosc2.Operand):
             raise ValueError(
                 f"the cache at {urlpath} was built for a different source: it holds {here}, "
                 f"the source is {there} ({fields})"
+            )
+        # Same geometry is not the same bytes: a replaced remote frame keeps its
+        # layout while every cached chunk, and every offset it was fetched by,
+        # goes stale.  Only for sources that can name themselves; the rest are
+        # adopted on geometry alone, as documented.
+        stamp = getattr(self.src, "stamp", None)
+        if stamp is not None and schunk.vlmeta.get("fsspec-stamp") != stamp:
+            raise ValueError(
+                f"the cache at {urlpath} was built against different remote bytes; "
+                f"pass mode='w' to fetch them anew"
             )
         return cached
 
