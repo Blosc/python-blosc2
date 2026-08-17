@@ -28,6 +28,18 @@ A.3a as recommended. What the code does differently from the design below:
 - Measured end to end afterwards with `--moto`: on 13 MB chunks of 134 blocks, a
   point read moves 0.10 MB instead of 13.15 MB — 3.1x faster over an in-region
   network, 7.0x over a transatlantic one, 1.0x when the slice wants every block.
+- **Filling one chunk a slice at a time is quadratic in bytes moved, and half of
+  that was removed rather than deferred.** Each fetch that adds blocks rewrites
+  the chunk; the write cannot be deferred at all, because the cache container is
+  what the next read comes out of (verified: skipping the write returns zeros).
+  What could go is the *read-back*: `Proxy` keeps the blocks of the last
+  `BLOCK_HOT_CHUNKS` partly filled chunks, so a rewrite no longer takes the
+  cached chunk apart to find out what is in it. Measured on 64 one-block fetches
+  into a 6.89 MB chunk: 441 MB moved becomes 224 MB, 0.096 s becomes 0.054 s, and
+  the cache file stays at 1.00x the live bytes (a growing chunk in the middle of
+  a frame leaves no dead space). The remaining half is marked `ponytail:` and
+  would need the cache to hold blocks apart from their chunk — a different
+  container, not a smaller change.
 
 Route B (the io-callback bridge) stays unbuilt, and stays the answer for the
 formats route A cannot reach.

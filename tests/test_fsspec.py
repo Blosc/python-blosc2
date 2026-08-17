@@ -902,3 +902,46 @@ def test_lazy_blocks_serve_a_single_block_chunk(monkeypatch, any_chunk_wants_blo
 
     assert np.array_equal(p[0:2], data[0:2])
     assert len(chunks) == 1
+
+
+def test_lazy_blocks_reuse_what_they_just_wrote(monkeypatch, any_chunk_wants_blocks):
+    # Growing a chunk block by block must not read it back out of the cache each
+    # time; the blocks already in it are still in hand
+    data, a = _incompressible((200, 200), (100, 200), (10, 20))
+    p = blosc2.open(_put("hot.b2nd", a), lazy=True)
+    read_back = []
+    orig = p.schunk.get_chunk
+    monkeypatch.setattr(p.schunk, "get_chunk", lambda n: (out := orig(n), read_back.append(n))[0])
+
+    for col in range(0, 200, 20):
+        assert np.array_equal(p[0:5, col : col + 5], data[0:5, col : col + 5])
+    assert not read_back
+
+
+def test_lazy_blocks_survive_eviction(monkeypatch, any_chunk_wants_blocks):
+    # More chunks in flight than the hot cache holds: the evicted ones fall back
+    # to reading the chunk back, which must reconstruct exactly the same blocks
+    monkeypatch.setattr(blosc2.proxy, "BLOCK_HOT_CHUNKS", 2)
+    data, a = _incompressible((400, 200), (100, 200), (10, 20))
+    p = blosc2.open(_put("evict.b2nd", a), lazy=True)
+
+    for chunk_row in range(0, 400, 100):  # touch every chunk once, evicting as it goes
+        assert np.array_equal(p[chunk_row : chunk_row + 5, 0:5], data[chunk_row : chunk_row + 5, 0:5])
+    # ... then come back to the first, whose blocks are no longer held
+    assert np.array_equal(p[0:5, 100:105], data[0:5, 100:105])
+    assert np.array_equal(p[0:5, 0:5], data[0:5, 0:5])
+    assert np.array_equal(p[...], data)
+
+
+def test_lazy_blocks_after_a_whole_chunk_arrives(any_chunk_wants_blocks):
+    # afetch fetches whole chunks, which replaces a partly filled one; what was
+    # held about its blocks must not be spliced back over it afterwards
+    import asyncio
+
+    data, a = _incompressible((200, 200), (100, 200), (10, 20))
+    p = blosc2.open(_put("mixed.b2nd", a), lazy=True)
+
+    assert np.array_equal(p[0:5, 0:5], data[0:5, 0:5])
+    asyncio.run(p.afetch((slice(0, 5), slice(None))))
+    assert np.array_equal(p[0:5], data[0:5])
+    assert np.array_equal(p[...], data)

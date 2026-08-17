@@ -52,6 +52,13 @@ BLOCK_MAX_FRACTION = 0.5
 # few unwanted bytes for one less request, which at object-store latencies is
 # always the right way round.
 BLOCK_GAP = 4096
+# How many partly filled chunks keep their blocks in memory as well as in the
+# cache.  Adding a block to a chunk rewrites that chunk, and the blocks already
+# in it have to come from somewhere: from here, or read back out of the cache and
+# taken apart again.  Keeping the last few saves half the copying for the pattern
+# that costs the most -- one chunk filled a slice at a time -- and 8 of them is
+# the memory a fetch of 8 whole chunks already peaks at.
+BLOCK_HOT_CHUNKS = 8
 
 # `jit` kwargs that tune *how* an expression is evaluated, not what container the
 # result is stored in. Unlike storage kwargs (`cparams`, `chunks`, `urlpath`, ...),
@@ -354,6 +361,9 @@ class Proxy(blosc2.Operand):
             for name in ("wants_blocks", "chunk_layout", "block_plan", "read_range")
         )
         self._blocks_per_chunk = self.src.blocks_per_chunk if serves_blocks else 1
+        # Blocks of the last few partly filled chunks, so a rewrite need not read
+        # the chunk back out of the cache to find out what is already in it
+        self._hot_payloads = {}
         nchunks = self._schunk_cache.nchunks
         nbits = nchunks * self._blocks_per_chunk
         self._fetched = bytearray((nbits + 7) // 8) if fresh else self._load_fetched(nchunks)
@@ -582,8 +592,7 @@ class Proxy(blosc2.Operand):
         missing = self._missing_chunks(item)
         try:
             for nchunk, chunk in self._get_chunks(missing, max_concurrency):
-                self._schunk_cache.update_chunk(nchunk, chunk)
-                self._mark_fetched(nchunk)
+                self._store_chunk(nchunk, chunk)
         finally:
             if missing:
                 self._save_fetched()
@@ -645,8 +654,7 @@ class Proxy(blosc2.Operand):
         try:
             for (nchunk, run), data in zip(tasks, self._run(fetch_one, tasks, max_concurrency), strict=True):
                 if run is None:
-                    self._schunk_cache.update_chunk(nchunk, data)
-                    self._mark_fetched(nchunk)
+                    self._store_chunk(nchunk, data)
                     continue
                 payloads = pending.setdefault(nchunk, {})
                 for nblock, offset, size in run[2]:
@@ -661,22 +669,43 @@ class Proxy(blosc2.Operand):
         return self._cache
 
     def _write_blocks(self, nchunk: int, payloads: dict[int, bytes], header: bytes) -> None:
-        """Put the blocks just fetched into the cache, keeping those already there."""
+        """Put the blocks just fetched into the cache, keeping those already there.
+
+        Every fetch that adds blocks to a chunk rewrites that chunk, so filling
+        one a slice at a time is quadratic in bytes moved.  It stays cheap --
+        compressed bytes, and a rewrite never exceeds what fetching that chunk
+        whole would have downloaded once -- and the write itself cannot be
+        deferred, since the cache container is what the read comes out of.  What
+        can be avoided is the other half: `_hot_payloads` keeps the blocks of the
+        last few partly filled chunks, so they need not be read back out of the
+        cache and taken apart on every rewrite.
+        """
         nblocks = self._blocks_per_chunk
-        held = [n for n in range(nblocks) if self._is_fetched(nchunk, n)]
-        # ponytail: every fetch that adds blocks to a chunk rewrites it, so N
-        # separate fetches into the same chunk copy O(N^2) compressed bytes. Cheap
-        # -- memcpy, never more per rewrite than downloading that chunk once --
-        # until something pokes one big chunk many times over; then hold the
-        # payloads per chunk for the session and splice on close instead.
-        if held:
-            # The chunk in the cache was spliced by an earlier fetch, so its blocks
-            # come back out the way they went in, compressed and without a copy of
-            # anything else
-            payloads = _chunk_payloads(self._schunk_cache.get_chunk(nchunk), nblocks, held) | payloads
-        self._schunk_cache.update_chunk(nchunk, _splice_chunk(header, nblocks, payloads))
+        kept = self._hot_payloads.pop(nchunk, None)
+        if kept is None:
+            # Not held any more (or not by this run): the chunk in the cache was
+            # spliced by an earlier fetch, so its blocks come back out the way
+            # they went in, compressed and without a copy of anything else
+            held = [n for n in range(nblocks) if self._is_fetched(nchunk, n)]
+            kept = _chunk_payloads(self._schunk_cache.get_chunk(nchunk), nblocks, held) if held else {}
+        kept.update(payloads)
+        # ponytail: the write half stays quadratic -- a rewrite hands the cache
+        # the whole chunk, and it cannot be deferred or batched further, since the
+        # cache is what the next read comes out of. Removing it needs the cache to
+        # hold blocks apart from their chunk, which is a different container.
+        self._schunk_cache.update_chunk(nchunk, _splice_chunk(header, nblocks, kept))
         for nblock in payloads:
             self._mark_fetched(nchunk, nblock)
+        if len(kept) < nblocks:  # a chunk that is now complete will never be rewritten
+            self._hot_payloads[nchunk] = kept
+            while len(self._hot_payloads) > BLOCK_HOT_CHUNKS:
+                self._hot_payloads.pop(next(iter(self._hot_payloads)))
+
+    def _store_chunk(self, nchunk: int, chunk: bytes) -> None:
+        """Put a whole chunk in the cache, dropping anything held about its blocks."""
+        self._schunk_cache.update_chunk(nchunk, chunk)
+        self._mark_fetched(nchunk)
+        self._hot_payloads.pop(nchunk, None)
 
     async def afetch(
         self, item: slice | list[slice] | None = (), max_concurrency: int | None = None
@@ -782,8 +811,7 @@ class Proxy(blosc2.Operand):
             async with semaphore:
                 chunk = await self.src.aget_chunk(nchunk)
             # Runs to completion between awaits, so concurrent writers can't interleave.
-            self._schunk_cache.update_chunk(nchunk, chunk)
-            self._mark_fetched(nchunk)
+            self._store_chunk(nchunk, chunk)
 
         if to_fetch:
             try:
