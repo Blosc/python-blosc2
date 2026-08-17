@@ -62,7 +62,7 @@ BLOCK_HOT_CHUNKS = 8
 
 # vlmeta entries the proxy keeps its own state in: what it has fetched, and which
 # remote bytes the cache was filled from. A caller cannot write these.
-_RESERVED_VLMETA = frozenset({"proxy-fetched", "proxy-fetched-blocks", "fsspec-stamp"})
+_RESERVED_VLMETA = frozenset({"proxy-fetched", "proxy-fetched-blocks", "proxy-fetched-bpc", "fsspec-stamp"})
 
 # `jit` kwargs that tune *how* an expression is evaluated, not what container the
 # result is stored in. Unlike storage kwargs (`cparams`, `chunks`, `urlpath`, ...),
@@ -517,8 +517,14 @@ class Proxy(blosc2.Operand):
         """Persist the bitmap, so a later run does not fetch these chunks again.
 
         Called even when a fetch failed partway: whatever did arrive is kept.
+
+        The blocks-per-chunk goes with it, not for reading the bitmap back -- the
+        source's geometry gives that -- but so that an eviction can clear the right
+        bits without a proxy being alive to ask.
         """
         self._schunk_cache.vlmeta[self._fetched_key] = bytes(self._fetched)
+        if self._blocks_per_chunk > 1:
+            self._schunk_cache.vlmeta["proxy-fetched-bpc"] = self._blocks_per_chunk
 
     def _reopen_cache(self, urlpath: str):
         """Adopt the cache container stored at *urlpath*, checking it fits the source."""
@@ -1278,9 +1284,21 @@ class FsspecNDSource(ProxyNDSource):
         """Read where the blocks of a chunk are: its header, bstarts and extents.
 
         One range read, of a size known in advance since every chunk holds the
-        same number of blocks.  None when the chunk has no block section to read:
-        a memcpyed chunk stores its blocks raw and uncompressed, and a chunk of a
-        single block is its own block, so both are better fetched whole.
+        same number of blocks.  None for a chunk this cannot take apart, which the
+        header is what says:
+
+        - a chunk of a single block is its own block, and a memcpyed one stores its
+          blocks raw with no ``bstarts`` at all;
+        - a chunk compressed against a codec dictionary keeps it between
+          ``bstarts`` and the streams, and `_splice_chunk` would drop it while
+          leaving the flag that promises it;
+        - a variable-length-block chunk does not use the zero-length stream that
+          stands in for a block `_splice_chunk` does not have;
+        - a chunk without the extended header keeps its ``bstarts`` somewhere else
+          entirely, so reading them at byte 32 would be reading data.
+
+        Each of those is then fetched whole, at the cost of the one header read
+        that found out.
         """
         cached = self._layouts.get(nchunk)
         if cached is not None:
@@ -1289,7 +1307,14 @@ class FsspecNDSource(ProxyNDSource):
         offset = int(self._offsets[nchunk])
         head = self.read_range(offset, _CHUNK_HEADER_LEN + 4 * nblocks)
         cbytes = struct.unpack("<i", head[12:16])[0]
-        if nblocks == 1 or head[2] & 0x02:  # single block, or memcpyed: no bstarts
+        extended = head[2] & 0x01 and head[2] & 0x04  # both shuffle bits: see the format doc
+        if (
+            nblocks == 1
+            or head[2] & 0x02  # memcpyed
+            or head[31] & 0x01  # compressed against a dictionary
+            or head[30] & 0x01  # variable-length blocks
+            or not extended
+        ):
             layout = None
         else:
             bstarts = np.frombuffer(head[_CHUNK_HEADER_LEN:], dtype="<i4").astype(np.int64)

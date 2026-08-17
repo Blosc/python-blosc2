@@ -961,3 +961,45 @@ def test_lazy_blocks_after_an_eviction(monkeypatch, any_chunk_wants_blocks):
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     assert len(reads) > fetched
     assert np.array_equal(p[...], data)
+
+
+@pytest.mark.parametrize(
+    ("cparams", "why"),
+    [
+        ({"use_dict": True, "codec": blosc2.Codec.ZSTD}, "dictionary"),
+        ({"clevel": 0}, "memcpyed"),
+    ],
+    ids=["use_dict", "clevel0"],
+)
+def test_lazy_blocks_skip_chunks_they_cannot_splice(monkeypatch, any_chunk_wants_blocks, cparams, why):
+    # A chunk compressed against a codec dictionary keeps it between the block
+    # offsets and the blocks, so a spliced chunk would promise a dictionary it
+    # does not carry.  The header says so; such chunks are fetched whole.
+    rng = np.random.default_rng(0)
+    data = np.tile(rng.random(500), 400).reshape(400, 500)  # repetitive, so a dict pays
+    a = blosc2.asarray(data, chunks=(200, 500), blocks=(20, 500), cparams=cparams)
+    reads, chunks = _traffic(monkeypatch)
+    p = blosc2.open(_put(f"nosplice-{why}.b2nd", a), lazy=True)
+
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert len(chunks) == 1  # the whole chunk, after the one header read that found out
+    assert np.array_equal(p[...], data)
+
+
+def test_lazy_eviction_survives_a_reopen(tmp_path, monkeypatch, any_chunk_wants_blocks):
+    # Evict a chunk and close without reading again: the record of what the cache
+    # holds lives in the cache, so the next run must not trust the evicted bit
+    data, a = _incompressible((200, 200), (100, 200), (10, 20))
+    url = _put("evict-reopen.b2nd", a)
+    cache = str(tmp_path / "evicted-cache")
+    reads, _ = _traffic(monkeypatch)
+
+    p = blosc2.open(url, lazy=True, cache_storage=cache)
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    fetched = len(reads)
+    p.schunk.update_special(0, blosc2.SpecialValue.UNINIT)
+    del p
+
+    q = blosc2.open(url, lazy=True, cache_storage=cache)
+    assert np.array_equal(q[0:5, 0:10], data[0:5, 0:10])
+    assert len(reads) > fetched

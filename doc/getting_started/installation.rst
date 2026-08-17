@@ -59,9 +59,9 @@ argument in shells like ``zsh`` that treat brackets specially):
     pip install "blosc2[tui,parquet]"     # several at once
 
 With the ``fsspec`` extra, :func:`blosc2.open` accepts any fsspec URL, chained
-ones included, and reads it whole, through a local cache (``cache_storage=``) or
-or fetching only the chunks and blocks a slice touches (``lazy=True``); see :func:`blosc2.open` and
-:ref:`FsspecNDSource` for what each mode supports.
+ones included, and reads it whole, through a local cache (``cache_storage=``), or
+by fetching only the chunks and blocks a slice touches (``lazy=True``); see
+:func:`blosc2.open` and :ref:`FsspecNDSource` for what each mode supports.
 ``examples/ndarray/rw-fsspec.py`` walks through all three plus the write side,
 and ``examples/ndarray/concurrent-fsspec.py`` shows what overlapping the
 fetches buys; both run with no network or credentials.

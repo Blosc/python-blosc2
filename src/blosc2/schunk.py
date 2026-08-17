@@ -804,7 +804,31 @@ class SChunk(blosc2_ext.SChunk):
         # a reader that keeps its own record of what it has (:ref:`Proxy` does)
         # cannot see this happen. Counting it lets such a reader notice for free.
         self.nspecialized += 1
-        return self.update_chunk(nchunk, tmp.get_chunk(0))
+        nchunks = self.update_chunk(nchunk, tmp.get_chunk(0))
+        self._forget_fetched(nchunk)
+        return nchunks
+
+    def _forget_fetched(self, nchunk: int) -> None:
+        """Drop *nchunk* from a proxy's record of what this container holds.
+
+        That record lives in this container's own ``vlmeta``, so the eviction can
+        keep it straight whether or not a :ref:`Proxy` is alive to notice -- which
+        matters most when nothing reads the cache again before the process ends,
+        where a live proxy's own bookkeeping would never be written down.
+        """
+        for key, blocks_per_chunk in (
+            ("proxy-fetched", 1),
+            ("proxy-fetched-blocks", self.vlmeta.get("proxy-fetched-bpc", 0)),
+        ):
+            stored = self.vlmeta.get(key)
+            if not stored or not blocks_per_chunk:
+                continue
+            bitmap = bytearray(stored)
+            first = nchunk * blocks_per_chunk
+            for bit in range(first, first + blocks_per_chunk):
+                if bit // 8 < len(bitmap):
+                    bitmap[bit // 8] &= ~(1 << (bit % 8))
+            self.vlmeta[key] = bytes(bitmap)
 
     def decompress_chunk(self, nchunk: int, dst: object = None) -> str | bytes:
         """Decompress the chunk given by its index :paramref:`nchunk`.
