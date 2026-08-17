@@ -664,6 +664,11 @@ class Proxy(blosc2.Operand):
         """Put the blocks just fetched into the cache, keeping those already there."""
         nblocks = self._blocks_per_chunk
         held = [n for n in range(nblocks) if self._is_fetched(nchunk, n)]
+        # ponytail: every fetch that adds blocks to a chunk rewrites it, so N
+        # separate fetches into the same chunk copy O(N^2) compressed bytes. Cheap
+        # -- memcpy, never more per rewrite than downloading that chunk once --
+        # until something pokes one big chunk many times over; then hold the
+        # payloads per chunk for the session and splice on close instead.
         if held:
             # The chunk in the cache was spliced by an earlier fetch, so its blocks
             # come back out the way they went in, compressed and without a copy of
