@@ -263,9 +263,61 @@ def slice_to_string(slice_):
 _UNTRIED = object()
 """A block source that has not been asked for yet, as against one that failed."""
 
+MAX_RANGES_PER_REQUEST = 64
+"""How many byte ranges one request to a subscriber may ask for.
+
+There is no limit in the protocol, and the saving grows with the count -- but a
+`Range` header is a header, which servers and proxies cap the length of (8 KB is
+the usual figure, and 64 spans of a large frame are about a kilobyte), and a
+failed request costs a round trip and every span in it.
+"""
+
 
 class _NotRanged(Exception):
     """The subscriber answered a range request with something other than a 206."""
+
+
+class _PartsMissing(Exception):
+    """A multi-range answer did not carry all the bytes that were asked for."""
+
+
+def _content_range(value: str) -> int:
+    """Where a `Content-Range: bytes start-end/total` header says its part starts."""
+    return int(value.split()[1].split("-")[0])
+
+
+def _byteranges(response) -> list[tuple[int, bytes]]:
+    """The parts of a 206, as (where each starts in the frame, its bytes).
+
+    One part for an ordinary 206, several for a `multipart/byteranges` body: a
+    boundary line, the part's own headers, a blank line and its bytes, over and
+    over, ending in the boundary followed by two dashes.  `email` would parse it,
+    at the price of decoding a megabyte of compressed data as text.
+    """
+    content_type = response.headers.get("content-type", "")
+    if "multipart/byteranges" not in content_type:
+        return [(_content_range(response.headers["content-range"]), response.content)]
+    boundary = content_type.split("boundary=")[1].strip().strip('"').encode()
+    parts = []
+    for chunk in response.content.split(b"--" + boundary):
+        head, sep, body = chunk.partition(b"\r\n\r\n")
+        if not sep:  # the preamble before the first boundary, and the closing --
+            continue
+        for line in head.split(b"\r\n"):
+            name, _, value = line.partition(b":")
+            if name.strip().lower() == b"content-range":
+                # The body ends with the CRLF that belongs to the next boundary
+                parts.append((_content_range(value.decode()), body[: body.rfind(b"\r\n")]))
+                break
+    return parts
+
+
+def _span_of(parts: list[tuple[int, bytes]], offset: int, size: int, url: str) -> bytes:
+    """The bytes of one requested span, out of whichever part covers it."""
+    for start, data in parts:
+        if start <= offset < start + len(data):
+            return data[offset - start : offset - start + size]
+    raise _PartsMissing(f"{url} answered without the bytes at {offset}, which were asked for")
 
 
 class C2NDSource(ByteRangeNDSource):
@@ -291,8 +343,40 @@ class C2NDSource(ByteRangeNDSource):
         self._auth_token = array.auth_token
         super().__init__(self._url, max_concurrency)
 
+    max_ranges = MAX_RANGES_PER_REQUEST
+
     def read_range(self, offset: int, size: int) -> bytes:
-        headers = _auth_headers(self._auth_token, {"Range": f"bytes={offset}-{offset + size - 1}"})
+        return self._get([(offset, size)])[0]
+
+    def read_ranges(self, spans: Sequence[tuple[int, int]]) -> list[bytes]:
+        """Every span in one request, which HTTP has a shape for and S3 has not.
+
+        RFC 7233 lets a `Range` header name several spans, and the answer is a
+        `multipart/byteranges` body carrying each with its own `Content-Range`.
+        Starlette builds that, so a whole wave of block reads -- across chunks,
+        since they are all the same file -- costs one round trip instead of one
+        each.  Measured against cat2.cloud: 32 spans in 0.136 s against 0.208 s
+        for 32 requests eight at a time, and 1.530 s for them one at a time.
+
+        The server may serve fewer parts than were asked for: Starlette sorts the
+        spans and merges the ones that touch, and answers a single 206 when they
+        all merge into one.  So the answer is taken apart by what each part says
+        it holds, and each span read out of the part that covers it, rather than
+        by trusting the order.  A server that answers a multi-range request with
+        bytes that do not cover the whole of it is not one to ask again: this
+        keeps to a range per request from there on.
+        """
+        spans = list(spans)
+        if len(spans) > 1 and self.max_ranges > 1:
+            try:
+                return self._get(spans)
+            except _PartsMissing:
+                self.max_ranges = 1
+        return [self.read_range(*span) for span in spans]
+
+    def _get(self, spans: list[tuple[int, int]]) -> list[bytes]:
+        wanted = ", ".join(f"{offset}-{offset + size - 1}" for offset, size in spans)
+        headers = _auth_headers(self._auth_token, {"Range": f"bytes={wanted}"})
         with _sync_client().stream("GET", self._url, headers=headers) as response:
             if response.status_code != 206:
                 # Whatever this is, it is not the bytes that were asked for: a 200
@@ -300,11 +384,22 @@ class C2NDSource(ByteRangeNDSource):
                 # avoid, so leave the body unread on the socket
                 raise _NotRanged(f"{self._url} answered {response.status_code} to a Range request")
             response.read()
-            return response.content
+            parts = _byteranges(response)
+        return [_span_of(parts, offset, size, self._url) for offset, size in spans]
 
 
 class C2Array(blosc2.Operand):
     """Remote compressed NDArray accessed from a Caterva2 server."""
+
+    max_concurrency = REMOTE_MAX_CONCURRENCY
+    """How many fetches a :ref:`Proxy` over this array may run at once.
+
+    Every chunk or block is a request whose cost is mostly the round trip, so
+    overlapping them is what a remote source has to gain; :meth:`Proxy.afetch`
+    already used this figure for a `C2Array`, and `fetch` was serial only for
+    want of somewhere to read it from.  `get_chunk` and the range reads are
+    thread-safe: they share one pooled HTTP client and hold no state of their own.
+    """
 
     def __init__(self, path: str, /, urlbase: str | None = None, auth_token: str | None = None):
         """Create an instance of a remote NDArray.
@@ -615,9 +710,19 @@ class C2Array(blosc2.Operand):
         source = self.block_source()
         return source is not None and source.wants_blocks(nchunk, nwanted)
 
+    @property
+    def max_ranges(self) -> int:
+        """How many ranges one request to this subscriber may carry."""
+        source = self.block_source()
+        return 1 if source is None else source.max_ranges
+
     def chunk_layout(self, nchunk: int):
         """Where the blocks of a chunk are; see :meth:`ByteRangeNDSource.chunk_layout`."""
         return self.block_source().chunk_layout(nchunk)
+
+    def chunk_layouts(self, nchunks: Sequence[int]) -> list:
+        """The same for several chunks; see :meth:`ByteRangeNDSource.chunk_layouts`."""
+        return self.block_source().chunk_layouts(nchunks)
 
     def block_plan(self, nchunk: int, nblocks: Sequence[int]) -> list[tuple[int, int, tuple]]:
         """The range reads covering *nblocks*; see :meth:`ByteRangeNDSource.block_plan`."""
@@ -625,10 +730,17 @@ class C2Array(blosc2.Operand):
 
     def read_range(self, offset: int, size: int) -> bytes:
         """The bytes at [*offset*, *offset* + *size*) of the remote frame."""
+        return self._ranged().read_range(offset, size)
+
+    def read_ranges(self, spans: Sequence[tuple[int, int]]) -> list[bytes]:
+        """The bytes of every span, in one request where the subscriber allows it."""
+        return self._ranged().read_ranges(spans)
+
+    def _ranged(self) -> C2NDSource:
         source = self.block_source()
         if source is None:
             raise ValueError(f"{self.path} is not served in byte ranges by {self.urlbase}")
-        return source.read_range(offset, size)
+        return source
 
     @property
     def shape(self) -> tuple[int]:

@@ -31,12 +31,14 @@ import blosc2
 class _Subscriber:
     """A Caterva2-shaped server over one .b2nd file."""
 
-    def __init__(self, path, ranges=True, cookie=None):
+    def __init__(self, path, ranges=True, cookie=None, multipart=True, merge_ranges=True):
         self.path = str(path)
         self.frame = pathlib.Path(self.path).read_bytes()
         self.array = blosc2.open(self.path)
         self.ranges = ranges  # False: stream the body and ignore Range, as a
         self.cookie = cookie  # computed dataset does
+        self.multipart = multipart  # False: answer only the first range asked for
+        self.merge_ranges = merge_ranges  # as Starlette does with ranges that touch
         self.log = []  # (endpoint, status, bytes served)
 
     @property
@@ -102,25 +104,57 @@ class _Handler(BaseHTTPRequestHandler):
             # What a StreamingResponse does with a Range header: nothing at all
             self._send(200, sub.frame, endpoint="fetch")
             return
-        start, end = (int(n) for n in wanted.removeprefix("bytes=").split("-"))
-        end = min(end, len(sub.frame) - 1)
+        spans = []
+        for span in wanted.removeprefix("bytes=").split(","):
+            start, end = (int(n) for n in span.split("-"))
+            spans.append((start, min(end, len(sub.frame) - 1)))
+        # Starlette sorts the spans and merges the ones that touch, so a client
+        # cannot count on getting a part per span, nor on the order it asked in
+        spans.sort()
+        merged = [spans[0]]
+        for start, end in spans[1:]:
+            if start <= merged[-1][1] + 1 and sub.merge_ranges:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        if len(merged) == 1 or not sub.multipart:
+            start, end = merged[0]  # ... and answers a plain 206 when one is left
+            self._send(
+                206,
+                sub.frame[start : end + 1],
+                [("Content-Range", f"bytes {start}-{end}/{len(sub.frame)}"), ("Accept-Ranges", "bytes")],
+                endpoint="fetch",
+            )
+            return
+        boundary = "c2boundary"
+        body = b""
+        for start, end in merged:
+            body += (
+                f"--{boundary}\r\nContent-Type: application/octet-stream\r\n"
+                f"Content-Range: bytes {start}-{end}/{len(sub.frame)}\r\n\r\n"
+            ).encode()
+            body += sub.frame[start : end + 1] + b"\r\n"
+        body += f"--{boundary}--\r\n".encode()
         self._send(
             206,
-            sub.frame[start : end + 1],
-            [("Content-Range", f"bytes {start}-{end}/{len(sub.frame)}"), ("Accept-Ranges", "bytes")],
+            body,
+            [
+                ("Content-Type", f"multipart/byteranges; boundary={boundary}"),
+                ("Accept-Ranges", "bytes"),
+            ],
             endpoint="fetch",
         )
 
 
-def _serve(tmp_path, data, chunks, blocks, ranges=True, cookie=None, name="ds.b2nd"):
+def _serve(tmp_path, data, chunks, blocks, name="ds.b2nd", **kwargs):
     """A C2Array over *data*, served by a subscriber stand-in on localhost."""
     urlpath = str(tmp_path / name)
     blosc2.asarray(data, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    server.subscriber = _Subscriber(urlpath, ranges=ranges, cookie=cookie)
+    server.subscriber = _Subscriber(urlpath, **kwargs)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     urlbase = f"http://127.0.0.1:{server.server_address[1]}/"
-    array = blosc2.C2Array(f"@public/{name}", urlbase=urlbase, auth_token=cookie)
+    array = blosc2.C2Array(f"@public/{name}", urlbase=urlbase, auth_token=kwargs.get("cookie"))
     return array, server.subscriber, server
 
 
@@ -319,3 +353,56 @@ def test_read_range_says_so_when_there_are_no_ranges(subscriber, any_chunk_wants
 
     with pytest.raises(ValueError, match="not served in byte ranges"):
         array.read_range(0, 32)
+
+
+def test_a_whole_wave_travels_in_one_request(subscriber, any_chunk_wants_blocks):
+    # A column through every chunk: each one wants a handful of blocks that lie
+    # apart in the file, which without batching is a request each
+    data = _incompressible((400, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    p = blosc2.Proxy(array, mode="w")
+    assert array.block_source() is not None  # the frame index, read once per array
+    sub.log.clear()
+
+    assert np.array_equal(p[:, 0:10], data[:, 0:10])
+    # One request for the layouts of all four chunks, one for all their blocks
+    assert [kind for kind, _, _ in sub.log] == ["fetch", "fetch"]
+    assert {status for _, status, _ in sub.log} == {206}
+    assert _bytes(sub, "fetch") < sub.array.schunk.cbytes / 4
+
+    # Which is the whole of the difference: one request per range otherwise
+    other, sub2 = subscriber(data, chunks=(100, 200), blocks=(10, 20), name="unbatched.b2nd")
+    other.block_source().max_ranges = 1
+    q = blosc2.Proxy(other, mode="w")
+    sub2.log.clear()
+    assert np.array_equal(q[:, 0:10], data[:, 0:10])
+    assert len(sub2.log) > 4 * len(sub.log)
+
+
+def test_merged_and_reordered_parts_are_read_correctly(subscriber, any_chunk_wants_blocks):
+    # The server sorts the spans and merges the ones that touch, so the answer
+    # carries fewer parts than were asked for and in an order of its own
+    data = _incompressible((400, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    p = blosc2.Proxy(array, mode="w")
+
+    assert np.array_equal(p[:, 0:10], data[:, 0:10])
+    assert np.array_equal(p[...], data)
+    assert array.max_ranges > 1  # ... and it never had to stop batching
+
+
+def test_a_server_that_answers_one_range_stops_being_batched(subscriber, any_chunk_wants_blocks):
+    # A subscriber that takes the first span of a multi-range request and ignores
+    # the rest: the answer does not cover what was asked for, which is noticed
+    # and never repeated
+    data = _incompressible((400, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), multipart=False)
+    p = blosc2.Proxy(array, mode="w")
+
+    assert np.array_equal(p[:, 0:10], data[:, 0:10])
+    assert array.max_ranges == 1
+    served = len(sub.log)
+    assert np.array_equal(p[:, 100:110], data[:, 100:110])
+    # One request per range from here on, and no second attempt at batching
+    assert len(sub.log) > served + 2
+    assert np.array_equal(p[...], data)

@@ -83,6 +83,12 @@ class ProxyNDSource(ABC):
     ``chunk_layout(nchunk)``, ``block_plan(nchunk, nblocks)`` and
     ``read_range(offset, size)``; :ref:`FsspecNDSource` implements them over byte
     ranges and is the worked example.
+
+    A source whose transport can ask for several ranges at once says so with
+    ``max_ranges`` and serves ``read_ranges(spans)`` and
+    ``chunk_layouts(nchunks)`` as well; :ref:`Proxy` then sends a whole wave of
+    reads as one request.  Both are optional, and a source without them is asked
+    one range at a time exactly as before.
     """
 
     @property
@@ -679,6 +685,10 @@ class Proxy(blosc2.Operand):
         whatever chunks are cheaper to take whole.  Which is which is decided
         before any of it, so the chunks that do not want blocks cost exactly one
         request each, as they did before this existed.
+
+        A transport that carries several ranges per request (`max_ranges`)
+        collapses each wave further, into as few requests as its limit allows;
+        one that does not sees exactly the reads it always saw.
         """
         missing = self._missing_blocks(item)
         if not missing:
@@ -686,38 +696,55 @@ class Proxy(blosc2.Operand):
         wanted = {n: bs for n, bs in missing.items() if self.src.wants_blocks(n, len(bs))}
         whole = [n for n in missing if n not in wanted]
 
-        layouts = dict(
-            zip(wanted, self._run(self.src.chunk_layout, list(wanted), max_concurrency), strict=True)
-        )
+        layouts = dict(zip(wanted, self._chunk_layouts(list(wanted), max_concurrency), strict=True))
         # A chunk with nothing to take apart (memcpyed, or a single block) says so
         # only once its header is read
         whole += [n for n, layout in layouts.items() if layout is None]
         wanted = {n: bs for n, bs in wanted.items() if layouts[n] is not None}
 
-        tasks = [(n, None) for n in whole]
-        tasks += [(n, run) for n in wanted for run in self.src.block_plan(n, wanted[n])]
+        # Each task is what one request will carry: a whole chunk on its own, or
+        # a batch of range reads (of one, for a transport that takes one)
+        runs = [(n, run) for n in wanted for run in self.src.block_plan(n, wanted[n])]
+        batch = max(getattr(self.src, "max_ranges", 1), 1)
+        tasks = [((n, None),) for n in whole] + list(itertools.batched(runs, batch))
 
-        def fetch_one(task):
-            nchunk, run = task
-            return self.src.get_chunk(nchunk) if run is None else self.src.read_range(run[0], run[1])
+        # `read_ranges` is the optional half of the protocol: a source that only
+        # has `read_range` is asked one range at a time, as `batch` is 1 for it
+        read_ranges = getattr(self.src, "read_ranges", None)
+
+        def fetch(task):
+            if task[0][1] is None:
+                return [self.src.get_chunk(task[0][0])]
+            spans = [(run[0], run[1]) for _, run in task]
+            if read_ranges is None:
+                return [self.src.read_range(*span) for span in spans]
+            return read_ranges(spans)
 
         pending = {}
         try:
-            for (nchunk, run), data in zip(tasks, self._run(fetch_one, tasks, max_concurrency), strict=True):
-                if run is None:
-                    self._store_chunk(nchunk, data)
-                    continue
-                payloads = pending.setdefault(nchunk, {})
-                for nblock, offset, size in run[2]:
-                    payloads[nblock] = data[offset : offset + size]
-                # Write the chunk once its last outstanding block has landed, so
-                # nothing is held longer than it takes to splice it in
-                if len(payloads) == len(wanted[nchunk]):
-                    self._write_blocks(nchunk, pending.pop(nchunk), layouts[nchunk][0])
+            for task, answers in zip(tasks, self._run(fetch, tasks, max_concurrency), strict=True):
+                for (nchunk, run), data in zip(task, answers, strict=True):
+                    if run is None:
+                        self._store_chunk(nchunk, data)
+                        continue
+                    payloads = pending.setdefault(nchunk, {})
+                    for nblock, offset, size in run[2]:
+                        payloads[nblock] = data[offset : offset + size]
+                    # Write the chunk once its last outstanding block has landed, so
+                    # nothing is held longer than it takes to splice it in
+                    if len(payloads) == len(wanted[nchunk]):
+                        self._write_blocks(nchunk, pending.pop(nchunk), layouts[nchunk][0])
         finally:
             self._save_fetched()
 
         return self._cache
+
+    def _chunk_layouts(self, nchunks: list[int], max_concurrency: int | None):
+        """Where the blocks of every one of *nchunks* are, in as few requests as fit."""
+        if max(getattr(self.src, "max_ranges", 1), 1) > 1:
+            # The source batches the reads itself, so there is nothing to overlap
+            return self.src.chunk_layouts(nchunks)
+        return self._run(self.src.chunk_layout, nchunks, max_concurrency)
 
     def _write_blocks(self, nchunk: int, payloads: dict[int, bytes], header: bytes) -> None:
         """Put the blocks just fetched into the cache, keeping those already there.
@@ -1196,6 +1223,15 @@ class ByteRangeNDSource(ProxyNDSource):
 
     stamp = None
 
+    max_ranges = 1
+    """How many ranges one request of this transport may carry.
+
+    One means one request each, which is all any object store offers.  A
+    subscriber answering ``multipart/byteranges`` takes more -- see
+    :meth:`read_ranges` -- and then a slice costs a couple of requests rather
+    than a couple per chunk it touches.
+    """
+
     def __init__(self, urlpath: str, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
         self.max_concurrency = max_concurrency
         self.urlpath = urlpath
@@ -1270,6 +1306,16 @@ class ByteRangeNDSource(ProxyNDSource):
         overlap the fetches of one slice.
         """
 
+    def read_ranges(self, spans: Sequence[tuple[int, int]]) -> list[bytes]:
+        """The bytes of every ``(offset, size)`` in *spans*, in that order.
+
+        One request each, unless a transport that can carry several ranges in one
+        overrides this and raises :attr:`max_ranges` to say how many.  Nothing
+        else has to change for it: this is the only method a batching transport
+        needs, and everything that reads bytes goes through it.
+        """
+        return [self.read_range(offset, size) for offset, size in spans]
+
     def wants_blocks(self, nchunk: int, nwanted: int) -> bool:
         """Whether fetching *nwanted* blocks of a chunk beats fetching all of it.
 
@@ -1307,13 +1353,28 @@ class ByteRangeNDSource(ProxyNDSource):
         Each of those is then fetched whole, at the cost of the one header read
         that found out.
         """
-        cached = self._layouts.get(nchunk)
-        if cached is not None:
-            return cached
+        return self.chunk_layouts((nchunk,))[0]
+
+    def chunk_layouts(self, nchunks: Sequence[int]) -> list:
+        """:meth:`chunk_layout` for several chunks, in as few requests as they fit.
+
+        One request each unless the transport takes several ranges at once, and
+        none at all for a chunk already read: a fetch asks for layouts only where
+        blocks are missing, but the same chunk comes up again as a slice fills it
+        in.
+        """
+        section = _CHUNK_HEADER_LEN + 4 * self.blocks_per_chunk
+        todo = [n for n in dict.fromkeys(nchunks) if n not in self._layouts]
+        for batch in itertools.batched(todo, max(self.max_ranges, 1)):
+            spans = [(int(self._offsets[n]), section) for n in batch]
+            heads = self.read_ranges(spans)
+            for nchunk, head in zip(batch, heads, strict=True):
+                self._layouts[nchunk] = self._parse_layout(head, section)
+        return [self._layouts[n] for n in nchunks]
+
+    def _parse_layout(self, head: bytes, section: int):
+        """The layout a chunk's header section says it has, or None for no layout."""
         nblocks = self.blocks_per_chunk
-        offset = int(self._offsets[nchunk])
-        section = _CHUNK_HEADER_LEN + 4 * nblocks
-        head = self.read_range(offset, section)
         cbytes = struct.unpack("<i", head[12:16])[0]
         extended = head[2] & 0x01 and head[2] & 0x04  # both shuffle bits: see the format doc
         if (
@@ -1328,12 +1389,9 @@ class ByteRangeNDSource(ProxyNDSource):
             or cbytes < section
             or len(head) < section
         ):
-            layout = None
-        else:
-            bstarts = np.frombuffer(head[_CHUNK_HEADER_LEN:], dtype="<i4").astype(np.int64)
-            layout = (head[:_CHUNK_HEADER_LEN], bstarts, _block_extents(bstarts, cbytes))
-        self._layouts[nchunk] = layout
-        return layout
+            return None
+        bstarts = np.frombuffer(head[_CHUNK_HEADER_LEN:section], dtype="<i4").astype(np.int64)
+        return (head[:_CHUNK_HEADER_LEN], bstarts, _block_extents(bstarts, cbytes))
 
     def block_plan(self, nchunk: int, nblocks: Sequence[int]) -> list[tuple[int, int, tuple]]:
         """The range reads that cover *nblocks*, near-adjacent ones merged.
