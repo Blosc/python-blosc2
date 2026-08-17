@@ -1116,14 +1116,14 @@ def _read_frame_index(f) -> tuple[bytes, list, np.ndarray]:
 class _RangeReader:
     """The seek/read pair `_read_frame_index` needs, served by exact range requests."""
 
-    def __init__(self, fs, path: str):
-        self._fs, self._path, self._pos = fs, path, 0
+    def __init__(self, read_range):
+        self._read_range, self._pos = read_range, 0
 
     def seek(self, pos: int) -> None:
         self._pos = pos
 
     def read(self, size: int) -> bytes:
-        data = self._fs.cat_file(self._path, start=self._pos, end=self._pos + size)
+        data = self._read_range(self._pos, size)
         self._pos += len(data)
         return data
 
@@ -1152,17 +1152,11 @@ def _chunk_extents(offsets: np.ndarray, header: list) -> np.ndarray:
     return np.minimum(extents, header[8] + blosc2.MAX_OVERHEAD)
 
 
-class FsspecNDSource(ProxyNDSource):
+class ByteRangeNDSource(ProxyNDSource):
     """A :ref:`Proxy` source that serves parts of a remote Blosc2 frame.
 
     The frame stays where it is: only its header, its chunk offsets, and what a
-    slice actually touches ever cross the network.  This is what
-    ``blosc2.open(url, lazy=True)`` builds; wrap it in a :ref:`Proxy` by hand
-    when the cache belongs at a path of your choosing rather than inside
-    ``cache_storage``::
-
-        src = blosc2.FsspecNDSource("s3://bucket/big.b2nd")
-        a = blosc2.Proxy(src, urlpath="big-cache.b2nd", mode="a")
+    slice actually touches ever cross the network.
 
     A chunk large enough to be worth taking apart is read block by block --
     :meth:`chunk_layout` fetches the offsets of its blocks, :meth:`block_plan`
@@ -1172,14 +1166,25 @@ class FsspecNDSource(ProxyNDSource):
     to save there; :meth:`wants_blocks` decides which is which without reading
     anything.
 
+    Everything above is the Blosc2 frame format and nothing else, so a subclass
+    only has to say how to read bytes: :meth:`read_range` is the one abstract
+    method, and the transport behind it decides nothing about the rest.
+    :ref:`FsspecNDSource` reads them with fsspec, and :ref:`C2Array` reads them
+    over HTTP ranges from a Caterva2 subscriber, carrying its auth cookie.
+
+    A subclass sets its transport up first and then calls this constructor,
+    which reads the frame's header and chunk offsets through it (three small
+    reads).  It may also set a ``stamp``, anything that names the exact bytes it
+    reads, so that :ref:`Proxy` can tell a cache built from other bytes.
+
     Contiguous frames carrying a ``b2nd`` metalayer only, which is what
     :func:`blosc2.asarray` and friends write to a single file.  Sparse frames and
-    ``.b2d`` stores are directories; open those with ``cache_storage=``.
+    ``.b2d`` stores are directories, and cannot be read this way.
 
     Parameters
     ----------
     urlpath: str
-        The fsspec URL of the frame.
+        Where the frame is, for error messages and for the caller to read back.
     max_concurrency: int, optional
         How many fetches the enclosing :ref:`Proxy` may run at once.  Every chunk
         or block costs one range request, so against an object store a slice is
@@ -1189,28 +1194,15 @@ class FsspecNDSource(ProxyNDSource):
         the thread pool costs about 10 microseconds per chunk and saves nothing.
     """
 
-    def __init__(self, urlpath: str, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
-        from blosc2.core import _import_fsspec
+    stamp = None
 
+    def __init__(self, urlpath: str, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
         self.max_concurrency = max_concurrency
-        fsspec = _import_fsspec(urlpath)
-        fs, path = fsspec.url_to_fs(urlpath)
-        if fs.isdir(path):
-            raise NotImplementedError(
-                f"{urlpath} is a directory (a sparse frame or a store), which cannot be read "
-                "chunk by chunk; open it with cache_storage= instead"
-            )
         self.urlpath = urlpath
-        self._fs, self._path = fs, path
-        # Identifies the remote bytes, so a cache built against them can tell it
-        # has gone stale -- and chunk offsets from a replaced frame are garbage.
-        # fsspec's own token, rather than a tuple of the metadata fields we guess
-        # a backend exposes: memory:// has no mtime, which left it size-only.
-        self.stamp = fs.ukey(path)
-        # Exact ranges, not fs.open(): a buffered handle reads a whole block per
+        # Exact ranges, not a file handle: a buffered one reads a whole block per
         # seek (50 MiB on s3fs by default), which would undo the point of a lazy
         # open. Chunk reads are stateless, so nothing here is shared between threads
-        raw, header, self._offsets = _read_frame_index(_RangeReader(fs, path))
+        raw, header, self._offsets = _read_frame_index(_RangeReader(self.read_range))
         self._chunksize = header[8]
         self._extents = _chunk_extents(self._offsets, header)
         try:
@@ -1264,12 +1256,19 @@ class FsspecNDSource(ProxyNDSource):
         offset = int(self._offsets[nchunk])
         if offset < 0:
             return self._special_chunk(offset)
-        data = self._fs.cat_file(self._path, start=offset, end=offset + int(self._extents[nchunk]))
+        data = self.read_range(offset, int(self._extents[nchunk]))
         return data[: struct.unpack("<i", data[12:16])[0]]
 
+    @abstractmethod
     def read_range(self, offset: int, size: int) -> bytes:
-        """The bytes at [*offset*, *offset* + *size*) of the frame."""
-        return self._fs.cat_file(self._path, start=offset, end=offset + size)
+        """The bytes at [*offset*, *offset* + *size*) of the frame.
+
+        The whole of the transport: everything else here is the frame format.
+        Fewer bytes may come back only at the end of the frame; anything else is
+        an error, since the caller has no way to ask for the rest.  Must be safe
+        to call from several threads at once, which is what lets :ref:`Proxy`
+        overlap the fetches of one slice.
+        """
 
     def wants_blocks(self, nchunk: int, nwanted: int) -> bool:
         """Whether fetching *nwanted* blocks of a chunk beats fetching all of it.
@@ -1396,6 +1395,46 @@ class FsspecNDSource(ProxyNDSource):
             typesize=self._dtype.itemsize,
             blocksize=int(np.prod(self._blocks)) * self._dtype.itemsize,
         )
+
+
+class FsspecNDSource(ByteRangeNDSource):
+    """A :ref:`ByteRangeNDSource` reading its frame through fsspec.
+
+    This is what ``blosc2.open(url, lazy=True)`` builds; wrap it in a
+    :ref:`Proxy` by hand when the cache belongs at a path of your choosing
+    rather than inside ``cache_storage``::
+
+        src = blosc2.FsspecNDSource("s3://bucket/big.b2nd")
+        a = blosc2.Proxy(src, urlpath="big-cache.b2nd", mode="a")
+
+    Parameters
+    ----------
+    urlpath: str
+        The fsspec URL of the frame.
+    max_concurrency: int, optional
+        As in :ref:`ByteRangeNDSource`.
+    """
+
+    def __init__(self, urlpath: str, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
+        from blosc2.core import _import_fsspec
+
+        fsspec = _import_fsspec(urlpath)
+        fs, path = fsspec.url_to_fs(urlpath)
+        if fs.isdir(path):
+            raise NotImplementedError(
+                f"{urlpath} is a directory (a sparse frame or a store), which cannot be read "
+                "chunk by chunk; open it with cache_storage= instead"
+            )
+        self._fs, self._path = fs, path
+        # Identifies the remote bytes, so a cache built against them can tell it
+        # has gone stale -- and chunk offsets from a replaced frame are garbage.
+        # fsspec's own token, rather than a tuple of the metadata fields we guess
+        # a backend exposes: memory:// has no mtime, which left it size-only.
+        self.stamp = fs.ukey(path)
+        super().__init__(urlpath, max_concurrency)
+
+    def read_range(self, offset: int, size: int) -> bytes:
+        return self._fs.cat_file(self._path, start=offset, end=offset + size)
 
 
 class ProxyNDField(blosc2.Operand):

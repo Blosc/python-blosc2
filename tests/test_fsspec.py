@@ -733,7 +733,13 @@ def any_chunk_wants_blocks(monkeypatch):
 
 
 def _traffic(monkeypatch):
-    """Record every range read and whole-chunk read a source makes."""
+    """Record every range read and whole-chunk read a source makes.
+
+    Everything the source reads goes through `read_range`, opening the frame and
+    fetching a whole chunk included, so `reads` counts requests and a
+    whole-chunk fetch appears in both lists.  Install it after the open where
+    the frame index would otherwise be counted in.
+    """
     reads, chunks = [], []
     for name, log in (("read_range", reads), ("get_chunk", chunks)):
         orig = getattr(blosc2.FsspecNDSource, name)
@@ -758,9 +764,9 @@ def test_lazy_fetches_only_touched_blocks(monkeypatch):
     data, a = _incompressible((600, 600), (300, 600), (30, 600))
     cbytes = a.schunk.cbytes // a.schunk.nchunks
     assert cbytes > blosc2.proxy.BLOCK_MIN_CBYTES
-    reads, chunks = _traffic(monkeypatch)
 
     p = blosc2.open(_put("blocks.b2nd", a), lazy=True)
+    reads, chunks = _traffic(monkeypatch)  # after the open, which reads the frame index
     assert np.array_equal(p[10:12, 30:40], data[10:12, 30:40])
     # One read for the block offsets, one for the single block the slice lands in
     assert len(reads) == 2
@@ -772,23 +778,23 @@ def test_lazy_small_chunks_are_fetched_whole(monkeypatch):
     # Below the threshold a chunk is one cheap request, so blocks would only add
     # a round trip; nothing must go looking for block offsets
     a = blosc2.arange(0, 1000, dtype="i4", chunks=(100,))
-    reads, chunks = _traffic(monkeypatch)
 
     p = blosc2.open(_put("smallblocks.b2nd", a), lazy=True)
+    reads, chunks = _traffic(monkeypatch)
     assert np.array_equal(p[150:250], a[150:250])
-    assert not reads
     assert len(chunks) == 2
+    assert len(reads) == len(chunks)  # one request each, none of them for block offsets
 
 
 def test_lazy_whole_array_skips_the_block_path(monkeypatch, any_chunk_wants_blocks):
     # Wanting every block of a chunk is what fetching the chunk already does
     data, a = _incompressible((200, 200), (100, 200), (10, 200))
-    reads, chunks = _traffic(monkeypatch)
 
     p = blosc2.open(_put("wholeblocks.b2nd", a), lazy=True)
+    reads, chunks = _traffic(monkeypatch)
     assert np.array_equal(p[:], data)
-    assert not reads
     assert len(chunks) == 2
+    assert len(reads) == len(chunks)  # one request each, none of them for block offsets
 
 
 @pytest.mark.parametrize(
@@ -835,16 +841,16 @@ def test_lazy_block_cache_survives_reopen(tmp_path, monkeypatch, any_chunk_wants
 
     p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
-    fetched = len(reads)
     del p
 
     # A partly filled chunk survives, so the blocks in it do not travel again
     p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
+    reopened = len(reads)  # every open reads the frame index afresh
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
-    assert len(reads) == fetched
+    assert len(reads) == reopened
     # ... and the ones missing from it still do
     assert np.array_equal(p[0:5, 100:110], data[0:5, 100:110])
-    assert len(reads) > fetched
+    assert len(reads) > reopened
     assert np.array_equal(p[...], data)
 
 
@@ -863,12 +869,13 @@ def test_lazy_blocks_fall_back_for_memcpyed_chunks(monkeypatch, any_chunk_wants_
     # A memcpyed chunk stores its blocks raw and has no offsets section to read
     data = np.random.default_rng(0).integers(0, 256, (300, 300), dtype="u1")
     a = blosc2.asarray(data, chunks=(150, 300), blocks=(15, 300), cparams={"clevel": 0})
-    reads, chunks = _traffic(monkeypatch)
 
     p = blosc2.open(_put("memcpyed.b2nd", a), lazy=True)
+    reads, chunks = _traffic(monkeypatch)
     assert np.array_equal(p[10:12, 30:40], data[10:12, 30:40])
-    assert len(reads) == 1  # the offsets are read, and say there is nothing to skip
     assert len(chunks) == 1
+    # The offsets are read, say there is nothing to skip, and the chunk follows
+    assert len(reads) == 2
 
 
 def test_lazy_blocks_with_run_length_chunks(monkeypatch, any_chunk_wants_blocks):
