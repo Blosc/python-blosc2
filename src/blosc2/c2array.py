@@ -338,12 +338,12 @@ class C2NDSource(ByteRangeNDSource):
     the array, whose ``api/chunk`` path works for every dataset there is.
     """
 
+    max_ranges = MAX_RANGES_PER_REQUEST
+
     def __init__(self, array: C2Array, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
         self._url = _sub_url(array.urlbase, f"api/fetch/{array.path}")
         self._auth_token = array.auth_token
         super().__init__(self._url, max_concurrency)
-
-    max_ranges = MAX_RANGES_PER_REQUEST
 
     def read_range(self, offset: int, size: int) -> bytes:
         return self._get([(offset, size)])[0]
