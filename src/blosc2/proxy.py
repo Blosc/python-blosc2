@@ -1158,9 +1158,11 @@ class FsspecNDSource(ProxyNDSource):
             else 1
         )
         # ponytail: layouts are memoized for the life of the source, so a second
-        # slice pays no header read. Persisting them in the cache would extend
-        # that across runs (worth a further 2-3x, measured); do it when someone
-        # reopens the same array often enough to notice.
+        # slice pays no header read. Persisting them in the cache would save one
+        # round trip more, but only for a new process reaching into a chunk it
+        # had partly explored before -- every other repeat already skips the read,
+        # since a fetch asks for layouts only where blocks are missing. Do it if
+        # many short-lived processes ever share one cached array.
         self._layouts = {}
 
     @property

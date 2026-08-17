@@ -389,9 +389,17 @@ The measurement that gated this is done, and it says build it.
    exact wanted-bytes figure, so the rule is a one-liner: fetch the whole chunk
    when the wanted blocks exceed ~50% of `cbytes`, or when `cbytes` is below the
    ~1 MB break-even, or when the chunk is memcpyed. Everything else goes by block.
-3. **Mitigation 2 (persist the layouts) is worth as much as the feature itself**:
-   it is another 2–3x on top (the "blocks, cached" column), for `4 * nblocks`
-   bytes per chunk in the cache's vlmeta.
+3. **Mitigation 2 (persist the layouts) is worth much less than the "blocks,
+   cached" column suggests, and was not built.** That column times a fetch whose
+   layouts are known but whose blocks are not — and once the implementation
+   existed it became clear how rare that combination is. A fetch only reads
+   layouts for chunks with *missing* blocks, so a repeated slice, a new slice in
+   the same session (layouts are memoized on the source) and a repeated slice in
+   a new session (the blocks are in the cache) all skip phase 1 already. What is
+   left is one round trip saved on the first fetch of a new process reaching into
+   a chunk it had only partly explored — against a vlmeta blob of `4 * nblocks`
+   bytes per chunk, rewritten whole on every update. Revisit if many short-lived
+   processes share one cached array; otherwise the arithmetic does not close.
 4. **Keep route B as the answer for the formats route A cannot reach** (sparse
    frames, `.b2d`, plain SChunks, `offset`), and prototype the GIL behaviour
    before committing to it. Do not build both at once.
