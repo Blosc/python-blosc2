@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import atexit
+import math
 import os
 import threading
 from contextlib import contextmanager
@@ -21,6 +22,10 @@ import numpy as np
 import blosc2
 from blosc2.b2objects import encode_b2object_payload, make_b2object_carrier, write_b2object_payload
 from blosc2.info import InfoReporter, format_nbytes_info
+
+# blosc2/__init__ imports this module before blosc2.proxy, so this pulls proxy in
+# early; it is safe because proxy only reaches into the package at call time
+from blosc2.proxy import REMOTE_MAX_CONCURRENCY, ByteRangeNDSource
 
 _subscriber_data = {
     "urlbase": os.environ.get("BLOSC_C2URLBASE"),
@@ -255,6 +260,49 @@ def slice_to_string(slice_):
     return ", ".join(slice_parts)
 
 
+_UNTRIED = object()
+"""A block source that has not been asked for yet, as against one that failed."""
+
+
+class _NotRanged(Exception):
+    """The subscriber answered a range request with something other than a 206."""
+
+
+class C2NDSource(ByteRangeNDSource):
+    """The frame behind a :ref:`C2Array`, read over HTTP byte ranges.
+
+    Caterva2 serves a *stored* dataset with a Starlette ``FileResponse``, which
+    implements RFC 7233 by itself: a ranged request comes back 206 with only the
+    bytes asked for, seeked to in the file rather than materialized, and the auth
+    cookie composes with it.  That is everything :ref:`ByteRangeNDSource` needs,
+    so a slice costs the blocks it touches instead of the chunks they live in.
+
+    A dataset the subscriber *builds* -- a lazy expression, an HDF5 leaf, a
+    ``.b2z`` member -- is streamed instead, and a streamed response ignores the
+    ``Range`` header and answers with the whole body.  :meth:`read_range` refuses
+    such an answer without reading it off the socket, and :ref:`C2Array` then
+    keeps to whole chunks for good.  Which is why this is built through
+    :meth:`C2Array.block_source` rather than directly: the fallback belongs with
+    the array, whose ``api/chunk`` path works for every dataset there is.
+    """
+
+    def __init__(self, array: C2Array, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
+        self._url = _sub_url(array.urlbase, f"api/fetch/{array.path}")
+        self._auth_token = array.auth_token
+        super().__init__(self._url, max_concurrency)
+
+    def read_range(self, offset: int, size: int) -> bytes:
+        headers = _auth_headers(self._auth_token, {"Range": f"bytes={offset}-{offset + size - 1}"})
+        with _sync_client().stream("GET", self._url, headers=headers) as response:
+            if response.status_code != 206:
+                # Whatever this is, it is not the bytes that were asked for: a 200
+                # carries the whole dataset, which is the download this exists to
+                # avoid, so leave the body unread on the socket
+                raise _NotRanged(f"{self._url} answered {response.status_code} to a Range request")
+            response.read()
+            return response.content
+
+
 class C2Array(blosc2.Operand):
     """Remote compressed NDArray accessed from a Caterva2 server."""
 
@@ -305,6 +353,10 @@ class C2Array(blosc2.Operand):
 
         self.auth_token = auth_token
         self._aclient = None  # lazy async client, shared across aget_chunk calls
+        # The block-reading source, built on first use: _UNTRIED, None (this
+        # dataset cannot be read in ranges) or a C2NDSource
+        self._block_source = _UNTRIED
+        self._block_lock = threading.Lock()
 
         # Try to 'open' the remote path
         try:
@@ -503,6 +555,80 @@ class C2Array(blosc2.Operand):
         if self._aclient is not None:
             await self._aclient.aclose()
             self._aclient = None
+
+    # -- Block-granular reads.  A :ref:`Proxy` uses these to fetch the blocks a
+    # slice touches instead of whole chunks, wherever that is the cheaper way
+    # round; every one of them falls back to `get_chunk` when it is not.
+
+    @property
+    def blocks_per_chunk(self) -> int:
+        """How many blocks a chunk of the remote array holds.
+
+        Geometry, and `api/info` already carries it, so this costs no request:
+        chunks are padded to whole blocks, so every chunk holds the same number
+        of them, edge chunks included.
+        """
+        blocks = self.blocks
+        if not all(blocks):  # an empty array partitions into nothing
+            return 1
+        return math.prod(math.ceil(c / b) for c, b in zip(self.chunks, blocks, strict=True))
+
+    def block_source(self) -> C2NDSource | None:
+        """The frame reader behind the block methods, or None if there is none.
+
+        Built on the first request for it and never rebuilt.  The fallback has to
+        be permanent: a subscriber that streams this dataset answers a range
+        request with the whole body, so retrying would pay a full download to
+        rediscover the same answer.
+        """
+        if self._block_source is _UNTRIED:
+            with self._block_lock:
+                if self._block_source is _UNTRIED:
+                    self._block_source = self._open_block_source()
+        return self._block_source
+
+    def _open_block_source(self) -> C2NDSource | None:
+        """Decide, at whatever cost it takes, whether this dataset serves ranges."""
+        # `api/info` rules out a dataset the subscriber computes for nothing: a
+        # stored one reports its geometry where a lazy expression reports
+        # `expression` and `operands`
+        if not all(key in self.meta for key in ("chunks", "blocks", "schunk")):
+            return None
+        # Nor is a frame of small chunks worth an index read: blosc2 declines to
+        # take a chunk below BLOCK_MIN_CBYTES apart, so nothing here would ever
+        # use a block, and the dataset keeps exactly the behaviour it had before
+        nchunks = math.prod(math.ceil(s / c) for s, c in zip(self.shape, self.chunks, strict=True))
+        if not nchunks or self.cbytes / nchunks < blosc2.proxy.BLOCK_MIN_CBYTES:
+            return None
+        # Whether a dataset that reports a geometry is *served* from a file is
+        # something only the answer to a range request can say: an HDF5 leaf or a
+        # `.b2z` member reports one and is streamed all the same
+        try:
+            return C2NDSource(self, max_concurrency=REMOTE_MAX_CONCURRENCY)
+        except (_NotRanged, ValueError, NotImplementedError, RuntimeError, _httpx().HTTPError):
+            # Not ranged, not a contiguous frame, not an NDArray, or not
+            # reachable: whole chunks work for all of those
+            return None
+
+    def wants_blocks(self, nchunk: int, nwanted: int) -> bool:
+        """Whether fetching *nwanted* blocks of a chunk beats fetching all of it."""
+        source = self.block_source()
+        return source is not None and source.wants_blocks(nchunk, nwanted)
+
+    def chunk_layout(self, nchunk: int):
+        """Where the blocks of a chunk are; see :meth:`ByteRangeNDSource.chunk_layout`."""
+        return self.block_source().chunk_layout(nchunk)
+
+    def block_plan(self, nchunk: int, nblocks: Sequence[int]) -> list[tuple[int, int, tuple]]:
+        """The range reads covering *nblocks*; see :meth:`ByteRangeNDSource.block_plan`."""
+        return self.block_source().block_plan(nchunk, nblocks)
+
+    def read_range(self, offset: int, size: int) -> bytes:
+        """The bytes at [*offset*, *offset* + *size*) of the remote frame."""
+        source = self.block_source()
+        if source is None:
+            raise ValueError(f"{self.path} is not served in byte ranges by {self.urlbase}")
+        return source.read_range(offset, size)
 
     @property
     def shape(self) -> tuple[int]:
