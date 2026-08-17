@@ -42,6 +42,21 @@ XXX version-specific blurb XXX
   with the traffic, since a fetch in flight is now a block rather than a chunk.
   `bench/ndarray/fsspec-block-granularity.py` measures both on any array.
 
+* A `Proxy` over a `C2Array` reads **blocks** too, straight out of the stored
+  frame over HTTP byte ranges. Caterva2 serves a stored dataset from a file, so
+  the `Range` header is honoured and composes with the auth cookie; no new
+  endpoint is involved. On cat2.cloud's `kevlar-tomo.b2nd` a corner slice costs
+  0.031 MB instead of 2.723 MB, and a slice touching ten chunks takes 0.14 s
+  against 1.01 s. Three things add up to it: one pooled HTTP client instead of a
+  connection per request (0.162 s → 0.046 s each), fetches that overlap by
+  default as `afetch()` already did, and one request carrying the whole wave of
+  ranges (`multipart/byteranges`, which no object store offers). A dataset the
+  subscriber *computes* — a lazy expression, an HDF5 leaf, a `.b2z` member — is
+  fetched a whole chunk at a time as before; which it is costs at most one small
+  request to find out, and is never asked twice. `blosc2.ByteRangeNDSource` is
+  the frame reader `FsspecNDSource` and the new `C2NDSource` share: subclass it
+  with a `read_range(offset, size)` to give any transport the same treatment.
+
 * `blosc2.Proxy(src, urlpath=..., mode="a")` now adopts the cache left by an
   earlier run instead of failing on the existing file, so a proxy's cache can
   outlive the process. The cache must come from a proxy over a source of the same
