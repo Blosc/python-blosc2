@@ -338,6 +338,9 @@ class SChunk(blosc2_ext.SChunk):
         [0, 2, 4]
         >>> shutil.rmtree(tmpdirname)
         """
+        # How many chunks were replaced by a special one, which is how a reader
+        # keeping its own record of this container notices an eviction
+        self.nspecialized = 0
         # Check only allowed kwarg are passed
         allowed_kwargs = [
             "urlpath",
@@ -797,6 +800,10 @@ class SChunk(blosc2_ext.SChunk):
 
         tmp = SChunk(chunksize=self.chunksize, cparams=blosc2.CParams(typesize=self.typesize))
         tmp.fill_special(nitems, special_value, value)
+        # A special chunk is indistinguishable from one that was never written, so
+        # a reader that keeps its own record of what it has (:ref:`Proxy` does)
+        # cannot see this happen. Counting it lets such a reader notice for free.
+        self.nspecialized += 1
         return self.update_chunk(nchunk, tmp.get_chunk(0))
 
     def decompress_chunk(self, nchunk: int, dst: object = None) -> str | bytes:

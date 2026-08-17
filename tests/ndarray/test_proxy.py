@@ -343,3 +343,35 @@ def test_proxy_contiguous_kwarg(tmp_path):
     assert proxy.schunk.contiguous is False
     assert urlpath.is_dir()  # sparse frame is a directory of chunk files
     np.testing.assert_array_equal(proxy.fetch(())[:], data)
+
+
+def test_evicted_chunk_is_fetched_again():
+    # update_special(UNINIT) is the documented cache-eviction primitive, and the
+    # chunk it leaves behind is indistinguishable from one never fetched -- which
+    # is exactly what the proxy's own bitmap is there to tell apart
+    data = np.arange(120, dtype=np.int32).reshape(12, 10)
+    source = blosc2.asarray(data, chunks=(4, 5), blocks=(2, 5))
+    fetched = []
+    proxy = blosc2.Proxy(source)
+    original = proxy.src.get_chunk
+    proxy.src.get_chunk = lambda n: (fetched.append(n), original(n))[1]
+
+    np.testing.assert_array_equal(proxy[0:4, 0:5], data[0:4, 0:5])
+    assert fetched == [0]
+    np.testing.assert_array_equal(proxy[0:4, 0:5], data[0:4, 0:5])
+    assert fetched == [0]  # cached, as before
+
+    proxy.schunk.update_special(0, blosc2.SpecialValue.UNINIT)
+    np.testing.assert_array_equal(proxy[0:4, 0:5], data[0:4, 0:5])
+    assert fetched == [0, 0]  # evicted, so fetched anew rather than read as zeros
+
+
+def test_vlmeta_cannot_overwrite_proxy_state():
+    # A caller-supplied bitmap would make the proxy skip chunks it never fetched
+    source = blosc2.asarray(np.arange(20).reshape(4, 5), chunks=(2, 5), blocks=(1, 5))
+    for name in ("proxy-fetched", "proxy-fetched-blocks", "fsspec-stamp"):
+        with pytest.raises(ValueError, match="reserved"):
+            blosc2.Proxy(source, vlmeta={name: b"nonsense"})
+    # Anything else still goes through
+    proxy = blosc2.Proxy(source, vlmeta={"mine": "ok"})
+    assert proxy.vlmeta["mine"] == "ok"

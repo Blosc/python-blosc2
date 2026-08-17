@@ -945,3 +945,19 @@ def test_lazy_blocks_after_a_whole_chunk_arrives(any_chunk_wants_blocks):
     asyncio.run(p.afetch((slice(0, 5), slice(None))))
     assert np.array_equal(p[0:5], data[0:5])
     assert np.array_equal(p[...], data)
+
+
+def test_lazy_blocks_after_an_eviction(monkeypatch, any_chunk_wants_blocks):
+    # Evicting a chunk that holds only some of its blocks must clear all of them,
+    # including the copies the proxy keeps in hand for the next splice
+    data, a = _incompressible((200, 200), (100, 200), (10, 20))
+    reads, _ = _traffic(monkeypatch)
+    p = blosc2.open(_put("evicted.b2nd", a), lazy=True)
+
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    fetched = len(reads)
+    p.schunk.update_special(0, blosc2.SpecialValue.UNINIT)
+
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert len(reads) > fetched
+    assert np.array_equal(p[...], data)

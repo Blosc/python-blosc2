@@ -60,6 +60,10 @@ BLOCK_GAP = 4096
 # the memory a fetch of 8 whole chunks already peaks at.
 BLOCK_HOT_CHUNKS = 8
 
+# vlmeta entries the proxy keeps its own state in: what it has fetched, and which
+# remote bytes the cache was filled from. A caller cannot write these.
+_RESERVED_VLMETA = frozenset({"proxy-fetched", "proxy-fetched-blocks", "fsspec-stamp"})
+
 # `jit` kwargs that tune *how* an expression is evaluated, not what container the
 # result is stored in. Unlike storage kwargs (`cparams`, `chunks`, `urlpath`, ...),
 # these must not by themselves flip the return type from a plain NumPy array to
@@ -273,11 +277,13 @@ class Proxy(blosc2.Operand):
             source of the same geometry (shape, dtype and partitioning); anything
             else raises rather than being silently reused or overwritten.
 
-            Geometry is all that is checked unless the source can name the exact
-            bytes it reads, as :ref:`FsspecNDSource` does with its ``stamp``: a
-            source whose contents changed underneath while its geometry did not
-            is adopted, and the cache keeps serving what the earlier run fetched.
-            Pass ``mode="w"`` when the source may have been rewritten.
+            A source that can name the exact bytes it reads, as
+            :ref:`FsspecNDSource` does with its ``stamp``, is checked against that
+            too: a cache built from different bytes raises, even when the geometry
+            still fits. For every other source geometry is all there is to check,
+            so a source whose contents changed underneath while its geometry did
+            not is adopted, and the cache keeps serving what the earlier run
+            fetched; pass ``mode="w"`` when that source may have been rewritten.
         kwargs: dict, optional
             Keyword arguments supported:
 
@@ -367,6 +373,8 @@ class Proxy(blosc2.Operand):
         nchunks = self._schunk_cache.nchunks
         nbits = nchunks * self._blocks_per_chunk
         self._fetched = bytearray((nbits + 7) // 8) if fresh else self._load_fetched(nchunks)
+        # Evictions the cache has seen, so `_sync_evictions` can spot new ones
+        self._specialized = getattr(self._schunk_cache, "nspecialized", 0)
         if self.urlpath is None:
             self.urlpath = getattr(self._schunk_cache, "urlpath", None)
         # Geometry alone cannot tell a replaced source from the one the cache was
@@ -375,6 +383,16 @@ class Proxy(blosc2.Operand):
         if stamp is not None:
             self._schunk_cache.vlmeta["fsspec-stamp"] = stamp
         if vlmeta:
+            reserved = sorted(_RESERVED_VLMETA & set(vlmeta))
+            if reserved:
+                # Writing these would hand the proxy a bitmap or an identity it
+                # never earned: a caller's `proxy-fetched` makes it skip chunks it
+                # has not fetched, and a caller's `fsspec-stamp` makes a good cache
+                # fail its identity check (or a stale one pass it)
+                raise ValueError(
+                    f"{', '.join(reserved)} {'is' if len(reserved) == 1 else 'are'} reserved "
+                    f"for the proxy's own bookkeeping and cannot be set through vlmeta"
+                )
             for key in vlmeta:
                 self._schunk_cache.vlmeta[key] = vlmeta[key]
 
@@ -426,8 +444,30 @@ class Proxy(blosc2.Operand):
         n = nchunk * self._blocks_per_chunk + nblock
         return bool(self._fetched[n // 8] >> (n % 8) & 1)
 
+    def _sync_evictions(self) -> None:
+        """Notice chunks dropped from the cache behind the proxy's back.
+
+        `SChunk.update_special(n, UNINIT)` is the documented way to reclaim a
+        cached chunk's storage, and it leaves a chunk that looks exactly like one
+        never fetched -- which is why the bitmap exists, and why the bitmap would
+        otherwise go on claiming the chunk is there.  The cache counts those
+        replacements, so this costs one integer compare until one happens.
+        """
+        specialized = getattr(self._schunk_cache, "nspecialized", 0)
+        if specialized == self._specialized:
+            return
+        self._specialized = specialized
+        for info in self._schunk_cache.iterchunks_info():
+            if info.special != blosc2.SpecialValue.UNINIT:
+                continue
+            base = info.nchunk * self._blocks_per_chunk
+            for n in range(base, base + self._blocks_per_chunk):
+                self._fetched[n // 8] &= ~(1 << (n % 8))
+            self._hot_payloads.pop(info.nchunk, None)
+
     def _wanted_chunks(self, item) -> list[int]:
         """The chunks *item* touches."""
+        self._sync_evictions()
         if item == ():  # full realization
             return list(range(self._schunk_cache.nchunks))
         return [int(n) for n in blosc2.get_slice_nchunks(self._cache, item)]
