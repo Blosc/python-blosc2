@@ -10,6 +10,7 @@ import warnings
 from dataclasses import asdict, dataclass, field, fields
 
 import blosc2
+from blosc2.core import is_fsspec_url, normalize_urlpath
 
 
 def default_nthreads():
@@ -248,6 +249,14 @@ class Storage:
     meta: dict = None
 
     def __post_init__(self):
+        self.urlpath = normalize_urlpath(self.urlpath)
+        if is_fsspec_url(self.urlpath):
+            # The C layer writes a container incrementally, rewriting its header
+            # and offsets as chunks land; an object store has no partial writes
+            raise ValueError(
+                f"{self.urlpath} is an fsspec URL, which cannot back a container as it is "
+                f"written; build it in memory and NDArray.save() it there in one go"
+            )
         if self.contiguous is None:
             self.contiguous = self.urlpath is not None
         # Check for None values

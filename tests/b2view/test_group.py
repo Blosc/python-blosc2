@@ -264,7 +264,7 @@ async def test_group_key_applies_and_escape_clears(group_store):
 
         # Re-group via the operation + value-column path: pick a numeric op.
         await pilot.press("G")
-        await pilot.pause()
+        await wait_for_screen(pilot, GroupByScreen)
         await pilot.press("enter")  # key list -> operation list
         await pilot.press("down", "down", "enter")  # -> "sum" -> value list
         await pilot.press("enter")  # apply sum(<first value column>)
@@ -306,7 +306,7 @@ async def test_argmin_cell_jumps_to_base_row(group_store):
         # Group region -> argmin(amount).  Ops: count rows, count, sum, mean,
         # min, max, argmin(6), argmax.  Values: region(0), amount(1).
         await pilot.press("G")
-        await pilot.pause()
+        await wait_for_screen(pilot, GroupByScreen)
         await pilot.press("down", "enter")  # key: region -> operation list
         await pilot.press("down", "down", "down", "down", "down", "down", "enter")  # argmin -> value
         await pilot.press("down", "enter")  # value: amount -> apply
@@ -342,7 +342,7 @@ async def test_group_config_cached_and_reused(group_store):
 
         # Group region -> mean(amount).
         await pilot.press("G")
-        await pilot.pause()
+        await wait_for_screen(pilot, GroupByScreen)
         await pilot.press("down", "enter")  # key: region -> operation list
         await pilot.press("down", "down", "down", "enter")  # mean -> value list
         await pilot.press("down", "enter")  # value: amount -> apply
@@ -380,7 +380,7 @@ async def test_group_bar_chart_and_hires(group_store):
 
         # Group vendor (categorical) -> mean(amount), then plot it as a bar chart.
         await pilot.press("G")
-        await pilot.pause()
+        await wait_for_screen(pilot, GroupByScreen)
         await pilot.press("enter")  # key: vendor (first) -> operation list
         await pilot.press("down", "down", "down", "enter")  # mean -> value list
         await pilot.press("down", "enter")  # value: amount -> apply
@@ -412,7 +412,7 @@ async def test_group_numeric_key_plots_as_line(group_store):
 
         # Group region (numeric) -> mean(amount): plots as a line curve, not bars.
         await pilot.press("G")
-        await pilot.pause()
+        await wait_for_screen(pilot, GroupByScreen)
         await pilot.press("down", "enter")  # key: region -> operation list
         await pilot.press("down", "down", "down", "enter")  # mean -> value list
         await pilot.press("down", "enter")  # value: amount -> apply

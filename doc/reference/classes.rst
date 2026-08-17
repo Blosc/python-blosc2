@@ -139,6 +139,7 @@ container APIs above.
     proxy
     proxysource
     proxyndsource
+    fsspecndsource
     simpleproxy
     embed_store
     dict_store

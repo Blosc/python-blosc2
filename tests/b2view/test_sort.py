@@ -248,7 +248,7 @@ async def test_sort_last_column_keeps_full_window(wide_store):
         await pilot.pause()
 
         await pilot.press("S")
-        await pilot.pause()
+        await wait_for_screen(pilot, SortByScreen)
         # Every column is now offered; jump to the last one (the indexed one).
         app.screen.query_one("#sortby-list").highlighted = len(cols) - 1
         await pilot.press("enter")
@@ -295,7 +295,7 @@ async def test_sort_non_indexed_column_async(wide_store):
         await pilot.pause()
 
         await pilot.press("S")
-        await pilot.pause()
+        await wait_for_screen(pilot, SortByScreen)
         app.screen.query_one("#sortby-list").highlighted = 0  # c00 — not indexed
         await pilot.press("enter")
         # Wait for the background sort worker to finish and repaint.
@@ -361,7 +361,7 @@ async def test_reverse_key_flips_active_sort(sort_store):
         await pilot.pause()
 
         await pilot.press("S")
-        await pilot.pause()
+        await wait_for_screen(pilot, SortByScreen)
         await pilot.press("enter")  # ascending
         await pilot.pause()
         col, reverse = app.browser.get_sort("/")
@@ -384,7 +384,7 @@ async def test_sort_reverse_toggle_in_dropdown(sort_store):
         await pilot.pause()
 
         await pilot.press("S")
-        await pilot.pause()
+        await wait_for_screen(pilot, SortByScreen)
         await pilot.press("R")  # toggle reverse (descending) before applying
         await pilot.press("enter")
         await pilot.pause()

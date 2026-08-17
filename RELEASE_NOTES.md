@@ -6,6 +6,48 @@ XXX version-specific blurb XXX
 
 ### Improvements
 
+* New `blosc2[fsspec]` extra: `blosc2.open()`, `save_array()` and `save_tensor()`
+  accept any [fsspec](https://filesystem-spec.readthedocs.io) URL — `s3://`,
+  `gs://`, `zip://`, chained ones like `zip://inner.b2nd::s3://bucket/a.zip`.
+  `open()` reads the container whole, or through a staleness-checked local copy
+  with `cache_storage=` (which is what covers `.b2d` stores, sparse frames,
+  `offset` and `mmap_mode`), or a piece at a time with `lazy=True`, which
+  leaves a huge frame where it is and fetches only what a slice touches
+  through the new `blosc2.FsspecNDSource`. The two combine: `lazy=True` with a
+  `cache_storage=` keeps what was fetched there, so a later run starts from
+  it. Protocol drivers (`s3fs`, `gcsfs`...) and credentials stay the caller's
+  business. On the write side `NDArray.save()` and `blosc2.save()` upload the
+  whole array as one object; containers cannot be *backed* by a URL while they
+  are written (the C layer rewrites a frame's header and offsets as chunks land,
+  which an object store has no way to serve), so constructors given a URL now say
+  that instead of failing deep in C.
+
+* `Proxy.fetch()` takes a `max_concurrency=` argument, and reads it from the
+  source when the source has one, so `blosc2.open(url, lazy=True,
+  max_concurrency=...)` overlaps its chunk fetches in a thread pool. Ordinary
+  slicing benefits, not just the async `afetch()`. A lazy fsspec proxy defaults
+  to 8, matching what `afetch()` already used for remote sources; pass 1 for a
+  protocol with no latency to hide, where the pool costs ~10 µs per chunk and
+  saves nothing. Other sources stay serial unless asked, since this is only safe
+  for a thread-safe `get_chunk`.
+
+* `blosc2.open(url, lazy=True)` fetches **blocks** rather than whole chunks when
+  a slice lands in a small part of a large one. With the partitions
+  `blosc2.asarray()` picks by default a chunk holds a hundred-odd blocks, so a
+  point or window read costs about 1% of what it used to: measured against S3,
+  5-17x faster on arrays with multi-megabyte chunks and 2-5x on 1 MB ones. It is
+  never a loss, because the two thresholds that decide it — a chunk under a
+  megabyte is one cheap request anyway, and wanting more than half of a chunk's
+  blocks is wanting the chunk — need nothing read to answer. Peak memory drops
+  with the traffic, since a fetch in flight is now a block rather than a chunk.
+  `bench/ndarray/fsspec-block-granularity.py` measures both on any array.
+
+* `blosc2.Proxy(src, urlpath=..., mode="a")` now adopts the cache left by an
+  earlier run instead of failing on the existing file, so a proxy's cache can
+  outlive the process. The cache must come from a proxy over a source of the same
+  shape and dtype; anything else at that path raises. A cache that holds only
+  some blocks of a chunk keeps them across runs too.
+
 * Querying a `utf8()` column through its FULL index no longer materializes the
   index vocabulary. The query literal is turned into an alphabetical rank by
   bisecting the vocabulary sidecar instead, so a lookup reads a few blocks

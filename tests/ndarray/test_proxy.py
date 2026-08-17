@@ -131,6 +131,76 @@ def test_readonly_proxy_keeps_both_readonly(tmp_path):
         np.testing.assert_array_equal(readonly_ctx[:], data)
 
 
+def test_reuse_cache_across_runs(tmp_path):
+    proxy_path = str(tmp_path / "proxy.b2nd")
+    data = np.arange(120, dtype=np.int32).reshape(12, 10)
+    source = blosc2.asarray(data, chunks=(4, 5), blocks=(2, 5))
+
+    proxy = blosc2.Proxy(source, urlpath=proxy_path, mode="a")
+    np.testing.assert_array_equal(proxy[0:4, 0:5], data[0:4, 0:5])
+    del proxy
+
+    # mode="a" over an existing cache picks up what the previous run fetched
+    proxy = blosc2.Proxy(source, urlpath=proxy_path, mode="a")
+    assert proxy._cache.schunk.urlpath == proxy_path
+    np.testing.assert_array_equal(proxy[:], data)
+
+
+def test_reuse_cache_rejects_construction_kwargs(tmp_path):
+    # The container already exists, so contiguous= (and any other kwarg meant for
+    # the constructor) would be quietly dropped instead of doing anything
+    proxy_path = str(tmp_path / "proxy.b2nd")
+    source = blosc2.asarray(np.arange(120, dtype=np.int32).reshape(12, 10), chunks=(4, 5))
+
+    blosc2.Proxy(source, urlpath=proxy_path, mode="a")
+    with pytest.raises(ValueError, match="contiguous"):
+        blosc2.Proxy(source, urlpath=proxy_path, mode="a", contiguous=False)
+
+
+def test_reuse_cache_rejects_other_kind(tmp_path):
+    proxy_path = str(tmp_path / "proxy.b2f")
+
+    class Source(blosc2.ProxySource):
+        nbytes, chunksize, typesize = 1000, 100, 1
+
+        def get_chunk(self, nchunk):
+            raise NotImplementedError
+
+    blosc2.Proxy(Source(), urlpath=proxy_path, mode="a")
+    with pytest.raises(ValueError, match="does not fit"):
+        blosc2.Proxy(blosc2.asarray(np.arange(1000, dtype=np.int32)), urlpath=proxy_path, mode="a")
+
+
+def test_reuse_cache_rejects_foreign_container(tmp_path):
+    path = str(tmp_path / "plain.b2nd")
+    blosc2.arange(0, 120, dtype=np.int32, shape=(12, 10), urlpath=path, mode="w")
+    source = blosc2.asarray(np.arange(120, dtype=np.int32).reshape(12, 10))
+
+    with pytest.raises(ValueError, match="not a proxy cache"):
+        blosc2.Proxy(source, urlpath=path, mode="a")
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        lambda data: blosc2.asarray(np.arange(50, dtype=np.float64)),
+        # Same shape and dtype, different partitioning: chunk numbers are what
+        # the proxy passes to the source, so this would silently fetch the
+        # wrong chunk or run off the end
+        lambda data: blosc2.asarray(data, chunks=(2, 5), blocks=(1, 5)),
+    ],
+    ids=["shape", "chunks"],
+)
+def test_reuse_cache_rejects_mismatched_source(tmp_path, other):
+    proxy_path = str(tmp_path / "proxy.b2nd")
+    data = np.arange(120, dtype=np.int32).reshape(12, 10)
+    source = blosc2.asarray(data, chunks=(4, 5), blocks=(2, 5))
+    blosc2.Proxy(source, urlpath=proxy_path, mode="a").fetch()
+
+    with pytest.raises(ValueError, match="different source"):
+        blosc2.Proxy(other(data), urlpath=proxy_path, mode="a")
+
+
 # Test the ProxyNDSources interface
 @pytest.mark.parametrize(
     ("shape", "chunks", "blocks"),
@@ -273,3 +343,35 @@ def test_proxy_contiguous_kwarg(tmp_path):
     assert proxy.schunk.contiguous is False
     assert urlpath.is_dir()  # sparse frame is a directory of chunk files
     np.testing.assert_array_equal(proxy.fetch(())[:], data)
+
+
+def test_evicted_chunk_is_fetched_again():
+    # update_special(UNINIT) is the documented cache-eviction primitive, and the
+    # chunk it leaves behind is indistinguishable from one never fetched -- which
+    # is exactly what the proxy's own bitmap is there to tell apart
+    data = np.arange(120, dtype=np.int32).reshape(12, 10)
+    source = blosc2.asarray(data, chunks=(4, 5), blocks=(2, 5))
+    fetched = []
+    proxy = blosc2.Proxy(source)
+    original = proxy.src.get_chunk
+    proxy.src.get_chunk = lambda n: (fetched.append(n), original(n))[1]
+
+    np.testing.assert_array_equal(proxy[0:4, 0:5], data[0:4, 0:5])
+    assert fetched == [0]
+    np.testing.assert_array_equal(proxy[0:4, 0:5], data[0:4, 0:5])
+    assert fetched == [0]  # cached, as before
+
+    proxy.schunk.update_special(0, blosc2.SpecialValue.UNINIT)
+    np.testing.assert_array_equal(proxy[0:4, 0:5], data[0:4, 0:5])
+    assert fetched == [0, 0]  # evicted, so fetched anew rather than read as zeros
+
+
+def test_vlmeta_cannot_overwrite_proxy_state():
+    # A caller-supplied bitmap would make the proxy skip chunks it never fetched
+    source = blosc2.asarray(np.arange(20).reshape(4, 5), chunks=(2, 5), blocks=(1, 5))
+    for name in ("proxy-fetched", "proxy-fetched-blocks", "fsspec-stamp"):
+        with pytest.raises(ValueError, match="reserved"):
+            blosc2.Proxy(source, vlmeta={name: b"nonsense"})
+    # Anything else still goes through
+    proxy = blosc2.Proxy(source, vlmeta={"mine": "ok"})
+    assert proxy.vlmeta["mine"] == "ok"

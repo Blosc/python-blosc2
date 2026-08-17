@@ -11,16 +11,21 @@ from __future__ import annotations
 import copy
 import ctypes
 import ctypes.util
+import hashlib
 import json
 import math
 import os
 import pathlib
 import pickle
 import platform
+import re
+import shutil
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from dataclasses import asdict
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
@@ -534,7 +539,9 @@ def save_array(arr: np.ndarray, urlpath: str, chunksize: int | None = None, **kw
         The NumPy array to be saved.
 
     urlpath: str
-        The path for the file where the array will be saved.
+        The path for the file where the array will be saved.  An fsspec URL
+        (``s3://``, ``gs://``, ``memory://``...) writes the whole container in one
+        shot; it needs the ``fsspec`` extra and the protocol driver installed.
 
     chunksize: int
         The size (in bytes) for the chunks during compression. If not provided,
@@ -612,6 +619,132 @@ def load_array(urlpath: str, dparams: dict | None = None) -> np.ndarray:
     return load_tensor(urlpath, dparams=dparams)
 
 
+def normalize_urlpath(urlpath: object) -> object:
+    """Turn a `file://` URL into the native path it names, leaving anything else alone.
+
+    Local URLs are kept off the fsspec branch so they can use mmap and every
+    container format, which only works if the scheme is stripped first.
+    """
+    if isinstance(urlpath, str) and urlpath.startswith("file://"):
+        parsed = urllib.parse.urlparse(urlpath)
+        netloc = "" if parsed.netloc.lower() in ("", "localhost") else parsed.netloc
+        if re.fullmatch("[A-Za-z]:", netloc):
+            if os.name != "nt":
+                raise ValueError(
+                    f"{urlpath} names the host {netloc!r}; only Windows can reach one, as a drive"
+                )
+            # A Windows drive lands in netloc for the two-slash form, `file://C:/x`
+            prefix = netloc
+        elif not netloc:
+            prefix = ""
+        elif os.name == "nt":
+            # A real authority is a UNC host, which keeps its two slashes
+            prefix = "//" + netloc
+        else:
+            raise ValueError(
+                f"{urlpath} names the host {netloc!r}; only Windows can reach one, as a UNC path"
+            )
+        return urllib.request.url2pathname(prefix + parsed.path)
+    return urlpath
+
+
+def is_fsspec_url(urlpath: object) -> bool:
+    """Whether *urlpath* should be routed through fsspec.
+
+    Any URL with a scheme qualifies, except `file://` (which the local path
+    handles better, with mmap and every container format) and `http(s)://`
+    (reserved for :ref:`C2Array`).  Chained URLs such as
+    `zip://x.b2nd::s3://bucket/a.zip` qualify too, as fsspec resolves them.
+    """
+    return (
+        isinstance(urlpath, str)
+        and "://" in urlpath
+        and not urlpath.startswith(("file://", "http://", "https://"))
+    )
+
+
+def _import_fsspec(urlpath: str):
+    """Import fsspec with an actionable error when the extra is not installed."""
+    try:
+        import fsspec
+    except ImportError:
+        raise ImportError(
+            f'Reading or writing {urlpath} requires fsspec: pip install "blosc2[fsspec]"'
+        ) from None
+    # Missing protocol backends (s3fs, gcsfs...) are fsspec's error to raise.
+    return fsspec
+
+
+def fsspec_open(urlpath: str, mode: str):
+    """`fsspec.open()`, but complaining properly when fsspec is missing."""
+    return _import_fsspec(urlpath).open(urlpath, mode)
+
+
+def fsspec_cache_path(urlpath: str, cache_storage: str | pathlib.Path, suffix: str = "") -> str:
+    """The local path under *cache_storage* reserved for *urlpath*, creating the directory."""
+    os.makedirs(cache_storage, exist_ok=True)
+    name = hashlib.sha256(urlpath.encode()).hexdigest()
+    return os.path.join(str(cache_storage), name + suffix)
+
+
+@cache
+def _suffixed_cache_mapper():
+    """fsspec's cache naming, plus the extension `blosc2.open()` dispatches on.
+
+    A `.b2e` store is told apart from a bare SChunk by its name alone, so a cached
+    copy under fsspec's plain hash would silently open as the wrong type.
+    """
+    from fsspec.implementations.cache_mapper import AbstractCacheMapper
+
+    class SuffixedCacheMapper(AbstractCacheMapper):
+        def __call__(self, path: str) -> str:
+            return hashlib.sha256(path.encode()).hexdigest() + pathlib.PurePosixPath(path).suffix
+
+    return SuffixedCacheMapper()
+
+
+def localize_fsspec_url(urlpath: str, cache_storage: str | pathlib.Path) -> str:
+    """Materialize the container at *urlpath* under *cache_storage*, return its local path.
+
+    Single-file containers go through fsspec's ``filecache``, which downloads
+    once and afterwards pays one HEAD per open to check staleness.  Directory
+    containers (``.b2d`` stores, sparse frames) have no such layer in fsspec, so
+    the whole prefix is fetched and re-fetched whenever the remote listing stops
+    matching the manifest written at download time.
+    """
+    fsspec = _import_fsspec(urlpath)
+    from fsspec.utils import tokenize
+
+    cache_storage = str(cache_storage)
+    fs, path = fsspec.url_to_fs(urlpath)
+
+    if not fs.isdir(path):
+        # check_files is off by default in fsspec, which would happily serve a
+        # cached copy of an array that changed remotely -- the worst failure mode
+        # this feature has, and worth one HEAD per open to avoid.
+        opts = {
+            "cache_storage": cache_storage,
+            "check_files": True,
+            "cache_mapper": _suffixed_cache_mapper(),
+        }
+        with fsspec.open(f"filecache::{urlpath}", "rb", filecache=opts) as f:
+            return f.name
+
+    localdir = fsspec_cache_path(urlpath, cache_storage)
+    manifest = pathlib.Path(localdir + ".json")
+    # tokenize(info) is what fs.ukey() hashes, so this asks each backend what
+    # identifies a file rather than guessing which fields it exposes -- size and
+    # mtime miss a same-size rewrite, and memory:// has no mtime at all
+    listing = json.dumps(
+        {name: tokenize(entry) for name, entry in sorted(fs.find(path, detail=True).items())}
+    )
+    if not manifest.exists() or manifest.read_text() != listing:
+        shutil.rmtree(localdir, ignore_errors=True)
+        fs.get(path.rstrip("/") + "/", localdir, recursive=True)
+        manifest.write_text(listing)
+    return localdir
+
+
 def pack_tensor(
     tensor: tensorflow.Tensor | torch.Tensor | np.ndarray, chunksize: int | None = None, **kwargs: dict
 ) -> bytes | int:
@@ -656,6 +789,14 @@ def pack_tensor(
     """
     arr = np.asarray(tensor)
 
+    # Object stores cannot be written incrementally, so build the whole cframe in
+    # memory and PUT it in one go.
+    remote_urlpath = kwargs.get("urlpath") if is_fsspec_url(kwargs.get("urlpath")) else None
+    if remote_urlpath is not None:
+        del kwargs["urlpath"]
+        # A remote write always replaces, but reading mode still forbids one
+        blosc2_ext.check_access_mode(remote_urlpath, kwargs.pop("mode", "a"))
+
     schunk = blosc2.SChunk(chunksize=chunksize, data=arr, **kwargs)
 
     # Guess the kind of tensor / array
@@ -673,6 +814,12 @@ def pack_tensor(
     dtype = arr.dtype.descr if arr.dtype.kind == "V" else arr.dtype.str
 
     schunk.vlmeta["__pack_tensor__"] = (kind, arr.shape, dtype)
+
+    if remote_urlpath is not None:
+        cframe = schunk.to_cframe()
+        with fsspec_open(remote_urlpath, "wb") as f:
+            f.write(cframe)
+        return len(cframe)
 
     if schunk.urlpath is None:
         return schunk.to_cframe()
@@ -762,7 +909,9 @@ def save_tensor(
         The tensor or array to be saved.
 
     urlpath: str
-        The file path where the tensor or array will be saved.
+        The file path where the tensor or array will be saved.  An fsspec URL
+        (``s3://``, ``gs://``, ``memory://``...) writes the whole container in one
+        shot; it needs the ``fsspec`` extra and the protocol driver installed.
 
     chunksize: int
         The size (in bytes) for the chunks during compression. If not provided,

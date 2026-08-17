@@ -22,6 +22,13 @@ import numpy as np
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
+from blosc2.core import (
+    fsspec_cache_path,
+    fsspec_open,
+    is_fsspec_url,
+    localize_fsspec_url,
+    normalize_urlpath,
+)
 from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
@@ -331,6 +338,9 @@ class SChunk(blosc2_ext.SChunk):
         [0, 2, 4]
         >>> shutil.rmtree(tmpdirname)
         """
+        # How many chunks were replaced by a special one, which is how a reader
+        # keeping its own record of this container notices an eviction
+        self.nspecialized = 0
         # Check only allowed kwarg are passed
         allowed_kwargs = [
             "urlpath",
@@ -366,7 +376,14 @@ class SChunk(blosc2_ext.SChunk):
         if isinstance(kwargs.get("dparams"), blosc2.DParams):
             kwargs["dparams"] = asdict(kwargs.get("dparams"))
 
-        urlpath = kwargs.get("urlpath")
+        urlpath = normalize_urlpath(kwargs.get("urlpath"))
+        if urlpath is not None:
+            kwargs["urlpath"] = urlpath
+        if is_fsspec_url(urlpath):
+            raise ValueError(
+                f"{urlpath} is an fsspec URL, which cannot back a container as it is written; "
+                f"build it in memory and write to_cframe() there, or use NDArray.save()"
+            )
         if "contiguous" not in kwargs:
             # Make contiguous true for disk, else sparse (for in-memory performance)
             kwargs["contiguous"] = urlpath is not None
@@ -783,7 +800,35 @@ class SChunk(blosc2_ext.SChunk):
 
         tmp = SChunk(chunksize=self.chunksize, cparams=blosc2.CParams(typesize=self.typesize))
         tmp.fill_special(nitems, special_value, value)
-        return self.update_chunk(nchunk, tmp.get_chunk(0))
+        # A special chunk is indistinguishable from one that was never written, so
+        # a reader that keeps its own record of what it has (:ref:`Proxy` does)
+        # cannot see this happen. Counting it lets such a reader notice for free.
+        self.nspecialized += 1
+        nchunks = self.update_chunk(nchunk, tmp.get_chunk(0))
+        self._forget_fetched(nchunk)
+        return nchunks
+
+    def _forget_fetched(self, nchunk: int) -> None:
+        """Drop *nchunk* from a proxy's record of what this container holds.
+
+        That record lives in this container's own ``vlmeta``, so the eviction can
+        keep it straight whether or not a :ref:`Proxy` is alive to notice -- which
+        matters most when nothing reads the cache again before the process ends,
+        where a live proxy's own bookkeeping would never be written down.
+        """
+        for key, blocks_per_chunk in (
+            ("proxy-fetched", 1),
+            ("proxy-fetched-blocks", self.vlmeta.get("proxy-fetched-bpc", 0)),
+        ):
+            stored = self.vlmeta.get(key)
+            if not stored or not blocks_per_chunk:
+                continue
+            bitmap = bytearray(stored)
+            first = nchunk * blocks_per_chunk
+            for bit in range(first, first + blocks_per_chunk):
+                if bit // 8 < len(bitmap):
+                    bitmap[bit // 8] &= ~(1 << (bit % 8))
+            self.vlmeta[key] = bytes(bitmap)
 
     def decompress_chunk(self, nchunk: int, dst: object = None) -> str | bytes:
         """Decompress the chunk given by its index :paramref:`nchunk`.
@@ -1930,6 +1975,90 @@ def _finalize_special_open(special, urlpath, mode):
     return special
 
 
+def _lazy_fsspec_proxy(
+    urlpath: str, cache_storage: str | pathlib.Path | None, max_concurrency: int | None = None
+):
+    """Wrap a remote frame in a Proxy that fetches chunks on demand.
+
+    Without `cache_storage` the fetched chunks live in memory and die with the
+    proxy; with it they go to a container under that directory, so a later run
+    starts from what this one pulled.
+    """
+    # None leaves the default where it belongs, on the source itself
+    kwargs = {} if max_concurrency is None else {"max_concurrency": max_concurrency}
+    src = blosc2.FsspecNDSource(urlpath, **kwargs)
+    if cache_storage is None:
+        return blosc2.Proxy(src)
+
+    path = fsspec_cache_path(urlpath, cache_storage, ".b2nd")
+    if os.path.exists(path) and _cache_stamp(path) != src.stamp:
+        # The remote frame was replaced, which makes every cached chunk -- and
+        # every offset they were fetched by -- meaningless
+        blosc2.remove_urlpath(path)
+    # Proxy stamps the cache with src.stamp itself, and refuses one built against
+    # other bytes; removing it above is what turns that refusal into a refetch
+    return blosc2.Proxy(src, urlpath=path, mode="a")
+
+
+def _cache_stamp(path: str):
+    """The remote stamp a cached proxy container was built against, if any.
+
+    None for a cache that cannot be read at all, which an interrupted run can
+    leave behind: the caller throws those away just like a stale one.
+    """
+    _set_default_dparams(kwargs := {})
+    try:
+        cache = blosc2_ext.open(path, "r", 0, **kwargs)
+    except RuntimeError:
+        return None
+    return getattr(cache, "schunk", cache).vlmeta.get("fsspec-stamp")
+
+
+def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):
+    """Open a container living behind an fsspec URL.
+
+    Without `cache_storage`, the whole object is fetched in one go and rebuilt in
+    memory, which is the right thing for a one-shot read of a small container but
+    only works for single-file ones.  With `cache_storage`, the container is
+    materialized under that directory and opened as an ordinary local path, so
+    every format, `mmap_mode` and `offset` work.  With `lazy`, nothing is fetched
+    up front and each slice pulls just the chunks it needs.
+    """
+    if mode != "r":
+        raise NotImplementedError(f"fsspec URLs can only be opened with mode='r', not {mode!r}")
+
+    cache_storage = kwargs.pop("cache_storage", None)
+    max_concurrency = kwargs.pop("max_concurrency", None)
+    if kwargs.pop("lazy", False):
+        if offset != 0:
+            raise NotImplementedError("offset is not supported with lazy=True")
+        requested = [k for k, v in kwargs.items() if v is not None]
+        if requested:
+            raise NotImplementedError(f"{', '.join(requested)} is not supported with lazy=True")
+        return _lazy_fsspec_proxy(urlpath, cache_storage, max_concurrency)
+
+    if max_concurrency is not None:
+        # Nothing is fetched chunk by chunk here, so there is nothing to overlap
+        raise NotImplementedError("max_concurrency is only supported with lazy=True")
+
+    if cache_storage is not None:
+        return open(localize_fsspec_url(urlpath, cache_storage), mode, offset, **kwargs)
+
+    if offset != 0:
+        raise NotImplementedError("offset on an fsspec URL requires passing cache_storage=")
+    # Unset options (dparams=None and friends) are not a request for anything
+    requested = [k for k, v in kwargs.items() if v is not None]
+    if requested:
+        raise NotImplementedError(f"{', '.join(requested)} on an fsspec URL requires passing cache_storage=")
+    if urlpath.split("?", 1)[0].split("#", 1)[0].endswith(".b2d"):
+        raise NotImplementedError(
+            "directory containers (.b2d, sparse frames) on an fsspec URL require "
+            "passing cache_storage= to fetch them locally first"
+        )
+    with fsspec_open(urlpath, "rb") as f:
+        return blosc2.from_cframe(f.read())
+
+
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath,
     mode: str = "r",
@@ -1956,7 +2085,9 @@ def open(
     ----------
     urlpath: str | pathlib.Path | :ref:`URLPath`
         The path where the :ref:`SChunk` (or :ref:`NDArray`)
-        is stored. If it is a remote array, a :ref:`URLPath` must be passed.
+        is stored. If it is a remote Caterva2 array, a :ref:`URLPath` must be passed.
+        Any other URL with a scheme (``s3://``, ``gs://``, ``zip://``, ``memory://``...)
+        is opened through fsspec; see the `Notes` section for the limits.
     mode: str, optional
         Persistence mode: 'r' means read only (must exist);
         'a' means read/write (create if it doesn't exist);
@@ -1974,6 +2105,30 @@ def open(
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
     kwargs: dict, optional
+        lazy: bool, optional
+            Only for fsspec URLs: return a :ref:`Proxy` that leaves the container
+            where it is and reads what a slice touches, in range requests,
+            instead of transferring the whole thing. Contiguous frames holding an
+            :ref:`NDArray` only. A slice landing in a small part of a large chunk
+            costs only the *blocks* it touches, which for the partitions
+            :func:`blosc2.asarray` picks by default can be a hundredth of the
+            chunk; chunks small enough to be one cheap request are still fetched
+            whole. What arrives is kept in memory, or in ``cache_storage`` when
+            that is given as well.
+        max_concurrency: int, optional
+            Only with ``lazy``: how many fetches to run at once, in a thread
+            pool. A slice against an object store is almost entirely round-trip
+            latency, so overlapping the requests is what makes a wide slice
+            bearable. Defaults to 8; pass 1 for a protocol with no latency to
+            hide, where the pool costs about 10 microseconds per chunk and saves
+            nothing.
+        cache_storage: str | pathlib.Path, optional
+            Only for fsspec URLs: a directory holding this container's local
+            copy — the whole thing, or just the chunks and blocks ``lazy`` has
+            fetched so far. Either way a later run starts from what is already
+            there, and the copy is discarded when the remote no longer matches
+            it. There is no default on purpose, so nothing writes to a disk you
+            did not name.
         mmap_mode: str, optional
             If set, the file will be memory-mapped instead of using the default
             I/O functions and the `mode` argument will be ignored.
@@ -2013,6 +2168,16 @@ def open(
 
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
       must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
+
+    * fsspec URLs need the ``fsspec`` extra (``pip install "blosc2[fsspec]"``) and
+      the driver for the protocol (``s3fs``, ``gcsfs``...), which fsspec asks for
+      by name when it is missing; credentials are configured there, not here.
+      ``mode != 'r'`` always raises, as object stores have no rename and no locks.
+      A plain URL read rebuilds the object from a cframe held in memory, so it
+      covers ``.b2nd``, ``.b2f`` and ``.b2e`` only -- a ``.b2z`` store is a zip
+      archive rather than a cframe, and needs ``cache_storage`` like the
+      directory formats do.  ``cache_storage`` and ``lazy`` above lift that, each
+      in its own way.
 
     * Persistent data handling follows a strict no-hidden-writes rule:
 
@@ -2075,6 +2240,10 @@ def open(
 
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
+    urlpath = normalize_urlpath(urlpath)
+
+    if is_fsspec_url(urlpath):
+        return _open_fsspec_url(urlpath, mode, offset, kwargs)
 
     # Keep explicit store paths on the direct dispatch path.  For regular
     # Blosc containers, try the standard open first and only fall back to the
