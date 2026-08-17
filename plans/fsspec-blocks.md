@@ -41,8 +41,11 @@ A.3a as recommended. What the code does differently from the design below:
   would need the cache to hold blocks apart from their chunk — a different
   container, not a smaller change.
 
-Route B (the io-callback bridge) stays unbuilt, and stays the answer for the
-formats route A cannot reach.
+Route B (the io-callback bridge) was prototyped and rejected: it works and it
+does reach the formats route A cannot, but c-blosc2 reads lazy blocks serially,
+which makes it ~3x slower than route A at 15 ms of latency and worse as latency
+grows. See the route B section below for what the prototype settled, and branch
+`fsspec-routeb-spike` for the code.
 
 ## The question
 
@@ -237,6 +240,47 @@ runs, memcpyed / nblocks==1 / short last block / dict / special chunks, bitmap
 migration). Roughly the size of phase 3 itself.
 
 ## Route B — a Python io callback, block granularity for free
+
+**Prototyped 2026-08-17 on branch `fsspec-routeb-spike`, and the answer is no —
+not as the fsspec transport.** It works, it reaches the formats route A cannot,
+and it is slower than route A by a factor that grows with latency. What the
+prototype settled, in the order it came out:
+
+1. **It works.** A `blosc2_io_cb` whose `open`/`size`/`read` call a Python object
+   opens a remote frame through `blosc2_schunk_open_offset_udio` and hands back
+   an ordinary `NDArray`. Reads are block-granular as promised: a slice landing in
+   one block of a 1.21 MB chunk moved 0.122 MB.
+2. **It reaches what route A refuses.** A plain SChunk with no `b2nd` metalayer
+   reads fine, where `FsspecNDSource` raises `NotImplementedError` on the same
+   file. That is the whole argument for route B, and it holds.
+3. **The GIL worry was unfounded, for a reason that costs more than it saves.**
+   The callbacks are only ever invoked from the calling thread, so there is no
+   contention and no deadlock — because `_blosc_getitem` (blosc2.c:4265) is a
+   plain serial `for` loop over blocks. The lazy path has no thread pool at all.
+4. **Serial is the wrong shape for an object store.** Same bytes as route A, more
+   requests, none of them overlapped. With 15 ms per request: a one-block window
+   costs 0.123 s against route A's 0.042 s, and ten blocks 0.090 s against 0.024 s
+   — 3x, widening as latency grows, because route A answers in two pooled waves
+   and route B in N sequential round trips. Nothing inside c-blosc2 can batch or
+   overlap them.
+5. **The io plugin cannot virtualize a path.** `frame_from_file_offset`
+   (frame.c:1737) calls `stat()` on the urlpath *before* consulting the
+   callbacks, to tell a sparse frame from a contiguous one and to bound the frame
+   length against the file size. So a URL fails at open; the prototype had to
+   pass a sparse local placeholder of the right size. Making route B real means
+   an upstream change: probe the path through the io callbacks, not `stat`.
+6. **The id ranges in `blosc2.h` are a trap.** `BLOSC_IO_LAST_REGISTERED` (32)
+   and `BLOSC2_IO_REGISTERED` (160) read alike and mean different things —
+   registration rejects anything below 160 — while `BLOSC2_IO_USER_DEFINED` (256)
+   cannot fit the `uint8_t id` field that carries it. A third-party plugin has no
+   range of its own and must squat in 160–255.
+
+So route B stays unbuilt, and the formats it would reach keep using
+`cache_storage=`, which downloads them whole but does so in one request rather
+than N serial ones. Reviving it is worth it only alongside items 5 and 4 upstream
+— io-based path probing, and some way to overlap lazy block reads.
+
+The rest of this section is the original design.
 
 Register a `blosc2_io_cb` whose `open`/`read`/`size` serve fsspec ranges, and
 open the remote frame as an ordinary schunk through
