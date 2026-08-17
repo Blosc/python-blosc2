@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import atexit
 import os
+import threading
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -36,6 +38,64 @@ def _httpx():
     import httpx
 
     return httpx
+
+
+_client = None
+_client_lock = threading.Lock()
+
+
+def _forgetful_cookies(httpx):
+    """A cookie jar that never keeps anything, for the shared client.
+
+    A client of its own per request could not carry a cookie from one request to
+    the next; a shared one can, and must not: the token belongs to the C2Array
+    being read, and arrays with different tokens (or none) share this client.  A
+    `Set-Cookie` from any response would otherwise start authorizing requests
+    that asked for none.
+    """
+
+    class _NoCookies(httpx.Cookies):
+        def extract_cookies(self, response):
+            pass
+
+    return _NoCookies()
+
+
+def _sync_client():
+    """The process-wide HTTP client every synchronous request goes through.
+
+    `httpx.get()` builds a client, opens a connection and negotiates TLS for
+    each call and throws all of it away afterwards, which over a WAN link
+    measured ~0.37 s per request -- most of what a small read costs, and paid
+    once per chunk.  A pooled client keeps the connection alive between
+    requests; it is thread-safe, which is what lets `Proxy` fan its fetches out.
+
+    Auth stays per call rather than on the client: the cookie belongs to the
+    C2Array being read, and several of them (with different tokens, or none)
+    share this one client.
+    """
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                httpx = _httpx()
+                # More connections than `Proxy`'s default concurrency, so that a
+                # caller raising it does not queue on the pool; keepalive covers
+                # the fan-out of one fetch, which is what there is to reuse
+                _client = httpx.Client(
+                    timeout=TIMEOUT,
+                    limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
+                    cookies=_forgetful_cookies(httpx),
+                )
+    return _client
+
+
+@atexit.register
+def _close_sync_client():
+    global _client
+    if _client is not None:
+        _client.close()
+        _client = None
 
 
 @contextmanager
@@ -121,7 +181,7 @@ def _auth_headers(auth_token, headers=None):
 
 def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
     headers = _auth_headers(auth_token, headers)
-    response = _httpx().get(url, params=params, headers=headers, timeout=timeout)
+    response = _sync_client().get(url, params=params, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response
 
@@ -129,7 +189,7 @@ def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
 def _xpost(url, json=None, auth_token=None, timeout=TIMEOUT):
     auth_token = auth_token or _subscriber_data["auth_token"]
     headers = {"Cookie": auth_token} if auth_token else None
-    response = _httpx().post(url, json=json, headers=headers, timeout=timeout)
+    response = _sync_client().post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
@@ -144,6 +204,8 @@ def _sub_url(urlbase, path):
 def login(username, password, urlbase):
     url = _sub_url(urlbase, "auth/jwt/login")
     creds = {"username": username, "password": password}
+    # Not the pooled client: this is the one request whose Set-Cookie matters,
+    # and it belongs to the caller rather than to every later request
     resp = _httpx().post(url, data=creds, timeout=TIMEOUT)
     resp.raise_for_status()
     return "=".join(list(resp.cookies.items())[0])

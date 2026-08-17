@@ -27,6 +27,8 @@ class _FakeResponse:
 
 
 class _FakeHttpx:
+    """Stands in for both the httpx module and the pooled sync client."""
+
     HTTPStatusError = Exception
 
     def __init__(self, meta):
@@ -47,7 +49,9 @@ def fake_c2array(monkeypatch):
         "dtype": str(array.dtype),
         "schunk": {"cparams": {"typesize": array.dtype.itemsize}},
     }
-    monkeypatch.setattr(c2array_mod, "_httpx", lambda: _FakeHttpx(meta))
+    fake = _FakeHttpx(meta)
+    monkeypatch.setattr(c2array_mod, "_httpx", lambda: fake)
+    monkeypatch.setattr(c2array_mod, "_sync_client", lambda: fake)
     c2 = blosc2.C2Array("@public/fake.b2nd", urlbase="http://fake-server/")
     c2._chunks_source = array  # stash the real array to serve chunk bytes from
     return c2
