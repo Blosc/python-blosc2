@@ -241,6 +241,23 @@ cdef extern from "blosc2.h":
         BLOSC2_IO_FILESYSTEM_MMAP
         BLOSC_IO_LAST_BLOSC_DEFINED
         BLOSC_IO_LAST_REGISTERED
+        BLOSC2_IO_REGISTERED
+
+    ctypedef struct blosc2_io_cb:
+        uint8_t id
+        char* name
+        c_bool is_allocation_necessary
+        void* (*open)(const char *urlpath, const char *mode, void *params) noexcept nogil
+        int (*close)(void *stream) noexcept nogil
+        int64_t (*size)(void *stream) noexcept nogil
+        int64_t (*write)(const void *ptr, int64_t size, int64_t nitems,
+                         int64_t position, void *stream) noexcept nogil
+        int64_t (*read)(void **ptr, int64_t size, int64_t nitems,
+                        int64_t position, void *stream) noexcept nogil
+        int (*truncate)(void *stream, int64_t size) noexcept nogil
+        int (*destroy)(void *params) noexcept nogil
+
+    int blosc2_register_io_cb(const blosc2_io_cb *io)
 
     cdef int INT_MAX
 
@@ -1620,6 +1637,102 @@ cdef blosc2_io _locking_io
 _locking_io.id = BLOSC2_IO_FILESYSTEM
 _locking_io.name = "filesystem"
 _locking_io.params = &_locking_params
+
+
+# --- Prototype: serve a frame's bytes from Python, block by block ------------
+#
+# c-blosc2 reads a lazy chunk's blocks one at a time through the io callbacks of
+# the schunk's storage (blosc2.c, "Read the lazy block on disk"), so a callback
+# set that answers from an object store gives block-granular reads for *every*
+# container format -- sparse frames and .b2d stores included -- rather than only
+# for the contiguous frames FsspecNDSource can parse.  This is route B of
+# plans/fsspec-blocks.md, here far enough to answer whether the GIL and the
+# request pattern make it viable.  Not public API: blosc2.open() does not reach
+# it, and the id below squats on the registered range because the header's
+# user-defined one (256) does not fit the uint8 field that carries it.
+_udio_readers = {}
+
+cdef blosc2_io_cb _udio_cb
+cdef c_bool _udio_registered = False
+
+
+cdef void* _udio_open(const char *urlpath, const char *mode, void *params) noexcept nogil:
+    cdef void* stream = NULL
+    with gil:
+        # Borrowed: _udio_readers keeps the reader alive until it is unregistered,
+        # which the caller does only once the schunk it serves is gone
+        reader = _udio_readers.get(<bytes> urlpath)
+        if reader is not None:
+            stream = <void*> reader
+    return stream
+
+
+cdef int _udio_close(void *stream) noexcept nogil:
+    return 0
+
+
+cdef int64_t _udio_size(void *stream) noexcept nogil:
+    cdef int64_t nbytes = -1
+    with gil:
+        nbytes = (<object> stream).size
+    return nbytes
+
+
+cdef int64_t _udio_read(void **ptr, int64_t size, int64_t nitems,
+                        int64_t position, void *stream) noexcept nogil:
+    """Fill *ptr with size*nitems bytes at *position*, and say how many items landed."""
+    cdef int64_t nbytes = size * nitems
+    cdef const char* src
+    cdef c_bool complete = False
+    if nbytes <= 0 or ptr[0] == NULL:
+        return 0
+    with gil:
+        data = (<object> stream).read(position, nbytes)
+        complete = len(data) == nbytes
+        if complete:
+            src = data
+            memcpy(ptr[0], src, nbytes)
+    return nitems if complete else 0
+
+
+cdef int64_t _udio_write(const void *ptr, int64_t size, int64_t nitems,
+                         int64_t position, void *stream) noexcept nogil:
+    return 0  # read-only, as an object store is for a frame being written
+
+
+cdef int _udio_truncate(void *stream, int64_t size) noexcept nogil:
+    return -1
+
+
+cdef int _udio_destroy(void *params) noexcept nogil:
+    return 0
+
+
+cdef _register_udio():
+    global _udio_registered
+    if _udio_registered:
+        return
+    # The lowest id registration accepts. Note this is *not* BLOSC_IO_LAST_REGISTERED
+    # (32): the two enums in blosc2.h read alike and mean different things, and the
+    # user-defined range the header names (256) does not fit the uint8 id field.
+    _udio_cb.id = BLOSC2_IO_REGISTERED
+    _udio_cb.name = <char*> "python"
+    _udio_cb.is_allocation_necessary = True
+    _udio_cb.open = _udio_open
+    _udio_cb.close = _udio_close
+    _udio_cb.size = _udio_size
+    _udio_cb.write = _udio_write
+    _udio_cb.read = _udio_read
+    _udio_cb.truncate = _udio_truncate
+    _udio_cb.destroy = _udio_destroy
+    if blosc2_register_io_cb(&_udio_cb) < 0:
+        raise RuntimeError("Could not register the Python I/O callbacks")
+    _udio_registered = True
+
+
+def _udio_unregister(urlpath):
+    """Forget the reader for *urlpath*; call once nothing is reading it."""
+    _udio_readers.pop(urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath, None)
 
 
 cdef create_storage(blosc2_storage *storage, kwargs):
@@ -3388,6 +3501,8 @@ def open(urlpath, mode, offset, **kwargs):
     cdef blosc2_stdio_mmap* mmap_file
     cdef blosc2_io* io
 
+    # Prototype (route B): serve this frame's bytes from a Python object
+    udio_reader = kwargs.pop("_udio_reader", None)
     mmap_mode = kwargs.get("mmap_mode")
     locking = kwargs.get("locking")
     if locking and mmap_mode is not None:
@@ -3406,7 +3521,16 @@ def open(urlpath, mode, offset, **kwargs):
         if mmap_mode == "r":
             raise ValueError("initial_mapping_size can only be used with writing modes (r+, c)")
 
-    if mmap_mode is None:
+    if udio_reader is not None:
+        _register_udio()
+        _udio_readers[urlpath_] = udio_reader
+        # Leaked on purpose, as the mmap path does: the io must outlive the schunk
+        io = <blosc2_io *> malloc(sizeof(blosc2_io))
+        io.id = _udio_cb.id
+        io.name = _udio_cb.name
+        io.params = NULL
+        schunk = blosc2_schunk_open_offset_udio(urlpath_, offset, io)
+    elif mmap_mode is None:
         if locking:
             schunk = blosc2_schunk_open_offset_udio(urlpath_, offset, &_locking_io)
         else:
@@ -3427,8 +3551,10 @@ def open(urlpath, mode, offset, **kwargs):
         schunk = blosc2_schunk_open_offset_udio(urlpath_, offset, io)
 
     if schunk == NULL:
-        if mmap_mode is not None:
+        if mmap_mode is not None or udio_reader is not None:
             free(io)
+        if udio_reader is not None:
+            _udio_readers.pop(urlpath_, None)
         raise RuntimeError(f'blosc2_schunk_open_offset({urlpath!r}, {offset!r}) returned NULL')
 
     is_ndarray = schunk_is_ndarray(schunk)
