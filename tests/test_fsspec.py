@@ -1003,3 +1003,18 @@ def test_lazy_eviction_survives_a_reopen(tmp_path, monkeypatch, any_chunk_wants_
     q = blosc2.open(url, lazy=True, cache_storage=cache)
     assert np.array_equal(q[0:5, 0:10], data[0:5, 0:10])
     assert len(reads) > fetched
+
+
+def test_lazy_blocks_with_a_repeated_value_chunk(monkeypatch, any_chunk_wants_blocks):
+    # blosc2.full() writes a chunk that is its header plus the value it repeats,
+    # at a real offset -- unlike a run of zeros, which the frame keeps in the
+    # offsets themselves.  There are no block offsets to read there, and reading
+    # them anyway walks into whatever follows the chunk.
+    a = blosc2.full((400, 500), fill_value=3.5, chunks=(200, 500), blocks=(20, 500))
+    reads, chunks = _traffic(monkeypatch)
+    p = blosc2.open(_put("repeated.b2nd", a), lazy=True)
+
+    assert p.src.chunk_layout(0) is None
+    assert np.array_equal(p[0:5, 0:10], np.full((5, 10), 3.5))
+    assert len(chunks) == 1
+    assert np.array_equal(p[...], np.full((400, 500), 3.5))

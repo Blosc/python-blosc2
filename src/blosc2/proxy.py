@@ -508,6 +508,11 @@ class Proxy(blosc2.Operand):
                 lo = max(start - int(coords[dim]) * chunks[dim], 0)
                 hi = min(stop - int(coords[dim]) * chunks[dim], chunks[dim])
                 ranges.append(range(lo // blocks[dim], (hi - 1) // blocks[dim] + 1))
+            if all(len(r) == n for r, n in zip(ranges, blocks_in_chunk, strict=True)):
+                # The slice covers this chunk whole, so naming its blocks one by
+                # one only to name all of them is the expensive way to say `every`
+                wanted[nchunk] = every
+                continue
             wanted[nchunk] = [
                 int(np.ravel_multi_index(b, blocks_in_chunk)) for b in itertools.product(*ranges)
             ]
@@ -1289,6 +1294,9 @@ class FsspecNDSource(ProxyNDSource):
 
         - a chunk of a single block is its own block, and a memcpyed one stores its
           blocks raw with no ``bstarts`` at all;
+        - a chunk that is a run of one value is its header and that value, with no
+          blocks in the file: `blosc2.full` writes those at a real offset, unlike
+          the runs of zeros the frame keeps in the offsets themselves;
         - a chunk compressed against a codec dictionary keeps it between
           ``bstarts`` and the streams, and `_splice_chunk` would drop it while
           leaving the flag that promises it;
@@ -1305,15 +1313,21 @@ class FsspecNDSource(ProxyNDSource):
             return cached
         nblocks = self.blocks_per_chunk
         offset = int(self._offsets[nchunk])
-        head = self.read_range(offset, _CHUNK_HEADER_LEN + 4 * nblocks)
+        section = _CHUNK_HEADER_LEN + 4 * nblocks
+        head = self.read_range(offset, section)
         cbytes = struct.unpack("<i", head[12:16])[0]
         extended = head[2] & 0x01 and head[2] & 0x04  # both shuffle bits: see the format doc
         if (
             nblocks == 1
             or head[2] & 0x02  # memcpyed
+            or (head[31] >> 4) & 0x7  # a run of one value: header and value, no blocks
             or head[31] & 0x01  # compressed against a dictionary
             or head[30] & 0x01  # variable-length blocks
             or not extended
+            # Whatever else a chunk may be, one too small to hold a block-offsets
+            # section has none: reading 32 bytes in would be reading the next chunk
+            or cbytes < section
+            or len(head) < section
         ):
             layout = None
         else:
