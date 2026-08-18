@@ -6,6 +6,7 @@
 #######################################################################
 
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
@@ -852,3 +853,44 @@ def test_dict_store_overwrite_key_across_tiers(tmp_path):
         dstore["/k"] = np.array([9], dtype=np.int8)  # embedded overwrite
         assert len(dstore) == 1
         assert dstore["/k"][:].tolist() == [9]
+
+
+def test_member_window(populated_dict_store):
+    """Where a leaf's frame lies in a .b2z, for a reader that can take a window.
+
+    A zip store writes each external leaf uncompressed, so those bytes are the
+    frame the leaf would have been written as on its own -- which is what lets a
+    server hand a byte-range reader the window instead of rebuilding the leaf.
+    """
+    dstore, path = populated_dict_store
+    dstore.close()
+    reopened = blosc2.open(path)
+
+    if path.endswith(".b2d"):  # a directory store keeps each leaf in a file
+        assert all(reopened.member_window(key) is None for key in reopened)
+        return
+
+    raw = pathlib.Path(path).read_bytes()
+    windows = {key: reopened.member_window(key) for key in reopened}
+    assert any(window is not None for window in windows.values())
+    for key, window in windows.items():
+        if window is None:
+            # An embedded leaf lives inside the store's own compressed
+            # super-chunk, so it has no window in the file to point at
+            assert key in reopened.estore
+            continue
+        offset, nbytes = window
+        frame = raw[offset : offset + nbytes]
+        assert frame[2:9] == b"b2frame"  # a whole frame, starting where it says
+        assert np.array_equal(blosc2.from_cframe(frame)[:], reopened[key][:])
+    # ... and nothing is claimed for what has no window of its own
+    assert reopened.member_window("/nope") is None
+
+
+def test_member_window_of_a_tree_group(tmp_path):
+    path = str(tmp_path / "grouped.b2z")
+    with blosc2.TreeStore(path, mode="w") as tstore:
+        tstore["/g/leaf"] = np.arange(10, dtype="i4")
+    tstore = blosc2.open(path)
+    assert tstore.member_window("/g/leaf") is not None
+    assert tstore.member_window("/g") is None  # a group is not a leaf

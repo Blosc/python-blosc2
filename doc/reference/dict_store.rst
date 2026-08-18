@@ -90,7 +90,11 @@ Quick example
     -----------
     Use :meth:`DictStore.to_b2z` to pack a directory-backed store into a
     ``.b2z`` archive, and :meth:`DictStore.to_b2d` to materialize a store as a
-    ``.b2d`` directory.
+    ``.b2d`` directory.  :meth:`DictStore.member_window` says where a leaf's
+    frame lies inside a ``.b2z``, for a reader that can take a byte window
+    rather than the leaf itself.
+
+    .. automethod:: member_window
 
     Public Members
     --------------

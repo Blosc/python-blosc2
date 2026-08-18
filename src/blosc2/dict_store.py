@@ -439,6 +439,51 @@ class DictStore:
             if os.path.splitext(filepath)[1] in external_exts or self._probe_external_leaf_offset(filepath):
                 self.map_tree[self._logical_key_from_relpath(filepath)] = filepath
 
+    def member_window(self, key: str) -> tuple[int, int] | None:
+        """Where the frame behind *key* lies in the ``.b2z``, as ``(offset, nbytes)``.
+
+        A zip store keeps each external leaf as a *stored* member, so those bytes
+        are the leaf's Blosc2 frame as it would have been written on its own:
+        self-contained, beginning at ``offset``, and readable by anything that
+        reads a frame -- ``blosc2.open(path, offset=offset)`` is what this store
+        does with it, and a server can hand the same window to a byte-range
+        reader instead of rebuilding the leaf per request.
+
+        None when there is no such window, which is not an error but an answer:
+        a directory-backed store keeps its leaves in files of their own, an
+        embedded leaf lives inside the store's own compressed super-chunk, a
+        :ref:`C2Array` leaf is a reference rather than bytes, and a key that
+        names a group or nothing at all has none either.
+
+        Parameters
+        ----------
+        key: str
+            The logical key of the leaf, as :meth:`keys` reports it.
+
+        Returns
+        -------
+        out: tuple or None
+            ``(offset, nbytes)`` into the ``.b2z`` file, or None.
+
+        Examples
+        --------
+        >>> import numpy as np, blosc2
+        >>> with blosc2.TreeStore("win.b2z", mode="w") as tstore:
+        ...     tstore["/a"] = np.arange(1000, dtype="i4")
+        >>> tstore = blosc2.open("win.b2z")
+        >>> offset, nbytes = tstore.member_window("/a")
+        >>> frame = open("win.b2z", "rb").read()[offset : offset + nbytes]
+        >>> np.array_equal(blosc2.ndarray_from_cframe(frame)[:], np.arange(1000, dtype="i4"))
+        True
+        """
+        if not self.is_zip_store:
+            return None
+        relpath = self.map_tree.get(key)
+        if relpath is None:
+            return None
+        window = self.offsets.get(relpath)
+        return (window["offset"], window["length"]) if window else None
+
     def _annotate_external_value(
         self,
         key: str,
