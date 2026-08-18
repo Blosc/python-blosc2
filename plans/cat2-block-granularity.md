@@ -440,12 +440,12 @@ batched again.
 
 ### Left undone
 
-- **A container leaf could serve ranges too.** A TreeStore keeps its leaves as
-  ordinary frames inside the `.b2z`, so the bytes a block reader wants are in
-  the file at a fixed offset -- what is missing is a way for the server to say
-  where a leaf's frame starts, and for the client to add that base to every
-  range.  Worth its own plan; it would give `.b2z` members everything a plain
-  `.b2nd` has.
+- ~~**A container leaf could serve ranges too.**~~ It does now, and it took no
+  client change at all: see [plans/container-leaf-ranges.md](container-leaf-ranges.md).
+  The subscriber serves a leaf out of its window in the `.b2z`, so what arrives
+  is a frame beginning at 0 and everything written for a `.b2nd` applies. 2.8x
+  on a point read of a leaf, 20x fewer bytes, and the same table as a plain
+  array row for row.
 - **Opening a frame could be one request rather than two**, with a suffix range
   (`Range: bytes=-65536`) batched with the head read.  No fsspec backend exposes
   suffix ranges and `read_ranges` has no way to express one, so it would be a
