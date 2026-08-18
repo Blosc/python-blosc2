@@ -314,8 +314,18 @@ print(r.status_code, r.headers.get("content-range"), len(r.content))
 # 200 None 14435027                -> served by a body builder, blocks must not be used
 ```
 
-`bench/ndarray/fsspec-block-granularity.py` measures the touch ratios of any
-local array, which is what decides whether a given dataset would benefit at all.
+`bench/ndarray/cat2-block-granularity.py` answers all of this for a dataset of
+your choosing, and needs no server to point at (it stands one in over loopback):
+
+```sh
+python bench/ndarray/cat2-block-granularity.py mydata.b2nd
+python bench/ndarray/cat2-block-granularity.py @public/examples/kevlar-tomo.b2nd \
+    --urlbase https://cat2.cloud/demo
+```
+
+It says whether the dataset serves ranges at all, what each mode would ask for,
+and what each one costs. `bench/ndarray/fsspec-block-granularity.py` is the same
+question for an fsspec URL.
 
 ## What landed
 

@@ -1,0 +1,550 @@
+#!/usr/bin/env python
+
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#######################################################################
+
+"""Would block-granular reads beat whole-chunk ones for a given Caterva2 dataset?
+
+A ``Proxy`` over a ``C2Array`` used to fetch one whole compressed chunk per
+request, through ``api/chunk``.  A chunk is made of blocks, which blosc2
+compresses and decompresses independently, and Caterva2 serves a *stored*
+dataset straight from its file, so ``api/fetch`` honours a ``Range`` header and
+a slice can fetch only the blocks it touches.  Whether that pays depends on
+three things this script measures against a subscriber of your choosing:
+
+- whether the dataset **serves ranges at all**.  One stored from a file does;
+  one the subscriber computes -- a lazy expression, an HDF5 leaf, a ``.b2z``
+  member -- is streamed, cannot honour a range, and keeps to whole chunks;
+- the **request plan**: how many requests each mode issues and how many bytes
+  they carry, read from the frame's own chunk headers for a few hundred bytes;
+- the **wall time** of each pattern, which is the shipped code fetching real
+  slices from a real server.
+
+Usage
+-----
+    # a local array, served by a stand-in subscriber over loopback
+    python cat2-block-granularity.py mydata.b2nd
+
+    # ... with a network put back in front of every request
+    python cat2-block-granularity.py mydata.b2nd --latency-ms 45 --bandwidth-mbs 10
+
+    # ... served the way a computed dataset is, which is what the fallback costs
+    python cat2-block-granularity.py mydata.b2nd --streamed
+
+    # against a real subscriber
+    python cat2-block-granularity.py @public/examples/kevlar-tomo.b2nd \\
+        --urlbase https://cat2.cloud/demo
+
+    # ... an authenticated dataset
+    python cat2-block-granularity.py @personal/mine.b2nd --urlbase http://localhost:8000 \\
+        --username me@example.com --password foobar11
+
+Three modes are timed, each of them the shipped code with one thing changed:
+
+- ``chunks``: one ``api/chunk`` request per touched chunk.  What a proxy over a
+  C2Array did before blocks existed, and what it still does for a dataset that
+  cannot serve ranges or whose chunks are too small to be worth taking apart.
+- ``blocks``: one request for the block offsets of each chunk worth taking
+  apart, then one per coalesced run of the blocks wanted.  Two dependent waves.
+- ``multipart``: the same two waves, each collapsed into a single request --
+  RFC 7233 lets one ``Range`` header name many spans, and Caterva2 answers
+  ``multipart/byteranges``.  No object store offers this.
+
+The stand-in subscriber answers ``api/info``, ``api/fetch`` and ``api/chunk``
+the way Caterva2 does, ranges and multipart included (it sorts and merges the
+spans it is given, as Starlette does, which is what the client has to survive).
+Its request and byte counts are exact.  Its *times* are not a subscriber's:
+loopback answers in a fraction of a millisecond, where a subscriber over a WAN
+takes tens of milliseconds, which is the regime the whole trade lives in.
+``--latency-ms`` and ``--bandwidth-mbs`` put a stated network back in front of
+each request; cat2.cloud from Europe measures about ``--latency-ms 45
+--bandwidth-mbs 10``.  The simulated bandwidth is *per request*, so eight
+parallel ones get eight times as much of it -- which is about right for an
+object store and about wrong for one subscriber, and is why ``multipart`` can
+come out behind ``blocks`` there while it wins against the real thing.
+
+Bytes counted are payload: the multipart envelope (about a hundred bytes per
+part) and the HTTP headers of every request are not in them.
+"""
+
+import argparse
+import http.server
+import json
+import math
+import pathlib
+import statistics
+import struct
+import threading
+import time
+
+import blosc2
+from blosc2 import c2array
+
+CHUNK_HEADER = blosc2.proxy._CHUNK_HEADER_LEN
+
+
+#
+# A stand-in subscriber, so this runs with no service to point at
+#
+
+
+class Subscriber:
+    """Caterva2's three read endpoints over one local .b2nd file."""
+
+    def __init__(self, urlpath, streamed=False):
+        self.path = pathlib.Path(urlpath)
+        self.size = self.path.stat().st_size
+        self.array = blosc2.open(str(self.path))
+        # A dataset the subscriber would compute rather than store: served by a
+        # body builder, which has no way to honour a Range
+        self.streamed = streamed
+
+    def meta(self):
+        schunk = self.array.schunk
+        return {
+            "shape": list(self.array.shape),
+            "chunks": list(self.array.chunks),
+            "blocks": list(self.array.blocks),
+            "dtype": str(self.array.dtype),
+            "mtime": None,
+            "schunk": {
+                "cparams": {"typesize": self.array.dtype.itemsize},
+                "nbytes": schunk.nbytes,
+                "cbytes": schunk.cbytes,
+                "cratio": schunk.cratio,
+                "blocksize": schunk.blocksize,
+                "vlmeta": {},
+            },
+        }
+
+    def read(self, start, end):
+        """The bytes at [start, end], seeked to rather than materialized."""
+        with self.path.open("rb") as frame:
+            frame.seek(start)
+            return frame.read(end - start + 1)
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    BOUNDARY = "c2boundary"
+
+    def log_message(self, *args):
+        pass
+
+    def _send(self, status, body, headers=()):
+        self.send_response(status)
+        for name, value in headers:
+            self.send_header(name, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):  # noqa: N802 (BaseHTTPRequestHandler's own spelling)
+        sub = self.server.subscriber
+        endpoint = self.path.split("/")[2]
+        if endpoint == "info":
+            self._send(200, json.dumps(sub.meta()).encode())
+        elif endpoint == "chunk":
+            nchunk = int(self.path.split("nchunk=")[1])
+            self._send(200, sub.array.schunk.get_chunk(nchunk))
+        elif endpoint == "fetch":
+            self._fetch(sub)
+        else:
+            self._send(404, b"")
+
+    def _fetch(self, sub):
+        wanted = self.headers.get("Range")
+        if sub.streamed:
+            # What the streaming paths answer since they were made honest: a 416
+            # instead of the whole body with a 200 that no client could notice
+            if wanted:
+                self._send(416, b"", [("Accept-Ranges", "none")])
+            else:
+                self._send(200, sub.read(0, sub.size - 1), [("Accept-Ranges", "none")])
+            return
+        if not wanted:
+            self._send(200, sub.read(0, sub.size - 1), [("Accept-Ranges", "bytes")])
+            return
+        spans = []
+        for span in wanted.removeprefix("bytes=").split(","):
+            start, end = (int(n) for n in span.split("-"))
+            spans.append((start, min(end, sub.size - 1)))
+        # Starlette sorts the spans and merges the ones that touch, and answers a
+        # plain 206 when only one is left, so a client cannot count on a part per
+        # span nor on the order it asked in
+        spans.sort()
+        merged = [spans[0]]
+        for start, end in spans[1:]:
+            if start <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        if len(merged) == 1:
+            start, end = merged[0]
+            self._send(
+                206,
+                sub.read(start, end),
+                [("Content-Range", f"bytes {start}-{end}/{sub.size}"), ("Accept-Ranges", "bytes")],
+            )
+            return
+        body = b""
+        for start, end in merged:
+            body += (
+                f"--{self.BOUNDARY}\r\nContent-Type: application/octet-stream\r\n"
+                f"Content-Range: bytes {start}-{end}/{sub.size}\r\n\r\n"
+            ).encode()
+            body += sub.read(start, end) + b"\r\n"
+        body += f"--{self.BOUNDARY}--\r\n".encode()
+        self._send(
+            206,
+            body,
+            [
+                ("Content-Type", f"multipart/byteranges; boundary={self.BOUNDARY}"),
+                ("Accept-Ranges", "bytes"),
+            ],
+        )
+
+
+def stand_in(urlpath, streamed=False):
+    """Serve *urlpath* as ``@public/<name>``, and return (server, urlbase, path)."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.subscriber = Subscriber(urlpath, streamed)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    urlbase = f"http://127.0.0.1:{server.server_address[1]}/"
+    return server, urlbase, f"@public/{pathlib.Path(urlpath).name}"
+
+
+#
+# What each mode would ask for
+#
+
+
+def default_patterns(shape):
+    """Slices worth asking about, for an array of any shape (as in the fsspec bench)."""
+    mid = [s // 2 for s in shape]
+    return [
+        ("point", tuple(mid)),
+        ("line, last dim", (*mid[:-1], slice(None))),
+        ("line, first dim", (slice(None), *mid[1:])),
+        (
+            "window (1/64 per dim)",
+            tuple(slice(m, m + max(1, s // 64)) for m, s in zip(mid, shape, strict=True)),
+        ),
+        (
+            "slab (1% of dim 0)",
+            (slice(mid[0], mid[0] + max(1, shape[0] // 100)), *[slice(None)] * (len(shape) - 1)),
+        ),
+        (
+            "slab (10% of dim 0)",
+            (slice(mid[0], mid[0] + max(1, shape[0] // 10)), *[slice(None)] * (len(shape) - 1)),
+        ),
+    ]
+
+
+def chunk_cbytes(source, nchunks):
+    """The compressed size of each chunk, from 16 bytes of its header.
+
+    Read rather than guessed at: the distance to the next chunk is an upper
+    bound only, and a frame with a hole in it would make the chunk mode look
+    dearer than it is.  One request for the lot where the subscriber takes
+    several ranges, which is the same trick the fetch path uses.
+    """
+    live = [n for n in nchunks if int(source._offsets[n]) >= 0]
+    heads = source.read_ranges([(int(source._offsets[n]), 16) for n in live]) if live else []
+    sizes = dict.fromkeys(nchunks, 0)  # a run-length chunk has no bytes in the file
+    for nchunk, head in zip(live, heads, strict=True):
+        sizes[nchunk] = struct.unpack("<i", head[12:16])[0]
+    return sizes
+
+
+def request_plan(proxy, array, item):
+    """What each mode asks the subscriber for, to serve *item*.
+
+    Follows `Proxy._fetch_by_block` step for step -- which chunks the slice
+    touches, which of those are worth taking apart, one read for the block
+    offsets of each, then the coalesced runs of the blocks wanted -- so the
+    counts are the ones the fetch below will produce, not an idea of them.
+    """
+    source = array.block_source()
+    wanted = proxy._wanted_blocks(item)
+    sizes = chunk_cbytes(source, list(wanted))
+    layouts, runs, whole = [], [], []
+    nblocks_wanted = 0
+    for nchunk, nblocks in wanted.items():
+        nblocks = list(nblocks)
+        nblocks_wanted += len(nblocks)
+        if not sizes[nchunk]:  # a run-length chunk: free in every mode
+            continue
+        if not array.wants_blocks(nchunk, len(nblocks)) or source.chunk_layout(nchunk) is None:
+            whole.append(nchunk)  # a chunk not worth taking apart, or with nothing to take apart
+            continue
+        layouts.append(CHUNK_HEADER + 4 * array.blocks_per_chunk)
+        runs += [size for _, size, _ in source.block_plan(nchunk, nblocks)]
+    chunk_bytes = sum(sizes.values())
+    block_bytes = sum(layouts) + sum(runs) + sum(sizes[n] for n in whole)
+    batch = source.max_ranges
+    return {
+        "chunks touched": len(wanted),
+        "blocks wanted": nblocks_wanted,
+        "blocks total": len(wanted) * array.blocks_per_chunk,
+        "chunk requests": sum(1 for n in wanted if sizes[n]),
+        "chunk bytes": chunk_bytes,
+        "block requests": len(layouts) + len(runs) + len(whole),
+        "multipart requests": (math.ceil(len(layouts) / batch) + math.ceil(len(runs) / batch) + len(whole)),
+        "block bytes": block_bytes,
+        "ratio": block_bytes / chunk_bytes if chunk_bytes else float("nan"),
+    }
+
+
+#
+# What each mode costs
+#
+
+
+def count_traffic(array, source, latency, bandwidth):
+    """Tally every HTTP request the fetch makes, and put a network in front of it.
+
+    `C2NDSource._get` is one request whatever it carries, which is the unit the
+    modes differ in; `get_chunk` is the other one.  Both waits happen inside the
+    proxy's thread pool, so they overlap the way real ones would.
+    """
+    tally = {"requests": 0, "bytes": 0}
+
+    def charge(nbytes):
+        if bandwidth:
+            time.sleep(nbytes / bandwidth)
+        tally["requests"] += 1
+        tally["bytes"] += nbytes
+
+    original_chunk = array.get_chunk
+
+    def get_chunk(nchunk):
+        if latency:
+            time.sleep(latency)
+        chunk = original_chunk(nchunk)
+        charge(len(chunk))
+        return chunk
+
+    array.get_chunk = get_chunk
+    if source is not None:
+        original_get = source._get
+
+        def get(spans):
+            if latency:
+                time.sleep(latency)
+            parts = original_get(spans)
+            charge(sum(len(part) for part in parts))
+            return parts
+
+        source._get = get
+    return tally
+
+
+def timed_slice(open_array, item, mode, concurrency, latency, bandwidth):
+    """One cold slice through the shipped code, in the state *mode* names.
+
+    Blocks are turned off by pushing the size threshold out of reach, which is
+    exactly the decision `wants_blocks` makes for a small-chunked dataset, so
+    ``chunks`` is the shipped code against itself rather than a reimplementation
+    of what it used to do.  The frame index is read before the clock starts: it
+    costs four small requests once per C2Array, not once per slice.
+    """
+    threshold = blosc2.proxy.BLOCK_MIN_CBYTES
+    blosc2.proxy.BLOCK_MIN_CBYTES = 1 << 62 if mode == "chunks" else threshold
+    try:
+        array = open_array()
+        array.max_concurrency = concurrency
+        source = array.block_source()
+        if source is not None:
+            source.max_ranges = 1 if mode == "blocks" else c2array.MAX_RANGES_PER_REQUEST
+        tally = count_traffic(array, source, latency, bandwidth)
+        proxy = blosc2.Proxy(array, mode="w")
+        start = time.perf_counter()
+        proxy[item]
+        return time.perf_counter() - start, tally["requests"], tally["bytes"]
+    finally:
+        blosc2.proxy.BLOCK_MIN_CBYTES = threshold
+
+
+def connection_setup(urlbase, path, token, reps):
+    """What a request costs before any bytes move, pooled against a client each.
+
+    `api/info` rather than a chunk, so what is left in the number is the
+    connection and the round trip rather than the transfer.
+    """
+    import httpx
+
+    url = c2array._sub_url(urlbase, f"api/info/{path}")
+    headers = c2array._auth_headers(token)
+    pooled = c2array._sync_client()
+
+    def median(get):
+        times = []
+        for _ in range(reps):
+            start = time.perf_counter()
+            get()
+            times.append(time.perf_counter() - start)
+        return statistics.median(times)
+
+    return median(lambda: pooled.get(url, headers=headers)), median(
+        lambda: httpx.get(url, headers=headers, timeout=c2array.TIMEOUT)
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("dataset", help="a remote dataset path with --urlbase, else a local .b2nd")
+    parser.add_argument("--urlbase", help="a Caterva2 subscriber; without it, one is stood in")
+    parser.add_argument("--username", help="log in to the subscriber as this user")
+    parser.add_argument("--password", help="the password to log in with")
+    parser.add_argument("--token", help="an authorization cookie, instead of logging in")
+    parser.add_argument(
+        "--streamed",
+        action="store_true",
+        help="stand-in only: serve the dataset the way a computed one is served",
+    )
+    parser.add_argument("--concurrency", type=int, default=8, help="parallel requests (default: 8)")
+    parser.add_argument("--reps", type=int, default=5, help="timed repetitions (default: 5)")
+    parser.add_argument("--max-mb", type=float, default=200, help="skip patterns fetching more than this")
+    parser.add_argument(
+        "--latency-ms", type=float, default=0, help="round-trip latency to simulate per request"
+    )
+    parser.add_argument(
+        "--bandwidth-mbs", type=float, default=0, help="MB/s to simulate per request (cat2.cloud: ~10)"
+    )
+    args = parser.parse_args()
+
+    server = None
+    if args.urlbase:
+        urlbase, path = args.urlbase, args.dataset
+    else:
+        server, urlbase, path = stand_in(args.dataset, args.streamed)
+    token = args.token
+    if args.username:
+        token = c2array.login(args.username, args.password, urlbase)
+
+    try:
+        report(args, urlbase, path, token)
+    finally:
+        if server is not None:
+            server.shutdown()
+
+
+def report(args, urlbase, path, token):
+    latency, bandwidth = args.latency_ms / 1e3, args.bandwidth_mbs * 1e6
+
+    def open_array():
+        return c2array.C2Array(path, urlbase=urlbase, auth_token=token)
+
+    array = open_array()
+    nchunks = math.prod(math.ceil(s / c) for s, c in zip(array.shape, array.chunks, strict=True))
+    per_chunk = array.cbytes / nchunks if nchunks else 0
+    print(
+        f"{path} at {urlbase}\n"
+        f"  shape={array.shape} dtype={array.dtype} chunks={array.chunks} blocks={array.blocks}\n"
+        f"  {nchunks} chunks, {array.blocks_per_chunk} blocks/chunk, "
+        f"{per_chunk / 1e6:.2f} MB per chunk, cratio {array.cratio:.1f}x"
+    )
+
+    opening = _opened(array)
+    source = array.block_source()
+    if source is None:
+        found_out = (
+            f"{opening['requests']} request found that out, and it is never asked again"
+            if opening["requests"]
+            else f"nothing was asked.\n  Chunks under the {blosc2.proxy.BLOCK_MIN_CBYTES / 1e6:.0f} MB "
+            "a round trip costs are not worth taking apart, and api/info\n  tells a computed "
+            "dataset from a stored one for free"
+        )
+        print(
+            f"\n  byte ranges: not served -- {found_out}.\n"
+            "  A proxy over this fetches whole chunks, exactly as it always did."
+        )
+        _time_patterns(args, open_array, array, ["chunks"], latency, bandwidth)
+        return
+    source.read_ranges([(0, 16), (64, 16)])  # two spans that cannot merge into one
+    print(
+        f"  byte ranges: served, multipart: {'yes' if source.max_ranges > 1 else 'no'}"
+        f" ({source.max_ranges} spans per request)\n"
+        f"  frame index: {opening['requests']} requests, {opening['bytes']} bytes, once per C2Array"
+    )
+
+    proxy = blosc2.Proxy(array, mode="w")
+    print(
+        f"\n  {'pattern':22s} {'chunks':>6s} {'blocks':>13s} {'chunk mode':>20s} "
+        f"{'block mode':>20s} {'multipart':>9s}   ratio"
+    )
+    plans = {}
+    for name, item in default_patterns(array.shape):
+        plan = plans[name] = request_plan(proxy, array, item)
+        print(
+            f"  {name:22s} {plan['chunks touched']:6d} "
+            f"{plan['blocks wanted']:6d}/{plan['blocks total']:<6d} "
+            f"{plan['chunk requests']:5d} req {plan['chunk bytes'] / 1e6:7.2f} MB "
+            f"{plan['block requests']:5d} req {plan['block bytes'] / 1e6:7.2f} MB "
+            f"{plan['multipart requests']:5d} req {plan['ratio'] * 100:6.1f}%"
+        )
+
+    pooled, fresh = connection_setup(urlbase, path, token, args.reps)
+    print(
+        f"\n  connection setup (api/info): {pooled * 1e3:6.1f} ms pooled, {fresh * 1e3:6.1f} ms with "
+        f"a client per request ({fresh / pooled:.1f}x)"
+    )
+    _time_patterns(args, open_array, array, ["chunks", "blocks", "multipart"], latency, bandwidth, plans)
+
+
+def _opened(array):
+    """What reading the frame index cost, which is paid once per C2Array."""
+    fresh = c2array.C2Array(array.path, urlbase=array.urlbase, auth_token=array.auth_token)
+    tally = {"requests": 0, "bytes": 0}
+    original = c2array.C2NDSource.read_range
+
+    def counted(self, offset, size):
+        tally["requests"] += 1  # before the read: a refused probe is a request too
+        data = original(self, offset, size)
+        tally["bytes"] += len(data)
+        return data
+
+    c2array.C2NDSource.read_range = counted
+    try:
+        fresh.block_source()
+    finally:
+        c2array.C2NDSource.read_range = original
+    return tally
+
+
+def _time_patterns(args, open_array, array, modes, latency, bandwidth, plans=None):
+    if latency or bandwidth:
+        print(
+            f"\n  simulating a network: {latency * 1e3:.0f} ms per request"
+            + (f", {bandwidth / 1e6:.1f} MB/s across it" if bandwidth else "")
+        )
+    header = "".join(f"{mode:>28s}" for mode in modes)
+    print(f"\n  {'pattern':22s}{header}" + ("  vs chunks" if len(modes) > 1 else ""))
+    for name, item in default_patterns(array.shape):
+        if plans and plans[name]["chunk bytes"] > args.max_mb * 1e6:
+            print(f"  {name:22s}   skipped ({plans[name]['chunk bytes'] / 1e6:.0f} MB > --max-mb)")
+            continue
+        results = {}
+        for mode in modes:
+            runs = [
+                timed_slice(open_array, item, mode, args.concurrency, latency, bandwidth)
+                for _ in range(args.reps)
+            ]
+            results[mode] = (statistics.median(r[0] for r in runs), runs[0][1], runs[0][2])
+        line = "".join(
+            f"{results[mode][1]:5d} req {results[mode][2] / 1e6:7.2f} MB {results[mode][0]:6.3f}s"
+            for mode in modes
+        )
+        speedup = ""
+        if len(modes) > 1:  # what the last mode, which is the shipped one, is worth
+            speedup = f"  {results[modes[0]][0] / results[modes[-1]][0]:8.1f}x"
+        print(f"  {name:22s}{line}{speedup}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

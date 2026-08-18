@@ -56,6 +56,8 @@ XXX version-specific blurb XXX
   request to find out, and is never asked twice. `blosc2.ByteRangeNDSource` is
   the frame reader `FsspecNDSource` and the new `C2NDSource` share: subclass it
   with a `read_range(offset, size)` to give any transport the same treatment.
+  `bench/ndarray/cat2-block-granularity.py` measures all of it on any dataset,
+  against a real subscriber or a stand-in it starts itself.
 
 * `blosc2.Proxy(src, urlpath=..., mode="a")` now adopts the cache left by an
   earlier run instead of failing on the existing file, so a proxy's cache can
