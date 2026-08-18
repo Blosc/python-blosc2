@@ -3,10 +3,12 @@
 Written 2026-08-17, after [plans/fsspec-blocks.md](fsspec-blocks.md) landed block
 fetching for fsspec URLs (merged as PR #701).
 
-**All five phases are implemented** (2026-08-17). Phases 1-4 are in blosc2 on
-`cat2-block-granularity`; phase 5 is in Caterva2 on `range-honesty`. See
-[what landed](#what-landed) at the end for the results and the two things the
-work found out.
+**All five phases are implemented**, and four more things that came out of them
+(2026-08-17/18). The blosc2 side is on `cat2-block-granularity`, the Caterva2
+side on `range-honesty`. Everything from *What was verified* to *Reproducing the
+measurements* is the analysis as it stood before any of it was written; see
+[what landed](#what-landed) at the end for what was built, what it measures at,
+and where the analysis turned out to be wrong.
 
 ## The question
 
@@ -329,8 +331,11 @@ question for an fsspec URL.
 
 ## What landed
 
-Every phase, in the order the plan gives them. Where the plan guessed and the
-work found out otherwise, that is said below rather than quietly fixed.
+All five phases, and four more things the work turned up on the way.  Where the
+plan guessed and the work found out otherwise, that is said below rather than
+quietly fixed.
+
+### The five phases
 
 | phase | where | commit |
 |---|---|---|
@@ -338,85 +343,117 @@ work found out otherwise, that is said below rather than quietly fixed.
 | 2. capability check | blosc2 `c2array.py` | *Read a C2Array's blocks over HTTP ranges* |
 | 3b. `ByteRangeNDSource` | blosc2 `proxy.py` | *Lift the frame reading out of FsspecNDSource* |
 | 3. `C2Array` blocks | blosc2 `c2array.py` | *Read a C2Array's blocks over HTTP ranges* |
-| 4. multipart | blosc2 both | *Ask a subscriber for a whole wave of ranges at once* |
-| 5. honest streaming | caterva2 `server.py` | *Say which responses serve byte ranges* |
+| 4. multipart | blosc2 `proxy.py`, `c2array.py` | *Ask a Caterva2 subscriber for a whole wave of ranges at once* |
+| 5. honest streaming | caterva2 `server.py` | *Say which responses serve byte ranges, and refuse the rest* |
 
 Option **(b)** was taken for phase 3, as recommended: `ByteRangeNDSource` holds
 the frame format and one abstract `read_range`, `FsspecNDSource` is that plus
 four lines of fsspec, and `C2NDSource` is that plus HTTP ranges with the auth
-cookie. `C2Array` keeps the five members `Proxy` looks for and delegates them,
+cookie.  `C2Array` keeps the five members `Proxy` looks for and delegates them,
 so every existing `Proxy(C2Array(...))` gets blocks without being asked.
+
+### And four things that came out of it
+
+| | where | commit |
+|---|---|---|
+| a bench for all of it | blosc2 `bench/ndarray/` | *Measure the Caterva2 block path the way the fsspec one is measured* |
+| chunks of a container leaf | caterva2 `server.py` | *Serve chunks of a container leaf, and refuse the ones that are not stored* |
+| a two-request frame open | blosc2 `proxy.py` | *Open a frame in two requests instead of four* |
+| a stamp for `C2Array` | blosc2 `c2array.py` | *Notice a remote array that was replaced under a proxy's cache* |
+
+- **`bench/ndarray/cat2-block-granularity.py`** is the fsspec bench's question
+  asked of a subscriber, and it needs no service to point at: a stand-in serves
+  `api/info`, `api/fetch` and `api/chunk` over loopback from any local `.b2nd`,
+  ranges, multipart and Starlette's sort-and-merge included.  It reports whether
+  a dataset serves ranges at all and what finding out cost, the request plan of
+  each mode, what a pooled connection is worth, and the timed slices.
+- **`api/chunk` serves container leaves**, which it never did: it was the last
+  read endpoint resolving with `get_abspath` rather than `split_and_resolve`, so
+  a `Proxy` over a `.b2z` leaf could not fetch anything at all.  HDF5 leaves and
+  CTables are refused with a 400 naming `slice_` instead of being recompressed
+  per request, and the opened leaf is cached (keyed on the container's mtime, as
+  `get_filtered_array` is) so a chunk-by-chunk read does not reopen the `.b2z`
+  every time.
+- **Opening a frame costs two requests**, or one when the frame arrives whole in
+  the first read: the two reads that only measured the next one are guessed at
+  instead (8 KB of head, and a tail the frame's own length bounds).  It is in
+  `ByteRangeNDSource`, so `blosc2.open(url, lazy=True)` gets it too.
+- **`C2Array` has a stamp**: `api/info`'s mtime and the compressed size, so a
+  cache built against a dataset that was since replaced raises instead of being
+  served stale.  In block mode that is worse than stale data -- the cached chunks
+  were spliced at offsets read from the frame the cache was built against.
 
 ### The numbers, end to end
 
-Against `cat2.cloud/demo` on `kevlar-tomo.b2nd` (1.44 MB chunks, 47 blocks each):
+`bench/ndarray/cat2-block-granularity.py @public/examples/kevlar-tomo.b2nd
+--urlbase https://cat2.cloud/demo` (1.44 MB chunks, 47 blocks each), median of 5:
 
-| | requests | bytes | time |
-|---|---|---|---|
-| chunks (before) | 2 | 2.723 MB | 0.28 s |
-| blocks | 8 | 0.031 MB | 0.34 s |
+| pattern | chunk mode | blocks | multipart | vs chunks |
+|---|---|---|---|---|
+| point | 1 req, 1.38 MB, 0.169 s | 2 req, 0.02 MB, 0.097 s | 2 req, 0.02 MB, 0.088 s | 1.9x |
+| line, last dim | 1 req, 1.38 MB, 0.140 s | 2 req, 0.02 MB, 0.087 s | 2 req, 0.02 MB, 0.090 s | 1.6x |
+| line, first dim | 10 req, 14.43 MB, 0.956 s | 20 req, 0.20 MB, 0.198 s | **2 req, 0.20 MB, 0.111 s** | **8.6x** |
+| window (1/64 per dim) | 1 req, 1.38 MB, 0.160 s | 2 req, 0.02 MB, 0.092 s | 2 req, 0.02 MB, 0.089 s | 1.8x |
+| slab (1% of dim 0) | 1 req, 1.38 MB, 0.169 s | 1 req, 1.38 MB, 0.155 s | 1 req, 1.38 MB, 0.161 s | 1.0x |
+| slab (10% of dim 0) | 1 req, 1.38 MB, 0.155 s | 1 req, 1.38 MB, 0.148 s | 1 req, 1.38 MB, 0.149 s | 1.0x |
 
-88x fewer bytes for a corner slice, and the same wall time on a link where a
-round trip and a megabyte cost about the same. For a slice touching ten chunks,
-where the request count is what decides:
+1.4% of the bytes for anything that lands in a corner of a chunk, and the two
+slabs that want every block of theirs come out identical in all three modes,
+which is the threshold declining to take a chunk apart.  Around it:
 
-| | requests | time |
+| | before | after |
 |---|---|---|
-| blocks, one request at a time | 20 | 1.008 s |
-| blocks, fetches overlapped | 20 | 0.334 s |
-| blocks, multipart | 2 | 0.141 s |
+| one request (`api/info`) | 163.3 ms, a client per request | **42.3 ms**, pooled (3.9x) |
+| opening a `C2Array` | 0.237 s, 4 requests, 303 bytes | **0.138 s**, 2 requests, 8306 bytes |
+| a wave of 32 ranges | 1.530 s one at a time, 0.208 s eight at a time | **0.136 s**, one multipart request |
 
-Phase 1 on its own: 0.162 s per request against 0.046 s pooled, on the existing
-chunk path.
+Phase 4 was built because that last row said to.  Starlette *sorts and merges*
+the spans it is given and answers a plain 206 when they all merge into one, so
+the client maps the parts back by what each says it holds rather than by order;
+a server that answers with less than was asked for is noticed once and never
+batched again.
 
-### Two things the plan had wrong
+### What the work found out
 
 - **`C2Array` cannot be built over a computed dataset at all.** `api/info` for a
   lazy expression carries no `schunk`, and `C2Array.__init__` reads
-  `meta["schunk"]["cparams"]`, so it raises long before any of this. The
+  `meta["schunk"]["cparams"]`, so it raises long before any of this.  The
   info-based discriminator of phase 2 is still there and still right, but it
   earns its place on the *other* case:
 - **A `.b2z` member reports a full geometry and is streamed.** Confirmed against
   a local server: `api/info` on `@public/tree-store.b2z/level1/leaf6` answers
-  with `blocks`, `chunks` and `schunk`, and `api/fetch` streams it. So the
+  with `blocks`, `chunks` and `schunk`, and `api/fetch` streams it.  So the
   status code of the first range read is the authority, exactly as phase 2
-  argued — with phase 5 in place that costs 169 bytes and one round trip.
-
-Phase 4 was built because the measurement said to: 32 spans cost 0.136 s in one
-multipart request against 0.208 s as 32 requests eight at a time, and 1.530 s
-one at a time. Starlette *sorts and merges* the spans it is given and answers a
-plain 206 when they all merge into one, so the client maps parts back by what
-each says it holds rather than by order; a server that answers with less than
-was asked for is noticed once and never batched again.
-
-The plan's guess that `_run` would already overlap a C2Array's fetches was wrong
-in the other direction: `Proxy.fetch` reads `max_concurrency` off the source, and
-`C2Array` had none, so the sync path was serial. It has one now, the same 8
-`afetch` already used.
+  argued -- with phase 5 in place that costs 169 bytes and one round trip.
+- **A `Proxy` over a container leaf never worked**, which is how the bench found
+  the `api/chunk` gap: it died in httpx rather than reporting anything.  Fixed
+  above; the bench now says so plainly when a dataset has no chunks to serve.
+- **`Proxy.fetch` was serial over a C2Array.** It reads `max_concurrency` off the
+  source and `C2Array` had none, so the plan's assumption that a chunk's runs
+  already go out in parallel was wrong.  It has one now, the same 8 `afetch`
+  already used, and that alone takes the unbatched block path from 1.008 s to
+  0.334 s.
+- **A read-only cache cannot be stamped.** `blosc2.open(path, mode="r")` over a
+  persisted proxy hands `Proxy` a cache it may not write to, and recording the
+  stamp there raised instead of opening it -- reachable only once a `C2Array` had
+  a stamp to record, and caught by the network tests rather than the local ones.
 
 ### Left undone
 
-- ~~**`api/chunk` does not serve container members.**~~ Fixed in Caterva2 on
-  `range-honesty` (*Serve chunks of a container leaf*): the endpoint resolves the
-  way `api/fetch` does, so a TreeStore leaf hands over its stored chunk, while
-  HDF5 leaves and CTables are refused with a 400 naming `slice_` rather than
-  being recompressed per request. A `.b2z` leaf still gets whole chunks only:
-  giving one the block path needs the offset of its frame inside the container,
-  which is the next item.
 - **A container leaf could serve ranges too.** A TreeStore keeps its leaves as
   ordinary frames inside the `.b2z`, so the bytes a block reader wants are in
   the file at a fixed offset -- what is missing is a way for the server to say
   where a leaf's frame starts, and for the client to add that base to every
-  range. Worth its own plan; it would give `.b2z` members everything a plain
+  range.  Worth its own plan; it would give `.b2z` members everything a plain
   `.b2nd` has.
-- ~~**The four requests to open a frame**~~ are two, and one for a frame that
-  arrives whole in the first read (*Open a frame in two requests*): both reads
-  that only measured the next one are guessed at instead. 0.237 s → 0.138 s
-  against cat2.cloud. Getting to one for a large frame needs a suffix range
-  (`Range: bytes=-65536`) batched with the head read, which no fsspec backend
-  exposes and `read_ranges` has no way to express.
-- ~~**`C2Array` still has no `stamp`.**~~ It has one now (*Notice a remote array
-  that was replaced*): `api/info`'s mtime and the compressed size, so a cache
-  built from other bytes raises instead of being served stale. The vlmeta entry
-  is `proxy-stamp` rather than `fsspec-stamp`, since it is no longer only
-  fsspec's; caches from earlier builds of this cycle are not adopted.
+- **Opening a frame could be one request rather than two**, with a suffix range
+  (`Range: bytes=-65536`) batched with the head read.  No fsspec backend exposes
+  suffix ranges and `read_ranges` has no way to express one, so it would be a
+  C2-only path through the shared base -- which is why it was not taken.
+- **Peer datasets stay on the streaming side.** They are fetched from their owner
+  and re-serialized here, so there is no file to seek into; phase 5 makes them
+  say so, and that is all they can do without a design of their own.
+- **Quota and accounting**, from the risks above, is still undecided: block reads
+  replace one chunk GET with a handful of small ranged ones, and multipart puts
+  a whole wave in one.  A subscriber metering per request would see block clients
+  as expensive while they transfer far less.
