@@ -18,6 +18,18 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 try:
+    from itertools import batched
+except ImportError:
+    # Python 3.11 has no itertools.batched
+    from itertools import islice
+
+    def batched(iterable, n):
+        it = iter(iterable)
+        while batch := tuple(islice(it, n)):
+            yield batch
+
+
+try:
     from numpy.typing import DTypeLike
 except (ImportError, AttributeError):
     # fallback to internal module (use with caution)
@@ -720,7 +732,7 @@ class Proxy(blosc2.Operand):
         # a batch of range reads (of one, for a transport that takes one)
         runs = [(n, run) for n in wanted for run in self.src.block_plan(n, wanted[n])]
         batch = max(getattr(self.src, "max_ranges", 1), 1)
-        tasks = [((n, None),) for n in whole] + list(itertools.batched(runs, batch))
+        tasks = [((n, None),) for n in whole] + list(batched(runs, batch))
 
         # `read_ranges` is the optional half of the protocol: a source that only
         # has `read_range` is asked one range at a time, as `batch` is 1 for it
@@ -1380,7 +1392,7 @@ class ByteRangeNDSource(ProxyNDSource):
         """
         section = _CHUNK_HEADER_LEN + 4 * self.blocks_per_chunk
         todo = [n for n in dict.fromkeys(nchunks) if n not in self._layouts]
-        for batch in itertools.batched(todo, max(self.max_ranges, 1)):
+        for batch in batched(todo, max(self.max_ranges, 1)):
             spans = [(int(self._offsets[n]), section) for n in batch]
             heads = self.read_ranges(spans)
             for nchunk, head in zip(batch, heads, strict=True):
