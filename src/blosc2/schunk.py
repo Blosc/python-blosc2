@@ -2011,7 +2011,7 @@ def _cache_stamp(path: str):
         cache = blosc2_ext.open(path, "r", 0, **kwargs)
     except RuntimeError:
         return None
-    return getattr(cache, "schunk", cache).vlmeta.get("fsspec-stamp")
+    return getattr(cache, "schunk", cache).vlmeta.get("proxy-stamp")
 
 
 def _open_fsspec_url(urlpath: str, mode: str, offset: int, kwargs: dict):

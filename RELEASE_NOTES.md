@@ -68,7 +68,12 @@ XXX version-specific blurb XXX
   earlier run instead of failing on the existing file, so a proxy's cache can
   outlive the process. The cache must come from a proxy over a source of the same
   shape and dtype; anything else at that path raises. A cache that holds only
-  some blocks of a chunk keeps them across runs too.
+  some blocks of a chunk keeps them across runs too. Sources that can name the
+  bytes they read are held to that as well, so a remote array *replaced* while
+  keeping its shape is noticed rather than served stale: `FsspecNDSource` uses
+  fsspec's token and `C2Array` the subscriber's mtime, both free with metadata
+  they already fetch. Caches from earlier 4.11.1 development builds are not
+  adopted (the stamp moved to a `proxy-stamp` entry); pass `mode="w"` once.
 
 * Querying a `utf8()` column through its FULL index no longer materializes the
   index vocabulary. The query literal is turned into an alphabetical rank by

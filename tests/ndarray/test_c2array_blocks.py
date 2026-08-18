@@ -18,6 +18,7 @@ live subscriber could not switch off at will.
 import contextlib
 import json
 import math
+import os
 import pathlib
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,13 +34,18 @@ class _Subscriber:
 
     def __init__(self, path, ranges=True, cookie=None, multipart=True, merge_ranges=True):
         self.path = str(path)
-        self.frame = pathlib.Path(self.path).read_bytes()
-        self.array = blosc2.open(self.path)
         self.ranges = ranges  # False: stream the body and ignore Range, as a
         self.cookie = cookie  # computed dataset does
         self.multipart = multipart  # False: answer only the first range asked for
         self.merge_ranges = merge_ranges  # as Starlette does with ranges that touch
         self.log = []  # (endpoint, status, bytes served)
+        self.reload()
+
+    def reload(self):
+        """Pick up the file as it is now, as a subscriber would on the next request."""
+        self.frame = pathlib.Path(self.path).read_bytes()
+        self.array = blosc2.open(self.path)
+        self.mtime = pathlib.Path(self.path).stat().st_mtime
 
     @property
     def meta(self):
@@ -49,7 +55,7 @@ class _Subscriber:
             "chunks": list(self.array.chunks),
             "blocks": list(self.array.blocks),
             "dtype": str(self.array.dtype),
-            "mtime": None,
+            "mtime": self.mtime,
             "schunk": {
                 "cparams": {"typesize": self.array.dtype.itemsize},
                 "nbytes": schunk.nbytes,
@@ -329,9 +335,10 @@ def test_a_whole_chunk_cache_is_adopted(tmp_path, subscriber, any_chunk_wants_bl
     array._block_source = None  # as if the subscriber served no ranges
     p = blosc2.Proxy(array, urlpath=cache, mode="a")
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
-    del p, array
+    del p
 
-    array, _ = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    # The same dataset, opened afresh: this one takes the blocks path
+    array = blosc2.C2Array(array.path, urlbase=array.urlbase)
     p = blosc2.Proxy(array, urlpath=cache, mode="a")
     served = len(sub.log)
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
@@ -407,3 +414,92 @@ def test_a_server_that_answers_one_range_stops_being_batched(subscriber, any_chu
     # One request per range from here on, and no second attempt at batching
     assert len(sub.log) > served + 2
     assert np.array_equal(p[...], data)
+
+
+# --- a cache is checked against the bytes it was filled from ----------------
+
+
+def _replace(sub, data, chunks, blocks):
+    """Rewrite the served dataset, as an upload of new data would."""
+    blosc2.asarray(data, chunks=chunks, blocks=blocks, urlpath=sub.path, mode="w")
+    stat = pathlib.Path(sub.path).stat()
+    os.utime(sub.path, (stat.st_atime, stat.st_mtime + 10))  # a tick the clock cannot swallow
+    sub.reload()
+
+
+def test_a_cache_is_stamped_with_the_remote_mtime(subscriber):
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    p = blosc2.Proxy(array, mode="w")
+
+    assert array.stamp == f"{sub.mtime}:{sub.array.schunk.cbytes}"
+    assert p.schunk.vlmeta["proxy-stamp"] == array.stamp
+
+
+def test_a_cache_from_other_bytes_is_refused(tmp_path, subscriber, any_chunk_wants_blocks):
+    # Same shape, same partitioning, different data: geometry cannot tell, and
+    # every cached chunk (and the offsets it was fetched by) is stale
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    cache = str(tmp_path / "stamped.b2nd")
+    p = blosc2.Proxy(array, urlpath=cache, mode="a")
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    del p
+
+    other = _incompressible((200, 200), seed=1)
+    _replace(sub, other, chunks=(100, 200), blocks=(10, 20))
+    replaced = blosc2.C2Array(array.path, urlbase=array.urlbase)
+    assert replaced.stamp != array.stamp
+
+    with pytest.raises(ValueError, match="different remote bytes"):
+        blosc2.Proxy(replaced, urlpath=cache, mode="a")
+
+    # ... and mode="w" is the way through, with the new data behind it
+    p = blosc2.Proxy(replaced, urlpath=cache, mode="w")
+    assert np.array_equal(p[0:5, 0:10], other[0:5, 0:10])
+    assert np.array_equal(p[...], other)
+
+
+def test_a_cache_from_the_same_bytes_is_adopted(tmp_path, subscriber, any_chunk_wants_blocks):
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    cache = str(tmp_path / "unchanged.b2nd")
+    p = blosc2.Proxy(array, urlpath=cache, mode="a")
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    del p
+
+    again = blosc2.C2Array(array.path, urlbase=array.urlbase)
+    assert again.stamp == array.stamp
+    p = blosc2.Proxy(again, urlpath=cache, mode="a")
+    served = len(sub.log)
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert len(sub.log) == served  # what it holds was not fetched again
+
+
+def test_no_stamp_when_the_subscriber_reports_no_mtime(tmp_path, subscriber):
+    # Then the cache is checked on geometry alone, as every unstamped source is
+    data = _incompressible((200, 200))
+    array, _sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    del array.meta["mtime"]
+    assert array.stamp is None
+
+    cache = str(tmp_path / "unstamped.b2nd")
+    p = blosc2.Proxy(array, urlpath=cache, mode="a")
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert "proxy-stamp" not in p.schunk.vlmeta.getall()
+    del p
+    assert blosc2.Proxy(array, urlpath=cache, mode="a") is not None
+
+
+def test_a_read_only_cache_is_not_stamped(tmp_path, subscriber):
+    # `blosc2.open(path, mode="r")` rebuilds the proxy over a cache that may not
+    # be written to; recording the stamp there raised instead of opening it
+    data = _incompressible((200, 200))
+    array, _sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    cache = str(tmp_path / "readonly.b2nd")
+    p = blosc2.Proxy(array, urlpath=cache, mode="w")
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    del p
+
+    reopened = blosc2.open(cache, mode="r")
+    assert np.array_equal(reopened[0:5, 0:10], data[0:5, 0:10])

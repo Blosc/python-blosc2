@@ -415,7 +415,8 @@ in the other direction: `Proxy.fetch` reads `max_concurrency` off the source, an
   against cat2.cloud. Getting to one for a large frame needs a suffix range
   (`Range: bytes=-65536`) batched with the head read, which no fsspec backend
   exposes and `read_ranges` has no way to express.
-- **`C2Array` still has no `stamp`.** A cache is checked against the source's
-  geometry only, so a dataset replaced underneath while keeping its shape is not
-  noticed. `mtime` is in `api/info` and would do it, but adding one invalidates
-  every cache built before it, which wants its own decision.
+- ~~**`C2Array` still has no `stamp`.**~~ It has one now (*Notice a remote array
+  that was replaced*): `api/info`'s mtime and the compressed size, so a cache
+  built from other bytes raises instead of being served stale. The vlmeta entry
+  is `proxy-stamp` rather than `fsspec-stamp`, since it is no longer only
+  fsspec's; caches from earlier builds of this cycle are not adopted.

@@ -369,7 +369,7 @@ def test_evicted_chunk_is_fetched_again():
 def test_vlmeta_cannot_overwrite_proxy_state():
     # A caller-supplied bitmap would make the proxy skip chunks it never fetched
     source = blosc2.asarray(np.arange(20).reshape(4, 5), chunks=(2, 5), blocks=(1, 5))
-    for name in ("proxy-fetched", "proxy-fetched-blocks", "fsspec-stamp"):
+    for name in ("proxy-fetched", "proxy-fetched-blocks", "proxy-stamp"):
         with pytest.raises(ValueError, match="reserved"):
             blosc2.Proxy(source, vlmeta={name: b"nonsense"})
     # Anything else still goes through

@@ -656,6 +656,25 @@ class C2Array(blosc2.Operand):
     # round; every one of them falls back to `get_chunk` when it is not.
 
     @property
+    def stamp(self) -> str | None:
+        """What names the exact remote bytes, for a :ref:`Proxy` to check a cache by.
+
+        Geometry cannot tell a dataset that was replaced from the one a cache was
+        filled from: a shape and a partitioning survive a rewrite, while every
+        cached chunk -- and, in block mode, every offset they were fetched by --
+        goes stale.  The subscriber's own mtime does tell, and `api/info` carries
+        it, so this costs no request; the compressed size goes in with it, since
+        a rewrite within the same clock tick is what an mtime cannot see.
+
+        None when the subscriber reports no mtime, which leaves the cache checked
+        on its geometry alone, as every source without a stamp is.
+        """
+        mtime = self.meta.get("mtime")
+        if mtime is None:
+            return None
+        return f"{mtime}:{self.meta['schunk'].get('cbytes', '')}"
+
+    @property
     def blocks_per_chunk(self) -> int:
         """How many blocks a chunk of the remote array holds.
 

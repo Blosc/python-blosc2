@@ -72,7 +72,7 @@ BLOCK_HOT_CHUNKS = 8
 
 # vlmeta entries the proxy keeps its own state in: what it has fetched, and which
 # remote bytes the cache was filled from. A caller cannot write these.
-_RESERVED_VLMETA = frozenset({"proxy-fetched", "proxy-fetched-blocks", "proxy-fetched-bpc", "fsspec-stamp"})
+_RESERVED_VLMETA = frozenset({"proxy-fetched", "proxy-fetched-blocks", "proxy-fetched-bpc", "proxy-stamp"})
 
 # `jit` kwargs that tune *how* an expression is evaluated, not what container the
 # result is stored in. Unlike storage kwargs (`cparams`, `chunks`, `urlpath`, ...),
@@ -294,7 +294,8 @@ class Proxy(blosc2.Operand):
             else raises rather than being silently reused or overwritten.
 
             A source that can name the exact bytes it reads, as
-            :ref:`FsspecNDSource` does with its ``stamp``, is checked against that
+            :ref:`FsspecNDSource` does with its ``stamp`` (fsspec's token) and
+            :ref:`C2Array` with the subscriber's mtime, is checked against that
             too: a cache built from different bytes raises, even when the geometry
             still fits. For every other source geometry is all there is to check,
             so a source whose contents changed underneath while its geometry did
@@ -396,14 +397,17 @@ class Proxy(blosc2.Operand):
         # Geometry alone cannot tell a replaced source from the one the cache was
         # filled from, so record whatever identity the source can name itself by
         stamp = getattr(self.src, "stamp", None)
-        if stamp is not None:
-            self._schunk_cache.vlmeta["fsspec-stamp"] = stamp
+        if stamp is not None and getattr(self._schunk_cache, "mode", None) != "r":
+            # Not into a cache opened read-only, which `blosc2.open(path, mode="r")`
+            # hands over for a persisted proxy: nothing may be written there, and a
+            # proxy over one stays observational anyway (see `__getitem__`)
+            self._schunk_cache.vlmeta["proxy-stamp"] = stamp
         if vlmeta:
             reserved = sorted(_RESERVED_VLMETA & set(vlmeta))
             if reserved:
                 # Writing these would hand the proxy a bitmap or an identity it
                 # never earned: a caller's `proxy-fetched` makes it skip chunks it
-                # has not fetched, and a caller's `fsspec-stamp` makes a good cache
+                # has not fetched, and a caller's `proxy-stamp` makes a good cache
                 # fail its identity check (or a stale one pass it)
                 raise ValueError(
                     f"{', '.join(reserved)} {'is' if len(reserved) == 1 else 'are'} reserved "
@@ -594,7 +598,7 @@ class Proxy(blosc2.Operand):
         # goes stale.  Only for sources that can name themselves; the rest are
         # adopted on geometry alone, as documented.
         stamp = getattr(self.src, "stamp", None)
-        if stamp is not None and schunk.vlmeta.get("fsspec-stamp") != stamp:
+        if stamp is not None and schunk.vlmeta.get("proxy-stamp") != stamp:
             raise ValueError(
                 f"the cache at {urlpath} was built against different remote bytes; "
                 f"pass mode='w' to fetch them anew"
