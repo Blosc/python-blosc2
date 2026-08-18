@@ -169,3 +169,77 @@ served` and time the three modes as it does for a plain array.
   them today (`method=0` throughout), but a `.b2z` produced by another tool
   could, and its window would decode to nonsense. The member's own frame magic
   is what catches that, on the server, before the window is offered.
+
+## What landed
+
+All four phases, 2026-08-18. blosc2 on `cat2-block-granularity`, Caterva2 on
+`range-honesty`.
+
+| phase | where | commit |
+|---|---|---|
+| 1. `member_window` | blosc2 `dict_store.py` | *Say where a leaf's frame lies inside a .b2z* |
+| 2. leaf ranges | caterva2 `server.py`, `srv_utils.py` | *Serve a container leaf from its window in the file* |
+| 3. container fetched whole | caterva2 `server.py` | (same commit) |
+| 4. tests | both | (same commits, plus *Pin that a container leaf reads its blocks like any other array*) |
+
+**The client did not change, at all.** That was the design's claim and it held:
+a `Proxy` over `@public/leaves.b2z/big` probes with a `Range` as it does for any
+dataset, gets a 206, reads the frame index, and fetches blocks. Nothing in
+blosc2 knows that the frame it is reading lives inside a container.
+
+### One deviation, for a reason that only turned up in the measuring
+
+The plan said not to serve a *whole* member from its window, on the grounds that
+it would change the bytes clients get. It changes them for the better, which the
+first measurement showed: the rebuild it replaced went through
+`array.slice(..., contiguous=True).to_cframe()`, which **re-partitions**. A leaf
+stored with `chunks=(1, 1000, 500)` came back with `chunks=(4, 1000, 500)` while
+`api/info` went on reporting the stored ones -- so the two disagreed about the
+same leaf, and a client caching that got a partitioning the source never had.
+Serving the window makes them agree, because they are the same bytes.
+
+That also settled what `Accept-Ranges` may say on that response: `bytes`, since
+the ranged and whole views are now one representation. Serving two different
+byte streams for one URL and advertising ranges over them would have been the
+kind of thing `If-Range` exists to catch.
+
+### The numbers
+
+A leaf of 8 chunks (3.36 MB each, 20 blocks per chunk) against a local server,
+with a network put in front of every request (`--latency-ms 45
+--bandwidth-mbs 10`, cat2.cloud's shape), median of 3:
+
+| pattern | before (chunks only) | after, blocks | after, multipart |
+|---|---|---|---|
+| point | 1 req, 3.36 MB, 0.410 s | 2 req, 0.17 MB, 0.145 s | 2 req, 0.17 MB, 0.151 s |
+| line, last dim | 1 req, 3.36 MB, 0.408 s | 2 req, 0.17 MB, 0.140 s | 2 req, 0.17 MB, 0.142 s |
+| line, first dim | 8 req, 26.92 MB, 0.454 s | 16 req, 1.35 MB, 0.184 s | 2 req, 1.35 MB, 0.271 s |
+| window (1/64 per dim) | 1 req, 3.36 MB, 0.413 s | 2 req, 0.17 MB, 0.152 s | 2 req, 0.17 MB, 0.147 s |
+| slab (1% of dim 0) | 1 req, 3.36 MB, 0.414 s | 1 req, 3.36 MB, 0.417 s | 1 req, 3.36 MB, 0.415 s |
+| slab (10% of dim 0) | 1 req, 3.36 MB, 0.416 s | 1 req, 3.36 MB, 0.414 s | 1 req, 3.36 MB, 0.412 s |
+
+2.8x on a point or a window, 20x fewer bytes, and the slabs that want every
+block of their chunk unchanged -- the same shape a plain `.b2nd` has, which is
+the point. Run against the same data stored both ways, the two tables agree row
+by row to within the noise.
+
+The whole-leaf fetch, which now reads the window instead of rebuilding it:
+
+| | time | bytes | chunks it returns |
+|---|---|---|---|
+| before | 0.034 s | 26.94 MB | (4, 1000, 500), where `api/info` said (1, 1000, 500) |
+| after | 0.016 s | 26.92 MB | (1, 1000, 500), as `api/info` says |
+
+### Left undone
+
+- **Only `.b2z` leaves.** An HDF5 dataset is not a Blosc2 frame and a `.b2d`
+  store keeps its leaves in files of their own (which could be served directly,
+  and are not today: `api/fetch` on a `.b2d` member is untested ground).
+- **An embedded leaf stays whole-chunked.** Its bytes live inside the store's own
+  compressed super-chunk, so there is no window; `member_window` says so and the
+  client falls back, which is the arrangement working as intended rather than a
+  gap to close.
+- **`If-Range` / `ETag`.** A leaf rewritten between a client's frame-index read
+  and its block reads would be read at offsets that no longer mean anything. The
+  proxy's stamp catches that between *runs* (the container's mtime), not within
+  one, which is the same exposure a plain `.b2nd` has over any object store.

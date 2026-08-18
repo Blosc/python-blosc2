@@ -64,6 +64,15 @@ XXX version-specific blurb XXX
   `bench/ndarray/cat2-block-granularity.py` measures all of it on any dataset,
   against a real subscriber or a stand-in it starts itself.
 
+* `DictStore.member_window(key)` says where a leaf's frame lies inside a `.b2z`,
+  as `(offset, nbytes)`. A zip store keeps each external leaf uncompressed, so
+  those bytes are the frame that leaf would have been written as on its own --
+  which lets a reader take the window instead of the leaf: Caterva2 now serves a
+  container leaf from it, so a `Proxy` over `@public/tree.b2z/leaf` reads blocks
+  exactly as it does over a `.b2nd` (2.8x on a point read, 20x fewer bytes).
+  None where there is no window: a directory-backed store, an embedded leaf, a
+  `C2Array` reference.
+
 * `blosc2.Proxy(src, urlpath=..., mode="a")` now adopts the cache left by an
   earlier run instead of failing on the existing file, so a proxy's cache can
   outlive the process. The cache must come from a proxy over a source of the same
