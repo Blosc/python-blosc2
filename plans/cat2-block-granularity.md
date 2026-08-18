@@ -396,10 +396,19 @@ in the other direction: `Proxy.fetch` reads `max_concurrency` off the source, an
 
 ### Left undone
 
-- **`api/chunk` does not serve container members.** A `Proxy` over a `.b2z` leaf
-  falls back to whole chunks correctly and then 404s, because `get_chunk` in the
-  server resolves the path without an inner key. It has never worked; nothing
-  here changed it, and nothing here depends on it.
+- ~~**`api/chunk` does not serve container members.**~~ Fixed in Caterva2 on
+  `range-honesty` (*Serve chunks of a container leaf*): the endpoint resolves the
+  way `api/fetch` does, so a TreeStore leaf hands over its stored chunk, while
+  HDF5 leaves and CTables are refused with a 400 naming `slice_` rather than
+  being recompressed per request. A `.b2z` leaf still gets whole chunks only:
+  giving one the block path needs the offset of its frame inside the container,
+  which is the next item.
+- **A container leaf could serve ranges too.** A TreeStore keeps its leaves as
+  ordinary frames inside the `.b2z`, so the bytes a block reader wants are in
+  the file at a fixed offset -- what is missing is a way for the server to say
+  where a leaf's frame starts, and for the client to add that base to every
+  range. Worth its own plan; it would give `.b2z` members everything a plain
+  `.b2nd` has.
 - **The four requests to open a frame** (prefix, header, offsets header, offsets)
   could be two: the header could be read optimistically with the prefix. It is in
   `ByteRangeNDSource`, so it would pay for fsspec as well, and multipart would
