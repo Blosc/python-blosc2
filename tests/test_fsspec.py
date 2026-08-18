@@ -759,6 +759,63 @@ def _incompressible(shape, chunks, blocks, seed=0):
     return data, blosc2.asarray(data, chunks=chunks, blocks=blocks)
 
 
+def test_lazy_open_costs_two_reads(monkeypatch):
+    # The format asks four questions to find the chunk offsets; both of the two
+    # that only measure the next read are guessed at instead
+    data, a = _incompressible((600, 600), (300, 600), (30, 600))
+    url = _put("openreads.b2nd", a)
+    reads, chunks = _traffic(monkeypatch)
+
+    src = blosc2.FsspecNDSource(url)
+    assert len(reads) == 2
+    assert not chunks
+    assert src.shape == (600, 600)
+    assert len(src._offsets) == 2  # ... and it read the offsets it came for
+
+
+def test_lazy_open_of_a_small_frame_costs_one_read(monkeypatch):
+    # A frame that fits in the first read is wholly in hand: the offsets chunk
+    # is in those bytes too, so there is nothing left to ask for
+    a = blosc2.arange(0, 100, dtype="i4", chunks=(10,))
+    assert a.schunk.cbytes < blosc2.proxy._FRAME_PREFETCH
+    url = _put("smallframe.b2nd", a)
+    reads, _ = _traffic(monkeypatch)
+
+    src = blosc2.FsspecNDSource(url)
+    assert len(reads) == 1
+    assert len(src._offsets) == 10
+    assert np.array_equal(blosc2.Proxy(src)[:], a[:])
+
+
+def test_lazy_open_reads_a_header_that_did_not_fit(monkeypatch):
+    # A metalayer big enough to push the header past the guess: the exact read
+    # the format asks for happens after all, and nothing is misread
+    monkeypatch.setattr(blosc2.proxy, "_FRAME_PREFETCH", 256)
+    data = np.arange(1000, dtype="i4")
+    a = blosc2.asarray(data, chunks=(100,), meta={"big": {"pad": "x" * 4096}})
+    url = _put("bigheader.b2nd", a)
+    reads, _ = _traffic(monkeypatch)
+
+    src = blosc2.FsspecNDSource(url)
+    assert len(reads) == 3  # the guess, the header, the offsets
+    assert reads[1] > 4096
+    assert np.array_equal(blosc2.Proxy(src)[:], data)
+
+
+def test_lazy_open_reads_an_index_that_did_not_fit(monkeypatch):
+    # The same for the offsets chunk, which is bounded by the frame's own length
+    # but capped in case a large trailer sits behind it
+    monkeypatch.setattr(blosc2.proxy, "_INDEX_PREFETCH", 16)
+    data, a = _incompressible((600, 600), (30, 600), (30, 600))
+    url = _put("bigindex.b2nd", a)
+    reads, _ = _traffic(monkeypatch)
+
+    src = blosc2.FsspecNDSource(url)
+    assert len(reads) == 3  # the head, the capped tail, the offsets in full
+    assert reads[1] == 16
+    assert np.array_equal(blosc2.Proxy(src)[:], data)
+
+
 def test_lazy_fetches_only_touched_blocks(monkeypatch):
     # Chunks big enough to be worth taking apart, at the real threshold
     data, a = _incompressible((600, 600), (300, 600), (30, 600))

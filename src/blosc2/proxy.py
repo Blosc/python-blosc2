@@ -52,6 +52,16 @@ BLOCK_MAX_FRACTION = 0.5
 # few unwanted bytes for one less request, which at object-store latencies is
 # always the right way round.
 BLOCK_GAP = 4096
+# Opening a frame asks two questions whose answers are shorter than the questions
+# are dear: how long is the header, and how long is the offsets chunk.  Both are
+# guessed at generously instead, since over a network a read of a few hundred
+# bytes and one of a few kilobytes cost the same.  A guess that falls short costs
+# the exact read that would have happened anyway, so these are ceilings, not
+# promises: an ordinary header is 165-320 bytes, and a frame of 100_000 chunks
+# has 4 KB of compressed offsets.
+_FRAME_PREFETCH = 8192
+_INDEX_PREFETCH = 1 << 16
+
 # How many partly filled chunks keep their blocks in memory as well as in the
 # cache.  Adding a block to a chunk rewrites that chunk, and the blocks already
 # in it have to come from somewhere: from here, or read back out of the cache and
@@ -1101,25 +1111,33 @@ def _chunk_payloads(chunk: bytes, nblocks: int, wanted) -> dict[int, bytes]:
     return {int(n): chunk[bstarts[n] : bstarts[n] + extents[n]] for n in wanted}
 
 
-def _read_frame_index(f) -> tuple[bytes, list, np.ndarray]:
-    """Read the header and the chunk offsets of a contiguous frame from *f*.
+def _read_frame_index(read_range) -> tuple[bytes, list, np.ndarray]:
+    """Read the header and the chunk offsets of a contiguous frame.
 
-    Returns the raw header bytes, the header decoded as the msgpack array it is,
-    and the absolute position of every chunk.  A negative position is not a
-    position at all: it encodes a run-length chunk that was never written to the
-    file.  See ``README_CFRAME_FORMAT.rst`` in c-blosc2 for the layout.
+    *read_range* is ``(offset, size) -> bytes``, so what this costs is round
+    trips.  Returns the raw header bytes, the header decoded as the msgpack
+    array it is, and the absolute position of every chunk.  A negative position
+    is not a position at all: it encodes a run-length chunk that was never
+    written to the file.  See ``README_CFRAME_FORMAT.rst`` in c-blosc2 for the
+    layout.
+
+    The format asks to be read in four steps -- how long is the header, the
+    header, how long is the offsets chunk, the offsets chunk -- and each of the
+    two questions costs as much as the answer it asks for.  So both are guessed
+    at instead: enough of the head to hold any ordinary header, and the tail
+    that the frame's own length bounds.  A guess that falls short is followed by
+    the exact read that would have happened anyway, and a frame small enough to
+    arrive whole in the first read costs one.
     """
     import msgpack
 
-    f.seek(0)
-    prefix = f.read(24)
-    if prefix[2:10] != _FRAME_MAGIC:
+    head = read_range(0, _FRAME_PREFETCH)
+    if head[2:10] != _FRAME_MAGIC:
         raise ValueError("not a Blosc2 contiguous frame")
     # header_len is the one field that must be located by hand; everything after
     # it comes out of unpacking the header, which is plain msgpack
-    header_len = struct.unpack(">i", prefix[11:15])[0]
-    f.seek(0)
-    raw = f.read(header_len)
+    header_len = struct.unpack(">i", head[11:15])[0]
+    raw = head[:header_len] if header_len <= len(head) else read_range(0, header_len)
     # raw=True because the flags field is a msgpack *string* holding four raw
     # bytes, and codec_flags packs clevel into its high nibble: from clevel 8 up
     # that byte is not valid UTF-8 and decoding the header blows up
@@ -1130,29 +1148,22 @@ def _read_frame_index(f) -> tuple[bytes, list, np.ndarray]:
     if header[8] == 0:  # chunksize
         return raw, header, np.empty(0, dtype=np.int64)
 
-    # The offsets live in a Blosc2 chunk of their own, right after the data ones
-    index_pos = header[1] + header[5]
-    f.seek(index_pos)
-    index_cbytes = struct.unpack("<i", f.read(16)[12:16])[0]
-    f.seek(index_pos)
-    offsets = np.frombuffer(blosc2.decompress2(f.read(index_cbytes)), dtype=np.int64)
+    # The offsets live in a Blosc2 chunk of their own, right after the data ones,
+    # so all that follows them is the trailer: the frame's own length says how
+    # much that is, and the cap keeps a large trailer (vlmeta) from being dragged
+    # along with them.  Compressed offsets are small -- 4 KB for a frame of
+    # 100_000 chunks -- so the cap is reached about as often as the header one is
+    frame_len, index_pos = header[2], header[1] + header[5]
+    if len(head) >= frame_len:
+        index = head[index_pos:]  # the whole frame arrived in the first read
+    else:
+        index = read_range(index_pos, min(frame_len - index_pos, _INDEX_PREFETCH))
+    index_cbytes = struct.unpack("<i", index[12:16])[0]
+    if index_cbytes > len(index):
+        index = read_range(index_pos, index_cbytes)
+    offsets = np.frombuffer(blosc2.decompress2(index[:index_cbytes]), dtype=np.int64)
     # Offsets are relative to the end of the header
     return raw, header, np.where(offsets >= 0, offsets + header_len, offsets)
-
-
-class _RangeReader:
-    """The seek/read pair `_read_frame_index` needs, served by exact range requests."""
-
-    def __init__(self, read_range):
-        self._read_range, self._pos = read_range, 0
-
-    def seek(self, pos: int) -> None:
-        self._pos = pos
-
-    def read(self, size: int) -> bytes:
-        data = self._read_range(self._pos, size)
-        self._pos += len(data)
-        return data
 
 
 def _frame_metalayer(raw: bytes, header: list, name: str):
@@ -1238,7 +1249,7 @@ class ByteRangeNDSource(ProxyNDSource):
         # Exact ranges, not a file handle: a buffered one reads a whole block per
         # seek (50 MiB on s3fs by default), which would undo the point of a lazy
         # open. Chunk reads are stateless, so nothing here is shared between threads
-        raw, header, self._offsets = _read_frame_index(_RangeReader(self.read_range))
+        raw, header, self._offsets = _read_frame_index(self.read_range)
         self._chunksize = header[8]
         self._extents = _chunk_extents(self._offsets, header)
         try:

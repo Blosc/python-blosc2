@@ -409,10 +409,12 @@ in the other direction: `Proxy.fetch` reads `max_concurrency` off the source, an
   where a leaf's frame starts, and for the client to add that base to every
   range. Worth its own plan; it would give `.b2z` members everything a plain
   `.b2nd` has.
-- **The four requests to open a frame** (prefix, header, offsets header, offsets)
-  could be two: the header could be read optimistically with the prefix. It is in
-  `ByteRangeNDSource`, so it would pay for fsspec as well, and multipart would
-  make it one.
+- ~~**The four requests to open a frame**~~ are two, and one for a frame that
+  arrives whole in the first read (*Open a frame in two requests*): both reads
+  that only measured the next one are guessed at instead. 0.237 s → 0.138 s
+  against cat2.cloud. Getting to one for a large frame needs a suffix range
+  (`Range: bytes=-65536`) batched with the head read, which no fsspec backend
+  exposes and `read_ranges` has no way to express.
 - **`C2Array` still has no `stamp`.** A cache is checked against the source's
   geometry only, so a dataset replaced underneath while keeping its shape is not
   noticed. `mtime` is in `api/info` and would do it, but adding one invalidates

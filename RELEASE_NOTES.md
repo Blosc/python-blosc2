@@ -56,6 +56,11 @@ XXX version-specific blurb XXX
   request to find out, and is never asked twice. `blosc2.ByteRangeNDSource` is
   the frame reader `FsspecNDSource` and the new `C2NDSource` share: subclass it
   with a `read_range(offset, size)` to give any transport the same treatment.
+  Opening a remote frame through either of them now costs two requests instead
+  of four (0.237 s → 0.138 s against cat2.cloud), and one for a frame small
+  enough to arrive whole in the first read: the two reads that only measured the
+  next one are guessed at generously instead, since over a network a few hundred
+  bytes and a few kilobytes cost the same.
   `bench/ndarray/cat2-block-granularity.py` measures all of it on any dataset,
   against a real subscriber or a stand-in it starts itself.
 

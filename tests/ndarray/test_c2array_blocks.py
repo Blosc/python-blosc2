@@ -195,8 +195,9 @@ def test_blocks_are_read_over_ranges(subscriber, any_chunk_wants_blocks):
     sub.log.clear()
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
-    # The frame index, then one read for the block offsets and one for the block
-    assert [kind for kind, _, _ in sub.log] == ["fetch"] * 6
+    # The frame index (header, then offsets), one read for the chunk's block
+    # offsets, and one for the block the slice lands in
+    assert [kind for kind, _, _ in sub.log] == ["fetch"] * 4
     assert {status for _, status, _ in sub.log} == {206}
     assert not _bytes(sub, "chunk")
     # A block of a chunk, not the chunk: an eighth of it here, and never the frame
