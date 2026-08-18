@@ -32,8 +32,9 @@ import blosc2
 class _Subscriber:
     """A Caterva2-shaped server over one .b2nd file."""
 
-    def __init__(self, path, ranges=True, cookie=None, multipart=True, merge_ranges=True):
+    def __init__(self, path, key=None, ranges=True, cookie=None, multipart=True, merge_ranges=True):
         self.path = str(path)
+        self.key = key  # a leaf inside a .b2z container, rather than a file of its own
         self.ranges = ranges  # False: stream the body and ignore Range, as a
         self.cookie = cookie  # computed dataset does
         self.multipart = multipart  # False: answer only the first range asked for
@@ -42,10 +43,20 @@ class _Subscriber:
         self.reload()
 
     def reload(self):
-        """Pick up the file as it is now, as a subscriber would on the next request."""
-        self.frame = pathlib.Path(self.path).read_bytes()
-        self.array = blosc2.open(self.path)
+        """Pick up the file as it is now, as a subscriber would on the next request.
+
+        A leaf is served out of its window in the container, which is what makes
+        it look to a client exactly like a dataset of its own: byte 0 of what it
+        asks for is the frame's first byte.
+        """
+        raw = pathlib.Path(self.path).read_bytes()
         self.mtime = pathlib.Path(self.path).stat().st_mtime
+        if self.key is None:
+            self.frame, self.array = raw, blosc2.open(self.path)
+            return
+        store = blosc2.open(self.path)
+        offset, nbytes = store.member_window(self.key)
+        self.frame, self.array = raw[offset : offset + nbytes], store[self.key]
 
     @property
     def meta(self):
@@ -152,15 +163,25 @@ class _Handler(BaseHTTPRequestHandler):
         )
 
 
-def _serve(tmp_path, data, chunks, blocks, name="ds.b2nd", **kwargs):
-    """A C2Array over *data*, served by a subscriber stand-in on localhost."""
+def _serve(tmp_path, data, chunks, blocks, name="ds.b2nd", key=None, **kwargs):
+    """A C2Array over *data*, served by a subscriber stand-in on localhost.
+
+    With *key*, the array is a leaf of a TreeStore container instead of a file
+    of its own, and the subscriber serves it from its window -- which is what
+    Caterva2 does, and what the client is meant not to notice.
+    """
     urlpath = str(tmp_path / name)
-    blosc2.asarray(data, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
+    if key is None:
+        blosc2.asarray(data, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
+    else:
+        with blosc2.TreeStore(urlpath, mode="w") as tstore:
+            tstore[key] = blosc2.asarray(data, chunks=chunks, blocks=blocks)
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    server.subscriber = _Subscriber(urlpath, **kwargs)
+    server.subscriber = _Subscriber(urlpath, key=key, **kwargs)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     urlbase = f"http://127.0.0.1:{server.server_address[1]}/"
-    array = blosc2.C2Array(f"@public/{name}", urlbase=urlbase, auth_token=kwargs.get("cookie"))
+    path = f"@public/{name}{key or ''}"
+    array = blosc2.C2Array(path, urlbase=urlbase, auth_token=kwargs.get("cookie"))
     return array, server.subscriber, server
 
 
@@ -503,3 +524,26 @@ def test_a_read_only_cache_is_not_stamped(tmp_path, subscriber):
 
     reopened = blosc2.open(cache, mode="r")
     assert np.array_equal(reopened[0:5, 0:10], data[0:5, 0:10])
+
+
+def test_blocks_of_a_container_leaf(subscriber, any_chunk_wants_blocks):
+    """A leaf of a .b2z is a whole frame inside the container, and a subscriber
+    serves it from that window -- so the client reads its blocks knowing nothing
+    about containers, which is the whole of what it takes."""
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), name="tree.b2z", key="/g/leaf")
+    p = blosc2.Proxy(array, mode="w")
+    assert array.block_source() is not None
+    sub.log.clear()
+
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert not _bytes(sub, "chunk")
+    assert _bytes(sub, "fetch") < sub.array.schunk.cbytes / 8
+    assert np.array_equal(p[...], data)
+
+
+def test_a_container_leaf_is_stamped_like_any_other(subscriber):
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), name="tree.b2z", key="/g/leaf")
+    # A leaf has no mtime of its own: the container's is what says it changed
+    assert array.stamp == f"{sub.mtime}:{sub.array.schunk.cbytes}"
