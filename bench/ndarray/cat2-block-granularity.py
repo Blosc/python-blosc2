@@ -497,6 +497,17 @@ def report(args, urlbase, path, token):
     _time_patterns(args, open_array, array, ["chunks", "blocks", "multipart"], latency, bandwidth, plans)
 
 
+def _no_chunks(array):
+    """Why api/chunk cannot serve this dataset, if it cannot."""
+    import httpx
+
+    try:
+        array.get_chunk(0)
+    except httpx.HTTPStatusError as exc:
+        return f"api/chunk answers {exc.response.status_code} for {array.path}"
+    return None
+
+
 def _opened(array):
     """What reading the frame index cost, which is paid once per C2Array."""
     fresh = c2array.C2Array(array.path, urlbase=array.urlbase, auth_token=array.auth_token)
@@ -518,6 +529,13 @@ def _opened(array):
 
 
 def _time_patterns(args, open_array, array, modes, latency, bandwidth, plans=None):
+    unavailable = _no_chunks(array)
+    if unavailable:
+        # A container member (a .b2z or .h5 leaf) is fetchable but not chunk-wise:
+        # api/chunk resolves a path without its inner key, so it 404s.  A proxy
+        # over one cannot read it at all, whatever mode it would have used
+        print(f"\n  nothing to time: {unavailable}")
+        return
     if latency or bandwidth:
         print(
             f"\n  simulating a network: {latency * 1e3:.0f} ms per request"
