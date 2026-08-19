@@ -482,7 +482,11 @@ class DictStore:
         if relpath is None:
             return None
         window = self.offsets.get(relpath)
-        return (window["offset"], window["length"]) if window else None
+        if not window or not window.get("stored"):
+            # A deflated member is not a frame where it lies, whatever its suffix
+            # says, so there is no window onto it to hand out
+            return None
+        return (window["offset"], window["length"])
 
     def _annotate_external_value(
         self,
@@ -1000,7 +1004,14 @@ class DictStore:
                 filename_len = int.from_bytes(local_header[26:28], "little")
                 extra_len = int.from_bytes(local_header[28:30], "little")
                 data_offset = info.header_offset + 30 + filename_len + extra_len
-                self.offsets[info.filename] = {"offset": data_offset, "length": info.file_size}
+                # The *stored* length, which is what lies at `data_offset`: it is
+                # `file_size` only for a member kept whole, and a `.b2z` repacked
+                # by any other tool may well have deflated its members instead
+                self.offsets[info.filename] = {
+                    "offset": data_offset,
+                    "length": info.compress_size,
+                    "stored": info.compress_type == zipfile.ZIP_STORED,
+                }
         return self.offsets
 
     def close(self) -> None:

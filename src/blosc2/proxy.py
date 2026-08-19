@@ -402,6 +402,8 @@ class Proxy(blosc2.Operand):
         # Blocks of the last few partly filled chunks, so a rewrite need not read
         # the chunk back out of the cache to find out what is already in it
         self._hot_payloads = {}
+        # The index as last written to the cache, to write it again only if it moves
+        self._saved_index = None
         nchunks = self._schunk_cache.nchunks
         nbits = nchunks * self._blocks_per_chunk
         self._fetched = bytearray((nbits + 7) // 8) if fresh else self._load_fetched(nchunks)
@@ -412,6 +414,9 @@ class Proxy(blosc2.Operand):
         # Geometry alone cannot tell a replaced source from the one the cache was
         # filled from, so record whatever identity the source can name itself by
         stamp = getattr(self.src, "stamp", None)
+        # Read before writing, or the check below would compare the stamp with
+        # the copy of itself just written and pass for every writable cache
+        stored = None if fresh else self._schunk_cache.vlmeta.get("proxy-stamp")
         if stamp is not None and getattr(self._schunk_cache, "mode", None) != "r":
             # Not into a cache opened read-only, which `blosc2.open(path, mode="r")`
             # hands over for a persisted proxy: nothing may be written there, and a
@@ -422,12 +427,7 @@ class Proxy(blosc2.Operand):
         # same remote bytes, checked here rather than taken on trust from how the
         # cache was come by: a `_cache=` handed in never passed `_reopen_cache`.
         adopt = getattr(self.src, "adopt_index", None)
-        if (
-            adopt is not None
-            and not fresh
-            and stamp is not None
-            and self._schunk_cache.vlmeta.get("proxy-stamp") == stamp
-        ):
+        if adopt is not None and not fresh and stamp is not None and stored == stamp:
             adopt(self._schunk_cache.vlmeta.get("proxy-index"))
         if vlmeta:
             reserved = sorted(_RESERVED_VLMETA & set(vlmeta))
@@ -585,7 +585,13 @@ class Proxy(blosc2.Operand):
         # alone, which are the only ones a later fetch would ask about.
         state = getattr(self.src, "index_state", None)
         if state is not None and getattr(self.src, "stamp", None) is not None:
-            self._schunk_cache.vlmeta["proxy-index"] = state(self._partly_filled())
+            index = state(self._partly_filled())
+            # Only when it says something new: the offsets are the bulk of it and
+            # never change once read, so a slice-by-slice walk would otherwise
+            # rewrite eight bytes per chunk of the frame after every fetch
+            if index != self._saved_index:
+                self._schunk_cache.vlmeta["proxy-index"] = index
+                self._saved_index = index
 
     def _partly_filled(self) -> list[int]:
         """Chunks the cache holds some of the blocks of, but not all."""
@@ -803,9 +809,17 @@ class Proxy(blosc2.Operand):
 
     def _chunk_layouts(self, nchunks: list[int], max_concurrency: int | None):
         """Where the blocks of every one of *nchunks* are, in as few requests as fit."""
-        if max(getattr(self.src, "max_ranges", 1), 1) > 1:
-            # The source batches the reads itself, so there is nothing to overlap
-            return self.src.chunk_layouts(nchunks)
+        batch = max(getattr(self.src, "max_ranges", 1), 1)
+        if batch > 1:
+            # The source reads a batch of them in one request, but only so many
+            # per request: the batches past the first are round trips like any
+            # other, so they are overlapped rather than run one after the next
+            tasks = list(batched(nchunks, batch))
+            return [
+                layout
+                for answers in self._run(self.src.chunk_layouts, tasks, max_concurrency)
+                for layout in answers
+            ]
         return self._run(self.src.chunk_layout, nchunks, max_concurrency)
 
     def _write_blocks(self, nchunk: int, payloads: dict[int, bytes], header: bytes) -> None:
@@ -1375,7 +1389,9 @@ class ByteRangeNDSource(ProxyNDSource):
         offsets = self._index[0] if self._index is not None else None
         return {
             "bpc": self.blocks_per_chunk,
-            "offsets": b"" if offsets is None else offsets.tobytes(),
+            # Little-endian whatever the host is: a cache directory outlives the
+            # machine that filled it, and a stamp cannot tell a byte order
+            "offsets": b"" if offsets is None else offsets.astype("<i8", copy=False).tobytes(),
             "layouts": [[n, self._sections[n]] for n in keep if n in self._sections],
         }
 
@@ -1399,14 +1415,14 @@ class ByteRangeNDSource(ProxyNDSource):
         offsets = state.get("offsets") or b""
         if offsets:
             nchunks = math.prod(math.ceil(s / c) for s, c in zip(self._shape, self._chunks, strict=True))
-            array = np.frombuffer(offsets, dtype=np.int64)
+            array = np.frombuffer(offsets, dtype="<i8")
             if len(array) != nchunks:
                 return
             with self._index_lock:
                 self._index = (array, _chunk_extents(array, self._header))
                 self._head = None  # the prefetch has nothing left to answer
         for nchunk, head in state.get("layouts") or ():
-            if len(head) <= section:  # what a read of one asks for, or a short answer
+            if len(head) == section:  # exactly what a read of one asks for
                 self._sections[nchunk] = head
                 self._layouts[nchunk] = self._parse_layout(head, section)
 
@@ -1452,10 +1468,13 @@ class ByteRangeNDSource(ProxyNDSource):
         return self._dtype
 
     def get_chunk(self, nchunk: int) -> bytes:
-        offset = int(self._offsets[nchunk])
+        # Read the index once: `_offsets` and `_extents` each take the lock, and
+        # what they hand back does not change after the first read
+        offsets, extents = self._frame_index()
+        offset = int(offsets[nchunk])
         if offset < 0:
             return self._special_chunk(offset)
-        data = self.read_range(offset, int(self._extents[nchunk]))
+        data = self.read_range(offset, int(extents[nchunk]))
         return data[: struct.unpack("<i", data[12:16])[0]]
 
     @abstractmethod
@@ -1487,11 +1506,12 @@ class ByteRangeNDSource(ProxyNDSource):
         and an upper bound on the chunk's compressed size is already in hand from
         the frame's offsets.  See the thresholds at the top of this module.
         """
-        if int(self._offsets[nchunk]) < 0:
+        offsets, extents = self._frame_index()  # once, rather than twice under the lock
+        if int(offsets[nchunk]) < 0:
             return False  # a run-length chunk has no bytes in the file to skip
         if nwanted > self.blocks_per_chunk * BLOCK_MAX_FRACTION:
             return False
-        return int(self._extents[nchunk]) >= BLOCK_MIN_CBYTES
+        return int(extents[nchunk]) >= BLOCK_MIN_CBYTES
 
     def chunk_layout(self, nchunk: int) -> tuple[bytes, np.ndarray, np.ndarray] | None:
         """Read where the blocks of a chunk are: its header, bstarts and extents.
@@ -1528,8 +1548,9 @@ class ByteRangeNDSource(ProxyNDSource):
         """
         section = _CHUNK_HEADER_LEN + 4 * self.blocks_per_chunk
         todo = [n for n in dict.fromkeys(nchunks) if n not in self._layouts]
+        offsets = self._offsets if todo else ()  # once, not once per span below
         for batch in batched(todo, max(self.max_ranges, 1)):
-            spans = [(int(self._offsets[n]), section) for n in batch]
+            spans = [(int(offsets[n]), section) for n in batch]
             heads = self.read_ranges(spans)
             for nchunk, head in zip(batch, heads, strict=True):
                 self._sections[nchunk] = head
@@ -1539,6 +1560,11 @@ class ByteRangeNDSource(ProxyNDSource):
     def _parse_layout(self, head: bytes, section: int):
         """The layout a chunk's header section says it has, or None for no layout."""
         nblocks = self.blocks_per_chunk
+        if len(head) < section:
+            # A chunk clipped by the end of the frame has no block-offsets section:
+            # asked for before the header is parsed, so a short one never reaches
+            # the fields below rather than tripping over their offsets
+            return None
         cbytes = struct.unpack("<i", head[12:16])[0]
         extended = head[2] & 0x01 and head[2] & 0x04  # both shuffle bits: see the format doc
         if (
@@ -1551,7 +1577,6 @@ class ByteRangeNDSource(ProxyNDSource):
             # Whatever else a chunk may be, one too small to hold a block-offsets
             # section has none: reading 32 bytes in would be reading the next chunk
             or cbytes < section
-            or len(head) < section
         ):
             return None
         bstarts = np.frombuffer(head[_CHUNK_HEADER_LEN:section], dtype="<i4").astype(np.int64)

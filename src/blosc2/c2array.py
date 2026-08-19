@@ -10,6 +10,7 @@ from __future__ import annotations
 import atexit
 import math
 import os
+import struct
 import threading
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
@@ -49,7 +50,7 @@ _client = None
 _client_lock = threading.Lock()
 
 
-def _forgetful_cookies(httpx):
+def _forgetful_cookies():
     """A cookie jar that never keeps anything, for the shared client.
 
     A client of its own per request could not carry a cookie from one request to
@@ -57,10 +58,15 @@ def _forgetful_cookies(httpx):
     being read, and arrays with different tokens (or none) share this client.  A
     `Set-Cookie` from any response would otherwise start authorizing requests
     that asked for none.
-    """
 
-    class _NoCookies(httpx.Cookies):
-        def extract_cookies(self, response):
+    A jar rather than an `httpx.Cookies` subclass: the client re-wraps whatever
+    it is handed in a plain `httpx.Cookies`, which copies the cookies over and
+    drops the subclass, but hands a bare `CookieJar` straight through.
+    """
+    import http.cookiejar
+
+    class _NoCookies(http.cookiejar.CookieJar):
+        def extract_cookies(self, response, request):
             pass
 
     return _NoCookies()
@@ -90,7 +96,7 @@ def _sync_client():
                 _client = httpx.Client(
                     timeout=TIMEOUT,
                     limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
-                    cookies=_forgetful_cookies(httpx),
+                    cookies=_forgetful_cookies(),
                 )
     return _client
 
@@ -276,14 +282,36 @@ failed request costs a round trip and every span in it.
 class _NotRanged(Exception):
     """The subscriber answered a range request with something other than a 206."""
 
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+    @property
+    def transient(self) -> bool:
+        """Whether asking again could be answered differently.
+
+        A 200 is the dataset itself, streamed, and no amount of asking again will
+        make it a file; a server that is busy or broken says nothing at all about
+        how the dataset is served, and costs no download to ask twice.
+        """
+        return self.status is not None and (self.status >= 500 or self.status == 429)
+
 
 class _PartsMissing(Exception):
     """A multi-range answer did not carry all the bytes that were asked for."""
 
 
 def _content_range(value: str) -> int:
-    """Where a `Content-Range: bytes start-end/total` header says its part starts."""
-    return int(value.split()[1].split("-")[0])
+    """Where a `Content-Range: bytes start-end/total` header says its part starts.
+
+    Malformed answers are refused rather than guessed at: `bytes */1234` for a
+    range that could not be satisfied has no start to read, and a part written to
+    no shape at all cannot be placed in the frame.
+    """
+    try:
+        return int(value.split()[1].split("-")[0])
+    except (IndexError, ValueError) as exc:
+        raise _NotRanged(f"a 206 carried an unreadable Content-Range: {value!r}") from exc
 
 
 def _byteranges(response) -> list[tuple[int, bytes]]:
@@ -296,8 +324,17 @@ def _byteranges(response) -> list[tuple[int, bytes]]:
     """
     content_type = response.headers.get("content-type", "")
     if "multipart/byteranges" not in content_type:
-        return [(_content_range(response.headers["content-range"]), response.content)]
-    boundary = content_type.split("boundary=")[1].strip().strip('"').encode()
+        # Where the part sits is the one thing the body cannot say, so an answer
+        # without it is refused: a caching proxy that strips the header would
+        # otherwise have its bytes placed wherever they were asked for
+        single = response.headers.get("content-range")
+        if single is None:
+            raise _NotRanged("a 206 arrived without a Content-Range to place it by")
+        return [(_content_range(single), response.content)]
+    _, sep, boundary = content_type.partition("boundary=")
+    if not sep:
+        raise _NotRanged(f"a multipart answer named no boundary: {content_type!r}")
+    boundary = boundary.strip().strip('"').encode()
     parts = []
     for chunk in response.content.split(b"--" + boundary):
         head, sep, body = chunk.partition(b"\r\n\r\n")
@@ -315,7 +352,10 @@ def _byteranges(response) -> list[tuple[int, bytes]]:
 def _span_of(parts: list[tuple[int, bytes]], offset: int, size: int, url: str) -> bytes:
     """The bytes of one requested span, out of whichever part covers it."""
     for start, data in parts:
-        if start <= offset < start + len(data):
+        # The whole span, not just its first byte: a part that begins inside it
+        # and ends early would otherwise slice short, and a short block payload
+        # is spliced against a `bstarts` that promises the full length
+        if start <= offset and offset + size <= start + len(data):
             return data[offset - start : offset - start + size]
     raise _PartsMissing(f"{url} answered without the bytes at {offset}, which were asked for")
 
@@ -344,6 +384,19 @@ class C2NDSource(ByteRangeNDSource):
         self._url = _sub_url(array.urlbase, f"api/fetch/{array.path}")
         self._auth_token = array.auth_token
         super().__init__(self._url, max_concurrency)
+        # A `Proxy` mixes the two: the block grid and the fetched bitmap come from
+        # the array's `api/info`, while the header sections and `bstarts` come from
+        # this frame.  They have to be the same dataset for that to mean anything,
+        # and the magic bytes alone do not say so -- a window off by a member of a
+        # `.b2z`, or a path serving a file other than the one described, reads a
+        # frame that parses and splices blocks into chunks of the wrong shape.
+        # Geometry alone, since that is what the block arithmetic on both sides is
+        # built out of, and a dtype `api/info` reports as a repr would fail to
+        # parse here for a dataset that reads perfectly well
+        described = (tuple(array.shape), tuple(array.chunks), tuple(array.blocks))
+        found = (tuple(self._shape), tuple(self._chunks), tuple(self._blocks))
+        if described != found:
+            raise ValueError(f"{self._url} serves {found}, where its dataset is {described}")
 
     def read_range(self, offset: int, size: int) -> bytes:
         return self._get([(offset, size)])[0]
@@ -382,7 +435,10 @@ class C2NDSource(ByteRangeNDSource):
                 # Whatever this is, it is not the bytes that were asked for: a 200
                 # carries the whole dataset, which is the download this exists to
                 # avoid, so leave the body unread on the socket
-                raise _NotRanged(f"{self._url} answered {response.status_code} to a Range request")
+                raise _NotRanged(
+                    f"{self._url} answered {response.status_code} to a Range request",
+                    response.status_code,
+                )
             response.read()
             parts = _byteranges(response)
         return [_span_of(parts, offset, size, self._url) for offset, size in spans]
@@ -701,31 +757,58 @@ class C2Array(blosc2.Operand):
             with self._block_lock:
                 if self._block_source is _UNTRIED:
                     self._block_source = self._open_block_source()
-        return self._block_source
+        # A failure that says nothing about the dataset leaves it _UNTRIED, so the
+        # next fetch asks again; this one keeps to whole chunks either way
+        return None if self._block_source is _UNTRIED else self._block_source
 
-    def _open_block_source(self) -> C2NDSource | None:
-        """Decide, at whatever cost it takes, whether this dataset serves ranges."""
+    def _open_block_source(self):
+        """Decide, at whatever cost it takes, whether this dataset serves ranges.
+
+        None for a dataset that does not serve ranges, which is an answer for
+        good; `_UNTRIED` for a subscriber that could not say, which is not.
+        """
+        httpx = _httpx()
         # `api/info` rules out a dataset the subscriber computes for nothing: a
         # stored one reports its geometry where a lazy expression reports
         # `expression` and `operands`
         if not all(key in self.meta for key in ("chunks", "blocks", "schunk")):
             return None
-        # Nor is a frame of small chunks worth an index read: blosc2 declines to
-        # take a chunk below BLOCK_MIN_CBYTES apart, so nothing here would ever
-        # use a block, and the dataset keeps exactly the behaviour it had before
-        nchunks = math.prod(math.ceil(s / c) for s, c in zip(self.shape, self.chunks, strict=True))
-        if not nchunks or self.cbytes / nchunks < blosc2.proxy.BLOCK_MIN_CBYTES:
-            return None
         # Whether a dataset that reports a geometry is *served* from a file is
         # something only the answer to a range request can say: an HDF5 leaf or a
         # `.b2z` member reports one and is streamed all the same
         try:
+            # Nor is a frame of small chunks worth an index read: blosc2 declines
+            # to take a chunk below BLOCK_MIN_CBYTES apart, so nothing here would
+            # ever use a block, and the dataset keeps the behaviour it had before.
+            # Inside the `try`, since `api/info` need not carry what these read.
+            nchunks = math.prod(math.ceil(s / c) for s, c in zip(self.shape, self.chunks, strict=True))
+            if not nchunks or self.cbytes / nchunks < blosc2.proxy.BLOCK_MIN_CBYTES:
+                return None
             source = C2NDSource(self, max_concurrency=REMOTE_MAX_CONCURRENCY)
             source.adopt_index(self._pending_index)
             return source
-        except (_NotRanged, ValueError, NotImplementedError, RuntimeError, _httpx().HTTPError):
-            # Not ranged, not a contiguous frame, not an NDArray, or not
-            # reachable: whole chunks work for all of those
+        except _NotRanged as exc:
+            return _UNTRIED if exc.transient else None
+        except httpx.HTTPStatusError as exc:
+            # A busy or broken subscriber said nothing about how this is served
+            status = exc.response.status_code
+            return _UNTRIED if status >= 500 or status == 429 else None
+        except httpx.TransportError:
+            # Nothing was downloaded to find this out, so asking again is cheap
+            return _UNTRIED
+        except (
+            _PartsMissing,
+            ValueError,
+            NotImplementedError,
+            RuntimeError,
+            KeyError,
+            IndexError,
+            struct.error,
+            httpx.HTTPError,
+        ):
+            # Not ranged, not a contiguous frame, not an NDArray, answered with
+            # something unreadable, or described by an `api/info` without the
+            # fields these read: whole chunks work for all of those
             return None
 
     def adopt_index(self, state) -> None:
@@ -760,15 +843,15 @@ class C2Array(blosc2.Operand):
 
     def chunk_layout(self, nchunk: int):
         """Where the blocks of a chunk are; see :meth:`ByteRangeNDSource.chunk_layout`."""
-        return self.block_source().chunk_layout(nchunk)
+        return self._ranged().chunk_layout(nchunk)
 
     def chunk_layouts(self, nchunks: Sequence[int]) -> list:
         """The same for several chunks; see :meth:`ByteRangeNDSource.chunk_layouts`."""
-        return self.block_source().chunk_layouts(nchunks)
+        return self._ranged().chunk_layouts(nchunks)
 
     def block_plan(self, nchunk: int, nblocks: Sequence[int]) -> list[tuple[int, int, tuple]]:
         """The range reads covering *nblocks*; see :meth:`ByteRangeNDSource.block_plan`."""
-        return self.block_source().block_plan(nchunk, nblocks)
+        return self._ranged().block_plan(nchunk, nblocks)
 
     def read_range(self, offset: int, size: int) -> bytes:
         """The bytes at [*offset*, *offset* + *size*) of the remote frame."""

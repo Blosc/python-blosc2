@@ -880,6 +880,34 @@ def test_a_kept_index_of_the_wrong_shape_is_dropped(tmp_path, monkeypatch):
     assert np.array_equal(p[...], data)
 
 
+def test_a_kept_index_is_dropped_when_the_bytes_behind_it_were_replaced(tmp_path):
+    # A cache handed straight in never passes `_reopen_cache`, so the check in
+    # the constructor is the only one there is: it has to read the stamp the
+    # cache was filled under *before* this run writes its own over it, or it
+    # compares the stamp with a copy of itself and adopts anything at all
+    data, a = _incompressible((600, 600), (300, 600), (30, 600))
+    url = _put("replacedbytes.b2nd", a)
+    cache = str(tmp_path / "replacedbytes-cache.b2nd")
+    blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="w").fetch((slice(0, 30), slice(None)))
+
+    # The same geometry over other bytes: the second chunk keeps its place in the
+    # array and loses it in the file, since the first no longer takes the room it did
+    other = np.zeros((600, 600))
+    other[300:] = np.random.default_rng(1).random((300, 600))
+    _put("replacedbytes.b2nd", blosc2.asarray(other, chunks=(300, 600), blocks=(30, 600)))
+
+    # The raw cache container, as `process_opened_object` hands it over: opening
+    # it with `blosc2.open` would build the proxy this is about, stamp and all
+    kwargs = {}
+    blosc2.schunk._set_default_dparams(kwargs)
+    holder = blosc2.blosc2_ext.open(cache, "a", 0, **kwargs)
+
+    src = blosc2.FsspecNDSource(url)
+    p = blosc2.Proxy(src, _cache=holder)
+    assert src._index is None  # where the chunks were is not where they are
+    assert np.array_equal(p[300:330, 0:10], other[300:330, 0:10])
+
+
 def test_a_cache_that_holds_the_slice_asks_for_no_offsets(monkeypatch, tmp_path):
     # What the deferral is for: a later run over a cache that already covers the
     # slice fetches nothing, and so has no use for where the chunks are either

@@ -37,7 +37,17 @@ pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="no listening sockets on 
 class _Subscriber:
     """A Caterva2-shaped server over one .b2nd file."""
 
-    def __init__(self, path, key=None, ranges=True, cookie=None, multipart=True, merge_ranges=True):
+    def __init__(
+        self,
+        path,
+        key=None,
+        ranges=True,
+        cookie=None,
+        multipart=True,
+        merge_ranges=True,
+        fetch_failures=0,
+    ):
+        self.fetch_failures = fetch_failures  # answer this many fetches 503 first
         self.path = str(path)
         self.key = key  # a leaf inside a .b2z container, rather than a file of its own
         self.ranges = ranges  # False: stream the body and ignore Range, as a
@@ -121,6 +131,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, b"", endpoint=endpoint)
 
     def _fetch(self, sub):
+        if sub.fetch_failures:
+            # A subscriber too busy to answer says nothing about how it serves
+            sub.fetch_failures -= 1
+            self._send(503, b"busy", endpoint="fetch")
+            return
         wanted = self.headers.get("Range")
         if not wanted or not sub.ranges:
             # What a StreamingResponse does with a Range header: nothing at all
@@ -619,3 +634,54 @@ def test_a_container_leaf_is_stamped_like_any_other(subscriber):
     array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), name="tree.b2z", key="/g/leaf")
     # A leaf has no mtime of its own: the container's is what says it changed
     assert array.stamp == f"{sub.mtime}:{sub.array.schunk.cbytes}"
+
+
+def test_a_busy_subscriber_is_asked_again(subscriber, any_chunk_wants_blocks):
+    # A 503 to the probe says nothing about whether the dataset is served from a
+    # file, and cost no download to find out -- unlike the streamed 200 the
+    # permanent fallback exists for, so this one is asked again on the next fetch
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), fetch_failures=1)
+    p = blosc2.Proxy(array, mode="w")
+
+    assert array.block_source() is None  # the probe was refused ...
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])  # ... and whole chunks served it
+    assert array.block_source() is not None  # ... but the next ask gets an answer
+    assert np.array_equal(p[...], data)
+
+
+def test_a_streamed_dataset_is_not_asked_again(subscriber, any_chunk_wants_blocks):
+    # The other half of the same rule: a 200 is the dataset itself, and asking
+    # again would pay for the whole of it to be told the same thing
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20), ranges=False)
+    p = blosc2.Proxy(array, mode="w")
+
+    assert array.block_source() is None
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert array.block_source() is None
+    assert not any(status == 206 for _, status, _ in sub.log)
+
+
+def test_a_part_that_ends_early_is_refused(subscriber, any_chunk_wants_blocks):
+    # A part that starts inside a span and stops short of its end would slice to
+    # a short payload, which is spliced against a `bstarts` promising the whole
+    # of it -- so it is refused, and the fetch falls back to a range per request
+    parts = [(100, b"12345")]
+    assert blosc2.c2array._span_of(parts, 100, 5, "url") == b"12345"
+    with pytest.raises(blosc2.c2array._PartsMissing):
+        blosc2.c2array._span_of(parts, 100, 6, "url")
+    with pytest.raises(blosc2.c2array._PartsMissing):
+        blosc2.c2array._span_of(parts, 103, 4, "url")
+
+
+def test_the_shared_client_keeps_no_cookies():
+    # One client serves every C2Array, so a `Set-Cookie` kept from any of them
+    # would start authorizing requests that asked for none
+    import httpx
+
+    client = blosc2.c2array._sync_client()
+    request = httpx.Request("GET", "http://127.0.0.1/api/fetch/x")
+    response = httpx.Response(200, headers={"set-cookie": "session=secret; Path=/"}, request=request)
+    client.cookies.extract_cookies(response)
+    assert not dict(client.cookies)
