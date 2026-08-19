@@ -759,23 +759,29 @@ def _incompressible(shape, chunks, blocks, seed=0):
     return data, blosc2.asarray(data, chunks=chunks, blocks=blocks)
 
 
-def test_lazy_open_costs_two_reads(monkeypatch):
-    # The format asks four questions to find the chunk offsets; both of the two
-    # that only measure the next read are guessed at instead
+def test_lazy_open_costs_one_read(monkeypatch):
+    # The format asks how long the header is in an answer as dear as the header,
+    # so the head is guessed at generously instead -- and that one read is the
+    # whole of an open, since where the chunks are is nothing an open decides
     data, a = _incompressible((600, 600), (300, 600), (30, 600))
     url = _put("openreads.b2nd", a)
     reads, chunks = _traffic(monkeypatch)
 
     src = blosc2.FsspecNDSource(url)
-    assert len(reads) == 2
+    assert len(reads) == 1
     assert not chunks
     assert src.shape == (600, 600)
-    assert len(src._offsets) == 2  # ... and it read the offsets it came for
+
+    # ... and the offsets are read by the first thing that asks where a chunk is
+    assert len(src._offsets) == 2
+    assert len(reads) == 2
+    assert len(src._offsets) == 2  # read once and kept, not once per question
+    assert len(reads) == 2
 
 
-def test_lazy_open_of_a_small_frame_costs_one_read(monkeypatch):
+def test_lazy_open_of_a_small_frame_never_reads_twice(monkeypatch):
     # A frame that fits in the first read is wholly in hand: the offsets chunk
-    # is in those bytes too, so there is nothing left to ask for
+    # is in those bytes too, so there is nothing left to ask for, then or later
     a = blosc2.arange(0, 100, dtype="i4", chunks=(10,))
     assert a.schunk.cbytes < blosc2.proxy._FRAME_PREFETCH
     url = _put("smallframe.b2nd", a)
@@ -784,6 +790,7 @@ def test_lazy_open_of_a_small_frame_costs_one_read(monkeypatch):
     src = blosc2.FsspecNDSource(url)
     assert len(reads) == 1
     assert len(src._offsets) == 10
+    assert len(reads) == 1
     assert np.array_equal(blosc2.Proxy(src)[:], a[:])
 
 
@@ -797,9 +804,34 @@ def test_lazy_open_reads_a_header_that_did_not_fit(monkeypatch):
     reads, _ = _traffic(monkeypatch)
 
     src = blosc2.FsspecNDSource(url)
-    assert len(reads) == 3  # the guess, the header, the offsets
+    assert len(reads) == 2  # the guess, then the header
     assert reads[1] > 4096
     assert np.array_equal(blosc2.Proxy(src)[:], data)
+    assert len(reads) > 2  # the offsets, and the chunks themselves
+
+
+def test_a_cache_that_holds_the_slice_asks_for_no_offsets(monkeypatch, tmp_path):
+    # What the deferral is for: a later run over a cache that already covers the
+    # slice fetches nothing, and so has no use for where the chunks are either
+    data, a = _incompressible((600, 600), (300, 600), (30, 600))
+    url = _put("cachedslice.b2nd", a)
+    cache = str(tmp_path / "cachedslice-cache.b2nd")
+    item = (slice(0, 30), slice(0, 600))
+    blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="w").fetch(item)
+
+    reads, _ = _traffic(monkeypatch)
+    src = blosc2.FsspecNDSource(url)
+    proxy = blosc2.Proxy(src, urlpath=cache, mode="a")
+    assert len(reads) == 1  # the header, which is what says the frame is readable
+
+    proxy.fetch(item)
+    assert len(reads) == 1
+    assert np.array_equal(proxy[0:30, 0:600], data[0:30, 0:600])
+    assert len(reads) == 1
+
+    # A slice it does not hold pays for the offsets then, and reads right
+    assert np.array_equal(proxy[300:330, 0:600], data[300:330, 0:600])
+    assert len(reads) > 1
 
 
 def test_lazy_open_reads_an_index_that_did_not_fit(monkeypatch):
@@ -811,7 +843,9 @@ def test_lazy_open_reads_an_index_that_did_not_fit(monkeypatch):
     reads, _ = _traffic(monkeypatch)
 
     src = blosc2.FsspecNDSource(url)
-    assert len(reads) == 3  # the head, the capped tail, the offsets in full
+    assert len(reads) == 1  # the head, and the offsets not asked for yet
+    assert len(src._offsets) == 20
+    assert len(reads) == 3  # ... then the capped tail, and the offsets in full
     assert reads[1] == 16
     assert np.array_equal(blosc2.Proxy(src)[:], data)
 
@@ -823,10 +857,11 @@ def test_lazy_fetches_only_touched_blocks(monkeypatch):
     assert cbytes > blosc2.proxy.BLOCK_MIN_CBYTES
 
     p = blosc2.open(_put("blocks.b2nd", a), lazy=True)
-    reads, chunks = _traffic(monkeypatch)  # after the open, which reads the frame index
+    reads, chunks = _traffic(monkeypatch)  # after the open, which reads the header
     assert np.array_equal(p[10:12, 30:40], data[10:12, 30:40])
-    # One read for the block offsets, one for the single block the slice lands in
-    assert len(reads) == 2
+    # One read for where the chunks are, one for the block offsets inside the one
+    # wanted, one for the single block the slice lands in
+    assert len(reads) == 3
     assert not chunks
     assert sum(reads) < cbytes / 5
 
@@ -851,7 +886,9 @@ def test_lazy_whole_array_skips_the_block_path(monkeypatch, any_chunk_wants_bloc
     reads, chunks = _traffic(monkeypatch)
     assert np.array_equal(p[:], data)
     assert len(chunks) == 2
-    assert len(reads) == len(chunks)  # one request each, none of them for block offsets
+    # One request per chunk and none for block offsets, after the one that says
+    # where the chunks are
+    assert len(reads) == len(chunks) + 1
 
 
 @pytest.mark.parametrize(
@@ -902,7 +939,7 @@ def test_lazy_block_cache_survives_reopen(tmp_path, monkeypatch, any_chunk_wants
 
     # A partly filled chunk survives, so the blocks in it do not travel again
     p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
-    reopened = len(reads)  # every open reads the frame index afresh
+    reopened = len(reads)  # every open reads the header afresh
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     assert len(reads) == reopened
     # ... and the ones missing from it still do
@@ -931,8 +968,9 @@ def test_lazy_blocks_fall_back_for_memcpyed_chunks(monkeypatch, any_chunk_wants_
     reads, chunks = _traffic(monkeypatch)
     assert np.array_equal(p[10:12, 30:40], data[10:12, 30:40])
     assert len(chunks) == 1
-    # The offsets are read, say there is nothing to skip, and the chunk follows
-    assert len(reads) == 2
+    # Where the chunks are, then the block offsets, which say there is nothing to
+    # skip, and the chunk follows
+    assert len(reads) == 3
 
 
 def test_lazy_blocks_with_run_length_chunks(monkeypatch, any_chunk_wants_blocks):

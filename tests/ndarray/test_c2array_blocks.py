@@ -351,6 +351,30 @@ def test_blocks_survive_a_reopened_cache(tmp_path, subscriber, any_chunk_wants_b
     assert np.array_equal(p[...], data)
 
 
+def test_a_cache_that_holds_the_slice_costs_no_request(tmp_path, subscriber, any_chunk_wants_blocks):
+    # Re-running a script over a cache that already covers the slice: `api/info`
+    # is all it takes.  Nothing opens the frame, because opening it is what
+    # `block_source` puts off until a fetch actually wants a chunk -- and this
+    # fetch wants none.
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    cache = str(tmp_path / "held.b2nd")
+    item = (slice(0, 5), slice(0, 10))
+    blosc2.Proxy(array, urlpath=cache, mode="a").fetch(item)
+
+    # A later run: its own array over the same subscriber, its own source
+    again = blosc2.C2Array(array.path, urlbase=array.urlbase)
+    sub.log.clear()
+    p = blosc2.Proxy(again, urlpath=cache, mode="a")
+    p.fetch(item)
+    assert np.array_equal(p[item], data[item])
+    assert not sub.log
+
+    # ... and a slice the cache does not hold opens the frame then
+    assert np.array_equal(p[100:105, 0:10], data[100:105, 0:10])
+    assert [kind for kind, _, _ in sub.log] == ["fetch"] * 4  # head, offsets, layout, block
+
+
 def test_a_whole_chunk_cache_is_adopted(tmp_path, subscriber, any_chunk_wants_blocks):
     # A cache left by a run that fetched whole chunks (which is every run before
     # this existed) holds complete chunks, so nothing in it is fetched again
@@ -395,12 +419,13 @@ def test_a_whole_wave_travels_in_one_request(subscriber, any_chunk_wants_blocks)
     data = _incompressible((400, 200))
     array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
-    assert array.block_source() is not None  # the frame index, read once per array
+    assert array.block_source() is not None  # the header, read once per array
     sub.log.clear()
 
     assert np.array_equal(p[:, 0:10], data[:, 0:10])
-    # One request for the layouts of all four chunks, one for all their blocks
-    assert [kind for kind, _, _ in sub.log] == ["fetch", "fetch"]
+    # One request for where the four chunks are, one for the layouts of all of
+    # them, one for all their blocks -- three waves, not three per chunk
+    assert [kind for kind, _, _ in sub.log] == ["fetch", "fetch", "fetch"]
     assert {status for _, status, _ in sub.log} == {206}
     assert _bytes(sub, "fetch") < sub.array.schunk.cbytes / 4
 

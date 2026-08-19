@@ -60,7 +60,15 @@ XXX version-specific blurb XXX
   of four (0.237 s → 0.138 s against cat2.cloud), and one for a frame small
   enough to arrive whole in the first read: the two reads that only measured the
   next one are guessed at generously instead, since over a network a few hundred
-  bytes and a few kilobytes cost the same.
+  bytes and a few kilobytes cost the same. Of those two, only the header is read
+  when the frame is opened — it is what says the frame can be read this way at
+  all — and where the chunks are waits for the first chunk anything asks about.
+  So `blosc2.open(url, lazy=True)` reads once, and so does a whole run over a
+  `cache_storage=` that already holds the slice wanted: it fetches nothing, and
+  now asks for no index either. `FsspecNDSource` also asks the filesystem for
+  the object's metadata, which is where its `stamp` comes from, so its floor is
+  that call plus the header read; `C2Array` gets geometry and stamp together
+  from `api/info`, and its floor is that one request.
   `bench/ndarray/cat2-block-granularity.py` measures all of it on any dataset,
   against a real subscriber or a stand-in it starts itself.
 

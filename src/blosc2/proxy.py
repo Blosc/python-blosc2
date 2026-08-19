@@ -13,6 +13,7 @@ import math
 import os
 import struct
 import textwrap
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -1127,23 +1128,24 @@ def _chunk_payloads(chunk: bytes, nblocks: int, wanted) -> dict[int, bytes]:
     return {int(n): chunk[bstarts[n] : bstarts[n] + extents[n]] for n in wanted}
 
 
-def _read_frame_index(read_range) -> tuple[bytes, list, np.ndarray]:
-    """Read the header and the chunk offsets of a contiguous frame.
+def _read_frame_header(read_range) -> tuple[bytes, list, bytes]:
+    """Read the header of a contiguous frame.
 
     *read_range* is ``(offset, size) -> bytes``, so what this costs is round
     trips.  Returns the raw header bytes, the header decoded as the msgpack
-    array it is, and the absolute position of every chunk.  A negative position
-    is not a position at all: it encodes a run-length chunk that was never
-    written to the file.  See ``README_CFRAME_FORMAT.rst`` in c-blosc2 for the
-    layout.
+    array it is, and the prefetched head those came out of -- which
+    `_read_frame_offsets` needs, since a frame small enough to have arrived
+    whole carries its offsets in there too.  See ``README_CFRAME_FORMAT.rst``
+    in c-blosc2 for the layout.
 
-    The format asks to be read in four steps -- how long is the header, the
-    header, how long is the offsets chunk, the offsets chunk -- and each of the
-    two questions costs as much as the answer it asks for.  So both are guessed
-    at instead: enough of the head to hold any ordinary header, and the tail
-    that the frame's own length bounds.  A guess that falls short is followed by
-    the exact read that would have happened anyway, and a frame small enough to
-    arrive whole in the first read costs one.
+    The format asks how long the header is before handing it over, and the
+    question costs as much as the answer.  So it is guessed at instead: enough
+    of the head to hold any ordinary header, and a guess that falls short is
+    followed by the exact read that would have happened anyway.
+
+    This is everything that says whether a frame can be read this way at all --
+    the magic, and the metalayer a caller goes on to decode -- so it is what an
+    open must do eagerly, and the offsets can wait for the first chunk touched.
     """
     import msgpack
 
@@ -1158,11 +1160,24 @@ def _read_frame_index(read_range) -> tuple[bytes, list, np.ndarray]:
     # bytes, and codec_flags packs clevel into its high nibble: from clevel 8 up
     # that byte is not valid UTF-8 and decoding the header blows up
     header = msgpack.unpackb(raw, raw=True, strict_map_key=False)
+    return raw, header, head
 
+
+def _read_frame_offsets(read_range, header: list, head: bytes, header_len: int) -> np.ndarray:
+    """The absolute position of every chunk of a frame whose header is in hand.
+
+    A negative position is not a position at all: it encodes a run-length chunk
+    that was never written to the file.
+
+    Like the header before it, the offsets chunk announces its length in an
+    answer that costs as much as the chunk does, so the tail the frame's own
+    length bounds is read instead and the announcement checked against it.  A
+    frame that arrived whole in *head* is already past this and costs nothing.
+    """
     # An empty frame has no chunks, so it has no offsets chunk either: what sits
     # at index_pos is the trailer, and reading it as one fails obscurely
     if header[8] == 0:  # chunksize
-        return raw, header, np.empty(0, dtype=np.int64)
+        return np.empty(0, dtype=np.int64)
 
     # The offsets live in a Blosc2 chunk of their own, right after the data ones,
     # so all that follows them is the trailer: the frame's own length says how
@@ -1179,7 +1194,7 @@ def _read_frame_index(read_range) -> tuple[bytes, list, np.ndarray]:
         index = read_range(index_pos, index_cbytes)
     offsets = np.frombuffer(blosc2.decompress2(index[:index_cbytes]), dtype=np.int64)
     # Offsets are relative to the end of the header
-    return raw, header, np.where(offsets >= 0, offsets + header_len, offsets)
+    return np.where(offsets >= 0, offsets + header_len, offsets)
 
 
 def _frame_metalayer(raw: bytes, header: list, name: str):
@@ -1227,9 +1242,13 @@ class ByteRangeNDSource(ProxyNDSource):
     over HTTP ranges from a Caterva2 subscriber, carrying its auth cookie.
 
     A subclass sets its transport up first and then calls this constructor,
-    which reads the frame's header and chunk offsets through it (three small
-    reads).  It may also set a ``stamp``, anything that names the exact bytes it
-    reads, so that :ref:`Proxy` can tell a cache built from other bytes.
+    which reads the frame's header through it -- one small read, and everything
+    an open decides: that this is a frame at all, and one holding an NDArray.
+    Where the chunks are waits for the first one anything asks about, so a
+    :ref:`Proxy` over a cache that already holds the slice wanted opens the
+    source without ever fetching its index.  It may also set a ``stamp``,
+    anything that names the exact bytes it reads, so that :ref:`Proxy` can tell
+    a cache built from other bytes.
 
     Contiguous frames carrying a ``b2nd`` metalayer only, which is what
     :func:`blosc2.asarray` and friends write to a single file.  Sparse frames and
@@ -1264,12 +1283,20 @@ class ByteRangeNDSource(ProxyNDSource):
         self.urlpath = urlpath
         # Exact ranges, not a file handle: a buffered one reads a whole block per
         # seek (50 MiB on s3fs by default), which would undo the point of a lazy
-        # open. Chunk reads are stateless, so nothing here is shared between threads
-        raw, header, self._offsets = _read_frame_index(self.read_range)
-        self._chunksize = header[8]
-        self._extents = _chunk_extents(self._offsets, header)
+        # open. Chunk reads are stateless, so the index below is the only state a
+        # thread pool shares, and the only thing here that needs a lock
+        raw, self._header, self._head = _read_frame_header(self.read_range)
+        self._header_len = len(raw)
+        self._chunksize = self._header[8]
+        # Where the chunks are is read on the first one touched, not here: a
+        # `Proxy` over a cache that already holds the slice asked for fetches
+        # nothing, and then the offsets are a request spent on nothing at all.
+        # Everything an open has to decide -- that this is a frame, and one with
+        # a b2nd metalayer -- is in the header that was just read.
+        self._index = None
+        self._index_lock = threading.Lock()
         try:
-            _, _, shape, chunks, blocks, dtype_format, dtype = _frame_metalayer(raw, header, "b2nd")
+            _, _, shape, chunks, blocks, dtype_format, dtype = _frame_metalayer(raw, self._header, "b2nd")
         except KeyError:
             raise NotImplementedError(
                 f"{urlpath} has no b2nd metalayer, so it is a plain SChunk rather than an "
@@ -1298,6 +1325,31 @@ class ByteRangeNDSource(ProxyNDSource):
         # since a fetch asks for layouts only where blocks are missing. Do it if
         # many short-lived processes ever share one cached array.
         self._layouts = {}
+
+    def _frame_index(self) -> tuple[np.ndarray, np.ndarray]:
+        """Where every chunk of the frame is, and how much to read at each.
+
+        Read once, on the first chunk anything asks about.  Under a lock because
+        the fetches this serves run in a thread pool: without one the first wave
+        of them would each read the index, which is a wasted request apiece and
+        no worse -- what they read is the same either way.
+        """
+        with self._index_lock:
+            if self._index is None:
+                offsets = _read_frame_offsets(self.read_range, self._header, self._head, self._header_len)
+                self._index = (offsets, _chunk_extents(offsets, self._header))
+                self._head = None  # the prefetch has nothing left to answer
+            return self._index
+
+    @property
+    def _offsets(self) -> np.ndarray:
+        """Where each chunk begins, negative for one that lives in its offset."""
+        return self._frame_index()[0]
+
+    @property
+    def _extents(self) -> np.ndarray:
+        """How many bytes to read at each chunk's offset to be sure of covering it."""
+        return self._frame_index()[1]
 
     @property
     def shape(self) -> tuple:

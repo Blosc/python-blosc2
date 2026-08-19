@@ -358,7 +358,7 @@ so every existing `Proxy(C2Array(...))` gets blocks without being asked.
 |---|---|---|
 | a bench for all of it | blosc2 `bench/ndarray/` | *Measure the Caterva2 block path the way the fsspec one is measured* |
 | chunks of a container leaf | caterva2 `server.py` | *Serve chunks of a container leaf, and refuse the ones that are not stored* |
-| a two-request frame open | blosc2 `proxy.py` | *Open a frame in two requests instead of four* |
+| a two-request frame open | blosc2 `proxy.py` | *Open a frame in two requests instead of four*, then *Read a frame's chunk offsets when a chunk is first asked for* |
 | a stamp for `C2Array` | blosc2 `c2array.py` | *Notice a remote array that was replaced under a proxy's cache* |
 
 - **`bench/ndarray/cat2-block-granularity.py`** is the fsspec bench's question
@@ -405,6 +405,14 @@ which is the threshold declining to take a chunk apart.  Around it:
 |---|---|---|
 | one request (`api/info`) | 163.3 ms, a client per request | **42.3 ms**, pooled (3.9x) |
 | opening a `C2Array` | 0.237 s, 4 requests, 303 bytes | **0.138 s**, 2 requests, 8306 bytes |
+
+Of those two requests only the first is an open: the header says whether the
+frame can be read this way, and the offsets wait for the first chunk anything
+asks about.  That is worth a request on every `blosc2.open(url, lazy=True)`, and
+a whole run's traffic where a `cache_storage=` already holds the slice wanted.
+For a `C2Array` it moves a request rather than saving one -- `block_source()`
+already put the whole open off until a fetch wanted a chunk, so a cache that
+covers the slice cost nothing there before this and costs nothing after.
 | a wave of 32 ranges | 1.530 s one at a time, 0.208 s eight at a time | **0.136 s**, one multipart request |
 
 Phase 4 was built because that last row said to.  Starlette *sorts and merges*
