@@ -137,8 +137,63 @@ def test_lazy_block_reads(blocky, max_concurrency):
     p.src.read_range = lambda *args: (out := original(*args), traffic.append(len(out)))[0]
 
     assert np.array_equal(p[10:12, 30:40], data[10:12, 30:40])
-    # The offsets and one block, against 1.4 MB of chunk
-    assert len(traffic) == 2
+    # Where the chunks are, where the blocks of the one wanted are, and one
+    # block, against 1.4 MB of chunk.  The frame's header is not in here: the
+    # open read that, before the hook went on
+    assert len(traffic) == 3
     assert sum(traffic) < 200_000
     # And the array still reads back whole, over the blocks already cached
+    assert np.array_equal(p[...], data)
+
+
+def test_a_kept_index_is_refused_when_the_object_was_replaced(s3_endpoint, tmp_path):
+    """The cache keeps *positions* now, which a replaced object invalidates.
+
+    A stale chunk cache serves old data; a stale index is worse, since blocks
+    fetched at the old frame's offsets and spliced into a chunk decode to
+    nonsense.  s3fs is where this can be checked honestly: its `ukey` is a real
+    object identity, where `memory://` has almost no metadata to build one from.
+    """
+    data = np.random.default_rng(0).random((600, 600))
+    url = f"s3://{BUCKET}/replaced.b2nd"
+    blosc2.asarray(data, chunks=(300, 600), blocks=(30, 600)).save(url, mode="w")
+    cache = str(tmp_path / "replaced-cache.b2nd")
+
+    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
+    assert np.array_equal(p[10:12, 30:40], data[10:12, 30:40])
+    del p
+    holder = blosc2.open(cache)
+    assert "proxy-index" in holder.schunk.vlmeta  # where the chunks and blocks are
+    del holder
+
+    # Same shape, same partitioning, other bytes: every offset in there now
+    # points somewhere else in a frame of the same size
+    other = np.random.default_rng(1).random((600, 600))
+    blosc2.asarray(other, chunks=(300, 600), blocks=(30, 600)).save(url, mode="w")
+    with pytest.raises(ValueError, match="different remote bytes"):
+        blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
+
+    # ... and starting afresh reads the new bytes, index and all
+    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="w")
+    assert np.array_equal(p[10:12, 30:40], other[10:12, 30:40])
+    assert np.array_equal(p[...], other)
+
+
+def test_a_kept_index_spares_a_later_run_the_reads(s3_endpoint, tmp_path):
+    # The same slice geometry as test_lazy_block_reads, one run later: the
+    # offsets and the layout of the half-held chunk both come out of the cache,
+    # so only the blocks that are missing travel
+    data = np.random.default_rng(0).random((600, 600))
+    url = f"s3://{BUCKET}/kept.b2nd"
+    blosc2.asarray(data, chunks=(300, 600), blocks=(30, 600)).save(url, mode="w")
+    cache = str(tmp_path / "kept-cache.b2nd")
+    blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a").fetch((slice(10, 12), slice(30, 40)))
+
+    src = blosc2.FsspecNDSource(url)
+    traffic = []
+    original = src.read_range
+    src.read_range = lambda *args: (out := original(*args), traffic.append(len(out)))[0]
+    p = blosc2.Proxy(src, urlpath=cache, mode="a")
+    assert np.array_equal(p[60:62, 30:40], data[60:62, 30:40])
+    assert len(traffic) == 1  # one block, and nothing to say where it was
     assert np.array_equal(p[...], data)
