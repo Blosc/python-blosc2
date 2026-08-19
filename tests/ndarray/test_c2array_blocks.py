@@ -183,7 +183,11 @@ def _serve(tmp_path, data, chunks, blocks, name="ds.b2nd", key=None, **kwargs):
             tstore[key] = blosc2.asarray(data, chunks=chunks, blocks=blocks)
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     server.subscriber = _Subscriber(urlpath, key=key, **kwargs)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    # A short poll interval, because `shutdown()` waits for one to elapse before
+    # the serve loop notices: at the default 0.5 s that is half a second of doing
+    # nothing per test, and this file has enough of them for that to be most of
+    # what it costs
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     urlbase = f"http://127.0.0.1:{server.server_address[1]}/"
     path = f"@public/{name}{key or ''}"
     array = blosc2.C2Array(path, urlbase=urlbase, auth_token=kwargs.get("cookie"))
