@@ -28,6 +28,11 @@ import pytest
 
 import blosc2
 
+# The stand-in subscriber binds a real socket, and Pyodide has no listen(2):
+# node asks for the `ws` module that is not there, and takes the runtime down
+# with it rather than raising
+pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="no listening sockets on wasm32")
+
 
 class _Subscriber:
     """A Caterva2-shaped server over one .b2nd file."""
