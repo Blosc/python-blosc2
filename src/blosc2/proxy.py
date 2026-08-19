@@ -85,7 +85,9 @@ BLOCK_HOT_CHUNKS = 8
 
 # vlmeta entries the proxy keeps its own state in: what it has fetched, and which
 # remote bytes the cache was filled from. A caller cannot write these.
-_RESERVED_VLMETA = frozenset({"proxy-fetched", "proxy-fetched-blocks", "proxy-fetched-bpc", "proxy-stamp"})
+_RESERVED_VLMETA = frozenset(
+    {"proxy-fetched", "proxy-fetched-blocks", "proxy-fetched-bpc", "proxy-stamp", "proxy-index"}
+)
 
 # `jit` kwargs that tune *how* an expression is evaluated, not what container the
 # result is stored in. Unlike storage kwargs (`cparams`, `chunks`, `urlpath`, ...),
@@ -415,6 +417,18 @@ class Proxy(blosc2.Operand):
             # hands over for a persisted proxy: nothing may be written there, and a
             # proxy over one stays observational anyway (see `__getitem__`)
             self._schunk_cache.vlmeta["proxy-stamp"] = stamp
+        # Where the chunks are, and where the blocks of the partly filled ones
+        # are, as an earlier run read them.  Only from a cache that names the very
+        # same remote bytes, checked here rather than taken on trust from how the
+        # cache was come by: a `_cache=` handed in never passed `_reopen_cache`.
+        adopt = getattr(self.src, "adopt_index", None)
+        if (
+            adopt is not None
+            and not fresh
+            and stamp is not None
+            and self._schunk_cache.vlmeta.get("proxy-stamp") == stamp
+        ):
+            adopt(self._schunk_cache.vlmeta.get("proxy-index"))
         if vlmeta:
             reserved = sorted(_RESERVED_VLMETA & set(vlmeta))
             if reserved:
@@ -563,6 +577,27 @@ class Proxy(blosc2.Operand):
         self._schunk_cache.vlmeta[self._fetched_key] = bytes(self._fetched)
         if self._blocks_per_chunk > 1:
             self._schunk_cache.vlmeta["proxy-fetched-bpc"] = self._blocks_per_chunk
+        # Where the source read things to be, so the next run over this cache need
+        # not ask again.  Only for a source that can name the bytes it read: an
+        # unstamped one cannot tell a replaced frame from the one these positions
+        # came from, and reusing them across a replacement is worse than serving
+        # stale data.  Bounded by keeping layouts for the partly filled chunks
+        # alone, which are the only ones a later fetch would ask about.
+        state = getattr(self.src, "index_state", None)
+        if state is not None and getattr(self.src, "stamp", None) is not None:
+            self._schunk_cache.vlmeta["proxy-index"] = state(self._partly_filled())
+
+    def _partly_filled(self) -> list[int]:
+        """Chunks the cache holds some of the blocks of, but not all."""
+        bpc = self._blocks_per_chunk
+        nchunks = self._schunk_cache.nchunks
+        if bpc == 1 or not nchunks:
+            return []
+        # Counted over the whole bitmap at once: a loop over chunks x blocks is
+        # millions of bit tests on a large array, and this runs after every fetch
+        bits = np.unpackbits(np.frombuffer(bytes(self._fetched), dtype=np.uint8), bitorder="little")
+        counts = bits[: nchunks * bpc].reshape(nchunks, bpc).sum(axis=1)
+        return np.flatnonzero((counts > 0) & (counts < bpc)).tolist()
 
     def _reopen_cache(self, urlpath: str):
         """Adopt the cache container stored at *urlpath*, checking it fits the source."""
@@ -1318,13 +1353,62 @@ class ByteRangeNDSource(ProxyNDSource):
             if all(self._blocks)
             else 1
         )
-        # ponytail: layouts are memoized for the life of the source, so a second
-        # slice pays no header read. Persisting them in the cache would save one
-        # round trip more, but only for a new process reaching into a chunk it
-        # had partly explored before -- every other repeat already skips the read,
-        # since a fetch asks for layouts only where blocks are missing. Do it if
-        # many short-lived processes ever share one cached array.
+        # Layouts are memoized for the life of the source, and `_sections` keeps
+        # the bytes each was read as, so a `Proxy` can hand them to its cache and
+        # a later run start from them instead of reading them again.
         self._layouts = {}
+        self._sections = {}
+
+    def index_state(self, keep: Sequence[int] = ()) -> dict:
+        """Where things are, as the bytes they were read as, for a cache to keep.
+
+        The frame's chunk offsets, and the header sections of the chunks in
+        *keep*.  A layout is worth keeping only for a chunk the cache holds some
+        but not all of: a fetch asks for layouts only where blocks are missing,
+        so a chunk that is complete is never asked about again, and one that is
+        empty was never read.
+
+        Kept as read rather than as parsed, so that what comes back goes through
+        :meth:`_parse_layout` exactly as a fresh read does -- one parser, not a
+        second one that could disagree with it.
+        """
+        offsets = self._index[0] if self._index is not None else None
+        return {
+            "bpc": self.blocks_per_chunk,
+            "offsets": b"" if offsets is None else offsets.tobytes(),
+            "layouts": [[n, self._sections[n]] for n in keep if n in self._sections],
+        }
+
+    def adopt_index(self, state: dict | None) -> None:
+        """Take up what an earlier run left behind in :meth:`index_state`.
+
+        Only ever called with a state saved against the very same remote bytes --
+        :ref:`Proxy` checks the source's ``stamp`` against the one its cache
+        recorded first -- and that is what makes these safe to reuse.  They are
+        positions *in a file*: a frame replaced underneath keeps its geometry
+        while every chunk and every block inside it moves, and blocks spliced at
+        the positions of the frame before it decode to nonsense rather than to
+        stale data.  Anything that does not fit the source as it stands now is
+        dropped rather than trusted.
+        """
+        if not state or self._index is not None:
+            return
+        if state.get("bpc") != self.blocks_per_chunk:
+            return
+        section = _CHUNK_HEADER_LEN + 4 * self.blocks_per_chunk
+        offsets = state.get("offsets") or b""
+        if offsets:
+            nchunks = math.prod(math.ceil(s / c) for s, c in zip(self._shape, self._chunks, strict=True))
+            array = np.frombuffer(offsets, dtype=np.int64)
+            if len(array) != nchunks:
+                return
+            with self._index_lock:
+                self._index = (array, _chunk_extents(array, self._header))
+                self._head = None  # the prefetch has nothing left to answer
+        for nchunk, head in state.get("layouts") or ():
+            if len(head) <= section:  # what a read of one asks for, or a short answer
+                self._sections[nchunk] = head
+                self._layouts[nchunk] = self._parse_layout(head, section)
 
     def _frame_index(self) -> tuple[np.ndarray, np.ndarray]:
         """Where every chunk of the frame is, and how much to read at each.
@@ -1448,6 +1532,7 @@ class ByteRangeNDSource(ProxyNDSource):
             spans = [(int(self._offsets[n]), section) for n in batch]
             heads = self.read_ranges(spans)
             for nchunk, head in zip(batch, heads, strict=True):
+                self._sections[nchunk] = head
                 self._layouts[nchunk] = self._parse_layout(head, section)
         return [self._layouts[n] for n in nchunks]
 

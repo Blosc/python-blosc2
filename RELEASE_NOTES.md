@@ -68,7 +68,15 @@ XXX version-specific blurb XXX
   now asks for no index either. `FsspecNDSource` also asks the filesystem for
   the object's metadata, which is where its `stamp` comes from, so its floor is
   that call plus the header read; `C2Array` gets geometry and stamp together
-  from `api/info`, and its floor is that one request.
+  from `api/info`, and its floor is that one request. A persisted cache keeps
+  what the source read about *where* things are — the frame's chunk offsets, and
+  the block offsets of the chunks it holds only part of — so a later run over it
+  starts from those instead of reading them again. A warm fetch of blocks missing
+  from a chunk already half held goes from 4 requests to 2 against a subscriber,
+  and drops the offsets read and one layout read per chunk touched against an
+  object store. Only for a source that can name the bytes it read: positions in a
+  frame are worth nothing against a frame that was replaced, so an unstamped
+  source keeps none of this and reads as before.
   `bench/ndarray/cat2-block-granularity.py` measures all of it on any dataset,
   against a real subscriber or a stand-in it starts itself.
 

@@ -358,7 +358,7 @@ so every existing `Proxy(C2Array(...))` gets blocks without being asked.
 |---|---|---|
 | a bench for all of it | blosc2 `bench/ndarray/` | *Measure the Caterva2 block path the way the fsspec one is measured* |
 | chunks of a container leaf | caterva2 `server.py` | *Serve chunks of a container leaf, and refuse the ones that are not stored* |
-| a two-request frame open | blosc2 `proxy.py` | *Open a frame in two requests instead of four*, then *Read a frame's chunk offsets when a chunk is first asked for* |
+| a two-request frame open | blosc2 `proxy.py` | *Open a frame in two requests instead of four*, then *Read a frame's chunk offsets when a chunk is first asked for* and *Keep where the chunks and blocks are in the cache* |
 | a stamp for `C2Array` | blosc2 `c2array.py` | *Notice a remote array that was replaced under a proxy's cache* |
 
 - **`bench/ndarray/cat2-block-granularity.py`** is the fsspec bench's question
@@ -413,6 +413,15 @@ a whole run's traffic where a `cache_storage=` already holds the slice wanted.
 For a `C2Array` it moves a request rather than saving one -- `block_source()`
 already put the whole open off until a fetch wanted a chunk, so a cache that
 covers the slice cost nothing there before this and costs nothing after.
+
+The cache then keeps both indexes it read -- the frame's chunk offsets, and the
+block offsets of the chunks it holds only part of -- under the same stamp that
+guards the cached chunks themselves.  A warm fetch of blocks missing from a
+half-held chunk: 4 requests to 2 against the subscriber stand-in (header and
+blocks, nothing between), 46 to 40 against fsspec, where the layout wave is a
+request per chunk rather than one for all of them.  Layouts are kept for the
+partly filled chunks alone, which bounds the blob to what a later fetch could
+ask about: a complete chunk is never asked again, an untouched one never was.
 | a wave of 32 ranges | 1.530 s one at a time, 0.208 s eight at a time | **0.136 s**, one multipart request |
 
 Phase 4 was built because that last row said to.  Starlette *sorts and merges*

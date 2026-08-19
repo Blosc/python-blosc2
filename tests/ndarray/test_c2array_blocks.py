@@ -370,9 +370,47 @@ def test_a_cache_that_holds_the_slice_costs_no_request(tmp_path, subscriber, any
     assert np.array_equal(p[item], data[item])
     assert not sub.log
 
-    # ... and a slice the cache does not hold opens the frame then
+    # ... and a slice the cache does not hold opens the frame then: the header,
+    # the layout of the chunk it lands in, and the blocks.  Not where the chunks
+    # are -- the earlier run left that in the cache
     assert np.array_equal(p[100:105, 0:10], data[100:105, 0:10])
-    assert [kind for kind, _, _ in sub.log] == ["fetch"] * 4  # head, offsets, layout, block
+    assert [kind for kind, _, _ in sub.log] == ["fetch"] * 3
+
+
+def test_a_kept_index_halves_a_warm_fetch(tmp_path, subscriber, any_chunk_wants_blocks):
+    # A later run wanting different blocks of chunks a previous one half filled:
+    # where the chunks are and where those blocks are both came out of the cache,
+    # so what travels is the header and the blocks, and nothing between
+    data = _incompressible((400, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    cache = str(tmp_path / "kept.b2nd")
+    blosc2.Proxy(array, urlpath=cache, mode="a").fetch((slice(None), slice(0, 10)))
+
+    again = blosc2.C2Array(array.path, urlbase=array.urlbase)
+    sub.log.clear()
+    p = blosc2.Proxy(again, urlpath=cache, mode="a")
+    assert np.array_equal(p[:, 100:110], data[:, 100:110])
+    assert [kind for kind, _, _ in sub.log] == ["fetch", "fetch"]  # the header, the blocks
+    assert np.array_equal(p[...], data)  # ... and the rest still reads right
+
+
+def test_a_kept_index_does_not_open_the_frame_to_be_taken_up(tmp_path, subscriber, any_chunk_wants_blocks):
+    # Handing the index to the source would build the source to receive it, and
+    # building it reads the header -- a request, at the very moment of a run that
+    # may go on to fetch nothing.  It waits with the array until there is a source
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    cache = str(tmp_path / "unopened.b2nd")
+    item = (slice(0, 5), slice(0, 10))
+    blosc2.Proxy(array, urlpath=cache, mode="a").fetch(item)
+
+    again = blosc2.C2Array(array.path, urlbase=array.urlbase)
+    sub.log.clear()
+    p = blosc2.Proxy(again, urlpath=cache, mode="a")
+    assert again._pending_index is not None  # taken out of the cache, not yet used
+    assert not sub.log
+    p.fetch(item)
+    assert not sub.log
 
 
 def test_a_whole_chunk_cache_is_adopted(tmp_path, subscriber, any_chunk_wants_blocks):

@@ -810,6 +810,76 @@ def test_lazy_open_reads_a_header_that_did_not_fit(monkeypatch):
     assert len(reads) > 2  # the offsets, and the chunks themselves
 
 
+def test_a_cache_keeps_where_the_chunks_and_blocks_are(monkeypatch, tmp_path):
+    # A later run over a partly filled cache asks for blocks it has not got, and
+    # for nothing else: where the chunks are, and where the blocks inside the
+    # chunks it half holds are, both came out of the cache
+    data, a = _incompressible((600, 600), (300, 600), (30, 600))
+    url = _put("keptindex.b2nd", a)
+    cache = str(tmp_path / "keptindex-cache.b2nd")
+    blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="w").fetch((slice(0, 30), slice(None)))
+
+    holder = blosc2.open(cache)
+    state = holder.schunk.vlmeta["proxy-index"]
+    assert len(state["offsets"]) == 2 * 8  # one int64 per chunk of the frame
+    assert [n for n, _ in state["layouts"]] == [0]  # the one chunk half held
+    del holder
+
+    reads, _ = _traffic(monkeypatch)
+    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
+    assert len(reads) == 1  # the header, which an open reads whatever else it knows
+
+    # Different blocks of the chunk already half held: only they travel
+    assert np.array_equal(p[60:90, 0:10], data[60:90, 0:10])
+    assert len(reads) == 2
+    assert np.array_equal(p[...], data)  # ... and the rest still reads right
+
+
+def test_a_cache_keeps_nothing_for_a_source_that_cannot_name_its_bytes(tmp_path, monkeypatch):
+    # Positions in a file are only reusable against the same file, and a source
+    # without a stamp cannot say it is the same one.  Nothing is kept for it,
+    # rather than kept and hoped for
+    data, a = _incompressible((600, 600), (300, 600), (30, 600))
+    url = _put("unstamped.b2nd", a)
+    cache = str(tmp_path / "unstamped-cache.b2nd")
+    src = blosc2.FsspecNDSource(url)
+    src.stamp = None  # as a source that cannot name its bytes leaves it
+    blosc2.Proxy(src, urlpath=cache, mode="w").fetch((slice(0, 30), slice(None)))
+
+    holder = blosc2.open(cache)
+    assert "proxy-index" not in holder.schunk.vlmeta
+    del holder
+
+    reads, _ = _traffic(monkeypatch)
+    src = blosc2.FsspecNDSource(url)
+    src.stamp = None
+    p = blosc2.Proxy(src, urlpath=cache, mode="a")
+    assert np.array_equal(p[60:90, 0:10], data[60:90, 0:10])
+    assert len(reads) > 2  # the header, and the offsets and layout it kept nothing of
+    assert np.array_equal(p[...], data)
+
+
+def test_a_kept_index_of_the_wrong_shape_is_dropped(tmp_path, monkeypatch):
+    # Belt to the stamp's braces: whatever else went wrong, an index that does not
+    # fit the source as it stands is read afresh rather than used
+    data, a = _incompressible((600, 600), (300, 600), (30, 600))
+    url = _put("wrongindex.b2nd", a)
+    cache = str(tmp_path / "wrongindex-cache.b2nd")
+    blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="w").fetch((slice(0, 30), slice(None)))
+
+    holder = blosc2.open(cache, mode="a")
+    state = dict(holder.schunk.vlmeta["proxy-index"])
+    state["offsets"] = state["offsets"][:8]  # one chunk's worth, for a frame of two
+    holder.schunk.vlmeta["proxy-index"] = state
+    del holder
+
+    reads, _ = _traffic(monkeypatch)
+    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
+    assert np.array_equal(p[60:90, 0:10], data[60:90, 0:10])
+    assert len(reads) > 2  # the offsets were read again
+    assert np.array_equal(p[...], data)
+
+
 def test_a_cache_that_holds_the_slice_asks_for_no_offsets(monkeypatch, tmp_path):
     # What the deferral is for: a later run over a cache that already covers the
     # slice fetches nothing, and so has no use for where the chunks are either
