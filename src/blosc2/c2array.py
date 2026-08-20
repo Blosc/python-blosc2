@@ -208,6 +208,20 @@ def _xpost(url, json=None, auth_token=None, timeout=TIMEOUT):
     return response.json()
 
 
+def _xpost_bytes(url, content, params=None, auth_token=None, timeout=TIMEOUT):
+    """POST a body of bytes through the pooled client, and read what came back.
+
+    `_xpost` sends JSON, which a compressed chunk is not: it goes as it is, and
+    the subscriber reads it as the chunk it will store.
+    """
+    headers = _auth_headers(auth_token, {"Content-Type": "application/octet-stream"})
+    response = _sync_client().post(url, params=params, content=content, headers=headers, timeout=timeout)
+    if response.status_code == 409:
+        raise ChunkAlreadyWritten(f"{url} already holds a chunk at {params and params.get('nchunk')}")
+    response.raise_for_status()
+    return response.json()
+
+
 def _sub_url(urlbase, path):
     urlbase = urlbase or _subscriber_data["urlbase"]
     if not urlbase:
@@ -381,6 +395,17 @@ def _span_of(parts: list[tuple[int, bytes, int | None]], offset: int, size: int,
         if offset + size <= end or (end == total and offset < end):
             return data[offset - start : offset - start + size]
     raise PartsMissing(f"{url} answered without the bytes at {offset}, which were asked for")
+
+
+class ChunkAlreadyWritten(ValueError):
+    """A chunk was written to a slot of a remote array that already held content.
+
+    A subscriber that accepts chunk writes accepts each slot exactly once: the
+    frame's own offsets say whether a slot was ever written, and a second write
+    would move every chunk that came after it.  So a writer that finds this has
+    lost a race, or is repeating work another writer already did; either way the
+    array is intact and the chunk it carried is the one to drop.
+    """
 
 
 class C2NDSource(ByteRangeNDSource):
@@ -741,6 +766,98 @@ class C2Array(blosc2.Operand):
             await self._aclient.aclose()
             self._aclient = None
 
+    # -- Writing chunks.  A pre-sized array is filled a chunk at a time, by as
+    # many writers as there are chunks to fill; the subscriber serializes them
+    # and refuses a slot that was already written.
+
+    def update_chunk(self, nchunk: int, chunk: bytes) -> dict:
+        """Write one compressed chunk into a slot of the remote array.
+
+        The array has to exist and to be laid out already -- `blosc2.uninit` and
+        an upload is what makes one -- and the slot has to be one nothing was
+        ever written to.  That is not a restriction the transport invents: a
+        chunk written into an empty slot is appended to the frame and moves
+        nothing, while one written over a chunk that is already there moves every
+        byte after it, so a fill made of writes-once is the cheap one and the one
+        whose offsets a concurrent reader can keep.
+
+        The chunk must match the array's geometry -- its chunkshape, its typesize
+        and its blocksize -- which is what compressing against
+        :attr:`cparams` and :attr:`blocks` gives; the subscriber checks it and
+        refuses anything else rather than storing a chunk the array cannot read.
+
+        Parameters
+        ----------
+        nchunk: int
+            Which chunk of the array to write, numbered as
+            :meth:`NDArray.get_chunk` numbers them.
+        chunk: bytes
+            The compressed chunk, as :meth:`SChunk.get_chunk` or
+            :func:`blosc2.compress2` produce it.
+
+        Returns
+        -------
+        out: dict
+            What the subscriber reports of the array's state now.  Carries
+            ``written`` and ``nchunks`` where it counts them, so a writer can see
+            a fill finish without asking again.
+
+        Raises
+        ------
+        ChunkAlreadyWritten
+            The slot already holds a chunk.  The array is untouched.
+
+        Examples
+        --------
+        >>> import blosc2, numpy as np  # doctest: +SKIP
+        >>> a = blosc2.C2Array("@personal/run.b2nd", urlbase)  # doctest: +SKIP
+        >>> data = np.arange(np.prod(a.chunks), dtype=a.dtype).reshape(a.chunks)  # doctest: +SKIP
+        >>> a.update_chunk(0, blosc2.compress2(data, **a.cparams.__dict__))  # doctest: +SKIP
+        {'written': 1, 'nchunks': 320, 'state': 'filling'}
+        """
+        url = _sub_url(self.urlbase, f"api/chunk/{self.path}")
+        answer = _xpost_bytes(url, chunk, params={"nchunk": nchunk}, auth_token=self.auth_token)
+        self._forget_index()
+        return answer
+
+    async def aupdate_chunk(self, nchunk: int, chunk: bytes) -> dict:
+        """Write one compressed chunk asynchronously; see :meth:`update_chunk`.
+
+        The same request, off the event loop, so a writer with many chunks to
+        send can have several in flight.  The subscriber serializes them at the
+        far end regardless -- what overlaps is the round trip, which for a
+        chunk-sized body is most of the cost.
+        """
+        url = _sub_url(self.urlbase, f"api/chunk/{self.path}")
+        headers = _auth_headers(self.auth_token, {"Content-Type": "application/octet-stream"})
+        if self._aclient is None:
+            self._aclient = _httpx().AsyncClient(timeout=TIMEOUT)
+        response = await self._aclient.post(url, params={"nchunk": nchunk}, content=chunk, headers=headers)
+        if response.status_code == 409:
+            raise ChunkAlreadyWritten(f"{self.path} already holds a chunk at {nchunk}")
+        response.raise_for_status()
+        self._forget_index()
+        return response.json()
+
+    def written_chunks(self) -> np.ndarray:
+        """Which chunks of the remote array hold content; see
+        :meth:`ByteRangeNDSource.written_chunks`.
+
+        One range read of the frame's offsets, which is where a fill records
+        itself: no endpoint of its own, and nothing for the subscriber to keep in
+        step with the array.  Reads the offsets afresh, since the point of asking
+        is to see what other writers have done since.
+        """
+        self._forget_index()
+        with self._ranged(index_only=True) as source:
+            return source.written_chunks()
+
+    def _forget_index(self) -> None:
+        """Drop what was read of a frame that has since been written to."""
+        source = self._block_source
+        if source is not _UNTRIED and source is not None:
+            source.invalidate_index()
+
     # -- Block-granular reads.  A :ref:`Proxy` uses these to fetch the blocks a
     # slice touches instead of whole chunks, wherever that is the cheaper way
     # round; every one of them falls back to `get_chunk` when it is not.
@@ -792,7 +909,7 @@ class C2Array(blosc2.Operand):
         when it is built, to decide whether its cache records blocks or chunks,
         so it must cost nothing and must not depend on what has been fetched.
         """
-        if not all(key in self.meta for key in ("chunks", "blocks", "schunk")):
+        if not self._reports_geometry:
             return False
         try:
             nchunks = math.prod(math.ceil(s / c) for s, c in zip(self.shape, self.chunks, strict=True))
@@ -802,6 +919,17 @@ class C2Array(blosc2.Operand):
             # whole chunks work for, as they do for every dataset there is
             return False
 
+    @property
+    def _reports_geometry(self) -> bool:
+        """Whether `api/info` describes a stored dataset rather than a computed one.
+
+        Necessary for reading the frame at all, where :attr:`serves_blocks` is
+        that plus a judgement about whether taking its chunks apart would pay.
+        The frame's own index is worth reading either way: it is one range read,
+        and it is what says where the chunks are and which of them were written.
+        """
+        return all(key in self.meta for key in ("chunks", "blocks", "schunk"))
+
     def block_source(self) -> C2NDSource | None:
         """The frame reader behind the block methods, or None if there is none.
 
@@ -810,15 +938,28 @@ class C2Array(blosc2.Operand):
         request with the whole body, so retrying would pay a full download to
         rediscover the same answer.
         """
+        return self._source(require_blocks=True)
+
+    def _index_source(self) -> C2NDSource | None:
+        """The same reader, built for any stored frame however small its chunks.
+
+        Reading the frame's index is not the same question as reading blocks of
+        its chunks: a frame of chunks too small to take apart still has offsets,
+        and they still say which chunks hold anything.  Whatever is built here is
+        the source the block path uses too -- there is only ever one.
+        """
+        return self._source(require_blocks=False)
+
+    def _source(self, require_blocks: bool) -> C2NDSource | None:
         if self._block_source is _UNTRIED:
             with self._block_lock:
                 if self._block_source is _UNTRIED:
-                    self._block_source = self._open_block_source()
+                    self._block_source = self._open_block_source(require_blocks)
         # A failure that says nothing about the dataset leaves it _UNTRIED, so the
         # next fetch asks again; this one keeps to whole chunks either way
         return None if self._block_source is _UNTRIED else self._block_source
 
-    def _open_block_source(self):
+    def _open_block_source(self, require_blocks: bool = True):
         """Decide, at whatever cost it takes, whether this dataset serves ranges.
 
         None for a dataset that does not serve ranges, which is an answer for
@@ -826,8 +967,10 @@ class C2Array(blosc2.Operand):
         """
         httpx = _httpx()
         # What `api/info` alone rules out -- a dataset the subscriber computes, a
-        # frame of chunks too small to take apart -- costs no request to find out
-        if not self.serves_blocks:
+        # frame of chunks too small to take apart -- costs no request to find out.
+        # The second of those only bars the block path: the index is worth a read
+        # whatever the chunks cost, which is what `require_blocks` says
+        if not (self.serves_blocks if require_blocks else self._reports_geometry):
             return None
         # Whether a dataset that reports a geometry is *served* from a file is
         # something only the answer to a range request can say: an HDF5 leaf or a
@@ -917,7 +1060,7 @@ class C2Array(blosc2.Operand):
             return source.read_ranges(spans)
 
     @contextmanager
-    def _ranged(self):
+    def _ranged(self, index_only: bool = False):
         """The block source, retired if it turns out to serve ranges no longer.
 
         The subscriber can stop serving a dataset from a file between one fetch
@@ -932,7 +1075,7 @@ class C2Array(blosc2.Operand):
         chunks it was after whole, and a caller reading ranges directly is
         entitled to hear that the ranges are gone.
         """
-        source = self.block_source()
+        source = self._index_source() if index_only else self.block_source()
         if source is None:
             # A `NotRanged`, which is a `ValueError`: a fetch that finds the
             # source retired under it -- by another thread of the same wave --

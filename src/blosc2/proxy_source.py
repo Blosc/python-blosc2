@@ -333,6 +333,19 @@ class ProxySource(ABC):
 _FRAME_MAGIC = b"b2frame\0"
 _CHUNK_HEADER_LEN = blosc2.MAX_OVERHEAD
 
+# What a run-length offset codes in its top byte: the ones a frame writes are a
+# run of zeros (1), of NaNs (2), and a chunk never written at all (4).  The last
+# is the only one that says "no content has ever been stored here", which is what
+# `written_chunks` reads and what a pre-sized array is filled with
+_SPECIAL_ZERO = 0x1
+_SPECIAL_NAN = 0x2
+_SPECIAL_UNINIT = 0x4
+
+
+def _special_kind(offset: int) -> int:
+    """Which run-length value a negative chunk offset codes."""
+    return ((offset & 0xFFFFFFFFFFFFFFFF) >> 56) & 0x7
+
 
 def _block_extents(bstarts: np.ndarray, cbytes: int) -> np.ndarray:
     """How many bytes each block of a chunk occupies, given where they start.
@@ -561,6 +574,9 @@ class ByteRangeNDSource(ProxyNDSource):
         # a b2nd metalayer -- is in the header that was just read.
         self._index = None
         self._index_lock = threading.Lock()
+        # Set when the frame is written to under this handle: the header moves as
+        # well as the offsets, so both are read again before the next lookup
+        self._stale = False
         try:
             _, _, shape, chunks, blocks, dtype_format, dtype = _frame_metalayer(raw, self._header, "b2nd")
         except KeyError:
@@ -666,6 +682,13 @@ class ByteRangeNDSource(ProxyNDSource):
         no worse -- what they read is the same either way.
         """
         with self._index_lock:
+            if self._stale:
+                # A write moved the frame's length and its payload extent, and the
+                # offsets are found through both, so the header is read first
+                raw, self._header, self._head = _read_frame_header(self.read_range)
+                self._header_len = len(raw)
+                self._chunksize = self._header[8]
+                self._stale = False
             if self._index is None:
                 offsets = _read_frame_offsets(self.read_range, self._header, self._head, self._header_len)
                 self._index = (offsets, _chunk_extents(offsets, self._header))
@@ -681,6 +704,49 @@ class ByteRangeNDSource(ProxyNDSource):
     def _extents(self) -> np.ndarray:
         """How many bytes to read at each chunk's offset to be sure of covering it."""
         return self._frame_index()[1]
+
+    def written_chunks(self) -> np.ndarray:
+        """Which chunks of the frame hold content, as a boolean per chunk.
+
+        False only for a chunk that was never written: a frame keeps those in
+        their offset rather than in the file, tagged as uninitialized, which is
+        what `blosc2.uninit` fills an array with.  Everything else is True,
+        a run of zeros included -- a writer that stored an all-zero chunk stored
+        something, and the tag says so, which is the whole reason to pre-size an
+        array with `uninit` rather than with `zeros`.
+
+        One range read of the frame's offsets, and none at all once they have
+        been read: this is the same index every chunk read goes through.  So the
+        progress of an array being filled is legible from the bytes a reader
+        already fetches, without asking the server anything about it.
+        """
+        offsets = self._offsets
+        # A view, not a cast: the tag lives in the top byte of an offset whose
+        # sign bit is what marks it as run-length in the first place
+        kinds = (offsets.view("<u8") >> 56) & 0x7
+        return ~((offsets < 0) & (kinds == _SPECIAL_UNINIT))
+
+    def invalidate_index(self) -> None:
+        """Forget where the chunks and blocks are, so the next read looks again.
+
+        The frame's offsets move whenever it is written to: a chunk written into
+        a slot that held no content is appended past the old offsets block, which
+        the new one is then written after.  Chunks already placed keep their
+        offsets -- that is what makes an append-only fill cheap to read
+        alongside -- but the index as a whole has to be read again to see the
+        slot that was filled, and the header with it, since the frame's length
+        and its payload extent are what the offsets are found through.
+
+        Nothing is read here: the next lookup pays for it, so a writer that never
+        reads back spends no request on this at all.
+
+        Only for a handle that writes, or that follows a frame someone else is
+        writing.  A frame that nobody mutates never needs this.
+        """
+        with self._index_lock:
+            self._index = None
+            self._layouts.clear()
+            self._stale = True
 
     @property
     def shape(self) -> tuple:
@@ -857,13 +923,13 @@ class ByteRangeNDSource(ProxyNDSource):
 
     def _special_chunk(self, offset: int) -> bytes:
         """Rebuild a run-length chunk, which lives in its offset instead of the file."""
-        kind = ((offset & 0xFFFFFFFFFFFFFFFF) >> 56) & 0x7
+        kind = _special_kind(offset)
         nitems = self._chunksize // self._dtype.itemsize
-        if kind == 2:
+        if kind == _SPECIAL_NAN:
             data = np.full(nitems, np.nan, dtype=self._dtype)
         else:
-            # A run of zeros (1); uninitialized chunks (4) have no defined
-            # content, and zeros is what reading them locally hands back too
+            # A run of zeros; an uninitialized chunk has no defined content, and
+            # zeros is what reading one locally hands back too
             data = np.zeros(nitems, dtype=self._dtype)
         # The blocksize has to be the container's: left to choose, blosc2 takes
         # the whole chunk, and the cache then rejects the chunk we hand it
