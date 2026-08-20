@@ -22,6 +22,17 @@ XXX version-specific blurb XXX
   which an object store has no way to serve), so constructors given a URL now say
   that instead of failing deep in C.
 
+* A `C2Array` can be written to a chunk at a time, which is how several
+  processes fill one remote array at once: `update_chunk()` (and its async
+  `aupdate_chunk()`) posts one compressed chunk into a slot of a pre-sized
+  array, and `written_chunks()` says which slots hold anything yet. The array is
+  laid out with `blosc2.uninit()` and uploaded -- a couple of hundred bytes
+  whatever its size -- and each slot is written once: a second write raises
+  `blosc2.ChunkAlreadyWritten`, which is the whole of the coordination between
+  writers. Writing into an empty slot appends to the frame and moves no other
+  chunk, so a fill is cheap and a concurrent reader's cached offsets stay good.
+  Needs a Caterva2 subscriber that serves the endpoint.
+
 * `Proxy.fetch()` takes a `max_concurrency=` argument, and reads it from the
   source when the source has one, so `blosc2.open(url, lazy=True,
   max_concurrency=...)` overlaps its chunk fetches in a thread pool. Ordinary

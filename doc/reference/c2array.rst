@@ -14,6 +14,16 @@ HDF5 leaf) is fetched a whole chunk at a time, as everything was before.  Which
 one this is takes at most one request to find out, and is decided once --
 :meth:`C2Array.block_source` is what answers it.
 
+A stored remote array can also be *filled*, by as many writers at once as it has
+chunks.  The array is laid out first -- ``blosc2.uninit`` writes a couple of
+hundred bytes whatever its size -- and then each writer posts the chunks it owns
+with :meth:`C2Array.update_chunk`.  A slot nothing was written to is free, and a
+write claims it; a second write to the same slot raises
+:class:`blosc2.ChunkAlreadyWritten`, so two writers that both believe they own a
+chunk are resolved by the array rather than by anything either of them holds.
+:meth:`C2Array.written_chunks` reads how far the fill has got out of the frame's
+own offsets, which is one range read and no endpoint of its own.
+
 
 .. currentmodule:: blosc2
 
