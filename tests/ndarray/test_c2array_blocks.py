@@ -46,6 +46,8 @@ class _Subscriber:
         multipart=True,
         merge_ranges=True,
         fetch_failures=0,
+        bad_parts=0,
+        geometry=True,
     ):
         self.fetch_failures = fetch_failures  # answer this many fetches 503 first
         self.path = str(path)
@@ -53,7 +55,10 @@ class _Subscriber:
         self.ranges = ranges  # False: stream the body and ignore Range, as a
         self.cookie = cookie  # computed dataset does
         self.multipart = multipart  # False: answer only the first range asked for
+        self.bad_parts = bad_parts  # ... and this many multi-range answers do too
         self.merge_ranges = merge_ranges  # as Starlette does with ranges that touch
+        self.geometry = geometry  # False: report a dataset the subscriber computes,
+        # which has no chunks or blocks of its own to report
         self.log = []  # (endpoint, status, bytes served)
         self.reload()
 
@@ -76,6 +81,16 @@ class _Subscriber:
     @property
     def meta(self):
         schunk = self.array.schunk
+        if not self.geometry:
+            # What a lazy expression looks like: an expression and its operands
+            # where a stored dataset has a partitioning
+            return {
+                "shape": list(self.array.shape),
+                "dtype": str(self.array.dtype),
+                "expression": "a + 1",
+                "operands": {"a": "@public/other.b2nd"},
+                "schunk": {"cparams": {"typesize": self.array.dtype.itemsize}},
+            }
         return {
             "shape": list(self.array.shape),
             "chunks": list(self.array.chunks),
@@ -154,7 +169,11 @@ class _Handler(BaseHTTPRequestHandler):
                 merged[-1] = (merged[-1][0], max(merged[-1][1], end))
             else:
                 merged.append((start, end))
-        if len(merged) == 1 or not sub.multipart:
+        partial = not sub.multipart
+        if len(merged) > 1 and sub.bad_parts:
+            sub.bad_parts -= 1  # an answer that carries only the first part, once
+            partial = True
+        if len(merged) == 1 or partial:
             start, end = merged[0]  # ... and answers a plain 206 when one is left
             self._send(
                 206,
@@ -331,6 +350,23 @@ def test_small_chunks_are_fetched_whole(subscriber):
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
     assert array.block_source() is None
     assert [kind for kind, _, _ in sub.log] == ["chunk"]
+
+
+def test_a_dataset_that_serves_no_blocks_keeps_the_chunkwise_bitmap(tmp_path, subscriber):
+    # Nothing will ever ask this one for a block, so its cache records chunks:
+    # the bitmap an older blosc2 also reads, and none of the per-block
+    # bookkeeping that would be kept only to say `all of them` every time
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    assert not array.serves_blocks  # decided from api/info, without a request
+    cache = str(tmp_path / "chunkwise-cache.b2nd")
+    p = blosc2.Proxy(array, urlpath=cache, mode="w")
+    assert p._blocks_per_chunk == 1
+
+    p.fetch((slice(0, 5), slice(0, 10)))
+    kept = p.schunk.vlmeta.getall()
+    assert "proxy-fetched" in kept
+    assert "proxy-fetched-blocks" not in kept
 
 
 def test_blocks_accumulate_in_a_chunk(subscriber, any_chunk_wants_blocks):
@@ -723,16 +759,161 @@ def test_a_streamed_dataset_is_not_asked_again(subscriber, any_chunk_wants_block
     assert not any(status == 206 for _, status, _ in sub.log)
 
 
-def test_a_part_that_ends_early_is_refused(subscriber, any_chunk_wants_blocks):
+def test_a_dataset_that_stops_being_stored_falls_back_to_chunks(subscriber, any_chunk_wants_blocks):
+    # A subscriber can stop serving a dataset from a file between one fetch and
+    # the next -- replaced by a lazy expression, moved into a container it
+    # streams out of.  The fetch that runs into it reads the chunks it was after
+    # whole rather than failing, and nothing asks for a range again
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    p = blosc2.Proxy(array, mode="w")
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert array.block_source() is not None
+
+    sub.ranges = False
+    sub.log.clear()
+    assert np.array_equal(p[50:55, 0:10], data[50:55, 0:10])
+    assert array.block_source() is None  # retired: whole chunks read every dataset
+    assert _bytes(sub, "chunk")
+    assert np.array_equal(p[...], data)
+    # The one refused request is the whole of what the change cost: the body it
+    # answered with was never read, and nothing asked for a range again
+    assert [status for kind, status, _ in sub.log if kind == "fetch"] == [200]
+
+
+def test_a_subscriber_too_busy_for_a_range_keeps_its_source(subscriber, any_chunk_wants_blocks):
+    # The other half of the rule that governs the probe: a 503 says nothing about
+    # how the dataset is served, so the fetch falls back for now and the next one
+    # asks for blocks again
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    p = blosc2.Proxy(array, mode="w")
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    source = array.block_source()
+
+    sub.fetch_failures = 1
+    sub.log.clear()
+    assert np.array_equal(p[50:55, 0:10], data[50:55, 0:10])
+    assert _bytes(sub, "chunk")  # served whole, since the range was refused
+    assert array.block_source() is source
+
+    sub.log.clear()
+    assert np.array_equal(p[0:5, 100:110], data[0:5, 100:110])
+    assert not _bytes(sub, "chunk")  # ... and blocks are asked for again
+
+
+def test_a_proxy_over_a_cache_survives_a_dataset_that_became_computed(
+    tmp_path, subscriber, any_chunk_wants_blocks
+):
+    # `blosc2.open` rebuilds the proxy over its own cache, and the source it
+    # rebuilds may by then be a dataset the subscriber computes -- which reports
+    # no partitioning at all, so nothing may go asking one for it
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    cache = str(tmp_path / "computed-cache.b2nd")
+    blosc2.Proxy(array, urlpath=cache, mode="w").fetch((slice(0, 5), slice(0, 10)))
+
+    sub.geometry = False
+    assert not blosc2.C2Array(array.path, urlbase=array.urlbase).serves_blocks
+    reopened = blosc2.open(cache)
+    assert isinstance(reopened, blosc2.Proxy)
+    assert np.array_equal(reopened[0:5, 0:10], data[0:5, 0:10])  # out of the cache
+
+
+def test_one_answer_that_misses_its_parts_does_not_end_batching(subscriber, any_chunk_wants_blocks):
+    # Batching is worth an order of magnitude, so a single truncated answer is
+    # worth retrying a range at a time rather than giving up the whole of it
+    data = _incompressible((400, 400))
+    array, sub = subscriber(data, chunks=(200, 200), blocks=(10, 20), bad_parts=1)
+    p = blosc2.Proxy(array, mode="w")
+
+    item = (slice(190, 210), slice(190, 210))  # a corner of each of the four chunks
+    assert np.array_equal(p[item], data[item])
+    assert not sub.bad_parts  # the answer that carried one part was asked for ...
+    assert array.max_ranges > 1  # ... and cost the batching nothing
+    assert np.array_equal(p[...], data)
+
+
+def test_a_part_that_ends_early_is_refused():
     # A part that starts inside a span and stops short of its end would slice to
     # a short payload, which is spliced against a `bstarts` promising the whole
     # of it -- so it is refused, and the fetch falls back to a range per request
-    parts = [(100, b"12345")]
+    parts = [(100, b"12345", 200)]  # (where it starts, its bytes, the frame's length)
     assert blosc2.c2array._span_of(parts, 100, 5, "url") == b"12345"
-    with pytest.raises(blosc2.c2array._PartsMissing):
+    with pytest.raises(blosc2.proxy_source.PartsMissing):
         blosc2.c2array._span_of(parts, 100, 6, "url")
-    with pytest.raises(blosc2.c2array._PartsMissing):
+    with pytest.raises(blosc2.proxy_source.PartsMissing):
         blosc2.c2array._span_of(parts, 103, 4, "url")
+
+
+class _Answer:
+    """The little of a response that taking a multipart body apart reads."""
+
+    def __init__(self, content, **headers):
+        self.content = content
+        self.headers = {name.replace("_", "-"): value for name, value in headers.items()}
+
+
+def test_a_payload_that_spells_the_boundary_is_read_whole():
+    # Compressed bytes hold whatever they hold, the boundary and a trailing CRLF
+    # among them: each part is cut to the length its own Content-Range gives, so
+    # what the data happens to spell decides nothing
+    payload = b"--c2boundary\r\n\r\nnot a boundary at all\r\ntail"
+    body = (
+        b"--c2boundary\r\nContent-Type: application/octet-stream\r\n"
+        + f"Content-Range: bytes 64-{64 + len(payload) - 1}/1000\r\n\r\n".encode()
+        + payload
+        + b"\r\n--c2boundary--\r\n"
+    )
+    answer = _Answer(body, content_type="multipart/byteranges; boundary=c2boundary")
+    assert blosc2.c2array._byteranges(answer) == [(64, payload, 1000)]
+    assert blosc2.c2array._span_of([(64, payload, 1000)], 64, len(payload), "url") == payload
+
+
+def test_a_multipart_answer_is_taken_apart_in_order():
+    parts = [(0, b"first-part-bytes"), (500, b"second\r\npart")]
+    body = b""
+    for start, data in parts:
+        body += b"--sep\r\n" + f"Content-Range: bytes {start}-{start + len(data) - 1}/1000\r\n\r\n".encode()
+        body += data + b"\r\n"
+    body += b"--sep--\r\n"
+    answer = _Answer(body, content_type='multipart/byteranges; boundary="sep"')
+    assert blosc2.c2array._byteranges(answer) == [(0, parts[0][1], 1000), (500, parts[1][1], 1000)]
+
+
+def test_a_part_without_a_content_range_is_refused():
+    body = b"--sep\r\nContent-Type: application/octet-stream\r\n\r\nbytes\r\n--sep--\r\n"
+    answer = _Answer(body, content_type="multipart/byteranges; boundary=sep")
+    with pytest.raises(blosc2.proxy_source.NotRanged, match="Content-Range"):
+        blosc2.c2array._byteranges(answer)
+
+
+def test_a_part_that_ends_where_the_frame_does_is_kept():
+    # ... unless it ends because the frame does, which is the one short read
+    # `read_range` allows: a frame shorter than the prefetch an open asks for
+    # comes back clipped, and refusing it would write the dataset off as streamed
+    parts = [(100, b"12345", 105)]
+    assert blosc2.c2array._span_of(parts, 100, 8192, "url") == b"12345"
+    assert blosc2.c2array._span_of(parts, 103, 8192, "url") == b"45"
+    with pytest.raises(blosc2.proxy_source.PartsMissing):
+        blosc2.c2array._span_of(parts, 105, 1, "url")  # nothing there to be short of
+    # A server that will not say how long the whole is leaves nothing to check a
+    # short answer against, so a short answer is a missing one
+    with pytest.raises(blosc2.proxy_source.PartsMissing):
+        blosc2.c2array._span_of([(100, b"12345", None)], 100, 6, "url")
+
+
+def test_a_small_frame_is_read_over_ranges(subscriber, any_chunk_wants_blocks):
+    # The whole of the frame arrives in the first read an open asks for, which
+    # is the clipped answer above, and the dataset is served in blocks all the same
+    data = np.arange(200, dtype="i4").reshape(20, 10)
+    array, sub = subscriber(data, chunks=(10, 10), blocks=(5, 10))
+    assert len(sub.frame) < blosc2.proxy_source._FRAME_PREFETCH
+    p = blosc2.Proxy(array, mode="w")
+
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert array.block_source() is not None
+    assert not _bytes(sub, "chunk")
 
 
 def test_the_shared_client_keeps_no_cookies():

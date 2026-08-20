@@ -91,23 +91,80 @@ _INDEX_PREFETCH = 1 << 16
 BLOCK_HOT_CHUNKS = 8
 
 
+def _is_transient(status: int | None) -> bool:
+    """Whether a status says the server was busy, rather than answering.
+
+    Both places that decide what a refused range read means -- whether to try
+    again at all, and whether the dataset is streamed for good -- ask this one
+    question, so that adding a status to it cannot leave the two disagreeing.
+    """
+    return status is not None and (status >= 500 or status == 429)
+
+
+class NotRanged(ValueError):
+    """A transport that reads byte ranges answered with something other than one.
+
+    Raised out of :meth:`ByteRangeNDSource.read_range` and its neighbours when
+    the answer is not the bytes that were asked for: an HTTP 200 carrying the
+    whole dataset, a busy server, a body that cannot be taken apart.  It is not
+    fatal to a fetch -- :meth:`Proxy.fetch` catches it and asks for the chunks
+    it wanted whole, which every source can serve -- so what it costs is the
+    block granularity, not the data.
+
+    A `ValueError`, which is what a source that cannot be read in ranges raised
+    before this had a type of its own.
+    """
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+    @property
+    def transient(self) -> bool:
+        """Whether asking again could be answered differently.
+
+        A 200 is the dataset itself, streamed, and no amount of asking again
+        will make it a file; a server that is busy or broken says nothing at all
+        about how the dataset is served, and costs no download to ask twice.
+        """
+        return _is_transient(self.status)
+
+
+class PartsMissing(NotRanged):
+    """A multi-range answer did not carry all the bytes that were asked for.
+
+    A :class:`NotRanged` for the caller that only wants to know the read failed,
+    and its own type for the transport, which answers it by asking for one range
+    at a time rather than by giving up on ranges.
+    """
+
+
 class ProxyNDSource(ABC):
     """
     Base interface for NDim sources in :ref:`Proxy`.
 
     A source may also serve single *blocks* rather than whole chunks, which is
     worth doing when a fetch costs a round trip and a slice touches little of the
-    chunks it lands in.  :ref:`Proxy` uses that path when the source has all four
+    chunks it lands in.  :ref:`Proxy` uses that path when the source has all five
     of ``blocks_per_chunk``, ``wants_blocks(nchunk, nwanted)``,
     ``chunk_layout(nchunk)``, ``block_plan(nchunk, nblocks)`` and
     ``read_range(offset, size)``; :ref:`FsspecNDSource` implements them over byte
     ranges and is the worked example.
+
+    Having them is not the same as being able to use them for the dataset in
+    hand: a source that knows, without asking anything, that this one is served
+    whole says so with ``serves_blocks``, and :ref:`Proxy` then keeps to chunks
+    from the start rather than to a per-block bitmap it would never fill.  It is
+    read once, when the proxy is built, and a source without it counts as True.
 
     A source whose transport can ask for several ranges at once says so with
     ``max_ranges`` and serves ``read_ranges(spans)`` and
     ``chunk_layouts(nchunks)`` as well; :ref:`Proxy` then sends a whole wave of
     reads as one request.  Both are optional, and a source without them is asked
     one range at a time exactly as before.
+
+    A block read that the transport cannot answer raises ``NotRanged``, and
+    :ref:`Proxy` then fetches the chunks it was after whole.
     """
 
     @property
@@ -468,6 +525,15 @@ class ByteRangeNDSource(ProxyNDSource):
     """
 
     stamp = None
+
+    serves_blocks = True
+    """That blocks are worth asking this source for, which reading a frame is.
+
+    The frame is there to be read in pieces -- that is what an open of one
+    settles -- so a :ref:`Proxy` over it goes straight to the block path.  A
+    source that only sometimes serves blocks (:ref:`C2Array`, whose subscriber
+    may compute the dataset rather than store it) overrides this.
+    """
 
     max_ranges = 1
     """How many ranges one request of this transport may carry.

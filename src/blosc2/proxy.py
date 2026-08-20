@@ -28,6 +28,7 @@ from blosc2.proxy_source import (  # noqa: F401
     REMOTE_MAX_CONCURRENCY,
     ByteRangeNDSource,
     FsspecNDSource,
+    NotRanged,
     ProxyNDSource,
     ProxySource,
     _chunk_payloads,
@@ -186,9 +187,15 @@ class Proxy(blosc2.Operand):
         # empty ones the cache starts life with. Hence an explicit bitmap. A
         # source that serves blocks needs one bit per block, since a chunk in the
         # cache may hold only some of them and reads zeros for the rest.
-        serves_blocks = all(
-            callable(getattr(self.src, name, None))
-            for name in ("wants_blocks", "chunk_layout", "block_plan", "read_range")
+        # Having the block methods is not the same as being able to use them for
+        # this dataset: a source that knows it is served whole says so with
+        # `serves_blocks`, and then the block path is never taken and the bitmap
+        # is the chunkwise one an older blosc2 also reads.  Asked rather than
+        # tried, since trying costs a request at the moment a proxy is built --
+        # which a proxy over a cache that already holds what is wanted never pays.
+        serves_blocks = getattr(self.src, "serves_blocks", True) and all(
+            getattr(self.src, name, None) is not None
+            for name in ("blocks_per_chunk", "wants_blocks", "chunk_layout", "block_plan", "read_range")
         )
         self._blocks_per_chunk = self.src.blocks_per_chunk if serves_blocks else 1
         # Blocks of the last few partly filled chunks, so a rewrite need not read
@@ -522,8 +529,11 @@ class Proxy(blosc2.Operand):
         A source that can serve individual blocks (:ref:`FsspecNDSource`) is
         asked only for the blocks the slice touches, rather than for whole
         chunks, whenever that is the cheaper way round -- see the thresholds in
-        `blosc2.proxy`.  The chunks left in the cache then hold only those
-        blocks, and read as zeros elsewhere until the rest are fetched.
+        `blosc2.proxy_source`.  The chunks left in the cache then hold only those
+        blocks, and read as zeros elsewhere until the rest are fetched.  A source
+        that stops answering range reads partway (a subscriber that now computes
+        the dataset, or is too busy to serve it from its file) does not fail the
+        fetch: the chunks it was asked for come whole instead.
 
         Examples
         --------
@@ -539,7 +549,14 @@ class Proxy(blosc2.Operand):
         [4 5]]
         """
         if self._blocks_per_chunk > 1:
-            return self._fetch_by_block(item, max_concurrency)
+            try:
+                return self._fetch_by_block(item, max_concurrency)
+            except NotRanged:
+                # The transport stopped answering range reads partway: whatever
+                # arrived before it did is in the cache and stays there, and what
+                # is still missing falls through to whole chunks below, which is
+                # the one way of reading a source that never goes away
+                pass
 
         missing = self._missing_chunks(item)
         try:

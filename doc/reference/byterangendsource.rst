@@ -17,3 +17,19 @@ and :ref:`ProxySource`.
     :members:
     :exclude-members: all, any, max, mean, min, prod, std, sum, var
     :member-order: groupwise
+
+When a range read is refused
+----------------------------
+
+A transport that reads byte ranges may be answered with something other than the
+bytes asked for: a subscriber that now streams the dataset, a server that is too
+busy to serve it, a body that cannot be taken apart. Those raise
+``blosc2.proxy_source.NotRanged``, which a :ref:`Proxy` catches for itself --
+whatever the fetch is still missing comes as whole chunks -- and which a caller
+reading ranges directly can catch by name.
+
+.. autoclass:: blosc2.proxy_source.NotRanged
+    :members:
+
+.. autoclass:: blosc2.proxy_source.PartsMissing
+    :members:

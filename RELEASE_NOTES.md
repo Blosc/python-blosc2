@@ -56,7 +56,10 @@ XXX version-specific blurb XXX
   request to find out, and is not asked again -- unless the subscriber could not
   say, which a busy or unreachable one cannot: a 5xx or a connection that failed
   is asked again on the next fetch rather than written off, since neither
-  downloaded anything to find out. `blosc2.ByteRangeNDSource` is
+  downloaded anything to find out. The same holds once blocks are being read: a
+  dataset that stops being served from a file, or a subscriber too busy to serve
+  it, costs the granularity and not the fetch — whatever is still missing comes
+  as whole chunks, which every dataset can be read as. `blosc2.ByteRangeNDSource` is
   the frame reader `FsspecNDSource` and the new `C2NDSource` share: subclass it
   with a `read_range(offset, size)` to give any transport the same treatment.
   Opening a remote frame through either of them now costs two requests instead
