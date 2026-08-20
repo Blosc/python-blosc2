@@ -122,7 +122,7 @@ def blocky(s3_endpoint):
     """An array whose chunks are big enough to be worth reading block by block."""
     data = np.random.default_rng(0).random((600, 600))
     a = blosc2.asarray(data, chunks=(300, 600), blocks=(30, 600))
-    assert a.schunk.cbytes / a.schunk.nchunks > blosc2.proxy.BLOCK_MIN_CBYTES
+    assert a.schunk.cbytes / a.schunk.nchunks > blosc2.proxy_source.BLOCK_MIN_CBYTES
     urlpath = f"s3://{BUCKET}/blocky.b2nd"
     a.save(urlpath, mode="w")
     return urlpath, data

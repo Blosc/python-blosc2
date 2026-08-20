@@ -84,7 +84,7 @@ import time
 import blosc2
 from blosc2 import c2array
 
-CHUNK_HEADER = blosc2.proxy._CHUNK_HEADER_LEN
+CHUNK_HEADER = blosc2.proxy_source._CHUNK_HEADER_LEN
 
 
 #
@@ -353,8 +353,8 @@ def timed_slice(open_array, item, mode, concurrency, latency, bandwidth):
     of what it used to do.  The frame index is read before the clock starts: it
     costs four small requests once per C2Array, not once per slice.
     """
-    threshold = blosc2.proxy.BLOCK_MIN_CBYTES
-    blosc2.proxy.BLOCK_MIN_CBYTES = 1 << 62 if mode == "chunks" else threshold
+    threshold = blosc2.proxy_source.BLOCK_MIN_CBYTES
+    blosc2.proxy_source.BLOCK_MIN_CBYTES = 1 << 62 if mode == "chunks" else threshold
     try:
         array = open_array()
         array.max_concurrency = concurrency
@@ -367,7 +367,7 @@ def timed_slice(open_array, item, mode, concurrency, latency, bandwidth):
         proxy[item]
         return time.perf_counter() - start, tally["requests"], tally["bytes"]
     finally:
-        blosc2.proxy.BLOCK_MIN_CBYTES = threshold
+        blosc2.proxy_source.BLOCK_MIN_CBYTES = threshold
 
 
 def connection_setup(urlbase, path, token, reps):
@@ -456,7 +456,7 @@ def report(args, urlbase, path, token):
         found_out = (
             f"{opening['requests']} request found that out, and it is never asked again"
             if opening["requests"]
-            else f"nothing was asked.\n  Chunks under the {blosc2.proxy.BLOCK_MIN_CBYTES / 1e6:.0f} MB "
+            else f"nothing was asked.\n  Chunks under the {blosc2.proxy_source.BLOCK_MIN_CBYTES / 1e6:.0f} MB "
             "a round trip costs are not worth taking apart, and api/info\n  tells a computed "
             "dataset from a stored one for free"
         )

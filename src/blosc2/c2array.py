@@ -23,10 +23,7 @@ import numpy as np
 import blosc2
 from blosc2.b2objects import encode_b2object_payload, make_b2object_carrier, write_b2object_payload
 from blosc2.info import InfoReporter, format_nbytes_info
-
-# blosc2/__init__ imports this module before blosc2.proxy, so this pulls proxy in
-# early; it is safe because proxy only reaches into the package at call time
-from blosc2.proxy import REMOTE_MAX_CONCURRENCY, ByteRangeNDSource
+from blosc2.proxy_source import REMOTE_MAX_CONCURRENCY, ByteRangeNDSource
 
 _subscriber_data = {
     "urlbase": os.environ.get("BLOSC_C2URLBASE"),
@@ -782,7 +779,7 @@ class C2Array(blosc2.Operand):
             # ever use a block, and the dataset keeps the behaviour it had before.
             # Inside the `try`, since `api/info` need not carry what these read.
             nchunks = math.prod(math.ceil(s / c) for s, c in zip(self.shape, self.chunks, strict=True))
-            if not nchunks or self.cbytes / nchunks < blosc2.proxy.BLOCK_MIN_CBYTES:
+            if not nchunks or self.cbytes / nchunks < blosc2.proxy_source.BLOCK_MIN_CBYTES:
                 return None
             source = C2NDSource(self, max_concurrency=REMOTE_MAX_CONCURRENCY)
             source.adopt_index(self._pending_index)

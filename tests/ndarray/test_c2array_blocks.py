@@ -228,7 +228,7 @@ def subscriber(tmp_path):
 @pytest.fixture
 def any_chunk_wants_blocks(monkeypatch):
     """Take the size threshold out of the way, so small test arrays use blocks."""
-    monkeypatch.setattr(blosc2.proxy, "BLOCK_MIN_CBYTES", 0)
+    monkeypatch.setattr(blosc2.proxy_source, "BLOCK_MIN_CBYTES", 0)
 
 
 def _incompressible(shape, seed=0):

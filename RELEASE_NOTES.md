@@ -53,7 +53,10 @@ XXX version-specific blurb XXX
   ranges (`multipart/byteranges`, which no object store offers). A dataset the
   subscriber *computes* — a lazy expression, an HDF5 leaf, a `.b2z` member — is
   fetched a whole chunk at a time as before; which it is costs at most one small
-  request to find out, and is never asked twice. `blosc2.ByteRangeNDSource` is
+  request to find out, and is not asked again -- unless the subscriber could not
+  say, which a busy or unreachable one cannot: a 5xx or a connection that failed
+  is asked again on the next fetch rather than written off, since neither
+  downloaded anything to find out. `blosc2.ByteRangeNDSource` is
   the frame reader `FsspecNDSource` and the new `C2NDSource` share: subclass it
   with a `read_range(offset, size)` to give any transport the same treatment.
   Opening a remote frame through either of them now costs two requests instead
@@ -97,8 +100,22 @@ XXX version-specific blurb XXX
   bytes they read are held to that as well, so a remote array *replaced* while
   keeping its shape is noticed rather than served stale: `FsspecNDSource` uses
   fsspec's token and `C2Array` the subscriber's mtime, both free with metadata
-  they already fetch. Caches from earlier 4.11.1 development builds are not
-  adopted (the stamp moved to a `proxy-stamp` entry); pass `mode="w"` once.
+  they already fetch. A proxy that `blosc2.open` rebuilds over its own cache
+  gets the same treatment without the raise -- there is no `mode="w"` to offer
+  it -- so a cache whose stamp no longer matches starts as though nothing had
+  been fetched and fills again from the bytes served now; opened read-only there
+  is nothing to empty, and every read falls through to the source. Caches from
+  earlier 4.11.1 development builds are not adopted (the stamp moved to a
+  `proxy-stamp` entry); pass `mode="w"` once.
+
+* The source protocol moved to its own module, `blosc2.proxy_source`:
+  `ProxySource`, `ProxyNDSource`, `ByteRangeNDSource`, `FsspecNDSource` and the
+  frame reading behind them. They are still `blosc2.X` and still reachable as
+  `blosc2.proxy.X`, so nothing outside need change; what moved for good are the
+  block-granularity knobs, `blosc2.proxy_source.BLOCK_MIN_CBYTES` and its
+  neighbours. This is what lets `proxy.py` be imported after `schunk` and
+  `indexing`, rather than being dragged in ahead of them by every module that
+  wants a source.
 
 * Querying a `utf8()` column through its FULL index no longer materializes the
   index vocabulary. The query literal is turned into an alphabetical rank by

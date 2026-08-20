@@ -54,7 +54,7 @@ from .b2objects import (
     write_b2object_user_vlmeta,
 )
 from .dsl_kernel import DSLKernel, DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
-from .proxy import convert_dtype
+from .proxy_source import convert_dtype
 from .utils import (
     check_smaller_shape,
     compute_smaller_slice,

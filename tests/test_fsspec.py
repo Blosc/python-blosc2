@@ -729,7 +729,7 @@ def test_handbuilt_proxy_rejects_a_stale_cache(tmp_path):
 @pytest.fixture
 def any_chunk_wants_blocks(monkeypatch):
     """Take the size threshold out of the way, so small test arrays exercise blocks."""
-    monkeypatch.setattr(blosc2.proxy, "BLOCK_MIN_CBYTES", 0)
+    monkeypatch.setattr(blosc2.proxy_source, "BLOCK_MIN_CBYTES", 0)
 
 
 def _traffic(monkeypatch):
@@ -783,7 +783,7 @@ def test_lazy_open_of_a_small_frame_never_reads_twice(monkeypatch):
     # A frame that fits in the first read is wholly in hand: the offsets chunk
     # is in those bytes too, so there is nothing left to ask for, then or later
     a = blosc2.arange(0, 100, dtype="i4", chunks=(10,))
-    assert a.schunk.cbytes < blosc2.proxy._FRAME_PREFETCH
+    assert a.schunk.cbytes < blosc2.proxy_source._FRAME_PREFETCH
     url = _put("smallframe.b2nd", a)
     reads, _ = _traffic(monkeypatch)
 
@@ -797,7 +797,7 @@ def test_lazy_open_of_a_small_frame_never_reads_twice(monkeypatch):
 def test_lazy_open_reads_a_header_that_did_not_fit(monkeypatch):
     # A metalayer big enough to push the header past the guess: the exact read
     # the format asks for happens after all, and nothing is misread
-    monkeypatch.setattr(blosc2.proxy, "_FRAME_PREFETCH", 256)
+    monkeypatch.setattr(blosc2.proxy_source, "_FRAME_PREFETCH", 256)
     data = np.arange(1000, dtype="i4")
     a = blosc2.asarray(data, chunks=(100,), meta={"big": {"pad": "x" * 4096}})
     url = _put("bigheader.b2nd", a)
@@ -935,7 +935,7 @@ def test_a_cache_that_holds_the_slice_asks_for_no_offsets(monkeypatch, tmp_path)
 def test_lazy_open_reads_an_index_that_did_not_fit(monkeypatch):
     # The same for the offsets chunk, which is bounded by the frame's own length
     # but capped in case a large trailer sits behind it
-    monkeypatch.setattr(blosc2.proxy, "_INDEX_PREFETCH", 16)
+    monkeypatch.setattr(blosc2.proxy_source, "_INDEX_PREFETCH", 16)
     data, a = _incompressible((600, 600), (30, 600), (30, 600))
     url = _put("bigindex.b2nd", a)
     reads, _ = _traffic(monkeypatch)
@@ -952,7 +952,7 @@ def test_lazy_fetches_only_touched_blocks(monkeypatch):
     # Chunks big enough to be worth taking apart, at the real threshold
     data, a = _incompressible((600, 600), (300, 600), (30, 600))
     cbytes = a.schunk.cbytes // a.schunk.nchunks
-    assert cbytes > blosc2.proxy.BLOCK_MIN_CBYTES
+    assert cbytes > blosc2.proxy_source.BLOCK_MIN_CBYTES
 
     p = blosc2.open(_put("blocks.b2nd", a), lazy=True)
     reads, chunks = _traffic(monkeypatch)  # after the open, which reads the header

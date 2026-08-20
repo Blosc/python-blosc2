@@ -223,8 +223,8 @@ def timed_open(urlpath, item, concurrency, blocks, latency=0.0, bandwidth=0.0):
     *bandwidth* bytes per second across it.  Both waits happen inside the
     proxy's thread pool, so they overlap the way real ones would.
     """
-    old = blosc2.proxy.BLOCK_MIN_CBYTES
-    blosc2.proxy.BLOCK_MIN_CBYTES = old if blocks else 1 << 62
+    old = blosc2.proxy_source.BLOCK_MIN_CBYTES
+    blosc2.proxy_source.BLOCK_MIN_CBYTES = old if blocks else 1 << 62
     try:
         array = blosc2.open(urlpath, lazy=True, max_concurrency=concurrency)
         traffic = [0, 0]
@@ -246,7 +246,7 @@ def timed_open(urlpath, item, concurrency, blocks, latency=0.0, bandwidth=0.0):
         array[item]
         return time.perf_counter() - t0, traffic[0], traffic[1]
     finally:
-        blosc2.proxy.BLOCK_MIN_CBYTES = old
+        blosc2.proxy_source.BLOCK_MIN_CBYTES = old
 
 
 def run_moto(local, concurrency, reps, latency, bandwidth):
