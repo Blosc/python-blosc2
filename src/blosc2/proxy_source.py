@@ -518,11 +518,10 @@ class ByteRangeNDSource(ProxyNDSource):
             if all(self._blocks)
             else 1
         )
-        # Layouts are memoized for the life of the source, and `_sections` keeps
-        # the bytes each was read as, so a `Proxy` can hand them to its cache and
-        # a later run start from them instead of reading them again.
+        # Layouts are memoized for the life of the source; `index_state` hands
+        # them back as the bytes they were read as, so a `Proxy` can keep them in
+        # its cache and a later run start from them instead of reading again.
         self._layouts = {}
-        self._sections = {}
 
     def index_state(self, keep: Sequence[int] = ()) -> dict:
         """Where things are, as the bytes they were read as, for a cache to keep.
@@ -533,9 +532,13 @@ class ByteRangeNDSource(ProxyNDSource):
         so a chunk that is complete is never asked about again, and one that is
         empty was never read.
 
-        Kept as read rather than as parsed, so that what comes back goes through
-        :meth:`_parse_layout` exactly as a fresh read does -- one parser, not a
-        second one that could disagree with it.
+        Handed back as the bytes a layout was read as rather than as parsed, so
+        that what comes back goes through :meth:`_parse_layout` exactly as a
+        fresh read does -- one parser, not a second one that could disagree with
+        it.  The bytes are rebuilt from the layout instead of being kept beside
+        it: they are the header and the ``bstarts`` it already holds, and a
+        second copy of every chunk ever laid out would grow for the life of the
+        source to be read back a handful of chunks at a time.
         """
         offsets = self._index[0] if self._index is not None else None
         return {
@@ -543,8 +546,18 @@ class ByteRangeNDSource(ProxyNDSource):
             # Little-endian whatever the host is: a cache directory outlives the
             # machine that filled it, and a stamp cannot tell a byte order
             "offsets": b"" if offsets is None else offsets.astype("<i8", copy=False).tobytes(),
-            "layouts": [[n, self._sections[n]] for n in keep if n in self._sections],
+            "layouts": [[n, self._section(n)] for n in keep if self._layouts.get(n) is not None],
         }
+
+    def _section(self, nchunk: int) -> bytes:
+        """A chunk's header section, as the read that found its layout saw it.
+
+        A chunk with no layout has none to give back, and none is wanted: a
+        `Proxy` keeps layouts for the chunks it holds some blocks of, and a chunk
+        that cannot be taken apart was fetched whole.
+        """
+        head, bstarts, _ = self._layouts[nchunk]
+        return head + bstarts.astype("<i4", copy=False).tobytes()
 
     def adopt_index(self, state: dict | None) -> None:
         """Take up what an earlier run left behind in :meth:`index_state`.
@@ -567,14 +580,15 @@ class ByteRangeNDSource(ProxyNDSource):
         if offsets:
             nchunks = math.prod(math.ceil(s / c) for s, c in zip(self._shape, self._chunks, strict=True))
             array = np.frombuffer(offsets, dtype="<i8")
-            if len(array) != nchunks:
-                return
-            with self._index_lock:
-                self._index = (array, _chunk_extents(array, self._header))
-                self._head = None  # the prefetch has nothing left to answer
+            # Offsets that do not fit the frame are dropped on their own: the
+            # layouts below are checked by themselves and keyed by chunk number,
+            # so they are still worth a header read apiece to a fetch to come
+            if len(array) == nchunks:
+                with self._index_lock:
+                    self._index = (array, _chunk_extents(array, self._header))
+                    self._head = None  # the prefetch has nothing left to answer
         for nchunk, head in state.get("layouts") or ():
             if len(head) == section:  # exactly what a read of one asks for
-                self._sections[nchunk] = head
                 self._layouts[nchunk] = self._parse_layout(head, section)
 
     def _frame_index(self) -> tuple[np.ndarray, np.ndarray]:
@@ -704,7 +718,6 @@ class ByteRangeNDSource(ProxyNDSource):
             spans = [(int(offsets[n]), section) for n in batch]
             heads = self.read_ranges(spans)
             for nchunk, head in zip(batch, heads, strict=True):
-                self._sections[nchunk] = head
                 self._layouts[nchunk] = self._parse_layout(head, section)
         return [self._layouts[n] for n in nchunks]
 

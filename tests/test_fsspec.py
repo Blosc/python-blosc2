@@ -876,7 +876,9 @@ def test_a_kept_index_of_the_wrong_shape_is_dropped(tmp_path, monkeypatch):
     reads, _ = _traffic(monkeypatch)
     p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
     assert np.array_equal(p[60:90, 0:10], data[60:90, 0:10])
-    assert len(reads) > 2  # the offsets were read again
+    # The offsets were read again -- and only they: the layout of the chunk half
+    # held is checked on its own, so bad offsets do not throw it away as well
+    assert len(reads) == 3  # the header, the offsets, and the blocks wanted
     assert np.array_equal(p[...], data)
 
 
