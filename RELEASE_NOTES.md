@@ -90,7 +90,9 @@ XXX version-specific blurb XXX
   container leaf from it, so a `Proxy` over `@public/tree.b2z/leaf` reads blocks
   exactly as it does over a `.b2nd` (2.8x on a point read, 20x fewer bytes).
   None where there is no window: a directory-backed store, an embedded leaf, a
-  `C2Array` reference.
+  `C2Array` reference, and a member some other tool repacked *compressed* --
+  which is now also left out of the store's keys rather than read as the deflate
+  output it is, and said plainly when it is the store's own super-chunk.
 
 * `blosc2.Proxy(src, urlpath=..., mode="a")` now adopts the cache left by an
   earlier run instead of failing on the existing file, so a proxy's cache can

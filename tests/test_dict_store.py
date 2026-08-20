@@ -894,3 +894,48 @@ def test_member_window_of_a_tree_group(tmp_path):
     tstore = blosc2.open(path)
     assert tstore.member_window("/g/leaf") is not None
     assert tstore.member_window("/g") is None  # a group is not a leaf
+
+
+def _repack(source: str, target: str, deflate: set[str]) -> str:
+    """Rewrite a .b2z with the named members compressed, as another tool might."""
+    with zipfile.ZipFile(source) as src, zipfile.ZipFile(target, "w") as dst:
+        for info in src.infolist():
+            kind = zipfile.ZIP_DEFLATED if info.filename in deflate else zipfile.ZIP_STORED
+            dst.writestr(info.filename, src.read(info.filename), compress_type=kind)
+    return target
+
+
+def test_a_deflated_member_is_not_read_as_a_frame(tmp_path):
+    """A .b2z is read where its members lie, so a deflated one is no leaf.
+
+    Every read of an external leaf opens the archive at the member's data
+    offset, and what lies there for a deflated member is deflate output rather
+    than the frame its suffix promises.  A store written here keeps them stored;
+    one repacked by another tool need not, and then the leaf is not there to be
+    served -- which is what `member_window` answers, and what everything that
+    opens a member at its offset has to agree with.
+    """
+    path = str(tmp_path / "stored.b2z")
+    with blosc2.TreeStore(path, mode="w") as tstore:
+        tstore["/a"] = np.arange(1000, dtype="i4")
+        tstore["/b"] = np.arange(1000, dtype="i4")
+
+    mixed = _repack(path, str(tmp_path / "mixed.b2z"), deflate={"a.b2nd"})
+    store = blosc2.open(mixed)
+    assert "/a" not in store  # nothing at that offset for a frame reader
+    assert store.member_window("/a") is None
+    assert "/b" in store  # ... and the stored leaf beside it is untouched
+    assert np.array_equal(store["/b"][:], np.arange(1000, dtype="i4"))
+
+
+def test_a_deflated_store_says_so_rather_than_misreading_it(tmp_path):
+    # The store's own super-chunk is read at its offset too, so a repack that
+    # compressed it left nothing to open: say that, rather than hand deflate
+    # output to a frame reader and fail somewhere inside it
+    path = str(tmp_path / "wholestore.b2z")
+    with blosc2.TreeStore(path, mode="w") as tstore:
+        tstore["/a"] = np.arange(1000, dtype="i4")
+
+    deflated = _repack(path, str(tmp_path / "deflated.b2z"), deflate={"a.b2nd", "embed.b2e"})
+    with pytest.raises(ValueError, match=r"compressed embed\.b2e"):
+        blosc2.open(deflated)

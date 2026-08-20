@@ -246,6 +246,14 @@ class DictStore:
             self.offsets = self._get_zip_offsets()
             if "embed.b2e" not in self.offsets:
                 raise FileNotFoundError("Embed file embed.b2e not found in store.")
+            if not self.offsets["embed.b2e"]["stored"]:
+                # The store is read where its members lie, so a repack that
+                # deflated them left no store to read: say so, rather than hand
+                # compressed bytes to a frame reader and fail somewhere inside it
+                raise ValueError(
+                    f"{self.b2z_path} holds a compressed embed.b2e; a .b2z is read in place, so its "
+                    f"members must be stored uncompressed. Unzip it and open the directory instead."
+                )
             estore_offset = self.offsets["embed.b2e"]["offset"]
             schunk = blosc2.blosc2_ext.open(
                 self.b2z_path,
@@ -431,10 +439,18 @@ class DictStore:
         leaf suffixes.  Trusting those suffixes avoids opening every member just
         to classify it, which is especially important for compact CTable stores
         with many columns.
+
+        A suffix is worth trusting only where the member is *stored*, which is
+        how this writes one: every read of a leaf here opens the archive at the
+        member's data offset, and what lies there for a deflated member is
+        compressed bytes rather than the frame its name promises.  A `.b2z`
+        repacked by another tool may hold such members, and they are left
+        unmapped -- there is no frame at that offset to serve, which is the same
+        answer :meth:`member_window` gives for one.
         """
         external_exts = {".b2nd", ".b2f", ".b2b"}
-        for filepath in self.offsets:
-            if filepath == "embed.b2e":
+        for filepath, window in self.offsets.items():
+            if filepath == "embed.b2e" or not window["stored"]:
                 continue
             if os.path.splitext(filepath)[1] in external_exts or self._probe_external_leaf_offset(filepath):
                 self.map_tree[self._logical_key_from_relpath(filepath)] = filepath
