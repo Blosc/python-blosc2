@@ -568,6 +568,66 @@ def test_a_cache_from_other_bytes_is_refused(tmp_path, subscriber, any_chunk_wan
     assert np.array_equal(p[...], other)
 
 
+def test_a_cache_of_bytes_that_were_replaced_is_emptied(tmp_path, subscriber, any_chunk_wants_blocks):
+    # `blosc2.open` rebuilds the proxy over the cache as it stands, with no
+    # `mode="a"` to refuse it by: the chunks in there were fetched from a frame
+    # that is gone, so what the cache says it holds is dropped rather than served
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    cache = str(tmp_path / "emptied.b2nd")
+    p = blosc2.Proxy(array, urlpath=cache, mode="w")
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    del p
+
+    other = _incompressible((200, 200), seed=1)
+    _replace(sub, other, chunks=(100, 200), blocks=(10, 20))
+
+    reopened = blosc2.open(cache, mode="a")
+    assert np.array_equal(reopened[0:5, 0:10], other[0:5, 0:10])
+    assert np.array_equal(reopened[...], other)
+
+
+def test_a_cache_emptied_of_replaced_bytes_stays_emptied(tmp_path, subscriber, any_chunk_wants_blocks):
+    # The stamp is written on the way in, so the run after this one finds a cache
+    # whose stamp fits and believes what it says it holds: emptying it has to
+    # reach the file, not just the proxy that noticed
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    cache = str(tmp_path / "stillemptied.b2nd")
+    p = blosc2.Proxy(array, urlpath=cache, mode="w")
+    assert np.array_equal(p[...], data)  # every chunk of it, fetched and recorded
+    del p
+
+    other = _incompressible((200, 200), seed=1)
+    _replace(sub, other, chunks=(100, 200), blocks=(10, 20))
+    noticed = blosc2.open(cache, mode="a")  # opened over the new bytes, dropped unread
+    del noticed
+
+    again = blosc2.open(cache, mode="a")
+    assert again.schunk.vlmeta["proxy-stamp"] == blosc2.C2Array(array.path, urlbase=array.urlbase).stamp
+    assert np.array_equal(again[...], other)
+
+
+def test_a_read_only_cache_of_replaced_bytes_reads_past_it(tmp_path, subscriber, any_chunk_wants_blocks):
+    # Nothing may be written to a cache opened read-only, so it cannot be emptied
+    # either -- but nothing of it is believed either, and the read falls through
+    # to the source rather than coming back with the bytes that are gone
+    data = _incompressible((200, 200))
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    cache = str(tmp_path / "readonlyreplaced.b2nd")
+    p = blosc2.Proxy(array, urlpath=cache, mode="w")
+    assert np.array_equal(p[...], data)
+    del p
+
+    other = _incompressible((200, 200), seed=1)
+    _replace(sub, other, chunks=(100, 200), blocks=(10, 20))
+
+    reopened = blosc2.open(cache, mode="r")
+    assert np.array_equal(reopened[:], other)  # read past the cache, off the source
+    # ... and the cache is left exactly as it was, stamp and chunks alike
+    assert reopened.schunk.vlmeta["proxy-stamp"] != blosc2.C2Array(array.path, urlbase=array.urlbase).stamp
+
+
 def test_a_cache_from_the_same_bytes_is_adopted(tmp_path, subscriber, any_chunk_wants_blocks):
     data = _incompressible((200, 200))
     array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))

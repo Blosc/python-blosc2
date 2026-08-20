@@ -316,6 +316,13 @@ class Proxy(blosc2.Operand):
             so a source whose contents changed underneath while its geometry did
             not is adopted, and the cache keeps serving what the earlier run
             fetched; pass ``mode="w"`` when that source may have been rewritten.
+
+            A proxy that :func:`blosc2.open` rebuilds over its own cache never
+            comes through here -- the cache is handed to it as it stands -- so
+            there a stamp that no longer matches empties the cache instead of
+            raising: it starts as though nothing had been fetched and fills again
+            from the bytes served now. Opened read-only there is nothing to
+            empty, and every read falls through to the source.
         kwargs: dict, optional
             Keyword arguments supported:
 
@@ -404,31 +411,11 @@ class Proxy(blosc2.Operand):
         self._hot_payloads = {}
         # The index as last written to the cache, to write it again only if it moves
         self._saved_index = None
-        nchunks = self._schunk_cache.nchunks
-        nbits = nchunks * self._blocks_per_chunk
-        self._fetched = bytearray((nbits + 7) // 8) if fresh else self._load_fetched(nchunks)
         # Evictions the cache has seen, so `_sync_evictions` can spot new ones
         self._specialized = getattr(self._schunk_cache, "nspecialized", 0)
         if self.urlpath is None:
             self.urlpath = getattr(self._schunk_cache, "urlpath", None)
-        # Geometry alone cannot tell a replaced source from the one the cache was
-        # filled from, so record whatever identity the source can name itself by
-        stamp = getattr(self.src, "stamp", None)
-        # Read before writing, or the check below would compare the stamp with
-        # the copy of itself just written and pass for every writable cache
-        stored = None if fresh else self._schunk_cache.vlmeta.get("proxy-stamp")
-        if stamp is not None and getattr(self._schunk_cache, "mode", None) != "r":
-            # Not into a cache opened read-only, which `blosc2.open(path, mode="r")`
-            # hands over for a persisted proxy: nothing may be written there, and a
-            # proxy over one stays observational anyway (see `__getitem__`)
-            self._schunk_cache.vlmeta["proxy-stamp"] = stamp
-        # Where the chunks are, and where the blocks of the partly filled ones
-        # are, as an earlier run read them.  Only from a cache that names the very
-        # same remote bytes, checked here rather than taken on trust from how the
-        # cache was come by: a `_cache=` handed in never passed `_reopen_cache`.
-        adopt = getattr(self.src, "adopt_index", None)
-        if adopt is not None and not fresh and stamp is not None and stored == stamp:
-            adopt(self._schunk_cache.vlmeta.get("proxy-index"))
+        self._fetched = self._adopt_cache(fresh, self._schunk_cache.nchunks)
         if vlmeta:
             reserved = sorted(_RESERVED_VLMETA & set(vlmeta))
             if reserved:
@@ -451,6 +438,66 @@ class Proxy(blosc2.Operand):
     def _fetched_key(self) -> str:
         """Where the bitmap lives, which says what it counts: chunks or blocks."""
         return "proxy-fetched-blocks" if self._blocks_per_chunk > 1 else "proxy-fetched"
+
+    def _adopt_cache(self, fresh: bool, nchunks: int) -> bytearray:
+        """Take up what the cache holds, as far as it is about the bytes served now.
+
+        Geometry alone cannot tell a replaced source from the one a cache was
+        filled from, so a source that can name itself has its stamp recorded here
+        -- read before it is written, or the check would be against the copy of
+        itself just written and pass for every writable cache.
+
+        A cache filled under another stamp holds the frame that used to be at
+        that path: the same geometry, and not one byte of it need be the same
+        data.  None of it is reusable -- neither the chunks nor the positions they
+        were fetched by -- so it starts empty, which for a cache that cannot be
+        written to means every read falls through to the source (see
+        `__getitem__`) rather than coming back stale.
+        """
+        stamp = getattr(self.src, "stamp", None)
+        stored = None if fresh else self._schunk_cache.vlmeta.get("proxy-stamp")
+        replaced = stamp is not None and stored is not None and stored != stamp
+        writable = getattr(self._schunk_cache, "mode", None) != "r"
+        if replaced and writable:
+            # Before the stamp, never after: the bitmap is what says the chunks
+            # are there, so a run that stopped in between would leave a cache
+            # claiming the new bytes and holding the old ones
+            self._forget_fetched(nchunks)
+        if stamp is not None and writable:
+            # Not into a cache opened read-only, which `blosc2.open(path, mode="r")`
+            # hands over for a persisted proxy: nothing may be written there, and a
+            # proxy over one stays observational anyway
+            self._schunk_cache.vlmeta["proxy-stamp"] = stamp
+        if fresh or replaced:
+            return bytearray((nchunks * self._blocks_per_chunk + 7) // 8)
+        # Where the chunks are, and where the blocks of the partly filled ones
+        # are, as an earlier run read them.  Only from a cache that names the very
+        # same remote bytes, checked here rather than taken on trust from how the
+        # cache was come by: a `_cache=` handed in never passed `_reopen_cache`.
+        adopt = getattr(self.src, "adopt_index", None)
+        if adopt is not None and stamp is not None and stored == stamp:
+            adopt(self._schunk_cache.vlmeta.get("proxy-index"))
+        return self._load_fetched(nchunks)
+
+    def _forget_fetched(self, nchunks: int) -> None:
+        """Empty the cache's record of what it holds, for bytes that are gone.
+
+        The chunks themselves are left where they are: every one of them is
+        overwritten by the fetch that asks for it again, and rewriting the whole
+        container here would be a download's worth of work to say `nothing`.
+        What has to go is every trace of what was fetched, in both the bitmaps a
+        cache may carry -- the block one this proxy writes, and the chunk one a
+        run before it may have left -- since either would be believed on the next
+        open, and where the chunks of the frame that is gone were.
+        """
+        vlmeta = self._schunk_cache.vlmeta
+        vlmeta[self._fetched_key] = bytes((nchunks * self._blocks_per_chunk + 7) // 8)
+        if self._fetched_key != "proxy-fetched" and vlmeta.get("proxy-fetched") is not None:
+            # The chunkwise bitmap a run before the block one left, which
+            # `_load_fetched` falls back to when there is no block bitmap
+            vlmeta["proxy-fetched"] = bytes((nchunks + 7) // 8)
+        if vlmeta.get("proxy-index") is not None:
+            vlmeta["proxy-index"] = {}
 
     def _load_fetched(self, nchunks: int) -> bytearray:
         """The bitmap of already fetched blocks that a previous run left behind."""
