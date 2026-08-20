@@ -572,7 +572,7 @@ from .objectarray import ObjectArray, objectarray_from_cframe
 from .ref import Ref
 from .b2objects import open_b2object
 
-from .c2array import c2context, C2Array, URLPath
+from .c2array import c2context, C2Array, C2NDSource, URLPath
 
 from .dsl_kernel import DSLSyntaxError, DSLKernel, dsl_kernel, validate_dsl, validate_dsl_jit
 from .lazyexpr import (
@@ -588,19 +588,25 @@ from .lazyexpr import (
     result_type,
     can_cast,
 )
-from .proxy import (
-    Proxy,
+from .proxy_source import (
     ProxySource,
     ProxyNDSource,
-    ProxyNDField,
+    ByteRangeNDSource,
     FsspecNDSource,
-    SimpleProxy,
-    jit,
-    as_simpleproxy,
 )
 from .indexing import Index
 
 from .schunk import SChunk, load, open
+
+# After .schunk and .indexing, which it may now import at module level: what a
+# proxy reads from lives in .proxy_source, which the early modules reach instead
+from .proxy import (
+    Proxy,
+    ProxyNDField,
+    SimpleProxy,
+    jit,
+    as_simpleproxy,
+)
 from . import linalg
 from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose, diagonal, outer
 from .utils import linalg_funcs as linalg_funcs_list
@@ -852,6 +858,7 @@ __all__ = [  # noqa : RUF022
     "group_reduce",
     # Classes
     "C2Array",
+    "C2NDSource",
     "Column",
     "CParams",
     "CTable",
@@ -879,6 +886,7 @@ __all__ = [  # noqa : RUF022
     "NDArray",
     "NDField",
     "Operand",
+    "ByteRangeNDSource",
     "FsspecNDSource",
     "Proxy",
     "ProxyNDField",

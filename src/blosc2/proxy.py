@@ -11,58 +11,38 @@ import inspect
 import itertools
 import math
 import os
-import struct
 import textwrap
-from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-
-try:
-    from numpy.typing import DTypeLike
-except (ImportError, AttributeError):
-    # fallback to internal module (use with caution)
-    from numpy._typing import DTypeLike
 
 import numpy as np
 
 import blosc2
 from blosc2.dsl_kernel import DSLKernel, DSLSyntaxError
 
-# Default Proxy.afetch concurrency cap for remote sources (e.g. C2Array),
-# where fetches are dominated by round-trip latency, not local CPU/IO.
-REMOTE_MAX_CONCURRENCY = 8
-
-# Block-granular fetching. A chunk is made of blocks that are compressed
-# independently, so a slice can fetch only the ones it touches -- at the price of
-# one extra round trip, since where the blocks are is written in the chunk header.
-# The two thresholds below are what keeps that trade from ever going the wrong
-# way; both are decided without reading anything, so a chunk that does not want
-# blocks costs exactly what it costs today.  Measured against S3 in
-# `bench/ndarray/fsspec-block-granularity.py`: 5-17x on multi-MB chunks, and the
-# break-even sits at about a megabyte of compressed chunk almost regardless of
-# the endpoint, since a round trip buys more bytes exactly where it costs more.
-BLOCK_MIN_CBYTES = 1 << 20
-# Above this share of a chunk's blocks the savings no longer pay for the extra
-# round trip.  Block *count* rather than bytes: it needs no header read, and
-# blocks of a chunk are close enough in size for the decision to come out the same.
-BLOCK_MAX_FRACTION = 0.5
-# Blocks land in the file roughly, but not exactly, in index order (a
-# multithreaded compressor writes them as they finish), so runs of wanted blocks
-# are near-adjacent rather than adjacent. Merging across gaps this small trades a
-# few unwanted bytes for one less request, which at object-store latencies is
-# always the right way round.
-BLOCK_GAP = 4096
-# How many partly filled chunks keep their blocks in memory as well as in the
-# cache.  Adding a block to a chunk rewrites that chunk, and the blocks already
-# in it have to come from somewhere: from here, or read back out of the cache and
-# taken apart again.  Keeping the last few saves half the copying for the pattern
-# that costs the most -- one chunk filled a slice at a time -- and 8 of them is
-# the memory a fetch of 8 whole chunks already peaks at.
-BLOCK_HOT_CHUNKS = 8
+# What a proxy reads from, which lived here until the import graph asked for it
+# further down (see `proxy_source`).  The four classes are re-exported rather
+# than used: `blosc2.proxy.X` is where anything outside would look for them
+from blosc2.proxy_source import (  # noqa: F401
+    BLOCK_HOT_CHUNKS,
+    REMOTE_MAX_CONCURRENCY,
+    ByteRangeNDSource,
+    FsspecNDSource,
+    NotRanged,
+    ProxyNDSource,
+    ProxySource,
+    _chunk_payloads,
+    _splice_chunk,
+    batched,
+    convert_dtype,
+)
+from blosc2.schunk import _set_default_dparams
 
 # vlmeta entries the proxy keeps its own state in: what it has fetched, and which
 # remote bytes the cache was filled from. A caller cannot write these.
-_RESERVED_VLMETA = frozenset({"proxy-fetched", "proxy-fetched-blocks", "proxy-fetched-bpc", "fsspec-stamp"})
+_RESERVED_VLMETA = frozenset(
+    {"proxy-fetched", "proxy-fetched-blocks", "proxy-fetched-bpc", "proxy-stamp", "proxy-index"}
+)
 
 # `jit` kwargs that tune *how* an expression is evaluated, not what container the
 # result is stored in. Unlike storage kwargs (`cparams`, `chunks`, `urlpath`, ...),
@@ -70,182 +50,6 @@ _RESERVED_VLMETA = frozenset({"proxy-fetched", "proxy-fetched-blocks", "proxy-fe
 # an NDArray -- wanting a faster JIT backend has nothing to do with wanting a
 # compressed/persisted container back.
 _JIT_EXECUTION_TUNING_KWARGS = frozenset({"jit", "jit_backend", "fp_accuracy"})
-
-
-class ProxyNDSource(ABC):
-    """
-    Base interface for NDim sources in :ref:`Proxy`.
-
-    A source may also serve single *blocks* rather than whole chunks, which is
-    worth doing when a fetch costs a round trip and a slice touches little of the
-    chunks it lands in.  :ref:`Proxy` uses that path when the source has all four
-    of ``blocks_per_chunk``, ``wants_blocks(nchunk, nwanted)``,
-    ``chunk_layout(nchunk)``, ``block_plan(nchunk, nblocks)`` and
-    ``read_range(offset, size)``; :ref:`FsspecNDSource` implements them over byte
-    ranges and is the worked example.
-    """
-
-    @property
-    @abstractmethod
-    def shape(self) -> tuple:
-        """
-        The shape of the source.
-        """
-        pass
-
-    @property
-    @abstractmethod
-    def chunks(self) -> tuple:
-        """
-        The chunk shape of the source.
-        """
-        pass
-
-    @property
-    @abstractmethod
-    def blocks(self) -> tuple:
-        """
-        The block shape of the source.
-        """
-        pass
-
-    @property
-    @abstractmethod
-    def dtype(self) -> np.dtype:
-        """
-        The dtype of the source.
-        """
-        pass
-
-    @property
-    def cparams(self) -> blosc2.CParams:
-        """
-        The compression parameters of the source.
-
-        This property is optional and can be overridden if the source has a
-        different compression configuration.
-        """
-        return blosc2.CParams(typesize=self.dtype.itemsize)
-
-    @abstractmethod
-    def get_chunk(self, nchunk: int) -> bytes:
-        """
-        Return the compressed chunk in :paramref:`self`.
-
-        Parameters
-        ----------
-        nchunk: int
-            The unidimensional index of the chunk to retrieve.
-
-        Returns
-        -------
-        out: bytes object
-            The compressed chunk.
-        """
-        pass
-
-    async def aget_chunk(self, nchunk: int) -> bytes:
-        """
-        Return the compressed chunk in :paramref:`self` asynchronously.
-
-        Parameters
-        ----------
-        nchunk: int
-            The index of the chunk to retrieve.
-
-        Returns
-        -------
-        out: bytes object
-            The compressed chunk.
-
-        Notes
-        -----
-        This method is optional, and only available if the source has an async
-        `aget_chunk` method.
-        """
-        raise NotImplementedError(
-            "aget_chunk is only available if the source has an async aget_chunk method"
-        )
-
-
-class ProxySource(ABC):
-    """
-    Base interface for sources of :ref:`Proxy` that are not NDim objects.
-    """
-
-    @property
-    @abstractmethod
-    def nbytes(self) -> int:
-        """
-        The total number of bytes in the source.
-        """
-        pass
-
-    @property
-    @abstractmethod
-    def chunksize(self) -> tuple:
-        """
-        The chunksize of the source.
-        """
-        pass
-
-    @property
-    @abstractmethod
-    def typesize(self) -> int:
-        """
-        The typesize of the source.
-        """
-        pass
-
-    @property
-    def cparams(self) -> blosc2.CParams:
-        """
-        The compression parameters of the source.
-
-        This property is optional and can be overridden if the source has a
-        different compression configuration.
-        """
-        return blosc2.CParams(typesize=self.typesize)
-
-    @abstractmethod
-    def get_chunk(self, nchunk: int) -> bytes:
-        """
-        Return the compressed chunk in :paramref:`self`.
-
-        Parameters
-        ----------
-        nchunk: int
-            The index of the chunk to retrieve.
-
-        Returns
-        -------
-        out: bytes object
-            The compressed chunk.
-        """
-        pass
-
-    async def aget_chunk(self, nchunk: int) -> bytes:
-        """
-        Return the compressed chunk in :paramref:`self` asynchronously.
-
-        Parameters
-        ----------
-        nchunk: int
-            The index of the chunk to retrieve.
-
-        Returns
-        -------
-        out: bytes object
-            The compressed chunk.
-
-        Notes
-        -----
-        This method is optional and only available if the source has an async
-        `aget_chunk` method.
-        """
-        raise NotImplementedError(
-            "aget_chunk is only available if the source has an async aget_chunk method"
-        )
 
 
 class Proxy(blosc2.Operand):
@@ -278,12 +82,20 @@ class Proxy(blosc2.Operand):
             else raises rather than being silently reused or overwritten.
 
             A source that can name the exact bytes it reads, as
-            :ref:`FsspecNDSource` does with its ``stamp``, is checked against that
+            :ref:`FsspecNDSource` does with its ``stamp`` (fsspec's token) and
+            :ref:`C2Array` with the subscriber's mtime, is checked against that
             too: a cache built from different bytes raises, even when the geometry
             still fits. For every other source geometry is all there is to check,
             so a source whose contents changed underneath while its geometry did
             not is adopted, and the cache keeps serving what the earlier run
             fetched; pass ``mode="w"`` when that source may have been rewritten.
+
+            A proxy that :func:`blosc2.open` rebuilds over its own cache never
+            comes through here -- the cache is handed to it as it stands -- so
+            there a stamp that no longer matches empties the cache instead of
+            raising: it starts as though nothing had been fetched and fills again
+            from the bytes served now. Opened read-only there is nothing to
+            empty, and every read falls through to the source.
         kwargs: dict, optional
             Keyword arguments supported:
 
@@ -307,6 +119,19 @@ class Proxy(blosc2.Operand):
         self._cache = kwargs.pop("_cache", None)
         vlmeta = kwargs.pop("vlmeta", None)
         caterva2_env = kwargs.pop("caterva2_env", False)
+        # Before anything is built or emptied: a call that is going to be refused
+        # must leave the cache at `urlpath` exactly as it found it, and adopting
+        # one whose stamp has moved on empties it as its first act
+        reserved = sorted(_RESERVED_VLMETA & set(vlmeta or ()))
+        if reserved:
+            # Writing these would hand the proxy a bitmap or an identity it never
+            # earned: a caller's `proxy-fetched` makes it skip chunks it has not
+            # fetched, and a caller's `proxy-stamp` makes a good cache fail its
+            # identity check (or a stale one pass it)
+            raise ValueError(
+                f"{', '.join(reserved)} {'is' if len(reserved) == 1 else 'are'} reserved "
+                f"for the proxy's own bookkeeping and cannot be set through vlmeta"
+            )
 
         if self._cache is None and mode == "a" and urlpath is not None and os.path.exists(urlpath):
             # Reuse the cache left by an earlier run: whatever was fetched then is
@@ -362,39 +187,29 @@ class Proxy(blosc2.Operand):
         # empty ones the cache starts life with. Hence an explicit bitmap. A
         # source that serves blocks needs one bit per block, since a chunk in the
         # cache may hold only some of them and reads zeros for the rest.
-        serves_blocks = all(
-            callable(getattr(self.src, name, None))
-            for name in ("wants_blocks", "chunk_layout", "block_plan", "read_range")
+        # Having the block methods is not the same as being able to use them for
+        # this dataset: a source that knows it is served whole says so with
+        # `serves_blocks`, and then the block path is never taken and the bitmap
+        # is the chunkwise one an older blosc2 also reads.  Asked rather than
+        # tried, since trying costs a request at the moment a proxy is built --
+        # which a proxy over a cache that already holds what is wanted never pays.
+        serves_blocks = getattr(self.src, "serves_blocks", True) and all(
+            getattr(self.src, name, None) is not None
+            for name in ("blocks_per_chunk", "wants_blocks", "chunk_layout", "block_plan", "read_range")
         )
         self._blocks_per_chunk = self.src.blocks_per_chunk if serves_blocks else 1
         # Blocks of the last few partly filled chunks, so a rewrite need not read
         # the chunk back out of the cache to find out what is already in it
         self._hot_payloads = {}
-        nchunks = self._schunk_cache.nchunks
-        nbits = nchunks * self._blocks_per_chunk
-        self._fetched = bytearray((nbits + 7) // 8) if fresh else self._load_fetched(nchunks)
+        # The index as last written to the cache, to write it again only if it moves
+        self._saved_index = None
         # Evictions the cache has seen, so `_sync_evictions` can spot new ones
         self._specialized = getattr(self._schunk_cache, "nspecialized", 0)
         if self.urlpath is None:
             self.urlpath = getattr(self._schunk_cache, "urlpath", None)
-        # Geometry alone cannot tell a replaced source from the one the cache was
-        # filled from, so record whatever identity the source can name itself by
-        stamp = getattr(self.src, "stamp", None)
-        if stamp is not None:
-            self._schunk_cache.vlmeta["fsspec-stamp"] = stamp
-        if vlmeta:
-            reserved = sorted(_RESERVED_VLMETA & set(vlmeta))
-            if reserved:
-                # Writing these would hand the proxy a bitmap or an identity it
-                # never earned: a caller's `proxy-fetched` makes it skip chunks it
-                # has not fetched, and a caller's `fsspec-stamp` makes a good cache
-                # fail its identity check (or a stale one pass it)
-                raise ValueError(
-                    f"{', '.join(reserved)} {'is' if len(reserved) == 1 else 'are'} reserved "
-                    f"for the proxy's own bookkeeping and cannot be set through vlmeta"
-                )
-            for key in vlmeta:
-                self._schunk_cache.vlmeta[key] = vlmeta[key]
+        self._fetched = self._adopt_cache(fresh, self._schunk_cache.nchunks)
+        for key in vlmeta or ():
+            self._schunk_cache.vlmeta[key] = vlmeta[key]
 
     def __enter__(self) -> "Proxy":
         """Enter a context manager and return this proxy."""
@@ -404,6 +219,74 @@ class Proxy(blosc2.Operand):
     def _fetched_key(self) -> str:
         """Where the bitmap lives, which says what it counts: chunks or blocks."""
         return "proxy-fetched-blocks" if self._blocks_per_chunk > 1 else "proxy-fetched"
+
+    def _adopt_cache(self, fresh: bool, nchunks: int) -> bytearray:
+        """Take up what the cache holds, as far as it is about the bytes served now.
+
+        Geometry alone cannot tell a replaced source from the one a cache was
+        filled from, so a source that can name itself has its stamp recorded here
+        -- read before it is written, or the check would be against the copy of
+        itself just written and pass for every writable cache.
+
+        A cache filled under another stamp holds the frame that used to be at
+        that path: the same geometry, and not one byte of it need be the same
+        data.  None of it is reusable -- neither the chunks nor the positions they
+        were fetched by -- so it starts empty, which for a cache that cannot be
+        written to means every read falls through to the source (see
+        `__getitem__`) rather than coming back stale.
+        """
+        stamp = getattr(self.src, "stamp", None)
+        stored = None if fresh else self._schunk_cache.vlmeta.get("proxy-stamp")
+        replaced = stamp is not None and stored is not None and stored != stamp
+        writable = getattr(self._schunk_cache, "mode", None) != "r"
+        if replaced and writable:
+            # Before the stamp, never after: the bitmap is what says the chunks
+            # are there, so a run that stopped in between would leave a cache
+            # claiming the new bytes and holding the old ones
+            self._forget_fetched(nchunks)
+        if stamp is not None and writable and stored != stamp:
+            # Not into a cache opened read-only, which `blosc2.open(path, mode="r")`
+            # hands over for a persisted proxy: nothing may be written there, and a
+            # proxy over one stays observational anyway.  Nor when it is already
+            # what is there: writing a vlmeta entry rewrites the cache file, and
+            # merely opening a proxy over a cache it fits should not touch it.
+            self._schunk_cache.vlmeta["proxy-stamp"] = stamp
+        if fresh or replaced:
+            return bytearray((nchunks * self._blocks_per_chunk + 7) // 8)
+        # Where the chunks are, and where the blocks of the partly filled ones
+        # are, as an earlier run read them.  Only from a cache that names the very
+        # same remote bytes, checked here rather than taken on trust from how the
+        # cache was come by: a `_cache=` handed in never passed `_reopen_cache`.
+        adopt = getattr(self.src, "adopt_index", None)
+        if adopt is not None and stamp is not None and stored == stamp:
+            index = self._schunk_cache.vlmeta.get("proxy-index")
+            adopt(index)
+            # What is on disk, so that a run which reads nothing new out of the
+            # source writes it back over itself for nothing: the offsets are the
+            # bulk of a large frame's index, and this is the first fetch's
+            # comparison, not just the second's
+            self._saved_index = index
+        return self._load_fetched(nchunks)
+
+    def _forget_fetched(self, nchunks: int) -> None:
+        """Empty the cache's record of what it holds, for bytes that are gone.
+
+        The chunks themselves are left where they are: every one of them is
+        overwritten by the fetch that asks for it again, and rewriting the whole
+        container here would be a download's worth of work to say `nothing`.
+        What has to go is every trace of what was fetched, in both the bitmaps a
+        cache may carry -- the block one this proxy writes, and the chunk one a
+        run before it may have left -- since either would be believed on the next
+        open, and where the chunks of the frame that is gone were.
+        """
+        vlmeta = self._schunk_cache.vlmeta
+        vlmeta[self._fetched_key] = bytes((nchunks * self._blocks_per_chunk + 7) // 8)
+        if self._fetched_key != "proxy-fetched" and vlmeta.get("proxy-fetched") is not None:
+            # The chunkwise bitmap a run before the block one left, which
+            # `_load_fetched` falls back to when there is no block bitmap
+            vlmeta["proxy-fetched"] = bytes((nchunks + 7) // 8)
+        if vlmeta.get("proxy-index") is not None:
+            vlmeta["proxy-index"] = {}
 
     def _load_fetched(self, nchunks: int) -> bytearray:
         """The bitmap of already fetched blocks that a previous run left behind."""
@@ -530,11 +413,36 @@ class Proxy(blosc2.Operand):
         self._schunk_cache.vlmeta[self._fetched_key] = bytes(self._fetched)
         if self._blocks_per_chunk > 1:
             self._schunk_cache.vlmeta["proxy-fetched-bpc"] = self._blocks_per_chunk
+        # Where the source read things to be, so the next run over this cache need
+        # not ask again.  Only for a source that can name the bytes it read: an
+        # unstamped one cannot tell a replaced frame from the one these positions
+        # came from, and reusing them across a replacement is worse than serving
+        # stale data.  Bounded by keeping layouts for the partly filled chunks
+        # alone, which are the only ones a later fetch would ask about.
+        state = getattr(self.src, "index_state", None)
+        if state is not None and getattr(self.src, "stamp", None) is not None:
+            index = state(self._partly_filled())
+            # Only when it says something new: the offsets are the bulk of it and
+            # never change once read, so a slice-by-slice walk would otherwise
+            # rewrite eight bytes per chunk of the frame after every fetch
+            if index != self._saved_index:
+                self._schunk_cache.vlmeta["proxy-index"] = index
+                self._saved_index = index
+
+    def _partly_filled(self) -> list[int]:
+        """Chunks the cache holds some of the blocks of, but not all."""
+        bpc = self._blocks_per_chunk
+        nchunks = self._schunk_cache.nchunks
+        if bpc == 1 or not nchunks:
+            return []
+        # Counted over the whole bitmap at once: a loop over chunks x blocks is
+        # millions of bit tests on a large array, and this runs after every fetch
+        bits = np.unpackbits(np.frombuffer(bytes(self._fetched), dtype=np.uint8), bitorder="little")
+        counts = bits[: nchunks * bpc].reshape(nchunks, bpc).sum(axis=1)
+        return np.flatnonzero((counts > 0) & (counts < bpc)).tolist()
 
     def _reopen_cache(self, urlpath: str):
         """Adopt the cache container stored at *urlpath*, checking it fits the source."""
-        from blosc2.schunk import _set_default_dparams
-
         # Not blosc2.open(): that would rebuild the source we already hold, and
         # raise outright for sources it cannot reconstruct from the cache metadata
         kwargs = {}
@@ -578,7 +486,7 @@ class Proxy(blosc2.Operand):
         # goes stale.  Only for sources that can name themselves; the rest are
         # adopted on geometry alone, as documented.
         stamp = getattr(self.src, "stamp", None)
-        if stamp is not None and schunk.vlmeta.get("fsspec-stamp") != stamp:
+        if stamp is not None and schunk.vlmeta.get("proxy-stamp") != stamp:
             raise ValueError(
                 f"the cache at {urlpath} was built against different remote bytes; "
                 f"pass mode='w' to fetch them anew"
@@ -621,8 +529,11 @@ class Proxy(blosc2.Operand):
         A source that can serve individual blocks (:ref:`FsspecNDSource`) is
         asked only for the blocks the slice touches, rather than for whole
         chunks, whenever that is the cheaper way round -- see the thresholds in
-        `blosc2.proxy`.  The chunks left in the cache then hold only those
-        blocks, and read as zeros elsewhere until the rest are fetched.
+        `blosc2.proxy_source`.  The chunks left in the cache then hold only those
+        blocks, and read as zeros elsewhere until the rest are fetched.  A source
+        that stops answering range reads partway (a subscriber that now computes
+        the dataset, or is too busy to serve it from its file) does not fail the
+        fetch: the chunks it was asked for come whole instead.
 
         Examples
         --------
@@ -638,7 +549,14 @@ class Proxy(blosc2.Operand):
         [4 5]]
         """
         if self._blocks_per_chunk > 1:
-            return self._fetch_by_block(item, max_concurrency)
+            try:
+                return self._fetch_by_block(item, max_concurrency)
+            except NotRanged:
+                # The transport stopped answering range reads partway: whatever
+                # arrived before it did is in the cache and stays there, and what
+                # is still missing falls through to whole chunks below, which is
+                # the one way of reading a source that never goes away
+                pass
 
         missing = self._missing_chunks(item)
         try:
@@ -679,6 +597,10 @@ class Proxy(blosc2.Operand):
         whatever chunks are cheaper to take whole.  Which is which is decided
         before any of it, so the chunks that do not want blocks cost exactly one
         request each, as they did before this existed.
+
+        A transport that carries several ranges per request (`max_ranges`)
+        collapses each wave further, into as few requests as its limit allows;
+        one that does not sees exactly the reads it always saw.
         """
         missing = self._missing_blocks(item)
         if not missing:
@@ -686,38 +608,62 @@ class Proxy(blosc2.Operand):
         wanted = {n: bs for n, bs in missing.items() if self.src.wants_blocks(n, len(bs))}
         whole = [n for n in missing if n not in wanted]
 
-        layouts = dict(
-            zip(wanted, self._run(self.src.chunk_layout, list(wanted), max_concurrency), strict=True)
-        )
+        layouts = dict(zip(wanted, self._chunk_layouts(list(wanted), max_concurrency), strict=True))
         # A chunk with nothing to take apart (memcpyed, or a single block) says so
         # only once its header is read
         whole += [n for n, layout in layouts.items() if layout is None]
         wanted = {n: bs for n, bs in wanted.items() if layouts[n] is not None}
 
-        tasks = [(n, None) for n in whole]
-        tasks += [(n, run) for n in wanted for run in self.src.block_plan(n, wanted[n])]
+        # Each task is what one request will carry: a whole chunk on its own, or
+        # a batch of range reads (of one, for a transport that takes one)
+        runs = [(n, run) for n in wanted for run in self.src.block_plan(n, wanted[n])]
+        batch = max(getattr(self.src, "max_ranges", 1), 1)
+        tasks = [((n, None),) for n in whole] + list(batched(runs, batch))
 
-        def fetch_one(task):
-            nchunk, run = task
-            return self.src.get_chunk(nchunk) if run is None else self.src.read_range(run[0], run[1])
+        # `read_ranges` is the optional half of the protocol: a source that only
+        # has `read_range` is asked one range at a time, as `batch` is 1 for it
+        read_ranges = getattr(self.src, "read_ranges", None)
+
+        def fetch(task):
+            if task[0][1] is None:
+                return [self.src.get_chunk(task[0][0])]
+            spans = [(run[0], run[1]) for _, run in task]
+            if read_ranges is None:
+                return [self.src.read_range(*span) for span in spans]
+            return read_ranges(spans)
 
         pending = {}
         try:
-            for (nchunk, run), data in zip(tasks, self._run(fetch_one, tasks, max_concurrency), strict=True):
-                if run is None:
-                    self._store_chunk(nchunk, data)
-                    continue
-                payloads = pending.setdefault(nchunk, {})
-                for nblock, offset, size in run[2]:
-                    payloads[nblock] = data[offset : offset + size]
-                # Write the chunk once its last outstanding block has landed, so
-                # nothing is held longer than it takes to splice it in
-                if len(payloads) == len(wanted[nchunk]):
-                    self._write_blocks(nchunk, pending.pop(nchunk), layouts[nchunk][0])
+            for task, answers in zip(tasks, self._run(fetch, tasks, max_concurrency), strict=True):
+                for (nchunk, run), data in zip(task, answers, strict=True):
+                    if run is None:
+                        self._store_chunk(nchunk, data)
+                        continue
+                    payloads = pending.setdefault(nchunk, {})
+                    for nblock, offset, size in run[2]:
+                        payloads[nblock] = data[offset : offset + size]
+                    # Write the chunk once its last outstanding block has landed, so
+                    # nothing is held longer than it takes to splice it in
+                    if len(payloads) == len(wanted[nchunk]):
+                        self._write_blocks(nchunk, pending.pop(nchunk), layouts[nchunk][0])
         finally:
             self._save_fetched()
 
         return self._cache
+
+    def _chunk_layouts(self, nchunks: list[int], max_concurrency: int | None) -> list:
+        """Where the blocks of every one of *nchunks* are, in as few requests as fit.
+
+        How many go in one request is the source's business (`chunk_layouts` is
+        what batches them, down to a batch of one); what is this proxy's is that
+        the requests past the first are round trips like any other, and so are
+        overlapped rather than run one after the next.
+        """
+        layouts = getattr(self.src, "chunk_layouts", None)
+        if layouts is None:  # a source that only serves them one at a time
+            return list(self._run(self.src.chunk_layout, nchunks, max_concurrency))
+        tasks = list(batched(nchunks, max(getattr(self.src, "max_ranges", 1), 1)))
+        return [layout for answers in self._run(layouts, tasks, max_concurrency) for layout in answers]
 
     def _write_blocks(self, nchunk: int, payloads: dict[int, bytes], header: bytes) -> None:
         """Put the blocks just fetched into the cache, keeping those already there.
@@ -1003,10 +949,6 @@ class Proxy(blosc2.Operand):
         return {key: ProxyNDField(self, key) for key in _fields}
 
 
-_FRAME_MAGIC = b"b2frame\0"
-_CHUNK_HEADER_LEN = blosc2.MAX_OVERHEAD
-
-
 def _item_spans(item, shape) -> list[tuple[int, int]] | None:
     """The (start, stop) of *item* along every dimension, or None if it is no box.
 
@@ -1021,381 +963,6 @@ def _item_spans(item, shape) -> list[tuple[int, int]] | None:
     if not all(isinstance(k, slice) and k.step in (None, 1) for k in key):
         return None
     return [(k.start, k.stop) for k in key]
-
-
-def _block_extents(bstarts: np.ndarray, cbytes: int) -> np.ndarray:
-    """How many bytes each block of a chunk occupies, given where they start.
-
-    ``bstarts`` is not sorted -- a multithreaded compressor writes blocks in the
-    order they finish -- so a block ends where the *next one along the file*
-    begins, which is the same sorted-neighbour rule `_chunk_extents` uses for
-    chunks inside a frame, one level down.
-    """
-    bounds = np.sort(np.append(bstarts, cbytes))
-    return bounds[np.searchsorted(bounds, bstarts, side="right")] - bstarts
-
-
-def _block_streams(header: bytes) -> int:
-    """How many compressed streams one block of this chunk is stored as.
-
-    One when the chunk is not split, and one per byte of the type when it is
-    (bit 4 of the flags means *not* split, as blosc1 left it).
-    """
-    return 1 if header[2] & 0x10 else header[3]
-
-
-def _splice_chunk(header: bytes, nblocks: int, payloads: dict[int, bytes]) -> bytes:
-    """Build a chunk that holds only *payloads*, keyed by block number.
-
-    The blocks that are missing are written as a stream of length zero each,
-    which the format defines as "made of zeros and stored nowhere", so what comes
-    back is an ordinary chunk that any reader decodes: exact where the payloads
-    are, zeros elsewhere.  Which is why the proxy has to keep its own record of
-    what it has actually fetched -- the chunk itself cannot say.
-    """
-    missing = b"\0\0\0\0" * _block_streams(header)
-    offset = _CHUNK_HEADER_LEN + 4 * nblocks
-    bstarts, body = np.empty(nblocks, dtype="<i4"), []
-    for nblock in range(nblocks):
-        payload = payloads.get(nblock, missing)
-        bstarts[nblock] = offset
-        offset += len(payload)
-        body.append(payload)
-    out = bytearray(header[:_CHUNK_HEADER_LEN])
-    out[12:16] = struct.pack("<i", offset)  # cbytes of the chunk we just built
-    return bytes(out) + bstarts.tobytes() + b"".join(body)
-
-
-def _chunk_payloads(chunk: bytes, nblocks: int, wanted) -> dict[int, bytes]:
-    """The compressed bytes of the *wanted* blocks of an already built chunk."""
-    bstarts = np.frombuffer(chunk[_CHUNK_HEADER_LEN : _CHUNK_HEADER_LEN + 4 * nblocks], dtype="<i4")
-    bstarts = bstarts.astype(np.int64)
-    extents = _block_extents(bstarts, len(chunk))
-    return {int(n): chunk[bstarts[n] : bstarts[n] + extents[n]] for n in wanted}
-
-
-def _read_frame_index(f) -> tuple[bytes, list, np.ndarray]:
-    """Read the header and the chunk offsets of a contiguous frame from *f*.
-
-    Returns the raw header bytes, the header decoded as the msgpack array it is,
-    and the absolute position of every chunk.  A negative position is not a
-    position at all: it encodes a run-length chunk that was never written to the
-    file.  See ``README_CFRAME_FORMAT.rst`` in c-blosc2 for the layout.
-    """
-    import msgpack
-
-    f.seek(0)
-    prefix = f.read(24)
-    if prefix[2:10] != _FRAME_MAGIC:
-        raise ValueError("not a Blosc2 contiguous frame")
-    # header_len is the one field that must be located by hand; everything after
-    # it comes out of unpacking the header, which is plain msgpack
-    header_len = struct.unpack(">i", prefix[11:15])[0]
-    f.seek(0)
-    raw = f.read(header_len)
-    # raw=True because the flags field is a msgpack *string* holding four raw
-    # bytes, and codec_flags packs clevel into its high nibble: from clevel 8 up
-    # that byte is not valid UTF-8 and decoding the header blows up
-    header = msgpack.unpackb(raw, raw=True, strict_map_key=False)
-
-    # An empty frame has no chunks, so it has no offsets chunk either: what sits
-    # at index_pos is the trailer, and reading it as one fails obscurely
-    if header[8] == 0:  # chunksize
-        return raw, header, np.empty(0, dtype=np.int64)
-
-    # The offsets live in a Blosc2 chunk of their own, right after the data ones
-    index_pos = header[1] + header[5]
-    f.seek(index_pos)
-    index_cbytes = struct.unpack("<i", f.read(16)[12:16])[0]
-    f.seek(index_pos)
-    offsets = np.frombuffer(blosc2.decompress2(f.read(index_cbytes)), dtype=np.int64)
-    # Offsets are relative to the end of the header
-    return raw, header, np.where(offsets >= 0, offsets + header_len, offsets)
-
-
-class _RangeReader:
-    """The seek/read pair `_read_frame_index` needs, served by exact range requests."""
-
-    def __init__(self, fs, path: str):
-        self._fs, self._path, self._pos = fs, path, 0
-
-    def seek(self, pos: int) -> None:
-        self._pos = pos
-
-    def read(self, size: int) -> bytes:
-        data = self._fs.cat_file(self._path, start=self._pos, end=self._pos + size)
-        self._pos += len(data)
-        return data
-
-
-def _frame_metalayer(raw: bytes, header: list, name: str):
-    """Decode the *name* metalayer out of an already-read frame header."""
-    offset = header[13][1][name.encode()]  # KeyError if there is no such metalayer
-    nbytes = struct.unpack(">I", raw[offset + 1 : offset + 5])[0]  # msgpack bin32
-    import msgpack
-
-    return msgpack.unpackb(raw[offset + 5 : offset + 5 + nbytes], raw=False)
-
-
-def _chunk_extents(offsets: np.ndarray, header: list) -> np.ndarray:
-    """How many bytes to read at each chunk offset to be sure of covering it.
-
-    A chunk carries its own compressed size in its header, but asking for that
-    first would cost a second request per chunk.  The next thing stored after a
-    chunk bounds it instead -- another chunk, or the offsets chunk -- capped by
-    what a chunk can possibly weigh, so a hole left by an updated chunk cannot
-    turn into an absurd read.  The caller truncates to the real size.
-    """
-    index_pos = header[1] + header[5]
-    bounds = np.sort(np.append(offsets[offsets >= 0], index_pos))
-    extents = bounds[np.searchsorted(bounds, offsets, side="right")] - offsets
-    return np.minimum(extents, header[8] + blosc2.MAX_OVERHEAD)
-
-
-class FsspecNDSource(ProxyNDSource):
-    """A :ref:`Proxy` source that serves parts of a remote Blosc2 frame.
-
-    The frame stays where it is: only its header, its chunk offsets, and what a
-    slice actually touches ever cross the network.  This is what
-    ``blosc2.open(url, lazy=True)`` builds; wrap it in a :ref:`Proxy` by hand
-    when the cache belongs at a path of your choosing rather than inside
-    ``cache_storage``::
-
-        src = blosc2.FsspecNDSource("s3://bucket/big.b2nd")
-        a = blosc2.Proxy(src, urlpath="big-cache.b2nd", mode="a")
-
-    A chunk large enough to be worth taking apart is read block by block --
-    :meth:`chunk_layout` fetches the offsets of its blocks, :meth:`block_plan`
-    turns the wanted ones into as few range reads as they fit in -- so a slice
-    landing in a corner of a multi-megabyte chunk costs a few kilobytes.  Small
-    chunks, memcpyed ones and run-length ones come whole, since there is nothing
-    to save there; :meth:`wants_blocks` decides which is which without reading
-    anything.
-
-    Contiguous frames carrying a ``b2nd`` metalayer only, which is what
-    :func:`blosc2.asarray` and friends write to a single file.  Sparse frames and
-    ``.b2d`` stores are directories; open those with ``cache_storage=``.
-
-    Parameters
-    ----------
-    urlpath: str
-        The fsspec URL of the frame.
-    max_concurrency: int, optional
-        How many fetches the enclosing :ref:`Proxy` may run at once.  Every chunk
-        or block costs one range request, so against an object store a slice is
-        almost entirely round-trip latency and overlapping the requests is the
-        whole win.  Defaults to 8, the same figure :meth:`Proxy.afetch` uses for
-        remote sources.  Pass 1 for a protocol with no latency to hide, where
-        the thread pool costs about 10 microseconds per chunk and saves nothing.
-    """
-
-    def __init__(self, urlpath: str, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
-        from blosc2.core import _import_fsspec
-
-        self.max_concurrency = max_concurrency
-        fsspec = _import_fsspec(urlpath)
-        fs, path = fsspec.url_to_fs(urlpath)
-        if fs.isdir(path):
-            raise NotImplementedError(
-                f"{urlpath} is a directory (a sparse frame or a store), which cannot be read "
-                "chunk by chunk; open it with cache_storage= instead"
-            )
-        self.urlpath = urlpath
-        self._fs, self._path = fs, path
-        # Identifies the remote bytes, so a cache built against them can tell it
-        # has gone stale -- and chunk offsets from a replaced frame are garbage.
-        # fsspec's own token, rather than a tuple of the metadata fields we guess
-        # a backend exposes: memory:// has no mtime, which left it size-only.
-        self.stamp = fs.ukey(path)
-        # Exact ranges, not fs.open(): a buffered handle reads a whole block per
-        # seek (50 MiB on s3fs by default), which would undo the point of a lazy
-        # open. Chunk reads are stateless, so nothing here is shared between threads
-        raw, header, self._offsets = _read_frame_index(_RangeReader(fs, path))
-        self._chunksize = header[8]
-        self._extents = _chunk_extents(self._offsets, header)
-        try:
-            _, _, shape, chunks, blocks, dtype_format, dtype = _frame_metalayer(raw, header, "b2nd")
-        except KeyError:
-            raise NotImplementedError(
-                f"{urlpath} has no b2nd metalayer, so it is a plain SChunk rather than an "
-                "NDArray; read it whole or with cache_storage= instead"
-            ) from None
-        if dtype_format != 0:
-            raise NotImplementedError(f"unsupported dtype format {dtype_format} in {urlpath}")
-        self._shape, self._chunks, self._blocks = tuple(shape), tuple(chunks), tuple(blocks)
-        try:
-            self._dtype = np.dtype(dtype)
-        except TypeError:
-            # Structured dtypes are stored as their repr, as blosc2_ext does too
-            self._dtype = np.dtype(ast.literal_eval(dtype))
-        # Chunks are padded to whole blocks, so every chunk holds the same number
-        # of them, edge chunks included.  An empty array partitions into nothing
-        # and has nothing to fetch either, so leave it out of the block path.
-        self.blocks_per_chunk = (
-            math.prod(math.ceil(c / b) for c, b in zip(self._chunks, self._blocks, strict=True))
-            if all(self._blocks)
-            else 1
-        )
-        # ponytail: layouts are memoized for the life of the source, so a second
-        # slice pays no header read. Persisting them in the cache would save one
-        # round trip more, but only for a new process reaching into a chunk it
-        # had partly explored before -- every other repeat already skips the read,
-        # since a fetch asks for layouts only where blocks are missing. Do it if
-        # many short-lived processes ever share one cached array.
-        self._layouts = {}
-
-    @property
-    def shape(self) -> tuple:
-        return self._shape
-
-    @property
-    def chunks(self) -> tuple:
-        return self._chunks
-
-    @property
-    def blocks(self) -> tuple:
-        return self._blocks
-
-    @property
-    def dtype(self) -> np.dtype:
-        return self._dtype
-
-    def get_chunk(self, nchunk: int) -> bytes:
-        offset = int(self._offsets[nchunk])
-        if offset < 0:
-            return self._special_chunk(offset)
-        data = self._fs.cat_file(self._path, start=offset, end=offset + int(self._extents[nchunk]))
-        return data[: struct.unpack("<i", data[12:16])[0]]
-
-    def read_range(self, offset: int, size: int) -> bytes:
-        """The bytes at [*offset*, *offset* + *size*) of the frame."""
-        return self._fs.cat_file(self._path, start=offset, end=offset + size)
-
-    def wants_blocks(self, nchunk: int, nwanted: int) -> bool:
-        """Whether fetching *nwanted* blocks of a chunk beats fetching all of it.
-
-        Answered without reading anything, so a chunk that says no costs exactly
-        what it costs today: the number of blocks a slice touches is geometry,
-        and an upper bound on the chunk's compressed size is already in hand from
-        the frame's offsets.  See the thresholds at the top of this module.
-        """
-        if int(self._offsets[nchunk]) < 0:
-            return False  # a run-length chunk has no bytes in the file to skip
-        if nwanted > self.blocks_per_chunk * BLOCK_MAX_FRACTION:
-            return False
-        return int(self._extents[nchunk]) >= BLOCK_MIN_CBYTES
-
-    def chunk_layout(self, nchunk: int) -> tuple[bytes, np.ndarray, np.ndarray] | None:
-        """Read where the blocks of a chunk are: its header, bstarts and extents.
-
-        One range read, of a size known in advance since every chunk holds the
-        same number of blocks.  None for a chunk this cannot take apart, which the
-        header is what says:
-
-        - a chunk of a single block is its own block, and a memcpyed one stores its
-          blocks raw with no ``bstarts`` at all;
-        - a chunk that is a run of one value is its header and that value, with no
-          blocks in the file: `blosc2.full` writes those at a real offset, unlike
-          the runs of zeros the frame keeps in the offsets themselves;
-        - a chunk compressed against a codec dictionary keeps it between
-          ``bstarts`` and the streams, and `_splice_chunk` would drop it while
-          leaving the flag that promises it;
-        - a variable-length-block chunk does not use the zero-length stream that
-          stands in for a block `_splice_chunk` does not have;
-        - a chunk without the extended header keeps its ``bstarts`` somewhere else
-          entirely, so reading them at byte 32 would be reading data.
-
-        Each of those is then fetched whole, at the cost of the one header read
-        that found out.
-        """
-        cached = self._layouts.get(nchunk)
-        if cached is not None:
-            return cached
-        nblocks = self.blocks_per_chunk
-        offset = int(self._offsets[nchunk])
-        section = _CHUNK_HEADER_LEN + 4 * nblocks
-        head = self.read_range(offset, section)
-        cbytes = struct.unpack("<i", head[12:16])[0]
-        extended = head[2] & 0x01 and head[2] & 0x04  # both shuffle bits: see the format doc
-        if (
-            nblocks == 1
-            or head[2] & 0x02  # memcpyed
-            or (head[31] >> 4) & 0x7  # a run of one value: header and value, no blocks
-            or head[31] & 0x01  # compressed against a dictionary
-            or head[30] & 0x01  # variable-length blocks
-            or not extended
-            # Whatever else a chunk may be, one too small to hold a block-offsets
-            # section has none: reading 32 bytes in would be reading the next chunk
-            or cbytes < section
-            or len(head) < section
-        ):
-            layout = None
-        else:
-            bstarts = np.frombuffer(head[_CHUNK_HEADER_LEN:], dtype="<i4").astype(np.int64)
-            layout = (head[:_CHUNK_HEADER_LEN], bstarts, _block_extents(bstarts, cbytes))
-        self._layouts[nchunk] = layout
-        return layout
-
-    def block_plan(self, nchunk: int, nblocks: Sequence[int]) -> list[tuple[int, int, tuple]]:
-        """The range reads that cover *nblocks*, near-adjacent ones merged.
-
-        Each is ``(offset, size, members)`` in frame coordinates, where members
-        says which block each piece of the answer is, as
-        ``(nblock, offset within the read, size)``.
-        """
-        _, bstarts, extents = self._layouts[nchunk]
-        base = int(self._offsets[nchunk])
-        plan = []
-        for nblock in sorted(nblocks, key=lambda n: bstarts[n]):
-            start, size = int(bstarts[nblock]), int(extents[nblock])
-            if plan and start - (plan[-1][0] + plan[-1][1]) <= BLOCK_GAP:
-                offset, length, members = plan[-1]
-                plan[-1] = (offset, max(length, start + size - offset), (*members, (nblock, start, size)))
-            else:
-                plan.append((start, size, ((nblock, start, size),)))
-        return [
-            (base + offset, length, tuple((n, s - offset, size) for n, s, size in members))
-            for offset, length, members in plan
-        ]
-
-    async def aget_chunk(self, nchunk: int) -> bytes:
-        """Same as :meth:`get_chunk`, but without blocking the caller's event loop.
-
-        This is what makes :meth:`Proxy.afetch` worth using against an object
-        store, where a slice spanning many chunks is nearly all round-trip
-        latency.
-
-        The fetch goes to a worker thread rather than being awaited directly.
-        Awaiting an async filesystem's coroutine looks like the obvious thing to
-        do and does not work: fsspec drives those on a private event loop of its
-        own, so a client created there and awaited here raises "got Future
-        attached to a different loop" (seen with s3fs).  Its blocking API is the
-        supported way in, and it hands off to that same private loop, so the
-        thread parks on a queue rather than on a socket.
-        """
-        offset = int(self._offsets[nchunk])
-        if offset < 0:
-            return self._special_chunk(offset)
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.get_chunk, nchunk)
-
-    def _special_chunk(self, offset: int) -> bytes:
-        """Rebuild a run-length chunk, which lives in its offset instead of the file."""
-        kind = ((offset & 0xFFFFFFFFFFFFFFFF) >> 56) & 0x7
-        nitems = self._chunksize // self._dtype.itemsize
-        if kind == 2:
-            data = np.full(nitems, np.nan, dtype=self._dtype)
-        else:
-            # A run of zeros (1); uninitialized chunks (4) have no defined
-            # content, and zeros is what reading them locally hands back too
-            data = np.zeros(nitems, dtype=self._dtype)
-        # The blocksize has to be the container's: left to choose, blosc2 takes
-        # the whole chunk, and the cache then rejects the chunk we hand it
-        return blosc2.compress2(
-            data,
-            typesize=self._dtype.itemsize,
-            blocksize=int(np.prod(self._blocks)) * self._dtype.itemsize,
-        )
 
 
 class ProxyNDField(blosc2.Operand):
@@ -1446,20 +1013,6 @@ class ProxyNDField(blosc2.Operand):
         # Get the data and return the corresponding field
         nparr = self.proxy[item]
         return nparr[self.field]
-
-
-def convert_dtype(dt: str | DTypeLike):
-    """
-    Attempts to convert to blosc2.dtype (i.e. numpy dtype)
-    """
-    if hasattr(dt, "as_numpy_dtype"):
-        dt = dt.as_numpy_dtype
-    try:
-        return np.dtype(dt)
-    except TypeError:  # likely passed e.g. a torch.float64
-        return np.dtype(str(dt).split(".")[1])
-    except Exception as e:
-        raise TypeError(f"Could not parse dtype arg {dt}.") from e
 
 
 class SimpleProxy(blosc2.Operand):

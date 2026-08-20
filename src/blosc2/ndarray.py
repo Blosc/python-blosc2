@@ -6880,8 +6880,8 @@ def asarray(
     utf8_out, array = _asarray_string_dispatch(array, copy, kwargs)
     if utf8_out is not None:
         return utf8_out
-    dtype_ = blosc2.proxy.convert_dtype(array.dtype)
-    dtype = blosc2.proxy.convert_dtype(kwargs.pop("dtype", dtype_))  # check if dtype provided
+    dtype_ = blosc2.proxy_source.convert_dtype(array.dtype)
+    dtype = blosc2.proxy_source.convert_dtype(kwargs.pop("dtype", dtype_))  # check if dtype provided
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)

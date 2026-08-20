@@ -246,6 +246,14 @@ class DictStore:
             self.offsets = self._get_zip_offsets()
             if "embed.b2e" not in self.offsets:
                 raise FileNotFoundError("Embed file embed.b2e not found in store.")
+            if not self.offsets["embed.b2e"]["stored"]:
+                # The store is read where its members lie, so a repack that
+                # deflated them left no store to read: say so, rather than hand
+                # compressed bytes to a frame reader and fail somewhere inside it
+                raise ValueError(
+                    f"{self.b2z_path} holds a compressed embed.b2e; a .b2z is read in place, so its "
+                    f"members must be stored uncompressed. Unzip it and open the directory instead."
+                )
             estore_offset = self.offsets["embed.b2e"]["offset"]
             schunk = blosc2.blosc2_ext.open(
                 self.b2z_path,
@@ -431,13 +439,70 @@ class DictStore:
         leaf suffixes.  Trusting those suffixes avoids opening every member just
         to classify it, which is especially important for compact CTable stores
         with many columns.
+
+        A suffix is worth trusting only where the member is *stored*, which is
+        how this writes one: every read of a leaf here opens the archive at the
+        member's data offset, and what lies there for a deflated member is
+        compressed bytes rather than the frame its name promises.  A `.b2z`
+        repacked by another tool may hold such members, and they are left
+        unmapped -- there is no frame at that offset to serve, which is the same
+        answer :meth:`member_window` gives for one.
         """
         external_exts = {".b2nd", ".b2f", ".b2b"}
-        for filepath in self.offsets:
-            if filepath == "embed.b2e":
+        for filepath, window in self.offsets.items():
+            if filepath == "embed.b2e" or not window["stored"]:
                 continue
             if os.path.splitext(filepath)[1] in external_exts or self._probe_external_leaf_offset(filepath):
                 self.map_tree[self._logical_key_from_relpath(filepath)] = filepath
+
+    def member_window(self, key: str) -> tuple[int, int] | None:
+        """Where the frame behind *key* lies in the ``.b2z``, as ``(offset, nbytes)``.
+
+        A zip store keeps each external leaf as a *stored* member, so those bytes
+        are the leaf's Blosc2 frame as it would have been written on its own:
+        self-contained, beginning at ``offset``, and readable by anything that
+        reads a frame -- ``blosc2.open(path, offset=offset)`` is what this store
+        does with it, and a server can hand the same window to a byte-range
+        reader instead of rebuilding the leaf per request.
+
+        None when there is no such window, which is not an error but an answer:
+        a directory-backed store keeps its leaves in files of their own, an
+        embedded leaf lives inside the store's own compressed super-chunk, a
+        :ref:`C2Array` leaf is a reference rather than bytes, and a key that
+        names a group or nothing at all has none either.
+
+        Parameters
+        ----------
+        key: str
+            The logical key of the leaf, as :meth:`keys` reports it.
+
+        Returns
+        -------
+        out: tuple or None
+            ``(offset, nbytes)`` into the ``.b2z`` file, or None.
+
+        Examples
+        --------
+        >>> import numpy as np, blosc2
+        >>> with blosc2.TreeStore("win.b2z", mode="w") as tstore:
+        ...     tstore["/a"] = np.arange(1000, dtype="i4")
+        >>> tstore = blosc2.open("win.b2z")
+        >>> offset, nbytes = tstore.member_window("/a")
+        >>> frame = open("win.b2z", "rb").read()[offset : offset + nbytes]
+        >>> np.array_equal(blosc2.ndarray_from_cframe(frame)[:], np.arange(1000, dtype="i4"))
+        True
+        """
+        if not self.is_zip_store:
+            return None
+        relpath = self.map_tree.get(key)
+        if relpath is None:
+            return None
+        window = self.offsets.get(relpath)
+        if not window or not window.get("stored"):
+            # A deflated member is not a frame where it lies, whatever its suffix
+            # says, so there is no window onto it to hand out
+            return None
+        return (window["offset"], window["length"])
 
     def _annotate_external_value(
         self,
@@ -955,7 +1020,14 @@ class DictStore:
                 filename_len = int.from_bytes(local_header[26:28], "little")
                 extra_len = int.from_bytes(local_header[28:30], "little")
                 data_offset = info.header_offset + 30 + filename_len + extra_len
-                self.offsets[info.filename] = {"offset": data_offset, "length": info.file_size}
+                # The *stored* length, which is what lies at `data_offset`: it is
+                # `file_size` only for a member kept whole, and a `.b2z` repacked
+                # by any other tool may well have deflated its members instead
+                self.offsets[info.filename] = {
+                    "offset": data_offset,
+                    "length": info.compress_size,
+                    "stored": info.compress_type == zipfile.ZIP_STORED,
+                }
         return self.offsets
 
     def close(self) -> None:

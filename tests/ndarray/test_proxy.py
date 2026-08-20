@@ -369,9 +369,22 @@ def test_evicted_chunk_is_fetched_again():
 def test_vlmeta_cannot_overwrite_proxy_state():
     # A caller-supplied bitmap would make the proxy skip chunks it never fetched
     source = blosc2.asarray(np.arange(20).reshape(4, 5), chunks=(2, 5), blocks=(1, 5))
-    for name in ("proxy-fetched", "proxy-fetched-blocks", "fsspec-stamp"):
+    for name in ("proxy-fetched", "proxy-fetched-blocks", "proxy-stamp"):
         with pytest.raises(ValueError, match="reserved"):
             blosc2.Proxy(source, vlmeta={name: b"nonsense"})
     # Anything else still goes through
     proxy = blosc2.Proxy(source, vlmeta={"mine": "ok"})
     assert proxy.vlmeta["mine"] == "ok"
+
+
+def test_the_proxy_module_still_answers_for_the_source_names():
+    # They live in `blosc2.proxy_source` now, so that the modules bound early in
+    # `blosc2/__init__` can reach them without dragging `proxy.py` in ahead of
+    # `schunk` and `indexing`.  `blosc2.proxy.X` is where anything outside would
+    # look for them, so that keeps working: the imports there are not dead.
+    import blosc2.proxy
+    import blosc2.proxy_source
+
+    for name in ("ProxySource", "ProxyNDSource", "ByteRangeNDSource", "FsspecNDSource"):
+        assert getattr(blosc2.proxy, name) is getattr(blosc2.proxy_source, name)
+        assert getattr(blosc2, name) is getattr(blosc2.proxy_source, name)

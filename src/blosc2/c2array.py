@@ -7,7 +7,11 @@
 
 from __future__ import annotations
 
+import atexit
+import math
 import os
+import struct
+import threading
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -19,6 +23,13 @@ import numpy as np
 import blosc2
 from blosc2.b2objects import encode_b2object_payload, make_b2object_carrier, write_b2object_payload
 from blosc2.info import InfoReporter, format_nbytes_info
+from blosc2.proxy_source import (
+    REMOTE_MAX_CONCURRENCY,
+    ByteRangeNDSource,
+    NotRanged,
+    PartsMissing,
+    _is_transient,
+)
 
 _subscriber_data = {
     "urlbase": os.environ.get("BLOSC_C2URLBASE"),
@@ -36,6 +47,69 @@ def _httpx():
     import httpx
 
     return httpx
+
+
+_client = None
+_client_lock = threading.Lock()
+
+
+def _forgetful_cookies():
+    """A cookie jar that never keeps anything, for the shared client.
+
+    A client of its own per request could not carry a cookie from one request to
+    the next; a shared one can, and must not: the token belongs to the C2Array
+    being read, and arrays with different tokens (or none) share this client.  A
+    `Set-Cookie` from any response would otherwise start authorizing requests
+    that asked for none.
+
+    A jar rather than an `httpx.Cookies` subclass: the client re-wraps whatever
+    it is handed in a plain `httpx.Cookies`, which copies the cookies over and
+    drops the subclass, but hands a bare `CookieJar` straight through.
+    """
+    import http.cookiejar
+
+    class _NoCookies(http.cookiejar.CookieJar):
+        def extract_cookies(self, response, request):
+            pass
+
+    return _NoCookies()
+
+
+def _sync_client():
+    """The process-wide HTTP client every synchronous request goes through.
+
+    `httpx.get()` builds a client, opens a connection and negotiates TLS for
+    each call and throws all of it away afterwards, which over a WAN link
+    measured ~0.37 s per request -- most of what a small read costs, and paid
+    once per chunk.  A pooled client keeps the connection alive between
+    requests; it is thread-safe, which is what lets `Proxy` fan its fetches out.
+
+    Auth stays per call rather than on the client: the cookie belongs to the
+    C2Array being read, and several of them (with different tokens, or none)
+    share this one client.
+    """
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                httpx = _httpx()
+                # More connections than `Proxy`'s default concurrency, so that a
+                # caller raising it does not queue on the pool; keepalive covers
+                # the fan-out of one fetch, which is what there is to reuse
+                _client = httpx.Client(
+                    timeout=TIMEOUT,
+                    limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
+                    cookies=_forgetful_cookies(),
+                )
+    return _client
+
+
+@atexit.register
+def _close_sync_client():
+    global _client
+    if _client is not None:
+        _client.close()
+        _client = None
 
 
 @contextmanager
@@ -121,7 +195,7 @@ def _auth_headers(auth_token, headers=None):
 
 def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
     headers = _auth_headers(auth_token, headers)
-    response = _httpx().get(url, params=params, headers=headers, timeout=timeout)
+    response = _sync_client().get(url, params=params, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response
 
@@ -129,7 +203,7 @@ def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
 def _xpost(url, json=None, auth_token=None, timeout=TIMEOUT):
     auth_token = auth_token or _subscriber_data["auth_token"]
     headers = {"Cookie": auth_token} if auth_token else None
-    response = _httpx().post(url, json=json, headers=headers, timeout=timeout)
+    response = _sync_client().post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
@@ -144,6 +218,8 @@ def _sub_url(urlbase, path):
 def login(username, password, urlbase):
     url = _sub_url(urlbase, "auth/jwt/login")
     creds = {"username": username, "password": password}
+    # Not the pooled client: this is the one request whose Set-Cookie matters,
+    # and it belongs to the caller rather than to every later request
     resp = _httpx().post(url, data=creds, timeout=TIMEOUT)
     resp.raise_for_status()
     return "=".join(list(resp.cookies.items())[0])
@@ -193,8 +269,225 @@ def slice_to_string(slice_):
     return ", ".join(slice_parts)
 
 
+_UNTRIED = object()
+"""A block source that has not been asked for yet, as against one that failed."""
+
+MAX_RANGES_PER_REQUEST = 64
+"""How many byte ranges one request to a subscriber may ask for.
+
+There is no limit in the protocol, and the saving grows with the count -- but a
+`Range` header is a header, which servers and proxies cap the length of (8 KB is
+the usual figure, and 64 spans of a large frame are about a kilobyte), and a
+failed request costs a round trip and every span in it.
+"""
+
+
+MULTIPART_STRIKES = 2
+"""How many answers that did not carry their parts end multi-range requests.
+
+Batching is worth an order of magnitude (see :meth:`C2NDSource.read_ranges`), so
+one truncated or unreadable answer is worth retrying a range at a time and
+asking again; a server that cannot do it says so twice.
+"""
+
+
+def _content_range(value: str) -> tuple[int, int, int | None]:
+    """A `Content-Range: bytes start-end/total` header, as (start, nbytes, total).
+
+    The length comes from the header rather than from the bytes that follow it,
+    which is what lets a multipart body be cut where its parts really end rather
+    than at whatever looks like a boundary inside a compressed payload.
+
+    Malformed answers are refused rather than guessed at: `bytes */1234` for a
+    range that could not be satisfied has no start to read, and a part written to
+    no shape at all cannot be placed in the frame.
+    """
+    try:
+        span, _, total = value.split()[1].partition("/")
+        start, _, end = span.partition("-")
+        nbytes = int(end) - int(start) + 1
+    except (IndexError, ValueError) as exc:
+        raise NotRanged(f"a 206 carried an unreadable Content-Range: {value!r}") from exc
+    if nbytes < 0:
+        raise NotRanged(f"a 206 carried a Content-Range that ends before it starts: {value!r}")
+    # `*` for a server that will not say how long the whole is, which is allowed
+    # and which only costs the tolerance for a read clipped by the end of the frame
+    return int(start), nbytes, int(total) if total.isdigit() else None
+
+
+def _byteranges(response) -> list[tuple[int, bytes, int | None]]:
+    """The parts of a 206, as (where each starts, its bytes, how long the frame is).
+
+    One part for an ordinary 206, several for a `multipart/byteranges` body: a
+    boundary line, the part's own headers, a blank line and its bytes, over and
+    over, ending in the boundary followed by two dashes.  `email` would parse it,
+    at the price of decoding a megabyte of compressed data as text.
+
+    Each part is cut to the length its own `Content-Range` gives, and the next
+    boundary looked for after it: compressed payloads hold arbitrary bytes, the
+    boundary and a trailing CRLF among them, so a body split on either would slice
+    parts short wherever the data happened to spell one.
+    """
+    content_type = response.headers.get("content-type", "")
+    if "multipart/byteranges" not in content_type:
+        # Where the part sits is the one thing the body cannot say, so an answer
+        # without it is refused: a caching proxy that strips the header would
+        # otherwise have its bytes placed wherever they were asked for
+        single = response.headers.get("content-range")
+        if single is None:
+            raise NotRanged("a 206 arrived without a Content-Range to place it by")
+        start, _, total = _content_range(single)
+        return [(start, response.content, total)]
+    _, sep, boundary = content_type.partition("boundary=")
+    if not sep:
+        raise NotRanged(f"a multipart answer named no boundary: {content_type!r}")
+    marker = b"--" + boundary.strip().strip('"').encode()
+    body = response.content
+    parts = []
+    pos = body.find(marker)
+    while pos != -1:
+        pos += len(marker)
+        if body[pos : pos + 2] == b"--":
+            break  # the closing boundary, and nothing after it belongs to a part
+        head_end = body.find(b"\r\n\r\n", pos)
+        if head_end == -1:
+            raise NotRanged("a multipart part arrived without a blank line to end its headers")
+        placed = None
+        for line in body[pos:head_end].split(b"\r\n"):
+            name, sep, value = line.partition(b":")
+            if sep and name.strip().lower() == b"content-range":
+                placed = _content_range(value.decode())
+                break
+        if placed is None:
+            raise NotRanged("a multipart part arrived without a Content-Range to place it by")
+        start, nbytes, total = placed
+        data = body[head_end + 4 : head_end + 4 + nbytes]
+        parts.append((start, data, total))
+        pos = body.find(marker, head_end + 4 + nbytes)
+    return parts
+
+
+def _span_of(parts: list[tuple[int, bytes, int | None]], offset: int, size: int, url: str) -> bytes:
+    """The bytes of one requested span, out of whichever part covers it."""
+    for start, data, total in parts:
+        if start > offset:
+            continue
+        # The whole span, not just its first byte: a part that begins inside it
+        # and ends early would otherwise slice short, and a short block payload
+        # is spliced against a `bstarts` that promises the full length.  Unless
+        # it ends where the frame does, which `read_range` allows and an open of
+        # a frame shorter than the prefetch relies on.
+        end = start + len(data)
+        if offset + size <= end or (end == total and offset < end):
+            return data[offset - start : offset - start + size]
+    raise PartsMissing(f"{url} answered without the bytes at {offset}, which were asked for")
+
+
+class C2NDSource(ByteRangeNDSource):
+    """The frame behind a :ref:`C2Array`, read over HTTP byte ranges.
+
+    Caterva2 serves a *stored* dataset with a Starlette ``FileResponse``, which
+    implements RFC 7233 by itself: a ranged request comes back 206 with only the
+    bytes asked for, seeked to in the file rather than materialized, and the auth
+    cookie composes with it.  That is everything :ref:`ByteRangeNDSource` needs,
+    so a slice costs the blocks it touches instead of the chunks they live in.
+
+    A dataset the subscriber *builds* -- a lazy expression, an HDF5 leaf, a
+    ``.b2z`` member -- is streamed instead, and a streamed response ignores the
+    ``Range`` header and answers with the whole body.  :meth:`read_range` refuses
+    such an answer without reading it off the socket, and :ref:`C2Array` then
+    keeps to whole chunks for good.  Which is why this is built through
+    :meth:`C2Array.block_source` rather than directly: the fallback belongs with
+    the array, whose ``api/chunk`` path works for every dataset there is.
+    """
+
+    max_ranges = MAX_RANGES_PER_REQUEST
+
+    def __init__(self, array: C2Array, max_concurrency: int = REMOTE_MAX_CONCURRENCY):
+        self._url = _sub_url(array.urlbase, f"api/fetch/{array.path}")
+        self._auth_token = array.auth_token
+        # Answers that did not carry their parts, in a row; see `read_ranges`
+        self._misses = 0
+        super().__init__(self._url, max_concurrency)
+        # A `Proxy` mixes the two: the block grid and the fetched bitmap come from
+        # the array's `api/info`, while the header sections and `bstarts` come from
+        # this frame.  They have to be the same dataset for that to mean anything,
+        # and the magic bytes alone do not say so -- a window off by a member of a
+        # `.b2z`, or a path serving a file other than the one described, reads a
+        # frame that parses and splices blocks into chunks of the wrong shape.
+        # Geometry alone, since that is what the block arithmetic on both sides is
+        # built out of, and a dtype `api/info` reports as a repr would fail to
+        # parse here for a dataset that reads perfectly well
+        described = (tuple(array.shape), tuple(array.chunks), tuple(array.blocks))
+        found = (tuple(self._shape), tuple(self._chunks), tuple(self._blocks))
+        if described != found:
+            raise ValueError(f"{self._url} serves {found}, where its dataset is {described}")
+
+    def read_range(self, offset: int, size: int) -> bytes:
+        return self._get([(offset, size)])[0]
+
+    def read_ranges(self, spans: Sequence[tuple[int, int]]) -> list[bytes]:
+        """Every span in one request, which HTTP has a shape for and S3 has not.
+
+        RFC 7233 lets a `Range` header name several spans, and the answer is a
+        `multipart/byteranges` body carrying each with its own `Content-Range`.
+        Starlette builds that, so a whole wave of block reads -- across chunks,
+        since they are all the same file -- costs one round trip instead of one
+        each.  Measured against cat2.cloud: 32 spans in 0.136 s against 0.208 s
+        for 32 requests eight at a time, and 1.530 s for them one at a time.
+
+        The server may serve fewer parts than were asked for: Starlette sorts the
+        spans and merges the ones that touch, and answers a single 206 when they
+        all merge into one.  So the answer is taken apart by what each part says
+        it holds, and each span read out of the part that covers it, rather than
+        by trusting the order.  An answer that does not carry the whole of what
+        was asked for is retried a range at a time, and only a server that does
+        that `MULTIPART_STRIKES` times is written off as unable to batch: an
+        order of magnitude for the rest of the process is too much to pay for one
+        truncated answer.
+        """
+        spans = list(spans)
+        if len(spans) > 1 and self.max_ranges > 1:
+            try:
+                answers = self._get(spans)
+            except PartsMissing:
+                self._misses += 1
+                if self._misses >= MULTIPART_STRIKES:
+                    self.max_ranges = 1
+            else:
+                self._misses = 0  # what counts is a server that cannot do this
+                return answers
+        return [self.read_range(*span) for span in spans]
+
+    def _get(self, spans: list[tuple[int, int]]) -> list[bytes]:
+        wanted = ", ".join(f"{offset}-{offset + size - 1}" for offset, size in spans)
+        headers = _auth_headers(self._auth_token, {"Range": f"bytes={wanted}"})
+        with _sync_client().stream("GET", self._url, headers=headers) as response:
+            if response.status_code != 206:
+                # Whatever this is, it is not the bytes that were asked for: a 200
+                # carries the whole dataset, which is the download this exists to
+                # avoid, so leave the body unread on the socket
+                raise NotRanged(
+                    f"{self._url} answered {response.status_code} to a Range request",
+                    response.status_code,
+                )
+            response.read()
+            parts = _byteranges(response)
+        return [_span_of(parts, offset, size, self._url) for offset, size in spans]
+
+
 class C2Array(blosc2.Operand):
     """Remote compressed NDArray accessed from a Caterva2 server."""
+
+    max_concurrency = REMOTE_MAX_CONCURRENCY
+    """How many fetches a :ref:`Proxy` over this array may run at once.
+
+    Every chunk or block is a request whose cost is mostly the round trip, so
+    overlapping them is what a remote source has to gain; :meth:`Proxy.afetch`
+    already used this figure for a `C2Array`, and `fetch` was serial only for
+    want of somewhere to read it from.  `get_chunk` and the range reads are
+    thread-safe: they share one pooled HTTP client and hold no state of their own.
+    """
 
     def __init__(self, path: str, /, urlbase: str | None = None, auth_token: str | None = None):
         """Create an instance of a remote NDArray.
@@ -243,6 +536,12 @@ class C2Array(blosc2.Operand):
 
         self.auth_token = auth_token
         self._aclient = None  # lazy async client, shared across aget_chunk calls
+        # The block-reading source, built on first use: _UNTRIED, None (this
+        # dataset cannot be read in ranges) or a C2NDSource
+        self._block_source = _UNTRIED
+        self._block_lock = threading.Lock()
+        # An index a `Proxy` handed over before the source existed; see adopt_index
+        self._pending_index = None
 
         # Try to 'open' the remote path
         try:
@@ -441,6 +740,215 @@ class C2Array(blosc2.Operand):
         if self._aclient is not None:
             await self._aclient.aclose()
             self._aclient = None
+
+    # -- Block-granular reads.  A :ref:`Proxy` uses these to fetch the blocks a
+    # slice touches instead of whole chunks, wherever that is the cheaper way
+    # round; every one of them falls back to `get_chunk` when it is not.
+
+    @property
+    def stamp(self) -> str | None:
+        """What names the exact remote bytes, for a :ref:`Proxy` to check a cache by.
+
+        Geometry cannot tell a dataset that was replaced from the one a cache was
+        filled from: a shape and a partitioning survive a rewrite, while every
+        cached chunk -- and, in block mode, every offset they were fetched by --
+        goes stale.  The subscriber's own mtime does tell, and `api/info` carries
+        it, so this costs no request; the compressed size goes in with it, since
+        a rewrite within the same clock tick is what an mtime cannot see.
+
+        None when the subscriber reports no mtime, which leaves the cache checked
+        on its geometry alone, as every source without a stamp is.
+        """
+        mtime = self.meta.get("mtime")
+        if mtime is None:
+            return None
+        return f"{mtime}:{self.meta['schunk'].get('cbytes', '')}"
+
+    @property
+    def blocks_per_chunk(self) -> int:
+        """How many blocks a chunk of the remote array holds.
+
+        Geometry, and `api/info` already carries it, so this costs no request:
+        chunks are padded to whole blocks, so every chunk holds the same number
+        of them, edge chunks included.
+        """
+        blocks = self.blocks
+        if not all(blocks):  # an empty array partitions into nothing
+            return 1
+        return math.prod(math.ceil(c / b) for c, b in zip(self.chunks, blocks, strict=True))
+
+    @property
+    def serves_blocks(self) -> bool:
+        """Whether blocks are worth asking this dataset for, as far as info can say.
+
+        What `api/info` already carries, and no request of its own: a dataset the
+        subscriber *computes* reports an expression where a stored one reports a
+        geometry, and a frame of small chunks would never have one taken apart --
+        blosc2 declines to split a chunk below ``BLOCK_MIN_CBYTES``, so the block
+        path would end in whole chunks anyway, by the longer road.
+
+        False is the whole answer; True is only that it is worth one request to
+        find out, which :meth:`block_source` spends.  A :ref:`Proxy` reads this
+        when it is built, to decide whether its cache records blocks or chunks,
+        so it must cost nothing and must not depend on what has been fetched.
+        """
+        if not all(key in self.meta for key in ("chunks", "blocks", "schunk")):
+            return False
+        try:
+            nchunks = math.prod(math.ceil(s / c) for s, c in zip(self.shape, self.chunks, strict=True))
+            return bool(nchunks) and self.cbytes / nchunks >= blosc2.proxy_source.BLOCK_MIN_CBYTES
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            # An `api/info` without the fields these read describes a dataset
+            # whole chunks work for, as they do for every dataset there is
+            return False
+
+    def block_source(self) -> C2NDSource | None:
+        """The frame reader behind the block methods, or None if there is none.
+
+        Built on the first request for it and never rebuilt.  The fallback has to
+        be permanent: a subscriber that streams this dataset answers a range
+        request with the whole body, so retrying would pay a full download to
+        rediscover the same answer.
+        """
+        if self._block_source is _UNTRIED:
+            with self._block_lock:
+                if self._block_source is _UNTRIED:
+                    self._block_source = self._open_block_source()
+        # A failure that says nothing about the dataset leaves it _UNTRIED, so the
+        # next fetch asks again; this one keeps to whole chunks either way
+        return None if self._block_source is _UNTRIED else self._block_source
+
+    def _open_block_source(self):
+        """Decide, at whatever cost it takes, whether this dataset serves ranges.
+
+        None for a dataset that does not serve ranges, which is an answer for
+        good; `_UNTRIED` for a subscriber that could not say, which is not.
+        """
+        httpx = _httpx()
+        # What `api/info` alone rules out -- a dataset the subscriber computes, a
+        # frame of chunks too small to take apart -- costs no request to find out
+        if not self.serves_blocks:
+            return None
+        # Whether a dataset that reports a geometry is *served* from a file is
+        # something only the answer to a range request can say: an HDF5 leaf or a
+        # `.b2z` member reports one and is streamed all the same
+        try:
+            source = C2NDSource(self, max_concurrency=REMOTE_MAX_CONCURRENCY)
+            source.adopt_index(self._pending_index)
+            return source
+        except NotRanged as exc:
+            # PartsMissing among them, which carries no status and so is not
+            # transient: an answer that cannot be taken apart is one to stop
+            # asking, and whole chunks read the dataset either way
+            return _UNTRIED if exc.transient else None
+        except httpx.HTTPStatusError as exc:
+            # A busy or broken subscriber said nothing about how this is served
+            return _UNTRIED if _is_transient(exc.response.status_code) else None
+        except httpx.TransportError:
+            # Nothing was downloaded to find this out, so asking again is cheap
+            return _UNTRIED
+        except (
+            ValueError,
+            NotImplementedError,
+            RuntimeError,
+            KeyError,
+            IndexError,
+            struct.error,
+            httpx.HTTPError,
+        ):
+            # Not ranged, not a contiguous frame, not an NDArray, answered with
+            # something unreadable, or described by an `api/info` without the
+            # fields these read: whole chunks work for all of those
+            return None
+
+    def adopt_index(self, state) -> None:
+        """Keep an index a `Proxy` read out of its cache until there is a source.
+
+        Handing it straight to :meth:`block_source` would build the source to
+        receive it, and building it reads the frame's header -- a request, at the
+        very moment of a run that may go on to fetch nothing at all.  So it waits
+        here, and `_open_block_source` passes it on to the source it builds.
+        """
+        self._pending_index = state
+
+    def index_state(self, keep=()) -> dict | None:
+        """What a `Proxy` should keep of what was read; see :ref:`ByteRangeNDSource`."""
+        source = self._block_source
+        if source is _UNTRIED or source is None:
+            # No source was ever built, so nothing was read through one: hand back
+            # whatever came out of the cache, rather than dropping it
+            return self._pending_index
+        return source.index_state(keep)
+
+    def wants_blocks(self, nchunk: int, nwanted: int) -> bool:
+        """Whether fetching *nwanted* blocks of a chunk beats fetching all of it."""
+        source = self.block_source()
+        return source is not None and source.wants_blocks(nchunk, nwanted)
+
+    @property
+    def max_ranges(self) -> int:
+        """How many ranges one request to this subscriber may carry."""
+        source = self.block_source()
+        return 1 if source is None else source.max_ranges
+
+    def chunk_layout(self, nchunk: int):
+        """Where the blocks of a chunk are; see :meth:`ByteRangeNDSource.chunk_layout`."""
+        with self._ranged() as source:
+            return source.chunk_layout(nchunk)
+
+    def chunk_layouts(self, nchunks: Sequence[int]) -> list:
+        """The same for several chunks; see :meth:`ByteRangeNDSource.chunk_layouts`."""
+        with self._ranged() as source:
+            return source.chunk_layouts(nchunks)
+
+    def block_plan(self, nchunk: int, nblocks: Sequence[int]) -> list[tuple[int, int, tuple]]:
+        """The range reads covering *nblocks*; see :meth:`ByteRangeNDSource.block_plan`."""
+        with self._ranged() as source:
+            return source.block_plan(nchunk, nblocks)
+
+    def read_range(self, offset: int, size: int) -> bytes:
+        """The bytes at [*offset*, *offset* + *size*) of the remote frame."""
+        with self._ranged() as source:
+            return source.read_range(offset, size)
+
+    def read_ranges(self, spans: Sequence[tuple[int, int]]) -> list[bytes]:
+        """The bytes of every span, in one request where the subscriber allows it."""
+        with self._ranged() as source:
+            return source.read_ranges(spans)
+
+    @contextmanager
+    def _ranged(self):
+        """The block source, retired if it turns out to serve ranges no longer.
+
+        The subscriber can stop serving a dataset from a file between one fetch
+        and the next -- replaced by a lazy expression, moved into a container it
+        streams out of -- and the answer to a range request is where that shows.
+        A refusal that says so for good puts the array back where it was before
+        any of this: `get_chunk`, which works for every dataset there is.  One
+        that says the server was busy leaves the source alone, since the next
+        request may well be answered.
+
+        The exception is raised either way: a `Proxy` catches it and fetches the
+        chunks it was after whole, and a caller reading ranges directly is
+        entitled to hear that the ranges are gone.
+        """
+        source = self.block_source()
+        if source is None:
+            # A `NotRanged`, which is a `ValueError`: a fetch that finds the
+            # source retired under it -- by another thread of the same wave --
+            # falls back to whole chunks rather than failing, exactly as the
+            # thread that retired it does
+            raise NotRanged(f"{self.path} is not served in byte ranges by {self.urlbase}")
+        try:
+            yield source
+        except PartsMissing:
+            # One answer that did not carry its bytes, which the source itself
+            # answers by asking for a range at a time; nothing about the dataset
+            raise
+        except NotRanged as exc:
+            if not exc.transient:
+                self._block_source = None
+            raise
 
     @property
     def shape(self) -> tuple[int]:
