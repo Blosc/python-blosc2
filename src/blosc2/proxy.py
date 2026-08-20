@@ -634,20 +634,19 @@ class Proxy(blosc2.Operand):
 
         return self._cache
 
-    def _chunk_layouts(self, nchunks: list[int], max_concurrency: int | None):
-        """Where the blocks of every one of *nchunks* are, in as few requests as fit."""
-        batch = max(getattr(self.src, "max_ranges", 1), 1)
-        if batch > 1:
-            # The source reads a batch of them in one request, but only so many
-            # per request: the batches past the first are round trips like any
-            # other, so they are overlapped rather than run one after the next
-            tasks = list(batched(nchunks, batch))
-            return [
-                layout
-                for answers in self._run(self.src.chunk_layouts, tasks, max_concurrency)
-                for layout in answers
-            ]
-        return self._run(self.src.chunk_layout, nchunks, max_concurrency)
+    def _chunk_layouts(self, nchunks: list[int], max_concurrency: int | None) -> list:
+        """Where the blocks of every one of *nchunks* are, in as few requests as fit.
+
+        How many go in one request is the source's business (`chunk_layouts` is
+        what batches them, down to a batch of one); what is this proxy's is that
+        the requests past the first are round trips like any other, and so are
+        overlapped rather than run one after the next.
+        """
+        layouts = getattr(self.src, "chunk_layouts", None)
+        if layouts is None:  # a source that only serves them one at a time
+            return list(self._run(self.src.chunk_layout, nchunks, max_concurrency))
+        tasks = list(batched(nchunks, max(getattr(self.src, "max_ranges", 1), 1)))
+        return [layout for answers in self._run(layouts, tasks, max_concurrency) for layout in answers]
 
     def _write_blocks(self, nchunk: int, payloads: dict[int, bytes], header: bytes) -> None:
         """Put the blocks just fetched into the cache, keeping those already there.
