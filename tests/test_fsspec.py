@@ -908,6 +908,52 @@ def test_a_kept_index_is_dropped_when_the_bytes_behind_it_were_replaced(tmp_path
     assert np.array_equal(p[300:330, 0:10], other[300:330, 0:10])
 
 
+def test_a_cache_a_proxy_fits_is_not_written_to_by_opening_it(tmp_path):
+    # Writing a vlmeta entry rewrites the cache file, so a proxy that adopts a
+    # cache and reads nothing new out of the source must write nothing back:
+    # neither the stamp it just checked nor the index it just read
+    data, a = _incompressible((600, 600), (300, 600), (30, 600))
+    url = _put("untouched.b2nd", a)
+    cache = str(tmp_path / "untouched-cache.b2nd")
+    item = (slice(0, 30), slice(None))
+    blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="w").fetch(item)
+    # The bytes and when they were last written: a stamp written over the same
+    # stamp leaves the first alone and moves the second, and both are the cost
+    before = (pathlib.Path(cache).read_bytes(), os.stat(cache).st_mtime_ns)
+
+    p = blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="a")
+    assert (pathlib.Path(cache).read_bytes(), os.stat(cache).st_mtime_ns) == before
+    # What the cache holds is what the proxy would write back, so the first fetch
+    # of this run has something to compare against rather than writing to find out
+    assert p._saved_index == p._schunk_cache.vlmeta["proxy-index"]
+    p.fetch(item)  # already cached, in full
+    assert (pathlib.Path(cache).read_bytes(), os.stat(cache).st_mtime_ns) == before
+    assert np.array_equal(p[...], data)
+
+
+def test_a_refused_vlmeta_leaves_the_cache_as_it_was(tmp_path):
+    # Adopting a cache whose bytes were replaced empties it, and a constructor
+    # that goes on to refuse its arguments must not have done that: a call that
+    # reports failure has to leave the cache for the next one to use
+    data, a = _incompressible((600, 600), (300, 600), (30, 600))
+    url = _put("refusedvlmeta.b2nd", a)
+    cache = str(tmp_path / "refusedvlmeta-cache.b2nd")
+    blosc2.Proxy(blosc2.FsspecNDSource(url), urlpath=cache, mode="w").fetch((slice(0, 30), slice(None)))
+
+    other = np.zeros((600, 600))
+    other[300:] = np.random.default_rng(1).random((300, 600))
+    _put("refusedvlmeta.b2nd", blosc2.asarray(other, chunks=(300, 600), blocks=(30, 600)))
+    before = pathlib.Path(cache).read_bytes()
+
+    kwargs = {}
+    blosc2.schunk._set_default_dparams(kwargs)
+    holder = blosc2.blosc2_ext.open(cache, "a", 0, **kwargs)
+    with pytest.raises(ValueError, match="reserved"):
+        blosc2.Proxy(blosc2.FsspecNDSource(url), _cache=holder, vlmeta={"proxy-fetched": b"nonsense"})
+    del holder
+    assert pathlib.Path(cache).read_bytes() == before
+
+
 def test_a_cache_that_holds_the_slice_asks_for_no_offsets(monkeypatch, tmp_path):
     # What the deferral is for: a later run over a cache that already covers the
     # slice fetches nothing, and so has no use for where the chunks are either

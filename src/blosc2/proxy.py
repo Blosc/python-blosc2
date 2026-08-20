@@ -118,6 +118,19 @@ class Proxy(blosc2.Operand):
         self._cache = kwargs.pop("_cache", None)
         vlmeta = kwargs.pop("vlmeta", None)
         caterva2_env = kwargs.pop("caterva2_env", False)
+        # Before anything is built or emptied: a call that is going to be refused
+        # must leave the cache at `urlpath` exactly as it found it, and adopting
+        # one whose stamp has moved on empties it as its first act
+        reserved = sorted(_RESERVED_VLMETA & set(vlmeta or ()))
+        if reserved:
+            # Writing these would hand the proxy a bitmap or an identity it never
+            # earned: a caller's `proxy-fetched` makes it skip chunks it has not
+            # fetched, and a caller's `proxy-stamp` makes a good cache fail its
+            # identity check (or a stale one pass it)
+            raise ValueError(
+                f"{', '.join(reserved)} {'is' if len(reserved) == 1 else 'are'} reserved "
+                f"for the proxy's own bookkeeping and cannot be set through vlmeta"
+            )
 
         if self._cache is None and mode == "a" and urlpath is not None and os.path.exists(urlpath):
             # Reuse the cache left by an earlier run: whatever was fetched then is
@@ -188,19 +201,8 @@ class Proxy(blosc2.Operand):
         if self.urlpath is None:
             self.urlpath = getattr(self._schunk_cache, "urlpath", None)
         self._fetched = self._adopt_cache(fresh, self._schunk_cache.nchunks)
-        if vlmeta:
-            reserved = sorted(_RESERVED_VLMETA & set(vlmeta))
-            if reserved:
-                # Writing these would hand the proxy a bitmap or an identity it
-                # never earned: a caller's `proxy-fetched` makes it skip chunks it
-                # has not fetched, and a caller's `proxy-stamp` makes a good cache
-                # fail its identity check (or a stale one pass it)
-                raise ValueError(
-                    f"{', '.join(reserved)} {'is' if len(reserved) == 1 else 'are'} reserved "
-                    f"for the proxy's own bookkeeping and cannot be set through vlmeta"
-                )
-            for key in vlmeta:
-                self._schunk_cache.vlmeta[key] = vlmeta[key]
+        for key in vlmeta or ():
+            self._schunk_cache.vlmeta[key] = vlmeta[key]
 
     def __enter__(self) -> "Proxy":
         """Enter a context manager and return this proxy."""
@@ -235,10 +237,12 @@ class Proxy(blosc2.Operand):
             # are there, so a run that stopped in between would leave a cache
             # claiming the new bytes and holding the old ones
             self._forget_fetched(nchunks)
-        if stamp is not None and writable:
+        if stamp is not None and writable and stored != stamp:
             # Not into a cache opened read-only, which `blosc2.open(path, mode="r")`
             # hands over for a persisted proxy: nothing may be written there, and a
-            # proxy over one stays observational anyway
+            # proxy over one stays observational anyway.  Nor when it is already
+            # what is there: writing a vlmeta entry rewrites the cache file, and
+            # merely opening a proxy over a cache it fits should not touch it.
             self._schunk_cache.vlmeta["proxy-stamp"] = stamp
         if fresh or replaced:
             return bytearray((nchunks * self._blocks_per_chunk + 7) // 8)
@@ -248,7 +252,13 @@ class Proxy(blosc2.Operand):
         # cache was come by: a `_cache=` handed in never passed `_reopen_cache`.
         adopt = getattr(self.src, "adopt_index", None)
         if adopt is not None and stamp is not None and stored == stamp:
-            adopt(self._schunk_cache.vlmeta.get("proxy-index"))
+            index = self._schunk_cache.vlmeta.get("proxy-index")
+            adopt(index)
+            # What is on disk, so that a run which reads nothing new out of the
+            # source writes it back over itself for nothing: the offsets are the
+            # bulk of a large frame's index, and this is the first fetch's
+            # comparison, not just the second's
+            self._saved_index = index
         return self._load_fetched(nchunks)
 
     def _forget_fetched(self, nchunks: int) -> None:
