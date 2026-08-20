@@ -344,3 +344,81 @@ Each was a short script run against local files; none needs a server.
   `chunk[31] >> 4 & 0x7`; cross-check with `schunk.iterchunks_info()`.
 - **Length is not a validator**: stat + md5 the file after a create, two ZERO
   writes and a regular write.
+
+## What landed
+
+Phases 1, 2, 3 and 5 (2026-08-21), on `cat2-concurrent-writers` here and
+`c2cache-monorepo` in Caterva2.  Phase 4 is still open, on purpose; phase 6's
+tests landed with the phases they cover, its bench did not.
+
+| phase | where | commit |
+|---|---|---|
+| 1. `POST api/chunk` | caterva2 `server.py` | *Accept one chunk at a time into a slot that holds none* |
+| 2. ETag | caterva2 `server.py` | the same commit |
+| 3. client writes | blosc2 `c2array.py`, `proxy_source.py` | *Write a chunk of a remote array, and read which ones were written* |
+| 5. completion and publish | caterva2 `server.py` | *Publish an array once every one of its chunks has landed* |
+| 5a. atomic publish | caterva2 `server.py` | *Move a published array into place instead of streaming into it* |
+
+The shape held: a pre-sized `uninit` array, one write per slot, the offsets as
+the record, and a 409 as the whole of the coordination.  15 tests against a live
+subscriber (`caterva2/tests/test_chunk_writes.py`) and 10 against a stand-in
+(`tests/ndarray/test_c2array_writes.py`), which is where the client-side
+behaviour is pinned without a service.
+
+### What the work found
+
+- **Reading the index is not the same question as reading blocks.**
+  `C2Array.written_chunks()` was gated on `serves_blocks`, which also weighs
+  whether *splitting a chunk into blocks* would pay — a frame of small chunks
+  reported that it served no blocks and so could not say which chunks were
+  written either.  The geometry half is now `_reports_geometry` and the index is
+  read whatever the chunks cost.  `serves_blocks` is unchanged for the block
+  path, which reads it at `Proxy` build time and must keep costing nothing.
+- **Invalidating the index means the header too.**  A write moves the frame's
+  length and its payload extent, and the offsets are found through both, so
+  dropping the offsets alone left the next read looking for them at the old
+  position.  `ByteRangeNDSource.invalidate_index()` marks both stale and reads
+  neither until something asks.
+- **The completion scan had to move off `iterchunks_info`.**  It reads a lazy
+  chunk apiece — 3.5 µs each, so 17.8 ms on 5000 chunks, which would have made a
+  fill cost the square of its length.  The write-once check reads the one
+  chunk's header instead (~3 µs), and the count comes from the offsets in one go
+  (0.37 ms at 5000 chunks, 0.39 ms at 20000 — flat where the walk is linear).
+- **A publish that streams into place is readable before it is whole.**  The
+  destination file exists from its first byte and a frame is not readable until
+  its last, so a reader polling for the published array opened it mid-copy and
+  got a NULL back.  Found by the test doing exactly that, which had passed only
+  while the copy won the race.  Published under a name of its own and moved into
+  place.
+- **A stale blosc2 handle corrupts a write silently.**  Two handles open over one
+  frame, one of them writing, leaves the frame unreadable — `Invalid arguments
+  for stdio write` under `BLOSC_TRACE=1`, and nothing at all without it: the
+  write itself does not raise.  This is the hazard `todo/locking-mwmr.md`
+  documents, but the silence of it is worth knowing.  Both the endpoint and the
+  test stand-in are written to hold exactly one handle and to drop it before
+  anything reads the file again.
+
+### Phase 4 is still open
+
+`C2Array.stamp` is still `mtime:cbytes`, so a `Proxy` cache over an array being
+filled is still discarded on every write, though every chunk it holds is still
+exactly where it was.  The ETag added in phase 2 is the *freshness* half of the
+question and does not answer this one: it changes on an append as readily as on a
+replacement, which is precisely the distinction wanted.
+
+What would answer it is an identity that survives appends and not replacement.
+The frame header has no UUID to use.  The candidate is a nonce written into
+vlmeta when the array is laid out — `api/info` already carries vlmeta, so it
+costs no request — with today's stamp as the fallback for an array created
+without one.  That is a convention as much as a change, so it is left for a
+decision rather than settled here.
+
+### Left undone
+
+- The bench of phase 6: `bench/ndarray/cat2-block-granularity.py`'s stand-in
+  does not accept writes, so the write path has no measured numbers of its own
+  against a loopback server.
+- Multi-worker deployment.  `locking=True` covers the frame across processes and
+  the `.b2lock` counter is read from disk, so the ETag is right there too; the
+  per-path `asyncio.Lock` is not, and neither are the mtime-keyed open-array
+  caches.  Nothing here depends on it, and nothing here provides it.
