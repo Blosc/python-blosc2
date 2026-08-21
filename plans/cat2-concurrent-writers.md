@@ -484,6 +484,22 @@ the endpoint at 5.7 ms each over localhost, read back identical to the source,
 and the unwritten remainder reading as undefined bytes — which is what makes the
 completeness contract part of the API rather than a nicety.
 
+### The way in, from the Caterva2 client
+
+The endpoints existed and nothing but `C2Array` could reach them, so the
+Caterva2 client described uploading and appending and said nothing about the one
+way to write an array from several processes at once.  `Client.lay_out`,
+`fill_chunk`, `written_chunks` and `publish` are the four calls the workflow is
+made of, with `Dataset` methods to match; the two that move chunks delegate to
+`C2Array` rather than reimplementing the request, so the refusal a second write
+earns is raised in one place only.  `publish_root` reaches
+`caterva2-server.sample.toml` too, which was the only way anyone deploying would
+find out that filled arrays can be published at all.
+
+An array laid out this way is measured at **under 4 KB for a shape of 20 GB**,
+which is the property the whole arrangement leans on: an unwritten chunk lives
+in the frame's offsets and nowhere else.
+
 ### Left undone
 - Multi-worker deployment.  `locking=True` covers the frame across processes and
   the `.b2lock` counter is read from disk, so the ETag is right there too; the
