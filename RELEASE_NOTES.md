@@ -33,6 +33,15 @@ XXX version-specific blurb XXX
   chunk, so a fill is cheap and a concurrent reader's cached offsets stay good.
   Needs a Caterva2 subscriber that serves the endpoint.
 
+* `C2Array.stamp`, which is what a `Proxy` checks its cache against, now names
+  *which* array it is as well as whether it has changed. A subscriber writes a
+  nonce into a filled array's vlmeta, so a cache is no longer served against a
+  different array that came to sit at the same path with the same size and
+  mtime; and a complete array — every chunk written, so every further write
+  refused — is stamped without its mtime, so a cache of it survives a republish
+  or a copy instead of being thrown away. Arrays that were never filled a chunk
+  at a time are stamped exactly as before.
+
 * `Proxy.fetch()` takes a `max_concurrency=` argument, and reads it from the
   source when the source has one, so `blosc2.open(url, lazy=True,
   max_concurrency=...)` overlaps its chunk fetches in a thread pool. Ordinary
