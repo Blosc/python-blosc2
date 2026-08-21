@@ -47,6 +47,9 @@ own offsets, which is one range read and no endpoint of its own.
     .. automethod:: __getitem__
 
 
+.. autoclass:: ChunkAlreadyWritten
+
+
 .. _C2NDSource:
 
 C2NDSource class

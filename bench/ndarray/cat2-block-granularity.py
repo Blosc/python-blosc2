@@ -215,7 +215,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return target
         return self.server.subscriber
 
-    def do_POST(self):  # noqa: N802 (BaseHTTPRequestHandler's own spelling)
+    def do_POST(self):  # BaseHTTPRequestHandler's own spelling
         sub = self._dataset()
         endpoint = self.path.split("/")[2].split("?")[0]
         if endpoint != "chunk" or not sub.writable:
@@ -226,7 +226,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         status, answer = sub.write_chunk(nchunk, body)
         self._send(status, json.dumps(answer).encode())
 
-    def do_GET(self):  # noqa: N802 (BaseHTTPRequestHandler's own spelling)
+    def do_GET(self):  # BaseHTTPRequestHandler's own spelling
         sub = self._dataset()
         endpoint = self.path.split("/")[2]
         if endpoint == "info":
@@ -292,11 +292,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         )
 
 
-def stand_in(urlpath, streamed=False, target=None):
-    """Serve *urlpath* as ``@public/<name>``, and return (server, urlbase, path)."""
+def stand_in(urlpath, streamed=False):
+    """Serve *urlpath* as ``@public/<name>``, and return (server, urlbase, path).
+
+    The array a fill writes into is installed later, by `make_presize`, which
+    lays out a fresh one per timed fill; until then there is only the one served
+    here.
+    """
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.subscriber = Subscriber(urlpath, streamed)
-    server.target = None if target is None else Subscriber(target, writable=True)
+    server.target = None
     threading.Thread(target=server.serve_forever, daemon=True).start()
     urlbase = f"http://127.0.0.1:{server.server_address[1]}/"
     return server, urlbase, f"@public/{pathlib.Path(urlpath).name}"
@@ -476,33 +481,33 @@ def timed_fill(open_array, chunks, writers, latency, bandwidth):
     """
     tally = {"requests": 0, "bytes": 0}
     tally_lock = threading.Lock()
+    writers = max(writers, 1)
+    # One array per writer, built before the clock starts: opening one is an
+    # `api/info` of its own, and a writer opens once however many chunks it goes
+    # on to send.  Building them inside the timing would charge every chunk for a
+    # round trip no writer actually makes
+    arrays = [open_array() for _ in range(writers)]
+    work = list(enumerate(chunks))
+    shares = [work[index::writers] for index in range(writers)]
 
-    def write(nchunk_and_chunk):
-        nchunk, chunk = nchunk_and_chunk
-        array = open_array()
-        original = array.update_chunk
-
-        def charged(n, payload):
+    def run(assignment):
+        array, share = assignment
+        for nchunk, chunk in share:
             if latency:
                 time.sleep(latency)
             if bandwidth:
-                time.sleep(len(payload) / bandwidth)
-            answer = original(n, payload)
+                time.sleep(len(chunk) / bandwidth)
+            array.update_chunk(nchunk, chunk)
             with tally_lock:
                 tally["requests"] += 1
-                tally["bytes"] += len(payload)
-            return answer
+                tally["bytes"] += len(chunk)
 
-        return charged(nchunk, chunk)
-
-    work = list(enumerate(chunks))
     start = time.perf_counter()
-    if writers <= 1:
-        for item in work:
-            write(item)
+    if writers == 1:
+        run((arrays[0], work))
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=writers) as pool:
-            list(pool.map(write, work))
+            list(pool.map(run, zip(arrays, shares, strict=True)))
     return time.perf_counter() - start, tally["requests"], tally["bytes"]
 
 

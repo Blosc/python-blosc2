@@ -684,10 +684,12 @@ class ByteRangeNDSource(ProxyNDSource):
         with self._index_lock:
             if self._stale:
                 # A write moved the frame's length and its payload extent, and the
-                # offsets are found through both, so the header is read first
+                # offsets are found through both, so the header is read first, and
+                # the offsets it locates are read again after it
                 raw, self._header, self._head = _read_frame_header(self.read_range)
                 self._header_len = len(raw)
                 self._chunksize = self._header[8]
+                self._index = None
                 self._stale = False
             if self._index is None:
                 offsets = _read_frame_offsets(self.read_range, self._header, self._head, self._header_len)
@@ -722,8 +724,11 @@ class ByteRangeNDSource(ProxyNDSource):
         """
         offsets = self._offsets
         # A view, not a cast: the tag lives in the top byte of an offset whose
-        # sign bit is what marks it as run-length in the first place
-        kinds = (offsets.view("<u8") >> 56) & 0x7
+        # sign bit is what marks it as run-length in the first place.  Viewed as
+        # the native unsigned type, not as a little-endian one -- the offsets are
+        # read in the host's order, so naming a byte order here would read the
+        # tag out of the wrong end of each word on a big-endian machine
+        kinds = (offsets.view(np.uint64) >> np.uint64(56)) & np.uint64(0x7)
         return ~((offsets < 0) & (kinds == _SPECIAL_UNINIT))
 
     def invalidate_index(self) -> None:
@@ -744,8 +749,14 @@ class ByteRangeNDSource(ProxyNDSource):
         writing.  A frame that nobody mutates never needs this.
         """
         with self._index_lock:
-            self._index = None
-            self._layouts.clear()
+            # What was read stays until something reads again: `index_state` hands
+            # it to a cache that a stamp already guards, and emptying it here
+            # would overwrite a good index with nothing at all.
+            #
+            # The layouts stay for good.  A chunk gets one only once it has been
+            # read, which under the write-once contract this exists for means it
+            # holds content and can never be written again; a chunk that was
+            # empty when the index was read has no layout to be wrong about.
             self._stale = True
 
     @property
@@ -927,10 +938,12 @@ class ByteRangeNDSource(ProxyNDSource):
         nitems = self._chunksize // self._dtype.itemsize
         if kind == _SPECIAL_NAN:
             data = np.full(nitems, np.nan, dtype=self._dtype)
-        else:
+        elif kind in (_SPECIAL_ZERO, _SPECIAL_UNINIT):
             # A run of zeros; an uninitialized chunk has no defined content, and
             # zeros is what reading one locally hands back too
             data = np.zeros(nitems, dtype=self._dtype)
+        else:
+            raise NotImplementedError(f"chunk offset {offset} codes run-length value {kind}")
         # The blocksize has to be the container's: left to choose, blosc2 takes
         # the whole chunk, and the cache then rejects the chunk we hand it
         return blosc2.compress2(

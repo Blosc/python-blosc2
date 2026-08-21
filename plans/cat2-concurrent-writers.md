@@ -464,8 +464,8 @@ of 1.76 MB:
 
 | | | |
 |---|---|---|
-| fill, serial | 247.7 ms/chunk | one round trip apiece |
-| fill, 8 writers at once | **35.5 ms/chunk** | **7.0x** |
+| fill, serial | 244.0 ms/chunk | one round trip apiece |
+| fill, 8 writers at once | **32.2 ms/chunk** | **7.6x** |
 | store into an empty slot | 0.91 ms | appended; no other chunk moves |
 | store over a live chunk | 2.96 ms | 3.3x, rewriting the 5.29 MB after it |
 | `written_chunks()` over HTTP | 2.47 ms | one range read of the offsets |
@@ -475,7 +475,7 @@ of 1.76 MB:
 The concurrency figure is the one worth having: the subscriber serializes the
 writes themselves, since each takes the frame's exclusive lock, so what overlaps
 is the round trip — which over a WAN is nearly all of it, and over loopback is
-nearly none (1.2x there).  The rewrite ratio is this dataset's and grows with
+none at all (1.0x there: 1.9 ms a chunk either way).  The rewrite ratio is this dataset's and grows with
 whatever payload follows the chunk; the same measurement on a 110 MB frame ran
 21.2 ms against 0.5 ms.
 

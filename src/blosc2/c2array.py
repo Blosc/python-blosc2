@@ -565,6 +565,9 @@ class C2Array(blosc2.Operand):
         # dataset cannot be read in ranges) or a C2NDSource
         self._block_source = _UNTRIED
         self._block_lock = threading.Lock()
+        # Set when this handle writes: `meta` describes the array as it was read,
+        # and a write of its own moves what `stamp` and `vlmeta` are built from
+        self._meta_stale = False
         # An index a `Proxy` handed over before the source existed; see adopt_index
         self._pending_index = None
 
@@ -854,9 +857,25 @@ class C2Array(blosc2.Operand):
 
     def _forget_index(self) -> None:
         """Drop what was read of a frame that has since been written to."""
-        source = self._block_source
-        if source is not _UNTRIED and source is not None:
-            source.invalidate_index()
+        # The metadata as well as the index: `meta` is read once when the array
+        # is opened, so a handle that goes on to write would otherwise answer for
+        # the array as it was before its own writes -- and `stamp` is built from
+        # exactly the fields a write moves.  Read again when something asks,
+        # rather than here, so a writer that never asks pays no request
+        self._meta_stale = True
+        with self._block_lock:
+            # Under the lock a source being built right now is invalidated after
+            # it is built, rather than missed entirely for holding a header this
+            # write has already moved
+            source = self._block_source
+            if source is not _UNTRIED and source is not None:
+                source.invalidate_index()
+
+    def _refresh_meta(self) -> None:
+        """Read `api/info` again, if this handle has written since it last did."""
+        if self._meta_stale:
+            self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
+            self._meta_stale = False
 
     # -- Block-granular reads.  A :ref:`Proxy` uses these to fetch the blocks a
     # slice touches instead of whole chunks, wherever that is the cheaper way
@@ -897,16 +916,21 @@ class C2Array(blosc2.Operand):
         which leaves the cache checked on its geometry alone, as every source
         without a stamp is.
         """
+        self._refresh_meta()
         vlmeta = self.meta.get("schunk", {}).get("vlmeta") or {}
         nonce = vlmeta.get("fill_nonce")
         cbytes = self.meta.get("schunk", {}).get("cbytes", "")
-        if nonce is not None and vlmeta.get("fill_state", "filling") != "filling":
-            # Complete: nothing can write to it again, so nothing here need move
-            return f"n{nonce}:{cbytes}"
         mtime = self.meta.get("mtime")
-        if mtime is None:
-            return None if nonce is None else f"n{nonce}:{cbytes}"
-        return f"{mtime}:{cbytes}" if nonce is None else f"n{nonce}:{mtime}:{cbytes}"
+        if nonce is None:
+            return None if mtime is None else f"{mtime}:{cbytes}"
+        # `c` and `f` keep the two apart whatever the rest holds: a complete array
+        # and a filling one must never stamp the same, or a cache of the second
+        # is adopted against the first and serves the zeros it holds for the
+        # chunks nobody had written yet
+        if vlmeta.get("fill_state", "filling") != "filling":
+            # Complete: nothing can write to it again, so nothing here need move
+            return f"n{nonce}:c:{cbytes}"
+        return f"n{nonce}:f:{cbytes}" if mtime is None else f"n{nonce}:f:{mtime}:{cbytes}"
 
     @property
     def blocks_per_chunk(self) -> int:
@@ -964,8 +988,14 @@ class C2Array(blosc2.Operand):
         be permanent: a subscriber that streams this dataset answers a range
         request with the whole body, so retrying would pay a full download to
         rediscover the same answer.
+
+        A frame whose chunks are too small to be worth taking apart says no here
+        without building anything, and without remembering that it said so: the
+        judgement is about *blocks*, and the same frame's index is still worth
+        reading.  Deciding it at the call rather than caching it is what keeps
+        the two questions from answering each other.
         """
-        return self._source(require_blocks=True)
+        return self._source() if self.serves_blocks else None
 
     def _index_source(self) -> C2NDSource | None:
         """The same reader, built for any stored frame however small its chunks.
@@ -975,29 +1005,29 @@ class C2Array(blosc2.Operand):
         and they still say which chunks hold anything.  Whatever is built here is
         the source the block path uses too -- there is only ever one.
         """
-        return self._source(require_blocks=False)
+        return self._source() if self._reports_geometry else None
 
-    def _source(self, require_blocks: bool) -> C2NDSource | None:
+    def _source(self) -> C2NDSource | None:
+        """The one source, built once, whichever question asked for it first."""
         if self._block_source is _UNTRIED:
             with self._block_lock:
                 if self._block_source is _UNTRIED:
-                    self._block_source = self._open_block_source(require_blocks)
+                    self._block_source = self._open_block_source()
         # A failure that says nothing about the dataset leaves it _UNTRIED, so the
         # next fetch asks again; this one keeps to whole chunks either way
         return None if self._block_source is _UNTRIED else self._block_source
 
-    def _open_block_source(self, require_blocks: bool = True):
+    def _open_block_source(self):
         """Decide, at whatever cost it takes, whether this dataset serves ranges.
 
         None for a dataset that does not serve ranges, which is an answer for
         good; `_UNTRIED` for a subscriber that could not say, which is not.
         """
         httpx = _httpx()
-        # What `api/info` alone rules out -- a dataset the subscriber computes, a
-        # frame of chunks too small to take apart -- costs no request to find out.
-        # The second of those only bars the block path: the index is worth a read
-        # whatever the chunks cost, which is what `require_blocks` says
-        if not (self.serves_blocks if require_blocks else self._reports_geometry):
+        # A dataset the subscriber computes has no frame to read at all, and
+        # `api/info` says so for free.  Whether its chunks are worth taking apart
+        # is a separate judgement, made by whoever asks -- see `block_source`
+        if not self._reports_geometry:
             return None
         # Whether a dataset that reports a geometry is *served* from a file is
         # something only the answer to a range request can say: an HDF5 leaf or a
@@ -1179,7 +1209,13 @@ class C2Array(blosc2.Operand):
 
     @property
     def vlmeta(self) -> dict:
-        """The variable-length metadata f the remote array"""
+        """The variable-length metadata of the remote array.
+
+        Read again where this handle has written since it last looked: a fill
+        records itself here, so a writer asking what it just did would otherwise
+        be told what was true before it started.
+        """
+        self._refresh_meta()
         return self.meta["schunk"]["vlmeta"]
 
     @property

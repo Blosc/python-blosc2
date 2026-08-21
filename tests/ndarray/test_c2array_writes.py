@@ -474,3 +474,60 @@ def test_a_cache_of_a_complete_array_survives_a_second_run(subscriber, tmp_path)
     proxy = blosc2.Proxy(blosc2.C2Array("run.b2nd", urlbase=array.urlbase), urlpath=cache, mode="a")
     np.testing.assert_array_equal(proxy[:], expected)
     assert not [entry for entry in sub.log if entry[0] in ("chunk", "fetch")]
+
+
+def test_a_handle_that_writes_stamps_what_it_wrote(subscriber):
+    """A writer's own view of the array has to move when the array does.
+
+    `meta` is read when the array is opened, and `stamp` is built from exactly
+    the fields a write moves, so a handle that goes on to write would otherwise
+    answer for the array as it was before its own writes -- and a `Proxy` given
+    that handle would adopt a cache built against them.
+    """
+    array, sub = subscriber
+    before = array.stamp
+    array.update_chunk(0, _chunk(0))
+    assert array.stamp != before
+    assert array.stamp == blosc2.C2Array("run.b2nd", urlbase=array.urlbase).stamp
+
+
+def test_asking_about_blocks_does_not_close_the_door_on_the_index(subscriber):
+    """Two questions, one source, and the answer to one must not answer the other.
+
+    `serves_blocks` weighs whether splitting a chunk into blocks would pay, which
+    a frame of small chunks fails; reading the frame's index is worth doing
+    anyway.  Deciding that at the call rather than remembering it is what keeps
+    the block path from shutting the index path down.
+    """
+    array, sub = subscriber
+    assert not array.serves_blocks  # chunks here are far under BLOCK_MIN_CBYTES
+    assert array.max_ranges == 1  # the block path, asked first, and declining
+    assert array.block_source() is None
+    assert list(array.written_chunks()) == [False] * NCHUNKS  # still answerable
+
+
+def test_a_filling_stamp_can_never_read_as_a_complete_one(subscriber):
+    """The two branches must not be able to produce the same string.
+
+    A cache built while chunks were unwritten holds the zeros they read as; if
+    the completed array stamped the same, that cache would be adopted against it
+    and those zeros served as data.
+    """
+    array, sub = subscriber
+    array.update_chunk(0, _chunk(0))
+    filling = blosc2.C2Array("run.b2nd", urlbase=array.urlbase).stamp
+    assert ":f:" in filling
+    for nchunk in range(1, NCHUNKS):
+        array.update_chunk(nchunk, _chunk(nchunk))
+    complete = blosc2.C2Array("run.b2nd", urlbase=array.urlbase).stamp
+    assert ":c:" in complete
+    assert complete != filling
+
+    # ... including when the subscriber reports no mtime at all, which is what
+    # left the two able to collide
+    handle = blosc2.C2Array("run.b2nd", urlbase=array.urlbase)
+    handle.meta["mtime"] = None
+    handle.meta["schunk"]["vlmeta"] = {"fill_nonce": "abc", "fill_state": "filling"}
+    unfinished = handle.stamp
+    handle.meta["schunk"]["vlmeta"] = {"fill_nonce": "abc", "fill_state": "complete"}
+    assert handle.stamp != unfinished
