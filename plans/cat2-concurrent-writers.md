@@ -413,11 +413,37 @@ costs no request — with today's stamp as the fallback for an array created
 without one.  That is a convention as much as a change, so it is left for a
 decision rather than settled here.
 
-### Left undone
+### The write path, measured
 
-- The bench of phase 6: `bench/ndarray/cat2-block-granularity.py`'s stand-in
-  does not accept writes, so the write path has no measured numbers of its own
-  against a loopback server.
+`bench/ndarray/cat2-block-granularity.py --write` (2026-08-21), which lays out an
+empty array of the dataset's geometry, fills it with the dataset's own chunks,
+and times the three things the design rests on.  Against the stand-in over
+loopback with a WAN put in front (`--latency-ms 45 --bandwidth-mbs 10`), 8 chunks
+of 1.76 MB:
+
+| | | |
+|---|---|---|
+| fill, serial | 247.7 ms/chunk | one round trip apiece |
+| fill, 8 writers at once | **35.5 ms/chunk** | **7.0x** |
+| store into an empty slot | 0.91 ms | appended; no other chunk moves |
+| store over a live chunk | 2.96 ms | 3.3x, rewriting the 5.29 MB after it |
+| `written_chunks()` over HTTP | 2.47 ms | one range read of the offsets |
+| the same, local | 0.33 ms | one decompress, whatever the count |
+| `iterchunks_info()`, local | 9.7 µs **per chunk** | what grows with the array |
+
+The concurrency figure is the one worth having: the subscriber serializes the
+writes themselves, since each takes the frame's exclusive lock, so what overlaps
+is the round trip — which over a WAN is nearly all of it, and over loopback is
+nearly none (1.2x there).  The rewrite ratio is this dataset's and grows with
+whatever payload follows the chunk; the same measurement on a 110 MB frame ran
+21.2 ms against 0.5 ms.
+
+Also verified end to end against a real `cat2-server`: six chunks filled through
+the endpoint at 5.7 ms each over localhost, read back identical to the source,
+and the unwritten remainder reading as undefined bytes — which is what makes the
+completeness contract part of the API rather than a nicety.
+
+### Left undone
 - Multi-worker deployment.  `locking=True` covers the frame across processes and
   the `.b2lock` counter is read from disk, so the ETag is right there too; the
   per-path `asyncio.Lock` is not, and neither are the mtime-keyed open-array

@@ -39,6 +39,9 @@ Usage
     python cat2-block-granularity.py @public/examples/kevlar-tomo.b2nd \\
         --urlbase https://cat2.cloud/demo
 
+    # ... and what filling a pre-sized array costs, one chunk per request
+    python cat2-block-granularity.py mydata.b2nd --write
+
     # ... an authenticated dataset
     python cat2-block-granularity.py @personal/mine.b2nd --urlbase http://localhost:8000 \\
         --username me@example.com --password foobar11
@@ -67,17 +70,44 @@ parallel ones get eight times as much of it -- which is about right for an
 object store and about wrong for one subscriber, and is why ``multipart`` can
 come out behind ``blocks`` there while it wins against the real thing.
 
+``--write`` measures the other direction: an array is laid out empty and filled
+a chunk at a time, which is how several writers fill one array at once.  Three
+things, and the first is the only one that goes over the wire:
+
+- the **fill**, serial and then ``--concurrency`` writers at once.  The
+  subscriber serializes the writes themselves -- each takes the frame's
+  exclusive lock -- so what overlaps is the round trip, and the gain is whatever
+  share of a write that was.  Over loopback it is almost none; put a network in
+  front with ``--latency-ms`` and it is most of it;
+- what the **server pays to store one chunk**, into an empty slot and over a live
+  one, timed locally where a round trip would bury the difference.  A slot
+  holding nothing is appended past the offsets and moves no other chunk; one
+  holding a chunk has every byte of payload after it read and written back.
+  That difference is why a fill writes each slot once and refuses a second write;
+- what **reading the progress** costs, from the frame's offsets against walking
+  its chunks.  The offsets are one decompress whatever the count; the walk is a
+  read per chunk, so the two cross over as an array grows.
+
+Against a real subscriber ``--write`` needs ``--write-target``: an empty
+pre-sized array to fill, since laying one out is not this script's business on
+someone else's server.  Only the serial fill runs there -- a slot is written
+once, so a second timed fill needs a second array.
+
 Bytes counted are payload: the multipart envelope (about a hundred bytes per
 part) and the HTTP headers of every request are not in them.
 """
 
 import argparse
+import concurrent.futures
 import http.server
+import itertools
 import json
 import math
 import pathlib
+import shutil
 import statistics
 import struct
+import tempfile
 import threading
 import time
 
@@ -92,16 +122,47 @@ CHUNK_HEADER = blosc2.proxy_source._CHUNK_HEADER_LEN
 #
 
 
-class Subscriber:
-    """Caterva2's three read endpoints over one local .b2nd file."""
+UNINIT = 0x4
+"""What a frame codes in a chunk's flags byte for a slot never written to."""
 
-    def __init__(self, urlpath, streamed=False):
+
+class Subscriber:
+    """Caterva2's read endpoints over one local .b2nd file, and its write one."""
+
+    def __init__(self, urlpath, streamed=False, writable=False):
         self.path = pathlib.Path(urlpath)
+        self.name = self.path.name
         self.size = self.path.stat().st_size
-        self.array = blosc2.open(str(self.path))
+        # A writable dataset is opened once, for the life of the server, and
+        # written through that one handle: a second handle over a frame this one
+        # writes leaves it unreadable, and says nothing while doing so
+        self.writable = writable
+        self.array = blosc2.open(str(self.path), mode="a" if writable else "r", locking=writable)
+        self.lock = threading.Lock()
         # A dataset the subscriber would compute rather than store: served by a
         # body builder, which has no way to honour a Range
         self.streamed = streamed
+
+    def write_chunk(self, nchunk, chunk):
+        """Caterva2's write contract: one chunk, into a slot that holds none.
+
+        The refusal is the whole of the coordination between writers, and the
+        check is O(1) -- a lazy chunk is its header, where walking the array
+        would make a fill cost the square of its length.
+        """
+        with self.lock:
+            schunk = self.array.schunk
+            if not 0 <= nchunk < schunk.nchunks:
+                return 404, {"detail": "no such chunk"}
+            nbytes, _, blocksize = blosc2.get_cbuffer_sizes(chunk)
+            if nbytes != schunk.chunksize or blocksize != schunk.blocksize:
+                return 400, {"detail": "the chunk does not match the array's geometry"}
+            with schunk.holding_lock():
+                if (schunk.get_lazychunk(nchunk)[31] >> 4) & 0x7 != UNINIT:
+                    return 409, {"detail": f"chunk {nchunk} was already written"}
+                schunk.update_chunk(nchunk, chunk)
+            self.size = self.path.stat().st_size
+            return 200, {"nchunk": nchunk}
 
     def meta(self):
         schunk = self.array.schunk
@@ -143,8 +204,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _dataset(self):
+        """Which of the served datasets this request names.
+
+        One of them until a fill is being measured, when there is a second: the
+        array being filled, which is not the array being read.
+        """
+        target = getattr(self.server, "target", None)
+        if target is not None and self.path.split("?")[0].endswith(target.name):
+            return target
+        return self.server.subscriber
+
+    def do_POST(self):  # noqa: N802 (BaseHTTPRequestHandler's own spelling)
+        sub = self._dataset()
+        endpoint = self.path.split("/")[2].split("?")[0]
+        if endpoint != "chunk" or not sub.writable:
+            self._send(404, b"")
+            return
+        nchunk = int(self.path.split("nchunk=")[1])
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        status, answer = sub.write_chunk(nchunk, body)
+        self._send(status, json.dumps(answer).encode())
+
     def do_GET(self):  # noqa: N802 (BaseHTTPRequestHandler's own spelling)
-        sub = self.server.subscriber
+        sub = self._dataset()
         endpoint = self.path.split("/")[2]
         if endpoint == "info":
             self._send(200, json.dumps(sub.meta()).encode())
@@ -209,10 +292,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         )
 
 
-def stand_in(urlpath, streamed=False):
+def stand_in(urlpath, streamed=False, target=None):
     """Serve *urlpath* as ``@public/<name>``, and return (server, urlbase, path)."""
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.subscriber = Subscriber(urlpath, streamed)
+    server.target = None if target is None else Subscriber(target, writable=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     urlbase = f"http://127.0.0.1:{server.server_address[1]}/"
     return server, urlbase, f"@public/{pathlib.Path(urlpath).name}"
@@ -370,6 +454,91 @@ def timed_slice(open_array, item, mode, concurrency, latency, bandwidth):
         blosc2.proxy_source.BLOCK_MIN_CBYTES = threshold
 
 
+def fill_chunks(source, limit):
+    """The dataset's own compressed chunks, which is what a fill would carry.
+
+    Real chunks rather than synthetic ones, so the bytes on the wire and the
+    work the server does storing them are the dataset's own.  Capped, because a
+    fill is timed per chunk and a large array would only repeat the measurement.
+    """
+    nchunks = math.prod(math.ceil(s / c) for s, c in zip(source.shape, source.chunks, strict=True))
+    # `get_chunk` is the one both a local array and a `C2Array` answer, so the
+    # bytes are the dataset's own whether it is a file here or a dataset there
+    return [source.get_chunk(n) for n in range(min(nchunks, limit))]
+
+
+def timed_fill(open_array, chunks, writers, latency, bandwidth):
+    """Write *chunks* into a pre-sized array, and say what it cost.
+
+    One `C2Array` per writer, as separate processes would have.  What overlaps
+    is the round trip: the subscriber serializes the writes themselves, since
+    each one takes the frame's exclusive lock.
+    """
+    tally = {"requests": 0, "bytes": 0}
+    tally_lock = threading.Lock()
+
+    def write(nchunk_and_chunk):
+        nchunk, chunk = nchunk_and_chunk
+        array = open_array()
+        original = array.update_chunk
+
+        def charged(n, payload):
+            if latency:
+                time.sleep(latency)
+            if bandwidth:
+                time.sleep(len(payload) / bandwidth)
+            answer = original(n, payload)
+            with tally_lock:
+                tally["requests"] += 1
+                tally["bytes"] += len(payload)
+            return answer
+
+        return charged(nchunk, chunk)
+
+    work = list(enumerate(chunks))
+    start = time.perf_counter()
+    if writers <= 1:
+        for item in work:
+            write(item)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=writers) as pool:
+            list(pool.map(write, work))
+    return time.perf_counter() - start, tally["requests"], tally["bytes"]
+
+
+def local_write_cost(presize, chunks, reps):
+    """What the *server* pays to store a chunk, into an empty slot and over a live one.
+
+    Measured on local files rather than over HTTP: this is the difference the
+    write-once rule buys, and a round trip would bury it.  A slot that holds
+    nothing is appended to and moves no other chunk; one that holds a chunk is
+    written in place, and every byte of payload after it is read and written back
+    to close the gap the old chunk left.
+
+    The rewrite has to carry a chunk of a *different* compressed size, or it
+    measures the wrong thing: replacing a chunk with bytes of its own length
+    leaves nothing to close, and the frame skips the move entirely.  None when
+    the dataset has no two chunks that differ in size to do it with.
+    """
+    middle = len(chunks) // 2
+    other = next((c for c in chunks if len(c) != len(chunks[middle])), None)
+    empty, live = [], []
+    for _ in range(reps):
+        path = presize()
+        array = blosc2.open(path, mode="a", locking=True)
+        for nchunk, chunk in enumerate(chunks):
+            start = time.perf_counter()
+            array.schunk.update_chunk(nchunk, chunk)
+            empty.append(time.perf_counter() - start)
+        if other is not None:
+            # Every slot holds something now, so this one compacts instead
+            start = time.perf_counter()
+            array.schunk.update_chunk(middle, other)
+            live.append(time.perf_counter() - start)
+        del array
+    return statistics.median(empty), (statistics.median(live) if live else None)
+
+
 def connection_setup(urlbase, path, token, reps):
     """What a request costs before any bytes move, pooled against a client each.
 
@@ -407,6 +576,18 @@ def main():
         action="store_true",
         help="stand-in only: serve the dataset the way a computed one is served",
     )
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="also measure filling a pre-sized array a chunk at a time",
+    )
+    parser.add_argument(
+        "--write-target",
+        help="with --urlbase and --write: an empty pre-sized array to fill (else one is laid out)",
+    )
+    parser.add_argument(
+        "--fill-chunks", type=int, default=10, help="how many chunks a timed fill writes (default: 10)"
+    )
     parser.add_argument("--concurrency", type=int, default=8, help="parallel requests (default: 8)")
     parser.add_argument("--reps", type=int, default=5, help="timed repetitions (default: 5)")
     parser.add_argument("--max-mb", type=float, default=200, help="skip patterns fetching more than this")
@@ -421,20 +602,49 @@ def main():
     server = None
     if args.urlbase:
         urlbase, path = args.urlbase, args.dataset
+        if args.write and not args.write_target:
+            parser.error("--write against a subscriber needs --write-target: an empty array to fill")
     else:
         server, urlbase, path = stand_in(args.dataset, args.streamed)
     token = args.token
     if args.username:
         token = c2array.login(args.username, args.password, urlbase)
 
+    scratch = tempfile.mkdtemp(prefix="cat2-fill-") if args.write and server else None
+    presize = make_presize(args.dataset, scratch, server) if scratch else None
     try:
-        report(args, urlbase, path, token)
+        report(args, urlbase, path, token, presize)
     finally:
         if server is not None:
             server.shutdown()
+        if scratch:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
-def report(args, urlbase, path, token):
+def make_presize(source_path, scratch, server):
+    """Lay out an empty array of the dataset's geometry, ready to be filled.
+
+    A fresh one per call: a slot is written once, so a second timed fill needs a
+    second array.  Costs a couple of hundred bytes whatever the geometry -- an
+    unwritten chunk lives in the offsets and nowhere else.
+    """
+    source = blosc2.open(str(source_path))
+    counter = itertools.count()
+
+    def presize(serve=False):
+        path = str(pathlib.Path(scratch) / f"fill-{next(counter)}.b2nd")
+        laid_out = blosc2.uninit(
+            source.shape, dtype=source.dtype, chunks=source.chunks, blocks=source.blocks, urlpath=path
+        )
+        del laid_out  # the server's handle is to be the only one over this file
+        if serve:
+            server.target = Subscriber(path, writable=True)
+        return path
+
+    return presize
+
+
+def report(args, urlbase, path, token, presize=None):
     latency, bandwidth = args.latency_ms / 1e3, args.bandwidth_mbs * 1e6
 
     def open_array():
@@ -465,6 +675,8 @@ def report(args, urlbase, path, token):
             "  A proxy over this fetches whole chunks, exactly as it always did."
         )
         _time_patterns(args, open_array, array, ["chunks"], latency, bandwidth)
+        if args.write:
+            _fill_section(args, urlbase, token, path, presize, latency, bandwidth)
         return
     source.read_ranges([(0, 16), (64, 16)])  # two spans that cannot merge into one
     print(
@@ -495,6 +707,98 @@ def report(args, urlbase, path, token):
         f"a client per request ({fresh / pooled:.1f}x)"
     )
     _time_patterns(args, open_array, array, ["chunks", "blocks", "multipart"], latency, bandwidth, plans)
+    if args.write:
+        _fill_section(args, urlbase, token, path, presize, latency, bandwidth)
+
+
+def _fill_section(args, urlbase, token, path, presize, latency, bandwidth):
+    """The write path, over the same connection the reads were measured on."""
+    local = args.dataset if presize is not None else None
+    source = blosc2.open(str(local)) if local else c2array.C2Array(path, urlbase, token)
+    _report_fill(args, urlbase, token, source, presize, args.write_target, latency, bandwidth)
+
+
+def _report_fill(args, urlbase, token, source, presize, target_path, latency, bandwidth):
+    """What filling a pre-sized array costs, and what the write-once rule buys."""
+    chunks = fill_chunks(source, args.fill_chunks)
+    payload = sum(len(chunk) for chunk in chunks)
+    print(
+        f"\n  fill: {len(chunks)} chunks, {payload / 1e6:.2f} MB of the dataset's own "
+        f"compressed bytes\n"
+        f"    {'writers':16s} {'requests':>8s} {'bytes':>10s} {'total':>9s} {'per chunk':>11s}"
+    )
+    runs = [("serial", 1)]
+    if args.concurrency > 1:
+        runs.append((f"{args.concurrency} at once", args.concurrency))
+    serial = None
+    filled = filled_path = None
+    for label, writers in runs:
+        if presize is None and serial is not None:
+            # A real target's slots are one-shot, and the bench does not lay out
+            # a second array on someone else's server
+            print(f"    {'(a second fill needs a second empty array)':16s}")
+            break
+        path = target_path
+        if presize is not None:
+            filled_path = presize(serve=True)
+            path = f"@public/{pathlib.Path(filled_path).name}"
+
+        def open_array(remote=path):
+            return c2array.C2Array(remote, urlbase=urlbase, auth_token=token)
+
+        elapsed, requests, nbytes = timed_fill(open_array, chunks, writers, latency, bandwidth)
+        serial = serial or elapsed
+        filled = open_array()
+        speedup = f"  {serial / elapsed:.1f}x" if writers > 1 else ""
+        print(
+            f"    {label:16s} {requests:8d} {nbytes / 1e6:9.2f} MB {elapsed:8.3f} s "
+            f"{elapsed / len(chunks) * 1e3:9.1f} ms{speedup}"
+        )
+
+    if presize is not None:
+        empty, live = local_write_cost(lambda: presize(serve=False), chunks, args.reps)
+        # What the rewrite has to shift, which is what its cost is made of: the
+        # ratio below is this dataset's, and grows with whatever follows a chunk
+        tail = sum(len(chunk) for chunk in chunks[len(chunks) // 2 + 1 :])
+        rewrite = (
+            f"    over a live chunk  {live * 1e3:8.2f} ms   {live / empty:.1f}x here, reading and "
+            f"writing back the {tail / 1e6:.2f} MB after it"
+            if live is not None
+            else "    over a live chunk        n/a   every chunk here compresses to the same size, "
+            "which is the case that never moves"
+        )
+        print(
+            f"\n  what the server pays to store one chunk (local, median of {args.reps})\n"
+            f"    into an empty slot {empty * 1e3:8.2f} ms   appended past the offsets; "
+            f"no other chunk moves\n{rewrite}"
+        )
+
+    if filled is not None:
+        start = time.perf_counter()
+        written = filled.written_chunks()
+        remote = time.perf_counter() - start
+        print(
+            f"\n  reading how far a fill has got ({int(written.sum())}/{written.size} written)\n"
+            f"    written_chunks()   {remote * 1e3:8.2f} ms   over HTTP: one range read of the "
+            "frame's offsets"
+        )
+    if filled_path is not None:
+        # The same question the server asks itself on every write, both ways
+        # round and both local, since one of them is not a thing to ask remotely
+        blosc2.FsspecNDSource(filled_path).written_chunks()  # fsspec's first use is its own cost
+        start = time.perf_counter()
+        offsets = blosc2.FsspecNDSource(filled_path).written_chunks()
+        index = time.perf_counter() - start
+        array = blosc2.open(filled_path)
+        start = time.perf_counter()
+        walked = sum(1 for info in array.schunk.iterchunks_info() if info.special.name != "UNINIT")
+        walk = time.perf_counter() - start
+        print(
+            f"    ... the same, local {index * 1e3:8.2f} ms   one decompress of the offsets, "
+            f"whatever the count\n"
+            f"    iterchunks_info()  {walk * 1e3:8.2f} ms   {walk / offsets.size * 1e6:.1f} us per "
+            f"chunk ({walked} written), which is what grows with the array"
+        )
 
 
 def _no_chunks(array):
