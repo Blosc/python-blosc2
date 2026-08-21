@@ -143,6 +143,15 @@ class Subscriber:
         # body builder, which has no way to honour a Range
         self.streamed = streamed
 
+    def close(self):
+        """Let go of the file this held open, so the scratch tree can be removed.
+
+        A writable subscriber keeps one handle for its whole life, and a run that
+        fills several arrays leaves one behind per array otherwise -- still
+        holding files that `shutil.rmtree` then unlinks under them.
+        """
+        self.array = None
+
     def write_chunk(self, nchunk, chunk):
         """Caterva2's write contract: one chunk, into a slot that holds none.
 
@@ -643,6 +652,8 @@ def make_presize(source_path, scratch, server):
         )
         del laid_out  # the server's handle is to be the only one over this file
         if serve:
+            if server.target is not None:
+                server.target.close()  # its handle is done with; the next array gets its own
             server.target = Subscriber(path, writable=True)
         return path
 
@@ -752,7 +763,10 @@ def _report_fill(args, urlbase, token, source, presize, target_path, latency, ba
             return c2array.C2Array(remote, urlbase=urlbase, auth_token=token)
 
         elapsed, requests, nbytes = timed_fill(open_array, chunks, writers, latency, bandwidth)
-        serial = serial or elapsed
+        # `is None`, not falsiness: a fill fast enough to measure as 0.0 is a
+        # measurement, and taking it for "not measured yet" would make the
+        # concurrent run its own baseline and report a speedup of 1.0x
+        serial = elapsed if serial is None else serial
         filled = open_array()
         speedup = f"  {serial / elapsed:.1f}x" if writers > 1 else ""
         print(
@@ -784,8 +798,8 @@ def _report_fill(args, urlbase, token, source, presize, target_path, latency, ba
         remote = time.perf_counter() - start
         print(
             f"\n  reading how far a fill has got ({int(written.sum())}/{written.size} written)\n"
-            f"    written_chunks()   {remote * 1e3:8.2f} ms   over HTTP: one range read of the "
-            "frame's offsets"
+            f"    written_chunks()   {remote * 1e3:8.2f} ms   over HTTP: the frame's header, "
+            "then the offsets it locates"
         )
     if filled_path is not None:
         # The same question the server asks itself on every write, both ways

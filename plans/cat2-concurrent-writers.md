@@ -178,8 +178,9 @@ sidecar bitmap, no progress endpoint:
 - **Readers get it free**: `ByteRangeNDSource` already decodes a negative offset
   and reconstructs the special chunk locally (`src/blosc2/proxy_source.py:706`,
   `853`), so an unwritten chunk costs zero bytes and zero requests.
-- **Progress is one range read**: the offsets block is a single span the branch
-  already knows how to locate.
+- **Progress is a couple of range reads**: the offsets block is a single span
+  the branch already knows how to locate -- through the frame's header, which a
+  write moves too, so following a fill re-reads that first.
 
 It deliberately records no in-progress state, no identity, no timing and no
 history.  That gives crash *recovery* (rerun the unwritten set) but not
@@ -233,8 +234,8 @@ from the same frame.  A `pread` of 8 bytes.
 ### Phase 3 — `C2Array.update_chunk` / `written_chunks` (blosc2) — small
 
 `update_chunk(nchunk, chunk)` and `aupdate_chunk` through the pooled client the
-branch added, plus `written_chunks() -> np.ndarray[bool]`, one range read of the
-offsets, decoded locally.  No general `__setitem__`: a partially covered chunk
+branch added, plus `written_chunks() -> np.ndarray[bool]`: the frame's header
+and then the offsets it locates, decoded locally.  No general `__setitem__`: a partially covered chunk
 is a networked read-modify-write and would need CAS to be safe.
 
 ### Phase 4 — `stamp`: which array, and has it changed (blosc2) — small
@@ -468,7 +469,7 @@ of 1.76 MB:
 | fill, 8 writers at once | **32.2 ms/chunk** | **7.6x** |
 | store into an empty slot | 0.91 ms | appended; no other chunk moves |
 | store over a live chunk | 2.96 ms | 3.3x, rewriting the 5.29 MB after it |
-| `written_chunks()` over HTTP | 2.47 ms | one range read of the offsets |
+| `written_chunks()` over HTTP | 2.47 ms | the header, then the offsets |
 | the same, local | 0.33 ms | one decompress, whatever the count |
 | `iterchunks_info()`, local | 9.7 µs **per chunk** | what grows with the array |
 

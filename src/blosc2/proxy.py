@@ -59,6 +59,14 @@ class Proxy(blosc2.Operand):
     :ref:`ProxySource` or :ref:`ProxyNDSource` interfaces.
     """
 
+    _stamped = False
+    """Whether the source names the bytes it reads, as `_adopt_cache` found out.
+
+    Kept because `_save_fetched` asks after every fetch and the answer cannot
+    change: a source either can name itself or cannot.  Asking the source each
+    time would cost a request for one that has to look at its remote to answer.
+    """
+
     def __init__(
         self, src: ProxySource or ProxyNDSource, urlpath: str | None = None, mode="a", **kwargs: dict
     ):
@@ -132,6 +140,15 @@ class Proxy(blosc2.Operand):
                 f"{', '.join(reserved)} {'is' if len(reserved) == 1 else 'are'} reserved "
                 f"for the proxy's own bookkeeping and cannot be set through vlmeta"
             )
+
+        # Before either the cache is reopened or its stamp is judged: a source
+        # read once when it was opened names itself as it was then, and a handle
+        # that has outlived someone else's writes would hand over a stamp the
+        # cache still matches and a set of bytes it no longer does.  Sources whose
+        # bytes cannot move underneath them do not offer this and are not asked
+        refresh = getattr(self.src, "refresh_stamp", None)
+        if refresh is not None:
+            refresh()
 
         if self._cache is None and mode == "a" and urlpath is not None and os.path.exists(urlpath):
             # Reuse the cache left by an earlier run: whatever was fetched then is
@@ -236,6 +253,10 @@ class Proxy(blosc2.Operand):
         `__getitem__`) rather than coming back stale.
         """
         stamp = getattr(self.src, "stamp", None)
+        # Whether this source names itself at all, kept rather than asked again:
+        # reading the stamp of one that is being written to costs a request, and
+        # `_save_fetched` wants only the yes or no, after every fetch it makes
+        self._stamped = stamp is not None
         stored = None if fresh else self._schunk_cache.vlmeta.get("proxy-stamp")
         replaced = stamp is not None and stored is not None and stored != stamp
         writable = getattr(self._schunk_cache, "mode", None) != "r"
@@ -420,7 +441,7 @@ class Proxy(blosc2.Operand):
         # stale data.  Bounded by keeping layouts for the partly filled chunks
         # alone, which are the only ones a later fetch would ask about.
         state = getattr(self.src, "index_state", None)
-        if state is not None and getattr(self.src, "stamp", None) is not None:
+        if state is not None and self._stamped:
             index = state(self._partly_filled())
             # Only when it says something new: the offsets are the bulk of it and
             # never change once read, so a slice-by-slice walk would otherwise

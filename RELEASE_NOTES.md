@@ -42,6 +42,13 @@ XXX version-specific blurb XXX
   or a copy instead of being thrown away. Arrays that were never filled a chunk
   at a time are stamped exactly as before.
 
+  A `Proxy` now calls `C2Array.refresh_stamp()` before judging its cache, which
+  reads `api/info` once for an array that could still be written to. A handle
+  reads that once when it is opened and, of itself, never again, so one that has
+  outlived someone else's chunks would otherwise hand over the stamp of the
+  array as it was — which its cache matches and the remote bytes no longer do. A
+  complete array costs nothing here: nothing can write to one.
+
 * `Proxy.fetch()` takes a `max_concurrency=` argument, and reads it from the
   source when the source has one, so `blosc2.open(url, lazy=True,
   max_concurrency=...)` overlaps its chunk fetches in a thread pool. Ordinary

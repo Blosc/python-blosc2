@@ -347,6 +347,45 @@ def _special_kind(offset: int) -> int:
     return ((offset & 0xFFFFFFFFFFFFFFFF) >> 56) & 0x7
 
 
+def _special_kinds(offsets: np.ndarray) -> np.ndarray:
+    """The same for a whole index at once; see `_special_kind`.
+
+    The offsets have to be in the host's own order for this: the tag lives in the
+    top byte of the word, and a view is what reads it, so an array that still
+    carries the byte order it was stored in would have the tag read out of the
+    wrong end.  `_read_frame_offsets` and `adopt_index` both hand over native
+    ones, which is what makes this the only place the two ever differ.
+    """
+    return (offsets.view(np.uint64) >> np.uint64(56)) & np.uint64(0x7)
+
+
+def _check_specials(offsets: np.ndarray, urlpath: str) -> None:
+    """Refuse a frame whose run-length offsets code something unknown.
+
+    Here rather than in `_special_chunk`, which runs in the middle of a fetch: a
+    chunk this cannot rebuild is a property of the frame, and a fetch that meets
+    it half way through has no fallback for it -- `Proxy.fetch` gives way to
+    whole chunks for a `NotRanged`, and this is not one.  Read once per index,
+    which is once per source unless it is written to.
+    """
+    special = offsets < 0
+    if not special.any():
+        return
+    unknown = special & ~np.isin(_special_kinds(offsets), [_SPECIAL_ZERO, _SPECIAL_NAN, _SPECIAL_UNINIT])
+    if unknown.any():
+        nchunk = int(np.flatnonzero(unknown)[0])
+        raise NotImplementedError(
+            f"chunk {nchunk} of {urlpath} has offset {int(offsets[nchunk])}, which codes "
+            f"run-length value {int(_special_kinds(offsets)[nchunk])}"
+        )
+
+
+def _section(layout: tuple) -> bytes:
+    """A chunk's header section, as the read that found its layout saw it."""
+    head, bstarts, _ = layout
+    return head + bstarts.astype("<i4", copy=False).tobytes()
+
+
 def _block_extents(bstarts: np.ndarray, cbytes: int) -> np.ndarray:
     """How many bytes each block of a chunk occupies, given where they start.
 
@@ -622,24 +661,37 @@ class ByteRangeNDSource(ProxyNDSource):
         second copy of every chunk ever laid out would grow for the life of the
         source to be read back a handful of chunks at a time.
         """
-        offsets = self._index[0] if self._index is not None else None
+        with self._index_lock:
+            # Not while it is stale: what is kept here goes into a cache, and the
+            # next run adopts it against a stamp that says the array has not moved
+            # since -- which for a complete array is true of the array and false
+            # of these, so nothing would ever catch them.  Handing back nothing
+            # costs that run a read of the offsets; handing back these would cost
+            # it a chunk that is in the frame and reads as never written
+            offsets = None if self._stale or self._index is None else self._index[0]
         return {
             "bpc": self.blocks_per_chunk,
             # Little-endian whatever the host is: a cache directory outlives the
             # machine that filled it, and a stamp cannot tell a byte order
             "offsets": b"" if offsets is None else offsets.astype("<i8", copy=False).tobytes(),
-            "layouts": [[n, self._section(n)] for n in keep if self._layouts.get(n) is not None],
+            # Looked up once each, not tested and then read: `invalidate_index`
+            # empties the layouts, and a chunk that went between the two would be
+            # a `KeyError` out of a method that is only saving what it happens to
+            # have
+            "layouts": [[n, _section(layout)] for n, layout in self._sections(keep)],
         }
 
-    def _section(self, nchunk: int) -> bytes:
-        """A chunk's header section, as the read that found its layout saw it.
+    def _sections(self, keep: Sequence[int]):
+        """The layouts of *keep* that there are, paired with the chunk they are of.
 
         A chunk with no layout has none to give back, and none is wanted: a
         `Proxy` keeps layouts for the chunks it holds some blocks of, and a chunk
         that cannot be taken apart was fetched whole.
         """
-        head, bstarts, _ = self._layouts[nchunk]
-        return head + bstarts.astype("<i4", copy=False).tobytes()
+        for nchunk in keep:
+            layout = self._layouts.get(nchunk)
+            if layout is not None:
+                yield nchunk, layout
 
     def adopt_index(self, state: dict | None) -> None:
         """Take up what an earlier run left behind in :meth:`index_state`.
@@ -661,11 +713,22 @@ class ByteRangeNDSource(ProxyNDSource):
         offsets = state.get("offsets") or b""
         if offsets:
             nchunks = math.prod(math.ceil(s / c) for s, c in zip(self._shape, self._chunks, strict=True))
-            array = np.frombuffer(offsets, dtype="<i8")
+            # Back into the host's own order, which is what `_special_kinds`
+            # reads the run-length tag out of and what a fresh read hands over
+            array = np.frombuffer(offsets, dtype="<i8").astype(np.int64, copy=False)
             # Offsets that do not fit the frame are dropped on their own: the
             # layouts below are checked by themselves and keyed by chunk number,
             # so they are still worth a header read apiece to a fetch to come
-            if len(array) == nchunks:
+            fits = len(array) == nchunks
+            if fits:
+                try:
+                    _check_specials(array, self.urlpath)
+                except NotImplementedError:
+                    # Out of a cache, not off the wire: an index that codes
+                    # something this cannot rebuild is one to drop, as everything
+                    # else here that does not fit is dropped rather than raised over
+                    fits = False
+            if fits:
                 with self._index_lock:
                     self._index = (array, _chunk_extents(array, self._header))
                     self._head = None  # the prefetch has nothing left to answer
@@ -693,6 +756,7 @@ class ByteRangeNDSource(ProxyNDSource):
                 self._stale = False
             if self._index is None:
                 offsets = _read_frame_offsets(self.read_range, self._header, self._head, self._header_len)
+                _check_specials(offsets, self.urlpath)
                 self._index = (offsets, _chunk_extents(offsets, self._header))
                 self._head = None  # the prefetch has nothing left to answer
             return self._index
@@ -723,13 +787,7 @@ class ByteRangeNDSource(ProxyNDSource):
         already fetches, without asking the server anything about it.
         """
         offsets = self._offsets
-        # A view, not a cast: the tag lives in the top byte of an offset whose
-        # sign bit is what marks it as run-length in the first place.  Viewed as
-        # the native unsigned type, not as a little-endian one -- the offsets are
-        # read in the host's order, so naming a byte order here would read the
-        # tag out of the wrong end of each word on a big-endian machine
-        kinds = (offsets.view(np.uint64) >> np.uint64(56)) & np.uint64(0x7)
-        return ~((offsets < 0) & (kinds == _SPECIAL_UNINIT))
+        return ~((offsets < 0) & (_special_kinds(offsets) == _SPECIAL_UNINIT))
 
     def invalidate_index(self) -> None:
         """Forget where the chunks and blocks are, so the next read looks again.
@@ -749,15 +807,20 @@ class ByteRangeNDSource(ProxyNDSource):
         writing.  A frame that nobody mutates never needs this.
         """
         with self._index_lock:
-            # What was read stays until something reads again: `index_state` hands
-            # it to a cache that a stamp already guards, and emptying it here
-            # would overwrite a good index with nothing at all.
-            #
-            # The layouts stay for good.  A chunk gets one only once it has been
-            # read, which under the write-once contract this exists for means it
-            # holds content and can never be written again; a chunk that was
-            # empty when the index was read has no layout to be wrong about.
+            # What was read stays until something reads again, so that a lookup
+            # racing this one is served the old positions rather than none at all;
+            # `index_state` is what must not hand them on, and it asks about
+            # `_stale` for exactly that reason.
             self._stale = True
+            # The layouts do go.  Where a chunk is says nothing about whether the
+            # bytes at that position are still the ones its blocks were mapped
+            # from: an append-only fill leaves them alone, but a frame rewritten
+            # in place -- which this method's name promises nothing against --
+            # keeps the offset and moves the block starts inside it, and a plan
+            # built from the old ones splices the wrong bytes into a chunk it
+            # then presents as whole.  A layout costs one header read to rebuild
+            # and only the partly fetched chunks have one at all
+            self._layouts.clear()
 
     @property
     def shape(self) -> tuple:
@@ -938,12 +1001,12 @@ class ByteRangeNDSource(ProxyNDSource):
         nitems = self._chunksize // self._dtype.itemsize
         if kind == _SPECIAL_NAN:
             data = np.full(nitems, np.nan, dtype=self._dtype)
-        elif kind in (_SPECIAL_ZERO, _SPECIAL_UNINIT):
-            # A run of zeros; an uninitialized chunk has no defined content, and
-            # zeros is what reading one locally hands back too
-            data = np.zeros(nitems, dtype=self._dtype)
         else:
-            raise NotImplementedError(f"chunk offset {offset} codes run-length value {kind}")
+            # A run of zeros; an uninitialized chunk has no defined content, and
+            # zeros is what reading one locally hands back too.  Nothing else can
+            # arrive here -- `_check_specials` refuses the frame when the index is
+            # read, which is before any of this is asked for
+            data = np.zeros(nitems, dtype=self._dtype)
         # The blocksize has to be the container's: left to choose, blosc2 takes
         # the whole chunk, and the cache then rejects the chunk we hand it
         return blosc2.compress2(

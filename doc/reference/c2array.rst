@@ -22,7 +22,7 @@ write claims it; a second write to the same slot raises
 :class:`blosc2.ChunkAlreadyWritten`, so two writers that both believe they own a
 chunk are resolved by the array rather than by anything either of them holds.
 :meth:`C2Array.written_chunks` reads how far the fill has got out of the frame's
-own offsets, which is one range read and no endpoint of its own.
+own offsets, which is a couple of range reads and no endpoint of its own.
 
 
 .. currentmodule:: blosc2

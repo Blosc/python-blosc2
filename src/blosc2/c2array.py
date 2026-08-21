@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import math
 import os
@@ -208,18 +209,41 @@ def _xpost(url, json=None, auth_token=None, timeout=TIMEOUT):
     return response.json()
 
 
+def _chunk_headers(auth_token):
+    """What a chunk write is sent with: bytes, not the JSON `_xpost` sends."""
+    return _auth_headers(auth_token, {"Content-Type": "application/octet-stream"})
+
+
+def _chunk_written(response, url, nchunk):
+    """Read a chunk write's answer, in one place for both ways of sending it.
+
+    The write contract lives here rather than at each call site: a slot that was
+    already claimed is the one refusal a writer is meant to act on, and it must
+    read the same whether the request went out on the pooled client or on the
+    async one.
+    """
+    if response.status_code == 409:
+        raise ChunkAlreadyWritten(f"{url} already holds a chunk at {nchunk}")
+    response.raise_for_status()
+    return response.json()
+
+
 def _xpost_bytes(url, content, params=None, auth_token=None, timeout=TIMEOUT):
     """POST a body of bytes through the pooled client, and read what came back.
 
     `_xpost` sends JSON, which a compressed chunk is not: it goes as it is, and
     the subscriber reads it as the chunk it will store.
     """
-    headers = _auth_headers(auth_token, {"Content-Type": "application/octet-stream"})
-    response = _sync_client().post(url, params=params, content=content, headers=headers, timeout=timeout)
-    if response.status_code == 409:
-        raise ChunkAlreadyWritten(f"{url} already holds a chunk at {params and params.get('nchunk')}")
-    response.raise_for_status()
-    return response.json()
+    response = _sync_client().post(
+        url, params=params, content=content, headers=_chunk_headers(auth_token), timeout=timeout
+    )
+    return _chunk_written(response, url, params and params.get("nchunk"))
+
+
+async def _axpost_bytes(client, url, content, params=None, auth_token=None):
+    """The same request off the event loop; see :func:`_xpost_bytes`."""
+    response = await client.post(url, params=params, content=content, headers=_chunk_headers(auth_token))
+    return _chunk_written(response, url, params and params.get("nchunk"))
 
 
 def _sub_url(urlbase, path):
@@ -566,8 +590,12 @@ class C2Array(blosc2.Operand):
         self._block_source = _UNTRIED
         self._block_lock = threading.Lock()
         # Set when this handle writes: `meta` describes the array as it was read,
-        # and a write of its own moves what `stamp` and `vlmeta` are built from
+        # and a write of its own moves everything `api/info` reports about it.
+        # The epoch counts those writes, so a read of `api/info` that was in
+        # flight when one landed can tell that its answer predates it
         self._meta_stale = False
+        self._meta_epoch = 0
+        self._meta_lock = threading.Lock()
         # An index a `Proxy` handed over before the source existed; see adopt_index
         self._pending_index = None
 
@@ -728,7 +756,7 @@ class C2Array(blosc2.Operand):
                23., 27., 28., 10., 11.,  0.,  0., 30., 31.,  0.,  0., 12., 13.,
                 0.,  0., 32., 33.,  0.,  0.], dtype=float32)
         """
-        url = _sub_url(self.urlbase, f"api/chunk/{self.path}")
+        url = self._chunk_url()
         params = {"nchunk": nchunk}
         response = _xget(url, params=params, auth_token=self.auth_token)
         return response.content
@@ -754,7 +782,7 @@ class C2Array(blosc2.Operand):
         out: bytes
             The requested compressed chunk.
         """
-        url = _sub_url(self.urlbase, f"api/chunk/{self.path}")
+        url = self._chunk_url()
         params = {"nchunk": nchunk}
         headers = _auth_headers(self.auth_token)
         if self._aclient is None:
@@ -812,16 +840,29 @@ class C2Array(blosc2.Operand):
 
         Examples
         --------
-        >>> import blosc2, numpy as np  # doctest: +SKIP
+        >>> import math, blosc2, numpy as np  # doctest: +SKIP
         >>> a = blosc2.C2Array("@personal/run.b2nd", urlbase)  # doctest: +SKIP
-        >>> data = np.arange(np.prod(a.chunks), dtype=a.dtype).reshape(a.chunks)  # doctest: +SKIP
-        >>> a.update_chunk(0, blosc2.compress2(data, **a.cparams.__dict__))  # doctest: +SKIP
-        {'written': 1, 'nchunks': 320, 'state': 'filling'}
+        >>> data = np.arange(math.prod(a.chunks), dtype=a.dtype).reshape(a.chunks)  # doctest: +SKIP
+        >>> itemsize = a.dtype.itemsize  # doctest: +SKIP
+        >>> chunk = blosc2.compress2(  # doctest: +SKIP
+        ...     data, typesize=itemsize, blocksize=math.prod(a.blocks) * itemsize
+        ... )
+        >>> a.update_chunk(0, chunk)  # doctest: +SKIP
+        {'written': 1, 'nchunks': 320}
+
+        The blocksize is spelled out because :func:`blosc2.compress2` picks its
+        own when it is not: left to choose it takes the whole chunk, and a chunk
+        blocked differently from the array is one the subscriber refuses.
         """
-        url = _sub_url(self.urlbase, f"api/chunk/{self.path}")
-        answer = _xpost_bytes(url, chunk, params={"nchunk": nchunk}, auth_token=self.auth_token)
-        self._forget_index()
-        return answer
+        url = self._chunk_url()
+        try:
+            return _xpost_bytes(url, chunk, params={"nchunk": nchunk}, auth_token=self.auth_token)
+        finally:
+            # However it went.  A refusal is the answer of a subscriber that has
+            # already stored someone else's chunk in that slot, and a request that
+            # failed on the way home may have stored this one; either way what
+            # this handle read of the array is no longer what the array is
+            self._forget_index()
 
     async def aupdate_chunk(self, nchunk: int, chunk: bytes) -> dict:
         """Write one compressed chunk asynchronously; see :meth:`update_chunk`.
@@ -831,38 +872,57 @@ class C2Array(blosc2.Operand):
         far end regardless -- what overlaps is the round trip, which for a
         chunk-sized body is most of the cost.
         """
-        url = _sub_url(self.urlbase, f"api/chunk/{self.path}")
-        headers = _auth_headers(self.auth_token, {"Content-Type": "application/octet-stream"})
+        url = self._chunk_url()
         if self._aclient is None:
             self._aclient = _httpx().AsyncClient(timeout=TIMEOUT)
-        response = await self._aclient.post(url, params={"nchunk": nchunk}, content=chunk, headers=headers)
-        if response.status_code == 409:
-            raise ChunkAlreadyWritten(f"{self.path} already holds a chunk at {nchunk}")
-        response.raise_for_status()
-        self._forget_index()
-        return response.json()
+        try:
+            return await _axpost_bytes(
+                self._aclient, url, chunk, params={"nchunk": nchunk}, auth_token=self.auth_token
+            )
+        finally:
+            # Off the loop as well: `_forget_index` waits on the lock a source
+            # being opened holds, and that open is a request of its own -- parking
+            # the loop on it would stall every write still in flight, which is the
+            # whole of what this method has over the blocking one
+            await asyncio.to_thread(self._forget_index)
 
     def written_chunks(self) -> np.ndarray:
         """Which chunks of the remote array hold content; see
         :meth:`ByteRangeNDSource.written_chunks`.
 
-        One range read of the frame's offsets, which is where a fill records
+        Read out of the frame's own offsets, which is where a fill records
         itself: no endpoint of its own, and nothing for the subscriber to keep in
-        step with the array.  Reads the offsets afresh, since the point of asking
-        is to see what other writers have done since.
+        step with the array.  Read afresh every time, since the point of asking
+        is to see what other writers have done since -- which is a couple of
+        range reads, the header first (a write moves the frame's length, and the
+        offsets are found through it) and then the offsets it locates.
+
+        Nothing else about the handle is disturbed: this asks what the *array*
+        holds, not what this handle has done, so `meta` is left as it was and no
+        `api/info` is spent on it.
         """
-        self._forget_index()
         with self._ranged(index_only=True) as source:
+            # Through the source rather than around it: `_ranged` is what builds
+            # one, and a source built here takes up any index a `Proxy` left in
+            # `_pending_index` -- which is as old as the cache it came from.
+            # Invalidating what has just been built is what makes this a read of
+            # the frame rather than of whatever was already believed about it
+            source.invalidate_index()
             return source.written_chunks()
 
+    def _chunk_url(self) -> str:
+        """Where a chunk of this array is read from, and written to."""
+        return _sub_url(self.urlbase, f"api/chunk/{self.path}")
+
     def _forget_index(self) -> None:
-        """Drop what was read of a frame that has since been written to."""
+        """Drop what this handle read of a frame it has since written to."""
         # The metadata as well as the index: `meta` is read once when the array
         # is opened, so a handle that goes on to write would otherwise answer for
-        # the array as it was before its own writes -- and `stamp` is built from
-        # exactly the fields a write moves.  Read again when something asks,
-        # rather than here, so a writer that never asks pays no request
-        self._meta_stale = True
+        # the array as it was before its own writes.  Read again when something
+        # asks, rather than here, so a writer that never asks pays no request
+        with self._meta_lock:
+            self._meta_stale = True
+            self._meta_epoch += 1
         with self._block_lock:
             # Under the lock a source being built right now is invalidated after
             # it is built, rather than missed entirely for holding a header this
@@ -870,12 +930,68 @@ class C2Array(blosc2.Operand):
             source = self._block_source
             if source is not _UNTRIED and source is not None:
                 source.invalidate_index()
+            # And an index that never reached a source: it came out of a `Proxy`
+            # cache filled before this write, so a source built later must not
+            # start from it
+            self._pending_index = None
+
+    def _reread_meta(self) -> None:
+        """Read `api/info` again, and keep the answer if it is still an answer.
+
+        The request is made outside the lock -- it is a round trip, and holding a
+        lock across one would serialize every reader of this handle behind it --
+        so a write of this handle's can land while it is in flight.  Such an
+        answer describes the array as it was before that write: it is dropped,
+        and the handle left marked stale, rather than stored as current and the
+        write it predates forgotten along with it.
+        """
+        with self._meta_lock:
+            seen = self._meta_epoch
+        meta = info(self.path, self.urlbase, auth_token=self.auth_token)
+        with self._meta_lock:
+            if self._meta_epoch != seen:
+                return
+            self.meta = meta
+            self._meta_stale = False
 
     def _refresh_meta(self) -> None:
-        """Read `api/info` again, if this handle has written since it last did."""
+        """Read `api/info` again, if this handle has written since it last did.
+
+        Every property built on `meta` goes through this, so that what they say
+        does not depend on which of them was read first.  It costs nothing to a
+        handle that has not written -- which is every reader -- and one request
+        to one that has.
+        """
         if self._meta_stale:
-            self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
-            self._meta_stale = False
+            self._reread_meta()
+
+    @property
+    def _meta_complete(self) -> bool:
+        """Whether `meta` describes an array that can no longer change.
+
+        Every slot of a filled array is claimed, so every write to it is refused:
+        what `api/info` says of one is what it will go on saying.  Anything else
+        -- an array still being filled, or one that was never filled a chunk at a
+        time and so says nothing either way -- can move under this handle at any
+        moment, and asking again is the only way to find out.
+        """
+        vlmeta = self.meta.get("schunk", {}).get("vlmeta") or {}
+        return vlmeta.get("fill_nonce") is not None and vlmeta.get("fill_state", "filling") != "filling"
+
+    def refresh_stamp(self) -> None:
+        """Look at the array again, so that :attr:`stamp` speaks for it now.
+
+        `meta` is read when the handle is opened and, of itself, never again: a
+        `stamp` off it names the array as this handle last saw it, which for a
+        handle that has outlived someone else's writes is not the array.  A
+        `Proxy` calls this before it reads the stamp it will judge its cache by,
+        which is the one moment that difference decides anything.
+
+        One `api/info`, and none at all for an array already known to be complete
+        -- nothing can write to one of those, so nothing it reports can move.
+        """
+        if self._meta_stale or not self._meta_complete:
+            self._reread_meta()
 
     # -- Block-granular reads.  A :ref:`Proxy` uses these to fetch the blocks a
     # slice touches instead of whole chunks, wherever that is the cheaper way
@@ -889,8 +1005,11 @@ class C2Array(blosc2.Operand):
         filled from: a shape and a partitioning survive a rewrite, while every
         cached chunk -- and, in block mode, every offset they were fetched by --
         goes stale.  The subscriber's own mtime does tell, and `api/info` carries
-        it, so this costs no request; the compressed size goes in with it, since
-        a rewrite within the same clock tick is what an mtime cannot see.
+        it, so this costs no request of its own; the compressed size goes in with
+        it, since a rewrite within the same clock tick is what an mtime cannot
+        see.  What it names is the array as this handle last looked at it --
+        :meth:`refresh_stamp` is how a caller that needs it to be the array *now*
+        says so, and what a `Proxy` calls before judging a cache by it.
 
         Two questions, and they want different answers.  *Which array is this* is
         answered by the nonce a subscriber writes into an array's vlmeta the first
@@ -955,6 +1074,13 @@ class C2Array(blosc2.Operand):
         blosc2 declines to split a chunk below ``BLOCK_MIN_CBYTES``, so the block
         path would end in whole chunks anyway, by the longer road.
 
+        Read off `api/info` again where this handle has written since it last
+        looked, which is the one case where the answer moves under it: a pre-sized
+        array holds almost nothing until it is filled, and a writer that took the
+        open-time figure would go on calling its own filled array too small to
+        take apart.  That is one request to a handle that has just written, and
+        none at all to a reader -- which is what the promise below needs.
+
         False is the whole answer; True is only that it is worth one request to
         find out, which :meth:`block_source` spends.  A :ref:`Proxy` reads this
         when it is built, to decide whether its cache records blocks or chunks,
@@ -976,9 +1102,10 @@ class C2Array(blosc2.Operand):
 
         Necessary for reading the frame at all, where :attr:`serves_blocks` is
         that plus a judgement about whether taking its chunks apart would pay.
-        The frame's own index is worth reading either way: it is one range read,
-        and it is what says where the chunks are and which of them were written.
+        The frame's own index is worth reading either way: it is a range read or
+        two, and it is what says where the chunks are and which were written.
         """
+        self._refresh_meta()
         return all(key in self.meta for key in ("chunks", "blocks", "schunk"))
 
     def block_source(self) -> C2NDSource | None:
@@ -1178,16 +1305,19 @@ class C2Array(blosc2.Operand):
     @property
     def nbytes(self) -> int:
         """The number of bytes of the remote array"""
+        self._refresh_meta()
         return self.meta["schunk"]["nbytes"]
 
     @property
     def cbytes(self) -> int:
         """The number of compressed bytes of the remote array"""
+        self._refresh_meta()
         return self.meta["schunk"]["cbytes"]
 
     @property
     def cratio(self) -> float:
         """The compression ratio of the remote array"""
+        self._refresh_meta()
         return self.meta["schunk"]["cratio"]
 
     # TODO: Add these to SChunk model in srv_utils and then access them here
@@ -1260,6 +1390,7 @@ class C2Array(blosc2.Operand):
     @property
     def blocksize(self) -> int:
         """The block size (in bytes) for the remote container."""
+        self._refresh_meta()
         return self.meta["schunk"]["blocksize"]
 
 

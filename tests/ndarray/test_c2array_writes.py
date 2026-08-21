@@ -531,3 +531,128 @@ def test_a_filling_stamp_can_never_read_as_a_complete_one(subscriber):
     unfinished = handle.stamp
     handle.meta["schunk"]["vlmeta"] = {"fill_nonce": "abc", "fill_state": "complete"}
     assert handle.stamp != unfinished
+
+
+@pytest.fixture
+def blocks_are_worth_it(monkeypatch):
+    """Take the size threshold out of the way, so these small chunks use blocks.
+
+    The block path is where the frame's index is read, and where a write that
+    moved it is either seen or not; the chunks here are a few KB, which blosc2
+    would never split, so the threshold is what would keep the path untaken.
+    """
+    monkeypatch.setattr(blosc2.proxy_source, "BLOCK_MIN_CBYTES", 0)
+
+
+def test_blocks_of_a_chunk_written_since_the_index_was_read(subscriber, tmp_path, blocks_are_worth_it):
+    """A `Proxy` reading blocks has to see a slot that was filled under it.
+
+    `__getitem__` asks the subscriber for a slice and never touches the frame,
+    so a read that goes through it says nothing about the index.  This one goes
+    through the offsets, the chunk's block starts and a range read of the block.
+    """
+    array, sub = subscriber
+    array.update_chunk(1, _chunk(1))
+    proxy = blosc2.Proxy(array, urlpath=str(tmp_path / "blocks.b2nd"), mode="w")
+    assert array.serves_blocks
+    np.testing.assert_array_equal(proxy[CHUNKS[0] : CHUNKS[0] + 10], np.full(10, 1, dtype=np.int32))
+
+    array.update_chunk(2, _chunk(2))
+    np.testing.assert_array_equal(proxy[2 * CHUNKS[0] : 2 * CHUNKS[0] + 10], np.full(10, 2, dtype=np.int32))
+
+
+def test_an_index_a_write_moved_is_not_handed_to_a_cache(subscriber, blocks_are_worth_it):
+    """What `index_state` keeps is where the chunks are, which a write moves.
+
+    A cache adopts these against a stamp that says the array has not changed
+    since -- and for a complete array that is true of the array and false of an
+    index read before the write that completed it.  Nothing downstream can catch
+    that, so what is stale is not handed over at all.
+    """
+    array, sub = subscriber
+    array.update_chunk(0, _chunk(0, value=7))
+    array.chunk_layout(0)  # builds the source and reads the frame's offsets
+    kept = array.index_state()["offsets"]
+    assert kept
+
+    array.update_chunk(1, _chunk(1))
+    assert not array.index_state()["offsets"]  # they describe a frame that moved
+    assert array.written_chunks()[1]  # read again ...
+    assert array.index_state()["offsets"] not in (b"", kept)  # ... and worth keeping again
+
+
+def test_a_cache_over_a_handle_that_outlived_a_write_is_not_kept(subscriber, tmp_path):
+    """A handle names the array as it last looked, and a proxy has to look again.
+
+    `meta` is read when the handle is opened and never again of itself, so a
+    reader that has outlived someone else's chunks would hand a `Proxy` the stamp
+    of the array as it was -- which the cache built under that stamp matches, and
+    the bytes no longer do.
+    """
+    array, sub = subscriber
+    reader = blosc2.C2Array("run.b2nd", urlbase=array.urlbase)
+    array.update_chunk(0, _chunk(0, value=4))
+    cache = str(tmp_path / "outlived.b2nd")
+    proxy = blosc2.Proxy(reader, urlpath=cache, mode="w")
+    np.testing.assert_array_equal(proxy[0 : CHUNKS[0]], np.full(CHUNKS[0], 4, dtype=np.int32))
+    del proxy
+
+    array.update_chunk(1, _chunk(1))  # another writer, which this handle never hears of
+    with pytest.raises(ValueError, match="different remote bytes"):
+        blosc2.Proxy(reader, urlpath=cache, mode="a")
+    proxy = blosc2.Proxy(reader, urlpath=cache, mode="w")
+    np.testing.assert_array_equal(proxy[CHUNKS[0] : 2 * CHUNKS[0]], np.full(CHUNKS[0], 1, dtype=np.int32))
+
+
+def test_written_chunks_does_not_answer_out_of_a_proxy_cache(subscriber, tmp_path, blocks_are_worth_it):
+    """The one question whose whole point is what other writers have done.
+
+    A `Proxy` hands its cached index to the array before there is a source to put
+    it in, and the source takes it up as it is built.  A fill read through that
+    is the fill as of whenever the cache was written.
+    """
+    array, sub = subscriber
+    array.update_chunk(0, _chunk(0))
+    cache = str(tmp_path / "pending.b2nd")
+    blosc2.Proxy(array, urlpath=cache, mode="w")[0:10]  # leaves the offsets in the cache
+
+    reader = blosc2.C2Array("run.b2nd", urlbase=array.urlbase)
+    blosc2.Proxy(reader, urlpath=cache, mode="a")  # takes them up, unread
+    assert reader._pending_index is not None
+    array.update_chunk(1, _chunk(1))
+    assert list(reader.written_chunks()) == [True, True, False, False, False, False]
+
+
+def test_a_writer_that_lost_a_race_stops_believing_what_it_read(subscriber):
+    """The refusal is the one answer that proves another writer moved the frame."""
+    array, sub = subscriber
+    loser = blosc2.C2Array("run.b2nd", urlbase=array.urlbase)
+    before = loser.stamp
+    array.update_chunk(3, _chunk(3))
+    with pytest.raises(blosc2.ChunkAlreadyWritten):
+        loser.update_chunk(3, _chunk(3, value=9))
+    assert loser.stamp != before
+    assert loser.stamp == blosc2.C2Array("run.b2nd", urlbase=array.urlbase).stamp
+
+
+def test_a_write_that_lands_while_the_handle_looks_is_not_forgotten(subscriber, monkeypatch):
+    """Reading `api/info` is a round trip, and a write of this handle's can land
+    inside it.  Such an answer describes the array as it was before that write:
+    keeping it would leave the handle believing it is current with nothing left
+    to say otherwise.
+    """
+    array, sub = subscriber
+    array.update_chunk(0, _chunk(0))  # the handle now has a look to catch up on
+    real, raced = blosc2.c2array.info, []
+
+    def racing_info(*args, **kwargs):
+        answer = real(*args, **kwargs)
+        if not raced:
+            raced.append(True)
+            array.update_chunk(1, _chunk(1))  # lands while the answer is on its way
+        return answer
+
+    monkeypatch.setattr(blosc2.c2array, "info", racing_info)
+    array.stamp  # noqa: B018 -- the look whose answer predates that write
+    assert raced
+    assert array.stamp == blosc2.C2Array("run.b2nd", urlbase=array.urlbase).stamp
