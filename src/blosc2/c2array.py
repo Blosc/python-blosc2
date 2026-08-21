@@ -873,13 +873,40 @@ class C2Array(blosc2.Operand):
         it, so this costs no request; the compressed size goes in with it, since
         a rewrite within the same clock tick is what an mtime cannot see.
 
-        None when the subscriber reports no mtime, which leaves the cache checked
-        on its geometry alone, as every source without a stamp is.
+        Two questions, and they want different answers.  *Which array is this* is
+        answered by the nonce a subscriber writes into an array's vlmeta the first
+        time a chunk is written to it: a size and an mtime can both be repeated
+        by a different array that came to sit at the same path, and a cache
+        served against one of those is stale without ever saying so.  *Has it
+        changed since* is answered by the mtime and the compressed size, as
+        before.
+
+        The second question stops being worth asking once the array is complete.
+        Every slot of a filled array is claimed, so every write to it is refused,
+        and the bytes a cache holds cannot move again -- so a complete array is
+        stamped by its nonce and its size, and a cache of it survives an mtime
+        that churned for reasons of its own.
+
+        An array still being filled is stamped freshly on every write, and has to
+        be.  A cache built while a chunk was unwritten holds that chunk as the
+        zeros an unwritten chunk reads as, and holds its offset as the run-length
+        one it had; when a writer fills that slot, both are wrong, and nothing in
+        the cache marks them apart from the chunks that are still good.
+
+        None when the subscriber reports no mtime and the array carries no nonce,
+        which leaves the cache checked on its geometry alone, as every source
+        without a stamp is.
         """
+        vlmeta = self.meta.get("schunk", {}).get("vlmeta") or {}
+        nonce = vlmeta.get("fill_nonce")
+        cbytes = self.meta.get("schunk", {}).get("cbytes", "")
+        if nonce is not None and vlmeta.get("fill_state", "filling") != "filling":
+            # Complete: nothing can write to it again, so nothing here need move
+            return f"n{nonce}:{cbytes}"
         mtime = self.meta.get("mtime")
         if mtime is None:
-            return None
-        return f"{mtime}:{self.meta['schunk'].get('cbytes', '')}"
+            return None if nonce is None else f"n{nonce}:{cbytes}"
+        return f"{mtime}:{cbytes}" if nonce is None else f"n{nonce}:{mtime}:{cbytes}"
 
     @property
     def blocks_per_chunk(self) -> int:

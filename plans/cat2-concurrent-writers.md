@@ -237,7 +237,7 @@ branch added, plus `written_chunks() -> np.ndarray[bool]`, one range read of the
 offsets, decoded locally.  No general `__setitem__`: a partially covered chunk
 is a networked read-modify-write and would need CAS to be safe.
 
-### Phase 4 — `stamp`: appended-to vs replaced (blosc2) — small, needs a decision
+### Phase 4 — `stamp`: which array, and has it changed (blosc2) — small
 
 `C2Array.stamp` is `mtime:cbytes` (`src/blosc2/c2array.py:749`) and answers "are
 these the same bytes?".  Under append-only writing the answer is "no" after
@@ -347,9 +347,9 @@ Each was a short script run against local files; none needs a server.
 
 ## What landed
 
-Phases 1, 2, 3 and 5 (2026-08-21), on `cat2-concurrent-writers` here and
-`c2cache-monorepo` in Caterva2.  Phase 4 is still open, on purpose; phase 6's
-tests landed with the phases they cover, its bench did not.
+All of it (2026-08-21), on `cat2-concurrent-writers` here and `c2cache-monorepo`
+in Caterva2.  Phase 4 landed last and is written up separately below, because
+what it found changed what it should do.
 
 | phase | where | commit |
 |---|---|---|
@@ -358,6 +358,8 @@ tests landed with the phases they cover, its bench did not.
 | 3. client writes | blosc2 `c2array.py`, `proxy_source.py` | *Write a chunk of a remote array, and read which ones were written* |
 | 5. completion and publish | caterva2 `server.py` | *Publish an array once every one of its chunks has landed* |
 | 5a. atomic publish | caterva2 `server.py` | *Move a published array into place instead of streaming into it* |
+| 6. the bench | blosc2 `bench/ndarray/` | *Measure a fill the way the reads are measured* |
+| 4. the stamp | both | *Name a filled array by a nonce, and say when it is complete* |
 
 The shape held: a pre-sized `uninit` array, one write per slot, the offsets as
 the record, and a 409 as the whole of the coordination.  15 tests against a live
@@ -398,20 +400,59 @@ behaviour is pinned without a service.
   test stand-in are written to hold exactly one handle and to drop it before
   anything reads the file again.
 
-### Phase 4 is still open
+### Phase 4, decided (2026-08-21)
 
-`C2Array.stamp` is still `mtime:cbytes`, so a `Proxy` cache over an array being
-filled is still discarded on every write, though every chunk it holds is still
-exactly where it was.  The ETag added in phase 2 is the *freshness* half of the
-question and does not answer this one: it changes on an append as readily as on a
-replacement, which is precisely the distinction wanted.
+Settled with the vlmeta nonce, but **not** the way this plan first framed it.
+The framing was wrong, and measuring it is what showed that.
 
-What would answer it is an identity that survives appends and not replacement.
-The frame header has no UUID to use.  The candidate is a nonce written into
-vlmeta when the array is laid out — `api/info` already carries vlmeta, so it
-costs no request — with today's stamp as the fallback for an array created
-without one.  That is a convention as much as a change, so it is left for a
-decision rather than settled here.
+The complaint above was that a cache over an array being filled is discarded on
+every write "though every chunk it holds is still exactly where it was".  That is
+true of the chunks that were *written* when the cache was built, and false of the
+ones that were not.  A `Proxy` reading a slice of an unwritten chunk caches the
+zeros an unwritten chunk reads as, and caches its run-length offset with them;
+when a writer fills that slot, both are wrong and nothing in the cache marks them
+apart from the chunks that are still good.  Pinned by giving a source a stamp
+that never moves and watching it happen:
+
+```
+read while unwritten:   [0 0 0]
+the file now holds:     [7 7 7]
+what the cache serves:  [0 0 0]     <- stale, and silent
+```
+
+So the stamp of an array still being filled *must* keep moving on every write.
+That is not waste; it is the only correct answer.  What is worth fixing is the
+other two things:
+
+- **Which array is this.**  `mtime:cbytes` can be repeated by a different array
+  that came to sit at the same path — two arrays of constant chunks compress to
+  the same size, and an mtime can be set.  A cache of the first served against
+  the second is wrong in every chunk and says nothing.  The subscriber now writes
+  a nonce into vlmeta the first time a chunk lands, and `api/info` already
+  carries vlmeta, so reading it costs no request.
+- **When it stops changing.**  Every slot of a complete array is claimed, so
+  every write to it is refused and its bytes cannot move again.  The subscriber
+  records that (`fill_state` leaves `filling` on the last chunk, whether or not
+  there is anywhere to publish to), and a complete array is then stamped by its
+  nonce and its size alone — so a cache of it survives an mtime that churned for
+  reasons of its own, which is what a republish or a copy does.
+
+| the array | stamp |
+|---|---|
+| being filled | `n<nonce>:<mtime>:<cbytes>` — moves on every write, and must |
+| complete | `n<nonce>:<cbytes>` — holds still, and may |
+| never filled chunk-wise | `<mtime>:<cbytes>` — exactly as before |
+
+The finished array is the one read again and again, so that is where the win is.
+Measured on the stand-in: a cache of a complete array, reopened after its mtime
+moved, refetches **nothing**.  With the old stamp the same reopen raises
+`the cache ... was built against different remote bytes` and the whole cache is
+thrown away.
+
+What the nonce does not do: it names the array's lineage, not its bytes.  Someone
+who uploads an edited copy of a complete array, vlmeta and all, is served the old
+cache.  Nothing short of a content hash closes that, `mtime:cbytes` did not close
+it either, and a write-once array has no ordinary path to it.
 
 ### The write path, measured
 

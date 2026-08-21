@@ -17,8 +17,11 @@ chunk are resolved by the array rather than by anything either of them holds.
 import concurrent.futures
 import contextlib
 import json
+import os
 import pathlib
 import threading
+import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -69,7 +72,7 @@ class _Subscriber:
                 "cbytes": schunk.cbytes,
                 "cratio": schunk.cratio,
                 "blocksize": schunk.blocksize,
-                "vlmeta": {},
+                "vlmeta": schunk.vlmeta.getall(),
             },
         }
 
@@ -91,11 +94,18 @@ class _Subscriber:
             if nbytes != array.schunk.chunksize:
                 return 400, {"detail": "the chunk does not match the array's chunkshape"}
             array.schunk.update_chunk(nchunk, chunk)
+            vlmeta = array.schunk.vlmeta
+            if "fill_nonce" not in vlmeta.getall():
+                # What names this array, as against another that comes to sit at
+                # the same path with the same size
+                vlmeta["fill_nonce"] = uuid.uuid4().hex
             # Counted through the handle that wrote, rather than a fresh open of
             # a frame the write just moved
             written = sum(
                 1 for i in array.schunk.iterchunks_info() if i.special is not blosc2.SpecialValue.UNINIT
             )
+            if written == len(infos) and vlmeta.getall().get("fill_state", "filling") == "filling":
+                vlmeta["fill_state"] = "complete"
             self.reload()
             return 200, {"written": written, "nchunks": len(infos), "nchunk": nchunk}
 
@@ -358,3 +368,109 @@ async def test_chunks_can_be_written_off_the_event_loop(subscriber):
         await array.aupdate_chunk(2, _chunk(2))
     await array.aclose()
     assert np.all(array[2 * CHUNKS[0] : 3 * CHUNKS[0]] == 2)
+
+
+def _fill(array, values=None):
+    for nchunk in range(NCHUNKS):
+        array.update_chunk(nchunk, _chunk(nchunk, value=None if values is None else values))
+
+
+def test_a_filling_array_is_stamped_afresh_on_every_write(subscriber):
+    """A cache of an array still being filled has to be thrown away, not kept.
+
+    What it holds of a chunk nobody had written is the zeros an unwritten chunk
+    reads as, and the run-length offset it had; once a writer fills that slot
+    both are wrong, and nothing in the cache tells them from the chunks that are
+    still good.
+    """
+    array, sub = subscriber
+    stamps = []
+    for nchunk in range(3):
+        array.update_chunk(nchunk, _chunk(nchunk))
+        stamps.append(blosc2.C2Array("run.b2nd", urlbase=array.urlbase).stamp)
+    assert len(set(stamps)) == len(stamps)
+
+
+def test_a_complete_array_keeps_one_stamp(subscriber):
+    """Once every slot is claimed the array cannot change, so a cache of it stands."""
+    array, sub = subscriber
+    _fill(array)
+
+    def stamp():
+        return blosc2.C2Array("run.b2nd", urlbase=array.urlbase).stamp
+
+    complete = stamp()
+    assert complete.startswith("n")
+    # An mtime that moved for reasons of its own is not a reason to refetch
+    os.utime(sub.path, (time.time() + 10, time.time() + 10))
+    sub.reload()
+    assert stamp() == complete
+
+
+def test_two_arrays_at_one_path_are_told_apart(subscriber, tmp_path):
+    """The hole a size and an mtime leave, which is what the nonce closes.
+
+    Both arrays here are filled with constant chunks, so they compress to exactly
+    the same size; the mtime is then made equal by hand.  Nothing but the nonce
+    separates them, and a cache of the first served against the second would be
+    wrong in every chunk.
+    """
+    array, sub = subscriber
+    _fill(array, values=1)
+    first = blosc2.C2Array("run.b2nd", urlbase=array.urlbase)
+    first_stamp, first_size = first.stamp, pathlib.Path(sub.path).stat().st_size
+
+    # A different array comes to sit at the same path, of the same size
+    replacement = tmp_path / "replacement.b2nd"
+    presized = blosc2.uninit(SHAPE, dtype=np.int32, chunks=CHUNKS, blocks=BLOCKS, urlpath=str(replacement))
+    del presized
+    sub.array = blosc2.open(str(replacement), mode="a", locking=True)
+    sub.path = str(replacement)
+    for nchunk in range(NCHUNKS):
+        sub.write_chunk(nchunk, _chunk(nchunk, value=2))
+    sub.reload()
+
+    assert pathlib.Path(sub.path).stat().st_size == first_size  # same bytes on disk
+    os.utime(sub.path, (first.meta["mtime"], first.meta["mtime"]))
+    sub.reload()
+    second = blosc2.C2Array("run.b2nd", urlbase=array.urlbase)
+    assert second.meta["mtime"] == first.meta["mtime"]  # ... and the same mtime
+    assert second.stamp != first_stamp
+
+
+def test_an_array_with_no_nonce_is_stamped_as_before(tmp_path):
+    """An ordinary dataset, never filled a chunk at a time, is unchanged by this."""
+    path = tmp_path / "plain.b2nd"
+    blosc2.asarray(np.arange(4000, dtype=np.int32), chunks=(1000,), blocks=(250,), urlpath=str(path))
+    sub = _Subscriber(path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    server.subscriber = sub
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        array = blosc2.C2Array("plain.b2nd", urlbase=f"http://127.0.0.1:{server.server_address[1]}/")
+        assert array.stamp == f"{sub.mtime}:{array.meta['schunk']['cbytes']}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_cache_of_a_complete_array_survives_a_second_run(subscriber, tmp_path):
+    """What the nonce is for: the finished array is the one read again and again.
+
+    The cache is reopened after the array's mtime has moved under it, which is
+    what a republish or a copy does.  Nothing was refetched -- the stamp says it
+    is the same array, and a complete one cannot have changed.
+    """
+    array, sub = subscriber
+    _fill(array)
+    cache = str(tmp_path / "cache.b2nd")
+    proxy = blosc2.Proxy(blosc2.C2Array("run.b2nd", urlbase=array.urlbase), urlpath=cache, mode="w")
+    expected = proxy[:]
+    del proxy
+
+    os.utime(sub.path, (time.time() + 10, time.time() + 10))
+    sub.reload()
+    sub.log.clear()
+    proxy = blosc2.Proxy(blosc2.C2Array("run.b2nd", urlbase=array.urlbase), urlpath=cache, mode="a")
+    np.testing.assert_array_equal(proxy[:], expected)
+    assert not [entry for entry in sub.log if entry[0] in ("chunk", "fetch")]
