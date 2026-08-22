@@ -408,9 +408,10 @@ def test_blocks_survive_a_reopened_cache(tmp_path, subscriber, any_chunk_wants_b
 
 def test_a_cache_that_holds_the_slice_costs_no_request(tmp_path, subscriber, any_chunk_wants_blocks):
     # Re-running a script over a cache that already covers the slice: `api/info`
-    # is all it takes.  Nothing opens the frame, because opening it is what
-    # `block_source` puts off until a fetch actually wants a chunk -- and this
-    # fetch wants none.
+    # is all it takes -- the one the proxy spends looking again at an array that
+    # could have been written to since (see `refresh_stamp`).  Nothing opens the
+    # frame, because opening it is what `block_source` puts off until a fetch
+    # actually wants a chunk -- and this fetch wants none.
     data = _incompressible((200, 200))
     array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
     cache = str(tmp_path / "held.b2nd")
@@ -423,13 +424,13 @@ def test_a_cache_that_holds_the_slice_costs_no_request(tmp_path, subscriber, any
     p = blosc2.Proxy(again, urlpath=cache, mode="a")
     p.fetch(item)
     assert np.array_equal(p[item], data[item])
-    assert not sub.log
+    assert [kind for kind, _, _ in sub.log] == ["info"]
 
     # ... and a slice the cache does not hold opens the frame then: the header,
     # the layout of the chunk it lands in, and the blocks.  Not where the chunks
     # are -- the earlier run left that in the cache
     assert np.array_equal(p[100:105, 0:10], data[100:105, 0:10])
-    assert [kind for kind, _, _ in sub.log] == ["fetch"] * 3
+    assert [kind for kind, _, _ in sub.log] == ["info"] + ["fetch"] * 3
 
 
 def test_a_kept_index_halves_a_warm_fetch(tmp_path, subscriber, any_chunk_wants_blocks):
@@ -445,7 +446,8 @@ def test_a_kept_index_halves_a_warm_fetch(tmp_path, subscriber, any_chunk_wants_
     sub.log.clear()
     p = blosc2.Proxy(again, urlpath=cache, mode="a")
     assert np.array_equal(p[:, 100:110], data[:, 100:110])
-    assert [kind for kind, _, _ in sub.log] == ["fetch", "fetch"]  # the header, the blocks
+    # The proxy's look at the array, then the header and the blocks -- nothing between
+    assert [kind for kind, _, _ in sub.log] == ["info", "fetch", "fetch"]
     assert np.array_equal(p[...], data)  # ... and the rest still reads right
 
 
@@ -463,9 +465,9 @@ def test_a_kept_index_does_not_open_the_frame_to_be_taken_up(tmp_path, subscribe
     sub.log.clear()
     p = blosc2.Proxy(again, urlpath=cache, mode="a")
     assert again._pending_index is not None  # taken out of the cache, not yet used
-    assert not sub.log
+    assert [kind for kind, _, _ in sub.log] == ["info"]  # the proxy's look, and no frame read
     p.fetch(item)
-    assert not sub.log
+    assert [kind for kind, _, _ in sub.log] == ["info"]
 
 
 def test_a_whole_chunk_cache_is_adopted(tmp_path, subscriber, any_chunk_wants_blocks):
@@ -683,8 +685,9 @@ def test_a_cache_from_the_same_bytes_is_adopted(tmp_path, subscriber, any_chunk_
 def test_no_stamp_when_the_subscriber_reports_no_mtime(tmp_path, subscriber):
     # Then the cache is checked on geometry alone, as every unstamped source is
     data = _incompressible((200, 200))
-    array, _sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
-    del array.meta["mtime"]
+    array, sub = subscriber(data, chunks=(100, 200), blocks=(10, 20))
+    sub.mtime = None  # the subscriber itself reports none, and goes on doing so
+    array = blosc2.C2Array(array.path, urlbase=array.urlbase)
     assert array.stamp is None
 
     cache = str(tmp_path / "unstamped.b2nd")

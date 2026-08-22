@@ -572,7 +572,7 @@ from .objectarray import ObjectArray, objectarray_from_cframe
 from .ref import Ref
 from .b2objects import open_b2object
 
-from .c2array import c2context, C2Array, C2NDSource, URLPath
+from .c2array import c2context, C2Array, C2NDSource, ChunkAlreadyWritten, URLPath
 
 from .dsl_kernel import DSLSyntaxError, DSLKernel, dsl_kernel, validate_dsl, validate_dsl_jit
 from .lazyexpr import (
@@ -859,6 +859,7 @@ __all__ = [  # noqa : RUF022
     # Classes
     "C2Array",
     "C2NDSource",
+    "ChunkAlreadyWritten",
     "Column",
     "CParams",
     "CTable",

@@ -6,6 +6,9 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import contextlib
+import functools
+import http.server
 import os
 import pathlib
 import threading
@@ -533,11 +536,63 @@ def test_unknown_protocol():
         blosc2.open("nosuchproto://bucket/key.b2nd")
 
 
-def test_http_does_not_reach_fsspec():
-    # http(s) is reserved for Caterva2, which is entered through blosc2.URLPath;
-    # a bare URL keeps failing as a missing local path rather than being fetched
-    with pytest.raises(FileNotFoundError):
-        blosc2.open("http://localhost:1/foo.b2nd")
+@pytest.mark.skipif(blosc2.IS_WASM, reason="no listening sockets on wasm32")
+def test_http_url_is_read_through_fsspec(tmp_path):
+    # A frame behind a plain web server -- no Caterva2 there to ask anything of --
+    # is a frame like any other: fsspec reads it in ranges wherever the server
+    # answers them, so a slice costs what it touches and not the whole file.
+    # A Caterva2 dataset is not reached this way; it needs a `blosc2.URLPath`.
+    pytest.importorskip("aiohttp")  # what fsspec reads http(s) with
+    data = np.arange(40_000, dtype="i4").reshape(200, 200)
+    root = tmp_path / "www"
+    root.mkdir()
+    blosc2.asarray(data, chunks=(50, 200), blocks=(10, 100), urlpath=str(root / "big.b2nd"))
+
+    with _ranged_server(root) as urlbase:
+        whole = blosc2.open(f"{urlbase}/big.b2nd")  # fetched in one go, as s3:// is
+        assert np.array_equal(whole[:], data)
+
+        lazy = blosc2.open(f"{urlbase}/big.b2nd", lazy=True, cache_storage=str(tmp_path / "cs"))
+        assert isinstance(lazy, blosc2.Proxy)
+        assert isinstance(lazy.src, blosc2.FsspecNDSource)
+        assert lazy.src.stamp is not None  # so a cache of it can tell it has moved
+        assert np.array_equal(lazy[3:5, 100:120], data[3:5, 100:120])
+
+
+@contextlib.contextmanager
+def _ranged_server(root):
+    """A web server over *root* that honours `Range`, which the stock one does not."""
+
+    class Ranged(http.server.SimpleHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            span = self.headers.get("Range")
+            if not span:
+                return super().do_GET()
+            body = (root / self.path.lstrip("/")).read_bytes()
+            first, _, last = span.removeprefix("bytes=").partition("-")
+            first, last = int(first), int(last) if last else len(body) - 1
+            part = body[first : last + 1]
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {first}-{last}/{len(body)}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(len(part)))
+            self.end_headers()
+            self.wfile.write(part)
+            return None
+
+    handler = functools.partial(Ranged, directory=str(root))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_zip_store_needs_cache(tmp_path):

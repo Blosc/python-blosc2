@@ -8,7 +8,8 @@ XXX version-specific blurb XXX
 
 * New `blosc2[fsspec]` extra: `blosc2.open()`, `save_array()` and `save_tensor()`
   accept any [fsspec](https://filesystem-spec.readthedocs.io) URL — `s3://`,
-  `gs://`, `zip://`, chained ones like `zip://inner.b2nd::s3://bucket/a.zip`.
+  `gs://`, `https://`, `zip://`, chained ones like
+  `zip://inner.b2nd::s3://bucket/a.zip`.
   `open()` reads the container whole, or through a staleness-checked local copy
   with `cache_storage=` (which is what covers `.b2d` stores, sparse frames,
   `offset` and `mmap_mode`), or a piece at a time with `lazy=True`, which
@@ -21,6 +22,33 @@ XXX version-specific blurb XXX
   are written (the C layer rewrites a frame's header and offsets as chunks land,
   which an object store has no way to serve), so constructors given a URL now say
   that instead of failing deep in C.
+
+* A `C2Array` can be written to a chunk at a time, which is how several
+  processes fill one remote array at once: `update_chunk()` (and its async
+  `aupdate_chunk()`) posts one compressed chunk into a slot of a pre-sized
+  array, and `written_chunks()` says which slots hold anything yet. The array is
+  laid out with `blosc2.uninit()` and uploaded -- a couple of hundred bytes
+  whatever its size -- and each slot is written once: a second write raises
+  `blosc2.ChunkAlreadyWritten`, which is the whole of the coordination between
+  writers. Writing into an empty slot appends to the frame and moves no other
+  chunk, so a fill is cheap and a concurrent reader's cached offsets stay good.
+  Needs a Caterva2 subscriber that serves the endpoint.
+
+* `C2Array.stamp`, which is what a `Proxy` checks its cache against, now names
+  *which* array it is as well as whether it has changed. A subscriber writes a
+  nonce into a filled array's vlmeta, so a cache is no longer served against a
+  different array that came to sit at the same path with the same size and
+  mtime; and a complete array — every chunk written, so every further write
+  refused — is stamped without its mtime, so a cache of it survives a republish
+  or a copy instead of being thrown away. Arrays that were never filled a chunk
+  at a time are stamped exactly as before.
+
+  A `Proxy` now calls `C2Array.refresh_stamp()` before judging its cache, which
+  reads `api/info` once for an array that could still be written to. A handle
+  reads that once when it is opened and, of itself, never again, so one that has
+  outlived someone else's chunks would otherwise hand over the stamp of the
+  array as it was — which its cache matches and the remote bytes no longer do. A
+  complete array costs nothing here: nothing can write to one.
 
 * `Proxy.fetch()` takes a `max_concurrency=` argument, and reads it from the
   source when the source has one, so `blosc2.open(url, lazy=True,

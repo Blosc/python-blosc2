@@ -651,16 +651,17 @@ def normalize_urlpath(urlpath: object) -> object:
 def is_fsspec_url(urlpath: object) -> bool:
     """Whether *urlpath* should be routed through fsspec.
 
-    Any URL with a scheme qualifies, except `file://` (which the local path
-    handles better, with mmap and every container format) and `http(s)://`
-    (reserved for :ref:`C2Array`).  Chained URLs such as
+    Any URL with a scheme qualifies, except `file://`, which the local path
+    handles better -- with mmap and every container format.  Chained URLs such as
     `zip://x.b2nd::s3://bucket/a.zip` qualify too, as fsspec resolves them.
+
+    `http(s)://` included: a frame behind a plain web server is a frame like any
+    other, and fsspec reads it in ranges wherever the server answers them.  A
+    Caterva2 subscriber is not reached this way -- its datasets are named by root
+    and path rather than by URL, so :ref:`C2Array` is entered through
+    :ref:`URLPath`, which `open` dispatches on before it ever gets here.
     """
-    return (
-        isinstance(urlpath, str)
-        and "://" in urlpath
-        and not urlpath.startswith(("file://", "http://", "https://"))
-    )
+    return isinstance(urlpath, str) and "://" in urlpath and not urlpath.startswith("file://")
 
 
 def _import_fsspec(urlpath: str):
