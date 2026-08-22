@@ -360,6 +360,58 @@ def test_small_chunks_are_fetched_whole(server):
     assert [kind for kind, _, _ in srv.log][-1] == "chunk"
 
 
+def test_scattered_points_cost_blocks_and_not_chunks(tmp_path, server, any_chunk_wants_blocks):
+    """An integer-array key is placed on the block grid, one block per point.
+
+    Falling back to whole chunks for it -- which is what anything that cannot be
+    reduced to a box got -- fetches the chunks the points live in, and a chunk is
+    what blocks exist to avoid fetching.
+    """
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    p = blosc2.Proxy(array, urlpath=str(tmp_path / "points.b2nd"), mode="w")
+    p.traffic.reset()
+
+    pts = [5, 105]  # one in each chunk, and one block of ten in each
+    np.testing.assert_array_equal(p[pts, 7], data[pts, 7])
+    blocks = p.traffic.nbytes
+
+    whole = blosc2.Proxy(
+        blosc2.C2Array(array.path, urlbase=array.urlbase),
+        urlpath=str(tmp_path / "whole.b2nd"),
+        mode="w",
+    )
+    whole.traffic.reset()
+    whole.fetch((slice(0, 200), slice(0, 200)))
+    assert blocks < whole.traffic.nbytes  # the point of the exercise
+
+
+def test_a_fancy_key_reads_what_numpy_reads(server, any_chunk_wants_blocks):
+    """Whatever is fetched, the answer is the array's own -- the cache decides it.
+
+    Which is why the mapping may only ever be too generous: a block that should
+    have been fetched and was not reads as zeros, and nothing downstream could
+    tell those from data.
+    """
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
+    p = blosc2.Proxy(array, mode="w")
+    for key in ([1, 5, 59], [0, -1], ([1, 5], [2, 7]), (np.array([[1, 2], [3, 4]]),), [5]):
+        np.testing.assert_array_equal(p[key], data[key])
+
+
+def test_a_key_that_cannot_be_placed_asks_for_everything(server, any_chunk_wants_blocks):
+    # A boolean mask selects by a rule rather than by coordinates, so it is not
+    # placed on the grid.  The answer stays right -- whole chunks are a superset
+    # of any of them -- which is the property the fallback exists to keep
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
+    p = blosc2.Proxy(array, mode="w")
+    mask = np.zeros(60, dtype=bool)
+    mask[[3, 40]] = True
+    np.testing.assert_array_equal(p[mask], data[mask])
+
+
 def test_a_peer_dataset_is_ruled_out_by_what_api_info_says(server, any_chunk_wants_blocks):
     """`Accept-Ranges: none` spares the request that would have found it out.
 

@@ -403,7 +403,21 @@ class Proxy(blosc2.Operand):
         self._sync_evictions()
         if item == ():  # full realization
             return list(range(self._schunk_cache.nchunks))
+        cells = self._cells(item)
+        if cells is _UNMAPPABLE:
+            # Not a key that can be placed on the grid, and `get_slice_nchunks`
+            # reads it as slices and trips over it: every chunk, which is what
+            # the proxy fetched for anything it could not narrow down anyway
+            return list(range(self._schunk_cache.nchunks))
+        if cells is not None:
+            return sorted(cells)
         return [int(n) for n in blosc2.get_slice_nchunks(self._cache, item)]
+
+    def _cells(self, item):
+        """:func:`_fancy_cells` for this proxy's grid; None where *item* is a box."""
+        if not isinstance(self._cache, blosc2.NDArray):
+            return None
+        return _fancy_cells(item, self._cache.shape, self._cache.chunks, self._cache.blocks)
 
     def _missing_chunks(self, item) -> list[int]:
         """The chunks *item* touches that the cache does not hold in full."""
@@ -422,12 +436,18 @@ class Proxy(blosc2.Operand):
     def _wanted_blocks(self, item) -> dict[int, Sequence[int]]:
         """{chunk: blocks} that *item* touches, by intersecting it with the block grid.
 
-        Anything this cannot reduce to a box -- fancy indexing, a step -- asks for
-        every block of the chunks it touches, which is the granularity the proxy
-        had before blocks and always a superset of the right answer.
+        An integer-array key is placed on the grid exactly, by
+        :func:`_fancy_cells`: each selected coordinate lives in one block, so
+        scattered points cost blocks and not the chunks holding them.  Anything
+        left that this cannot reduce to a box -- a boolean mask, a step -- asks
+        for every block of the chunks it touches, which is the granularity the
+        proxy had before blocks and always a superset of the right answer.
         """
         chunks, blocks = self._cache.chunks, self._cache.blocks
         every = range(self._blocks_per_chunk)
+        cells = self._cells(item)
+        if cells is not None and cells is not _UNMAPPABLE:
+            return {n: sorted(b) for n, b in cells.items()}
         spans = _item_spans(item, self._cache.shape)
         if spans is None:
             return dict.fromkeys(self._wanted_chunks(item), every)
@@ -1007,6 +1027,126 @@ class Proxy(blosc2.Operand):
         if _fields is None:
             return None
         return {key: ProxyNDField(self, key) for key in _fields}
+
+
+_UNMAPPABLE = object()
+"""A key that selects something, but nothing this can reduce to cells of the grid."""
+
+
+def _dim_cells(dim, lo, hi, chunks, blocks) -> set[tuple[int, int]]:
+    """The (chunk, block) pairs along *dim* that coordinates lo..hi inclusive fall in.
+
+    Blocks partition a chunk and restart at every chunk boundary -- a chunk need
+    not be a whole number of blocks -- so a block is located by where it sits
+    inside its chunk, never by a running count across the array.
+    """
+    cells = set()
+    for c in range(lo // chunks[dim], hi // chunks[dim] + 1):
+        first = max(lo - c * chunks[dim], 0) // blocks[dim]
+        last = min(hi - c * chunks[dim], chunks[dim] - 1) // blocks[dim]
+        cells |= {(c, b) for b in range(first, last + 1)}
+    return cells
+
+
+def _sort_dims(key):
+    """The dimensions of *key* indexed by an array, and those indexed plainly.
+
+    `_UNMAPPABLE` for anything else, which is what keeps this to integer arrays:
+    a boolean mask selects by a rule rather than by coordinates, and placing one
+    is a different job from placing these.
+    """
+    advanced, basic = [], []
+    for dim, k in enumerate(key):
+        if isinstance(k, np.ndarray):
+            if not np.issubdtype(k.dtype, np.integer):
+                return _UNMAPPABLE  # a boolean mask is not one of these
+            advanced.append(dim)
+        elif isinstance(k, (slice, int, np.integer)):
+            basic.append(dim)
+        else:
+            return _UNMAPPABLE
+    return advanced, basic
+
+
+def _cross_cells(paired, crossed, advanced, basic, shape, chunks, blocks):
+    """Every (chunk, block) the paired and crossed dimensions come to, as {chunk: {block}}."""
+    return _cross_cells(paired, crossed, advanced, basic, shape, chunks, blocks)
+
+
+def _fancy_cells(item, shape, chunks, blocks):
+    """{chunk: {blocks}} a fancy key touches, exactly, or None where it is a plain box.
+
+    A slice reduces to a box and the caller intersects that with the block grid;
+    an integer array does not, and used to fall back to every block of every
+    chunk it touched -- which for scattered points is the whole of each of them,
+    the granularity blocks exist to avoid.  Here each selected coordinate is
+    located in its own block, so N points cost N blocks and not N chunks.
+
+    `process_key` has already broadcast the advanced indices against each other,
+    which is numpy's own rule for how they pair up, so the arrays arrive with one
+    shape and reading them elementwise is reading the coordinates selected.
+    Dimensions indexed by a slice are crossed with those, since every selected
+    coordinate is taken at every position of the slice.
+
+    Integer arrays only.  `_UNMAPPABLE` for a key that selects something this
+    cannot place -- a boolean mask, anything `process_key` will not expand -- and
+    the caller then asks for whole chunks, which is a superset and so always
+    safe.  Never a smaller answer than the truth: a block that should have been
+    fetched and was not reads as zeros, which nothing downstream could tell from
+    data.
+    """
+    from blosc2.utils import process_key
+
+    try:
+        key, _ = process_key(item, shape)
+    except Exception:
+        return _UNMAPPABLE
+    sorted_dims = _sort_dims(key)
+    if sorted_dims is _UNMAPPABLE:
+        return _UNMAPPABLE
+    advanced, basic = sorted_dims
+    if not advanced:
+        return None  # a box, which the caller has a cheaper way to intersect
+
+    def cell(dim, coord):
+        chunk, offset = divmod(int(coord), chunks[dim])
+        return chunk, offset // blocks[dim]
+
+    # The advanced dimensions are read together: one coordinate each, per element
+    flat = [key[d].reshape(-1) for d in advanced]
+    if flat[0].size == 0:
+        return {}
+    paired = {
+        tuple(cell(d, v) for d, v in zip(advanced, vals, strict=True)) for vals in zip(*flat, strict=True)
+    }
+
+    crossed = []
+    for dim in basic:
+        k = key[dim]
+        if isinstance(k, (int, np.integer)):
+            crossed.append(_dim_cells(dim, int(k), int(k), chunks, blocks))
+            continue
+        start, stop, step = k.indices(shape[dim])
+        if stop <= start:
+            return {}
+        # A step is not followed: the span it lies in is a superset of it, and a
+        # superset is the one kind of wrong answer this may give
+        crossed.append(_dim_cells(dim, start, stop - 1, chunks, blocks))
+
+    chunk_grid = [math.ceil(s / c) for s, c in zip(shape, chunks, strict=True)]
+    blocks_in_chunk = [math.ceil(c / b) for c, b in zip(chunks, blocks, strict=True)]
+    out = {}
+    for pair in paired:
+        for combo in itertools.product(*crossed):
+            coords = [None] * len(shape)
+            for i, dim in enumerate(advanced):
+                coords[dim] = pair[i]
+            for i, dim in enumerate(basic):
+                coords[dim] = combo[i]
+            nchunk = int(np.ravel_multi_index([c for c, _ in coords], chunk_grid))
+            nblock = int(np.ravel_multi_index([b for _, b in coords], blocks_in_chunk))
+            out.setdefault(nchunk, set()).add(nblock)
+    return out
 
 
 def _item_spans(item, shape) -> list[tuple[int, int]] | None:

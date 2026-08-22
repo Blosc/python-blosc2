@@ -304,6 +304,15 @@ def slice_to_string(slice_):
                 raise IndexError("Only step=1 is supported")
             # step = index.step or ''
             slice_parts.append(f"{start}:{stop}")
+        else:
+            # Anything else has no spelling here, and dropping it would widen the
+            # request rather than narrow it: a fancy index skipped this way asks
+            # `api/fetch` for the whole dataset and hands back all of it, which
+            # is neither what was asked for nor a smaller answer
+            raise IndexError(
+                f"Cannot ask a Caterva2 server for {index!r}: only integers and "
+                "step-1 slices can be expressed in a fetch request"
+            )
     return ", ".join(slice_parts)
 
 
