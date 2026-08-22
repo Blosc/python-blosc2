@@ -271,9 +271,32 @@ def info(path, urlbase, params=None, headers=None, model=None, auth_token=None):
     return json if model is None else model(**json)
 
 
+def _post_fetch(url, params, auth_token):
+    """`api/fetch` again, with the parameters in the body.
+
+    For a key too long to be a query and nothing else.  A server that has never
+    heard of this answers 405, which says what it is rather than what went
+    wrong, so it is turned into the sentence a caller can act on.
+    """
+    auth_token = auth_token or _server_data["auth_token"]
+    headers = {"Cookie": auth_token} if auth_token else None
+    response = _sync_client().post(url, json=params, headers=headers, timeout=TIMEOUT)
+    if response.status_code == 405:
+        raise IndexError(
+            "This many coordinates do not fit in an URL, and the server does not accept "
+            "them in a request body (it predates `POST api/fetch`). Ask in batches, or "
+            "upgrade the server."
+        )
+    response.raise_for_status()
+    return response
+
+
 def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False, traffic=None):
     url = _server_url(urlbase, f"api/fetch/{path}")
-    response = _xget(url, params=params, auth_token=auth_token)
+    if sum(len(str(v)) for v in params.values() if v is not None) > _MAX_QUERY_CHARS:
+        response = _post_fetch(url, params, auth_token)
+    else:
+        response = _xget(url, params=params, auth_token=auth_token)
     data = response.content
     if traffic is not None:
         # A slice or a gather is data crossing the wire like any chunk, and the
@@ -358,13 +381,16 @@ def key_to_indices(key):
     return json.dumps(out, separators=(",", ":"))
 
 
-_MAX_INDICES_CHARS = 60_000
-"""How long the `indices` query may be before it is refused rather than sent.
+_MAX_QUERY_CHARS = 60_000
+"""How long a query may be before the parameters go in a body instead.
 
-A URL is not a body: the client library gives up somewhere past this, and the
-error it raises says nothing about coordinates.  Refusing here says what is
-wrong and what to do about it.  Roughly 10,000 coordinates, past which a
-request of its own per batch is the shape this has.
+A URL is not a body: past roughly this much the client library gives up, with
+an error about URL components rather than about coordinates.  `api/fetch`
+answers a POST carrying the same parameters for exactly this reason, so a key
+of more coordinates than a URL holds is a change of verb and nothing else.
+
+Below it nothing changes, which is what keeps every server that ever served a
+GET serving one: a POST is spent only where a GET could not have been made.
 """
 
 _UNTRIED = object()
@@ -770,11 +796,6 @@ class C2Array(blosc2.Operand):
         indices = key_to_indices(key)
         if indices is None:
             return {"slice_": slice_to_string(key)}
-        if len(indices) > _MAX_INDICES_CHARS:
-            raise IndexError(
-                f"Too many coordinates to ask for in one request ({len(indices)} characters of "
-                f"query, over the {_MAX_INDICES_CHARS} an URL carries). Ask for them in batches."
-            )
         return {"indices": indices}
 
     def slice(self, slice_: int | slice | Sequence[slice]) -> blosc2.NDArray:

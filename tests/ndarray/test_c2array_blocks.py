@@ -50,7 +50,11 @@ class _Cat2Server:
         bad_parts=0,
         geometry=True,
         accept_ranges=None,
+        post_fetch=True,
     ):
+        # False: a server that answers 405 to `POST api/fetch`, as one from
+        # before the route existed does
+        self.post_fetch = post_fetch
         # What `api/info` reports for byte ranges: "bytes", "none", or None for a
         # server old enough to report nothing, which is what the client must survive
         self.accept_ranges = accept_ranges
@@ -151,17 +155,30 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, b"", endpoint=endpoint)
 
+    def do_POST(self):
+        srv = self.server.cat2
+        if srv.cookie and self.headers.get("Cookie") != srv.cookie:
+            self._send(401, b"unauthorized", endpoint="auth")
+            return
+        if not srv.post_fetch:  # a server old enough not to know the route
+            self._send(405, b"method not allowed", endpoint="fetch")
+            return
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        self._gather(srv, body["indices"])
+
+    def _gather(self, srv, raw):
+        # What Caterva2 does with a fancy key: gather the points and send those,
+        # since there is no file to seek into for coordinates
+        key = tuple(
+            slice(None) if e is None else (np.array(e) if isinstance(e, list) else e)
+            for e in json.loads(raw)
+        )
+        data = blosc2.asarray(np.ascontiguousarray(srv.array[key])).to_cframe()
+        self._send(200, data, endpoint="fetch")
+
     def _fetch(self, srv):
         if "indices=" in self.path:
-            # What Caterva2 does with a fancy key: gather the points and send
-            # those, since there is no file to seek into for coordinates
-            raw = urllib.parse.unquote(self.path.split("indices=")[1].split("&")[0])
-            key = tuple(
-                slice(None) if e is None else (np.array(e) if isinstance(e, list) else e)
-                for e in json.loads(raw)
-            )
-            data = blosc2.asarray(np.ascontiguousarray(srv.array[key])).to_cframe()
-            self._send(200, data, endpoint="fetch")
+            self._gather(srv, urllib.parse.unquote(self.path.split("indices=")[1].split("&")[0]))
             return
         if srv.fetch_failures:
             # A server too busy to answer says nothing about how it serves
@@ -409,7 +426,22 @@ def test_a_key_a_fetch_request_cannot_spell_is_refused(server):
     array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
     with pytest.raises(IndexError, match="step=1"):
         array[::2]
-    with pytest.raises(IndexError, match="Too many coordinates"):
+
+
+def test_a_key_too_long_for_an_url_goes_in_a_body(server):
+    """Past what a query carries the parameters move to a POST, and nothing else."""
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
+    key = list(range(60)) * 400  # far more coordinates than an URL holds
+    np.testing.assert_array_equal(array[key], data[key])
+
+
+def test_a_server_without_the_post_route_says_so(server):
+    # 405 says which method, not which key, so it is turned into the sentence a
+    # caller can act on -- batch the coordinates, or upgrade the server
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9), post_fetch=False)
+    with pytest.raises(IndexError, match="request body"):
         array[list(range(60)) * 400]
 
 
