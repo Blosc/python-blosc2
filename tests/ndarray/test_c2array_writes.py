@@ -494,15 +494,15 @@ def test_a_handle_that_writes_stamps_what_it_wrote(server):
 def test_asking_about_blocks_does_not_close_the_door_on_the_index(server):
     """Two questions, one source, and the answer to one must not answer the other.
 
-    `serves_blocks` weighs whether splitting a chunk into blocks would pay, which
-    a frame of small chunks fails; reading the frame's index is worth doing
-    anyway.  Deciding that at the call rather than remembering it is what keeps
-    the block path from shutting the index path down.
+    `serves_blocks` asks only whether the server has a frame to read ranges of,
+    which a pre-sized array does before anything is written to it.  Whether a
+    given chunk is worth splitting is `wants_blocks`, asked per fetch; neither
+    answer may stand in for the other, and neither may shut the index path down.
     """
     array, srv = server
-    assert not array.serves_blocks  # chunks here are far under BLOCK_MIN_CBYTES
-    assert array.max_ranges == 1  # the block path, asked first, and declining
-    assert array.block_source() is None
+    assert array.serves_blocks  # a stored frame, however little it holds
+    assert array.block_source() is not None  # the block path, asked first
+    assert not array.wants_blocks(0, 1)  # ... and declining, for this chunk
     assert list(array.written_chunks()) == [False] * NCHUNKS  # still answerable
 
 

@@ -457,7 +457,9 @@ class C2NDSource(ByteRangeNDSource):
         self._auth_token = array.auth_token
         # Answers that did not carry their parts, in a row; see `read_ranges`
         self._misses = 0
-        super().__init__(self._url, max_concurrency)
+        # The array's own tally, so that what it reads through `api/chunk` and
+        # what this reads through `api/fetch` add up to what the dataset cost
+        super().__init__(self._url, max_concurrency, traffic=array.traffic)
         # A `Proxy` mixes the two: the block grid and the fetched bitmap come from
         # the array's `api/info`, while the header sections and `bstarts` come from
         # this frame.  They have to be the same dataset for that to mean anything,
@@ -521,6 +523,7 @@ class C2NDSource(ByteRangeNDSource):
                     response.status_code,
                 )
             response.read()
+            self.traffic.charge(len(response.content))
             parts = _byteranges(response)
         return [_span_of(parts, offset, size, self._url) for offset, size in spans]
 
@@ -598,6 +601,9 @@ class C2Array(blosc2.Operand):
         self._meta_lock = threading.Lock()
         # An index a `Proxy` handed over before the source existed; see _adopt_index
         self._pending_index = None
+        # What this handle has read off the server, whichever endpoint it used;
+        # the block source built later is handed this same tally
+        self.traffic = blosc2.proxy_source.Traffic()
 
         # Try to 'open' the remote path
         try:
@@ -759,6 +765,7 @@ class C2Array(blosc2.Operand):
         url = self._chunk_url()
         params = {"nchunk": nchunk}
         response = _xget(url, params=params, auth_token=self.auth_token)
+        self.traffic.charge(len(response.content))
         return response.content
 
     async def aget_chunk(self, nchunk: int) -> bytes:
@@ -789,6 +796,7 @@ class C2Array(blosc2.Operand):
             self._aclient = _httpx().AsyncClient(timeout=TIMEOUT)
         response = await self._aclient.get(url, params=params, headers=headers)
         response.raise_for_status()
+        self.traffic.charge(len(response.content))
         return response.content
 
     async def aclose(self) -> None:
@@ -1070,31 +1078,47 @@ class C2Array(blosc2.Operand):
 
         What `api/info` already carries, and no request of its own: a dataset the
         server *computes* reports an expression where a stored one reports a
-        geometry, and a frame of small chunks would never have one taken apart --
-        blosc2 declines to split a chunk below ``BLOCK_MIN_CBYTES``, so the block
-        path would end in whole chunks anyway, by the longer road.
+        geometry, and only a stored one has a frame to read ranges of.  That is
+        the whole question here.  Whether taking a particular chunk apart pays is
+        a different one, and it is asked per fetch by
+        :meth:`ByteRangeNDSource.wants_blocks`, which knows what the slice
+        touches; this cannot, since it is read before any slice exists.
+
+        It used to answer no as well for a frame whose chunks averaged under
+        ``BLOCK_MIN_CBYTES``, which decided from one number, once, that no future
+        slice of that dataset would ever be worth taking apart.  That forfeited
+        the bytes the block path exists to save: measured against a Caterva2
+        server, a dataset of 193 KB chunks reads a slab of 81 of them in 6.4 MB
+        against 13.3 MB whole, and one of 650 KB chunks a slab of 36 in 6.4 MB
+        against 23.3 MB -- 2.1x and 3.6x the traffic, on every such read, for the
+        life of the dataset.  Where the link is what is scarce, and a server's
+        uplink is shared by everyone reading through it, those are the bytes that
+        decide how many readers it can hold.  The judgement was never wrong, only
+        made too early and too widely: a point read of a small chunk really does
+        cost more than it saves, and `wants_blocks` still refuses it.
 
         Read off `api/info` again where this handle has written since it last
-        looked, which is the one case where the answer moves under it: a pre-sized
-        array holds almost nothing until it is filled, and a writer that took the
-        open-time figure would go on calling its own filled array too small to
-        take apart.  That is one request to a handle that has just written, and
-        none at all to a reader -- which is what the promise below needs.
+        looked, which is the one case where the answer moves under it: a dataset
+        may be laid out before it is stored.  That is one request to a handle that
+        has just written, and none at all to a reader -- which is what the promise
+        below needs.
 
         False is the whole answer; True is only that it is worth one request to
         find out, which :meth:`block_source` spends.  A :ref:`Proxy` reads this
         when it is built, to decide whether its cache records blocks or chunks,
         so it must cost nothing and must not depend on what has been fetched.
+
+        A server that reports ``accept_ranges`` spares even that request where
+        the answer is no: a dataset this server mounts from a peer reports the
+        peer's geometry, being stored there, but is fetched from its owner and
+        re-serialized here, so a range read of it is refused.  Nothing else in
+        what `api/info` says can tell the two apart.  A server that reports
+        nothing is an older one, and then this asks as it always did.
         """
-        if not self._reports_geometry:
+        self._refresh_meta()  # `meta` is what carries it, so read it current
+        if self.meta.get("accept_ranges") == "none":
             return False
-        try:
-            nchunks = math.prod(math.ceil(s / c) for s, c in zip(self.shape, self.chunks, strict=True))
-            return bool(nchunks) and self.cbytes / nchunks >= blosc2.proxy_source.BLOCK_MIN_CBYTES
-        except (KeyError, TypeError, ValueError, ZeroDivisionError):
-            # An `api/info` without the fields these read describes a dataset
-            # whole chunks work for, as they do for every dataset there is
-            return False
+        return self._reports_geometry
 
     @property
     def _reports_geometry(self) -> bool:
@@ -1116,11 +1140,12 @@ class C2Array(blosc2.Operand):
         request with the whole body, so retrying would pay a full download to
         rediscover the same answer.
 
-        A frame whose chunks are too small to be worth taking apart says no here
-        without building anything, and without remembering that it said so: the
-        judgement is about *blocks*, and the same frame's index is still worth
-        reading.  Deciding it at the call rather than caching it is what keeps
-        the two questions from answering each other.
+        Every stored frame says yes: whether a given chunk of it is worth taking
+        apart is decided per fetch, by `wants_blocks`, and not here.  So this and
+        :meth:`_index_source` now come to the same answer, and both remain because
+        they ask for different reasons -- one for the blocks of a chunk, one for
+        the offsets that say where the chunks are.  Neither remembers a no, since
+        a dataset laid out empty becomes a stored one as it is filled.
         """
         return self._source() if self.serves_blocks else None
 
@@ -1128,9 +1153,10 @@ class C2Array(blosc2.Operand):
         """The same reader, built for any stored frame however small its chunks.
 
         Reading the frame's index is not the same question as reading blocks of
-        its chunks: a frame of chunks too small to take apart still has offsets,
-        and they still say which chunks hold anything.  Whatever is built here is
-        the source the block path uses too -- there is only ever one.
+        its chunks, though a stored frame now answers yes to both: the offsets
+        say which chunks hold anything, which is worth knowing whatever is done
+        with them.  Whatever is built here is the source the block path uses too
+        -- there is only ever one.
         """
         return self._source() if self._reports_geometry else None
 
@@ -1207,10 +1233,10 @@ class C2Array(blosc2.Operand):
             return self._pending_index
         return source._index_state(keep)
 
-    def wants_blocks(self, nchunk: int, nwanted: int) -> bool:
+    def wants_blocks(self, nchunk: int, nwanted: int, wave=None) -> bool:
         """Whether fetching *nwanted* blocks of a chunk beats fetching all of it."""
         source = self.block_source()
-        return source is not None and source.wants_blocks(nchunk, nwanted)
+        return source is not None and source.wants_blocks(nchunk, nwanted, wave)
 
     @property
     def max_ranges(self) -> int:

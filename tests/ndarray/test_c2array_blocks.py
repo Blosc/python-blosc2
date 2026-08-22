@@ -48,7 +48,11 @@ class _Cat2Server:
         fetch_failures=0,
         bad_parts=0,
         geometry=True,
+        accept_ranges=None,
     ):
+        # What `api/info` reports for byte ranges: "bytes", "none", or None for a
+        # server old enough to report nothing, which is what the client must survive
+        self.accept_ranges = accept_ranges
         self.fetch_failures = fetch_failures  # answer this many fetches 503 first
         self.path = str(path)
         self.key = key  # a leaf inside a .b2z container, rather than a file of its own
@@ -105,6 +109,7 @@ class _Cat2Server:
                 "blocksize": schunk.blocksize,
                 "vlmeta": {},
             },
+            **({} if self.accept_ranges is None else {"accept_ranges": self.accept_ranges}),
         }
 
 
@@ -340,24 +345,117 @@ def test_a_computed_dataset_is_ruled_out_without_a_request(server, any_chunk_wan
 
 
 def test_small_chunks_are_fetched_whole(server):
-    # Below the threshold a chunk is one cheap request, so blocks would only add
-    # a round trip: nothing goes looking for the frame index, let alone a block
+    # A point read of a chunk this small saves fewer bytes than the round trip
+    # that would find them costs, so `wants_blocks` refuses it and the chunk
+    # comes whole -- the judgement the dataset no longer makes for every slice
+    # at once, only for the slice in hand
     data = _incompressible((200, 200))
     array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
     p = blosc2.Proxy(array, mode="w")
     srv.log.clear()
 
     assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert array.block_source() is not None  # a stored frame is readable in ranges
+    assert not array.wants_blocks(0, 1)  # ... and this one is not worth splitting
+    assert [kind for kind, _, _ in srv.log][-1] == "chunk"
+
+
+def test_a_peer_dataset_is_ruled_out_by_what_api_info_says(server, any_chunk_wants_blocks):
+    """`Accept-Ranges: none` spares the request that would have found it out.
+
+    A dataset the server mounts from a peer reports the peer's geometry, being
+    stored *there*, but is re-serialized here and so refuses a range.  Nothing in
+    the payload tells it from a local one; the header does.
+    """
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20), accept_ranges="none")
+    srv.log.clear()
+
+    assert not array.serves_blocks
     assert array.block_source() is None
-    assert [kind for kind, _, _ in srv.log] == ["chunk"]
+    assert not srv.log  # ... and no request was spent learning it
 
 
-def test_a_dataset_that_serves_no_blocks_keeps_the_chunkwise_bitmap(tmp_path, server):
-    # Nothing will ever ask this one for a block, so its cache records chunks:
-    # the bitmap an older blosc2 also reads, and none of the per-block
-    # bookkeeping that would be kept only to say `all of them` every time
+def test_a_server_that_names_nothing_is_asked_as_before(server, any_chunk_wants_blocks):
+    # An older server names no Accept-Ranges at all, and then the probe is the
+    # only way to know -- which is what was always done, and must keep working
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20), accept_ranges=None)
+    srv.log.clear()
+
+    assert array.serves_blocks
+    assert array.block_source() is not None
+    assert [kind for kind, _, _ in srv.log] == ["fetch"]  # the probe, and only it
+
+
+def test_a_server_that_says_bytes_is_believed(server, any_chunk_wants_blocks):
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20), accept_ranges="bytes")
+    assert array.serves_blocks
+    assert array.block_source() is not None
+
+
+def test_traffic_counts_what_crossed_the_wire(server, any_chunk_wants_blocks):
+    """Bytes and requests, counted at the transport and not inferred.
+
+    The point of counting them is that blocks and chunks cost about the same
+    wall time on a fast link and differ by the compression ratio in traffic, so
+    traffic is the only thing that shows the block path working at all.
+    """
     data = _incompressible((200, 200))
     array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    p = blosc2.Proxy(array, mode="w")
+    assert p.traffic is array.traffic  # the array's tally, not a second one
+
+    p.traffic.reset()
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    blocks = (p.traffic.requests, p.traffic.nbytes)
+    assert blocks[0] > 0
+    assert blocks[1] > 0
+    # What the server logged for the data endpoints is what was counted; the
+    # `api/info` that opened the handle is metadata and is deliberately not
+    served = [(kind, nbytes) for kind, _, nbytes in srv.log if kind != "info"]
+    assert blocks[0] == len(served)
+    assert blocks[1] <= sum(nbytes for _, nbytes in served)
+
+    # The same slice again is served from the cache and costs nothing more
+    before = (p.traffic.requests, p.traffic.nbytes)
+    assert np.array_equal(p[0:5, 0:10], data[0:5, 0:10])
+    assert (p.traffic.requests, p.traffic.nbytes) == before
+
+
+def test_traffic_shows_blocks_costing_fewer_bytes_than_chunks(tmp_path, server, monkeypatch):
+    """The comparison the counter exists to make, on one array and one slice."""
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+
+    monkeypatch.setattr(blosc2.proxy_source, "BLOCK_MIN_CBYTES", 1 << 62)  # chunks
+    whole = blosc2.Proxy(array, urlpath=str(tmp_path / "whole.b2nd"), mode="w")
+    whole.traffic.reset()
+    assert np.array_equal(whole[0:5, 0:10], data[0:5, 0:10])
+    by_chunk = whole.traffic.nbytes
+
+    monkeypatch.setattr(blosc2.proxy_source, "BLOCK_MIN_CBYTES", 0)  # blocks
+    split = blosc2.Proxy(
+        blosc2.C2Array(array.path, urlbase=array.urlbase),
+        urlpath=str(tmp_path / "split.b2nd"),
+        mode="w",
+    )
+    split.traffic.reset()
+    assert np.array_equal(split[0:5, 0:10], data[0:5, 0:10])
+    assert split.traffic.nbytes < by_chunk  # which is the whole point
+
+
+def test_a_dataset_that_serves_no_blocks_keeps_the_chunkwise_bitmap(tmp_path, server, monkeypatch):
+    # A source that says it serves no blocks -- which a dataset the server
+    # computes says, having no frame to read ranges of -- gets a cache that
+    # records chunks: the bitmap an older blosc2 also reads, and none of the
+    # per-block bookkeeping that would be kept only to say `all of them` every
+    # time.  Said here rather than served that way, since a computed dataset
+    # reports no partitioning at all and a proxy cannot be laid out over one.
+    data = _incompressible((200, 200))
+    array, srv = server(data, chunks=(100, 200), blocks=(10, 20))
+    monkeypatch.setattr(type(array), "serves_blocks", property(lambda self: False))
     assert not array.serves_blocks  # decided from api/info, without a request
     cache = str(tmp_path / "chunkwise-cache.b2nd")
     p = blosc2.Proxy(array, urlpath=cache, mode="w")

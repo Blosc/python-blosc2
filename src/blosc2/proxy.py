@@ -228,6 +228,35 @@ class Proxy(blosc2.Operand):
         for key in vlmeta or ():
             self._schunk_cache.vlmeta[key] = vlmeta[key]
 
+    @property
+    def traffic(self) -> "blosc2.proxy_source.Traffic | None":
+        """What this proxy has read off its source, or None for a local one.
+
+        Cumulative bytes and requests since the source was opened, counted at the
+        transport, so the frame index and the block offsets are in it as well as
+        the data, and the metadata call that opened the handle is not.  What a
+        slice cost in traffic is the difference between two readings of this, or
+        one reading after :meth:`Traffic.reset`.
+
+        It is what says whether block granularity is doing anything for a given
+        dataset and access pattern: whole chunks and blocks of them take similar
+        time on a fast link and differ by the compression ratio in bytes, and
+        bytes are what a shared uplink runs out of.
+
+        None where nothing crosses a wire -- a proxy over a local array -- since
+        a counter that only ever reads zero would say the traffic was free rather
+        than that it was never measured.
+
+        Examples
+        --------
+        >>> proxy = blosc2.open(url, lazy=True)  # doctest: +SKIP
+        >>> proxy.traffic.reset()  # doctest: +SKIP
+        >>> _ = proxy[0, 0, 0]  # doctest: +SKIP
+        >>> proxy.traffic  # doctest: +SKIP
+        Traffic(requests=2, nbytes=20480)
+        """
+        return getattr(self.src, "traffic", None)
+
     def __enter__(self) -> "Proxy":
         """Enter a context manager and return this proxy."""
         return self
@@ -626,7 +655,17 @@ class Proxy(blosc2.Operand):
         missing = self._missing_blocks(item)
         if not missing:
             return self._cache
-        wanted = {n: bs for n, bs in missing.items() if self.src.wants_blocks(n, len(bs))}
+        # A transport that batches ranges pays the block path's fixed cost once
+        # for the whole fetch, so what it wants asked is the wave rather than the
+        # chunk; see `ByteRangeNDSource._wave_saves`.  It is also the only kind of
+        # source this module hands the wave to, so one written to the two-argument
+        # protocol is never called with three.
+        if getattr(self.src, "max_ranges", 1) > 1:
+            wave = {n: len(bs) for n, bs in missing.items()}
+            asks = lambda n, nwanted: self.src.wants_blocks(n, nwanted, wave)  # noqa: E731
+        else:
+            asks = self.src.wants_blocks
+        wanted = {n: bs for n, bs in missing.items() if asks(n, len(bs))}
         whole = [n for n in missing if n not in wanted]
 
         layouts = dict(zip(wanted, self._chunk_layouts(list(wanted), max_concurrency), strict=True))

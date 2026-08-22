@@ -18,6 +18,7 @@ from blosc2 import c2array as c2array_mod
 class _FakeResponse:
     def __init__(self, json_data):
         self._json = json_data
+        self.headers = {}  # a real response always has them; `info` reads Accept-Ranges
 
     def raise_for_status(self):
         pass
