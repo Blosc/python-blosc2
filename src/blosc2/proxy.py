@@ -436,12 +436,13 @@ class Proxy(blosc2.Operand):
     def _wanted_blocks(self, item) -> dict[int, Sequence[int]]:
         """{chunk: blocks} that *item* touches, by intersecting it with the block grid.
 
-        An integer-array key is placed on the grid exactly, by
-        :func:`_fancy_cells`: each selected coordinate lives in one block, so
+        A key of integer arrays or boolean masks is placed on the grid exactly,
+        by :func:`_fancy_cells`: each selected coordinate lives in one block, so
         scattered points cost blocks and not the chunks holding them.  Anything
-        left that this cannot reduce to a box -- a boolean mask, a step -- asks
-        for every block of the chunks it touches, which is the granularity the
-        proxy had before blocks and always a superset of the right answer.
+        left that this cannot reduce to a box -- a step, a key nobody has thought
+        about -- asks for every block of the chunks it touches, which is the
+        granularity the proxy had before blocks and always a superset of the
+        right answer.
         """
         chunks, blocks = self._cache.chunks, self._cache.blocks
         every = range(self._blocks_per_chunk)
@@ -1051,15 +1052,16 @@ def _dim_cells(dim, lo, hi, chunks, blocks) -> set[tuple[int, int]]:
 def _sort_dims(key):
     """The dimensions of *key* indexed by an array, and those indexed plainly.
 
-    `_UNMAPPABLE` for anything else, which is what keeps this to integer arrays:
-    a boolean mask selects by a rule rather than by coordinates, and placing one
-    is a different job from placing these.
+    `_UNMAPPABLE` for anything else.  Everything `process_key` hands back is one
+    of these today -- a mask has already become an integer array by the time it
+    arrives -- so this is what keeps a key nobody has thought about from being
+    read as one that was.
     """
     advanced, basic = [], []
     for dim, k in enumerate(key):
         if isinstance(k, np.ndarray):
             if not np.issubdtype(k.dtype, np.integer):
-                return _UNMAPPABLE  # a boolean mask is not one of these
+                return _UNMAPPABLE  # coordinates, or this cannot place it
             advanced.append(dim)
         elif isinstance(k, (slice, int, np.integer)):
             basic.append(dim)
@@ -1088,19 +1090,22 @@ def _fancy_cells(item, shape, chunks, blocks):
     Dimensions indexed by a slice are crossed with those, since every selected
     coordinate is taken at every position of the slice.
 
-    Integer arrays only.  `_UNMAPPABLE` for a key that selects something this
-    cannot place -- a boolean mask, anything `process_key` will not expand -- and
-    the caller then asks for whole chunks, which is a superset and so always
-    safe.  Never a smaller answer than the truth: a block that should have been
-    fetched and was not reads as zeros, which nothing downstream could tell from
-    data.
+    A boolean mask arrives here already an integer array, and one per dimension
+    it spanned: `process_key` turns it into the coordinates it selects, paired
+    the way a mask's own dimensions pair.  So masks are placed as exactly as
+    lists are, and nothing here has to know which it was given.
+
+    `_UNMAPPABLE` for a key that selects something this cannot place, and the
+    caller then asks for whole chunks, which is a superset and so always safe.
+    Never a smaller answer than the truth: a block that should have been fetched
+    and was not reads as zeros, which nothing downstream could tell from data.
+    A key `process_key` refuses is not one of those -- the cache cannot index it
+    either, so it raises here rather than fetching an array's worth of blocks for
+    an answer that is never going to be returned.
     """
     from blosc2.utils import process_key
 
-    try:
-        key, _ = process_key(item, shape)
-    except Exception:
-        return _UNMAPPABLE
+    key, _ = process_key(item, shape)
     sorted_dims = _sort_dims(key)
     if sorted_dims is _UNMAPPABLE:
         return _UNMAPPABLE

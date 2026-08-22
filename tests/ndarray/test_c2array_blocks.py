@@ -400,16 +400,59 @@ def test_a_fancy_key_reads_what_numpy_reads(server, any_chunk_wants_blocks):
         np.testing.assert_array_equal(p[key], data[key])
 
 
-def test_a_key_that_cannot_be_placed_asks_for_everything(server, any_chunk_wants_blocks):
-    # A boolean mask selects by a rule rather than by coordinates, so it is not
-    # placed on the grid.  The answer stays right -- whole chunks are a superset
-    # of any of them -- which is the property the fallback exists to keep
+def test_a_boolean_mask_is_placed_as_exactly_as_a_list(tmp_path, server, any_chunk_wants_blocks):
+    """A mask reaches the grid as the coordinates it selects, not as a rule.
+
+    `process_key` turns one into an integer array per dimension it spanned, so
+    nothing in the mapping has to know which it was given -- and a mask picking
+    two rows of an array costs those rows' blocks, not every chunk they lie in.
+    """
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
+    p = blosc2.Proxy(array, urlpath=str(tmp_path / "mask.b2nd"), mode="w")
+    mask = np.zeros(60, dtype=bool)
+    mask[[3, 40]] = True
+    p.traffic.reset()
+    np.testing.assert_array_equal(p[mask], data[mask])
+    masked = p.traffic.nbytes
+
+    whole = blosc2.Proxy(
+        blosc2.C2Array(array.path, urlbase=array.urlbase),
+        urlpath=str(tmp_path / "maskwhole.b2nd"),
+        mode="w",
+    )
+    whole.traffic.reset()
+    whole.fetch(())
+    assert masked < whole.traffic.nbytes
+
+
+def test_masks_of_every_shape_read_what_numpy_reads(server, any_chunk_wants_blocks):
+    # A mask may span one dimension or several, and may sit anywhere in the key;
+    # each spelling pairs its coordinates differently, and none may lose a block
     data = _incompressible((60, 70))
     array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
     p = blosc2.Proxy(array, mode="w")
-    mask = np.zeros(60, dtype=bool)
-    mask[[3, 40]] = True
-    np.testing.assert_array_equal(p[mask], data[mask])
+    rows = np.zeros(60, dtype=bool)
+    rows[[1, 59]] = True
+    cols = np.zeros(70, dtype=bool)
+    cols[[0, 44, 69]] = True
+    both = np.zeros((60, 70), dtype=bool)
+    both[[2, 50], [3, 60]] = True
+    for key in (rows, both, (rows, 7), (slice(None), cols), np.zeros(60, dtype=bool)):
+        np.testing.assert_array_equal(p[key], data[key])
+
+
+def test_a_key_the_cache_cannot_index_is_refused_before_it_is_fetched(server, any_chunk_wants_blocks):
+    # Arrays separated by a slice are not supported by the layer below, so the
+    # answer was never going to be returned: raise it here rather than after
+    # fetching an array's worth of blocks to build it from
+    data = _incompressible((30, 40, 50))
+    array, srv = server(data, chunks=(10, 20, 25), blocks=(5, 7, 9))
+    p = blosc2.Proxy(array, mode="w")
+    srv.log.clear()
+    with pytest.raises(NotImplementedError):
+        p[[1, 5], slice(0, 3), 2]  # two arrays with a slice between them
+    assert not srv.log
 
 
 def test_a_peer_dataset_is_ruled_out_by_what_api_info_says(server, any_chunk_wants_blocks):
