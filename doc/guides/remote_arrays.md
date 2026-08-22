@@ -69,8 +69,6 @@ p = blosc2.Proxy(src, urlpath="cache.b2nd", mode="a")
 A Caterva2 array can be *written*, one chunk at a time, by as many processes as it has chunks. Lay the array out empty first — {func}`blosc2.uninit` writes a couple of hundred bytes whatever the shape — upload it to the subscriber, then have each writer post the chunks it owns:
 
 ```python
-import math
-
 import blosc2
 import numpy as np
 
@@ -82,9 +80,21 @@ blosc2.uninit(
     blocks=(10_000,),
     urlpath="run.b2nd",
 )
-# ... upload run.b2nd to the subscriber with your Caterva2 client ...
+```
 
-# In each writer
+Upload it with the client that comes with Caterva2:
+
+```sh
+cat2-client upload run.b2nd @personal/run.b2nd
+```
+
+Then each writer opens it and posts its own chunks:
+
+```python
+import math
+
+import blosc2
+
 a = blosc2.C2Array("@personal/run.b2nd", urlbase="https://cat2.cloud/demo")
 itemsize = a.dtype.itemsize
 chunk = blosc2.compress2(
