@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import json
 import math
 import os
 import struct
@@ -270,10 +271,14 @@ def info(path, urlbase, params=None, headers=None, model=None, auth_token=None):
     return json if model is None else model(**json)
 
 
-def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False):
+def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False, traffic=None):
     url = _server_url(urlbase, f"api/fetch/{path}")
     response = _xget(url, params=params, auth_token=auth_token)
     data = response.content
+    if traffic is not None:
+        # A slice or a gather is data crossing the wire like any chunk, and the
+        # one a caller asking for coordinates most wants counted
+        traffic.charge(len(data))
     # Try different deserialization methods
     try:
         data = blosc2.ndarray_from_cframe(data)
@@ -315,6 +320,52 @@ def slice_to_string(slice_):
             )
     return ", ".join(slice_parts)
 
+
+def key_to_indices(key):
+    """*key* as the `indices` parameter names it, or None if it needs no such thing.
+
+    `api/fetch` takes a fancy key as JSON, one entry per dimension, because a
+    list of coordinates has no unambiguous reading as the comma-separated string
+    `slice_` is.  None where the key is a plain box, which `slice_` says more
+    cheaply and which every server understands.
+
+    The key goes over as it was written, not as numpy would expand it: the server
+    indexes a real array with it, so its reading is numpy's own and there is no
+    second interpretation here to disagree with that one.
+    """
+    entries = key if isinstance(key, tuple) else (key,)
+    if not any(isinstance(k, (list, np.ndarray)) for k in entries):
+        return None
+    out = []
+    for entry in entries:
+        if isinstance(entry, (list, np.ndarray)):
+            coords = np.asarray(entry)
+            if coords.dtype == np.bool_:
+                # A mask is the coordinates it selects, said in as many bytes as
+                # the array is long; the coordinates themselves are what travels
+                coords = np.flatnonzero(coords)
+            if not np.issubdtype(coords.dtype, np.integer):
+                raise IndexError(f"Cannot index a remote array with {entry!r}")
+            out.append([int(v) for v in coords.reshape(-1)])
+        elif isinstance(entry, (int, np.integer)):
+            out.append(int(entry))
+        elif isinstance(entry, slice):
+            if entry.step not in (1, None):
+                raise IndexError("Only step=1 is supported")
+            out.append(None if entry == slice(None) else f"{entry.start or ''}:{entry.stop or ''}")
+        else:
+            raise IndexError(f"Cannot index a remote array with {entry!r}")
+    return json.dumps(out, separators=(",", ":"))
+
+
+_MAX_INDICES_CHARS = 60_000
+"""How long the `indices` query may be before it is refused rather than sent.
+
+A URL is not a body: the client library gives up somewhere past this, and the
+error it raises says nothing about coordinates.  Refusing here says what is
+wrong and what to do about it.  Roughly 10,000 coordinates, past which a
+request of its own per batch is the shape this has.
+"""
 
 _UNTRIED = object()
 """A block source that has not been asked for yet, as against one that failed."""
@@ -697,10 +748,34 @@ class C2Array(blosc2.Operand):
         array([[61, 62, 63],
                [81, 82, 83]], dtype=uint16)
         """
-        slice_ = slice_to_string(slice_)
+        params = self._fetch_params(slice_)
         return fetch_data(
-            self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token, as_blosc2=False
+            self.path,
+            self.urlbase,
+            params,
+            auth_token=self.auth_token,
+            as_blosc2=False,
+            traffic=self.traffic,
         )
+
+    def _fetch_params(self, key) -> dict:
+        """What `api/fetch` is to be asked for *key*: coordinates, or a box.
+
+        A fancy key is gathered by the server, which reads the points out of the
+        chunks they land in and sends those and nothing else.  Reading it here
+        would mean fetching whole blocks to pick single values out of them, and a
+        block is nearly all waste for a point -- see :ref:`Proxy`, which does
+        exactly that where there is no server to ask.
+        """
+        indices = key_to_indices(key)
+        if indices is None:
+            return {"slice_": slice_to_string(key)}
+        if len(indices) > _MAX_INDICES_CHARS:
+            raise IndexError(
+                f"Too many coordinates to ask for in one request ({len(indices)} characters of "
+                f"query, over the {_MAX_INDICES_CHARS} an URL carries). Ask for them in batches."
+            )
+        return {"indices": indices}
 
     def slice(self, slice_: int | slice | Sequence[slice]) -> blosc2.NDArray:
         """
@@ -728,9 +803,14 @@ class C2Array(blosc2.Operand):
         >>> type(data_slice)
         blosc2.ndarray.NDArray
         """
-        slice_ = slice_to_string(slice_)
+        params = self._fetch_params(slice_)
         return fetch_data(
-            self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token, as_blosc2=True
+            self.path,
+            self.urlbase,
+            params,
+            auth_token=self.auth_token,
+            as_blosc2=True,
+            traffic=self.traffic,
         )
 
     def __len__(self) -> int:

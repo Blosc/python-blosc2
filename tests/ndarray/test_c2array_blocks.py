@@ -21,6 +21,7 @@ import math
 import os
 import pathlib
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
@@ -151,6 +152,17 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, b"", endpoint=endpoint)
 
     def _fetch(self, srv):
+        if "indices=" in self.path:
+            # What Caterva2 does with a fancy key: gather the points and send
+            # those, since there is no file to seek into for coordinates
+            raw = urllib.parse.unquote(self.path.split("indices=")[1].split("&")[0])
+            key = tuple(
+                slice(None) if e is None else (np.array(e) if isinstance(e, list) else e)
+                for e in json.loads(raw)
+            )
+            data = blosc2.asarray(np.ascontiguousarray(srv.array[key])).to_cframe()
+            self._send(200, data, endpoint="fetch")
+            return
         if srv.fetch_failures:
             # A server too busy to answer says nothing about how it serves
             srv.fetch_failures -= 1
@@ -358,6 +370,47 @@ def test_small_chunks_are_fetched_whole(server):
     assert array.block_source() is not None  # a stored frame is readable in ranges
     assert not array.wants_blocks(0, 1)  # ... and this one is not worth splitting
     assert [kind for kind, _, _ in srv.log][-1] == "chunk"
+
+
+def test_a_c2array_gathers_its_points_at_the_server(server):
+    """`C2Array` sends the coordinates and is sent the points, and nothing else.
+
+    A `Proxy` over a source that cannot gather fetches the blocks holding the
+    points instead; a Caterva2 server can gather, and a block is nearly all
+    waste for a single coordinate.
+    """
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
+    array.traffic.reset()
+
+    pts = [1, 30, 59]
+    np.testing.assert_array_equal(array[pts, 7], data[pts, 7])
+    assert array.traffic.requests == 1  # one gather, not one fetch per point
+    gathered = array.traffic.nbytes
+
+    array.traffic.reset()
+    array[:]  # what the same points used to cost, at their coarsest
+    assert gathered < array.traffic.nbytes
+
+
+def test_a_c2array_reads_the_coordinates_numpy_reads(server):
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
+    mask = np.zeros(60, dtype=bool)
+    mask[[4, 41]] = True
+    for key in ([1, 5, 59], [0, -1], np.array([2, 4]), (([1, 5]), 7), (slice(None), [1, 2]), mask):
+        np.testing.assert_array_equal(array[key], data[key])
+
+
+def test_a_key_a_fetch_request_cannot_spell_is_refused(server):
+    # It used to be dropped instead, and a dropped index asks for the whole
+    # dataset and hands back all of it -- neither what was asked for nor smaller
+    data = _incompressible((60, 70))
+    array, srv = server(data, chunks=(20, 25), blocks=(7, 9))
+    with pytest.raises(IndexError, match="step=1"):
+        array[::2]
+    with pytest.raises(IndexError, match="Too many coordinates"):
+        array[list(range(60)) * 400]
 
 
 def test_scattered_points_cost_blocks_and_not_chunks(tmp_path, server, any_chunk_wants_blocks):
