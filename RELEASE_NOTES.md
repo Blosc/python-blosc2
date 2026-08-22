@@ -8,7 +8,8 @@ XXX version-specific blurb XXX
 
 * New `blosc2[fsspec]` extra: `blosc2.open()`, `save_array()` and `save_tensor()`
   accept any [fsspec](https://filesystem-spec.readthedocs.io) URL — `s3://`,
-  `gs://`, `zip://`, chained ones like `zip://inner.b2nd::s3://bucket/a.zip`.
+  `gs://`, `https://`, `zip://`, chained ones like
+  `zip://inner.b2nd::s3://bucket/a.zip`.
   `open()` reads the container whole, or through a staleness-checked local copy
   with `cache_storage=` (which is what covers `.b2d` stores, sparse frames,
   `offset` and `mmap_mode`), or a piece at a time with `lazy=True`, which
