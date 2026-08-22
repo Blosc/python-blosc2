@@ -12,6 +12,7 @@ Topics
     :maxdepth: 1
 
     optimization_tips
+    remote_arrays
     sharing_across_processes
     pandas_engine
 
