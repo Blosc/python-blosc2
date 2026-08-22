@@ -278,7 +278,7 @@ class Proxy(blosc2.Operand):
         # are, as an earlier run read them.  Only from a cache that names the very
         # same remote bytes, checked here rather than taken on trust from how the
         # cache was come by: a `_cache=` handed in never passed `_reopen_cache`.
-        adopt = getattr(self.src, "adopt_index", None)
+        adopt = getattr(self.src, "_adopt_index", None)
         if adopt is not None and stamp is not None and stored == stamp:
             index = self._schunk_cache.vlmeta.get("proxy-index")
             adopt(index)
@@ -440,7 +440,7 @@ class Proxy(blosc2.Operand):
         # came from, and reusing them across a replacement is worse than serving
         # stale data.  Bounded by keeping layouts for the partly filled chunks
         # alone, which are the only ones a later fetch would ask about.
-        state = getattr(self.src, "index_state", None)
+        state = getattr(self.src, "_index_state", None)
         if state is not None and self._stamped:
             index = state(self._partly_filled())
             # Only when it says something new: the offsets are the bulk of it and

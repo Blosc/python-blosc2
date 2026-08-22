@@ -562,7 +562,7 @@ def test_blocks_of_a_chunk_written_since_the_index_was_read(subscriber, tmp_path
 
 
 def test_an_index_a_write_moved_is_not_handed_to_a_cache(subscriber, blocks_are_worth_it):
-    """What `index_state` keeps is where the chunks are, which a write moves.
+    """What `_index_state` keeps is where the chunks are, which a write moves.
 
     A cache adopts these against a stamp that says the array has not changed
     since -- and for a complete array that is true of the array and false of an
@@ -572,13 +572,13 @@ def test_an_index_a_write_moved_is_not_handed_to_a_cache(subscriber, blocks_are_
     array, sub = subscriber
     array.update_chunk(0, _chunk(0, value=7))
     array.chunk_layout(0)  # builds the source and reads the frame's offsets
-    kept = array.index_state()["offsets"]
+    kept = array._index_state()["offsets"]
     assert kept
 
     array.update_chunk(1, _chunk(1))
-    assert not array.index_state()["offsets"]  # they describe a frame that moved
+    assert not array._index_state()["offsets"]  # they describe a frame that moved
     assert array.written_chunks()[1]  # read again ...
-    assert array.index_state()["offsets"] not in (b"", kept)  # ... and worth keeping again
+    assert array._index_state()["offsets"] not in (b"", kept)  # ... and worth keeping again
 
 
 def test_a_cache_over_a_handle_that_outlived_a_write_is_not_kept(subscriber, tmp_path):

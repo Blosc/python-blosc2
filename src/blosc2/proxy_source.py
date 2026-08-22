@@ -353,7 +353,7 @@ def _special_kinds(offsets: np.ndarray) -> np.ndarray:
     The offsets have to be in the host's own order for this: the tag lives in the
     top byte of the word, and a view is what reads it, so an array that still
     carries the byte order it was stored in would have the tag read out of the
-    wrong end.  `_read_frame_offsets` and `adopt_index` both hand over native
+    wrong end.  `_read_frame_offsets` and `_adopt_index` both hand over native
     ones, which is what makes this the only place the two ever differ.
     """
     return (offsets.view(np.uint64) >> np.uint64(56)) & np.uint64(0x7)
@@ -639,12 +639,12 @@ class ByteRangeNDSource(ProxyNDSource):
             if all(self._blocks)
             else 1
         )
-        # Layouts are memoized for the life of the source; `index_state` hands
+        # Layouts are memoized for the life of the source; `_index_state` hands
         # them back as the bytes they were read as, so a `Proxy` can keep them in
         # its cache and a later run start from them instead of reading again.
         self._layouts = {}
 
-    def index_state(self, keep: Sequence[int] = ()) -> dict:
+    def _index_state(self, keep: Sequence[int] = ()) -> dict:
         """Where things are, as the bytes they were read as, for a cache to keep.
 
         The frame's chunk offsets, and the header sections of the chunks in
@@ -693,8 +693,8 @@ class ByteRangeNDSource(ProxyNDSource):
             if layout is not None:
                 yield nchunk, layout
 
-    def adopt_index(self, state: dict | None) -> None:
-        """Take up what an earlier run left behind in :meth:`index_state`.
+    def _adopt_index(self, state: dict | None) -> None:
+        """Take up what an earlier run left behind in `_index_state`.
 
         Only ever called with a state saved against the very same remote bytes --
         :ref:`Proxy` checks the source's ``stamp`` against the one its cache
@@ -809,7 +809,7 @@ class ByteRangeNDSource(ProxyNDSource):
         with self._index_lock:
             # What was read stays until something reads again, so that a lookup
             # racing this one is served the old positions rather than none at all;
-            # `index_state` is what must not hand them on, and it asks about
+            # `_index_state` is what must not hand them on, and it asks about
             # `_stale` for exactly that reason.
             self._stale = True
             # The layouts do go.  Where a chunk is says nothing about whether the

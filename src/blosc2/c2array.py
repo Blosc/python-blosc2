@@ -596,7 +596,7 @@ class C2Array(blosc2.Operand):
         self._meta_stale = False
         self._meta_epoch = 0
         self._meta_lock = threading.Lock()
-        # An index a `Proxy` handed over before the source existed; see adopt_index
+        # An index a `Proxy` handed over before the source existed; see _adopt_index
         self._pending_index = None
 
         # Try to 'open' the remote path
@@ -1161,7 +1161,7 @@ class C2Array(blosc2.Operand):
         # `.b2z` member reports one and is streamed all the same
         try:
             source = C2NDSource(self, max_concurrency=REMOTE_MAX_CONCURRENCY)
-            source.adopt_index(self._pending_index)
+            source._adopt_index(self._pending_index)
             return source
         except NotRanged as exc:
             # PartsMissing among them, which carries no status and so is not
@@ -1188,7 +1188,7 @@ class C2Array(blosc2.Operand):
             # fields these read: whole chunks work for all of those
             return None
 
-    def adopt_index(self, state) -> None:
+    def _adopt_index(self, state) -> None:
         """Keep an index a `Proxy` read out of its cache until there is a source.
 
         Handing it straight to :meth:`block_source` would build the source to
@@ -1198,14 +1198,14 @@ class C2Array(blosc2.Operand):
         """
         self._pending_index = state
 
-    def index_state(self, keep=()) -> dict | None:
+    def _index_state(self, keep=()) -> dict | None:
         """What a `Proxy` should keep of what was read; see :ref:`ByteRangeNDSource`."""
         source = self._block_source
         if source is _UNTRIED or source is None:
             # No source was ever built, so nothing was read through one: hand back
             # whatever came out of the cache, rather than dropping it
             return self._pending_index
-        return source.index_state(keep)
+        return source._index_state(keep)
 
     def wants_blocks(self, nchunk: int, nwanted: int) -> bool:
         """Whether fetching *nwanted* blocks of a chunk beats fetching all of it."""
